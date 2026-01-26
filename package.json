@@ -1,17 +1,23 @@
 {
-  "name": "app",
+  "name": "omr-maker",
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "dev": "next dev",
+    "dev": "next dev -p 3003",
     "build": "next build",
     "start": "next start",
     "lint": "eslint"
   },
   "dependencies": {
+    "@google/generative-ai": "^0.24.1",
+    "canvas": "^3.2.1",
+    "html2canvas": "^1.4.1",
     "next": "16.1.4",
+    "pdfjs-dist": "^5.4.530",
+    "qrcode.react": "^4.2.0",
     "react": "19.2.3",
-    "react-dom": "19.2.3"
+    "react-dom": "19.2.3",
+    "react-pdf": "^10.3.0"
   },
   "devDependencies": {
     "@types/node": "^20",
