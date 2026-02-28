@@ -35,6 +35,7 @@ export interface Attempt {
     totalScore: number;
     answers: Record<number, number>; // qId -> selected option
     status: 'completed' | 'in_progress';
+    guestId?: string; // For tracking guest attempts
 }
 
 export interface Group {

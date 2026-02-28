@@ -21,6 +21,7 @@ export default function SolvePage() {
     const [isAuthorized, setIsAuthorized] = useState(false);
     const [selectedGroupId, setSelectedGroupId] = useState("");
     const [availableGroups, setAvailableGroups] = useState<any[]>([]);
+    const [user, setUser] = useState<{ name: string; isGuest?: boolean; guestId?: string } | null>(null);
 
     // Navigation State
     const [currentQuestionId, setCurrentQuestionId] = useState<number | null>(null);
@@ -32,6 +33,12 @@ export default function SolvePage() {
     const [answerFile, setAnswerFile] = useState<File | null>(null);
 
     useEffect(() => {
+        // Load User Session
+        const sessionStr = sessionStorage.getItem("omr_student_session");
+        if (sessionStr) {
+            setUser(JSON.parse(sessionStr));
+        }
+
         const loadExam = async () => {
             if (id) {
                 const data = localStorage.getItem(`omr_exam_${id}`);
@@ -113,10 +120,33 @@ export default function SolvePage() {
         }));
     };
 
+
+
+    // ... (intermediate code) ...
+
     const handleSubmit = () => {
         if (!confirm("정말 제출하시겠습니까? (현재는 로컬에만 저장됩니다)")) return;
 
         if (!examData) return;
+
+        // Ensure User
+        let submitter = user;
+        if (!submitter) {
+            // Guest Flow for Public Exams
+            if (examData.accessConfig?.type === 'public') {
+                const name = prompt("이름을 입력해주세요 (게스트 제출):");
+                if (!name) return;
+                const guestId = Math.random().toString(36).substring(2, 15);
+                submitter = { name, isGuest: true, guestId };
+                // Save session for continuity
+                sessionStorage.setItem("omr_student_session", JSON.stringify({ ...submitter, groupName: 'Guest' }));
+                localStorage.setItem("omr_guest_id", guestId);
+            } else {
+                alert("로그인이 필요한 시험입니다.");
+                window.location.href = "/";
+                return;
+            }
+        }
 
         // Calculate Score
         let correctCount = 0;
@@ -136,13 +166,14 @@ export default function SolvePage() {
             id: attemptId,
             examId: id,
             examTitle: examData.title,
-            studentName: "Student", // In real app, from auth
-            startedAt: new Date().toISOString(), // Mock start time
+            studentName: submitter.name,
+            guestId: submitter.guestId, // Track Guest ID
+            startedAt: new Date().toISOString(),
             finishedAt: new Date().toISOString(),
             score: correctCount,
             totalScore: totalCount,
             answers: studentAnswers,
-            drawings: drawings, // Save drawings
+            drawings: drawings,
             status: 'completed'
         };
 
