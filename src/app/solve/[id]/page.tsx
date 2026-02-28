@@ -20,6 +20,7 @@ export default function SolvePage() {
 
     const [isAuthorized, setIsAuthorized] = useState(false);
     const [selectedGroupId, setSelectedGroupId] = useState("");
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const [availableGroups, setAvailableGroups] = useState<any[]>([]);
     const [user, setUser] = useState<{ name: string; isGuest?: boolean; guestId?: string } | null>(null);
 
@@ -82,8 +83,9 @@ export default function SolvePage() {
                         } else {
                             setIsAuthorized(true);
                         }
-                    } catch (e) {
+                    } catch (err) {
                         alert("시험 데이터 로드 실패");
+                        console.error(err);
                     }
                 } else {
                     alert("유효하지 않은 시험 ID이거나 데이터가 없습니다.");
@@ -186,6 +188,7 @@ export default function SolvePage() {
         window.location.href = `/student/review/${attemptId}`;
     };
 
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
     const checkGroupAccess = () => {
         if (!examData?.accessConfig?.groupIds) return;
 

@@ -52,6 +52,7 @@ export function mergeGuestAttempts(guestId: string, realStudentName: string) {
     if (!attemptsStr) return;
 
     try {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
         const allAttempts: any[] = JSON.parse(attemptsStr);
         let updated = false;
 

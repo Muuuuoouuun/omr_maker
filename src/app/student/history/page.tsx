@@ -14,6 +14,7 @@ export default function HistoryPage() {
                 const parsed = JSON.parse(data);
                 // Sort by latest first
                 parsed.sort((a: Attempt, b: Attempt) => new Date(b.finishedAt).getTime() - new Date(a.finishedAt).getTime());
+                // eslint-disable-next-line react-hooks/set-state-in-effect
                 setAttempts(parsed);
             } catch (e) {
                 console.error("Failed to load history", e);

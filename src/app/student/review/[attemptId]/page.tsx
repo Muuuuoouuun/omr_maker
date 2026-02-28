@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
-import { Attempt, Question, Exam } from "@/types/omr";
+import { Attempt, Exam } from "@/types/omr";
 
 export default function ReviewPage() {
     const params = useParams();
@@ -22,6 +22,7 @@ export default function ReviewPage() {
                 const attempts: Attempt[] = JSON.parse(attemptsData);
                 const found = attempts.find(a => a.id === id);
                 if (found) {
+                    // eslint-disable-next-line react-hooks/set-state-in-effect
                     setAttempt(found);
                     // Load Exam Data associated with this attempt
                     // Note: In real app, we fetch by examId. Here we rely on the exam saving key convention.

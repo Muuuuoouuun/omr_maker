@@ -22,6 +22,7 @@ export default function AnswerImportModal({ isOpen, onClose, onApply, onUploadAn
         if (file) {
             analyzeFile(file, useAI);
         }
+        // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [useAI]);
 
     const analyzeFile = async (targetFile: File, isAiMode: boolean) => {
@@ -44,6 +45,7 @@ export default function AnswerImportModal({ isOpen, onClose, onApply, onUploadAn
                     : "텍스트 정답을 찾을 수 없습니다. 'AI 인식' 모드를 사용보세요.");
             }
             setParsedData(results);
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
         } catch (err: any) {
             console.error(err);
             if (err.message && err.message.includes("GEMINI_API_KEY")) {

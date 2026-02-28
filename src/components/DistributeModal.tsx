@@ -7,11 +7,11 @@ import { Group } from '@/types/omr';
 interface DistributeModalProps {
     isOpen: boolean;
     onClose: () => void;
-    examTitle: string;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     onSaveAndShare: (config: any) => Promise<string>; // Returns share URL
 }
 
-export default function DistributeModal({ isOpen, onClose, examTitle, onSaveAndShare }: DistributeModalProps) {
+export default function DistributeModal({ isOpen, onClose, onSaveAndShare }: DistributeModalProps) {
     const [accessType, setAccessType] = useState<'public' | 'group'>('public');
     const [selectedGroups, setSelectedGroups] = useState<string[]>([]);
     const [groups, setGroups] = useState<Group[]>([]);

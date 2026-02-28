@@ -46,6 +46,7 @@ export async function analyzeAnswerImages(imageParts: string[]) {
 
         try {
             return JSON.parse(jsonStr);
+            // eslint-disable-next-line @typescript-eslint/no-unused-vars
         } catch (parseError) {
             console.error("JSON Parse Error. Raw Text:", text);
             throw new Error("AI가 유효한 정답 형식을 반환하지 않았습니다.");

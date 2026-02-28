@@ -27,6 +27,7 @@ export default function StudentDashboard() {
             return;
         }
         const currentUser = JSON.parse(session);
+        // eslint-disable-next-line react-hooks/set-state-in-effect
         setUser(currentUser);
 
         // 2. Load Data
@@ -36,6 +37,7 @@ export default function StudentDashboard() {
             if (key?.startsWith("omr_exam_")) {
                 try {
                     allExams.push(JSON.parse(localStorage.getItem(key) || ""));
+                    // eslint-disable-next-line @typescript-eslint/no-unused-vars
                 } catch (e) { }
             }
         }

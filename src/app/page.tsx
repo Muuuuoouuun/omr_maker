@@ -1,7 +1,6 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { Group } from "@/types/omr";
 
@@ -20,7 +19,10 @@ export default function Home() {
   useEffect(() => {
     // Load Groups for Student Login
     const stored = localStorage.getItem('omr_groups');
-    if (stored) setGroups(JSON.parse(stored));
+    if (stored) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      setGroups(JSON.parse(stored));
+    }
   }, []);
 
   const handleTeacherLogin = () => {

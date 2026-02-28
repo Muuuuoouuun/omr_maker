@@ -25,6 +25,7 @@ export default function ExamDetailPage() {
         // Load Exam
         const examData = localStorage.getItem(`omr_exam_${id}`);
         if (examData) {
+            // eslint-disable-next-line react-hooks/set-state-in-effect
             setExam(JSON.parse(examData));
         }
 

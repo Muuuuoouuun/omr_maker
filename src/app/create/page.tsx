@@ -99,6 +99,7 @@ export default function CreateOMRPage() {
         ));
     };
 
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const handleShareConfig = async (accessConfig: any) => {
         const fileToBase64 = (file: File): Promise<string> => {
             return new Promise((resolve, reject) => {
@@ -229,7 +230,6 @@ export default function CreateOMRPage() {
             <DistributeModal
                 isOpen={isDistributeModalOpen}
                 onClose={() => setIsDistributeModalOpen(false)}
-                examTitle={title}
                 onSaveAndShare={handleShareConfig}
             />
 

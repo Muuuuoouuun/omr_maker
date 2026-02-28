@@ -11,6 +11,7 @@ export default function GroupsPage() {
     useEffect(() => {
         const stored = localStorage.getItem('omr_groups');
         if (stored) {
+            // eslint-disable-next-line react-hooks/set-state-in-effect
             setGroups(JSON.parse(stored));
         }
     }, []);

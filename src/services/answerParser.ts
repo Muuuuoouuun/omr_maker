@@ -31,7 +31,7 @@ export async function parseAnswerKeyPdf(file: File): Promise<ParsedAnswer[]> {
 
         // Sort items by Y (descending) then X (ascending) to approximate reading order
         // Note: PDF coordinates: (0,0) is bottom-left usually.
-        // item.transform[5] is Y, item.transform[4] is X
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
         const items = textContent.items.map((item: any) => ({
             str: item.str,
             x: item.transform[4],
@@ -125,6 +125,7 @@ export async function parseAnswerKeyWithGemini(file: File): Promise<ParsedAnswer
         canvas.width = viewport.width;
 
         if (context) {
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
             await page.render({ canvasContext: context, viewport } as any).promise;
             // Use JPEG instead of PNG to save bandwidth and stay under limits
             images.push(canvas.toDataURL('image/jpeg', 0.8));
@@ -139,12 +140,15 @@ export async function parseAnswerKeyWithGemini(file: File): Promise<ParsedAnswer
         }
 
         // Convert to ParsedAnswer format
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
         return aiResults.map((item: any) => ({
             questionNum: parseInt(item.questionNum || item.id || item.number),
             answer: parseInt(item.answer || item.val),
             confidence: 0.95,
             rawText: JSON.stringify(item)
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
         })).filter((item: any) => !isNaN(item.questionNum) && !isNaN(item.answer))
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
             .sort((a: any, b: any) => a.questionNum - b.questionNum);
     } catch (e) {
         console.error("AI Parsing failed:", e);

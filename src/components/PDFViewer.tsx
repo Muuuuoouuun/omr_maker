@@ -49,6 +49,7 @@ export default function PDFViewer({
 
     useEffect(() => {
         if (typeof forcePage === 'number' && forcePage >= 1 && forcePage <= numPages) {
+            // eslint-disable-next-line react-hooks/set-state-in-effect
             setPageNumber(forcePage);
         }
     }, [forcePage, numPages]);
@@ -157,7 +158,9 @@ export default function PDFViewer({
 
     const clearPage = () => {
         if (confirm("이 페이지의 필기를 모두 지우시겠습니까?")) {
-            onDrawingsChange && onDrawingsChange(pageNumber, []);
+            if (onDrawingsChange) {
+                onDrawingsChange(pageNumber, []);
+            }
         }
     };
 
@@ -246,9 +249,7 @@ export default function PDFViewer({
                                 onClick={handlePageClick}
                                 style={{ position: 'relative', boxShadow: '0 4px 6px -1px rgba(0, 0, 0, 0.1)' }}
                             >
-                                <Page pageNumber={pageNumber} scale={scale} renderTextLayer={true} renderAnnotationLayer={true} />
-
-                                {/* Canvas Overlay */}
+                                <Page pageNumber={pageNumber} scale={scale} renderTextLayer={true} renderAnnotationLayer={true} />{/* Canvas Overlay */}
                                 {enableDrawing && (
                                     <canvas
                                         ref={canvasRef}

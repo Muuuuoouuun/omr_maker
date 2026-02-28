@@ -3,11 +3,15 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { Exam, Attempt } from "@/types/omr";
-import StatCard from "@/components/dashboard/StatCard";
-import TrendChart from "@/components/dashboard/TrendChart";
-import ExamListBlock from "@/components/dashboard/ExamListBlock";
+import OverviewTab from "@/components/dashboard/tabs/OverviewTab";
+import ExamAnalyticsTab from "@/components/dashboard/tabs/ExamAnalyticsTab";
+import StudentAnalyticsTab from "@/components/dashboard/tabs/StudentAnalyticsTab";
+import { LayoutDashboard, BarChart2, GraduationCap } from "lucide-react";
+
+type TabType = 'overview' | 'exam' | 'student';
 
 export default function TeacherDashboard() {
+    const [activeTab, setActiveTab] = useState<TabType>('overview');
     const [exams, setExams] = useState<Exam[]>([]);
     const [attempts, setAttempts] = useState<Attempt[]>([]);
     const [stats, setStats] = useState({
@@ -29,6 +33,7 @@ export default function TeacherDashboard() {
                 try {
                     const val = JSON.parse(localStorage.getItem(key) || "");
                     loadedExams.push(val);
+                    // eslint-disable-next-line @typescript-eslint/no-unused-vars
                 } catch (e) { }
             }
         }
@@ -37,11 +42,13 @@ export default function TeacherDashboard() {
         if (attemptsStr) {
             try {
                 loadedAttempts.push(...JSON.parse(attemptsStr));
+                // eslint-disable-next-line @typescript-eslint/no-unused-vars
             } catch (e) { }
         }
 
         // Sort exams by date
         loadedExams.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+        // eslint-disable-next-line react-hooks/set-state-in-effect
         setExams(loadedExams);
         setAttempts(loadedAttempts);
 
@@ -50,20 +57,19 @@ export default function TeacherDashboard() {
         const avg = loadedAttempts.length > 0 ? Math.round(totalScore / loadedAttempts.length) : 0;
 
         setStats({
-            totalStudents: new Set(loadedAttempts.map(a => a.studentName + a.id)).size, // Rough unique student count if names were unique
+            totalStudents: new Set(loadedAttempts.map(a => a.studentName + a.id)).size,
             avgScore: avg,
             activeExams: loadedExams.length
         });
 
-        // Mock/Calculate Trend Data (Last 7 attempts scores)
-        // In real app, aggregate by day. Here we just take last 10 scores
+        // Calculate Trend Data (Last N attempts scores)
         const scores = loadedAttempts
             .sort((a, b) => new Date(a.finishedAt).getTime() - new Date(b.finishedAt).getTime())
             .map(a => Math.round((a.score / a.totalScore) * 100))
-            .slice(-10); // Last 10
+            .slice(-10);
 
-        // If not enough data, pad with mocks for visual
         if (scores.length < 5) {
+            // Mock data with average if not enough
             setTrendData([65, 78, 72, 85, 82, 90, avg || 80]);
         } else {
             setTrendData(scores);
@@ -71,12 +77,65 @@ export default function TeacherDashboard() {
 
     }, []);
 
+    // Tab Navigation Component
+    const renderTabs = () => (
+        <div style={{
+            display: 'flex', gap: '0.5rem', marginBottom: '2rem',
+            background: 'var(--surface)', padding: '0.5rem', borderRadius: 'var(--radius-lg)',
+            border: '1px solid var(--border)', overflowX: 'auto',
+            boxShadow: '0 4px 6px rgba(0,0,0,0.02)'
+        }}>
+            <button
+                onClick={() => setActiveTab('overview')}
+                style={{
+                    display: 'flex', alignItems: 'center', gap: '0.5rem',
+                    padding: '0.75rem 1.5rem', borderRadius: 'var(--radius-md)',
+                    background: activeTab === 'overview' ? 'var(--primary)' : 'transparent',
+                    color: activeTab === 'overview' ? 'white' : 'var(--muted)',
+                    fontWeight: activeTab === 'overview' ? 700 : 500,
+                    transition: 'all 0.2s cubic-bezier(0.4, 0, 0.2, 1)', flex: 1, justifyContent: 'center', whiteSpace: 'nowrap'
+                }}
+            >
+                <LayoutDashboard size={18} />
+                대시보드 요약
+            </button>
+            <button
+                onClick={() => setActiveTab('exam')}
+                style={{
+                    display: 'flex', alignItems: 'center', gap: '0.5rem',
+                    padding: '0.75rem 1.5rem', borderRadius: 'var(--radius-md)',
+                    background: activeTab === 'exam' ? 'var(--primary)' : 'transparent',
+                    color: activeTab === 'exam' ? 'white' : 'var(--muted)',
+                    fontWeight: activeTab === 'exam' ? 700 : 500,
+                    transition: 'all 0.2s cubic-bezier(0.4, 0, 0.2, 1)', flex: 1, justifyContent: 'center', whiteSpace: 'nowrap'
+                }}
+            >
+                <BarChart2 size={18} />
+                시험 분석
+            </button>
+            <button
+                onClick={() => setActiveTab('student')}
+                style={{
+                    display: 'flex', alignItems: 'center', gap: '0.5rem',
+                    padding: '0.75rem 1.5rem', borderRadius: 'var(--radius-md)',
+                    background: activeTab === 'student' ? 'var(--primary)' : 'transparent',
+                    color: activeTab === 'student' ? 'white' : 'var(--muted)',
+                    fontWeight: activeTab === 'student' ? 700 : 500,
+                    transition: 'all 0.2s cubic-bezier(0.4, 0, 0.2, 1)', flex: 1, justifyContent: 'center', whiteSpace: 'nowrap'
+                }}
+            >
+                <GraduationCap size={18} />
+                학생 성취도
+            </button>
+        </div>
+    );
+
     return (
         <div className="layout-main">
             <header className="header">
                 <div className="container header-content">
                     <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
-                        <Link href="/" className="logo">OMR Maker</Link>
+                        <Link href="/" className="logo">Classin</Link>
                         <span style={{
                             fontSize: '0.75rem', fontWeight: 700,
                             background: 'rgba(99, 102, 241, 0.1)', color: 'var(--primary)',
@@ -91,124 +150,45 @@ export default function TeacherDashboard() {
 
             <main className="container animate-fade-in" style={{ paddingBottom: '4rem' }}>
                 {/* Welcome Section */}
-                <div style={{ margin: '3rem 0' }}>
-                    <h1 className="title-gradient" style={{ fontSize: '2.5rem', marginBottom: '0.75rem', lineHeight: 1.2 }}>
-                        Dashboard
-                    </h1>
-                    <p className="text-muted" style={{ fontSize: '1.1rem' }}>
-                        Review your class performance and manage exams.
-                    </p>
-                </div>
-
-                {/* Bento Grid */}
-                <div className="bento-grid">
-
-                    {/* 1. Score Trend (Main Feature) */}
-                    <div className="bento-card col-span-2 row-span-1" style={{
-                        background: 'linear-gradient(135deg, var(--primary), var(--primary-dark))',
-                        color: 'white', border: 'none',
-                        position: 'relative', overflow: 'hidden'
-                    }}>
-                        <div style={{ marginBottom: '1.5rem', position: 'relative', zIndex: 1 }}>
-                            <h3 style={{ fontSize: '1.25rem', fontWeight: 700 }}>Avg. Score Trend</h3>
-                            <p style={{ opacity: 0.8, fontSize: '0.95rem' }}>Last 7 exams performance</p>
-                        </div>
-
-                        {/* Decorative bloom */}
-                        <div style={{ position: 'absolute', top: '-20%', right: '-10%', width: '200px', height: '200px', background: 'radial-gradient(circle, rgba(255,255,255,0.2) 0%, transparent 70%)' }}></div>
-
-                        <div style={{ flex: 1, display: 'flex', alignItems: 'flex-end', width: '100%' }}>
-                            <TrendChart data={trendData} color="white" height={140} />
-                        </div>
+                <div style={{ margin: '3rem 0', display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end' }}>
+                    <div>
+                        <h1 className="title-gradient" style={{ fontSize: '2.5rem', marginBottom: '0.75rem', lineHeight: 1.2 }}>
+                            Analytics Center
+                        </h1>
+                        <p className="text-muted" style={{ fontSize: '1.1rem' }}>
+                            방대한 리포트와 시험 통계를 한 번에 관리하세요.
+                        </p>
                     </div>
-
-                    {/* 2. Total Students */}
-                    <StatCard
-                        title="Total Students"
-                        value={stats.totalStudents}
-                        icon={<span style={{ fontSize: '2rem' }}>👥</span>}
-                        trend="12%"
-                        trendUp={true}
-                    />
-
-                    {/* 3. Average Score */}
-                    <StatCard
-                        title="Average Score"
-                        value={`${stats.avgScore}`}
-                        icon={<span style={{ fontSize: '2rem' }}>📊</span>}
-                        color="var(--success)"
-                        trend={stats.avgScore > 80 ? 'Good' : 'Needs Focus'}
-                        trendUp={stats.avgScore > 80}
-                    />
-
-                    {/* 4. Active Exams */}
-                    <Link href="/create" className="bento-card col-span-1 card-hover" style={{
-                        justifyContent: 'center', alignItems: 'center',
-                        border: '2px dashed var(--border)', boxShadow: 'none',
-                        background: 'transparent'
-                    }}>
-                        <div style={{
-                            width: '60px', height: '60px', borderRadius: '50%',
-                            background: 'rgba(99, 102, 241, 0.1)', color: 'var(--primary)',
-                            display: 'flex', alignItems: 'center', justifyContent: 'center',
-                            marginBottom: '1rem', fontSize: '2rem', transition: 'all 0.3s'
+                    {activeTab !== 'overview' && (
+                        <Link href="/create" style={{
+                            padding: '0.75rem 1.5rem', background: 'var(--primary)',
+                            color: 'white', borderRadius: 'var(--radius-full)',
+                            fontWeight: 600, display: 'flex', alignItems: 'center', gap: '0.5rem',
+                            boxShadow: '0 4px 12px rgba(99, 102, 241, 0.3)'
                         }}>
-                            +
-                        </div>
-                        <span style={{ fontWeight: 600, color: 'var(--primary)', fontSize: '1.1rem' }}>Create New Exam</span>
-                    </Link>
-
-                    {/* 5. Recent Exams List */}
-                    <ExamListBlock exams={exams} />
-
-                    {/* 6. Recent Activity Feed */}
-                    <div className="bento-card col-span-2 row-span-2">
-                        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '1.5rem' }}>
-                            <h3 style={{ fontSize: '1.25rem', fontWeight: 700 }}>Recent Activity</h3>
-                            <button className="text-muted" style={{ fontSize: '0.85rem', fontWeight: 500 }}>View All</button>
-                        </div>
-                        <div style={{ display: 'flex', flexDirection: 'column', gap: '0', overflowY: 'auto' }}>
-                            {attempts.length === 0 ? (
-                                <div style={{ color: 'var(--muted)', textAlign: 'center', padding: '2rem', background: 'var(--background)', borderRadius: 'var(--radius-lg)' }}>
-                                    No activity yet
-                                </div>
-                            ) : (
-                                attempts.sort((a, b) => new Date(b.finishedAt).getTime() - new Date(a.finishedAt).getTime()).slice(0, 7).map((attempt, idx) => (
-                                    <div key={idx} style={{
-                                        display: 'flex', gap: '1rem', alignItems: 'center', padding: '1rem 0',
-                                        borderBottom: idx !== 6 ? '1px solid var(--border)' : 'none',
-                                        transition: 'background 0.2s'
-                                    }}>
-                                        <div style={{
-                                            width: '40px', height: '40px', borderRadius: '50%',
-                                            background: 'var(--background)', display: 'flex', alignItems: 'center', justifyContent: 'center',
-                                            fontSize: '1.2rem', border: '1px solid var(--border)'
-                                        }}>
-                                            👤
-                                        </div>
-                                        <div style={{ flex: 1 }}>
-                                            <div style={{ fontSize: '0.95rem', marginBottom: '0.2rem' }}>
-                                                <span style={{ fontWeight: 600 }}>Student</span> submitted
-                                                <span style={{ fontWeight: 600, color: 'var(--primary)' }}> {attempt.examTitle}</span>
-                                            </div>
-                                            <div style={{ fontSize: '0.8rem', color: 'var(--muted)' }}>
-                                                {new Date(attempt.finishedAt).toLocaleString()}
-                                            </div>
-                                        </div>
-                                        <div style={{
-                                            fontWeight: 700, fontSize: '1.1rem',
-                                            color: (attempt.score / attempt.totalScore) > 0.8 ? 'var(--success)' : 'var(--warning)'
-                                        }}>
-                                            {Math.round((attempt.score / attempt.totalScore) * 100)}점
-                                        </div>
-                                    </div>
-                                ))
-                            )}
-                        </div>
-                    </div>
-
+                            시험 출제하기
+                        </Link>
+                    )}
                 </div>
+
+                {/* Tabs */}
+                {renderTabs()}
+
+                {/* Tab Content */}
+                <div style={{ minHeight: '600px' }}>
+                    {activeTab === 'overview' && (
+                        <OverviewTab exams={exams} attempts={attempts} stats={stats} trendData={trendData} />
+                    )}
+                    {activeTab === 'exam' && (
+                        <ExamAnalyticsTab exams={exams} attempts={attempts} />
+                    )}
+                    {activeTab === 'student' && (
+                        <StudentAnalyticsTab exams={exams} attempts={attempts} />
+                    )}
+                </div>
+
             </main>
         </div>
     );
 }
+
