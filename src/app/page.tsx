@@ -2,6 +2,7 @@
 
 import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
+import Image from "next/image";
 import { Group } from "@/types/omr";
 
 export default function Home() {
@@ -54,7 +55,8 @@ export default function Home() {
       <div className="container animate-fade-in" style={{ maxWidth: '900px' }}>
 
         {/* Header Section */}
-        <div style={{ textAlign: 'center', marginBottom: '5rem' }}>
+        <div style={{ textAlign: 'center', marginBottom: '5rem', display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
+          <Image src="/logo.png" alt="OMR Maker Logo" width={100} height={100} style={{ marginBottom: '1rem', objectFit: 'contain' }} />
           <h1 className="title-gradient" style={{ fontSize: '4.5rem', marginBottom: '1.5rem', lineHeight: 1.1, letterSpacing: '-0.03em' }}>
             OMR Maker
           </h1>

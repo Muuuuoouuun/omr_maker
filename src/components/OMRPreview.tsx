@@ -107,6 +107,11 @@ export default function OMRPreview({
                             {q.label}
                         </span>
                     )}
+                    {q.score !== undefined && (
+                        <span style={{ fontSize: '0.7rem', background: 'rgba(236, 72, 153, 0.1)', padding: '1px 5px', borderRadius: '4px', color: 'var(--secondary)', fontWeight: 'bold' }}>
+                            {q.score}점
+                        </span>
+                    )}
                     {q.pdfLocation && (
                         <span style={{ fontSize: '0.8rem', cursor: 'help' }} title={`Page ${q.pdfLocation.page}`}>
                             🔗
@@ -151,7 +156,7 @@ export default function OMRPreview({
                 </div>
             </div>
 
-            <div className="omr-body">
+            <div className="omr-body" style={{ '--omr-cols': cols } as React.CSSProperties}>
                 {columnQuestions.map((chunk, index) => (
                     <React.Fragment key={index}>
                         <div className="omr-column">

@@ -156,49 +156,93 @@ export default function StudentAnalyticsTab({ exams, attempts }: StudentAnalytic
                     </div>
                 </div>
 
-                {/* Right side: Exam List & Inclusion Toggles */}
-                <div className="card" style={{ padding: '1.5rem', display: 'flex', flexDirection: 'column' }}>
-                    <h3 style={{ fontSize: '1.1rem', fontWeight: 700, marginBottom: '0.5rem' }}>응시 기록 ({studentAttempts.length})</h3>
-                    <p style={{ fontSize: '0.85rem', color: 'var(--muted)', marginBottom: '1.5rem' }}>차트에서 제외할 시험의 체크를 해제하세요.</p>
+                {/* Right side: Exam List & Unattempted Exams */}
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem', maxHeight: '500px' }}>
 
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', overflowY: 'auto', flex: 1, maxHeight: '350px' }}>
-                        {studentAttempts.map(attempt => {
-                            const isExcluded = excludedExamIds.has(attempt.examId);
-                            const scoreRate = Math.round((attempt.score / attempt.totalScore) * 100);
+                    {/* Unattempted Exams & Alarm Saturation feature */}
+                    <div className="card" style={{ padding: '1.5rem', display: 'flex', flexDirection: 'column' }}>
+                        <h3 style={{ fontSize: '1.1rem', fontWeight: 700, marginBottom: '0.5rem', color: 'var(--error)' }}>
+                            미응시 시험 ({exams.filter(e => !studentAttempts.some(a => a.examId === e.id)).length})
+                        </h3>
+                        <p style={{ fontSize: '0.85rem', color: 'var(--muted)', marginBottom: '1rem' }}>
+                            학생이 응시하지 않은 시험 목록입니다. 알림 포화 기능을 설정할 수 있습니다.
+                        </p>
 
-                            return (
-                                <label
-                                    key={attempt.id}
-                                    style={{
-                                        display: 'flex',
-                                        alignItems: 'center',
-                                        gap: '0.75rem',
-                                        padding: '0.75rem',
-                                        borderRadius: 'var(--radius-md)',
-                                        background: isExcluded ? 'transparent' : 'var(--surface)',
-                                        border: `1px solid ${isExcluded ? 'var(--border)' : 'var(--primary)'}`,
-                                        opacity: isExcluded ? 0.6 : 1,
-                                        cursor: 'pointer',
-                                        transition: 'all 0.2s'
-                                    }}
-                                    className="card-hover"
-                                >
-                                    <input
-                                        type="checkbox"
-                                        checked={!isExcluded}
-                                        onChange={() => toggleExamExclusion(attempt.examId)}
-                                        style={{ accentColor: 'var(--primary)', width: '16px', height: '16px', cursor: 'pointer' }}
-                                    />
-                                    <div style={{ flex: 1, overflow: 'hidden' }}>
-                                        <div style={{ fontWeight: 600, fontSize: '0.9rem', whiteSpace: 'nowrap', textOverflow: 'ellipsis', overflow: 'hidden' }}>{attempt.examTitle}</div>
-                                        <div style={{ fontSize: '0.75rem', color: 'var(--muted)' }}>{new Date(attempt.finishedAt).toLocaleDateString()}</div>
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', overflowY: 'auto', maxHeight: '150px' }}>
+                            {exams.filter(e => !studentAttempts.some(a => a.examId === e.id)).length === 0 ? (
+                                <div style={{ fontSize: '0.9rem', color: 'var(--muted)', padding: '1rem', textAlign: 'center', background: 'var(--background)', borderRadius: 'var(--radius-md)' }}>
+                                    모든 시험을 완료했습니다! 🎉
+                                </div>
+                            ) : (
+                                exams.filter(e => !studentAttempts.some(a => a.examId === e.id)).map(exam => (
+                                    <div key={exam.id} style={{
+                                        display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '0.75rem',
+                                        borderRadius: 'var(--radius-md)', background: 'rgba(239, 68, 68, 0.05)', border: '1px solid rgba(239, 68, 68, 0.2)'
+                                    }}>
+                                        <div>
+                                            <div style={{ fontWeight: 600, fontSize: '0.9rem', color: 'var(--foreground)' }}>{exam.title}</div>
+                                            <div style={{ fontSize: '0.75rem', color: 'var(--muted)' }}>배포일: {new Date(exam.createdAt).toLocaleDateString()}</div>
+                                        </div>
+                                        <button
+                                            onClick={() => alert(`[${selectedStudent}] 학생의 "${exam.title}" 시험에 대한 [알림 포화 모드]가 활성화되었습니다.\n\n해당 학생이 시험을 완료할 때까지 5분에 한 번씩 푸시 알림이 전송됩니다.`)}
+                                            style={{
+                                                background: 'var(--error)', color: 'white', padding: '0.4rem 0.8rem',
+                                                borderRadius: 'var(--radius-md)', fontSize: '0.75rem', fontWeight: 700,
+                                                transition: 'all 0.2s', boxShadow: '0 2px 4px rgba(239, 68, 68, 0.2)'
+                                            }}
+                                            className="card-hover"
+                                        >
+                                            알림 포화 (5분 간격)
+                                        </button>
                                     </div>
-                                    <div style={{ fontWeight: 800, fontSize: '1.1rem', color: scoreRate >= 80 ? 'var(--success)' : (scoreRate < 50 ? 'var(--error)' : 'var(--text)') }}>
-                                        {scoreRate}점
-                                    </div>
-                                </label>
-                            );
-                        })}
+                                ))
+                            )}
+                        </div>
+                    </div>
+
+                    <div className="card" style={{ padding: '1.5rem', display: 'flex', flexDirection: 'column', flex: 1 }}>
+                        <h3 style={{ fontSize: '1.1rem', fontWeight: 700, marginBottom: '0.5rem' }}>응시 기록 ({studentAttempts.length})</h3>
+                        <p style={{ fontSize: '0.85rem', color: 'var(--muted)', marginBottom: '1.5rem' }}>차트에서 제외할 시험의 체크를 해제하세요.</p>
+
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', overflowY: 'auto', flex: 1 }}>
+                            {studentAttempts.map(attempt => {
+                                const isExcluded = excludedExamIds.has(attempt.examId);
+                                const scoreRate = Math.round((attempt.score / attempt.totalScore) * 100);
+
+                                return (
+                                    <label
+                                        key={attempt.id}
+                                        style={{
+                                            display: 'flex',
+                                            alignItems: 'center',
+                                            gap: '0.75rem',
+                                            padding: '0.75rem',
+                                            borderRadius: 'var(--radius-md)',
+                                            background: isExcluded ? 'transparent' : 'var(--surface)',
+                                            border: `1px solid ${isExcluded ? 'var(--border)' : 'var(--primary)'}`,
+                                            opacity: isExcluded ? 0.6 : 1,
+                                            cursor: 'pointer',
+                                            transition: 'all 0.2s'
+                                        }}
+                                        className="card-hover"
+                                    >
+                                        <input
+                                            type="checkbox"
+                                            checked={!isExcluded}
+                                            onChange={() => toggleExamExclusion(attempt.examId)}
+                                            style={{ accentColor: 'var(--primary)', width: '16px', height: '16px', cursor: 'pointer' }}
+                                        />
+                                        <div style={{ flex: 1, overflow: 'hidden' }}>
+                                            <div style={{ fontWeight: 600, fontSize: '0.9rem', whiteSpace: 'nowrap', textOverflow: 'ellipsis', overflow: 'hidden' }}>{attempt.examTitle}</div>
+                                            <div style={{ fontSize: '0.75rem', color: 'var(--muted)' }}>{new Date(attempt.finishedAt).toLocaleDateString()}</div>
+                                        </div>
+                                        <div style={{ fontWeight: 800, fontSize: '1.1rem', color: scoreRate >= 80 ? 'var(--success)' : (scoreRate < 50 ? 'var(--error)' : 'var(--text)') }}>
+                                            {scoreRate}점
+                                        </div>
+                                    </label>
+                                );
+                            })}
+                        </div>
                     </div>
                 </div>
             </div>

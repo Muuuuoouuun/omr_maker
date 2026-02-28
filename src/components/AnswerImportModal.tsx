@@ -80,7 +80,12 @@ export default function AnswerImportModal({ isOpen, onClose, onApply, onUploadAn
         parsedData.forEach(item => {
             mapping[item.questionNum] = item.answer;
         });
-        onApply(mapping);
+        if (Object.keys(mapping).length > 0) {
+            onApply(mapping);
+        }
+        if (file && onUploadAnswerPdf) {
+            onUploadAnswerPdf(file);
+        }
         onClose();
     };
 
@@ -128,7 +133,17 @@ export default function AnswerImportModal({ isOpen, onClose, onApply, onUploadAn
                         </label>
                     </div>
 
-                    {isProcessing && <div style={{ textAlign: 'center', padding: '1rem' }}>분석 중...</div>}
+                    {isProcessing && (
+                        <div style={{ textAlign: 'center', padding: '2rem 1rem', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '1rem', background: 'rgba(99, 102, 241, 0.05)', borderRadius: '8px', marginBottom: '1.5rem', border: '1px solid rgba(99, 102, 241, 0.2)' }}>
+                            <div style={{ fontWeight: 600, color: 'var(--primary)', fontSize: '1.05rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                                <span className="animate-pulse">✨</span> AI가 이미지를 분석하고 정답을 추출 중입니다... <span className="animate-pulse">✨</span>
+                            </div>
+                            <div style={{ width: '80%', height: '8px', background: '#e2e8f0', borderRadius: '4px', overflow: 'hidden', boxShadow: 'inset 0 1px 2px rgba(0,0,0,0.1)' }}>
+                                <div className="ai-loading-bar" style={{ width: '100%', height: '100%' }}></div>
+                            </div>
+                            <div style={{ fontSize: '0.85rem', color: '#666' }}>최대 10~20초 정도 소요될 수 있습니다. 잠시만 기다려주세요!</div>
+                        </div>
+                    )}
 
                     {error && <div style={{ color: 'red', padding: '1rem', background: '#fff0f0', borderRadius: '4px' }}>{error}</div>}
 
@@ -180,7 +195,7 @@ export default function AnswerImportModal({ isOpen, onClose, onApply, onUploadAn
                         <button
                             onClick={handleApply}
                             className="btn btn-primary"
-                            disabled={parsedData.length === 0}
+                            disabled={!file}
                         >
                             적용하기
                         </button>

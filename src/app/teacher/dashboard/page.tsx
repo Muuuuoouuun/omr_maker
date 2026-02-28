@@ -12,6 +12,7 @@ type TabType = 'overview' | 'exam' | 'student';
 
 export default function TeacherDashboard() {
     const [activeTab, setActiveTab] = useState<TabType>('overview');
+    const [selectedExamIdForAnalytics, setSelectedExamIdForAnalytics] = useState<string | undefined>(undefined);
     const [exams, setExams] = useState<Exam[]>([]);
     const [attempts, setAttempts] = useState<Attempt[]>([]);
     const [stats, setStats] = useState({
@@ -23,8 +24,8 @@ export default function TeacherDashboard() {
 
     useEffect(() => {
         // Load Data
-        const loadedExams: Exam[] = [];
-        const loadedAttempts: Attempt[] = [];
+        let loadedExams: Exam[] = [];
+        let loadedAttempts: Attempt[] = [];
 
         // Scan localStorage for exams
         for (let i = 0; i < localStorage.length; i++) {
@@ -45,6 +46,50 @@ export default function TeacherDashboard() {
                 // eslint-disable-next-line @typescript-eslint/no-unused-vars
             } catch (e) { }
         }
+
+        // --- INJECT MOCK DATA FOR DEMONSTRATION IF NEEDED ---
+        // Provide rich mock data so that Exam Analytics Tab works nicely with examples
+        const MOCK_EXAMS: Exam[] = [
+            {
+                id: 'mock-1', title: '[예시] Midterm English Test', createdAt: new Date(Date.now() - 86400000 * 2).toISOString(),
+                questions: Array.from({ length: 20 }).map((_, i) => ({
+                    id: i + 1, number: i + 1, label: i < 5 ? '문법' : (i < 10 ? '독해' : '어휘'), score: 5, answer: 1
+                }))
+            },
+            {
+                id: 'mock-2', title: '[예시] Chapter 4 Mathematics', createdAt: new Date(Date.now() - 86400000 * 5).toISOString(),
+                questions: Array.from({ length: 15 }).map((_, i) => ({
+                    id: i + 1, number: i + 1, label: i < 5 ? '계산' : (i < 10 ? '이해' : '응용'), score: 6.66, answer: 1
+                }))
+            }
+        ];
+
+        // Add mock exams if they aren't duplicates
+        MOCK_EXAMS.forEach(mockExam => {
+            if (!loadedExams.some(e => e.id === mockExam.id)) {
+                loadedExams.push(mockExam);
+                // add mock attempts for this exam
+                const mockAttempts: Attempt[] = Array.from({ length: 25 }).map((_, i) => ({
+                    id: `mock-attempt-${mockExam.id}-${i}`,
+                    examId: mockExam.id,
+                    examTitle: mockExam.title,
+                    studentName: `학생 ${i + 1}`,
+                    startedAt: new Date(Date.now() - 86400000 * 1).toISOString(),
+                    finishedAt: new Date(Date.now() - 86400000 * 1 + i * 1000).toISOString(),
+                    score: mockExam.id === 'mock-1' ? (50 + Math.random() * 50) : (40 + Math.random() * 50),
+                    totalScore: 100,
+                    status: 'completed',
+                    answers: Array.from({ length: mockExam.questions.length }).reduce((acc: Record<number, number>, _, qIdx) => {
+                        // 70% random chance to be correct
+                        const isCorrect = Math.random() > 0.3;
+                        const correctAns = mockExam.questions[qIdx].answer || 1;
+                        acc[qIdx + 1] = isCorrect ? correctAns : (correctAns === 1 ? 2 : 1);
+                        return acc;
+                    }, {})
+                }));
+                loadedAttempts.push(...mockAttempts);
+            }
+        });
 
         // Sort exams by date
         loadedExams.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
@@ -76,6 +121,11 @@ export default function TeacherDashboard() {
         }
 
     }, []);
+
+    const handleNavigateToExamAnalytics = (examId: string) => {
+        setSelectedExamIdForAnalytics(examId);
+        setActiveTab('exam');
+    };
 
     // Tab Navigation Component
     const renderTabs = () => (
@@ -177,10 +227,16 @@ export default function TeacherDashboard() {
                 {/* Tab Content */}
                 <div style={{ minHeight: '600px' }}>
                     {activeTab === 'overview' && (
-                        <OverviewTab exams={exams} attempts={attempts} stats={stats} trendData={trendData} />
+                        <OverviewTab
+                            exams={exams}
+                            attempts={attempts}
+                            stats={stats}
+                            trendData={trendData}
+                            onNavigateToExamAnalytics={handleNavigateToExamAnalytics}
+                        />
                     )}
                     {activeTab === 'exam' && (
-                        <ExamAnalyticsTab exams={exams} attempts={attempts} />
+                        <ExamAnalyticsTab exams={exams} attempts={attempts} initialExamId={selectedExamIdForAnalytics} />
                     )}
                     {activeTab === 'student' && (
                         <StudentAnalyticsTab exams={exams} attempts={attempts} />

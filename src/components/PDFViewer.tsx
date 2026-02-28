@@ -34,6 +34,7 @@ export default function PDFViewer({
 }: PDFViewerProps & { forcePage?: number }) {
     const [numPages, setNumPages] = useState<number>(0);
     const [pageNumber, setPageNumber] = useState<number>(1);
+    const [inputPage, setInputPage] = useState<string>("1");
     const [scale, setScale] = useState<number>(1.0);
     const [isDragging, setIsDragging] = useState(false);
 
@@ -58,6 +59,27 @@ export default function PDFViewer({
         setNumPages(numPages);
         onLoadSuccess(numPages);
     }
+
+    useEffect(() => {
+        setInputPage(pageNumber.toString());
+    }, [pageNumber]);
+
+    const handlePageInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+        setInputPage(e.target.value);
+    };
+
+    const handlePageInputSubmit = (e: React.KeyboardEvent<HTMLInputElement> | React.FocusEvent<HTMLInputElement>) => {
+        if ('key' in e && (e as React.KeyboardEvent).key !== 'Enter') return;
+        let newPage = parseInt(inputPage);
+        if (isNaN(newPage)) {
+            setInputPage(pageNumber.toString());
+            return;
+        }
+        if (newPage < 1) newPage = 1;
+        if (newPage > numPages) newPage = numPages;
+        setPageNumber(newPage);
+        setInputPage(newPage.toString());
+    };
 
     // --- Drawing Logic ---
 
@@ -228,9 +250,19 @@ export default function PDFViewer({
                             </div>
                         )}
 
-                        <button onClick={() => setPageNumber(p => Math.max(1, p - 1))} disabled={pageNumber <= 1} style={{ color: 'white', padding: '0.2rem 0.5rem', cursor: 'pointer' }}>◀</button>
-                        <span>{pageNumber} / {numPages}</span>
-                        <button onClick={() => setPageNumber(p => Math.min(numPages, p + 1))} disabled={pageNumber >= numPages} style={{ color: 'white', padding: '0.2rem 0.5rem', cursor: 'pointer' }}>▶</button>
+                        <button onClick={() => setPageNumber(p => Math.max(1, p - 1))} disabled={pageNumber <= 1} style={{ color: 'white', padding: '0.2rem 0.5rem', cursor: 'pointer', background: 'transparent', border: 'none' }}>◀</button>
+                        <span style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                            <input
+                                type="text"
+                                value={inputPage}
+                                onChange={handlePageInputChange}
+                                onBlur={handlePageInputSubmit}
+                                onKeyDown={handlePageInputSubmit}
+                                style={{ width: '30px', textAlign: 'center', background: '#222', color: 'white', border: '1px solid #555', borderRadius: '4px', padding: '2px' }}
+                            />
+                            / {numPages}
+                        </span>
+                        <button onClick={() => setPageNumber(p => Math.min(numPages, p + 1))} disabled={pageNumber >= numPages} style={{ color: 'white', padding: '0.2rem 0.5rem', cursor: 'pointer', background: 'transparent', border: 'none' }}>▶</button>
                         <div style={{ width: '1px', height: '15px', background: '#666', margin: '0 0.5rem' }}></div>
                         <button onClick={() => setScale(s => Math.max(0.5, s - 0.1))} style={{ color: 'white', cursor: 'pointer' }}>-</button>
                         <span>{Math.round(scale * 100)}%</span>
@@ -326,7 +358,17 @@ export default function PDFViewer({
                         marginTop: 'auto'
                     }}>
                         <button onClick={() => setPageNumber(p => Math.max(1, p - 1))} disabled={pageNumber <= 1} style={{ color: 'white', padding: '0.2rem 0.5rem', cursor: 'pointer', background: 'rgba(255,255,255,0.1)', borderRadius: '4px', border: 'none' }}>◀ 이전</button>
-                        <span>{pageNumber} / {numPages}</span>
+                        <span style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                            <input
+                                type="text"
+                                value={inputPage}
+                                onChange={handlePageInputChange}
+                                onBlur={handlePageInputSubmit}
+                                onKeyDown={handlePageInputSubmit}
+                                style={{ width: '30px', textAlign: 'center', background: '#222', color: 'white', border: '1px solid #555', borderRadius: '4px', padding: '2px' }}
+                            />
+                            / {numPages}
+                        </span>
                         <button onClick={() => setPageNumber(p => Math.min(numPages, p + 1))} disabled={pageNumber >= numPages} style={{ color: 'white', padding: '0.2rem 0.5rem', cursor: 'pointer', background: 'rgba(255,255,255,0.1)', borderRadius: '4px', border: 'none' }}>다음 ▶</button>
                     </div>
                 )}

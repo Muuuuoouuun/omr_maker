@@ -28,12 +28,16 @@ export async function analyzeAnswerImages(imageParts: string[]) {
         // Convert base64 strings to GenerativeContent parts
         const generatedContent = await model.generateContent([
             prompt,
-            ...imageParts.map(img => ({
-                inlineData: {
-                    data: img.split(',')[1], // Remove "data:image/png;base64," prefix
-                    mimeType: "image/png"
-                }
-            }))
+            ...imageParts.map(img => {
+                const mimeMatch = img.match(/^data:(.*?);base64,/);
+                const mimeType = mimeMatch ? mimeMatch[1] : "image/jpeg";
+                return {
+                    inlineData: {
+                        data: img.split(',')[1],
+                        mimeType: mimeType
+                    }
+                };
+            })
         ]);
 
         const response = await generatedContent.response;
