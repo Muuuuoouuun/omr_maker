@@ -1,10 +1,10 @@
 "use client";
 
-import { useMemo, useState, useEffect } from "react";
+import { useMemo, useState, useEffect, useRef } from "react";
 import { Exam, Attempt } from "@/types/omr";
 import {
     BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip, ResponsiveContainer,
-    Radar, RadarChart, PolarGrid, PolarAngleAxis, PolarRadiusAxis, Legend
+    Radar, RadarChart, PolarGrid, PolarAngleAxis, PolarRadiusAxis
 } from 'recharts';
 import { AlertTriangle, CheckCircle, BarChart2, Download, ChevronUp, ChevronDown, List } from "lucide-react";
 
@@ -16,6 +16,36 @@ interface ExamAnalyticsTabProps {
 
 export default function ExamAnalyticsTab({ exams, attempts, initialExamId }: ExamAnalyticsTabProps) {
     const [selectedExamId, setSelectedExamId] = useState<string>(initialExamId || (exams.length > 0 ? exams[0].id : ""));
+    const [isSelectOpen, setIsSelectOpen] = useState(false);
+    const [inputValue, setInputValue] = useState("");
+    const dropdownRef = useRef<HTMLDivElement>(null);
+
+    // Handle click outside to close dropdown
+    useEffect(() => {
+        const handleClickOutside = (event: MouseEvent) => {
+            if (dropdownRef.current && !dropdownRef.current.contains(event.target as Node)) {
+                setIsSelectOpen(false);
+            }
+        };
+        document.addEventListener("mousedown", handleClickOutside);
+        return () => document.removeEventListener("mousedown", handleClickOutside);
+    }, []);
+
+    const filteredExams = useMemo(() => {
+        if (!inputValue) return exams;
+        // Don't filter if the input exactly matches the selected exam title (meaning it's just displaying it)
+        const currentSelected = exams.find(e => e.id === selectedExamId);
+        if (currentSelected && inputValue === currentSelected.title && !isSelectOpen) return exams;
+        return exams.filter(exam => exam.title.toLowerCase().includes(inputValue.toLowerCase()));
+    }, [exams, inputValue, selectedExamId, isSelectOpen]);
+
+    // Keep input in sync with selected exam when not open
+    useEffect(() => {
+        const currentSelected = exams.find(e => e.id === selectedExamId);
+        if (currentSelected && !isSelectOpen) {
+            setInputValue(currentSelected.title);
+        }
+    }, [selectedExamId, exams, isSelectOpen]);
 
     // Sync initialExamId if parent changes it
     useEffect(() => {
@@ -79,7 +109,7 @@ export default function ExamAnalyticsTab({ exams, attempts, initialExamId }: Exa
                 optionRates,
                 answer: q.answer
             };
-        }).sort((a: any, b: any) => a.correctRate - b.correctRate); // Sort by hardest first
+        }).sort((a: { correctRate: number }, b: { correctRate: number }) => a.correctRate - b.correctRate); // Sort by hardest first
     }, [selectedExam, examAttempts]);
 
     // Calculate Label Analytics for Radar Chart
@@ -200,25 +230,108 @@ export default function ExamAnalyticsTab({ exams, attempts, initialExamId }: Exa
             {/* Filter Section */}
             <div className="card" style={{ padding: '1.5rem', display: 'flex', alignItems: 'center', gap: '1rem', background: 'var(--surface)' }}>
                 <span style={{ fontWeight: 600, color: 'var(--text)' }}>분석할 시험 선택:</span>
-                <select
-                    value={selectedExamId}
-                    onChange={(e) => setSelectedExamId(e.target.value)}
-                    style={{
-                        padding: '0.75rem 1rem',
-                        borderRadius: 'var(--radius-md)',
-                        border: '1px solid var(--border)',
-                        background: 'var(--background)',
-                        color: 'var(--text)',
-                        flex: 1,
-                        maxWidth: '400px',
-                        outline: 'none',
-                        cursor: 'pointer'
-                    }}
-                >
-                    {exams.map(exam => (
-                        <option key={exam.id} value={exam.id}>{exam.title}</option>
-                    ))}
-                </select>
+                <div ref={dropdownRef} style={{ position: 'relative', flex: 1, maxWidth: '400px' }}>
+                    <div
+                        style={{
+                            display: 'flex',
+                            alignItems: 'center',
+                            position: 'relative',
+                            borderRadius: 'var(--radius-md)',
+                            border: '1px solid var(--border)',
+                            background: 'var(--background)',
+                        }}
+                    >
+                        <input
+                            type="text"
+                            value={inputValue}
+                            onChange={(e) => {
+                                setInputValue(e.target.value);
+                                setIsSelectOpen(true);
+                            }}
+                            onFocus={() => {
+                                setIsSelectOpen(true);
+                                setInputValue(""); // Clear input to allow fresh search
+                            }}
+                            onBlur={() => {
+                                // Restore selected exam text if they didn't pick anything new
+                                setTimeout(() => {
+                                    if (!isSelectOpen) {
+                                        const currentExam = exams.find(e => e.id === selectedExamId);
+                                        if (currentExam) setInputValue(currentExam.title);
+                                    }
+                                }, 150);
+                            }}
+                            placeholder="시험을 검색하거나 선택하세요"
+                            style={{
+                                width: '100%',
+                                padding: '0.75rem 1rem',
+                                paddingRight: '2.5rem',
+                                border: 'none',
+                                background: 'transparent',
+                                color: 'var(--text)',
+                                outline: 'none',
+                                cursor: 'text'
+                            }}
+                        />
+                        <ChevronDown
+                            size={18}
+                            style={{
+                                position: 'absolute',
+                                right: '1rem',
+                                pointerEvents: 'none',
+                                transform: isSelectOpen ? 'rotate(180deg)' : 'rotate(0deg)',
+                                transition: 'transform 0.2s',
+                                color: 'var(--muted)'
+                            }}
+                        />
+                    </div>
+
+                    {isSelectOpen && (
+                        <div style={{
+                            position: 'absolute',
+                            top: '100%',
+                            left: 0,
+                            right: 0,
+                            marginTop: '0.5rem',
+                            background: 'var(--background)',
+                            border: '1px solid var(--border)',
+                            borderRadius: 'var(--radius-md)',
+                            boxShadow: '0 4px 12px rgba(0,0,0,0.1)',
+                            zIndex: 50,
+                            maxHeight: '300px',
+                            overflowY: 'auto'
+                        }}>
+                            {filteredExams.length > 0 ? (
+                                filteredExams.map(exam => (
+                                    <div
+                                        key={exam.id}
+                                        onMouseDown={(e) => {
+                                            // Handle click with onMouseDown so it fires before input onBlur
+                                            e.preventDefault();
+                                            setSelectedExamId(exam.id);
+                                            setInputValue(exam.title);
+                                            setIsSelectOpen(false);
+                                        }}
+                                        style={{
+                                            padding: '0.75rem 1rem',
+                                            cursor: 'pointer',
+                                            background: exam.id === selectedExamId ? 'var(--surface)' : 'transparent',
+                                            color: exam.id === selectedExamId ? 'var(--primary)' : 'var(--text)',
+                                            fontWeight: exam.id === selectedExamId ? 600 : 400,
+                                        }}
+                                        className="hover:bg-slate-50 dark:hover:bg-slate-800"
+                                    >
+                                        {exam.title}
+                                    </div>
+                                ))
+                            ) : (
+                                <div style={{ padding: '1rem', textAlign: 'center', color: 'var(--muted)' }}>
+                                    검색 결과가 없습니다
+                                </div>
+                            )}
+                        </div>
+                    )}
+                </div>
             </div>
 
             {examStats ? (
@@ -310,7 +423,7 @@ export default function ExamAnalyticsTab({ exams, attempts, initialExamId }: Exa
                         </h3>
                         <div style={{ height: '300px', width: '100%', marginBottom: '2rem' }}>
                             <ResponsiveContainer width="100%" height="100%">
-                                <BarChart data={questionAnalytics.sort((a: any, b: any) => a.index - b.index)}>
+                                <BarChart data={[...questionAnalytics].sort((a: { index: number }, b: { index: number }) => a.index - b.index)}>
                                     <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="var(--border)" />
                                     <XAxis dataKey="index" tickFormatter={(v) => `${v}번`} tick={{ fill: 'var(--muted)' }} axisLine={false} tickLine={false} />
                                     <YAxis domain={[0, 100]} tick={{ fill: 'var(--muted)' }} axisLine={false} tickLine={false} />
@@ -344,8 +457,8 @@ export default function ExamAnalyticsTab({ exams, attempts, initialExamId }: Exa
                                     </tr>
                                 </thead>
                                 <tbody>
-                                    {questionAnalytics.sort((a: any, b: any) => a.index - b.index).map((q, i) => {
-                                        const optMap = q.optionRates.reduce((acc: any, curr: any) => { acc[curr.option] = curr.rate; return acc; }, {});
+                                    {[...questionAnalytics].sort((a: { index: number }, b: { index: number }) => a.index - b.index).map((q, i) => {
+                                        const optMap = q.optionRates.reduce((acc: Record<number, number>, curr: { option: number; rate: number }) => { acc[curr.option] = curr.rate; return acc; }, {});
                                         return (
                                             <tr key={i} style={{ borderBottom: '1px solid var(--border)' }} className="hover:bg-slate-50 dark:hover:bg-slate-800/50">
                                                 <td style={{ padding: '0.75rem 1rem', fontWeight: 600 }}>{q.index}번 <span style={{ fontSize: '0.75rem', color: 'var(--muted)', fontWeight: 400 }}>({q.label})</span></td>
@@ -418,7 +531,7 @@ export default function ExamAnalyticsTab({ exams, attempts, initialExamId }: Exa
                                             <td style={{ padding: '1rem', fontWeight: 600 }}>{student.studentName}</td>
                                             <td style={{ padding: '1rem' }}>
                                                 <div style={{ fontWeight: 800, color: student.scorePercentage >= 80 ? 'var(--success)' : (student.scorePercentage < 50 ? 'var(--error)' : 'var(--text)') }}>
-                                                    {student.totalScore}점 <span style={{ fontSize: '0.8rem', color: 'var(--muted)', fontWeight: 400 }}>({student.scorePercentage}%)</span>
+                                                    {Number(student.totalScore.toFixed(2))}점 <span style={{ fontSize: '0.8rem', color: 'var(--muted)', fontWeight: 400 }}>({student.scorePercentage}%)</span>
                                                 </div>
                                             </td>
                                             {/* Dynamic Label Columns */}

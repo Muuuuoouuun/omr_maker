@@ -18,10 +18,6 @@ export default function SolvePage() {
     const [drawings, setDrawings] = useState<Record<number, string[]>>({});
     const [pdfFile, setPdfFile] = useState<File | null>(null);
 
-    const [isAuthorized, setIsAuthorized] = useState(false);
-    const [selectedGroupId, setSelectedGroupId] = useState("");
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const [availableGroups, setAvailableGroups] = useState<any[]>([]);
     const [user, setUser] = useState<{ name: string; isGuest?: boolean; guestId?: string } | null>(null);
 
     // Navigation State
@@ -73,15 +69,12 @@ export default function SolvePage() {
                         }
 
                         // Check Access Control
+                        // Load groups for selection (Simulation of "User's Groups")
                         if (parsed.accessConfig?.type === 'group') {
-                            setIsAuthorized(false);
-                            // Load groups for selection (Simulation of "User's Groups")
                             const groups = localStorage.getItem('omr_groups');
                             if (groups) {
-                                setAvailableGroups(JSON.parse(groups));
+                                // Logic removed
                             }
-                        } else {
-                            setIsAuthorized(true);
                         }
                     } catch (err) {
                         alert("시험 데이터 로드 실패");
@@ -188,16 +181,7 @@ export default function SolvePage() {
         window.location.href = `/student/review/${attemptId}`;
     };
 
-    // eslint-disable-next-line @typescript-eslint/no-unused-vars
-    const checkGroupAccess = () => {
-        if (!examData?.accessConfig?.groupIds) return;
 
-        if (examData.accessConfig.groupIds.includes(selectedGroupId)) {
-            setIsAuthorized(true);
-        } else {
-            alert("이 시험에 접근 권한이 없는 그룹입니다.");
-        }
-    };
 
     const toggleTeacherMode = (checked: boolean) => {
         if (checked) {

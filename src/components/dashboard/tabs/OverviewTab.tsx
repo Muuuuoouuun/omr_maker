@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useMemo } from "react";
 import Link from "next/link";
 import { Exam, Attempt } from "@/types/omr";
 import StatCard from "@/components/dashboard/StatCard";
@@ -24,20 +24,26 @@ export default function OverviewTab({ exams, attempts, stats, trendData, onNavig
     const [activeTab, setActiveTab] = useState<'ongoing' | 'completed'>('ongoing');
 
     // Create dummy data mixed with real data for presentation
-    const ongoingExams = [
-        ...exams.slice(0, 2).map((e, idx) => ({ ...e, completedCount: attempts.filter(a => a.examId === e.id).length, total: stats.totalStudents > 0 ? stats.totalStudents : 30 + idx * 5 })),
-        // Mock ongoing exams
-        { id: 'mock-1', title: 'Midterm English Test', createdAt: new Date(Date.now() - 86400000 * 2).toISOString(), completedCount: 12, total: 35 },
-        { id: 'mock-2', title: 'Chapter 4 Mathematics', createdAt: new Date(Date.now() - 86400000 * 5).toISOString(), completedCount: 28, total: 32 },
-        { id: 'mock-3', title: 'Science Pop Quiz', createdAt: new Date(Date.now() - 86400000 * 1).toISOString(), completedCount: 5, total: 30 }
-    ].slice(0, 5);
+    const ongoingExams = useMemo(() => {
+        const now = Date.now();
+        return [
+            ...exams.slice(0, 2).map((e, idx) => ({ ...e, completedCount: attempts.filter(a => a.examId === e.id).length, total: stats.totalStudents > 0 ? stats.totalStudents : 30 + idx * 5 })),
+            // Mock ongoing exams
+            { id: 'mock-ongoing-1', title: 'Midterm English Test', createdAt: new Date(now - 86400000 * 2).toISOString(), completedCount: 12, total: 35 },
+            { id: 'mock-ongoing-2', title: 'Chapter 4 Mathematics', createdAt: new Date(now - 86400000 * 5).toISOString(), completedCount: 28, total: 32 },
+            { id: 'mock-ongoing-3', title: 'Science Pop Quiz', createdAt: new Date(now - 86400000 * 1).toISOString(), completedCount: 5, total: 30 }
+        ].slice(0, 5);
+    }, [exams, attempts, stats]);
 
-    const completedExams = [
-        // Mock completed exams
-        { id: 'comp-1', title: 'History Final Exam', createdAt: new Date(Date.now() - 86400000 * 30).toISOString(), completedCount: 35, total: 35 },
-        { id: 'comp-2', title: 'Biology Chapter 1', createdAt: new Date(Date.now() - 86400000 * 15).toISOString(), completedCount: 30, total: 30 },
-        { id: 'comp-3', title: 'Literature Essay Submission', createdAt: new Date(Date.now() - 86400000 * 10).toISOString(), completedCount: 32, total: 32 }
-    ];
+    const completedExams = useMemo(() => {
+        const now = Date.now();
+        return [
+            // Mock completed exams
+            { id: 'comp-1', title: 'History Final Exam', createdAt: new Date(now - 86400000 * 30).toISOString(), completedCount: 35, total: 35 },
+            { id: 'comp-2', title: 'Biology Chapter 1', createdAt: new Date(now - 86400000 * 15).toISOString(), completedCount: 30, total: 30 },
+            { id: 'comp-3', title: 'Literature Essay Submission', createdAt: new Date(now - 86400000 * 10).toISOString(), completedCount: 32, total: 32 }
+        ];
+    }, []);
 
     const displayExams = activeTab === 'ongoing' ? ongoingExams : completedExams;
 

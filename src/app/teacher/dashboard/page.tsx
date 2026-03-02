@@ -24,8 +24,8 @@ export default function TeacherDashboard() {
 
     useEffect(() => {
         // Load Data
-        let loadedExams: Exam[] = [];
-        let loadedAttempts: Attempt[] = [];
+        const loadedExams: Exam[] = [];
+        const loadedAttempts: Attempt[] = [];
 
         // Scan localStorage for exams
         for (let i = 0; i < localStorage.length; i++) {

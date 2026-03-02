@@ -47,10 +47,23 @@ export default function PDFViewer({
     // Canvas Ref
     const canvasRef = useRef<HTMLCanvasElement>(null);
     const containerRef = useRef<HTMLDivElement>(null);
+    const wrapperRef = useRef<HTMLDivElement>(null);
+    const [containerWidth, setContainerWidth] = useState<number>(0);
+
+    useEffect(() => {
+        if (!wrapperRef.current) return;
+        const observer = new ResizeObserver((entries) => {
+            if (entries[0]) {
+                const { width } = entries[0].contentRect;
+                setContainerWidth(width - 64); // Account for 2rem padding (32px * 2)
+            }
+        });
+        observer.observe(wrapperRef.current);
+        return () => observer.disconnect();
+    }, []);
 
     useEffect(() => {
         if (typeof forcePage === 'number' && forcePage >= 1 && forcePage <= numPages) {
-            // eslint-disable-next-line react-hooks/set-state-in-effect
             setPageNumber(forcePage);
         }
     }, [forcePage, numPages]);
@@ -272,7 +285,7 @@ export default function PDFViewer({
             </div>
 
             {/* PDF Content */}
-            <div style={{ flex: 1, overflow: 'auto', display: 'flex', flexDirection: 'column', alignItems: 'center', background: '#525659', position: 'relative' }}>
+            <div ref={wrapperRef} style={{ flex: 1, overflow: 'auto', display: 'flex', flexDirection: 'column', alignItems: 'center', background: '#525659', position: 'relative' }}>
                 <div style={{ flex: 1, display: 'flex', justifyContent: 'center', padding: '2rem', width: '100%' }}>
                     {file ? (
                         <Document file={file} onLoadSuccess={onDocumentLoadSuccess} loading={<div style={{ color: 'white' }}>문서 로딩 중...</div>}>
@@ -281,7 +294,7 @@ export default function PDFViewer({
                                 onClick={handlePageClick}
                                 style={{ position: 'relative', boxShadow: '0 4px 6px -1px rgba(0, 0, 0, 0.1)' }}
                             >
-                                <Page pageNumber={pageNumber} scale={scale} renderTextLayer={true} renderAnnotationLayer={true} />{/* Canvas Overlay */}
+                                <Page pageNumber={pageNumber} scale={scale} width={containerWidth > 0 ? containerWidth : undefined} renderTextLayer={true} renderAnnotationLayer={true} />{/* Canvas Overlay */}
                                 {enableDrawing && (
                                     <canvas
                                         ref={canvasRef}
@@ -309,7 +322,7 @@ export default function PDFViewer({
                                         key={i}
                                         onClick={(e) => {
                                             e.stopPropagation();
-                                            marker.onClick && marker.onClick();
+                                            if (marker.onClick) marker.onClick();
                                         }}
                                         style={{
                                             position: 'absolute',

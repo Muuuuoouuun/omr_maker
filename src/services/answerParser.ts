@@ -4,6 +4,7 @@ import { analyzeAnswerImages } from '@/app/actions/analyzeKey';
 export interface ParsedAnswer {
     questionNum: number;
     answer: number; // 1=A, 2=B...
+    score?: number; // Optional point value if detected
     confidence: number; // 0-1
     rawText: string;
 }
@@ -112,12 +113,13 @@ export async function parseAnswerKeyWithGemini(file: File): Promise<ParsedAnswer
     const arrayBuffer = await file.arrayBuffer();
     const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
 
-    const maxPages = Math.min(pdf.numPages, 3); // Limit to 3 pages
+    const maxPages = Math.min(pdf.numPages, 3); // Max 3 pages to prevent heavy payloads
     const images: string[] = [];
 
     for (let i = 1; i <= maxPages; i++) {
         const page = await pdf.getPage(i);
-        const viewport = page.getViewport({ scale: 2.0 }); // Higher scale for better OCR
+        // Decrease scale significantly to 1.0 down from 1.5. This keeps it around ~150kb per image.
+        const viewport = page.getViewport({ scale: 1.0 });
 
         const canvas = document.createElement('canvas');
         const context = canvas.getContext('2d');
@@ -127,8 +129,8 @@ export async function parseAnswerKeyWithGemini(file: File): Promise<ParsedAnswer
         if (context) {
             // eslint-disable-next-line @typescript-eslint/no-explicit-any
             await page.render({ canvasContext: context, viewport } as any).promise;
-            // Use JPEG instead of PNG to save bandwidth and stay under limits
-            images.push(canvas.toDataURL('image/jpeg', 0.8));
+            // Heavily compress jpeg to drastically reduce size and avoid Next.js Body Size Limit
+            images.push(canvas.toDataURL('image/jpeg', 0.5));
         }
     }
 
@@ -144,14 +146,15 @@ export async function parseAnswerKeyWithGemini(file: File): Promise<ParsedAnswer
         return aiResults.map((item: any) => ({
             questionNum: parseInt(item.questionNum || item.id || item.number),
             answer: parseInt(item.answer || item.val),
+            score: item.score ? parseFloat(item.score) : undefined,
             confidence: 0.95,
             rawText: JSON.stringify(item)
             // eslint-disable-next-line @typescript-eslint/no-explicit-any
         })).filter((item: any) => !isNaN(item.questionNum) && !isNaN(item.answer))
             // eslint-disable-next-line @typescript-eslint/no-explicit-any
             .sort((a: any, b: any) => a.questionNum - b.questionNum);
-    } catch (e) {
+    } catch (e: any) {
         console.error("AI Parsing failed:", e);
-        throw e;
+        throw new Error(`AI 인식 실패: ${e.message || '알 수 없는 오류'}`);
     }
 }

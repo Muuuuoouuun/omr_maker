@@ -6,7 +6,7 @@ import { parseAnswerKeyPdf, ParsedAnswer } from '@/services/answerParser';
 interface AnswerImportModalProps {
     isOpen: boolean;
     onClose: () => void;
-    onApply: (answers: Record<number, number>) => void;
+    onApply: (answers: ParsedAnswer[]) => void;
     onUploadAnswerPdf?: (file: File) => void; // For reference-only PDF (teacher view only)
 }
 
@@ -51,7 +51,7 @@ export default function AnswerImportModal({ isOpen, onClose, onApply, onUploadAn
             if (err.message && err.message.includes("GEMINI_API_KEY")) {
                 setError("서버에 GEMINI_API_KEY가 설정되지 않았습니다.");
             } else {
-                setError("분석 중 오류가 발생했습니다. " + (isAiMode ? "(AI 모드는 시간이 더 걸릴 수 있습니다)" : ""));
+                setError(`분석 실패: ${err.message || err.toString()}`);
             }
         } finally {
             setIsProcessing(false);
@@ -76,12 +76,8 @@ export default function AnswerImportModal({ isOpen, onClose, onApply, onUploadAn
     };
 
     const handleApply = () => {
-        const mapping: Record<number, number> = {};
-        parsedData.forEach(item => {
-            mapping[item.questionNum] = item.answer;
-        });
-        if (Object.keys(mapping).length > 0) {
-            onApply(mapping);
+        if (parsedData.length > 0) {
+            onApply(parsedData);
         }
         if (file && onUploadAnswerPdf) {
             onUploadAnswerPdf(file);
@@ -156,7 +152,10 @@ export default function AnswerImportModal({ isOpen, onClose, onApply, onUploadAn
                             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(100px, 1fr))', gap: '0.5rem' }}>
                                 {parsedData.map((item, idx) => (
                                     <div key={idx} style={{ padding: '0.5rem', border: '1px solid #eee', borderRadius: '4px', textAlign: 'center' }}>
-                                        <div style={{ fontSize: '0.8rem', color: '#666', marginBottom: '0.2rem' }}>문항 {item.questionNum}</div>
+                                        <div style={{ fontSize: '0.8rem', color: '#666', marginBottom: '0.2rem' }}>
+                                            문항 {item.questionNum}
+                                            {item.score && <span style={{ color: '#10b981', marginLeft: '4px' }}>({item.score}점)</span>}
+                                        </div>
                                         <select
                                             value={item.answer}
                                             onChange={(e) => handleAnswerChange(idx, e.target.value)}

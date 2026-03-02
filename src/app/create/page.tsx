@@ -11,6 +11,7 @@ const PDFViewer = dynamic(() => import("@/components/PDFViewer"), { ssr: false }
 import { useState, useEffect } from "react";
 import html2canvas from "html2canvas";
 import { Question } from "@/types/omr";
+import { ParsedAnswer } from "@/services/answerParser";
 
 export default function CreateOMRPage() {
     // UI State
@@ -216,9 +217,9 @@ export default function CreateOMRPage() {
         }
     };
 
-    const handleAnswerImport = (importedAnswers: Record<number, number>) => {
+    const handleAnswerImport = (importedAnswers: ParsedAnswer[]) => {
         // Find max question number to auto-resize exam if needed
-        const maxQ = Math.max(...Object.keys(importedAnswers).map(Number));
+        const maxQ = Math.max(...importedAnswers.map(ans => ans.questionNum));
         if (maxQ > questionsCount) {
             if (confirm(`가져온 정답이 ${maxQ}번까지 있습니다. 문항 수를 늘리시겠습니까?`)) {
                 setQuestionsCount(maxQ);
@@ -226,13 +227,18 @@ export default function CreateOMRPage() {
         }
 
         setQuestions(prev => prev.map(q => {
-            if (importedAnswers[q.number]) {
-                return { ...q, answer: importedAnswers[q.number] };
+            const match = importedAnswers.find(ans => ans.questionNum === q.number);
+            if (match) {
+                return {
+                    ...q,
+                    answer: match.answer,
+                    ...(match.score ? { score: match.score } : {})
+                };
             }
             return q;
         }));
 
-        alert("정답이 적용되었습니다!");
+        alert("정답 및 배점(있는 경우)이 적용되었습니다!");
     };
 
     const handleFastAnswerChange = (e: React.ChangeEvent<HTMLInputElement>) => {
