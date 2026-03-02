@@ -66,6 +66,79 @@ export default function StudentAnalyticsTab({ exams, attempts }: StudentAnalytic
             });
     }, [studentAttempts, attempts, excludedExamIds]);
 
+    // Data for Detailed Table
+    const detailedAnalysis = useMemo(() => {
+        return studentAttempts.map(attempt => {
+            const exam = exams.find(e => e.id === attempt.examId);
+
+            // Calculate rank
+            const examAttempts = attempts.filter(a => a.examId === attempt.examId)
+                .sort((a, b) => b.score - a.score);
+            let rank = 1;
+            const totalStudents = examAttempts.length;
+
+            // To handle ties properly, find first index with same score
+            const studentScore = attempt.score;
+            rank = examAttempts.findIndex(a => a.score === studentScore) + 1;
+
+            // Calculate strengths and weaknesses based on labels
+            const labelStats: Record<string, { correct: number, total: number }> = {};
+
+            if (exam && attempt.answers && exam.questions) {
+                exam.questions.forEach(q => {
+                    const label = q.label || '일반/종합';
+                    if (!labelStats[label]) labelStats[label] = { correct: 0, total: 0 };
+
+                    labelStats[label].total += 1;
+                    if (attempt.answers[q.id] === q.answer) {
+                        labelStats[label].correct += 1;
+                    }
+                });
+            }
+
+            let strongPoint = '';
+            let weakPoint = '';
+            let highestRate = -1;
+            let lowestRate = 2; // rate goes up to 1
+
+            Object.entries(labelStats).forEach(([label, stats]) => {
+                if (stats.total > 0) {
+                    const rate = stats.correct / stats.total;
+                    if (rate > highestRate) {
+                        highestRate = rate;
+                        strongPoint = label;
+                    }
+                    if (rate < lowestRate) {
+                        lowestRate = rate;
+                        weakPoint = label;
+                    }
+                }
+            });
+
+            if (highestRate === lowestRate) {
+                if (highestRate >= 0.8) weakPoint = '비교적 양호';
+                else if (highestRate <= 0.4) strongPoint = '기초 필요';
+                else if (Object.keys(labelStats).length === 1) {
+                    strongPoint = '균형';
+                    weakPoint = '균형';
+                }
+            }
+
+            return {
+                attemptId: attempt.id,
+                examTitle: attempt.examTitle,
+                score: attempt.score,
+                totalScore: attempt.totalScore,
+                scoreRate: Math.round((attempt.score / attempt.totalScore) * 100),
+                rank,
+                totalStudents,
+                strongPoint,
+                weakPoint,
+                date: new Date(attempt.finishedAt).toLocaleDateString(undefined, { year: 'numeric', month: '2-digit', day: '2-digit' })
+            };
+        }).reverse(); // Latest at the top
+    }, [studentAttempts, attempts, exams]);
+
     if (students.length === 0) {
         return <div className="text-center p-8 text-muted">아직 응시 기록이 있는 학생이 없습니다.</div>;
     }
@@ -244,6 +317,73 @@ export default function StudentAnalyticsTab({ exams, attempts }: StudentAnalytic
                             })}
                         </div>
                     </div>
+                </div>
+            </div>
+
+            {/* Detailed Table Section */}
+            <div className="card" style={{ padding: '1.5rem', display: 'flex', flexDirection: 'column' }}>
+                <h3 style={{ fontSize: '1.25rem', fontWeight: 700, marginBottom: '0.5rem' }}>
+                    세부 시험 분석 내역
+                </h3>
+                <p style={{ color: 'var(--muted)', fontSize: '0.9rem', marginBottom: '1.5rem' }}>
+                    각 시험별 등수 및 문항 라벨에 따른 강점/약점 유형을 요약하여 보여줍니다.
+                </p>
+
+                <div style={{ overflowX: 'auto' }}>
+                    <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left', minWidth: '700px' }}>
+                        <thead>
+                            <tr style={{ borderBottom: '2px solid var(--border)', color: 'var(--muted)', fontSize: '0.9rem' }}>
+                                <th style={{ padding: '1rem 0.5rem', fontWeight: 600 }}>시험명</th>
+                                <th style={{ padding: '1rem 0.5rem', fontWeight: 600 }}>점수</th>
+                                <th style={{ padding: '1rem 0.5rem', fontWeight: 600 }}>전체 등수</th>
+                                <th style={{ padding: '1rem 0.5rem', fontWeight: 600 }}>강점 유형</th>
+                                <th style={{ padding: '1rem 0.5rem', fontWeight: 600 }}>약점 유형</th>
+                                <th style={{ padding: '1rem 0.5rem', fontWeight: 600 }}>응시일</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {detailedAnalysis.length === 0 ? (
+                                <tr>
+                                    <td colSpan={6} style={{ textAlign: 'center', padding: '2rem', color: 'var(--muted)' }}>
+                                        기록이 없습니다.
+                                    </td>
+                                </tr>
+                            ) : (
+                                detailedAnalysis.map((detail) => (
+                                    <tr key={detail.attemptId} className="card-hover" style={{ borderBottom: '1px solid var(--border)' }}>
+                                        <td style={{ padding: '1rem 0.5rem', fontWeight: 600, color: 'var(--foreground)' }}>
+                                            {detail.examTitle}
+                                        </td>
+                                        <td style={{ padding: '1rem 0.5rem', fontWeight: 700, color: detail.scoreRate >= 80 ? 'var(--success)' : (detail.scoreRate < 50 ? 'var(--error)' : 'inherit') }}>
+                                            {detail.score} <span style={{ fontSize: '0.8rem', color: 'var(--muted)', fontWeight: 400 }}>/ {detail.totalScore}</span>
+                                        </td>
+                                        <td style={{ padding: '1rem 0.5rem', fontWeight: 600 }}>
+                                            {detail.rank} <span style={{ fontSize: '0.8rem', color: 'var(--muted)', fontWeight: 400 }}>/ {detail.totalStudents}명</span>
+                                        </td>
+                                        <td style={{ padding: '1rem 0.5rem' }}>
+                                            {detail.strongPoint ?
+                                                <span style={{ background: 'rgba(16, 185, 129, 0.1)', color: 'var(--success)', padding: '4px 8px', borderRadius: '4px', fontSize: '0.85rem', fontWeight: 600 }}>
+                                                    {detail.strongPoint}
+                                                </span>
+                                                : <span style={{ color: 'var(--muted)' }}>-</span>
+                                            }
+                                        </td>
+                                        <td style={{ padding: '1rem 0.5rem' }}>
+                                            {detail.weakPoint ?
+                                                <span style={{ background: 'rgba(239, 68, 68, 0.1)', color: 'var(--error)', padding: '4px 8px', borderRadius: '4px', fontSize: '0.85rem', fontWeight: 600 }}>
+                                                    {detail.weakPoint}
+                                                </span>
+                                                : <span style={{ color: 'var(--muted)' }}>-</span>
+                                            }
+                                        </td>
+                                        <td style={{ padding: '1rem 0.5rem', fontSize: '0.85rem', color: 'var(--muted)' }}>
+                                            {detail.date}
+                                        </td>
+                                    </tr>
+                                ))
+                            )}
+                        </tbody>
+                    </table>
                 </div>
             </div>
         </div>
