@@ -279,18 +279,41 @@ export default function SolvePage() {
                         onDrawingsChange={handleDrawingsChange}
                         forcePage={activeTab === 'problem' ? pdfCurrentPage : undefined}
                         markers={(activeTab === 'problem' && examData.questions)
-                            ? examData.questions
-                                .filter((q: Question) => q.pdfLocation)
-                                .map((q: Question) => ({
-                                    page: q.pdfLocation!.page,
-                                    x: q.pdfLocation!.x,
-                                    y: q.pdfLocation!.y,
-                                    w: q.pdfLocation!.w,
-                                    h: q.pdfLocation!.h,
-                                    label: q.number,
-                                    color: currentQuestionId === q.id ? '#6366f1' : '#ef4444',
-                                    onClick: () => handleQuestionClick(q.id)
-                                }))
+                            ? examData.questions.flatMap((q: Question) => {
+                                const qMarkers: { page: number; x: number; y: number; w?: number; h?: number; label: string | number; color?: string; type?: 'question' | 'choice'; onClick?: () => void }[] = [];
+                                if (q.pdfLocation) {
+                                    qMarkers.push({
+                                        page: q.pdfLocation.page,
+                                        x: q.pdfLocation.x,
+                                        y: q.pdfLocation.y,
+                                        w: q.pdfLocation.w,
+                                        h: q.pdfLocation.h,
+                                        label: q.number,
+                                        type: 'question',
+                                        color: currentQuestionId === q.id ? '#6366f1' : '#ef4444',
+                                        onClick: () => handleQuestionClick(q.id)
+                                    });
+                                }
+                                if (q.pdfChoices) {
+                                    Object.entries(q.pdfChoices).forEach(([choiceStr, loc]) => {
+                                        const choiceNum = parseInt(choiceStr, 10);
+                                        const isSelected = studentAnswers[q.id] === choiceNum;
+                                        qMarkers.push({
+                                            page: loc.page,
+                                            x: loc.x,
+                                            y: loc.y,
+                                            w: loc.w,
+                                            h: loc.h,
+                                            label: choiceNum,
+                                            type: 'choice',
+                                            // Provide color only if selected so viewer highlights it
+                                            color: isSelected ? '#3b82f6' : undefined,
+                                            onClick: () => handleAnswerClick(q.id, choiceNum)
+                                        });
+                                    });
+                                }
+                                return qMarkers;
+                            })
                             : []}
                     />
                 </div>

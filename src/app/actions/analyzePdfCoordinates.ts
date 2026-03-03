@@ -17,15 +17,28 @@ export async function analyzePdfCoordinates(imageParts: string[]) {
     });
 
     const prompt = `
-    You are an AI tasked with analyzing exam papers and finding the precise bounding box coordinates for every question number.
-    Extract the bounding box [ymin, xmin, ymax, xmax] for every question number (1, 2, 3...) in the provided images.
+    You are an AI tasked with analyzing exam papers and finding the precise bounding box coordinates for every question number, AND its multiple-choice options (choices 1, 2, 3, 4, 5).
+    Extract the bounding box [ymin, xmin, ymax, xmax] for every question number (1, 2, 3...) and for every choice (①, ②, ③, ④, ⑤ or 1), 2), 3), 4), 5)) in the provided images.
 
     Rules:
     1. Only locate the actual question numbers that start a new question (e.g. "1.", "1)", "[1]"). Do not locate numbers used inside the text.
     2. Coordinates must be strictly numeric values between 0.0 and 1.0, representing percentages of the image height/width from the top-left corner.
     3. Return ONLY a valid JSON array.
-    4. Format: [{"questionNum": 1, "page": 1, "ymin": 0.1, "xmin": 0.1, "ymax": 0.15, "xmax": 0.2}, ...]
+    4. Format:
+    [
+      {
+        "questionNum": 1,
+        "page": 1,
+        "ymin": 0.1, "xmin": 0.1, "ymax": 0.15, "xmax": 0.2,
+        "choices": [
+          {"num": 1, "ymin": 0.16, "xmin": 0.1, "ymax": 0.18, "xmax": 0.15},
+          {"num": 2, "ymin": 0.16, "xmin": 0.2, "ymax": 0.18, "xmax": 0.25}
+        ]
+      },
+      ...
+    ]
     5. 'page' should be the index matching the image provided (1-based index).
+    6. Ensure that choices correctly map to their respective questions.
     `;
 
     try {

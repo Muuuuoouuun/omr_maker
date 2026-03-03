@@ -160,6 +160,14 @@ export async function parseAnswerKeyWithGemini(file: File): Promise<ParsedAnswer
     }
 }
 
+export interface ChoiceBbox {
+    num: number;
+    ymin: number;
+    xmin: number;
+    ymax: number;
+    xmax: number;
+}
+
 export interface BboxResult {
     questionNum: number;
     page: number;
@@ -167,6 +175,7 @@ export interface BboxResult {
     xmin: number;
     ymax: number;
     xmax: number;
+    choices?: ChoiceBbox[];
 }
 
 export async function parsePdfCoordinatesWithGemini(file: File): Promise<BboxResult[]> {
@@ -208,7 +217,15 @@ export async function parsePdfCoordinatesWithGemini(file: File): Promise<BboxRes
             ymin: parseFloat(item.ymin),
             xmin: parseFloat(item.xmin),
             ymax: parseFloat(item.ymax),
-            xmax: parseFloat(item.xmax)
+            xmax: parseFloat(item.xmax),
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            choices: Array.isArray(item.choices) ? item.choices.map((c: any) => ({
+                num: parseInt(c.num),
+                ymin: parseFloat(c.ymin),
+                xmin: parseFloat(c.xmin),
+                ymax: parseFloat(c.ymax),
+                xmax: parseFloat(c.xmax)
+            })) : undefined
         })).filter((item: BboxResult) => !isNaN(item.questionNum) && !isNaN(item.ymin));
     } catch (error: unknown) {
         const e = error as Error;

@@ -11,6 +11,15 @@ export interface Question {
         w?: number;
         h?: number;
     };
+    pdfChoices?: {
+        [choiceNum: number]: {
+            page: number;
+            x: number;
+            y: number;
+            w: number;
+            h: number;
+        };
+    };
 }
 
 export interface Exam {

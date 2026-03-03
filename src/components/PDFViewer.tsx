@@ -18,7 +18,7 @@ interface PDFViewerProps {
     drawings?: Record<number, string[]>; // per page, array of path strings
     onDrawingsChange?: (page: number, newPaths: string[]) => void;
     // Markers Props
-    markers?: { page: number; x: number; y: number; w?: number; h?: number; label: string | number; color?: string; onClick?: () => void }[];
+    markers?: { page: number; x: number; y: number; w?: number; h?: number; label: string | number; color?: string; type?: 'question' | 'choice'; onClick?: () => void }[];
 }
 
 export default function PDFViewer({
@@ -319,6 +319,46 @@ export default function PDFViewer({
                                 {/* Markers Overlay */}
                                 {markers.filter(m => m.page === pageNumber).map((marker, i) => {
                                     const isBbox = marker.w !== undefined && marker.h !== undefined;
+                                    const isChoice = marker.type === 'choice';
+
+                                    if (isChoice) {
+                                        return (
+                                            <div
+                                                key={i}
+                                                onClick={(e) => {
+                                                    e.stopPropagation();
+                                                    if (marker.onClick) marker.onClick();
+                                                }}
+                                                className="pdf-choice-marker"
+                                                style={{
+                                                    position: 'absolute',
+                                                    left: `${marker.x * 100}%`,
+                                                    top: `${marker.y * 100}%`,
+                                                    width: `${marker.w! * 100}%`,
+                                                    height: `${marker.h! * 100}%`,
+                                                    zIndex: 25,
+                                                    cursor: 'pointer',
+                                                    background: marker.color ? `${marker.color}40` : 'transparent', // 25% opacity when selected
+                                                    border: marker.color ? `2px solid ${marker.color}` : 'none',
+                                                    borderRadius: '4px',
+                                                    transition: 'all 0.1s',
+                                                }}
+                                                title={`Select Choice ${marker.label}`}
+                                                onMouseEnter={(e) => {
+                                                    if (!marker.color) {
+                                                        e.currentTarget.style.background = 'rgba(16, 185, 129, 0.2)'; // Subtle green highlight
+                                                        e.currentTarget.style.border = '2px solid rgba(16, 185, 129, 0.5)';
+                                                    }
+                                                }}
+                                                onMouseLeave={(e) => {
+                                                    if (!marker.color) {
+                                                        e.currentTarget.style.background = 'transparent';
+                                                        e.currentTarget.style.border = 'none';
+                                                    }
+                                                }}
+                                            />
+                                        );
+                                    }
 
                                     return (
                                         <div

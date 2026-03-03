@@ -188,6 +188,19 @@ export default function CreateOMRPage() {
             bboxes.forEach(bbox => {
                 const qIndex = newQuestions.findIndex(q => q.number === bbox.questionNum);
                 if (qIndex !== -1) {
+                    const pdfChoices: { [key: number]: { page: number, x: number, y: number, w: number, h: number } } = {};
+                    if (bbox.choices) {
+                        bbox.choices.forEach(c => {
+                            pdfChoices[c.num] = {
+                                page: bbox.page,
+                                x: c.xmin,
+                                y: c.ymin,
+                                w: c.xmax - c.xmin,
+                                h: c.ymax - c.ymin
+                            };
+                        });
+                    }
+
                     newQuestions[qIndex] = {
                         ...newQuestions[qIndex],
                         pdfLocation: {
@@ -196,7 +209,8 @@ export default function CreateOMRPage() {
                             y: bbox.ymin,
                             w: bbox.xmax - bbox.xmin,
                             h: bbox.ymax - bbox.ymin
-                        }
+                        },
+                        pdfChoices: Object.keys(pdfChoices).length > 0 ? pdfChoices : undefined
                     };
                     mappedCount++;
                 }
