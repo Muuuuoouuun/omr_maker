@@ -18,7 +18,7 @@ interface PDFViewerProps {
     drawings?: Record<number, string[]>; // per page, array of path strings
     onDrawingsChange?: (page: number, newPaths: string[]) => void;
     // Markers Props
-    markers?: { page: number; x: number; y: number; label: string | number; color?: string; onClick?: () => void }[];
+    markers?: { page: number; x: number; y: number; w?: number; h?: number; label: string | number; color?: string; onClick?: () => void }[];
 }
 
 export default function PDFViewer({
@@ -317,34 +317,68 @@ export default function PDFViewer({
                                 )}
 
                                 {/* Markers Overlay */}
-                                {markers.filter(m => m.page === pageNumber).map((marker, i) => (
-                                    <div
-                                        key={i}
-                                        onClick={(e) => {
-                                            e.stopPropagation();
-                                            if (marker.onClick) marker.onClick();
-                                        }}
-                                        style={{
-                                            position: 'absolute',
-                                            left: `${marker.x * 100}%`,
-                                            top: `${marker.y * 100}%`,
-                                            transform: 'translate(-50%, -50%)',
-                                            zIndex: 20,
-                                            cursor: 'pointer',
-                                            width: '24px', height: '24px',
-                                            background: marker.color || '#ef4444',
-                                            color: 'white',
-                                            borderRadius: '50%',
-                                            display: 'flex', alignItems: 'center', justifyContent: 'center',
-                                            fontWeight: 'bold', fontSize: '0.75rem',
-                                            boxShadow: '0 2px 4px rgba(0,0,0,0.3)',
-                                            border: '2px solid white'
-                                        }}
-                                        title={`Question ${marker.label}`}
-                                    >
-                                        {marker.label}
-                                    </div>
-                                ))}
+                                {markers.filter(m => m.page === pageNumber).map((marker, i) => {
+                                    const isBbox = marker.w !== undefined && marker.h !== undefined;
+
+                                    return (
+                                        <div
+                                            key={i}
+                                            onClick={(e) => {
+                                                e.stopPropagation();
+                                                if (marker.onClick) marker.onClick();
+                                            }}
+                                            style={isBbox ? {
+                                                position: 'absolute',
+                                                left: `${marker.x * 100}%`,
+                                                top: `${marker.y * 100}%`,
+                                                width: `${marker.w! * 100}%`,
+                                                height: `${marker.h! * 100}%`,
+                                                zIndex: 20,
+                                                cursor: 'pointer',
+                                                background: (marker.color || '#ef4444') + '33', // 20% opacity
+                                                border: `2px solid ${marker.color || '#ef4444'}`,
+                                                borderRadius: '4px',
+                                                display: 'flex', alignItems: 'flex-start', justifyContent: 'flex-start',
+                                                padding: '2px',
+                                                boxShadow: '0 2px 4px rgba(0,0,0,0.1)',
+                                                transition: 'all 0.2s',
+                                            } : {
+                                                position: 'absolute',
+                                                left: `${marker.x * 100}%`,
+                                                top: `${marker.y * 100}%`,
+                                                transform: 'translate(-50%, -50%)',
+                                                zIndex: 20,
+                                                cursor: 'pointer',
+                                                width: '24px', height: '24px',
+                                                background: marker.color || '#ef4444',
+                                                color: 'white',
+                                                borderRadius: '50%',
+                                                display: 'flex', alignItems: 'center', justifyContent: 'center',
+                                                fontWeight: 'bold', fontSize: '0.75rem',
+                                                boxShadow: '0 2px 4px rgba(0,0,0,0.3)',
+                                                border: '2px solid white'
+                                            }}
+                                            title={`Question ${marker.label}`}
+                                        >
+                                            {isBbox ? (
+                                                <div style={{
+                                                    background: marker.color || '#ef4444',
+                                                    color: 'white',
+                                                    borderRadius: '4px',
+                                                    padding: '2px 6px',
+                                                    fontSize: '0.75rem',
+                                                    fontWeight: 'bold',
+                                                    marginTop: '-24px', // Float above
+                                                    marginLeft: '-2px'
+                                                }}>
+                                                    Q{marker.label}
+                                                </div>
+                                            ) : (
+                                                marker.label
+                                            )}
+                                        </div>
+                                    );
+                                })}
                             </div>
                         </Document>
                     ) : (

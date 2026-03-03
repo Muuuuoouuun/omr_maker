@@ -1,5 +1,5 @@
-// Answer parsing utility using PDF text extraction and Gemini AI for OCR
 import { analyzeAnswerImages } from '@/app/actions/analyzeKey';
+import { analyzePdfCoordinates } from '@/app/actions/analyzePdfCoordinates';
 
 export interface ParsedAnswer {
     questionNum: number;
@@ -153,8 +153,66 @@ export async function parseAnswerKeyWithGemini(file: File): Promise<ParsedAnswer
         })).filter((item: any) => !isNaN(item.questionNum) && !isNaN(item.answer))
             // eslint-disable-next-line @typescript-eslint/no-explicit-any
             .sort((a: any, b: any) => a.questionNum - b.questionNum);
-    } catch (e: any) {
+    } catch (error: unknown) {
+        const e = error as Error;
         console.error("AI Parsing failed:", e);
         throw new Error(`AI 인식 실패: ${e.message || '알 수 없는 오류'}`);
+    }
+}
+
+export interface BboxResult {
+    questionNum: number;
+    page: number;
+    ymin: number;
+    xmin: number;
+    ymax: number;
+    xmax: number;
+}
+
+export async function parsePdfCoordinatesWithGemini(file: File): Promise<BboxResult[]> {
+    const pdfjsLib = await getPdfJs();
+    const arrayBuffer = await file.arrayBuffer();
+    const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
+
+    const maxPages = Math.min(pdf.numPages, 10); // Analyze up to 10 pages
+    const images: string[] = [];
+
+    for (let i = 1; i <= maxPages; i++) {
+        const page = await pdf.getPage(i);
+        const viewport = page.getViewport({ scale: 1.0 });
+
+        const canvas = document.createElement('canvas');
+        const context = canvas.getContext('2d');
+        if (!context) continue;
+
+        canvas.height = viewport.height;
+        canvas.width = viewport.width;
+
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        await page.render({ canvasContext: context, viewport } as any).promise;
+        // Compress jpeg to avoid payload size limit
+        images.push(canvas.toDataURL('image/jpeg', 0.6));
+    }
+
+    try {
+        const aiResults = await analyzePdfCoordinates(images);
+
+        if (!Array.isArray(aiResults)) {
+            throw new Error("AI response is not an array");
+        }
+
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        return aiResults.map((item: any) => ({
+            questionNum: parseInt(item.questionNum || item.id || item.number),
+            page: parseInt(item.page || 1),
+            ymin: parseFloat(item.ymin),
+            xmin: parseFloat(item.xmin),
+            ymax: parseFloat(item.ymax),
+            xmax: parseFloat(item.xmax)
+        })).filter((item: BboxResult) => !isNaN(item.questionNum) && !isNaN(item.ymin));
+    } catch (error: unknown) {
+        const e = error as Error;
+        console.error("AI BBox Parsing failed:", e);
+        throw new Error(`AI를 통한 위치 인식 실패: ${e.message || '알 수 없는 오류'}`);
     }
 }

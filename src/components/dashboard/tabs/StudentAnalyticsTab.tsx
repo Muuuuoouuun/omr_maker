@@ -6,7 +6,7 @@ import {
     LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip,
     ResponsiveContainer, Legend
 } from 'recharts';
-import { TrendingUp } from "lucide-react";
+import { TrendingUp, Search } from "lucide-react";
 
 interface StudentAnalyticsTabProps {
     exams: Exam[];
@@ -27,6 +27,12 @@ export default function StudentAnalyticsTab({ exams, attempts }: StudentAnalytic
 
     const [selectedStudent, setSelectedStudent] = useState<string>(students.length > 0 ? students[0] : "");
     const [excludedExamIds, setExcludedExamIds] = useState<Set<string>>(new Set());
+    const [searchQuery, setSearchQuery] = useState<string>("");
+
+    const filteredStudents = useMemo(() => {
+        if (!searchQuery.trim()) return students;
+        return students.filter(name => name.toLowerCase().includes(searchQuery.toLowerCase()));
+    }, [students, searchQuery]);
 
     const toggleExamExclusion = (examId: string) => {
         const newSet = new Set(excludedExamIds);
@@ -151,8 +157,29 @@ export default function StudentAnalyticsTab({ exams, attempts }: StudentAnalytic
     return (
         <div className="fade-in-up" style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
             {/* Filter Section */}
-            <div className="card" style={{ padding: '1.5rem', display: 'flex', alignItems: 'center', gap: '1rem', background: 'var(--surface)' }}>
-                <span style={{ fontWeight: 600, color: 'var(--text)' }}>분석할 학생 선택:</span>
+            <div className="card" style={{ padding: '1.5rem', display: 'flex', alignItems: 'center', gap: '1rem', background: 'var(--surface)', flexWrap: 'wrap' }}>
+                <span style={{ fontWeight: 600, color: 'var(--text)', whiteSpace: 'nowrap' }}>분석할 학생 선택:</span>
+
+                <div style={{ position: 'relative', display: 'flex', alignItems: 'center' }}>
+                    <Search size={18} style={{ position: 'absolute', left: '12px', color: 'var(--muted)' }} />
+                    <input
+                        type="text"
+                        placeholder="이름 검색..."
+                        value={searchQuery}
+                        onChange={(e) => setSearchQuery(e.target.value)}
+                        style={{
+                            padding: '0.75rem 1rem 0.75rem 2.5rem',
+                            borderRadius: 'var(--radius-md)',
+                            border: '1px solid var(--border)',
+                            background: 'var(--background)',
+                            color: 'var(--text)',
+                            width: '180px',
+                            outline: 'none',
+                            transition: 'border-color 0.2s'
+                        }}
+                    />
+                </div>
+
                 <select
                     value={selectedStudent}
                     onChange={(e) => setSelectedStudent(e.target.value)}
@@ -168,9 +195,13 @@ export default function StudentAnalyticsTab({ exams, attempts }: StudentAnalytic
                         cursor: 'pointer'
                     }}
                 >
-                    {students.map(name => (
-                        <option key={name} value={name}>{name}</option>
-                    ))}
+                    {filteredStudents.length > 0 ? (
+                        filteredStudents.map(name => (
+                            <option key={name} value={name}>{name}</option>
+                        ))
+                    ) : (
+                        <option value="" disabled>검색 결과가 없습니다.</option>
+                    )}
                 </select>
             </div>
 

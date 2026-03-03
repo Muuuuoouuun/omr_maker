@@ -11,7 +11,7 @@ const PDFViewer = dynamic(() => import("@/components/PDFViewer"), { ssr: false }
 import { useState, useEffect } from "react";
 import html2canvas from "html2canvas";
 import { Question } from "@/types/omr";
-import { ParsedAnswer } from "@/services/answerParser";
+import { ParsedAnswer, parsePdfCoordinatesWithGemini } from "@/services/answerParser";
 
 export default function CreateOMRPage() {
     // UI State
@@ -41,6 +41,7 @@ export default function CreateOMRPage() {
     const [answerKeyPdf, setAnswerKeyPdf] = useState<File | null>(null); // Teacher reference answer key
     const [activeViewTab, setActiveViewTab] = useState<'problem' | 'answer'>('problem');
     const [isDetectingLocation, setIsDetectingLocation] = useState(false);
+    const [isSmartPdf, setIsSmartPdf] = useState(false);
 
     // Initialize questions when count changes
     useEffect(() => {
@@ -172,6 +173,47 @@ export default function CreateOMRPage() {
         }
     };
 
+    const handleAIDetectLocations = async () => {
+        if (!pdfFile) {
+            alert("먼저 문제지 PDF를 왼쪽 상단에서 업로드해주세요.");
+            return;
+        }
+        setIsDetectingLocation(true);
+        try {
+            const bboxes = await parsePdfCoordinatesWithGemini(pdfFile);
+
+            const newQuestions = [...questions];
+            let mappedCount = 0;
+
+            bboxes.forEach(bbox => {
+                const qIndex = newQuestions.findIndex(q => q.number === bbox.questionNum);
+                if (qIndex !== -1) {
+                    newQuestions[qIndex] = {
+                        ...newQuestions[qIndex],
+                        pdfLocation: {
+                            page: bbox.page,
+                            x: bbox.xmin,
+                            y: bbox.ymin,
+                            w: bbox.xmax - bbox.xmin,
+                            h: bbox.ymax - bbox.ymin
+                        }
+                    };
+                    mappedCount++;
+                }
+            });
+
+            setQuestions(newQuestions);
+            setIsSmartPdf(true);
+            alert(`AI가 총 ${mappedCount}개 문항의 스마트 영역을 성공적으로 매칭했습니다!`);
+        } catch (error: unknown) {
+            const e = error as Error;
+            console.error(e);
+            alert(e.message || "AI 위치 매칭 중 오류가 발생했습니다.");
+        } finally {
+            setIsDetectingLocation(false);
+        }
+    };
+
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const handleShareConfig = async (accessConfig: any) => {
         const fileToBase64 = (file: File): Promise<string> => {
@@ -204,6 +246,7 @@ export default function CreateOMRPage() {
                 accessConfig,
                 pdfData: pdfBase64, // Problem PDF
                 answerKeyPdf: answerKeyBase64, // Reference Key
+                isSmartPdf,
                 createdAt: new Date().toISOString()
             };
 
@@ -401,6 +444,8 @@ export default function CreateOMRPage() {
                                         page: q.pdfLocation!.page,
                                         x: q.pdfLocation!.x,
                                         y: q.pdfLocation!.y,
+                                        w: q.pdfLocation!.w,
+                                        h: q.pdfLocation!.h,
                                         label: q.number,
                                         color: selectedQuestionId === q.id ? '#6366f1' : '#ef4444',
                                         onClick: () => setSelectedQuestionId(q.id)
@@ -500,7 +545,19 @@ export default function CreateOMRPage() {
                             onClick={handleAutoDetectLocations}
                             disabled={isDetectingLocation || !pdfFile}
                         >
-                            {isDetectingLocation ? "⏳ 위치 찾는 중..." : "🎯 PDF 문제 위치 자동 매칭"}
+                            {isDetectingLocation ? "⏳ 위치 찾는 중..." : "🎯 텍스트 기반 위치 찾기 (빠름)"}
+                        </button>
+
+                        <button
+                            className="btn btn-secondary"
+                            style={{ width: '100%', marginBottom: '1rem', border: '1px solid #f59e0b', color: '#d97706', background: 'rgba(245, 158, 11, 0.05)', display: 'flex', flexDirection: 'column', alignItems: 'center', padding: '0.8rem' }}
+                            onClick={handleAIDetectLocations}
+                            disabled={isDetectingLocation || !pdfFile}
+                        >
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', fontWeight: 'bold' }}>
+                                <span>✨ AI 스마트 위치 인식 (정확함)</span>
+                            </div>
+                            <span style={{ fontSize: '0.75rem', opacity: 0.8, marginTop: '0.3rem' }}>학생이 번호를 터치해 바로 마킹할 수 있게 됩니다.</span>
                         </button>
 
                         <div style={{ marginBottom: '1rem' }}>

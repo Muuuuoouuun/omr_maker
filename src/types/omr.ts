@@ -8,6 +8,8 @@ export interface Question {
         page: number;
         x: number;
         y: number;
+        w?: number;
+        h?: number;
     };
 }
 
@@ -22,6 +24,7 @@ export interface Exam {
         groupIds?: string[];
         pin?: string;
     };
+    isSmartPdf?: boolean;
 }
 
 export interface Attempt {

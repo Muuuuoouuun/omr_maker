@@ -285,6 +285,8 @@ export default function SolvePage() {
                                     page: q.pdfLocation!.page,
                                     x: q.pdfLocation!.x,
                                     y: q.pdfLocation!.y,
+                                    w: q.pdfLocation!.w,
+                                    h: q.pdfLocation!.h,
                                     label: q.number,
                                     color: currentQuestionId === q.id ? '#6366f1' : '#ef4444',
                                     onClick: () => handleQuestionClick(q.id)
