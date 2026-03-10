@@ -311,6 +311,47 @@ export default function CreateOMRPage() {
         }));
     };
 
+    const handleSaveDraft = async () => {
+        setIsSaving(true);
+        const fileToBase64 = (file: File): Promise<string> => {
+            return new Promise((resolve, reject) => {
+                const reader = new FileReader();
+                reader.onload = () => resolve(reader.result as string);
+                reader.onerror = reject;
+                reader.readAsDataURL(file);
+            });
+        };
+
+        try {
+            let pdfBase64 = "";
+            let answerKeyBase64 = "";
+
+            if (pdfFile) pdfBase64 = await fileToBase64(pdfFile);
+            if (answerKeyPdf) answerKeyBase64 = await fileToBase64(answerKeyPdf);
+
+            const id = Date.now().toString(36);
+            const draftData = {
+                id,
+                title: title || "제목 없는 시험",
+                questions,
+                accessConfig: { type: 'draft' }, // specific draft config
+                pdfData: pdfBase64,
+                answerKeyPdf: answerKeyBase64,
+                isSmartPdf,
+                status: 'draft',
+                createdAt: new Date().toISOString()
+            };
+
+            localStorage.setItem(`omr_exam_${id}`, JSON.stringify(draftData));
+            alert("✅ 시험지가 임시 저장되었습니다.\n대시보드에서 불러와 이어서 편집하거나 배포할 수 있습니다.");
+        } catch (e) {
+            console.error(e);
+            alert("저장 실패: 파일 용량이 너무 큽니다. (LocalStorage 한계)");
+        } finally {
+            setIsSaving(false);
+        }
+    };
+
     const handleSaveImage = async () => {
         const element = document.getElementById("omr-preview");
         if (!element) return;
@@ -345,12 +386,12 @@ export default function CreateOMRPage() {
                             Smart Editor
                         </span>
                     </div>
-                    <div style={{ display: 'flex', gap: '0.8rem' }}>
-                        <label className="btn btn-secondary" style={{ cursor: 'pointer', background: 'white', border: '1px solid var(--border)' }}>
+                    <div style={{ display: 'flex', gap: '0.8rem', flexWrap: 'wrap' }}>
+                        <label className="btn btn-secondary" style={{ cursor: 'pointer', background: 'white', border: '1px solid var(--border)', whiteSpace: 'nowrap', padding: '0.6rem 1rem', fontSize: '0.9rem' }}>
                             📄 문제지 업로드
                             <input id="pdf-upload-input" type="file" accept=".pdf" onChange={handleFileChange} style={{ display: 'none' }} />
                         </label>
-                        <label className="btn btn-secondary" style={{ cursor: 'pointer', background: 'white', border: '1px solid var(--border)' }}>
+                        <label className="btn btn-secondary" style={{ cursor: 'pointer', background: 'white', border: '1px solid var(--border)', whiteSpace: 'nowrap', padding: '0.6rem 1rem', fontSize: '0.9rem' }}>
                             📁 답지 업로드
                             <input type="file" accept=".pdf" onChange={(e) => {
                                 if (e.target.files && e.target.files[0]) {
@@ -362,12 +403,21 @@ export default function CreateOMRPage() {
                             className="btn btn-primary"
                             onClick={handleSaveImage}
                             disabled={isSaving}
+                            style={{ whiteSpace: 'nowrap', padding: '0.6rem 1rem', fontSize: '0.9rem' }}
                         >
                             {isSaving ? "저장 중..." : "이미지로 저장"}
                         </button>
                         <button
                             className="btn btn-secondary"
-                            style={{ background: '#6366f1', color: 'white', border: 'none' }}
+                            onClick={handleSaveDraft}
+                            disabled={isSaving}
+                            style={{ whiteSpace: 'nowrap', padding: '0.6rem 1rem', fontSize: '0.9rem' }}
+                        >
+                            {isSaving ? "저장 중..." : "💾 임시 저장"}
+                        </button>
+                        <button
+                            className="btn btn-secondary"
+                            style={{ background: '#6366f1', color: 'white', border: 'none', whiteSpace: 'nowrap', padding: '0.6rem 1rem', fontSize: '0.9rem' }}
                             onClick={() => setIsDistributeModalOpen(true)}
                         >
                             🚀 배포하기
@@ -390,12 +440,13 @@ export default function CreateOMRPage() {
                 isOpen={isDistributeModalOpen}
                 onClose={() => setIsDistributeModalOpen(false)}
                 onSaveAndShare={handleShareConfig}
+                examTitle={title || "제목 없는 시험"}
             />
 
-            <div style={{ display: 'flex', flex: 1, height: 'calc(100vh - 4rem)', overflow: 'hidden' }}>
+            <div className="split-layout" style={{ display: 'flex', flex: 1, height: 'calc(100vh - 4rem)', overflow: 'hidden' }}>
 
                 {/* 1. PDF Viewer Area */}
-                <div style={{
+                <div className="split-pane-pdf" style={{
                     width: `${pdfWidth}px`,
                     minWidth: '300px',
                     flexShrink: 0,
@@ -470,7 +521,7 @@ export default function CreateOMRPage() {
                 </div>
 
                 {/* Resizer 1 */}
-                <div
+                <div className="resizer"
                     style={{ width: '6px', background: 'var(--border)', cursor: 'col-resize', position: 'relative', zIndex: 10 }}
                     onMouseDown={(e) => {
                         e.preventDefault();
@@ -492,7 +543,7 @@ export default function CreateOMRPage() {
                 </div>
 
                 {/* 2. Settings Sidebar */}
-                <aside className="glass-panel" style={{
+                <aside className="glass-panel split-pane-settings" style={{
                     width: `${sidebarWidth}px`,
                     minWidth: '250px',
                     padding: '1.5rem',
@@ -764,7 +815,7 @@ export default function CreateOMRPage() {
                 </aside>
 
                 {/* Resizer 2 */}
-                <div
+                <div className="resizer"
                     style={{ width: '6px', background: 'var(--border)', cursor: 'col-resize', position: 'relative', zIndex: 10 }}
                     onMouseDown={(e) => {
                         e.preventDefault();
@@ -786,17 +837,17 @@ export default function CreateOMRPage() {
                 </div>
 
                 {/* 3. OMR Preview */}
-                <main style={{
+                <main className="split-pane-main" style={{
                     flex: 1,
                     display: 'flex',
                     minWidth: '350px',
                     justifyContent: 'center',
                     overflowY: 'auto',
-                    overflowX: 'auto',
+                    overflowX: 'hidden',
                     padding: '2rem',
                     background: '#e2e8f0'
                 }}>
-                    <div style={{ transform: 'scale(0.8)', transformOrigin: 'top center', height: 'fit-content' }}>
+                    <div style={{ width: '100%', maxWidth: '1300px', height: 'fit-content' }}>
                         <OMRPreview
                             title={title}
                             questions={questions}

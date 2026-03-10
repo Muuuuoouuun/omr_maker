@@ -48,6 +48,7 @@ export interface Attempt {
     answers: Record<number, number>; // qId -> selected option
     status: 'completed' | 'in_progress';
     guestId?: string; // For tracking guest attempts
+    drawings?: Record<number, string[]>; // user's handwritten notes
 }
 
 export interface Group {

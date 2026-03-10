@@ -11,6 +11,7 @@ import { mergeGuestAttempts } from "@/utils/storage";
 export default function StudentDashboard() {
     const router = useRouter();
     const [user, setUser] = useState<{ name: string; groupId: string; groupName: string; isGuest?: boolean; guestId?: string } | null>(null);
+    const [searchExamId, setSearchExamId] = useState("");
     const [todoExams, setTodoExams] = useState<Exam[]>([]);
     const [doneExams, setDoneExams] = useState<(Exam & { attemptId: string })[]>([]);
     const [stats, setStats] = useState({
@@ -116,6 +117,14 @@ export default function StudentDashboard() {
         window.location.reload(); // Reload to refresh data
     };
 
+    const handleSearchExam = () => {
+        if (!searchExamId.trim()) {
+            alert("시험 코드를 입력해주세요.");
+            return;
+        }
+        router.push(`/solve/${searchExamId.trim()}`);
+    };
+
     if (!user) return <div style={{ padding: '2rem' }}>Loading...</div>;
 
     return (
@@ -189,37 +198,62 @@ export default function StudentDashboard() {
                 </div>
 
                 {/* Dashboard Grid */}
-                <div className="bento-grid">
-                    {/* Stats */}
-                    <Link href="/student/history" className="bento-card col-span-1 card-hover" style={{
-                        background: 'linear-gradient(135deg, var(--secondary), #f472b6)',
-                        color: 'white', border: 'none',
-                        display: 'flex', flexDirection: 'column', justifyContent: 'center'
-                    }}>
-                        <div style={{ fontSize: '0.95rem', fontWeight: 600, opacity: 0.9, marginBottom: '0.5rem' }}>My Average</div>
-                        <div style={{ fontSize: '3rem', fontWeight: 800, lineHeight: 1 }}>{stats.avgScore}</div>
-                        <div style={{ fontSize: '0.85rem', opacity: 0.8, marginTop: '1rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                            View Details <span>→</span>
+                {user.isGuest ? (
+                    <div className="bento-grid">
+                        <div className="bento-card col-span-2" style={{ background: 'var(--surface)', display: 'flex', flexDirection: 'column', gap: '1rem', padding: '2rem' }}>
+                            <h2 style={{ fontSize: '1.25rem', fontWeight: 700 }}>시험 참여하기</h2>
+                            <p style={{ color: 'var(--muted)', fontSize: '0.95rem' }}>선생님께 받은 시험 코드(ID)를 입력하여 바로 시작하세요.</p>
+                            <div style={{ display: 'flex', gap: '0.5rem' }}>
+                                <input
+                                    type="text"
+                                    className="input-field"
+                                    placeholder="예: exam_abc123"
+                                    value={searchExamId}
+                                    onChange={(e) => setSearchExamId(e.target.value)}
+                                    onKeyDown={(e) => e.key === 'Enter' && handleSearchExam()}
+                                    style={{ flex: 1 }}
+                                />
+                                <button className="btn btn-primary" onClick={handleSearchExam}>들어가기</button>
+                            </div>
                         </div>
-                    </Link>
-
-                    <div className="bento-card col-span-1" style={{ justifyContent: 'center', alignItems: 'center', background: 'var(--surface)' }}>
-                        <div style={{ fontSize: '3rem', fontWeight: 800, color: 'var(--foreground)', lineHeight: 1, marginBottom: '0.5rem' }}>
-                            {stats.completedCount}
+                        {/* Completed List (Guest) */}
+                        <div className="col-span-2">
+                            <AssignmentBlock type="done" exams={doneExams} />
                         </div>
-                        <div style={{ color: 'var(--muted)', fontSize: '0.9rem', fontWeight: 600 }}>Exams Completed</div>
                     </div>
+                ) : (
+                    <div className="bento-grid">
+                        {/* Stats */}
+                        <Link href="/student/history" className="bento-card col-span-1 card-hover" style={{
+                            background: 'linear-gradient(135deg, var(--secondary), #f472b6)',
+                            color: 'white', border: 'none',
+                            display: 'flex', flexDirection: 'column', justifyContent: 'center'
+                        }}>
+                            <div style={{ fontSize: '0.95rem', fontWeight: 600, opacity: 0.9, marginBottom: '0.5rem' }}>My Average</div>
+                            <div style={{ fontSize: '3rem', fontWeight: 800, lineHeight: 1 }}>{stats.avgScore}</div>
+                            <div style={{ fontSize: '0.85rem', opacity: 0.8, marginTop: '1rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                                View Details <span>→</span>
+                            </div>
+                        </Link>
 
-                    {/* Todo List (Main Focus) */}
-                    <div className="col-span-2 row-span-2">
-                        <AssignmentBlock type="todo" exams={todoExams} />
-                    </div>
+                        <div className="bento-card col-span-1" style={{ justifyContent: 'center', alignItems: 'center', background: 'var(--surface)' }}>
+                            <div style={{ fontSize: '3rem', fontWeight: 800, color: 'var(--foreground)', lineHeight: 1, marginBottom: '0.5rem' }}>
+                                {stats.completedCount}
+                            </div>
+                            <div style={{ color: 'var(--muted)', fontSize: '0.9rem', fontWeight: 600 }}>Exams Completed</div>
+                        </div>
 
-                    {/* Completed List */}
-                    <div className="col-span-2">
-                        <AssignmentBlock type="done" exams={doneExams} />
+                        {/* Todo List (Main Focus) */}
+                        <div className="col-span-2 row-span-2">
+                            <AssignmentBlock type="todo" exams={todoExams} />
+                        </div>
+
+                        {/* Completed List */}
+                        <div className="col-span-2">
+                            <AssignmentBlock type="done" exams={doneExams} />
+                        </div>
                     </div>
-                </div>
+                )}
             </main>
         </div>
     );

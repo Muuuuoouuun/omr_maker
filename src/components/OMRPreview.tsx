@@ -1,6 +1,6 @@
 "use client";
 
-import React from 'react';
+import React, { useRef, useEffect, useState } from 'react';
 import { Question } from '@/types/omr';
 
 interface OMRPreviewProps {
@@ -45,6 +45,38 @@ export default function OMRPreview({
         return displayQuestions.slice(start, end);
     });
 
+    const containerRef = useRef<HTMLDivElement>(null);
+    const contentRef = useRef<HTMLDivElement>(null);
+    const [scale, setScale] = useState(1);
+    const [contentHeight, setContentHeight] = useState(800);
+
+    const baseWidth = cols === 1 ? 790 : cols === 2 ? 1120 : 1600;
+    const minAspect = cols === 1 ? 1 / 1.414 : cols === 2 ? 1.414 : 2.12;
+    const minHeight = baseWidth / minAspect;
+
+    useEffect(() => {
+        if (!containerRef.current) return;
+        const observer = new ResizeObserver((entries) => {
+            if (entries[0]) {
+                const { width } = entries[0].contentRect;
+                setScale(width / baseWidth);
+            }
+        });
+        observer.observe(containerRef.current);
+        return () => observer.disconnect();
+    }, [baseWidth]);
+
+    useEffect(() => {
+        if (!contentRef.current) return;
+        const observer = new ResizeObserver((entries) => {
+            if (entries[0]) {
+                setContentHeight(entries[0].contentRect.height);
+            }
+        });
+        observer.observe(contentRef.current);
+        return () => observer.disconnect();
+    }, []);
+
     const renderQuestion = (q: Question) => {
         const isRowSelected = selectedQuestionId === q.id;
 
@@ -62,8 +94,14 @@ export default function OMRPreview({
                     transition: 'all 0.2s ease'
                 }}
             >
-                <div className="omr-number" style={{ width: '30px', fontWeight: 'bold', color: isRowSelected ? 'var(--primary)' : 'inherit' }}>
-                    {q.number}
+                <div className="omr-number" style={{ width: '40px', fontWeight: 'bold', color: isRowSelected ? 'var(--primary)' : 'inherit', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', lineHeight: '1.2' }} title={q.label ? `[${q.label}]` : ''}>
+                    <span>{q.number}</span>
+                    {(q.score || q.pdfLocation) && (
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '3px', marginTop: '2px' }}>
+                            {q.pdfLocation && <span style={{ width: '4px', height: '4px', borderRadius: '50%', background: 'var(--primary)' }} title="PDF Mapped" />}
+                            {q.score !== undefined && <span style={{ fontSize: '0.6rem', color: 'var(--muted)', fontWeight: 'normal' }}>{q.score}</span>}
+                        </div>
+                    )}
                 </div>
                 <div className="omr-options">
                     {Array.from({ length: optionsCount }, (_, i) => {
@@ -99,78 +137,69 @@ export default function OMRPreview({
                         );
                     })}
                 </div>
-
-                {/* Metadata Tags */}
-                <div style={{ display: 'flex', gap: '4px', marginLeft: '8px' }}>
-                    {q.label && (
-                        <span style={{ fontSize: '0.7rem', background: '#e2e8f0', padding: '1px 5px', borderRadius: '4px', color: '#475569' }}>
-                            {q.label}
-                        </span>
-                    )}
-                    {q.score !== undefined && (
-                        <span style={{ fontSize: '0.7rem', background: 'rgba(236, 72, 153, 0.1)', padding: '1px 5px', borderRadius: '4px', color: 'var(--secondary)', fontWeight: 'bold' }}>
-                            {q.score}점
-                        </span>
-                    )}
-                    {q.pdfLocation && (
-                        <span style={{ fontSize: '0.8rem', cursor: 'help' }} title={`Page ${q.pdfLocation.page}`}>
-                            🔗
-                        </span>
-                    )}
-                </div>
             </div>
         );
     };
 
     return (
-        <div id="omr-preview" className="omr-sheet">
-            {/* OMR Markers */}
-            <div className="omr-marker omr-marker-tl"></div>
-            <div className="omr-marker omr-marker-tr"></div>
-            <div className="omr-marker omr-marker-bl"></div>
-            <div className="omr-marker omr-marker-br"></div>
+        <div ref={containerRef} className="omr-preview-scaler" style={{ width: '100%', position: 'relative', height: `${contentHeight * scale}px`, overflow: 'hidden', borderRadius: '12px', boxShadow: '0 10px 30px rgba(0, 0, 0, 0.08), 0 4px 6px rgba(0, 0, 0, 0.04)', background: 'white' }}>
+            <div style={{
+                width: `${baseWidth}px`,
+                transform: `scale(${scale})`,
+                transformOrigin: 'top left',
+                position: 'absolute',
+                top: 0, left: 0
+            }}>
+                <div id="omr-preview" ref={contentRef} className="omr-sheet" style={{ width: '100%', minHeight: `${minHeight}px`, maxWidth: 'none', margin: 0, padding: cols === 1 ? '3rem' : '3.5rem 4rem', boxShadow: 'none', borderRadius: 0, border: 'none', display: 'flex', flexDirection: 'column' }}>
+                    {/* OMR Markers */}
+                    <div className="omr-marker omr-marker-tl"></div>
+                    <div className="omr-marker omr-marker-tr"></div>
+                    <div className="omr-marker omr-marker-bl"></div>
+                    <div className="omr-marker omr-marker-br"></div>
 
-            <div className="omr-header">
-                <div className="omr-title-area">
-                    <h1 className="omr-title">{title}</h1>
-                    <p style={{ fontSize: '0.9rem', color: '#666' }}>컴퓨터용 사인펜을 사용하여 표기하십시오.</p>
-                </div>
-
-                <div className="omr-info-grid">
-                    <div className="omr-field">
-                        <span className="omr-label">과 목</span>
-                        <div className="omr-input-box"></div>
-                    </div>
-                    <div className="omr-field">
-                        <span className="omr-label">점 수</span>
-                        <div className="omr-input-box"></div>
-                    </div>
-                    <div className="omr-field">
-                        <span className="omr-label">성 명</span>
-                        <div className="omr-input-box"></div>
-                    </div>
-                    <div className="omr-field">
-                        <span className="omr-label">학 번</span>
-                        <div className="omr-input-box"></div>
-                    </div>
-                </div>
-            </div>
-
-            <div className="omr-body" style={{ '--omr-cols': cols } as React.CSSProperties}>
-                {columnQuestions.map((chunk, index) => (
-                    <React.Fragment key={index}>
-                        <div className="omr-column">
-                            {chunk.map(renderQuestion)}
+                    <div className="omr-header">
+                        <div className="omr-title-area">
+                            <h1 className="omr-title">{title}</h1>
+                            <p style={{ fontSize: '0.9rem', color: '#666' }}>컴퓨터용 사인펜을 사용하여 표기하십시오.</p>
                         </div>
-                        {index < cols - 1 && (
-                            <div style={{ width: '1px', background: '#000', margin: '0 1rem' }}></div>
-                        )}
-                    </React.Fragment>
-                ))}
-            </div>
 
-            <div style={{ marginTop: 'auto', textAlign: 'center', fontSize: '0.8rem', color: '#999' }}>
-                OMR Maker - Generated Answer Sheet
+                        <div className="omr-info-grid">
+                            <div className="omr-field">
+                                <span className="omr-label">과 목</span>
+                                <div className="omr-input-box"></div>
+                            </div>
+                            <div className="omr-field">
+                                <span className="omr-label">점 수</span>
+                                <div className="omr-input-box"></div>
+                            </div>
+                            <div className="omr-field">
+                                <span className="omr-label">성 명</span>
+                                <div className="omr-input-box"></div>
+                            </div>
+                            <div className="omr-field">
+                                <span className="omr-label">학 번</span>
+                                <div className="omr-input-box"></div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div className="omr-body" style={{ '--omr-cols': cols } as React.CSSProperties}>
+                        {columnQuestions.map((chunk, index) => (
+                            <React.Fragment key={index}>
+                                <div className="omr-column">
+                                    {chunk.map(renderQuestion)}
+                                </div>
+                                {index < cols - 1 && (
+                                    <div style={{ width: '1px', background: '#000', margin: '0 1rem' }}></div>
+                                )}
+                            </React.Fragment>
+                        ))}
+                    </div>
+
+                    <div style={{ marginTop: 'auto', textAlign: 'center', fontSize: '1rem', color: '#999', paddingTop: '1rem' }}>
+                        OMR Maker - Generated Answer Sheet
+                    </div>
+                </div>
             </div>
         </div>
     );

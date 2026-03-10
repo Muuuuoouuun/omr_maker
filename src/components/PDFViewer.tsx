@@ -19,6 +19,7 @@ interface PDFViewerProps {
     onDrawingsChange?: (page: number, newPaths: string[]) => void;
     // Markers Props
     markers?: { page: number; x: number; y: number; w?: number; h?: number; label: string | number; color?: string; type?: 'question' | 'choice'; onClick?: () => void }[];
+    viewerMode?: 'teacher' | 'student';
 }
 
 export default function PDFViewer({
@@ -30,7 +31,8 @@ export default function PDFViewer({
     drawings = {},
     onDrawingsChange,
     markers = [],
-    forcePage
+    forcePage,
+    viewerMode = 'teacher'
 }: PDFViewerProps & { forcePage?: number }) {
     const [numPages, setNumPages] = useState<number>(0);
     const [pageNumber, setPageNumber] = useState<number>(1);
@@ -41,7 +43,7 @@ export default function PDFViewer({
     // Drawing State
     const [isDrawing, setIsDrawing] = useState(false);
     const [currentPath, setCurrentPath] = useState<{ x: number, y: number }[]>([]);
-    const [drawingMode, setDrawingMode] = useState<'pen' | 'eraser'>('pen');
+    const [drawingMode, setDrawingMode] = useState<'pen' | 'eraser' | 'pan'>('pan'); // Default pan for student
     const [penColor, setPenColor] = useState('#ef4444'); // Default Red
 
     // Canvas Ref
@@ -129,7 +131,8 @@ export default function PDFViewer({
     }, [pageNumber, drawings, enableDrawing, scale, file]); // Re-render on these changes
 
     const startDrawing = (e: React.MouseEvent | React.TouchEvent) => {
-        if (!enableDrawing || drawingMode === 'eraser') return;
+        if (!enableDrawing) return;
+        if (drawingMode === 'eraser' || drawingMode === 'pan') return;
         setIsDrawing(true);
         const pos = getPos(e);
         setCurrentPath([pos]);
@@ -199,6 +202,41 @@ export default function PDFViewer({
         }
     };
 
+    // Drag to Pan Logic
+    const panState = useRef({ isDragging: false, startX: 0, startY: 0, scrollLeft: 0, scrollTop: 0 });
+
+    const handleWrapperPointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
+        if (drawingMode !== 'pan') return;
+        const wrapper = wrapperRef.current;
+        if (!wrapper) return;
+        panState.current = {
+            isDragging: true,
+            startX: e.clientX,
+            startY: e.clientY,
+            scrollLeft: wrapper.scrollLeft,
+            scrollTop: wrapper.scrollTop
+        };
+        wrapper.style.cursor = 'grabbing';
+    };
+
+    const handleWrapperPointerMove = (e: React.PointerEvent<HTMLDivElement>) => {
+        if (!panState.current.isDragging || drawingMode !== 'pan') return;
+        const wrapper = wrapperRef.current;
+        if (!wrapper) return;
+        const dx = e.clientX - panState.current.startX;
+        const dy = e.clientY - panState.current.startY;
+        wrapper.scrollLeft = panState.current.scrollLeft - dx;
+        wrapper.scrollTop = panState.current.scrollTop - dy;
+    }
+
+    const handleWrapperPointerUp = () => {
+        if (drawingMode !== 'pan') return;
+        panState.current.isDragging = false;
+        if (wrapperRef.current) {
+            wrapperRef.current.style.cursor = 'grab';
+        }
+    }
+
     // --- End Drawing Logic ---
 
 
@@ -232,7 +270,9 @@ export default function PDFViewer({
             onDragOver={handleDragOver} onDragLeave={handleDragLeave} onDrop={handleDrop}
             style={{
                 height: '100%', display: 'flex', flexDirection: 'column',
-                background: '#525659', borderRight: '1px solid #333', position: 'relative', overflow: 'hidden'
+                background: viewerMode === 'teacher' ? '#525659' : '#f8fafc',
+                borderRight: viewerMode === 'teacher' ? '1px solid #333' : 'none',
+                position: 'relative', overflow: 'hidden'
             }}
         >
             {/* ... Drag Overlay ... */}
@@ -240,59 +280,84 @@ export default function PDFViewer({
                 <div style={{ position: 'absolute', inset: 0, zIndex: 50, background: 'rgba(99, 102, 241, 0.2)', border: '3px dashed #6366f1', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'white', fontWeight: 'bold', fontSize: '1.5rem', backdropFilter: 'blur(4px)' }}>PDF 파일을 여기에 놓으세요</div>
             )}
 
-            {/* PDF Toolbar */}
-            <div style={{ padding: '0.5rem 1rem', background: '#323639', color: 'white', display: 'flex', alignItems: 'center', justifyContent: 'space-between', fontSize: '0.9rem', borderBottom: '1px solid #000' }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
-                    <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '200px' }}>{file ? file.name : 'PDF 없음'}</span>
-                </div>
-
-                {file && (
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                        {/* Drawing Tools */}
-                        {enableDrawing && (
-                            <div style={{ display: 'flex', gap: '5px', marginRight: '1rem', paddingRight: '1rem', borderRight: '1px solid #666' }}>
-                                <button onClick={() => setDrawingMode(drawingMode === 'pen' ? 'eraser' : 'pen')} style={{ background: drawingMode === 'pen' ? '#6366f1' : 'transparent', border: '1px solid #666', borderRadius: '4px', padding: '2px 6px', color: 'white' }}>
-                                    {drawingMode === 'pen' ? '✏️ 그리기' : '👆 클릭모드'}
-                                </button>
-                                {drawingMode === 'pen' && (
-                                    <>
-                                        <input type="color" value={penColor} onChange={(e) => setPenColor(e.target.value)} style={{ width: '24px', height: '24px', padding: 0, border: 'none', background: 'none' }} />
-                                        <button onClick={clearPage} style={{ fontSize: '0.8rem', padding: '2px 6px', background: '#ef4444', border: 'none', borderRadius: '4px', color: 'white' }}>삭제</button>
-                                    </>
-                                )}
-                            </div>
-                        )}
-
-                        <button onClick={() => setPageNumber(p => Math.max(1, p - 1))} disabled={pageNumber <= 1} style={{ color: 'white', padding: '0.2rem 0.5rem', cursor: 'pointer', background: 'transparent', border: 'none' }}>◀</button>
-                        <span style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
-                            <input
-                                type="text"
-                                value={inputPage}
-                                onChange={handlePageInputChange}
-                                onBlur={handlePageInputSubmit}
-                                onKeyDown={handlePageInputSubmit}
-                                style={{ width: '30px', textAlign: 'center', background: '#222', color: 'white', border: '1px solid #555', borderRadius: '4px', padding: '2px' }}
-                            />
-                            / {numPages}
-                        </span>
-                        <button onClick={() => setPageNumber(p => Math.min(numPages, p + 1))} disabled={pageNumber >= numPages} style={{ color: 'white', padding: '0.2rem 0.5rem', cursor: 'pointer', background: 'transparent', border: 'none' }}>▶</button>
-                        <div style={{ width: '1px', height: '15px', background: '#666', margin: '0 0.5rem' }}></div>
-                        <button onClick={() => setScale(s => Math.max(0.5, s - 0.1))} style={{ color: 'white', cursor: 'pointer' }}>-</button>
-                        <span>{Math.round(scale * 100)}%</span>
-                        <button onClick={() => setScale(s => Math.min(2.5, s + 0.1))} style={{ color: 'white', cursor: 'pointer' }}>+</button>
+            {/* Teacher Top Toolbar */}
+            {viewerMode === 'teacher' && (
+                <div style={{ padding: '0.5rem 1rem', background: '#323639', color: 'white', display: 'flex', alignItems: 'center', justifyContent: 'space-between', fontSize: '0.9rem', borderBottom: '1px solid #000' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
+                        <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '200px' }}>{file ? file.name : 'PDF 없음'}</span>
                     </div>
-                )}
-            </div>
+
+                    {file && (
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                            {/* Drawing Tools */}
+                            {enableDrawing && (
+                                <div style={{ display: 'flex', gap: '5px', marginRight: '1rem', paddingRight: '1rem', borderRight: '1px solid #666' }}>
+                                    <button onClick={() => setDrawingMode('pen')} style={{ background: drawingMode === 'pen' ? '#6366f1' : 'transparent', border: '1px solid #666', borderRadius: '4px', padding: '2px 6px', color: 'white' }}>
+                                        ✏️ 그리기
+                                    </button>
+                                    <button onClick={() => setDrawingMode('pan')} style={{ background: drawingMode === 'pan' ? '#6366f1' : 'transparent', border: '1px solid #666', borderRadius: '4px', padding: '2px 6px', color: 'white' }}>
+                                        🖐 이동
+                                    </button>
+                                    {drawingMode === 'pen' && (
+                                        <>
+                                            <input type="color" value={penColor} onChange={(e) => setPenColor(e.target.value)} style={{ width: '24px', height: '24px', padding: 0, border: 'none', background: 'none' }} />
+                                            <button onClick={clearPage} style={{ fontSize: '0.8rem', padding: '2px 6px', background: '#ef4444', border: 'none', borderRadius: '4px', color: 'white' }}>삭제</button>
+                                        </>
+                                    )}
+                                </div>
+                            )}
+
+                            <button onClick={() => setPageNumber(p => Math.max(1, p - 1))} disabled={pageNumber <= 1} style={{ color: 'white', padding: '0.2rem 0.5rem', cursor: 'pointer', background: 'transparent', border: 'none' }}>◀</button>
+                            <span style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                                <input
+                                    type="text"
+                                    value={inputPage}
+                                    onChange={handlePageInputChange}
+                                    onBlur={handlePageInputSubmit}
+                                    onKeyDown={handlePageInputSubmit}
+                                    style={{ width: '30px', textAlign: 'center', background: '#222', color: 'white', border: '1px solid #555', borderRadius: '4px', padding: '2px' }}
+                                />
+                                / {numPages}
+                            </span>
+                            <button onClick={() => setPageNumber(p => Math.min(numPages, p + 1))} disabled={pageNumber >= numPages} style={{ color: 'white', padding: '0.2rem 0.5rem', cursor: 'pointer', background: 'transparent', border: 'none' }}>▶</button>
+                            <div style={{ width: '1px', height: '15px', background: '#666', margin: '0 0.5rem' }}></div>
+                            <button onClick={() => setScale(s => Math.max(0.5, s - 0.1))} style={{ color: 'white', cursor: 'pointer', padding: '0 5px', background: 'transparent', border: 'none' }}>-</button>
+                            <span>{Math.round(scale * 100)}%</span>
+                            <button onClick={() => setScale(s => Math.min(2.5, s + 0.1))} style={{ color: 'white', cursor: 'pointer', padding: '0 5px', background: 'transparent', border: 'none' }}>+</button>
+                        </div>
+                    )}
+                </div>
+            )}
 
             {/* PDF Content */}
-            <div ref={wrapperRef} style={{ flex: 1, overflow: 'auto', display: 'flex', flexDirection: 'column', alignItems: 'center', background: '#525659', position: 'relative' }}>
-                <div style={{ flex: 1, display: 'flex', justifyContent: 'center', padding: '2rem', width: '100%' }}>
+            <div
+                ref={wrapperRef}
+                onPointerDown={handleWrapperPointerDown}
+                onPointerMove={handleWrapperPointerMove}
+                onPointerUp={handleWrapperPointerUp}
+                onPointerLeave={handleWrapperPointerUp}
+                style={{
+                    flex: 1, overflow: 'auto', display: 'flex', flexDirection: 'column', alignItems: 'center',
+                    background: viewerMode === 'teacher' ? '#525659' : '#f1f5f9',
+                    position: 'relative',
+                    cursor: drawingMode === 'pan' ? 'grab' : 'default',
+                    touchAction: drawingMode === 'pan' ? 'none' : 'auto', // disable pull to refresh on pan
+                    paddingBottom: viewerMode === 'student' ? '120px' : '0' // Room for floating toolbar
+                }}
+            >
+                <div style={{ display: 'flex', justifyContent: 'center', padding: viewerMode === 'teacher' ? '2rem' : '3rem 1rem', width: '100%' }}>
                     {file ? (
-                        <Document file={file} onLoadSuccess={onDocumentLoadSuccess} loading={<div style={{ color: 'white' }}>문서 로딩 중...</div>}>
+                        <Document file={file} onLoadSuccess={onDocumentLoadSuccess} loading={<div style={{ color: viewerMode === 'teacher' ? 'white' : '#64748b' }}>시험지 로딩 중...</div>}>
                             <div
                                 ref={containerRef}
                                 onClick={handlePageClick}
-                                style={{ position: 'relative', boxShadow: '0 4px 6px -1px rgba(0, 0, 0, 0.1)' }}
+                                style={{
+                                    position: 'relative',
+                                    boxShadow: viewerMode === 'student' ? '0 10px 25px -5px rgba(0, 0, 0, 0.1), 0 8px 10px -6px rgba(0, 0, 0, 0.1)' : '0 4px 6px -1px rgba(0, 0, 0, 0.1)',
+                                    borderRadius: viewerMode === 'student' ? '8px' : '0',
+                                    overflow: 'hidden',
+                                    background: 'white'
+                                }}
                             >
                                 <Page pageNumber={pageNumber} scale={scale} width={containerWidth > 0 ? containerWidth : undefined} renderTextLayer={true} renderAnnotationLayer={true} />{/* Canvas Overlay */}
                                 {enableDrawing && (
@@ -311,7 +376,7 @@ export default function PDFViewer({
                                             width: '100%', height: '100%',
                                             zIndex: 10,
                                             cursor: drawingMode === 'pen' ? 'crosshair' : 'default',
-                                            pointerEvents: drawingMode === 'pen' ? 'auto' : 'none' // Allow click through if not drawing
+                                            pointerEvents: drawingMode === 'pen' ? 'auto' : 'none' // Allow click through to markers/pan if not drawing
                                         }}
                                     />
                                 )}
@@ -422,44 +487,111 @@ export default function PDFViewer({
                             </div>
                         </Document>
                     ) : (
-                        <div onClick={() => document.getElementById('pdf-upload-input')?.click()} style={{ color: '#aaa', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '100%', width: '100%', cursor: 'pointer', border: '2px dashed #666', margin: '1rem', borderRadius: '1rem' }}>
+                        <div onClick={() => viewerMode === 'teacher' && document.getElementById('pdf-upload-input')?.click()} style={{ color: '#aaa', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '100%', width: '100%', cursor: viewerMode === 'teacher' ? 'pointer' : 'default', border: '2px dashed #ccc', margin: '1rem', borderRadius: '1rem', minHeight: '400px', background: 'white' }}>
                             <div style={{ fontSize: '3rem', marginBottom: '1rem' }}>📄</div>
-                            <p style={{ fontWeight: 600 }}>PDF 업로드</p>
-                            <p style={{ fontSize: '0.8rem', opacity: 0.7 }}>클릭하거나 파일을 드래그하세요</p>
+                            <p style={{ fontWeight: 600 }}>선생님이 아직 문제지를 등록하지 않았습니다.</p>
                         </div>
                     )}
                 </div>
-
-                {/* Bottom Pagination Toolbar (Only visible if file exists) */}
-                {file && (
-                    <div style={{
-                        width: '100%',
-                        padding: '0.5rem',
-                        background: '#323639',
-                        color: 'white',
-                        display: 'flex',
-                        alignItems: 'center',
-                        justifyContent: 'center',
-                        gap: '1rem',
-                        borderTop: '1px solid #000',
-                        marginTop: 'auto'
-                    }}>
-                        <button onClick={() => setPageNumber(p => Math.max(1, p - 1))} disabled={pageNumber <= 1} style={{ color: 'white', padding: '0.2rem 0.5rem', cursor: 'pointer', background: 'rgba(255,255,255,0.1)', borderRadius: '4px', border: 'none' }}>◀ 이전</button>
-                        <span style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
-                            <input
-                                type="text"
-                                value={inputPage}
-                                onChange={handlePageInputChange}
-                                onBlur={handlePageInputSubmit}
-                                onKeyDown={handlePageInputSubmit}
-                                style={{ width: '30px', textAlign: 'center', background: '#222', color: 'white', border: '1px solid #555', borderRadius: '4px', padding: '2px' }}
-                            />
-                            / {numPages}
-                        </span>
-                        <button onClick={() => setPageNumber(p => Math.min(numPages, p + 1))} disabled={pageNumber >= numPages} style={{ color: 'white', padding: '0.2rem 0.5rem', cursor: 'pointer', background: 'rgba(255,255,255,0.1)', borderRadius: '4px', border: 'none' }}>다음 ▶</button>
-                    </div>
-                )}
             </div>
+
+            {/* Student Floating Toolbar */}
+            {viewerMode === 'student' && file && (
+                <div style={{
+                    position: 'absolute',
+                    bottom: '2rem',
+                    left: '50%',
+                    transform: 'translateX(-50%)',
+                    background: 'white',
+                    padding: '0.75rem 1.5rem',
+                    borderRadius: '9999px',
+                    boxShadow: '0 10px 25px -5px rgba(0, 0, 0, 0.1), 0 8px 10px -6px rgba(0, 0, 0, 0.1)',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '1.5rem',
+                    zIndex: 100,
+                    border: '1px solid #e2e8f0'
+                }}>
+                    {/* Pagination */}
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                        <button onClick={() => setPageNumber(p => Math.max(1, p - 1))} disabled={pageNumber <= 1} style={{ background: '#f8fafc', border: 'none', borderRadius: '50%', width: '32px', height: '32px', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', color: '#334155' }}>◀</button>
+                        <span style={{ fontSize: '0.9rem', fontWeight: 600, color: '#475569', minWidth: '40px', textAlign: 'center' }}>
+                            {pageNumber} / {numPages}
+                        </span>
+                        <button onClick={() => setPageNumber(p => Math.min(numPages, p + 1))} disabled={pageNumber >= numPages} style={{ background: '#f8fafc', border: 'none', borderRadius: '50%', width: '32px', height: '32px', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', color: '#334155' }}>▶</button>
+                    </div>
+
+                    <div style={{ width: '1px', height: '24px', background: '#e2e8f0' }}></div>
+
+                    {/* Scale */}
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                        <button onClick={() => setScale(s => Math.max(0.5, s - 0.2))} style={{ background: 'transparent', border: 'none', fontSize: '1.2rem', cursor: 'pointer', color: '#475569' }}>-</button>
+                        <span style={{ fontSize: '0.85rem', fontWeight: 600, color: '#475569', width: '45px', textAlign: 'center' }}>{Math.round(scale * 100)}%</span>
+                        <button onClick={() => setScale(s => Math.min(2.5, s + 0.2))} style={{ background: 'transparent', border: 'none', fontSize: '1.2rem', cursor: 'pointer', color: '#475569' }}>+</button>
+                    </div>
+
+                    {enableDrawing && (
+                        <>
+                            <div style={{ width: '1px', height: '24px', background: '#e2e8f0' }}></div>
+                            {/* Tools */}
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                                <button
+                                    onClick={() => setDrawingMode('pan')}
+                                    style={{ background: drawingMode === 'pan' ? '#e0e7ff' : 'transparent', color: drawingMode === 'pan' ? '#4f46e5' : '#64748b', border: 'none', padding: '0.5rem 0.75rem', borderRadius: '8px', cursor: 'pointer', fontSize: '1.2rem', display: 'flex', alignItems: 'center', gap: '0.2rem' }}
+                                    title="이동 모드"
+                                >
+                                    🖐
+                                </button>
+                                <button
+                                    onClick={() => setDrawingMode('pen')}
+                                    style={{ background: drawingMode === 'pen' ? '#fee2e2' : 'transparent', color: drawingMode === 'pen' ? '#ef4444' : '#64748b', border: 'none', padding: '0.5rem 0.75rem', borderRadius: '8px', cursor: 'pointer', fontSize: '1.2rem', display: 'flex', alignItems: 'center', gap: '0.2rem' }}
+                                    title="그리기 모드"
+                                >
+                                    🖍️
+                                    {drawingMode === 'pen' && (
+                                        <input type="color" value={penColor} onChange={(e) => setPenColor(e.target.value)} style={{ width: '20px', height: '20px', padding: 0, border: 'none', background: 'none' }} />
+                                    )}
+                                </button>
+                                {drawingMode === 'pen' && (
+                                    <button onClick={clearPage} style={{ background: 'white', border: '1px solid #e2e8f0', padding: '0.4rem 0.6rem', borderRadius: '8px', cursor: 'pointer', fontSize: '0.8rem', color: '#64748b', marginLeft: '0.2rem' }}>
+                                        지우기
+                                    </button>
+                                )}
+                            </div>
+                        </>
+                    )}
+                </div>
+            )}
+
+            {/* Teacher Bottom Pagination Toolbar (Only visible if file exists & in teacher mode) */}
+            {viewerMode === 'teacher' && file && (
+                <div style={{
+                    width: '100%',
+                    padding: '0.5rem',
+                    background: '#323639',
+                    color: 'white',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    gap: '1rem',
+                    borderTop: '1px solid #000',
+                    marginTop: 'auto'
+                }}>
+                    <button onClick={() => setPageNumber(p => Math.max(1, p - 1))} disabled={pageNumber <= 1} style={{ color: 'white', padding: '0.2rem 0.5rem', cursor: 'pointer', background: 'rgba(255,255,255,0.1)', borderRadius: '4px', border: 'none' }}>◀ 이전</button>
+                    <span style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                        <input
+                            type="text"
+                            value={inputPage}
+                            onChange={handlePageInputChange}
+                            onBlur={handlePageInputSubmit}
+                            onKeyDown={handlePageInputSubmit}
+                            style={{ width: '30px', textAlign: 'center', background: '#222', color: 'white', border: '1px solid #555', borderRadius: '4px', padding: '2px' }}
+                        />
+                        / {numPages}
+                    </span>
+                    <button onClick={() => setPageNumber(p => Math.min(numPages, p + 1))} disabled={pageNumber >= numPages} style={{ color: 'white', padding: '0.2rem 0.5rem', cursor: 'pointer', background: 'rgba(255,255,255,0.1)', borderRadius: '4px', border: 'none' }}>다음 ▶</button>
+                </div>
+            )}
         </div>
     );
 }
