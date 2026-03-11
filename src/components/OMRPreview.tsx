@@ -13,7 +13,9 @@ interface OMRPreviewProps {
     // New Props
     mode?: 'editor' | 'solve' | 'view';
     userAnswers?: Record<number, number>; // Student marked answers
+    userStringAnswers?: Record<number, string>; // Student string answers
     onAnswerClick?: (questionId: number, optionIndex: number) => void;
+    onStringAnswerChange?: (questionId: number, value: string) => void;
 }
 
 export default function OMRPreview({
@@ -25,7 +27,9 @@ export default function OMRPreview({
     onQuestionClick,
     mode = 'editor',
     userAnswers = {},
-    onAnswerClick
+    userStringAnswers = {},
+    onAnswerClick,
+    onStringAnswerChange
 }: OMRPreviewProps) {
 
     // Helper to generate dummy questions if empty
@@ -79,10 +83,13 @@ export default function OMRPreview({
 
     const renderQuestion = (q: Question) => {
         const isRowSelected = selectedQuestionId === q.id;
+        const isSubjective = q.type === 'subjective';
+        const isDual = !isSubjective && q.askReason;
 
         return (
             <div
                 key={q.id}
+                id={`omr-row-${q.id}`}
                 className={`omr-row ${isRowSelected ? 'omr-row-selected' : ''}`}
                 onClick={() => onQuestionClick && onQuestionClick(q.id)}
                 style={{
@@ -91,52 +98,138 @@ export default function OMRPreview({
                     borderRadius: '4px',
                     background: isRowSelected ? 'rgba(99, 102, 241, 0.1)' : 'transparent',
                     border: isRowSelected ? '1px solid var(--primary)' : '1px solid transparent',
-                    transition: 'all 0.2s ease'
+                    transition: 'all 0.2s ease',
+                    flexDirection: (isSubjective || isDual) ? 'column' : 'row',
+                    alignItems: (isSubjective || isDual) ? 'flex-start' : 'center',
+                    gap: (isSubjective || isDual) ? '0.5rem' : '0'
                 }}
             >
-                <div className="omr-number" style={{ width: '40px', fontWeight: 'bold', color: isRowSelected ? 'var(--primary)' : 'inherit', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', lineHeight: '1.2' }} title={q.label ? `[${q.label}]` : ''}>
-                    <span>{q.number}</span>
-                    {(q.score || q.pdfLocation) && (
-                        <div style={{ display: 'flex', alignItems: 'center', gap: '3px', marginTop: '2px' }}>
-                            {q.pdfLocation && <span style={{ width: '4px', height: '4px', borderRadius: '50%', background: 'var(--primary)' }} title="PDF Mapped" />}
-                            {q.score !== undefined && <span style={{ fontSize: '0.6rem', color: 'var(--muted)', fontWeight: 'normal' }}>{q.score}</span>}
+                <div style={{ display: 'flex', alignItems: 'center', width: (isSubjective || isDual) ? '100%' : 'auto', justifyContent: isDual ? 'space-between' : 'flex-start' }}>
+                    <div style={{ display: 'flex', alignItems: 'center' }}>
+                        <div className="omr-number" style={{ width: '40px', fontWeight: 'bold', color: isRowSelected ? 'var(--primary)' : 'inherit', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', lineHeight: '1.2' }} title={q.label ? `[${q.label}]` : ''}>
+                            <span>{q.number}</span>
+                            {(q.score || q.pdfLocation) && (
+                                <div style={{ display: 'flex', alignItems: 'center', gap: '3px', marginTop: '2px' }}>
+                                    {q.pdfLocation && <span style={{ width: '4px', height: '4px', borderRadius: '50%', background: 'var(--primary)' }} title="PDF Mapped" />}
+                                    {q.score !== undefined && <span style={{ fontSize: '0.6rem', color: 'var(--muted)', fontWeight: 'normal' }}>{q.score}</span>}
+                                </div>
+                            )}
+                        </div>
+                        {isSubjective && <span style={{ fontSize: '0.75rem', color: 'var(--primary)', marginLeft: '10px', background: 'rgba(99, 102, 241, 0.1)', padding: '2px 6px', borderRadius: '4px' }}>주관식</span>}
+                        {isDual && <span style={{ fontSize: '0.75rem', color: 'var(--warning)', marginLeft: '10px', background: 'rgba(234, 179, 8, 0.1)', padding: '2px 6px', borderRadius: '4px' }}>이중 문제 (사유)</span>}
+                    </div>
+
+                    {isDual && (
+                        <div className="omr-options" style={{ paddingLeft: '0', flex: 'none' }}>
+                            {Array.from({ length: optionsCount }, (_, i) => {
+                                const optionNum = i + 1;
+                                const isMarked = userAnswers[q.id] === optionNum;
+                                const isCorrect = mode === 'editor' && q.answer === optionNum;
+
+                                return (
+                                    <div
+                                        key={i}
+                                        className="omr-bubble"
+                                        onClick={(e) => {
+                                            if ((mode === 'solve' || mode === 'editor') && onAnswerClick) {
+                                                e.stopPropagation();
+                                                onAnswerClick(q.id, optionNum);
+                                            }
+                                        }}
+                                        style={{
+                                            cursor: (mode === 'solve' || mode === 'editor') ? 'pointer' : 'default',
+                                            background: isMarked ? '#000' : (isCorrect ? 'rgba(239, 68, 68, 0.1)' : 'white'),
+                                            color: isMarked ? '#fff' : (isCorrect ? '#ef4444' : 'inherit'),
+                                            borderColor: isCorrect ? '#ef4444' : undefined,
+                                            fontWeight: isMarked || isCorrect ? 'bold' : 'normal',
+                                            position: 'relative'
+                                        }}
+                                    >
+                                        {optionNum}
+                                        {isCorrect && <div style={{ position: 'absolute', inset: -2, border: '2px solid #ef4444', borderRadius: '50%' }}></div>}
+                                    </div>
+                                );
+                            })}
                         </div>
                     )}
                 </div>
-                <div className="omr-options">
-                    {Array.from({ length: optionsCount }, (_, i) => {
-                        const optionNum = i + 1;
-                        // Solve Mode: Student Answer
-                        const isMarked = userAnswers[q.id] === optionNum;
-                        // Editor Mode: Correct Answer (stored in q.answer)
-                        const isCorrect = mode === 'editor' && q.answer === optionNum;
 
-                        return (
-                            <div
-                                key={i}
-                                className="omr-bubble"
-                                onClick={(e) => {
-                                    if ((mode === 'solve' || mode === 'editor') && onAnswerClick) {
-                                        e.stopPropagation(); // Prevent row click
-                                        onAnswerClick(q.id, optionNum);
-                                    }
-                                }}
-                                style={{
-                                    cursor: (mode === 'solve' || mode === 'editor') ? 'pointer' : 'default',
-                                    background: isMarked ? '#000' : (isCorrect ? 'rgba(239, 68, 68, 0.1)' : 'white'), // Black for student, Red tint for teacher
-                                    color: isMarked ? '#fff' : (isCorrect ? '#ef4444' : 'inherit'),
-                                    borderColor: isCorrect ? '#ef4444' : undefined,
-                                    fontWeight: isMarked || isCorrect ? 'bold' : 'normal',
-                                    position: 'relative'
-                                }}
-                            >
-                                {optionNum}
-                                {/* Teacher Key Indicator (Circle) */}
-                                {isCorrect && <div style={{ position: 'absolute', inset: -2, border: '2px solid #ef4444', borderRadius: '50%' }}></div>}
+                {isSubjective ? (
+                    <div style={{ width: '100%', paddingLeft: '40px' }}>
+                        {mode === 'editor' ? (
+                            <div style={{ fontSize: '0.85rem', color: 'var(--muted)', background: 'white', padding: '0.5rem', borderRadius: '4px', border: '1px dashed #ccc' }}>
+                                정답: {q.stringAnswer || '(입력 안됨)'}
                             </div>
-                        );
-                    })}
-                </div>
+                        ) : mode === 'solve' ? (
+                            <input
+                                type="text"
+                                value={userStringAnswers?.[q.id] || ''}
+                                onChange={(e) => onStringAnswerChange && onStringAnswerChange(q.id, e.target.value)}
+                                placeholder="정답을 입력하세요"
+                                style={{ width: '100%', padding: '0.5rem', borderRadius: '4px', border: '1px solid #ccc' }}
+                            />
+                        ) : (
+                            <div style={{ padding: '0.5rem', borderBottom: '1px solid #000', minHeight: '30px' }}>
+                                {userStringAnswers?.[q.id] || ''}
+                            </div>
+                        )}
+                    </div>
+                ) : isDual ? (
+                    <div style={{ width: '100%', paddingLeft: '40px' }}>
+                        {mode === 'editor' ? (
+                            <div style={{ fontSize: '0.85rem', color: 'var(--muted)', background: 'white', padding: '0.5rem', borderRadius: '4px', border: '1px dashed #eab308' }}>
+                                모범 사유: {q.reasonStringAnswer || '(입력 안됨)'}
+                            </div>
+                        ) : mode === 'solve' ? (
+                            <input
+                                type="text"
+                                value={userStringAnswers?.[q.id] || ''}
+                                onChange={(e) => onStringAnswerChange && onStringAnswerChange(q.id, e.target.value)}
+                                placeholder="선택하신 객관식 정답의 사유를 서술하세요."
+                                style={{ width: '100%', padding: '0.5rem', borderRadius: '4px', border: '1px solid #eab308' }}
+                            />
+                        ) : (
+                            <div style={{ padding: '0.5rem', borderBottom: '1px solid #eab308', minHeight: '30px', fontSize: '0.9rem' }}>
+                                <strong>선택 사유:</strong> {userStringAnswers?.[q.id] || '(작성 안됨)'}
+                            </div>
+                        )}
+                    </div>
+                ) : (
+                    <div className="omr-options">
+                        {Array.from({ length: optionsCount }, (_, i) => {
+                            const optionNum = i + 1;
+                            // Solve Mode: Student Answer
+                            const isMarked = userAnswers[q.id] === optionNum;
+                            // Editor Mode: Correct Answer (stored in q.answer)
+                            const isCorrect = mode === 'editor' && q.answer === optionNum;
+
+                            return (
+                                <div
+                                    key={i}
+                                    className="omr-bubble"
+                                    onClick={(e) => {
+                                        if ((mode === 'solve' || mode === 'editor') && onAnswerClick) {
+                                            e.stopPropagation(); // Prevent row click
+                                            onAnswerClick(q.id, optionNum);
+                                        }
+                                    }}
+                                    style={{
+                                        cursor: (mode === 'solve' || mode === 'editor') ? 'pointer' : 'default',
+                                        background: isMarked ? '#000' : (isCorrect ? 'rgba(239, 68, 68, 0.1)' : 'white'), // Black for student, Red tint for teacher
+                                        color: isMarked ? '#fff' : (isCorrect ? '#ef4444' : 'inherit'),
+                                        borderColor: isCorrect ? '#ef4444' : undefined,
+                                        fontWeight: isMarked || isCorrect ? 'bold' : 'normal',
+                                        position: 'relative'
+                                    }}
+                                >
+                                    {optionNum}
+                                    {/* Teacher Key Indicator (Circle) */}
+                                    {isCorrect && <div style={{ position: 'absolute', inset: -2, border: '2px solid #ef4444', borderRadius: '50%' }}></div>}
+                                </div>
+                            );
+                        })}
+                    </div>
+                )}
             </div>
         );
     };

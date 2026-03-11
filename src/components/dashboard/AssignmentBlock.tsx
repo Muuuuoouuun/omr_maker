@@ -1,8 +1,10 @@
 import Link from "next/link";
 import { Exam } from "@/types/omr";
 
+export type ExtendedExamInfo = Exam & { attemptId?: string; status?: string };
+
 interface AssignmentBlockProps {
-    exams: Exam[];
+    exams: ExtendedExamInfo[];
     type: 'todo' | 'done';
 }
 
@@ -84,11 +86,17 @@ export default function AssignmentBlock({ exams, type }: AssignmentBlockProps) {
                                 </Link>
                             ) : (
                                 <Link
-                                    href={`/student/review/${exam.id}`}
-                                    className="btn btn-secondary"
-                                    style={{ padding: '0.5rem 1rem', fontSize: '0.85rem' }}
+                                    href={`/student/review/${exam.attemptId || exam.id}`}
+                                    className={`btn ${exam.status === 'grading' ? 'btn-secondary' : 'btn-secondary'}`}
+                                    style={{
+                                        padding: '0.5rem 1rem',
+                                        fontSize: '0.85rem',
+                                        background: exam.status === 'grading' ? '#fef08a' : undefined,
+                                        color: exam.status === 'grading' ? '#854d0e' : undefined,
+                                        border: exam.status === 'grading' ? '1px solid #fde047' : undefined
+                                    }}
                                 >
-                                    Review
+                                    {exam.status === 'grading' ? '채점 대기' : 'Review'}
                                 </Link>
                             )}
                         </div>

@@ -27,6 +27,7 @@ export default function ReviewPage() {
                 const attempts: Attempt[] = JSON.parse(attemptsData);
                 const found = attempts.find(a => a.id === id);
                 if (found) {
+                    // eslint-disable-next-line react-hooks/set-state-in-effect
                     setAttempt(found);
                     // Load Exam Data associated with this attempt
                     const examDataStr = localStorage.getItem(`omr_exam_${found.examId}`);
@@ -132,9 +133,15 @@ export default function ReviewPage() {
                     {/* Score Card */}
                     <div className="card-hover" style={{ background: 'white', padding: '2rem', borderRadius: '16px', boxShadow: '0 10px 15px -3px rgba(0,0,0,0.1)', textAlign: 'center', marginBottom: '2rem' }}>
                         <h2 style={{ fontSize: '1.1rem', marginBottom: '0.5rem', fontWeight: 600, color: '#64748b' }}>내 점수</h2>
-                        <div style={{ fontSize: '4rem', fontWeight: 800, color: 'var(--primary)', lineHeight: 1 }}>
-                            {attempt.score}
-                            <span style={{ fontSize: '1.5rem', color: '#cbd5e1', fontWeight: 500 }}> / {attempt.totalScore}</span>
+                        <div style={{ fontSize: attempt.status === 'grading' ? '2.5rem' : '4rem', fontWeight: 800, color: 'var(--primary)', lineHeight: 1 }}>
+                            {attempt.status === 'grading' ? (
+                                <span>⏳ 채점중...</span>
+                            ) : (
+                                <>
+                                    {attempt.score}
+                                    <span style={{ fontSize: '1.5rem', color: '#cbd5e1', fontWeight: 500 }}> / {attempt.totalScore}</span>
+                                </>
+                            )}
                         </div>
                         <p style={{ color: '#94a3b8', marginTop: '1rem', fontSize: '0.85rem' }}>
                             {new Date(attempt.finishedAt).toLocaleString()} 제출 완료
@@ -142,29 +149,55 @@ export default function ReviewPage() {
                     </div>
 
                     {/* Filters */}
-                    <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '1.5rem' }}>
-                        <button
-                            onClick={() => setFilterWrong(false)}
-                            className={`btn ${!filterWrong ? 'btn-primary' : 'btn-secondary'}`}
-                            style={{ flex: 1, borderRadius: '8px', padding: '0.5rem' }}
-                        >
-                            전체 ({exam.questions.length})
-                        </button>
-                        <button
-                            onClick={() => setFilterWrong(true)}
-                            className={`btn ${filterWrong ? 'btn-primary' : 'btn-secondary'}`}
-                            style={{ flex: 1, borderRadius: '8px', padding: '0.5rem', background: filterWrong ? '#ef4444' : undefined, color: filterWrong ? 'white' : undefined }}
-                        >
-                            오답만 ({attempt.totalScore - attempt.score})
-                        </button>
-                    </div>
+                    {attempt.status !== 'grading' && (
+                        <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '1.5rem' }}>
+                            <button
+                                onClick={() => setFilterWrong(false)}
+                                className={`btn ${!filterWrong ? 'btn-primary' : 'btn-secondary'}`}
+                                style={{ flex: 1, borderRadius: '8px', padding: '0.5rem' }}
+                            >
+                                전체 ({exam.questions.length})
+                            </button>
+                            <button
+                                onClick={() => setFilterWrong(true)}
+                                className={`btn ${filterWrong ? 'btn-primary' : 'btn-secondary'}`}
+                                style={{ flex: 1, borderRadius: '8px', padding: '0.5rem', background: filterWrong ? '#ef4444' : undefined, color: filterWrong ? 'white' : undefined }}
+                            >
+                                오답만 ({attempt.totalScore - attempt.score})
+                            </button>
+                        </div>
+                    )}
 
                     {/* Question List */}
                     <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
                         {filteredQuestions.map((q) => {
-                            const userAns = attempt.answers[q.id];
-                            const isCorrect = userAns === q.answer;
-                            const isSkipped = userAns === undefined;
+                            const isSubjective = q.type === 'subjective';
+                            const isDual = !isSubjective && q.askReason;
+                            const userAns = isSubjective
+                                ? attempt.stringAnswers?.[q.id]
+                                : attempt.answers[q.id];
+
+                            const userReasonAns = isDual ? attempt.stringAnswers?.[q.id] : undefined;
+
+                            // For subjective, check if score exists if it's graded, else leave as pending/grading
+                            let isCorrect = false;
+                            let isGraded = true;
+
+                            if (isSubjective) {
+                                if (attempt.status === 'grading') {
+                                    isGraded = false;
+                                } else {
+                                    isCorrect = (attempt.subjectiveScores?.[q.id] || 0) > 0;
+                                }
+                            } else {
+                                if (isDual && attempt.status === 'grading') {
+                                    isGraded = false; // Dual questions waiting for reason grade
+                                } else {
+                                    isCorrect = userAns === q.answer;
+                                }
+                            }
+
+                            const isSkipped = userAns === undefined || userAns === '';
 
                             return (
                                 <div
@@ -173,39 +206,62 @@ export default function ReviewPage() {
                                     className="card-hover"
                                     style={{
                                         background: 'white', padding: '1rem 1.25rem', borderRadius: '12px',
-                                        borderLeft: `4px solid ${isCorrect ? '#10b981' : '#ef4444'}`,
+                                        borderLeft: `4px solid ${!isGraded ? '#cbd5e1' : (isCorrect ? '#10b981' : '#ef4444')}`,
                                         cursor: 'pointer',
                                         boxShadow: '0 2px 4px rgba(0,0,0,0.05)'
                                     }}
                                 >
                                     <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '0.5rem' }}>
                                         <span style={{ fontWeight: 700, fontSize: '1.1rem', color: '#1e293b' }}>
-                                            문항 {q.number}
+                                            문항 {q.number} {isSubjective && <span style={{ fontSize: '0.75rem', color: 'var(--primary)', marginLeft: '4px', background: 'rgba(99, 102, 241, 0.1)', padding: '2px 6px', borderRadius: '4px' }}>주관식</span>}
+                                            {isDual && <span style={{ fontSize: '0.75rem', color: 'var(--warning)', marginLeft: '4px', background: 'rgba(234, 179, 8, 0.1)', padding: '2px 6px', borderRadius: '4px' }}>이중 문제 (사유)</span>}
                                         </span>
                                         <span style={{
                                             fontWeight: 700, fontSize: '0.85rem',
                                             padding: '2px 8px', borderRadius: '12px',
-                                            background: isCorrect ? '#d1fae5' : '#fee2e2',
-                                            color: isCorrect ? '#047857' : '#b91c1c'
+                                            background: !isGraded ? '#e2e8f0' : (isCorrect ? '#d1fae5' : '#fee2e2'),
+                                            color: !isGraded ? '#64748b' : (isCorrect ? '#047857' : '#b91c1c')
                                         }}>
-                                            {isCorrect ? "정답" : "오답"}
+                                            {!isGraded ? "채점 대기" : (isCorrect ? "정답" : "오답")}
                                         </span>
                                     </div>
 
                                     <div style={{ display: 'flex', gap: '1rem', fontSize: '0.9rem' }}>
                                         <div>
-                                            <span style={{ color: '#64748b', marginRight: '0.5rem' }}>내 마킹:</span>
-                                            <span style={{ fontWeight: 700, color: isCorrect ? '#0f172a' : '#ef4444' }}>
+                                            <span style={{ color: '#64748b', marginRight: '0.5rem' }}>내 {isSubjective ? '답안' : '마킹'}:</span>
+                                            <span style={{ fontWeight: 700, color: !isGraded ? '#0f172a' : (isCorrect ? '#0f172a' : '#ef4444') }}>
                                                 {isSkipped ? '(미응답)' : userAns}
                                             </span>
                                         </div>
-                                        {!isCorrect && q.answer && (
+                                        {!isCorrect && isGraded && (q.answer || q.stringAnswer) && (
                                             <div>
-                                                <span style={{ color: '#64748b', marginRight: '0.5rem' }}>정답:</span>
-                                                <span style={{ fontWeight: 700, color: '#10b981' }}>{q.answer}</span>
+                                                <span style={{ color: '#64748b', marginRight: '0.5rem' }}>{isSubjective ? '모범 정답' : '정답'}:</span>
+                                                <span style={{ fontWeight: 700, color: '#10b981' }}>{isSubjective ? q.stringAnswer : q.answer}</span>
                                             </div>
                                         )}
                                     </div>
+
+                                    {isDual && (
+                                        <div style={{ fontSize: '0.9rem', marginTop: '0.8rem', paddingTop: '0.8rem', borderTop: '1px dashed #cbd5e1' }}>
+                                            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem' }}>
+                                                <div>
+                                                    <span style={{ color: '#64748b', marginRight: '0.5rem' }}>작성한 사유:</span>
+                                                    <span style={{ fontWeight: 600 }}>{userReasonAns || '(미작성)'}</span>
+                                                </div>
+                                                {isGraded && q.reasonStringAnswer && (
+                                                    <div>
+                                                        <span style={{ color: '#64748b', marginRight: '0.5rem' }}>모범 사유:</span>
+                                                        <span style={{ fontWeight: 600, color: '#10b981' }}>{q.reasonStringAnswer}</span>
+                                                    </div>
+                                                )}
+                                                {!isGraded && (
+                                                    <div style={{ fontSize: '0.8rem', color: '#94a3b8', fontStyle: 'italic', marginTop: '0.2rem' }}>
+                                                        * 사유 채점이 완료되면 모범 사유가 함께 공개됩니다.
+                                                    </div>
+                                                )}
+                                            </div>
+                                        </div>
+                                    )}
                                 </div>
                             );
                         })}

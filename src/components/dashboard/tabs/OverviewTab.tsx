@@ -7,6 +7,7 @@ import StatCard from "@/components/dashboard/StatCard";
 import TrendChart from "@/components/dashboard/TrendChart";
 import ExamListBlock from "@/components/dashboard/ExamListBlock";
 import { Users, BarChart3, PlusCircle, Activity } from "lucide-react";
+import { useToast } from "@/components/ui/Toast";
 
 interface OverviewTabProps {
     exams: Exam[];
@@ -23,6 +24,7 @@ interface OverviewTabProps {
 export default function OverviewTab({ exams, attempts, stats, trendData, onNavigateToExamAnalytics }: OverviewTabProps) {
     const [activeTab, setActiveTab] = useState<'ongoing' | 'completed'>('ongoing');
     const [now] = useState(() => Date.now());
+    const toast = useToast();
 
     // Create dummy data mixed with real data for presentation
     const ongoingExams = useMemo(() => {
@@ -47,11 +49,11 @@ export default function OverviewTab({ exams, attempts, stats, trendData, onNavig
     const displayExams = activeTab === 'ongoing' ? ongoingExams : completedExams;
 
     const handleSendAlarm = (examTitle: string) => {
-        alert(`[${examTitle}] 미응시 학생들에게 개별 알림을 전송했습니다.\n\n- 시험 시작 하루 전 자동 알림 기능 (활성화됨)\n- 선생님 수동 푸시 알림 (전송됨)`);
+        toast.info(`[${examTitle}] 미응시 학생들에게 개별 알림을 전송했습니다.\n\n- 시험 시작 하루 전 자동 알림 기능 (활성화됨)\n- 선생님 수동 푸시 알림 (전송됨)`);
     };
 
     const handleSendAllAlarms = () => {
-        alert("선생님이 배포한 '모든' 진행중인 시험의 미응시 학생들에게 일괄 알림을 전송했습니다.");
+        toast.info("선생님이 배포한 '모든' 진행중인 시험의 미응시 학생들에게 일괄 알림을 전송했습니다.");
     };
 
     return (
@@ -80,11 +82,11 @@ export default function OverviewTab({ exams, attempts, stats, trendData, onNavig
                         <BarChart3 size={24} />
                         <span style={{ fontSize: '0.85rem', fontWeight: 600 }}>Analytics</span>
                     </button>
-                    <button onClick={() => alert("Setting features coming soon")} style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: '0.5rem', padding: '1rem', background: 'rgba(99, 102, 241, 0.1)', borderRadius: 'var(--radius-lg)', color: '#6366f1', transition: 'all 0.2s' }} className="card-hover">
+                    <button onClick={() => toast.info("Setting features coming soon")} style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: '0.5rem', padding: '1rem', background: 'rgba(99, 102, 241, 0.1)', borderRadius: 'var(--radius-lg)', color: '#6366f1', transition: 'all 0.2s' }} className="card-hover">
                         <svg width="24" height="24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>
                         <span style={{ fontSize: '0.85rem', fontWeight: 600 }}>Settings</span>
                     </button>
-                    <button onClick={() => alert("Invoice & Billing features coming soon")} style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: '0.5rem', padding: '1rem', background: 'rgba(168, 85, 247, 0.1)', borderRadius: 'var(--radius-lg)', color: '#a855f7', transition: 'all 0.2s' }} className="card-hover">
+                    <button onClick={() => toast.info("Invoice & Billing features coming soon")} style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: '0.5rem', padding: '1rem', background: 'rgba(168, 85, 247, 0.1)', borderRadius: 'var(--radius-lg)', color: '#a855f7', transition: 'all 0.2s' }} className="card-hover">
                         <svg width="24" height="24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="2" y="5" width="20" height="14" rx="2"></rect><line x1="2" y1="10" x2="22" y2="10"></line></svg>
                         <span style={{ fontSize: '0.85rem', fontWeight: 600 }}>Billing</span>
                     </button>

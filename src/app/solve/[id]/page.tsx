@@ -8,13 +8,16 @@ import dynamic from "next/dynamic";
 
 const PDFViewer = dynamic(() => import("@/components/PDFViewer"), { ssr: false });
 import { Question } from "@/types/omr";
+import { useToast } from "@/components/ui/Toast";
 
 export default function SolvePage() {
     const params = useParams();
+    const toast = useToast();
     const id = params?.id as string;
 
     const [examData, setExamData] = useState<{ title: string; questions: Question[]; accessConfig?: { type: string; groupIds: string[] } } | null>(null);
     const [studentAnswers, setStudentAnswers] = useState<Record<number, number>>({});
+    const [studentStringAnswers, setStudentStringAnswers] = useState<Record<number, string>>({});
     const [drawings, setDrawings] = useState<Record<number, string[]>>({});
     const [pdfFile, setPdfFile] = useState<File | null>(null);
 
@@ -91,11 +94,11 @@ export default function SolvePage() {
                             }
                         }
                     } catch (err) {
-                        alert("시험 데이터 로드 실패");
+                        toast.error("시험 데이터 로드 실패");
                         console.error(err);
                     }
                 } else {
-                    alert("유효하지 않은 시험 ID이거나 데이터가 없습니다.");
+                    toast.error("유효하지 않은 시험 ID이거나 데이터가 없습니다.");
                 }
             }
         };
@@ -109,9 +112,13 @@ export default function SolvePage() {
 
         if (timeLeft <= 0) {
             setIsTimeUp(true);
-            alert("⏰ 제한 시간이 종료되었습니다! (자동 제출 기능은 게스트 이름 확인 후 구현됩니다)");
+            toast.error("⏰ 제한 시간이 종료되었습니다! (자동 제출 기능은 게스트 이름 확인 후 구현됩니다)");
             // In a fully authenticated environment, we would call handleSubmit() here automatically.
             return;
+        }
+
+        if (timeLeft === 600) {
+            toast.info("⚠️ 시험 종료까지 10분 남았습니다!");
         }
 
         const timer = setInterval(() => {
@@ -119,7 +126,7 @@ export default function SolvePage() {
         }, 1000);
 
         return () => clearInterval(timer);
-    }, [timeLeft, isTeacherMode, isTimeUp]);
+    }, [timeLeft, isTeacherMode, isTimeUp, toast]);
 
     const formatTime = (seconds: number) => {
         const m = Math.floor(seconds / 60);
@@ -132,7 +139,24 @@ export default function SolvePage() {
             ...prev,
             [qId]: optionIndex
         }));
-        // Auto-select question when answering
+
+        // Auto-select next question when answering
+        if (examData) {
+            const currentIndex = examData.questions.findIndex(q => q.id === qId);
+            if (currentIndex !== -1 && currentIndex < examData.questions.length - 1) {
+                const nextQId = examData.questions[currentIndex + 1].id;
+                handleQuestionClick(nextQId);
+            } else {
+                handleQuestionClick(qId);
+            }
+        }
+    };
+
+    const handleStringAnswerChange = (qId: number, value: string) => {
+        setStudentStringAnswers(prev => ({
+            ...prev,
+            [qId]: value
+        }));
         handleQuestionClick(qId);
     };
 
@@ -144,6 +168,13 @@ export default function SolvePage() {
                 setPdfCurrentPage(q.pdfLocation.page);
             }
         }
+
+        setTimeout(() => {
+            const el = document.getElementById(`omr-row-${qId}`);
+            if (el) {
+                el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+            }
+        }, 50);
     };
 
     const handleDrawingsChange = (page: number, newPaths: string[]) => {
@@ -163,23 +194,17 @@ export default function SolvePage() {
         // Ensure User
         const submitter = user;
         if (!submitter) {
-            // Guest Flow for Public Exams
-            if (examData.accessConfig?.type === 'public') {
-                setShowGuestModal(true);
-                return;
-            } else {
-                alert("로그인이 필요한 시험입니다.");
-                window.location.href = "/";
-                return;
-            }
+            // Allow Guest Flow for any exam if accessed via code/link
+            setShowGuestModal(true);
+            return;
         }
 
         executeSubmit(submitter);
     };
 
     const handleGuestSubmit = () => {
-        if (!guestName.trim()) { alert("이름을 입력해주세요."); return; }
-        if (!guestTeacher.trim()) { alert("담당 선생님 이름을 입력해주세요."); return; }
+        if (!guestName.trim()) { toast.error("이름을 입력해주세요."); return; }
+        if (!guestTeacher.trim()) { toast.error("담당 선생님 이름을 입력해주세요."); return; }
 
         const guestId = Math.random().toString(36).substring(2, 15);
         const submitter = { name: guestName, teacherName: guestTeacher, age: guestAge, isGuest: true, guestId };
@@ -201,12 +226,21 @@ export default function SolvePage() {
         // Calculate Score
         let correctCount = 0;
         let totalCount = 0;
+        let hasPendingSubjective = false;
 
         examData.questions.forEach(q => {
-            if (q.answer) {
+            if (q.type === 'subjective') {
                 totalCount++;
+                hasPendingSubjective = true;
+            } else if (q.answer) {
+                totalCount++; // 1 pt for objective
                 if (studentAnswers[q.id] === q.answer) {
                     correctCount++;
+                }
+
+                if (q.askReason) {
+                    totalCount++; // 1 additional pt for the written reason
+                    hasPendingSubjective = true;
                 }
             }
         });
@@ -223,8 +257,9 @@ export default function SolvePage() {
             score: correctCount,
             totalScore: totalCount,
             answers: studentAnswers,
+            stringAnswers: studentStringAnswers,
             drawings: drawings,
-            status: 'completed'
+            status: hasPendingSubjective ? 'grading' : 'completed'
         };
 
         // Save to Local Storage (List of attempts)
@@ -232,7 +267,7 @@ export default function SolvePage() {
         history.push(attemptData);
         localStorage.setItem('omr_attempts', JSON.stringify(history));
 
-        alert(`제출 완료! 점수: ${correctCount}/${totalCount}`);
+        toast.success(`제출 완료! 점수: ${correctCount}/${totalCount}`);
         window.location.href = `/student/review/${attemptId}`;
     };
 
@@ -244,7 +279,7 @@ export default function SolvePage() {
             if (password === "admin123") {
                 setIsTeacherMode(true);
             } else {
-                alert("비밀번호가 틀렸습니다.");
+                toast.error("비밀번호가 틀렸습니다.");
                 setIsTeacherMode(false);
             }
         } else {
@@ -270,8 +305,8 @@ export default function SolvePage() {
                         ID: {id}
                     </span>
                     {timeLeft !== null && !isTeacherMode && (
-                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', background: timeLeft < 60 ? '#fee2e2' : '#e0e7ff', color: timeLeft < 60 ? '#dc2626' : '#4338ca', padding: '0.3rem 0.8rem', borderRadius: '20px', fontWeight: 'bold', fontSize: '0.9rem', border: `1px solid ${timeLeft < 60 ? '#fca5a5' : '#a5b4fc'}` }}>
-                            ⏱️ {formatTime(timeLeft)}
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', background: timeLeft <= 600 ? '#fee2e2' : '#e0e7ff', color: timeLeft <= 600 ? '#dc2626' : '#4338ca', padding: '0.3rem 0.8rem', borderRadius: '20px', fontWeight: 'bold', fontSize: '0.9rem', border: `1px solid ${timeLeft <= 600 ? '#fca5a5' : '#a5b4fc'}`, transition: 'all 0.3s' }}>
+                            <span className={timeLeft <= 60 ? 'animate-pulse' : ''}>⏱️ {formatTime(timeLeft)}</span>
                         </div>
                     )}
                     <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontSize: '0.85rem', color: 'var(--muted)', cursor: 'pointer', background: 'var(--background)', padding: '0.3rem 0.6rem', borderRadius: '4px', whiteSpace: 'nowrap' }}>
@@ -377,18 +412,51 @@ export default function SolvePage() {
                 </div>
 
                 {/* OMR Sheet (Right) */}
-                <div className="split-pane-main" style={{ flex: 1, display: 'flex', justifyContent: 'center', overflowY: 'auto', overflowX: 'hidden', padding: '2rem', background: '#e2e8f0' }}>
+                <div className="split-pane-main" style={{ flex: 1, display: 'flex', justifyContent: 'center', overflowY: 'auto', overflowX: 'hidden', padding: '2rem', background: '#e2e8f0', gap: '1.5rem', alignItems: 'flex-start' }}>
                     <div style={{ width: '100%', maxWidth: '900px', height: 'fit-content' }}>
                         <OMRPreview
                             title={examData.title}
                             questions={examData.questions}
                             mode="solve"
                             userAnswers={studentAnswers}
+                            userStringAnswers={studentStringAnswers}
                             selectedQuestionId={currentQuestionId}
                             onAnswerClick={handleAnswerClick}
+                            onStringAnswerChange={handleStringAnswerChange}
                             onQuestionClick={handleQuestionClick}
                         />
                     </div>
+
+                    {/* Sticky Navigator (Mini-map) */}
+                    {!isTeacherMode && examData && (
+                        <div className="bento-card fade-in-up" style={{ position: 'sticky', top: '0', background: 'var(--surface)', padding: '1.25rem', borderRadius: 'var(--radius-xl)', boxShadow: 'var(--shadow-lg)', display: 'flex', flexDirection: 'column', gap: '0.75rem', zIndex: 50, maxHeight: 'calc(100vh - 10rem)', overflowY: 'auto', border: '1px solid var(--border)', width: 'auto', minWidth: '120px', flexShrink: 0 }}>
+                            <div style={{ fontSize: '0.9rem', fontWeight: 800, textAlign: 'center', color: 'var(--foreground)', marginBottom: '0.25rem', paddingBottom: '0.75rem', borderBottom: '1px solid var(--border)' }}>진행현황</div>
+                            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '0.5rem' }}>
+                                {examData.questions.map(q => {
+                                    const isAnswered = studentAnswers[q.id] !== undefined || (studentStringAnswers[q.id] && studentStringAnswers[q.id].trim() !== "");
+                                    const isSelected = currentQuestionId === q.id;
+                                    return (
+                                        <button
+                                            key={q.id}
+                                            onClick={() => handleQuestionClick(q.id)}
+                                            style={{
+                                                width: '100%', aspectRatio: '1', borderRadius: '8px', fontSize: '0.9rem', fontWeight: 700,
+                                                border: isSelected ? '2px solid var(--primary)' : '1px solid transparent',
+                                                background: isAnswered ? '#10b981' : 'var(--background)',
+                                                color: isAnswered ? 'white' : 'var(--muted)',
+                                                cursor: 'pointer', transition: 'all 0.2s', display: 'flex', alignItems: 'center', justifyContent: 'center',
+                                                boxShadow: isAnswered ? '0 2px 4px rgba(16, 185, 129, 0.3)' : 'inset 0 2px 4px rgba(0,0,0,0.02)'
+                                            }}
+                                            title={`${q.number}번 문제로 이동`}
+                                            className="card-hover"
+                                        >
+                                            {q.number}
+                                        </button>
+                                    );
+                                })}
+                            </div>
+                        </div>
+                    )}
                 </div>
             </div>
 

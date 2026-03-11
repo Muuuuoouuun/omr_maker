@@ -112,19 +112,30 @@ export default function ExamDetailPage() {
                                             <td style={{ padding: '1rem' }}>
                                                 <span style={{
                                                     padding: '2px 8px', borderRadius: '4px', fontSize: '0.8rem', fontWeight: 600,
-                                                    background: '#dcfce7', color: '#166534'
+                                                    background: attempt.status === 'grading' ? '#fef08a' : '#dcfce7',
+                                                    color: attempt.status === 'grading' ? '#854d0e' : '#166534'
                                                 }}>
-                                                    Completed
+                                                    {attempt.status === 'grading' ? '채점 대기' : 'Completed'}
                                                 </span>
                                             </td>
-                                            <td style={{ padding: '1rem', textAlign: 'right' }}>
-                                                <Link
-                                                    href={`/student/review/${attempt.id}`}
-                                                    className="btn btn-secondary"
-                                                    style={{ padding: '0.3rem 0.8rem', fontSize: '0.8rem' }}
-                                                >
-                                                    View OMR
-                                                </Link>
+                                            <td style={{ padding: '1rem', textAlign: 'right', display: 'flex', gap: '0.5rem', justifyContent: 'flex-end' }}>
+                                                {attempt.status === 'grading' ? (
+                                                    <Link
+                                                        href={`/teacher/grade/${attempt.id}`}
+                                                        className="btn btn-primary"
+                                                        style={{ padding: '0.3rem 0.8rem', fontSize: '0.8rem' }}
+                                                    >
+                                                        주관식 채점
+                                                    </Link>
+                                                ) : (
+                                                    <Link
+                                                        href={`/student/review/${attempt.id}`}
+                                                        className="btn btn-secondary"
+                                                        style={{ padding: '0.3rem 0.8rem', fontSize: '0.8rem' }}
+                                                    >
+                                                        View OMR
+                                                    </Link>
+                                                )}
                                             </td>
                                         </tr>
                                     ))

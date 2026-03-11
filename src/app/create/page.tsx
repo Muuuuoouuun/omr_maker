@@ -12,8 +12,10 @@ import { useState, useEffect } from "react";
 import html2canvas from "html2canvas";
 import { Question } from "@/types/omr";
 import { ParsedAnswer, parsePdfCoordinatesWithGemini } from "@/services/answerParser";
+import { useToast } from "@/components/ui/Toast";
 
 export default function CreateOMRPage() {
+    const toast = useToast();
     // UI State
     const [isSaving, setIsSaving] = useState(false);
     const [isImportModalOpen, setIsImportModalOpen] = useState(false);
@@ -74,16 +76,48 @@ export default function CreateOMRPage() {
 
     const handlePdfPageClick = (page: number, x: number, y: number) => {
         if (selectedQuestionId === null) {
-            alert("먼저 연결할 문항을 OMR에서 선택해주세요!");
+            // "Click to Add": automatically create a new question at the clicked location
+            setQuestionsCount(prev => prev + 1);
+            setQuestions(prev => {
+                const newId = prev.length > 0 ? Math.max(...prev.map(q => q.id)) + 1 : 1;
+                const newNum = prev.length + 1;
+                const newQ: Question = {
+                    id: newId,
+                    number: newNum,
+                    pdfLocation: { page, x, y }
+                };
+                return [...prev, newQ];
+            });
+            toast.success("새로운 문항이 클릭한 위치에 추가되었습니다!");
             return;
         }
 
-        // Update the selected question with PDF location
-        setQuestions(prev => prev.map(q =>
-            q.id === selectedQuestionId
-                ? { ...q, pdfLocation: { page, x, y } }
-                : q
-        ));
+        // Update the selected question with PDF location and Auto-advance
+        let nextSelectedId: number | null = null;
+        let nextNumber: number | null = null;
+
+        setQuestions(prev => {
+            const mapped = prev.map(q =>
+                q.id === selectedQuestionId
+                    ? { ...q, pdfLocation: { page, x, y } }
+                    : q
+            );
+
+            const currentIndex = mapped.findIndex(q => q.id === selectedQuestionId);
+            if (currentIndex !== -1 && currentIndex < mapped.length - 1) {
+                nextSelectedId = mapped[currentIndex + 1].id;
+                nextNumber = mapped[currentIndex + 1].number;
+            }
+            return mapped;
+        });
+
+        if (nextSelectedId !== null) {
+            setSelectedQuestionId(nextSelectedId);
+            toast.info(`${nextNumber}번 문항으로 포커스가 이동했습니다.`);
+        } else {
+            setSelectedQuestionId(null);
+            toast.success("모든 문항의 영역 지정이 완료되었습니다.");
+        }
     };
 
     const toggleLabel = (label: string) => {
@@ -121,9 +155,10 @@ export default function CreateOMRPage() {
 
     const handleAutoDetectLocations = async () => {
         if (!pdfFile) {
-            alert("먼저 문제지 PDF를 왼쪽 상단에서 업로드해주세요.");
+            toast.error("먼저 문제지 PDF를 왼쪽 상단에서 업로드해주세요.");
             return;
         }
+        toast.info("텍스트 위치 탐색을 백그라운드에서 시작합니다. 잠시만 기다려주세요.");
         setIsDetectingLocation(true);
         try {
             const pdfjsLib = await import('pdfjs-dist');
@@ -164,10 +199,10 @@ export default function CreateOMRPage() {
             }
 
             setQuestions(newQuestions);
-            alert(`총 ${pdf.numPages}페이지에서 ${mappedCount}개 문항의 위치를 자동으로 찾았습니다! \n매칭되지 않은 문항은 직접 클릭하여 지정해주세요.`);
+            toast.success(`총 ${pdf.numPages}페이지에서 ${mappedCount}개 문항의 위치를 자동으로 찾았습니다! \n매칭되지 않은 문항은 직접 클릭하여 지정해주세요.`);
         } catch (e) {
             console.error(e);
-            alert("위치 자동 매칭 중 오류가 발생했습니다.");
+            toast.error("위치 자동 매칭 중 오류가 발생했습니다.");
         } finally {
             setIsDetectingLocation(false);
         }
@@ -175,9 +210,10 @@ export default function CreateOMRPage() {
 
     const handleAIDetectLocations = async () => {
         if (!pdfFile) {
-            alert("먼저 문제지 PDF를 왼쪽 상단에서 업로드해주세요.");
+            toast.error("먼저 문제지 PDF를 왼쪽 상단에서 업로드해주세요.");
             return;
         }
+        toast.info("AI 스마트 위치 인식을 백그라운드에서 시작합니다. (약 30초 소요 됨)");
         setIsDetectingLocation(true);
         try {
             const bboxes = await parsePdfCoordinatesWithGemini(pdfFile);
@@ -218,11 +254,11 @@ export default function CreateOMRPage() {
 
             setQuestions(newQuestions);
             setIsSmartPdf(true);
-            alert(`AI가 총 ${mappedCount}개 문항의 스마트 영역을 성공적으로 매칭했습니다!`);
+            toast.success(`AI가 총 ${mappedCount}개 문항의 스마트 영역을 성공적으로 매칭했습니다!`);
         } catch (error: unknown) {
             const e = error as Error;
             console.error(e);
-            alert(e.message || "AI 위치 매칭 중 오류가 발생했습니다.");
+            toast.error(e.message || "AI 위치 매칭 중 오류가 발생했습니다.");
         } finally {
             setIsDetectingLocation(false);
         }
@@ -269,7 +305,7 @@ export default function CreateOMRPage() {
             return shareUrl;
         } catch (e) {
             console.error(e);
-            alert("배포 데이터 저장 실패: 파일 용량이 너무 큽니다. (LocalStorage 한계)");
+            toast.error("배포 데이터 저장 실패: 파일 용량이 너무 큽니다. (LocalStorage 한계)");
             return "";
         }
     };
@@ -295,7 +331,7 @@ export default function CreateOMRPage() {
             return q;
         }));
 
-        alert("정답 및 배점(있는 경우)이 적용되었습니다!");
+        toast.success("정답 및 배점(있는 경우)이 적용되었습니다!");
     };
 
     const handleFastAnswerChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -343,10 +379,10 @@ export default function CreateOMRPage() {
             };
 
             localStorage.setItem(`omr_exam_${id}`, JSON.stringify(draftData));
-            alert("✅ 시험지가 임시 저장되었습니다.\n대시보드에서 불러와 이어서 편집하거나 배포할 수 있습니다.");
+            toast.success("✅ 시험지가 임시 저장되었습니다.\n대시보드에서 불러와 이어서 편집하거나 배포할 수 있습니다.");
         } catch (e) {
             console.error(e);
-            alert("저장 실패: 파일 용량이 너무 큽니다. (LocalStorage 한계)");
+            toast.error("저장 실패: 파일 용량이 너무 큽니다. (LocalStorage 한계)");
         } finally {
             setIsSaving(false);
         }
@@ -367,7 +403,7 @@ export default function CreateOMRPage() {
             link.click();
         } catch (err) {
             console.error("Save failed:", err);
-            alert("저장에 실패했습니다.");
+            toast.error("저장에 실패했습니다.");
         } finally {
             setIsSaving(false);
         }
@@ -608,22 +644,41 @@ export default function CreateOMRPage() {
                             className="btn btn-secondary"
                             style={{ width: '100%', marginBottom: '1rem', border: '1px solid #10b981', color: '#10b981', background: 'rgba(16, 185, 129, 0.05)' }}
                             onClick={handleAutoDetectLocations}
-                            disabled={isDetectingLocation || !pdfFile}
                         >
-                            {isDetectingLocation ? "⏳ 위치 찾는 중..." : "🎯 텍스트 기반 위치 찾기 (빠름)"}
+                            {isDetectingLocation ? <span className="animate-pulse">⏳ 텍스트 위치 찾는 중... (백그라운드 진행)</span> : "🎯 텍스트 기반 위치 찾기 (빠름)"}
                         </button>
 
                         <button
                             className="btn btn-secondary"
                             style={{ width: '100%', marginBottom: '1rem', border: '1px solid #f59e0b', color: '#d97706', background: 'rgba(245, 158, 11, 0.05)', display: 'flex', flexDirection: 'column', alignItems: 'center', padding: '0.8rem' }}
                             onClick={handleAIDetectLocations}
-                            disabled={isDetectingLocation || !pdfFile}
                         >
                             <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', fontWeight: 'bold' }}>
-                                <span>✨ AI 스마트 위치 인식 (정확함)</span>
+                                <span>{isDetectingLocation ? <span className="animate-pulse">⏳ AI 스마트 위치 인식 중... (백그라운드 진행)</span> : "✨ AI 스마트 위치 인식 (정확함)"}</span>
                             </div>
-                            <span style={{ fontSize: '0.75rem', opacity: 0.8, marginTop: '0.3rem' }}>학생이 번호를 터치해 바로 마킹할 수 있게 됩니다.</span>
+                            {!isDetectingLocation && <span style={{ fontSize: '0.75rem', opacity: 0.8, marginTop: '0.3rem' }}>학생이 번호를 터치해 바로 마킹할 수 있게 됩니다.</span>}
                         </button>
+
+                        <div style={{ marginBottom: '1rem', padding: '1rem', background: 'rgba(16, 185, 129, 0.05)', borderRadius: 'var(--radius-md)', border: '1px solid rgba(16, 185, 129, 0.2)' }}>
+                            <label style={{ display: 'block', marginBottom: '0.4rem', fontSize: '0.9rem', fontWeight: 600, color: '#10b981' }}>
+                                전체 문항 일괄 설정
+                            </label>
+                            <div style={{ display: 'flex', gap: '0.5rem' }}>
+                                <button className="btn btn-secondary" style={{ flex: 1, padding: '0.4rem', fontSize: '0.8rem' }} onClick={() => {
+                                    const score = prompt("모든 문항에 적용할 배점을 입력하세요 (예: 5)");
+                                    if (score && !isNaN(parseFloat(score))) {
+                                        setQuestions(prev => prev.map(q => ({ ...q, score: parseFloat(score) })));
+                                        toast.success(`모든 문항의 배점이 ${score}점으로 변경되었습니다.`);
+                                    }
+                                }}>배점 일괄 변경</button>
+                                <button className="btn btn-secondary" style={{ flex: 1, padding: '0.4rem', fontSize: '0.8rem' }} onClick={() => {
+                                    if (confirm("모든 문항을 객관식으로 초기화하시겠습니까?")) {
+                                        setQuestions(prev => prev.map(q => ({ ...q, type: 'objective' })));
+                                        toast.success(`모든 문항이 객관식으로 변경되었습니다.`);
+                                    }
+                                }}>모두 객관식으로</button>
+                            </div>
+                        </div>
 
                         <div style={{ marginBottom: '1rem' }}>
                             <label style={{ display: 'block', marginBottom: '0.4rem', fontSize: '0.9rem', fontWeight: 600, color: 'var(--primary)' }}>
@@ -651,35 +706,106 @@ export default function CreateOMRPage() {
 
                         {selectedQuestionId ? (
                             <div className="animate-fade-in">
+                                {/* Type Setting */}
+                                <div style={{ marginBottom: '1rem' }}>
+                                    <label style={{ display: 'block', marginBottom: '0.3rem', fontSize: '0.85rem' }}>문제 유형</label>
+                                    <div style={{ display: 'flex', gap: '0.5rem' }}>
+                                        <button
+                                            onClick={() => {
+                                                setQuestions(prev => prev.map(q => q.id === selectedQuestionId ? { ...q, type: 'objective' } : q));
+                                            }}
+                                            className={`btn ${questions.find(q => q.id === selectedQuestionId)?.type !== 'subjective' ? 'btn-primary' : 'btn-secondary'}`}
+                                            style={{ flex: 1, padding: '0.4rem', fontSize: '0.85rem' }}
+                                        >
+                                            객관식
+                                        </button>
+                                        <button
+                                            onClick={() => {
+                                                setQuestions(prev => prev.map(q => q.id === selectedQuestionId ? { ...q, type: 'subjective', answer: undefined } : q));
+                                            }}
+                                            className={`btn ${questions.find(q => q.id === selectedQuestionId)?.type === 'subjective' ? 'btn-primary' : 'btn-secondary'}`}
+                                            style={{ flex: 1, padding: '0.4rem', fontSize: '0.85rem' }}
+                                        >
+                                            주관식
+                                        </button>
+                                    </div>
+                                </div>
+
                                 {/* Answer Setting */}
                                 <div style={{ marginBottom: '1rem' }}>
                                     <label style={{ display: 'block', marginBottom: '0.3rem', fontSize: '0.85rem' }}>정답 설정</label>
-                                    <div style={{ display: 'flex', gap: '0.5rem' }}>
-                                        {[1, 2, 3, 4, 5].map(num => {
-                                            const currentQ = questions.find(q => q.id === selectedQuestionId);
-                                            const isSelected = currentQ?.answer === num;
-                                            return (
-                                                <button
-                                                    key={num}
-                                                    onClick={() => setAnswer(num)}
-                                                    style={{
-                                                        width: '30px', height: '30px',
-                                                        borderRadius: '50%',
-                                                        border: isSelected ? 'none' : '1px solid var(--muted)',
-                                                        background: isSelected ? 'var(--primary)' : 'white',
-                                                        color: isSelected ? 'white' : 'var(--foreground)',
-                                                        display: 'flex', alignItems: 'center', justifyContent: 'center',
-                                                        fontSize: '0.85rem', fontWeight: 'bold',
-                                                        transition: 'all 0.2s',
-                                                        cursor: 'pointer'
-                                                    }}
-                                                >
-                                                    {num}
-                                                </button>
-                                            );
-                                        })}
-                                    </div>
+                                    {questions.find(q => q.id === selectedQuestionId)?.type === 'subjective' ? (
+                                        <input
+                                            type="text"
+                                            placeholder="주관식 정답 입력 (선택)"
+                                            value={questions.find(q => q.id === selectedQuestionId)?.stringAnswer || ''}
+                                            onChange={(e) => {
+                                                setQuestions(prev => prev.map(q => q.id === selectedQuestionId ? { ...q, stringAnswer: e.target.value } : q));
+                                            }}
+                                            className="input-field"
+                                            style={{ width: '100%', padding: '0.5rem', borderRadius: '4px', border: '1px solid var(--border)' }}
+                                        />
+                                    ) : (
+                                        <div style={{ display: 'flex', gap: '0.5rem' }}>
+                                            {[1, 2, 3, 4, 5].map(num => {
+                                                const currentQ = questions.find(q => q.id === selectedQuestionId);
+                                                const isSelected = currentQ?.answer === num;
+                                                return (
+                                                    <button
+                                                        key={num}
+                                                        onClick={() => setAnswer(num)}
+                                                        style={{
+                                                            width: '30px', height: '30px',
+                                                            borderRadius: '50%',
+                                                            border: isSelected ? 'none' : '1px solid var(--muted)',
+                                                            background: isSelected ? 'var(--primary)' : 'white',
+                                                            color: isSelected ? 'white' : 'var(--foreground)',
+                                                            display: 'flex', alignItems: 'center', justifyContent: 'center',
+                                                            fontSize: '0.85rem', fontWeight: 'bold',
+                                                            transition: 'all 0.2s',
+                                                            cursor: 'pointer'
+                                                        }}
+                                                    >
+                                                        {num}
+                                                    </button>
+                                                );
+                                            })}
+                                        </div>
+                                    )}
                                 </div>
+
+                                {/* Dual Question Setting (Only for Objective) */}
+                                {questions.find(q => q.id === selectedQuestionId)?.type !== 'subjective' && (
+                                    <div style={{ marginBottom: '1rem', background: 'rgba(99, 102, 241, 0.05)', padding: '1rem', borderRadius: '8px', border: '1px solid rgba(99, 102, 241, 0.2)' }}>
+                                        <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.5rem', fontSize: '0.9rem', fontWeight: 600, cursor: 'pointer' }}>
+                                            <input
+                                                type="checkbox"
+                                                checked={questions.find(q => q.id === selectedQuestionId)?.askReason || false}
+                                                onChange={(e) => {
+                                                    setQuestions(prev => prev.map(q => q.id === selectedQuestionId ? { ...q, askReason: e.target.checked } : q));
+                                                }}
+                                                style={{ width: '16px', height: '16px', accentColor: 'var(--primary)', cursor: 'pointer' }}
+                                            />
+                                            이중 문제 (사유 묻기) 활성화
+                                        </label>
+
+                                        {questions.find(q => q.id === selectedQuestionId)?.askReason && (
+                                            <div className="animate-fade-in" style={{ marginTop: '0.5rem' }}>
+                                                <input
+                                                    type="text"
+                                                    placeholder="모범 사유 입력 (선택)"
+                                                    value={questions.find(q => q.id === selectedQuestionId)?.reasonStringAnswer || ''}
+                                                    onChange={(e) => {
+                                                        setQuestions(prev => prev.map(q => q.id === selectedQuestionId ? { ...q, reasonStringAnswer: e.target.value } : q));
+                                                    }}
+                                                    className="input-field"
+                                                    style={{ width: '100%', padding: '0.5rem', borderRadius: '4px', border: '1px solid var(--border)', fontSize: '0.85rem' }}
+                                                />
+                                                <p style={{ fontSize: '0.75rem', color: 'var(--muted)', marginTop: '0.3rem' }}>* 학생이 선택한 답안에 대한 논리적 근거를 서술하도록 합니다.</p>
+                                            </div>
+                                        )}
+                                    </div>
+                                )}
 
                                 {/* Score Setting */}
                                 <div style={{ marginBottom: '1rem' }}>

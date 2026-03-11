@@ -4,6 +4,7 @@ import { useState, useEffect } from 'react';
 import { QRCodeCanvas } from 'qrcode.react';
 import { Group } from '@/types/omr';
 import { useRouter } from 'next/navigation';
+import { useToast } from '@/components/ui/Toast';
 
 interface DistributeModalProps {
     isOpen: boolean;
@@ -15,6 +16,7 @@ interface DistributeModalProps {
 
 export default function DistributeModal({ isOpen, onClose, onSaveAndShare, examTitle = "OMR-Maker 시험" }: DistributeModalProps) {
     const router = useRouter();
+    const toast = useToast();
     const [accessType, setAccessType] = useState<'public' | 'group'>('public');
     const [selectedGroups, setSelectedGroups] = useState<string[]>([]);
     const [groups, setGroups] = useState<Group[]>([]);
@@ -104,7 +106,7 @@ export default function DistributeModal({ isOpen, onClose, onSaveAndShare, examT
         if (!shareUrl) return;
         const textToCopy = `[시험 안내]\n\n배포된 시험지: ${examTitle}\n\n아래 접속 링크를 눌러 모바일 기기로 정답지를 작성해 주세요. \n👉 ${shareUrl}\n\n${hasTimeLimit ? `🕒 제한 시간: ${timeLimit}분\n` : ''}행운을 빕니다!`;
         navigator.clipboard.writeText(textToCopy);
-        alert("학생들에게 보낼 공유 안내 문구가 클립보드에 복사되었습니다!");
+        toast.success("학생들에게 보낼 공유 안내 문구가 클립보드에 복사되었습니다!");
     };
 
     const toggleGroup = (id: string) => {
@@ -227,7 +229,7 @@ export default function DistributeModal({ isOpen, onClose, onSaveAndShare, examT
                             <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', alignItems: 'center', marginBottom: '1.5rem' }}>
                                 <div style={{ display: 'flex', gap: '0.5rem', justifyContent: 'center', flexWrap: 'wrap' }}>
                                     <button onClick={downloadQR} className="btn btn-secondary">QR 코드 다운로드</button>
-                                    <button onClick={() => { navigator.clipboard.writeText(shareUrl); alert("링크가 복사되었습니다!"); }} className="btn btn-primary" style={{ background: '#3b82f6', border: 'none' }}>🔗 링크 복사</button>
+                                    <button onClick={() => { navigator.clipboard.writeText(shareUrl); toast.success("링크가 복사되었습니다!"); }} className="btn btn-primary" style={{ background: '#3b82f6', border: 'none' }}>🔗 링크 복사</button>
                                     <button onClick={handleCopyTemplate} className="btn btn-primary">💬 안내 문구와 함께 복사</button>
                                 </div>
                             </div>

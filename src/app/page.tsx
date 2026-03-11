@@ -1,52 +1,79 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState } from "react";
 import { useRouter } from "next/navigation";
 import Image from "next/image";
-import { Group } from "@/types/omr";
+import { Student } from "@/types/omr";
+import { useToast } from "@/components/ui/Toast";
 
 export default function Home() {
   const router = useRouter();
+  const toast = useToast();
   const [role, setRole] = useState<'none' | 'teacher' | 'student'>('none');
 
   // Student Login State
   const [studentName, setStudentName] = useState("");
-  const [selectedGroupId, setSelectedGroupId] = useState("");
-  const [groups, setGroups] = useState<Group[]>([]);
+  const [phone, setPhone] = useState("");
+  const [isLoginMode, setIsLoginMode] = useState(true);
+  const [guestExamCode, setGuestExamCode] = useState("");
 
   // Teacher Login State
   const [password, setPassword] = useState("");
-
-  useEffect(() => {
-    // Load Groups for Student Login
-    const stored = localStorage.getItem('omr_groups');
-    if (stored) {
-      // eslint-disable-next-line react-hooks/set-state-in-effect
-      setGroups(JSON.parse(stored));
-    }
-  }, []);
 
   const handleTeacherLogin = () => {
     if (password === "admin123") {
       router.push("/teacher/dashboard");
     } else {
-      alert("Invalid Password (Try: admin123)");
+      toast.error("Invalid Password (Try: admin123)");
     }
   };
 
   const handleStudentLogin = () => {
-    if (!studentName.trim() || !selectedGroupId) {
-      alert("이름과 그룹을 모두 입력해주세요.");
+    if (!studentName.trim() || !phone.trim()) {
+      toast.error("이름과 전화번호를 모두 입력해주세요.");
       return;
     }
-    const group = groups.find(g => g.id === selectedGroupId);
+
+    const storedStudents = JSON.parse(localStorage.getItem('omr_students') || '[]');
+    let student = storedStudents.find((s: Student) => s.name === studentName && s.phone === phone);
+
+    if (isLoginMode) {
+      if (!student) {
+        toast.error("가입된 정보가 없습니다. '가입 및 로그인'을 선택해주세요.");
+        return;
+      }
+    } else {
+      if (!student) {
+        student = {
+          id: `stu_${Math.random().toString(36).substring(2, 9)}`,
+          name: studentName,
+          phone: phone,
+          createdAt: new Date().toISOString()
+        };
+        storedStudents.push(student);
+        localStorage.setItem('omr_students', JSON.stringify(storedStudents));
+        toast.success("회원가입이 완료되었습니다!");
+      } else {
+        toast.success("이미 가입된 정보로 로그인합니다.");
+      }
+    }
+
     const session = {
-      name: studentName,
-      groupId: selectedGroupId,
-      groupName: group?.name || "Unknown"
+      id: student.id,
+      name: student.name,
+      phone: student.phone,
+      isGuest: false
     };
     sessionStorage.setItem("omr_student_session", JSON.stringify(session));
     router.push("/student/dashboard");
+  };
+
+  const handleGuestExamEnter = () => {
+    if (!guestExamCode.trim()) {
+      toast.error("시험 코드를 입력해주세요.");
+      return;
+    }
+    router.push(`/solve/${guestExamCode.trim()}`);
   };
 
   return (
@@ -139,47 +166,75 @@ export default function Home() {
               </div>
             ) : (
               <div>
-                <h2 style={{ fontSize: '1.8rem', marginBottom: '2rem', fontWeight: 800, color: 'var(--foreground)' }}>Student Login</h2>
+                <div style={{ display: 'flex', gap: '1rem', marginBottom: '2rem' }}>
+                  <button 
+                    onClick={() => setIsLoginMode(true)}
+                    style={{ flex: 1, padding: '0.5rem', borderBottom: isLoginMode ? '2px solid var(--primary)' : '2px solid transparent', background: 'none', color: isLoginMode ? 'var(--primary)' : 'var(--muted)', fontWeight: isLoginMode ? 700 : 500, cursor: 'pointer', transition: 'all 0.2s' }}
+                  >
+                    로그인
+                  </button>
+                  <button 
+                    onClick={() => setIsLoginMode(false)}
+                    style={{ flex: 1, padding: '0.5rem', borderBottom: !isLoginMode ? '2px solid var(--primary)' : '2px solid transparent', background: 'none', color: !isLoginMode ? 'var(--primary)' : 'var(--muted)', fontWeight: !isLoginMode ? 700 : 500, cursor: 'pointer', transition: 'all 0.2s' }}
+                  >
+                    가입 및 로그인
+                  </button>
+                </div>
+
                 <div style={{ marginBottom: '1.5rem' }}>
-                  <label style={{ display: 'block', marginBottom: '0.75rem', fontSize: '0.95rem', fontWeight: 600, color: 'var(--muted)' }}>Name</label>
+                  <label style={{ display: 'block', marginBottom: '0.75rem', fontSize: '0.95rem', fontWeight: 600, color: 'var(--muted)' }}>이름</label>
                   <input
                     type="text"
                     className="input-field"
                     value={studentName}
                     onChange={(e) => setStudentName(e.target.value)}
-                    placeholder="e.g. Kim Minji"
+                    placeholder="홍길동"
                   />
                 </div>
                 <div style={{ marginBottom: '2.5rem' }}>
-                  <label style={{ display: 'block', marginBottom: '0.75rem', fontSize: '0.95rem', fontWeight: 600, color: 'var(--muted)' }}>Select Class</label>
-                  <select
-                    value={selectedGroupId}
-                    onChange={(e) => setSelectedGroupId(e.target.value)}
+                  <label style={{ display: 'block', marginBottom: '0.75rem', fontSize: '0.95rem', fontWeight: 600, color: 'var(--muted)' }}>전화번호 (또는 뒷자리 4자리)</label>
+                  <input
+                    type="text"
                     className="input-field"
-                    style={{ cursor: 'pointer' }}
-                  >
-                    <option value="">-- Select Group --</option>
-                    {groups.map(g => (
-                      <option key={g.id} value={g.id}>{g.name}</option>
-                    ))}
-                  </select>
-                  {groups.length === 0 && (
-                    <div style={{ fontSize: '0.85rem', color: 'var(--error)', marginTop: '0.75rem', background: 'rgba(239, 68, 68, 0.1)', padding: '0.5rem', borderRadius: 'var(--radius-md)' }}>
-                      No groups found. Please ask teacher to create groups first.
-                    </div>
-                  )}
+                    value={phone}
+                    onChange={(e) => setPhone(e.target.value)}
+                    onKeyDown={(e) => e.key === 'Enter' && handleStudentLogin()}
+                    placeholder="예: 010-1234-5678 또는 5678"
+                  />
                 </div>
                 <button
                   onClick={handleStudentLogin}
                   className="btn btn-primary"
                   style={{ width: '100%', background: 'linear-gradient(135deg, var(--secondary), var(--secondary-light))', boxShadow: '0 4px 15px rgba(236, 72, 153, 0.4)', marginBottom: '1rem' }}
                 >
-                  Start Learning
+                  {isLoginMode ? '로그인' : '학생 등록하고 시작'}
                 </button>
 
-                <div style={{ position: 'relative', textAlign: 'center', margin: '1.5rem 0' }}>
+                <div style={{ position: 'relative', textAlign: 'center', margin: '2rem 0' }}>
                   <hr style={{ borderColor: 'var(--border)' }} />
                   <span style={{ position: 'absolute', top: '-10px', left: '50%', transform: 'translateX(-50%)', background: 'var(--surface-glass)', padding: '0 0.5rem', fontSize: '0.8rem', color: 'var(--muted)' }}>OR</span>
+                </div>
+
+                <div style={{ marginBottom: '1rem' }}>
+                  <label style={{ display: 'block', marginBottom: '0.75rem', fontSize: '0.95rem', fontWeight: 600, color: 'var(--foreground)' }}>시험 코드로 바로 입장 (비회원 가능)</label>
+                  <div style={{ display: 'flex', gap: '0.5rem' }}>
+                    <input
+                      type="text"
+                      className="input-field"
+                      value={guestExamCode}
+                      onChange={(e) => setGuestExamCode(e.target.value)}
+                      onKeyDown={(e) => e.key === 'Enter' && handleGuestExamEnter()}
+                      placeholder="시험 코드 입력 (예: exam_abc123)"
+                      style={{ flex: 1 }}
+                    />
+                    <button
+                      onClick={handleGuestExamEnter}
+                      className="btn btn-secondary"
+                      style={{ padding: '0 1.5rem' }}
+                    >
+                      입장
+                    </button>
+                  </div>
                 </div>
 
                 <button
@@ -201,10 +256,11 @@ export default function Home() {
                     background: 'transparent',
                     border: '1px solid var(--border)',
                     color: 'var(--muted)',
-                    fontSize: '0.9rem'
+                    fontSize: '0.9rem',
+                    marginTop: '1rem'
                   }}
                 >
-                  Continue as Guest
+                  (테스트용) 게스트 대시보드 바로가기
                 </button>
               </div>
             )}

@@ -4,6 +4,7 @@ import { useState, useRef, useEffect } from 'react';
 import { Document, Page, pdfjs } from 'react-pdf';
 import 'react-pdf/dist/Page/AnnotationLayer.css';
 import 'react-pdf/dist/Page/TextLayer.css';
+import { useToast } from "@/components/ui/Toast";
 
 // Worker setup for Next.js
 pdfjs.GlobalWorkerOptions.workerSrc = `//unpkg.com/pdfjs-dist@${pdfjs.version}/build/pdf.worker.min.mjs`;
@@ -34,6 +35,7 @@ export default function PDFViewer({
     forcePage,
     viewerMode = 'teacher'
 }: PDFViewerProps & { forcePage?: number }) {
+    const toast = useToast();
     const [numPages, setNumPages] = useState<number>(0);
     const [pageNumber, setPageNumber] = useState<number>(1);
     const [inputPage, setInputPage] = useState<string>("1");
@@ -261,7 +263,7 @@ export default function PDFViewer({
         e.preventDefault(); setIsDragging(false);
         if (onFileDrop && e.dataTransfer.files[0] && e.dataTransfer.files[0].type === 'application/pdf') {
             onFileDrop(e.dataTransfer.files[0]);
-        } else { alert('PDF 파일만 업로드 가능합니다.'); }
+        } else { toast.error('PDF 파일만 업로드 가능합니다.'); }
     };
 
     return (
@@ -514,11 +516,11 @@ export default function PDFViewer({
                 }}>
                     {/* Pagination */}
                     <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                        <button onClick={() => setPageNumber(p => Math.max(1, p - 1))} disabled={pageNumber <= 1} style={{ background: '#f8fafc', border: 'none', borderRadius: '50%', width: '32px', height: '32px', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', color: '#334155' }}>◀</button>
+                        <button onClick={() => setPageNumber(p => Math.max(1, p - 1))} disabled={pageNumber <= 1} style={{ background: '#f8fafc', border: 'none', borderRadius: '50%', width: '44px', height: '44px', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', color: '#334155' }}>◀</button>
                         <span style={{ fontSize: '0.9rem', fontWeight: 600, color: '#475569', minWidth: '40px', textAlign: 'center' }}>
                             {pageNumber} / {numPages}
                         </span>
-                        <button onClick={() => setPageNumber(p => Math.min(numPages, p + 1))} disabled={pageNumber >= numPages} style={{ background: '#f8fafc', border: 'none', borderRadius: '50%', width: '32px', height: '32px', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', color: '#334155' }}>▶</button>
+                        <button onClick={() => setPageNumber(p => Math.min(numPages, p + 1))} disabled={pageNumber >= numPages} style={{ background: '#f8fafc', border: 'none', borderRadius: '50%', width: '44px', height: '44px', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', color: '#334155' }}>▶</button>
                     </div>
 
                     <div style={{ width: '1px', height: '24px', background: '#e2e8f0' }}></div>

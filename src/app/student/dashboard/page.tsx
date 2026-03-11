@@ -5,12 +5,14 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { Exam, Attempt } from "@/types/omr";
 import AssignmentBlock from "@/components/dashboard/AssignmentBlock";
+import { useToast } from "@/components/ui/Toast";
 
 import { mergeGuestAttempts } from "@/utils/storage";
 
 export default function StudentDashboard() {
     const router = useRouter();
-    const [user, setUser] = useState<{ name: string; groupId: string; groupName: string; isGuest?: boolean; guestId?: string } | null>(null);
+    const toast = useToast();
+    const [user, setUser] = useState<{ id?: string; name: string; phone?: string; groupId?: string; groupName?: string; isGuest?: boolean; guestId?: string } | null>(null);
     const [searchExamId, setSearchExamId] = useState("");
     const [todoExams, setTodoExams] = useState<Exam[]>([]);
     const [doneExams, setDoneExams] = useState<(Exam & { attemptId: string })[]>([]);
@@ -23,11 +25,31 @@ export default function StudentDashboard() {
         // 1. Check Session (Simulated)
         const session = sessionStorage.getItem("omr_student_session");
         if (!session) {
-            alert("로그인이 필요합니다.");
+            toast.error("로그인이 필요합니다.");
             router.push("/");
             return;
         }
-        const currentUser = JSON.parse(session);
+        let currentUser = JSON.parse(session);
+        
+        if (!currentUser.isGuest) {
+            // refresh data from omr_students
+            const students = JSON.parse(localStorage.getItem("omr_students") || "[]");
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            const dbUser = students.find((s: any) => s.id === currentUser.id || (s.name === currentUser.name && s.phone === currentUser.phone));
+            if (dbUser) {
+                currentUser = { ...currentUser, ...dbUser };
+                
+                if (dbUser.groupId) {
+                    const groups = JSON.parse(localStorage.getItem("omr_groups") || "[]");
+                    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                    const foundGroup = groups.find((g: any) => g.id === dbUser.groupId);
+                    if (foundGroup) {
+                        currentUser.groupName = foundGroup.name;
+                    }
+                }
+            }
+        }
+
         // eslint-disable-next-line react-hooks/set-state-in-effect
         setUser(currentUser);
 
@@ -85,32 +107,45 @@ export default function StudentDashboard() {
         setDoneExams(done);
 
         // 4. Calculate Stats
-        const totalScore = myAttempts.reduce((acc, curr) => acc + (curr.score / curr.totalScore) * 100, 0);
-        const avg = myAttempts.length > 0 ? Math.round(totalScore / myAttempts.length) : 0;
+        const completedAttempts = myAttempts.filter(a => a.status !== 'grading');
+        const totalScore = completedAttempts.reduce((acc, curr) => acc + (curr.score / curr.totalScore) * 100, 0);
+        const avg = completedAttempts.length > 0 ? Math.round(totalScore / completedAttempts.length) : 0;
         setStats({
             avgScore: avg,
-            completedCount: myAttempts.length
+            completedCount: completedAttempts.length
         });
 
     }, [router]);
 
     const handleMergeAccount = () => {
-        // Mocking a flow where guest logs in
-        const name = prompt("Enter your name to sign up/login:");
+        const name = prompt("가입할 이름을 입력하세요 (예: 홍길동):");
         if (!name) return;
+        const phone = prompt("전화번호 (또는 뒷자리 4자리)를 입력하세요:");
+        if (!phone) return;
+
+        // Create new account
+        const newStudentId = `stu_${Math.random().toString(36).substring(2, 9)}`;
+        const students = JSON.parse(localStorage.getItem('omr_students') || '[]');
+        students.push({
+            id: newStudentId,
+            name: name,
+            phone: phone,
+            createdAt: new Date().toISOString()
+        });
+        localStorage.setItem('omr_students', JSON.stringify(students));
 
         // 1. Simulate new session
         const newSession = {
+            id: newStudentId,
             name: name,
-            groupId: "group-1", // mock group
-            groupName: "Class A",
+            phone: phone,
             isGuest: false
         };
 
         // 2. Perform Merge
         if (user?.guestId) {
             mergeGuestAttempts(user.guestId, name);
-            alert(`History merged to ${name}!`);
+            toast.success(`${name} 이름으로 데이터가 성공적으로 저장/병합되었습니다!`);
         }
 
         sessionStorage.setItem("omr_student_session", JSON.stringify(newSession));
@@ -119,13 +154,23 @@ export default function StudentDashboard() {
 
     const handleSearchExam = () => {
         if (!searchExamId.trim()) {
-            alert("시험 코드를 입력해주세요.");
+            toast.error("시험 코드를 입력해주세요.");
             return;
         }
         router.push(`/solve/${searchExamId.trim()}`);
     };
 
-    if (!user) return <div style={{ padding: '2rem' }}>Loading...</div>;
+    if (!user) return (
+        <div className="layout-main" style={{ padding: '2rem', maxWidth: '1200px', margin: '0 auto' }}>
+            <div className="animate-pulse" style={{ height: '4.5rem', width: '100%', background: 'var(--surface)', borderRadius: 'var(--radius-lg)', marginBottom: '3rem', opacity: 0.5 }}></div>
+            <div className="animate-pulse" style={{ height: '3rem', width: '40%', background: 'var(--surface)', borderRadius: 'var(--radius-md)', marginBottom: '3rem', opacity: 0.5 }}></div>
+            <div className="bento-grid">
+                <div className="bento-card col-span-1 animate-pulse" style={{ height: '180px', opacity: 0.5 }}></div>
+                <div className="bento-card col-span-1 animate-pulse" style={{ height: '180px', opacity: 0.5 }}></div>
+                <div className="bento-card col-span-2 row-span-2 animate-pulse" style={{ height: '400px', opacity: 0.5 }}></div>
+            </div>
+        </div>
+    );
 
     return (
         <div className="layout-main">
@@ -144,7 +189,7 @@ export default function StudentDashboard() {
                     </div>
                     <div style={{ display: 'flex', alignItems: 'center', gap: '1.5rem' }}>
                         <span style={{ fontWeight: 600, fontSize: '0.95rem' }}>
-                            {user.name} <span style={{ color: 'var(--muted)', fontWeight: 400 }}>({user.groupName})</span>
+                            {user.name} {user.groupName && <span style={{ color: 'var(--muted)', fontWeight: 400 }}>({user.groupName})</span>}
                         </span>
                         <button onClick={() => {
                             if (confirm("Logout?")) {
