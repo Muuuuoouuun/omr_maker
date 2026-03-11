@@ -6,9 +6,10 @@ import { Exam, Attempt } from "@/types/omr";
 import OverviewTab from "@/components/dashboard/tabs/OverviewTab";
 import ExamAnalyticsTab from "@/components/dashboard/tabs/ExamAnalyticsTab";
 import StudentAnalyticsTab from "@/components/dashboard/tabs/StudentAnalyticsTab";
-import { LayoutDashboard, BarChart2, GraduationCap } from "lucide-react";
+import { LayoutDashboard, BarChart2, GraduationCap, Users } from "lucide-react";
+import ClassManagementTab from "@/components/dashboard/tabs/ClassManagementTab";
 
-type TabType = 'overview' | 'exam' | 'student';
+type TabType = 'overview' | 'exam' | 'student' | 'class';
 
 export default function TeacherDashboard() {
     const [activeTab, setActiveTab] = useState<TabType>('overview');
@@ -177,6 +178,20 @@ export default function TeacherDashboard() {
                 <GraduationCap size={18} />
                 학생 성취도
             </button>
+            <button
+                onClick={() => setActiveTab('class')}
+                style={{
+                    display: 'flex', alignItems: 'center', gap: '0.5rem',
+                    padding: '0.75rem 1.5rem', borderRadius: 'var(--radius-md)',
+                    background: activeTab === 'class' ? 'var(--primary)' : 'transparent',
+                    color: activeTab === 'class' ? 'white' : 'var(--muted)',
+                    fontWeight: activeTab === 'class' ? 700 : 500,
+                    transition: 'all 0.2s cubic-bezier(0.4, 0, 0.2, 1)', flex: 1, justifyContent: 'center', whiteSpace: 'nowrap'
+                }}
+            >
+                <Users size={18} />
+                학생 및 그룹 관리
+            </button>
         </div>
     );
 
@@ -240,6 +255,9 @@ export default function TeacherDashboard() {
                     )}
                     {activeTab === 'student' && (
                         <StudentAnalyticsTab exams={exams} attempts={attempts} />
+                    )}
+                    {activeTab === 'class' && (
+                        <ClassManagementTab />
                     )}
                 </div>
 
