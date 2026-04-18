@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import TeacherHeader from "@/components/TeacherHeader";
 import { CreditCard, Check, Zap, Crown, Building, Download, Receipt, Sparkles, TrendingUp, AlertCircle } from "lucide-react";
 
@@ -36,14 +36,110 @@ const MOCK_INVOICES = [
 ];
 
 export default function BillingPage() {
-    const [current] = useState<Plan>("pro");
+    const [current, setCurrent] = useState<Plan>("pro");
     const [yearly, setYearly] = useState(false);
+    const [usage, setUsage] = useState<{ exams: number; students: number; ai: number }>({ exams: 0, students: 0, ai: 0 });
+
+    useEffect(() => {
+        if (typeof window === "undefined") return;
+
+        // Exams: count keys starting with omr_exam_
+        let examCount = 0;
+        for (let i = 0; i < localStorage.length; i++) {
+            const k = localStorage.key(i);
+            if (k && k.startsWith("omr_exam_")) examCount++;
+        }
+
+        // Students: prefer omr_students, else unique names from omr_attempts
+        let studentCount = 0;
+        try {
+            const rawStudents = localStorage.getItem("omr_students");
+            if (rawStudents) {
+                const parsed = JSON.parse(rawStudents);
+                if (Array.isArray(parsed)) studentCount = parsed.length;
+            } else {
+                const rawAttempts = localStorage.getItem("omr_attempts");
+                if (rawAttempts) {
+                    const attempts = JSON.parse(rawAttempts);
+                    if (Array.isArray(attempts)) {
+                        const names = new Set<string>();
+                        for (const a of attempts) {
+                            if (a && typeof a.studentName === "string") names.add(a.studentName);
+                            else if (a && typeof a.name === "string") names.add(a.name);
+                        }
+                        studentCount = names.size;
+                    }
+                }
+            }
+        } catch {
+            studentCount = 0;
+        }
+
+        // AI usage
+        let aiCount = 0;
+        try {
+            const rawAi = localStorage.getItem("omr_ai_usage");
+            if (rawAi !== null) {
+                const n = Number(rawAi);
+                if (!Number.isNaN(n)) aiCount = n;
+            }
+        } catch {
+            aiCount = 0;
+        }
+
+        setUsage({ exams: examCount, students: studentCount, ai: aiCount });
+
+        // Plan
+        try {
+            const rawPlan = localStorage.getItem("omr_plan");
+            if (rawPlan === "free" || rawPlan === "pro" || rawPlan === "school") {
+                setCurrent(rawPlan);
+            }
+        } catch {
+            // keep default
+        }
+
+        // Billing cycle
+        try {
+            const rawCycle = localStorage.getItem("omr_billing_cycle");
+            if (rawCycle === "yearly") setYearly(true);
+            else if (rawCycle === "monthly") setYearly(false);
+        } catch {
+            // keep default
+        }
+    }, []);
 
     const currentPlan = PLANS.find(p => p.key === current)!;
-    const usage = {
-        exams: { used: 12, total: currentPlan.limits.exams },
-        students: { used: 87, total: currentPlan.limits.students },
-        ai: { used: 1247, total: currentPlan.limits.ai },
+
+    const handleCycleChange = (next: boolean) => {
+        setYearly(next);
+        if (typeof window !== "undefined") {
+            try {
+                localStorage.setItem("omr_billing_cycle", next ? "yearly" : "monthly");
+            } catch {
+                // ignore
+            }
+        }
+    };
+
+    const handlePlanChange = (next: Plan) => {
+        if (next === current) return;
+        const nextPlan = PLANS.find(p => p.key === next);
+        if (!nextPlan) return;
+        const priceLabel = nextPlan.priceNum === 0 ? "무료" : `${nextPlan.price} / 월`;
+        const action = nextPlan.priceNum > currentPlan.priceNum ? "업그레이드" : "다운그레이드";
+        const ok = typeof window !== "undefined"
+            ? window.confirm(`${nextPlan.name} 플랜으로 ${action}하시겠습니까?\n가격: ${priceLabel}`)
+            : false;
+        if (!ok) return;
+        setCurrent(next);
+        if (typeof window !== "undefined") {
+            try {
+                localStorage.setItem("omr_plan", next);
+            } catch {
+                // ignore
+            }
+        }
     };
 
     return (
@@ -95,9 +191,9 @@ export default function BillingPage() {
                 <div style={{ marginBottom: '2rem' }}>
                     <h2 style={{ fontSize: '1.4rem', fontWeight: 700, marginBottom: '1rem' }}>이달 사용량</h2>
                     <div className="bento-grid">
-                        <UsageCard label="생성한 시험" used={usage.exams.used} total={usage.exams.total} color="#4f46e5" />
-                        <UsageCard label="등록 학생" used={usage.students.used} total={usage.students.total} color="#10b981" />
-                        <UsageCard label="AI 채점 크레딧" used={usage.ai.used} total={usage.ai.total} color="#ec4899" />
+                        <UsageCard label="생성한 시험" used={usage.exams} total={currentPlan.limits.exams} color="#4f46e5" />
+                        <UsageCard label="등록 학생" used={usage.students} total={currentPlan.limits.students} color="#10b981" />
+                        <UsageCard label="AI 채점 크레딧" used={usage.ai} total={currentPlan.limits.ai} color="#ec4899" />
                         <div className="bento-card" style={{ padding: '1.5rem', background: 'linear-gradient(135deg, rgba(99,102,241,0.08), rgba(236,72,153,0.08))', border: '1px solid rgba(99,102,241,0.2)' }}>
                             <TrendingUp size={22} color="var(--primary)" style={{ marginBottom: '0.75rem' }} />
                             <div style={{ fontSize: '0.8rem', fontWeight: 700, color: 'var(--muted)', letterSpacing: '0.05em', marginBottom: '0.3rem' }}>사용 추이</div>

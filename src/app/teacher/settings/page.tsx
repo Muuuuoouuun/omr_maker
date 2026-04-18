@@ -1,10 +1,77 @@
 "use client";
 
-import { useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import TeacherHeader from "@/components/TeacherHeader";
 import { User, Bell, FileText, CheckCircle, Key, Palette, Shield, Copy, Eye, EyeOff, Save } from "lucide-react";
 
 type Section = "profile" | "notifications" | "exam-defaults" | "grading" | "api" | "theme" | "security";
+
+interface Settings {
+    profile: { name: string; email: string; school: string; subject: string; publicProfile: boolean };
+    notifications: { email: boolean; push: boolean; weekly: boolean; autoRemind: boolean; quietStart: string; quietEnd: string };
+    examDefaults: { questions: number; duration: number; scorePerQ: number; choices: 4 | 5; autosaveSec: number };
+    grading: { negative: boolean; partial: boolean; autoRelease: boolean; rounding: "half" | "up" | "down" | "none" };
+    api: { geminiKey: string };
+    theme: { mode: "light" | "dark" | "auto"; accent: string; density: "comfortable" | "compact"; motion: boolean };
+    security: { twoFactor: boolean; loginAlerts: boolean };
+}
+
+const DEFAULT_SETTINGS: Settings = {
+    profile: { name: "김선생", email: "teacher@school.ac.kr", school: "한빛고등학교", subject: "수학 · 과학", publicProfile: true },
+    notifications: { email: true, push: true, weekly: false, autoRemind: true, quietStart: "22:00", quietEnd: "07:00" },
+    examDefaults: { questions: 20, duration: 50, scorePerQ: 5, choices: 5, autosaveSec: 30 },
+    grading: { negative: false, partial: true, autoRelease: false, rounding: "half" },
+    api: { geminiKey: "AIzaSyBbreLmNTPHKOHgS9HuRjAnjg1Zt8lYbjY" },
+    theme: { mode: "light", accent: "#4f46e5", density: "comfortable", motion: true },
+    security: { twoFactor: false, loginAlerts: true },
+};
+
+const STORAGE_KEY = "omr_settings";
+const THEME_KEY = "omr_theme";
+
+function mergeSettings(parsed: Partial<Settings> | null | undefined): Settings {
+    if (!parsed || typeof parsed !== "object") return DEFAULT_SETTINGS;
+    return {
+        profile: { ...DEFAULT_SETTINGS.profile, ...(parsed.profile ?? {}) },
+        notifications: { ...DEFAULT_SETTINGS.notifications, ...(parsed.notifications ?? {}) },
+        examDefaults: { ...DEFAULT_SETTINGS.examDefaults, ...(parsed.examDefaults ?? {}) },
+        grading: { ...DEFAULT_SETTINGS.grading, ...(parsed.grading ?? {}) },
+        api: { ...DEFAULT_SETTINGS.api, ...(parsed.api ?? {}) },
+        theme: { ...DEFAULT_SETTINGS.theme, ...(parsed.theme ?? {}) },
+        security: { ...DEFAULT_SETTINGS.security, ...(parsed.security ?? {}) },
+    };
+}
+
+function loadPersisted(): Settings {
+    if (typeof window === "undefined") return DEFAULT_SETTINGS;
+    try {
+        const raw = window.localStorage.getItem(STORAGE_KEY);
+        if (!raw) return DEFAULT_SETTINGS;
+        return mergeSettings(JSON.parse(raw) as Partial<Settings>);
+    } catch {
+        return DEFAULT_SETTINGS;
+    }
+}
+
+function applyTheme(theme: Settings["theme"]) {
+    if (typeof window === "undefined") return;
+    const root = document.documentElement;
+    let resolved: "light" | "dark" = "light";
+    if (theme.mode === "auto") {
+        resolved = window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+    } else {
+        resolved = theme.mode;
+    }
+    root.setAttribute("data-theme", resolved);
+    root.setAttribute("data-density", theme.density);
+    root.setAttribute("data-motion", theme.motion ? "on" : "off");
+    root.style.setProperty("--primary", theme.accent);
+    try {
+        window.localStorage.setItem(THEME_KEY, theme.mode);
+    } catch {
+        // ignore
+    }
+}
 
 const SECTIONS: { key: Section; label: string; icon: React.ReactNode; color: string }[] = [
     { key: "profile", label: "프로필", icon: <User size={18} />, color: "#4f46e5" },
@@ -19,6 +86,63 @@ const SECTIONS: { key: Section; label: string; icon: React.ReactNode; color: str
 export default function SettingsPage() {
     const [section, setSection] = useState<Section>("profile");
     const [showKey, setShowKey] = useState(false);
+    // Draft state: edits live here until 저장 commits to localStorage.
+    const [draft, setDraft] = useState<Settings>(DEFAULT_SETTINGS);
+    // The last persisted settings (what 취소 reverts to, and what 저장 writes).
+    const [persisted, setPersisted] = useState<Settings>(DEFAULT_SETTINGS);
+    const [hydrated, setHydrated] = useState(false);
+    const draftRef = useRef<Settings>(DEFAULT_SETTINGS);
+    const persistedRef = useRef<Settings>(DEFAULT_SETTINGS);
+
+    // Keep refs in sync so save/cancel callbacks can read latest values without re-binding.
+    useEffect(() => { draftRef.current = draft; }, [draft]);
+    useEffect(() => { persistedRef.current = persisted; }, [persisted]);
+
+    // Hydrate from localStorage on mount.
+    useEffect(() => {
+        const initial = loadPersisted();
+        setDraft(initial);
+        setPersisted(initial);
+        draftRef.current = initial;
+        persistedRef.current = initial;
+        setHydrated(true);
+    }, []);
+
+    // Apply theme whenever the draft theme changes — so the user sees a live preview.
+    useEffect(() => {
+        if (!hydrated) return;
+        applyTheme(draft.theme);
+    }, [hydrated, draft.theme]);
+
+    // Listen for system scheme changes when in "auto" mode.
+    useEffect(() => {
+        if (!hydrated || draft.theme.mode !== "auto" || typeof window === "undefined") return;
+        const mq = window.matchMedia("(prefers-color-scheme: dark)");
+        const onChange = () => applyTheme(draft.theme);
+        mq.addEventListener("change", onChange);
+        return () => mq.removeEventListener("change", onChange);
+    }, [hydrated, draft.theme]);
+
+    const updateSection = useCallback(<K extends keyof Settings>(key: K, partial: Partial<Settings[K]>) => {
+        setDraft(prev => ({ ...prev, [key]: { ...prev[key], ...partial } }));
+    }, []);
+
+    const saveSection = useCallback(<K extends keyof Settings>(key: K) => {
+        const next: Settings = { ...persistedRef.current, [key]: draftRef.current[key] };
+        persistedRef.current = next;
+        setPersisted(next);
+        if (typeof window !== "undefined") {
+            try {
+                window.localStorage.setItem(STORAGE_KEY, JSON.stringify(next));
+            } catch {
+                // ignore quota errors
+            }
+        }
+    }, []);
+
+    const cancelSection = useCallback(<K extends keyof Settings>(key: K) => {
+        setDraft(prev => ({ ...prev, [key]: persistedRef.current[key] }));
+    }, []);
 
     return (
         <div className="layout-main">
@@ -56,13 +180,13 @@ export default function SettingsPage() {
 
                     {/* Content */}
                     <section>
-                        {section === "profile" && <ProfileSection />}
-                        {section === "notifications" && <NotificationsSection />}
-                        {section === "exam-defaults" && <ExamDefaultsSection />}
-                        {section === "grading" && <GradingSection />}
-                        {section === "api" && <ApiSection showKey={showKey} setShowKey={setShowKey} />}
-                        {section === "theme" && <ThemeSection />}
-                        {section === "security" && <SecuritySection />}
+                        {section === "profile" && <ProfileSection value={draft.profile} onChange={v => updateSection("profile", v)} onSave={() => saveSection("profile")} onCancel={() => cancelSection("profile")} />}
+                        {section === "notifications" && <NotificationsSection value={draft.notifications} onChange={v => updateSection("notifications", v)} onSave={() => saveSection("notifications")} onCancel={() => cancelSection("notifications")} />}
+                        {section === "exam-defaults" && <ExamDefaultsSection value={draft.examDefaults} onChange={v => updateSection("examDefaults", v)} onSave={() => saveSection("examDefaults")} onCancel={() => cancelSection("examDefaults")} />}
+                        {section === "grading" && <GradingSection value={draft.grading} onChange={v => updateSection("grading", v)} onSave={() => saveSection("grading")} onCancel={() => cancelSection("grading")} />}
+                        {section === "api" && <ApiSection value={draft.api} onChange={v => updateSection("api", v)} onSave={() => saveSection("api")} onCancel={() => cancelSection("api")} showKey={showKey} setShowKey={setShowKey} />}
+                        {section === "theme" && <ThemeSection value={draft.theme} onChange={v => updateSection("theme", v)} onSave={() => saveSection("theme")} onCancel={() => cancelSection("theme")} />}
+                        {section === "security" && <SecuritySection value={draft.security} onChange={v => updateSection("security", v)} onSave={() => saveSection("security")} onCancel={() => cancelSection("security")} />}
                     </section>
                 </div>
             </main>
@@ -121,121 +245,152 @@ function Toggle({ checked, onChange, label, desc }: { checked: boolean; onChange
     );
 }
 
-function SaveBar() {
+function SaveBar({ onCancel, onSave }: { onCancel: () => void; onSave: () => void }) {
+    const [saved, setSaved] = useState(false);
+    const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+    useEffect(() => {
+        return () => {
+            if (timerRef.current) clearTimeout(timerRef.current);
+        };
+    }, []);
+
+    const handleSave = () => {
+        onSave();
+        setSaved(true);
+        if (timerRef.current) clearTimeout(timerRef.current);
+        timerRef.current = setTimeout(() => setSaved(false), 1800);
+    };
+
     return (
-        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.75rem', marginTop: '1.5rem', paddingTop: '1.5rem', borderTop: '1px solid var(--border)' }}>
-            <button style={{ padding: '0.7rem 1.4rem', background: 'var(--surface)', color: 'var(--foreground)', border: '1px solid var(--border)', borderRadius: 'var(--radius-md)', fontWeight: 600, fontSize: '0.9rem' }}>취소</button>
-            <button style={{ padding: '0.7rem 1.4rem', background: 'linear-gradient(135deg, var(--primary), var(--primary-dark))', color: 'white', borderRadius: 'var(--radius-md)', fontWeight: 600, fontSize: '0.9rem', display: 'flex', alignItems: 'center', gap: '0.4rem', boxShadow: '0 4px 12px rgba(99,102,241,0.3)' }}>
+        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.75rem', marginTop: '1.5rem', paddingTop: '1.5rem', borderTop: '1px solid var(--border)', alignItems: 'center' }}>
+            {saved && (
+                <span
+                    style={{
+                        fontSize: '0.85rem',
+                        fontWeight: 600,
+                        color: 'var(--primary)',
+                        marginRight: '0.25rem',
+                        opacity: saved ? 1 : 0,
+                        transition: 'opacity 0.4s ease',
+                    }}
+                >
+                    저장됨
+                </span>
+            )}
+            <button onClick={onCancel} style={{ padding: '0.7rem 1.4rem', background: 'var(--surface)', color: 'var(--foreground)', border: '1px solid var(--border)', borderRadius: 'var(--radius-md)', fontWeight: 600, fontSize: '0.9rem' }}>취소</button>
+            <button onClick={handleSave} style={{ padding: '0.7rem 1.4rem', background: 'linear-gradient(135deg, var(--primary), var(--primary-dark))', color: 'white', borderRadius: 'var(--radius-md)', fontWeight: 600, fontSize: '0.9rem', display: 'flex', alignItems: 'center', gap: '0.4rem', boxShadow: '0 4px 12px rgba(99,102,241,0.3)' }}>
                 <Save size={14} /> 저장
             </button>
         </div>
     );
 }
 
-function ProfileSection() {
-    const [notif, setNotif] = useState(true);
+type SectionProps<T> = {
+    value: T;
+    onChange: (v: Partial<T>) => void;
+    onSave: () => void;
+    onCancel: () => void;
+};
+
+function ProfileSection({ value, onChange, onSave, onCancel }: SectionProps<Settings["profile"]>) {
     return (
         <Card title="프로필" desc="공개적으로 보여질 정보를 관리하세요.">
             <div style={{ display: 'flex', alignItems: 'center', gap: '1.25rem', marginBottom: '1.5rem', padding: '1.25rem', background: 'var(--background)', borderRadius: 'var(--radius-md)' }}>
-                <div style={{ width: 72, height: 72, borderRadius: '50%', background: 'linear-gradient(135deg, #4f46e5, #8b5cf6)', color: 'white', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '1.8rem', fontWeight: 800 }}>K</div>
+                <div style={{ width: 72, height: 72, borderRadius: '50%', background: 'linear-gradient(135deg, #4f46e5, #8b5cf6)', color: 'white', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '1.8rem', fontWeight: 800 }}>{(value.name || "?").slice(0, 1)}</div>
                 <div style={{ flex: 1 }}>
-                    <div style={{ fontSize: '1.05rem', fontWeight: 700 }}>김선생</div>
-                    <div style={{ fontSize: '0.85rem', color: 'var(--muted)' }}>teacher@school.ac.kr</div>
+                    <div style={{ fontSize: '1.05rem', fontWeight: 700 }}>{value.name}</div>
+                    <div style={{ fontSize: '0.85rem', color: 'var(--muted)' }}>{value.email}</div>
                 </div>
                 <button style={{ padding: '0.6rem 1.1rem', background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 'var(--radius-md)', fontSize: '0.85rem', fontWeight: 600 }}>이미지 변경</button>
             </div>
 
-            <Field label="이름"><input className="input-field" defaultValue="김선생" /></Field>
-            <Field label="이메일" hint="로그인 및 알림에 사용됩니다."><input className="input-field" defaultValue="teacher@school.ac.kr" /></Field>
-            <Field label="소속"><input className="input-field" defaultValue="한빛고등학교" /></Field>
-            <Field label="담당 과목"><input className="input-field" defaultValue="수학 · 과학" /></Field>
+            <Field label="이름"><input className="input-field" value={value.name} onChange={e => onChange({ name: e.target.value })} /></Field>
+            <Field label="이메일" hint="로그인 및 알림에 사용됩니다."><input className="input-field" value={value.email} onChange={e => onChange({ email: e.target.value })} /></Field>
+            <Field label="소속"><input className="input-field" value={value.school} onChange={e => onChange({ school: e.target.value })} /></Field>
+            <Field label="담당 과목"><input className="input-field" value={value.subject} onChange={e => onChange({ subject: e.target.value })} /></Field>
 
-            <Toggle checked={notif} onChange={setNotif} label="공개 프로필" desc="학생들이 내 이름과 소속을 볼 수 있습니다." />
+            <Toggle checked={value.publicProfile} onChange={v => onChange({ publicProfile: v })} label="공개 프로필" desc="학생들이 내 이름과 소속을 볼 수 있습니다." />
 
-            <SaveBar />
+            <SaveBar onCancel={onCancel} onSave={onSave} />
         </Card>
     );
 }
 
-function NotificationsSection() {
-    const [email, setEmail] = useState(true);
-    const [push, setPush] = useState(true);
-    const [weekly, setWeekly] = useState(false);
-    const [autoRemind, setAutoRemind] = useState(true);
+function NotificationsSection({ value, onChange, onSave, onCancel }: SectionProps<Settings["notifications"]>) {
     return (
         <Card title="알림" desc="언제, 어떤 방식으로 알림을 받을지 설정하세요.">
-            <Toggle checked={email} onChange={setEmail} label="이메일 알림" desc="학생 제출, 성적 집계, 시스템 공지" />
-            <Toggle checked={push} onChange={setPush} label="브라우저 푸시" desc="실시간 시험 현황 알림" />
-            <Toggle checked={weekly} onChange={setWeekly} label="주간 리포트" desc="매주 월요일 오전 9시, 지난 주 요약" />
-            <Toggle checked={autoRemind} onChange={setAutoRemind} label="미응시 학생 자동 독려" desc="시험 시작 24시간 전 자동 알림 발송" />
+            <Toggle checked={value.email} onChange={v => onChange({ email: v })} label="이메일 알림" desc="학생 제출, 성적 집계, 시스템 공지" />
+            <Toggle checked={value.push} onChange={v => onChange({ push: v })} label="브라우저 푸시" desc="실시간 시험 현황 알림" />
+            <Toggle checked={value.weekly} onChange={v => onChange({ weekly: v })} label="주간 리포트" desc="매주 월요일 오전 9시, 지난 주 요약" />
+            <Toggle checked={value.autoRemind} onChange={v => onChange({ autoRemind: v })} label="미응시 학생 자동 독려" desc="시험 시작 24시간 전 자동 알림 발송" />
 
             <div style={{ marginTop: '1.5rem', padding: '1rem', background: 'rgba(99,102,241,0.05)', borderRadius: 'var(--radius-md)', border: '1px solid rgba(99,102,241,0.15)' }}>
                 <div style={{ fontSize: '0.8rem', fontWeight: 700, color: 'var(--primary)', marginBottom: '0.5rem' }}>알림 정숙 시간</div>
                 <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'center' }}>
-                    <input type="time" className="input-field" defaultValue="22:00" style={{ width: 140 }} />
+                    <input type="time" className="input-field" value={value.quietStart} onChange={e => onChange({ quietStart: e.target.value })} style={{ width: 140 }} />
                     <span style={{ color: 'var(--muted)' }}>~</span>
-                    <input type="time" className="input-field" defaultValue="07:00" style={{ width: 140 }} />
+                    <input type="time" className="input-field" value={value.quietEnd} onChange={e => onChange({ quietEnd: e.target.value })} style={{ width: 140 }} />
                 </div>
             </div>
 
-            <SaveBar />
+            <SaveBar onCancel={onCancel} onSave={onSave} />
         </Card>
     );
 }
 
-function ExamDefaultsSection() {
+function ExamDefaultsSection({ value, onChange, onSave, onCancel }: SectionProps<Settings["examDefaults"]>) {
     return (
         <Card title="시험 기본값" desc="새 시험 생성 시 자동으로 적용될 값을 설정하세요.">
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem' }}>
-                <Field label="기본 문항 수"><input className="input-field" type="number" defaultValue={20} /></Field>
-                <Field label="기본 시간 (분)"><input className="input-field" type="number" defaultValue={50} /></Field>
-                <Field label="문항당 기본 배점"><input className="input-field" type="number" defaultValue={5} step={0.5} /></Field>
+                <Field label="기본 문항 수"><input className="input-field" type="number" value={value.questions} onChange={e => onChange({ questions: Number(e.target.value) })} /></Field>
+                <Field label="기본 시간 (분)"><input className="input-field" type="number" value={value.duration} onChange={e => onChange({ duration: Number(e.target.value) })} /></Field>
+                <Field label="문항당 기본 배점"><input className="input-field" type="number" value={value.scorePerQ} step={0.5} onChange={e => onChange({ scorePerQ: Number(e.target.value) })} /></Field>
                 <Field label="선택지 수">
-                    <select className="input-field" defaultValue={5}>
+                    <select className="input-field" value={value.choices} onChange={e => onChange({ choices: Number(e.target.value) as 4 | 5 })}>
                         <option value={4}>4지선다</option>
                         <option value={5}>5지선다</option>
                     </select>
                 </Field>
             </div>
             <Field label="자동 저장 주기" hint="편집 중 자동으로 저장됩니다.">
-                <select className="input-field" defaultValue={30}>
+                <select className="input-field" value={value.autosaveSec} onChange={e => onChange({ autosaveSec: Number(e.target.value) })}>
                     <option value={10}>10초</option>
                     <option value={30}>30초</option>
                     <option value={60}>1분</option>
                     <option value={0}>수동</option>
                 </select>
             </Field>
-            <SaveBar />
+            <SaveBar onCancel={onCancel} onSave={onSave} />
         </Card>
     );
 }
 
-function GradingSection() {
-    const [negative, setNegative] = useState(false);
-    const [partial, setPartial] = useState(true);
-    const [autoRelease, setAutoRelease] = useState(false);
+function GradingSection({ value, onChange, onSave, onCancel }: SectionProps<Settings["grading"]>) {
     return (
         <Card title="채점 규칙" desc="점수 계산 방식을 설정하세요.">
-            <Toggle checked={negative} onChange={setNegative} label="오답 감점 허용" desc="오답 시 문항 배점의 일부를 감점합니다." />
-            <Toggle checked={partial} onChange={setPartial} label="부분 점수 허용" desc="서술형 문항에서 부분 점수를 부여합니다." />
-            <Toggle checked={autoRelease} onChange={setAutoRelease} label="제출 즉시 성적 공개" desc="학생에게 제출 직후 점수를 보여줍니다." />
+            <Toggle checked={value.negative} onChange={v => onChange({ negative: v })} label="오답 감점 허용" desc="오답 시 문항 배점의 일부를 감점합니다." />
+            <Toggle checked={value.partial} onChange={v => onChange({ partial: v })} label="부분 점수 허용" desc="서술형 문항에서 부분 점수를 부여합니다." />
+            <Toggle checked={value.autoRelease} onChange={v => onChange({ autoRelease: v })} label="제출 즉시 성적 공개" desc="학생에게 제출 직후 점수를 보여줍니다." />
 
             <Field label="반올림 방식">
-                <select className="input-field" defaultValue="half">
+                <select className="input-field" value={value.rounding} onChange={e => onChange({ rounding: e.target.value as Settings["grading"]["rounding"] })}>
                     <option value="half">반올림 (소수점 0.5)</option>
                     <option value="up">올림</option>
                     <option value="down">버림</option>
                     <option value="none">그대로 표시</option>
                 </select>
             </Field>
-            <SaveBar />
+            <SaveBar onCancel={onCancel} onSave={onSave} />
         </Card>
     );
 }
 
-function ApiSection({ showKey, setShowKey }: { showKey: boolean; setShowKey: (v: boolean) => void }) {
-    const realKey = "AIzaSyBbreLmNTPHKOHgS9HuRjAnjg1Zt8lYbjY";
-    const maskedKey = realKey.slice(0, 8) + "•".repeat(Math.max(0, realKey.length - 11)) + realKey.slice(-3);
+function ApiSection({ value, onChange, onSave, onCancel, showKey, setShowKey }: SectionProps<Settings["api"]> & { showKey: boolean; setShowKey: (v: boolean) => void }) {
+    const realKey = value.geminiKey;
+    const maskedKey = realKey.length > 11
+        ? realKey.slice(0, 8) + "•".repeat(Math.max(0, realKey.length - 11)) + realKey.slice(-3)
+        : realKey;
     return (
         <Card title="API 키" desc="Gemini 연동을 위한 API 키를 관리하세요.">
             <div style={{ padding: '1rem 1.25rem', background: 'linear-gradient(135deg, rgba(245,158,11,0.06), rgba(239,68,68,0.06))', borderRadius: 'var(--radius-md)', border: '1px solid rgba(245,158,11,0.25)', marginBottom: '1.5rem', display: 'flex', gap: '0.75rem' }}>
@@ -251,13 +406,21 @@ function ApiSection({ showKey, setShowKey }: { showKey: boolean; setShowKey: (v:
                         className="input-field"
                         type={showKey ? "text" : "password"}
                         value={showKey ? realKey : maskedKey}
-                        readOnly
+                        onChange={e => showKey && onChange({ geminiKey: e.target.value })}
+                        readOnly={!showKey}
                         style={{ fontFamily: 'var(--font-mono)', fontSize: '0.85rem' }}
                     />
                     <button onClick={() => setShowKey(!showKey)} style={{ padding: '0.7rem', border: '1px solid var(--border)', background: 'var(--surface)', borderRadius: 'var(--radius-md)', color: 'var(--muted)' }}>
                         {showKey ? <EyeOff size={18} /> : <Eye size={18} />}
                     </button>
-                    <button style={{ padding: '0.7rem', border: '1px solid var(--border)', background: 'var(--surface)', borderRadius: 'var(--radius-md)', color: 'var(--muted)' }}>
+                    <button
+                        onClick={() => {
+                            if (typeof navigator !== "undefined" && navigator.clipboard) {
+                                navigator.clipboard.writeText(realKey).catch(() => { });
+                            }
+                        }}
+                        style={{ padding: '0.7rem', border: '1px solid var(--border)', background: 'var(--surface)', borderRadius: 'var(--radius-md)', color: 'var(--muted)' }}
+                    >
                         <Copy size={18} />
                     </button>
                 </div>
@@ -273,26 +436,26 @@ function ApiSection({ showKey, setShowKey }: { showKey: boolean; setShowKey: (v:
                 </div>
             </div>
 
-            <SaveBar />
+            <SaveBar onCancel={onCancel} onSave={onSave} />
         </Card>
     );
 }
 
-function ThemeSection() {
-    const [density, setDensity] = useState<"comfortable" | "compact">("comfortable");
-    const [motion, setMotion] = useState(true);
+function ThemeSection({ value, onChange, onSave, onCancel }: SectionProps<Settings["theme"]>) {
+    const modes: { key: Settings["theme"]["mode"]; label: string; preview: string }[] = [
+        { key: "light", label: "라이트", preview: "linear-gradient(135deg, #f8fafc, #e2e8f0)" },
+        { key: "dark", label: "다크", preview: "linear-gradient(135deg, #1e293b, #0f172a)" },
+        { key: "auto", label: "시스템 설정", preview: "linear-gradient(135deg, #f8fafc 50%, #1e293b 50%)" },
+    ];
+    const accents = ["#4f46e5", "#ec4899", "#8b5cf6", "#10b981", "#f59e0b", "#ef4444"];
     return (
         <Card title="테마" desc="화면 모습을 내 스타일대로 꾸며보세요.">
             <Field label="색상 모드">
                 <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '0.75rem' }}>
-                    {[
-                        { key: "light", label: "라이트", preview: "linear-gradient(135deg, #f8fafc, #e2e8f0)" },
-                        { key: "dark", label: "다크", preview: "linear-gradient(135deg, #1e293b, #0f172a)" },
-                        { key: "auto", label: "시스템 설정", preview: "linear-gradient(135deg, #f8fafc 50%, #1e293b 50%)" },
-                    ].map(t => (
-                        <button key={t.key} style={{
+                    {modes.map(t => (
+                        <button key={t.key} onClick={() => onChange({ mode: t.key })} style={{
                             padding: '1rem', borderRadius: 'var(--radius-md)',
-                            border: t.key === "light" ? '2px solid var(--primary)' : '1px solid var(--border)',
+                            border: value.mode === t.key ? '2px solid var(--primary)' : '1px solid var(--border)',
                             background: 'var(--surface)', cursor: 'pointer', textAlign: 'left'
                         }}>
                             <div style={{ height: 60, borderRadius: 'var(--radius-sm)', background: t.preview, marginBottom: '0.6rem', border: '1px solid var(--border)' }} />
@@ -304,24 +467,27 @@ function ThemeSection() {
 
             <Field label="액센트 색상">
                 <div style={{ display: 'flex', gap: '0.75rem' }}>
-                    {["#4f46e5", "#ec4899", "#8b5cf6", "#10b981", "#f59e0b", "#ef4444"].map((c, i) => (
-                        <button key={c} style={{
-                            width: 36, height: 36, borderRadius: '50%', background: c,
-                            border: i === 0 ? '3px solid var(--foreground)' : '3px solid transparent',
-                            boxShadow: i === 0 ? `0 0 0 2px ${c}` : 'none'
-                        }} />
-                    ))}
+                    {accents.map(c => {
+                        const selected = value.accent === c;
+                        return (
+                            <button key={c} onClick={() => onChange({ accent: c })} style={{
+                                width: 36, height: 36, borderRadius: '50%', background: c,
+                                border: selected ? '3px solid var(--foreground)' : '3px solid transparent',
+                                boxShadow: selected ? `0 0 0 2px ${c}` : 'none'
+                            }} />
+                        );
+                    })}
                 </div>
             </Field>
 
             <Field label="밀도">
                 <div style={{ display: 'flex', gap: '0.5rem' }}>
                     {(["comfortable", "compact"] as const).map(d => (
-                        <button key={d} onClick={() => setDensity(d)} style={{
+                        <button key={d} onClick={() => onChange({ density: d })} style={{
                             flex: 1, padding: '0.7rem', borderRadius: 'var(--radius-md)',
-                            border: density === d ? '2px solid var(--primary)' : '1px solid var(--border)',
-                            background: density === d ? 'rgba(99,102,241,0.05)' : 'var(--surface)',
-                            fontWeight: 600, fontSize: '0.85rem', color: density === d ? 'var(--primary)' : 'var(--foreground)'
+                            border: value.density === d ? '2px solid var(--primary)' : '1px solid var(--border)',
+                            background: value.density === d ? 'rgba(99,102,241,0.05)' : 'var(--surface)',
+                            fontWeight: 600, fontSize: '0.85rem', color: value.density === d ? 'var(--primary)' : 'var(--foreground)'
                         }}>
                             {d === "comfortable" ? "편안하게" : "촘촘하게"}
                         </button>
@@ -329,14 +495,14 @@ function ThemeSection() {
                 </div>
             </Field>
 
-            <Toggle checked={motion} onChange={setMotion} label="모션 효과" desc="카드 호버, 애니메이션 사용" />
+            <Toggle checked={value.motion} onChange={v => onChange({ motion: v })} label="모션 효과" desc="카드 호버, 애니메이션 사용" />
 
-            <SaveBar />
+            <SaveBar onCancel={onCancel} onSave={onSave} />
         </Card>
     );
 }
 
-function SecuritySection() {
+function SecuritySection({ value, onChange, onSave, onCancel }: SectionProps<Settings["security"]>) {
     return (
         <Card title="보안" desc="계정 보안을 관리하세요.">
             <Field label="비밀번호 변경">
@@ -345,8 +511,8 @@ function SecuritySection() {
                 <input className="input-field" type="password" placeholder="새 비밀번호 확인" />
             </Field>
 
-            <Toggle checked={false} onChange={() => { }} label="2단계 인증" desc="로그인 시 앱에서 추가 코드 입력" />
-            <Toggle checked={true} onChange={() => { }} label="로그인 알림" desc="새 기기 로그인 시 이메일 발송" />
+            <Toggle checked={value.twoFactor} onChange={v => onChange({ twoFactor: v })} label="2단계 인증" desc="로그인 시 앱에서 추가 코드 입력" />
+            <Toggle checked={value.loginAlerts} onChange={v => onChange({ loginAlerts: v })} label="로그인 알림" desc="새 기기 로그인 시 이메일 발송" />
 
             <Field label="활성 세션">
                 <div style={{ padding: '0.85rem 1rem', background: 'var(--background)', borderRadius: 'var(--radius-md)', border: '1px solid var(--border)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
@@ -357,7 +523,7 @@ function SecuritySection() {
                     <span className="badge badge-success">현재</span>
                 </div>
             </Field>
-            <SaveBar />
+            <SaveBar onCancel={onCancel} onSave={onSave} />
         </Card>
     );
 }

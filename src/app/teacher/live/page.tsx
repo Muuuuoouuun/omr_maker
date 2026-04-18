@@ -1,8 +1,9 @@
 "use client";
 
-import { useState, useEffect, useMemo } from "react";
+import { useState, useEffect, useMemo, useCallback } from "react";
 import TeacherHeader from "@/components/TeacherHeader";
 import { Activity, Users, CheckCircle2, Clock, AlertTriangle, Bell, PlayCircle, PauseCircle } from "lucide-react";
+import type { Exam, Attempt } from "@/types/omr";
 
 type StudentStatus = "submitted" | "in_progress" | "not_started";
 
@@ -18,7 +19,15 @@ interface LiveStudent {
     score?: number;
 }
 
-const MOCK_EXAMS = [
+interface LiveExam {
+    id: string;
+    title: string;
+    total: number;
+    duration: number;
+    questions?: { id: number; answer?: number }[];
+}
+
+const MOCK_EXAMS: LiveExam[] = [
     { id: "ex1", title: "Midterm English Test", total: 35, duration: 60 },
     { id: "ex2", title: "Chapter 4 Mathematics", total: 32, duration: 45 },
     { id: "ex3", title: "Science Pop Quiz", total: 30, duration: 20 },
@@ -26,41 +35,179 @@ const MOCK_EXAMS = [
 
 const AVATAR_COLORS = ["#4f46e5", "#ec4899", "#8b5cf6", "#10b981", "#f59e0b", "#0ea5e9"];
 
-function genStudents(examTotal: number): LiveStudent[] {
-    const firstNames = ["민준", "서연", "도윤", "예은", "하준", "지우", "시우", "수아", "재윤", "유나", "건우", "하윤", "지호", "서아", "선우", "지민", "윤서", "태호", "예준", "채원", "주원", "은서", "이준", "리아", "연우", "서현", "다은", "승우", "세은", "현우", "채은", "준서", "하린", "도현", "지안"];
-    const count = examTotal;
-    const statuses: StudentStatus[] = [];
-    for (let i = 0; i < count; i++) {
-        const r = Math.random();
-        if (r < 0.35) statuses.push("submitted");
-        else if (r < 0.8) statuses.push("in_progress");
-        else statuses.push("not_started");
+const MOCK_FIRST_NAMES = ["민준", "서연", "도윤", "예은", "하준", "지우", "시우", "수아", "재윤", "유나", "건우", "하윤", "지호", "서아", "선우", "지민", "윤서", "태호", "예준", "채원", "주원", "은서", "이준", "리아", "연우", "서현", "다은", "승우", "세은", "현우", "채은", "준서", "하린", "도현", "지안"];
+
+function hashString(str: string): number {
+    let h = 0;
+    for (let i = 0; i < str.length; i++) {
+        h = ((h << 5) - h) + str.charCodeAt(i);
+        h |= 0;
     }
-    return statuses.map((status, i) => {
-        const totalQ = 20;
-        const progress = status === "submitted" ? 100 : status === "in_progress" ? Math.round(20 + Math.random() * 70) : 0;
-        return {
-            id: `s-${i}`,
-            name: firstNames[i % firstNames.length] + (i >= firstNames.length ? "2" : ""),
-            avatar: AVATAR_COLORS[i % AVATAR_COLORS.length],
-            status,
-            progress,
-            currentQ: Math.ceil((progress / 100) * totalQ),
-            totalQ,
-            startedAt: status !== "not_started" ? new Date(Date.now() - Math.random() * 30 * 60 * 1000).toISOString() : undefined,
-            score: status === "submitted" ? Math.round(50 + Math.random() * 50) : undefined,
-        };
-    });
+    return Math.abs(h);
 }
 
+function pickAvatar(name: string): string {
+    return AVATAR_COLORS[hashString(name) % AVATAR_COLORS.length];
+}
+
+function countAnsweredEntries(answers: Record<number, number> | undefined): number {
+    if (!answers) return 0;
+    let c = 0;
+    for (const k in answers) {
+        const v = answers[k];
+        if (v !== undefined && v !== null && v !== 0) c++;
+    }
+    return c;
+}
+
+function attemptToStudent(a: Attempt, totalQ: number): LiveStudent {
+    const status: StudentStatus =
+        a.status === "completed" ? "submitted" :
+        a.status === "in_progress" ? "in_progress" : "not_started";
+    const answered = countAnsweredEntries(a.answers);
+    const name = a.studentName || "Student";
+    const progress =
+        status === "submitted" ? 100 :
+        status === "in_progress" ? (totalQ > 0 ? Math.round((answered / totalQ) * 100) : 0) : 0;
+    const score =
+        status === "submitted" && a.totalScore > 0
+            ? Math.round((a.score / a.totalScore) * 100)
+            : undefined;
+    return {
+        id: a.id,
+        name,
+        avatar: pickAvatar(name + a.id),
+        status,
+        progress,
+        currentQ: answered,
+        totalQ,
+        startedAt: a.startedAt,
+        score,
+    };
+}
+
+function genSyntheticStudents(count: number, totalQ: number, startIdx: number): LiveStudent[] {
+    const out: LiveStudent[] = [];
+    for (let i = 0; i < count; i++) {
+        const idx = startIdx + i;
+        const seed = (idx * 9301 + 49297) % 233280;
+        const r = seed / 233280;
+        const status: StudentStatus = r < 0.35 ? "submitted" : r < 0.8 ? "in_progress" : "not_started";
+        const progress =
+            status === "submitted" ? 100 :
+            status === "in_progress" ? Math.round(20 + ((seed % 70))) : 0;
+        const currentQ = totalQ > 0 ? Math.ceil((progress / 100) * totalQ) : 0;
+        const name = MOCK_FIRST_NAMES[idx % MOCK_FIRST_NAMES.length] + (idx >= MOCK_FIRST_NAMES.length ? "2" : "");
+        out.push({
+            id: `synthetic-${idx}`,
+            name,
+            avatar: pickAvatar(name + idx),
+            status,
+            progress,
+            currentQ,
+            totalQ,
+            startedAt: status !== "not_started" ? new Date(Date.now() - (seed % 1800) * 1000).toISOString() : undefined,
+            score: status === "submitted" ? Math.round(50 + (seed % 50)) : undefined,
+        });
+    }
+    return out;
+}
+
+function loadExamsFromStorage(): LiveExam[] {
+    if (typeof window === "undefined") return [];
+    const out: LiveExam[] = [];
+    try {
+        for (let i = 0; i < localStorage.length; i++) {
+            const key = localStorage.key(i);
+            if (!key || !key.startsWith("omr_exam_")) continue;
+            const raw = localStorage.getItem(key);
+            if (!raw) continue;
+            try {
+                const parsed = JSON.parse(raw) as Exam;
+                if (!parsed || !parsed.id || !parsed.title) continue;
+                const questions = Array.isArray(parsed.questions) ? parsed.questions : [];
+                out.push({
+                    id: parsed.id,
+                    title: parsed.title,
+                    total: questions.length,
+                    duration: 60,
+                    questions: questions.map(q => ({ id: q.id, answer: q.answer })),
+                });
+            } catch {
+                // skip malformed
+            }
+        }
+    } catch {
+        // localStorage unavailable
+    }
+    return out;
+}
+
+function loadAttemptsFromStorage(): Attempt[] {
+    if (typeof window === "undefined") return [];
+    try {
+        const raw = localStorage.getItem("omr_attempts");
+        if (!raw) return [];
+        const parsed = JSON.parse(raw);
+        return Array.isArray(parsed) ? parsed as Attempt[] : [];
+    } catch {
+        return [];
+    }
+}
+
+const MIN_STUDENT_CARDS = 8;
+
 export default function LiveResultsPage() {
-    const [selectedExamId, setSelectedExamId] = useState(MOCK_EXAMS[0].id);
-    const [tick, setTick] = useState(0);
+    const [exams, setExams] = useState<LiveExam[]>(MOCK_EXAMS);
+    const [attempts, setAttempts] = useState<Attempt[]>([]);
+    const [selectedExamId, setSelectedExamId] = useState<string>(MOCK_EXAMS[0].id);
+    const [, setTick] = useState(0);
     const [timerSeconds, setTimerSeconds] = useState(38 * 60 + 24);
     const [isPaused, setIsPaused] = useState(false);
 
-    const exam = MOCK_EXAMS.find(e => e.id === selectedExamId)!;
-    const students = useMemo(() => genStudents(exam.total), [selectedExamId]);
+    const refreshFromStorage = useCallback(() => {
+        const loaded = loadExamsFromStorage();
+        setExams(loaded.length > 0 ? loaded : MOCK_EXAMS);
+        setAttempts(loadAttemptsFromStorage());
+    }, []);
+
+    // Initial load + adjust selected exam if real exams found
+    useEffect(() => {
+        const loaded = loadExamsFromStorage();
+        const effective = loaded.length > 0 ? loaded : MOCK_EXAMS;
+        setExams(effective);
+        setAttempts(loadAttemptsFromStorage());
+        setSelectedExamId(prev => effective.some(e => e.id === prev) ? prev : effective[0].id);
+    }, []);
+
+    // Poll every 3s when tab is visible
+    useEffect(() => {
+        const id = setInterval(() => {
+            if (typeof document === "undefined" || document.visibilityState === "visible") {
+                refreshFromStorage();
+            }
+        }, 3000);
+        return () => clearInterval(id);
+    }, [refreshFromStorage]);
+
+    const exam = exams.find(e => e.id === selectedExamId) ?? exams[0] ?? MOCK_EXAMS[0];
+
+    const examAttempts = useMemo(
+        () => attempts.filter(a => a && a.examId === exam.id),
+        [attempts, exam.id]
+    );
+
+    const students = useMemo<LiveStudent[]>(() => {
+        const totalQ = exam.total;
+        const real = examAttempts.map(a => attemptToStudent(a, totalQ));
+        if (real.length >= MIN_STUDENT_CARDS) return real;
+        const synthetic = genSyntheticStudents(
+            Math.max(MIN_STUDENT_CARDS - real.length, 0),
+            totalQ || 20,
+            real.length
+        );
+        return [...real, ...synthetic];
+    }, [examAttempts, exam.id, exam.total]);
 
     useEffect(() => {
         const id = setInterval(() => {
@@ -80,12 +227,26 @@ export default function LiveResultsPage() {
         ? Math.round(submittedStudents.reduce((a, s) => a + (s.score || 0), 0) / submittedStudents.length)
         : 0;
 
-    // Question heatmap (accuracy per question)
-    const heatmap = useMemo(() => Array.from({ length: 20 }, (_, i) => ({
-        q: i + 1,
-        correct: Math.round(30 + Math.random() * 65),
-        total: submittedStudents.length || 1,
-    })), [selectedExamId, submittedStudents.length]);
+    // Question heatmap (real accuracy per question from submitted attempts)
+    const heatmap = useMemo(() => {
+        const questions = exam.questions ?? [];
+        const submittedAttempts = examAttempts.filter(a => a.status === "completed");
+        const total = submittedAttempts.length;
+        // If no real questions metadata, fall back to exam.total with zeros
+        const qList = questions.length > 0
+            ? questions
+            : Array.from({ length: exam.total || 20 }, (_, i) => ({ id: i + 1, answer: undefined as number | undefined }));
+        return qList.map((q, i) => {
+            let correct = 0;
+            if (total > 0 && q.answer !== undefined && q.answer !== null) {
+                for (const a of submittedAttempts) {
+                    const selected = a.answers ? a.answers[q.id] : undefined;
+                    if (selected !== undefined && selected === q.answer) correct++;
+                }
+            }
+            return { q: i + 1, correct, total: total || 1 };
+        });
+    }, [examAttempts, exam.questions, exam.total]);
 
     const mm = Math.floor(timerSeconds / 60).toString().padStart(2, "0");
     const ss = (timerSeconds % 60).toString().padStart(2, "0");
