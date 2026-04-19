@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import TeacherHeader from "@/components/TeacherHeader";
 import { User, Bell, FileText, CheckCircle, Key, Palette, Shield, Copy, Eye, EyeOff, Save, RotateCcw, Download, Upload } from "lucide-react";
+import { toast } from "@/components/Toast";
 
 type Section = "profile" | "notifications" | "exam-defaults" | "grading" | "api" | "theme" | "security";
 
@@ -158,6 +159,7 @@ export default function SettingsPage() {
             // ignore
         }
         applyTheme(DEFAULT_SETTINGS.theme);
+        toast.success("초기화 완료", "모든 설정을 기본값으로 되돌렸습니다.");
     }, []);
 
     const handleExport = useCallback(() => {
@@ -188,9 +190,9 @@ export default function SettingsPage() {
                 // ignore quota errors
             }
             applyTheme(merged.theme);
-            window.alert("설정을 가져왔습니다.");
+            toast.success("설정 가져오기 완료", "백업 파일을 성공적으로 불러왔습니다.");
         } catch {
-            window.alert("설정 파일을 읽지 못했습니다.");
+            toast.error("가져오기 실패", "JSON 파일 형식을 확인해주세요.");
         }
     }, []);
 

@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import TeacherHeader from "@/components/TeacherHeader";
 import { CreditCard, Check, Zap, Crown, Building, Download, Receipt, Sparkles, TrendingUp, AlertCircle } from "lucide-react";
+import { formatLimit, usagePct } from "@/lib/pure";
 
 type Plan = "free" | "pro" | "school";
 
@@ -398,24 +399,45 @@ th { background: #f8fafc; font-size: 12px; color: #64748b; text-transform: upper
 }
 
 function UsageCard({ label, used, total, color }: { label: string; used: number; total: number; color: string }) {
-    const pct = total === Infinity ? 0 : Math.min(100, Math.round((used / total) * 100));
+    const pct = usagePct(used, total);
     const isWarning = pct > 80;
+    const isUnlimited = total === Infinity;
     return (
         <div className="bento-card" style={{ padding: '1.25rem 1.4rem', position: 'relative', overflow: 'hidden' }}>
             <div style={{ position: 'absolute', top: 0, left: 0, right: 0, height: 3, background: `linear-gradient(90deg, ${color}, transparent)` }} />
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.5rem' }}>
                 <div style={{ fontSize: '0.72rem', fontWeight: 700, color: 'var(--muted)', letterSpacing: '0.08em', textTransform: 'uppercase' }}>{label}</div>
-                {isWarning && <AlertCircle size={14} color="#f59e0b" />}
+                {isWarning && <AlertCircle size={14} color="#f59e0b" aria-label="임계치 초과" />}
+                {isUnlimited && (
+                    <span style={{
+                        fontSize: '0.6rem', fontWeight: 800, letterSpacing: '0.1em',
+                        background: `color-mix(in srgb, ${color}, transparent 90%)`, color,
+                        padding: '2px 7px', borderRadius: 'var(--radius-full)'
+                    }}>UNLIMITED</span>
+                )}
             </div>
             <div style={{ fontSize: '1.8rem', fontWeight: 900, letterSpacing: '-0.03em', fontVariantNumeric: 'tabular-nums', marginBottom: '0.25rem' }}>
-                {used.toLocaleString()}
+                {formatLimit(used)}
                 <span style={{ fontSize: '1rem', fontWeight: 600, color: 'var(--muted)', marginLeft: '0.3rem' }}>
-                    / {total === Infinity ? "∞" : total.toLocaleString()}
+                    / {formatLimit(total)}
                 </span>
             </div>
-            <div style={{ height: 6, background: 'var(--border)', borderRadius: 'var(--radius-full)', overflow: 'hidden', marginTop: '0.75rem' }}>
-                <div style={{ width: `${pct}%`, height: '100%', background: color, borderRadius: 'var(--radius-full)', transition: 'width 0.8s ease-out' }} />
-            </div>
+            {!isUnlimited && (
+                <div style={{ height: 6, background: 'var(--border)', borderRadius: 'var(--radius-full)', overflow: 'hidden', marginTop: '0.75rem' }}>
+                    <div style={{
+                        width: `${pct}%`, height: '100%',
+                        background: isWarning ? '#f59e0b' : color,
+                        borderRadius: 'var(--radius-full)', transition: 'width 0.8s ease-out'
+                    }} />
+                </div>
+            )}
+            {isUnlimited && (
+                <div style={{
+                    height: 6, background: `color-mix(in srgb, ${color}, transparent 85%)`,
+                    borderRadius: 'var(--radius-full)', marginTop: '0.75rem',
+                    backgroundImage: `repeating-linear-gradient(45deg, transparent, transparent 4px, ${color}33 4px, ${color}33 8px)`
+                }} />
+            )}
         </div>
     );
 }

@@ -3,6 +3,7 @@
 import { useState, useMemo, useEffect, useRef } from "react";
 import TeacherHeader from "@/components/TeacherHeader";
 import { Users, UserPlus, Upload, Search, Mail, TrendingUp, TrendingDown, MoreVertical, Link as LinkIcon, FolderPlus, CheckCircle2, Clock, X, Trash2, Download } from "lucide-react";
+import { toast } from "@/components/Toast";
 
 type TabType = "students" | "groups" | "invites";
 
@@ -243,7 +244,7 @@ export default function ManageUsersPage() {
             ? students.filter(s => selectedIds.has(s.id))
             : filtered;
         if (rows.length === 0) {
-            alert("내보낼 학생이 없습니다.");
+            toast.info("내보낼 학생 없음", "선택하거나 필터를 조정해보세요.");
             return;
         }
         const header = ["name", "email", "group", "avgScore", "examsTaken", "status"];
@@ -300,11 +301,11 @@ export default function ManageUsersPage() {
         const trimmed = email.trim();
         // Simple email validation
         if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(trimmed)) {
-            alert("올바른 이메일 주소를 입력해주세요.");
+            toast.error("이메일 형식 오류", "올바른 이메일 주소를 입력해주세요.");
             return;
         }
         if (invites.some(inv => inv.email === trimmed && inv.status === "pending")) {
-            alert("이미 대기 중인 초대가 있습니다.");
+            toast.info("이미 대기 중", "동일 주소로 대기 중인 초대가 있습니다.");
             return;
         }
         const newInvite: Invite = {
@@ -314,6 +315,7 @@ export default function ManageUsersPage() {
             status: "pending",
         };
         persistInvites([newInvite, ...invites]);
+        toast.success("초대 발송됨", `${trimmed}에게 초대를 보냈습니다.`);
     };
 
     // ===== CSV upload =====
@@ -322,7 +324,7 @@ export default function ManageUsersPage() {
             const text = await file.text();
             const lines = text.split(/\r?\n/).filter(l => l.trim().length > 0);
             if (lines.length < 2) {
-                alert("CSV에 데이터가 없습니다.");
+                toast.error("CSV 파싱 실패", "데이터가 없습니다.");
                 return;
             }
             const header = lines[0].split(",").map(h => h.trim().toLowerCase());
@@ -330,7 +332,7 @@ export default function ManageUsersPage() {
             const emailIdx = header.indexOf("email");
             const groupIdx = header.indexOf("group");
             if (nameIdx === -1 || emailIdx === -1 || groupIdx === -1) {
-                alert("헤더는 name,email,group 이어야 합니다.");
+                toast.error("헤더 형식 오류", "첫 줄은 name,email,group 이어야 합니다.");
                 return;
             }
             const added: Student[] = [];
@@ -357,10 +359,12 @@ export default function ManageUsersPage() {
                 const next = [...added, ...students];
                 persistStudents(next);
                 persistGroups(recomputeGroups(next, groups));
+                toast.success("CSV 업로드 완료", `${added.length}명이 추가되었습니다.`);
+            } else {
+                toast.info("추가된 학생 없음", "유효한 데이터 행이 없습니다.");
             }
-            alert(`${added.length}명이 추가되었습니다.`);
         } catch {
-            alert("CSV 파싱에 실패했습니다.");
+            toast.error("CSV 파싱 실패", "파일 형식을 확인해주세요 (name,email,group).");
         }
     };
 

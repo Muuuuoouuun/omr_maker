@@ -128,6 +128,28 @@ button {
   padding: 0 1.5rem;
 }
 
+/* Tighter padding on mobile */
+@media (max-width: 640px) {
+  .container {
+    padding: 0 1rem;
+  }
+}
+
+/* Give 1440p+ monitors a bit more room */
+@media (min-width: 1600px) {
+  .container {
+    max-width: 1360px;
+  }
+}
+
+/* Responsive title shrinking — existing pages use inline fontSize: 2.5rem */
+@media (max-width: 640px) {
+  .title-gradient {
+    font-size: 1.8rem !important;
+    line-height: 1.2 !important;
+  }
+}
+
 .center-content {
   display: flex;
   align-items: center;
