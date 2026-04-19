@@ -1,20 +1,23 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import { useParams } from "next/navigation";
+import { useEffect, useRef, useState } from "react";
+import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
 import OMRCardView from "@/components/OMRCardView";
 import ThemeToggle from "@/components/ThemeToggle";
 import dynamic from "next/dynamic";
+import { toast } from "@/components/Toast";
+import { Clock, Save } from "lucide-react";
 
 const PDFViewer = dynamic(() => import("@/components/PDFViewer"), { ssr: false });
-import { Question } from "@/types/omr";
+import { Question, gradeAttempt } from "@/types/omr";
 
 export default function SolvePage() {
     const params = useParams();
+    const router = useRouter();
     const id = params?.id as string;
 
-    const [examData, setExamData] = useState<{ title: string; questions: Question[]; accessConfig?: { type: string; groupIds: string[] } } | null>(null);
+    const [examData, setExamData] = useState<{ title: string; questions: Question[]; accessConfig?: { type: string; groupIds: string[] }; durationMin?: number; startAt?: string; endAt?: string } | null>(null);
     const [studentAnswers, setStudentAnswers] = useState<Record<number, number>>({});
     const [drawings, setDrawings] = useState<Record<number, string[]>>({});
     const [pdfFile, setPdfFile] = useState<File | null>(null);
@@ -33,6 +36,25 @@ export default function SolvePage() {
     // Layout State
     const [isOMRCollapsed, setIsOMRCollapsed] = useState(false);
 
+    // Timer + autosave State
+    const [startedAt] = useState(() => new Date().toISOString());
+    const [timeRemaining, setTimeRemaining] = useState<number | null>(null); // seconds
+    const [lastSavedAt, setLastSavedAt] = useState<Date | null>(null);
+    const [hasResumed, setHasResumed] = useState(false);
+    const submittedRef = useRef(false);
+    // Stable per-device student/guest id
+    const [persistId] = useState(() => {
+        if (typeof window === "undefined") return "";
+        let pid = localStorage.getItem("omr_student_pid");
+        if (!pid) {
+            pid = `pid-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+            localStorage.setItem("omr_student_pid", pid);
+        }
+        return pid;
+    });
+
+    const DRAFT_KEY = id ? `omr_draft_${id}` : "";
+
     useEffect(() => {
         const sessionStr = sessionStorage.getItem("omr_student_session");
         if (sessionStr) setUser(JSON.parse(sessionStr));
@@ -41,12 +63,43 @@ export default function SolvePage() {
             if (!id) return;
             const data = localStorage.getItem(`omr_exam_${id}`);
             if (!data) {
-                alert("유효하지 않은 시험 ID이거나 데이터가 없습니다.");
+                toast.error("시험을 찾을 수 없음", "유효하지 않은 시험 ID입니다.");
                 return;
             }
             try {
                 const parsed = JSON.parse(data);
                 setExamData(parsed);
+
+                // Enforce schedule window (startAt/endAt)
+                const now = Date.now();
+                if (parsed.startAt && new Date(parsed.startAt).getTime() > now) {
+                    toast.info("아직 응시 시작 전입니다", `${new Date(parsed.startAt).toLocaleString('ko-KR')}에 시작합니다.`);
+                }
+                if (parsed.endAt && new Date(parsed.endAt).getTime() < now) {
+                    toast.error("응시 기간 종료", "이 시험의 응시 가능 기간이 지났습니다.");
+                }
+
+                // Initialize timer from duration
+                if (parsed.durationMin && typeof parsed.durationMin === "number") {
+                    setTimeRemaining(parsed.durationMin * 60);
+                }
+
+                // Restore draft (autosave) if present
+                try {
+                    const draftStr = localStorage.getItem(`omr_draft_${id}`);
+                    if (draftStr) {
+                        const draft = JSON.parse(draftStr);
+                        if (draft.answers && typeof draft.answers === "object") {
+                            setStudentAnswers(draft.answers);
+                        }
+                        if (typeof draft.timeRemaining === "number") {
+                            setTimeRemaining(draft.timeRemaining);
+                        }
+                        setHasResumed(true);
+                    }
+                } catch {
+                    // ignore bad draft
+                }
 
                 if (parsed.pdfData) {
                     try {
@@ -78,6 +131,56 @@ export default function SolvePage() {
         loadExam();
     }, [id]);
 
+    // Show resume banner once after initial load
+    useEffect(() => {
+        if (hasResumed) {
+            toast.info("임시저장 복원됨", "이전에 풀던 답안을 불러왔습니다.");
+        }
+    }, [hasResumed]);
+
+    // Tick timer every second when examData has duration. Auto-submit at 0.
+    useEffect(() => {
+        if (timeRemaining === null || submittedRef.current) return;
+        if (timeRemaining <= 0) {
+            submittedRef.current = true;
+            handleSubmitInternal(true);
+            return;
+        }
+        const id = setTimeout(() => setTimeRemaining(t => (t === null ? null : t - 1)), 1000);
+        return () => clearTimeout(id);
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [timeRemaining]);
+
+    // Autosave draft every 3s when answers change
+    useEffect(() => {
+        if (!id || submittedRef.current) return;
+        const t = setTimeout(() => {
+            try {
+                localStorage.setItem(DRAFT_KEY, JSON.stringify({
+                    answers: studentAnswers,
+                    timeRemaining,
+                    savedAt: new Date().toISOString(),
+                }));
+                setLastSavedAt(new Date());
+            } catch {
+                // quota exceeded — silent, UI will stop showing save time
+            }
+        }, 3000);
+        return () => clearTimeout(t);
+    }, [studentAnswers, timeRemaining, id, DRAFT_KEY]);
+
+    // Warn on tab close if there are unsaved answers
+    useEffect(() => {
+        const onBeforeUnload = (e: BeforeUnloadEvent) => {
+            if (submittedRef.current) return;
+            if (Object.keys(studentAnswers).length === 0) return;
+            e.preventDefault();
+            e.returnValue = "";
+        };
+        window.addEventListener("beforeunload", onBeforeUnload);
+        return () => window.removeEventListener("beforeunload", onBeforeUnload);
+    }, [studentAnswers]);
+
     const handleAnswerClick = (qId: number, optionIndex: number) => {
         setStudentAnswers(prev => ({ ...prev, [qId]: optionIndex }));
         setCurrentQuestionId(qId);
@@ -95,34 +198,30 @@ export default function SolvePage() {
         setDrawings(prev => ({ ...prev, [page]: newPaths }));
     };
 
-    const handleSubmit = () => {
-        if (!confirm("정말 제출하시겠습니까? (현재는 로컬에만 저장됩니다)")) return;
+    const handleSubmitInternal = (autoSubmitted = false) => {
         if (!examData) return;
+        if (submittedRef.current && !autoSubmitted) return;
 
         let submitter = user;
         if (!submitter) {
             if (examData.accessConfig?.type === 'public') {
-                const name = prompt("이름을 입력해주세요 (게스트 제출):");
+                const name = window.prompt("이름을 입력해주세요 (게스트 제출):");
                 if (!name) return;
                 const guestId = Math.random().toString(36).substring(2, 15);
                 submitter = { name, isGuest: true, guestId };
                 sessionStorage.setItem("omr_student_session", JSON.stringify({ ...submitter, groupName: 'Guest' }));
                 localStorage.setItem("omr_guest_id", guestId);
             } else {
-                alert("로그인이 필요한 시험입니다.");
-                window.location.href = "/";
+                toast.error("로그인 필요", "이 시험은 로그인이 필요합니다.");
+                router.push("/");
                 return;
             }
         }
 
-        let correctCount = 0;
-        let totalCount = 0;
-        examData.questions.forEach(q => {
-            if (q.answer) {
-                totalCount++;
-                if (studentAnswers[q.id] === q.answer) correctCount++;
-            }
-        });
+        submittedRef.current = true;
+
+        // Use weighted grading from types/omr.ts
+        const graded = gradeAttempt(examData.questions, studentAnswers);
 
         const attemptId = Date.now().toString();
         const attemptData = {
@@ -130,22 +229,45 @@ export default function SolvePage() {
             examId: id,
             examTitle: examData.title,
             studentName: submitter.name,
+            studentId: submitter.guestId ?? persistId,
             guestId: submitter.guestId,
-            startedAt: new Date().toISOString(),
+            startedAt,
             finishedAt: new Date().toISOString(),
-            score: correctCount,
-            totalScore: totalCount,
+            score: graded.earnedScore,
+            totalScore: graded.totalScore,
             answers: studentAnswers,
-            drawings: drawings,
-            status: 'completed'
+            drawings,
+            status: 'completed' as const,
+            autoSubmitted,
         };
 
-        const history = JSON.parse(localStorage.getItem('omr_attempts') || '[]');
-        history.push(attemptData);
-        localStorage.setItem('omr_attempts', JSON.stringify(history));
+        try {
+            const history = JSON.parse(localStorage.getItem('omr_attempts') || '[]');
+            history.push(attemptData);
+            localStorage.setItem('omr_attempts', JSON.stringify(history));
+            // Clean up draft
+            try { localStorage.removeItem(DRAFT_KEY); } catch {}
+        } catch {
+            toast.error("저장 공간 부족", "브라우저 저장소가 가득 찼습니다. 관리자에게 문의하세요.");
+            return;
+        }
 
-        alert(`제출 완료! 점수: ${correctCount}/${totalCount}`);
-        window.location.href = `/student/review/${attemptId}`;
+        if (autoSubmitted) {
+            toast.info("시간 종료", "답안이 자동으로 제출되었습니다.");
+        }
+        router.push(`/student/review/${attemptId}`);
+    };
+
+    const handleSubmit = () => {
+        if (!examData) return;
+        const totalQ = examData.questions.length;
+        const answeredCount = Object.keys(studentAnswers).length;
+        const unanswered = totalQ - answeredCount;
+        const message = unanswered > 0
+            ? `미답변 ${unanswered}문항이 있습니다. 정말 제출하시겠습니까?`
+            : `모든 답변을 완료했습니다. 제출하시겠습니까?`;
+        if (!window.confirm(message)) return;
+        handleSubmitInternal(false);
     };
 
     const toggleTeacherMode = (checked: boolean) => {
@@ -210,6 +332,32 @@ export default function SolvePage() {
                         </span>
                     </div>
 
+                    {/* Timer */}
+                    {timeRemaining !== null && (
+                        (() => {
+                            const mm = Math.floor(Math.max(0, timeRemaining) / 60).toString().padStart(2, "0");
+                            const ss = (Math.max(0, timeRemaining) % 60).toString().padStart(2, "0");
+                            const isCritical = timeRemaining <= 300; // last 5 min
+                            return (
+                                <div style={{
+                                    display: 'flex', alignItems: 'center', gap: '0.4rem',
+                                    padding: '0.35rem 0.75rem',
+                                    background: isCritical ? 'rgba(239,68,68,0.1)' : 'var(--background)',
+                                    border: `1px solid ${isCritical ? 'rgba(239,68,68,0.3)' : 'var(--border)'}`,
+                                    borderRadius: 'var(--radius-full)',
+                                    color: isCritical ? '#ef4444' : 'var(--foreground)',
+                                    flexShrink: 0,
+                                    animation: isCritical ? 'pulse 1.5s ease-in-out infinite' : undefined
+                                }}>
+                                    <Clock size={13} />
+                                    <span style={{ fontSize: '0.82rem', fontWeight: 700, fontVariantNumeric: 'tabular-nums' }}>
+                                        {mm}:{ss}
+                                    </span>
+                                </div>
+                            );
+                        })()
+                    )}
+
                     {/* Progress indicator */}
                     <div style={{
                         display: 'flex',
@@ -244,6 +392,18 @@ export default function SolvePage() {
                             {answeredCount}/{totalQuestions}
                         </span>
                     </div>
+
+                    {/* Autosave indicator */}
+                    {lastSavedAt && (
+                        <span
+                            title={`마지막 저장: ${lastSavedAt.toLocaleTimeString('ko-KR')}`}
+                            style={{
+                                display: 'inline-flex', alignItems: 'center', gap: '0.3rem',
+                                fontSize: '0.72rem', color: 'var(--muted)', fontWeight: 600, flexShrink: 0
+                            }}>
+                            <Save size={11} /> 저장됨
+                        </span>
+                    )}
 
                     <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', flexShrink: 0 }}>
                         <label style={{

@@ -4,6 +4,10 @@ export interface Question {
     label?: string;
     score?: number;
     answer?: number;
+    /** Number of choices (4 or 5). Default 5 when undefined. */
+    choices?: 4 | 5;
+    /** Optional teacher-authored explanation shown in review. */
+    explanation?: string;
     pdfLocation?: {
         page: number;
         x: number;
@@ -16,7 +20,15 @@ export interface Exam {
     title: string;
     questions: Question[];
     createdAt: string;
-    // Feature 3: Distribution
+    updatedAt?: string;
+    /** Duration in minutes. Default 50 when undefined. */
+    durationMin?: number;
+    /** ISO timestamps for when exam is accessible. */
+    startAt?: string;
+    endAt?: string;
+    /** Soft-archived exams don't show in student dashboards. */
+    archived?: boolean;
+    // Distribution
     accessConfig?: {
         type: 'public' | 'group';
         groupIds?: string[];
@@ -29,6 +41,8 @@ export interface Attempt {
     examId: string;
     examTitle: string;
     studentName: string; // "Student" for anonymous
+    /** Stable student identifier — preferred over studentName for joins. */
+    studentId?: string;
     startedAt: string;
     finishedAt: string;
     score: number;
@@ -36,6 +50,8 @@ export interface Attempt {
     answers: Record<number, number>; // qId -> selected option
     status: 'completed' | 'in_progress';
     guestId?: string; // For tracking guest attempts
+    /** If true, submitted because the timer hit zero. */
+    autoSubmitted?: boolean;
 }
 
 export interface Group {
@@ -43,4 +59,51 @@ export interface Group {
     name: string;
     studentCount: number;
     createdAt: string;
+}
+
+// ────────────────────────────────────────────────────────────
+// Helper: compute a question's effective score weight.
+// Teachers may leave `score` blank; fall back to equal split.
+// ────────────────────────────────────────────────────────────
+export function questionWeight(q: Question, totalQuestions: number): number {
+    if (typeof q.score === 'number' && !Number.isNaN(q.score) && q.score > 0) return q.score;
+    return totalQuestions > 0 ? 100 / totalQuestions : 0;
+}
+
+export function computeExamTotalScore(questions: Question[]): number {
+    return questions.reduce((sum, q) => sum + questionWeight(q, questions.length), 0);
+}
+
+export function gradeAttempt(questions: Question[], answers: Record<number, number>): {
+    earnedScore: number;
+    totalScore: number;
+    correctCount: number;
+    incorrectCount: number;
+    unansweredCount: number;
+} {
+    const totalScore = computeExamTotalScore(questions);
+    let earned = 0;
+    let correct = 0;
+    let incorrect = 0;
+    let unanswered = 0;
+    for (const q of questions) {
+        const selected = answers[q.id];
+        if (selected === undefined || selected === null || selected === 0) {
+            unanswered++;
+            continue;
+        }
+        if (q.answer !== undefined && selected === q.answer) {
+            earned += questionWeight(q, questions.length);
+            correct++;
+        } else {
+            incorrect++;
+        }
+    }
+    return {
+        earnedScore: Math.round(earned * 100) / 100,
+        totalScore: Math.round(totalScore * 100) / 100,
+        correctCount: correct,
+        incorrectCount: incorrect,
+        unansweredCount: unanswered,
+    };
 }
