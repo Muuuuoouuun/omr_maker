@@ -6,8 +6,17 @@ import { useRouter } from "next/navigation";
 import { Exam, Attempt } from "@/types/omr";
 import AssignmentBlock from "@/components/dashboard/AssignmentBlock";
 import ThemeToggle from "@/components/ThemeToggle";
+import { Sparkles, Award } from "lucide-react";
 
 import { mergeGuestAttempts } from "@/utils/storage";
+
+function getTimeGreeting(): string {
+    const h = new Date().getHours();
+    if (h < 6) return "늦은 밤이네요";
+    if (h < 12) return "좋은 아침이에요";
+    if (h < 18) return "오늘도 수고하세요";
+    return "좋은 저녁이에요";
+}
 
 export default function StudentDashboard() {
     const router = useRouter();
@@ -139,12 +148,12 @@ export default function StudentDashboard() {
                             {user.name} <span style={{ color: 'var(--muted)', fontWeight: 400 }}>({user.groupName})</span>
                         </span>
                         <button onClick={() => {
-                            if (confirm("Logout?")) {
+                            if (confirm("로그아웃하시겠습니까?")) {
                                 sessionStorage.removeItem("omr_student_session");
                                 router.push("/");
                             }
                         }} style={{ fontSize: '0.9rem', color: 'var(--muted)', cursor: 'pointer', transition: 'color 0.2s', fontWeight: 500 }}>
-                            Logout
+                            로그아웃
                         </button>
                         <ThemeToggle />
                     </div>
@@ -182,11 +191,23 @@ export default function StudentDashboard() {
 
                 {/* Welcome */}
                 <div style={{ margin: '3rem 0' }}>
+                    <div style={{
+                        display: 'inline-flex', alignItems: 'center', gap: '0.5rem',
+                        fontSize: '0.8rem', fontWeight: 700, letterSpacing: '0.04em',
+                        color: 'var(--muted)', marginBottom: '0.5rem'
+                    }}>
+                        <Sparkles size={14} color="var(--primary)" />
+                        {getTimeGreeting()}
+                    </div>
                     <h1 className="title-gradient" style={{ fontSize: '2.5rem', marginBottom: '0.75rem', lineHeight: 1.2 }}>
-                        Hello, {user.name}! 👋
+                        {user.name}님,
                     </h1>
                     <p className="text-muted" style={{ fontSize: '1.1rem' }}>
-                        You have <strong style={{ color: 'var(--primary)', fontWeight: 700 }}>{todoExams.length}</strong> assignments pending today.
+                        {todoExams.length > 0 ? (
+                            <>오늘 <strong style={{ color: 'var(--primary)', fontWeight: 700 }}>{todoExams.length}개</strong>의 시험이 기다리고 있어요.</>
+                        ) : (
+                            <>오늘은 예정된 시험이 없습니다. 편안한 하루 보내세요.</>
+                        )}
                     </p>
                 </div>
 
@@ -198,18 +219,19 @@ export default function StudentDashboard() {
                         color: 'white', border: 'none',
                         display: 'flex', flexDirection: 'column', justifyContent: 'center'
                     }}>
-                        <div style={{ fontSize: '0.95rem', fontWeight: 600, opacity: 0.9, marginBottom: '0.5rem' }}>My Average</div>
+                        <div style={{ fontSize: '0.95rem', fontWeight: 600, opacity: 0.9, marginBottom: '0.5rem' }}>나의 평균 점수</div>
                         <div style={{ fontSize: '3rem', fontWeight: 800, lineHeight: 1 }}>{stats.avgScore}</div>
                         <div style={{ fontSize: '0.85rem', opacity: 0.8, marginTop: '1rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                            View Details <span>→</span>
+                            상세 보기 <span>→</span>
                         </div>
                     </Link>
 
-                    <div className="bento-card col-span-1" style={{ justifyContent: 'center', alignItems: 'center', background: 'var(--surface)' }}>
+                    <div className="bento-card col-span-1" style={{ justifyContent: 'center', alignItems: 'center', background: 'var(--surface)', position: 'relative', overflow: 'hidden' }}>
+                        <Award size={22} color="var(--primary)" style={{ position: 'absolute', top: 16, right: 16, opacity: 0.6 }} />
                         <div style={{ fontSize: '3rem', fontWeight: 800, color: 'var(--foreground)', lineHeight: 1, marginBottom: '0.5rem' }}>
                             {stats.completedCount}
                         </div>
-                        <div style={{ color: 'var(--muted)', fontSize: '0.9rem', fontWeight: 600 }}>Exams Completed</div>
+                        <div style={{ color: 'var(--muted)', fontSize: '0.9rem', fontWeight: 600 }}>완료한 시험</div>
                     </div>
 
                     {/* Todo List (Main Focus) */}

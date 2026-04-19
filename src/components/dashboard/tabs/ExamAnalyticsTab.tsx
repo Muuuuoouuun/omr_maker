@@ -222,7 +222,31 @@ export default function ExamAnalyticsTab({ exams, attempts, initialExamId }: Exa
     };
 
     if (exams.length === 0) {
-        return <div className="text-center p-8 text-muted">등록된 시험이 없습니다.</div>;
+        return (
+            <div className="fade-in-up" style={{ padding: '3rem 2rem', textAlign: 'center' }}>
+                <div style={{
+                    width: 80, height: 80, borderRadius: '50%',
+                    background: 'linear-gradient(135deg, rgba(99,102,241,0.1), rgba(236,72,153,0.1))',
+                    display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+                    color: 'var(--primary)', marginBottom: '1.5rem'
+                }}>
+                    <BarChart2 size={36} />
+                </div>
+                <h3 style={{ fontSize: '1.15rem', fontWeight: 700, marginBottom: '0.5rem' }}>분석할 시험이 없습니다</h3>
+                <p style={{ fontSize: '0.9rem', color: 'var(--muted)', marginBottom: '1.5rem' }}>
+                    먼저 시험을 출제하면 응시 결과를 분석할 수 있습니다.
+                </p>
+                <a href="/create" style={{
+                    display: 'inline-flex', alignItems: 'center', gap: '0.5rem',
+                    padding: '0.75rem 1.4rem',
+                    background: 'linear-gradient(135deg, var(--primary), var(--primary-dark))',
+                    color: 'white', borderRadius: 'var(--radius-full)', fontWeight: 600, fontSize: '0.9rem',
+                    boxShadow: '0 4px 14px rgba(99,102,241,0.3)'
+                }}>
+                    시험 출제하기
+                </a>
+            </div>
+        );
     }
 
     return (

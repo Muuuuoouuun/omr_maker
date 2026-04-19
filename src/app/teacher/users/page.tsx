@@ -289,6 +289,33 @@ export default function ManageUsersPage() {
         persistInvites(next);
     };
 
+    const handleCancelInvite = (id: string) => {
+        if (!window.confirm("이 초대를 취소하시겠습니까?")) return;
+        persistInvites(invites.filter(inv => inv.id !== id));
+    };
+
+    const handleCreateInvite = () => {
+        const email = window.prompt("초대할 이메일 주소를 입력하세요");
+        if (!email) return;
+        const trimmed = email.trim();
+        // Simple email validation
+        if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(trimmed)) {
+            alert("올바른 이메일 주소를 입력해주세요.");
+            return;
+        }
+        if (invites.some(inv => inv.email === trimmed && inv.status === "pending")) {
+            alert("이미 대기 중인 초대가 있습니다.");
+            return;
+        }
+        const newInvite: Invite = {
+            id: `i-${Date.now()}`,
+            email: trimmed,
+            sentAt: "방금 전",
+            status: "pending",
+        };
+        persistInvites([newInvite, ...invites]);
+    };
+
     // ===== CSV upload =====
     const handleCsvFile = async (file: File) => {
         try {
@@ -730,9 +757,15 @@ export default function ManageUsersPage() {
                             )}
                             <button
                                 onClick={handleCopyInvite}
-                                style={{ padding: '0.5rem 1rem', background: 'var(--primary)', color: 'white', borderRadius: 'var(--radius-md)', fontWeight: 600, fontSize: '0.8rem' }}
+                                style={{ padding: '0.5rem 1rem', background: 'var(--surface)', color: 'var(--primary)', border: '1px solid rgba(99,102,241,0.3)', borderRadius: 'var(--radius-md)', fontWeight: 600, fontSize: '0.8rem' }}
                             >
-                                초대 링크 복사
+                                링크 복사
+                            </button>
+                            <button
+                                onClick={handleCreateInvite}
+                                style={{ padding: '0.5rem 1rem', background: 'var(--primary)', color: 'white', borderRadius: 'var(--radius-md)', fontWeight: 600, fontSize: '0.8rem', display: 'flex', alignItems: 'center', gap: '0.3rem' }}
+                            >
+                                <Mail size={13} /> 이메일로 초대
                             </button>
                         </div>
 
@@ -764,18 +797,33 @@ export default function ManageUsersPage() {
                                                 }}>{m.label}</span>
                                             </td>
                                             <td style={{ padding: '1rem 0.5rem', textAlign: 'right' }}>
-                                                <button
-                                                    onClick={() => handleResendInvite(inv.id)}
-                                                    style={{ fontSize: '0.8rem', color: 'var(--primary)', fontWeight: 600 }}
-                                                >
-                                                    재발송
-                                                </button>
+                                                <div style={{ display: 'flex', gap: '0.75rem', justifyContent: 'flex-end' }}>
+                                                    {inv.status !== "accepted" && (
+                                                        <button
+                                                            onClick={() => handleResendInvite(inv.id)}
+                                                            style={{ fontSize: '0.8rem', color: 'var(--primary)', fontWeight: 600 }}
+                                                        >
+                                                            재발송
+                                                        </button>
+                                                    )}
+                                                    <button
+                                                        onClick={() => handleCancelInvite(inv.id)}
+                                                        style={{ fontSize: '0.8rem', color: 'var(--muted)', fontWeight: 500 }}
+                                                    >
+                                                        취소
+                                                    </button>
+                                                </div>
                                             </td>
                                         </tr>
                                     );
                                 })}
                             </tbody>
                         </table>
+                        {hydrated && invites.length === 0 && (
+                            <div style={{ padding: '2.5rem 1rem', textAlign: 'center', color: 'var(--muted)', fontSize: '0.9rem' }}>
+                                아직 발송된 초대가 없습니다. 위의 <strong style={{ color: 'var(--primary)' }}>이메일로 초대</strong> 버튼으로 시작하세요.
+                            </div>
+                        )}
                     </div>
                 )}
             </main>
