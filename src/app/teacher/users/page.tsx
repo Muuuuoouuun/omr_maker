@@ -1,9 +1,11 @@
 "use client";
 
-import { useState, useMemo, useEffect, useRef } from "react";
+import { Suspense, useState, useMemo, useEffect, useRef } from "react";
+import { useSearchParams } from "next/navigation";
 import TeacherHeader from "@/components/TeacherHeader";
 import { Users, UserPlus, Upload, Search, Mail, TrendingUp, TrendingDown, MoreVertical, Link as LinkIcon, FolderPlus, CheckCircle2, Clock, X, Trash2, Download } from "lucide-react";
 import { toast } from "@/components/Toast";
+import type { Attempt } from "@/types/omr";
 
 type TabType = "students" | "groups" | "invites";
 
@@ -78,7 +80,21 @@ const MOCK_INVITES: Invite[] = [
 ];
 
 export default function ManageUsersPage() {
-    const [tab, setTab] = useState<TabType>("students");
+    return (
+        <Suspense fallback={<div style={{ minHeight: '100vh' }} />}>
+            <ManageUsersInner />
+        </Suspense>
+    );
+}
+
+function ManageUsersInner() {
+    const searchParams = useSearchParams();
+    const initialTab: TabType = (() => {
+        const t = searchParams?.get("tab");
+        if (t === "groups" || t === "invites" || t === "students") return t;
+        return "students";
+    })();
+    const [tab, setTab] = useState<TabType>(initialTab);
     const [query, setQuery] = useState("");
     const [selectedId, setSelectedId] = useState<string | null>(null);
 
@@ -162,6 +178,41 @@ export default function ManageUsersPage() {
         ), [query, students]);
 
     const selected = students.find(s => s.id === selectedId);
+
+    // Recent attempts for the selected student (from omr_attempts)
+    const selectedRecentAttempts = useMemo<Attempt[]>(() => {
+        if (!selected) return [];
+        if (typeof window === "undefined") return [];
+        try {
+            const raw = localStorage.getItem("omr_attempts");
+            if (!raw) return [];
+            const parsed = JSON.parse(raw);
+            if (!Array.isArray(parsed)) return [];
+            const mine = (parsed as Attempt[])
+                .filter(a => a && a.studentName === selected.name)
+                .sort((a, b) => {
+                    const ta = new Date(a.finishedAt || a.startedAt || 0).getTime();
+                    const tb = new Date(b.finishedAt || b.startedAt || 0).getTime();
+                    return tb - ta;
+                })
+                .slice(0, 3);
+            return mine;
+        } catch {
+            return [];
+        }
+    }, [selected]);
+
+    // Detail-panel button handlers
+    const handleSendMessage = () => {
+        if (typeof window === "undefined") return;
+        const body = window.prompt("메시지 내용:");
+        if (body && body.trim().length > 0) {
+            toast.success("메시지 전송됨");
+        }
+    };
+    const handleOpenDetail = () => {
+        toast.info("상세 프로필 준비 중");
+    };
 
     // ===== Student CRUD =====
     const handleAddStudent = (data: { name: string; email: string; group: string }) => {
@@ -689,18 +740,29 @@ export default function ManageUsersPage() {
                                 </div>
                                 <div style={{ padding: '1rem', background: 'var(--background)', borderRadius: 'var(--radius-md)', marginBottom: '1rem' }}>
                                     <div style={{ fontSize: '0.75rem', fontWeight: 700, color: 'var(--muted)', letterSpacing: '0.08em', marginBottom: '0.5rem' }}>최근 응시 이력</div>
-                                    {["Midterm English Test", "Chapter 4 Math", "Science Pop Quiz"].map((t, i) => (
-                                        <div key={i} style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.85rem', padding: '0.3rem 0', borderBottom: i < 2 ? '1px dashed var(--border)' : 'none' }}>
-                                            <span style={{ fontWeight: 500 }}>{t}</span>
-                                            <span style={{ fontWeight: 700, color: 'var(--foreground)' }}>{85 - i * 7}점</span>
+                                    {selectedRecentAttempts.length === 0 ? (
+                                        <div style={{ fontSize: '0.85rem', color: 'var(--muted)', padding: '0.3rem 0' }}>
+                                            아직 응시 이력이 없습니다.
                                         </div>
-                                    ))}
+                                    ) : (
+                                        selectedRecentAttempts.map((a, i) => {
+                                            const pct = a.totalScore > 0
+                                                ? Math.round((a.score / a.totalScore) * 100)
+                                                : 0;
+                                            return (
+                                                <div key={a.id} style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.85rem', padding: '0.3rem 0', borderBottom: i < selectedRecentAttempts.length - 1 ? '1px dashed var(--border)' : 'none' }}>
+                                                    <span style={{ fontWeight: 500, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: 220 }}>{a.examTitle}</span>
+                                                    <span style={{ fontWeight: 700, color: 'var(--foreground)' }}>{pct}점</span>
+                                                </div>
+                                            );
+                                        })
+                                    )}
                                 </div>
                                 <div style={{ display: 'flex', gap: '0.5rem' }}>
-                                    <button style={{ flex: 1, padding: '0.7rem', background: 'var(--primary)', color: 'white', borderRadius: 'var(--radius-md)', fontWeight: 600, fontSize: '0.85rem', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.4rem' }}>
+                                    <button onClick={handleSendMessage} style={{ flex: 1, padding: '0.7rem', background: 'var(--primary)', color: 'white', borderRadius: 'var(--radius-md)', fontWeight: 600, fontSize: '0.85rem', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.4rem' }}>
                                         <Mail size={14} /> 메시지
                                     </button>
-                                    <button style={{ flex: 1, padding: '0.7rem', background: 'var(--surface)', color: 'var(--foreground)', border: '1px solid var(--border)', borderRadius: 'var(--radius-md)', fontWeight: 600, fontSize: '0.85rem' }}>
+                                    <button onClick={handleOpenDetail} style={{ flex: 1, padding: '0.7rem', background: 'var(--surface)', color: 'var(--foreground)', border: '1px solid var(--border)', borderRadius: 'var(--radius-md)', fontWeight: 600, fontSize: '0.85rem' }}>
                                         상세 보기
                                     </button>
                                 </div>

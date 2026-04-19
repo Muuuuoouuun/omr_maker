@@ -1,9 +1,10 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import TeacherHeader from "@/components/TeacherHeader";
-import { CreditCard, Check, Zap, Crown, Building, Download, Receipt, Sparkles, TrendingUp, AlertCircle } from "lucide-react";
+import { CreditCard, Check, Zap, Crown, Building, Download, Receipt, Sparkles, TrendingUp, AlertCircle, X } from "lucide-react";
 import { formatLimit, usagePct } from "@/lib/pure";
+import { toast } from "@/components/Toast";
 
 type Plan = "free" | "pro" | "school";
 
@@ -28,7 +29,15 @@ const PLANS: { key: Plan; name: string; price: string; priceNum: number; icon: R
     },
 ];
 
-const MOCK_INVOICES = [
+interface Invoice {
+    id: string;
+    date: string;
+    amount: number;
+    status: string;
+    desc: string;
+}
+
+const MOCK_INVOICES: Invoice[] = [
     { id: "INV-2026-04", date: "2026-04-01", amount: 19000, status: "paid", desc: "Pro 플랜 · 2026년 4월" },
     { id: "INV-2026-03", date: "2026-03-01", amount: 19000, status: "paid", desc: "Pro 플랜 · 2026년 3월" },
     { id: "INV-2026-02", date: "2026-02-01", amount: 19000, status: "paid", desc: "Pro 플랜 · 2026년 2월" },
@@ -40,6 +49,8 @@ export default function BillingPage() {
     const [current, setCurrent] = useState<Plan>("pro");
     const [yearly, setYearly] = useState(false);
     const [usage, setUsage] = useState<{ exams: number; students: number; ai: number }>({ exams: 0, students: 0, ai: 0 });
+    const [userInvoices, setUserInvoices] = useState<Invoice[]>([]);
+    const [upgradeTarget, setUpgradeTarget] = useState<Plan | null>(null);
 
     useEffect(() => {
         if (typeof window === "undefined") return;
@@ -108,7 +119,27 @@ export default function BillingPage() {
         } catch {
             // keep default
         }
+
+        // User-generated invoices (from past upgrades)
+        try {
+            const rawInv = localStorage.getItem("omr_plan_invoices");
+            if (rawInv) {
+                const parsed = JSON.parse(rawInv);
+                if (Array.isArray(parsed)) setUserInvoices(parsed as Invoice[]);
+            }
+        } catch {
+            // keep default
+        }
     }, []);
+
+    // Merge user-generated invoices with MOCK historical data, newest first
+    const allInvoices = useMemo<Invoice[]>(() => {
+        return [...userInvoices, ...MOCK_INVOICES].sort((a, b) => {
+            const ta = new Date(a.date).getTime() || 0;
+            const tb = new Date(b.date).getTime() || 0;
+            return tb - ta;
+        });
+    }, [userInvoices]);
 
     const currentPlan = PLANS.find(p => p.key === current)!;
 
@@ -123,7 +154,7 @@ export default function BillingPage() {
         }
     };
 
-    const downloadInvoice = (inv: typeof MOCK_INVOICES[number]) => {
+    const downloadInvoice = (inv: Invoice) => {
         const html = `<!doctype html>
 <html lang="ko"><head><meta charset="utf-8"><title>${inv.id}</title>
 <style>
@@ -175,29 +206,42 @@ th { background: #f8fafc; font-size: 12px; color: #64748b; text-transform: upper
     };
 
     const downloadAllInvoices = () => {
-        MOCK_INVOICES.forEach((inv, i) => {
+        const list = [...userInvoices, ...MOCK_INVOICES];
+        list.forEach((inv, i) => {
             setTimeout(() => downloadInvoice(inv), i * 150);
         });
     };
 
     const handlePlanChange = (next: Plan) => {
         if (next === current) return;
-        const nextPlan = PLANS.find(p => p.key === next);
-        if (!nextPlan) return;
-        const priceLabel = nextPlan.priceNum === 0 ? "무료" : `${nextPlan.price} / 월`;
-        const action = nextPlan.priceNum > currentPlan.priceNum ? "업그레이드" : "다운그레이드";
-        const ok = typeof window !== "undefined"
-            ? window.confirm(`${nextPlan.name} 플랜으로 ${action}하시겠습니까?\n가격: ${priceLabel}`)
-            : false;
-        if (!ok) return;
-        setCurrent(next);
+        setUpgradeTarget(next);
+    };
+
+    const upgradePlan = upgradeTarget ? PLANS.find(p => p.key === upgradeTarget) ?? null : null;
+
+    const confirmPlanChange = () => {
+        if (!upgradeTarget || !upgradePlan) return;
+        const now = new Date();
+        const yyyy = now.getFullYear();
+        const mm = String(now.getMonth() + 1).padStart(2, "0");
+        const dd = String(now.getDate()).padStart(2, "0");
+        const basePrice = yearly ? Math.round(upgradePlan.priceNum * 12 * 0.8) : upgradePlan.priceNum;
+        const newInvoice: Invoice = {
+            id: `INV-${yyyy}-${mm}-${Date.now().toString(36).slice(-4).toUpperCase()}`,
+            date: `${yyyy}-${mm}-${dd}`,
+            amount: basePrice,
+            status: "paid",
+            desc: `${upgradePlan.name} 플랜 · ${yyyy}년 ${Number(mm)}월${yearly ? " (연간)" : ""}`,
+        };
+        setCurrent(upgradeTarget);
+        const nextInvoices = [newInvoice, ...userInvoices];
+        setUserInvoices(nextInvoices);
         if (typeof window !== "undefined") {
-            try {
-                localStorage.setItem("omr_plan", next);
-            } catch {
-                // ignore
-            }
+            try { localStorage.setItem("omr_plan", upgradeTarget); } catch {}
+            try { localStorage.setItem("omr_plan_invoices", JSON.stringify(nextInvoices)); } catch {}
         }
+        toast.success("플랜 변경 완료", `${upgradePlan.name} 플랜으로 변경되었습니다.`);
+        setUpgradeTarget(null);
     };
 
     return (
@@ -321,6 +365,7 @@ th { background: #f8fafc; font-size: 12px; color: #64748b; text-transform: upper
 
                                     <button
                                         disabled={isCurrent}
+                                        onClick={() => handlePlanChange(p.key)}
                                         style={{
                                             width: '100%', padding: '0.85rem', borderRadius: 'var(--radius-md)',
                                             background: isCurrent ? 'var(--background)' : isPro ? p.gradient : 'var(--surface)',
@@ -361,7 +406,7 @@ th { background: #f8fafc; font-size: 12px; color: #64748b; text-transform: upper
                             </tr>
                         </thead>
                         <tbody>
-                            {MOCK_INVOICES.map(inv => (
+                            {allInvoices.map(inv => (
                                 <tr key={inv.id} style={{ borderBottom: '1px solid var(--border)' }}>
                                     <td style={{ padding: '1rem 0.5rem', fontSize: '0.85rem', fontFamily: 'var(--font-mono)', fontWeight: 600 }}>{inv.id}</td>
                                     <td style={{ padding: '1rem 0.5rem', fontSize: '0.9rem' }}>{inv.desc}</td>
@@ -394,6 +439,105 @@ th { background: #f8fafc; font-size: 12px; color: #64748b; text-transform: upper
                     .plans-grid { grid-template-columns: 1fr !important; }
                 }
             `}</style>
+
+            {upgradeTarget && upgradePlan && (() => {
+                const basePrice = yearly ? Math.round(upgradePlan.priceNum * 12 * 0.8) : upgradePlan.priceNum;
+                // price is inclusive of VAT in this mock: compute subtotal + vat = basePrice.
+                const subtotal = Math.round(basePrice / 1.1);
+                const vat = basePrice - subtotal;
+                const actionLabel = upgradePlan.priceNum > currentPlan.priceNum ? "업그레이드" : "플랜 변경";
+                return (
+                    <div
+                        role="dialog"
+                        aria-label={`${upgradePlan.name} 플랜 ${actionLabel}`}
+                        onClick={() => setUpgradeTarget(null)}
+                        style={{
+                            position: 'fixed', inset: 0, background: 'rgba(15,23,42,0.55)',
+                            display: 'flex', alignItems: 'center', justifyContent: 'center',
+                            zIndex: 200, padding: '1rem', animation: 'fadeIn 0.15s both'
+                        }}
+                    >
+                        <div
+                            onClick={(e) => e.stopPropagation()}
+                            className="bento-card"
+                            style={{
+                                width: '100%', maxWidth: 440, padding: '1.5rem',
+                                background: 'var(--surface)', borderRadius: 'var(--radius-lg)',
+                                boxShadow: '0 24px 48px rgba(0,0,0,0.2)'
+                            }}
+                        >
+                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
+                                <h3 style={{ fontSize: '1.15rem', fontWeight: 800 }}>{upgradePlan.name} 플랜으로 {actionLabel}</h3>
+                                <button onClick={() => setUpgradeTarget(null)} aria-label="모달 닫기" style={{ color: 'var(--muted)' }}>
+                                    <X size={18} />
+                                </button>
+                            </div>
+
+                            <div style={{
+                                padding: '1rem', background: `color-mix(in srgb, ${upgradePlan.color}, transparent 92%)`,
+                                border: `1px solid ${upgradePlan.color}22`, borderRadius: 'var(--radius-md)', marginBottom: '1rem'
+                            }}>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.4rem', color: upgradePlan.color }}>
+                                    {upgradePlan.icon}
+                                    <span style={{ fontSize: '0.95rem', fontWeight: 800, color: 'var(--foreground)' }}>{upgradePlan.name} · {yearly ? "연간" : "월간"}</span>
+                                </div>
+                                <ul style={{ listStyle: 'none', padding: 0, margin: 0 }}>
+                                    {upgradePlan.features.slice(0, 4).map(f => (
+                                        <li key={f} style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', fontSize: '0.82rem', padding: '0.2rem 0' }}>
+                                            <Check size={13} color={upgradePlan.color} style={{ flexShrink: 0 }} />
+                                            <span>{f}</span>
+                                        </li>
+                                    ))}
+                                </ul>
+                            </div>
+
+                            <div style={{ padding: '0.85rem 1rem', background: 'var(--background)', borderRadius: 'var(--radius-md)', marginBottom: '1rem', fontSize: '0.88rem' }}>
+                                <div style={{ display: 'flex', justifyContent: 'space-between', padding: '0.25rem 0' }}>
+                                    <span style={{ color: 'var(--muted)' }}>소계</span>
+                                    <span style={{ fontWeight: 600 }}>₩{subtotal.toLocaleString()}</span>
+                                </div>
+                                <div style={{ display: 'flex', justifyContent: 'space-between', padding: '0.25rem 0', borderBottom: '1px dashed var(--border)' }}>
+                                    <span style={{ color: 'var(--muted)' }}>부가세 (10%)</span>
+                                    <span style={{ fontWeight: 600 }}>₩{vat.toLocaleString()}</span>
+                                </div>
+                                <div style={{ display: 'flex', justifyContent: 'space-between', padding: '0.5rem 0 0', fontSize: '0.95rem' }}>
+                                    <span style={{ fontWeight: 700 }}>총 결제 금액</span>
+                                    <span style={{ fontWeight: 900, color: upgradePlan.color }}>
+                                        ₩{basePrice.toLocaleString()} / {yearly ? "년" : "월"}
+                                    </span>
+                                </div>
+                            </div>
+
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', padding: '0.7rem 0.85rem', background: 'var(--background)', border: '1px solid var(--border)', borderRadius: 'var(--radius-md)', marginBottom: '1.25rem' }}>
+                                <CreditCard size={16} color="var(--muted)" />
+                                <span style={{ fontSize: '0.85rem', fontWeight: 600 }}>Visa •••• 4242</span>
+                                <span style={{ marginLeft: 'auto', fontSize: '0.75rem', color: 'var(--muted)' }}>만료 06/28</span>
+                            </div>
+
+                            <div style={{ display: 'flex', gap: '0.5rem', justifyContent: 'flex-end' }}>
+                                <button
+                                    type="button"
+                                    onClick={() => setUpgradeTarget(null)}
+                                    style={{ padding: '0.7rem 1.1rem', background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 'var(--radius-md)', fontWeight: 600, fontSize: '0.88rem', color: 'var(--foreground)' }}
+                                >
+                                    취소
+                                </button>
+                                <button
+                                    type="button"
+                                    onClick={confirmPlanChange}
+                                    style={{
+                                        padding: '0.7rem 1.25rem', background: upgradePlan.gradient,
+                                        color: 'white', borderRadius: 'var(--radius-md)', fontWeight: 800, fontSize: '0.9rem',
+                                        boxShadow: `0 4px 14px ${upgradePlan.color}55`
+                                    }}
+                                >
+                                    결제하기
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                );
+            })()}
         </div>
     );
 }

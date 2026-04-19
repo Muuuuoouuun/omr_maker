@@ -1,5 +1,6 @@
 "use client";
 
+import { useEffect, useState } from "react";
 import Link from "next/link";
 import { Search } from "lucide-react";
 import ThemeToggle from "./ThemeToggle";
@@ -13,8 +14,14 @@ interface TeacherHeaderProps {
 
 export default function TeacherHeader({ badge = "TEACHER", badgeColor }: TeacherHeaderProps) {
     const color = badgeColor || "var(--primary)";
-    // Detect mac for the right hint; SSR-safe — navigator is undefined server-side
-    const isMac = typeof navigator !== "undefined" && /Mac|iPhone|iPad/.test(navigator.platform);
+    // Defer mac detection to post-mount to avoid SSR/CSR hydration mismatch
+    // (navigator.platform differs between server and client and would mismatch
+    // the <kbd> label, which breaks hydration of the whole subtree — including
+    // GlobalSearch's keydown listener and ThemeToggle's mount effect).
+    const [isMac, setIsMac] = useState(false);
+    useEffect(() => {
+        setIsMac(typeof navigator !== "undefined" && /Mac|iPhone|iPad/.test(navigator.platform));
+    }, []);
     return (
         <>
             <header className="header">

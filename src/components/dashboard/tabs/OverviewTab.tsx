@@ -1,11 +1,14 @@
 "use client";
 
-import { useState, useMemo } from "react";
+import { useState, useMemo, useEffect } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { Exam, Attempt } from "@/types/omr";
 import StatCard from "@/components/dashboard/StatCard";
 import TrendChart from "@/components/dashboard/TrendChart";
 import ExamListBlock from "@/components/dashboard/ExamListBlock";
+import ExamActionsMenu, { ExamActionKind } from "@/components/dashboard/ExamActionsMenu";
+import { toast } from "@/components/Toast";
 import { Users, BarChart3, PlusCircle, Activity } from "lucide-react";
 
 interface OverviewTabProps {
@@ -20,8 +23,83 @@ interface OverviewTabProps {
     onNavigateToExamAnalytics?: (examId: string) => void;
 }
 
-export default function OverviewTab({ exams, attempts, stats, trendData, onNavigateToExamAnalytics }: OverviewTabProps) {
+export default function OverviewTab({ exams: examsProp, attempts, stats, trendData, onNavigateToExamAnalytics }: OverviewTabProps) {
+    const router = useRouter();
     const [activeTab, setActiveTab] = useState<'ongoing' | 'completed'>('ongoing');
+    // Local copy so action handlers (archive/delete/duplicate) can update the table
+    // without requiring the parent page to reload from localStorage.
+    const [exams, setExams] = useState<Exam[]>(examsProp);
+
+    // Sync when parent reloads data (initial mount / navigation).
+    useEffect(() => { setExams(examsProp); }, [examsProp]);
+
+    const realExamIds = useMemo(() => new Set(exams.map(e => e.id)), [exams]);
+
+    const isMockExamId = (id: string) => !realExamIds.has(id);
+
+    const handleExamAction = (kind: ExamActionKind, examId: string) => {
+        const target = exams.find(e => e.id === examId);
+        if (!target) return;
+
+        if (kind === 'edit') {
+            router.push(`/create?edit=${encodeURIComponent(examId)}`);
+            return;
+        }
+
+        if (kind === 'duplicate') {
+            const newId = Date.now().toString(36);
+            const copy: Exam = {
+                ...target,
+                id: newId,
+                title: target.title + ' (복사본)',
+                createdAt: new Date().toISOString(),
+                updatedAt: new Date().toISOString(),
+                archived: false,
+            };
+            try {
+                localStorage.setItem(`omr_exam_${newId}`, JSON.stringify(copy));
+                setExams(prev => [copy, ...prev]);
+                toast.success('시험 복제됨', `"${target.title}"의 복사본을 만들었습니다.`);
+            } catch {
+                toast.error('복제 실패', 'localStorage 용량이 부족할 수 있습니다.');
+            }
+            return;
+        }
+
+        if (kind === 'archive') {
+            const nextArchived = !target.archived;
+            const updated: Exam = { ...target, archived: nextArchived, updatedAt: new Date().toISOString() };
+            try {
+                localStorage.setItem(`omr_exam_${examId}`, JSON.stringify(updated));
+                setExams(prev => prev.map(e => e.id === examId ? updated : e));
+                toast.success(nextArchived ? '시험 보관됨' : '보관 해제됨', target.title);
+            } catch {
+                toast.error('보관 처리 실패');
+            }
+            return;
+        }
+
+        if (kind === 'delete') {
+            if (!window.confirm(`"${target.title}" 시험을 삭제하시겠습니까?\n이 작업은 되돌릴 수 없습니다.`)) return;
+            try {
+                localStorage.removeItem(`omr_exam_${examId}`);
+                // Clean up attempts belonging to this exam
+                const attemptsRaw = localStorage.getItem('omr_attempts');
+                if (attemptsRaw) {
+                    try {
+                        const all: Attempt[] = JSON.parse(attemptsRaw);
+                        const filtered = all.filter(a => a.examId !== examId);
+                        localStorage.setItem('omr_attempts', JSON.stringify(filtered));
+                    } catch {}
+                }
+                setExams(prev => prev.filter(e => e.id !== examId));
+                toast.success('시험 삭제됨', target.title);
+            } catch {
+                toast.error('삭제 실패');
+            }
+            return;
+        }
+    };
 
     // Create dummy data mixed with real data for presentation
     const ongoingExams = useMemo(() => {
@@ -48,11 +126,17 @@ export default function OverviewTab({ exams, attempts, stats, trendData, onNavig
     const displayExams = activeTab === 'ongoing' ? ongoingExams : completedExams;
 
     const handleSendAlarm = (examTitle: string) => {
-        alert(`[${examTitle}] 미응시 학생들에게 개별 알림을 전송했습니다.\n\n- 시험 시작 하루 전 자동 알림 기능 (활성화됨)\n- 선생님 수동 푸시 알림 (전송됨)`);
+        toast.success(
+            '독려 알람 발송됨',
+            `${examTitle} 미응시 학생들에게 개별 알림을 전송했습니다.`
+        );
     };
 
     const handleSendAllAlarms = () => {
-        alert("선생님이 배포한 '모든' 진행중인 시험의 미응시 학생들에게 일괄 알림을 전송했습니다.");
+        toast.success(
+            '알람 발송 완료',
+            '진행 중인 모든 시험의 미응시 학생에게 일괄 전송되었습니다.'
+        );
     };
 
     return (
@@ -164,6 +248,7 @@ export default function OverviewTab({ exams, attempts, stats, trendData, onNavig
                             <th style={{ padding: '1rem 0' }}>Participants / Total</th>
                             <th style={{ padding: '1rem 0' }}>Status</th>
                             {activeTab === 'ongoing' && <th style={{ padding: '1rem 0', textAlign: 'right' }}>Action</th>}
+                            <th style={{ padding: '1rem 0', textAlign: 'right', width: 60 }}>작업</th>
                         </tr>
                     </thead>
                     <tbody>
@@ -175,8 +260,12 @@ export default function OverviewTab({ exams, attempts, stats, trendData, onNavig
                             const statusBg = participationRate === 100 ? 'rgba(16, 185, 129, 0.1)' : 'rgba(139, 92, 246, 0.1)';
                             const statusColor = participationRate === 100 ? 'var(--success)' : 'var(--accent)';
 
+                            const realExam = exams.find(e => e.id === exam.id);
+                            const isArchived = !!realExam?.archived;
+                            const canAct = !isMockExamId(exam.id);
+
                             return (
-                                <tr key={exam.id} style={{ borderBottom: '1px solid var(--border)', transition: 'background 0.2s' }} className="hover:bg-slate-50 dark:hover:bg-slate-800/50">
+                                <tr key={exam.id} style={{ borderBottom: '1px solid var(--border)', transition: 'background 0.2s', opacity: isArchived ? 0.6 : 1 }} className="hover:bg-slate-50 dark:hover:bg-slate-800/50">
                                     <td style={{ padding: '1.2rem 0', fontWeight: 600, fontSize: '0.95rem' }}>
                                         <span
                                             onClick={() => onNavigateToExamAnalytics && onNavigateToExamAnalytics(exam.id)}
@@ -185,6 +274,19 @@ export default function OverviewTab({ exams, attempts, stats, trendData, onNavig
                                         >
                                             {exam.title}
                                         </span>
+                                        {isArchived && (
+                                            <span style={{
+                                                marginLeft: '0.5rem',
+                                                display: 'inline-block',
+                                                padding: '0.15rem 0.5rem',
+                                                fontSize: '0.7rem',
+                                                fontWeight: 700,
+                                                background: 'rgba(100,116,139,0.15)',
+                                                color: 'var(--muted)',
+                                                borderRadius: 'var(--radius-full)',
+                                                verticalAlign: 'middle',
+                                            }}>보관됨</span>
+                                        )}
                                     </td>
                                     <td style={{ padding: '1.2rem 0', color: 'var(--muted)', fontSize: '0.9rem' }}>{new Date(exam.createdAt).toLocaleDateString()}</td>
                                     <td style={{ padding: '1.2rem 0', display: 'flex', alignItems: 'center', gap: '1rem', height: '100%' }}>
@@ -218,6 +320,16 @@ export default function OverviewTab({ exams, attempts, stats, trendData, onNavig
                                             </button>
                                         </td>
                                     )}
+                                    <td style={{ padding: '1.2rem 0', textAlign: 'right' }}>
+                                        {canAct ? (
+                                            <ExamActionsMenu
+                                                exam={{ id: exam.id, title: exam.title, archived: isArchived }}
+                                                onAction={handleExamAction}
+                                            />
+                                        ) : (
+                                            <span style={{ display: 'inline-block', width: 32, height: 32 }} aria-hidden />
+                                        )}
+                                    </td>
                                 </tr>
                             );
                         })}

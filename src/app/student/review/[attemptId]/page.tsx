@@ -3,7 +3,8 @@
 import { useEffect, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
-import { Attempt, Exam } from "@/types/omr";
+import { BookOpen, ChevronDown, ChevronUp } from "lucide-react";
+import { Attempt, Exam, gradeAttempt } from "@/types/omr";
 
 export default function ReviewPage() {
     const params = useParams();
@@ -13,6 +14,7 @@ export default function ReviewPage() {
     const [attempt, setAttempt] = useState<Attempt | null>(null);
     const [exam, setExam] = useState<Exam | null>(null);
     const [filterWrong, setFilterWrong] = useState(false);
+    const [openExplanations, setOpenExplanations] = useState<Record<number, boolean>>({});
 
     useEffect(() => {
         if (id) {
@@ -25,7 +27,6 @@ export default function ReviewPage() {
                     // eslint-disable-next-line react-hooks/set-state-in-effect
                     setAttempt(found);
                     // Load Exam Data associated with this attempt
-                    // Note: In real app, we fetch by examId. Here we rely on the exam saving key convention.
                     const examDataStr = localStorage.getItem(`omr_exam_${found.examId}`);
                     if (examDataStr) {
                         setExam(JSON.parse(examDataStr));
@@ -39,9 +40,18 @@ export default function ReviewPage() {
         return <div style={{ padding: '2rem', textAlign: 'center' }}>Loading...</div>;
     }
 
+    const stats = gradeAttempt(exam.questions, attempt.answers);
+    const percentCorrect = stats.totalScore > 0
+        ? Math.round((stats.earnedScore / stats.totalScore) * 100)
+        : 0;
+
     const filteredQuestions = filterWrong
         ? exam.questions.filter(q => q.answer && attempt.answers[q.id] !== q.answer)
         : exam.questions;
+
+    const toggleExplanation = (qId: number) => {
+        setOpenExplanations(prev => ({ ...prev, [qId]: !prev[qId] }));
+    };
 
     return (
         <div className="layout-main" style={{ minHeight: '100vh', background: '#f8fafc' }}>
@@ -59,15 +69,50 @@ export default function ReviewPage() {
 
             <main className="container" style={{ padding: '2rem 1rem', maxWidth: '800px', margin: '0 auto' }}>
                 {/* Score Card */}
-                <div style={{ background: 'white', padding: '2rem', borderRadius: '16px', boxShadow: '0 4px 6px -1px rgba(0,0,0,0.1)', textAlign: 'center', marginBottom: '2rem' }}>
+                <div style={{ background: 'white', padding: '2rem', borderRadius: '16px', boxShadow: '0 4px 6px -1px rgba(0,0,0,0.1)', textAlign: 'center', marginBottom: '1.25rem' }}>
                     <h1 style={{ fontSize: '1.5rem', marginBottom: '0.5rem', fontWeight: 700 }}>{attempt.examTitle}</h1>
                     <div style={{ fontSize: '3.5rem', fontWeight: 800, color: 'var(--primary)', lineHeight: 1 }}>
-                        {attempt.score}
-                        <span style={{ fontSize: '1.5rem', color: '#94a3b8', fontWeight: 500 }}> / {attempt.totalScore}</span>
+                        {percentCorrect}
+                        <span style={{ fontSize: '1.5rem', color: '#94a3b8', fontWeight: 500 }}>%</span>
+                    </div>
+                    <div style={{ fontSize: '1rem', color: '#475569', marginTop: '0.4rem', fontWeight: 600 }}>
+                        {stats.earnedScore} / {stats.totalScore} 점
                     </div>
                     <p style={{ color: '#64748b', marginTop: '0.5rem' }}>
                         {new Date(attempt.finishedAt).toLocaleString()} 응시 완료
                     </p>
+                </div>
+
+                {/* Stat Row */}
+                <div style={{
+                    display: 'grid',
+                    gridTemplateColumns: 'repeat(3, 1fr)',
+                    gap: '0.75rem',
+                    marginBottom: '1.5rem',
+                }}>
+                    <div style={{ background: 'white', padding: '1rem', borderRadius: '12px', border: '1px solid #e2e8f0', textAlign: 'center' }}>
+                        <div style={{ fontSize: '0.75rem', color: '#64748b', fontWeight: 600, marginBottom: '0.25rem' }}>정답</div>
+                        <div style={{ fontSize: '1.5rem', fontWeight: 800, color: 'var(--success, #16a34a)' }}>{stats.correctCount}</div>
+                    </div>
+                    <div style={{ background: 'white', padding: '1rem', borderRadius: '12px', border: '1px solid #e2e8f0', textAlign: 'center' }}>
+                        <div style={{ fontSize: '0.75rem', color: '#64748b', fontWeight: 600, marginBottom: '0.25rem' }}>오답</div>
+                        <div style={{ fontSize: '1.5rem', fontWeight: 800, color: 'var(--error, #dc2626)' }}>{stats.incorrectCount}</div>
+                    </div>
+                    <div style={{ background: 'white', padding: '1rem', borderRadius: '12px', border: '1px solid #e2e8f0', textAlign: 'center' }}>
+                        <div style={{ fontSize: '0.75rem', color: '#64748b', fontWeight: 600, marginBottom: '0.25rem' }}>미응답</div>
+                        <div style={{ fontSize: '1.5rem', fontWeight: 800, color: '#94a3b8' }}>{stats.unansweredCount}</div>
+                    </div>
+                </div>
+
+                {/* Action: retake */}
+                <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: '1rem' }}>
+                    <Link
+                        href={`/solve/${attempt.examId}`}
+                        className="btn btn-primary"
+                        style={{ fontSize: '0.9rem' }}
+                    >
+                        시험 다시 보기
+                    </Link>
                 </div>
 
                 {/* Filters */}
@@ -84,7 +129,7 @@ export default function ReviewPage() {
                         className={`btn ${filterWrong ? 'btn-primary' : 'btn-secondary'}`}
                         style={{ borderRadius: '999px', background: filterWrong ? '#ef4444' : undefined, color: filterWrong ? 'white' : undefined }}
                     >
-                        🚨 오답만 보기 ({attempt.totalScore - attempt.score})
+                        오답만 보기 ({stats.incorrectCount + stats.unansweredCount})
                     </button>
                 </div>
 
@@ -93,7 +138,8 @@ export default function ReviewPage() {
                     {filteredQuestions.map((q) => {
                         const userAns = attempt.answers[q.id];
                         const isCorrect = userAns === q.answer;
-                        const isSkipped = userAns === undefined;
+                        const isSkipped = userAns === undefined || userAns === null || userAns === 0;
+                        const explanationOpen = !!openExplanations[q.id];
 
                         return (
                             <div key={q.id} style={{
@@ -109,21 +155,29 @@ export default function ReviewPage() {
                                         fontWeight: 600, fontSize: '0.9rem',
                                         color: isCorrect ? '#16a34a' : '#dc2626'
                                     }}>
-                                        {isCorrect ? "✅ 정답" : "❌ 오답"}
+                                        {isCorrect ? "정답" : isSkipped ? "미응답" : "오답"}
                                     </span>
                                 </div>
 
-                                <div style={{ display: 'flex', gap: '2rem', fontSize: '0.95rem' }}>
-                                    <div>
-                                        <span style={{ color: '#64748b', marginRight: '0.5rem' }}>내가 쓴 답:</span>
-                                        <span style={{ fontWeight: 700, color: isCorrect ? '#0f172a' : '#ef4444' }}>
-                                            {isSkipped ? '(미응답)' : userAns}
-                                        </span>
-                                    </div>
-                                    {!isCorrect && q.answer && (
+                                <div style={{ fontSize: '0.95rem', color: '#334155' }}>
+                                    {isCorrect ? (
                                         <div>
-                                            <span style={{ color: '#64748b', marginRight: '0.5rem' }}>정답:</span>
-                                            <span style={{ fontWeight: 700, color: '#16a34a' }}>{q.answer}</span>
+                                            <span style={{ color: '#64748b', marginRight: '0.5rem' }}>내 답:</span>
+                                            <span style={{ fontWeight: 700, color: '#0f172a' }}>{userAns}번</span>
+                                        </div>
+                                    ) : (
+                                        <div>
+                                            <span style={{ color: '#64748b', marginRight: '0.5rem' }}>내 답:</span>
+                                            <span style={{ fontWeight: 700, color: '#ef4444' }}>
+                                                {isSkipped ? '(미응답)' : `${userAns}번`}
+                                            </span>
+                                            {q.answer !== undefined && (
+                                                <>
+                                                    <span style={{ color: '#94a3b8', margin: '0 0.5rem' }}>·</span>
+                                                    <span style={{ color: '#64748b', marginRight: '0.5rem' }}>정답:</span>
+                                                    <span style={{ fontWeight: 700, color: '#16a34a' }}>{q.answer}번</span>
+                                                </>
+                                            )}
                                         </div>
                                     )}
                                 </div>
@@ -135,6 +189,36 @@ export default function ReviewPage() {
                                         </span>
                                     </div>
                                 )}
+
+                                {q.explanation && (
+                                    <div style={{ marginTop: '1rem', borderTop: '1px dashed #e2e8f0', paddingTop: '0.85rem' }}>
+                                        <button
+                                            type="button"
+                                            onClick={() => toggleExplanation(q.id)}
+                                            style={{
+                                                display: 'inline-flex', alignItems: 'center', gap: '0.4rem',
+                                                background: 'transparent', border: 'none', cursor: 'pointer',
+                                                padding: 0, color: 'var(--primary, #4f46e5)', fontWeight: 600,
+                                                fontSize: '0.9rem',
+                                            }}
+                                            aria-expanded={explanationOpen}
+                                        >
+                                            <BookOpen size={16} />
+                                            해설 보기
+                                            {explanationOpen ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
+                                        </button>
+                                        {explanationOpen && (
+                                            <div style={{
+                                                marginTop: '0.6rem', padding: '0.9rem 1rem',
+                                                background: '#f8fafc', border: '1px solid #e2e8f0',
+                                                borderRadius: '8px', color: '#334155',
+                                                fontSize: '0.9rem', lineHeight: 1.6, whiteSpace: 'pre-wrap',
+                                            }}>
+                                                {q.explanation}
+                                            </div>
+                                        )}
+                                    </div>
+                                )}
                             </div>
                         );
                     })}
@@ -142,7 +226,7 @@ export default function ReviewPage() {
 
                 {filterWrong && filteredQuestions.length === 0 && (
                     <div style={{ textAlign: 'center', padding: '3rem', color: '#64748b' }}>
-                        🎉 틀린 문제가 없습니다!
+                        틀린 문제가 없습니다!
                     </div>
                 )}
             </main>

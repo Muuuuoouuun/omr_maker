@@ -2,8 +2,24 @@
 
 import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
-import { Group } from "@/types/omr";
+import { Attempt, Group } from "@/types/omr";
 import ThemeToggle from "@/components/ThemeToggle";
+import { toast } from "@/components/Toast";
+
+// Stable identifier for a (name, group) pair.
+function studentIdFor(name: string, groupId: string) {
+    return `${groupId}::${name.trim()}`;
+}
+
+// 6-char alphanumeric code — avoids ambiguous chars (0/O, 1/I).
+function generateStartCode(): string {
+    const alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+    let out = "";
+    for (let i = 0; i < 6; i++) {
+        out += alphabet[Math.floor(Math.random() * alphabet.length)];
+    }
+    return out;
+}
 
 /* ─── SVG Icons ──────────────────────────────────────── */
 
@@ -68,11 +84,31 @@ export default function Home() {
   const [groups, setGroups] = useState<Group[]>([]);
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
+  // Anti-spoof: require a start-code for returning students.
+  const [startCode, setStartCode] = useState("");
+  const [needsCode, setNeedsCode] = useState(false);
 
   useEffect(() => {
     const stored = localStorage.getItem("omr_groups");
     if (stored) setGroups(JSON.parse(stored));
   }, []);
+
+  // Surface the start-code field proactively for returning students.
+  useEffect(() => {
+    if (role !== "student" || !studentName.trim() || !selectedGroupId) {
+      setNeedsCode(false);
+      return;
+    }
+    try {
+      const raw = localStorage.getItem("omr_student_codes");
+      if (!raw) return setNeedsCode(false);
+      const codes: Record<string, string> = JSON.parse(raw);
+      const sid = studentIdFor(studentName, selectedGroupId);
+      setNeedsCode(!!codes[sid]);
+    } catch {
+      setNeedsCode(false);
+    }
+  }, [role, studentName, selectedGroupId]);
 
   const handleTeacherLogin = () => {
     if (password === "admin123") {
@@ -90,7 +126,57 @@ export default function Home() {
       return;
     }
     const group = groups.find((g) => g.id === selectedGroupId);
-    const session = { name: studentName, groupId: selectedGroupId, groupName: group?.name || "Unknown" };
+    const sid = studentIdFor(studentName, selectedGroupId);
+
+    // Load existing start-code registry + attempts to decide anti-spoof path.
+    let codes: Record<string, string> = {};
+    try {
+      const raw = localStorage.getItem("omr_student_codes");
+      if (raw) codes = JSON.parse(raw);
+    } catch { /* ignore */ }
+
+    let attempts: Attempt[] = [];
+    try {
+      const raw = localStorage.getItem("omr_attempts");
+      if (raw) attempts = JSON.parse(raw);
+    } catch { /* ignore */ }
+
+    const hasPriorAttempt = attempts.some(a => a.studentId === sid
+      || (a.studentName === studentName.trim() && !a.guestId));
+    const storedCode = codes[sid];
+
+    // CASE 1: returning student — must enter their start code.
+    if (storedCode && hasPriorAttempt) {
+      if (!startCode.trim()) {
+        setNeedsCode(true);
+        setError("이미 등록된 학생입니다. 시작 코드를 입력해주세요.");
+        setTimeout(() => setError(""), 2500);
+        return;
+      }
+      if (startCode.trim().toUpperCase() !== storedCode) {
+        setError("시작 코드가 일치하지 않습니다.");
+        setTimeout(() => setError(""), 2500);
+        return;
+      }
+    } else if (!storedCode) {
+      // CASE 2: brand-new student — mint + show their code.
+      const fresh = generateStartCode();
+      codes[sid] = fresh;
+      try {
+        localStorage.setItem("omr_student_codes", JSON.stringify(codes));
+      } catch { /* ignore quota */ }
+      toast.success(
+        "시작 코드 발급",
+        `다음 로그인 시 이 코드를 입력하세요: ${fresh}`
+      );
+    }
+
+    const session = {
+      name: studentName.trim(),
+      studentId: sid,
+      groupId: selectedGroupId,
+      groupName: group?.name || "Unknown",
+    };
     sessionStorage.setItem("omr_student_session", JSON.stringify(session));
     router.push("/student/dashboard");
   };
@@ -109,6 +195,8 @@ export default function Home() {
     setPassword("");
     setStudentName("");
     setSelectedGroupId("");
+    setStartCode("");
+    setNeedsCode(false);
   };
 
   return (
@@ -504,6 +592,37 @@ export default function Home() {
                     </p>
                   )}
                 </div>
+
+                {needsCode && (
+                  <div style={{ marginBottom: "1.75rem" }}>
+                    <label
+                      style={{
+                        display: "block",
+                        marginBottom: "0.55rem",
+                        fontSize: "0.75rem",
+                        fontWeight: 700,
+                        color: "var(--muted)",
+                        textTransform: "uppercase",
+                        letterSpacing: "0.07em",
+                      }}
+                    >
+                      시작 코드
+                    </label>
+                    <input
+                      type="text"
+                      className="input-field"
+                      value={startCode}
+                      onChange={(e) => setStartCode(e.target.value.toUpperCase())}
+                      onKeyDown={(e) => e.key === "Enter" && handleStudentLogin()}
+                      placeholder="6자리 코드 입력"
+                      maxLength={6}
+                      style={{ letterSpacing: "0.25em", fontFamily: "monospace", textTransform: "uppercase" }}
+                    />
+                    <p style={{ fontSize: "0.75rem", color: "var(--muted)", marginTop: "0.45rem", opacity: 0.85 }}>
+                      이미 등록된 학생입니다. 처음 로그인 시 발급받은 코드를 입력해주세요.
+                    </p>
+                  </div>
+                )}
 
                 <button
                   onClick={handleStudentLogin}

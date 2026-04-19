@@ -2,6 +2,7 @@
 
 import { useState, useEffect } from 'react';
 import { QRCodeCanvas } from 'qrcode.react';
+import { Lock } from 'lucide-react';
 import { Group } from '@/types/omr';
 
 interface DistributeModalProps {
@@ -17,6 +18,7 @@ export default function DistributeModal({ isOpen, onClose, onSaveAndShare }: Dis
     const [groups, setGroups] = useState<Group[]>([]);
     const [shareUrl, setShareUrl] = useState<string | null>(null);
     const [isSaving, setIsSaving] = useState(false);
+    const [pin, setPin] = useState("");
 
     useEffect(() => {
         if (isOpen) {
@@ -29,6 +31,7 @@ export default function DistributeModal({ isOpen, onClose, onSaveAndShare }: Dis
             setAccessType('public');
             setSelectedGroups([]);
             setIsSaving(false);
+            setPin("");
         }
     }, [isOpen]);
 
@@ -40,9 +43,15 @@ export default function DistributeModal({ isOpen, onClose, onSaveAndShare }: Dis
             return;
         }
 
+        if (accessType === 'public' && pin && !/^\d{4,6}$/.test(pin)) {
+            alert("PIN은 4~6자리 숫자여야 합니다.");
+            return;
+        }
+
         const config = {
             type: accessType,
-            groupIds: accessType === 'group' ? selectedGroups : undefined
+            groupIds: accessType === 'group' ? selectedGroups : undefined,
+            pin: accessType === 'public' && pin ? pin : undefined,
         };
 
         setIsSaving(true);
@@ -108,6 +117,36 @@ export default function DistributeModal({ isOpen, onClose, onSaveAndShare }: Dis
                                     </label>
                                 </div>
                             </div>
+
+                            {accessType === 'public' && (
+                                <div style={{ marginBottom: '1.5rem' }}>
+                                    <label htmlFor="distribute-pin" style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', marginBottom: '0.5rem', fontWeight: 600 }}>
+                                        <Lock size={14} />
+                                        PIN (선택)
+                                    </label>
+                                    <input
+                                        id="distribute-pin"
+                                        type="text"
+                                        inputMode="numeric"
+                                        pattern="[0-9]{4,6}"
+                                        maxLength={6}
+                                        placeholder="예: 1234 (4~6자리 숫자)"
+                                        value={pin}
+                                        onChange={(e) => setPin(e.target.value.replace(/\D/g, '').slice(0, 6))}
+                                        style={{
+                                            width: '100%',
+                                            padding: '0.6rem 0.8rem',
+                                            borderRadius: '6px',
+                                            border: '1px solid #e5e7eb',
+                                            fontSize: '0.95rem',
+                                            letterSpacing: '2px',
+                                        }}
+                                    />
+                                    <p style={{ fontSize: '0.8rem', color: '#666', marginTop: '0.4rem' }}>
+                                        응시자가 PIN을 입력해야 시험에 접근할 수 있습니다.
+                                    </p>
+                                </div>
+                            )}
 
                             {accessType === 'group' && (
                                 <div style={{ marginBottom: '1.5rem', background: '#f8fafc', padding: '1rem', borderRadius: '8px' }}>

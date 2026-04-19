@@ -140,8 +140,11 @@ test.describe("Global Search", () => {
 
     // Search lives inside TeacherHeader, which is rendered on the 4 subpages
     // (live/users/settings/billing) — not on /teacher/dashboard.
+    // Wait for the header search trigger to appear as a proxy for TeacherHeader
+    // (and therefore GlobalSearch) being fully hydrated before pressing Cmd+K.
     test("Cmd+K opens modal and Escape closes", async ({ page }) => {
         await page.goto("/teacher/live");
+        await expect(page.getByRole("button", { name: "빠른 검색" })).toBeVisible();
         await page.keyboard.press("ControlOrMeta+K");
         await expect(page.getByPlaceholder(/빠른 검색/)).toBeVisible();
         await page.keyboard.press("Escape");
@@ -150,6 +153,7 @@ test.describe("Global Search", () => {
 
     test("typing filters results and Enter navigates", async ({ page }) => {
         await page.goto("/teacher/live");
+        await expect(page.getByRole("button", { name: "빠른 검색" })).toBeVisible();
         await page.keyboard.press("ControlOrMeta+K");
         await page.getByPlaceholder(/빠른 검색/).fill("결제");
         await expect(page.getByText("결제 및 플랜").first()).toBeVisible();

@@ -3,6 +3,7 @@
 import { useState, useEffect, useMemo, useCallback } from "react";
 import TeacherHeader from "@/components/TeacherHeader";
 import { Activity, Users, CheckCircle2, Clock, AlertTriangle, Bell, PlayCircle, PauseCircle } from "lucide-react";
+import { toast } from "@/components/Toast";
 import type { Exam, Attempt } from "@/types/omr";
 
 type StudentStatus = "submitted" | "in_progress" | "not_started";
@@ -314,6 +315,44 @@ export default function LiveResultsPage() {
     const mm = Math.floor(timerSeconds / 60).toString().padStart(2, "0");
     const ss = (timerSeconds % 60).toString().padStart(2, "0");
 
+    // Handlers for timer-bar actions
+    const handleExtendTime = () => {
+        setTimerSeconds(s => s + 300);
+        toast.success("시간 5분 연장됨");
+    };
+
+    const handleForceFinish = () => {
+        if (typeof window === "undefined") return;
+        const ok = window.confirm("모든 학생의 시험을 지금 종료하시겠습니까?");
+        if (!ok) return;
+        setSyntheticByExam(prev => {
+            const list = prev[exam.id];
+            if (!list) return prev;
+            const totalQ = exam.total || 20;
+            const next = list.map(s => {
+                if (s.status === "submitted") return s;
+                const progress = s.progress;
+                const score = Math.max(0, Math.round((progress / 100) * 100));
+                return {
+                    ...s,
+                    status: "submitted" as const,
+                    progress,
+                    currentQ: Math.max(s.currentQ, Math.ceil((progress / 100) * totalQ)),
+                    score,
+                };
+            });
+            return { ...prev, [exam.id]: next };
+        });
+        setTimerSeconds(0);
+        setIsPaused(true);
+        toast.success("시험 강제 종료됨");
+    };
+
+    const handleNotifyNotStarted = () => {
+        const n = counts.notStarted;
+        toast.success(`${n}명에게 독려 알림을 발송했습니다`);
+    };
+
     return (
         <div className="layout-main">
             <div className="orb orb-primary" />
@@ -382,7 +421,7 @@ export default function LiveResultsPage() {
                                 {isPaused ? <PlayCircle size={18} /> : <PauseCircle size={18} />}
                                 {isPaused ? '재개' : '일시정지'}
                             </button>
-                            <button style={{
+                            <button onClick={handleExtendTime} style={{
                                 background: 'rgba(255,255,255,0.18)', color: 'white', padding: '0.75rem 1.25rem',
                                 borderRadius: 'var(--radius-full)', fontSize: '0.9rem', fontWeight: 700,
                                 display: 'flex', alignItems: 'center', gap: '0.5rem',
@@ -390,7 +429,7 @@ export default function LiveResultsPage() {
                             }}>
                                 <Clock size={18} /> +5분 연장
                             </button>
-                            <button style={{
+                            <button onClick={handleForceFinish} style={{
                                 background: 'white', color: '#ef4444', padding: '0.75rem 1.25rem',
                                 borderRadius: 'var(--radius-full)', fontSize: '0.9rem', fontWeight: 700,
                                 display: 'flex', alignItems: 'center', gap: '0.5rem',
@@ -416,7 +455,7 @@ export default function LiveResultsPage() {
                     <div className="bento-card" style={{ padding: '1.5rem' }}>
                         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.25rem' }}>
                             <h3 style={{ fontSize: '1.1rem', fontWeight: 700 }}>학생별 실시간 현황</h3>
-                            <button style={{
+                            <button onClick={handleNotifyNotStarted} style={{
                                 background: 'rgba(239,68,68,0.1)', color: '#ef4444', padding: '0.5rem 1rem',
                                 borderRadius: 'var(--radius-full)', fontSize: '0.8rem', fontWeight: 700,
                                 display: 'flex', alignItems: 'center', gap: '0.4rem', border: '1px solid rgba(239,68,68,0.2)'
