@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { Suspense, useEffect, useState } from "react";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { Exam, Attempt } from "@/types/omr";
@@ -12,7 +12,17 @@ import ThemeToggle from "@/components/ThemeToggle";
 
 type TabType = 'overview' | 'exam' | 'student';
 
-export default function TeacherDashboard() {
+// Wrap the inner component so useSearchParams is inside a Suspense boundary
+// (required by Next 16 to avoid deopting the whole page to client-only rendering).
+export default function TeacherDashboardPage() {
+    return (
+        <Suspense fallback={<div style={{ minHeight: '100vh' }} />}>
+            <TeacherDashboard />
+        </Suspense>
+    );
+}
+
+function TeacherDashboard() {
     const searchParams = useSearchParams();
     const initialTab = (searchParams.get('tab') as TabType) || 'overview';
     const [activeTab, setActiveTab] = useState<TabType>(

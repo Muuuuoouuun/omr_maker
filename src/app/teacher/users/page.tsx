@@ -486,6 +486,7 @@ export default function ManageUsersPage() {
                                         <th style={{ padding: '0.85rem 0.5rem', width: 32 }}>
                                             <input
                                                 type="checkbox"
+                                                aria-label="전체 학생 선택 토글"
                                                 checked={filtered.length > 0 && filtered.every(s => selectedIds.has(s.id))}
                                                 ref={el => { if (el) el.indeterminate = filtered.some(s => selectedIds.has(s.id)) && !filtered.every(s => selectedIds.has(s.id)); }}
                                                 onChange={() => toggleSelectAll(filtered.map(s => s.id))}
@@ -512,6 +513,7 @@ export default function ManageUsersPage() {
                                             <td style={{ padding: '0.85rem 0.5rem' }} onClick={(e) => e.stopPropagation()}>
                                                 <input
                                                     type="checkbox"
+                                                    aria-label={`${s.name} 선택`}
                                                     checked={selectedIds.has(s.id)}
                                                     onChange={() => toggleSelect(s.id)}
                                                     style={{ cursor: 'pointer', accentColor: 'var(--primary)' }}
@@ -543,6 +545,7 @@ export default function ManageUsersPage() {
                                             </td>
                                             <td style={{ padding: '0.85rem 0.5rem', textAlign: 'right', position: 'relative' }}>
                                                 <button
+                                                    aria-label={`${s.name} 작업 메뉴 열기`}
                                                     onClick={(e) => {
                                                         e.stopPropagation();
                                                         setPopoverId(popoverId === s.id ? null : s.id);
@@ -585,8 +588,46 @@ export default function ManageUsersPage() {
                                 </tbody>
                             </table>
                             {hydrated && filtered.length === 0 && (
-                                <div style={{ padding: '2rem', textAlign: 'center', color: 'var(--muted)', fontSize: '0.9rem' }}>
-                                    표시할 학생이 없습니다.
+                                <div style={{ padding: '3rem 2rem', textAlign: 'center' }}>
+                                    <div style={{
+                                        width: 64, height: 64, borderRadius: '50%',
+                                        background: 'rgba(99,102,241,0.08)',
+                                        display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+                                        color: 'var(--primary)', marginBottom: '1rem'
+                                    }}>
+                                        <Users size={28} />
+                                    </div>
+                                    <div style={{ fontSize: '1rem', fontWeight: 700, marginBottom: '0.35rem' }}>
+                                        {students.length === 0 ? '아직 등록된 학생이 없습니다' : '검색 결과가 없습니다'}
+                                    </div>
+                                    <div style={{ fontSize: '0.85rem', color: 'var(--muted)', marginBottom: '1.25rem' }}>
+                                        {students.length === 0
+                                            ? '학생을 초대하거나 CSV로 업로드해서 시작하세요.'
+                                            : '다른 키워드로 검색해보세요.'}
+                                    </div>
+                                    {students.length === 0 && (
+                                        <div style={{ display: 'inline-flex', gap: '0.5rem' }}>
+                                            <button
+                                                onClick={() => { setEditingStudent(null); setShowStudentModal(true); }}
+                                                style={{
+                                                    padding: '0.55rem 1.1rem', background: 'linear-gradient(135deg, #22c55e, #10b981)',
+                                                    color: 'white', borderRadius: 'var(--radius-md)', fontWeight: 600, fontSize: '0.85rem',
+                                                    display: 'flex', alignItems: 'center', gap: '0.4rem'
+                                                }}>
+                                                <UserPlus size={14} /> 학생 초대
+                                            </button>
+                                            <button
+                                                onClick={() => fileInputRef.current?.click()}
+                                                style={{
+                                                    padding: '0.55rem 1.1rem', background: 'var(--surface)',
+                                                    border: '1px solid var(--border)',
+                                                    borderRadius: 'var(--radius-md)', fontWeight: 600, fontSize: '0.85rem',
+                                                    display: 'flex', alignItems: 'center', gap: '0.4rem'
+                                                }}>
+                                                <Upload size={14} /> CSV 업로드
+                                            </button>
+                                        </div>
+                                    )}
                                 </div>
                             )}
                         </div>

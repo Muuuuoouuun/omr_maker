@@ -277,26 +277,39 @@ export default function LiveResultsPage() {
         ? Math.round(submittedStudents.reduce((a, s) => a + (s.score || 0), 0) / submittedStudents.length)
         : 0;
 
-    // Question heatmap (real accuracy per question from submitted attempts)
+    // Question heatmap:
+    // - If we have real submitted attempts with answer data, derive accuracy from them.
+    // - Otherwise, simulate realistic per-question accuracy from the count of submitted
+    //   (real + synthetic) students, with a deterministic per-question baseline so the
+    //   heatmap "stabilizes" as more students submit instead of jumping randomly.
     const heatmap = useMemo(() => {
         const questions = exam.questions ?? [];
-        const submittedAttempts = examAttempts.filter(a => a.status === "completed");
-        const total = submittedAttempts.length;
-        // If no real questions metadata, fall back to exam.total with zeros
+        const submittedReal = examAttempts.filter(a => a.status === "completed");
+        const submittedAll = students.filter(s => s.status === "submitted");
+        const totalReal = submittedReal.length;
+        const totalAll = submittedAll.length;
         const qList = questions.length > 0
             ? questions
             : Array.from({ length: exam.total || 20 }, (_, i) => ({ id: i + 1, answer: undefined as number | undefined }));
+
         return qList.map((q, i) => {
-            let correct = 0;
-            if (total > 0 && q.answer !== undefined && q.answer !== null) {
-                for (const a of submittedAttempts) {
+            // Path 1: real attempts with known correct answers
+            if (totalReal > 0 && q.answer !== undefined && q.answer !== null) {
+                let correct = 0;
+                for (const a of submittedReal) {
                     const selected = a.answers ? a.answers[q.id] : undefined;
                     if (selected !== undefined && selected === q.answer) correct++;
                 }
+                return { q: i + 1, correct, total: totalReal };
             }
-            return { q: i + 1, correct, total: total || 1 };
+
+            // Path 2: synthetic — deterministic baseline per question (35%..90%)
+            const seed = hashString(`${exam.id}:${i + 1}`);
+            const baseline = 35 + (seed % 56); // 35..90
+            const correct = Math.round((baseline / 100) * Math.max(totalAll, 1));
+            return { q: i + 1, correct, total: Math.max(totalAll, 1) };
         });
-    }, [examAttempts, exam.questions, exam.total]);
+    }, [examAttempts, exam.questions, exam.total, exam.id, students]);
 
     const mm = Math.floor(timerSeconds / 60).toString().padStart(2, "0");
     const ss = (timerSeconds % 60).toString().padStart(2, "0");

@@ -373,6 +373,7 @@ th { background: #f8fafc; font-size: 12px; color: #64748b; text-transform: upper
                                         <button
                                             onClick={() => downloadInvoice(inv)}
                                             title="영수증 다운로드"
+                                            aria-label={`${inv.id} 영수증 다운로드`}
                                             style={{ color: 'var(--primary)', fontSize: '0.85rem', fontWeight: 600, display: 'inline-flex', alignItems: 'center', gap: '0.3rem', padding: '0.3rem 0.5rem', borderRadius: 'var(--radius-sm)' }}
                                             onMouseEnter={e => e.currentTarget.style.background = 'rgba(99,102,241,0.08)'}
                                             onMouseLeave={e => e.currentTarget.style.background = 'transparent'}

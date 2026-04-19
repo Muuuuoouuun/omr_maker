@@ -17,12 +17,18 @@ export const metadata: Metadata = {
   description: "Create and customize your OMR sheets easily.",
 };
 
-// Runs before React hydration to prevent flash of wrong theme
+// Runs before React hydration to prevent flash of wrong theme.
+// Handles "auto" by resolving from the user's OS preference at boot.
 const themeInitScript = `
 (function() {
   try {
     var saved = localStorage.getItem('omr_theme');
-    var theme = (saved === 'dark' || saved === 'light') ? saved : 'light';
+    var theme = 'light';
+    if (saved === 'dark' || saved === 'light') {
+      theme = saved;
+    } else if (saved === 'auto') {
+      theme = (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches) ? 'dark' : 'light';
+    }
     document.documentElement.setAttribute('data-theme', theme);
   } catch (e) {
     document.documentElement.setAttribute('data-theme', 'light');

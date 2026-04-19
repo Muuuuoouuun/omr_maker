@@ -9,7 +9,9 @@ export default function ThemeToggle({ size = "default" }: { size?: "small" | "de
   const [mounted, setMounted] = useState(false);
 
   useEffect(() => {
-    // Read current theme from DOM (set by inline script in layout)
+    // Read current theme from DOM (set by inline script in layout).
+    // Note: the inline script has already resolved 'auto' to a concrete 'light'/'dark'
+    // before we run here, so this read is always a concrete theme.
     const current =
       (document.documentElement.getAttribute("data-theme") as Theme) || "light";
     setTheme(current);
@@ -21,6 +23,7 @@ export default function ThemeToggle({ size = "default" }: { size?: "small" | "de
     setTheme(next);
     document.documentElement.setAttribute("data-theme", next);
     try {
+      // Toggling explicitly commits to light/dark, overriding any prior 'auto'.
       localStorage.setItem("omr_theme", next);
     } catch {
       /* ignore */
