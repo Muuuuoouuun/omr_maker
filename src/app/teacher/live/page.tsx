@@ -164,6 +164,8 @@ export default function LiveResultsPage() {
     const [, setTick] = useState(0);
     const [timerSeconds, setTimerSeconds] = useState(38 * 60 + 24);
     const [isPaused, setIsPaused] = useState(false);
+    // Synthetic students per exam — mutable state so they can "progress" over time
+    const [syntheticByExam, setSyntheticByExam] = useState<Record<string, LiveStudent[]>>({});
 
     const refreshFromStorage = useCallback(() => {
         const loaded = loadExamsFromStorage();
@@ -197,17 +199,65 @@ export default function LiveResultsPage() {
         [attempts, exam.id]
     );
 
+    // Initialize synthetic students for this exam if not yet seeded
+    useEffect(() => {
+        setSyntheticByExam(prev => {
+            if (prev[exam.id]) return prev;
+            const real = examAttempts.map(a => attemptToStudent(a, exam.total));
+            const needed = Math.max(MIN_STUDENT_CARDS - real.length, 0);
+            if (needed === 0) return prev;
+            return { ...prev, [exam.id]: genSyntheticStudents(needed, exam.total || 20, real.length) };
+        });
+    }, [exam.id, exam.total, examAttempts]);
+
+    // Advance synthetic students every 3s when not paused — makes "Live" feel live
+    useEffect(() => {
+        if (isPaused) return;
+        const id = setInterval(() => {
+            setSyntheticByExam(prev => {
+                const list = prev[exam.id];
+                if (!list || list.length === 0) return prev;
+                const totalQ = exam.total || 20;
+                const next = list.map(s => {
+                    if (s.status === "in_progress" && Math.random() < 0.45) {
+                        const inc = Math.floor(5 + Math.random() * 12);
+                        const newProgress = Math.min(100, s.progress + inc);
+                        const newQ = Math.max(s.currentQ, Math.ceil((newProgress / 100) * totalQ));
+                        if (newProgress >= 100) {
+                            return {
+                                ...s,
+                                status: "submitted" as const,
+                                progress: 100,
+                                currentQ: totalQ,
+                                score: Math.round(50 + Math.random() * 50),
+                            };
+                        }
+                        return { ...s, progress: newProgress, currentQ: newQ };
+                    }
+                    if (s.status === "not_started" && Math.random() < 0.18) {
+                        return {
+                            ...s,
+                            status: "in_progress" as const,
+                            progress: Math.floor(5 + Math.random() * 15),
+                            currentQ: 1,
+                            startedAt: new Date().toISOString(),
+                        };
+                    }
+                    return s;
+                });
+                return { ...prev, [exam.id]: next };
+            });
+        }, 3000);
+        return () => clearInterval(id);
+    }, [exam.id, exam.total, isPaused]);
+
     const students = useMemo<LiveStudent[]>(() => {
         const totalQ = exam.total;
         const real = examAttempts.map(a => attemptToStudent(a, totalQ));
         if (real.length >= MIN_STUDENT_CARDS) return real;
-        const synthetic = genSyntheticStudents(
-            Math.max(MIN_STUDENT_CARDS - real.length, 0),
-            totalQ || 20,
-            real.length
-        );
+        const synthetic = syntheticByExam[exam.id] ?? [];
         return [...real, ...synthetic];
-    }, [examAttempts, exam.id, exam.total]);
+    }, [examAttempts, exam.id, exam.total, syntheticByExam]);
 
     useEffect(() => {
         const id = setInterval(() => {

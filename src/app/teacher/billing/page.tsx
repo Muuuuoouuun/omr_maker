@@ -122,6 +122,63 @@ export default function BillingPage() {
         }
     };
 
+    const downloadInvoice = (inv: typeof MOCK_INVOICES[number]) => {
+        const html = `<!doctype html>
+<html lang="ko"><head><meta charset="utf-8"><title>${inv.id}</title>
+<style>
+body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; max-width: 640px; margin: 40px auto; padding: 0 24px; color: #0f172a; }
+.header { display: flex; justify-content: space-between; align-items: start; border-bottom: 2px solid #4f46e5; padding-bottom: 20px; margin-bottom: 24px; }
+.brand { font-size: 28px; font-weight: 800; background: linear-gradient(135deg, #4f46e5, #ec4899); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
+.meta { text-align: right; color: #64748b; font-size: 13px; line-height: 1.6; }
+h1 { font-size: 22px; margin: 0 0 4px; }
+.id { font-family: monospace; color: #64748b; font-size: 13px; }
+table { width: 100%; border-collapse: collapse; margin: 24px 0; }
+th, td { padding: 12px 8px; text-align: left; border-bottom: 1px solid #e2e8f0; }
+th { background: #f8fafc; font-size: 12px; color: #64748b; text-transform: uppercase; letter-spacing: 0.05em; }
+.total { font-size: 20px; font-weight: 800; color: #4f46e5; }
+.paid { display: inline-block; background: rgba(16,185,129,0.1); color: #10b981; padding: 4px 12px; border-radius: 999px; font-size: 11px; font-weight: 700; letter-spacing: 0.05em; }
+.footer { margin-top: 40px; padding-top: 20px; border-top: 1px solid #e2e8f0; font-size: 12px; color: #64748b; text-align: center; }
+</style></head><body>
+<div class="header">
+  <div>
+    <div class="brand">Classin</div>
+    <div style="color: #64748b; font-size: 13px; margin-top: 4px;">OMR Maker Platform</div>
+  </div>
+  <div class="meta">
+    <strong>Invoice</strong><br>
+    Date: ${inv.date}<br>
+    <span class="paid">PAID</span>
+  </div>
+</div>
+<h1>결제 영수증</h1>
+<div class="id">${inv.id}</div>
+<table>
+  <thead><tr><th>항목</th><th style="text-align: right;">금액</th></tr></thead>
+  <tbody>
+    <tr><td>${inv.desc}</td><td style="text-align: right; font-weight: 600;">₩${inv.amount.toLocaleString()}</td></tr>
+    <tr><td style="color: #64748b;">부가세 (10%)</td><td style="text-align: right; color: #64748b;">포함</td></tr>
+    <tr><td><strong>총 결제 금액</strong></td><td style="text-align: right;" class="total">₩${inv.amount.toLocaleString()}</td></tr>
+  </tbody>
+</table>
+<div class="footer">Classin — 문의: billing@classin.app · 이 영수증은 자동 생성되었습니다.</div>
+</body></html>`;
+        const blob = new Blob([html], { type: "text/html;charset=utf-8" });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = `${inv.id}.html`;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+    };
+
+    const downloadAllInvoices = () => {
+        MOCK_INVOICES.forEach((inv, i) => {
+            setTimeout(() => downloadInvoice(inv), i * 150);
+        });
+    };
+
     const handlePlanChange = (next: Plan) => {
         if (next === current) return;
         const nextPlan = PLANS.find(p => p.key === next);
@@ -287,7 +344,7 @@ export default function BillingPage() {
                             <h2 style={{ fontSize: '1.2rem', fontWeight: 700 }}>결제 내역</h2>
                             <p style={{ fontSize: '0.85rem', color: 'var(--muted)' }}>최근 12개월</p>
                         </div>
-                        <button style={{ padding: '0.55rem 1rem', background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 'var(--radius-md)', fontSize: '0.85rem', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+                        <button onClick={downloadAllInvoices} style={{ padding: '0.55rem 1rem', background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 'var(--radius-md)', fontSize: '0.85rem', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
                             <Download size={14} /> 전체 다운로드
                         </button>
                     </div>
@@ -313,7 +370,13 @@ export default function BillingPage() {
                                         <span style={{ background: 'rgba(16,185,129,0.1)', color: '#10b981', padding: '0.25rem 0.65rem', borderRadius: 'var(--radius-full)', fontSize: '0.72rem', fontWeight: 700 }}>결제 완료</span>
                                     </td>
                                     <td style={{ padding: '1rem 0.5rem', textAlign: 'right' }}>
-                                        <button style={{ color: 'var(--primary)', fontSize: '0.85rem', fontWeight: 600, display: 'inline-flex', alignItems: 'center', gap: '0.3rem' }}>
+                                        <button
+                                            onClick={() => downloadInvoice(inv)}
+                                            title="영수증 다운로드"
+                                            style={{ color: 'var(--primary)', fontSize: '0.85rem', fontWeight: 600, display: 'inline-flex', alignItems: 'center', gap: '0.3rem', padding: '0.3rem 0.5rem', borderRadius: 'var(--radius-sm)' }}
+                                            onMouseEnter={e => e.currentTarget.style.background = 'rgba(99,102,241,0.08)'}
+                                            onMouseLeave={e => e.currentTarget.style.background = 'transparent'}
+                                        >
                                             <Receipt size={14} />
                                         </button>
                                     </td>

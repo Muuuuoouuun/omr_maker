@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import TeacherHeader from "@/components/TeacherHeader";
-import { User, Bell, FileText, CheckCircle, Key, Palette, Shield, Copy, Eye, EyeOff, Save } from "lucide-react";
+import { User, Bell, FileText, CheckCircle, Key, Palette, Shield, Copy, Eye, EyeOff, Save, RotateCcw, Download, Upload } from "lucide-react";
 
 type Section = "profile" | "notifications" | "exam-defaults" | "grading" | "api" | "theme" | "security";
 
@@ -144,6 +144,56 @@ export default function SettingsPage() {
         setDraft(prev => ({ ...prev, [key]: persistedRef.current[key] }));
     }, []);
 
+    const importInputRef = useRef<HTMLInputElement | null>(null);
+
+    const resetAllToDefaults = useCallback(() => {
+        if (!window.confirm("모든 설정을 기본값으로 되돌리시겠습니까?")) return;
+        setDraft(DEFAULT_SETTINGS);
+        setPersisted(DEFAULT_SETTINGS);
+        draftRef.current = DEFAULT_SETTINGS;
+        persistedRef.current = DEFAULT_SETTINGS;
+        try {
+            window.localStorage.setItem(STORAGE_KEY, JSON.stringify(DEFAULT_SETTINGS));
+        } catch {
+            // ignore
+        }
+        applyTheme(DEFAULT_SETTINGS.theme);
+    }, []);
+
+    const handleExport = useCallback(() => {
+        const json = JSON.stringify(persistedRef.current, null, 2);
+        const blob = new Blob([json], { type: "application/json" });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = `omr-settings-${new Date().toISOString().slice(0, 10)}.json`;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+    }, []);
+
+    const handleImportFile = useCallback(async (file: File) => {
+        try {
+            const text = await file.text();
+            const parsed = JSON.parse(text) as Partial<Settings>;
+            const merged = mergeSettings(parsed);
+            setDraft(merged);
+            setPersisted(merged);
+            draftRef.current = merged;
+            persistedRef.current = merged;
+            try {
+                window.localStorage.setItem(STORAGE_KEY, JSON.stringify(merged));
+            } catch {
+                // ignore quota errors
+            }
+            applyTheme(merged.theme);
+            window.alert("설정을 가져왔습니다.");
+        } catch {
+            window.alert("설정 파일을 읽지 못했습니다.");
+        }
+    }, []);
+
     return (
         <div className="layout-main">
             <div className="orb orb-primary" />
@@ -187,6 +237,50 @@ export default function SettingsPage() {
                         {section === "api" && <ApiSection value={draft.api} onChange={v => updateSection("api", v)} onSave={() => saveSection("api")} onCancel={() => cancelSection("api")} showKey={showKey} setShowKey={setShowKey} />}
                         {section === "theme" && <ThemeSection value={draft.theme} onChange={v => updateSection("theme", v)} onSave={() => saveSection("theme")} onCancel={() => cancelSection("theme")} />}
                         {section === "security" && <SecuritySection value={draft.security} onChange={v => updateSection("security", v)} onSave={() => saveSection("security")} onCancel={() => cancelSection("security")} />}
+
+                        {/* Global settings actions */}
+                        <div className="bento-card" style={{ padding: '1.5rem', marginTop: '0.25rem', background: 'var(--background)', border: '1px dashed var(--border)' }}>
+                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '1rem' }}>
+                                <div>
+                                    <div style={{ fontSize: '0.9rem', fontWeight: 700, marginBottom: '0.25rem' }}>백업 · 복원</div>
+                                    <div style={{ fontSize: '0.8rem', color: 'var(--muted)' }}>전체 설정을 JSON으로 내보내거나, 다른 기기에서 불러올 수 있습니다.</div>
+                                </div>
+                                <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
+                                    <input
+                                        ref={importInputRef}
+                                        type="file"
+                                        accept="application/json,.json"
+                                        style={{ display: 'none' }}
+                                        onChange={(e) => {
+                                            const f = e.target.files?.[0];
+                                            if (f) handleImportFile(f);
+                                            if (importInputRef.current) importInputRef.current.value = "";
+                                        }}
+                                    />
+                                    <button onClick={handleExport} style={{
+                                        padding: '0.55rem 1rem', background: 'var(--surface)', border: '1px solid var(--border)',
+                                        borderRadius: 'var(--radius-md)', fontSize: '0.85rem', fontWeight: 600,
+                                        display: 'flex', alignItems: 'center', gap: '0.4rem', color: 'var(--foreground)'
+                                    }}>
+                                        <Download size={14} /> 내보내기
+                                    </button>
+                                    <button onClick={() => importInputRef.current?.click()} style={{
+                                        padding: '0.55rem 1rem', background: 'var(--surface)', border: '1px solid var(--border)',
+                                        borderRadius: 'var(--radius-md)', fontSize: '0.85rem', fontWeight: 600,
+                                        display: 'flex', alignItems: 'center', gap: '0.4rem', color: 'var(--foreground)'
+                                    }}>
+                                        <Upload size={14} /> 가져오기
+                                    </button>
+                                    <button onClick={resetAllToDefaults} style={{
+                                        padding: '0.55rem 1rem', background: 'rgba(239,68,68,0.08)', color: '#ef4444',
+                                        border: '1px solid rgba(239,68,68,0.25)', borderRadius: 'var(--radius-md)',
+                                        fontSize: '0.85rem', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '0.4rem'
+                                    }}>
+                                        <RotateCcw size={14} /> 전체 초기화
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
                     </section>
                 </div>
             </main>

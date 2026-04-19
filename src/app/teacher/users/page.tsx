@@ -2,7 +2,7 @@
 
 import { useState, useMemo, useEffect, useRef } from "react";
 import TeacherHeader from "@/components/TeacherHeader";
-import { Users, UserPlus, Upload, Search, Mail, TrendingUp, TrendingDown, MoreVertical, Link as LinkIcon, FolderPlus, CheckCircle2, Clock, X } from "lucide-react";
+import { Users, UserPlus, Upload, Search, Mail, TrendingUp, TrendingDown, MoreVertical, Link as LinkIcon, FolderPlus, CheckCircle2, Clock, X, Trash2, Download } from "lucide-react";
 
 type TabType = "students" | "groups" | "invites";
 
@@ -92,6 +92,7 @@ export default function ManageUsersPage() {
     const [showGroupModal, setShowGroupModal] = useState(false);
     const [popoverId, setPopoverId] = useState<string | null>(null);
     const [copyFlash, setCopyFlash] = useState(false);
+    const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
 
     const fileInputRef = useRef<HTMLInputElement | null>(null);
 
@@ -194,6 +195,71 @@ export default function ManageUsersPage() {
         persistGroups(recomputeGroups(next, groups));
         if (selectedId === id) setSelectedId(null);
         setPopoverId(null);
+        setSelectedIds(prev => {
+            if (!prev.has(id)) return prev;
+            const n = new Set(prev);
+            n.delete(id);
+            return n;
+        });
+    };
+
+    // ===== Bulk selection =====
+    const toggleSelect = (id: string) => {
+        setSelectedIds(prev => {
+            const n = new Set(prev);
+            if (n.has(id)) n.delete(id); else n.add(id);
+            return n;
+        });
+    };
+    const toggleSelectAll = (visibleIds: string[]) => {
+        setSelectedIds(prev => {
+            const allSelected = visibleIds.every(id => prev.has(id));
+            if (allSelected) {
+                const n = new Set(prev);
+                visibleIds.forEach(id => n.delete(id));
+                return n;
+            }
+            const n = new Set(prev);
+            visibleIds.forEach(id => n.add(id));
+            return n;
+        });
+    };
+    const clearSelection = () => setSelectedIds(new Set());
+
+    const handleBulkDelete = () => {
+        if (selectedIds.size === 0) return;
+        if (!window.confirm(`선택된 ${selectedIds.size}명을 삭제하시겠습니까?`)) return;
+        const next = students.filter(s => !selectedIds.has(s.id));
+        persistStudents(next);
+        persistGroups(recomputeGroups(next, groups));
+        if (selectedId && selectedIds.has(selectedId)) setSelectedId(null);
+        clearSelection();
+    };
+
+    // ===== CSV export =====
+    const csvEscape = (v: string) => /[",\n]/.test(v) ? `"${v.replace(/"/g, '""')}"` : v;
+    const handleExportCsv = () => {
+        const rows = selectedIds.size > 0
+            ? students.filter(s => selectedIds.has(s.id))
+            : filtered;
+        if (rows.length === 0) {
+            alert("내보낼 학생이 없습니다.");
+            return;
+        }
+        const header = ["name", "email", "group", "avgScore", "examsTaken", "status"];
+        const lines = [
+            header.join(","),
+            ...rows.map(s => [s.name, s.email, s.group, String(s.avgScore), String(s.examsTaken), s.status].map(csvEscape).join(","))
+        ];
+        const blob = new Blob(["\uFEFF" + lines.join("\n")], { type: "text/csv;charset=utf-8" });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = `students-${new Date().toISOString().slice(0, 10)}.csv`;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
     };
 
     // ===== Group CRUD =====
@@ -360,7 +426,7 @@ export default function ManageUsersPage() {
                     <div style={{ display: 'grid', gridTemplateColumns: selectedId ? '1fr 380px' : '1fr', gap: '1.25rem' }}>
                         <div className="bento-card" style={{ padding: '1.5rem' }}>
                             {/* Search */}
-                            <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', marginBottom: '1.25rem', padding: '0.75rem 1rem', background: 'var(--background)', borderRadius: 'var(--radius-md)', border: '1px solid var(--border)' }}>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', marginBottom: '1rem', padding: '0.75rem 1rem', background: 'var(--background)', borderRadius: 'var(--radius-md)', border: '1px solid var(--border)' }}>
                                 <Search size={16} color="var(--muted)" />
                                 <input
                                     value={query}
@@ -371,9 +437,62 @@ export default function ManageUsersPage() {
                                 <span style={{ fontSize: '0.8rem', color: 'var(--muted)' }}>{filtered.length}명</span>
                             </div>
 
+                            {/* Selection banner */}
+                            {selectedIds.size > 0 ? (
+                                <div style={{
+                                    display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem',
+                                    padding: '0.7rem 1rem', background: 'rgba(99,102,241,0.08)', borderRadius: 'var(--radius-md)',
+                                    border: '1px solid rgba(99,102,241,0.25)'
+                                }}>
+                                    <span style={{ fontSize: '0.85rem', fontWeight: 600, color: 'var(--primary)' }}>
+                                        <strong>{selectedIds.size}명</strong> 선택됨
+                                    </span>
+                                    <div style={{ display: 'flex', gap: '0.5rem' }}>
+                                        <button onClick={handleExportCsv} style={{
+                                            padding: '0.4rem 0.85rem', background: 'var(--surface)', color: 'var(--foreground)',
+                                            border: '1px solid var(--border)', borderRadius: 'var(--radius-md)',
+                                            fontSize: '0.8rem', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '0.35rem'
+                                        }}>
+                                            <Download size={13} /> CSV 내보내기
+                                        </button>
+                                        <button onClick={handleBulkDelete} style={{
+                                            padding: '0.4rem 0.85rem', background: 'rgba(239,68,68,0.1)', color: '#ef4444',
+                                            border: '1px solid rgba(239,68,68,0.25)', borderRadius: 'var(--radius-md)',
+                                            fontSize: '0.8rem', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '0.35rem'
+                                        }}>
+                                            <Trash2 size={13} /> 삭제
+                                        </button>
+                                        <button onClick={clearSelection} style={{
+                                            padding: '0.4rem 0.85rem', background: 'transparent', color: 'var(--muted)',
+                                            borderRadius: 'var(--radius-md)', fontSize: '0.8rem', fontWeight: 500
+                                        }}>취소</button>
+                                    </div>
+                                </div>
+                            ) : (
+                                <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: '1rem' }}>
+                                    <button onClick={handleExportCsv} style={{
+                                        padding: '0.45rem 0.9rem', background: 'var(--surface)', color: 'var(--muted)',
+                                        border: '1px solid var(--border)', borderRadius: 'var(--radius-md)',
+                                        fontSize: '0.8rem', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '0.35rem'
+                                    }}>
+                                        <Download size={13} /> 전체 CSV 내보내기
+                                    </button>
+                                </div>
+                            )}
+
                             <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left' }}>
                                 <thead>
                                     <tr style={{ color: 'var(--muted)', fontSize: '0.8rem', borderBottom: '1px solid var(--border)', fontWeight: 700, letterSpacing: '0.05em', textTransform: 'uppercase' }}>
+                                        <th style={{ padding: '0.85rem 0.5rem', width: 32 }}>
+                                            <input
+                                                type="checkbox"
+                                                checked={filtered.length > 0 && filtered.every(s => selectedIds.has(s.id))}
+                                                ref={el => { if (el) el.indeterminate = filtered.some(s => selectedIds.has(s.id)) && !filtered.every(s => selectedIds.has(s.id)); }}
+                                                onChange={() => toggleSelectAll(filtered.map(s => s.id))}
+                                                onClick={e => e.stopPropagation()}
+                                                style={{ cursor: 'pointer', accentColor: 'var(--primary)' }}
+                                            />
+                                        </th>
                                         <th style={{ padding: '0.85rem 0.5rem' }}>학생</th>
                                         <th style={{ padding: '0.85rem 0.5rem' }}>반</th>
                                         <th style={{ padding: '0.85rem 0.5rem' }}>평균 점수</th>
@@ -386,10 +505,18 @@ export default function ManageUsersPage() {
                                     {filtered.map(s => (
                                         <tr key={s.id}
                                             onClick={() => setSelectedId(s.id)}
-                                            style={{ borderBottom: '1px solid var(--border)', cursor: 'pointer', transition: 'background 0.2s', background: selectedId === s.id ? 'rgba(99,102,241,0.05)' : 'transparent' }}
+                                            style={{ borderBottom: '1px solid var(--border)', cursor: 'pointer', transition: 'background 0.2s', background: selectedIds.has(s.id) ? 'rgba(99,102,241,0.06)' : selectedId === s.id ? 'rgba(99,102,241,0.05)' : 'transparent' }}
                                             onMouseEnter={e => e.currentTarget.style.background = 'rgba(99,102,241,0.04)'}
-                                            onMouseLeave={e => e.currentTarget.style.background = selectedId === s.id ? 'rgba(99,102,241,0.05)' : 'transparent'}
+                                            onMouseLeave={e => e.currentTarget.style.background = selectedIds.has(s.id) ? 'rgba(99,102,241,0.06)' : selectedId === s.id ? 'rgba(99,102,241,0.05)' : 'transparent'}
                                         >
+                                            <td style={{ padding: '0.85rem 0.5rem' }} onClick={(e) => e.stopPropagation()}>
+                                                <input
+                                                    type="checkbox"
+                                                    checked={selectedIds.has(s.id)}
+                                                    onChange={() => toggleSelect(s.id)}
+                                                    style={{ cursor: 'pointer', accentColor: 'var(--primary)' }}
+                                                />
+                                            </td>
                                             <td style={{ padding: '0.85rem 0.5rem' }}>
                                                 <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
                                                     <div style={{ width: 34, height: 34, borderRadius: '50%', background: s.avatar, color: 'white', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '0.8rem', fontWeight: 700, flexShrink: 0 }}>{s.name.slice(1, 2)}</div>
