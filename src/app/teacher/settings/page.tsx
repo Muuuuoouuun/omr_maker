@@ -22,7 +22,7 @@ const DEFAULT_SETTINGS: Settings = {
     notifications: { email: true, push: true, weekly: false, autoRemind: true, quietStart: "22:00", quietEnd: "07:00" },
     examDefaults: { questions: 20, duration: 50, scorePerQ: 5, choices: 5, autosaveSec: 30 },
     grading: { negative: false, partial: true, autoRelease: false, rounding: "half" },
-    api: { geminiKey: "AIzaSyBbreLmNTPHKOHgS9HuRjAnjg1Zt8lYbjY" },
+    api: { geminiKey: "" },
     theme: { mode: "light", accent: "#4f46e5", density: "comfortable", motion: true },
     security: { twoFactor: false, loginAlerts: true },
 };
