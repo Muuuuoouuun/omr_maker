@@ -6,8 +6,7 @@ import {
     LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip,
     ResponsiveContainer, Legend
 } from 'recharts';
-import { TrendingUp, Search } from "lucide-react";
-import { useToast } from "@/components/ui/Toast";
+import { TrendingUp } from "lucide-react";
 
 interface StudentAnalyticsTabProps {
     exams: Exam[];
@@ -28,13 +27,6 @@ export default function StudentAnalyticsTab({ exams, attempts }: StudentAnalytic
 
     const [selectedStudent, setSelectedStudent] = useState<string>(students.length > 0 ? students[0] : "");
     const [excludedExamIds, setExcludedExamIds] = useState<Set<string>>(new Set());
-    const [searchQuery, setSearchQuery] = useState<string>("");
-    const toast = useToast();
-
-    const filteredStudents = useMemo(() => {
-        if (!searchQuery.trim()) return students;
-        return students.filter(name => name.toLowerCase().includes(searchQuery.toLowerCase()));
-    }, [students, searchQuery]);
 
     const toggleExamExclusion = (examId: string) => {
         const newSet = new Set(excludedExamIds);
@@ -56,10 +48,10 @@ export default function StudentAnalyticsTab({ exams, attempts }: StudentAnalytic
     // Data for Chart
     const trendData = useMemo(() => {
         return studentAttempts
-            .filter(a => !excludedExamIds.has(a.examId) && a.status !== 'grading')
+            .filter(a => !excludedExamIds.has(a.examId))
             .map(attempt => {
                 // Find all attempts for this exam to calculate average
-                const allAttemptsForExam = attempts.filter(a => a.examId === attempt.examId && a.status !== 'grading');
+                const allAttemptsForExam = attempts.filter(a => a.examId === attempt.examId);
                 const avgScore = allAttemptsForExam.length > 0
                     ? allAttemptsForExam.reduce((sum, a) => sum + (a.score / a.totalScore) * 100, 0) / allAttemptsForExam.length
                     : 0;
@@ -135,14 +127,13 @@ export default function StudentAnalyticsTab({ exams, attempts }: StudentAnalytic
             return {
                 attemptId: attempt.id,
                 examTitle: attempt.examTitle,
-                score: attempt.status === 'grading' ? '채점 대기' : attempt.score,
+                score: attempt.score,
                 totalScore: attempt.totalScore,
-                scoreRate: attempt.status === 'grading' ? 0 : Math.round((attempt.score / attempt.totalScore) * 100),
-                status: attempt.status,
+                scoreRate: Math.round((attempt.score / attempt.totalScore) * 100),
                 rank,
                 totalStudents,
-                strongPoint: attempt.status === 'grading' ? '-' : strongPoint,
-                weakPoint: attempt.status === 'grading' ? '-' : weakPoint,
+                strongPoint,
+                weakPoint,
                 date: new Date(attempt.finishedAt).toLocaleDateString(undefined, { year: 'numeric', month: '2-digit', day: '2-digit' })
             };
         }).reverse(); // Latest at the top
@@ -160,29 +151,8 @@ export default function StudentAnalyticsTab({ exams, attempts }: StudentAnalytic
     return (
         <div className="fade-in-up" style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
             {/* Filter Section */}
-            <div className="card" style={{ padding: '1.5rem', display: 'flex', alignItems: 'center', gap: '1rem', background: 'var(--surface)', flexWrap: 'wrap' }}>
-                <span style={{ fontWeight: 600, color: 'var(--text)', whiteSpace: 'nowrap' }}>분석할 학생 선택:</span>
-
-                <div style={{ position: 'relative', display: 'flex', alignItems: 'center' }}>
-                    <Search size={18} style={{ position: 'absolute', left: '12px', color: 'var(--muted)' }} />
-                    <input
-                        type="text"
-                        placeholder="이름 검색..."
-                        value={searchQuery}
-                        onChange={(e) => setSearchQuery(e.target.value)}
-                        style={{
-                            padding: '0.75rem 1rem 0.75rem 2.5rem',
-                            borderRadius: 'var(--radius-md)',
-                            border: '1px solid var(--border)',
-                            background: 'var(--background)',
-                            color: 'var(--text)',
-                            width: '180px',
-                            outline: 'none',
-                            transition: 'border-color 0.2s'
-                        }}
-                    />
-                </div>
-
+            <div className="card" style={{ padding: '1.5rem', display: 'flex', alignItems: 'center', gap: '1rem', background: 'var(--surface)' }}>
+                <span style={{ fontWeight: 600, color: 'var(--text)' }}>분석할 학생 선택:</span>
                 <select
                     value={selectedStudent}
                     onChange={(e) => setSelectedStudent(e.target.value)}
@@ -198,13 +168,9 @@ export default function StudentAnalyticsTab({ exams, attempts }: StudentAnalytic
                         cursor: 'pointer'
                     }}
                 >
-                    {filteredStudents.length > 0 ? (
-                        filteredStudents.map(name => (
-                            <option key={name} value={name}>{name}</option>
-                        ))
-                    ) : (
-                        <option value="" disabled>검색 결과가 없습니다.</option>
-                    )}
+                    {students.map(name => (
+                        <option key={name} value={name}>{name}</option>
+                    ))}
                 </select>
             </div>
 
@@ -291,7 +257,7 @@ export default function StudentAnalyticsTab({ exams, attempts }: StudentAnalytic
                                             <div style={{ fontSize: '0.75rem', color: 'var(--muted)' }}>배포일: {new Date(exam.createdAt).toLocaleDateString()}</div>
                                         </div>
                                         <button
-                                            onClick={() => toast.info(`[${selectedStudent}] 학생의 "${exam.title}" 시험에 대한 [알림 포화 모드]가 활성화되었습니다.\n\n해당 학생이 시험을 완료할 때까지 5분에 한 번씩 푸시 알림이 전송됩니다.`)}
+                                            onClick={() => alert(`[${selectedStudent}] 학생의 "${exam.title}" 시험에 대한 [알림 포화 모드]가 활성화되었습니다.\n\n해당 학생이 시험을 완료할 때까지 5분에 한 번씩 푸시 알림이 전송됩니다.`)}
                                             style={{
                                                 background: 'var(--error)', color: 'white', padding: '0.4rem 0.8rem',
                                                 borderRadius: 'var(--radius-md)', fontSize: '0.75rem', fontWeight: 700,
@@ -388,21 +354,11 @@ export default function StudentAnalyticsTab({ exams, attempts }: StudentAnalytic
                                         <td style={{ padding: '1rem 0.5rem', fontWeight: 600, color: 'var(--foreground)' }}>
                                             {detail.examTitle}
                                         </td>
-                                        <td style={{ padding: '1rem 0.5rem', fontWeight: 700, color: detail.status === 'grading' ? '#854d0e' : (detail.scoreRate >= 80 ? 'var(--success)' : (detail.scoreRate < 50 ? 'var(--error)' : 'inherit')) }}>
-                                            {detail.status === 'grading' ? (
-                                                <span style={{ fontSize: '0.85rem', background: '#fef08a', padding: '2px 6px', borderRadius: '4px' }}>{detail.score}</span>
-                                            ) : (
-                                                <>
-                                                    {detail.score} <span style={{ fontSize: '0.8rem', color: 'var(--muted)', fontWeight: 400 }}>/ {detail.totalScore}</span>
-                                                </>
-                                            )}
+                                        <td style={{ padding: '1rem 0.5rem', fontWeight: 700, color: detail.scoreRate >= 80 ? 'var(--success)' : (detail.scoreRate < 50 ? 'var(--error)' : 'inherit') }}>
+                                            {detail.score} <span style={{ fontSize: '0.8rem', color: 'var(--muted)', fontWeight: 400 }}>/ {detail.totalScore}</span>
                                         </td>
                                         <td style={{ padding: '1rem 0.5rem', fontWeight: 600 }}>
-                                            {detail.status === 'grading' ? <span style={{ color: 'var(--muted)' }}>-</span> : (
-                                                <>
-                                                    {detail.rank} <span style={{ fontSize: '0.8rem', color: 'var(--muted)', fontWeight: 400 }}>/ {detail.totalStudents}명</span>
-                                                </>
-                                            )}
+                                            {detail.rank} <span style={{ fontSize: '0.8rem', color: 'var(--muted)', fontWeight: 400 }}>/ {detail.totalStudents}명</span>
                                         </td>
                                         <td style={{ padding: '1rem 0.5rem' }}>
                                             {detail.strongPoint ?

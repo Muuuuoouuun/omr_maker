@@ -1,33 +1,28 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import { useParams } from "next/navigation";
+import { useEffect, useRef, useState } from "react";
+import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
-import OMRPreview from "@/components/OMRPreview";
+import OMRCardView from "@/components/OMRCardView";
+import ThemeToggle from "@/components/ThemeToggle";
 import dynamic from "next/dynamic";
+import { toast } from "@/components/Toast";
+import { Clock, Save } from "lucide-react";
 
 const PDFViewer = dynamic(() => import("@/components/PDFViewer"), { ssr: false });
-import { Question } from "@/types/omr";
-import { useToast } from "@/components/ui/Toast";
+import { Question, gradeAttempt } from "@/types/omr";
 
 export default function SolvePage() {
     const params = useParams();
-    const toast = useToast();
+    const router = useRouter();
     const id = params?.id as string;
 
-    const [examData, setExamData] = useState<{ title: string; questions: Question[]; accessConfig?: { type: string; groupIds: string[] } } | null>(null);
+    const [examData, setExamData] = useState<{ title: string; questions: Question[]; accessConfig?: { type: string; groupIds: string[] }; durationMin?: number; startAt?: string; endAt?: string } | null>(null);
     const [studentAnswers, setStudentAnswers] = useState<Record<number, number>>({});
-    const [studentStringAnswers, setStudentStringAnswers] = useState<Record<number, string>>({});
     const [drawings, setDrawings] = useState<Record<number, string[]>>({});
     const [pdfFile, setPdfFile] = useState<File | null>(null);
 
-    const [user, setUser] = useState<{ name: string; isGuest?: boolean; guestId?: string; teacherName?: string; age?: string } | null>(null);
-
-    // Guest Registration State
-    const [showGuestModal, setShowGuestModal] = useState(false);
-    const [guestName, setGuestName] = useState("");
-    const [guestTeacher, setGuestTeacher] = useState("");
-    const [guestAge, setGuestAge] = useState("");
+    const [user, setUser] = useState<{ name: string; isGuest?: boolean; guestId?: string } | null>(null);
 
     // Navigation State
     const [currentQuestionId, setCurrentQuestionId] = useState<number | null>(null);
@@ -38,212 +33,195 @@ export default function SolvePage() {
     const [activeTab, setActiveTab] = useState<'problem' | 'answer'>('problem');
     const [answerFile, setAnswerFile] = useState<File | null>(null);
 
-    // Timer State
-    const [timeLeft, setTimeLeft] = useState<number | null>(null);
-    const [isTimeUp, setIsTimeUp] = useState(false);
+    // Layout State
+    const [isOMRCollapsed, setIsOMRCollapsed] = useState(false);
+
+    // Timer + autosave State
+    const [startedAt] = useState(() => new Date().toISOString());
+    const [timeRemaining, setTimeRemaining] = useState<number | null>(null); // seconds
+    const [lastSavedAt, setLastSavedAt] = useState<Date | null>(null);
+    const [hasResumed, setHasResumed] = useState(false);
+    const submittedRef = useRef(false);
+    // Stable per-device student/guest id
+    const [persistId] = useState(() => {
+        if (typeof window === "undefined") return "";
+        let pid = localStorage.getItem("omr_student_pid");
+        if (!pid) {
+            pid = `pid-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+            localStorage.setItem("omr_student_pid", pid);
+        }
+        return pid;
+    });
+
+    const DRAFT_KEY = id ? `omr_draft_${id}` : "";
 
     useEffect(() => {
-        // Load User Session
         const sessionStr = sessionStorage.getItem("omr_student_session");
-        if (sessionStr) {
-            setUser(JSON.parse(sessionStr));
-        }
+        if (sessionStr) setUser(JSON.parse(sessionStr));
 
         const loadExam = async () => {
-            if (id) {
-                const data = localStorage.getItem(`omr_exam_${id}`);
-                if (data) {
-                    try {
-                        const parsed = JSON.parse(data);
-                        setExamData(parsed);
+            if (!id) return;
+            const data = localStorage.getItem(`omr_exam_${id}`);
+            if (!data) {
+                toast.error("시험을 찾을 수 없음", "유효하지 않은 시험 ID입니다.");
+                return;
+            }
+            try {
+                const parsed = JSON.parse(data);
+                setExamData(parsed);
 
-                        if (parsed.accessConfig?.timeLimit) {
-                            setTimeLeft(parsed.accessConfig.timeLimit * 60);
-                        }
-
-                        // Convert base64 pdfData (Problem PDF) back to File
-                        if (parsed.pdfData) {
-                            try {
-                                const fetchRes = await fetch(parsed.pdfData);
-                                const blob = await fetchRes.blob();
-                                const file = new File([blob], "problem.pdf", { type: "application/pdf" });
-                                setPdfFile(file);
-                            } catch (err) {
-                                console.error("Failed to load problem PDF", err);
-                            }
-                        }
-
-                        // Convert base64 answerKeyPdf back to File
-                        if (parsed.answerKeyPdf) {
-                            try {
-                                const fetchRes = await fetch(parsed.answerKeyPdf);
-                                const blob = await fetchRes.blob();
-                                const file = new File([blob], "answer_key.pdf", { type: "application/pdf" });
-                                setAnswerFile(file);
-                            } catch (err) {
-                                console.error("Failed to load answer key PDF", err);
-                            }
-                        }
-
-                        // Check Access Control
-                        // Load groups for selection (Simulation of "User's Groups")
-                        if (parsed.accessConfig?.type === 'group') {
-                            const groups = localStorage.getItem('omr_groups');
-                            if (groups) {
-                                // Logic removed
-                            }
-                        }
-                    } catch (err) {
-                        toast.error("시험 데이터 로드 실패");
-                        console.error(err);
-                    }
-                } else {
-                    toast.error("유효하지 않은 시험 ID이거나 데이터가 없습니다.");
+                // Enforce schedule window (startAt/endAt)
+                const now = Date.now();
+                if (parsed.startAt && new Date(parsed.startAt).getTime() > now) {
+                    toast.info("아직 응시 시작 전입니다", `${new Date(parsed.startAt).toLocaleString('ko-KR')}에 시작합니다.`);
                 }
+                if (parsed.endAt && new Date(parsed.endAt).getTime() < now) {
+                    toast.error("응시 기간 종료", "이 시험의 응시 가능 기간이 지났습니다.");
+                }
+
+                // Initialize timer from duration
+                if (parsed.durationMin && typeof parsed.durationMin === "number") {
+                    setTimeRemaining(parsed.durationMin * 60);
+                }
+
+                // Restore draft (autosave) if present
+                try {
+                    const draftStr = localStorage.getItem(`omr_draft_${id}`);
+                    if (draftStr) {
+                        const draft = JSON.parse(draftStr);
+                        if (draft.answers && typeof draft.answers === "object") {
+                            setStudentAnswers(draft.answers);
+                        }
+                        if (typeof draft.timeRemaining === "number") {
+                            setTimeRemaining(draft.timeRemaining);
+                        }
+                        setHasResumed(true);
+                    }
+                } catch {
+                    // ignore bad draft
+                }
+
+                if (parsed.pdfData) {
+                    try {
+                        const fetchRes = await fetch(parsed.pdfData);
+                        const blob = await fetchRes.blob();
+                        const file = new File([blob], "problem.pdf", { type: "application/pdf" });
+                        setPdfFile(file);
+                    } catch (err) {
+                        console.error("Failed to load problem PDF", err);
+                    }
+                }
+
+                if (parsed.answerKeyPdf) {
+                    try {
+                        const fetchRes = await fetch(parsed.answerKeyPdf);
+                        const blob = await fetchRes.blob();
+                        const file = new File([blob], "answer_key.pdf", { type: "application/pdf" });
+                        setAnswerFile(file);
+                    } catch (err) {
+                        console.error("Failed to load answer key PDF", err);
+                    }
+                }
+            } catch (err) {
+                alert("시험 데이터 로드 실패");
+                console.error(err);
             }
         };
 
         loadExam();
     }, [id]);
 
-    // Timer Effect
+    // Show resume banner once after initial load
     useEffect(() => {
-        if (timeLeft === null || isTeacherMode || isTimeUp) return;
+        if (hasResumed) {
+            toast.info("임시저장 복원됨", "이전에 풀던 답안을 불러왔습니다.");
+        }
+    }, [hasResumed]);
 
-        if (timeLeft <= 0) {
-            setIsTimeUp(true);
-            toast.error("⏰ 제한 시간이 종료되었습니다! (자동 제출 기능은 게스트 이름 확인 후 구현됩니다)");
-            // In a fully authenticated environment, we would call handleSubmit() here automatically.
+    // Tick timer every second when examData has duration. Auto-submit at 0.
+    useEffect(() => {
+        if (timeRemaining === null || submittedRef.current) return;
+        if (timeRemaining <= 0) {
+            submittedRef.current = true;
+            handleSubmitInternal(true);
             return;
         }
+        const id = setTimeout(() => setTimeRemaining(t => (t === null ? null : t - 1)), 1000);
+        return () => clearTimeout(id);
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [timeRemaining]);
 
-        if (timeLeft === 600) {
-            toast.info("⚠️ 시험 종료까지 10분 남았습니다!");
-        }
+    // Autosave draft every 3s when answers change
+    useEffect(() => {
+        if (!id || submittedRef.current) return;
+        const t = setTimeout(() => {
+            try {
+                localStorage.setItem(DRAFT_KEY, JSON.stringify({
+                    answers: studentAnswers,
+                    timeRemaining,
+                    savedAt: new Date().toISOString(),
+                }));
+                setLastSavedAt(new Date());
+            } catch {
+                // quota exceeded — silent, UI will stop showing save time
+            }
+        }, 3000);
+        return () => clearTimeout(t);
+    }, [studentAnswers, timeRemaining, id, DRAFT_KEY]);
 
-        const timer = setInterval(() => {
-            setTimeLeft(prev => prev !== null ? prev - 1 : null);
-        }, 1000);
-
-        return () => clearInterval(timer);
-    }, [timeLeft, isTeacherMode, isTimeUp, toast]);
-
-    const formatTime = (seconds: number) => {
-        const m = Math.floor(seconds / 60);
-        const s = seconds % 60;
-        return `${m}:${s.toString().padStart(2, '0')}`;
-    };
+    // Warn on tab close if there are unsaved answers
+    useEffect(() => {
+        const onBeforeUnload = (e: BeforeUnloadEvent) => {
+            if (submittedRef.current) return;
+            if (Object.keys(studentAnswers).length === 0) return;
+            e.preventDefault();
+            e.returnValue = "";
+        };
+        window.addEventListener("beforeunload", onBeforeUnload);
+        return () => window.removeEventListener("beforeunload", onBeforeUnload);
+    }, [studentAnswers]);
 
     const handleAnswerClick = (qId: number, optionIndex: number) => {
-        setStudentAnswers(prev => ({
-            ...prev,
-            [qId]: optionIndex
-        }));
-
-        // Auto-select next question when answering
-        if (examData) {
-            const currentIndex = examData.questions.findIndex(q => q.id === qId);
-            if (currentIndex !== -1 && currentIndex < examData.questions.length - 1) {
-                const nextQId = examData.questions[currentIndex + 1].id;
-                handleQuestionClick(nextQId);
-            } else {
-                handleQuestionClick(qId);
-            }
-        }
-    };
-
-    const handleStringAnswerChange = (qId: number, value: string) => {
-        setStudentStringAnswers(prev => ({
-            ...prev,
-            [qId]: value
-        }));
-        handleQuestionClick(qId);
+        setStudentAnswers(prev => ({ ...prev, [qId]: optionIndex }));
+        setCurrentQuestionId(qId);
     };
 
     const handleQuestionClick = (qId: number) => {
         setCurrentQuestionId(qId);
         if (examData) {
             const q = examData.questions.find(q => q.id === qId);
-            if (q?.pdfLocation?.page) {
-                setPdfCurrentPage(q.pdfLocation.page);
-            }
+            if (q?.pdfLocation?.page) setPdfCurrentPage(q.pdfLocation.page);
         }
-
-        setTimeout(() => {
-            const el = document.getElementById(`omr-row-${qId}`);
-            if (el) {
-                el.scrollIntoView({ behavior: 'smooth', block: 'center' });
-            }
-        }, 50);
     };
 
     const handleDrawingsChange = (page: number, newPaths: string[]) => {
-        setDrawings(prev => ({
-            ...prev,
-            [page]: newPaths
-        }));
+        setDrawings(prev => ({ ...prev, [page]: newPaths }));
     };
 
-
-
-    // ... (intermediate code) ...
-
-    const handleSubmit = () => {
+    const handleSubmitInternal = (autoSubmitted = false) => {
         if (!examData) return;
+        if (submittedRef.current && !autoSubmitted) return;
 
-        // Ensure User
-        const submitter = user;
+        let submitter = user;
         if (!submitter) {
-            // Allow Guest Flow for any exam if accessed via code/link
-            setShowGuestModal(true);
-            return;
+            if (examData.accessConfig?.type === 'public') {
+                const name = window.prompt("이름을 입력해주세요 (게스트 제출):");
+                if (!name) return;
+                const guestId = Math.random().toString(36).substring(2, 15);
+                submitter = { name, isGuest: true, guestId };
+                sessionStorage.setItem("omr_student_session", JSON.stringify({ ...submitter, groupName: 'Guest' }));
+                localStorage.setItem("omr_guest_id", guestId);
+            } else {
+                toast.error("로그인 필요", "이 시험은 로그인이 필요합니다.");
+                router.push("/");
+                return;
+            }
         }
 
-        executeSubmit(submitter);
-    };
+        submittedRef.current = true;
 
-    const handleGuestSubmit = () => {
-        if (!guestName.trim()) { toast.error("이름을 입력해주세요."); return; }
-        if (!guestTeacher.trim()) { toast.error("담당 선생님 이름을 입력해주세요."); return; }
-
-        const guestId = Math.random().toString(36).substring(2, 15);
-        const submitter = { name: guestName, teacherName: guestTeacher, age: guestAge, isGuest: true, guestId };
-
-        // Save session for continuity
-        sessionStorage.setItem("omr_student_session", JSON.stringify({ ...submitter, groupName: 'Guest' }));
-        localStorage.setItem("omr_guest_id", guestId);
-        setUser(submitter);
-        setShowGuestModal(false);
-
-        executeSubmit(submitter);
-    };
-
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const executeSubmit = (submitter: any) => {
-        if (!examData) return;
-        if (!confirm("정말 제출하시겠습니까? (현재는 로컬에만 저장됩니다)")) return;
-
-        // Calculate Score
-        let correctCount = 0;
-        let totalCount = 0;
-        let hasPendingSubjective = false;
-
-        examData.questions.forEach(q => {
-            if (q.type === 'subjective') {
-                totalCount++;
-                hasPendingSubjective = true;
-            } else if (q.answer) {
-                totalCount++; // 1 pt for objective
-                if (studentAnswers[q.id] === q.answer) {
-                    correctCount++;
-                }
-
-                if (q.askReason) {
-                    totalCount++; // 1 additional pt for the written reason
-                    hasPendingSubjective = true;
-                }
-            }
-        });
+        // Use weighted grading from types/omr.ts
+        const graded = gradeAttempt(examData.questions, studentAnswers);
 
         const attemptId = Date.now().toString();
         const attemptData = {
@@ -251,27 +229,46 @@ export default function SolvePage() {
             examId: id,
             examTitle: examData.title,
             studentName: submitter.name,
-            guestId: submitter.guestId, // Track Guest ID
-            startedAt: new Date().toISOString(),
+            studentId: submitter.guestId ?? persistId,
+            guestId: submitter.guestId,
+            startedAt,
             finishedAt: new Date().toISOString(),
-            score: correctCount,
-            totalScore: totalCount,
+            score: graded.earnedScore,
+            totalScore: graded.totalScore,
             answers: studentAnswers,
-            stringAnswers: studentStringAnswers,
-            drawings: drawings,
-            status: hasPendingSubjective ? 'grading' : 'completed'
+            drawings,
+            status: 'completed' as const,
+            autoSubmitted,
         };
 
-        // Save to Local Storage (List of attempts)
-        const history = JSON.parse(localStorage.getItem('omr_attempts') || '[]');
-        history.push(attemptData);
-        localStorage.setItem('omr_attempts', JSON.stringify(history));
+        try {
+            const history = JSON.parse(localStorage.getItem('omr_attempts') || '[]');
+            history.push(attemptData);
+            localStorage.setItem('omr_attempts', JSON.stringify(history));
+            // Clean up draft
+            try { localStorage.removeItem(DRAFT_KEY); } catch {}
+        } catch {
+            toast.error("저장 공간 부족", "브라우저 저장소가 가득 찼습니다. 관리자에게 문의하세요.");
+            return;
+        }
 
-        toast.success(`제출 완료! 점수: ${correctCount}/${totalCount}`);
-        window.location.href = `/student/review/${attemptId}`;
+        if (autoSubmitted) {
+            toast.info("시간 종료", "답안이 자동으로 제출되었습니다.");
+        }
+        router.push(`/student/review/${attemptId}`);
     };
 
-
+    const handleSubmit = () => {
+        if (!examData) return;
+        const totalQ = examData.questions.length;
+        const answeredCount = Object.keys(studentAnswers).length;
+        const unanswered = totalQ - answeredCount;
+        const message = unanswered > 0
+            ? `미답변 ${unanswered}문항이 있습니다. 정말 제출하시겠습니까?`
+            : `모든 답변을 완료했습니다. 제출하시겠습니까?`;
+        if (!window.confirm(message)) return;
+        handleSubmitInternal(false);
+    };
 
     const toggleTeacherMode = (checked: boolean) => {
         if (checked) {
@@ -279,7 +276,7 @@ export default function SolvePage() {
             if (password === "admin123") {
                 setIsTeacherMode(true);
             } else {
-                toast.error("비밀번호가 틀렸습니다.");
+                alert("비밀번호가 틀렸습니다.");
                 setIsTeacherMode(false);
             }
         } else {
@@ -296,58 +293,234 @@ export default function SolvePage() {
         );
     }
 
+    const answeredCount = Object.keys(studentAnswers).length;
+    const totalQuestions = examData.questions.length;
+    const progress = totalQuestions > 0 ? (answeredCount / totalQuestions) * 100 : 0;
+
     return (
-        <div className="app-container" style={{ display: 'flex', flexDirection: 'column', height: '100vh', background: 'var(--background)' }}>
-            <header className="header fade-in-down" style={{ padding: '1rem 1.5rem', display: 'flex', flexWrap: 'wrap', justifyContent: 'space-between', alignItems: 'center', height: 'auto', minHeight: '4rem', background: 'var(--surface)', borderBottom: '1px solid var(--border)', gap: '1rem' }}>
-                <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '1rem' }}>
-                    <h1 style={{ fontSize: '1.25rem', fontWeight: 800, color: 'var(--primary)' }}>Answer Mode</h1>
-                    <span style={{ fontSize: '0.85rem', color: 'var(--muted)', background: 'var(--background)', padding: '0.3rem 0.6rem', borderRadius: '4px' }}>
-                        ID: {id}
-                    </span>
-                    {timeLeft !== null && !isTeacherMode && (
-                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', background: timeLeft <= 600 ? '#fee2e2' : '#e0e7ff', color: timeLeft <= 600 ? '#dc2626' : '#4338ca', padding: '0.3rem 0.8rem', borderRadius: '20px', fontWeight: 'bold', fontSize: '0.9rem', border: `1px solid ${timeLeft <= 600 ? '#fca5a5' : '#a5b4fc'}`, transition: 'all 0.3s' }}>
-                            <span className={timeLeft <= 60 ? 'animate-pulse' : ''}>⏱️ {formatTime(timeLeft)}</span>
-                        </div>
+        <div className="layout-main" style={{
+            background: 'var(--background)',
+            height: '100vh',
+            overflow: 'hidden',
+            display: 'flex',
+            flexDirection: 'column'
+        }}>
+            {/* Header */}
+            <header className="header" style={{
+                flexShrink: 0,
+                height: 'auto',
+                padding: '0.75rem 1.5rem'
+            }}>
+                <div className="container header-content" style={{ gap: '1rem' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '1rem', minWidth: 0, flex: 1 }}>
+                        <Link href="/" className="logo" style={{ fontSize: '1.15rem', flexShrink: 0 }}>OMR Maker</Link>
+                        <div style={{
+                            height: '22px',
+                            width: '1px',
+                            background: 'var(--border)',
+                            flexShrink: 0
+                        }} />
+                        <span style={{
+                            fontSize: '0.9rem',
+                            fontWeight: 700,
+                            color: 'var(--foreground)',
+                            overflow: 'hidden',
+                            textOverflow: 'ellipsis',
+                            whiteSpace: 'nowrap'
+                        }}>
+                            {examData.title}
+                        </span>
+                    </div>
+
+                    {/* Timer */}
+                    {timeRemaining !== null && (
+                        (() => {
+                            const mm = Math.floor(Math.max(0, timeRemaining) / 60).toString().padStart(2, "0");
+                            const ss = (Math.max(0, timeRemaining) % 60).toString().padStart(2, "0");
+                            const isCritical = timeRemaining <= 300; // last 5 min
+                            return (
+                                <div style={{
+                                    display: 'flex', alignItems: 'center', gap: '0.4rem',
+                                    padding: '0.35rem 0.75rem',
+                                    background: isCritical ? 'rgba(239,68,68,0.1)' : 'var(--background)',
+                                    border: `1px solid ${isCritical ? 'rgba(239,68,68,0.3)' : 'var(--border)'}`,
+                                    borderRadius: 'var(--radius-full)',
+                                    color: isCritical ? '#ef4444' : 'var(--foreground)',
+                                    flexShrink: 0,
+                                    animation: isCritical ? 'pulse 1.5s ease-in-out infinite' : undefined
+                                }}>
+                                    <Clock size={13} />
+                                    <span style={{ fontSize: '0.82rem', fontWeight: 700, fontVariantNumeric: 'tabular-nums' }}>
+                                        {mm}:{ss}
+                                    </span>
+                                </div>
+                            );
+                        })()
                     )}
-                    <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontSize: '0.85rem', color: 'var(--muted)', cursor: 'pointer', background: 'var(--background)', padding: '0.3rem 0.6rem', borderRadius: '4px', whiteSpace: 'nowrap' }}>
-                        <input type="checkbox" checked={isTeacherMode} onChange={(e) => toggleTeacherMode(e.target.checked)} />
-                        선생님 모드
-                    </label>
 
-                    {/* Teacher Mode Specific Controls */}
-                    {isTeacherMode ? (
-                        <div style={{ display: 'flex', background: 'var(--background)', border: '1px solid var(--border)', borderRadius: '4px', padding: '2px' }}>
-                            <button
-                                onClick={() => setActiveTab('problem')}
-                                style={{ padding: '0.3rem 0.8rem', fontSize: '0.85rem', borderRadius: '4px', border: 'none', background: activeTab === 'problem' ? 'var(--surface)' : 'transparent', color: activeTab === 'problem' ? 'var(--primary)' : 'var(--muted)', fontWeight: activeTab === 'problem' ? 'bold' : 'normal', cursor: 'pointer' }}
-                            >
-                                문제지
-                            </button>
-                            <button
-                                onClick={() => setActiveTab('answer')}
-                                style={{ padding: '0.3rem 0.8rem', fontSize: '0.85rem', borderRadius: '4px', border: 'none', background: activeTab === 'answer' ? 'var(--surface)' : 'transparent', color: activeTab === 'answer' ? 'var(--primary)' : 'var(--muted)', fontWeight: activeTab === 'answer' ? 'bold' : 'normal', cursor: 'pointer' }}
-                            >
-                                정답/해설
-                            </button>
+                    {/* Progress indicator */}
+                    <div style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '0.75rem',
+                        padding: '0.35rem 0.85rem',
+                        background: 'var(--background)',
+                        border: '1px solid var(--border)',
+                        borderRadius: 'var(--radius-full)',
+                        flexShrink: 0
+                    }}>
+                        <div style={{
+                            width: '90px',
+                            height: '4px',
+                            background: 'var(--border)',
+                            borderRadius: 'var(--radius-full)',
+                            overflow: 'hidden'
+                        }}>
+                            <div style={{
+                                width: `${progress}%`,
+                                height: '100%',
+                                background: 'linear-gradient(90deg, var(--primary), var(--secondary))',
+                                transition: 'width 0.3s'
+                            }} />
                         </div>
-                    ) : null}
-                </div>
+                        <span style={{
+                            fontSize: '0.82rem',
+                            fontWeight: 700,
+                            color: 'var(--foreground)',
+                            fontVariantNumeric: 'tabular-nums'
+                        }}>
+                            {answeredCount}/{totalQuestions}
+                        </span>
+                    </div>
 
-                <div style={{ display: 'flex', gap: '1rem', alignItems: 'center' }}>
-                    <button className="btn btn-primary" onClick={handleSubmit} style={{ whiteSpace: 'nowrap' }}>
-                        ✅ 제출하기
-                    </button>
+                    {/* Autosave indicator */}
+                    {lastSavedAt && (
+                        <span
+                            title={`마지막 저장: ${lastSavedAt.toLocaleTimeString('ko-KR')}`}
+                            style={{
+                                display: 'inline-flex', alignItems: 'center', gap: '0.3rem',
+                                fontSize: '0.72rem', color: 'var(--muted)', fontWeight: 600, flexShrink: 0
+                            }}>
+                            <Save size={11} /> 저장됨
+                        </span>
+                    )}
+
+                    <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', flexShrink: 0 }}>
+                        <label style={{
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: '0.4rem',
+                            fontSize: '0.78rem',
+                            cursor: 'pointer',
+                            background: 'var(--background)',
+                            border: '1px solid var(--border)',
+                            padding: '0.35rem 0.7rem',
+                            borderRadius: 'var(--radius-full)',
+                            fontWeight: 600,
+                            color: 'var(--muted)'
+                        }}>
+                            <input
+                                type="checkbox"
+                                checked={isTeacherMode}
+                                onChange={(e) => toggleTeacherMode(e.target.checked)}
+                                style={{ margin: 0 }}
+                            />
+                            선생님 모드
+                        </label>
+
+                        {isTeacherMode ? (
+                            <div style={{
+                                display: 'flex',
+                                background: 'var(--background)',
+                                border: '1px solid var(--border)',
+                                borderRadius: 'var(--radius-full)',
+                                padding: '3px'
+                            }}>
+                                <button
+                                    onClick={() => setActiveTab('problem')}
+                                    style={{
+                                        padding: '0.3rem 0.8rem',
+                                        fontSize: '0.78rem',
+                                        borderRadius: 'var(--radius-full)',
+                                        border: 'none',
+                                        background: activeTab === 'problem' ? 'var(--primary)' : 'transparent',
+                                        color: activeTab === 'problem' ? 'white' : 'var(--muted)',
+                                        fontWeight: 700,
+                                        cursor: 'pointer',
+                                        transition: 'all 0.2s'
+                                    }}
+                                >
+                                    문제지
+                                </button>
+                                <button
+                                    onClick={() => setActiveTab('answer')}
+                                    style={{
+                                        padding: '0.3rem 0.8rem',
+                                        fontSize: '0.78rem',
+                                        borderRadius: 'var(--radius-full)',
+                                        border: 'none',
+                                        background: activeTab === 'answer' ? 'var(--primary)' : 'transparent',
+                                        color: activeTab === 'answer' ? 'white' : 'var(--muted)',
+                                        fontWeight: 700,
+                                        cursor: 'pointer',
+                                        transition: 'all 0.2s'
+                                    }}
+                                >
+                                    정답/해설
+                                </button>
+                            </div>
+                        ) : (
+                            <label className="btn btn-secondary" style={{
+                                cursor: 'pointer',
+                                fontSize: '0.8rem',
+                                padding: '0.45rem 0.85rem'
+                            }}>
+                                PDF 열기
+                                <input id="pdf-upload-input" type="file" accept=".pdf" onChange={(e) => e.target.files && setPdfFile(e.target.files[0])} style={{ display: 'none' }} />
+                            </label>
+                        )}
+
+                        <button
+                            onClick={() => setIsOMRCollapsed(!isOMRCollapsed)}
+                            className="btn btn-secondary"
+                            style={{
+                                padding: '0.45rem 0.75rem',
+                                fontSize: '0.8rem',
+                                display: 'flex',
+                                alignItems: 'center',
+                                gap: '0.35rem'
+                            }}
+                            title={isOMRCollapsed ? '답안지 펼치기' : '답안지 접기'}
+                        >
+                            <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+                                <path d={isOMRCollapsed ? "M9 4L5 7L9 10" : "M5 4L9 7L5 10"} stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+                            </svg>
+                        </button>
+
+                        <button className="btn btn-primary" style={{ padding: '0.5rem 1rem', fontSize: '0.85rem' }} onClick={handleSubmit}>
+                            제출하기
+                        </button>
+                        <ThemeToggle size="small" />
+                    </div>
                 </div>
             </header>
 
-            <div className="split-layout" style={{ display: 'flex', flex: 1, overflow: 'hidden' }}>
-                {/* PDF ViewerArea (Left) */}
-                <div className="split-pane-pdf" style={{ flex: 1, borderRight: '1px solid #ddd', background: isTeacherMode ? '#222' : '#f8fafc', position: 'relative', display: 'flex', flexDirection: 'column' }}>
-                    {/* Tab Context specific toolbar */}
+            {/* Body */}
+            <div style={{ display: 'flex', flex: 1, overflow: 'hidden' }}>
+                {/* PDF Area (Left, larger) */}
+                <div style={{
+                    flex: 1,
+                    borderRight: '1px solid var(--border)',
+                    background: '#2a2d31',
+                    position: 'relative',
+                    display: 'flex',
+                    flexDirection: 'column',
+                    minWidth: 0
+                }}>
                     {isTeacherMode && activeTab === 'answer' && !answerFile && (
                         <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 10, pointerEvents: 'none' }}>
                             <label className="btn btn-primary" style={{ pointerEvents: 'auto', cursor: 'pointer', boxShadow: '0 4px 10px rgba(0,0,0,0.3)' }}>
-                                📁 해설/정답 PDF 업로드
+                                해설/정답 PDF 업로드
                                 <input type="file" accept=".pdf" onChange={(e) => e.target.files && setAnswerFile(e.target.files[0])} style={{ display: 'none' }} />
                             </label>
                         </div>
@@ -356,7 +529,7 @@ export default function SolvePage() {
                     {isTeacherMode && activeTab === 'problem' && !pdfFile && (
                         <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 10, pointerEvents: 'none' }}>
                             <label className="btn btn-secondary" style={{ pointerEvents: 'auto', cursor: 'pointer', boxShadow: '0 4px 10px rgba(0,0,0,0.3)' }}>
-                                📄 문제지 PDF 업로드
+                                문제지 PDF 업로드
                                 <input type="file" accept=".pdf" onChange={(e) => e.target.files && setPdfFile(e.target.files[0])} style={{ display: 'none' }} />
                             </label>
                         </div>
@@ -371,121 +544,48 @@ export default function SolvePage() {
                         onDrawingsChange={handleDrawingsChange}
                         forcePage={activeTab === 'problem' ? pdfCurrentPage : undefined}
                         markers={(activeTab === 'problem' && examData.questions)
-                            ? examData.questions.flatMap((q: Question) => {
-                                const qMarkers: { page: number; x: number; y: number; w?: number; h?: number; label: string | number; color?: string; type?: 'question' | 'choice'; onClick?: () => void }[] = [];
-                                if (q.pdfLocation) {
-                                    qMarkers.push({
-                                        page: q.pdfLocation.page,
-                                        x: q.pdfLocation.x,
-                                        y: q.pdfLocation.y,
-                                        w: q.pdfLocation.w,
-                                        h: q.pdfLocation.h,
-                                        label: q.number,
-                                        type: 'question',
-                                        color: currentQuestionId === q.id ? '#6366f1' : '#ef4444',
-                                        onClick: () => handleQuestionClick(q.id)
-                                    });
-                                }
-                                if (q.pdfChoices) {
-                                    Object.entries(q.pdfChoices).forEach(([choiceStr, loc]) => {
-                                        const choiceNum = parseInt(choiceStr, 10);
-                                        const isSelected = studentAnswers[q.id] === choiceNum;
-                                        qMarkers.push({
-                                            page: loc.page,
-                                            x: loc.x,
-                                            y: loc.y,
-                                            w: loc.w,
-                                            h: loc.h,
-                                            label: choiceNum,
-                                            type: 'choice',
-                                            // Provide color only if selected so viewer highlights it
-                                            color: isSelected ? '#3b82f6' : undefined,
-                                            onClick: () => handleAnswerClick(q.id, choiceNum)
-                                        });
-                                    });
-                                }
-                                return qMarkers;
-                            })
+                            ? examData.questions
+                                .filter((q: Question) => q.pdfLocation)
+                                .map((q: Question) => ({
+                                    page: q.pdfLocation!.page,
+                                    x: q.pdfLocation!.x,
+                                    y: q.pdfLocation!.y,
+                                    label: q.number,
+                                    color: currentQuestionId === q.id ? '#6366f1' : '#ef4444',
+                                    onClick: () => handleQuestionClick(q.id),
+                                    questionId: q.id,
+                                    currentAnswer: studentAnswers[q.id],
+                                    onAnswer: (opt: number) => handleAnswerClick(q.id, opt),
+                                    optionsCount: 5,
+                                }))
                             : []}
-                        viewerMode={isTeacherMode ? 'teacher' : 'student'}
                     />
                 </div>
 
-                {/* OMR Sheet (Right) */}
-                <div className="split-pane-main" style={{ flex: 1, display: 'flex', justifyContent: 'center', overflowY: 'auto', overflowX: 'hidden', padding: '2rem', background: '#e2e8f0', gap: '1.5rem', alignItems: 'flex-start' }}>
-                    <div style={{ width: '100%', maxWidth: '900px', height: 'fit-content' }}>
-                        <OMRPreview
+                {/* OMR Sheet (Right, responsive card view) */}
+                <div style={{
+                    width: isOMRCollapsed ? '0' : '440px',
+                    maxWidth: isOMRCollapsed ? '0' : '40vw',
+                    flexShrink: 0,
+                    transition: 'width 0.3s, max-width 0.3s',
+                    overflow: 'hidden',
+                    background: 'var(--background)',
+                    display: 'flex',
+                    flexDirection: 'column'
+                }}>
+                    <div style={{ flex: 1, overflowY: 'auto' }} className="scroll-custom">
+                        <OMRCardView
                             title={examData.title}
                             questions={examData.questions}
-                            mode="solve"
                             userAnswers={studentAnswers}
-                            userStringAnswers={studentStringAnswers}
                             selectedQuestionId={currentQuestionId}
                             onAnswerClick={handleAnswerClick}
-                            onStringAnswerChange={handleStringAnswerChange}
                             onQuestionClick={handleQuestionClick}
+                            mode="solve"
                         />
                     </div>
-
-                    {/* Sticky Navigator (Mini-map) */}
-                    {!isTeacherMode && examData && (
-                        <div className="bento-card fade-in-up" style={{ position: 'sticky', top: '0', background: 'var(--surface)', padding: '1.25rem', borderRadius: 'var(--radius-xl)', boxShadow: 'var(--shadow-lg)', display: 'flex', flexDirection: 'column', gap: '0.75rem', zIndex: 50, maxHeight: 'calc(100vh - 10rem)', overflowY: 'auto', border: '1px solid var(--border)', width: 'auto', minWidth: '120px', flexShrink: 0 }}>
-                            <div style={{ fontSize: '0.9rem', fontWeight: 800, textAlign: 'center', color: 'var(--foreground)', marginBottom: '0.25rem', paddingBottom: '0.75rem', borderBottom: '1px solid var(--border)' }}>진행현황</div>
-                            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '0.5rem' }}>
-                                {examData.questions.map(q => {
-                                    const isAnswered = studentAnswers[q.id] !== undefined || (studentStringAnswers[q.id] && studentStringAnswers[q.id].trim() !== "");
-                                    const isSelected = currentQuestionId === q.id;
-                                    return (
-                                        <button
-                                            key={q.id}
-                                            onClick={() => handleQuestionClick(q.id)}
-                                            style={{
-                                                width: '100%', aspectRatio: '1', borderRadius: '8px', fontSize: '0.9rem', fontWeight: 700,
-                                                border: isSelected ? '2px solid var(--primary)' : '1px solid transparent',
-                                                background: isAnswered ? '#10b981' : 'var(--background)',
-                                                color: isAnswered ? 'white' : 'var(--muted)',
-                                                cursor: 'pointer', transition: 'all 0.2s', display: 'flex', alignItems: 'center', justifyContent: 'center',
-                                                boxShadow: isAnswered ? '0 2px 4px rgba(16, 185, 129, 0.3)' : 'inset 0 2px 4px rgba(0,0,0,0.02)'
-                                            }}
-                                            title={`${q.number}번 문제로 이동`}
-                                            className="card-hover"
-                                        >
-                                            {q.number}
-                                        </button>
-                                    );
-                                })}
-                            </div>
-                        </div>
-                    )}
                 </div>
             </div>
-
-            {/* Guest Registration Modal */}
-            {showGuestModal && (
-                <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000 }}>
-                    <div style={{ width: '90%', maxWidth: '400px', background: 'var(--surface)', padding: '2rem', borderRadius: 'var(--radius-xl)', boxShadow: 'var(--shadow-xl)' }}>
-                        <h2 style={{ fontSize: '1.25rem', fontWeight: 700, marginBottom: '1.5rem', color: 'var(--primary)' }}>비회원(게스트) 정보 입력</h2>
-
-                        <div style={{ marginBottom: '1rem' }}>
-                            <label style={{ display: 'block', fontSize: '0.85rem', fontWeight: 600, marginBottom: '0.5rem' }}>이름 (필수)</label>
-                            <input type="text" className="input-field" value={guestName} onChange={(e) => setGuestName(e.target.value)} placeholder="학생 이름" />
-                        </div>
-                        <div style={{ marginBottom: '1rem' }}>
-                            <label style={{ display: 'block', fontSize: '0.85rem', fontWeight: 600, marginBottom: '0.5rem' }}>담당 선생님 (필수)</label>
-                            <input type="text" className="input-field" value={guestTeacher} onChange={(e) => setGuestTeacher(e.target.value)} placeholder="선생님 이름" />
-                        </div>
-                        <div style={{ marginBottom: '1.5rem' }}>
-                            <label style={{ display: 'block', fontSize: '0.85rem', fontWeight: 600, marginBottom: '0.5rem' }}>나이 (선택사항)</label>
-                            <input type="number" className="input-field" value={guestAge} onChange={(e) => setGuestAge(e.target.value)} placeholder="예: 15" />
-                        </div>
-
-                        <div style={{ display: 'flex', gap: '0.8rem', justifyContent: 'flex-end', marginTop: '1rem' }}>
-                            <button className="btn btn-secondary" onClick={() => setShowGuestModal(false)}>취소</button>
-                            <button className="btn btn-primary" onClick={handleGuestSubmit}>제출하기</button>
-                        </div>
-                    </div>
-                </div>
-            )}
-        </div >
+        </div>
     );
 }

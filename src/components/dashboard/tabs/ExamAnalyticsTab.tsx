@@ -222,7 +222,31 @@ export default function ExamAnalyticsTab({ exams, attempts, initialExamId }: Exa
     };
 
     if (exams.length === 0) {
-        return <div className="text-center p-8 text-muted">등록된 시험이 없습니다.</div>;
+        return (
+            <div className="fade-in-up" style={{ padding: '3rem 2rem', textAlign: 'center' }}>
+                <div style={{
+                    width: 80, height: 80, borderRadius: '50%',
+                    background: 'linear-gradient(135deg, rgba(99,102,241,0.1), rgba(236,72,153,0.1))',
+                    display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+                    color: 'var(--primary)', marginBottom: '1.5rem'
+                }}>
+                    <BarChart2 size={36} />
+                </div>
+                <h3 style={{ fontSize: '1.15rem', fontWeight: 700, marginBottom: '0.5rem' }}>분석할 시험이 없습니다</h3>
+                <p style={{ fontSize: '0.9rem', color: 'var(--muted)', marginBottom: '1.5rem' }}>
+                    먼저 시험을 출제하면 응시 결과를 분석할 수 있습니다.
+                </p>
+                <a href="/create" style={{
+                    display: 'inline-flex', alignItems: 'center', gap: '0.5rem',
+                    padding: '0.75rem 1.4rem',
+                    background: 'linear-gradient(135deg, var(--primary), var(--primary-dark))',
+                    color: 'white', borderRadius: 'var(--radius-full)', fontWeight: 600, fontSize: '0.9rem',
+                    boxShadow: '0 4px 14px rgba(99,102,241,0.3)'
+                }}>
+                    시험 출제하기
+                </a>
+            </div>
+        );
     }
 
     return (
@@ -353,23 +377,127 @@ export default function ExamAnalyticsTab({ exams, attempts, initialExamId }: Exa
 
                     <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1.5rem' }}>
                         {/* Radar Chart for labels */}
-                        <div className="card" style={{ padding: '1.5rem' }}>
-                            <h3 style={{ fontSize: '1.1rem', fontWeight: 700, marginBottom: '1rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                                <BarChart2 size={18} color="var(--primary)" />
-                                항목별(라벨) 정답률 분석
-                            </h3>
-                            {labelAnalytics.length > 0 ? (
-                                <div style={{ height: '300px', width: '100%' }}>
-                                    <ResponsiveContainer width="100%" height="100%">
-                                        <RadarChart cx="50%" cy="50%" outerRadius="80%" data={labelAnalytics} startAngle={90} endAngle={-270}>
-                                            <PolarGrid stroke="var(--border)" />
-                                            <PolarAngleAxis dataKey="label" tick={{ fill: 'var(--text)', fontSize: 13, fontWeight: 700 }} />
-                                            <PolarRadiusAxis angle={30} domain={[0, 100]} tick={{ fill: 'var(--muted)' }} />
-                                            <Radar name="정답률" dataKey="correctRate" stroke="var(--primary)" fill="var(--primary)" fillOpacity={0.4} />
-                                            <RechartsTooltip cursor={{ fill: 'transparent' }} contentStyle={{ borderRadius: '8px', border: '1px solid var(--border)', boxShadow: '0 4px 12px rgba(0,0,0,0.1)', background: 'var(--background)' }} formatter={(value: number | string | undefined) => [`${value}%`, '정답률']} />
-                                        </RadarChart>
-                                    </ResponsiveContainer>
+                        <div className="card" style={{ padding: '1.5rem', background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 'var(--radius-xl)', position: 'relative', overflow: 'hidden' }}>
+                            {/* Decorative background */}
+                            <div style={{
+                                position: 'absolute', top: '-30px', right: '-30px',
+                                width: '200px', height: '200px',
+                                background: 'radial-gradient(circle, rgba(99,102,241,0.08) 0%, transparent 70%)',
+                                pointerEvents: 'none', filter: 'blur(20px)'
+                            }} />
+
+                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '1.25rem', position: 'relative' }}>
+                                <div>
+                                    <h3 style={{ fontSize: '1rem', fontWeight: 700, display: 'flex', alignItems: 'center', gap: '0.5rem', letterSpacing: '-0.01em' }}>
+                                        <BarChart2 size={16} color="var(--primary)" />
+                                        항목별(라벨) 정답률 분석
+                                    </h3>
+                                    <p style={{ fontSize: '0.78rem', color: 'var(--muted)', marginTop: '2px', fontWeight: 500 }}>
+                                        카테고리별 평균 정답률 레이더
+                                    </p>
                                 </div>
+                                {labelAnalytics.length > 0 && (
+                                    <span className="badge badge-primary" style={{ fontSize: '0.7rem' }}>
+                                        {labelAnalytics.length}개 라벨
+                                    </span>
+                                )}
+                            </div>
+
+                            {labelAnalytics.length > 0 ? (
+                                <>
+                                    <div style={{ height: '300px', width: '100%', position: 'relative' }}>
+                                        <ResponsiveContainer width="100%" height="100%">
+                                            <RadarChart cx="50%" cy="50%" outerRadius="72%" data={labelAnalytics} startAngle={90} endAngle={-270}>
+                                                <defs>
+                                                    <linearGradient id="radarGradient" x1="0" y1="0" x2="1" y2="1">
+                                                        <stop offset="0%" stopColor="#4f46e5" stopOpacity={0.7} />
+                                                        <stop offset="50%" stopColor="#8b5cf6" stopOpacity={0.5} />
+                                                        <stop offset="100%" stopColor="#ec4899" stopOpacity={0.35} />
+                                                    </linearGradient>
+                                                    <filter id="radarGlow">
+                                                        <feGaussianBlur stdDeviation="3" result="coloredBlur" />
+                                                        <feMerge>
+                                                            <feMergeNode in="coloredBlur" />
+                                                            <feMergeNode in="SourceGraphic" />
+                                                        </feMerge>
+                                                    </filter>
+                                                </defs>
+
+                                                {/* Inner dotted gridlines (faint) */}
+                                                <PolarGrid
+                                                    stroke="var(--muted)"
+                                                    strokeDasharray="2 4"
+                                                    strokeOpacity={0.3}
+                                                    gridType="polygon"
+                                                />
+                                                <PolarAngleAxis
+                                                    dataKey="label"
+                                                    tick={{ fill: 'var(--foreground)', fontSize: 12, fontWeight: 700, letterSpacing: '-0.01em' }}
+                                                    tickLine={false}
+                                                    axisLine={{ stroke: 'var(--muted)', strokeWidth: 1, strokeOpacity: 0.55 }}
+                                                />
+                                                <PolarRadiusAxis
+                                                    angle={90}
+                                                    domain={[0, 100]}
+                                                    tick={{ fill: 'var(--muted)', fontSize: 10, fontWeight: 500 }}
+                                                    tickCount={5}
+                                                    axisLine={false}
+                                                    stroke="transparent"
+                                                />
+                                                <Radar
+                                                    name="정답률"
+                                                    dataKey="correctRate"
+                                                    stroke="#6366f1"
+                                                    strokeWidth={2.5}
+                                                    fill="url(#radarGradient)"
+                                                    fillOpacity={0.85}
+                                                    dot={{ fill: '#6366f1', stroke: '#fff', strokeWidth: 2, r: 5 }}
+                                                    activeDot={{ fill: '#ec4899', stroke: '#fff', strokeWidth: 2, r: 7 }}
+                                                    animationDuration={1400}
+                                                    animationEasing="ease-out"
+                                                    filter="url(#radarGlow)"
+                                                />
+                                                <RechartsTooltip
+                                                    cursor={{ fill: 'transparent' }}
+                                                    contentStyle={{
+                                                        borderRadius: '12px',
+                                                        border: '1px solid rgba(99, 102, 241, 0.2)',
+                                                        boxShadow: '0 8px 32px rgba(0,0,0,0.12)',
+                                                        background: 'var(--surface)',
+                                                        color: 'var(--foreground)',
+                                                        fontWeight: 700,
+                                                        fontSize: '0.85rem',
+                                                        padding: '0.6rem 0.9rem',
+                                                        letterSpacing: '-0.01em'
+                                                    }}
+                                                    itemStyle={{ color: 'var(--primary)', fontWeight: 800, padding: 0 }}
+                                                    labelStyle={{ color: 'var(--foreground)', marginBottom: '4px', fontSize: '0.82rem', fontWeight: 700 }}
+                                                    formatter={(value: number | string | undefined) => [`${value}%`, '정답률']}
+                                                />
+                                            </RadarChart>
+                                        </ResponsiveContainer>
+                                    </div>
+
+                                    {/* Premium Legend */}
+                                    <div className="radar-legend">
+                                        {labelAnalytics.map((item, idx) => {
+                                            const hue = (idx * 360) / labelAnalytics.length;
+                                            const dotColor = `hsl(${(hue + 230) % 360}, 75%, 60%)`;
+                                            const rateColor = item.correctRate >= 80 ? 'var(--success)'
+                                                : item.correctRate >= 50 ? 'var(--primary)'
+                                                : 'var(--error)';
+                                            return (
+                                                <div key={item.label} className="radar-legend-item">
+                                                    <span className="radar-legend-dot" style={{ background: dotColor }} />
+                                                    <span className="radar-legend-label">{item.label}</span>
+                                                    <span className="radar-legend-value" style={{ color: rateColor }}>
+                                                        {item.correctRate}%
+                                                    </span>
+                                                </div>
+                                            );
+                                        })}
+                                    </div>
+                                </>
                             ) : (
                                 <div style={{ height: '300px', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--muted)' }}>라벨이 지정된 문항이 없습니다.</div>
                             )}

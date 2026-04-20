@@ -1,13 +1,15 @@
 "use client";
 
-import { useState, useMemo } from "react";
+import { useState, useMemo, useEffect } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { Exam, Attempt } from "@/types/omr";
 import StatCard from "@/components/dashboard/StatCard";
 import TrendChart from "@/components/dashboard/TrendChart";
 import ExamListBlock from "@/components/dashboard/ExamListBlock";
+import ExamActionsMenu, { ExamActionKind } from "@/components/dashboard/ExamActionsMenu";
+import { toast } from "@/components/Toast";
 import { Users, BarChart3, PlusCircle, Activity } from "lucide-react";
-import { useToast } from "@/components/ui/Toast";
 
 interface OverviewTabProps {
     exams: Exam[];
@@ -21,13 +23,87 @@ interface OverviewTabProps {
     onNavigateToExamAnalytics?: (examId: string) => void;
 }
 
-export default function OverviewTab({ exams, attempts, stats, trendData, onNavigateToExamAnalytics }: OverviewTabProps) {
+export default function OverviewTab({ exams: examsProp, attempts, stats, trendData, onNavigateToExamAnalytics }: OverviewTabProps) {
+    const router = useRouter();
     const [activeTab, setActiveTab] = useState<'ongoing' | 'completed'>('ongoing');
-    const [now] = useState(() => Date.now());
-    const toast = useToast();
+    // Local copy so action handlers (archive/delete/duplicate) can update the table
+    // without requiring the parent page to reload from localStorage.
+    const [exams, setExams] = useState<Exam[]>(examsProp);
+
+    // Sync when parent reloads data (initial mount / navigation).
+    useEffect(() => { setExams(examsProp); }, [examsProp]);
+
+    const realExamIds = useMemo(() => new Set(exams.map(e => e.id)), [exams]);
+
+    const isMockExamId = (id: string) => !realExamIds.has(id);
+
+    const handleExamAction = (kind: ExamActionKind, examId: string) => {
+        const target = exams.find(e => e.id === examId);
+        if (!target) return;
+
+        if (kind === 'edit') {
+            router.push(`/create?edit=${encodeURIComponent(examId)}`);
+            return;
+        }
+
+        if (kind === 'duplicate') {
+            const newId = Date.now().toString(36);
+            const copy: Exam = {
+                ...target,
+                id: newId,
+                title: target.title + ' (복사본)',
+                createdAt: new Date().toISOString(),
+                updatedAt: new Date().toISOString(),
+                archived: false,
+            };
+            try {
+                localStorage.setItem(`omr_exam_${newId}`, JSON.stringify(copy));
+                setExams(prev => [copy, ...prev]);
+                toast.success('시험 복제됨', `"${target.title}"의 복사본을 만들었습니다.`);
+            } catch {
+                toast.error('복제 실패', 'localStorage 용량이 부족할 수 있습니다.');
+            }
+            return;
+        }
+
+        if (kind === 'archive') {
+            const nextArchived = !target.archived;
+            const updated: Exam = { ...target, archived: nextArchived, updatedAt: new Date().toISOString() };
+            try {
+                localStorage.setItem(`omr_exam_${examId}`, JSON.stringify(updated));
+                setExams(prev => prev.map(e => e.id === examId ? updated : e));
+                toast.success(nextArchived ? '시험 보관됨' : '보관 해제됨', target.title);
+            } catch {
+                toast.error('보관 처리 실패');
+            }
+            return;
+        }
+
+        if (kind === 'delete') {
+            if (!window.confirm(`"${target.title}" 시험을 삭제하시겠습니까?\n이 작업은 되돌릴 수 없습니다.`)) return;
+            try {
+                localStorage.removeItem(`omr_exam_${examId}`);
+                // Clean up attempts belonging to this exam
+                const attemptsRaw = localStorage.getItem('omr_attempts');
+                if (attemptsRaw) {
+                    try {
+                        const all: Attempt[] = JSON.parse(attemptsRaw);
+                        const filtered = all.filter(a => a.examId !== examId);
+                        localStorage.setItem('omr_attempts', JSON.stringify(filtered));
+                    } catch {}
+                }
+                setExams(prev => prev.filter(e => e.id !== examId));
+                toast.success('시험 삭제됨', target.title);
+            } catch {
+                toast.error('삭제 실패');
+            }
+            return;
+        }
+    };
 
     // Create dummy data mixed with real data for presentation
     const ongoingExams = useMemo(() => {
+        const now = Date.now();
         return [
             ...exams.slice(0, 2).map((e, idx) => ({ ...e, completedCount: attempts.filter(a => a.examId === e.id).length, total: stats.totalStudents > 0 ? stats.totalStudents : 30 + idx * 5 })),
             // Mock ongoing exams
@@ -35,25 +111,32 @@ export default function OverviewTab({ exams, attempts, stats, trendData, onNavig
             { id: 'mock-ongoing-2', title: 'Chapter 4 Mathematics', createdAt: new Date(now - 86400000 * 5).toISOString(), completedCount: 28, total: 32 },
             { id: 'mock-ongoing-3', title: 'Science Pop Quiz', createdAt: new Date(now - 86400000 * 1).toISOString(), completedCount: 5, total: 30 }
         ].slice(0, 5);
-    }, [exams, attempts, stats, now]);
+    }, [exams, attempts, stats]);
 
     const completedExams = useMemo(() => {
+        const now = Date.now();
         return [
             // Mock completed exams
             { id: 'comp-1', title: 'History Final Exam', createdAt: new Date(now - 86400000 * 30).toISOString(), completedCount: 35, total: 35 },
             { id: 'comp-2', title: 'Biology Chapter 1', createdAt: new Date(now - 86400000 * 15).toISOString(), completedCount: 30, total: 30 },
             { id: 'comp-3', title: 'Literature Essay Submission', createdAt: new Date(now - 86400000 * 10).toISOString(), completedCount: 32, total: 32 }
         ];
-    }, [now]);
+    }, []);
 
     const displayExams = activeTab === 'ongoing' ? ongoingExams : completedExams;
 
     const handleSendAlarm = (examTitle: string) => {
-        toast.info(`[${examTitle}] 미응시 학생들에게 개별 알림을 전송했습니다.\n\n- 시험 시작 하루 전 자동 알림 기능 (활성화됨)\n- 선생님 수동 푸시 알림 (전송됨)`);
+        toast.success(
+            '독려 알람 발송됨',
+            `${examTitle} 미응시 학생들에게 개별 알림을 전송했습니다.`
+        );
     };
 
     const handleSendAllAlarms = () => {
-        toast.info("선생님이 배포한 '모든' 진행중인 시험의 미응시 학생들에게 일괄 알림을 전송했습니다.");
+        toast.success(
+            '알람 발송 완료',
+            '진행 중인 모든 시험의 미응시 학생에게 일괄 전송되었습니다.'
+        );
     };
 
     return (
@@ -65,31 +148,31 @@ export default function OverviewTab({ exams, attempts, stats, trendData, onNavig
                         Quick Action <span style={{ fontWeight: 400, color: 'var(--muted)', fontSize: '0.9rem' }}>Do Some Quickly</span>
                     </h3>
                 </div>
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(100px, 1fr))', gap: '1rem', flex: 1 }}>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '1rem', flex: 1 }}>
                     <Link href="/create" style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: '0.5rem', padding: '1rem', background: 'rgba(56, 189, 248, 0.1)', borderRadius: 'var(--radius-lg)', color: '#0ea5e9', transition: 'all 0.2s' }} className="card-hover">
                         <PlusCircle size={24} />
                         <span style={{ fontSize: '0.85rem', fontWeight: 600 }}>Create Exam</span>
                     </Link>
-                    <button style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: '0.5rem', padding: '1rem', background: 'rgba(239, 68, 68, 0.1)', borderRadius: 'var(--radius-lg)', color: '#ef4444', transition: 'all 0.2s' }} className="card-hover">
+                    <Link href="/teacher/live" style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: '0.5rem', padding: '1rem', background: 'rgba(239, 68, 68, 0.1)', borderRadius: 'var(--radius-lg)', color: '#ef4444', transition: 'all 0.2s' }} className="card-hover">
                         <Activity size={24} />
                         <span style={{ fontSize: '0.85rem', fontWeight: 600 }}>Live Results</span>
-                    </button>
-                    <button style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: '0.5rem', padding: '1rem', background: 'rgba(34, 197, 94, 0.1)', borderRadius: 'var(--radius-lg)', color: '#22c55e', transition: 'all 0.2s' }} className="card-hover">
+                    </Link>
+                    <Link href="/teacher/users" style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: '0.5rem', padding: '1rem', background: 'rgba(34, 197, 94, 0.1)', borderRadius: 'var(--radius-lg)', color: '#22c55e', transition: 'all 0.2s' }} className="card-hover">
                         <Users size={24} />
                         <span style={{ fontSize: '0.85rem', fontWeight: 600 }}>Manage Users</span>
-                    </button>
-                    <button style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: '0.5rem', padding: '1rem', background: 'rgba(245, 158, 11, 0.1)', borderRadius: 'var(--radius-lg)', color: '#f59e0b', transition: 'all 0.2s' }} className="card-hover">
+                    </Link>
+                    <Link href="/teacher/dashboard?tab=exam" style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: '0.5rem', padding: '1rem', background: 'rgba(245, 158, 11, 0.1)', borderRadius: 'var(--radius-lg)', color: '#f59e0b', transition: 'all 0.2s' }} className="card-hover">
                         <BarChart3 size={24} />
                         <span style={{ fontSize: '0.85rem', fontWeight: 600 }}>Analytics</span>
-                    </button>
-                    <button onClick={() => toast.info("Setting features coming soon")} style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: '0.5rem', padding: '1rem', background: 'rgba(99, 102, 241, 0.1)', borderRadius: 'var(--radius-lg)', color: '#6366f1', transition: 'all 0.2s' }} className="card-hover">
+                    </Link>
+                    <Link href="/teacher/settings" style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: '0.5rem', padding: '1rem', background: 'rgba(99, 102, 241, 0.1)', borderRadius: 'var(--radius-lg)', color: '#6366f1', transition: 'all 0.2s' }} className="card-hover">
                         <svg width="24" height="24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>
                         <span style={{ fontSize: '0.85rem', fontWeight: 600 }}>Settings</span>
-                    </button>
-                    <button onClick={() => toast.info("Invoice & Billing features coming soon")} style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: '0.5rem', padding: '1rem', background: 'rgba(168, 85, 247, 0.1)', borderRadius: 'var(--radius-lg)', color: '#a855f7', transition: 'all 0.2s' }} className="card-hover">
+                    </Link>
+                    <Link href="/teacher/billing" style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: '0.5rem', padding: '1rem', background: 'rgba(168, 85, 247, 0.1)', borderRadius: 'var(--radius-lg)', color: '#a855f7', transition: 'all 0.2s' }} className="card-hover">
                         <svg width="24" height="24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="2" y="5" width="20" height="14" rx="2"></rect><line x1="2" y1="10" x2="22" y2="10"></line></svg>
                         <span style={{ fontSize: '0.85rem', fontWeight: 600 }}>Billing</span>
-                    </button>
+                    </Link>
                 </div>
             </div>
 
@@ -165,6 +248,7 @@ export default function OverviewTab({ exams, attempts, stats, trendData, onNavig
                             <th style={{ padding: '1rem 0' }}>Participants / Total</th>
                             <th style={{ padding: '1rem 0' }}>Status</th>
                             {activeTab === 'ongoing' && <th style={{ padding: '1rem 0', textAlign: 'right' }}>Action</th>}
+                            <th style={{ padding: '1rem 0', textAlign: 'right', width: 60 }}>작업</th>
                         </tr>
                     </thead>
                     <tbody>
@@ -176,8 +260,12 @@ export default function OverviewTab({ exams, attempts, stats, trendData, onNavig
                             const statusBg = participationRate === 100 ? 'rgba(16, 185, 129, 0.1)' : 'rgba(139, 92, 246, 0.1)';
                             const statusColor = participationRate === 100 ? 'var(--success)' : 'var(--accent)';
 
+                            const realExam = exams.find(e => e.id === exam.id);
+                            const isArchived = !!realExam?.archived;
+                            const canAct = !isMockExamId(exam.id);
+
                             return (
-                                <tr key={exam.id} style={{ borderBottom: '1px solid var(--border)', transition: 'background 0.2s' }} className="hover:bg-slate-50 dark:hover:bg-slate-800/50">
+                                <tr key={exam.id} style={{ borderBottom: '1px solid var(--border)', transition: 'background 0.2s', opacity: isArchived ? 0.6 : 1 }} className="hover:bg-slate-50 dark:hover:bg-slate-800/50">
                                     <td style={{ padding: '1.2rem 0', fontWeight: 600, fontSize: '0.95rem' }}>
                                         <span
                                             onClick={() => onNavigateToExamAnalytics && onNavigateToExamAnalytics(exam.id)}
@@ -186,6 +274,19 @@ export default function OverviewTab({ exams, attempts, stats, trendData, onNavig
                                         >
                                             {exam.title}
                                         </span>
+                                        {isArchived && (
+                                            <span style={{
+                                                marginLeft: '0.5rem',
+                                                display: 'inline-block',
+                                                padding: '0.15rem 0.5rem',
+                                                fontSize: '0.7rem',
+                                                fontWeight: 700,
+                                                background: 'rgba(100,116,139,0.15)',
+                                                color: 'var(--muted)',
+                                                borderRadius: 'var(--radius-full)',
+                                                verticalAlign: 'middle',
+                                            }}>보관됨</span>
+                                        )}
                                     </td>
                                     <td style={{ padding: '1.2rem 0', color: 'var(--muted)', fontSize: '0.9rem' }}>{new Date(exam.createdAt).toLocaleDateString()}</td>
                                     <td style={{ padding: '1.2rem 0', display: 'flex', alignItems: 'center', gap: '1rem', height: '100%' }}>
@@ -219,6 +320,16 @@ export default function OverviewTab({ exams, attempts, stats, trendData, onNavig
                                             </button>
                                         </td>
                                     )}
+                                    <td style={{ padding: '1.2rem 0', textAlign: 'right' }}>
+                                        {canAct ? (
+                                            <ExamActionsMenu
+                                                exam={{ id: exam.id, title: exam.title, archived: isArchived }}
+                                                onAction={handleExamAction}
+                                            />
+                                        ) : (
+                                            <span style={{ display: 'inline-block', width: 32, height: 32 }} aria-hidden />
+                                        )}
+                                    </td>
                                 </tr>
                             );
                         })}
@@ -226,25 +337,32 @@ export default function OverviewTab({ exams, attempts, stats, trendData, onNavig
                 </table>
             </div>
 
-            {/* 4. Statistics Small Cards Base */}
-            <StatCard
-                title="Total Students"
-                value={stats.totalStudents}
-                icon={<Users size={32} color="var(--primary)" />}
-                trend="12%"
-                trendUp={true}
-            />
+            {/* 4. Statistics stacked vertically (col-span-1) + Exam list (col-span-3) */}
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem', gridColumn: 'span 1', height: '100%' }}>
+                <div style={{ flex: 1, display: 'flex', width: '100%', minHeight: 0 }}>
+                    <StatCard
+                        title="Total Students"
+                        value={stats.totalStudents}
+                        icon={<Users size={28} color="var(--primary)" />}
+                        trend="12%"
+                        trendUp={true}
+                    />
+                </div>
+                <div style={{ flex: 1, display: 'flex', width: '100%', minHeight: 0 }}>
+                    <StatCard
+                        title="Average Score"
+                        value={stats.avgScore.toFixed(1)}
+                        icon={<BarChart3 size={28} color="var(--success)" />}
+                        color="var(--success)"
+                        trend={stats.avgScore > 80 ? 'Good' : 'Needs Focus'}
+                        trendUp={stats.avgScore > 80}
+                    />
+                </div>
+            </div>
 
-            <StatCard
-                title="Average Score"
-                value={stats.avgScore.toFixed(1)}
-                icon={<BarChart3 size={32} color="var(--success)" />}
-                color="var(--success)"
-                trend={stats.avgScore > 80 ? 'Good' : 'Needs Focus'}
-                trendUp={stats.avgScore > 80}
-            />
-
-            <ExamListBlock exams={exams} />
+            <div style={{ gridColumn: 'span 3' }}>
+                <ExamListBlock exams={exams} />
+            </div>
         </div>
     );
 }

@@ -5,15 +5,22 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { Exam, Attempt } from "@/types/omr";
 import AssignmentBlock from "@/components/dashboard/AssignmentBlock";
-import { useToast } from "@/components/ui/Toast";
+import ThemeToggle from "@/components/ThemeToggle";
+import { Sparkles, Award } from "lucide-react";
 
 import { mergeGuestAttempts } from "@/utils/storage";
 
+function getTimeGreeting(): string {
+    const h = new Date().getHours();
+    if (h < 6) return "늦은 밤이네요";
+    if (h < 12) return "좋은 아침이에요";
+    if (h < 18) return "오늘도 수고하세요";
+    return "좋은 저녁이에요";
+}
+
 export default function StudentDashboard() {
     const router = useRouter();
-    const toast = useToast();
-    const [user, setUser] = useState<{ id?: string; name: string; phone?: string; groupId?: string; groupName?: string; isGuest?: boolean; guestId?: string } | null>(null);
-    const [searchExamId, setSearchExamId] = useState("");
+    const [user, setUser] = useState<{ name: string; groupId: string; groupName: string; isGuest?: boolean; guestId?: string } | null>(null);
     const [todoExams, setTodoExams] = useState<Exam[]>([]);
     const [doneExams, setDoneExams] = useState<(Exam & { attemptId: string })[]>([]);
     const [stats, setStats] = useState({
@@ -25,31 +32,11 @@ export default function StudentDashboard() {
         // 1. Check Session (Simulated)
         const session = sessionStorage.getItem("omr_student_session");
         if (!session) {
-            toast.error("로그인이 필요합니다.");
+            alert("로그인이 필요합니다.");
             router.push("/");
             return;
         }
-        let currentUser = JSON.parse(session);
-        
-        if (!currentUser.isGuest) {
-            // refresh data from omr_students
-            const students = JSON.parse(localStorage.getItem("omr_students") || "[]");
-            // eslint-disable-next-line @typescript-eslint/no-explicit-any
-            const dbUser = students.find((s: any) => s.id === currentUser.id || (s.name === currentUser.name && s.phone === currentUser.phone));
-            if (dbUser) {
-                currentUser = { ...currentUser, ...dbUser };
-                
-                if (dbUser.groupId) {
-                    const groups = JSON.parse(localStorage.getItem("omr_groups") || "[]");
-                    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                    const foundGroup = groups.find((g: any) => g.id === dbUser.groupId);
-                    if (foundGroup) {
-                        currentUser.groupName = foundGroup.name;
-                    }
-                }
-            }
-        }
-
+        const currentUser = JSON.parse(session);
         // eslint-disable-next-line react-hooks/set-state-in-effect
         setUser(currentUser);
 
@@ -107,70 +94,39 @@ export default function StudentDashboard() {
         setDoneExams(done);
 
         // 4. Calculate Stats
-        const completedAttempts = myAttempts.filter(a => a.status !== 'grading');
-        const totalScore = completedAttempts.reduce((acc, curr) => acc + (curr.score / curr.totalScore) * 100, 0);
-        const avg = completedAttempts.length > 0 ? Math.round(totalScore / completedAttempts.length) : 0;
+        const totalScore = myAttempts.reduce((acc, curr) => acc + (curr.score / curr.totalScore) * 100, 0);
+        const avg = myAttempts.length > 0 ? Math.round(totalScore / myAttempts.length) : 0;
         setStats({
             avgScore: avg,
-            completedCount: completedAttempts.length
+            completedCount: myAttempts.length
         });
 
     }, [router]);
 
     const handleMergeAccount = () => {
-        const name = prompt("가입할 이름을 입력하세요 (예: 홍길동):");
+        // Mocking a flow where guest logs in
+        const name = prompt("Enter your name to sign up/login:");
         if (!name) return;
-        const phone = prompt("전화번호 (또는 뒷자리 4자리)를 입력하세요:");
-        if (!phone) return;
-
-        // Create new account
-        const newStudentId = `stu_${Math.random().toString(36).substring(2, 9)}`;
-        const students = JSON.parse(localStorage.getItem('omr_students') || '[]');
-        students.push({
-            id: newStudentId,
-            name: name,
-            phone: phone,
-            createdAt: new Date().toISOString()
-        });
-        localStorage.setItem('omr_students', JSON.stringify(students));
 
         // 1. Simulate new session
         const newSession = {
-            id: newStudentId,
             name: name,
-            phone: phone,
+            groupId: "group-1", // mock group
+            groupName: "Class A",
             isGuest: false
         };
 
         // 2. Perform Merge
         if (user?.guestId) {
             mergeGuestAttempts(user.guestId, name);
-            toast.success(`${name} 이름으로 데이터가 성공적으로 저장/병합되었습니다!`);
+            alert(`History merged to ${name}!`);
         }
 
         sessionStorage.setItem("omr_student_session", JSON.stringify(newSession));
         window.location.reload(); // Reload to refresh data
     };
 
-    const handleSearchExam = () => {
-        if (!searchExamId.trim()) {
-            toast.error("시험 코드를 입력해주세요.");
-            return;
-        }
-        router.push(`/solve/${searchExamId.trim()}`);
-    };
-
-    if (!user) return (
-        <div className="layout-main" style={{ padding: '2rem', maxWidth: '1200px', margin: '0 auto' }}>
-            <div className="animate-pulse" style={{ height: '4.5rem', width: '100%', background: 'var(--surface)', borderRadius: 'var(--radius-lg)', marginBottom: '3rem', opacity: 0.5 }}></div>
-            <div className="animate-pulse" style={{ height: '3rem', width: '40%', background: 'var(--surface)', borderRadius: 'var(--radius-md)', marginBottom: '3rem', opacity: 0.5 }}></div>
-            <div className="bento-grid">
-                <div className="bento-card col-span-1 animate-pulse" style={{ height: '180px', opacity: 0.5 }}></div>
-                <div className="bento-card col-span-1 animate-pulse" style={{ height: '180px', opacity: 0.5 }}></div>
-                <div className="bento-card col-span-2 row-span-2 animate-pulse" style={{ height: '400px', opacity: 0.5 }}></div>
-            </div>
-        </div>
-    );
+    if (!user) return <div style={{ padding: '2rem' }}>Loading...</div>;
 
     return (
         <div className="layout-main">
@@ -187,18 +143,19 @@ export default function StudentDashboard() {
                             {user.isGuest ? "GUEST" : "STUDENT"}
                         </span>
                     </div>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '1.5rem' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
                         <span style={{ fontWeight: 600, fontSize: '0.95rem' }}>
-                            {user.name} {user.groupName && <span style={{ color: 'var(--muted)', fontWeight: 400 }}>({user.groupName})</span>}
+                            {user.name} <span style={{ color: 'var(--muted)', fontWeight: 400 }}>({user.groupName})</span>
                         </span>
                         <button onClick={() => {
-                            if (confirm("Logout?")) {
+                            if (confirm("로그아웃하시겠습니까?")) {
                                 sessionStorage.removeItem("omr_student_session");
                                 router.push("/");
                             }
                         }} style={{ fontSize: '0.9rem', color: 'var(--muted)', cursor: 'pointer', transition: 'color 0.2s', fontWeight: 500 }}>
-                            Logout
+                            로그아웃
                         </button>
+                        <ThemeToggle />
                     </div>
                 </div>
             </header>
@@ -234,71 +191,59 @@ export default function StudentDashboard() {
 
                 {/* Welcome */}
                 <div style={{ margin: '3rem 0' }}>
+                    <div style={{
+                        display: 'inline-flex', alignItems: 'center', gap: '0.5rem',
+                        fontSize: '0.8rem', fontWeight: 700, letterSpacing: '0.04em',
+                        color: 'var(--muted)', marginBottom: '0.5rem'
+                    }}>
+                        <Sparkles size={14} color="var(--primary)" />
+                        {getTimeGreeting()}
+                    </div>
                     <h1 className="title-gradient" style={{ fontSize: '2.5rem', marginBottom: '0.75rem', lineHeight: 1.2 }}>
-                        Hello, {user.name}! 👋
+                        {user.name}님,
                     </h1>
                     <p className="text-muted" style={{ fontSize: '1.1rem' }}>
-                        You have <strong style={{ color: 'var(--primary)', fontWeight: 700 }}>{todoExams.length}</strong> assignments pending today.
+                        {todoExams.length > 0 ? (
+                            <>오늘 <strong style={{ color: 'var(--primary)', fontWeight: 700 }}>{todoExams.length}개</strong>의 시험이 기다리고 있어요.</>
+                        ) : (
+                            <>오늘은 예정된 시험이 없습니다. 편안한 하루 보내세요.</>
+                        )}
                     </p>
                 </div>
 
                 {/* Dashboard Grid */}
-                {user.isGuest ? (
-                    <div className="bento-grid">
-                        <div className="bento-card col-span-2" style={{ background: 'var(--surface)', display: 'flex', flexDirection: 'column', gap: '1rem', padding: '2rem' }}>
-                            <h2 style={{ fontSize: '1.25rem', fontWeight: 700 }}>시험 참여하기</h2>
-                            <p style={{ color: 'var(--muted)', fontSize: '0.95rem' }}>선생님께 받은 시험 코드(ID)를 입력하여 바로 시작하세요.</p>
-                            <div style={{ display: 'flex', gap: '0.5rem' }}>
-                                <input
-                                    type="text"
-                                    className="input-field"
-                                    placeholder="예: exam_abc123"
-                                    value={searchExamId}
-                                    onChange={(e) => setSearchExamId(e.target.value)}
-                                    onKeyDown={(e) => e.key === 'Enter' && handleSearchExam()}
-                                    style={{ flex: 1 }}
-                                />
-                                <button className="btn btn-primary" onClick={handleSearchExam}>들어가기</button>
-                            </div>
+                <div className="bento-grid">
+                    {/* Stats */}
+                    <Link href="/student/history" className="bento-card col-span-1 card-hover" style={{
+                        background: 'linear-gradient(135deg, var(--secondary), #f472b6)',
+                        color: 'white', border: 'none',
+                        display: 'flex', flexDirection: 'column', justifyContent: 'center'
+                    }}>
+                        <div style={{ fontSize: '0.95rem', fontWeight: 600, opacity: 0.9, marginBottom: '0.5rem' }}>나의 평균 점수</div>
+                        <div style={{ fontSize: '3rem', fontWeight: 800, lineHeight: 1 }}>{stats.avgScore}</div>
+                        <div style={{ fontSize: '0.85rem', opacity: 0.8, marginTop: '1rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                            상세 보기 <span>→</span>
                         </div>
-                        {/* Completed List (Guest) */}
-                        <div className="col-span-2">
-                            <AssignmentBlock type="done" exams={doneExams} />
+                    </Link>
+
+                    <div className="bento-card col-span-1" style={{ justifyContent: 'center', alignItems: 'center', background: 'var(--surface)', position: 'relative', overflow: 'hidden' }}>
+                        <Award size={22} color="var(--primary)" style={{ position: 'absolute', top: 16, right: 16, opacity: 0.6 }} />
+                        <div style={{ fontSize: '3rem', fontWeight: 800, color: 'var(--foreground)', lineHeight: 1, marginBottom: '0.5rem' }}>
+                            {stats.completedCount}
                         </div>
+                        <div style={{ color: 'var(--muted)', fontSize: '0.9rem', fontWeight: 600 }}>완료한 시험</div>
                     </div>
-                ) : (
-                    <div className="bento-grid">
-                        {/* Stats */}
-                        <Link href="/student/history" className="bento-card col-span-1 card-hover" style={{
-                            background: 'linear-gradient(135deg, var(--secondary), #f472b6)',
-                            color: 'white', border: 'none',
-                            display: 'flex', flexDirection: 'column', justifyContent: 'center'
-                        }}>
-                            <div style={{ fontSize: '0.95rem', fontWeight: 600, opacity: 0.9, marginBottom: '0.5rem' }}>My Average</div>
-                            <div style={{ fontSize: '3rem', fontWeight: 800, lineHeight: 1 }}>{stats.avgScore}</div>
-                            <div style={{ fontSize: '0.85rem', opacity: 0.8, marginTop: '1rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                                View Details <span>→</span>
-                            </div>
-                        </Link>
 
-                        <div className="bento-card col-span-1" style={{ justifyContent: 'center', alignItems: 'center', background: 'var(--surface)' }}>
-                            <div style={{ fontSize: '3rem', fontWeight: 800, color: 'var(--foreground)', lineHeight: 1, marginBottom: '0.5rem' }}>
-                                {stats.completedCount}
-                            </div>
-                            <div style={{ color: 'var(--muted)', fontSize: '0.9rem', fontWeight: 600 }}>Exams Completed</div>
-                        </div>
-
-                        {/* Todo List (Main Focus) */}
-                        <div className="col-span-2 row-span-2">
-                            <AssignmentBlock type="todo" exams={todoExams} />
-                        </div>
-
-                        {/* Completed List */}
-                        <div className="col-span-2">
-                            <AssignmentBlock type="done" exams={doneExams} />
-                        </div>
+                    {/* Todo List (Main Focus) */}
+                    <div className="col-span-2 row-span-2">
+                        <AssignmentBlock type="todo" exams={todoExams} />
                     </div>
-                )}
+
+                    {/* Completed List */}
+                    <div className="col-span-2">
+                        <AssignmentBlock type="done" exams={doneExams} />
+                    </div>
+                </div>
             </main>
         </div>
     );

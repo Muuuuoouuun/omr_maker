@@ -1,272 +1,663 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
-import Image from "next/image";
-import { Student } from "@/types/omr";
-import { useToast } from "@/components/ui/Toast";
+import { Attempt, Group } from "@/types/omr";
+import ThemeToggle from "@/components/ThemeToggle";
+import { toast } from "@/components/Toast";
+
+// Stable identifier for a (name, group) pair.
+function studentIdFor(name: string, groupId: string) {
+    return `${groupId}::${name.trim()}`;
+}
+
+// 6-char alphanumeric code — avoids ambiguous chars (0/O, 1/I).
+function generateStartCode(): string {
+    const alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+    let out = "";
+    for (let i = 0; i < 6; i++) {
+        out += alphabet[Math.floor(Math.random() * alphabet.length)];
+    }
+    return out;
+}
+
+/* ─── SVG Icons ──────────────────────────────────────── */
+
+function StudentIcon({ size = 40 }: { size?: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 48 48" fill="none" xmlns="http://www.w3.org/2000/svg" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round">
+      {/* Mortarboard top (diamond shape) */}
+      <path d="M24 8L43 18L24 28L5 18L24 8Z" strokeWidth="2.3" />
+      {/* Inner cap highlight line */}
+      <path d="M12 19L24 25L36 19" strokeWidth="1.5" strokeOpacity="0.4" />
+      {/* Hood/cap band under the mortarboard */}
+      <path d="M14 23V32C14 35.3 18.5 37 24 37C29.5 37 34 35.3 34 32V23" strokeWidth="2.3" />
+      {/* Tassel cord */}
+      <path d="M43 18V30" strokeWidth="2.3" />
+      {/* Tassel dot */}
+      <circle cx="43" cy="33" r="2.2" fill="currentColor" stroke="none" />
+    </svg>
+  );
+}
+
+function TeacherIcon({ size = 40 }: { size?: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 48 48" fill="none" xmlns="http://www.w3.org/2000/svg" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round">
+      {/* Book/clipboard base */}
+      <path d="M10 8C10 7 10.5 6.5 11.5 6.5H34.5C35.5 6.5 36 7 36 8V36C36 37 35.5 37.5 34.5 37.5H11.5C10.5 37.5 10 37 10 36V8Z" strokeWidth="2.2" />
+      {/* Book spine vertical line */}
+      <path d="M10 8V36" strokeWidth="2.2" strokeOpacity="0.4" />
+      {/* Content lines on book */}
+      <path d="M16 15H30" strokeWidth="2.2" />
+      <path d="M16 21H26" strokeWidth="2.2" />
+      <path d="M16 27H28" strokeWidth="2.2" />
+      {/* Pen / marker overlapping bottom-right */}
+      <path d="M36 32L42 38L40 41L34 35L36 32Z" strokeWidth="2.2" />
+      <path d="M34 35L31 41L37 39L36 32" strokeWidth="2.2" strokeOpacity="0.6" />
+    </svg>
+  );
+}
+
+function ChevronRight({ size = 16 }: { size?: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 16 16" fill="none">
+      <path d="M6 12L10 8L6 4" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
+function ChevronLeft({ size = 16 }: { size?: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 16 16" fill="none">
+      <path d="M10 12L6 8L10 4" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
+/* ─── Page ───────────────────────────────────────────── */
 
 export default function Home() {
   const router = useRouter();
-  const toast = useToast();
-  const [role, setRole] = useState<'none' | 'teacher' | 'student'>('none');
-
-  // Student Login State
+  const [role, setRole] = useState<"none" | "teacher" | "student">("none");
   const [studentName, setStudentName] = useState("");
-  const [phone, setPhone] = useState("");
-  const [isLoginMode, setIsLoginMode] = useState(true);
-  const [guestExamCode, setGuestExamCode] = useState("");
-
-  // Teacher Login State
+  const [selectedGroupId, setSelectedGroupId] = useState("");
+  const [groups, setGroups] = useState<Group[]>([]);
   const [password, setPassword] = useState("");
+  const [error, setError] = useState("");
+  // Anti-spoof: require a start-code for returning students.
+  const [startCode, setStartCode] = useState("");
+  const [needsCode, setNeedsCode] = useState(false);
+
+  useEffect(() => {
+    const stored = localStorage.getItem("omr_groups");
+    if (stored) setGroups(JSON.parse(stored));
+  }, []);
+
+  // Surface the start-code field proactively for returning students.
+  useEffect(() => {
+    if (role !== "student" || !studentName.trim() || !selectedGroupId) {
+      setNeedsCode(false);
+      return;
+    }
+    try {
+      const raw = localStorage.getItem("omr_student_codes");
+      if (!raw) return setNeedsCode(false);
+      const codes: Record<string, string> = JSON.parse(raw);
+      const sid = studentIdFor(studentName, selectedGroupId);
+      setNeedsCode(!!codes[sid]);
+    } catch {
+      setNeedsCode(false);
+    }
+  }, [role, studentName, selectedGroupId]);
 
   const handleTeacherLogin = () => {
     if (password === "admin123") {
       router.push("/teacher/dashboard");
     } else {
-      toast.error("Invalid Password (Try: admin123)");
+      setError("잘못된 비밀번호입니다.");
+      setTimeout(() => setError(""), 2000);
     }
   };
 
   const handleStudentLogin = () => {
-    if (!studentName.trim() || !phone.trim()) {
-      toast.error("이름과 전화번호를 모두 입력해주세요.");
+    if (!studentName.trim() || !selectedGroupId) {
+      setError("이름과 반을 모두 입력해주세요.");
+      setTimeout(() => setError(""), 2000);
       return;
     }
+    const group = groups.find((g) => g.id === selectedGroupId);
+    const sid = studentIdFor(studentName, selectedGroupId);
 
-    const storedStudents = JSON.parse(localStorage.getItem('omr_students') || '[]');
-    let student = storedStudents.find((s: Student) => s.name === studentName && s.phone === phone);
+    // Load existing start-code registry + attempts to decide anti-spoof path.
+    let codes: Record<string, string> = {};
+    try {
+      const raw = localStorage.getItem("omr_student_codes");
+      if (raw) codes = JSON.parse(raw);
+    } catch { /* ignore */ }
 
-    if (isLoginMode) {
-      if (!student) {
-        toast.error("가입된 정보가 없습니다. '가입 및 로그인'을 선택해주세요.");
+    let attempts: Attempt[] = [];
+    try {
+      const raw = localStorage.getItem("omr_attempts");
+      if (raw) attempts = JSON.parse(raw);
+    } catch { /* ignore */ }
+
+    const hasPriorAttempt = attempts.some(a => a.studentId === sid
+      || (a.studentName === studentName.trim() && !a.guestId));
+    const storedCode = codes[sid];
+
+    // CASE 1: returning student — must enter their start code.
+    if (storedCode && hasPriorAttempt) {
+      if (!startCode.trim()) {
+        setNeedsCode(true);
+        setError("이미 등록된 학생입니다. 시작 코드를 입력해주세요.");
+        setTimeout(() => setError(""), 2500);
         return;
       }
-    } else {
-      if (!student) {
-        student = {
-          id: `stu_${Math.random().toString(36).substring(2, 9)}`,
-          name: studentName,
-          phone: phone,
-          createdAt: new Date().toISOString()
-        };
-        storedStudents.push(student);
-        localStorage.setItem('omr_students', JSON.stringify(storedStudents));
-        toast.success("회원가입이 완료되었습니다!");
-      } else {
-        toast.success("이미 가입된 정보로 로그인합니다.");
+      if (startCode.trim().toUpperCase() !== storedCode) {
+        setError("시작 코드가 일치하지 않습니다.");
+        setTimeout(() => setError(""), 2500);
+        return;
       }
+    } else if (!storedCode) {
+      // CASE 2: brand-new student — mint + show their code.
+      const fresh = generateStartCode();
+      codes[sid] = fresh;
+      try {
+        localStorage.setItem("omr_student_codes", JSON.stringify(codes));
+      } catch { /* ignore quota */ }
+      toast.success(
+        "시작 코드 발급",
+        `다음 로그인 시 이 코드를 입력하세요: ${fresh}`
+      );
     }
 
     const session = {
-      id: student.id,
-      name: student.name,
-      phone: student.phone,
-      isGuest: false
+      name: studentName.trim(),
+      studentId: sid,
+      groupId: selectedGroupId,
+      groupName: group?.name || "Unknown",
     };
     sessionStorage.setItem("omr_student_session", JSON.stringify(session));
     router.push("/student/dashboard");
   };
 
-  const handleGuestExamEnter = () => {
-    if (!guestExamCode.trim()) {
-      toast.error("시험 코드를 입력해주세요.");
-      return;
-    }
-    router.push(`/solve/${guestExamCode.trim()}`);
+  const handleGuest = () => {
+    const guestId = Math.random().toString(36).substring(2, 15);
+    const session = { name: "Guest Student", isGuest: true, guestId, groupName: "Guest Mode" };
+    sessionStorage.setItem("omr_student_session", JSON.stringify(session));
+    localStorage.setItem("omr_guest_id", guestId);
+    router.push("/student/dashboard");
+  };
+
+  const handleBack = () => {
+    setRole("none");
+    setError("");
+    setPassword("");
+    setStudentName("");
+    setSelectedGroupId("");
+    setStartCode("");
+    setNeedsCode(false);
   };
 
   return (
-    <div className="layout-main center-content">
+    <div className="layout-main center-content" style={{ position: "relative" }}>
+      {/* Animated background orbs */}
+      <div className="orb orb-primary" />
+      <div className="orb orb-secondary" />
+      <div className="orb orb-accent" />
 
-      <div className="container animate-fade-in" style={{ maxWidth: '900px' }}>
+      {/* Theme toggle */}
+      <div style={{ position: "fixed", top: "1.25rem", right: "1.25rem", zIndex: 10 }}>
+        <ThemeToggle />
+      </div>
 
-        {/* Header Section */}
-        <div style={{ textAlign: 'center', marginBottom: '5rem', display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
-          <Image src="/logo.png" alt="OMR Maker Logo" width={100} height={100} style={{ marginBottom: '1rem', objectFit: 'contain' }} />
-          <h1 className="title-gradient" style={{ fontSize: '4.5rem', marginBottom: '1.5rem', lineHeight: 1.1, letterSpacing: '-0.03em' }}>
+      <div
+        className="container animate-fade-in"
+        style={{ maxWidth: "960px", position: "relative", zIndex: 1, padding: "3rem 1.5rem" }}
+      >
+        {/* ── Hero ───────────────────────────── */}
+        <div style={{ textAlign: "center", marginBottom: "4rem" }}>
+          <div
+            className="badge badge-primary stagger-1 animate-fade-in"
+            style={{ marginBottom: "1.75rem", opacity: 0 }}
+          >
+            <svg width="8" height="8" viewBox="0 0 8 8" fill="currentColor">
+              <circle cx="4" cy="4" r="4" />
+            </svg>
+            Smart Evaluation Platform
+          </div>
+
+          <h1
+            className="title-gradient stagger-2 animate-fade-in"
+            style={{
+              fontSize: "clamp(3.2rem, 8vw, 5.5rem)",
+              lineHeight: 1.04,
+              letterSpacing: "-0.045em",
+              fontWeight: 900,
+              marginBottom: "1.25rem",
+              opacity: 0,
+            }}
+          >
             OMR Maker
           </h1>
-          <p style={{ fontSize: '1.4rem', color: 'var(--muted)', fontWeight: 300 }}>
-            Smart Evaluation Platform for Schools
+
+          <p
+            className="stagger-3 animate-fade-in"
+            style={{
+              fontSize: "1.15rem",
+              color: "var(--muted)",
+              fontWeight: 400,
+              lineHeight: 1.65,
+              maxWidth: "480px",
+              margin: "0 auto",
+              opacity: 0,
+              wordBreak: "keep-all",
+              wordWrap: "break-word",
+            }}
+          >
+            교사와 학생을 위한 스마트 평가 플랫폼.
           </p>
         </div>
 
-        {/* Role Selection Cards */}
-        {role === 'none' && (
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))', gap: '2.5rem' }}>
-            {/* Student Card */}
-            <div
-              onClick={() => setRole('student')}
+        {/* ── Role Selection ─────────────────── */}
+        {role === "none" && (
+          <div
+            className="stagger-4 animate-fade-in"
+            style={{
+              display: "grid",
+              gridTemplateColumns: "repeat(auto-fit, minmax(300px, 1fr))",
+              gap: "1.5rem",
+              opacity: 0,
+            }}
+          >
+            {/* Student */}
+            <button
+              onClick={() => setRole("student")}
               className="glass-panel card-hover"
               style={{
-                padding: '4rem 2rem', textAlign: 'center',
-                display: 'flex', flexDirection: 'column', alignItems: 'center'
+                padding: "2.75rem 2.25rem",
+                textAlign: "left",
+                display: "flex",
+                flexDirection: "column",
+                alignItems: "flex-start",
+                cursor: "pointer",
+                border: "1px solid transparent",
+                position: "relative",
+                overflow: "hidden",
               }}
             >
-              <div style={{ fontSize: '5rem', marginBottom: '1.5rem', filter: 'drop-shadow(0 4px 6px rgba(0,0,0,0.1))' }}>🎓</div>
-              <h2 style={{ fontSize: '1.75rem', fontWeight: 700, marginBottom: '0.75rem' }}>Student</h2>
-              <p style={{ color: 'var(--muted)', fontSize: '1.1rem' }}>Access your assignments and check results.</p>
-            </div>
+              <div
+                style={{
+                  position: "absolute",
+                  top: 0,
+                  right: 0,
+                  width: "180px",
+                  height: "180px",
+                  background:
+                    "radial-gradient(circle at top right, rgba(236,72,153,0.1), transparent 70%)",
+                  pointerEvents: "none",
+                }}
+              />
 
-            {/* Teacher Card */}
-            <div
-              onClick={() => setRole('teacher')}
+              <div className="icon-wrap icon-wrap-secondary" style={{ marginBottom: "1.5rem" }}>
+                <StudentIcon size={38} />
+              </div>
+
+              <h2
+                style={{
+                  fontSize: "1.5rem",
+                  fontWeight: 800,
+                  marginBottom: "0.5rem",
+                  color: "var(--foreground)",
+                  letterSpacing: "-0.02em",
+                }}
+              >
+                학생
+              </h2>
+              <p
+                style={{
+                  color: "var(--muted)",
+                  fontSize: "0.95rem",
+                  lineHeight: 1.65,
+                  marginBottom: "2rem",
+                }}
+              >
+                배정된 시험에 참여하고 결과를 확인하세요.
+              </p>
+
+              <div
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: "0.3rem",
+                  color: "var(--secondary)",
+                  fontSize: "0.9rem",
+                  fontWeight: 700,
+                  marginTop: "auto",
+                }}
+              >
+                시작하기
+                <ChevronRight />
+              </div>
+            </button>
+
+            {/* Teacher */}
+            <button
+              onClick={() => setRole("teacher")}
               className="glass-panel card-hover"
               style={{
-                padding: '4rem 2rem', textAlign: 'center',
-                display: 'flex', flexDirection: 'column', alignItems: 'center'
+                padding: "2.75rem 2.25rem",
+                textAlign: "left",
+                display: "flex",
+                flexDirection: "column",
+                alignItems: "flex-start",
+                cursor: "pointer",
+                border: "1px solid transparent",
+                position: "relative",
+                overflow: "hidden",
               }}
             >
-              <div style={{ fontSize: '5rem', marginBottom: '1.5rem', filter: 'drop-shadow(0 4px 6px rgba(0,0,0,0.1))' }}>👨‍🏫</div>
-              <h2 style={{ fontSize: '1.75rem', fontWeight: 700, marginBottom: '0.75rem' }}>Teacher</h2>
-              <p style={{ color: 'var(--muted)', fontSize: '1.1rem' }}>Manage exams, view analytics, and grade.</p>
-            </div>
+              <div
+                style={{
+                  position: "absolute",
+                  top: 0,
+                  right: 0,
+                  width: "180px",
+                  height: "180px",
+                  background:
+                    "radial-gradient(circle at top right, rgba(99,102,241,0.1), transparent 70%)",
+                  pointerEvents: "none",
+                }}
+              />
+
+              <div className="icon-wrap icon-wrap-primary" style={{ marginBottom: "1.5rem" }}>
+                <TeacherIcon size={38} />
+              </div>
+
+              <h2
+                style={{
+                  fontSize: "1.5rem",
+                  fontWeight: 800,
+                  marginBottom: "0.5rem",
+                  color: "var(--foreground)",
+                  letterSpacing: "-0.02em",
+                }}
+              >
+                교사
+              </h2>
+              <p
+                style={{
+                  color: "var(--muted)",
+                  fontSize: "0.95rem",
+                  lineHeight: 1.65,
+                  marginBottom: "2rem",
+                }}
+              >
+                시험을 출제하고 배포하며 학생 성취도를 분석하세요.
+              </p>
+
+              <div
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: "0.3rem",
+                  color: "var(--primary)",
+                  fontSize: "0.9rem",
+                  fontWeight: 700,
+                  marginTop: "auto",
+                }}
+              >
+                대시보드
+                <ChevronRight />
+              </div>
+            </button>
           </div>
         )}
 
-        {/* Login Forms */}
-        {role !== 'none' && (
-          <div className="glass-panel animate-slide-up" style={{ maxWidth: '420px', margin: '0 auto', padding: '3rem 2.5rem' }}>
+        {/* ── Login Forms ────────────────────── */}
+        {role !== "none" && (
+          <div
+            className="glass-panel animate-slide-up"
+            style={{ maxWidth: "440px", margin: "0 auto", padding: "2.75rem 2.5rem" }}
+          >
             <button
-              onClick={() => setRole('none')}
+              onClick={handleBack}
               style={{
-                marginBottom: '2rem', fontSize: '0.95rem', color: 'var(--muted)',
-                display: 'flex', alignItems: 'center', gap: '0.5rem',
-                fontWeight: 500, transition: 'color 0.2s'
+                marginBottom: "2rem",
+                fontSize: "0.88rem",
+                color: "var(--muted)",
+                display: "flex",
+                alignItems: "center",
+                gap: "0.35rem",
+                fontWeight: 600,
+                transition: "color 0.2s",
               }}
-              onMouseEnter={(e) => e.currentTarget.style.color = 'var(--primary)'}
-              onMouseLeave={(e) => e.currentTarget.style.color = 'var(--muted)'}
+              onMouseEnter={(e) => (e.currentTarget.style.color = "var(--primary)")}
+              onMouseLeave={(e) => (e.currentTarget.style.color = "var(--muted)")}
             >
-              ← Back to role selection
+              <ChevronLeft />
+              역할 선택으로
             </button>
 
-            {role === 'teacher' ? (
-              <div>
-                <h2 style={{ fontSize: '1.8rem', marginBottom: '2rem', fontWeight: 800, color: 'var(--foreground)' }}>Teacher Access</h2>
-                <div style={{ marginBottom: '2rem' }}>
-                  <label style={{ display: 'block', marginBottom: '0.75rem', fontSize: '0.95rem', fontWeight: 600, color: 'var(--muted)' }}>Password</label>
+            {role === "teacher" ? (
+              <>
+                {/* Teacher form */}
+                <div style={{ marginBottom: "2.25rem" }}>
+                  <span className="badge badge-primary" style={{ marginBottom: "1rem" }}>
+                    <TeacherIcon size={12} />
+                    교사 포털
+                  </span>
+                  <h2
+                    style={{
+                      fontSize: "1.85rem",
+                      fontWeight: 800,
+                      color: "var(--foreground)",
+                      lineHeight: 1.2,
+                      letterSpacing: "-0.03em",
+                    }}
+                  >
+                    환영합니다
+                  </h2>
+                </div>
+
+                <div style={{ marginBottom: "1.75rem" }}>
+                  <label
+                    style={{
+                      display: "block",
+                      marginBottom: "0.55rem",
+                      fontSize: "0.75rem",
+                      fontWeight: 700,
+                      color: "var(--muted)",
+                      textTransform: "uppercase",
+                      letterSpacing: "0.07em",
+                    }}
+                  >
+                    비밀번호
+                  </label>
                   <input
                     type="password"
                     className="input-field"
                     value={password}
                     onChange={(e) => setPassword(e.target.value)}
-                    onKeyDown={(e) => e.key === 'Enter' && handleTeacherLogin()}
-                    placeholder="Enter password"
+                    onKeyDown={(e) => e.key === "Enter" && handleTeacherLogin()}
+                    placeholder="비밀번호 입력"
+                    autoFocus
                   />
-                  <div style={{ fontSize: '0.85rem', color: 'var(--muted)', marginTop: '0.75rem' }}>Hint: admin123</div>
-                </div>
-                <button
-                  onClick={handleTeacherLogin}
-                  className="btn btn-primary"
-                  style={{ width: '100%' }}
-                >
-                  Enter Dashboard
-                </button>
-              </div>
-            ) : (
-              <div>
-                <div style={{ display: 'flex', gap: '1rem', marginBottom: '2rem' }}>
-                  <button 
-                    onClick={() => setIsLoginMode(true)}
-                    style={{ flex: 1, padding: '0.5rem', borderBottom: isLoginMode ? '2px solid var(--primary)' : '2px solid transparent', background: 'none', color: isLoginMode ? 'var(--primary)' : 'var(--muted)', fontWeight: isLoginMode ? 700 : 500, cursor: 'pointer', transition: 'all 0.2s' }}
-                  >
-                    로그인
-                  </button>
-                  <button 
-                    onClick={() => setIsLoginMode(false)}
-                    style={{ flex: 1, padding: '0.5rem', borderBottom: !isLoginMode ? '2px solid var(--primary)' : '2px solid transparent', background: 'none', color: !isLoginMode ? 'var(--primary)' : 'var(--muted)', fontWeight: !isLoginMode ? 700 : 500, cursor: 'pointer', transition: 'all 0.2s' }}
-                  >
-                    가입 및 로그인
-                  </button>
+                  {error ? (
+                    <p style={{ fontSize: "0.8rem", color: "var(--error)", marginTop: "0.5rem", fontWeight: 600 }}>
+                      {error}
+                    </p>
+                  ) : (
+                    <p style={{ fontSize: "0.8rem", color: "var(--muted)", marginTop: "0.5rem", opacity: 0.75 }}>
+                      Demo: admin123
+                    </p>
+                  )}
                 </div>
 
-                <div style={{ marginBottom: '1.5rem' }}>
-                  <label style={{ display: 'block', marginBottom: '0.75rem', fontSize: '0.95rem', fontWeight: 600, color: 'var(--muted)' }}>이름</label>
+                <button onClick={handleTeacherLogin} className="btn btn-primary" style={{ width: "100%" }}>
+                  대시보드 입장
+                </button>
+              </>
+            ) : (
+              <>
+                {/* Student form */}
+                <div style={{ marginBottom: "2.25rem" }}>
+                  <span className="badge badge-secondary" style={{ marginBottom: "1rem" }}>
+                    <StudentIcon size={12} />
+                    학생 포털
+                  </span>
+                  <h2
+                    style={{
+                      fontSize: "1.85rem",
+                      fontWeight: 800,
+                      color: "var(--foreground)",
+                      lineHeight: 1.2,
+                      letterSpacing: "-0.03em",
+                    }}
+                  >
+                    학습 시작
+                  </h2>
+                </div>
+
+                <div style={{ marginBottom: "1.1rem" }}>
+                  <label
+                    style={{
+                      display: "block",
+                      marginBottom: "0.55rem",
+                      fontSize: "0.75rem",
+                      fontWeight: 700,
+                      color: "var(--muted)",
+                      textTransform: "uppercase",
+                      letterSpacing: "0.07em",
+                    }}
+                  >
+                    이름
+                  </label>
                   <input
                     type="text"
                     className="input-field"
                     value={studentName}
                     onChange={(e) => setStudentName(e.target.value)}
-                    placeholder="홍길동"
+                    placeholder="이름을 입력하세요"
+                    autoFocus
                   />
                 </div>
-                <div style={{ marginBottom: '2.5rem' }}>
-                  <label style={{ display: 'block', marginBottom: '0.75rem', fontSize: '0.95rem', fontWeight: 600, color: 'var(--muted)' }}>전화번호 (또는 뒷자리 4자리)</label>
-                  <input
-                    type="text"
+
+                <div style={{ marginBottom: "1.75rem" }}>
+                  <label
+                    style={{
+                      display: "block",
+                      marginBottom: "0.55rem",
+                      fontSize: "0.75rem",
+                      fontWeight: 700,
+                      color: "var(--muted)",
+                      textTransform: "uppercase",
+                      letterSpacing: "0.07em",
+                    }}
+                  >
+                    반 선택
+                  </label>
+                  <select
+                    value={selectedGroupId}
+                    onChange={(e) => setSelectedGroupId(e.target.value)}
                     className="input-field"
-                    value={phone}
-                    onChange={(e) => setPhone(e.target.value)}
-                    onKeyDown={(e) => e.key === 'Enter' && handleStudentLogin()}
-                    placeholder="예: 010-1234-5678 또는 5678"
-                  />
+                    style={{ cursor: "pointer" }}
+                  >
+                    <option value="">반을 선택하세요</option>
+                    {groups.map((g) => (
+                      <option key={g.id} value={g.id}>
+                        {g.name}
+                      </option>
+                    ))}
+                  </select>
+                  {groups.length === 0 && (
+                    <div
+                      style={{
+                        fontSize: "0.8rem",
+                        color: "var(--error)",
+                        marginTop: "0.55rem",
+                        background: "rgba(239,68,68,0.07)",
+                        padding: "0.5rem 0.75rem",
+                        borderRadius: "var(--radius-md)",
+                        border: "1px solid rgba(239,68,68,0.18)",
+                        fontWeight: 600,
+                      }}
+                    >
+                      등록된 반이 없습니다. 선생님께 문의하세요.
+                    </div>
+                  )}
+                  {error && (
+                    <p style={{ fontSize: "0.8rem", color: "var(--error)", marginTop: "0.5rem", fontWeight: 600 }}>
+                      {error}
+                    </p>
+                  )}
                 </div>
-                <button
-                  onClick={handleStudentLogin}
-                  className="btn btn-primary"
-                  style={{ width: '100%', background: 'linear-gradient(135deg, var(--secondary), var(--secondary-light))', boxShadow: '0 4px 15px rgba(236, 72, 153, 0.4)', marginBottom: '1rem' }}
-                >
-                  {isLoginMode ? '로그인' : '학생 등록하고 시작'}
-                </button>
 
-                <div style={{ position: 'relative', textAlign: 'center', margin: '2rem 0' }}>
-                  <hr style={{ borderColor: 'var(--border)' }} />
-                  <span style={{ position: 'absolute', top: '-10px', left: '50%', transform: 'translateX(-50%)', background: 'var(--surface-glass)', padding: '0 0.5rem', fontSize: '0.8rem', color: 'var(--muted)' }}>OR</span>
-                </div>
-
-                <div style={{ marginBottom: '1rem' }}>
-                  <label style={{ display: 'block', marginBottom: '0.75rem', fontSize: '0.95rem', fontWeight: 600, color: 'var(--foreground)' }}>시험 코드로 바로 입장 (비회원 가능)</label>
-                  <div style={{ display: 'flex', gap: '0.5rem' }}>
+                {needsCode && (
+                  <div style={{ marginBottom: "1.75rem" }}>
+                    <label
+                      style={{
+                        display: "block",
+                        marginBottom: "0.55rem",
+                        fontSize: "0.75rem",
+                        fontWeight: 700,
+                        color: "var(--muted)",
+                        textTransform: "uppercase",
+                        letterSpacing: "0.07em",
+                      }}
+                    >
+                      시작 코드
+                    </label>
                     <input
                       type="text"
                       className="input-field"
-                      value={guestExamCode}
-                      onChange={(e) => setGuestExamCode(e.target.value)}
-                      onKeyDown={(e) => e.key === 'Enter' && handleGuestExamEnter()}
-                      placeholder="시험 코드 입력 (예: exam_abc123)"
-                      style={{ flex: 1 }}
+                      value={startCode}
+                      onChange={(e) => setStartCode(e.target.value.toUpperCase())}
+                      onKeyDown={(e) => e.key === "Enter" && handleStudentLogin()}
+                      placeholder="6자리 코드 입력"
+                      maxLength={6}
+                      style={{ letterSpacing: "0.25em", fontFamily: "monospace", textTransform: "uppercase" }}
                     />
-                    <button
-                      onClick={handleGuestExamEnter}
-                      className="btn btn-secondary"
-                      style={{ padding: '0 1.5rem' }}
-                    >
-                      입장
-                    </button>
+                    <p style={{ fontSize: "0.75rem", color: "var(--muted)", marginTop: "0.45rem", opacity: 0.85 }}>
+                      이미 등록된 학생입니다. 처음 로그인 시 발급받은 코드를 입력해주세요.
+                    </p>
                   </div>
+                )}
+
+                <button
+                  onClick={handleStudentLogin}
+                  className="btn btn-primary"
+                  style={{
+                    width: "100%",
+                    background: "linear-gradient(135deg, var(--secondary), #c026d3)",
+                    boxShadow: "0 4px 18px rgba(236,72,153,0.38)",
+                    marginBottom: "0.75rem",
+                  }}
+                >
+                  시험 시작하기
+                </button>
+
+                <div className="divider-label">
+                  <span>또는</span>
                 </div>
 
                 <button
-                  onClick={() => {
-                    const guestId = Math.random().toString(36).substring(2, 15);
-                    const session = {
-                      name: "Guest Student",
-                      isGuest: true,
-                      guestId: guestId,
-                      groupName: "Guest Mode"
-                    };
-                    sessionStorage.setItem("omr_student_session", JSON.stringify(session));
-                    localStorage.setItem("omr_guest_id", guestId); // Persist for merging later
-                    router.push("/student/dashboard");
-                  }}
+                  onClick={handleGuest}
                   className="btn"
                   style={{
-                    width: '100%',
-                    background: 'transparent',
-                    border: '1px solid var(--border)',
-                    color: 'var(--muted)',
-                    fontSize: '0.9rem',
-                    marginTop: '1rem'
+                    width: "100%",
+                    background: "transparent",
+                    border: "1px solid var(--border)",
+                    color: "var(--muted)",
+                    fontSize: "0.92rem",
                   }}
                 >
-                  (테스트용) 게스트 대시보드 바로가기
+                  게스트로 계속하기
                 </button>
-              </div>
+              </>
             )}
           </div>
         )}
-
       </div>
     </div>
   );

@@ -1,18 +1,33 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { Suspense, useEffect, useState } from "react";
 import Link from "next/link";
+import { useSearchParams } from "next/navigation";
 import { Exam, Attempt } from "@/types/omr";
 import OverviewTab from "@/components/dashboard/tabs/OverviewTab";
 import ExamAnalyticsTab from "@/components/dashboard/tabs/ExamAnalyticsTab";
 import StudentAnalyticsTab from "@/components/dashboard/tabs/StudentAnalyticsTab";
-import { LayoutDashboard, BarChart2, GraduationCap, Users } from "lucide-react";
-import ClassManagementTab from "@/components/dashboard/tabs/ClassManagementTab";
+import { LayoutDashboard, BarChart2, GraduationCap } from "lucide-react";
+import ThemeToggle from "@/components/ThemeToggle";
 
-type TabType = 'overview' | 'exam' | 'student' | 'class';
+type TabType = 'overview' | 'exam' | 'student';
 
-export default function TeacherDashboard() {
-    const [activeTab, setActiveTab] = useState<TabType>('overview');
+// Wrap the inner component so useSearchParams is inside a Suspense boundary
+// (required by Next 16 to avoid deopting the whole page to client-only rendering).
+export default function TeacherDashboardPage() {
+    return (
+        <Suspense fallback={<div style={{ minHeight: '100vh' }} />}>
+            <TeacherDashboard />
+        </Suspense>
+    );
+}
+
+function TeacherDashboard() {
+    const searchParams = useSearchParams();
+    const initialTab = (searchParams.get('tab') as TabType) || 'overview';
+    const [activeTab, setActiveTab] = useState<TabType>(
+        ['overview', 'exam', 'student'].includes(initialTab) ? initialTab : 'overview'
+    );
     const [selectedExamIdForAnalytics, setSelectedExamIdForAnalytics] = useState<string | undefined>(undefined);
     const [exams, setExams] = useState<Exam[]>([]);
     const [attempts, setAttempts] = useState<Attempt[]>([]);
@@ -48,28 +63,27 @@ export default function TeacherDashboard() {
             } catch (e) { }
         }
 
-        // --- INJECT MOCK DATA FOR DEMONSTRATION IF NEEDED ---
-        // Provide rich mock data so that Exam Analytics Tab works nicely with examples
-        const MOCK_EXAMS: Exam[] = [
-            {
-                id: 'mock-1', title: '[예시] Midterm English Test', createdAt: new Date(Date.now() - 86400000 * 2).toISOString(),
-                questions: Array.from({ length: 20 }).map((_, i) => ({
-                    id: i + 1, number: i + 1, label: i < 5 ? '문법' : (i < 10 ? '독해' : '어휘'), score: 5, answer: 1
-                }))
-            },
-            {
-                id: 'mock-2', title: '[예시] Chapter 4 Mathematics', createdAt: new Date(Date.now() - 86400000 * 5).toISOString(),
-                questions: Array.from({ length: 15 }).map((_, i) => ({
-                    id: i + 1, number: i + 1, label: i < 5 ? '계산' : (i < 10 ? '이해' : '응용'), score: 6.66, answer: 1
-                }))
-            }
-        ];
-
-        // Add mock exams if they aren't duplicates
-        MOCK_EXAMS.forEach(mockExam => {
-            if (!loadedExams.some(e => e.id === mockExam.id)) {
+        // Seed demo data only when the DB is completely empty AND only in development.
+        // Prevents the "[예시]" mock exams from appearing in production.
+        const isDev = process.env.NODE_ENV !== 'production';
+        const shouldSeedDemo = isDev && loadedExams.length === 0 && loadedAttempts.length === 0;
+        if (shouldSeedDemo) {
+            const MOCK_EXAMS: Exam[] = [
+                {
+                    id: 'mock-1', title: '[예시] Midterm English Test', createdAt: new Date(Date.now() - 86400000 * 2).toISOString(),
+                    questions: Array.from({ length: 20 }).map((_, i) => ({
+                        id: i + 1, number: i + 1, label: i < 5 ? '문법' : (i < 10 ? '독해' : '어휘'), score: 5, answer: 1
+                    }))
+                },
+                {
+                    id: 'mock-2', title: '[예시] Chapter 4 Mathematics', createdAt: new Date(Date.now() - 86400000 * 5).toISOString(),
+                    questions: Array.from({ length: 15 }).map((_, i) => ({
+                        id: i + 1, number: i + 1, label: i < 5 ? '계산' : (i < 10 ? '이해' : '응용'), score: 6.66, answer: 1
+                    }))
+                }
+            ];
+            MOCK_EXAMS.forEach(mockExam => {
                 loadedExams.push(mockExam);
-                // add mock attempts for this exam
                 const mockAttempts: Attempt[] = Array.from({ length: 25 }).map((_, i) => ({
                     id: `mock-attempt-${mockExam.id}-${i}`,
                     examId: mockExam.id,
@@ -81,7 +95,6 @@ export default function TeacherDashboard() {
                     totalScore: 100,
                     status: 'completed',
                     answers: Array.from({ length: mockExam.questions.length }).reduce((acc: Record<number, number>, _, qIdx) => {
-                        // 70% random chance to be correct
                         const isCorrect = Math.random() > 0.3;
                         const correctAns = mockExam.questions[qIdx].answer || 1;
                         acc[qIdx + 1] = isCorrect ? correctAns : (correctAns === 1 ? 2 : 1);
@@ -89,8 +102,8 @@ export default function TeacherDashboard() {
                     }, {})
                 }));
                 loadedAttempts.push(...mockAttempts);
-            }
-        });
+            });
+        }
 
         // Sort exams by date
         loadedExams.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
@@ -178,20 +191,6 @@ export default function TeacherDashboard() {
                 <GraduationCap size={18} />
                 학생 성취도
             </button>
-            <button
-                onClick={() => setActiveTab('class')}
-                style={{
-                    display: 'flex', alignItems: 'center', gap: '0.5rem',
-                    padding: '0.75rem 1.5rem', borderRadius: 'var(--radius-md)',
-                    background: activeTab === 'class' ? 'var(--primary)' : 'transparent',
-                    color: activeTab === 'class' ? 'white' : 'var(--muted)',
-                    fontWeight: activeTab === 'class' ? 700 : 500,
-                    transition: 'all 0.2s cubic-bezier(0.4, 0, 0.2, 1)', flex: 1, justifyContent: 'center', whiteSpace: 'nowrap'
-                }}
-            >
-                <Users size={18} />
-                학생 및 그룹 관리
-            </button>
         </div>
     );
 
@@ -210,6 +209,7 @@ export default function TeacherDashboard() {
                             TEACHER
                         </span>
                     </div>
+                    <ThemeToggle />
                 </div>
             </header>
 
@@ -255,9 +255,6 @@ export default function TeacherDashboard() {
                     )}
                     {activeTab === 'student' && (
                         <StudentAnalyticsTab exams={exams} attempts={attempts} />
-                    )}
-                    {activeTab === 'class' && (
-                        <ClassManagementTab />
                     )}
                 </div>
 

@@ -3,10 +3,8 @@
 import { useEffect, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
-import { Attempt, Exam, Question } from "@/types/omr";
-import dynamic from "next/dynamic";
-
-const PDFViewer = dynamic(() => import("@/components/PDFViewer"), { ssr: false });
+import { BookOpen, ChevronDown, ChevronUp } from "lucide-react";
+import { Attempt, Exam, gradeAttempt } from "@/types/omr";
 
 export default function ReviewPage() {
     const params = useParams();
@@ -15,9 +13,8 @@ export default function ReviewPage() {
 
     const [attempt, setAttempt] = useState<Attempt | null>(null);
     const [exam, setExam] = useState<Exam | null>(null);
-    const [pdfFile, setPdfFile] = useState<File | null>(null);
     const [filterWrong, setFilterWrong] = useState(false);
-    const [pdfCurrentPage, setPdfCurrentPage] = useState<number | undefined>(undefined);
+    const [openExplanations, setOpenExplanations] = useState<Record<number, boolean>>({});
 
     useEffect(() => {
         if (id) {
@@ -32,19 +29,7 @@ export default function ReviewPage() {
                     // Load Exam Data associated with this attempt
                     const examDataStr = localStorage.getItem(`omr_exam_${found.examId}`);
                     if (examDataStr) {
-                        const parsedExam = JSON.parse(examDataStr);
-                        setExam(parsedExam);
-
-                        // Convert base64 pdfData to File
-                        if (parsedExam.pdfData) {
-                            fetch(parsedExam.pdfData)
-                                .then(res => res.blob())
-                                .then(blob => {
-                                    const file = new File([blob], "problem.pdf", { type: "application/pdf" });
-                                    setPdfFile(file);
-                                })
-                                .catch(err => console.error("Failed to load PDF", err));
-                        }
+                        setExam(JSON.parse(examDataStr));
                     }
                 }
             }
@@ -55,225 +40,196 @@ export default function ReviewPage() {
         return <div style={{ padding: '2rem', textAlign: 'center' }}>Loading...</div>;
     }
 
+    const stats = gradeAttempt(exam.questions, attempt.answers);
+    const percentCorrect = stats.totalScore > 0
+        ? Math.round((stats.earnedScore / stats.totalScore) * 100)
+        : 0;
+
     const filteredQuestions = filterWrong
         ? exam.questions.filter(q => q.answer && attempt.answers[q.id] !== q.answer)
         : exam.questions;
 
-    const markers = exam.questions.flatMap((q: Question) => {
-        const qMarkers: { page: number; x: number; y: number; w?: number; h?: number; label: string | number; color?: string; type?: 'question' | 'choice'; onClick?: () => void }[] = [];
-        const isCorrect = attempt.answers[q.id] === q.answer;
-        const qColor = isCorrect ? '#16a34a' : '#ef4444';
-
-        if (q.pdfLocation) {
-            qMarkers.push({
-                ...q.pdfLocation,
-                label: q.number,
-                type: 'question',
-                color: qColor
-            });
-        }
-
-        if (q.pdfChoices) {
-            Object.entries(q.pdfChoices).forEach(([choiceStr, loc]) => {
-                const choiceNum = parseInt(choiceStr, 10);
-                let color = undefined;
-
-                if (choiceNum === q.answer) {
-                    color = '#16a34a'; // Green for correct answer
-                } else if (choiceNum === attempt.answers[q.id]) {
-                    color = '#ef4444'; // Red for wrong selection
-                }
-
-                if (color) {
-                    qMarkers.push({
-                        ...loc,
-                        label: choiceNum,
-                        type: 'choice',
-                        color: color
-                    });
-                }
-            });
-        }
-        return qMarkers;
-    });
-
-    const jumpToQuestion = (page?: number) => {
-        if (page) setPdfCurrentPage(page);
+    const toggleExplanation = (qId: number) => {
+        setOpenExplanations(prev => ({ ...prev, [qId]: !prev[qId] }));
     };
 
     return (
-        <div className="layout-main" style={{ minHeight: '100vh', display: 'flex', flexDirection: 'column' }}>
-            <header className="header" style={{ padding: '1rem 1.5rem', display: 'flex', gap: '1rem', background: 'white', borderBottom: '1px solid #e2e8f0', justifyContent: 'space-between', alignItems: 'center' }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
-                    <button onClick={() => router.back()} style={{ border: 'none', background: 'none', fontSize: '1.2rem', cursor: 'pointer', color: '#64748b' }}>←</button>
-                    <h1 style={{ fontSize: '1.25rem', fontWeight: 800, color: 'var(--primary)' }}>결과 리포트 - {attempt.examTitle}</h1>
+        <div className="layout-main" style={{ minHeight: '100vh', background: '#f8fafc' }}>
+            <header className="header" style={{ background: 'white', borderBottom: '1px solid #e2e8f0' }}>
+                <div className="container header-content">
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
+                        <button onClick={() => router.back()} style={{ border: 'none', background: 'none', fontSize: '1.2rem', cursor: 'pointer' }}>←</button>
+                        <span style={{ fontWeight: 600 }}>결과 리포트</span>
+                    </div>
+                    <Link href="/student/history" className="btn btn-secondary" style={{ fontSize: '0.9rem', padding: '0.4rem 1rem' }}>
+                        목록으로
+                    </Link>
                 </div>
-                <Link href="/student/dashboard" className="btn btn-secondary" style={{ fontSize: '0.9rem', padding: '0.4rem 1rem' }}>
-                    대시보드로
-                </Link>
             </header>
 
-            <div className="split-layout" style={{ display: 'flex', flex: 1, overflow: 'hidden' }}>
-                {/* PDF ViewerArea (Left) */}
-                <div className="split-pane-pdf flex-1" style={{ borderRight: '1px solid #ddd', background: '#f8fafc', position: 'relative', display: 'flex', flexDirection: 'column' }}>
-                    <PDFViewer
-                        file={pdfFile}
-                        onLoadSuccess={() => { }}
-                        enableDrawing={false}
-                        drawings={attempt.drawings}
-                        forcePage={pdfCurrentPage}
-                        markers={markers}
-                        viewerMode="student"
-                    />
+            <main className="container" style={{ padding: '2rem 1rem', maxWidth: '800px', margin: '0 auto' }}>
+                {/* Score Card */}
+                <div style={{ background: 'white', padding: '2rem', borderRadius: '16px', boxShadow: '0 4px 6px -1px rgba(0,0,0,0.1)', textAlign: 'center', marginBottom: '1.25rem' }}>
+                    <h1 style={{ fontSize: '1.5rem', marginBottom: '0.5rem', fontWeight: 700 }}>{attempt.examTitle}</h1>
+                    <div style={{ fontSize: '3.5rem', fontWeight: 800, color: 'var(--primary)', lineHeight: 1 }}>
+                        {percentCorrect}
+                        <span style={{ fontSize: '1.5rem', color: '#94a3b8', fontWeight: 500 }}>%</span>
+                    </div>
+                    <div style={{ fontSize: '1rem', color: '#475569', marginTop: '0.4rem', fontWeight: 600 }}>
+                        {stats.earnedScore} / {stats.totalScore} 점
+                    </div>
+                    <p style={{ color: '#64748b', marginTop: '0.5rem' }}>
+                        {new Date(attempt.finishedAt).toLocaleString()} 응시 완료
+                    </p>
                 </div>
 
-                {/* Score & Report (Right) */}
-                <div className="split-pane-main w-[400px] min-w-[350px] max-w-[500px]" style={{ overflowY: 'auto', padding: '2rem', background: '#f8fafc' }}>
-
-                    {/* Score Card */}
-                    <div className="card-hover" style={{ background: 'white', padding: '2rem', borderRadius: '16px', boxShadow: '0 10px 15px -3px rgba(0,0,0,0.1)', textAlign: 'center', marginBottom: '2rem' }}>
-                        <h2 style={{ fontSize: '1.1rem', marginBottom: '0.5rem', fontWeight: 600, color: '#64748b' }}>내 점수</h2>
-                        <div style={{ fontSize: attempt.status === 'grading' ? '2.5rem' : '4rem', fontWeight: 800, color: 'var(--primary)', lineHeight: 1 }}>
-                            {attempt.status === 'grading' ? (
-                                <span>⏳ 채점중...</span>
-                            ) : (
-                                <>
-                                    {attempt.score}
-                                    <span style={{ fontSize: '1.5rem', color: '#cbd5e1', fontWeight: 500 }}> / {attempt.totalScore}</span>
-                                </>
-                            )}
-                        </div>
-                        <p style={{ color: '#94a3b8', marginTop: '1rem', fontSize: '0.85rem' }}>
-                            {new Date(attempt.finishedAt).toLocaleString()} 제출 완료
-                        </p>
+                {/* Stat Row */}
+                <div style={{
+                    display: 'grid',
+                    gridTemplateColumns: 'repeat(3, 1fr)',
+                    gap: '0.75rem',
+                    marginBottom: '1.5rem',
+                }}>
+                    <div style={{ background: 'white', padding: '1rem', borderRadius: '12px', border: '1px solid #e2e8f0', textAlign: 'center' }}>
+                        <div style={{ fontSize: '0.75rem', color: '#64748b', fontWeight: 600, marginBottom: '0.25rem' }}>정답</div>
+                        <div style={{ fontSize: '1.5rem', fontWeight: 800, color: 'var(--success, #16a34a)' }}>{stats.correctCount}</div>
                     </div>
+                    <div style={{ background: 'white', padding: '1rem', borderRadius: '12px', border: '1px solid #e2e8f0', textAlign: 'center' }}>
+                        <div style={{ fontSize: '0.75rem', color: '#64748b', fontWeight: 600, marginBottom: '0.25rem' }}>오답</div>
+                        <div style={{ fontSize: '1.5rem', fontWeight: 800, color: 'var(--error, #dc2626)' }}>{stats.incorrectCount}</div>
+                    </div>
+                    <div style={{ background: 'white', padding: '1rem', borderRadius: '12px', border: '1px solid #e2e8f0', textAlign: 'center' }}>
+                        <div style={{ fontSize: '0.75rem', color: '#64748b', fontWeight: 600, marginBottom: '0.25rem' }}>미응답</div>
+                        <div style={{ fontSize: '1.5rem', fontWeight: 800, color: '#94a3b8' }}>{stats.unansweredCount}</div>
+                    </div>
+                </div>
 
-                    {/* Filters */}
-                    {attempt.status !== 'grading' && (
-                        <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '1.5rem' }}>
-                            <button
-                                onClick={() => setFilterWrong(false)}
-                                className={`btn ${!filterWrong ? 'btn-primary' : 'btn-secondary'}`}
-                                style={{ flex: 1, borderRadius: '8px', padding: '0.5rem' }}
-                            >
-                                전체 ({exam.questions.length})
-                            </button>
-                            <button
-                                onClick={() => setFilterWrong(true)}
-                                className={`btn ${filterWrong ? 'btn-primary' : 'btn-secondary'}`}
-                                style={{ flex: 1, borderRadius: '8px', padding: '0.5rem', background: filterWrong ? '#ef4444' : undefined, color: filterWrong ? 'white' : undefined }}
-                            >
-                                오답만 ({attempt.totalScore - attempt.score})
-                            </button>
-                        </div>
-                    )}
+                {/* Action: retake */}
+                <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: '1rem' }}>
+                    <Link
+                        href={`/solve/${attempt.examId}`}
+                        className="btn btn-primary"
+                        style={{ fontSize: '0.9rem' }}
+                    >
+                        시험 다시 보기
+                    </Link>
+                </div>
 
-                    {/* Question List */}
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
-                        {filteredQuestions.map((q) => {
-                            const isSubjective = q.type === 'subjective';
-                            const isDual = !isSubjective && q.askReason;
-                            const userAns = isSubjective
-                                ? attempt.stringAnswers?.[q.id]
-                                : attempt.answers[q.id];
+                {/* Filters */}
+                <div style={{ display: 'flex', gap: '1rem', marginBottom: '1.5rem', borderBottom: '1px solid #e2e8f0', paddingBottom: '1rem' }}>
+                    <button
+                        onClick={() => setFilterWrong(false)}
+                        className={`btn ${!filterWrong ? 'btn-primary' : 'btn-secondary'}`}
+                        style={{ borderRadius: '999px' }}
+                    >
+                        전체 문항 ({exam.questions.length})
+                    </button>
+                    <button
+                        onClick={() => setFilterWrong(true)}
+                        className={`btn ${filterWrong ? 'btn-primary' : 'btn-secondary'}`}
+                        style={{ borderRadius: '999px', background: filterWrong ? '#ef4444' : undefined, color: filterWrong ? 'white' : undefined }}
+                    >
+                        오답만 보기 ({stats.incorrectCount + stats.unansweredCount})
+                    </button>
+                </div>
 
-                            const userReasonAns = isDual ? attempt.stringAnswers?.[q.id] : undefined;
+                {/* Question List */}
+                <div style={{ display: 'grid', gap: '1rem' }}>
+                    {filteredQuestions.map((q) => {
+                        const userAns = attempt.answers[q.id];
+                        const isCorrect = userAns === q.answer;
+                        const isSkipped = userAns === undefined || userAns === null || userAns === 0;
+                        const explanationOpen = !!openExplanations[q.id];
 
-                            // For subjective, check if score exists if it's graded, else leave as pending/grading
-                            let isCorrect = false;
-                            let isGraded = true;
+                        return (
+                            <div key={q.id} style={{
+                                background: 'white', padding: '1.5rem', borderRadius: '12px',
+                                border: '1px solid', borderColor: isCorrect ? '#e2e8f0' : '#fecaca',
+                                position: 'relative'
+                            }}>
+                                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '1rem' }}>
+                                    <span style={{ fontWeight: 700, fontSize: '1.1rem', color: isCorrect ? '#0f172a' : '#ef4444' }}>
+                                        문항 {q.number}
+                                    </span>
+                                    <span style={{
+                                        fontWeight: 600, fontSize: '0.9rem',
+                                        color: isCorrect ? '#16a34a' : '#dc2626'
+                                    }}>
+                                        {isCorrect ? "정답" : isSkipped ? "미응답" : "오답"}
+                                    </span>
+                                </div>
 
-                            if (isSubjective) {
-                                if (attempt.status === 'grading') {
-                                    isGraded = false;
-                                } else {
-                                    isCorrect = (attempt.subjectiveScores?.[q.id] || 0) > 0;
-                                }
-                            } else {
-                                if (isDual && attempt.status === 'grading') {
-                                    isGraded = false; // Dual questions waiting for reason grade
-                                } else {
-                                    isCorrect = userAns === q.answer;
-                                }
-                            }
-
-                            const isSkipped = userAns === undefined || userAns === '';
-
-                            return (
-                                <div
-                                    key={q.id}
-                                    onClick={() => jumpToQuestion(q.pdfLocation?.page)}
-                                    className="card-hover"
-                                    style={{
-                                        background: 'white', padding: '1rem 1.25rem', borderRadius: '12px',
-                                        borderLeft: `4px solid ${!isGraded ? '#cbd5e1' : (isCorrect ? '#10b981' : '#ef4444')}`,
-                                        cursor: 'pointer',
-                                        boxShadow: '0 2px 4px rgba(0,0,0,0.05)'
-                                    }}
-                                >
-                                    <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '0.5rem' }}>
-                                        <span style={{ fontWeight: 700, fontSize: '1.1rem', color: '#1e293b' }}>
-                                            문항 {q.number} {isSubjective && <span style={{ fontSize: '0.75rem', color: 'var(--primary)', marginLeft: '4px', background: 'rgba(99, 102, 241, 0.1)', padding: '2px 6px', borderRadius: '4px' }}>주관식</span>}
-                                            {isDual && <span style={{ fontSize: '0.75rem', color: 'var(--warning)', marginLeft: '4px', background: 'rgba(234, 179, 8, 0.1)', padding: '2px 6px', borderRadius: '4px' }}>이중 문제 (사유)</span>}
-                                        </span>
-                                        <span style={{
-                                            fontWeight: 700, fontSize: '0.85rem',
-                                            padding: '2px 8px', borderRadius: '12px',
-                                            background: !isGraded ? '#e2e8f0' : (isCorrect ? '#d1fae5' : '#fee2e2'),
-                                            color: !isGraded ? '#64748b' : (isCorrect ? '#047857' : '#b91c1c')
-                                        }}>
-                                            {!isGraded ? "채점 대기" : (isCorrect ? "정답" : "오답")}
-                                        </span>
-                                    </div>
-
-                                    <div style={{ display: 'flex', gap: '1rem', fontSize: '0.9rem' }}>
+                                <div style={{ fontSize: '0.95rem', color: '#334155' }}>
+                                    {isCorrect ? (
                                         <div>
-                                            <span style={{ color: '#64748b', marginRight: '0.5rem' }}>내 {isSubjective ? '답안' : '마킹'}:</span>
-                                            <span style={{ fontWeight: 700, color: !isGraded ? '#0f172a' : (isCorrect ? '#0f172a' : '#ef4444') }}>
-                                                {isSkipped ? '(미응답)' : userAns}
-                                            </span>
+                                            <span style={{ color: '#64748b', marginRight: '0.5rem' }}>내 답:</span>
+                                            <span style={{ fontWeight: 700, color: '#0f172a' }}>{userAns}번</span>
                                         </div>
-                                        {!isCorrect && isGraded && (q.answer || q.stringAnswer) && (
-                                            <div>
-                                                <span style={{ color: '#64748b', marginRight: '0.5rem' }}>{isSubjective ? '모범 정답' : '정답'}:</span>
-                                                <span style={{ fontWeight: 700, color: '#10b981' }}>{isSubjective ? q.stringAnswer : q.answer}</span>
-                                            </div>
-                                        )}
-                                    </div>
-
-                                    {isDual && (
-                                        <div style={{ fontSize: '0.9rem', marginTop: '0.8rem', paddingTop: '0.8rem', borderTop: '1px dashed #cbd5e1' }}>
-                                            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem' }}>
-                                                <div>
-                                                    <span style={{ color: '#64748b', marginRight: '0.5rem' }}>작성한 사유:</span>
-                                                    <span style={{ fontWeight: 600 }}>{userReasonAns || '(미작성)'}</span>
-                                                </div>
-                                                {isGraded && q.reasonStringAnswer && (
-                                                    <div>
-                                                        <span style={{ color: '#64748b', marginRight: '0.5rem' }}>모범 사유:</span>
-                                                        <span style={{ fontWeight: 600, color: '#10b981' }}>{q.reasonStringAnswer}</span>
-                                                    </div>
-                                                )}
-                                                {!isGraded && (
-                                                    <div style={{ fontSize: '0.8rem', color: '#94a3b8', fontStyle: 'italic', marginTop: '0.2rem' }}>
-                                                        * 사유 채점이 완료되면 모범 사유가 함께 공개됩니다.
-                                                    </div>
-                                                )}
-                                            </div>
+                                    ) : (
+                                        <div>
+                                            <span style={{ color: '#64748b', marginRight: '0.5rem' }}>내 답:</span>
+                                            <span style={{ fontWeight: 700, color: '#ef4444' }}>
+                                                {isSkipped ? '(미응답)' : `${userAns}번`}
+                                            </span>
+                                            {q.answer !== undefined && (
+                                                <>
+                                                    <span style={{ color: '#94a3b8', margin: '0 0.5rem' }}>·</span>
+                                                    <span style={{ color: '#64748b', marginRight: '0.5rem' }}>정답:</span>
+                                                    <span style={{ fontWeight: 700, color: '#16a34a' }}>{q.answer}번</span>
+                                                </>
+                                            )}
                                         </div>
                                     )}
                                 </div>
-                            );
-                        })}
 
-                        {filterWrong && filteredQuestions.length === 0 && (
-                            <div style={{ textAlign: 'center', padding: '3rem', color: '#94a3b8' }}>
-                                🎉 틀린 문제가 없습니다!
+                                {q.label && (
+                                    <div style={{ marginTop: '1rem', display: 'flex', gap: '0.5rem' }}>
+                                        <span style={{ fontSize: '0.75rem', padding: '2px 8px', borderRadius: '4px', background: '#f1f5f9', color: '#64748b' }}>
+                                            #{q.label}
+                                        </span>
+                                    </div>
+                                )}
+
+                                {q.explanation && (
+                                    <div style={{ marginTop: '1rem', borderTop: '1px dashed #e2e8f0', paddingTop: '0.85rem' }}>
+                                        <button
+                                            type="button"
+                                            onClick={() => toggleExplanation(q.id)}
+                                            style={{
+                                                display: 'inline-flex', alignItems: 'center', gap: '0.4rem',
+                                                background: 'transparent', border: 'none', cursor: 'pointer',
+                                                padding: 0, color: 'var(--primary, #4f46e5)', fontWeight: 600,
+                                                fontSize: '0.9rem',
+                                            }}
+                                            aria-expanded={explanationOpen}
+                                        >
+                                            <BookOpen size={16} />
+                                            해설 보기
+                                            {explanationOpen ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
+                                        </button>
+                                        {explanationOpen && (
+                                            <div style={{
+                                                marginTop: '0.6rem', padding: '0.9rem 1rem',
+                                                background: '#f8fafc', border: '1px solid #e2e8f0',
+                                                borderRadius: '8px', color: '#334155',
+                                                fontSize: '0.9rem', lineHeight: 1.6, whiteSpace: 'pre-wrap',
+                                            }}>
+                                                {q.explanation}
+                                            </div>
+                                        )}
+                                    </div>
+                                )}
                             </div>
-                        )}
-                    </div>
+                        );
+                    })}
                 </div>
-            </div>
+
+                {filterWrong && filteredQuestions.length === 0 && (
+                    <div style={{ textAlign: 'center', padding: '3rem', color: '#64748b' }}>
+                        틀린 문제가 없습니다!
+                    </div>
+                )}
+            </main>
         </div>
     );
 }

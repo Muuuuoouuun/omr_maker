@@ -3,26 +3,15 @@ export interface Question {
     number: number;
     label?: string;
     score?: number;
-    answer?: number; // object answer (1-5)
-    type?: 'objective' | 'subjective'; // Problem type (default is objective)
-    stringAnswer?: string; // Correct answer for subjective problem
-    askReason?: boolean; // Dual question flag for objective problems
-    reasonStringAnswer?: string; // Model subjective answer for dual questions
+    answer?: number;
+    /** Number of choices (4 or 5). Default 5 when undefined. */
+    choices?: 4 | 5;
+    /** Optional teacher-authored explanation shown in review. */
+    explanation?: string;
     pdfLocation?: {
         page: number;
         x: number;
         y: number;
-        w?: number;
-        h?: number;
-    };
-    pdfChoices?: {
-        [choiceNum: number]: {
-            page: number;
-            x: number;
-            y: number;
-            w: number;
-            h: number;
-        };
     };
 }
 
@@ -31,14 +20,20 @@ export interface Exam {
     title: string;
     questions: Question[];
     createdAt: string;
-    // Feature 3: Distribution
+    updatedAt?: string;
+    /** Duration in minutes. Default 50 when undefined. */
+    durationMin?: number;
+    /** ISO timestamps for when exam is accessible. */
+    startAt?: string;
+    endAt?: string;
+    /** Soft-archived exams don't show in student dashboards. */
+    archived?: boolean;
+    // Distribution
     accessConfig?: {
         type: 'public' | 'group';
         groupIds?: string[];
         pin?: string;
-        timeLimit?: number;
     };
-    isSmartPdf?: boolean;
 }
 
 export interface Attempt {
@@ -46,16 +41,17 @@ export interface Attempt {
     examId: string;
     examTitle: string;
     studentName: string; // "Student" for anonymous
+    /** Stable student identifier — preferred over studentName for joins. */
+    studentId?: string;
     startedAt: string;
     finishedAt: string;
     score: number;
     totalScore: number;
     answers: Record<number, number>; // qId -> selected option
-    stringAnswers?: Record<number, string>; // subjective answers by student (qId -> string answer)
-    subjectiveScores?: Record<number, number>; // points awarded for subjective answers
-    status: 'completed' | 'in_progress' | 'grading'; // 'grading' means subjective questions are pending grading
+    status: 'completed' | 'in_progress';
     guestId?: string; // For tracking guest attempts
-    drawings?: Record<number, string[]>; // user's handwritten notes
+    /** If true, submitted because the timer hit zero. */
+    autoSubmitted?: boolean;
 }
 
 export interface Group {
@@ -65,10 +61,49 @@ export interface Group {
     createdAt: string;
 }
 
-export interface Student {
-    id: string;
-    name: string;
-    phone: string;
-    groupId?: string;
-    createdAt: string;
+// ────────────────────────────────────────────────────────────
+// Helper: compute a question's effective score weight.
+// Teachers may leave `score` blank; fall back to equal split.
+// ────────────────────────────────────────────────────────────
+export function questionWeight(q: Question, totalQuestions: number): number {
+    if (typeof q.score === 'number' && !Number.isNaN(q.score) && q.score > 0) return q.score;
+    return totalQuestions > 0 ? 100 / totalQuestions : 0;
+}
+
+export function computeExamTotalScore(questions: Question[]): number {
+    return questions.reduce((sum, q) => sum + questionWeight(q, questions.length), 0);
+}
+
+export function gradeAttempt(questions: Question[], answers: Record<number, number>): {
+    earnedScore: number;
+    totalScore: number;
+    correctCount: number;
+    incorrectCount: number;
+    unansweredCount: number;
+} {
+    const totalScore = computeExamTotalScore(questions);
+    let earned = 0;
+    let correct = 0;
+    let incorrect = 0;
+    let unanswered = 0;
+    for (const q of questions) {
+        const selected = answers[q.id];
+        if (selected === undefined || selected === null || selected === 0) {
+            unanswered++;
+            continue;
+        }
+        if (q.answer !== undefined && selected === q.answer) {
+            earned += questionWeight(q, questions.length);
+            correct++;
+        } else {
+            incorrect++;
+        }
+    }
+    return {
+        earnedScore: Math.round(earned * 100) / 100,
+        totalScore: Math.round(totalScore * 100) / 100,
+        correctCount: correct,
+        incorrectCount: incorrect,
+        unansweredCount: unanswered,
+    };
 }

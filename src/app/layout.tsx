@@ -1,7 +1,7 @@
 import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
-import { ToastProvider } from "@/components/ui/Toast";
+import ToastHost from "@/components/Toast";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -18,17 +18,38 @@ export const metadata: Metadata = {
   description: "Create and customize your OMR sheets easily.",
 };
 
+// Runs before React hydration to prevent flash of wrong theme.
+// Handles "auto" by resolving from the user's OS preference at boot.
+const themeInitScript = `
+(function() {
+  try {
+    var saved = localStorage.getItem('omr_theme');
+    var theme = 'light';
+    if (saved === 'dark' || saved === 'light') {
+      theme = saved;
+    } else if (saved === 'auto') {
+      theme = (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches) ? 'dark' : 'light';
+    }
+    document.documentElement.setAttribute('data-theme', theme);
+  } catch (e) {
+    document.documentElement.setAttribute('data-theme', 'light');
+  }
+})();
+`;
+
 export default function RootLayout({
   children,
 }: Readonly<{
   children: React.ReactNode;
 }>) {
   return (
-    <html lang="ko">
+    <html lang="ko" data-theme="light" suppressHydrationWarning>
+      <head>
+        <script dangerouslySetInnerHTML={{ __html: themeInitScript }} />
+      </head>
       <body className={`${geistSans.variable} ${geistMono.variable}`}>
-        <ToastProvider>
-          {children}
-        </ToastProvider>
+        {children}
+        <ToastHost />
       </body>
     </html>
   );
