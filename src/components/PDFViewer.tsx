@@ -2,6 +2,7 @@
 
 import { useState, useRef, useEffect } from 'react';
 import { Document, Page, pdfjs } from 'react-pdf';
+import type { PdfDrawings } from '@/types/omr';
 import 'react-pdf/dist/Page/AnnotationLayer.css';
 import 'react-pdf/dist/Page/TextLayer.css';
 
@@ -29,7 +30,8 @@ interface PDFViewerProps {
     onFileDrop?: (file: File) => void;
     // Drawing Props
     enableDrawing?: boolean;
-    drawings?: Record<number, string[]>; // per page, array of path strings
+    readOnlyDrawings?: boolean;
+    drawings?: PdfDrawings; // per page, array of path strings
     onDrawingsChange?: (page: number, newPaths: string[]) => void;
     // Markers Props
     markers?: MarkerData[];
@@ -41,6 +43,7 @@ export default function PDFViewer({
     onPageClick,
     onFileDrop,
     enableDrawing = false,
+    readOnlyDrawings = false,
     drawings = {},
     onDrawingsChange,
     markers = [],
@@ -57,6 +60,8 @@ export default function PDFViewer({
     const [currentPath, setCurrentPath] = useState<{ x: number, y: number }[]>([]);
     const [drawingMode, setDrawingMode] = useState<'pen' | 'eraser'>('eraser');
     const [penColor, setPenColor] = useState('#ef4444'); // Default Red
+    const shouldRenderDrawingLayer = enableDrawing || readOnlyDrawings;
+    const canEditDrawing = enableDrawing && !readOnlyDrawings;
 
     // Floating OMR popup state - tracks active marker index (page + list index)
     const [activePopupKey, setActivePopupKey] = useState<string | null>(null);
@@ -129,7 +134,7 @@ export default function PDFViewer({
 
     // Render existing paths when page or drawings change
     useEffect(() => {
-        if (!enableDrawing || !canvasRef.current || !containerRef.current) return;
+        if (!shouldRenderDrawingLayer || !canvasRef.current || !containerRef.current) return;
         const canvas = canvasRef.current;
         const ctx = canvas.getContext('2d');
         if (!ctx) return;
@@ -157,17 +162,17 @@ export default function PDFViewer({
             }
         });
 
-    }, [pageNumber, drawings, enableDrawing, scale, file]); // Re-render on these changes
+    }, [pageNumber, drawings, shouldRenderDrawingLayer, scale, file]); // Re-render on these changes
 
     const startDrawing = (e: React.MouseEvent | React.TouchEvent) => {
-        if (!enableDrawing || drawingMode === 'eraser') return;
+        if (!canEditDrawing || drawingMode === 'eraser') return;
         setIsDrawing(true);
         const pos = getPos(e);
         setCurrentPath([pos]);
     };
 
     const draw = (e: React.MouseEvent | React.TouchEvent) => {
-        if (!isDrawing || !enableDrawing || !canvasRef.current) return;
+        if (!isDrawing || !canEditDrawing || !canvasRef.current) return;
         const pos = getPos(e);
         setCurrentPath(prev => [...prev, pos]);
 
@@ -235,7 +240,7 @@ export default function PDFViewer({
 
     function handlePageClick(event: React.MouseEvent<HTMLDivElement>) {
         // ... (Existing click logic, maybe disable if drawing?)
-        if (enableDrawing && drawingMode === 'pen') return; // Don't trigger link click while drawing
+        if (canEditDrawing && drawingMode === 'pen') return; // Don't trigger link click while drawing
         if (!onPageClick) return;
 
         const rect = event.currentTarget.getBoundingClientRect();
@@ -280,7 +285,7 @@ export default function PDFViewer({
                 {file && (
                     <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
                         {/* Drawing Tools */}
-                        {enableDrawing && (
+                        {canEditDrawing && (
                             <div style={{ display: 'flex', gap: '5px', marginRight: '1rem', paddingRight: '1rem', borderRight: '1px solid #666' }}>
                                 <button onClick={() => setDrawingMode(drawingMode === 'pen' ? 'eraser' : 'pen')} style={{ background: drawingMode === 'pen' ? '#6366f1' : 'transparent', border: '1px solid #666', borderRadius: '4px', padding: '2px 6px', color: 'white' }}>
                                     {drawingMode === 'pen' ? '✏️ 그리기' : '👆 클릭모드'}
@@ -326,7 +331,7 @@ export default function PDFViewer({
                                 style={{ position: 'relative', boxShadow: '0 4px 6px -1px rgba(0, 0, 0, 0.1)' }}
                             >
                                 <Page pageNumber={pageNumber} scale={scale} width={containerWidth > 0 ? containerWidth : undefined} renderTextLayer={true} renderAnnotationLayer={true} />{/* Canvas Overlay */}
-                                {enableDrawing && (
+                                {shouldRenderDrawingLayer && (
                                     <canvas
                                         ref={canvasRef}
                                         onMouseDown={startDrawing}
@@ -341,8 +346,8 @@ export default function PDFViewer({
                                             top: 0, left: 0,
                                             width: '100%', height: '100%',
                                             zIndex: 10,
-                                            cursor: drawingMode === 'pen' ? 'crosshair' : 'default',
-                                            pointerEvents: drawingMode === 'pen' ? 'auto' : 'none' // Allow click through if not drawing
+                                            cursor: canEditDrawing && drawingMode === 'pen' ? 'crosshair' : 'default',
+                                            pointerEvents: canEditDrawing && drawingMode === 'pen' ? 'auto' : 'none' // Allow click through if not drawing
                                         }}
                                     />
                                 )}

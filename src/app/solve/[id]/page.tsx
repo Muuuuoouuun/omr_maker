@@ -10,7 +10,35 @@ import { toast } from "@/components/Toast";
 import { Clock, Save } from "lucide-react";
 
 const PDFViewer = dynamic(() => import("@/components/PDFViewer"), { ssr: false });
-import { Question, gradeAttempt } from "@/types/omr";
+import { gradeAttempt } from "@/types/omr";
+import type { Attempt, PdfDrawings, Question } from "@/types/omr";
+
+const AUTOSAVE_INTERVAL_MS = 3000;
+
+interface SolveDraft {
+    answers: Record<number, number>;
+    drawings: PdfDrawings;
+    timeRemaining: number | null;
+    startedAt: string;
+    savedAt: string;
+}
+
+function isPdfDrawings(value: unknown): value is PdfDrawings {
+    if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+    return Object.values(value as Record<string, unknown>).every(paths =>
+        Array.isArray(paths) && paths.every(path => typeof path === "string")
+    );
+}
+
+function compactDrawings(drawings: PdfDrawings): PdfDrawings {
+    return Object.fromEntries(
+        Object.entries(drawings).filter(([, paths]) => paths.length > 0)
+    ) as PdfDrawings;
+}
+
+function hasDrawings(drawings: PdfDrawings): boolean {
+    return Object.values(drawings).some(paths => paths.length > 0);
+}
 
 export default function SolvePage() {
     const params = useParams();
@@ -19,7 +47,7 @@ export default function SolvePage() {
 
     const [examData, setExamData] = useState<{ title: string; questions: Question[]; accessConfig?: { type: string; groupIds: string[] }; durationMin?: number; startAt?: string; endAt?: string } | null>(null);
     const [studentAnswers, setStudentAnswers] = useState<Record<number, number>>({});
-    const [drawings, setDrawings] = useState<Record<number, string[]>>({});
+    const [drawings, setDrawings] = useState<PdfDrawings>({});
     const [pdfFile, setPdfFile] = useState<File | null>(null);
 
     const [user, setUser] = useState<{ name: string; isGuest?: boolean; guestId?: string } | null>(null);
@@ -37,11 +65,13 @@ export default function SolvePage() {
     const [isOMRCollapsed, setIsOMRCollapsed] = useState(false);
 
     // Timer + autosave State
-    const [startedAt] = useState(() => new Date().toISOString());
+    const [startedAt, setStartedAt] = useState(() => new Date().toISOString());
     const [timeRemaining, setTimeRemaining] = useState<number | null>(null); // seconds
     const [lastSavedAt, setLastSavedAt] = useState<Date | null>(null);
     const [hasResumed, setHasResumed] = useState(false);
     const submittedRef = useRef(false);
+    const latestDraftRef = useRef<SolveDraft | null>(null);
+    const autosaveErrorShownRef = useRef(false);
     // Stable per-device student/guest id
     const [persistId] = useState(() => {
         if (typeof window === "undefined") return "";
@@ -92,8 +122,14 @@ export default function SolvePage() {
                         if (draft.answers && typeof draft.answers === "object") {
                             setStudentAnswers(draft.answers);
                         }
+                        if (isPdfDrawings(draft.drawings)) {
+                            setDrawings(draft.drawings);
+                        }
                         if (typeof draft.timeRemaining === "number") {
                             setTimeRemaining(draft.timeRemaining);
+                        }
+                        if (typeof draft.startedAt === "string") {
+                            setStartedAt(draft.startedAt);
                         }
                         setHasResumed(true);
                     }
@@ -151,35 +187,64 @@ export default function SolvePage() {
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [timeRemaining]);
 
-    // Autosave draft every 3s when answers change
     useEffect(() => {
-        if (!id || submittedRef.current) return;
-        const t = setTimeout(() => {
+        latestDraftRef.current = {
+            answers: studentAnswers,
+            drawings: compactDrawings(drawings),
+            timeRemaining,
+            startedAt,
+            savedAt: new Date().toISOString(),
+        };
+    }, [studentAnswers, drawings, timeRemaining, startedAt]);
+
+    // Autosave draft every 3s. Keep this interval independent from the ticking timer.
+    useEffect(() => {
+        if (!DRAFT_KEY) return;
+        const saveDraft = () => {
+            if (submittedRef.current || !latestDraftRef.current) return;
+            const savedAt = new Date().toISOString();
             try {
                 localStorage.setItem(DRAFT_KEY, JSON.stringify({
-                    answers: studentAnswers,
-                    timeRemaining,
-                    savedAt: new Date().toISOString(),
+                    ...latestDraftRef.current,
+                    savedAt,
                 }));
-                setLastSavedAt(new Date());
+                autosaveErrorShownRef.current = false;
+                setLastSavedAt(new Date(savedAt));
             } catch {
-                // quota exceeded — silent, UI will stop showing save time
+                if (!autosaveErrorShownRef.current) {
+                    autosaveErrorShownRef.current = true;
+                    toast.error("Autosave failed", "Unable to save answers and handwriting.");
+                }
+                // quota exceeded: keep the first error visible without spamming toasts
             }
-        }, 3000);
-        return () => clearTimeout(t);
-    }, [studentAnswers, timeRemaining, id, DRAFT_KEY]);
+        };
+
+        const handleVisibilityChange = () => {
+            if (document.visibilityState === "hidden") saveDraft();
+        };
+
+        const intervalId = window.setInterval(saveDraft, AUTOSAVE_INTERVAL_MS);
+        window.addEventListener("pagehide", saveDraft);
+        window.addEventListener("visibilitychange", handleVisibilityChange);
+
+        return () => {
+            window.clearInterval(intervalId);
+            window.removeEventListener("pagehide", saveDraft);
+            window.removeEventListener("visibilitychange", handleVisibilityChange);
+        };
+    }, [DRAFT_KEY]);
 
     // Warn on tab close if there are unsaved answers
     useEffect(() => {
         const onBeforeUnload = (e: BeforeUnloadEvent) => {
             if (submittedRef.current) return;
-            if (Object.keys(studentAnswers).length === 0) return;
+            if (Object.keys(studentAnswers).length === 0 && !hasDrawings(drawings)) return;
             e.preventDefault();
             e.returnValue = "";
         };
         window.addEventListener("beforeunload", onBeforeUnload);
         return () => window.removeEventListener("beforeunload", onBeforeUnload);
-    }, [studentAnswers]);
+    }, [studentAnswers, drawings]);
 
     const handleAnswerClick = (qId: number, optionIndex: number) => {
         setStudentAnswers(prev => ({ ...prev, [qId]: optionIndex }));
@@ -224,7 +289,7 @@ export default function SolvePage() {
         const graded = gradeAttempt(examData.questions, studentAnswers);
 
         const attemptId = Date.now().toString();
-        const attemptData = {
+        const attemptData: Attempt = {
             id: attemptId,
             examId: id,
             examTitle: examData.title,
@@ -236,7 +301,7 @@ export default function SolvePage() {
             score: graded.earnedScore,
             totalScore: graded.totalScore,
             answers: studentAnswers,
-            drawings,
+            drawings: compactDrawings(drawings),
             status: 'completed' as const,
             autoSubmitted,
         };
