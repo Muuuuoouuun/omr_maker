@@ -20,6 +20,8 @@ export default function TeacherHeader({ badge = "TEACHER", badgeColor }: Teacher
     // GlobalSearch's keydown listener and ThemeToggle's mount effect).
     const [isMac, setIsMac] = useState(false);
     useEffect(() => {
+        // Hydrate browser platform after mount to avoid SSR mismatch.
+        // eslint-disable-next-line react-hooks/set-state-in-effect
         setIsMac(typeof navigator !== "undefined" && /Mac|iPhone|iPad/.test(navigator.platform));
     }, []);
     return (

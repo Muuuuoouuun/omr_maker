@@ -162,6 +162,8 @@ export default function NotificationBell() {
 
     // Hydrate once + refresh every 60s
     useEffect(() => {
+        // Refresh derives notifications from client-only localStorage after mount.
+        // eslint-disable-next-line react-hooks/set-state-in-effect
         refresh();
         setHydrated(true);
         const id = setInterval(refresh, 60 * 1000);

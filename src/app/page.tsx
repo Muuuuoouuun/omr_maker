@@ -90,18 +90,25 @@ export default function Home() {
 
   useEffect(() => {
     const stored = localStorage.getItem("omr_groups");
+    // Hydrate client-only localStorage state after mount.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     if (stored) setGroups(JSON.parse(stored));
   }, []);
 
   // Surface the start-code field proactively for returning students.
   useEffect(() => {
     if (role !== "student" || !studentName.trim() || !selectedGroupId) {
+      // Derived from client-only localStorage inputs.
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setNeedsCode(false);
       return;
     }
     try {
       const raw = localStorage.getItem("omr_student_codes");
-      if (!raw) return setNeedsCode(false);
+      if (!raw) {
+        setNeedsCode(false);
+        return;
+      }
       const codes: Record<string, string> = JSON.parse(raw);
       const sid = studentIdFor(studentName, selectedGroupId);
       setNeedsCode(!!codes[sid]);

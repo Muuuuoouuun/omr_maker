@@ -14,6 +14,8 @@ export default function ThemeToggle({ size = "default" }: { size?: "small" | "de
     // before we run here, so this read is always a concrete theme.
     const current =
       (document.documentElement.getAttribute("data-theme") as Theme) || "light";
+    // Hydrate client-resolved theme after the layout script has run.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setTheme(current);
     setMounted(true);
   }, []);

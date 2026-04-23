@@ -121,6 +121,8 @@ function ManageUsersInner() {
             const i = localStorage.getItem(STORAGE_KEYS.invites);
 
             if (s) {
+                // Hydrate client-only localStorage data after mount.
+                // eslint-disable-next-line react-hooks/set-state-in-effect
                 setStudents(JSON.parse(s));
             } else {
                 localStorage.setItem(STORAGE_KEYS.students, JSON.stringify(MOCK_STUDENTS));

@@ -102,6 +102,8 @@ export default function SettingsPage() {
     // Hydrate from localStorage on mount.
     useEffect(() => {
         const initial = loadPersisted();
+        // Hydrate client-only persisted settings after mount.
+        // eslint-disable-next-line react-hooks/set-state-in-effect
         setDraft(initial);
         setPersisted(initial);
         draftRef.current = initial;
