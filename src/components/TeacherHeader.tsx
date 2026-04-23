@@ -44,8 +44,7 @@ export default function TeacherHeader({ badge = "TEACHER", badgeColor }: Teacher
                         {/* Search trigger — opens modal via Cmd+K */}
                         <button
                             onClick={() => {
-                                // Dispatch a synthetic Cmd+K so GlobalSearch's window listener opens it
-                                window.dispatchEvent(new KeyboardEvent('keydown', { key: 'k', metaKey: true, ctrlKey: true, bubbles: true }));
+                                window.dispatchEvent(new Event('omr:open-search'));
                             }}
                             aria-label="빠른 검색"
                             style={{

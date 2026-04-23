@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Search, PlusCircle, Activity, Users, BarChart3, Settings as SettingsIcon, CreditCard, FileText, LayoutDashboard, X, CornerDownLeft } from "lucide-react";
+import { loadAllExams } from "@/utils/storage";
 
 interface SearchItem {
     id: string;
@@ -51,8 +52,13 @@ export default function GlobalSearch() {
                 setOpen(false);
             }
         };
+        const onOpenSearch = () => setOpen(true);
         window.addEventListener("keydown", onKey);
-        return () => window.removeEventListener("keydown", onKey);
+        window.addEventListener("omr:open-search", onOpenSearch);
+        return () => {
+            window.removeEventListener("keydown", onKey);
+            window.removeEventListener("omr:open-search", onOpenSearch);
+        };
     }, [open]);
 
     // When opening, load dynamic items from localStorage (exams + students)
@@ -62,26 +68,17 @@ export default function GlobalSearch() {
         try {
             const items: SearchItem[] = [];
             // Exams
-            for (let i = 0; i < localStorage.length; i++) {
-                const k = localStorage.key(i);
-                if (!k || !k.startsWith("omr_exam_")) continue;
-                try {
-                    const ex = JSON.parse(localStorage.getItem(k) || "");
-                    if (ex?.id && ex?.title) {
-                        items.push({
-                            id: `exam-${ex.id}`,
-                            title: ex.title,
-                            subtitle: `${(ex.questions?.length ?? 0)}문항 · 시험`,
-                            href: `/teacher/dashboard?tab=exam`,
-                            icon: <FileText size={16} />,
-                            group: "exam",
-                            keywords: `exam ${ex.title}`,
-                        });
-                    }
-                } catch {
-                    // skip
-                }
-            }
+            loadAllExams().forEach(ex => {
+                items.push({
+                    id: `exam-${ex.id}`,
+                    title: ex.title,
+                    subtitle: `${ex.questions.length}문항 · 시험`,
+                    href: `/teacher/dashboard?tab=exam`,
+                    icon: <FileText size={16} />,
+                    group: "exam",
+                    keywords: `exam ${ex.title}`,
+                });
+            });
             // Students
             try {
                 const raw = localStorage.getItem("omr_students");

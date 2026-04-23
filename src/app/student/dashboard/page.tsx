@@ -3,12 +3,22 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { Exam, Attempt } from "@/types/omr";
+import { Exam } from "@/types/omr";
 import AssignmentBlock from "@/components/dashboard/AssignmentBlock";
 import ThemeToggle from "@/components/ThemeToggle";
 import { Sparkles, Award } from "lucide-react";
 
-import { mergeGuestAttempts } from "@/utils/storage";
+import {
+    attemptMatchesSession,
+    getSession,
+    loadAllExams,
+    loadAttempts,
+    makeStudentId,
+    mergeGuestAttempts,
+    saveSession,
+    scorePercent,
+    type StudentSession,
+} from "@/utils/storage";
 
 function getTimeGreeting(): string {
     const h = new Date().getHours();
@@ -20,7 +30,7 @@ function getTimeGreeting(): string {
 
 export default function StudentDashboard() {
     const router = useRouter();
-    const [user, setUser] = useState<{ name: string; groupId: string; groupName: string; isGuest?: boolean; guestId?: string } | null>(null);
+    const [user, setUser] = useState<StudentSession | null>(null);
     const [todoExams, setTodoExams] = useState<Exam[]>([]);
     const [doneExams, setDoneExams] = useState<(Exam & { attemptId: string })[]>([]);
     const [stats, setStats] = useState({
@@ -29,42 +39,18 @@ export default function StudentDashboard() {
     });
 
     useEffect(() => {
-        // 1. Check Session (Simulated)
-        const session = sessionStorage.getItem("omr_student_session");
-        if (!session) {
+        const currentUser = getSession();
+        if (!currentUser) {
             alert("로그인이 필요합니다.");
             router.push("/");
             return;
         }
-        const currentUser = JSON.parse(session);
         // eslint-disable-next-line react-hooks/set-state-in-effect
         setUser(currentUser);
 
-        // 2. Load Data
-        const allExams: Exam[] = [];
-        for (let i = 0; i < localStorage.length; i++) {
-            const key = localStorage.key(i);
-            if (key?.startsWith("omr_exam_")) {
-                try {
-                    allExams.push(JSON.parse(localStorage.getItem(key) || ""));
-                    // eslint-disable-next-line @typescript-eslint/no-unused-vars
-                } catch (e) { }
-            }
-        }
-
-        const allAttempts: Attempt[] = JSON.parse(localStorage.getItem("omr_attempts") || "[]");
-
-        // Filter attempts: by guestId if guest, or by name if logged in
-        // In a real app, we'd use IDs for everything.
-        const myAttempts = allAttempts.filter(a => {
-            if (currentUser.isGuest) {
-                return a.guestId === currentUser.guestId;
-            } else {
-                return a.studentName === currentUser.name;
-                // Note: IF we just merged, we might want to also check matches that WERE guestIds? 
-                // For now, assume merge updates studentName.
-            }
-        });
+        const allExams = loadAllExams();
+        const allAttempts = loadAttempts();
+        const myAttempts = allAttempts.filter(a => attemptMatchesSession(a, currentUser));
 
         // 3. Categorize Exams
         const done: (Exam & { attemptId: string })[] = [];
@@ -77,7 +63,7 @@ export default function StudentDashboard() {
             if (exam.accessConfig?.type === 'public') hasAccess = true;
             // Group exams check if user's group is in the list. Guests only see public.
             else if (currentUser.isGuest) hasAccess = false;
-            else if (exam.accessConfig?.groupIds?.includes(currentUser.groupId)) hasAccess = true;
+            else if (currentUser.groupId && exam.accessConfig?.groupIds?.includes(currentUser.groupId)) hasAccess = true;
 
             if (!hasAccess) return;
 
@@ -94,7 +80,7 @@ export default function StudentDashboard() {
         setDoneExams(done);
 
         // 4. Calculate Stats
-        const totalScore = myAttempts.reduce((acc, curr) => acc + (curr.score / curr.totalScore) * 100, 0);
+        const totalScore = myAttempts.reduce((acc, curr) => acc + scorePercent(curr), 0);
         const avg = myAttempts.length > 0 ? Math.round(totalScore / myAttempts.length) : 0;
         setStats({
             avgScore: avg,
@@ -109,20 +95,23 @@ export default function StudentDashboard() {
         if (!name) return;
 
         // 1. Simulate new session
-        const newSession = {
-            name: name,
-            groupId: "group-1", // mock group
+        const trimmedName = name.trim();
+        const groupId = "group-1";
+        const newSession: StudentSession = {
+            name: trimmedName,
+            studentId: makeStudentId(trimmedName, groupId),
+            groupId,
             groupName: "Class A",
             isGuest: false
         };
 
         // 2. Perform Merge
         if (user?.guestId) {
-            mergeGuestAttempts(user.guestId, name);
-            alert(`History merged to ${name}!`);
+            mergeGuestAttempts(user.guestId, trimmedName, newSession.studentId);
+            alert(`History merged to ${trimmedName}!`);
         }
 
-        sessionStorage.setItem("omr_student_session", JSON.stringify(newSession));
+        saveSession(newSession);
         window.location.reload(); // Reload to refresh data
     };
 

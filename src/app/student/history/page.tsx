@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { Attempt } from "@/types/omr";
+import { attemptMatchesSession, getSession, loadAttempts, scorePercent } from "@/utils/storage";
 
 type PeriodFilter = "all" | "30d" | "7d";
 type SortMode = "recent" | "high" | "low";
@@ -10,8 +11,7 @@ type SortMode = "recent" | "high" | "low";
 const PAGE_SIZE = 10;
 
 function pct(a: Attempt): number {
-    if (!a.totalScore || a.totalScore <= 0) return 0;
-    return (a.score / a.totalScore) * 100;
+    return scorePercent(a);
 }
 
 function badgeForPct(p: number): { bg: string; color: string } {
@@ -28,17 +28,11 @@ export default function HistoryPage() {
     const [now] = useState(() => Date.now());
 
     useEffect(() => {
-        const data = localStorage.getItem('omr_attempts');
-        if (data) {
-            try {
-                const parsed = JSON.parse(data);
-                // Hydrate client-only attempt history after mount.
-                // eslint-disable-next-line react-hooks/set-state-in-effect
-                setAttempts(parsed);
-            } catch (e) {
-                console.error("Failed to load history", e);
-            }
-        }
+        const session = getSession();
+        const allAttempts = loadAttempts();
+        // Hydrate client-only attempt history after mount.
+        // eslint-disable-next-line react-hooks/set-state-in-effect
+        setAttempts(session ? allAttempts.filter(a => attemptMatchesSession(a, session)) : []);
     }, []);
 
     // Summary uses all attempts regardless of filters.

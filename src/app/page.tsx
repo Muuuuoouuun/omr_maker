@@ -5,11 +5,7 @@ import { useRouter } from "next/navigation";
 import { Attempt, Group } from "@/types/omr";
 import ThemeToggle from "@/components/ThemeToggle";
 import { toast } from "@/components/Toast";
-
-// Stable identifier for a (name, group) pair.
-function studentIdFor(name: string, groupId: string) {
-    return `${groupId}::${name.trim()}`;
-}
+import { getOrCreateGuestId, loadAttempts, makeStudentId, saveSession } from "@/utils/storage";
 
 // 6-char alphanumeric code — avoids ambiguous chars (0/O, 1/I).
 function generateStartCode(): string {
@@ -110,7 +106,7 @@ export default function Home() {
         return;
       }
       const codes: Record<string, string> = JSON.parse(raw);
-      const sid = studentIdFor(studentName, selectedGroupId);
+      const sid = makeStudentId(studentName, selectedGroupId);
       setNeedsCode(!!codes[sid]);
     } catch {
       setNeedsCode(false);
@@ -133,7 +129,7 @@ export default function Home() {
       return;
     }
     const group = groups.find((g) => g.id === selectedGroupId);
-    const sid = studentIdFor(studentName, selectedGroupId);
+    const sid = makeStudentId(studentName, selectedGroupId);
 
     // Load existing start-code registry + attempts to decide anti-spoof path.
     let codes: Record<string, string> = {};
@@ -142,11 +138,7 @@ export default function Home() {
       if (raw) codes = JSON.parse(raw);
     } catch { /* ignore */ }
 
-    let attempts: Attempt[] = [];
-    try {
-      const raw = localStorage.getItem("omr_attempts");
-      if (raw) attempts = JSON.parse(raw);
-    } catch { /* ignore */ }
+    const attempts: Attempt[] = loadAttempts();
 
     const hasPriorAttempt = attempts.some(a => a.studentId === sid
       || (a.studentName === studentName.trim() && !a.guestId));
@@ -184,15 +176,14 @@ export default function Home() {
       groupId: selectedGroupId,
       groupName: group?.name || "Unknown",
     };
-    sessionStorage.setItem("omr_student_session", JSON.stringify(session));
+    saveSession(session);
     router.push("/student/dashboard");
   };
 
   const handleGuest = () => {
-    const guestId = Math.random().toString(36).substring(2, 15);
+    const guestId = getOrCreateGuestId();
     const session = { name: "Guest Student", isGuest: true, guestId, groupName: "Guest Mode" };
-    sessionStorage.setItem("omr_student_session", JSON.stringify(session));
-    localStorage.setItem("omr_guest_id", guestId);
+    saveSession(session);
     router.push("/student/dashboard");
   };
 

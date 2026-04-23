@@ -11,7 +11,15 @@ import { Clock, Save } from "lucide-react";
 
 const PDFViewer = dynamic(() => import("@/components/PDFViewer"), { ssr: false });
 import { gradeAttempt } from "@/types/omr";
-import type { Attempt, PdfDrawings, Question } from "@/types/omr";
+import type { Attempt, Exam, PdfDrawings, Question } from "@/types/omr";
+import {
+    appendAttempt,
+    getOrCreateGuestId,
+    getSession,
+    loadExam as loadStoredExam,
+    saveSession,
+    type StudentSession,
+} from "@/utils/storage";
 
 const AUTOSAVE_INTERVAL_MS = 3000;
 
@@ -45,12 +53,12 @@ export default function SolvePage() {
     const router = useRouter();
     const id = params?.id as string;
 
-    const [examData, setExamData] = useState<{ title: string; questions: Question[]; accessConfig?: { type: string; groupIds: string[] }; durationMin?: number; startAt?: string; endAt?: string } | null>(null);
+    const [examData, setExamData] = useState<Exam | null>(null);
     const [studentAnswers, setStudentAnswers] = useState<Record<number, number>>({});
     const [drawings, setDrawings] = useState<PdfDrawings>({});
     const [pdfFile, setPdfFile] = useState<File | null>(null);
 
-    const [user, setUser] = useState<{ name: string; isGuest?: boolean; guestId?: string } | null>(null);
+    const [user, setUser] = useState<StudentSession | null>(null);
 
     // Navigation State
     const [currentQuestionId, setCurrentQuestionId] = useState<number | null>(null);
@@ -86,18 +94,17 @@ export default function SolvePage() {
     const DRAFT_KEY = id ? `omr_draft_${id}` : "";
 
     useEffect(() => {
-        const sessionStr = sessionStorage.getItem("omr_student_session");
-        if (sessionStr) setUser(JSON.parse(sessionStr));
+        const session = getSession();
+        if (session) setUser(session);
 
         const loadExam = async () => {
             if (!id) return;
-            const data = localStorage.getItem(`omr_exam_${id}`);
-            if (!data) {
+            const parsed = loadStoredExam(id);
+            if (!parsed) {
                 toast.error("시험을 찾을 수 없음", "유효하지 않은 시험 ID입니다.");
                 return;
             }
             try {
-                const parsed = JSON.parse(data);
                 setExamData(parsed);
 
                 // Enforce schedule window (startAt/endAt)
@@ -272,10 +279,9 @@ export default function SolvePage() {
             if (examData.accessConfig?.type === 'public') {
                 const name = window.prompt("이름을 입력해주세요 (게스트 제출):");
                 if (!name) return;
-                const guestId = Math.random().toString(36).substring(2, 15);
-                submitter = { name, isGuest: true, guestId };
-                sessionStorage.setItem("omr_student_session", JSON.stringify({ ...submitter, groupName: 'Guest' }));
-                localStorage.setItem("omr_guest_id", guestId);
+                const guestId = getOrCreateGuestId();
+                submitter = { name: name.trim(), isGuest: true, guestId, groupName: 'Guest' };
+                saveSession(submitter);
             } else {
                 toast.error("로그인 필요", "이 시험은 로그인이 필요합니다.");
                 router.push("/");
@@ -294,7 +300,7 @@ export default function SolvePage() {
             examId: id,
             examTitle: examData.title,
             studentName: submitter.name,
-            studentId: submitter.guestId ?? persistId,
+            studentId: submitter.studentId ?? submitter.guestId ?? persistId,
             guestId: submitter.guestId,
             startedAt,
             finishedAt: new Date().toISOString(),
@@ -307,9 +313,8 @@ export default function SolvePage() {
         };
 
         try {
-            const history = JSON.parse(localStorage.getItem('omr_attempts') || '[]');
-            history.push(attemptData);
-            localStorage.setItem('omr_attempts', JSON.stringify(history));
+            const saved = appendAttempt(attemptData);
+            if (!saved) throw new Error("append attempt failed");
             // Clean up draft
             try { localStorage.removeItem(DRAFT_KEY); } catch {}
         } catch {
@@ -371,13 +376,13 @@ export default function SolvePage() {
             flexDirection: 'column'
         }}>
             {/* Header */}
-            <header className="header" style={{
+            <header className="header solve-header" style={{
                 flexShrink: 0,
                 height: 'auto',
                 padding: '0.75rem 1.5rem'
             }}>
-                <div className="container header-content" style={{ gap: '1rem' }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '1rem', minWidth: 0, flex: 1 }}>
+                <div className="container header-content solve-header-content" style={{ gap: '1rem' }}>
+                    <div className="solve-title-group" style={{ display: 'flex', alignItems: 'center', gap: '1rem', minWidth: 0, flex: 1 }}>
                         <Link href="/" className="logo" style={{ fontSize: '1.15rem', flexShrink: 0 }}>OMR Maker</Link>
                         <div style={{
                             height: '22px',
@@ -404,7 +409,7 @@ export default function SolvePage() {
                             const ss = (Math.max(0, timeRemaining) % 60).toString().padStart(2, "0");
                             const isCritical = timeRemaining <= 300; // last 5 min
                             return (
-                                <div style={{
+                                <div className="solve-timer-pill" style={{
                                     display: 'flex', alignItems: 'center', gap: '0.4rem',
                                     padding: '0.35rem 0.75rem',
                                     background: isCritical ? 'rgba(239,68,68,0.1)' : 'var(--background)',
@@ -424,7 +429,7 @@ export default function SolvePage() {
                     )}
 
                     {/* Progress indicator */}
-                    <div style={{
+                    <div className="solve-progress-pill" style={{
                         display: 'flex',
                         alignItems: 'center',
                         gap: '0.75rem',
@@ -470,7 +475,7 @@ export default function SolvePage() {
                         </span>
                     )}
 
-                    <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', flexShrink: 0 }}>
+                    <div className="solve-header-actions" style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', flexShrink: 0 }}>
                         <label style={{
                             display: 'flex',
                             alignItems: 'center',
@@ -571,9 +576,9 @@ export default function SolvePage() {
             </header>
 
             {/* Body */}
-            <div style={{ display: 'flex', flex: 1, overflow: 'hidden' }}>
+            <div className="solve-body" style={{ display: 'flex', flex: 1, overflow: 'hidden' }}>
                 {/* PDF Area (Left, larger) */}
-                <div style={{
+                <div className="solve-pdf-pane" style={{
                     flex: 1,
                     borderRight: '1px solid var(--border)',
                     background: '#2a2d31',
@@ -628,7 +633,7 @@ export default function SolvePage() {
                 </div>
 
                 {/* OMR Sheet (Right, responsive card view) */}
-                <div style={{
+                <div className={`solve-omr-pane ${isOMRCollapsed ? 'is-collapsed' : ''}`} style={{
                     width: isOMRCollapsed ? '0' : '440px',
                     maxWidth: isOMRCollapsed ? '0' : '40vw',
                     flexShrink: 0,

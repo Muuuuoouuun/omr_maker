@@ -7,6 +7,7 @@ import dynamic from "next/dynamic";
 import { BookOpen, ChevronDown, ChevronUp } from "lucide-react";
 import { gradeAttempt } from "@/types/omr";
 import type { Attempt, Exam, PdfDrawings } from "@/types/omr";
+import { loadAttempts, loadExam as loadStoredExam } from "@/utils/storage";
 
 const PDFViewer = dynamic(() => import("@/components/PDFViewer"), { ssr: false });
 
@@ -29,34 +30,27 @@ export default function ReviewPage() {
     useEffect(() => {
         let cancelled = false;
         if (id) {
-            // Load Attempt
-            const attemptsData = localStorage.getItem('omr_attempts');
-            if (attemptsData) {
-                const attempts: Attempt[] = JSON.parse(attemptsData);
-                const found = attempts.find(a => a.id === id);
-                if (found) {
-                    // eslint-disable-next-line react-hooks/set-state-in-effect
-                    setAttempt(found);
-                    // Load Exam Data associated with this attempt
-                    const examDataStr = localStorage.getItem(`omr_exam_${found.examId}`);
-                    if (examDataStr) {
-                        const parsedExam = JSON.parse(examDataStr) as Exam;
-                        setExam(parsedExam);
-                        setPdfFile(null);
-                        setPdfLoadFailed(false);
+            const found = loadAttempts().find(a => a.id === id);
+            if (found) {
+                // eslint-disable-next-line react-hooks/set-state-in-effect
+                setAttempt(found);
+                const parsedExam = loadStoredExam(found.examId);
+                if (parsedExam) {
+                    setExam(parsedExam);
+                    setPdfFile(null);
+                    setPdfLoadFailed(false);
 
-                        if (parsedExam.pdfData) {
-                            fetch(parsedExam.pdfData)
-                                .then(res => res.blob())
-                                .then(blob => {
-                                    if (!cancelled) {
-                                        setPdfFile(new File([blob], "problem.pdf", { type: "application/pdf" }));
-                                    }
-                                })
-                                .catch(() => {
-                                    if (!cancelled) setPdfLoadFailed(true);
-                                });
-                        }
+                    if (parsedExam.pdfData) {
+                        fetch(parsedExam.pdfData)
+                            .then(res => res.blob())
+                            .then(blob => {
+                                if (!cancelled) {
+                                    setPdfFile(new File([blob], "problem.pdf", { type: "application/pdf" }));
+                                }
+                            })
+                            .catch(() => {
+                                if (!cancelled) setPdfLoadFailed(true);
+                            });
                     }
                 }
             }

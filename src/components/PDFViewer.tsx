@@ -77,7 +77,8 @@ export default function PDFViewer({
         const observer = new ResizeObserver((entries) => {
             if (entries[0]) {
                 const { width } = entries[0].contentRect;
-                setContainerWidth(width - 64); // Account for 2rem padding (32px * 2)
+                const horizontalPadding = width <= 900 ? 32 : 64;
+                setContainerWidth(Math.max(240, width - horizontalPadding));
             }
         });
         observer.observe(wrapperRef.current);
@@ -166,6 +167,7 @@ export default function PDFViewer({
 
     const startDrawing = (e: React.MouseEvent | React.TouchEvent) => {
         if (!canEditDrawing || drawingMode === 'eraser') return;
+        e.preventDefault();
         setIsDrawing(true);
         const pos = getPos(e);
         setCurrentPath([pos]);
@@ -173,6 +175,7 @@ export default function PDFViewer({
 
     const draw = (e: React.MouseEvent | React.TouchEvent) => {
         if (!isDrawing || !canEditDrawing || !canvasRef.current) return;
+        e.preventDefault();
         const pos = getPos(e);
         setCurrentPath(prev => [...prev, pos]);
 
@@ -277,16 +280,16 @@ export default function PDFViewer({
             )}
 
             {/* PDF Toolbar */}
-            <div style={{ padding: '0.5rem 1rem', background: '#323639', color: 'white', display: 'flex', alignItems: 'center', justifyContent: 'space-between', fontSize: '0.9rem', borderBottom: '1px solid #000' }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
+            <div className="pdf-viewer-toolbar" style={{ padding: '0.5rem 1rem', background: '#323639', color: 'white', display: 'flex', alignItems: 'center', justifyContent: 'space-between', fontSize: '0.9rem', borderBottom: '1px solid #000' }}>
+                <div className="pdf-toolbar-title" style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
                     <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '200px' }}>{file ? file.name : 'PDF 없음'}</span>
                 </div>
 
                 {file && (
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                    <div className="pdf-toolbar-controls" style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
                         {/* Drawing Tools */}
                         {canEditDrawing && (
-                            <div style={{ display: 'flex', gap: '5px', marginRight: '1rem', paddingRight: '1rem', borderRight: '1px solid #666' }}>
+                            <div className="pdf-drawing-tools" style={{ display: 'flex', gap: '5px', marginRight: '1rem', paddingRight: '1rem', borderRight: '1px solid #666' }}>
                                 <button onClick={() => setDrawingMode(drawingMode === 'pen' ? 'eraser' : 'pen')} style={{ background: drawingMode === 'pen' ? '#6366f1' : 'transparent', border: '1px solid #666', borderRadius: '4px', padding: '2px 6px', color: 'white' }}>
                                     {drawingMode === 'pen' ? '✏️ 그리기' : '👆 클릭모드'}
                                 </button>
@@ -322,7 +325,7 @@ export default function PDFViewer({
 
             {/* PDF Content */}
             <div ref={wrapperRef} style={{ flex: 1, overflow: 'auto', display: 'flex', flexDirection: 'column', alignItems: 'center', background: '#525659', position: 'relative' }}>
-                <div style={{ flex: 1, display: 'flex', justifyContent: 'center', padding: '2rem', width: '100%' }}>
+                <div className="pdf-page-shell" style={{ flex: 1, display: 'flex', justifyContent: 'center', padding: '2rem', width: '100%' }}>
                     {file ? (
                         <Document file={file} onLoadSuccess={onDocumentLoadSuccess} loading={<div style={{ color: 'white' }}>문서 로딩 중...</div>}>
                             <div
@@ -347,6 +350,7 @@ export default function PDFViewer({
                                             width: '100%', height: '100%',
                                             zIndex: 10,
                                             cursor: canEditDrawing && drawingMode === 'pen' ? 'crosshair' : 'default',
+                                            touchAction: canEditDrawing && drawingMode === 'pen' ? 'none' : 'pan-x pan-y',
                                             pointerEvents: canEditDrawing && drawingMode === 'pen' ? 'auto' : 'none' // Allow click through if not drawing
                                         }}
                                     />
