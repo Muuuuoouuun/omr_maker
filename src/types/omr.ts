@@ -28,6 +28,10 @@ export interface Exam {
     endAt?: string;
     /** Soft-archived exams don't show in student dashboards. */
     archived?: boolean;
+    /** Problem PDF stored as a data URL while the app is localStorage-backed. */
+    pdfData?: string;
+    /** Optional answer key PDF stored as a data URL. */
+    answerKeyPdf?: string;
     // Distribution
     accessConfig?: {
         type: 'public' | 'group';
@@ -35,6 +39,9 @@ export interface Exam {
         pin?: string;
     };
 }
+
+/** Per-page serialized canvas stroke paths drawn on the PDF. */
+export type PdfDrawings = Record<number, string[]>;
 
 export interface Attempt {
     id: string; // specific attempt ID
@@ -48,6 +55,8 @@ export interface Attempt {
     score: number;
     totalScore: number;
     answers: Record<number, number>; // qId -> selected option
+    /** Student handwriting captured from the PDF drawing layer. */
+    drawings?: PdfDrawings;
     status: 'completed' | 'in_progress';
     guestId?: string; // For tracking guest attempts
     /** If true, submitted because the timer hit zero. */

@@ -7,6 +7,7 @@ import {
     ResponsiveContainer, Legend
 } from 'recharts';
 import { TrendingUp } from "lucide-react";
+import { scorePercent, studentIdentityKeyFromAttempt } from "@/utils/storage";
 
 interface StudentAnalyticsTabProps {
     exams: Exam[];
@@ -16,17 +17,22 @@ interface StudentAnalyticsTabProps {
 export default function StudentAnalyticsTab({ exams, attempts }: StudentAnalyticsTabProps) {
     // Extract unique students
     const students = useMemo(() => {
-        const studentMap = new Map<string, string>();
+        const studentMap = new Map<string, { key: string; name: string }>();
         attempts.forEach(a => {
-            if (!studentMap.has(a.studentName)) {
-                studentMap.set(a.studentName, a.studentName);
+            const key = studentIdentityKeyFromAttempt(a);
+            if (!studentMap.has(key)) {
+                studentMap.set(key, { key, name: a.studentName });
             }
         });
-        return Array.from(studentMap.values()).sort();
+        return Array.from(studentMap.values()).sort((a, b) => a.name.localeCompare(b.name, "ko"));
     }, [attempts]);
 
-    const [selectedStudent, setSelectedStudent] = useState<string>(students.length > 0 ? students[0] : "");
+    const [selectedStudentKey, setSelectedStudentKey] = useState<string>("");
     const [excludedExamIds, setExcludedExamIds] = useState<Set<string>>(new Set());
+    const activeStudentKey = students.some(student => student.key === selectedStudentKey)
+        ? selectedStudentKey
+        : students[0]?.key ?? "";
+    const selectedStudentName = students.find(student => student.key === activeStudentKey)?.name ?? "";
 
     const toggleExamExclusion = (examId: string) => {
         const newSet = new Set(excludedExamIds);
@@ -39,11 +45,11 @@ export default function StudentAnalyticsTab({ exams, attempts }: StudentAnalytic
     };
 
     const studentAttempts = useMemo(() => {
-        if (!selectedStudent) return [];
+        if (!activeStudentKey) return [];
         return attempts
-            .filter(a => a.studentName === selectedStudent)
+            .filter(a => studentIdentityKeyFromAttempt(a) === activeStudentKey)
             .sort((a, b) => new Date(a.finishedAt).getTime() - new Date(b.finishedAt).getTime());
-    }, [attempts, selectedStudent]);
+    }, [attempts, activeStudentKey]);
 
     // Data for Chart
     const trendData = useMemo(() => {
@@ -53,14 +59,14 @@ export default function StudentAnalyticsTab({ exams, attempts }: StudentAnalytic
                 // Find all attempts for this exam to calculate average
                 const allAttemptsForExam = attempts.filter(a => a.examId === attempt.examId);
                 const avgScore = allAttemptsForExam.length > 0
-                    ? allAttemptsForExam.reduce((sum, a) => sum + (a.score / a.totalScore) * 100, 0) / allAttemptsForExam.length
+                    ? allAttemptsForExam.reduce((sum, a) => sum + scorePercent(a), 0) / allAttemptsForExam.length
                     : 0;
 
                 return {
                     date: new Date(attempt.finishedAt).toLocaleDateString(undefined, { month: 'short', day: 'numeric' }),
                     examTitle: attempt.examTitle,
                     examId: attempt.examId,
-                    studentScore: Math.round((attempt.score / attempt.totalScore) * 100),
+                    studentScore: Math.round(scorePercent(attempt)),
                     avgScore: Math.round(avgScore),
                 };
             });
@@ -73,13 +79,9 @@ export default function StudentAnalyticsTab({ exams, attempts }: StudentAnalytic
 
             // Calculate rank
             const examAttempts = attempts.filter(a => a.examId === attempt.examId)
-                .sort((a, b) => b.score - a.score);
-            let rank = 1;
+                .sort((a, b) => scorePercent(b) - scorePercent(a));
             const totalStudents = examAttempts.length;
-
-            // To handle ties properly, find first index with same score
-            const studentScore = attempt.score;
-            rank = examAttempts.findIndex(a => a.score === studentScore) + 1;
+            const rank = Math.max(1, examAttempts.findIndex(a => a.id === attempt.id) + 1);
 
             // Calculate strengths and weaknesses based on labels
             const labelStats: Record<string, { correct: number, total: number }> = {};
@@ -129,7 +131,7 @@ export default function StudentAnalyticsTab({ exams, attempts }: StudentAnalytic
                 examTitle: attempt.examTitle,
                 score: attempt.score,
                 totalScore: attempt.totalScore,
-                scoreRate: Math.round((attempt.score / attempt.totalScore) * 100),
+                scoreRate: Math.round(scorePercent(attempt)),
                 rank,
                 totalStudents,
                 strongPoint,
@@ -143,19 +145,14 @@ export default function StudentAnalyticsTab({ exams, attempts }: StudentAnalytic
         return <div className="text-center p-8 text-muted">아직 응시 기록이 있는 학생이 없습니다.</div>;
     }
 
-    // fallback when a student is not active
-    if (!selectedStudent && students.length > 0) {
-        setSelectedStudent(students[0]);
-    }
-
     return (
         <div className="fade-in-up" style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
             {/* Filter Section */}
             <div className="card" style={{ padding: '1.5rem', display: 'flex', alignItems: 'center', gap: '1rem', background: 'var(--surface)' }}>
                 <span style={{ fontWeight: 600, color: 'var(--text)' }}>분석할 학생 선택:</span>
                 <select
-                    value={selectedStudent}
-                    onChange={(e) => setSelectedStudent(e.target.value)}
+                    value={activeStudentKey}
+                    onChange={(e) => setSelectedStudentKey(e.target.value)}
                     style={{
                         padding: '0.75rem 1rem',
                         borderRadius: 'var(--radius-md)',
@@ -168,8 +165,8 @@ export default function StudentAnalyticsTab({ exams, attempts }: StudentAnalytic
                         cursor: 'pointer'
                     }}
                 >
-                    {students.map(name => (
-                        <option key={name} value={name}>{name}</option>
+                    {students.map(student => (
+                        <option key={student.key} value={student.key}>{student.name}</option>
                     ))}
                 </select>
             </div>
@@ -180,7 +177,7 @@ export default function StudentAnalyticsTab({ exams, attempts }: StudentAnalytic
                     <div style={{ marginBottom: '1.5rem' }}>
                         <h3 style={{ fontSize: '1.25rem', fontWeight: 700, display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.5rem' }}>
                             <TrendingUp size={20} color="var(--primary)" />
-                            {selectedStudent} 학생 성취도 추이
+                            {selectedStudentName} 학생 성취도 추이
                         </h3>
                         <p style={{ color: 'var(--muted)', fontSize: '0.9rem' }}>
                             응시한 시험들의 점수 추이 및 전체 학생의 시험 평균을 같이 비교합니다.
@@ -257,7 +254,7 @@ export default function StudentAnalyticsTab({ exams, attempts }: StudentAnalytic
                                             <div style={{ fontSize: '0.75rem', color: 'var(--muted)' }}>배포일: {new Date(exam.createdAt).toLocaleDateString()}</div>
                                         </div>
                                         <button
-                                            onClick={() => alert(`[${selectedStudent}] 학생의 "${exam.title}" 시험에 대한 [알림 포화 모드]가 활성화되었습니다.\n\n해당 학생이 시험을 완료할 때까지 5분에 한 번씩 푸시 알림이 전송됩니다.`)}
+                                            onClick={() => alert(`[${selectedStudentName}] 학생의 "${exam.title}" 시험에 대한 [알림 포화 모드]가 활성화되었습니다.\n\n해당 학생이 시험을 완료할 때까지 5분에 한 번씩 푸시 알림이 전송됩니다.`)}
                                             style={{
                                                 background: 'var(--error)', color: 'white', padding: '0.4rem 0.8rem',
                                                 borderRadius: 'var(--radius-md)', fontSize: '0.75rem', fontWeight: 700,
@@ -280,7 +277,7 @@ export default function StudentAnalyticsTab({ exams, attempts }: StudentAnalytic
                         <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', overflowY: 'auto', flex: 1 }}>
                             {studentAttempts.map(attempt => {
                                 const isExcluded = excludedExamIds.has(attempt.examId);
-                                const scoreRate = Math.round((attempt.score / attempt.totalScore) * 100);
+                                const scoreRate = Math.round(scorePercent(attempt));
 
                                 return (
                                     <label

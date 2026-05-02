@@ -9,6 +9,7 @@ import ExamAnalyticsTab from "@/components/dashboard/tabs/ExamAnalyticsTab";
 import StudentAnalyticsTab from "@/components/dashboard/tabs/StudentAnalyticsTab";
 import { LayoutDashboard, BarChart2, GraduationCap } from "lucide-react";
 import ThemeToggle from "@/components/ThemeToggle";
+import { loadAllExams, loadAttempts, scorePercent, studentIdentityKeyFromAttempt } from "@/utils/storage";
 
 type TabType = 'overview' | 'exam' | 'student';
 
@@ -39,29 +40,8 @@ function TeacherDashboard() {
     const [trendData, setTrendData] = useState<number[]>([]);
 
     useEffect(() => {
-        // Load Data
-        const loadedExams: Exam[] = [];
-        const loadedAttempts: Attempt[] = [];
-
-        // Scan localStorage for exams
-        for (let i = 0; i < localStorage.length; i++) {
-            const key = localStorage.key(i);
-            if (key?.startsWith("omr_exam_")) {
-                try {
-                    const val = JSON.parse(localStorage.getItem(key) || "");
-                    loadedExams.push(val);
-                    // eslint-disable-next-line @typescript-eslint/no-unused-vars
-                } catch (e) { }
-            }
-        }
-        // Load attempts
-        const attemptsStr = localStorage.getItem("omr_attempts");
-        if (attemptsStr) {
-            try {
-                loadedAttempts.push(...JSON.parse(attemptsStr));
-                // eslint-disable-next-line @typescript-eslint/no-unused-vars
-            } catch (e) { }
-        }
+        const loadedExams = loadAllExams();
+        const loadedAttempts = loadAttempts();
 
         // Seed demo data only when the DB is completely empty AND only in development.
         // Prevents the "[예시]" mock exams from appearing in production.
@@ -89,6 +69,7 @@ function TeacherDashboard() {
                     examId: mockExam.id,
                     examTitle: mockExam.title,
                     studentName: `학생 ${i + 1}`,
+                    studentId: `mock-student-${i + 1}`,
                     startedAt: new Date(Date.now() - 86400000 * 1).toISOString(),
                     finishedAt: new Date(Date.now() - 86400000 * 1 + i * 1000).toISOString(),
                     score: mockExam.id === 'mock-1' ? (50 + Math.random() * 50) : (40 + Math.random() * 50),
@@ -112,19 +93,19 @@ function TeacherDashboard() {
         setAttempts(loadedAttempts);
 
         // Calculate Stats
-        const totalScore = loadedAttempts.reduce((acc, curr) => acc + (curr.score / curr.totalScore) * 100, 0);
+        const totalScore = loadedAttempts.reduce((acc, curr) => acc + scorePercent(curr), 0);
         const avg = loadedAttempts.length > 0 ? Math.round(totalScore / loadedAttempts.length) : 0;
 
         setStats({
-            totalStudents: new Set(loadedAttempts.map(a => a.studentName + a.id)).size,
+            totalStudents: new Set(loadedAttempts.map(studentIdentityKeyFromAttempt)).size,
             avgScore: avg,
             activeExams: loadedExams.length
         });
 
         // Calculate Trend Data (Last N attempts scores)
-        const scores = loadedAttempts
+        const scores = [...loadedAttempts]
             .sort((a, b) => new Date(a.finishedAt).getTime() - new Date(b.finishedAt).getTime())
-            .map(a => Math.round((a.score / a.totalScore) * 100))
+            .map(a => Math.round(scorePercent(a)))
             .slice(-10);
 
         if (scores.length < 5) {

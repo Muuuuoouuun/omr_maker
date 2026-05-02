@@ -153,8 +153,9 @@ export async function parseAnswerKeyWithGemini(file: File): Promise<ParsedAnswer
         })).filter((item: any) => !isNaN(item.questionNum) && !isNaN(item.answer))
             // eslint-disable-next-line @typescript-eslint/no-explicit-any
             .sort((a: any, b: any) => a.questionNum - b.questionNum);
-    } catch (e: any) {
+    } catch (e: unknown) {
         console.error("AI Parsing failed:", e);
-        throw new Error(`AI 인식 실패: ${e.message || '알 수 없는 오류'}`);
+        const message = e instanceof Error ? e.message : '알 수 없는 오류';
+        throw new Error(`AI 인식 실패: ${message}`);
     }
 }

@@ -10,19 +10,55 @@ import { toast } from "@/components/Toast";
 import { Clock, Save } from "lucide-react";
 
 const PDFViewer = dynamic(() => import("@/components/PDFViewer"), { ssr: false });
-import { Question, gradeAttempt } from "@/types/omr";
+import { gradeAttempt } from "@/types/omr";
+import type { Attempt, Exam, PdfDrawings, Question } from "@/types/omr";
+import {
+    appendAttempt,
+    getOrCreateGuestId,
+    getSession,
+    loadExam as loadStoredExam,
+    saveSession,
+    type StudentSession,
+} from "@/utils/storage";
+
+const AUTOSAVE_INTERVAL_MS = 3000;
+
+interface SolveDraft {
+    answers: Record<number, number>;
+    drawings: PdfDrawings;
+    timeRemaining: number | null;
+    startedAt: string;
+    savedAt: string;
+}
+
+function isPdfDrawings(value: unknown): value is PdfDrawings {
+    if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+    return Object.values(value as Record<string, unknown>).every(paths =>
+        Array.isArray(paths) && paths.every(path => typeof path === "string")
+    );
+}
+
+function compactDrawings(drawings: PdfDrawings): PdfDrawings {
+    return Object.fromEntries(
+        Object.entries(drawings).filter(([, paths]) => paths.length > 0)
+    ) as PdfDrawings;
+}
+
+function hasDrawings(drawings: PdfDrawings): boolean {
+    return Object.values(drawings).some(paths => paths.length > 0);
+}
 
 export default function SolvePage() {
     const params = useParams();
     const router = useRouter();
     const id = params?.id as string;
 
-    const [examData, setExamData] = useState<{ title: string; questions: Question[]; accessConfig?: { type: string; groupIds: string[] }; durationMin?: number; startAt?: string; endAt?: string } | null>(null);
+    const [examData, setExamData] = useState<Exam | null>(null);
     const [studentAnswers, setStudentAnswers] = useState<Record<number, number>>({});
-    const [drawings, setDrawings] = useState<Record<number, string[]>>({});
+    const [drawings, setDrawings] = useState<PdfDrawings>({});
     const [pdfFile, setPdfFile] = useState<File | null>(null);
 
-    const [user, setUser] = useState<{ name: string; isGuest?: boolean; guestId?: string } | null>(null);
+    const [user, setUser] = useState<StudentSession | null>(null);
 
     // Navigation State
     const [currentQuestionId, setCurrentQuestionId] = useState<number | null>(null);
@@ -37,11 +73,13 @@ export default function SolvePage() {
     const [isOMRCollapsed, setIsOMRCollapsed] = useState(false);
 
     // Timer + autosave State
-    const [startedAt] = useState(() => new Date().toISOString());
+    const [startedAt, setStartedAt] = useState(() => new Date().toISOString());
     const [timeRemaining, setTimeRemaining] = useState<number | null>(null); // seconds
     const [lastSavedAt, setLastSavedAt] = useState<Date | null>(null);
     const [hasResumed, setHasResumed] = useState(false);
     const submittedRef = useRef(false);
+    const latestDraftRef = useRef<SolveDraft | null>(null);
+    const autosaveErrorShownRef = useRef(false);
     // Stable per-device student/guest id
     const [persistId] = useState(() => {
         if (typeof window === "undefined") return "";
@@ -56,18 +94,17 @@ export default function SolvePage() {
     const DRAFT_KEY = id ? `omr_draft_${id}` : "";
 
     useEffect(() => {
-        const sessionStr = sessionStorage.getItem("omr_student_session");
-        if (sessionStr) setUser(JSON.parse(sessionStr));
+        const session = getSession();
+        if (session) setUser(session);
 
         const loadExam = async () => {
             if (!id) return;
-            const data = localStorage.getItem(`omr_exam_${id}`);
-            if (!data) {
+            const parsed = loadStoredExam(id);
+            if (!parsed) {
                 toast.error("시험을 찾을 수 없음", "유효하지 않은 시험 ID입니다.");
                 return;
             }
             try {
-                const parsed = JSON.parse(data);
                 setExamData(parsed);
 
                 // Enforce schedule window (startAt/endAt)
@@ -92,8 +129,14 @@ export default function SolvePage() {
                         if (draft.answers && typeof draft.answers === "object") {
                             setStudentAnswers(draft.answers);
                         }
+                        if (isPdfDrawings(draft.drawings)) {
+                            setDrawings(draft.drawings);
+                        }
                         if (typeof draft.timeRemaining === "number") {
                             setTimeRemaining(draft.timeRemaining);
+                        }
+                        if (typeof draft.startedAt === "string") {
+                            setStartedAt(draft.startedAt);
                         }
                         setHasResumed(true);
                     }
@@ -151,35 +194,64 @@ export default function SolvePage() {
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [timeRemaining]);
 
-    // Autosave draft every 3s when answers change
     useEffect(() => {
-        if (!id || submittedRef.current) return;
-        const t = setTimeout(() => {
+        latestDraftRef.current = {
+            answers: studentAnswers,
+            drawings: compactDrawings(drawings),
+            timeRemaining,
+            startedAt,
+            savedAt: new Date().toISOString(),
+        };
+    }, [studentAnswers, drawings, timeRemaining, startedAt]);
+
+    // Autosave draft every 3s. Keep this interval independent from the ticking timer.
+    useEffect(() => {
+        if (!DRAFT_KEY) return;
+        const saveDraft = () => {
+            if (submittedRef.current || !latestDraftRef.current) return;
+            const savedAt = new Date().toISOString();
             try {
                 localStorage.setItem(DRAFT_KEY, JSON.stringify({
-                    answers: studentAnswers,
-                    timeRemaining,
-                    savedAt: new Date().toISOString(),
+                    ...latestDraftRef.current,
+                    savedAt,
                 }));
-                setLastSavedAt(new Date());
+                autosaveErrorShownRef.current = false;
+                setLastSavedAt(new Date(savedAt));
             } catch {
-                // quota exceeded — silent, UI will stop showing save time
+                if (!autosaveErrorShownRef.current) {
+                    autosaveErrorShownRef.current = true;
+                    toast.error("Autosave failed", "Unable to save answers and handwriting.");
+                }
+                // quota exceeded: keep the first error visible without spamming toasts
             }
-        }, 3000);
-        return () => clearTimeout(t);
-    }, [studentAnswers, timeRemaining, id, DRAFT_KEY]);
+        };
+
+        const handleVisibilityChange = () => {
+            if (document.visibilityState === "hidden") saveDraft();
+        };
+
+        const intervalId = window.setInterval(saveDraft, AUTOSAVE_INTERVAL_MS);
+        window.addEventListener("pagehide", saveDraft);
+        window.addEventListener("visibilitychange", handleVisibilityChange);
+
+        return () => {
+            window.clearInterval(intervalId);
+            window.removeEventListener("pagehide", saveDraft);
+            window.removeEventListener("visibilitychange", handleVisibilityChange);
+        };
+    }, [DRAFT_KEY]);
 
     // Warn on tab close if there are unsaved answers
     useEffect(() => {
         const onBeforeUnload = (e: BeforeUnloadEvent) => {
             if (submittedRef.current) return;
-            if (Object.keys(studentAnswers).length === 0) return;
+            if (Object.keys(studentAnswers).length === 0 && !hasDrawings(drawings)) return;
             e.preventDefault();
             e.returnValue = "";
         };
         window.addEventListener("beforeunload", onBeforeUnload);
         return () => window.removeEventListener("beforeunload", onBeforeUnload);
-    }, [studentAnswers]);
+    }, [studentAnswers, drawings]);
 
     const handleAnswerClick = (qId: number, optionIndex: number) => {
         setStudentAnswers(prev => ({ ...prev, [qId]: optionIndex }));
@@ -207,10 +279,9 @@ export default function SolvePage() {
             if (examData.accessConfig?.type === 'public') {
                 const name = window.prompt("이름을 입력해주세요 (게스트 제출):");
                 if (!name) return;
-                const guestId = Math.random().toString(36).substring(2, 15);
-                submitter = { name, isGuest: true, guestId };
-                sessionStorage.setItem("omr_student_session", JSON.stringify({ ...submitter, groupName: 'Guest' }));
-                localStorage.setItem("omr_guest_id", guestId);
+                const guestId = getOrCreateGuestId();
+                submitter = { name: name.trim(), isGuest: true, guestId, groupName: 'Guest' };
+                saveSession(submitter);
             } else {
                 toast.error("로그인 필요", "이 시험은 로그인이 필요합니다.");
                 router.push("/");
@@ -224,27 +295,26 @@ export default function SolvePage() {
         const graded = gradeAttempt(examData.questions, studentAnswers);
 
         const attemptId = Date.now().toString();
-        const attemptData = {
+        const attemptData: Attempt = {
             id: attemptId,
             examId: id,
             examTitle: examData.title,
             studentName: submitter.name,
-            studentId: submitter.guestId ?? persistId,
+            studentId: submitter.studentId ?? submitter.guestId ?? persistId,
             guestId: submitter.guestId,
             startedAt,
             finishedAt: new Date().toISOString(),
             score: graded.earnedScore,
             totalScore: graded.totalScore,
             answers: studentAnswers,
-            drawings,
+            drawings: compactDrawings(drawings),
             status: 'completed' as const,
             autoSubmitted,
         };
 
         try {
-            const history = JSON.parse(localStorage.getItem('omr_attempts') || '[]');
-            history.push(attemptData);
-            localStorage.setItem('omr_attempts', JSON.stringify(history));
+            const saved = appendAttempt(attemptData);
+            if (!saved) throw new Error("append attempt failed");
             // Clean up draft
             try { localStorage.removeItem(DRAFT_KEY); } catch {}
         } catch {
@@ -306,13 +376,13 @@ export default function SolvePage() {
             flexDirection: 'column'
         }}>
             {/* Header */}
-            <header className="header" style={{
+            <header className="header solve-header" style={{
                 flexShrink: 0,
                 height: 'auto',
                 padding: '0.75rem 1.5rem'
             }}>
-                <div className="container header-content" style={{ gap: '1rem' }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '1rem', minWidth: 0, flex: 1 }}>
+                <div className="container header-content solve-header-content" style={{ gap: '1rem' }}>
+                    <div className="solve-title-group" style={{ display: 'flex', alignItems: 'center', gap: '1rem', minWidth: 0, flex: 1 }}>
                         <Link href="/" className="logo" style={{ fontSize: '1.15rem', flexShrink: 0 }}>OMR Maker</Link>
                         <div style={{
                             height: '22px',
@@ -339,7 +409,7 @@ export default function SolvePage() {
                             const ss = (Math.max(0, timeRemaining) % 60).toString().padStart(2, "0");
                             const isCritical = timeRemaining <= 300; // last 5 min
                             return (
-                                <div style={{
+                                <div className="solve-timer-pill" style={{
                                     display: 'flex', alignItems: 'center', gap: '0.4rem',
                                     padding: '0.35rem 0.75rem',
                                     background: isCritical ? 'rgba(239,68,68,0.1)' : 'var(--background)',
@@ -359,7 +429,7 @@ export default function SolvePage() {
                     )}
 
                     {/* Progress indicator */}
-                    <div style={{
+                    <div className="solve-progress-pill" style={{
                         display: 'flex',
                         alignItems: 'center',
                         gap: '0.75rem',
@@ -405,7 +475,7 @@ export default function SolvePage() {
                         </span>
                     )}
 
-                    <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', flexShrink: 0 }}>
+                    <div className="solve-header-actions" style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', flexShrink: 0 }}>
                         <label style={{
                             display: 'flex',
                             alignItems: 'center',
@@ -506,9 +576,9 @@ export default function SolvePage() {
             </header>
 
             {/* Body */}
-            <div style={{ display: 'flex', flex: 1, overflow: 'hidden' }}>
+            <div className="solve-body" style={{ display: 'flex', flex: 1, overflow: 'hidden' }}>
                 {/* PDF Area (Left, larger) */}
-                <div style={{
+                <div className="solve-pdf-pane" style={{
                     flex: 1,
                     borderRight: '1px solid var(--border)',
                     background: '#2a2d31',
@@ -563,7 +633,7 @@ export default function SolvePage() {
                 </div>
 
                 {/* OMR Sheet (Right, responsive card view) */}
-                <div style={{
+                <div className={`solve-omr-pane ${isOMRCollapsed ? 'is-collapsed' : ''}`} style={{
                     width: isOMRCollapsed ? '0' : '440px',
                     maxWidth: isOMRCollapsed ? '0' : '40vw',
                     flexShrink: 0,

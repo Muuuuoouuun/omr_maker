@@ -3,8 +3,17 @@
 import { useEffect, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
+import dynamic from "next/dynamic";
 import { BookOpen, ChevronDown, ChevronUp } from "lucide-react";
-import { Attempt, Exam, gradeAttempt } from "@/types/omr";
+import { gradeAttempt } from "@/types/omr";
+import type { Attempt, Exam, PdfDrawings } from "@/types/omr";
+import { loadAttempts, loadExam as loadStoredExam } from "@/utils/storage";
+
+const PDFViewer = dynamic(() => import("@/components/PDFViewer"), { ssr: false });
+
+function hasDrawings(drawings?: PdfDrawings): boolean {
+    return !!drawings && Object.values(drawings).some(paths => paths.length > 0);
+}
 
 export default function ReviewPage() {
     const params = useParams();
@@ -13,27 +22,40 @@ export default function ReviewPage() {
 
     const [attempt, setAttempt] = useState<Attempt | null>(null);
     const [exam, setExam] = useState<Exam | null>(null);
+    const [pdfFile, setPdfFile] = useState<File | null>(null);
+    const [pdfLoadFailed, setPdfLoadFailed] = useState(false);
     const [filterWrong, setFilterWrong] = useState(false);
     const [openExplanations, setOpenExplanations] = useState<Record<number, boolean>>({});
 
     useEffect(() => {
+        let cancelled = false;
         if (id) {
-            // Load Attempt
-            const attemptsData = localStorage.getItem('omr_attempts');
-            if (attemptsData) {
-                const attempts: Attempt[] = JSON.parse(attemptsData);
-                const found = attempts.find(a => a.id === id);
-                if (found) {
-                    // eslint-disable-next-line react-hooks/set-state-in-effect
-                    setAttempt(found);
-                    // Load Exam Data associated with this attempt
-                    const examDataStr = localStorage.getItem(`omr_exam_${found.examId}`);
-                    if (examDataStr) {
-                        setExam(JSON.parse(examDataStr));
+            const found = loadAttempts().find(a => a.id === id);
+            if (found) {
+                // eslint-disable-next-line react-hooks/set-state-in-effect
+                setAttempt(found);
+                const parsedExam = loadStoredExam(found.examId);
+                if (parsedExam) {
+                    setExam(parsedExam);
+                    setPdfFile(null);
+                    setPdfLoadFailed(false);
+
+                    if (parsedExam.pdfData) {
+                        fetch(parsedExam.pdfData)
+                            .then(res => res.blob())
+                            .then(blob => {
+                                if (!cancelled) {
+                                    setPdfFile(new File([blob], "problem.pdf", { type: "application/pdf" }));
+                                }
+                            })
+                            .catch(() => {
+                                if (!cancelled) setPdfLoadFailed(true);
+                            });
                     }
                 }
             }
         }
+        return () => { cancelled = true; };
     }, [id]);
 
     if (!attempt || !exam) {
@@ -48,6 +70,7 @@ export default function ReviewPage() {
     const filteredQuestions = filterWrong
         ? exam.questions.filter(q => q.answer && attempt.answers[q.id] !== q.answer)
         : exam.questions;
+    const hasHandwriting = hasDrawings(attempt.drawings);
 
     const toggleExplanation = (qId: number) => {
         setOpenExplanations(prev => ({ ...prev, [qId]: !prev[qId] }));
@@ -103,6 +126,70 @@ export default function ReviewPage() {
                         <div style={{ fontSize: '1.5rem', fontWeight: 800, color: '#94a3b8' }}>{stats.unansweredCount}</div>
                     </div>
                 </div>
+
+                {hasHandwriting && (
+                    <section style={{
+                        background: 'white',
+                        border: '1px solid #e2e8f0',
+                        borderRadius: '12px',
+                        overflow: 'hidden',
+                        marginBottom: '1.5rem',
+                        boxShadow: '0 2px 4px rgba(0,0,0,0.05)'
+                    }}>
+                        <div style={{
+                            padding: '1rem 1.25rem',
+                            borderBottom: '1px solid #e2e8f0',
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'space-between',
+                            gap: '1rem'
+                        }}>
+                            <div>
+                                <h2 style={{ fontSize: '1rem', fontWeight: 700, color: '#0f172a', marginBottom: '0.2rem' }}>
+                                    풀이 필기
+                                </h2>
+                                <p style={{ fontSize: '0.82rem', color: '#64748b' }}>
+                                    제출 당시 저장된 필기를 읽기 전용으로 표시합니다.
+                                </p>
+                            </div>
+                            <span style={{
+                                fontSize: '0.75rem',
+                                fontWeight: 700,
+                                color: '#475569',
+                                background: '#f1f5f9',
+                                borderRadius: '999px',
+                                padding: '0.25rem 0.65rem',
+                                whiteSpace: 'nowrap'
+                            }}>
+                                읽기 전용
+                            </span>
+                        </div>
+                        <div style={{ height: '720px', background: '#525659' }}>
+                            {pdfFile ? (
+                                <PDFViewer
+                                    file={pdfFile}
+                                    onLoadSuccess={() => { }}
+                                    readOnlyDrawings={true}
+                                    drawings={attempt.drawings}
+                                />
+                            ) : (
+                                <div style={{
+                                    height: '100%',
+                                    display: 'flex',
+                                    alignItems: 'center',
+                                    justifyContent: 'center',
+                                    color: 'white',
+                                    padding: '2rem',
+                                    textAlign: 'center'
+                                }}>
+                                    {pdfLoadFailed
+                                        ? "문제 PDF를 불러오지 못했습니다. 필기 데이터는 제출 기록에 저장되어 있습니다."
+                                        : "문제 PDF를 불러오는 중입니다..."}
+                                </div>
+                            )}
+                        </div>
+                    </section>
+                )}
 
                 {/* Action: retake */}
                 <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: '1rem' }}>

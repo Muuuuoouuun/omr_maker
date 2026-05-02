@@ -20,6 +20,8 @@ export default function TeacherHeader({ badge = "TEACHER", badgeColor }: Teacher
     // GlobalSearch's keydown listener and ThemeToggle's mount effect).
     const [isMac, setIsMac] = useState(false);
     useEffect(() => {
+        // Hydrate browser platform after mount to avoid SSR mismatch.
+        // eslint-disable-next-line react-hooks/set-state-in-effect
         setIsMac(typeof navigator !== "undefined" && /Mac|iPhone|iPad/.test(navigator.platform));
     }, []);
     return (
@@ -42,8 +44,7 @@ export default function TeacherHeader({ badge = "TEACHER", badgeColor }: Teacher
                         {/* Search trigger — opens modal via Cmd+K */}
                         <button
                             onClick={() => {
-                                // Dispatch a synthetic Cmd+K so GlobalSearch's window listener opens it
-                                window.dispatchEvent(new KeyboardEvent('keydown', { key: 'k', metaKey: true, ctrlKey: true, bubbles: true }));
+                                window.dispatchEvent(new Event('omr:open-search'));
                             }}
                             aria-label="빠른 검색"
                             style={{

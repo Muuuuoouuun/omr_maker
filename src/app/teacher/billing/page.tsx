@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import TeacherHeader from "@/components/TeacherHeader";
 import { CreditCard, Check, Zap, Crown, Building, Download, Receipt, Sparkles, TrendingUp, AlertCircle, X } from "lucide-react";
 import { formatLimit, usagePct } from "@/lib/pure";
@@ -51,6 +51,7 @@ export default function BillingPage() {
     const [usage, setUsage] = useState<{ exams: number; students: number; ai: number }>({ exams: 0, students: 0, ai: 0 });
     const [userInvoices, setUserInvoices] = useState<Invoice[]>([]);
     const [upgradeTarget, setUpgradeTarget] = useState<Plan | null>(null);
+    const invoiceSeqRef = useRef(0);
 
     useEffect(() => {
         if (typeof window === "undefined") return;
@@ -99,6 +100,8 @@ export default function BillingPage() {
             aiCount = 0;
         }
 
+        // Hydrate dashboard usage from client-only storage after mount.
+        // eslint-disable-next-line react-hooks/set-state-in-effect
         setUsage({ exams: examCount, students: studentCount, ai: aiCount });
 
         // Plan
@@ -226,8 +229,10 @@ th { background: #f8fafc; font-size: 12px; color: #64748b; text-transform: upper
         const mm = String(now.getMonth() + 1).padStart(2, "0");
         const dd = String(now.getDate()).padStart(2, "0");
         const basePrice = yearly ? Math.round(upgradePlan.priceNum * 12 * 0.8) : upgradePlan.priceNum;
+        invoiceSeqRef.current += 1;
+        const nonce = invoiceSeqRef.current.toString(36).padStart(4, "0").slice(-4).toUpperCase();
         const newInvoice: Invoice = {
-            id: `INV-${yyyy}-${mm}-${Date.now().toString(36).slice(-4).toUpperCase()}`,
+            id: `INV-${yyyy}-${mm}-${nonce}`,
             date: `${yyyy}-${mm}-${dd}`,
             amount: basePrice,
             status: "paid",
@@ -313,12 +318,12 @@ th { background: #f8fafc; font-size: 12px; color: #64748b; text-transform: upper
                             <p style={{ fontSize: '0.9rem', color: 'var(--muted)' }}>필요에 맞는 플랜으로 언제든 변경 가능합니다.</p>
                         </div>
                         <div style={{ display: 'inline-flex', padding: '4px', background: 'var(--surface)', borderRadius: 'var(--radius-full)', border: '1px solid var(--border)' }}>
-                            <button onClick={() => setYearly(false)} style={{
+                            <button onClick={() => handleCycleChange(false)} style={{
                                 padding: '0.5rem 1.1rem', borderRadius: 'var(--radius-full)', fontSize: '0.85rem', fontWeight: 600,
                                 background: !yearly ? 'var(--primary)' : 'transparent',
                                 color: !yearly ? 'white' : 'var(--muted)', transition: 'var(--transition-base)'
                             }}>월간</button>
-                            <button onClick={() => setYearly(true)} style={{
+                            <button onClick={() => handleCycleChange(true)} style={{
                                 padding: '0.5rem 1.1rem', borderRadius: 'var(--radius-full)', fontSize: '0.85rem', fontWeight: 600,
                                 background: yearly ? 'var(--primary)' : 'transparent',
                                 color: yearly ? 'white' : 'var(--muted)', transition: 'var(--transition-base)',

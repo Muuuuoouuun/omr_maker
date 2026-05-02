@@ -178,6 +178,8 @@ export default function LiveResultsPage() {
     useEffect(() => {
         const loaded = loadExamsFromStorage();
         const effective = loaded.length > 0 ? loaded : MOCK_EXAMS;
+        // Hydrate from client-only localStorage after mount.
+        // eslint-disable-next-line react-hooks/set-state-in-effect
         setExams(effective);
         setAttempts(loadAttemptsFromStorage());
         setSelectedExamId(prev => effective.some(e => e.id === prev) ? prev : effective[0].id);
@@ -202,6 +204,8 @@ export default function LiveResultsPage() {
 
     // Initialize synthetic students for this exam if not yet seeded
     useEffect(() => {
+        // Seed derived display-only data once the selected exam is known.
+        // eslint-disable-next-line react-hooks/set-state-in-effect
         setSyntheticByExam(prev => {
             if (prev[exam.id]) return prev;
             const real = examAttempts.map(a => attemptToStudent(a, exam.total));

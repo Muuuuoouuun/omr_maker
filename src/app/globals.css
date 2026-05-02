@@ -1059,6 +1059,164 @@ button {
   border: 2px solid white;
 }
 
+/* Tablet solve/review ergonomics */
+@media (max-width: 900px) {
+  .header-content {
+    gap: 0.75rem;
+  }
+
+  .nav-link {
+    margin-left: 0.75rem;
+  }
+
+  .solve-header {
+    padding: 0.65rem 1rem !important;
+  }
+
+  .solve-header-content {
+    flex-wrap: wrap;
+    align-items: center !important;
+    row-gap: 0.6rem;
+  }
+
+  .solve-title-group {
+    flex: 1 1 280px !important;
+  }
+
+  .solve-timer-pill,
+  .solve-progress-pill {
+    flex: 0 0 auto;
+  }
+
+  .solve-header-actions {
+    flex: 1 1 100%;
+    justify-content: flex-start;
+    min-width: 0;
+    overflow-x: auto;
+    padding-bottom: 0.1rem;
+    scrollbar-width: none;
+  }
+
+  .solve-header-actions::-webkit-scrollbar,
+  .pdf-toolbar-controls::-webkit-scrollbar {
+    display: none;
+  }
+
+  .solve-header-actions > * {
+    flex: 0 0 auto;
+  }
+
+  .pdf-viewer-toolbar {
+    flex-wrap: wrap;
+    align-items: stretch !important;
+    gap: 0.45rem;
+    padding: 0.5rem 0.75rem !important;
+  }
+
+  .pdf-toolbar-title {
+    flex: 1 1 180px;
+    min-width: 0;
+  }
+
+  .pdf-toolbar-title span {
+    max-width: 100% !important;
+  }
+
+  .pdf-toolbar-controls {
+    flex: 1 1 100%;
+    min-width: 0;
+    overflow-x: auto;
+    padding-bottom: 0.1rem;
+    scrollbar-width: none;
+  }
+
+  .pdf-toolbar-controls > * {
+    flex: 0 0 auto;
+  }
+
+  .pdf-drawing-tools {
+    margin-right: 0.5rem !important;
+    padding-right: 0.5rem !important;
+  }
+
+  .pdf-page-shell {
+    padding: 1rem !important;
+  }
+}
+
+@media (max-width: 900px) and (orientation: portrait) {
+  .solve-body {
+    flex-direction: column;
+  }
+
+  .solve-pdf-pane {
+    flex: 1 1 auto;
+    min-height: 0;
+    border-right: 0 !important;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .solve-omr-pane {
+    width: 100% !important;
+    max-width: none !important;
+    flex: 0 0 min(40vh, 430px);
+    height: min(40vh, 430px);
+    min-height: 260px;
+    border-top: 1px solid var(--border);
+  }
+
+  .solve-omr-pane.is-collapsed {
+    flex-basis: 0 !important;
+    height: 0 !important;
+    min-height: 0 !important;
+    border-top: 0 !important;
+  }
+
+  .omr-cardview {
+    max-width: none;
+    padding: 1rem;
+  }
+
+  .omr-cardview-grid {
+    gap: 0.6rem;
+  }
+
+  .q-card {
+    flex-basis: 160px;
+    min-width: 160px;
+    max-width: none;
+  }
+}
+
+@media (max-width: 1180px) {
+  .q-card {
+    min-height: 56px;
+  }
+
+  .q-card-num {
+    width: 34px;
+    height: 34px;
+    min-width: 34px;
+  }
+
+  .q-bubble {
+    width: 32px;
+    height: 32px;
+    font-size: 0.8rem;
+  }
+
+  .pdf-popup-bubble {
+    width: 34px;
+    height: 34px;
+  }
+}
+
+@media (max-width: 760px) {
+  .solve-progress-pill > div:first-child {
+    display: none;
+  }
+}
+
 /* ─── Premium Radar Chart Legend ───────────────────── */
 .radar-legend {
   display: flex;
