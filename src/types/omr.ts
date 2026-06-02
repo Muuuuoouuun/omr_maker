@@ -1,3 +1,12 @@
+export interface StoredDataRef {
+    store: 'indexeddb';
+    key: string;
+    name?: string;
+    mimeType?: string;
+    size?: number;
+    updatedAt?: string;
+}
+
 export interface Question {
     id: number;
     number: number;
@@ -8,6 +17,19 @@ export interface Question {
     choices?: 4 | 5;
     /** Optional teacher-authored explanation shown in review. */
     explanation?: string;
+    /** Optional advanced design metadata for teacher diagnostics. */
+    tags?: {
+        subject?: string;
+        unit?: string;
+        concept?: string;
+        skill?: string;
+        difficulty?: 'easy' | 'medium' | 'hard' | 'killer';
+        cognitiveLevel?: 'recall' | 'understanding' | 'application' | 'reasoning';
+        source?: string;
+        expectedTimeSec?: number;
+        mistakeTypes?: string[];
+        prerequisites?: string[];
+    };
     pdfLocation?: {
         page: number;
         x: number;
@@ -28,10 +50,14 @@ export interface Exam {
     endAt?: string;
     /** Soft-archived exams don't show in student dashboards. */
     archived?: boolean;
-    /** Problem PDF stored as a data URL while the app is localStorage-backed. */
+    /** Legacy inline problem PDF data URL. New saves prefer pdfDataRef. */
     pdfData?: string;
-    /** Optional answer key PDF stored as a data URL. */
+    /** Problem PDF stored outside localStorage to avoid quota pressure. */
+    pdfDataRef?: StoredDataRef;
+    /** Legacy inline answer key PDF data URL. New saves prefer answerKeyPdfRef. */
     answerKeyPdf?: string;
+    /** Optional answer key PDF stored outside localStorage to avoid quota pressure. */
+    answerKeyPdfRef?: StoredDataRef;
     // Distribution
     accessConfig?: {
         type: 'public' | 'group';
@@ -57,10 +83,14 @@ export interface Attempt {
     answers: Record<number, number>; // qId -> selected option
     /** Student handwriting captured from the PDF drawing layer. */
     drawings?: PdfDrawings;
+    /** External drawings reference in IndexedDB to bypass localStorage limits. */
+    drawingsRef?: StoredDataRef;
     status: 'completed' | 'in_progress';
     guestId?: string; // For tracking guest attempts
     /** If true, submitted because the timer hit zero. */
     autoSubmitted?: boolean;
+    /** Number of times the student switched tabs or lost focus during the exam. */
+    tabFociLostCount?: number;
 }
 
 export interface Group {

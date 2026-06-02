@@ -7,6 +7,7 @@ import dynamic from "next/dynamic";
 import { BookOpen, ChevronDown, ChevronUp } from "lucide-react";
 import { gradeAttempt } from "@/types/omr";
 import type { Attempt, Exam, PdfDrawings } from "@/types/omr";
+import { storedDataUrlToFile, loadJsonRecord } from "@/utils/blobStore";
 
 const PDFViewer = dynamic(() => import("@/components/PDFViewer"), { ssr: false });
 
@@ -21,6 +22,7 @@ export default function ReviewPage() {
 
     const [attempt, setAttempt] = useState<Attempt | null>(null);
     const [exam, setExam] = useState<Exam | null>(null);
+    const [restoredDrawings, setRestoredDrawings] = useState<PdfDrawings | undefined>(undefined);
     const [pdfFile, setPdfFile] = useState<File | null>(null);
     const [pdfLoadFailed, setPdfLoadFailed] = useState(false);
     const [filterWrong, setFilterWrong] = useState(false);
@@ -28,15 +30,29 @@ export default function ReviewPage() {
 
     useEffect(() => {
         let cancelled = false;
-        if (id) {
+        queueMicrotask(() => {
+            if (!id || cancelled) return;
             // Load Attempt
             const attemptsData = localStorage.getItem('omr_attempts');
             if (attemptsData) {
                 const attempts: Attempt[] = JSON.parse(attemptsData);
                 const found = attempts.find(a => a.id === id);
-                if (found) {
-                    // eslint-disable-next-line react-hooks/set-state-in-effect
+                if (found && !cancelled) {
                     setAttempt(found);
+                    
+                    // Securely restore drawings from IndexedDB if drawingsRef exists
+                    if (found.drawingsRef) {
+                        loadJsonRecord<PdfDrawings>(found.drawingsRef)
+                            .then(drawings => {
+                                if (!cancelled && drawings) setRestoredDrawings(drawings);
+                            })
+                            .catch(err => {
+                                console.error("Failed to restore drawings from IndexedDB", err);
+                            });
+                    } else if (found.drawings) {
+                        setRestoredDrawings(found.drawings);
+                    }
+
                     // Load Exam Data associated with this attempt
                     const examDataStr = localStorage.getItem(`omr_exam_${found.examId}`);
                     if (examDataStr) {
@@ -45,22 +61,17 @@ export default function ReviewPage() {
                         setPdfFile(null);
                         setPdfLoadFailed(false);
 
-                        if (parsedExam.pdfData) {
-                            fetch(parsedExam.pdfData)
-                                .then(res => res.blob())
-                                .then(blob => {
-                                    if (!cancelled) {
-                                        setPdfFile(new File([blob], "problem.pdf", { type: "application/pdf" }));
-                                    }
-                                })
-                                .catch(() => {
-                                    if (!cancelled) setPdfLoadFailed(true);
-                                });
-                        }
+                        storedDataUrlToFile("problem.pdf", parsedExam.pdfData, parsedExam.pdfDataRef)
+                            .then(file => {
+                                if (!cancelled && file) setPdfFile(file);
+                            })
+                            .catch(() => {
+                                if (!cancelled) setPdfLoadFailed(true);
+                            });
                     }
                 }
             }
-        }
+        });
         return () => { cancelled = true; };
     }, [id]);
 
@@ -76,7 +87,7 @@ export default function ReviewPage() {
     const filteredQuestions = filterWrong
         ? exam.questions.filter(q => q.answer && attempt.answers[q.id] !== q.answer)
         : exam.questions;
-    const hasHandwriting = hasDrawings(attempt.drawings);
+    const hasHandwriting = hasDrawings(restoredDrawings);
 
     const toggleExplanation = (qId: number) => {
         setOpenExplanations(prev => ({ ...prev, [qId]: !prev[qId] }));
@@ -176,7 +187,7 @@ export default function ReviewPage() {
                                     file={pdfFile}
                                     onLoadSuccess={() => { }}
                                     readOnlyDrawings={true}
-                                    drawings={attempt.drawings}
+                                    drawings={restoredDrawings}
                                 />
                             ) : (
                                 <div style={{

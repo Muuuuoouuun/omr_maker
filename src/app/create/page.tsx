@@ -12,15 +12,32 @@ import { toast } from "@/components/Toast";
 import { Undo2, Redo2 } from "lucide-react";
 
 const PDFViewer = dynamic(() => import("@/components/PDFViewer"), { ssr: false });
-import { Suspense, useState, useEffect, useRef, useCallback } from "react";
+import { Suspense, useState, useEffect, useRef, useCallback, useMemo } from "react";
 import html2canvas from "html2canvas";
 import { Exam, Question } from "@/types/omr";
 import { ParsedAnswer } from "@/services/answerParser";
+import { saveFileDataUrl, storedDataUrlToFile } from "@/utils/blobStore";
 
 // ─── Autosave + history constants ────────────────────────────────────
 const DRAFT_KEY = "omr_exam_draft";
 const AUTOSAVE_INTERVAL_MS = 2000;
 const HISTORY_LIMIT = 20;
+
+const DIFFICULTY_OPTIONS: Array<{ value: NonNullable<Question["tags"]>["difficulty"]; label: string; tone: string }> = [
+    { value: "easy", label: "기초", tone: "#10b981" },
+    { value: "medium", label: "표준", tone: "#6366f1" },
+    { value: "hard", label: "심화", tone: "#f59e0b" },
+    { value: "killer", label: "킬러", tone: "#ef4444" },
+];
+
+const COGNITIVE_LEVEL_OPTIONS: Array<{ value: NonNullable<Question["tags"]>["cognitiveLevel"]; label: string }> = [
+    { value: "recall", label: "암기" },
+    { value: "understanding", label: "이해" },
+    { value: "application", label: "적용" },
+    { value: "reasoning", label: "추론" },
+];
+
+const DEFAULT_MISTAKE_TYPES = ["개념 부족", "계산 실수", "시간 부족", "지문 오독", "선택지 함정"];
 
 interface EditorDraft {
     title: string;
@@ -53,6 +70,17 @@ function safeSetLocal(key: string, value: string): boolean {
         toast.error("저장 공간 부족", "오래된 시험을 정리하거나 용량을 확인하세요.");
         return false;
     }
+}
+
+function splitTagInput(value: string): string[] {
+    return value
+        .split(",")
+        .map(item => item.trim())
+        .filter(Boolean);
+}
+
+function joinTagInput(value?: string[]): string {
+    return value?.join(", ") || "";
 }
 
 export default function CreateOMRPage() {
@@ -106,6 +134,33 @@ function CreateOMRPageInner() {
     // Edit mode: load existing exam snapshot + carry through on save.
     const [loadedExam, setLoadedExam] = useState<Exam | null>(null);
 
+    const selectedQuestion = useMemo(
+        () => questions.find(q => q.id === selectedQuestionId) || null,
+        [questions, selectedQuestionId],
+    );
+
+    const designSummary = useMemo(() => {
+        const answered = questions.filter(q => typeof q.answer === "number").length;
+        const conceptTagged = questions.filter(q => q.tags?.concept || q.label).length;
+        const highDifficulty = questions.filter(q => q.tags?.difficulty === "hard" || q.tags?.difficulty === "killer").length;
+        const pdfLinked = questions.filter(q => q.pdfLocation).length;
+        const totalExpectedSec = questions.reduce((sum, q) => sum + (q.tags?.expectedTimeSec || 0), 0);
+        const conceptCount = new Set(
+            questions
+                .map(q => q.tags?.concept || q.label)
+                .filter(Boolean)
+        ).size;
+
+        return {
+            answered,
+            conceptTagged,
+            highDifficulty,
+            pdfLinked,
+            totalExpectedMin: totalExpectedSec > 0 ? Math.round(totalExpectedSec / 60) : 0,
+            conceptCount,
+        };
+    }, [questions]);
+
     // Undo/Redo + autosave refs
     const historyRef = useRef<HistorySnapshot[]>([]);
     const redoRef = useRef<HistorySnapshot[]>([]);
@@ -133,6 +188,7 @@ function CreateOMRPageInner() {
     useEffect(() => {
         if (!editId) return;
         if (typeof window === 'undefined') return;
+        let cancelled = false;
         try {
             const raw = localStorage.getItem(`omr_exam_${editId}`);
             if (!raw) {
@@ -149,10 +205,25 @@ function CreateOMRPageInner() {
             if (typeof parsed.durationMin === 'number') setDurationMin(parsed.durationMin);
             if (parsed.startAt) setStartAt(isoToLocalInput(parsed.startAt));
             if (parsed.endAt) setEndAt(isoToLocalInput(parsed.endAt));
+            storedDataUrlToFile("problem.pdf", parsed.pdfData, parsed.pdfDataRef)
+                .then(file => {
+                    if (!cancelled && file) setPdfFile(file);
+                })
+                .catch(() => {
+                    if (!cancelled) toast.error('문제지 PDF 불러오기 실패');
+                });
+            storedDataUrlToFile("answer_key.pdf", parsed.answerKeyPdf, parsed.answerKeyPdfRef)
+                .then(file => {
+                    if (!cancelled && file) setAnswerKeyPdf(file);
+                })
+                .catch(() => {
+                    if (!cancelled) toast.error('답지 PDF 불러오기 실패');
+                });
             toast.info('편집 모드', `"${parsed.title}"을(를) 불러왔습니다.`);
         } catch {
             toast.error('시험 불러오기 실패');
         }
+        return () => { cancelled = true; };
     }, [editId]);
 
     // Initialize questions when count changes
@@ -328,6 +399,40 @@ function CreateOMRPageInner() {
         ));
     };
 
+    const updateSelectedQuestion = (updater: (question: Question) => Question) => {
+        if (selectedQuestionId === null) return;
+        setQuestions(prev => prev.map(q => q.id === selectedQuestionId ? updater(q) : q));
+    };
+
+    const setQuestionTag = <K extends keyof NonNullable<Question["tags"]>>(
+        key: K,
+        value: NonNullable<Question["tags"]>[K] | undefined,
+    ) => {
+        updateSelectedQuestion(q => {
+            const nextTags = { ...(q.tags || {}) };
+            if (
+                value === undefined ||
+                value === "" ||
+                (Array.isArray(value) && value.length === 0)
+            ) {
+                delete nextTags[key];
+            } else {
+                nextTags[key] = value;
+            }
+            return {
+                ...q,
+                tags: Object.keys(nextTags).length > 0 ? nextTags : undefined,
+            };
+        });
+    };
+
+    const setExplanation = (explanation: string) => {
+        updateSelectedQuestion(q => ({
+            ...q,
+            explanation: explanation.trim() ? explanation : undefined,
+        }));
+    };
+
     const toggleLabel = (label: string) => {
         if (selectedQuestionId === null) return;
         setQuestions(prev => prev.map(q => {
@@ -396,7 +501,7 @@ function CreateOMRPageInner() {
         try {
             const pdfjsLib = await import('pdfjs-dist');
             if (typeof window !== 'undefined' && !pdfjsLib.GlobalWorkerOptions.workerSrc) {
-                pdfjsLib.GlobalWorkerOptions.workerSrc = `//unpkg.com/pdfjs-dist@${pdfjsLib.version}/build/pdf.worker.min.mjs`;
+                pdfjsLib.GlobalWorkerOptions.workerSrc = '/pdf.worker.min.mjs';
             }
             const arrayBuffer = await pdfFile.arrayBuffer();
             const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
@@ -443,39 +548,37 @@ function CreateOMRPageInner() {
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const handleShareConfig = async (accessConfig: any) => {
-        const fileToBase64 = (file: File): Promise<string> => {
-            return new Promise((resolve, reject) => {
-                const reader = new FileReader();
-                reader.onload = () => resolve(reader.result as string);
-                reader.onerror = reject;
-                reader.readAsDataURL(file);
-            });
-        };
-
         try {
-            // Convert both PDFs to base64
-            let pdfBase64 = "";
-            if (pdfFile) {
-                pdfBase64 = await fileToBase64(pdfFile);
-            }
-
-            let answerKeyBase64 = "";
-            if (answerKeyPdf) {
-                answerKeyBase64 = await fileToBase64(answerKeyPdf);
-            }
-
             // Editing? Reuse the existing ID and preserve createdAt; otherwise mint a new one.
             const id = loadedExam?.id || Date.now().toString(36);
             const createdAt = loadedExam?.createdAt || new Date().toISOString();
+            let pdfData = loadedExam?.pdfData || "";
+            let pdfDataRef = loadedExam?.pdfDataRef;
+            let answerKeyData = loadedExam?.answerKeyPdf || "";
+            let answerKeyPdfRef = loadedExam?.answerKeyPdfRef;
 
-            const examData = {
+            if (pdfFile) {
+                const stored = await saveFileDataUrl(`exam:${id}:problemPdf`, pdfFile);
+                pdfData = stored.inlineDataUrl || "";
+                pdfDataRef = stored.ref;
+            }
+
+            if (answerKeyPdf) {
+                const stored = await saveFileDataUrl(`exam:${id}:answerKeyPdf`, answerKeyPdf);
+                answerKeyData = stored.inlineDataUrl || "";
+                answerKeyPdfRef = stored.ref;
+            }
+
+            const examData: Exam = {
                 ...(loadedExam || {}),
                 id,
                 title,
                 questions,
                 accessConfig,
-                pdfData: pdfBase64, // Problem PDF
-                answerKeyPdf: answerKeyBase64, // Reference Key
+                pdfData,
+                pdfDataRef,
+                answerKeyPdf: answerKeyData,
+                answerKeyPdfRef,
                 createdAt,
                 updatedAt: new Date().toISOString(),
                 durationMin: typeof durationMin === 'number' ? durationMin : undefined,
@@ -493,7 +596,7 @@ function CreateOMRPageInner() {
             return shareUrl;
         } catch (e) {
             console.error(e);
-            toast.error("배포 저장 실패", "파일 용량이 너무 큽니다. (LocalStorage 한계)");
+            toast.error("배포 저장 실패", "파일 저장 공간 또는 브라우저 권한을 확인해주세요.");
             return "";
         }
     };
@@ -764,6 +867,46 @@ function CreateOMRPageInner() {
                             </div>
                         )}
 
+                        <div style={{ marginBottom: '1rem', padding: '0.85rem', background: 'var(--background)', border: '1px solid var(--border)', borderRadius: 'var(--radius-md)' }}>
+                            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '0.75rem', marginBottom: '0.65rem' }}>
+                                <div>
+                                    <div style={{ fontSize: '0.85rem', fontWeight: 800, color: 'var(--foreground)' }}>설계 체크</div>
+                                    <div style={{ fontSize: '0.72rem', color: 'var(--muted)', marginTop: '2px' }}>
+                                        배포 전 강사가 바로 확인할 핵심 상태입니다.
+                                    </div>
+                                </div>
+                                <span style={{
+                                    fontSize: '0.7rem',
+                                    fontWeight: 800,
+                                    color: designSummary.answered === questionsCount ? 'var(--success)' : 'var(--warning)',
+                                    background: designSummary.answered === questionsCount ? 'rgba(16,185,129,0.08)' : 'rgba(245,158,11,0.1)',
+                                    padding: '3px 8px',
+                                    borderRadius: 'var(--radius-full)',
+                                    whiteSpace: 'nowrap'
+                                }}>
+                                    {designSummary.answered}/{questionsCount} 정답
+                                </span>
+                            </div>
+                            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.45rem' }}>
+                                {[
+                                    { label: '개념 태그', value: `${designSummary.conceptTagged}/${questionsCount}` },
+                                    { label: '개념 수', value: `${designSummary.conceptCount}개` },
+                                    { label: '심화/킬러', value: `${designSummary.highDifficulty}문항` },
+                                    { label: 'PDF 연결', value: `${designSummary.pdfLinked}/${questionsCount}` },
+                                ].map(item => (
+                                    <div key={item.label} style={{ padding: '0.55rem', background: 'var(--surface)', borderRadius: '8px', border: '1px solid var(--border)' }}>
+                                        <div style={{ fontSize: '0.68rem', color: 'var(--muted)', fontWeight: 700, marginBottom: '0.18rem' }}>{item.label}</div>
+                                        <div style={{ fontSize: '0.92rem', color: 'var(--foreground)', fontWeight: 800 }}>{item.value}</div>
+                                    </div>
+                                ))}
+                            </div>
+                            {designSummary.totalExpectedMin > 0 && (
+                                <div style={{ marginTop: '0.55rem', fontSize: '0.74rem', color: 'var(--muted)', fontWeight: 600 }}>
+                                    문항별 예상 풀이시간 합계: 약 {designSummary.totalExpectedMin}분
+                                </div>
+                            )}
+                        </div>
+
                         <label style={{ display: 'block', marginBottom: '0.5rem', fontSize: '0.9rem', fontWeight: 500 }}>시험 제목</label>
                         <input
                             type="text"
@@ -981,6 +1124,185 @@ function CreateOMRPageInner() {
                                         >
                                             추가
                                         </button>
+                                    </div>
+                                </div>
+
+                                {/* Advanced Design Metadata */}
+                                <div style={{ marginBottom: '1rem', padding: '0.85rem', background: 'var(--background)', border: '1px solid var(--border)', borderRadius: 'var(--radius-md)' }}>
+                                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '0.5rem', marginBottom: '0.75rem' }}>
+                                        <div>
+                                            <div style={{ fontSize: '0.85rem', fontWeight: 800, color: 'var(--foreground)' }}>전문가 설계</div>
+                                            <div style={{ fontSize: '0.7rem', color: 'var(--muted)', marginTop: '2px' }}>
+                                                분석 리포트와 보충 처방에 쓰입니다.
+                                            </div>
+                                        </div>
+                                        <span style={{ fontSize: '0.68rem', color: 'var(--primary)', fontWeight: 800, background: 'rgba(99,102,241,0.1)', padding: '2px 7px', borderRadius: 'var(--radius-full)' }}>
+                                            선택사항
+                                        </span>
+                                    </div>
+
+                                    <div style={{ display: 'grid', gap: '0.65rem' }}>
+                                        <div>
+                                            <label style={{ display: 'block', marginBottom: '0.25rem', fontSize: '0.76rem', fontWeight: 700, color: 'var(--muted)' }}>단원</label>
+                                            <input
+                                                type="text"
+                                                value={selectedQuestion?.tags?.unit || ''}
+                                                onChange={(e) => setQuestionTag('unit', e.target.value.trim() || undefined)}
+                                                placeholder="예: 문법 > 시제"
+                                                className="input-field"
+                                                style={{ width: '100%', padding: '0.45rem 0.55rem', fontSize: '0.8rem', border: '1px solid var(--border)', borderRadius: '8px', background: 'var(--surface)' }}
+                                            />
+                                        </div>
+
+                                        <div>
+                                            <label style={{ display: 'block', marginBottom: '0.25rem', fontSize: '0.76rem', fontWeight: 700, color: 'var(--muted)' }}>세부 개념</label>
+                                            <input
+                                                type="text"
+                                                value={selectedQuestion?.tags?.concept || ''}
+                                                onChange={(e) => setQuestionTag('concept', e.target.value.trim() || undefined)}
+                                                placeholder="예: 현재완료와 과거시제 구분"
+                                                className="input-field"
+                                                style={{ width: '100%', padding: '0.45rem 0.55rem', fontSize: '0.8rem', border: '1px solid var(--border)', borderRadius: '8px', background: 'var(--surface)' }}
+                                            />
+                                        </div>
+
+                                        <div>
+                                            <label style={{ display: 'block', marginBottom: '0.35rem', fontSize: '0.76rem', fontWeight: 700, color: 'var(--muted)' }}>난이도</label>
+                                            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '0.35rem' }}>
+                                                {DIFFICULTY_OPTIONS.map(option => {
+                                                    const isActive = selectedQuestion?.tags?.difficulty === option.value;
+                                                    return (
+                                                        <button
+                                                            key={option.value}
+                                                            type="button"
+                                                            onClick={() => setQuestionTag('difficulty', isActive ? undefined : option.value)}
+                                                            style={{
+                                                                padding: '0.4rem 0.25rem',
+                                                                borderRadius: '8px',
+                                                                border: isActive ? `1px solid ${option.tone}` : '1px solid var(--border)',
+                                                                background: isActive ? `${option.tone}18` : 'var(--surface)',
+                                                                color: isActive ? option.tone : 'var(--muted)',
+                                                                fontSize: '0.72rem',
+                                                                fontWeight: 800,
+                                                                cursor: 'pointer',
+                                                            }}
+                                                        >
+                                                            {option.label}
+                                                        </button>
+                                                    );
+                                                })}
+                                            </div>
+                                        </div>
+
+                                        <div>
+                                            <label style={{ display: 'block', marginBottom: '0.35rem', fontSize: '0.76rem', fontWeight: 700, color: 'var(--muted)' }}>인지 수준</label>
+                                            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '0.35rem' }}>
+                                                {COGNITIVE_LEVEL_OPTIONS.map(option => {
+                                                    const isActive = selectedQuestion?.tags?.cognitiveLevel === option.value;
+                                                    return (
+                                                        <button
+                                                            key={option.value}
+                                                            type="button"
+                                                            onClick={() => setQuestionTag('cognitiveLevel', isActive ? undefined : option.value)}
+                                                            style={{
+                                                                padding: '0.38rem 0.25rem',
+                                                                borderRadius: '8px',
+                                                                border: isActive ? '1px solid var(--primary)' : '1px solid var(--border)',
+                                                                background: isActive ? 'rgba(99,102,241,0.1)' : 'var(--surface)',
+                                                                color: isActive ? 'var(--primary)' : 'var(--muted)',
+                                                                fontSize: '0.72rem',
+                                                                fontWeight: 800,
+                                                                cursor: 'pointer',
+                                                            }}
+                                                        >
+                                                            {option.label}
+                                                        </button>
+                                                    );
+                                                })}
+                                            </div>
+                                        </div>
+
+                                        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.5rem' }}>
+                                            <div>
+                                                <label style={{ display: 'block', marginBottom: '0.25rem', fontSize: '0.76rem', fontWeight: 700, color: 'var(--muted)' }}>예상 시간(초)</label>
+                                                <input
+                                                    type="number"
+                                                    min={0}
+                                                    value={selectedQuestion?.tags?.expectedTimeSec || ''}
+                                                    onChange={(e) => {
+                                                        const next = parseInt(e.target.value, 10);
+                                                        setQuestionTag('expectedTimeSec', Number.isFinite(next) && next > 0 ? next : undefined);
+                                                    }}
+                                                    placeholder="90"
+                                                    className="input-field"
+                                                    style={{ width: '100%', padding: '0.45rem 0.55rem', fontSize: '0.8rem', border: '1px solid var(--border)', borderRadius: '8px', background: 'var(--surface)' }}
+                                                />
+                                            </div>
+                                            <div>
+                                                <label style={{ display: 'block', marginBottom: '0.25rem', fontSize: '0.76rem', fontWeight: 700, color: 'var(--muted)' }}>출처</label>
+                                                <input
+                                                    type="text"
+                                                    value={selectedQuestion?.tags?.source || ''}
+                                                    onChange={(e) => setQuestionTag('source', e.target.value.trim() || undefined)}
+                                                    placeholder="내신/기출/자체"
+                                                    className="input-field"
+                                                    style={{ width: '100%', padding: '0.45rem 0.55rem', fontSize: '0.8rem', border: '1px solid var(--border)', borderRadius: '8px', background: 'var(--surface)' }}
+                                                />
+                                            </div>
+                                        </div>
+
+                                        <div>
+                                            <label style={{ display: 'block', marginBottom: '0.35rem', fontSize: '0.76rem', fontWeight: 700, color: 'var(--muted)' }}>주요 오답 원인</label>
+                                            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.35rem', marginBottom: '0.45rem' }}>
+                                                {DEFAULT_MISTAKE_TYPES.map(type => {
+                                                    const current = selectedQuestion?.tags?.mistakeTypes || [];
+                                                    const isActive = current.includes(type);
+                                                    return (
+                                                        <button
+                                                            key={type}
+                                                            type="button"
+                                                            onClick={() => {
+                                                                const next = isActive
+                                                                    ? current.filter(item => item !== type)
+                                                                    : [...current, type];
+                                                                setQuestionTag('mistakeTypes', next);
+                                                            }}
+                                                            style={{
+                                                                padding: '0.3rem 0.5rem',
+                                                                borderRadius: '999px',
+                                                                border: isActive ? '1px solid var(--primary)' : '1px solid var(--border)',
+                                                                background: isActive ? 'rgba(99,102,241,0.1)' : 'var(--surface)',
+                                                                color: isActive ? 'var(--primary)' : 'var(--muted)',
+                                                                fontSize: '0.72rem',
+                                                                fontWeight: 800,
+                                                                cursor: 'pointer',
+                                                            }}
+                                                        >
+                                                            {type}
+                                                        </button>
+                                                    );
+                                                })}
+                                            </div>
+                                            <input
+                                                type="text"
+                                                value={joinTagInput(selectedQuestion?.tags?.mistakeTypes)}
+                                                onChange={(e) => setQuestionTag('mistakeTypes', splitTagInput(e.target.value))}
+                                                placeholder="쉼표로 직접 입력"
+                                                className="input-field"
+                                                style={{ width: '100%', padding: '0.45rem 0.55rem', fontSize: '0.8rem', border: '1px solid var(--border)', borderRadius: '8px', background: 'var(--surface)' }}
+                                            />
+                                        </div>
+
+                                        <div>
+                                            <label style={{ display: 'block', marginBottom: '0.25rem', fontSize: '0.76rem', fontWeight: 700, color: 'var(--muted)' }}>해설 메모</label>
+                                            <textarea
+                                                value={selectedQuestion?.explanation || ''}
+                                                onChange={(e) => setExplanation(e.target.value)}
+                                                placeholder="학생 리뷰에 보여줄 핵심 해설 또는 수업 메모"
+                                                className="input-field"
+                                                style={{ width: '100%', minHeight: '74px', resize: 'vertical', padding: '0.5rem 0.6rem', fontSize: '0.8rem', border: '1px solid var(--border)', borderRadius: '8px', background: 'var(--surface)', lineHeight: 1.5 }}
+                                            />
+                                        </div>
                                     </div>
                                 </div>
                                 <div style={{ fontSize: '0.8rem', color: 'var(--muted)', borderTop: '1px solid rgba(0,0,0,0.05)', paddingTop: '0.5rem' }}>

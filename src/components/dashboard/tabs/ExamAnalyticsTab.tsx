@@ -1,18 +1,25 @@
 "use client";
 
 import { useMemo, useState, useEffect, useRef } from "react";
-import { Exam, Attempt } from "@/types/omr";
+import { Exam, Attempt, questionWeight } from "@/types/omr";
 import {
     BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip, ResponsiveContainer,
     Radar, RadarChart, PolarGrid, PolarAngleAxis, PolarRadiusAxis
 } from 'recharts';
-import { AlertTriangle, CheckCircle, BarChart2, Download, ChevronUp, ChevronDown, List } from "lucide-react";
+import { AlertTriangle, CheckCircle, BarChart2, Download, ChevronUp, ChevronDown, List, Target, Users, Lightbulb } from "lucide-react";
 
 interface ExamAnalyticsTabProps {
     exams: Exam[];
     attempts: Attempt[];
     initialExamId?: string;
 }
+
+const difficultyLabelMap: Record<string, string> = {
+    easy: "기초",
+    medium: "표준",
+    hard: "심화",
+    killer: "킬러",
+};
 
 export default function ExamAnalyticsTab({ exams, attempts, initialExamId }: ExamAnalyticsTabProps) {
     const [selectedExamId, setSelectedExamId] = useState<string>(initialExamId || (exams.length > 0 ? exams[0].id : ""));
@@ -77,37 +84,73 @@ export default function ExamAnalyticsTab({ exams, attempts, initialExamId }: Exa
     const questionAnalytics = useMemo(() => {
         if (!selectedExam || examAttempts.length === 0) return [];
 
+        const sortedByScore = [...examAttempts].sort((a, b) => {
+            const aPct = a.totalScore > 0 ? a.score / a.totalScore : 0;
+            const bPct = b.totalScore > 0 ? b.score / b.totalScore : 0;
+            return bPct - aPct;
+        });
+        const splitSize = Math.max(1, Math.ceil(sortedByScore.length / 3));
+        const upperGroup = sortedByScore.slice(0, splitSize);
+        const lowerGroup = sortedByScore.slice(-splitSize);
+        const rateForGroup = (group: Attempt[], questionId: number, answer?: number) => {
+            if (group.length === 0 || answer === undefined) return 0;
+            const correct = group.filter(attempt => attempt.answers[questionId] === answer).length;
+            return Math.round((correct / group.length) * 100);
+        };
+
         return selectedExam.questions.map((q, qIndex) => {
             let correctCount = 0;
-            const optionCounts: Record<number, number> = { 1: 0, 2: 0, 3: 0, 4: 0, 5: 0 };
+            let unansweredCount = 0;
+            const choices = q.choices || 5;
+            const optionCounts: Record<number, number> = Object.fromEntries(
+                Array.from({ length: choices }, (_, i) => [i + 1, 0])
+            );
 
             examAttempts.forEach(attempt => {
                 const selectedAns = attempt.answers[q.id];
-                if (selectedAns !== undefined) {
+                if (selectedAns !== undefined && selectedAns !== 0) {
                     if (selectedAns === q.answer) correctCount++;
                     if (optionCounts[selectedAns] !== undefined) {
                         optionCounts[selectedAns]++;
                     } else {
                         optionCounts[selectedAns] = 1; // dynamically add other options if they exist
                     }
+                } else {
+                    unansweredCount++;
                 }
             });
             const correctRate = Math.round((correctCount / examAttempts.length) * 100);
+            const unansweredRate = Math.round((unansweredCount / examAttempts.length) * 100);
+            const upperCorrectRate = rateForGroup(upperGroup, q.id, q.answer);
+            const lowerCorrectRate = rateForGroup(lowerGroup, q.id, q.answer);
+            const discrimination = upperCorrectRate - lowerCorrectRate;
 
             const optionRates = Object.entries(optionCounts).map(([opt, count]) => ({
                 option: parseInt(opt),
                 count,
                 rate: Math.round((count / examAttempts.length) * 100)
             }));
+            const topWrongOption = optionRates
+                .filter(item => item.option !== q.answer)
+                .sort((a, b) => b.rate - a.rate)[0];
 
             return {
                 index: qIndex + 1,
                 id: q.id,
                 label: q.label || '일반',
+                concept: q.tags?.concept || q.label || '일반',
+                unit: q.tags?.unit,
+                difficulty: q.tags?.difficulty,
+                mistakeTypes: q.tags?.mistakeTypes || [],
+                expectedTimeSec: q.tags?.expectedTimeSec,
                 correctRate,
                 wrongRate: 100 - correctRate,
+                unansweredRate,
+                discrimination,
+                topWrongOption,
                 optionRates,
-                answer: q.answer
+                answer: q.answer,
+                choices,
             };
         }).sort((a: { correctRate: number }, b: { correctRate: number }) => a.correctRate - b.correctRate); // Sort by hardest first
     }, [selectedExam, examAttempts]);
@@ -122,12 +165,13 @@ export default function ExamAnalyticsTab({ exams, attempts, initialExamId }: Exa
             const label = q.label || '일반';
             if (!labelMap[label]) labelMap[label] = { totalPoints: 0, earnedPoints: 0 };
 
-            labelMap[label].totalPoints += (q.score || 5) * examAttempts.length;
+            const weight = questionWeight(q, selectedExam.questions.length);
+            labelMap[label].totalPoints += weight * examAttempts.length;
 
             examAttempts.forEach(attempt => {
                 const selectedAns = attempt.answers[q.id];
                 if (selectedAns !== undefined && selectedAns === q.answer) {
-                    labelMap[label].earnedPoints += (q.score || 5);
+                    labelMap[label].earnedPoints += weight;
                 }
             });
         });
@@ -143,6 +187,11 @@ export default function ExamAnalyticsTab({ exams, attempts, initialExamId }: Exa
         return Array.from(new Set(selectedExam.questions.map(q => q.label || '일반')));
     }, [selectedExam]);
 
+    const maxChoiceCount = useMemo(() => {
+        if (!selectedExam) return 5;
+        return Math.max(4, ...selectedExam.questions.map(q => q.choices || 5));
+    }, [selectedExam]);
+
     const studentScores = useMemo(() => {
         if (!selectedExam || examAttempts.length === 0) return [];
         return examAttempts.map(attempt => {
@@ -151,7 +200,7 @@ export default function ExamAnalyticsTab({ exams, attempts, initialExamId }: Exa
 
             selectedExam.questions.forEach(q => {
                 const label = q.label || '일반';
-                const score = q.score || 5;
+                const score = questionWeight(q, selectedExam.questions.length);
                 labelScores[label].total += score;
                 const selectedAns = attempt.answers[q.id];
                 if (selectedAns !== undefined && selectedAns === q.answer) {
@@ -184,6 +233,77 @@ export default function ExamAnalyticsTab({ exams, attempts, initialExamId }: Exa
         });
     }, [studentScores, sortField, sortDir]);
 
+    const conceptAnalytics = useMemo(() => {
+        if (!selectedExam || examAttempts.length === 0) return [];
+
+        const conceptMap: Record<string, {
+            questionCount: number;
+            correctRateSum: number;
+            hardCount: number;
+            questionNumbers: number[];
+            mistakeTypes: Set<string>;
+        }> = {};
+
+        questionAnalytics.forEach(q => {
+            const concept = q.concept || q.label || '일반';
+            if (!conceptMap[concept]) {
+                conceptMap[concept] = {
+                    questionCount: 0,
+                    correctRateSum: 0,
+                    hardCount: 0,
+                    questionNumbers: [],
+                    mistakeTypes: new Set<string>(),
+                };
+            }
+            conceptMap[concept].questionCount++;
+            conceptMap[concept].correctRateSum += q.correctRate;
+            conceptMap[concept].questionNumbers.push(q.index);
+            if (q.difficulty === 'hard' || q.difficulty === 'killer') conceptMap[concept].hardCount++;
+            q.mistakeTypes.forEach(type => conceptMap[concept].mistakeTypes.add(type));
+        });
+
+        return Object.entries(conceptMap)
+            .map(([concept, data]) => ({
+                concept,
+                questionCount: data.questionCount,
+                correctRate: Math.round(data.correctRateSum / data.questionCount),
+                hardCount: data.hardCount,
+                questionNumbers: data.questionNumbers.sort((a, b) => a - b),
+                mistakeTypes: Array.from(data.mistakeTypes),
+            }))
+            .sort((a, b) => a.correctRate - b.correctRate);
+    }, [selectedExam, examAttempts, questionAnalytics]);
+
+    const teachingInsights = useMemo(() => {
+        if (!examStats) return null;
+
+        const weakConcept = conceptAnalytics[0];
+        const riskyQuestions = questionAnalytics.filter(q =>
+            q.correctRate < 50 ||
+            q.discrimination < 10 ||
+            q.unansweredRate >= 20 ||
+            (q.topWrongOption?.rate || 0) >= 30
+        );
+        const tooEasyCount = questionAnalytics.filter(q => q.correctRate >= 90).length;
+        const weakDiscriminationCount = questionAnalytics.filter(q => q.discrimination < 10 && q.correctRate >= 35 && q.correctRate <= 85).length;
+        const lowStudents = studentScores.filter(student => student.scorePercentage < 60);
+        const borderlineStudents = studentScores.filter(student => student.scorePercentage >= 60 && student.scorePercentage < 80);
+        const advancedStudents = studentScores.filter(student => student.scorePercentage >= 90);
+
+        return {
+            weakConcept,
+            riskyQuestions: riskyQuestions.slice(0, 5),
+            tooEasyCount,
+            weakDiscriminationCount,
+            lowStudents,
+            borderlineStudents,
+            advancedStudents,
+            actionCopy: weakConcept
+                ? `${weakConcept.concept} 보강 후 ${weakConcept.questionNumbers.slice(0, 4).join(", ")}번 유사문항 재응시`
+                : "응시 데이터가 쌓이면 보강 우선순위를 계산합니다.",
+        };
+    }, [conceptAnalytics, examStats, questionAnalytics, studentScores]);
+
     const handleSort = (field: 'name' | 'score') => {
         if (sortField === field) {
             setSortDir(sortDir === 'asc' ? 'desc' : 'asc');
@@ -202,7 +322,7 @@ export default function ExamAnalyticsTab({ exams, attempts, initialExamId }: Exa
         selectedExam.questions.forEach((q, i) => {
             const selectedAns = student.attempt.answers[q.id];
             const isCorrect = (selectedAns !== undefined && selectedAns === q.answer);
-            const score = q.score || 5;
+            const score = questionWeight(q, selectedExam.questions.length);
             csvContent += `${q.number || i + 1},${q.label || '일반'},${score},${selectedAns || '-'},${q.answer || 1},${isCorrect ? 'O' : 'X'}\n`;
         });
 
@@ -375,6 +495,128 @@ export default function ExamAnalyticsTab({ exams, attempts, initialExamId }: Exa
                         ))}
                     </div>
 
+                    {teachingInsights && (
+                        <div className="card" style={{ padding: '1.5rem', background: 'var(--surface)', border: '1px solid var(--border)' }}>
+                            <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: '1rem', marginBottom: '1.25rem' }}>
+                                <div>
+                                    <h3 style={{ fontSize: '1.1rem', fontWeight: 800, display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.3rem' }}>
+                                        <Lightbulb size={18} color="var(--primary)" />
+                                        강사용 다음 액션
+                                    </h3>
+                                    <p style={{ fontSize: '0.82rem', color: 'var(--muted)', fontWeight: 500 }}>
+                                        점수 확인 후 바로 수업 운영에 쓰는 진단 요약입니다.
+                                    </p>
+                                </div>
+                                <span style={{
+                                    fontSize: '0.72rem',
+                                    fontWeight: 800,
+                                    color: 'var(--primary)',
+                                    background: 'rgba(99,102,241,0.1)',
+                                    border: '1px solid rgba(99,102,241,0.18)',
+                                    padding: '0.25rem 0.65rem',
+                                    borderRadius: 'var(--radius-full)',
+                                    whiteSpace: 'nowrap'
+                                }}>
+                                    Teacher UX
+                                </span>
+                            </div>
+
+                            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '1rem', marginBottom: '1.25rem' }}>
+                                <div style={{ padding: '1rem', borderRadius: 'var(--radius-md)', background: 'var(--background)', border: '1px solid var(--border)' }}>
+                                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.45rem', fontSize: '0.82rem', fontWeight: 800, color: 'var(--primary)', marginBottom: '0.55rem' }}>
+                                        <Target size={15} />
+                                        오늘 보강
+                                    </div>
+                                    <div style={{ fontSize: '1rem', fontWeight: 800, color: 'var(--foreground)', lineHeight: 1.35 }}>
+                                        {teachingInsights.weakConcept?.concept || '데이터 대기'}
+                                    </div>
+                                    <div style={{ fontSize: '0.78rem', color: 'var(--muted)', marginTop: '0.45rem', lineHeight: 1.45 }}>
+                                        {teachingInsights.actionCopy}
+                                    </div>
+                                </div>
+
+                                <div style={{ padding: '1rem', borderRadius: 'var(--radius-md)', background: 'var(--background)', border: '1px solid var(--border)' }}>
+                                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.45rem', fontSize: '0.82rem', fontWeight: 800, color: 'var(--warning)', marginBottom: '0.55rem' }}>
+                                        <AlertTriangle size={15} />
+                                        문항 품질 점검
+                                    </div>
+                                    <div style={{ fontSize: '1rem', fontWeight: 800, color: 'var(--foreground)', lineHeight: 1.35 }}>
+                                        {teachingInsights.riskyQuestions.length}문항 재검토
+                                    </div>
+                                    <div style={{ fontSize: '0.78rem', color: 'var(--muted)', marginTop: '0.45rem', lineHeight: 1.45 }}>
+                                        변별 약함 {teachingInsights.weakDiscriminationCount}개, 쉬운 문항 {teachingInsights.tooEasyCount}개
+                                    </div>
+                                </div>
+
+                                <div style={{ padding: '1rem', borderRadius: 'var(--radius-md)', background: 'var(--background)', border: '1px solid var(--border)' }}>
+                                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.45rem', fontSize: '0.82rem', fontWeight: 800, color: 'var(--success)', marginBottom: '0.55rem' }}>
+                                        <Users size={15} />
+                                        반 운영
+                                    </div>
+                                    <div style={{ fontSize: '1rem', fontWeight: 800, color: 'var(--foreground)', lineHeight: 1.35 }}>
+                                        보충 {teachingInsights.lowStudents.length}명 · 심화 {teachingInsights.advancedStudents.length}명
+                                    </div>
+                                    <div style={{ fontSize: '0.78rem', color: 'var(--muted)', marginTop: '0.45rem', lineHeight: 1.45 }}>
+                                        60~79점 구간 {teachingInsights.borderlineStudents.length}명은 다음 시험 전 개념 점검 권장
+                                    </div>
+                                </div>
+                            </div>
+
+                            {conceptAnalytics.length > 0 && (
+                                <div style={{ overflowX: 'auto', border: '1px solid var(--border)', borderRadius: 'var(--radius-md)' }}>
+                                    <table style={{ width: '100%', minWidth: '680px', borderCollapse: 'collapse', textAlign: 'left' }}>
+                                        <thead style={{ background: 'var(--background)', color: 'var(--muted)', fontSize: '0.78rem' }}>
+                                            <tr>
+                                                <th style={{ padding: '0.75rem 0.9rem' }}>보강 우선순위</th>
+                                                <th style={{ padding: '0.75rem 0.9rem' }}>정답률</th>
+                                                <th style={{ padding: '0.75rem 0.9rem' }}>문항</th>
+                                                <th style={{ padding: '0.75rem 0.9rem' }}>오답 원인 힌트</th>
+                                                <th style={{ padding: '0.75rem 0.9rem' }}>수업 조치</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody>
+                                            {conceptAnalytics.slice(0, 6).map((item, index) => {
+                                                const isWeak = item.correctRate < 60;
+                                                const action = isWeak
+                                                    ? '개념 재설명 + 유사문항 3개'
+                                                    : item.correctRate < 80
+                                                        ? '짧은 확인 문제'
+                                                        : '심화 변형문항';
+                                                return (
+                                                    <tr key={item.concept} style={{ borderTop: '1px solid var(--border)' }}>
+                                                        <td style={{ padding: '0.8rem 0.9rem', fontWeight: 800, color: index === 0 ? 'var(--error)' : 'var(--foreground)' }}>
+                                                            {index + 1}. {item.concept}
+                                                        </td>
+                                                        <td style={{ padding: '0.8rem 0.9rem' }}>
+                                                            <span style={{
+                                                                color: item.correctRate < 60 ? 'var(--error)' : item.correctRate < 80 ? 'var(--warning)' : 'var(--success)',
+                                                                fontWeight: 900,
+                                                            }}>
+                                                                {item.correctRate}%
+                                                            </span>
+                                                        </td>
+                                                        <td style={{ padding: '0.8rem 0.9rem', color: 'var(--muted)', fontWeight: 700 }}>
+                                                            {item.questionNumbers.join(', ')}번
+                                                            {item.hardCount > 0 && (
+                                                                <span style={{ marginLeft: '0.4rem', color: 'var(--warning)' }}>심화 {item.hardCount}</span>
+                                                            )}
+                                                        </td>
+                                                        <td style={{ padding: '0.8rem 0.9rem', color: 'var(--muted)' }}>
+                                                            {item.mistakeTypes.slice(0, 3).join(', ') || '오답 선택률 확인'}
+                                                        </td>
+                                                        <td style={{ padding: '0.8rem 0.9rem', fontWeight: 800, color: isWeak ? 'var(--primary)' : 'var(--muted)' }}>
+                                                            {action}
+                                                        </td>
+                                                    </tr>
+                                                );
+                                            })}
+                                        </tbody>
+                                    </table>
+                                </div>
+                            )}
+                        </div>
+                    )}
+
                     <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1.5rem' }}>
                         {/* Radar Chart for labels */}
                         <div className="card" style={{ padding: '1.5rem', background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 'var(--radius-xl)', position: 'relative', overflow: 'hidden' }}>
@@ -525,7 +767,9 @@ export default function ExamAnalyticsTab({ exams, attempts, initialExamId }: Exa
                                                 {q.index}번 문항 ({q.label})
                                             </div>
                                             <div style={{ fontSize: '0.85rem', color: 'var(--muted)' }}>
-                                                정답률이 가장 낮습니다. 보충 설명이 필요합니다.
+                                                {q.topWrongOption && q.topWrongOption.rate > 0
+                                                    ? `${q.topWrongOption.option}번 선택 쏠림 ${q.topWrongOption.rate}% · 변별도 ${q.discrimination}%`
+                                                    : `미응답 ${q.unansweredRate}% · 변별도 ${q.discrimination}%`}
                                             </div>
                                         </div>
                                         <div style={{ textAlign: 'right' }}>
@@ -576,32 +820,76 @@ export default function ExamAnalyticsTab({ exams, attempts, initialExamId }: Exa
                                 <thead>
                                     <tr style={{ background: 'var(--surface)', color: 'var(--muted)', fontSize: '0.85rem' }}>
                                         <th style={{ padding: '0.75rem 1rem', borderRadius: 'var(--radius-md) 0 0 var(--radius-md)' }}>문항</th>
+                                        <th style={{ padding: '0.75rem 1rem' }}>진단</th>
                                         <th style={{ padding: '0.75rem 1rem' }}>정답률</th>
-                                        <th style={{ padding: '0.75rem 1rem', textAlign: 'center' }}>선지 1</th>
-                                        <th style={{ padding: '0.75rem 1rem', textAlign: 'center' }}>선지 2</th>
-                                        <th style={{ padding: '0.75rem 1rem', textAlign: 'center' }}>선지 3</th>
-                                        <th style={{ padding: '0.75rem 1rem', textAlign: 'center' }}>선지 4</th>
-                                        <th style={{ padding: '0.75rem 1rem', textAlign: 'center', borderRadius: '0 var(--radius-md) var(--radius-md) 0' }}>선지 5</th>
+                                        <th style={{ padding: '0.75rem 1rem' }}>변별도</th>
+                                        <th style={{ padding: '0.75rem 1rem' }}>미응답</th>
+                                        {Array.from({ length: maxChoiceCount }, (_, i) => i + 1).map(opt => (
+                                            <th
+                                                key={opt}
+                                                style={{
+                                                    padding: '0.75rem 1rem',
+                                                    textAlign: 'center',
+                                                    borderRadius: opt === maxChoiceCount ? '0 var(--radius-md) var(--radius-md) 0' : undefined
+                                                }}
+                                            >
+                                                선지 {opt}
+                                            </th>
+                                        ))}
                                     </tr>
                                 </thead>
                                 <tbody>
                                     {[...questionAnalytics].sort((a: { index: number }, b: { index: number }) => a.index - b.index).map((q, i) => {
                                         const optMap = q.optionRates.reduce((acc: Record<number, number>, curr: { option: number; rate: number }) => { acc[curr.option] = curr.rate; return acc; }, {});
+                                        const qualityLabel = q.correctRate < 50
+                                            ? '보강'
+                                            : q.discrimination < 10
+                                                ? '변별 점검'
+                                                : q.correctRate >= 90
+                                                    ? '쉬움'
+                                                    : '정상';
                                         return (
                                             <tr key={i} style={{ borderBottom: '1px solid var(--border)' }} className="hover:bg-slate-50 dark:hover:bg-slate-800/50">
-                                                <td style={{ padding: '0.75rem 1rem', fontWeight: 600 }}>{q.index}번 <span style={{ fontSize: '0.75rem', color: 'var(--muted)', fontWeight: 400 }}>({q.label})</span></td>
+                                                <td style={{ padding: '0.75rem 1rem', fontWeight: 600 }}>
+                                                    {q.index}번
+                                                    <span style={{ fontSize: '0.75rem', color: 'var(--muted)', fontWeight: 400 }}> ({q.concept})</span>
+                                                    {q.difficulty && (
+                                                        <span style={{ marginLeft: '0.35rem', fontSize: '0.7rem', color: 'var(--primary)', fontWeight: 800 }}>
+                                                            {difficultyLabelMap[q.difficulty] || q.difficulty}
+                                                        </span>
+                                                    )}
+                                                </td>
+                                                <td style={{ padding: '0.75rem 1rem' }}>
+                                                    <span style={{
+                                                        padding: '0.22rem 0.48rem',
+                                                        borderRadius: '999px',
+                                                        fontSize: '0.72rem',
+                                                        fontWeight: 900,
+                                                        background: qualityLabel === '정상' ? 'rgba(16,185,129,0.08)' : 'rgba(245,158,11,0.1)',
+                                                        color: qualityLabel === '정상' ? 'var(--success)' : 'var(--warning)',
+                                                        whiteSpace: 'nowrap',
+                                                    }}>
+                                                        {qualityLabel}
+                                                    </span>
+                                                </td>
                                                 <td style={{ padding: '0.75rem 1rem', fontWeight: 600, color: q.correctRate < 40 ? 'var(--error)' : 'var(--text)' }}>
                                                     {q.correctRate}%
                                                 </td>
-                                                {[1, 2, 3, 4, 5].map(optNum => (
+                                                <td style={{ padding: '0.75rem 1rem', fontWeight: 700, color: q.discrimination < 10 ? 'var(--warning)' : 'var(--muted)' }}>
+                                                    {q.discrimination}%
+                                                </td>
+                                                <td style={{ padding: '0.75rem 1rem', fontWeight: 700, color: q.unansweredRate >= 20 ? 'var(--error)' : 'var(--muted)' }}>
+                                                    {q.unansweredRate}%
+                                                </td>
+                                                {Array.from({ length: maxChoiceCount }, (_, optIdx) => optIdx + 1).map(optNum => (
                                                     <td key={optNum} style={{ padding: '0.75rem 1rem', textAlign: 'center' }}>
                                                         <span style={{
                                                             display: 'inline-block', minWidth: '40px', padding: '0.2rem 0.4rem', borderRadius: '4px',
-                                                            background: q.answer === optNum ? 'rgba(34, 197, 94, 0.1)' : 'transparent',
-                                                            color: q.answer === optNum ? 'var(--success)' : 'var(--muted)',
+                                                            background: q.answer === optNum ? 'rgba(34, 197, 94, 0.1)' : optNum > q.choices ? 'rgba(148,163,184,0.08)' : 'transparent',
+                                                            color: q.answer === optNum ? 'var(--success)' : optNum > q.choices ? 'rgba(148,163,184,0.55)' : 'var(--muted)',
                                                             fontWeight: q.answer === optNum ? 700 : 400
                                                         }}>
-                                                            {optMap[optNum] || 0}%
+                                                            {optNum > q.choices ? '-' : `${optMap[optNum] || 0}%`}
                                                         </span>
                                                     </td>
                                                 ))}
@@ -703,4 +991,3 @@ export default function ExamAnalyticsTab({ exams, attempts, initialExamId }: Exa
         </div>
     );
 }
-

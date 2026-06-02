@@ -8,10 +8,12 @@ import ThemeToggle from "@/components/ThemeToggle";
 import dynamic from "next/dynamic";
 import { toast } from "@/components/Toast";
 import { Clock, Save } from "lucide-react";
+import { storedDataUrlToFile, saveJsonRecord } from "@/utils/blobStore";
+import { verifyTeacherPassword } from "@/app/actions/auth";
 
 const PDFViewer = dynamic(() => import("@/components/PDFViewer"), { ssr: false });
 import { gradeAttempt } from "@/types/omr";
-import type { Attempt, PdfDrawings, Question } from "@/types/omr";
+import type { Attempt, Exam, PdfDrawings, Question } from "@/types/omr";
 
 const AUTOSAVE_INTERVAL_MS = 3000;
 
@@ -45,7 +47,7 @@ export default function SolvePage() {
     const router = useRouter();
     const id = params?.id as string;
 
-    const [examData, setExamData] = useState<{ title: string; questions: Question[]; accessConfig?: { type: string; groupIds: string[] }; durationMin?: number; startAt?: string; endAt?: string } | null>(null);
+    const [examData, setExamData] = useState<Exam | null>(null);
     const [studentAnswers, setStudentAnswers] = useState<Record<number, number>>({});
     const [drawings, setDrawings] = useState<PdfDrawings>({});
     const [pdfFile, setPdfFile] = useState<File | null>(null);
@@ -72,6 +74,11 @@ export default function SolvePage() {
     const submittedRef = useRef(false);
     const latestDraftRef = useRef<SolveDraft | null>(null);
     const autosaveErrorShownRef = useRef(false);
+    
+    // Focus Warning States (Anti-cheat)
+    const [tabFociLostCount, setTabFociLostCount] = useState(0);
+    const [showFocusWarning, setShowFocusWarning] = useState(false);
+
     // Stable per-device student/guest id
     const [persistId] = useState(() => {
         if (typeof window === "undefined") return "";
@@ -82,6 +89,52 @@ export default function SolvePage() {
         }
         return pid;
     });
+
+    // Anti-cheat Window Focus/Visibility Monitoring
+    useEffect(() => {
+        if (submittedRef.current) return;
+
+        let isFocused = true;
+
+        const triggerWarning = () => {
+            if (submittedRef.current) return;
+            setTabFociLostCount(c => {
+                const nextCount = c + 1;
+                setShowFocusWarning(true);
+                return nextCount;
+            });
+        };
+
+        const handleWindowBlur = () => {
+            if (isFocused) {
+                isFocused = false;
+                triggerWarning();
+            }
+        };
+
+        const handleWindowFocus = () => {
+            isFocused = true;
+        };
+
+        const handleVisibilityChange = () => {
+            if (document.visibilityState === "hidden" && isFocused) {
+                isFocused = false;
+                triggerWarning();
+            } else if (document.visibilityState === "visible") {
+                isFocused = true;
+            }
+        };
+
+        window.addEventListener("blur", handleWindowBlur);
+        window.addEventListener("focus", handleWindowFocus);
+        document.addEventListener("visibilitychange", handleVisibilityChange);
+
+        return () => {
+            window.removeEventListener("blur", handleWindowBlur);
+            window.removeEventListener("focus", handleWindowFocus);
+            document.removeEventListener("visibilitychange", handleVisibilityChange);
+        };
+    }, []);
 
     const DRAFT_KEY = id ? `omr_draft_${id}` : "";
 
@@ -137,27 +190,11 @@ export default function SolvePage() {
                     // ignore bad draft
                 }
 
-                if (parsed.pdfData) {
-                    try {
-                        const fetchRes = await fetch(parsed.pdfData);
-                        const blob = await fetchRes.blob();
-                        const file = new File([blob], "problem.pdf", { type: "application/pdf" });
-                        setPdfFile(file);
-                    } catch (err) {
-                        console.error("Failed to load problem PDF", err);
-                    }
-                }
+                const problemPdf = await storedDataUrlToFile("problem.pdf", parsed.pdfData, parsed.pdfDataRef);
+                if (problemPdf) setPdfFile(problemPdf);
 
-                if (parsed.answerKeyPdf) {
-                    try {
-                        const fetchRes = await fetch(parsed.answerKeyPdf);
-                        const blob = await fetchRes.blob();
-                        const file = new File([blob], "answer_key.pdf", { type: "application/pdf" });
-                        setAnswerFile(file);
-                    } catch (err) {
-                        console.error("Failed to load answer key PDF", err);
-                    }
-                }
+                const answerPdf = await storedDataUrlToFile("answer_key.pdf", parsed.answerKeyPdf, parsed.answerKeyPdfRef);
+                if (answerPdf) setAnswerFile(answerPdf);
             } catch (err) {
                 alert("시험 데이터 로드 실패");
                 console.error(err);
@@ -263,7 +300,7 @@ export default function SolvePage() {
         setDrawings(prev => ({ ...prev, [page]: newPaths }));
     };
 
-    const handleSubmitInternal = (autoSubmitted = false) => {
+    const handleSubmitInternal = async (autoSubmitted = false) => {
         if (!examData) return;
         if (submittedRef.current && !autoSubmitted) return;
 
@@ -289,6 +326,18 @@ export default function SolvePage() {
         const graded = gradeAttempt(examData.questions, studentAnswers);
 
         const attemptId = Date.now().toString();
+        const activeDrawings = compactDrawings(drawings);
+        
+        let drawingsRef = undefined;
+        if (hasDrawings(activeDrawings)) {
+            try {
+                const stored = await saveJsonRecord(`attempt:${attemptId}:drawings`, activeDrawings);
+                drawingsRef = stored;
+            } catch (e) {
+                console.error("Failed to save drawings to IndexedDB", e);
+            }
+        }
+
         const attemptData: Attempt = {
             id: attemptId,
             examId: id,
@@ -301,9 +350,11 @@ export default function SolvePage() {
             score: graded.earnedScore,
             totalScore: graded.totalScore,
             answers: studentAnswers,
-            drawings: compactDrawings(drawings),
+            drawings: undefined, // Omit from localStorage to protect quota limit
+            drawingsRef,
             status: 'completed' as const,
             autoSubmitted,
+            tabFociLostCount,
         };
 
         try {
@@ -335,13 +386,24 @@ export default function SolvePage() {
         handleSubmitInternal(false);
     };
 
-    const toggleTeacherMode = (checked: boolean) => {
+    const toggleTeacherMode = async (checked: boolean) => {
         if (checked) {
             const password = prompt("선생님 비밀번호를 입력하세요 (기본: admin123)");
-            if (password === "admin123") {
-                setIsTeacherMode(true);
-            } else {
-                alert("비밀번호가 틀렸습니다.");
+            if (!password) {
+                setIsTeacherMode(false);
+                return;
+            }
+            try {
+                const res = await verifyTeacherPassword(password);
+                if (res.success && res.token) {
+                    setIsTeacherMode(true);
+                    sessionStorage.setItem("omr_teacher_token", res.token);
+                } else {
+                    alert(res.error || "비밀번호가 틀렸습니다.");
+                    setIsTeacherMode(false);
+                }
+            } catch {
+                alert("인증 오류가 발생했습니다.");
                 setIsTeacherMode(false);
             }
         } else {
@@ -363,7 +425,7 @@ export default function SolvePage() {
     const progress = totalQuestions > 0 ? (answeredCount / totalQuestions) * 100 : 0;
 
     return (
-        <div className="layout-main" style={{
+        <div className="layout-main solve-page" style={{
             background: 'var(--background)',
             height: '100vh',
             overflow: 'hidden',
@@ -371,21 +433,21 @@ export default function SolvePage() {
             flexDirection: 'column'
         }}>
             {/* Header */}
-            <header className="header" style={{
+            <header className="header solve-header" style={{
                 flexShrink: 0,
                 height: 'auto',
                 padding: '0.75rem 1.5rem'
             }}>
-                <div className="container header-content" style={{ gap: '1rem' }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '1rem', minWidth: 0, flex: 1 }}>
-                        <Link href="/" className="logo" style={{ fontSize: '1.15rem', flexShrink: 0 }}>OMR Maker</Link>
-                        <div style={{
+                <div className="container header-content solve-header-content" style={{ gap: '1rem' }}>
+                    <div className="solve-title-group" style={{ display: 'flex', alignItems: 'center', gap: '1rem', minWidth: 0, flex: 1 }}>
+                        <Link href="/" className="logo solve-brand" style={{ fontSize: '1.15rem', flexShrink: 0 }}>OMR Maker</Link>
+                        <div className="solve-divider" style={{
                             height: '22px',
                             width: '1px',
                             background: 'var(--border)',
                             flexShrink: 0
                         }} />
-                        <span style={{
+                        <span className="solve-title" style={{
                             fontSize: '0.9rem',
                             fontWeight: 700,
                             color: 'var(--foreground)',
@@ -404,7 +466,7 @@ export default function SolvePage() {
                             const ss = (Math.max(0, timeRemaining) % 60).toString().padStart(2, "0");
                             const isCritical = timeRemaining <= 300; // last 5 min
                             return (
-                                <div style={{
+                                <div className="solve-timer" style={{
                                     display: 'flex', alignItems: 'center', gap: '0.4rem',
                                     padding: '0.35rem 0.75rem',
                                     background: isCritical ? 'rgba(239,68,68,0.1)' : 'var(--background)',
@@ -424,7 +486,7 @@ export default function SolvePage() {
                     )}
 
                     {/* Progress indicator */}
-                    <div style={{
+                    <div className="solve-progress" style={{
                         display: 'flex',
                         alignItems: 'center',
                         gap: '0.75rem',
@@ -434,14 +496,14 @@ export default function SolvePage() {
                         borderRadius: 'var(--radius-full)',
                         flexShrink: 0
                     }}>
-                        <div style={{
+                        <div className="solve-progress-bar" style={{
                             width: '90px',
                             height: '4px',
                             background: 'var(--border)',
                             borderRadius: 'var(--radius-full)',
                             overflow: 'hidden'
                         }}>
-                            <div style={{
+                            <div className="solve-progress-fill" style={{
                                 width: `${progress}%`,
                                 height: '100%',
                                 background: 'linear-gradient(90deg, var(--primary), var(--secondary))',
@@ -461,6 +523,7 @@ export default function SolvePage() {
                     {/* Autosave indicator */}
                     {lastSavedAt && (
                         <span
+                            className="solve-autosave"
                             title={`마지막 저장: ${lastSavedAt.toLocaleTimeString('ko-KR')}`}
                             style={{
                                 display: 'inline-flex', alignItems: 'center', gap: '0.3rem',
@@ -470,8 +533,8 @@ export default function SolvePage() {
                         </span>
                     )}
 
-                    <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', flexShrink: 0 }}>
-                        <label style={{
+                    <div className="solve-controls" style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', flexShrink: 0 }}>
+                        <label className="solve-teacher-toggle" style={{
                             display: 'flex',
                             alignItems: 'center',
                             gap: '0.4rem',
@@ -494,7 +557,7 @@ export default function SolvePage() {
                         </label>
 
                         {isTeacherMode ? (
-                            <div style={{
+                            <div className="solve-tab-toggle" style={{
                                 display: 'flex',
                                 background: 'var(--background)',
                                 border: '1px solid var(--border)',
@@ -502,6 +565,7 @@ export default function SolvePage() {
                                 padding: '3px'
                             }}>
                                 <button
+                                    className="solve-tab-button"
                                     onClick={() => setActiveTab('problem')}
                                     style={{
                                         padding: '0.3rem 0.8rem',
@@ -518,6 +582,7 @@ export default function SolvePage() {
                                     문제지
                                 </button>
                                 <button
+                                    className="solve-tab-button"
                                     onClick={() => setActiveTab('answer')}
                                     style={{
                                         padding: '0.3rem 0.8rem',
@@ -535,7 +600,7 @@ export default function SolvePage() {
                                 </button>
                             </div>
                         ) : (
-                            <label className="btn btn-secondary" style={{
+                            <label className="btn btn-secondary solve-pdf-button" style={{
                                 cursor: 'pointer',
                                 fontSize: '0.8rem',
                                 padding: '0.45rem 0.85rem'
@@ -547,7 +612,7 @@ export default function SolvePage() {
 
                         <button
                             onClick={() => setIsOMRCollapsed(!isOMRCollapsed)}
-                            className="btn btn-secondary"
+                            className="btn btn-secondary solve-collapse-button"
                             style={{
                                 padding: '0.45rem 0.75rem',
                                 fontSize: '0.8rem',
@@ -562,7 +627,7 @@ export default function SolvePage() {
                             </svg>
                         </button>
 
-                        <button className="btn btn-primary" style={{ padding: '0.5rem 1rem', fontSize: '0.85rem' }} onClick={handleSubmit}>
+                        <button className="btn btn-primary solve-submit-button" style={{ padding: '0.5rem 1rem', fontSize: '0.85rem' }} onClick={handleSubmit}>
                             제출하기
                         </button>
                         <ThemeToggle size="small" />
@@ -571,9 +636,9 @@ export default function SolvePage() {
             </header>
 
             {/* Body */}
-            <div style={{ display: 'flex', flex: 1, overflow: 'hidden' }}>
+            <div className="solve-body" style={{ display: 'flex', flex: 1, overflow: 'hidden' }}>
                 {/* PDF Area (Left, larger) */}
-                <div style={{
+                <div className="solve-pdf-pane" style={{
                     flex: 1,
                     borderRight: '1px solid var(--border)',
                     background: '#2a2d31',
@@ -583,7 +648,7 @@ export default function SolvePage() {
                     minWidth: 0
                 }}>
                     {isTeacherMode && activeTab === 'answer' && !answerFile && (
-                        <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 10, pointerEvents: 'none' }}>
+                        <div className="solve-upload-overlay" style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 10, pointerEvents: 'none' }}>
                             <label className="btn btn-primary" style={{ pointerEvents: 'auto', cursor: 'pointer', boxShadow: '0 4px 10px rgba(0,0,0,0.3)' }}>
                                 해설/정답 PDF 업로드
                                 <input type="file" accept=".pdf" onChange={(e) => e.target.files && setAnswerFile(e.target.files[0])} style={{ display: 'none' }} />
@@ -592,7 +657,7 @@ export default function SolvePage() {
                     )}
 
                     {isTeacherMode && activeTab === 'problem' && !pdfFile && (
-                        <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 10, pointerEvents: 'none' }}>
+                        <div className="solve-upload-overlay" style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 10, pointerEvents: 'none' }}>
                             <label className="btn btn-secondary" style={{ pointerEvents: 'auto', cursor: 'pointer', boxShadow: '0 4px 10px rgba(0,0,0,0.3)' }}>
                                 문제지 PDF 업로드
                                 <input type="file" accept=".pdf" onChange={(e) => e.target.files && setPdfFile(e.target.files[0])} style={{ display: 'none' }} />
@@ -621,14 +686,14 @@ export default function SolvePage() {
                                     questionId: q.id,
                                     currentAnswer: studentAnswers[q.id],
                                     onAnswer: (opt: number) => handleAnswerClick(q.id, opt),
-                                    optionsCount: 5,
+                                    optionsCount: q.choices || 5,
                                 }))
                             : []}
                     />
                 </div>
 
                 {/* OMR Sheet (Right, responsive card view) */}
-                <div style={{
+                <div className={`solve-omr-pane ${isOMRCollapsed ? 'is-collapsed' : ''}`} style={{
                     width: isOMRCollapsed ? '0' : '440px',
                     maxWidth: isOMRCollapsed ? '0' : '40vw',
                     flexShrink: 0,
@@ -638,7 +703,7 @@ export default function SolvePage() {
                     display: 'flex',
                     flexDirection: 'column'
                 }}>
-                    <div style={{ flex: 1, overflowY: 'auto' }} className="scroll-custom">
+                    <div style={{ flex: 1, overflowY: 'auto' }} className="scroll-custom solve-omr-scroll">
                         <OMRCardView
                             title={examData.title}
                             questions={examData.questions}
@@ -651,6 +716,88 @@ export default function SolvePage() {
                     </div>
                 </div>
             </div>
+
+            {/* Focus warning overlay modal (Anti-cheat) */}
+            {showFocusWarning && (
+                <div style={{
+                    position: 'fixed',
+                    inset: 0,
+                    backgroundColor: 'rgba(15, 23, 42, 0.85)',
+                    backdropFilter: 'blur(8px)',
+                    zIndex: 9999,
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    padding: '1.5rem'
+                }}>
+                    <div style={{
+                        background: 'var(--background, white)',
+                        border: '2px solid #ef4444',
+                        borderRadius: '16px',
+                        padding: '2.5rem 2rem',
+                        maxWidth: '480px',
+                        width: '100%',
+                        textAlign: 'center',
+                        boxShadow: '0 25px 50px -12px rgba(239, 68, 68, 0.25)'
+                    }}>
+                        <div style={{
+                            fontSize: '3.5rem',
+                            marginBottom: '1rem',
+                            animation: 'pulse 2s infinite'
+                        }}>
+                            ⚠️
+                        </div>
+                        <h2 style={{
+                            fontSize: '1.4rem',
+                            fontWeight: 800,
+                            color: '#ef4444',
+                            marginBottom: '0.75rem'
+                        }}>
+                            시험 이탈 경고!
+                        </h2>
+                        <p style={{
+                            fontSize: '0.95rem',
+                            color: 'var(--foreground)',
+                            lineHeight: 1.6,
+                            marginBottom: '1.5rem'
+                        }}>
+                            시험 도중 다른 탭으로 이동하거나 브라우저 화면 포커스를 이탈한 내역이 감지되었습니다.<br />
+                            <strong style={{ color: '#ef4444' }}>이탈 기록은 선생님의 감독 대시보드에 실시간으로 기록됩니다.</strong>
+                        </p>
+                        <div style={{
+                            background: 'rgba(239, 68, 68, 0.1)',
+                            border: '1px solid rgba(239, 68, 68, 0.2)',
+                            borderRadius: '8px',
+                            padding: '0.75rem',
+                            marginBottom: '2rem',
+                            fontSize: '0.9rem',
+                            fontWeight: 700,
+                            color: '#ef4444'
+                        }}>
+                            현재 이탈 횟수: <span style={{ fontSize: '1.1rem' }}>{tabFociLostCount}</span>회
+                        </div>
+                        <button
+                            onClick={() => setShowFocusWarning(false)}
+                            style={{
+                                background: '#ef4444',
+                                color: 'white',
+                                border: 'none',
+                                borderRadius: '8px',
+                                padding: '0.75rem 2rem',
+                                fontWeight: 700,
+                                fontSize: '0.95rem',
+                                cursor: 'pointer',
+                                transition: 'background 0.2s',
+                                width: '100%'
+                            }}
+                            onMouseOver={(e) => e.currentTarget.style.background = '#dc2626'}
+                            onMouseOut={(e) => e.currentTarget.style.background = '#ef4444'}
+                        >
+                            시험으로 돌아가기
+                        </button>
+                    </div>
+                </div>
+            )}
         </div>
     );
 }

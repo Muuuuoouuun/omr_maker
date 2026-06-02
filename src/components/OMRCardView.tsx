@@ -30,6 +30,13 @@ function LinkIcon() {
   );
 }
 
+const difficultyLabels: Record<string, string> = {
+  easy: "기초",
+  medium: "표준",
+  hard: "심화",
+  killer: "킬러",
+};
+
 export default function OMRCardView({
   title = "OMR 답안지",
   questions,
@@ -109,6 +116,7 @@ export default function OMRCardView({
           const answered = effectiveAnswers[q.id];
           const isSelected = selectedQuestionId === q.id;
           const isAnswered = answered !== undefined && answered !== null;
+          const questionOptionsCount = q.choices || optionsCount;
 
           return (
             <div
@@ -124,7 +132,7 @@ export default function OMRCardView({
               <div className="q-card-num">{q.number}</div>
 
               <div className="q-card-bubbles">
-                {Array.from({ length: optionsCount }, (_, i) => {
+                {Array.from({ length: questionOptionsCount }, (_, i) => {
                   const optNum = i + 1;
                   const isMarked = answered === optNum;
                   const correct = correctAnswers?.[q.id];
@@ -161,10 +169,16 @@ export default function OMRCardView({
               </div>
 
               {/* Meta indicators (editor mode) */}
-              {showMeta && (q.label || q.score !== undefined || q.pdfLocation) && (
+              {showMeta && (q.label || q.tags?.concept || q.tags?.difficulty || q.score !== undefined || q.pdfLocation) && (
                 <div className="q-card-meta">
                   {q.label && (
                     <span className="q-meta-chip q-meta-label">{q.label}</span>
+                  )}
+                  {q.tags?.concept && (
+                    <span className="q-meta-chip q-meta-label">{q.tags.concept}</span>
+                  )}
+                  {q.tags?.difficulty && (
+                    <span className="q-meta-chip q-meta-score">{difficultyLabels[q.tags.difficulty] || q.tags.difficulty}</span>
                   )}
                   {q.score !== undefined && (
                     <span className="q-meta-chip q-meta-score">{q.score}점</span>

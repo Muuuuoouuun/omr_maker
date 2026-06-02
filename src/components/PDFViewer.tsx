@@ -1,13 +1,13 @@
 "use client";
 
-import { useState, useRef, useEffect } from 'react';
+import { useState, useRef, useEffect, useCallback } from 'react';
 import { Document, Page, pdfjs } from 'react-pdf';
 import type { PdfDrawings } from '@/types/omr';
 import 'react-pdf/dist/Page/AnnotationLayer.css';
 import 'react-pdf/dist/Page/TextLayer.css';
 
 // Worker setup for Next.js
-pdfjs.GlobalWorkerOptions.workerSrc = `//unpkg.com/pdfjs-dist@${pdfjs.version}/build/pdf.worker.min.mjs`;
+pdfjs.GlobalWorkerOptions.workerSrc = '/pdf.worker.min.mjs';
 
 interface MarkerData {
     page: number;
@@ -58,8 +58,10 @@ export default function PDFViewer({
     // Drawing State
     const [isDrawing, setIsDrawing] = useState(false);
     const [currentPath, setCurrentPath] = useState<{ x: number, y: number }[]>([]);
-    const [drawingMode, setDrawingMode] = useState<'pen' | 'eraser'>('eraser');
+    const [drawingMode, setDrawingMode] = useState<'click' | 'pen' | 'eraser'>('click');
     const [penColor, setPenColor] = useState('#ef4444'); // Default Red
+    const [undoStack, setUndoStack] = useState<Record<number, string[][]>>({});
+    const [redoStack, setRedoStack] = useState<Record<number, string[][]>>({});
     const shouldRenderDrawingLayer = enableDrawing || readOnlyDrawings;
     const canEditDrawing = enableDrawing && !readOnlyDrawings;
 
@@ -149,23 +151,123 @@ export default function PDFViewer({
         // Draw saved paths
         const paths = drawings[pageNumber] || [];
         paths.forEach(pathStr => {
-            const pathData = JSON.parse(pathStr);
-            if (pathData.points && pathData.points.length > 0) {
-                ctx.beginPath();
-                ctx.strokeStyle = pathData.color;
-                ctx.lineWidth = 2;
-                ctx.moveTo(pathData.points[0].x * canvas.width, pathData.points[0].y * canvas.height);
-                for (let i = 1; i < pathData.points.length; i++) {
-                    ctx.lineTo(pathData.points[i].x * canvas.width, pathData.points[i].y * canvas.height);
+            try {
+                const pathData = JSON.parse(pathStr);
+                if (pathData.points && pathData.points.length > 0) {
+                    ctx.beginPath();
+                    const isEraser = pathData.mode === 'eraser';
+                    ctx.globalCompositeOperation = isEraser ? 'destination-out' : 'source-over';
+                    ctx.strokeStyle = isEraser ? 'rgba(0,0,0,1)' : (pathData.color || '#ef4444');
+                    ctx.lineWidth = pathData.width || (isEraser ? 20 : 2);
+                    ctx.lineCap = 'round';
+                    ctx.lineJoin = 'round';
+                    ctx.moveTo(pathData.points[0].x * canvas.width, pathData.points[0].y * canvas.height);
+                    for (let i = 1; i < pathData.points.length; i++) {
+                        ctx.lineTo(pathData.points[i].x * canvas.width, pathData.points[i].y * canvas.height);
+                    }
+                    ctx.stroke();
                 }
-                ctx.stroke();
+            } catch (err) {
+                console.error("Failed to parse path JSON", err);
             }
         });
 
+        // Reset globalCompositeOperation to default
+        ctx.globalCompositeOperation = 'source-over';
+
     }, [pageNumber, drawings, shouldRenderDrawingLayer, scale, file]); // Re-render on these changes
 
+    const handleUndo = useCallback(() => {
+        if (!canEditDrawing || !onDrawingsChange) return;
+        const pageUndo = undoStack[pageNumber] || [];
+        if (pageUndo.length === 0) return; // nothing to undo
+        
+        const previousState = pageUndo[pageUndo.length - 1];
+        const newUndo = pageUndo.slice(0, -1);
+        
+        // Push current state to redo stack
+        const currentState = drawings[pageNumber] || [];
+        setRedoStack(prev => ({
+            ...prev,
+            [pageNumber]: [...(prev[pageNumber] || []), currentState]
+        }));
+        
+        setUndoStack(prev => ({
+            ...prev,
+            [pageNumber]: newUndo
+        }));
+        
+        onDrawingsChange(pageNumber, previousState);
+    }, [canEditDrawing, drawings, onDrawingsChange, pageNumber, undoStack]);
+
+    const handleRedo = useCallback(() => {
+        if (!canEditDrawing || !onDrawingsChange) return;
+        const pageRedo = redoStack[pageNumber] || [];
+        if (pageRedo.length === 0) return; // nothing to redo
+        
+        const nextState = pageRedo[pageRedo.length - 1];
+        const newRedo = pageRedo.slice(0, -1);
+        
+        // Push current state to undo stack
+        const currentState = drawings[pageNumber] || [];
+        setUndoStack(prev => ({
+            ...prev,
+            [pageNumber]: [...(prev[pageNumber] || []), currentState]
+        }));
+        
+        setRedoStack(prev => ({
+            ...prev,
+            [pageNumber]: newRedo
+        }));
+        
+        onDrawingsChange(pageNumber, nextState);
+    }, [canEditDrawing, drawings, onDrawingsChange, pageNumber, redoStack]);
+
+    // Keyboard Shortcuts for Undo/Redo
+    useEffect(() => {
+        const handleKeyDown = (e: KeyboardEvent) => {
+            if (!canEditDrawing) return;
+            
+            // Do not capture if editing an input
+            if (document.activeElement?.tagName === 'INPUT' || document.activeElement?.tagName === 'TEXTAREA') {
+                return;
+            }
+
+            const isMac = navigator.platform.toUpperCase().indexOf('MAC') >= 0;
+            const isCmdOrCtrl = isMac ? e.metaKey : e.ctrlKey;
+
+            if (isCmdOrCtrl && e.key.toLowerCase() === 'z') {
+                e.preventDefault();
+                if (e.shiftKey) {
+                    handleRedo();
+                } else {
+                    handleUndo();
+                }
+            } else if (isCmdOrCtrl && e.key.toLowerCase() === 'y') {
+                e.preventDefault();
+                handleRedo();
+            }
+        };
+
+        window.addEventListener('keydown', handleKeyDown);
+        return () => window.removeEventListener('keydown', handleKeyDown);
+    }, [canEditDrawing, handleRedo, handleUndo]);
+
     const startDrawing = (e: React.MouseEvent | React.TouchEvent) => {
-        if (!canEditDrawing || drawingMode === 'eraser') return;
+        if (!canEditDrawing || drawingMode === 'click') return;
+        
+        // Multi-touch scroll check: ignore drawing if 2+ fingers are touch-dragging
+        if ('touches' in e) {
+            if (e.touches.length >= 2) {
+                setIsDrawing(false);
+                return;
+            }
+            // Prevent browser scroll when drawing with 1 finger
+            if (e.touches.length === 1) {
+                e.preventDefault();
+            }
+        }
+
         setIsDrawing(true);
         const pos = getPos(e);
         setCurrentPath([pos]);
@@ -173,24 +275,44 @@ export default function PDFViewer({
 
     const draw = (e: React.MouseEvent | React.TouchEvent) => {
         if (!isDrawing || !canEditDrawing || !canvasRef.current) return;
+        
+        // Multi-touch zoom/scroll: abort drawing if fingers >= 2
+        if ('touches' in e) {
+            if (e.touches.length >= 2) {
+                stopDrawing();
+                return;
+            }
+            if (e.touches.length === 1) {
+                e.preventDefault();
+            }
+        }
+
         const pos = getPos(e);
+        const last = currentPath[currentPath.length - 1];
         setCurrentPath(prev => [...prev, pos]);
 
-        // Real-time visual feedback
+        // Real-time visual feedback drawing segment-by-segment
         const ctx = canvasRef.current.getContext('2d');
         if (ctx) {
             const rect = canvasRef.current.getBoundingClientRect();
-            ctx.lineTo(pos.x * rect.width, pos.y * rect.height);
-            ctx.stroke();
-            // Note: This is a hacky visual update, real render happens on useEffect usually.
-            // Better: draw single segment.
             ctx.beginPath();
-            const last = currentPath[currentPath.length - 1];
-            if (last) ctx.moveTo(last.x * rect.width, last.y * rect.height);
+            if (last) {
+                ctx.moveTo(last.x * rect.width, last.y * rect.height);
+            } else {
+                ctx.moveTo(pos.x * rect.width, pos.y * rect.height);
+            }
             ctx.lineTo(pos.x * rect.width, pos.y * rect.height);
-            ctx.strokeStyle = penColor;
-            ctx.lineWidth = 2;
+            
+            const isEraser = drawingMode === 'eraser';
+            ctx.globalCompositeOperation = isEraser ? 'destination-out' : 'source-over';
+            ctx.strokeStyle = isEraser ? 'rgba(0,0,0,1)' : penColor;
+            ctx.lineWidth = isEraser ? 20 : 2;
+            ctx.lineCap = 'round';
+            ctx.lineJoin = 'round';
             ctx.stroke();
+            
+            // Restore default draw mode
+            ctx.globalCompositeOperation = 'source-over';
         }
     };
 
@@ -199,12 +321,25 @@ export default function PDFViewer({
         setIsDrawing(false);
 
         // Save Path
-        if (currentPath.length > 1 && onDrawingsChange) {
+        if (currentPath.length > 0 && onDrawingsChange) {
             const newPath = {
-                color: penColor,
+                mode: drawingMode,
+                color: drawingMode === 'eraser' ? 'rgba(0,0,0,1)' : penColor,
+                width: drawingMode === 'eraser' ? 20 : 2,
                 points: currentPath
             };
             const currentPaths = drawings[pageNumber] || [];
+            
+            // Push to Undo Stack and clear Redo Stack
+            setUndoStack(prev => ({
+                ...prev,
+                [pageNumber]: [...(prev[pageNumber] || []), currentPaths]
+            }));
+            setRedoStack(prev => ({
+                ...prev,
+                [pageNumber]: []
+            }));
+
             onDrawingsChange(pageNumber, [...currentPaths, JSON.stringify(newPath)]);
         }
         setCurrentPath([]);
@@ -230,6 +365,15 @@ export default function PDFViewer({
     const clearPage = () => {
         if (confirm("이 페이지의 필기를 모두 지우시겠습니까?")) {
             if (onDrawingsChange) {
+                const currentPaths = drawings[pageNumber] || [];
+                setUndoStack(prev => ({
+                    ...prev,
+                    [pageNumber]: [...(prev[pageNumber] || []), currentPaths]
+                }));
+                setRedoStack(prev => ({
+                    ...prev,
+                    [pageNumber]: []
+                }));
                 onDrawingsChange(pageNumber, []);
             }
         }
@@ -277,25 +421,134 @@ export default function PDFViewer({
             )}
 
             {/* PDF Toolbar */}
-            <div style={{ padding: '0.5rem 1rem', background: '#323639', color: 'white', display: 'flex', alignItems: 'center', justifyContent: 'space-between', fontSize: '0.9rem', borderBottom: '1px solid #000' }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
-                    <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '200px' }}>{file ? file.name : 'PDF 없음'}</span>
+            <div className="pdf-viewer-toolbar" style={{ padding: '0.5rem 1rem', background: '#323639', color: 'white', display: 'flex', alignItems: 'center', justifyContent: 'space-between', fontSize: '0.9rem', borderBottom: '1px solid #000' }}>
+                <div className="pdf-viewer-file" style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
+                    <span className="pdf-viewer-file-name" style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '200px' }}>{file ? file.name : 'PDF 없음'}</span>
                 </div>
 
                 {file && (
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                    <div className="pdf-viewer-controls" style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
                         {/* Drawing Tools */}
                         {canEditDrawing && (
-                            <div style={{ display: 'flex', gap: '5px', marginRight: '1rem', paddingRight: '1rem', borderRight: '1px solid #666' }}>
-                                <button onClick={() => setDrawingMode(drawingMode === 'pen' ? 'eraser' : 'pen')} style={{ background: drawingMode === 'pen' ? '#6366f1' : 'transparent', border: '1px solid #666', borderRadius: '4px', padding: '2px 6px', color: 'white' }}>
-                                    {drawingMode === 'pen' ? '✏️ 그리기' : '👆 클릭모드'}
+                            <div className="pdf-viewer-drawing-tools" style={{ display: 'flex', alignItems: 'center', gap: '6px', marginRight: '1rem', paddingRight: '1rem', borderRight: '1px solid #555' }}>
+                                <button 
+                                    onClick={() => setDrawingMode('click')} 
+                                    title="일반 마우스 모드 (선택/클릭)"
+                                    style={{ 
+                                        background: drawingMode === 'click' ? '#4f46e5' : '#222', 
+                                        border: '1px solid #555', 
+                                        borderRadius: '6px', 
+                                        padding: '4px 10px', 
+                                        color: 'white',
+                                        fontSize: '0.8rem',
+                                        fontWeight: 600,
+                                        cursor: 'pointer',
+                                        transition: 'all 0.2s'
+                                    }}
+                                >
+                                    🖱️ 일반
                                 </button>
+                                <button 
+                                    onClick={() => setDrawingMode('pen')} 
+                                    title="펜 그리기 모드"
+                                    style={{ 
+                                        background: drawingMode === 'pen' ? '#4f46e5' : '#222', 
+                                        border: '1px solid #555', 
+                                        borderRadius: '6px', 
+                                        padding: '4px 10px', 
+                                        color: 'white',
+                                        fontSize: '0.8rem',
+                                        fontWeight: 600,
+                                        cursor: 'pointer',
+                                        transition: 'all 0.2s'
+                                    }}
+                                >
+                                    ✏️ 펜
+                                </button>
+                                <button 
+                                    onClick={() => setDrawingMode('eraser')} 
+                                    title="지우개 모드 (선택 궤적 삭제)"
+                                    style={{ 
+                                        background: drawingMode === 'eraser' ? '#4f46e5' : '#222', 
+                                        border: '1px solid #555', 
+                                        borderRadius: '6px', 
+                                        padding: '4px 10px', 
+                                        color: 'white',
+                                        fontSize: '0.8rem',
+                                        fontWeight: 600,
+                                        cursor: 'pointer',
+                                        transition: 'all 0.2s'
+                                    }}
+                                >
+                                    🧹 지우개
+                                </button>
+
                                 {drawingMode === 'pen' && (
-                                    <>
-                                        <input type="color" value={penColor} onChange={(e) => setPenColor(e.target.value)} style={{ width: '24px', height: '24px', padding: 0, border: 'none', background: 'none' }} />
-                                        <button onClick={clearPage} style={{ fontSize: '0.8rem', padding: '2px 6px', background: '#ef4444', border: 'none', borderRadius: '4px', color: 'white' }}>삭제</button>
-                                    </>
+                                    <input 
+                                        type="color" 
+                                        value={penColor} 
+                                        onChange={(e) => setPenColor(e.target.value)} 
+                                        title="펜 색상 선택"
+                                        style={{ width: '28px', height: '28px', padding: 0, border: '1px solid #555', borderRadius: '50%', background: 'none', cursor: 'pointer', overflow: 'hidden' }} 
+                                    />
                                 )}
+
+                                <div style={{ width: '1px', height: '16px', background: '#555', margin: '0 4px' }}></div>
+
+                                <button 
+                                    onClick={handleUndo} 
+                                    disabled={!(undoStack[pageNumber] && undoStack[pageNumber].length > 0)}
+                                    title="실행 취소 (Cmd/Ctrl+Z)"
+                                    style={{ 
+                                        background: '#222', 
+                                        border: '1px solid #555', 
+                                        borderRadius: '6px', 
+                                        padding: '4px 8px', 
+                                        color: 'white',
+                                        fontSize: '0.8rem',
+                                        cursor: (undoStack[pageNumber] && undoStack[pageNumber].length > 0) ? 'pointer' : 'not-allowed',
+                                        opacity: (undoStack[pageNumber] && undoStack[pageNumber].length > 0) ? 1 : 0.4,
+                                        transition: 'all 0.2s'
+                                    }}
+                                >
+                                    ↩️ Undo
+                                </button>
+                                <button 
+                                    onClick={handleRedo} 
+                                    disabled={!(redoStack[pageNumber] && redoStack[pageNumber].length > 0)}
+                                    title="다시 실행 (Cmd/Ctrl+Y)"
+                                    style={{ 
+                                        background: '#222', 
+                                        border: '1px solid #555', 
+                                        borderRadius: '6px', 
+                                        padding: '4px 8px', 
+                                        color: 'white',
+                                        fontSize: '0.8rem',
+                                        cursor: (redoStack[pageNumber] && redoStack[pageNumber].length > 0) ? 'pointer' : 'not-allowed',
+                                        opacity: (redoStack[pageNumber] && redoStack[pageNumber].length > 0) ? 1 : 0.4,
+                                        transition: 'all 0.2s'
+                                    }}
+                                >
+                                    ↪️ Redo
+                                </button>
+                                <button 
+                                    onClick={clearPage} 
+                                    title="이 페이지의 모든 필기 삭제"
+                                    style={{ 
+                                        background: '#ef4444', 
+                                        border: 'none', 
+                                        borderRadius: '6px', 
+                                        padding: '4px 8px', 
+                                        color: 'white',
+                                        fontSize: '0.8rem',
+                                        fontWeight: 600,
+                                        cursor: 'pointer',
+                                        marginLeft: '4px',
+                                        transition: 'all 0.2s'
+                                    }}
+                                >
+                                    🗑️ 전체삭제
+                                </button>
                             </div>
                         )}
 
@@ -321,8 +574,8 @@ export default function PDFViewer({
             </div>
 
             {/* PDF Content */}
-            <div ref={wrapperRef} style={{ flex: 1, overflow: 'auto', display: 'flex', flexDirection: 'column', alignItems: 'center', background: '#525659', position: 'relative' }}>
-                <div style={{ flex: 1, display: 'flex', justifyContent: 'center', padding: '2rem', width: '100%' }}>
+            <div ref={wrapperRef} className="pdf-viewer-scroll" style={{ flex: 1, overflow: 'auto', display: 'flex', flexDirection: 'column', alignItems: 'center', background: '#525659', position: 'relative' }}>
+                <div className="pdf-viewer-page-wrap" style={{ flex: 1, display: 'flex', justifyContent: 'center', padding: '2rem', width: '100%' }}>
                     {file ? (
                         <Document file={file} onLoadSuccess={onDocumentLoadSuccess} loading={<div style={{ color: 'white' }}>문서 로딩 중...</div>}>
                             <div
@@ -346,8 +599,8 @@ export default function PDFViewer({
                                             top: 0, left: 0,
                                             width: '100%', height: '100%',
                                             zIndex: 10,
-                                            cursor: canEditDrawing && drawingMode === 'pen' ? 'crosshair' : 'default',
-                                            pointerEvents: canEditDrawing && drawingMode === 'pen' ? 'auto' : 'none' // Allow click through if not drawing
+                                            cursor: canEditDrawing ? (drawingMode === 'pen' ? 'crosshair' : drawingMode === 'eraser' ? 'cell' : 'default') : 'default',
+                                            pointerEvents: canEditDrawing && (drawingMode === 'pen' || drawingMode === 'eraser') ? 'auto' : 'none' // Allow click through if not drawing
                                         }}
                                     />
                                 )}
@@ -459,7 +712,7 @@ export default function PDFViewer({
 
                 {/* Bottom Pagination Toolbar (Only visible if file exists) */}
                 {file && (
-                    <div style={{
+                    <div className="pdf-viewer-bottom-toolbar" style={{
                         width: '100%',
                         padding: '0.5rem',
                         background: '#323639',
