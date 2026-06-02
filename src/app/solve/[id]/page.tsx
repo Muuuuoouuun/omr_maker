@@ -10,6 +10,7 @@ import { toast } from "@/components/Toast";
 import { Clock, Save } from "lucide-react";
 import { storedDataUrlToFile, saveJsonRecord } from "@/utils/blobStore";
 import { verifyTeacherPassword } from "@/app/actions/auth";
+import { getOrCreateGuestId, getSession, saveSession, type StudentSession } from "@/utils/storage";
 
 const PDFViewer = dynamic(() => import("@/components/PDFViewer"), { ssr: false });
 import { gradeAttempt } from "@/types/omr";
@@ -52,7 +53,7 @@ export default function SolvePage() {
     const [drawings, setDrawings] = useState<PdfDrawings>({});
     const [pdfFile, setPdfFile] = useState<File | null>(null);
 
-    const [user, setUser] = useState<{ name: string; isGuest?: boolean; guestId?: string } | null>(null);
+    const [user, setUser] = useState<StudentSession | null>(() => getSession());
 
     // Navigation State
     const [currentQuestionId, setCurrentQuestionId] = useState<number | null>(null);
@@ -136,11 +137,13 @@ export default function SolvePage() {
         };
     }, []);
 
-    const DRAFT_KEY = id ? `omr_draft_${id}` : "";
+    const draftOwnerKey = user?.studentId || user?.guestId || persistId;
+    const DRAFT_KEY = id && draftOwnerKey ? `omr_draft_${id}_${draftOwnerKey}` : "";
+    const LEGACY_DRAFT_KEY = id ? `omr_draft_${id}` : "";
 
     useEffect(() => {
-        const sessionStr = sessionStorage.getItem("omr_student_session");
-        if (sessionStr) setUser(JSON.parse(sessionStr));
+        const currentSession = getSession();
+        if (currentSession) setUser(currentSession);
 
         const loadExam = async () => {
             if (!id) return;
@@ -169,7 +172,10 @@ export default function SolvePage() {
 
                 // Restore draft (autosave) if present
                 try {
-                    const draftStr = localStorage.getItem(`omr_draft_${id}`);
+                    const ownerKey = currentSession?.studentId || currentSession?.guestId || persistId;
+                    const scopedDraftKey = ownerKey ? `omr_draft_${id}_${ownerKey}` : "";
+                    const draftStr = (scopedDraftKey ? localStorage.getItem(scopedDraftKey) : null)
+                        || localStorage.getItem(`omr_draft_${id}`);
                     if (draftStr) {
                         const draft = JSON.parse(draftStr);
                         if (draft.answers && typeof draft.answers === "object") {
@@ -202,7 +208,7 @@ export default function SolvePage() {
         };
 
         loadExam();
-    }, [id]);
+    }, [id, persistId]);
 
     // Show resume banner once after initial load
     useEffect(() => {
@@ -309,9 +315,17 @@ export default function SolvePage() {
             if (examData.accessConfig?.type === 'public') {
                 const name = window.prompt("이름을 입력해주세요 (게스트 제출):");
                 if (!name) return;
-                const guestId = Math.random().toString(36).substring(2, 15);
-                submitter = { name, isGuest: true, guestId };
-                sessionStorage.setItem("omr_student_session", JSON.stringify({ ...submitter, groupName: 'Guest' }));
+                const guestId = getOrCreateGuestId();
+                submitter = {
+                    studentId: `guest:${guestId}`,
+                    name,
+                    isGuest: true,
+                    identityType: 'guest',
+                    guestId,
+                    groupName: 'Guest',
+                };
+                saveSession(submitter);
+                setUser(submitter);
                 localStorage.setItem("omr_guest_id", guestId);
             } else {
                 toast.error("로그인 필요", "이 시험은 로그인이 필요합니다.");
@@ -343,7 +357,10 @@ export default function SolvePage() {
             examId: id,
             examTitle: examData.title,
             studentName: submitter.name,
-            studentId: submitter.guestId ?? persistId,
+            studentId: submitter.studentId || submitter.guestId || persistId,
+            groupId: submitter.groupId,
+            groupName: submitter.groupName,
+            identityType: submitter.identityType || (submitter.isGuest ? 'guest' : 'temporary'),
             guestId: submitter.guestId,
             startedAt,
             finishedAt: new Date().toISOString(),
@@ -363,6 +380,7 @@ export default function SolvePage() {
             localStorage.setItem('omr_attempts', JSON.stringify(history));
             // Clean up draft
             try { localStorage.removeItem(DRAFT_KEY); } catch {}
+            try { localStorage.removeItem(LEGACY_DRAFT_KEY); } catch {}
         } catch {
             toast.error("저장 공간 부족", "브라우저 저장소가 가득 찼습니다. 관리자에게 문의하세요.");
             return;

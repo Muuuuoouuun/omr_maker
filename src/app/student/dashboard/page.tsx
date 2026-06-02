@@ -8,7 +8,14 @@ import AssignmentBlock from "@/components/dashboard/AssignmentBlock";
 import ThemeToggle from "@/components/ThemeToggle";
 import { Sparkles, Award } from "lucide-react";
 
-import { mergeGuestAttempts } from "@/utils/storage";
+import {
+    attemptBelongsToSession,
+    getSession,
+    mergeGuestAttempts,
+    saveSession,
+    studentIdFor,
+    type StudentSession,
+} from "@/utils/storage";
 
 function getTimeGreeting(): string {
     const h = new Date().getHours();
@@ -20,7 +27,7 @@ function getTimeGreeting(): string {
 
 export default function StudentDashboard() {
     const router = useRouter();
-    const [user, setUser] = useState<{ name: string; groupId: string; groupName: string; isGuest?: boolean; guestId?: string } | null>(null);
+    const [user, setUser] = useState<StudentSession | null>(null);
     const [todoExams, setTodoExams] = useState<Exam[]>([]);
     const [doneExams, setDoneExams] = useState<(Exam & { attemptId: string })[]>([]);
     const [stats, setStats] = useState({
@@ -30,13 +37,12 @@ export default function StudentDashboard() {
 
     useEffect(() => {
         // 1. Check Session (Simulated)
-        const session = sessionStorage.getItem("omr_student_session");
-        if (!session) {
+        const currentUser = getSession();
+        if (!currentUser) {
             alert("로그인이 필요합니다.");
             router.push("/");
             return;
         }
-        const currentUser = JSON.parse(session);
         // eslint-disable-next-line react-hooks/set-state-in-effect
         setUser(currentUser);
 
@@ -54,17 +60,7 @@ export default function StudentDashboard() {
 
         const allAttempts: Attempt[] = JSON.parse(localStorage.getItem("omr_attempts") || "[]");
 
-        // Filter attempts: by guestId if guest, or by name if logged in
-        // In a real app, we'd use IDs for everything.
-        const myAttempts = allAttempts.filter(a => {
-            if (currentUser.isGuest) {
-                return a.guestId === currentUser.guestId;
-            } else {
-                return a.studentName === currentUser.name;
-                // Note: IF we just merged, we might want to also check matches that WERE guestIds? 
-                // For now, assume merge updates studentName.
-            }
-        });
+        const myAttempts = allAttempts.filter(a => attemptBelongsToSession(a, currentUser));
 
         // 3. Categorize Exams
         const done: (Exam & { attemptId: string })[] = [];
@@ -77,7 +73,7 @@ export default function StudentDashboard() {
             if (exam.accessConfig?.type === 'public') hasAccess = true;
             // Group exams check if user's group is in the list. Guests only see public.
             else if (currentUser.isGuest) hasAccess = false;
-            else if (exam.accessConfig?.groupIds?.includes(currentUser.groupId)) hasAccess = true;
+            else if (currentUser.groupId && exam.accessConfig?.groupIds?.includes(currentUser.groupId)) hasAccess = true;
 
             if (!hasAccess) return;
 
@@ -105,24 +101,40 @@ export default function StudentDashboard() {
 
     const handleMergeAccount = () => {
         // Mocking a flow where guest logs in
-        const name = prompt("Enter your name to sign up/login:");
+        const name = prompt("Enter your name to sign up/login:")?.trim();
         if (!name) return;
 
         // 1. Simulate new session
-        const newSession = {
-            name: name,
-            groupId: "group-1", // mock group
-            groupName: "Class A",
-            isGuest: false
+        let targetGroup = { id: "group-1", name: "Class A" };
+        try {
+            const rawGroups = localStorage.getItem("omr_groups");
+            const parsed = rawGroups ? JSON.parse(rawGroups) as Array<{ id: string; name: string }> : [];
+            if (parsed[0]?.id && parsed[0]?.name) targetGroup = parsed[0];
+        } catch { /* keep default */ }
+
+        const newSession: StudentSession = {
+            studentId: studentIdFor(name, targetGroup.id),
+            loginId: studentIdFor(name, targetGroup.id),
+            name,
+            groupId: targetGroup.id,
+            groupName: targetGroup.name,
+            isGuest: false,
+            identityType: "temporary",
         };
 
         // 2. Perform Merge
         if (user?.guestId) {
-            mergeGuestAttempts(user.guestId, name);
+            mergeGuestAttempts(user.guestId, {
+                studentId: newSession.studentId,
+                name,
+                groupId: newSession.groupId,
+                groupName: newSession.groupName,
+                identityType: "temporary",
+            });
             alert(`History merged to ${name}!`);
         }
 
-        sessionStorage.setItem("omr_student_session", JSON.stringify(newSession));
+        saveSession(newSession);
         window.location.reload(); // Reload to refresh data
     };
 

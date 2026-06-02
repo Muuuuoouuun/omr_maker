@@ -8,6 +8,7 @@ import { BookOpen, ChevronDown, ChevronUp } from "lucide-react";
 import { gradeAttempt } from "@/types/omr";
 import type { Attempt, Exam, PdfDrawings } from "@/types/omr";
 import { storedDataUrlToFile, loadJsonRecord } from "@/utils/blobStore";
+import { attemptBelongsToSession, getSession } from "@/utils/storage";
 
 const PDFViewer = dynamic(() => import("@/components/PDFViewer"), { ssr: false });
 
@@ -27,6 +28,7 @@ export default function ReviewPage() {
     const [pdfLoadFailed, setPdfLoadFailed] = useState(false);
     const [filterWrong, setFilterWrong] = useState(false);
     const [openExplanations, setOpenExplanations] = useState<Record<number, boolean>>({});
+    const [accessDenied, setAccessDenied] = useState(false);
 
     useEffect(() => {
         let cancelled = false;
@@ -38,6 +40,11 @@ export default function ReviewPage() {
                 const attempts: Attempt[] = JSON.parse(attemptsData);
                 const found = attempts.find(a => a.id === id);
                 if (found && !cancelled) {
+                    const session = getSession();
+                    if (!session || !attemptBelongsToSession(found, session)) {
+                        setAccessDenied(true);
+                        return;
+                    }
                     setAttempt(found);
                     
                     // Securely restore drawings from IndexedDB if drawingsRef exists
@@ -74,6 +81,16 @@ export default function ReviewPage() {
         });
         return () => { cancelled = true; };
     }, [id]);
+
+    if (accessDenied) {
+        return (
+            <div style={{ padding: '2rem', textAlign: 'center' }}>
+                <h2>접근할 수 없는 기록입니다.</h2>
+                <p style={{ color: '#64748b', marginTop: '0.5rem' }}>현재 로그인한 학생의 응시 기록만 볼 수 있습니다.</p>
+                <Link href="/" className="btn btn-primary" style={{ marginTop: '1rem', display: 'inline-flex' }}>홈으로 돌아가기</Link>
+            </div>
+        );
+    }
 
     if (!attempt || !exam) {
         return <div style={{ padding: '2rem', textAlign: 'center' }}>Loading...</div>;

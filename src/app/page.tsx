@@ -5,11 +5,8 @@ import { useRouter } from "next/navigation";
 import { Attempt, Group } from "@/types/omr";
 import ThemeToggle from "@/components/ThemeToggle";
 import { toast } from "@/components/Toast";
-
-// Stable identifier for a (name, group) pair.
-function studentIdFor(name: string, groupId: string) {
-    return `${groupId}::${name.trim()}`;
-}
+import { verifyTeacherPassword } from "@/app/actions/auth";
+import { getOrCreateGuestId, saveSession, studentIdFor, type StudentSession } from "@/utils/storage";
 
 // 6-char alphanumeric code — avoids ambiguous chars (0/O, 1/I).
 function generateStartCode(): string {
@@ -110,30 +107,57 @@ export default function Home() {
         return;
       }
       const codes: Record<string, string> = JSON.parse(raw);
-      const sid = studentIdFor(studentName, selectedGroupId);
-      setNeedsCode(!!codes[sid]);
+      let sid = studentIdFor(studentName, selectedGroupId);
+      try {
+        const group = groups.find(g => g.id === selectedGroupId);
+        const rawStudents = localStorage.getItem("omr_students");
+        if (rawStudents) {
+          const students = JSON.parse(rawStudents) as Array<{ id?: string; name?: string; group?: string }>;
+          const profile = students.find(s => s.name === studentName.trim() && (!group?.name || s.group === group.name));
+          if (profile?.id) sid = profile.id;
+        }
+      } catch { /* ignore local profile lookup */ }
+      setNeedsCode(!!codes[sid] || !!codes[studentIdFor(studentName, selectedGroupId)]);
     } catch {
       setNeedsCode(false);
     }
-  }, [role, studentName, selectedGroupId]);
+  }, [role, studentName, selectedGroupId, groups]);
 
-  const handleTeacherLogin = () => {
-    if (password === "admin123") {
-      router.push("/teacher/dashboard");
-    } else {
-      setError("잘못된 비밀번호입니다.");
+  const handleTeacherLogin = async () => {
+    try {
+      const res = await verifyTeacherPassword(password);
+      if (res.success && res.token) {
+        sessionStorage.setItem("omr_teacher_token", res.token);
+        router.push("/teacher/dashboard");
+      } else {
+        setError(res.error || "잘못된 비밀번호입니다.");
+        setTimeout(() => setError(""), 2000);
+      }
+    } catch {
+      setError("서버 인증 도중 오류가 발생했습니다.");
       setTimeout(() => setError(""), 2000);
     }
   };
 
   const handleStudentLogin = () => {
-    if (!studentName.trim() || !selectedGroupId) {
+    const trimmedName = studentName.trim();
+    if (!trimmedName || !selectedGroupId) {
       setError("이름과 반을 모두 입력해주세요.");
       setTimeout(() => setError(""), 2000);
       return;
     }
     const group = groups.find((g) => g.id === selectedGroupId);
-    const sid = studentIdFor(studentName, selectedGroupId);
+    const legacySid = studentIdFor(trimmedName, selectedGroupId);
+    let sid = legacySid;
+
+    try {
+      const rawStudents = localStorage.getItem("omr_students");
+      if (rawStudents) {
+        const students = JSON.parse(rawStudents) as Array<{ id?: string; name?: string; group?: string }>;
+        const profile = students.find(s => s.name === trimmedName && (!group?.name || s.group === group.name));
+        if (profile?.id) sid = profile.id;
+      }
+    } catch { /* ignore local profile lookup */ }
 
     // Load existing start-code registry + attempts to decide anti-spoof path.
     let codes: Record<string, string> = {};
@@ -149,8 +173,13 @@ export default function Home() {
     } catch { /* ignore */ }
 
     const hasPriorAttempt = attempts.some(a => a.studentId === sid
-      || (a.studentName === studentName.trim() && !a.guestId));
-    const storedCode = codes[sid];
+      || a.studentId === legacySid
+      || (a.studentName === trimmedName && !a.guestId));
+    const storedCode = codes[sid] || codes[legacySid];
+    if (storedCode && !codes[sid]) {
+      codes[sid] = storedCode;
+      try { localStorage.setItem("omr_student_codes", JSON.stringify(codes)); } catch { /* ignore quota */ }
+    }
 
     // CASE 1: returning student — must enter their start code.
     if (storedCode && hasPriorAttempt) {
@@ -178,20 +207,30 @@ export default function Home() {
       );
     }
 
-    const session = {
-      name: studentName.trim(),
+    const session: StudentSession = {
+      name: trimmedName,
       studentId: sid,
+      loginId: legacySid,
       groupId: selectedGroupId,
       groupName: group?.name || "Unknown",
+      isGuest: false,
+      identityType: "temporary",
     };
-    sessionStorage.setItem("omr_student_session", JSON.stringify(session));
+    saveSession(session);
     router.push("/student/dashboard");
   };
 
   const handleGuest = () => {
-    const guestId = Math.random().toString(36).substring(2, 15);
-    const session = { name: "Guest Student", isGuest: true, guestId, groupName: "Guest Mode" };
-    sessionStorage.setItem("omr_student_session", JSON.stringify(session));
+    const guestId = getOrCreateGuestId();
+    const session: StudentSession = {
+      studentId: `guest:${guestId}`,
+      name: "Guest Student",
+      isGuest: true,
+      identityType: "guest",
+      guestId,
+      groupName: "Guest Mode",
+    };
+    saveSession(session);
     localStorage.setItem("omr_guest_id", guestId);
     router.push("/student/dashboard");
   };

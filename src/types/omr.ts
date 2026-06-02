@@ -69,6 +69,8 @@ export interface Exam {
 /** Per-page serialized canvas stroke paths drawn on the PDF. */
 export type PdfDrawings = Record<number, string[]>;
 
+export type IdentityType = 'guest' | 'temporary' | 'registered';
+
 export interface Attempt {
     id: string; // specific attempt ID
     examId: string;
@@ -76,6 +78,11 @@ export interface Attempt {
     studentName: string; // "Student" for anonymous
     /** Stable student identifier — preferred over studentName for joins. */
     studentId?: string;
+    /** Group snapshot at submission time. */
+    groupId?: string;
+    groupName?: string;
+    /** Whether this attempt belongs to a guest, class-issued temporary ID, or registered account. */
+    identityType?: IdentityType;
     startedAt: string;
     finishedAt: string;
     score: number;
@@ -91,6 +98,9 @@ export interface Attempt {
     autoSubmitted?: boolean;
     /** Number of times the student switched tabs or lost focus during the exam. */
     tabFociLostCount?: number;
+    /** Guest provenance after a merge into a canonical student profile. */
+    mergedFromGuestId?: string;
+    mergedAt?: string;
 }
 
 export interface Group {

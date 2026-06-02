@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { Attempt } from "@/types/omr";
+import { attemptBelongsToSession, getSession, type StudentSession } from "@/utils/storage";
 
 type PeriodFilter = "all" | "30d" | "7d";
 type SortMode = "recent" | "high" | "low";
@@ -22,23 +23,32 @@ function badgeForPct(p: number): { bg: string; color: string } {
 
 export default function HistoryPage() {
     const [attempts, setAttempts] = useState<Attempt[]>([]);
+    const [session, setSession] = useState<StudentSession | null>(null);
     const [period, setPeriod] = useState<PeriodFilter>("all");
     const [sortMode, setSortMode] = useState<SortMode>("recent");
     const [page, setPage] = useState(1);
     const [now] = useState(() => Date.now());
 
     useEffect(() => {
-        const data = localStorage.getItem('omr_attempts');
-        if (data) {
-            try {
-                const parsed = JSON.parse(data);
-                // Hydrate client-only attempt history after mount.
-                // eslint-disable-next-line react-hooks/set-state-in-effect
-                setAttempts(parsed);
-            } catch (e) {
-                console.error("Failed to load history", e);
+        let cancelled = false;
+        queueMicrotask(() => {
+            if (cancelled) return;
+            const currentSession = getSession();
+            setSession(currentSession);
+            const data = localStorage.getItem('omr_attempts');
+            if (data) {
+                try {
+                    const parsed = JSON.parse(data) as Attempt[];
+                    const mine = currentSession
+                        ? parsed.filter(attempt => attemptBelongsToSession(attempt, currentSession))
+                        : [];
+                    setAttempts(mine);
+                } catch (e) {
+                    console.error("Failed to load history", e);
+                }
             }
-        }
+        });
+        return () => { cancelled = true; };
     }, []);
 
     // Summary uses all attempts regardless of filters.
@@ -111,9 +121,11 @@ export default function HistoryPage() {
 
                 {attempts.length === 0 ? (
                     <div style={{ textAlign: 'center', padding: '4rem', color: '#64748b', background: 'white', borderRadius: '12px', boxShadow: '0 4px 6px -1px rgba(0,0,0,0.1)' }}>
-                        <p style={{ fontSize: '1.2rem' }}>아직 응시한 시험이 없습니다.</p>
+                        <p style={{ fontSize: '1.2rem' }}>
+                            {session ? "아직 응시한 시험이 없습니다." : "로그인이 필요합니다."}
+                        </p>
                         <Link href="/" className="btn btn-primary" style={{ marginTop: '1.5rem', display: 'inline-block' }}>
-                            시험 응시하러 가기
+                            {session ? "시험 응시하러 가기" : "로그인하러 가기"}
                         </Link>
                     </div>
                 ) : (

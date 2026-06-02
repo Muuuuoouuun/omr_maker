@@ -6,6 +6,7 @@ import TeacherHeader from "@/components/TeacherHeader";
 import { Users, UserPlus, Upload, Search, Mail, TrendingUp, TrendingDown, MoreVertical, Link as LinkIcon, FolderPlus, CheckCircle2, Clock, X, Trash2, Download } from "lucide-react";
 import { toast } from "@/components/Toast";
 import type { Attempt } from "@/types/omr";
+import { attemptMatchesStudentProfile } from "@/utils/storage";
 
 type TabType = "students" | "groups" | "invites";
 
@@ -191,7 +192,7 @@ function ManageUsersInner() {
             const parsed = JSON.parse(raw);
             if (!Array.isArray(parsed)) return [];
             const mine = (parsed as Attempt[])
-                .filter(a => a && a.studentName === selected.name)
+                .filter(a => a && attemptMatchesStudentProfile(a, selected))
                 .sort((a, b) => {
                     const ta = new Date(a.finishedAt || a.startedAt || 0).getTime();
                     const tb = new Date(b.finishedAt || b.startedAt || 0).getTime();
