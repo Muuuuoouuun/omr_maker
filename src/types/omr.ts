@@ -70,6 +70,29 @@ export interface Exam {
 export type PdfDrawings = Record<number, string[]>;
 
 export type IdentityType = 'guest' | 'temporary' | 'registered';
+export type PlanKey = 'free' | 'pro' | 'school';
+
+export interface QuestionDrawingSummary {
+    questionId: number;
+    questionNumber: number;
+    page: number;
+    strokeCount: number;
+}
+
+export type HandwritingStatus = 'none' | 'saved' | 'failed' | 'unavailable' | 'plan_required';
+
+export interface AttemptHandwriting {
+    schemaVersion: 1;
+    status: HandwritingStatus;
+    strokesRef?: StoredDataRef;
+    plan: PlanKey;
+    summary: {
+        pageCount: number;
+        strokeCount: number;
+        questionCount: number;
+    };
+    questions: Record<number, QuestionDrawingSummary>;
+}
 
 export interface Attempt {
     id: string; // specific attempt ID
@@ -92,6 +115,17 @@ export interface Attempt {
     drawings?: PdfDrawings;
     /** External drawings reference in IndexedDB to bypass localStorage limits. */
     drawingsRef?: StoredDataRef;
+    /** Premium handwriting archive model. Legacy attempts may only have drawings/drawingsRef. */
+    handwriting?: AttemptHandwriting;
+    /** True when the submitted handwriting payload was archived for later review. */
+    handwritingArchived?: boolean;
+    /** Plan snapshot used when deciding whether to archive handwriting. */
+    handwritingPlan?: PlanKey;
+    /** Lightweight handwriting metrics for teacher lists and premium usage. */
+    drawingPageCount?: number;
+    drawingStrokeCount?: number;
+    /** Per-question handwriting summary. The heavy payload remains in drawingsRef. */
+    questionDrawings?: QuestionDrawingSummary[];
     status: 'completed' | 'in_progress';
     guestId?: string; // For tracking guest attempts
     /** If true, submitted because the timer hit zero. */

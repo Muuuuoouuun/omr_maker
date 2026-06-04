@@ -219,11 +219,11 @@ export default function ExamDetailPage() {
                                                 </td>
                                                 <td style={{ padding: '1rem', textAlign: 'right' }}>
                                                     <Link
-                                                        href={`/student/review/${attempt.id}`}
+                                                        href={`/teacher/attempt/${attempt.id}`}
                                                         className="btn btn-secondary"
                                                         style={{ padding: '0.3rem 0.8rem', fontSize: '0.8rem' }}
                                                     >
-                                                        View OMR
+                                                        {attempt.handwritingArchived ? "필기 보기" : "OMR 보기"}
                                                     </Link>
                                                 </td>
                                             </tr>

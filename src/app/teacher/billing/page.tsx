@@ -18,13 +18,13 @@ const PLANS: { key: Plan; name: string; price: string; priceNum: number; icon: R
     {
         key: "pro", name: "Pro", price: "₩19,000", priceNum: 19000,
         icon: <Zap size={22} />, color: "#4f46e5", gradient: "linear-gradient(135deg, #6366f1, #4f46e5)",
-        features: ["무제한 시험", "학생 300명", "AI 채점 월 5,000회", "고급 분석", "PDF 내보내기", "우선 지원"],
+        features: ["무제한 시험", "학생 300명", "AI 채점 월 5,000회", "풀이 필기 보관", "고급 분석", "PDF 내보내기", "우선 지원"],
         limits: { exams: Infinity, students: 300, ai: 5000 }
     },
     {
         key: "school", name: "School", price: "₩99,000", priceNum: 99000,
         icon: <Building size={22} />, color: "#ec4899", gradient: "linear-gradient(135deg, #ec4899, #db2777)",
-        features: ["무제한 모든 것", "무제한 학생", "AI 채점 무제한", "전담 매니저", "커스텀 도메인", "SSO 연동", "API 액세스"],
+        features: ["무제한 모든 것", "무제한 학생", "AI 채점 무제한", "필기 장기 보관", "선생님 첨삭 워크플로우", "전담 매니저", "커스텀 도메인", "SSO 연동", "API 액세스"],
         limits: { exams: Infinity, students: Infinity, ai: Infinity }
     },
 ];
@@ -46,7 +46,7 @@ const MOCK_INVOICES: Invoice[] = [
 ];
 
 export default function BillingPage() {
-    const [current, setCurrent] = useState<Plan>("pro");
+    const [current, setCurrent] = useState<Plan>("free");
     const [yearly, setYearly] = useState(false);
     const [usage, setUsage] = useState<{ exams: number; students: number; ai: number }>({ exams: 0, students: 0, ai: 0 });
     const [userInvoices, setUserInvoices] = useState<Invoice[]>([]);

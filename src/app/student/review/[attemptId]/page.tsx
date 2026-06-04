@@ -29,6 +29,7 @@ export default function ReviewPage() {
     const [filterWrong, setFilterWrong] = useState(false);
     const [openExplanations, setOpenExplanations] = useState<Record<number, boolean>>({});
     const [accessDenied, setAccessDenied] = useState(false);
+    const [handwritingUnavailable, setHandwritingUnavailable] = useState(false);
 
     useEffect(() => {
         let cancelled = false;
@@ -47,14 +48,24 @@ export default function ReviewPage() {
                     }
                     setAttempt(found);
                     
-                    // Securely restore drawings from IndexedDB if drawingsRef exists
-                    if (found.drawingsRef) {
-                        loadJsonRecord<PdfDrawings>(found.drawingsRef)
+                    const drawingsRef = found.handwriting?.strokesRef || found.drawingsRef;
+                    if (drawingsRef) {
+                        loadJsonRecord<PdfDrawings>(drawingsRef)
                             .then(drawings => {
-                                if (!cancelled && drawings) setRestoredDrawings(drawings);
+                                if (cancelled) return;
+                                if (drawings) {
+                                    setRestoredDrawings(drawings);
+                                    setHandwritingUnavailable(false);
+                                } else if (found.drawings) {
+                                    setRestoredDrawings(found.drawings);
+                                } else {
+                                    setHandwritingUnavailable(true);
+                                }
                             })
                             .catch(err => {
                                 console.error("Failed to restore drawings from IndexedDB", err);
+                                if (!cancelled && found.drawings) setRestoredDrawings(found.drawings);
+                                else if (!cancelled) setHandwritingUnavailable(true);
                             });
                     } else if (found.drawings) {
                         setRestoredDrawings(found.drawings);
@@ -138,7 +149,38 @@ export default function ReviewPage() {
                     <p style={{ color: '#64748b', marginTop: '0.5rem' }}>
                         {new Date(attempt.finishedAt).toLocaleString()} 응시 완료
                     </p>
+                    {attempt.handwritingArchived && (
+                        <div style={{
+                            margin: '0.9rem auto 0',
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            gap: '0.4rem',
+                            padding: '0.35rem 0.75rem',
+                            borderRadius: '999px',
+                            background: '#eef2ff',
+                            color: '#4f46e5',
+                            fontSize: '0.78rem',
+                            fontWeight: 800
+                        }}>
+                            필기 보관 {attempt.questionDrawings?.length || attempt.drawingPageCount || 0}문항
+                        </div>
+                    )}
                 </div>
+
+                {handwritingUnavailable && (
+                    <div style={{
+                        background: '#fff7ed',
+                        border: '1px solid #fed7aa',
+                        color: '#9a3412',
+                        borderRadius: '12px',
+                        padding: '0.9rem 1rem',
+                        marginBottom: '1.25rem',
+                        fontSize: '0.88rem',
+                        fontWeight: 700
+                    }}>
+                        저장된 필기 정보를 불러오지 못했습니다. 답안과 점수 기록은 정상적으로 보관되어 있습니다.
+                    </div>
+                )}
 
                 {/* Stat Row */}
                 <div style={{

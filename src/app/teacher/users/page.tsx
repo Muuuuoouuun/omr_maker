@@ -2,8 +2,9 @@
 
 import { Suspense, useState, useMemo, useEffect, useRef } from "react";
 import { useSearchParams } from "next/navigation";
+import NextLink from "next/link";
 import TeacherHeader from "@/components/TeacherHeader";
-import { Users, UserPlus, Upload, Search, Mail, TrendingUp, TrendingDown, MoreVertical, Link as LinkIcon, FolderPlus, CheckCircle2, Clock, X, Trash2, Download } from "lucide-react";
+import { Users, UserPlus, Upload, Search, Mail, TrendingUp, TrendingDown, MoreVertical, Link as LinkIcon, FolderPlus, CheckCircle2, Clock, X, Trash2, Download, PenLine } from "lucide-react";
 import { toast } from "@/components/Toast";
 import type { Attempt } from "@/types/omr";
 import { attemptMatchesStudentProfile } from "@/utils/storage";
@@ -79,6 +80,17 @@ const MOCK_INVITES: Invite[] = [
     { id: "i3", email: "parent.notify@gmail.com", sentAt: "3일 전", status: "accepted" },
     { id: "i4", email: "transferred@school.ac.kr", sentAt: "1주 전", status: "expired" },
 ];
+
+function hasArchivedHandwriting(attempt: Attempt): boolean {
+    return !!attempt.handwritingArchived && !!(attempt.handwriting?.strokesRef || attempt.drawingsRef);
+}
+
+function handwritingLabel(attempt: Attempt): string {
+    const questionCount = attempt.questionDrawings?.length || 0;
+    if (questionCount > 0) return `${questionCount}문항`;
+    if (attempt.drawingPageCount) return `${attempt.drawingPageCount}쪽`;
+    return "저장됨";
+}
 
 export default function ManageUsersPage() {
     return (
@@ -204,6 +216,10 @@ function ManageUsersInner() {
             return [];
         }
     }, [selected]);
+
+    const selectedHandwritingCount = useMemo(() => {
+        return selectedRecentAttempts.filter(hasArchivedHandwriting).length;
+    }, [selectedRecentAttempts]);
 
     // Detail-panel button handlers
     const handleSendMessage = () => {
@@ -737,9 +753,10 @@ function ManageUsersInner() {
                                         <span className="badge badge-primary">{selected.group}</span>
                                     </div>
                                 </div>
-                                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.75rem', marginBottom: '1.25rem' }}>
+                                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '0.6rem', marginBottom: '1.25rem' }}>
                                     <MiniStat label="평균 점수" value={`${selected.avgScore}점`} color="#4f46e5" />
                                     <MiniStat label="응시 수" value={`${selected.examsTaken}회`} color="#10b981" />
+                                    <MiniStat label="필기 보관" value={`${selectedHandwritingCount}건`} color="#8b5cf6" />
                                 </div>
                                 <div style={{ padding: '1rem', background: 'var(--background)', borderRadius: 'var(--radius-md)', marginBottom: '1rem' }}>
                                     <div style={{ fontSize: '0.75rem', fontWeight: 700, color: 'var(--muted)', letterSpacing: '0.08em', marginBottom: '0.5rem' }}>최근 응시 이력</div>
@@ -752,10 +769,42 @@ function ManageUsersInner() {
                                             const pct = a.totalScore > 0
                                                 ? Math.round((a.score / a.totalScore) * 100)
                                                 : 0;
+                                            const hasHandwriting = hasArchivedHandwriting(a);
                                             return (
-                                                <div key={a.id} style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.85rem', padding: '0.3rem 0', borderBottom: i < selectedRecentAttempts.length - 1 ? '1px dashed var(--border)' : 'none' }}>
-                                                    <span style={{ fontWeight: 500, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: 220 }}>{a.examTitle}</span>
-                                                    <span style={{ fontWeight: 700, color: 'var(--foreground)' }}>{pct}점</span>
+                                                <div key={a.id} style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) auto', gap: '0.6rem', alignItems: 'center', fontSize: '0.85rem', padding: '0.45rem 0', borderBottom: i < selectedRecentAttempts.length - 1 ? '1px dashed var(--border)' : 'none' }}>
+                                                    <div style={{ minWidth: 0 }}>
+                                                        <div style={{ fontWeight: 600, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: 220 }}>{a.examTitle}</div>
+                                                        {hasHandwriting && (
+                                                            <div style={{ marginTop: '0.25rem', display: 'flex', alignItems: 'center', gap: '0.35rem', color: '#7c3aed', fontSize: '0.73rem', fontWeight: 800 }}>
+                                                                <PenLine size={12} />
+                                                                필기 {handwritingLabel(a)}
+                                                            </div>
+                                                        )}
+                                                    </div>
+                                                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.45rem' }}>
+                                                        {hasHandwriting && (
+                                                            <NextLink
+                                                                href={`/teacher/attempt/${a.id}`}
+                                                                title="학생 필기 리포트 열기"
+                                                                style={{
+                                                                    display: 'inline-flex',
+                                                                    alignItems: 'center',
+                                                                    gap: '0.25rem',
+                                                                    padding: '0.25rem 0.45rem',
+                                                                    borderRadius: '999px',
+                                                                    background: '#f5f3ff',
+                                                                    color: '#7c3aed',
+                                                                    fontSize: '0.72rem',
+                                                                    fontWeight: 800,
+                                                                    whiteSpace: 'nowrap'
+                                                                }}
+                                                            >
+                                                                <PenLine size={12} />
+                                                                열람
+                                                            </NextLink>
+                                                        )}
+                                                        <span style={{ fontWeight: 700, color: 'var(--foreground)', fontVariantNumeric: 'tabular-nums' }}>{pct}점</span>
+                                                    </div>
                                                 </div>
                                             );
                                         })

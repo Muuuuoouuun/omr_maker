@@ -8,19 +8,22 @@ import ThemeToggle from "@/components/ThemeToggle";
 import dynamic from "next/dynamic";
 import { toast } from "@/components/Toast";
 import { Clock, Save } from "lucide-react";
-import { storedDataUrlToFile, saveJsonRecord } from "@/utils/blobStore";
+import { storedDataUrlToFile, saveJsonRecord, loadJsonRecord } from "@/utils/blobStore";
 import { verifyTeacherPassword } from "@/app/actions/auth";
 import { getOrCreateGuestId, getSession, saveSession, type StudentSession } from "@/utils/storage";
+import { canArchiveHandwriting, getCurrentPlan, getPlanLabel } from "@/utils/plans";
 
 const PDFViewer = dynamic(() => import("@/components/PDFViewer"), { ssr: false });
 import { gradeAttempt } from "@/types/omr";
-import type { Attempt, Exam, PdfDrawings, Question } from "@/types/omr";
+import type { Attempt, Exam, PdfDrawings, PlanKey, Question, QuestionDrawingSummary, StoredDataRef } from "@/types/omr";
 
 const AUTOSAVE_INTERVAL_MS = 3000;
 
 interface SolveDraft {
     answers: Record<number, number>;
-    drawings: PdfDrawings;
+    /** Legacy inline drawings. New drafts store large handwriting payloads in IndexedDB. */
+    drawings?: PdfDrawings;
+    drawingsRef?: StoredDataRef;
     timeRemaining: number | null;
     startedAt: string;
     savedAt: string;
@@ -43,6 +46,36 @@ function hasDrawings(drawings: PdfDrawings): boolean {
     return Object.values(drawings).some(paths => paths.length > 0);
 }
 
+function drawingStrokeCount(drawings: PdfDrawings): number {
+    return Object.values(drawings).reduce((sum, paths) => sum + paths.length, 0);
+}
+
+function summarizeQuestionDrawings(questions: Question[], drawings: PdfDrawings): QuestionDrawingSummary[] {
+    const strokesByPage = new Map<number, number>();
+    for (const [page, paths] of Object.entries(drawings)) {
+        const pageNum = Number(page);
+        if (!Number.isNaN(pageNum) && paths.length > 0) {
+            strokesByPage.set(pageNum, paths.length);
+        }
+    }
+
+    return questions
+        .filter(q => q.pdfLocation?.page && strokesByPage.has(q.pdfLocation.page))
+        .map(q => ({
+            questionId: q.id,
+            questionNumber: q.number,
+            page: q.pdfLocation!.page,
+            strokeCount: strokesByPage.get(q.pdfLocation!.page) || 0,
+        }));
+}
+
+function questionDrawingsById(questionDrawings: QuestionDrawingSummary[]): Record<number, QuestionDrawingSummary> {
+    return questionDrawings.reduce((acc, item) => {
+        acc[item.questionId] = item;
+        return acc;
+    }, {} as Record<number, QuestionDrawingSummary>);
+}
+
 export default function SolvePage() {
     const params = useParams();
     const router = useRouter();
@@ -52,6 +85,7 @@ export default function SolvePage() {
     const [studentAnswers, setStudentAnswers] = useState<Record<number, number>>({});
     const [drawings, setDrawings] = useState<PdfDrawings>({});
     const [pdfFile, setPdfFile] = useState<File | null>(null);
+    const [currentPlan, setCurrentPlan] = useState<PlanKey>("free");
 
     const [user, setUser] = useState<StudentSession | null>(() => getSession());
 
@@ -142,6 +176,8 @@ export default function SolvePage() {
     const LEGACY_DRAFT_KEY = id ? `omr_draft_${id}` : "";
 
     useEffect(() => {
+        setCurrentPlan(getCurrentPlan());
+
         const currentSession = getSession();
         if (currentSession) setUser(currentSession);
 
@@ -181,7 +217,12 @@ export default function SolvePage() {
                         if (draft.answers && typeof draft.answers === "object") {
                             setStudentAnswers(draft.answers);
                         }
-                        if (isPdfDrawings(draft.drawings)) {
+                        if (draft.drawingsRef) {
+                            const draftDrawings = await loadJsonRecord<PdfDrawings>(draft.drawingsRef);
+                            if (draftDrawings && isPdfDrawings(draftDrawings)) {
+                                setDrawings(draftDrawings);
+                            }
+                        } else if (isPdfDrawings(draft.drawings)) {
                             setDrawings(draft.drawings);
                         }
                         if (typeof draft.timeRemaining === "number") {
@@ -243,12 +284,20 @@ export default function SolvePage() {
     // Autosave draft every 3s. Keep this interval independent from the ticking timer.
     useEffect(() => {
         if (!DRAFT_KEY) return;
-        const saveDraft = () => {
+        const saveDraft = async () => {
             if (submittedRef.current || !latestDraftRef.current) return;
             const savedAt = new Date().toISOString();
             try {
+                const draftDrawings = latestDraftRef.current.drawings || {};
+                let drawingsRef = latestDraftRef.current.drawingsRef;
+                if (hasDrawings(draftDrawings)) {
+                    drawingsRef = await saveJsonRecord(`draft:${id}:${draftOwnerKey}:drawings`, draftDrawings);
+                    if (!drawingsRef) throw new Error("Failed to save draft drawings");
+                }
                 localStorage.setItem(DRAFT_KEY, JSON.stringify({
                     ...latestDraftRef.current,
+                    drawings: undefined,
+                    drawingsRef,
                     savedAt,
                 }));
                 autosaveErrorShownRef.current = false;
@@ -263,19 +312,22 @@ export default function SolvePage() {
         };
 
         const handleVisibilityChange = () => {
-            if (document.visibilityState === "hidden") saveDraft();
+            if (document.visibilityState === "hidden") void saveDraft();
+        };
+        const handlePageHide = () => {
+            void saveDraft();
         };
 
-        const intervalId = window.setInterval(saveDraft, AUTOSAVE_INTERVAL_MS);
-        window.addEventListener("pagehide", saveDraft);
+        const intervalId = window.setInterval(() => { void saveDraft(); }, AUTOSAVE_INTERVAL_MS);
+        window.addEventListener("pagehide", handlePageHide);
         window.addEventListener("visibilitychange", handleVisibilityChange);
 
         return () => {
             window.clearInterval(intervalId);
-            window.removeEventListener("pagehide", saveDraft);
+            window.removeEventListener("pagehide", handlePageHide);
             window.removeEventListener("visibilitychange", handleVisibilityChange);
         };
-    }, [DRAFT_KEY]);
+    }, [DRAFT_KEY, draftOwnerKey, id]);
 
     // Warn on tab close if there are unsaved answers
     useEffect(() => {
@@ -341,15 +393,27 @@ export default function SolvePage() {
 
         const attemptId = Date.now().toString();
         const activeDrawings = compactDrawings(drawings);
-        
-        let drawingsRef = undefined;
-        if (hasDrawings(activeDrawings)) {
+        const activeDrawingStrokeCount = drawingStrokeCount(activeDrawings);
+        const activeDrawingPageCount = Object.keys(activeDrawings).length;
+        const questionDrawings = summarizeQuestionDrawings(examData.questions, activeDrawings);
+        const canStoreHandwriting = canArchiveHandwriting(currentPlan);
+
+        let drawingsRef: Attempt["drawingsRef"] | undefined = undefined;
+        if (hasDrawings(activeDrawings) && canStoreHandwriting) {
             try {
                 const stored = await saveJsonRecord(`attempt:${attemptId}:drawings`, activeDrawings);
                 drawingsRef = stored;
             } catch (e) {
                 console.error("Failed to save drawings to IndexedDB", e);
             }
+            if (!drawingsRef) {
+                submittedRef.current = false;
+                toast.error("필기 저장 실패", "답안 제출 전 필기 저장에 실패했습니다. 잠시 후 다시 제출해주세요.");
+                return;
+            }
+        }
+        if (hasDrawings(activeDrawings) && !canStoreHandwriting) {
+            toast.info("필기 보관은 Pro 기능입니다", "답안은 저장됐고 필기 원본은 장기 보관되지 않습니다.");
         }
 
         const attemptData: Attempt = {
@@ -369,6 +433,27 @@ export default function SolvePage() {
             answers: studentAnswers,
             drawings: undefined, // Omit from localStorage to protect quota limit
             drawingsRef,
+            handwriting: {
+                schemaVersion: 1,
+                status: !hasDrawings(activeDrawings)
+                    ? 'none'
+                    : drawingsRef
+                        ? 'saved'
+                        : 'plan_required',
+                strokesRef: drawingsRef,
+                plan: currentPlan,
+                summary: {
+                    pageCount: activeDrawingPageCount,
+                    strokeCount: activeDrawingStrokeCount,
+                    questionCount: questionDrawings.length,
+                },
+                questions: questionDrawingsById(questionDrawings),
+            },
+            handwritingArchived: !!drawingsRef,
+            handwritingPlan: currentPlan,
+            drawingPageCount: activeDrawingPageCount,
+            drawingStrokeCount: activeDrawingStrokeCount,
+            questionDrawings,
             status: 'completed' as const,
             autoSubmitted,
             tabFociLostCount,
@@ -382,6 +467,7 @@ export default function SolvePage() {
             try { localStorage.removeItem(DRAFT_KEY); } catch {}
             try { localStorage.removeItem(LEGACY_DRAFT_KEY); } catch {}
         } catch {
+            submittedRef.current = false;
             toast.error("저장 공간 부족", "브라우저 저장소가 가득 찼습니다. 관리자에게 문의하세요.");
             return;
         }
@@ -548,6 +634,20 @@ export default function SolvePage() {
                                 fontSize: '0.72rem', color: 'var(--muted)', fontWeight: 600, flexShrink: 0
                             }}>
                             <Save size={11} /> 저장됨
+                        </span>
+                    )}
+                    {hasDrawings(drawings) && (
+                        <span
+                            className="solve-autosave"
+                            title={canArchiveHandwriting(currentPlan)
+                                ? `${getPlanLabel(currentPlan)} 플랜: 제출 후 필기 보관`
+                                : "Free 플랜: 제출 후 필기 원본 미보관"}
+                            style={{
+                                display: 'inline-flex', alignItems: 'center', gap: '0.3rem',
+                                fontSize: '0.72rem', color: canArchiveHandwriting(currentPlan) ? 'var(--primary)' : '#f59e0b',
+                                fontWeight: 700, flexShrink: 0
+                            }}>
+                            필기 {canArchiveHandwriting(currentPlan) ? '보관' : '임시'}
                         </span>
                     )}
 
