@@ -13,7 +13,7 @@ async function getPdfJs() {
     const pdfjsLib = await import('pdfjs-dist');
     // Ensure worker is set up
     if (typeof window !== 'undefined' && !pdfjsLib.GlobalWorkerOptions.workerSrc) {
-        pdfjsLib.GlobalWorkerOptions.workerSrc = `//unpkg.com/pdfjs-dist@${pdfjsLib.version}/build/pdf.worker.min.mjs`;
+        pdfjsLib.GlobalWorkerOptions.workerSrc = '/pdf.worker.min.mjs';
     }
     return pdfjsLib;
 }

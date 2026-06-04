@@ -10,6 +10,7 @@ import ExamListBlock from "@/components/dashboard/ExamListBlock";
 import ExamActionsMenu, { ExamActionKind } from "@/components/dashboard/ExamActionsMenu";
 import { toast } from "@/components/Toast";
 import { Users, BarChart3, PlusCircle, Activity } from "lucide-react";
+import { copyStoredData, deleteStoredData } from "@/utils/blobStore";
 
 interface OverviewTabProps {
     exams: Exam[];
@@ -38,7 +39,7 @@ export default function OverviewTab({ exams: examsProp, attempts, stats, trendDa
 
     const isMockExamId = (id: string) => !realExamIds.has(id);
 
-    const handleExamAction = (kind: ExamActionKind, examId: string) => {
+    const handleExamAction = async (kind: ExamActionKind, examId: string) => {
         const target = exams.find(e => e.id === examId);
         if (!target) return;
 
@@ -49,9 +50,13 @@ export default function OverviewTab({ exams: examsProp, attempts, stats, trendDa
 
         if (kind === 'duplicate') {
             const newId = Date.now().toString(36);
+            const pdfDataRef = await copyStoredData(target.pdfDataRef, `exam:${newId}:problemPdf`) || target.pdfDataRef;
+            const answerKeyPdfRef = await copyStoredData(target.answerKeyPdfRef, `exam:${newId}:answerKeyPdf`) || target.answerKeyPdfRef;
             const copy: Exam = {
                 ...target,
                 id: newId,
+                pdfDataRef,
+                answerKeyPdfRef,
                 title: target.title + ' (복사본)',
                 createdAt: new Date().toISOString(),
                 updatedAt: new Date().toISOString(),
@@ -84,6 +89,8 @@ export default function OverviewTab({ exams: examsProp, attempts, stats, trendDa
             if (!window.confirm(`"${target.title}" 시험을 삭제하시겠습니까?\n이 작업은 되돌릴 수 없습니다.`)) return;
             try {
                 localStorage.removeItem(`omr_exam_${examId}`);
+                deleteStoredData(target.pdfDataRef).catch(() => {});
+                deleteStoredData(target.answerKeyPdfRef).catch(() => {});
                 // Clean up attempts belonging to this exam
                 const attemptsRaw = localStorage.getItem('omr_attempts');
                 if (attemptsRaw) {

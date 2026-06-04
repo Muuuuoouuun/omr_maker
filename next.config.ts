@@ -5,6 +5,17 @@ const nextConfig = {
       bodySizeLimit: '10mb', // 전송 용량을 10MB로 확대
     },
   },
+  async headers() {
+    return [
+      {
+        source: "/sw.js",
+        headers: [
+          { key: "Content-Type", value: "application/javascript; charset=utf-8" },
+          { key: "Cache-Control", value: "no-cache, no-store, must-revalidate" },
+        ],
+      },
+    ];
+  },
 };
 
 export default nextConfig;

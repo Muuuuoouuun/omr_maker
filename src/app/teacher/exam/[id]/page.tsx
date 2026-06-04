@@ -95,13 +95,14 @@ export default function ExamDetailPage() {
             toast.info("내보낼 제출이 없습니다.");
             return;
         }
-        const header = ["name", "score", "total", "percent", "finishedAt"];
+        const header = ["name", "score", "total", "percent", "finishedAt", "fociLostCount"];
         const rows = sortedAttempts.map(a => [
             a.studentName || "Anonymous",
             a.score,
             a.totalScore,
             (Math.round(percent(a) * 10) / 10).toString(),
             a.finishedAt,
+            a.tabFociLostCount ?? 0,
         ].map(csvEscape).join(","));
         const csv = [header.join(","), ...rows].join("\n");
         // BOM for Excel-friendly Korean.
@@ -185,13 +186,14 @@ export default function ExamDetailPage() {
                                         Time{sortIndicator("finishedAt")}
                                     </th>
                                     <th style={{ padding: '1rem', textAlign: 'left', color: 'var(--muted)' }}>Status</th>
+                                    <th style={{ padding: '1rem', textAlign: 'left', color: 'var(--muted)' }}>집중도/이탈</th>
                                     <th style={{ padding: '1rem', textAlign: 'right', color: 'var(--muted)' }}>Action</th>
                                 </tr>
                             </thead>
                             <tbody>
                                 {sortedAttempts.length === 0 ? (
                                     <tr>
-                                        <td colSpan={5} style={{ padding: '3rem', textAlign: 'center', color: 'var(--muted)' }}>
+                                        <td colSpan={6} style={{ padding: '3rem', textAlign: 'center', color: 'var(--muted)' }}>
                                             <div style={{ fontWeight: 600, marginBottom: '0.4rem' }}>아직 제출된 답안이 없습니다.</div>
                                             <div style={{ fontSize: '0.85rem' }}>학생이 시험을 제출하면 여기에 나타납니다.</div>
                                         </td>
@@ -216,6 +218,23 @@ export default function ExamDetailPage() {
                                                     }}>
                                                         Completed
                                                     </span>
+                                                </td>
+                                                <td style={{ padding: '1rem' }}>
+                                                    {attempt.tabFociLostCount && attempt.tabFociLostCount > 0 ? (
+                                                        <span style={{
+                                                            padding: '2px 8px', borderRadius: '4px', fontSize: '0.8rem', fontWeight: 600,
+                                                            background: '#fee2e2', color: '#991b1b', display: 'inline-flex', alignItems: 'center', gap: '4px'
+                                                        }}>
+                                                            ⚠️ {attempt.tabFociLostCount}회 이탈
+                                                        </span>
+                                                    ) : (
+                                                        <span style={{
+                                                            padding: '2px 8px', borderRadius: '4px', fontSize: '0.8rem', fontWeight: 600,
+                                                            background: '#f1f5f9', color: '#475569'
+                                                        }}>
+                                                            정상 (0회)
+                                                        </span>
+                                                    )}
                                                 </td>
                                                 <td style={{ padding: '1rem', textAlign: 'right' }}>
                                                     <Link

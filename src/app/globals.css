@@ -984,6 +984,257 @@ button {
   padding: 2px 5px;
 }
 
+/* ─── Solve Page Mobile App Layout ───────────────────── */
+@media (max-width: 768px) {
+  .solve-page {
+    height: 100dvh !important;
+    min-height: 100dvh;
+    overflow: hidden !important;
+  }
+
+  .solve-header {
+    padding: 0.6rem 0.75rem !important;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .solve-header-content {
+    width: 100% !important;
+    max-width: none !important;
+    padding: 0 !important;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.45rem !important;
+  }
+
+  .solve-title-group {
+    flex: 1 1 100% !important;
+    width: 100%;
+    gap: 0.55rem !important;
+    order: 1;
+  }
+
+  .solve-brand {
+    font-size: 1rem !important;
+  }
+
+  .solve-divider {
+    height: 18px !important;
+  }
+
+  .solve-title {
+    font-size: 0.86rem !important;
+    min-width: 0;
+  }
+
+  .solve-timer,
+  .solve-progress,
+  .solve-autosave,
+  .solve-controls {
+    order: 2;
+  }
+
+  .solve-timer {
+    padding: 0.3rem 0.55rem !important;
+  }
+
+  .solve-progress {
+    flex: 1 1 auto !important;
+    min-width: 116px;
+    padding: 0.3rem 0.55rem !important;
+    gap: 0.45rem !important;
+  }
+
+  .solve-progress-bar {
+    flex: 1 1 56px;
+    width: auto !important;
+    min-width: 48px;
+  }
+
+  .solve-autosave {
+    display: none !important;
+  }
+
+  .solve-controls {
+    display: flex !important;
+    flex: 1 1 100% !important;
+    width: 100%;
+    flex-wrap: wrap;
+    gap: 0.4rem !important;
+  }
+
+  .solve-teacher-toggle {
+    flex: 1 1 132px;
+    justify-content: center;
+    padding: 0.38rem 0.55rem !important;
+    font-size: 0.74rem !important;
+  }
+
+  .solve-tab-toggle {
+    flex: 1 1 160px;
+    min-width: 0;
+  }
+
+  .solve-tab-button {
+    flex: 1 1 0;
+    padding: 0.34rem 0.45rem !important;
+    white-space: nowrap;
+  }
+
+  .solve-pdf-button,
+  .solve-collapse-button,
+  .solve-submit-button {
+    min-height: 36px;
+  }
+
+  .solve-pdf-button {
+    flex: 1 1 96px;
+    justify-content: center;
+    padding: 0.44rem 0.6rem !important;
+  }
+
+  .solve-collapse-button {
+    flex: 0 0 42px;
+    justify-content: center;
+    padding: 0.45rem !important;
+  }
+
+  .solve-submit-button {
+    flex: 1 1 104px;
+    padding: 0.5rem 0.65rem !important;
+    font-size: 0.82rem !important;
+  }
+
+  .solve-body {
+    flex: 1 1 auto !important;
+    min-height: 0;
+    display: flex !important;
+    flex-direction: column !important;
+    overflow: hidden !important;
+  }
+
+  .solve-pdf-pane {
+    flex: 1 1 auto !important;
+    min-height: 0;
+    border-right: 0 !important;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .solve-omr-pane {
+    width: 100% !important;
+    max-width: none !important;
+    flex: 0 0 min(38dvh, 320px) !important;
+    max-height: min(38dvh, 320px);
+    border-top: 1px solid var(--border);
+    box-shadow: 0 -8px 24px rgba(15, 23, 42, 0.08);
+  }
+
+  .solve-omr-pane.is-collapsed {
+    flex-basis: 0 !important;
+    max-height: 0 !important;
+    border-top: 0;
+  }
+
+  .solve-omr-scroll {
+    min-height: 0;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .solve-omr-scroll .omr-cardview {
+    max-width: none;
+    padding: 0.75rem;
+    gap: 0.65rem;
+  }
+
+  .solve-omr-scroll .omr-cardview-header {
+    padding: 0.75rem 0.85rem;
+    border-radius: var(--radius-lg);
+    gap: 0.55rem;
+  }
+
+  .solve-omr-scroll .omr-cardview-title {
+    font-size: 0.95rem;
+  }
+
+  .solve-omr-scroll .omr-cardview-counter-current {
+    font-size: 1.2rem;
+  }
+
+  .solve-omr-scroll .omr-cardview-grid {
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 0.45rem;
+  }
+
+  .solve-omr-scroll .q-card {
+    width: 100%;
+    max-width: none;
+    min-width: 0;
+    min-height: 46px;
+  }
+
+  .solve-omr-scroll .q-card-bubbles {
+    margin-left: auto;
+    flex-wrap: nowrap;
+  }
+
+  .solve-omr-scroll .q-bubble {
+    width: 28px;
+    height: 28px;
+  }
+
+  .pdf-viewer-toolbar {
+    align-items: stretch !important;
+    flex-direction: column;
+    gap: 0.45rem;
+    padding: 0.45rem 0.55rem !important;
+    font-size: 0.8rem !important;
+  }
+
+  .pdf-viewer-file {
+    min-width: 0;
+  }
+
+  .pdf-viewer-file-name {
+    max-width: 100% !important;
+  }
+
+  .pdf-viewer-controls {
+    width: 100%;
+    flex-wrap: wrap;
+    gap: 0.35rem !important;
+  }
+
+  .pdf-viewer-drawing-tools {
+    flex: 1 1 100%;
+    margin-right: 0 !important;
+    padding-right: 0 !important;
+    border-right: 0 !important;
+    padding-bottom: 0.35rem;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.16);
+  }
+
+  .pdf-viewer-controls button,
+  .pdf-viewer-bottom-toolbar button {
+    min-height: 30px;
+  }
+
+  .pdf-viewer-scroll {
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .pdf-viewer-page-wrap {
+    padding: 0.75rem !important;
+  }
+
+  .pdf-viewer-bottom-toolbar {
+    gap: 0.45rem !important;
+    padding: 0.45rem !important;
+    flex-wrap: wrap;
+    font-size: 0.82rem;
+  }
+}
+
 /* ─── Floating OMR Popup on PDF markers ──────────────── */
 .pdf-marker-popup {
   position: absolute;
