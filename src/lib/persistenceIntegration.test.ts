@@ -46,6 +46,39 @@ describe("persistence integration", () => {
         expect(schema).toContain("class_id text");
     });
 
+    it("Supabase schema models users, rosters, materials, assignments, and feedback", () => {
+        const schema = readProjectFile("supabase/schema.sql");
+        const expectedTables = [
+            "public.omr_user_profiles",
+            "public.omr_teacher_profiles",
+            "public.omr_student_profiles",
+            "public.omr_class_teachers",
+            "public.omr_class_students",
+            "public.omr_materials",
+            "public.omr_exam_materials",
+            "public.omr_assignments",
+            "public.omr_assignment_targets",
+            "public.omr_assignment_submissions",
+            "public.omr_comments",
+        ];
+
+        for (const table of expectedTables) {
+            expect(schema, `${table} table`).toContain(`create table if not exists ${table}`);
+            expect(schema, `${table} RLS`).toContain(`alter table ${table} enable row level security`);
+        }
+
+        expect(schema).toContain("assignment_id text");
+        expect(schema).toContain("student_profile_id text");
+        expect(schema).toContain("storage_bucket text");
+        expect(schema).toContain("storage_path text");
+        expect(schema).toContain("target_type text not null");
+        expect(schema).toContain("entity_type text not null");
+        expect(schema).toContain("check (role in ('owner', 'admin', 'teacher', 'assistant', 'viewer'))");
+        expect(schema).toContain("check (material_type in ('problem_pdf', 'answer_key', 'solution', 'worksheet', 'image', 'video', 'link', 'note', 'other'))");
+        expect(schema).toContain("omr_assignment_submissions_student_idx");
+        expect(schema).toContain("omr_materials_org_owner_idx");
+    });
+
     it("Supabase docs warn that alpha RLS is open", () => {
         const docs = readProjectFile("supabase/README.md");
 
