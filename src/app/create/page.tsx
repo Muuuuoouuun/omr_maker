@@ -9,7 +9,7 @@ import DistributeModal from "@/components/DistributeModal";
 import ThemeToggle from "@/components/ThemeToggle";
 import { useSearchParams } from "next/navigation";
 import { toast } from "@/components/Toast";
-import { Undo2, Redo2 } from "lucide-react";
+import { BrainCircuit, Crosshair, FileText, FolderOpen, Loader2, Redo2, Undo2 } from "lucide-react";
 
 const PDFViewer = dynamic(() => import("@/components/PDFViewer"), { ssr: false });
 import { Suspense, useState, useEffect, useRef, useCallback, useMemo } from "react";
@@ -775,20 +775,24 @@ function CreateOMRPageInner() {
                                 style={{
                                     flex: 1, padding: '0.5rem', borderRadius: '4px', border: 'none',
                                     background: activeViewTab === 'problem' ? '#6366f1' : '#444',
-                                    color: 'white', fontSize: '0.85rem', fontWeight: 'bold', cursor: 'pointer', transition: '0.2s'
+                                    color: 'white', fontSize: '0.85rem', fontWeight: 'bold', cursor: 'pointer', transition: '0.2s',
+                                    display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: '0.35rem'
                                 }}
                             >
-                                📄 문제지 (PDF)
+                                <FileText size={15} />
+                                문제지 (PDF)
                             </button>
                             <button
                                 onClick={() => setActiveViewTab('answer')}
                                 style={{
                                     flex: 1, padding: '0.5rem', borderRadius: '4px', border: 'none',
                                     background: activeViewTab === 'answer' ? '#10b981' : '#444',
-                                    color: 'white', fontSize: '0.85rem', fontWeight: 'bold', cursor: 'pointer', transition: '0.2s'
+                                    color: 'white', fontSize: '0.85rem', fontWeight: 'bold', cursor: 'pointer', transition: '0.2s',
+                                    display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: '0.35rem'
                                 }}
                             >
-                                📁 참고용 답지
+                                <FolderOpen size={15} />
+                                참고용 답지
                             </button>
                             <button
                                 onClick={() => {
@@ -966,19 +970,21 @@ function CreateOMRPageInner() {
                     <div style={{ marginBottom: '1.5rem' }}>
                         <button
                             className="btn btn-secondary"
-                            style={{ width: '100%', marginBottom: '0.5rem', border: '1px dashed #6366f1', color: '#6366f1', background: 'rgba(99, 102, 241, 0.05)' }}
+                            style={{ width: '100%', marginBottom: '0.5rem', border: '1px dashed #6366f1', color: '#6366f1', background: 'rgba(99, 102, 241, 0.05)', display: 'inline-flex', alignItems: 'center', gap: '0.45rem' }}
                             onClick={() => setIsImportModalOpen(true)}
                         >
-                            ⚡ 정답 인식 마법사 (답지 추출)
+                            <BrainCircuit size={17} />
+                            정답 인식 마법사 (답지 추출)
                         </button>
 
                         <button
                             className="btn btn-secondary"
-                            style={{ width: '100%', marginBottom: '1rem', border: '1px solid #10b981', color: '#10b981', background: 'rgba(16, 185, 129, 0.05)' }}
+                            style={{ width: '100%', marginBottom: '1rem', border: '1px solid #0f766e', color: '#0f766e', background: 'rgba(15, 118, 110, 0.06)', display: 'inline-flex', alignItems: 'center', gap: '0.45rem' }}
                             onClick={handleAutoDetectLocations}
                             disabled={isDetectingLocation || !pdfFile}
                         >
-                            {isDetectingLocation ? "⏳ 위치 찾는 중..." : "🎯 PDF 문제 위치 자동 매칭"}
+                            {isDetectingLocation ? <Loader2 size={17} className="animate-spin" /> : <Crosshair size={17} />}
+                            {isDetectingLocation ? "위치 찾는 중..." : "PDF 문제 위치 자동 매칭"}
                         </button>
 
                         <div style={{ marginBottom: '1rem' }}>

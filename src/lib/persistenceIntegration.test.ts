@@ -34,4 +34,23 @@ describe("persistence integration", () => {
             }
         }
     });
+
+    it("Supabase schema includes alpha organization boundaries", () => {
+        const schema = readProjectFile("supabase/schema.sql");
+
+        expect(schema).toContain("create table if not exists public.omr_organizations");
+        expect(schema).toContain("create table if not exists public.omr_organization_members");
+        expect(schema).toContain("create table if not exists public.omr_classes");
+        expect(schema).toContain("create table if not exists public.omr_audit_logs");
+        expect(schema).toContain("organization_id text");
+        expect(schema).toContain("class_id text");
+    });
+
+    it("Supabase docs warn that alpha RLS is open", () => {
+        const docs = readProjectFile("supabase/README.md");
+
+        expect(docs).toContain("alpha/local testing");
+        expect(docs).toContain("real student data");
+        expect(docs).toContain("Supabase Auth");
+    });
 });

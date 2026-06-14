@@ -5,29 +5,14 @@ import TeacherHeader from "@/components/TeacherHeader";
 import { CreditCard, Check, Zap, Crown, Building, Download, Receipt, Sparkles, TrendingUp, AlertCircle, X } from "lucide-react";
 import { formatLimit, usagePct } from "@/lib/pure";
 import { toast } from "@/components/Toast";
+import type { PlanKey } from "@/types/omr";
+import { PLAN_BY_KEY, PLAN_CATALOG, normalizePlan, setCurrentPlan } from "@/utils/plans";
 
-type Plan = "free" | "pro" | "school";
-
-const PLANS: { key: Plan; name: string; price: string; priceNum: number; icon: React.ReactNode; color: string; gradient: string; features: string[]; limits: { exams: number; students: number; ai: number } }[] = [
-    {
-        key: "free", name: "Free", price: "₩0", priceNum: 0,
-        icon: <Sparkles size={22} />, color: "#64748b", gradient: "linear-gradient(135deg, #94a3b8, #64748b)",
-        features: ["월 시험 5개", "학생 30명", "AI 채점 월 100회", "기본 분석"],
-        limits: { exams: 5, students: 30, ai: 100 }
-    },
-    {
-        key: "pro", name: "Pro", price: "₩19,000", priceNum: 19000,
-        icon: <Zap size={22} />, color: "#4f46e5", gradient: "linear-gradient(135deg, #6366f1, #4f46e5)",
-        features: ["무제한 시험", "학생 300명", "AI 채점 월 5,000회", "풀이 필기 보관", "고급 분석", "PDF 내보내기", "우선 지원"],
-        limits: { exams: Infinity, students: 300, ai: 5000 }
-    },
-    {
-        key: "school", name: "School", price: "₩99,000", priceNum: 99000,
-        icon: <Building size={22} />, color: "#ec4899", gradient: "linear-gradient(135deg, #ec4899, #db2777)",
-        features: ["무제한 모든 것", "무제한 학생", "AI 채점 무제한", "필기 장기 보관", "선생님 첨삭 워크플로우", "전담 매니저", "커스텀 도메인", "SSO 연동", "API 액세스"],
-        limits: { exams: Infinity, students: Infinity, ai: Infinity }
-    },
-];
+const PLAN_ICONS: Record<PlanKey, React.ReactNode> = {
+    free: <Sparkles size={22} />,
+    pro: <Zap size={22} />,
+    academy: <Building size={22} />,
+};
 
 interface Invoice {
     id: string;
@@ -46,11 +31,11 @@ const MOCK_INVOICES: Invoice[] = [
 ];
 
 export default function BillingPage() {
-    const [current, setCurrent] = useState<Plan>("free");
+    const [current, setCurrent] = useState<PlanKey>("free");
     const [yearly, setYearly] = useState(false);
     const [usage, setUsage] = useState<{ exams: number; students: number; ai: number }>({ exams: 0, students: 0, ai: 0 });
     const [userInvoices, setUserInvoices] = useState<Invoice[]>([]);
-    const [upgradeTarget, setUpgradeTarget] = useState<Plan | null>(null);
+    const [upgradeTarget, setUpgradeTarget] = useState<PlanKey | null>(null);
     const invoiceSeqRef = useRef(0);
 
     useEffect(() => {
@@ -107,8 +92,10 @@ export default function BillingPage() {
         // Plan
         try {
             const rawPlan = localStorage.getItem("omr_plan");
-            if (rawPlan === "free" || rawPlan === "pro" || rawPlan === "school") {
-                setCurrent(rawPlan);
+            const parsedPlan = normalizePlan(rawPlan);
+            if (parsedPlan) {
+                setCurrent(parsedPlan);
+                if (rawPlan === "school") localStorage.setItem("omr_plan", parsedPlan);
             }
         } catch {
             // keep default
@@ -144,7 +131,12 @@ export default function BillingPage() {
         });
     }, [userInvoices]);
 
-    const currentPlan = PLANS.find(p => p.key === current)!;
+    const currentPlan = PLAN_BY_KEY[current];
+    const nextBillingDate = useMemo(() => {
+        const now = new Date();
+        const renewal = new Date(now.getFullYear(), now.getMonth() + 1, 1);
+        return renewal.toISOString().slice(0, 10);
+    }, []);
 
     const handleCycleChange = (next: boolean) => {
         setYearly(next);
@@ -215,12 +207,12 @@ th { background: #f8fafc; font-size: 12px; color: #64748b; text-transform: upper
         });
     };
 
-    const handlePlanChange = (next: Plan) => {
+    const handlePlanChange = (next: PlanKey) => {
         if (next === current) return;
         setUpgradeTarget(next);
     };
 
-    const upgradePlan = upgradeTarget ? PLANS.find(p => p.key === upgradeTarget) ?? null : null;
+    const upgradePlan = upgradeTarget ? PLAN_BY_KEY[upgradeTarget] : null;
 
     const confirmPlanChange = () => {
         if (!upgradeTarget || !upgradePlan) return;
@@ -242,7 +234,7 @@ th { background: #f8fafc; font-size: 12px; color: #64748b; text-transform: upper
         const nextInvoices = [newInvoice, ...userInvoices];
         setUserInvoices(nextInvoices);
         if (typeof window !== "undefined") {
-            try { localStorage.setItem("omr_plan", upgradeTarget); } catch {}
+            setCurrentPlan(upgradeTarget);
             try { localStorage.setItem("omr_plan_invoices", JSON.stringify(nextInvoices)); } catch {}
         }
         toast.success("플랜 변경 완료", `${upgradePlan.name} 플랜으로 변경되었습니다.`);
@@ -273,10 +265,10 @@ th { background: #f8fafc; font-size: 12px; color: #64748b; text-transform: upper
                                 <span style={{ fontSize: '0.75rem', fontWeight: 700, background: 'rgba(255,255,255,0.2)', padding: '4px 10px', borderRadius: 'var(--radius-full)', letterSpacing: '0.08em' }}>
                                     CURRENT PLAN
                                 </span>
-                                {currentPlan.icon}
+                                {PLAN_ICONS[currentPlan.key]}
                             </div>
                             <h2 style={{ fontSize: '2.5rem', fontWeight: 900, letterSpacing: '-0.03em', marginBottom: '0.25rem' }}>{currentPlan.name}</h2>
-                            <p style={{ fontSize: '1rem', opacity: 0.9 }}>{currentPlan.price} / 월 · 다음 결제 2026-05-01</p>
+                            <p style={{ fontSize: '1rem', opacity: 0.9 }}>{currentPlan.price} / 월 · 다음 결제 {nextBillingDate}</p>
                         </div>
                         <div style={{ display: 'flex', gap: '0.75rem' }}>
                             <button style={{ padding: '0.75rem 1.25rem', background: 'rgba(255,255,255,0.2)', color: 'white', borderRadius: 'var(--radius-full)', fontWeight: 700, border: '1px solid rgba(255,255,255,0.3)', backdropFilter: 'blur(10px)', fontSize: '0.9rem' }}>결제 수단 변경</button>
@@ -300,7 +292,7 @@ th { background: #f8fafc; font-size: 12px; color: #64748b; text-transform: upper
                     <div className="bento-grid">
                         <UsageCard label="생성한 시험" used={usage.exams} total={currentPlan.limits.exams} color="#4f46e5" />
                         <UsageCard label="등록 학생" used={usage.students} total={currentPlan.limits.students} color="#10b981" />
-                        <UsageCard label="AI 채점 크레딧" used={usage.ai} total={currentPlan.limits.ai} color="#ec4899" />
+                        <UsageCard label="AI 정답 인식" used={usage.ai} total={currentPlan.limits.aiRecognition} color="#0f766e" />
                         <div className="bento-card" style={{ padding: '1.5rem', background: 'linear-gradient(135deg, rgba(99,102,241,0.08), rgba(236,72,153,0.08))', border: '1px solid rgba(99,102,241,0.2)' }}>
                             <TrendingUp size={22} color="var(--primary)" style={{ marginBottom: '0.75rem' }} />
                             <div style={{ fontSize: '0.8rem', fontWeight: 700, color: 'var(--muted)', letterSpacing: '0.05em', marginBottom: '0.3rem' }}>사용 추이</div>
@@ -333,7 +325,7 @@ th { background: #f8fafc; font-size: 12px; color: #64748b; text-transform: upper
                     </div>
 
                     <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '1.25rem' }} className="plans-grid">
-                        {PLANS.map(p => {
+                        {PLAN_CATALOG.map(p => {
                             const isCurrent = p.key === current;
                             const isPro = p.key === "pro";
                             const price = yearly ? Math.round(p.priceNum * 12 * 0.8) : p.priceNum;
@@ -349,7 +341,7 @@ th { background: #f8fafc; font-size: 12px; color: #64748b; text-transform: upper
                                         </div>
                                     )}
                                     <div style={{ width: 46, height: 46, borderRadius: 'var(--radius-md)', background: `color-mix(in srgb, ${p.color}, transparent 88%)`, color: p.color, display: 'flex', alignItems: 'center', justifyContent: 'center', marginBottom: '1rem' }}>
-                                        {p.icon}
+                                        {PLAN_ICONS[p.key]}
                                     </div>
                                     <h3 style={{ fontSize: '1.4rem', fontWeight: 800, marginBottom: '0.25rem' }}>{p.name}</h3>
                                     <div style={{ display: 'flex', alignItems: 'baseline', gap: '0.3rem', marginBottom: '1.25rem' }}>
@@ -483,7 +475,7 @@ th { background: #f8fafc; font-size: 12px; color: #64748b; text-transform: upper
                                 border: `1px solid ${upgradePlan.color}22`, borderRadius: 'var(--radius-md)', marginBottom: '1rem'
                             }}>
                                 <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.4rem', color: upgradePlan.color }}>
-                                    {upgradePlan.icon}
+                                    {PLAN_ICONS[upgradePlan.key]}
                                     <span style={{ fontSize: '0.95rem', fontWeight: 800, color: 'var(--foreground)' }}>{upgradePlan.name} · {yearly ? "연간" : "월간"}</span>
                                 </div>
                                 <ul style={{ listStyle: 'none', padding: 0, margin: 0 }}>

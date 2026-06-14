@@ -70,7 +70,8 @@ export interface Exam {
 export type PdfDrawings = Record<number, string[]>;
 
 export type IdentityType = 'guest' | 'temporary' | 'registered';
-export type PlanKey = 'free' | 'pro' | 'school';
+export type PlanKey = 'free' | 'pro' | 'academy';
+export type StoredPlanKey = PlanKey | 'school';
 
 export interface QuestionDrawingSummary {
     questionId: number;
@@ -85,7 +86,7 @@ export interface AttemptHandwriting {
     schemaVersion: 1;
     status: HandwritingStatus;
     strokesRef?: StoredDataRef;
-    plan: PlanKey;
+    plan: StoredPlanKey;
     summary: {
         pageCount: number;
         strokeCount: number;
@@ -120,7 +121,7 @@ export interface Attempt {
     /** True when the submitted handwriting payload was archived for later review. */
     handwritingArchived?: boolean;
     /** Plan snapshot used when deciding whether to archive handwriting. */
-    handwritingPlan?: PlanKey;
+    handwritingPlan?: StoredPlanKey;
     /** Lightweight handwriting metrics for teacher lists and premium usage. */
     drawingPageCount?: number;
     drawingStrokeCount?: number;

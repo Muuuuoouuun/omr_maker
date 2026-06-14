@@ -47,3 +47,9 @@ NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY=sb_publishable_your_full_key_here
 3. Restart the dev or production server.
 
 See `supabase/README.md` for details and the current RLS warning.
+
+The alpha schema includes organization, member, class, exam, attempt, and audit-log tables. Current RLS policies are open only for alpha/local testing; configure Supabase Auth and organization-scoped policies before storing real student data.
+
+## Answer-Key Recognition
+
+Answer PDFs can be parsed with PDF text extraction or Gemini image recognition. Recognition usage is counted locally as `omr_ai_usage` and shown on the billing page as AI answer-key recognition usage.

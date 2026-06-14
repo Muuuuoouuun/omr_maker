@@ -3,6 +3,7 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
 import { Document, Page, pdfjs } from 'react-pdf';
 import type { PdfDrawings } from '@/types/omr';
+import { FileText } from 'lucide-react';
 import 'react-pdf/dist/Page/AnnotationLayer.css';
 import 'react-pdf/dist/Page/TextLayer.css';
 
@@ -703,7 +704,7 @@ export default function PDFViewer({
                         </Document>
                     ) : (
                         <div onClick={() => document.getElementById('pdf-upload-input')?.click()} style={{ color: '#aaa', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '100%', width: '100%', cursor: 'pointer', border: '2px dashed #666', margin: '1rem', borderRadius: '1rem' }}>
-                            <div style={{ fontSize: '3rem', marginBottom: '1rem' }}>📄</div>
+                            <FileText size={48} style={{ marginBottom: '1rem' }} />
                             <p style={{ fontWeight: 600 }}>PDF 업로드</p>
                             <p style={{ fontSize: '0.8rem', opacity: 0.7 }}>클릭하거나 파일을 드래그하세요</p>
                         </div>

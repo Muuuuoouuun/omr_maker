@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { Bell, AlertCircle, CheckCircle2, CreditCard, Users, Clock } from "lucide-react";
+import { getPlanLabel, normalizePlan } from "@/utils/plans";
 
 interface Notification {
     id: string;
@@ -78,14 +79,14 @@ function computeAutoNotifications(): Notification[] {
 
     // 3) Plan renewal within 7 days
     try {
-        const plan = localStorage.getItem("omr_plan");
-        if (plan === "pro" || plan === "school") {
+        const plan = normalizePlan(localStorage.getItem("omr_plan"));
+        if (plan === "pro" || plan === "academy") {
             // Use the 1st of next month as the mock renewal date
             const now = new Date();
             const renewal = new Date(now.getFullYear(), now.getMonth() + 1, 1);
             const daysUntil = Math.ceil((renewal.getTime() - now.getTime()) / (24 * 60 * 60 * 1000));
             if (daysUntil >= 0 && daysUntil <= 7) {
-                const planName = plan === "pro" ? "Pro" : "School";
+                const planName = getPlanLabel(plan);
                 out.push({
                     id: "auto-plan-renewal",
                     source: "plan-renewal",
