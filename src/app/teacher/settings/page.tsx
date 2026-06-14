@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import TeacherHeader from "@/components/TeacherHeader";
 import { User, Bell, FileText, CheckCircle, Key, Palette, Shield, Copy, Eye, EyeOff, Save, RotateCcw, Download, Upload } from "lucide-react";
 import { toast } from "@/components/Toast";
+import { SETTINGS_STORAGE_KEY, maskGeminiApiKey } from "@/lib/geminiApiKey";
 
 type Section = "profile" | "notifications" | "exam-defaults" | "grading" | "api" | "theme" | "security";
 
@@ -27,7 +28,7 @@ const DEFAULT_SETTINGS: Settings = {
     security: { twoFactor: false, loginAlerts: true },
 };
 
-const STORAGE_KEY = "omr_settings";
+const STORAGE_KEY = SETTINGS_STORAGE_KEY;
 const THEME_KEY = "omr_theme";
 
 function mergeSettings(parsed: Partial<Settings> | null | undefined): Settings {
@@ -486,51 +487,81 @@ function GradingSection({ value, onChange, onSave, onCancel }: SectionProps<Sett
 
 function ApiSection({ value, onChange, onSave, onCancel, showKey, setShowKey }: SectionProps<Settings["api"]> & { showKey: boolean; setShowKey: (v: boolean) => void }) {
     const realKey = value.geminiKey;
-    const maskedKey = realKey.length > 11
-        ? realKey.slice(0, 8) + "•".repeat(Math.max(0, realKey.length - 11)) + realKey.slice(-3)
-        : realKey;
+    const maskedKey = maskGeminiApiKey(realKey);
+    const hasKey = realKey.trim().length > 0;
+
     return (
-        <Card title="API 키" desc="Gemini 연동을 위한 API 키를 관리하세요.">
+        <Card title="API 키" desc="각 사용자의 Gemini API 키를 이 브라우저에 저장해 AI 정답 인식에 사용합니다.">
             <div style={{ padding: '1rem 1.25rem', background: 'linear-gradient(135deg, rgba(245,158,11,0.06), rgba(239,68,68,0.06))', borderRadius: 'var(--radius-md)', border: '1px solid rgba(245,158,11,0.25)', marginBottom: '1.5rem', display: 'flex', gap: '0.75rem' }}>
                 <Shield size={20} color="#f59e0b" style={{ flexShrink: 0, marginTop: 2 }} />
                 <div style={{ fontSize: '0.85rem', color: 'var(--muted)' }}>
-                    API 키는 브라우저에만 저장되며 서버로 전송되지 않습니다. 키는 다른 기기와 공유되지 않습니다.
+                    저장된 키는 이 기기의 브라우저 localStorage에만 보관됩니다. AI 정답 인식을 실행할 때만 Gemini 요청에 사용되며, OMR Maker 데이터베이스에는 저장하지 않습니다.
                 </div>
             </div>
 
-            <Field label="Gemini API Key" hint={<span>키 발급: <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener noreferrer" style={{ color: 'var(--primary)', fontWeight: 600 }}>aistudio.google.com/apikey</a></span>}>
+            <Field
+                label="개인 Gemini API Key"
+                hint={<span>키 발급: <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener noreferrer" style={{ color: 'var(--primary)', fontWeight: 600 }}>aistudio.google.com/apikey</a></span>}
+            >
                 <div style={{ display: 'flex', gap: '0.5rem' }}>
                     <input
                         className="input-field"
                         type={showKey ? "text" : "password"}
-                        value={showKey ? realKey : maskedKey}
-                        onChange={e => showKey && onChange({ geminiKey: e.target.value })}
-                        readOnly={!showKey}
+                        value={realKey}
+                        onChange={e => onChange({ geminiKey: e.target.value })}
+                        placeholder="AIza..."
+                        autoComplete="off"
+                        spellCheck={false}
                         style={{ fontFamily: 'var(--font-mono)', fontSize: '0.85rem' }}
                     />
-                    <button onClick={() => setShowKey(!showKey)} style={{ padding: '0.7rem', border: '1px solid var(--border)', background: 'var(--surface)', borderRadius: 'var(--radius-md)', color: 'var(--muted)' }}>
+                    <button
+                        type="button"
+                        onClick={() => setShowKey(!showKey)}
+                        aria-label={showKey ? "Gemini API 키 숨기기" : "Gemini API 키 보기"}
+                        title={showKey ? "키 숨기기" : "키 보기"}
+                        style={{ padding: '0.7rem', border: '1px solid var(--border)', background: 'var(--surface)', borderRadius: 'var(--radius-md)', color: 'var(--muted)' }}
+                    >
                         {showKey ? <EyeOff size={18} /> : <Eye size={18} />}
                     </button>
                     <button
+                        type="button"
                         onClick={() => {
+                            if (!realKey) return;
                             if (typeof navigator !== "undefined" && navigator.clipboard) {
                                 navigator.clipboard.writeText(realKey).catch(() => { });
                             }
                         }}
-                        style={{ padding: '0.7rem', border: '1px solid var(--border)', background: 'var(--surface)', borderRadius: 'var(--radius-md)', color: 'var(--muted)' }}
+                        disabled={!hasKey}
+                        aria-label="Gemini API 키 복사"
+                        title="키 복사"
+                        style={{ padding: '0.7rem', border: '1px solid var(--border)', background: 'var(--surface)', borderRadius: 'var(--radius-md)', color: 'var(--muted)', opacity: hasKey ? 1 : 0.45 }}
                     >
                         <Copy size={18} />
                     </button>
                 </div>
+                {hasKey && (
+                    <div style={{ marginTop: '0.6rem', display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
+                        <span style={{ fontSize: '0.78rem', fontWeight: 700, color: 'var(--success)', background: 'rgba(16,185,129,0.1)', padding: '0.25rem 0.55rem', borderRadius: 'var(--radius-full)' }}>
+                            개인 키 저장 준비됨
+                        </span>
+                        <span style={{ fontSize: '0.78rem', color: 'var(--muted)', fontFamily: 'var(--font-mono)' }}>
+                            {maskedKey}
+                        </span>
+                        <button
+                            type="button"
+                            onClick={() => onChange({ geminiKey: "" })}
+                            style={{ fontSize: '0.78rem', color: 'var(--error)', fontWeight: 700 }}
+                        >
+                            키 지우기
+                        </button>
+                    </div>
+                )}
             </Field>
 
             <div style={{ padding: '1rem', background: 'var(--background)', borderRadius: 'var(--radius-md)', border: '1px solid var(--border)' }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '0.5rem' }}>
-                    <span style={{ fontSize: '0.85rem', fontWeight: 600 }}>이달 사용량</span>
-                    <span style={{ fontSize: '0.85rem', fontWeight: 700, color: 'var(--primary)' }}>1,247 / 10,000 req</span>
-                </div>
-                <div style={{ height: 6, background: 'var(--border)', borderRadius: 'var(--radius-full)', overflow: 'hidden' }}>
-                    <div style={{ width: '12.47%', height: '100%', background: 'linear-gradient(90deg, var(--primary), var(--secondary))' }} />
+                <div style={{ fontSize: '0.85rem', fontWeight: 700, marginBottom: '0.35rem' }}>적용 위치</div>
+                <div style={{ fontSize: '0.82rem', color: 'var(--muted)', lineHeight: 1.6 }}>
+                    시험 출제 화면의 답지 업로드 모달에서 <strong style={{ color: 'var(--foreground)' }}>AI(Gemini) 정답 인식</strong>을 켜면 이 키를 우선 사용합니다. 키가 비어 있으면 서버 기본 키를 사용합니다.
                 </div>
             </div>
 

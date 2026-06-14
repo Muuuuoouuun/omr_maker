@@ -96,6 +96,45 @@ export function getTimeGreeting(hour: number): "late-night" | "morning" | "after
     return "evening";
 }
 
+// ---------- Stable display formatting ----------
+const KOREAN_TIME_ZONE = "Asia/Seoul";
+
+const koreanDateFormatter = new Intl.DateTimeFormat("ko-KR", {
+    year: "numeric",
+    month: "numeric",
+    day: "numeric",
+    timeZone: KOREAN_TIME_ZONE,
+});
+
+const koreanDateTimeFormatter = new Intl.DateTimeFormat("ko-KR", {
+    year: "numeric",
+    month: "numeric",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+    hour12: false,
+    timeZone: KOREAN_TIME_ZONE,
+});
+
+function parseDisplayDate(value: string): Date | null {
+    if (!value) return null;
+    const date = new Date(value);
+    return Number.isNaN(date.getTime()) ? null : date;
+}
+
+export function formatKoreanDate(value: string): string {
+    return parseDisplayDate(value) ? koreanDateFormatter.format(new Date(value)) : value;
+}
+
+export function formatKoreanDateTime(value: string): string {
+    if (!parseDisplayDate(value)) return value;
+
+    return koreanDateTimeFormatter
+        .format(new Date(value))
+        .replace("AM", "오전")
+        .replace("PM", "오후");
+}
+
 // ---------- Plan display ----------
 export function formatLimit(n: number): string {
     return n === Infinity ? "∞" : n.toLocaleString();
@@ -104,4 +143,35 @@ export function formatLimit(n: number): string {
 export function usagePct(used: number, total: number): number {
     if (total === Infinity || total <= 0) return 0;
     return Math.min(100, Math.round((used / total) * 100));
+}
+
+// ---------- OMR layout ----------
+function normalizeColumns(columns: number | undefined, maxColumns = 3): number {
+    if (!Number.isFinite(columns)) return 1;
+    return Math.min(Math.max(Math.floor(columns || 1), 1), maxColumns);
+}
+
+export function splitQuestionsIntoColumns<T>(items: readonly T[], columns: number): T[][] {
+    if (items.length === 0) return [];
+
+    const columnCount = Math.min(normalizeColumns(columns), items.length);
+    const itemsPerColumn = Math.ceil(items.length / columnCount);
+
+    return Array.from({ length: columnCount }, (_, columnIndex) => {
+        const start = columnIndex * itemsPerColumn;
+        return items.slice(start, start + itemsPerColumn);
+    });
+}
+
+export function getCardViewGridMetrics(
+    totalItems: number,
+    columns = 1,
+): { columns: number; rows: number } {
+    if (totalItems <= 0) return { columns: 1, rows: 0 };
+
+    const columnCount = Math.min(normalizeColumns(columns), totalItems);
+    return {
+        columns: columnCount,
+        rows: Math.ceil(totalItems / columnCount),
+    };
 }

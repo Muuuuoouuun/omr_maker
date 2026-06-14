@@ -2,6 +2,7 @@
 
 import React, { useEffect, useRef } from "react";
 import { Question } from "@/types/omr";
+import { getCardViewGridMetrics } from "@/lib/pure";
 
 interface OMRCardViewProps {
   title?: string;
@@ -47,6 +48,7 @@ export default function OMRCardView({
   onQuestionClick,
   mode = "solve",
   correctAnswers,
+  columns = 1,
   showMeta = false,
 }: OMRCardViewProps) {
   const isEditor = mode === "editor";
@@ -66,6 +68,11 @@ export default function OMRCardView({
   const progress = totalCount > 0 ? (answeredCount / totalCount) * 100 : 0;
 
   const cardRefs = useRef<Record<number, HTMLDivElement | null>>({});
+  const gridMetrics = getCardViewGridMetrics(questions.length, columns);
+  const gridStyle = {
+    "--omr-card-cols": gridMetrics.columns,
+    "--omr-card-rows": Math.max(gridMetrics.rows, 1),
+  } as React.CSSProperties;
 
   useEffect(() => {
     if (selectedQuestionId !== null && cardRefs.current[selectedQuestionId]) {
@@ -111,7 +118,7 @@ export default function OMRCardView({
       </div>
 
       {/* Card Grid */}
-      <div className="omr-cardview-grid">
+      <div className="omr-cardview-grid" style={gridStyle}>
         {questions.map((q) => {
           const answered = effectiveAnswers[q.id];
           const isSelected = selectedQuestionId === q.id;

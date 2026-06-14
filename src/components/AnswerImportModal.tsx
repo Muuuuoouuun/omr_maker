@@ -2,6 +2,7 @@
 
 import { useState, useEffect } from 'react';
 import { parseAnswerKeyPdf, ParsedAnswer } from '@/services/answerParser';
+import { readStoredGeminiApiKey } from '@/lib/geminiApiKey';
 
 interface AnswerImportModalProps {
     isOpen: boolean;
@@ -34,7 +35,7 @@ export default function AnswerImportModal({ isOpen, onClose, onApply, onUploadAn
             let results;
             if (isAiMode) {
                 const { parseAnswerKeyWithGemini } = await import('@/services/answerParser');
-                results = await parseAnswerKeyWithGemini(targetFile);
+                results = await parseAnswerKeyWithGemini(targetFile, readStoredGeminiApiKey());
             } else {
                 results = await parseAnswerKeyPdf(targetFile);
             }
@@ -48,8 +49,8 @@ export default function AnswerImportModal({ isOpen, onClose, onApply, onUploadAn
             // eslint-disable-next-line @typescript-eslint/no-explicit-any
         } catch (err: any) {
             console.error(err);
-            if (err.message && err.message.includes("GEMINI_API_KEY")) {
-                setError("서버에 GEMINI_API_KEY가 설정되지 않았습니다.");
+            if (err.message && (err.message.includes("Gemini API key") || err.message.includes("GEMINI_API_KEY"))) {
+                setError("개인설정 > API 키에서 Gemini API 키를 저장한 뒤 다시 시도해주세요.");
             } else {
                 setError(`분석 실패: ${err.message || err.toString()}`);
             }
@@ -125,7 +126,7 @@ export default function AnswerImportModal({ isOpen, onClose, onApply, onUploadAn
                             style={{ width: '1.2rem', height: '1.2rem' }}
                         />
                         <label htmlFor="use-ai-mode" style={{ fontWeight: 500, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '0.3rem' }}>
-                            🤖 AI(Gemini)로 정답 인식하기 <span style={{ fontSize: '0.7rem', color: '#ef4444', border: '1px solid #ef4444', padding: '1px 4px', borderRadius: '4px' }}>추천</span>
+                            AI(Gemini)로 정답 인식하기 <span style={{ fontSize: '0.7rem', color: '#ef4444', border: '1px solid #ef4444', padding: '1px 4px', borderRadius: '4px' }}>추천</span>
                         </label>
                     </div>
 

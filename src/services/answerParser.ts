@@ -108,7 +108,7 @@ function extractAnswersFromText(text: string): ParsedAnswer[] {
     return results.sort((a, b) => a.questionNum - b.questionNum);
 }
 
-export async function parseAnswerKeyWithGemini(file: File): Promise<ParsedAnswer[]> {
+export async function parseAnswerKeyWithGemini(file: File, geminiApiKey?: string): Promise<ParsedAnswer[]> {
     const pdfjsLib = await getPdfJs();
     const arrayBuffer = await file.arrayBuffer();
     const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
@@ -135,7 +135,7 @@ export async function parseAnswerKeyWithGemini(file: File): Promise<ParsedAnswer
     }
 
     try {
-        const aiResults = await analyzeAnswerImages(images);
+        const aiResults = await analyzeAnswerImages(images, geminiApiKey);
 
         if (!Array.isArray(aiResults)) {
             throw new Error("AI response is not an array");

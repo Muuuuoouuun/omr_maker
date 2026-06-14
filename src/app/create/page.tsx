@@ -1487,7 +1487,8 @@ function CreateOMRPageInner() {
                         overflowX: 'auto',
                         padding: previewMode === 'paper' ? '2rem' : '0',
                         display: 'flex',
-                        justifyContent: 'center',
+                        justifyContent: previewMode === 'paper' ? 'flex-start' : 'center',
+                        alignItems: previewMode === 'paper' ? 'flex-start' : 'stretch',
                         background: previewMode === 'paper' ? '#e2e8f0' : 'transparent',
                     }} className="scroll-custom">
                         {previewMode === 'modern' ? (
@@ -1501,7 +1502,7 @@ function CreateOMRPageInner() {
                                 showMeta={true}
                             />
                         ) : (
-                            <div style={{ transform: 'scale(0.8)', transformOrigin: 'top center', height: 'fit-content' }}>
+                            <div className="omr-print-preview-scale">
                                 <OMRPreview
                                     title={title}
                                     questions={questions}

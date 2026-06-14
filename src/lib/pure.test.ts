@@ -7,6 +7,7 @@ import {
     countAnswered, mapAttemptStatus, computeProgress,
     getTimeGreeting,
     formatLimit, usagePct,
+    formatKoreanDate, formatKoreanDateTime,
 } from "./pure";
 
 describe("hashString", () => {
@@ -163,6 +164,21 @@ describe("formatLimit", () => {
     });
 });
 
+describe("stable Korean date formatting", () => {
+    it("formats dates with explicit locale and timezone", () => {
+        expect(formatKoreanDate("2026-06-12T00:00:00.000Z")).toBe("2026. 6. 12.");
+    });
+
+    it("formats date-times with explicit locale and timezone", () => {
+        expect(formatKoreanDateTime("2026-06-12T09:30:00.000Z")).toBe("2026. 6. 12. 18:30");
+    });
+
+    it("returns a fallback for invalid input", () => {
+        expect(formatKoreanDate("not-a-date")).toBe("not-a-date");
+        expect(formatKoreanDateTime("")).toBe("");
+    });
+});
+
 describe("usagePct", () => {
     it("returns 0 for infinity total", () => {
         expect(usagePct(50, Infinity)).toBe(0);
@@ -175,5 +191,35 @@ describe("usagePct", () => {
     });
     it("rounds", () => {
         expect(usagePct(1, 3)).toBe(33);
+    });
+});
+
+describe("splitQuestionsIntoColumns", () => {
+    it("keeps OMR print questions flowing down each paper column", async () => {
+        const pure = await import("./pure") as typeof import("./pure") & {
+            splitQuestionsIntoColumns?: <T>(items: readonly T[], columns: number) => T[][];
+        };
+        expect(typeof pure.splitQuestionsIntoColumns).toBe("function");
+
+        const questions = Array.from({ length: 13 }, (_, i) => ({ number: i + 1 }));
+        const columns = pure.splitQuestionsIntoColumns!(questions, 2);
+
+        expect(columns.map(column => column.map(q => q.number))).toEqual([
+            [1, 2, 3, 4, 5, 6, 7],
+            [8, 9, 10, 11, 12, 13],
+        ]);
+    });
+});
+
+describe("getCardViewGridMetrics", () => {
+    it("defaults card view to one vertical sequence", async () => {
+        const pure = await import("./pure") as typeof import("./pure") & {
+            getCardViewGridMetrics?: (totalItems: number, columns?: number) => { columns: number; rows: number };
+        };
+        expect(typeof pure.getCardViewGridMetrics).toBe("function");
+
+        expect(pure.getCardViewGridMetrics!(7)).toEqual({ columns: 1, rows: 7 });
+        expect(pure.getCardViewGridMetrics!(7, 2)).toEqual({ columns: 2, rows: 4 });
+        expect(pure.getCardViewGridMetrics!(0, 2)).toEqual({ columns: 1, rows: 0 });
     });
 });

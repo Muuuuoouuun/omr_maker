@@ -1,11 +1,12 @@
 "use server";
 
 import { GoogleGenerativeAI } from "@google/generative-ai";
+import { resolveGeminiApiKey } from "@/lib/geminiApiKey";
 
-export async function analyzeAnswerImages(imageParts: string[]) {
-    const apiKey = process.env.GEMINI_API_KEY;
+export async function analyzeAnswerImages(imageParts: string[], personalApiKey?: string) {
+    const apiKey = resolveGeminiApiKey(personalApiKey, process.env.GEMINI_API_KEY);
     if (!apiKey) {
-        throw new Error("GEMINI_API_KEY is not defined in environment variables");
+        throw new Error("Gemini API key is not configured");
     }
 
     const genAI = new GoogleGenerativeAI(apiKey);

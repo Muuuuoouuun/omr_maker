@@ -2,6 +2,7 @@
 
 import React from 'react';
 import { Question } from '@/types/omr';
+import { splitQuestionsIntoColumns } from '@/lib/pure';
 
 interface OMRPreviewProps {
     title?: string;
@@ -33,17 +34,9 @@ export default function OMRPreview({
         ? questions
         : Array.from({ length: 20 }, (_, i) => ({ id: i + 1, number: i + 1 } as Question));
 
-    const totalQuestions = displayQuestions.length;
-
     // Layout Logic
-    const cols = Math.min(Math.max(columns || 2, 1), 3);
-    const questionsPerCol = Math.ceil(totalQuestions / cols);
-
-    const columnQuestions = Array.from({ length: cols }, (_, colIndex) => {
-        const start = colIndex * questionsPerCol;
-        const end = Math.min((colIndex + 1) * questionsPerCol, totalQuestions);
-        return displayQuestions.slice(start, end);
-    });
+    const columnQuestions = splitQuestionsIntoColumns(displayQuestions, columns || 2);
+    const cols = Math.max(columnQuestions.length, 1);
 
     const renderQuestion = (q: Question) => {
         const isRowSelected = selectedQuestionId === q.id;
@@ -162,9 +155,7 @@ export default function OMRPreview({
                         <div className="omr-column">
                             {chunk.map(renderQuestion)}
                         </div>
-                        {index < cols - 1 && (
-                            <div style={{ width: '1px', background: '#000', margin: '0 1rem' }}></div>
-                        )}
+                        {index < cols - 1 && <div className="omr-column-divider" aria-hidden="true" />}
                     </React.Fragment>
                 ))}
             </div>
