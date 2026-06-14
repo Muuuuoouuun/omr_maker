@@ -9,6 +9,8 @@ import { gradeAttempt } from "@/types/omr";
 import type { Attempt, Exam, PdfDrawings } from "@/types/omr";
 import { storedDataUrlToFile, loadJsonRecord } from "@/utils/blobStore";
 import { attemptBelongsToSession, getSession } from "@/utils/storage";
+import { loadAttempt, loadExam } from "@/lib/omrPersistence";
+import { formatKoreanDateTime } from "@/lib/pure";
 
 const PDFViewer = dynamic(() => import("@/components/PDFViewer"), { ssr: false });
 
@@ -33,63 +35,59 @@ export default function ReviewPage() {
 
     useEffect(() => {
         let cancelled = false;
-        queueMicrotask(() => {
+        const loadReview = async () => {
             if (!id || cancelled) return;
             // Load Attempt
-            const attemptsData = localStorage.getItem('omr_attempts');
-            if (attemptsData) {
-                const attempts: Attempt[] = JSON.parse(attemptsData);
-                const found = attempts.find(a => a.id === id);
-                if (found && !cancelled) {
-                    const session = getSession();
-                    if (!session || !attemptBelongsToSession(found, session)) {
-                        setAccessDenied(true);
-                        return;
-                    }
-                    setAttempt(found);
-                    
-                    const drawingsRef = found.handwriting?.strokesRef || found.drawingsRef;
-                    if (drawingsRef) {
-                        loadJsonRecord<PdfDrawings>(drawingsRef)
-                            .then(drawings => {
-                                if (cancelled) return;
-                                if (drawings) {
-                                    setRestoredDrawings(drawings);
-                                    setHandwritingUnavailable(false);
-                                } else if (found.drawings) {
-                                    setRestoredDrawings(found.drawings);
-                                } else {
-                                    setHandwritingUnavailable(true);
-                                }
-                            })
-                            .catch(err => {
-                                console.error("Failed to restore drawings from IndexedDB", err);
-                                if (!cancelled && found.drawings) setRestoredDrawings(found.drawings);
-                                else if (!cancelled) setHandwritingUnavailable(true);
-                            });
-                    } else if (found.drawings) {
-                        setRestoredDrawings(found.drawings);
-                    }
+            const found = await loadAttempt(id);
+            if (found && !cancelled) {
+                const session = getSession();
+                if (!session || !attemptBelongsToSession(found, session)) {
+                    setAccessDenied(true);
+                    return;
+                }
+                setAttempt(found);
 
-                    // Load Exam Data associated with this attempt
-                    const examDataStr = localStorage.getItem(`omr_exam_${found.examId}`);
-                    if (examDataStr) {
-                        const parsedExam = JSON.parse(examDataStr) as Exam;
-                        setExam(parsedExam);
-                        setPdfFile(null);
-                        setPdfLoadFailed(false);
+                const drawingsRef = found.handwriting?.strokesRef || found.drawingsRef;
+                if (drawingsRef) {
+                    loadJsonRecord<PdfDrawings>(drawingsRef)
+                        .then(drawings => {
+                            if (cancelled) return;
+                            if (drawings) {
+                                setRestoredDrawings(drawings);
+                                setHandwritingUnavailable(false);
+                            } else if (found.drawings) {
+                                setRestoredDrawings(found.drawings);
+                            } else {
+                                setHandwritingUnavailable(true);
+                            }
+                        })
+                        .catch(err => {
+                            console.error("Failed to restore drawings from IndexedDB", err);
+                            if (!cancelled && found.drawings) setRestoredDrawings(found.drawings);
+                            else if (!cancelled) setHandwritingUnavailable(true);
+                        });
+                } else if (found.drawings) {
+                    setRestoredDrawings(found.drawings);
+                }
 
-                        storedDataUrlToFile("problem.pdf", parsedExam.pdfData, parsedExam.pdfDataRef)
-                            .then(file => {
-                                if (!cancelled && file) setPdfFile(file);
-                            })
-                            .catch(() => {
-                                if (!cancelled) setPdfLoadFailed(true);
-                            });
-                    }
+                // Load Exam Data associated with this attempt
+                const parsedExam = await loadExam(found.examId);
+                if (parsedExam && !cancelled) {
+                    setExam(parsedExam);
+                    setPdfFile(null);
+                    setPdfLoadFailed(false);
+
+                    storedDataUrlToFile("problem.pdf", parsedExam.pdfData, parsedExam.pdfDataRef)
+                        .then(file => {
+                            if (!cancelled && file) setPdfFile(file);
+                        })
+                        .catch(() => {
+                            if (!cancelled) setPdfLoadFailed(true);
+                        });
                 }
             }
-        });
+        };
+        void loadReview();
         return () => { cancelled = true; };
     }, [id]);
 
@@ -147,7 +145,7 @@ export default function ReviewPage() {
                         {stats.earnedScore} / {stats.totalScore} 점
                     </div>
                     <p style={{ color: '#64748b', marginTop: '0.5rem' }}>
-                        {new Date(attempt.finishedAt).toLocaleString()} 응시 완료
+                        {formatKoreanDateTime(attempt.finishedAt)} 응시 완료
                     </p>
                     {attempt.handwritingArchived && (
                         <div style={{

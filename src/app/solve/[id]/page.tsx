@@ -12,6 +12,7 @@ import { storedDataUrlToFile, saveJsonRecord, loadJsonRecord } from "@/utils/blo
 import { verifyTeacherPassword } from "@/app/actions/auth";
 import { getOrCreateGuestId, getSession, saveSession, type StudentSession } from "@/utils/storage";
 import { canArchiveHandwriting, getCurrentPlan, getPlanLabel } from "@/utils/plans";
+import { loadExam as loadPersistedExam, saveAttempt } from "@/lib/omrPersistence";
 
 const PDFViewer = dynamic(() => import("@/components/PDFViewer"), { ssr: false });
 import { gradeAttempt } from "@/types/omr";
@@ -181,15 +182,14 @@ export default function SolvePage() {
         const currentSession = getSession();
         if (currentSession) setUser(currentSession);
 
-        const loadExam = async () => {
+        const hydrateExam = async () => {
             if (!id) return;
-            const data = localStorage.getItem(`omr_exam_${id}`);
-            if (!data) {
+            const parsed = await loadPersistedExam(id);
+            if (!parsed) {
                 toast.error("시험을 찾을 수 없음", "유효하지 않은 시험 ID입니다.");
                 return;
             }
             try {
-                const parsed = JSON.parse(data);
                 setExamData(parsed);
 
                 // Enforce schedule window (startAt/endAt)
@@ -248,7 +248,7 @@ export default function SolvePage() {
             }
         };
 
-        loadExam();
+        hydrateExam();
     }, [id, persistId]);
 
     // Show resume banner once after initial load
@@ -460,9 +460,13 @@ export default function SolvePage() {
         };
 
         try {
-            const history = JSON.parse(localStorage.getItem('omr_attempts') || '[]');
-            history.push(attemptData);
-            localStorage.setItem('omr_attempts', JSON.stringify(history));
+            const result = await saveAttempt(attemptData);
+            if (!result.localSaved && !result.remoteSaved) {
+                throw new Error(result.remoteError || "Failed to save attempt");
+            }
+            if (result.remoteError) {
+                toast.info("답안은 이 기기에 저장됨", "Supabase 동기화는 나중에 다시 시도됩니다.");
+            }
             // Clean up draft
             try { localStorage.removeItem(DRAFT_KEY); } catch {}
             try { localStorage.removeItem(LEGACY_DRAFT_KEY); } catch {}

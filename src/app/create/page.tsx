@@ -17,6 +17,7 @@ import html2canvas from "html2canvas";
 import { Exam, Question } from "@/types/omr";
 import { ParsedAnswer } from "@/services/answerParser";
 import { saveFileDataUrl, storedDataUrlToFile } from "@/utils/blobStore";
+import { loadExam, saveExam } from "@/lib/omrPersistence";
 
 // ─── Autosave + history constants ────────────────────────────────────
 const DRAFT_KEY = "omr_exam_draft";
@@ -189,40 +190,43 @@ function CreateOMRPageInner() {
         if (!editId) return;
         if (typeof window === 'undefined') return;
         let cancelled = false;
-        try {
-            const raw = localStorage.getItem(`omr_exam_${editId}`);
-            if (!raw) {
+        const loadExistingExam = async () => {
+            try {
+                const parsed = await loadExam(editId);
+                if (cancelled) return;
+                if (!parsed) {
+                    toast.error('시험을 찾을 수 없습니다', editId);
+                    return;
+                }
+                setLoadedExam(parsed);
+                if (parsed.title) setTitle(parsed.title);
+                if (Array.isArray(parsed.questions) && parsed.questions.length > 0) {
+                    setQuestionsCount(parsed.questions.length);
+                    setQuestions(parsed.questions);
+                }
+                if (typeof parsed.durationMin === 'number') setDurationMin(parsed.durationMin);
+                if (parsed.startAt) setStartAt(isoToLocalInput(parsed.startAt));
+                if (parsed.endAt) setEndAt(isoToLocalInput(parsed.endAt));
+                storedDataUrlToFile("problem.pdf", parsed.pdfData, parsed.pdfDataRef)
+                    .then(file => {
+                        if (!cancelled && file) setPdfFile(file);
+                    })
+                    .catch(() => {
+                        if (!cancelled) toast.error('문제지 PDF 불러오기 실패');
+                    });
+                storedDataUrlToFile("answer_key.pdf", parsed.answerKeyPdf, parsed.answerKeyPdfRef)
+                    .then(file => {
+                        if (!cancelled && file) setAnswerKeyPdf(file);
+                    })
+                    .catch(() => {
+                        if (!cancelled) toast.error('답지 PDF 불러오기 실패');
+                    });
+                toast.info('편집 모드', `"${parsed.title}"을(를) 불러왔습니다.`);
+            } catch {
                 toast.error('시험을 찾을 수 없습니다', editId);
-                return;
             }
-            const parsed = JSON.parse(raw) as Exam;
-            setLoadedExam(parsed);
-            if (parsed.title) setTitle(parsed.title);
-            if (Array.isArray(parsed.questions) && parsed.questions.length > 0) {
-                setQuestionsCount(parsed.questions.length);
-                setQuestions(parsed.questions);
-            }
-            if (typeof parsed.durationMin === 'number') setDurationMin(parsed.durationMin);
-            if (parsed.startAt) setStartAt(isoToLocalInput(parsed.startAt));
-            if (parsed.endAt) setEndAt(isoToLocalInput(parsed.endAt));
-            storedDataUrlToFile("problem.pdf", parsed.pdfData, parsed.pdfDataRef)
-                .then(file => {
-                    if (!cancelled && file) setPdfFile(file);
-                })
-                .catch(() => {
-                    if (!cancelled) toast.error('문제지 PDF 불러오기 실패');
-                });
-            storedDataUrlToFile("answer_key.pdf", parsed.answerKeyPdf, parsed.answerKeyPdfRef)
-                .then(file => {
-                    if (!cancelled && file) setAnswerKeyPdf(file);
-                })
-                .catch(() => {
-                    if (!cancelled) toast.error('답지 PDF 불러오기 실패');
-                });
-            toast.info('편집 모드', `"${parsed.title}"을(를) 불러왔습니다.`);
-        } catch {
-            toast.error('시험 불러오기 실패');
-        }
+        };
+        void loadExistingExam();
         return () => { cancelled = true; };
     }, [editId]);
 
@@ -587,8 +591,14 @@ function CreateOMRPageInner() {
                 archived: loadedExam?.archived || false,
             };
 
-            const ok = safeSetLocal(`omr_exam_${id}`, JSON.stringify(examData));
-            if (!ok) return "";
+            const result = await saveExam(examData);
+            if (!result.localSaved && !result.remoteSaved) {
+                toast.error("배포 저장 실패", "브라우저 저장소와 Supabase 저장에 모두 실패했습니다.");
+                return "";
+            }
+            if (result.remoteError) {
+                toast.info("로컬 저장 완료", "Supabase 동기화는 나중에 다시 시도됩니다.");
+            }
             // Clear the autosave draft now that the exam is published.
             try { localStorage.removeItem(DRAFT_KEY); } catch { /* ignore */ }
             const shareUrl = `${window.location.origin}/solve/${id}`;

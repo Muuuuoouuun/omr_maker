@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { Exam } from "@/types/omr";
+import { formatKoreanDate } from "@/lib/pure";
 
 interface ExamListBlockProps {
   exams: Exam[];
@@ -218,7 +219,7 @@ export default function ExamListBlock({ exams }: ExamListBlockProps) {
                       fontWeight: 500,
                     }}
                   >
-                    {new Date(exam.createdAt).toLocaleDateString("ko-KR")}
+                    {formatKoreanDate(exam.createdAt)}
                   </div>
                 </div>
 

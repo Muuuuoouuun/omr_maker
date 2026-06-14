@@ -9,6 +9,7 @@ import ExamAnalyticsTab from "@/components/dashboard/tabs/ExamAnalyticsTab";
 import StudentAnalyticsTab from "@/components/dashboard/tabs/StudentAnalyticsTab";
 import { LayoutDashboard, BarChart2, GraduationCap } from "lucide-react";
 import ThemeToggle from "@/components/ThemeToggle";
+import { loadAttempts, loadExams } from "@/lib/omrPersistence";
 
 type TabType = 'overview' | 'exam' | 'student';
 
@@ -39,101 +40,91 @@ function TeacherDashboard() {
     const [trendData, setTrendData] = useState<number[]>([]);
 
     useEffect(() => {
-        // Load Data
-        const loadedExams: Exam[] = [];
-        const loadedAttempts: Attempt[] = [];
+        let cancelled = false;
 
-        // Scan localStorage for exams
-        for (let i = 0; i < localStorage.length; i++) {
-            const key = localStorage.key(i);
-            if (key?.startsWith("omr_exam_")) {
-                try {
-                    const val = JSON.parse(localStorage.getItem(key) || "");
-                    loadedExams.push(val);
-                    // eslint-disable-next-line @typescript-eslint/no-unused-vars
-                } catch (e) { }
+        const loadDashboardData = async () => {
+            const [examResult, attemptResult] = await Promise.all([
+                loadExams(),
+                loadAttempts(),
+            ]);
+            if (cancelled) return;
+
+            const loadedExams = [...examResult.items];
+            const loadedAttempts = [...attemptResult.items];
+
+            // Seed demo data only when the DB is completely empty AND only in development.
+            // Prevents the "[예시]" mock exams from appearing in production.
+            const isDev = process.env.NODE_ENV !== 'production';
+            const shouldSeedDemo = isDev && loadedExams.length === 0 && loadedAttempts.length === 0;
+            if (shouldSeedDemo) {
+                const MOCK_EXAMS: Exam[] = [
+                    {
+                        id: 'mock-1', title: '[예시] Midterm English Test', createdAt: new Date(Date.now() - 86400000 * 2).toISOString(),
+                        questions: Array.from({ length: 20 }).map((_, i) => ({
+                            id: i + 1, number: i + 1, label: i < 5 ? '문법' : (i < 10 ? '독해' : '어휘'), score: 5, answer: 1
+                        }))
+                    },
+                    {
+                        id: 'mock-2', title: '[예시] Chapter 4 Mathematics', createdAt: new Date(Date.now() - 86400000 * 5).toISOString(),
+                        questions: Array.from({ length: 15 }).map((_, i) => ({
+                            id: i + 1, number: i + 1, label: i < 5 ? '계산' : (i < 10 ? '이해' : '응용'), score: 6.66, answer: 1
+                        }))
+                    }
+                ];
+                MOCK_EXAMS.forEach(mockExam => {
+                    loadedExams.push(mockExam);
+                    const mockAttempts: Attempt[] = Array.from({ length: 25 }).map((_, i) => ({
+                        id: `mock-attempt-${mockExam.id}-${i}`,
+                        examId: mockExam.id,
+                        examTitle: mockExam.title,
+                        studentName: `학생 ${i + 1}`,
+                        startedAt: new Date(Date.now() - 86400000 * 1).toISOString(),
+                        finishedAt: new Date(Date.now() - 86400000 * 1 + i * 1000).toISOString(),
+                        score: mockExam.id === 'mock-1' ? (50 + Math.random() * 50) : (40 + Math.random() * 50),
+                        totalScore: 100,
+                        status: 'completed',
+                        answers: Array.from({ length: mockExam.questions.length }).reduce((acc: Record<number, number>, _, qIdx) => {
+                            const isCorrect = Math.random() > 0.3;
+                            const correctAns = mockExam.questions[qIdx].answer || 1;
+                            acc[qIdx + 1] = isCorrect ? correctAns : (correctAns === 1 ? 2 : 1);
+                            return acc;
+                        }, {})
+                    }));
+                    loadedAttempts.push(...mockAttempts);
+                });
             }
-        }
-        // Load attempts
-        const attemptsStr = localStorage.getItem("omr_attempts");
-        if (attemptsStr) {
-            try {
-                loadedAttempts.push(...JSON.parse(attemptsStr));
-                // eslint-disable-next-line @typescript-eslint/no-unused-vars
-            } catch (e) { }
-        }
 
-        // Seed demo data only when the DB is completely empty AND only in development.
-        // Prevents the "[예시]" mock exams from appearing in production.
-        const isDev = process.env.NODE_ENV !== 'production';
-        const shouldSeedDemo = isDev && loadedExams.length === 0 && loadedAttempts.length === 0;
-        if (shouldSeedDemo) {
-            const MOCK_EXAMS: Exam[] = [
-                {
-                    id: 'mock-1', title: '[예시] Midterm English Test', createdAt: new Date(Date.now() - 86400000 * 2).toISOString(),
-                    questions: Array.from({ length: 20 }).map((_, i) => ({
-                        id: i + 1, number: i + 1, label: i < 5 ? '문법' : (i < 10 ? '독해' : '어휘'), score: 5, answer: 1
-                    }))
-                },
-                {
-                    id: 'mock-2', title: '[예시] Chapter 4 Mathematics', createdAt: new Date(Date.now() - 86400000 * 5).toISOString(),
-                    questions: Array.from({ length: 15 }).map((_, i) => ({
-                        id: i + 1, number: i + 1, label: i < 5 ? '계산' : (i < 10 ? '이해' : '응용'), score: 6.66, answer: 1
-                    }))
-                }
-            ];
-            MOCK_EXAMS.forEach(mockExam => {
-                loadedExams.push(mockExam);
-                const mockAttempts: Attempt[] = Array.from({ length: 25 }).map((_, i) => ({
-                    id: `mock-attempt-${mockExam.id}-${i}`,
-                    examId: mockExam.id,
-                    examTitle: mockExam.title,
-                    studentName: `학생 ${i + 1}`,
-                    startedAt: new Date(Date.now() - 86400000 * 1).toISOString(),
-                    finishedAt: new Date(Date.now() - 86400000 * 1 + i * 1000).toISOString(),
-                    score: mockExam.id === 'mock-1' ? (50 + Math.random() * 50) : (40 + Math.random() * 50),
-                    totalScore: 100,
-                    status: 'completed',
-                    answers: Array.from({ length: mockExam.questions.length }).reduce((acc: Record<number, number>, _, qIdx) => {
-                        const isCorrect = Math.random() > 0.3;
-                        const correctAns = mockExam.questions[qIdx].answer || 1;
-                        acc[qIdx + 1] = isCorrect ? correctAns : (correctAns === 1 ? 2 : 1);
-                        return acc;
-                    }, {})
-                }));
-                loadedAttempts.push(...mockAttempts);
+            // Sort exams by date
+            loadedExams.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+            setExams(loadedExams);
+            setAttempts(loadedAttempts);
+
+            // Calculate Stats
+            const totalScore = loadedAttempts.reduce((acc, curr) => acc + (curr.score / curr.totalScore) * 100, 0);
+            const avg = loadedAttempts.length > 0 ? Math.round(totalScore / loadedAttempts.length) : 0;
+
+            setStats({
+                totalStudents: new Set(loadedAttempts.map(a => a.studentName + a.id)).size,
+                avgScore: avg,
+                activeExams: loadedExams.length
             });
-        }
 
-        // Sort exams by date
-        loadedExams.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
-        // eslint-disable-next-line react-hooks/set-state-in-effect
-        setExams(loadedExams);
-        setAttempts(loadedAttempts);
+            // Calculate Trend Data (Last N attempts scores)
+            const scores = loadedAttempts
+                .sort((a, b) => new Date(a.finishedAt).getTime() - new Date(b.finishedAt).getTime())
+                .map(a => Math.round((a.score / a.totalScore) * 100))
+                .slice(-10);
 
-        // Calculate Stats
-        const totalScore = loadedAttempts.reduce((acc, curr) => acc + (curr.score / curr.totalScore) * 100, 0);
-        const avg = loadedAttempts.length > 0 ? Math.round(totalScore / loadedAttempts.length) : 0;
+            if (scores.length < 5) {
+                // Mock data with average if not enough
+                setTrendData([65, 78, 72, 85, 82, 90, avg || 80]);
+            } else {
+                setTrendData(scores);
+            }
+        };
 
-        setStats({
-            totalStudents: new Set(loadedAttempts.map(a => a.studentName + a.id)).size,
-            avgScore: avg,
-            activeExams: loadedExams.length
-        });
-
-        // Calculate Trend Data (Last N attempts scores)
-        const scores = loadedAttempts
-            .sort((a, b) => new Date(a.finishedAt).getTime() - new Date(b.finishedAt).getTime())
-            .map(a => Math.round((a.score / a.totalScore) * 100))
-            .slice(-10);
-
-        if (scores.length < 5) {
-            // Mock data with average if not enough
-            setTrendData([65, 78, 72, 85, 82, 90, avg || 80]);
-        } else {
-            setTrendData(scores);
-        }
-
+        void loadDashboardData();
+        return () => { cancelled = true; };
     }, []);
 
     const handleNavigateToExamAnalytics = (examId: string) => {
@@ -262,4 +253,3 @@ function TeacherDashboard() {
         </div>
     );
 }
-

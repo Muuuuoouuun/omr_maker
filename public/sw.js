@@ -6,7 +6,6 @@ const APP_SHELL = [
   "/",
   "/offline.html",
   "/manifest.webmanifest",
-  "/icon.png",
   "/pdf.worker.min.mjs",
   "/icons/icon-192.png",
   "/icons/icon-512.png",
@@ -56,7 +55,7 @@ self.addEventListener("fetch", event => {
     return;
   }
 
-  if (url.pathname.startsWith("/_next/static/") || url.pathname.startsWith("/icons/") || url.pathname === "/icon.png" || url.pathname === "/pdf.worker.min.mjs") {
+  if (url.pathname.startsWith("/_next/static/") || url.pathname.startsWith("/icons/") || url.pathname === "/pdf.worker.min.mjs") {
     event.respondWith(
       caches.match(request).then(cached => {
         const network = fetch(request).then(response => {

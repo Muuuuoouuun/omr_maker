@@ -14,10 +14,11 @@
   },
   "dependencies": {
     "@google/generative-ai": "^0.24.1",
+    "@supabase/supabase-js": "^2.108.1",
     "canvas": "^3.2.1",
     "html2canvas": "^1.4.1",
     "lucide-react": "^0.575.0",
-    "next": "16.1.4",
+    "next": "^16.2.9",
     "pdfjs-dist": "^5.4.530",
     "qrcode.react": "^4.2.0",
     "react": "19.2.3",
@@ -32,8 +33,11 @@
     "@types/react-dom": "^19",
     "@vitest/ui": "^4.1.4",
     "eslint": "^9",
-    "eslint-config-next": "16.1.4",
+    "eslint-config-next": "^16.2.9",
     "typescript": "^5",
     "vitest": "^4.1.4"
+  },
+  "overrides": {
+    "postcss": "8.5.10"
   }
 }

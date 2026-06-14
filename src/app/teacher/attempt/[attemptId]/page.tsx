@@ -9,6 +9,8 @@ import { gradeAttempt } from "@/types/omr";
 import type { Attempt, Exam, PdfDrawings } from "@/types/omr";
 import { loadJsonRecord, storedDataUrlToFile } from "@/utils/blobStore";
 import { getPlanLabel } from "@/utils/plans";
+import { formatKoreanDateTime } from "@/lib/pure";
+import { loadAttempt, loadExam } from "@/lib/omrPersistence";
 
 const PDFViewer = dynamic(() => import("@/components/PDFViewer"), { ssr: false });
 
@@ -36,7 +38,7 @@ export default function TeacherAttemptPage() {
 
     useEffect(() => {
         let cancelled = false;
-        queueMicrotask(() => {
+        const loadTeacherAttempt = async () => {
             if (!hasTeacherAccess()) {
                 setAccessDenied(true);
                 setLoaded(true);
@@ -44,9 +46,7 @@ export default function TeacherAttemptPage() {
             }
 
             try {
-                const attemptsRaw = localStorage.getItem("omr_attempts");
-                const attempts = attemptsRaw ? JSON.parse(attemptsRaw) as Attempt[] : [];
-                const found = attempts.find(a => a.id === id);
+                const found = await loadAttempt(id);
                 if (!found || cancelled) {
                     setLoaded(true);
                     return;
@@ -54,9 +54,8 @@ export default function TeacherAttemptPage() {
 
                 setAttempt(found);
 
-                const examRaw = localStorage.getItem(`omr_exam_${found.examId}`);
-                if (examRaw) {
-                    const parsedExam = JSON.parse(examRaw) as Exam;
+                const parsedExam = await loadExam(found.examId);
+                if (parsedExam) {
                     setExam(parsedExam);
                     storedDataUrlToFile("problem.pdf", parsedExam.pdfData, parsedExam.pdfDataRef)
                         .then(file => {
@@ -87,7 +86,9 @@ export default function TeacherAttemptPage() {
             } catch {
                 if (!cancelled) setLoaded(true);
             }
-        });
+        };
+
+        void loadTeacherAttempt();
 
         return () => { cancelled = true; };
     }, [id]);
@@ -126,7 +127,7 @@ export default function TeacherAttemptPage() {
                         <button onClick={() => router.back()} style={{ border: 'none', background: 'none', fontSize: '1.2rem', cursor: 'pointer' }}>←</button>
                         <div style={{ minWidth: 0 }}>
                             <div style={{ fontWeight: 800, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{attempt.examTitle}</div>
-                            <div style={{ fontSize: '0.78rem', color: '#64748b' }}>{attempt.studentName} · {new Date(attempt.finishedAt).toLocaleString('ko-KR')}</div>
+                            <div style={{ fontSize: '0.78rem', color: '#64748b' }}>{attempt.studentName} · {formatKoreanDateTime(attempt.finishedAt)}</div>
                         </div>
                     </div>
                     <Link href={`/teacher/exam/${attempt.examId}`} className="btn btn-secondary" style={{ fontSize: '0.85rem' }}>

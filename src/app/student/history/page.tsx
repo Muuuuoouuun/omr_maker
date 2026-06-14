@@ -4,6 +4,8 @@ import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { Attempt } from "@/types/omr";
 import { attemptBelongsToSession, getSession, type StudentSession } from "@/utils/storage";
+import { loadAttempts } from "@/lib/omrPersistence";
+import { formatKoreanDateTime } from "@/lib/pure";
 
 type PeriodFilter = "all" | "30d" | "7d";
 type SortMode = "recent" | "high" | "low";
@@ -31,23 +33,22 @@ export default function HistoryPage() {
 
     useEffect(() => {
         let cancelled = false;
-        queueMicrotask(() => {
+        const loadHistory = async () => {
             if (cancelled) return;
             const currentSession = getSession();
             setSession(currentSession);
-            const data = localStorage.getItem('omr_attempts');
-            if (data) {
-                try {
-                    const parsed = JSON.parse(data) as Attempt[];
-                    const mine = currentSession
-                        ? parsed.filter(attempt => attemptBelongsToSession(attempt, currentSession))
-                        : [];
-                    setAttempts(mine);
-                } catch (e) {
-                    console.error("Failed to load history", e);
-                }
+            try {
+                const result = await loadAttempts();
+                if (cancelled) return;
+                const mine = currentSession
+                    ? result.items.filter(attempt => attemptBelongsToSession(attempt, currentSession))
+                    : [];
+                setAttempts(mine);
+            } catch (e) {
+                console.error("Failed to load history", e);
             }
-        });
+        };
+        void loadHistory();
         return () => { cancelled = true; };
     }, []);
 
@@ -242,7 +243,7 @@ export default function HistoryPage() {
                                                 </span>
                                             </div>
                                             <div style={{ color: '#64748b', fontSize: '0.9rem', display: 'flex', gap: '0.75rem', flexWrap: 'wrap' }}>
-                                                <span>응시일: {new Date(attempt.finishedAt).toLocaleString()}</span>
+                                                <span>응시일: {formatKoreanDateTime(attempt.finishedAt)}</span>
                                                 <span style={{ color: '#94a3b8' }}>·</span>
                                                 <span>{attempt.score} / {attempt.totalScore} 점</span>
                                             </div>

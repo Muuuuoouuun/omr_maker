@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { Exam, Attempt } from "@/types/omr";
+import { Exam } from "@/types/omr";
 import AssignmentBlock from "@/components/dashboard/AssignmentBlock";
 import ThemeToggle from "@/components/ThemeToggle";
 import { Sparkles, Award } from "lucide-react";
@@ -16,6 +16,7 @@ import {
     studentIdFor,
     type StudentSession,
 } from "@/utils/storage";
+import { loadAttempts, loadExams } from "@/lib/omrPersistence";
 
 function getTimeGreeting(): string {
     const h = new Date().getHours();
@@ -36,66 +37,67 @@ export default function StudentDashboard() {
     });
 
     useEffect(() => {
-        // 1. Check Session (Simulated)
-        const currentUser = getSession();
-        if (!currentUser) {
-            alert("로그인이 필요합니다.");
-            router.push("/");
-            return;
-        }
-        // eslint-disable-next-line react-hooks/set-state-in-effect
-        setUser(currentUser);
-
-        // 2. Load Data
-        const allExams: Exam[] = [];
-        for (let i = 0; i < localStorage.length; i++) {
-            const key = localStorage.key(i);
-            if (key?.startsWith("omr_exam_")) {
-                try {
-                    allExams.push(JSON.parse(localStorage.getItem(key) || ""));
-                    // eslint-disable-next-line @typescript-eslint/no-unused-vars
-                } catch (e) { }
+        let cancelled = false;
+        const loadStudentData = async () => {
+            // 1. Check Session (Simulated)
+            const currentUser = getSession();
+            if (!currentUser) {
+                alert("로그인이 필요합니다.");
+                router.push("/");
+                return;
             }
-        }
+            if (cancelled) return;
+            setUser(currentUser);
 
-        const allAttempts: Attempt[] = JSON.parse(localStorage.getItem("omr_attempts") || "[]");
+            // 2. Load Data
+            const [examResult, attemptResult] = await Promise.all([
+                loadExams(),
+                loadAttempts(),
+            ]);
+            if (cancelled) return;
 
-        const myAttempts = allAttempts.filter(a => attemptBelongsToSession(a, currentUser));
+            const allExams = examResult.items;
+            const allAttempts = attemptResult.items;
+            const myAttempts = allAttempts.filter(a => attemptBelongsToSession(a, currentUser));
 
-        // 3. Categorize Exams
-        const done: (Exam & { attemptId: string })[] = [];
-        const todo: Exam[] = [];
+            // 3. Categorize Exams
+            const done: (Exam & { attemptId: string })[] = [];
+            const todo: Exam[] = [];
 
-        allExams.forEach(exam => {
-            // Check Access
-            let hasAccess = false;
-            // Public exams are accessible to everyone
-            if (exam.accessConfig?.type === 'public') hasAccess = true;
-            // Group exams check if user's group is in the list. Guests only see public.
-            else if (currentUser.isGuest) hasAccess = false;
-            else if (currentUser.groupId && exam.accessConfig?.groupIds?.includes(currentUser.groupId)) hasAccess = true;
+            allExams.forEach(exam => {
+                // Check Access
+                let hasAccess = false;
+                // Public exams are accessible to everyone
+                if (exam.accessConfig?.type === 'public') hasAccess = true;
+                // Group exams check if user's group is in the list. Guests only see public.
+                else if (currentUser.isGuest) hasAccess = false;
+                else if (currentUser.groupId && exam.accessConfig?.groupIds?.includes(currentUser.groupId)) hasAccess = true;
 
-            if (!hasAccess) return;
+                if (!hasAccess) return;
 
-            // Check if completed
-            const attempt = myAttempts.find(a => a.examId === exam.id);
-            if (attempt) {
-                done.push({ ...exam, attemptId: attempt.id });
-            } else {
-                todo.push(exam);
-            }
-        });
+                // Check if completed
+                const attempt = myAttempts.find(a => a.examId === exam.id);
+                if (attempt) {
+                    done.push({ ...exam, attemptId: attempt.id });
+                } else {
+                    todo.push(exam);
+                }
+            });
 
-        setTodoExams(todo);
-        setDoneExams(done);
+            setTodoExams(todo);
+            setDoneExams(done);
 
-        // 4. Calculate Stats
-        const totalScore = myAttempts.reduce((acc, curr) => acc + (curr.score / curr.totalScore) * 100, 0);
-        const avg = myAttempts.length > 0 ? Math.round(totalScore / myAttempts.length) : 0;
-        setStats({
-            avgScore: avg,
-            completedCount: myAttempts.length
-        });
+            // 4. Calculate Stats
+            const totalScore = myAttempts.reduce((acc, curr) => acc + (curr.score / curr.totalScore) * 100, 0);
+            const avg = myAttempts.length > 0 ? Math.round(totalScore / myAttempts.length) : 0;
+            setStats({
+                avgScore: avg,
+                completedCount: myAttempts.length
+            });
+        };
+
+        void loadStudentData();
+        return () => { cancelled = true; };
 
     }, [router]);
 

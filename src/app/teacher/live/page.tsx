@@ -5,6 +5,7 @@ import TeacherHeader from "@/components/TeacherHeader";
 import { Activity, Users, CheckCircle2, Clock, AlertTriangle, Bell, PlayCircle, PauseCircle } from "lucide-react";
 import { toast } from "@/components/Toast";
 import type { Exam, Attempt } from "@/types/omr";
+import { loadAttempts, loadExams } from "@/lib/omrPersistence";
 
 type StudentStatus = "submitted" | "in_progress" | "not_started";
 
@@ -114,46 +115,15 @@ function genSyntheticStudents(count: number, totalQ: number, startIdx: number): 
     return out;
 }
 
-function loadExamsFromStorage(): LiveExam[] {
-    if (typeof window === "undefined") return [];
-    const out: LiveExam[] = [];
-    try {
-        for (let i = 0; i < localStorage.length; i++) {
-            const key = localStorage.key(i);
-            if (!key || !key.startsWith("omr_exam_")) continue;
-            const raw = localStorage.getItem(key);
-            if (!raw) continue;
-            try {
-                const parsed = JSON.parse(raw) as Exam;
-                if (!parsed || !parsed.id || !parsed.title) continue;
-                const questions = Array.isArray(parsed.questions) ? parsed.questions : [];
-                out.push({
-                    id: parsed.id,
-                    title: parsed.title,
-                    total: questions.length,
-                    duration: 60,
-                    questions: questions.map(q => ({ id: q.id, answer: q.answer })),
-                });
-            } catch {
-                // skip malformed
-            }
-        }
-    } catch {
-        // localStorage unavailable
-    }
-    return out;
-}
-
-function loadAttemptsFromStorage(): Attempt[] {
-    if (typeof window === "undefined") return [];
-    try {
-        const raw = localStorage.getItem("omr_attempts");
-        if (!raw) return [];
-        const parsed = JSON.parse(raw);
-        return Array.isArray(parsed) ? parsed as Attempt[] : [];
-    } catch {
-        return [];
-    }
+function examToLiveExam(exam: Exam): LiveExam {
+    const questions = Array.isArray(exam.questions) ? exam.questions : [];
+    return {
+        id: exam.id,
+        title: exam.title,
+        total: questions.length,
+        duration: exam.durationMin || 60,
+        questions: questions.map(q => ({ id: q.id, answer: q.answer })),
+    };
 }
 
 const MIN_STUDENT_CARDS = 8;
@@ -168,28 +138,42 @@ export default function LiveResultsPage() {
     // Synthetic students per exam — mutable state so they can "progress" over time
     const [syntheticByExam, setSyntheticByExam] = useState<Record<string, LiveStudent[]>>({});
 
-    const refreshFromStorage = useCallback(() => {
-        const loaded = loadExamsFromStorage();
-        setExams(loaded.length > 0 ? loaded : MOCK_EXAMS);
-        setAttempts(loadAttemptsFromStorage());
+    const refreshFromStorage = useCallback(async () => {
+        const [examResult, attemptResult] = await Promise.all([
+            loadExams(),
+            loadAttempts(),
+        ]);
+        const loaded = examResult.items.map(examToLiveExam);
+        const effective = loaded.length > 0 ? loaded : MOCK_EXAMS;
+        setExams(effective);
+        setAttempts(attemptResult.items);
+        setSelectedExamId(prev => effective.some(e => e.id === prev) ? prev : effective[0].id);
     }, []);
 
     // Initial load + adjust selected exam if real exams found
     useEffect(() => {
-        const loaded = loadExamsFromStorage();
-        const effective = loaded.length > 0 ? loaded : MOCK_EXAMS;
-        // Hydrate from client-only localStorage after mount.
-        // eslint-disable-next-line react-hooks/set-state-in-effect
-        setExams(effective);
-        setAttempts(loadAttemptsFromStorage());
-        setSelectedExamId(prev => effective.some(e => e.id === prev) ? prev : effective[0].id);
+        let cancelled = false;
+        const loadInitial = async () => {
+            const [examResult, attemptResult] = await Promise.all([
+                loadExams(),
+                loadAttempts(),
+            ]);
+            if (cancelled) return;
+            const loaded = examResult.items.map(examToLiveExam);
+            const effective = loaded.length > 0 ? loaded : MOCK_EXAMS;
+            setExams(effective);
+            setAttempts(attemptResult.items);
+            setSelectedExamId(prev => effective.some(e => e.id === prev) ? prev : effective[0].id);
+        };
+        void loadInitial();
+        return () => { cancelled = true; };
     }, []);
 
     // Poll every 3s when tab is visible
     useEffect(() => {
         const id = setInterval(() => {
             if (typeof document === "undefined" || document.visibilityState === "visible") {
-                refreshFromStorage();
+                void refreshFromStorage();
             }
         }, 3000);
         return () => clearInterval(id);
@@ -389,7 +373,7 @@ export default function LiveResultsPage() {
                         className="input-field"
                         style={{ maxWidth: 340, fontWeight: 600 }}
                     >
-                        {MOCK_EXAMS.map(e => (
+                        {exams.map(e => (
                             <option key={e.id} value={e.id}>{e.title}</option>
                         ))}
                     </select>

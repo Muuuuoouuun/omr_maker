@@ -6,6 +6,8 @@ import Link from "next/link";
 import { Exam, Attempt } from "@/types/omr";
 import StatCard from "@/components/dashboard/StatCard";
 import { toast } from "@/components/Toast";
+import { loadAttempts, loadExam } from "@/lib/omrPersistence";
+import { formatKoreanDateTime } from "@/lib/pure";
 
 type SortKey = "name" | "percent" | "finishedAt";
 type SortDir = "asc" | "desc";
@@ -36,18 +38,19 @@ export default function ExamDetailPage() {
     useEffect(() => {
         if (!id) return;
 
-        const examData = localStorage.getItem(`omr_exam_${id}`);
-        if (examData) {
-            // eslint-disable-next-line react-hooks/set-state-in-effect
-            setExam(JSON.parse(examData));
-        }
+        let cancelled = false;
+        const loadDetail = async () => {
+            const [loadedExam, loadedAttempts] = await Promise.all([
+                loadExam(id),
+                loadAttempts(),
+            ]);
+            if (cancelled) return;
+            if (loadedExam) setExam(loadedExam);
+            setAttempts(loadedAttempts.items.filter(a => a.examId === id));
+        };
 
-        const allAttemptsStr = localStorage.getItem("omr_attempts");
-        if (allAttemptsStr) {
-            const allAttempts: Attempt[] = JSON.parse(allAttemptsStr);
-            const examAttempts = allAttempts.filter(a => a.examId === id);
-            setAttempts(examAttempts);
-        }
+        void loadDetail();
+        return () => { cancelled = true; };
     }, [id]);
 
     // Correct avg: percent-based, not raw score.
@@ -209,7 +212,7 @@ export default function ExamDetailPage() {
                                                     <span style={{ color: 'var(--muted)', fontSize: '0.8rem' }}> ({attempt.score}/{attempt.totalScore})</span>
                                                 </td>
                                                 <td style={{ padding: '1rem', color: 'var(--muted)' }}>
-                                                    {new Date(attempt.finishedAt).toLocaleString()}
+                                                    {formatKoreanDateTime(attempt.finishedAt)}
                                                 </td>
                                                 <td style={{ padding: '1rem' }}>
                                                     <span style={{

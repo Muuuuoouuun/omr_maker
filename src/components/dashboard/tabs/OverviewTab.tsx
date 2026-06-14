@@ -11,6 +11,8 @@ import ExamActionsMenu, { ExamActionKind } from "@/components/dashboard/ExamActi
 import { toast } from "@/components/Toast";
 import { Users, BarChart3, PlusCircle, Activity } from "lucide-react";
 import { copyStoredData, deleteStoredData } from "@/utils/blobStore";
+import { deleteExam, saveExam } from "@/lib/omrPersistence";
+import { formatKoreanDate } from "@/lib/pure";
 
 interface OverviewTabProps {
     exams: Exam[];
@@ -63,7 +65,8 @@ export default function OverviewTab({ exams: examsProp, attempts, stats, trendDa
                 archived: false,
             };
             try {
-                localStorage.setItem(`omr_exam_${newId}`, JSON.stringify(copy));
+                const result = await saveExam(copy);
+                if (!result.localSaved && !result.remoteSaved) throw new Error(result.remoteError);
                 setExams(prev => [copy, ...prev]);
                 toast.success('시험 복제됨', `"${target.title}"의 복사본을 만들었습니다.`);
             } catch {
@@ -76,7 +79,8 @@ export default function OverviewTab({ exams: examsProp, attempts, stats, trendDa
             const nextArchived = !target.archived;
             const updated: Exam = { ...target, archived: nextArchived, updatedAt: new Date().toISOString() };
             try {
-                localStorage.setItem(`omr_exam_${examId}`, JSON.stringify(updated));
+                const result = await saveExam(updated);
+                if (!result.localSaved && !result.remoteSaved) throw new Error(result.remoteError);
                 setExams(prev => prev.map(e => e.id === examId ? updated : e));
                 toast.success(nextArchived ? '시험 보관됨' : '보관 해제됨', target.title);
             } catch {
@@ -88,18 +92,10 @@ export default function OverviewTab({ exams: examsProp, attempts, stats, trendDa
         if (kind === 'delete') {
             if (!window.confirm(`"${target.title}" 시험을 삭제하시겠습니까?\n이 작업은 되돌릴 수 없습니다.`)) return;
             try {
-                localStorage.removeItem(`omr_exam_${examId}`);
+                const result = await deleteExam(examId);
+                if (!result.localSaved && !result.remoteSaved) throw new Error(result.remoteError);
                 deleteStoredData(target.pdfDataRef).catch(() => {});
                 deleteStoredData(target.answerKeyPdfRef).catch(() => {});
-                // Clean up attempts belonging to this exam
-                const attemptsRaw = localStorage.getItem('omr_attempts');
-                if (attemptsRaw) {
-                    try {
-                        const all: Attempt[] = JSON.parse(attemptsRaw);
-                        const filtered = all.filter(a => a.examId !== examId);
-                        localStorage.setItem('omr_attempts', JSON.stringify(filtered));
-                    } catch {}
-                }
                 setExams(prev => prev.filter(e => e.id !== examId));
                 toast.success('시험 삭제됨', target.title);
             } catch {
@@ -294,7 +290,7 @@ export default function OverviewTab({ exams: examsProp, attempts, stats, trendDa
                                             }}>보관됨</span>
                                         )}
                                     </td>
-                                    <td style={{ padding: '1.2rem 0', color: 'var(--muted)', fontSize: '0.9rem' }}>{new Date(exam.createdAt).toLocaleDateString()}</td>
+                                    <td style={{ padding: '1.2rem 0', color: 'var(--muted)', fontSize: '0.9rem' }}>{formatKoreanDate(exam.createdAt)}</td>
                                     <td style={{ padding: '1.2rem 0', display: 'flex', alignItems: 'center', gap: '1rem', height: '100%' }}>
                                         <div style={{ flex: 1, height: '6px', background: 'var(--border)', borderRadius: 'var(--radius-full)', overflow: 'hidden' }}>
                                             <div style={{ width: `${participationRate}%`, height: '100%', background: targetColor, borderRadius: 'var(--radius-full)', transition: 'width 1s ease-out' }}></div>

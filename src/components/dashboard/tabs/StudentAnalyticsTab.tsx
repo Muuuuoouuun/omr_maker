@@ -7,6 +7,7 @@ import {
     ResponsiveContainer, Legend
 } from 'recharts';
 import { TrendingUp } from "lucide-react";
+import { formatKoreanDate } from "@/lib/pure";
 
 interface StudentAnalyticsTabProps {
     exams: Exam[];
@@ -57,7 +58,7 @@ export default function StudentAnalyticsTab({ exams, attempts }: StudentAnalytic
                     : 0;
 
                 return {
-                    date: new Date(attempt.finishedAt).toLocaleDateString(undefined, { month: 'short', day: 'numeric' }),
+                    date: formatKoreanDate(attempt.finishedAt),
                     examTitle: attempt.examTitle,
                     examId: attempt.examId,
                     studentScore: Math.round((attempt.score / attempt.totalScore) * 100),
@@ -134,7 +135,7 @@ export default function StudentAnalyticsTab({ exams, attempts }: StudentAnalytic
                 totalStudents,
                 strongPoint,
                 weakPoint,
-                date: new Date(attempt.finishedAt).toLocaleDateString(undefined, { year: 'numeric', month: '2-digit', day: '2-digit' })
+                date: formatKoreanDate(attempt.finishedAt)
             };
         }).reverse(); // Latest at the top
     }, [studentAttempts, attempts, exams]);
@@ -254,7 +255,7 @@ export default function StudentAnalyticsTab({ exams, attempts }: StudentAnalytic
                                     }}>
                                         <div>
                                             <div style={{ fontWeight: 600, fontSize: '0.9rem', color: 'var(--foreground)' }}>{exam.title}</div>
-                                            <div style={{ fontSize: '0.75rem', color: 'var(--muted)' }}>배포일: {new Date(exam.createdAt).toLocaleDateString()}</div>
+                                            <div style={{ fontSize: '0.75rem', color: 'var(--muted)' }}>배포일: {formatKoreanDate(exam.createdAt)}</div>
                                         </div>
                                         <button
                                             onClick={() => alert(`[${selectedStudent}] 학생의 "${exam.title}" 시험에 대한 [알림 포화 모드]가 활성화되었습니다.\n\n해당 학생이 시험을 완료할 때까지 5분에 한 번씩 푸시 알림이 전송됩니다.`)}
@@ -307,7 +308,7 @@ export default function StudentAnalyticsTab({ exams, attempts }: StudentAnalytic
                                         />
                                         <div style={{ flex: 1, overflow: 'hidden' }}>
                                             <div style={{ fontWeight: 600, fontSize: '0.9rem', whiteSpace: 'nowrap', textOverflow: 'ellipsis', overflow: 'hidden' }}>{attempt.examTitle}</div>
-                                            <div style={{ fontSize: '0.75rem', color: 'var(--muted)' }}>{new Date(attempt.finishedAt).toLocaleDateString()}</div>
+                                            <div style={{ fontSize: '0.75rem', color: 'var(--muted)' }}>{formatKoreanDate(attempt.finishedAt)}</div>
                                         </div>
                                         <div style={{ fontWeight: 800, fontSize: '1.1rem', color: scoreRate >= 80 ? 'var(--success)' : (scoreRate < 50 ? 'var(--error)' : 'var(--text)') }}>
                                             {scoreRate}점
