@@ -4,18 +4,35 @@ import { useEffect, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
 import dynamic from "next/dynamic";
-import { BookOpen, ChevronDown, ChevronUp } from "lucide-react";
+import { BookOpen, ChevronDown, ChevronUp, Clock, Repeat2, Target } from "lucide-react";
 import { gradeAttempt } from "@/types/omr";
 import type { Attempt, Exam, PdfDrawings } from "@/types/omr";
 import { storedDataUrlToFile, loadJsonRecord } from "@/utils/blobStore";
 import { attemptBelongsToSession, getSession } from "@/utils/storage";
 import { loadAttempt, loadExam } from "@/lib/omrPersistence";
 import { formatKoreanDateTime } from "@/lib/pure";
+import { buildRetakeQuestionIds, buildStudentWeaknessGroups, summarizeAttemptBehavior } from "@/lib/premiumAnalytics";
 
 const PDFViewer = dynamic(() => import("@/components/PDFViewer"), { ssr: false });
 
 function hasDrawings(drawings?: PdfDrawings): boolean {
     return !!drawings && Object.values(drawings).some(paths => paths.length > 0);
+}
+
+function formatSeconds(totalSec: number): string {
+    if (totalSec < 60) return `${totalSec}초`;
+    const minutes = Math.floor(totalSec / 60);
+    const seconds = totalSec % 60;
+    return seconds > 0 ? `${minutes}분 ${seconds}초` : `${minutes}분`;
+}
+
+function buildRetakeHref(examId: string, sourceAttemptId: string, questionIds: number[], mode: "wrong" | "similar" = "wrong"): string {
+    const params = new URLSearchParams({
+        retakeFrom: sourceAttemptId,
+        questions: questionIds.join(","),
+        mode,
+    });
+    return `/solve/${examId}?${params.toString()}`;
 }
 
 export default function ReviewPage() {
@@ -105,15 +122,26 @@ export default function ReviewPage() {
         return <div style={{ padding: '2rem', textAlign: 'center' }}>Loading...</div>;
     }
 
-    const stats = gradeAttempt(exam.questions, attempt.answers);
+    const reviewQuestionIds = attempt.retake?.questionIds?.length
+        ? new Set(attempt.retake.questionIds)
+        : null;
+    const reviewQuestions = reviewQuestionIds
+        ? exam.questions.filter(q => reviewQuestionIds.has(q.id))
+        : exam.questions;
+    const reviewExam: Exam = { ...exam, questions: reviewQuestions };
+    const stats = gradeAttempt(reviewQuestions, attempt.answers);
     const percentCorrect = stats.totalScore > 0
         ? Math.round((stats.earnedScore / stats.totalScore) * 100)
         : 0;
 
     const filteredQuestions = filterWrong
-        ? exam.questions.filter(q => q.answer && attempt.answers[q.id] !== q.answer)
-        : exam.questions;
+        ? reviewQuestions.filter(q => q.answer && attempt.answers[q.id] !== q.answer)
+        : reviewQuestions;
     const hasHandwriting = hasDrawings(restoredDrawings);
+    const retakeQuestionIds = buildRetakeQuestionIds(reviewExam, attempt);
+    const weaknessGroups = buildStudentWeaknessGroups(reviewExam, attempt).slice(0, 3);
+    const behaviorSummary = summarizeAttemptBehavior(attempt);
+    const timingByQuestionId = new Map((attempt.questionTimings || []).map(timing => [timing.questionId, timing]));
 
     const toggleExplanation = (qId: number) => {
         setOpenExplanations(prev => ({ ...prev, [qId]: !prev[qId] }));
@@ -161,6 +189,22 @@ export default function ReviewPage() {
                             fontWeight: 800
                         }}>
                             필기 보관 {attempt.questionDrawings?.length || attempt.drawingPageCount || 0}문항
+                        </div>
+                    )}
+                    {attempt.retake && (
+                        <div style={{
+                            margin: '0.6rem auto 0',
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            gap: '0.4rem',
+                            padding: '0.35rem 0.75rem',
+                            borderRadius: '999px',
+                            background: '#f0fdfa',
+                            color: '#0f766e',
+                            fontSize: '0.78rem',
+                            fontWeight: 800
+                        }}>
+                            재시험 {attempt.retake.questionIds.length}문항
                         </div>
                     )}
                 </div>
@@ -265,16 +309,112 @@ export default function ReviewPage() {
                     </section>
                 )}
 
-                {/* Action: retake */}
-                <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: '1rem' }}>
-                    <Link
-                        href={`/solve/${attempt.examId}`}
-                        className="btn btn-primary"
-                        style={{ fontSize: '0.9rem' }}
-                    >
-                        시험 다시 보기
-                    </Link>
-                </div>
+                <section style={{
+                    background: 'white',
+                    border: '1px solid #e2e8f0',
+                    borderRadius: '12px',
+                    padding: '1.25rem',
+                    marginBottom: '1.25rem',
+                    display: 'grid',
+                    gap: '1rem'
+                }}>
+                    <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: '1rem', flexWrap: 'wrap' }}>
+                        <div>
+                            <h2 style={{ fontSize: '1rem', fontWeight: 800, color: '#0f172a', display: 'flex', alignItems: 'center', gap: '0.45rem' }}>
+                                <Target size={17} color="#4f46e5" />
+                                오답 재시험
+                            </h2>
+                            <p style={{ color: '#64748b', fontSize: '0.84rem', marginTop: '0.25rem' }}>
+                                틀린 문항과 같은 유형을 묶어 다시 풀 수 있습니다.
+                            </p>
+                        </div>
+                        <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+                            {retakeQuestionIds.length > 0 ? (
+                                <Link
+                                    href={buildRetakeHref(attempt.examId, attempt.id, retakeQuestionIds, "wrong")}
+                                    className="btn btn-primary"
+                                    style={{ fontSize: '0.86rem', display: 'inline-flex', alignItems: 'center', gap: '0.4rem' }}
+                                >
+                                    <Repeat2 size={15} />
+                                    오답만 재시험
+                                </Link>
+                            ) : (
+                                <span style={{ color: '#16a34a', fontWeight: 800, fontSize: '0.86rem' }}>재시험할 오답이 없습니다</span>
+                            )}
+                            <Link
+                                href={`/solve/${attempt.examId}`}
+                                className="btn btn-secondary"
+                                style={{ fontSize: '0.86rem' }}
+                            >
+                                전체 다시 보기
+                            </Link>
+                        </div>
+                    </div>
+
+                    {weaknessGroups.length > 0 && (
+                        <div style={{ display: 'grid', gap: '0.55rem' }}>
+                            {weaknessGroups.map(group => (
+                                <div key={group.key} style={{
+                                    display: 'flex',
+                                    alignItems: 'center',
+                                    justifyContent: 'space-between',
+                                    gap: '0.75rem',
+                                    padding: '0.8rem 0.9rem',
+                                    borderRadius: '8px',
+                                    background: '#f8fafc',
+                                    border: '1px solid #e2e8f0'
+                                }}>
+                                    <div style={{ minWidth: 0 }}>
+                                        <div style={{ fontWeight: 800, color: '#0f172a', fontSize: '0.9rem' }}>
+                                            {group.title}
+                                            <span style={{ marginLeft: '0.45rem', color: '#64748b', fontSize: '0.76rem', fontWeight: 700 }}>
+                                                {group.basis}
+                                            </span>
+                                        </div>
+                                        <div style={{ color: '#64748b', fontSize: '0.78rem', marginTop: '0.2rem' }}>
+                                            {group.questionNumbers.join(', ')}번 · 오답률 {group.wrongRate}%
+                                        </div>
+                                    </div>
+                                    <Link
+                                        href={buildRetakeHref(attempt.examId, attempt.id, group.questionIds, "similar")}
+                                        className="btn btn-secondary"
+                                        style={{ fontSize: '0.78rem', padding: '0.35rem 0.7rem', whiteSpace: 'nowrap' }}
+                                    >
+                                        유형 재시험
+                                    </Link>
+                                </div>
+                            ))}
+                        </div>
+                    )}
+                </section>
+
+                {(attempt.questionTimings?.length || behaviorSummary.focusLossCount > 0) && (
+                    <section style={{
+                        background: 'white',
+                        border: '1px solid #e2e8f0',
+                        borderRadius: '12px',
+                        padding: '1rem',
+                        marginBottom: '1.25rem',
+                    }}>
+                        <h2 style={{ fontSize: '0.96rem', fontWeight: 800, color: '#0f172a', display: 'flex', alignItems: 'center', gap: '0.4rem', marginBottom: '0.75rem' }}>
+                            <Clock size={16} color="#4f46e5" />
+                            풀이 행동 요약
+                        </h2>
+                        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '0.6rem' }}>
+                            {[
+                                { label: '추적 시간', value: formatSeconds(behaviorSummary.totalTrackedTimeSec) },
+                                { label: '평균 문항 시간', value: formatSeconds(behaviorSummary.averageTimeSec) },
+                                { label: '다시 본 문항', value: behaviorSummary.revisitedQuestionNumbers.length ? `${behaviorSummary.revisitedQuestionNumbers.join(', ')}번` : '없음' },
+                                { label: '이탈 기록', value: `${behaviorSummary.focusLossCount}회` },
+                            ].map(item => (
+                                <div key={item.label} style={{ padding: '0.75rem', borderRadius: '8px', background: '#f8fafc', border: '1px solid #e2e8f0' }}>
+                                    <div style={{ color: '#64748b', fontSize: '0.72rem', fontWeight: 700, marginBottom: '0.25rem' }}>{item.label}</div>
+                                    <div style={{ color: '#0f172a', fontSize: '0.9rem', fontWeight: 800 }}>{item.value}</div>
+                                </div>
+                            ))}
+                        </div>
+                    </section>
+                )}
 
                 {/* Filters */}
                 <div style={{ display: 'flex', gap: '1rem', marginBottom: '1.5rem', borderBottom: '1px solid #e2e8f0', paddingBottom: '1rem' }}>
@@ -283,7 +423,7 @@ export default function ReviewPage() {
                         className={`btn ${!filterWrong ? 'btn-primary' : 'btn-secondary'}`}
                         style={{ borderRadius: '999px' }}
                     >
-                        전체 문항 ({exam.questions.length})
+                        전체 문항 ({reviewQuestions.length})
                     </button>
                     <button
                         onClick={() => setFilterWrong(true)}
@@ -301,6 +441,7 @@ export default function ReviewPage() {
                         const isCorrect = userAns === q.answer;
                         const isSkipped = userAns === undefined || userAns === null || userAns === 0;
                         const explanationOpen = !!openExplanations[q.id];
+                        const timing = timingByQuestionId.get(q.id);
 
                         return (
                             <div key={q.id} style={{
@@ -343,11 +484,20 @@ export default function ReviewPage() {
                                     )}
                                 </div>
 
-                                {q.label && (
-                                    <div style={{ marginTop: '1rem', display: 'flex', gap: '0.5rem' }}>
-                                        <span style={{ fontSize: '0.75rem', padding: '2px 8px', borderRadius: '4px', background: '#f1f5f9', color: '#64748b' }}>
+                                {(q.label || q.tags?.concept || q.tags?.source || timing) && (
+                                    <div style={{ marginTop: '1rem', display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
+                                        {q.label && <span style={{ fontSize: '0.75rem', padding: '2px 8px', borderRadius: '4px', background: '#f1f5f9', color: '#64748b' }}>
                                             #{q.label}
-                                        </span>
+                                        </span>}
+                                        {q.tags?.concept && <span style={{ fontSize: '0.75rem', padding: '2px 8px', borderRadius: '4px', background: '#eef2ff', color: '#4f46e5' }}>
+                                            {q.tags.concept}
+                                        </span>}
+                                        {q.tags?.source && <span style={{ fontSize: '0.75rem', padding: '2px 8px', borderRadius: '4px', background: '#f0fdfa', color: '#0f766e' }}>
+                                            {q.tags.source}
+                                        </span>}
+                                        {timing && <span style={{ fontSize: '0.75rem', padding: '2px 8px', borderRadius: '4px', background: '#fff7ed', color: '#9a3412' }}>
+                                            {formatSeconds(timing.totalTimeSec)} · 방문 {timing.visitCount}회
+                                        </span>}
                                     </div>
                                 )}
 

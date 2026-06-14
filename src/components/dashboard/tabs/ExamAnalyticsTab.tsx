@@ -2,11 +2,13 @@
 
 import { useMemo, useState, useEffect, useRef } from "react";
 import { Exam, Attempt, questionWeight } from "@/types/omr";
+import Link from "next/link";
 import {
     BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip, ResponsiveContainer,
     Radar, RadarChart, PolarGrid, PolarAngleAxis, PolarRadiusAxis
 } from 'recharts';
 import { AlertTriangle, CheckCircle, BarChart2, Download, ChevronUp, ChevronDown, List, Target, Users, Lightbulb } from "lucide-react";
+import { buildRetakeQuestionIds, buildSimilarQuestionGroups, summarizeAttemptBehavior } from "@/lib/premiumAnalytics";
 
 interface ExamAnalyticsTabProps {
     exams: Exam[];
@@ -20,6 +22,22 @@ const difficultyLabelMap: Record<string, string> = {
     hard: "심화",
     killer: "킬러",
 };
+
+function formatSeconds(totalSec: number): string {
+    if (totalSec < 60) return `${totalSec}초`;
+    const minutes = Math.floor(totalSec / 60);
+    const seconds = totalSec % 60;
+    return seconds > 0 ? `${minutes}분 ${seconds}초` : `${minutes}분`;
+}
+
+function buildRetakeHref(examId: string, sourceAttemptId: string, questionIds: number[], mode: "wrong" | "similar" = "wrong"): string {
+    const params = new URLSearchParams({
+        retakeFrom: sourceAttemptId,
+        questions: questionIds.join(","),
+        mode,
+    });
+    return `/solve/${examId}?${params.toString()}`;
+}
 
 export default function ExamAnalyticsTab({ exams, attempts, initialExamId }: ExamAnalyticsTabProps) {
     const [selectedExamId, setSelectedExamId] = useState<string>(initialExamId || (exams.length > 0 ? exams[0].id : ""));
@@ -61,8 +79,16 @@ export default function ExamAnalyticsTab({ exams, attempts, initialExamId }: Exa
         }
     }, [initialExamId]);
 
+    useEffect(() => {
+        if (!selectedExamId && exams.length > 0) {
+            setSelectedExamId(exams[0].id);
+        }
+    }, [exams, selectedExamId]);
+
     const selectedExam = useMemo(() => exams.find(e => e.id === selectedExamId), [exams, selectedExamId]);
-    const examAttempts = useMemo(() => attempts.filter(a => a.examId === selectedExamId), [attempts, selectedExamId]);
+    const allSelectedExamAttempts = useMemo(() => attempts.filter(a => a.examId === selectedExamId), [attempts, selectedExamId]);
+    const examAttempts = useMemo(() => allSelectedExamAttempts.filter(a => !a.retake), [allSelectedExamAttempts]);
+    const retakeAttempts = useMemo(() => allSelectedExamAttempts.filter(a => !!a.retake), [allSelectedExamAttempts]);
 
     const examStats = useMemo(() => {
         if (!selectedExam || examAttempts.length === 0) return null;
@@ -304,6 +330,36 @@ export default function ExamAnalyticsTab({ exams, attempts, initialExamId }: Exa
         };
     }, [conceptAnalytics, examStats, questionAnalytics, studentScores]);
 
+    const similarQuestionGroups = useMemo(() => {
+        if (!selectedExam || examAttempts.length === 0) return [];
+        return buildSimilarQuestionGroups(selectedExam, examAttempts)
+            .filter(group => group.wrongCount > 0)
+            .slice(0, 6);
+    }, [selectedExam, examAttempts]);
+
+    const behaviorRows = useMemo(() => {
+        return examAttempts
+            .map(attempt => ({
+                attempt,
+                summary: summarizeAttemptBehavior(attempt),
+            }))
+            .filter(row =>
+                row.summary.totalTrackedTimeSec > 0 ||
+                row.summary.revisitedQuestionNumbers.length > 0 ||
+                row.summary.focusLossCount > 0
+            )
+            .sort((a, b) => {
+                if (b.summary.focusLossCount !== a.summary.focusLossCount) {
+                    return b.summary.focusLossCount - a.summary.focusLossCount;
+                }
+                if (b.summary.revisitedQuestionNumbers.length !== a.summary.revisitedQuestionNumbers.length) {
+                    return b.summary.revisitedQuestionNumbers.length - a.summary.revisitedQuestionNumbers.length;
+                }
+                return b.summary.totalTrackedTimeSec - a.summary.totalTrackedTimeSec;
+            })
+            .slice(0, 6);
+    }, [examAttempts]);
+
     const handleSort = (field: 'name' | 'score') => {
         if (sortField === field) {
             setSortDir(sortDir === 'asc' ? 'desc' : 'asc');
@@ -481,12 +537,13 @@ export default function ExamAnalyticsTab({ exams, attempts, initialExamId }: Exa
             {examStats ? (
                 <>
                     {/* Stats Summary */}
-                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '1rem' }}>
+                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: '1rem' }}>
                         {[
                             { label: '평균 점수', value: `${examStats.avgScore}점`, color: 'var(--primary)' },
                             { label: '최고 점수', value: `${examStats.maxScore}점`, color: 'var(--success)' },
                             { label: '최저 점수', value: `${examStats.minScore}점`, color: 'var(--warning)' },
                             { label: '응시 인원', value: `${examStats.count}명`, color: 'var(--text)' },
+                            { label: '재시험 제출', value: `${retakeAttempts.length}건`, color: '#0f766e' },
                         ].map((stat, i) => (
                             <div key={i} className="card" style={{ padding: '1.5rem', textAlign: 'center', borderTop: `4px solid ${stat.color}` }}>
                                 <div style={{ fontSize: '0.9rem', color: 'var(--muted)', marginBottom: '0.5rem' }}>{stat.label}</div>
@@ -614,6 +671,115 @@ export default function ExamAnalyticsTab({ exams, attempts, initialExamId }: Exa
                                     </table>
                                 </div>
                             )}
+                        </div>
+                    )}
+
+                    {(similarQuestionGroups.length > 0 || behaviorRows.length > 0) && (
+                        <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1.2fr) minmax(0, 1fr)', gap: '1.5rem' }}>
+                            <div className="card" style={{ padding: '1.5rem', border: '1px solid var(--border)', background: 'var(--surface)' }}>
+                                <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: '1rem', marginBottom: '1rem' }}>
+                                    <div>
+                                        <h3 style={{ fontSize: '1rem', fontWeight: 800, color: 'var(--foreground)', display: 'flex', alignItems: 'center', gap: '0.45rem' }}>
+                                            <Target size={16} color="var(--primary)" />
+                                            유사 유형 소팅
+                                        </h3>
+                                        <p style={{ fontSize: '0.8rem', color: 'var(--muted)', marginTop: '0.2rem' }}>
+                                            같은 지문/작품, 개념, 단원 기준으로 오답 압력이 높은 묶음입니다.
+                                        </p>
+                                    </div>
+                                    <span style={{
+                                        fontSize: '0.72rem',
+                                        fontWeight: 800,
+                                        color: '#0f766e',
+                                        background: '#f0fdfa',
+                                        border: '1px solid #99f6e4',
+                                        padding: '0.22rem 0.55rem',
+                                        borderRadius: '999px',
+                                        whiteSpace: 'nowrap',
+                                    }}>
+                                        Premium
+                                    </span>
+                                </div>
+
+                                {similarQuestionGroups.length > 0 ? (
+                                    <div style={{ display: 'grid', gap: '0.65rem' }}>
+                                        {similarQuestionGroups.map(group => (
+                                            <div key={group.key} style={{
+                                                display: 'flex',
+                                                alignItems: 'center',
+                                                justifyContent: 'space-between',
+                                                gap: '0.75rem',
+                                                padding: '0.85rem',
+                                                borderRadius: 'var(--radius-md)',
+                                                border: '1px solid var(--border)',
+                                                background: 'var(--background)'
+                                            }}>
+                                                <div style={{ minWidth: 0 }}>
+                                                    <div style={{ fontWeight: 900, color: 'var(--foreground)', lineHeight: 1.3 }}>
+                                                        {group.title}
+                                                        <span style={{ marginLeft: '0.45rem', color: 'var(--muted)', fontSize: '0.74rem', fontWeight: 800 }}>
+                                                            {group.basis}
+                                                        </span>
+                                                    </div>
+                                                    <div style={{ fontSize: '0.78rem', color: 'var(--muted)', marginTop: '0.22rem' }}>
+                                                        {group.questionNumbers.join(', ')}번 · 오답 {group.wrongCount}/{group.totalCount} · {group.wrongRate}%
+                                                    </div>
+                                                </div>
+                                                <Link
+                                                    href={buildRetakeHref(selectedExamId, `exam:${selectedExamId}`, group.questionIds, "similar")}
+                                                    className="btn btn-secondary"
+                                                    style={{ fontSize: '0.75rem', padding: '0.35rem 0.65rem', whiteSpace: 'nowrap' }}
+                                                >
+                                                    세트 재시험
+                                                </Link>
+                                            </div>
+                                        ))}
+                                    </div>
+                                ) : (
+                                    <div style={{ color: 'var(--muted)', fontSize: '0.85rem', padding: '1rem', border: '1px dashed var(--border)', borderRadius: 'var(--radius-md)' }}>
+                                        오답이 쌓이면 유사 유형 묶음이 표시됩니다.
+                                    </div>
+                                )}
+                            </div>
+
+                            <div className="card" style={{ padding: '1.5rem', border: '1px solid var(--border)', background: 'var(--surface)' }}>
+                                <h3 style={{ fontSize: '1rem', fontWeight: 800, color: 'var(--foreground)', display: 'flex', alignItems: 'center', gap: '0.45rem', marginBottom: '0.25rem' }}>
+                                    <List size={16} color="var(--primary)" />
+                                    풀이 행동 신호
+                                </h3>
+                                <p style={{ fontSize: '0.8rem', color: 'var(--muted)', marginBottom: '1rem' }}>
+                                    오래 머문 문항, 다시 돌아온 문항, 화면 이탈을 학생별로 확인합니다.
+                                </p>
+
+                                {behaviorRows.length > 0 ? (
+                                    <div style={{ display: 'grid', gap: '0.55rem' }}>
+                                        {behaviorRows.map(row => (
+                                            <div key={row.attempt.id} style={{
+                                                padding: '0.8rem',
+                                                borderRadius: 'var(--radius-md)',
+                                                border: '1px solid var(--border)',
+                                                background: 'var(--background)',
+                                            }}>
+                                                <div style={{ display: 'flex', justifyContent: 'space-between', gap: '0.75rem', marginBottom: '0.3rem' }}>
+                                                    <span style={{ fontWeight: 900, color: 'var(--foreground)' }}>{row.attempt.studentName}</span>
+                                                    <span style={{ color: row.summary.focusLossCount > 0 ? 'var(--error)' : 'var(--muted)', fontSize: '0.78rem', fontWeight: 800 }}>
+                                                        이탈 {row.summary.focusLossCount}회
+                                                    </span>
+                                                </div>
+                                                <div style={{ fontSize: '0.78rem', color: 'var(--muted)', lineHeight: 1.5 }}>
+                                                    추적 {formatSeconds(row.summary.totalTrackedTimeSec)}
+                                                    {row.summary.slowQuestionNumbers.length > 0 && ` · 오래 머문 ${row.summary.slowQuestionNumbers.join(', ')}번`}
+                                                    {row.summary.revisitedQuestionNumbers.length > 0 && ` · 재방문 ${row.summary.revisitedQuestionNumbers.join(', ')}번`}
+                                                </div>
+                                            </div>
+                                        ))}
+                                    </div>
+                                ) : (
+                                    <div style={{ color: 'var(--muted)', fontSize: '0.85rem', padding: '1rem', border: '1px dashed var(--border)', borderRadius: 'var(--radius-md)' }}>
+                                        새 제출부터 문항별 시간과 재방문 로그가 표시됩니다.
+                                    </div>
+                                )}
+                            </div>
                         </div>
                     )}
 
@@ -938,46 +1104,80 @@ export default function ExamAnalyticsTab({ exams, attempts, initialExamId }: Exa
                                                 {label}
                                             </th>
                                         ))}
+                                        <th style={{ padding: '1rem', fontSize: '0.85rem', color: 'var(--muted)' }}>풀이 행동</th>
+                                        <th style={{ padding: '1rem', fontSize: '0.85rem', color: 'var(--muted)' }}>재시험</th>
                                         <th style={{ padding: '1rem', fontSize: '0.85rem', color: 'var(--muted)', textAlign: 'right' }}>데이터 출력</th>
                                     </tr>
                                 </thead>
                                 <tbody>
-                                    {sortedStudentScores.map((student, i) => (
-                                        <tr key={i} style={{ borderTop: '1px solid var(--border)' }} className="hover:bg-slate-50 dark:hover:bg-slate-800/50">
-                                            <td style={{ padding: '1rem', fontWeight: 600 }}>{student.studentName}</td>
-                                            <td style={{ padding: '1rem' }}>
-                                                <div style={{ fontWeight: 800, color: student.scorePercentage >= 80 ? 'var(--success)' : (student.scorePercentage < 50 ? 'var(--error)' : 'var(--text)') }}>
-                                                    {Number(student.totalScore.toFixed(2))}점 <span style={{ fontSize: '0.8rem', color: 'var(--muted)', fontWeight: 400 }}>({student.scorePercentage}%)</span>
-                                                </div>
-                                            </td>
-                                            {/* Dynamic Label Columns */}
-                                            {examLabels.map(label => {
-                                                const ls = student.labelScores[label];
-                                                const rate = ls.total > 0 ? Math.round((ls.earned / ls.total) * 100) : 0;
-                                                return (
-                                                    <td key={label} style={{ padding: '1rem' }}>
-                                                        <div style={{ fontSize: '0.9rem', fontWeight: 600 }}>{ls.earned} / {ls.total}</div>
-                                                        <div style={{ fontSize: '0.75rem', color: 'var(--muted)' }}>정답률 {rate}%</div>
-                                                    </td>
-                                                );
-                                            })}
-                                            <td style={{ padding: '1rem', textAlign: 'right' }}>
-                                                <button
-                                                    onClick={() => handleExportCSV(student)}
-                                                    style={{
-                                                        background: 'var(--surface)', color: 'var(--foreground)', padding: '0.4rem 0.8rem',
-                                                        borderRadius: 'var(--radius-md)', fontSize: '0.75rem', fontWeight: 600,
-                                                        display: 'inline-flex', alignItems: 'center', gap: '0.4rem',
-                                                        border: '1px solid var(--border)', transition: 'all 0.2s'
-                                                    }}
-                                                    className="hover:border-primary hover:text-primary"
-                                                >
-                                                    <Download size={14} />
-                                                    정오표(CSV)
-                                                </button>
-                                            </td>
-                                        </tr>
-                                    ))}
+                                    {sortedStudentScores.map((student, i) => {
+                                        const behavior = summarizeAttemptBehavior(student.attempt);
+                                        const retakeIds = selectedExam ? buildRetakeQuestionIds(selectedExam, student.attempt) : [];
+                                        return (
+                                            <tr key={i} style={{ borderTop: '1px solid var(--border)' }} className="hover:bg-slate-50 dark:hover:bg-slate-800/50">
+                                                <td style={{ padding: '1rem', fontWeight: 600 }}>{student.studentName}</td>
+                                                <td style={{ padding: '1rem' }}>
+                                                    <div style={{ fontWeight: 800, color: student.scorePercentage >= 80 ? 'var(--success)' : (student.scorePercentage < 50 ? 'var(--error)' : 'var(--text)') }}>
+                                                        {Number(student.totalScore.toFixed(2))}점 <span style={{ fontSize: '0.8rem', color: 'var(--muted)', fontWeight: 400 }}>({student.scorePercentage}%)</span>
+                                                    </div>
+                                                </td>
+                                                {/* Dynamic Label Columns */}
+                                                {examLabels.map(label => {
+                                                    const ls = student.labelScores[label];
+                                                    const rate = ls.total > 0 ? Math.round((ls.earned / ls.total) * 100) : 0;
+                                                    return (
+                                                        <td key={label} style={{ padding: '1rem' }}>
+                                                            <div style={{ fontSize: '0.9rem', fontWeight: 600 }}>{ls.earned} / {ls.total}</div>
+                                                            <div style={{ fontSize: '0.75rem', color: 'var(--muted)' }}>정답률 {rate}%</div>
+                                                        </td>
+                                                    );
+                                                })}
+                                                <td style={{ padding: '1rem', color: 'var(--muted)', fontSize: '0.78rem', lineHeight: 1.45 }}>
+                                                    {behavior.totalTrackedTimeSec > 0
+                                                        ? `평균 ${formatSeconds(behavior.averageTimeSec)}`
+                                                        : '새 제출부터 추적'}
+                                                    {behavior.revisitedQuestionNumbers.length > 0 && (
+                                                        <div style={{ color: 'var(--primary)', fontWeight: 800 }}>
+                                                            재방문 {behavior.revisitedQuestionNumbers.join(', ')}번
+                                                        </div>
+                                                    )}
+                                                    {behavior.focusLossCount > 0 && (
+                                                        <div style={{ color: 'var(--error)', fontWeight: 800 }}>
+                                                            이탈 {behavior.focusLossCount}회
+                                                        </div>
+                                                    )}
+                                                </td>
+                                                <td style={{ padding: '1rem' }}>
+                                                    {retakeIds.length > 0 ? (
+                                                        <Link
+                                                            href={buildRetakeHref(selectedExamId, student.attempt.id, retakeIds, "wrong")}
+                                                            className="btn btn-secondary"
+                                                            style={{ padding: '0.35rem 0.7rem', fontSize: '0.75rem', whiteSpace: 'nowrap' }}
+                                                        >
+                                                            오답 {retakeIds.length}문항
+                                                        </Link>
+                                                    ) : (
+                                                        <span style={{ color: 'var(--success)', fontSize: '0.78rem', fontWeight: 800 }}>완료</span>
+                                                    )}
+                                                </td>
+                                                <td style={{ padding: '1rem', textAlign: 'right' }}>
+                                                    <button
+                                                        onClick={() => handleExportCSV(student)}
+                                                        style={{
+                                                            background: 'var(--surface)', color: 'var(--foreground)', padding: '0.4rem 0.8rem',
+                                                            borderRadius: 'var(--radius-md)', fontSize: '0.75rem', fontWeight: 600,
+                                                            display: 'inline-flex', alignItems: 'center', gap: '0.4rem',
+                                                            border: '1px solid var(--border)', transition: 'all 0.2s'
+                                                        }}
+                                                        className="hover:border-primary hover:text-primary"
+                                                    >
+                                                        <Download size={14} />
+                                                        정오표(CSV)
+                                                    </button>
+                                                </td>
+                                            </tr>
+                                        );
+                                    })}
                                 </tbody>
                             </table>
                         </div>

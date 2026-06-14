@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
 import OMRCardView from "@/components/OMRCardView";
@@ -16,7 +16,18 @@ import { loadExam as loadPersistedExam, saveAttempt } from "@/lib/omrPersistence
 
 const PDFViewer = dynamic(() => import("@/components/PDFViewer"), { ssr: false });
 import { gradeAttempt } from "@/types/omr";
-import type { Attempt, Exam, PdfDrawings, PlanKey, Question, QuestionDrawingSummary, StoredDataRef } from "@/types/omr";
+import type {
+    Attempt,
+    Exam,
+    FocusLossEvent,
+    PdfDrawings,
+    PlanKey,
+    Question,
+    QuestionDrawingSummary,
+    QuestionTiming,
+    RetakeMetadata,
+    StoredDataRef,
+} from "@/types/omr";
 
 const AUTOSAVE_INTERVAL_MS = 3000;
 
@@ -29,6 +40,19 @@ interface SolveDraft {
     startedAt: string;
     savedAt: string;
 }
+
+interface QuestionTimingDraft {
+    questionId: number;
+    questionNumber: number;
+    totalMs: number;
+    visitCount: number;
+    answerChangeCount: number;
+    firstVisitedAt?: string;
+    lastVisitedAt?: string;
+    lastAnsweredAt?: string;
+}
+
+type RetakeConfig = Omit<RetakeMetadata, "createdAt">;
 
 function isPdfDrawings(value: unknown): value is PdfDrawings {
     if (!value || typeof value !== "object" || Array.isArray(value)) return false;
@@ -87,6 +111,7 @@ export default function SolvePage() {
     const [drawings, setDrawings] = useState<PdfDrawings>({});
     const [pdfFile, setPdfFile] = useState<File | null>(null);
     const [currentPlan, setCurrentPlan] = useState<PlanKey>("free");
+    const [retakeConfig, setRetakeConfig] = useState<RetakeConfig | null>(null);
 
     const [user, setUser] = useState<StudentSession | null>(() => getSession());
 
@@ -110,6 +135,11 @@ export default function SolvePage() {
     const submittedRef = useRef(false);
     const latestDraftRef = useRef<SolveDraft | null>(null);
     const autosaveErrorShownRef = useRef(false);
+    const examQuestionsRef = useRef<Question[]>([]);
+    const currentQuestionIdRef = useRef<number | null>(null);
+    const activeQuestionRef = useRef<{ questionId: number; startedAtMs: number } | null>(null);
+    const questionTimingRef = useRef<Record<number, QuestionTimingDraft>>({});
+    const focusLossEventsRef = useRef<FocusLossEvent[]>([]);
     
     // Focus Warning States (Anti-cheat)
     const [tabFociLostCount, setTabFociLostCount] = useState(0);
@@ -126,38 +156,125 @@ export default function SolvePage() {
         return pid;
     });
 
+    const getQuestionById = useCallback((questionId: number) => {
+        return examQuestionsRef.current.find(q => q.id === questionId);
+    }, []);
+
+    const ensureQuestionTiming = useCallback((questionId: number, nowMs = Date.now()) => {
+        const existing = questionTimingRef.current[questionId];
+        if (existing) return existing;
+
+        const question = getQuestionById(questionId);
+        const timestamp = new Date(nowMs).toISOString();
+        const next: QuestionTimingDraft = {
+            questionId,
+            questionNumber: question?.number || questionId,
+            totalMs: 0,
+            visitCount: 0,
+            answerChangeCount: 0,
+            firstVisitedAt: timestamp,
+            lastVisitedAt: timestamp,
+        };
+        questionTimingRef.current[questionId] = next;
+        return next;
+    }, [getQuestionById]);
+
+    const settleActiveQuestion = useCallback((nowMs = Date.now()) => {
+        const active = activeQuestionRef.current;
+        if (!active) return;
+        const timing = ensureQuestionTiming(active.questionId, active.startedAtMs);
+        timing.totalMs += Math.max(0, nowMs - active.startedAtMs);
+        timing.lastVisitedAt = new Date(nowMs).toISOString();
+        activeQuestionRef.current = null;
+    }, [ensureQuestionTiming]);
+
+    const beginQuestionVisit = useCallback((questionId: number, nowMs = Date.now()) => {
+        if (activeQuestionRef.current?.questionId === questionId) {
+            setCurrentQuestionId(questionId);
+            return;
+        }
+
+        settleActiveQuestion(nowMs);
+        const timing = ensureQuestionTiming(questionId, nowMs);
+        timing.visitCount += 1;
+        timing.lastVisitedAt = new Date(nowMs).toISOString();
+        activeQuestionRef.current = { questionId, startedAtMs: nowMs };
+        currentQuestionIdRef.current = questionId;
+        setCurrentQuestionId(questionId);
+    }, [ensureQuestionTiming, settleActiveQuestion]);
+
+    const getActiveExamQuestions = () => {
+        if (!examData) return [];
+        if (!retakeConfig) return examData.questions;
+        const activeIds = new Set(retakeConfig.questionIds);
+        const scoped = examData.questions.filter(q => activeIds.has(q.id));
+        return scoped.length > 0 ? scoped : examData.questions;
+    };
+
+    const buildQuestionTimingSnapshot = (questions: Question[]): QuestionTiming[] => {
+        settleActiveQuestion(Date.now());
+        const activeIds = new Set(questions.map(q => q.id));
+        return Object.values(questionTimingRef.current)
+            .filter(timing => activeIds.has(timing.questionId))
+            .map(timing => ({
+                questionId: timing.questionId,
+                questionNumber: timing.questionNumber,
+                totalTimeSec: Math.round(timing.totalMs / 1000),
+                visitCount: timing.visitCount,
+                revisitCount: Math.max(0, timing.visitCount - 1),
+                answerChangeCount: timing.answerChangeCount,
+                firstVisitedAt: timing.firstVisitedAt,
+                lastVisitedAt: timing.lastVisitedAt,
+                lastAnsweredAt: timing.lastAnsweredAt,
+            }))
+            .sort((a, b) => a.questionNumber - b.questionNumber);
+    };
+
     // Anti-cheat Window Focus/Visibility Monitoring
     useEffect(() => {
         if (submittedRef.current) return;
 
         let isFocused = true;
 
-        const triggerWarning = () => {
+        const triggerWarning = (reason: FocusLossEvent["reason"]) => {
             if (submittedRef.current) return;
+            const nowMs = Date.now();
+            const questionId = activeQuestionRef.current?.questionId || currentQuestionIdRef.current || undefined;
+            const question = questionId ? getQuestionById(questionId) : undefined;
+            settleActiveQuestion(nowMs);
+            const nextCount = focusLossEventsRef.current.length + 1;
+            focusLossEventsRef.current.push({
+                at: new Date(nowMs).toISOString(),
+                questionId,
+                questionNumber: question?.number,
+                count: nextCount,
+                reason,
+            });
             setTabFociLostCount(c => {
-                const nextCount = c + 1;
                 setShowFocusWarning(true);
-                return nextCount;
+                return Math.max(c + 1, nextCount);
             });
         };
 
         const handleWindowBlur = () => {
             if (isFocused) {
                 isFocused = false;
-                triggerWarning();
+                triggerWarning("blur");
             }
         };
 
         const handleWindowFocus = () => {
             isFocused = true;
+            if (currentQuestionIdRef.current) beginQuestionVisit(currentQuestionIdRef.current);
         };
 
         const handleVisibilityChange = () => {
             if (document.visibilityState === "hidden" && isFocused) {
                 isFocused = false;
-                triggerWarning();
+                triggerWarning("hidden");
             } else if (document.visibilityState === "visible") {
                 isFocused = true;
+                if (currentQuestionIdRef.current) beginQuestionVisit(currentQuestionIdRef.current);
             }
         };
 
@@ -170,7 +287,15 @@ export default function SolvePage() {
             window.removeEventListener("focus", handleWindowFocus);
             document.removeEventListener("visibilitychange", handleVisibilityChange);
         };
-    }, []);
+    }, [beginQuestionVisit, getQuestionById, settleActiveQuestion]);
+
+    useEffect(() => {
+        currentQuestionIdRef.current = currentQuestionId;
+    }, [currentQuestionId]);
+
+    useEffect(() => {
+        examQuestionsRef.current = examData?.questions || [];
+    }, [examData]);
 
     const draftOwnerKey = user?.studentId || user?.guestId || persistId;
     const DRAFT_KEY = id && draftOwnerKey ? `omr_draft_${id}_${draftOwnerKey}` : "";
@@ -190,7 +315,33 @@ export default function SolvePage() {
                 return;
             }
             try {
+                examQuestionsRef.current = parsed.questions;
                 setExamData(parsed);
+
+                const searchParams = new URLSearchParams(window.location.search);
+                const rawQuestionIds = (searchParams.get("questions") || "")
+                    .split(",")
+                    .map(value => Number(value.trim()))
+                    .filter(value => Number.isFinite(value));
+                const validQuestionIds = rawQuestionIds.filter(questionId =>
+                    parsed.questions.some(question => question.id === questionId)
+                );
+                if (validQuestionIds.length > 0) {
+                    const mode = searchParams.get("mode") === "similar" ? "similar"
+                        : searchParams.get("mode") === "custom" ? "custom"
+                            : "wrong";
+                    setRetakeConfig({
+                        sourceAttemptId: searchParams.get("retakeFrom") || `exam:${parsed.id}`,
+                        questionIds: validQuestionIds,
+                        mode,
+                        labels: (searchParams.get("labels") || "").split(",").filter(Boolean),
+                        concepts: (searchParams.get("concepts") || "").split(",").filter(Boolean),
+                    });
+                    toast.info("재시험 모드", `${validQuestionIds.length}개 문항만 다시 풉니다.`);
+                    beginQuestionVisit(validQuestionIds[0]);
+                } else if (parsed.questions[0]) {
+                    beginQuestionVisit(parsed.questions[0].id);
+                }
 
                 // Enforce schedule window (startAt/endAt)
                 const now = Date.now();
@@ -249,7 +400,7 @@ export default function SolvePage() {
         };
 
         hydrateExam();
-    }, [id, persistId]);
+    }, [beginQuestionVisit, id, persistId]);
 
     // Show resume banner once after initial load
     useEffect(() => {
@@ -342,12 +493,20 @@ export default function SolvePage() {
     }, [studentAnswers, drawings]);
 
     const handleAnswerClick = (qId: number, optionIndex: number) => {
-        setStudentAnswers(prev => ({ ...prev, [qId]: optionIndex }));
-        setCurrentQuestionId(qId);
+        const nowMs = Date.now();
+        beginQuestionVisit(qId, nowMs);
+        setStudentAnswers(prev => {
+            if (prev[qId] !== optionIndex) {
+                const timing = ensureQuestionTiming(qId, nowMs);
+                timing.answerChangeCount += 1;
+                timing.lastAnsweredAt = new Date(nowMs).toISOString();
+            }
+            return { ...prev, [qId]: optionIndex };
+        });
     };
 
     const handleQuestionClick = (qId: number) => {
-        setCurrentQuestionId(qId);
+        beginQuestionVisit(qId);
         if (examData) {
             const q = examData.questions.find(q => q.id === qId);
             if (q?.pdfLocation?.page) setPdfCurrentPage(q.pdfLocation.page);
@@ -389,7 +548,9 @@ export default function SolvePage() {
         submittedRef.current = true;
 
         // Use weighted grading from types/omr.ts
-        const graded = gradeAttempt(examData.questions, studentAnswers);
+        const activeExamQuestions = getActiveExamQuestions();
+        const graded = gradeAttempt(activeExamQuestions, studentAnswers);
+        const questionTimings = buildQuestionTimingSnapshot(activeExamQuestions);
 
         const attemptId = Date.now().toString();
         const activeDrawings = compactDrawings(drawings);
@@ -457,6 +618,12 @@ export default function SolvePage() {
             status: 'completed' as const,
             autoSubmitted,
             tabFociLostCount,
+            questionTimings,
+            focusLossEvents: focusLossEventsRef.current,
+            retake: retakeConfig ? {
+                ...retakeConfig,
+                createdAt: new Date().toISOString(),
+            } : undefined,
         };
 
         try {
@@ -484,8 +651,12 @@ export default function SolvePage() {
 
     const handleSubmit = () => {
         if (!examData) return;
-        const totalQ = examData.questions.length;
-        const answeredCount = Object.keys(studentAnswers).length;
+        const activeExamQuestions = getActiveExamQuestions();
+        const totalQ = activeExamQuestions.length;
+        const answeredCount = activeExamQuestions.filter(q => {
+            const answer = studentAnswers[q.id];
+            return answer !== undefined && answer !== null && answer !== 0;
+        }).length;
         const unanswered = totalQ - answeredCount;
         const message = unanswered > 0
             ? `미답변 ${unanswered}문항이 있습니다. 정말 제출하시겠습니까?`
@@ -528,8 +699,12 @@ export default function SolvePage() {
         );
     }
 
-    const answeredCount = Object.keys(studentAnswers).length;
-    const totalQuestions = examData.questions.length;
+    const activeExamQuestions = getActiveExamQuestions();
+    const answeredCount = activeExamQuestions.filter(q => {
+        const answer = studentAnswers[q.id];
+        return answer !== undefined && answer !== null && answer !== 0;
+    }).length;
+    const totalQuestions = activeExamQuestions.length;
     const progress = totalQuestions > 0 ? (answeredCount / totalQuestions) * 100 : 0;
 
     return (
@@ -564,6 +739,7 @@ export default function SolvePage() {
                             whiteSpace: 'nowrap'
                         }}>
                             {examData.title}
+                            {retakeConfig ? ` · 재시험 ${retakeConfig.questionIds.length}문항` : ''}
                         </span>
                     </div>
 
@@ -796,7 +972,7 @@ export default function SolvePage() {
                         onDrawingsChange={handleDrawingsChange}
                         forcePage={activeTab === 'problem' ? pdfCurrentPage : undefined}
                         markers={(activeTab === 'problem' && examData.questions)
-                            ? examData.questions
+                            ? activeExamQuestions
                                 .filter((q: Question) => q.pdfLocation)
                                 .map((q: Question) => ({
                                     page: q.pdfLocation!.page,
@@ -828,7 +1004,7 @@ export default function SolvePage() {
                     <div style={{ flex: 1, overflowY: 'auto' }} className="scroll-custom solve-omr-scroll">
                         <OMRCardView
                             title={examData.title}
-                            questions={examData.questions}
+                            questions={activeExamQuestions}
                             userAnswers={studentAnswers}
                             selectedQuestionId={currentQuestionId}
                             onAnswerClick={handleAnswerClick}

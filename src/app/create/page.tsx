@@ -39,6 +39,13 @@ const COGNITIVE_LEVEL_OPTIONS: Array<{ value: NonNullable<Question["tags"]>["cog
 ];
 
 const DEFAULT_MISTAKE_TYPES = ["개념 부족", "계산 실수", "시간 부족", "지문 오독", "선택지 함정"];
+const DURATION_PRESETS = [20, 30, 45, 50, 60, 90];
+const SCHEDULE_PRESETS = [
+    { key: "now", label: "지금" },
+    { key: "today-19", label: "오늘 19:00" },
+    { key: "tomorrow-09", label: "내일 09:00" },
+    { key: "tomorrow-19", label: "내일 19:00" },
+] as const;
 
 interface EditorDraft {
     title: string;
@@ -78,6 +85,18 @@ function splitTagInput(value: string): string[] {
         .split(",")
         .map(item => item.trim())
         .filter(Boolean);
+}
+
+function toLocalDateTimeInput(date: Date): string {
+    const pad = (n: number) => String(n).padStart(2, '0');
+    return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`;
+}
+
+function addMinutesToLocalInput(value: string, minutes: number): string {
+    if (!value || !Number.isFinite(minutes)) return "";
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) return "";
+    return toLocalDateTimeInput(new Date(date.getTime() + minutes * 60 * 1000));
 }
 
 function joinTagInput(value?: string[]): string {
@@ -183,6 +202,37 @@ function CreateOMRPageInner() {
         const d = new Date(v);
         if (isNaN(d.getTime())) return undefined;
         return d.toISOString();
+    };
+    const durationValue = typeof durationMin === 'number' && durationMin > 0 ? durationMin : 50;
+    const setDurationAndSyncEnd = (minutes: number) => {
+        const safeMinutes = Math.max(1, Math.floor(minutes));
+        setDurationMin(safeMinutes);
+        if (startAt) setEndAt(addMinutesToLocalInput(startAt, safeMinutes));
+    };
+    const setStartAndSyncEnd = (value: string) => {
+        setStartAt(value);
+        if (value) {
+            setEndAt(addMinutesToLocalInput(value, durationValue));
+        }
+    };
+    const applySchedulePreset = (preset: typeof SCHEDULE_PRESETS[number]["key"]) => {
+        const date = new Date();
+        if (preset === "today-19") {
+            date.setHours(19, 0, 0, 0);
+        } else if (preset === "tomorrow-09") {
+            date.setDate(date.getDate() + 1);
+            date.setHours(9, 0, 0, 0);
+        } else if (preset === "tomorrow-19") {
+            date.setDate(date.getDate() + 1);
+            date.setHours(19, 0, 0, 0);
+        } else {
+            date.setSeconds(0, 0);
+        }
+        setStartAndSyncEnd(toLocalDateTimeInput(date));
+    };
+    const clearSchedule = () => {
+        setStartAt("");
+        setEndAt("");
     };
 
     // Load exam from localStorage when ?edit=<id> is present.
@@ -1372,19 +1422,49 @@ function CreateOMRPageInner() {
                                 value={durationMin}
                                 onChange={(e) => {
                                     const v = e.target.value;
-                                    setDurationMin(v === "" ? "" : Math.max(1, parseInt(v, 10) || 0));
+                                    if (v === "") {
+                                        setDurationMin("");
+                                        return;
+                                    }
+                                    setDurationAndSyncEnd(parseInt(v, 10) || 1);
                                 }}
                                 className="input-field"
                                 style={{ width: '100%', padding: '0.5rem 0.6rem', borderRadius: 'var(--radius-md)', border: '1px solid var(--border)', background: 'var(--background)', fontSize: '0.9rem' }}
                             />
+                            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '0.35rem', marginTop: '0.5rem' }}>
+                                {DURATION_PRESETS.map(minutes => (
+                                    <button
+                                        key={minutes}
+                                        type="button"
+                                        onClick={() => setDurationAndSyncEnd(minutes)}
+                                        className={`btn ${durationMin === minutes ? 'btn-primary' : 'btn-secondary'}`}
+                                        style={{ padding: '0.38rem 0.35rem', fontSize: '0.74rem', borderRadius: 'var(--radius-md)' }}
+                                    >
+                                        {minutes}분
+                                    </button>
+                                ))}
+                            </div>
                         </div>
 
                         <div style={{ marginBottom: '0.75rem' }}>
                             <label style={{ display: 'block', marginBottom: '0.3rem', fontSize: '0.82rem', fontWeight: 500 }}>시작 시각</label>
+                            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '0.35rem', marginBottom: '0.5rem' }}>
+                                {SCHEDULE_PRESETS.map(preset => (
+                                    <button
+                                        key={preset.key}
+                                        type="button"
+                                        onClick={() => applySchedulePreset(preset.key)}
+                                        className="btn btn-secondary"
+                                        style={{ padding: '0.38rem 0.35rem', fontSize: '0.74rem', borderRadius: 'var(--radius-md)' }}
+                                    >
+                                        {preset.label}
+                                    </button>
+                                ))}
+                            </div>
                             <input
                                 type="datetime-local"
                                 value={startAt}
-                                onChange={(e) => setStartAt(e.target.value)}
+                                onChange={(e) => setStartAndSyncEnd(e.target.value)}
                                 className="input-field"
                                 style={{ width: '100%', padding: '0.5rem 0.6rem', borderRadius: 'var(--radius-md)', border: '1px solid var(--border)', background: 'var(--background)', fontSize: '0.85rem' }}
                             />
@@ -1399,10 +1479,31 @@ function CreateOMRPageInner() {
                                 className="input-field"
                                 style={{ width: '100%', padding: '0.5rem 0.6rem', borderRadius: 'var(--radius-md)', border: '1px solid var(--border)', background: 'var(--background)', fontSize: '0.85rem' }}
                             />
+                            <div style={{ display: 'flex', gap: '0.4rem', marginTop: '0.5rem' }}>
+                                <button
+                                    type="button"
+                                    onClick={() => startAt && setEndAt(addMinutesToLocalInput(startAt, durationValue))}
+                                    className="btn btn-secondary"
+                                    disabled={!startAt}
+                                    style={{ flex: 1, padding: '0.4rem 0.5rem', fontSize: '0.75rem', borderRadius: 'var(--radius-md)' }}
+                                >
+                                    종료 자동 맞춤
+                                </button>
+                                <button
+                                    type="button"
+                                    onClick={clearSchedule}
+                                    className="btn btn-secondary"
+                                    style={{ flex: 1, padding: '0.4rem 0.5rem', fontSize: '0.75rem', borderRadius: 'var(--radius-md)' }}
+                                >
+                                    기간 비우기
+                                </button>
+                            </div>
                         </div>
 
                         <p style={{ marginTop: '0.5rem', fontSize: '0.75rem', color: 'var(--muted)' }}>
-                            배포 시 함께 저장됩니다. 비워두면 제한 없이 응시할 수 있습니다.
+                            {startAt && endAt
+                                ? `${durationValue}분 시험으로 저장됩니다.`
+                                : '비워두면 제한 없이 응시할 수 있습니다.'}
                         </p>
                     </div>
 

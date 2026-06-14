@@ -95,6 +95,35 @@ export interface AttemptHandwriting {
     questions: Record<number, QuestionDrawingSummary>;
 }
 
+export interface QuestionTiming {
+    questionId: number;
+    questionNumber: number;
+    totalTimeSec: number;
+    visitCount: number;
+    revisitCount: number;
+    answerChangeCount: number;
+    firstVisitedAt?: string;
+    lastVisitedAt?: string;
+    lastAnsweredAt?: string;
+}
+
+export interface FocusLossEvent {
+    at: string;
+    questionId?: number;
+    questionNumber?: number;
+    count: number;
+    reason: 'blur' | 'hidden';
+}
+
+export interface RetakeMetadata {
+    sourceAttemptId: string;
+    questionIds: number[];
+    mode: 'wrong' | 'similar' | 'custom';
+    labels?: string[];
+    concepts?: string[];
+    createdAt: string;
+}
+
 export interface Attempt {
     id: string; // specific attempt ID
     examId: string;
@@ -133,6 +162,12 @@ export interface Attempt {
     autoSubmitted?: boolean;
     /** Number of times the student switched tabs or lost focus during the exam. */
     tabFociLostCount?: number;
+    /** Per-question timing and revisit metrics captured while solving. */
+    questionTimings?: QuestionTiming[];
+    /** Timestamped focus-loss events with the active question when available. */
+    focusLossEvents?: FocusLossEvent[];
+    /** Present when this attempt is a premium retake over selected questions. */
+    retake?: RetakeMetadata;
     /** Guest provenance after a merge into a canonical student profile. */
     mergedFromGuestId?: string;
     mergedAt?: string;
