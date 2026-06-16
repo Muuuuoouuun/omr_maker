@@ -1123,6 +1123,289 @@ button {
   box-shadow: 0 12px 22px rgba(15, 23, 42, 0.05);
 }
 
+.create-question-quick-card {
+  margin: 0 0 1rem;
+  padding: 0.85rem;
+  border: 1px solid rgba(99, 102, 241, 0.2);
+  border-radius: 8px;
+  background:
+    linear-gradient(180deg, rgba(99, 102, 241, 0.08), color-mix(in srgb, var(--surface), var(--background) 26%));
+}
+
+.create-question-quick-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.65rem;
+  margin-bottom: 0.72rem;
+}
+
+.create-question-quick-title {
+  color: var(--foreground);
+  font-size: 0.84rem;
+  font-weight: 950;
+  line-height: 1.2;
+}
+
+.create-question-quick-subtitle {
+  margin-top: 0.18rem;
+  color: var(--muted);
+  font-size: 0.7rem;
+  font-weight: 750;
+  line-height: 1.35;
+}
+
+.create-question-quick-badge {
+  flex: 0 0 auto;
+  min-width: 44px;
+  padding: 0.22rem 0.5rem;
+  border: 1px solid rgba(99, 102, 241, 0.2);
+  border-radius: var(--radius-full);
+  background: var(--surface);
+  color: var(--primary);
+  font-size: 0.66rem;
+  font-weight: 950;
+  line-height: 1;
+  text-align: center;
+  white-space: nowrap;
+}
+
+.create-question-quick-body {
+  display: grid;
+  gap: 0.62rem;
+}
+
+.create-question-quick-row {
+  display: grid;
+  grid-template-columns: 34px minmax(0, 1fr);
+  align-items: center;
+  gap: 0.48rem;
+}
+
+.create-question-quick-row > span {
+  color: var(--muted);
+  font-size: 0.7rem;
+  font-weight: 950;
+  line-height: 1;
+}
+
+.create-question-answer-buttons,
+.create-question-score-buttons,
+.create-question-label-buttons {
+  min-width: 0;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.34rem;
+}
+
+.create-question-answer-buttons button,
+.create-question-score-buttons button,
+.create-question-label-buttons button {
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--muted);
+  cursor: pointer;
+  font-weight: 900;
+  line-height: 1;
+  transition: background-color 0.16s ease, border-color 0.16s ease, color 0.16s ease, transform 0.16s ease;
+}
+
+.create-question-answer-buttons button {
+  width: 30px;
+  height: 30px;
+  border-radius: 999px;
+  font-size: 0.78rem;
+}
+
+.create-question-score-buttons button {
+  min-width: 30px;
+  height: 28px;
+  padding: 0 0.4rem;
+  border-radius: 8px;
+  font-size: 0.72rem;
+}
+
+.create-question-label-buttons button {
+  max-width: 96px;
+  min-height: 28px;
+  padding: 0 0.46rem;
+  border-radius: 8px;
+  font-size: 0.7rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.create-question-answer-buttons button:hover,
+.create-question-score-buttons button:hover,
+.create-question-label-buttons button:hover {
+  border-color: rgba(99, 102, 241, 0.36);
+  color: var(--primary);
+  transform: translateY(-1px);
+}
+
+.create-question-answer-buttons button.is-active,
+.create-question-score-buttons button.is-active,
+.create-question-label-buttons button.is-active {
+  border-color: var(--primary);
+  background: var(--primary);
+  color: white;
+}
+
+.create-question-score-buttons input {
+  width: 54px;
+  height: 28px;
+  min-width: 0;
+  padding: 0 0.42rem;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--foreground);
+  font-size: 0.72rem;
+  font-weight: 800;
+}
+
+.create-question-quick-empty {
+  padding: 0.62rem 0.7rem;
+  border: 1px dashed rgba(99, 102, 241, 0.22);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--surface), var(--background) 28%);
+  color: var(--muted);
+  font-size: 0.75rem;
+  font-weight: 750;
+  line-height: 1.45;
+}
+
+.create-label-batch-card {
+  margin: 0 0 1rem;
+  padding: 0.9rem;
+  border-radius: var(--radius-md);
+  border: 1px solid rgba(15, 118, 110, 0.22);
+  background: linear-gradient(180deg, rgba(15, 118, 110, 0.06), color-mix(in srgb, var(--surface), var(--background) 24%));
+}
+
+.create-label-batch-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.65rem;
+  margin-bottom: 0.72rem;
+}
+
+.create-label-batch-title {
+  color: var(--foreground);
+  font-size: 0.84rem;
+  font-weight: 950;
+  line-height: 1.2;
+}
+
+.create-label-batch-subtitle {
+  margin-top: 0.18rem;
+  color: var(--muted);
+  font-size: 0.7rem;
+  font-weight: 750;
+  line-height: 1.35;
+}
+
+.create-label-batch-count {
+  flex: 0 0 auto;
+  padding: 0.18rem 0.5rem;
+  border-radius: var(--radius-full);
+  border: 1px solid rgba(15, 118, 110, 0.22);
+  background: var(--surface);
+  color: #0f766e;
+  font-size: 0.66rem;
+  font-weight: 950;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.create-label-batch-range,
+.create-label-batch-grid,
+.create-label-batch-actions {
+  display: grid;
+  gap: 0.45rem;
+}
+
+.create-label-batch-range {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  margin-bottom: 0.48rem;
+}
+
+.create-label-batch-range label {
+  display: grid;
+  gap: 0.22rem;
+  color: var(--muted);
+  font-size: 0.68rem;
+  font-weight: 850;
+}
+
+.create-label-batch-range input,
+.create-label-batch-grid input,
+.create-label-batch-input {
+  width: 100%;
+  min-width: 0;
+  padding: 0.44rem 0.55rem;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--foreground);
+  font-size: 0.78rem;
+}
+
+.create-label-batch-presets,
+.create-label-batch-difficulty {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  margin-top: 0.5rem;
+}
+
+.create-label-batch-presets button,
+.create-label-batch-difficulty button {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-full);
+  background: var(--surface);
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 0.7rem;
+  font-weight: 850;
+  line-height: 1;
+  padding: 0.34rem 0.52rem;
+  transition: background-color 0.16s ease, border-color 0.16s ease, color 0.16s ease;
+}
+
+.create-label-batch-presets button.is-active {
+  border-color: rgba(15, 118, 110, 0.42);
+  background: rgba(15, 118, 110, 0.1);
+  color: #0f766e;
+}
+
+.create-label-batch-difficulty button.is-active {
+  border-color: var(--label-tone);
+  background: color-mix(in srgb, var(--label-tone), transparent 88%);
+  color: var(--label-tone);
+}
+
+.create-label-batch-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  margin-top: 0.5rem;
+}
+
+.create-label-batch-actions {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  margin-top: 0.65rem;
+}
+
+.create-label-batch-actions .btn {
+  min-width: 0;
+  justify-content: center;
+  padding: 0.46rem 0.42rem;
+  font-size: 0.72rem;
+  white-space: nowrap;
+}
+
 [data-theme="dark"] .create-settings-sticky-summary {
   background:
     linear-gradient(180deg, var(--surface) 0%, var(--surface) 78%, rgba(15, 23, 42, 0) 100%);
@@ -1160,6 +1443,61 @@ button {
   container-type: inline-size;
 }
 
+.create-preview-main.is-collapsed {
+  border-left: 1px solid var(--border);
+  box-shadow: -10px 0 22px rgba(15, 23, 42, 0.04);
+}
+
+.create-preview-collapsed-rail {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  align-items: stretch;
+  justify-content: stretch;
+  padding: 0.45rem;
+  background:
+    linear-gradient(180deg, var(--surface), color-mix(in srgb, var(--surface), var(--background) 34%));
+}
+
+.create-preview-collapsed-rail button {
+  width: 100%;
+  min-width: 0;
+  border: 1px solid color-mix(in srgb, var(--border), transparent 10%);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--surface), var(--background) 18%);
+  color: var(--muted);
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.45rem;
+  transition: border-color 0.16s ease, color 0.16s ease, background-color 0.16s ease;
+}
+
+.create-preview-collapsed-rail button:hover {
+  border-color: rgba(99, 102, 241, 0.34);
+  color: var(--primary);
+  background: rgba(99, 102, 241, 0.08);
+}
+
+.create-preview-collapsed-rail span {
+  writing-mode: vertical-rl;
+  text-orientation: mixed;
+  color: inherit;
+  font-size: 0.68rem;
+  font-weight: 950;
+  letter-spacing: 0;
+}
+
+.create-preview-collapsed-rail strong {
+  color: var(--foreground);
+  font-size: 0.7rem;
+  font-weight: 950;
+  line-height: 1;
+  white-space: nowrap;
+}
+
 .create-editor-actions {
   min-width: 0;
 }
@@ -1173,6 +1511,27 @@ button {
 
 .create-preview-toolbar {
   box-shadow: 0 1px 0 rgba(15, 23, 42, 0.03);
+}
+
+.create-preview-icon-button {
+  width: 34px;
+  height: 34px;
+  min-width: 34px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--muted);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transition: background-color 0.16s ease, border-color 0.16s ease, color 0.16s ease;
+}
+
+.create-preview-icon-button:hover {
+  border-color: rgba(99, 102, 241, 0.34);
+  background: rgba(99, 102, 241, 0.08);
+  color: var(--primary);
 }
 
 .create-preview-status {
@@ -1331,6 +1690,10 @@ button {
   justify-content: center;
 }
 
+.create-card-stage .omr-cardview.is-vertical-numbering {
+  max-width: min(980px, 100%);
+}
+
 .create-paper-stage {
   position: relative;
   min-width: max-content;
@@ -1439,6 +1802,18 @@ button {
 
   .create-preview-main {
     min-height: 620px;
+  }
+
+  .create-preview-main.is-collapsed {
+    min-height: 72px;
+  }
+
+  .create-preview-collapsed-rail button {
+    flex-direction: row;
+  }
+
+  .create-preview-collapsed-rail span {
+    writing-mode: horizontal-tb;
   }
 
   .create-resizer {
@@ -1672,6 +2047,17 @@ button {
   grid-template-rows: repeat(var(--omr-card-rows, 1), auto);
   grid-auto-flow: column;
   gap: 0.5rem;
+}
+
+.omr-cardview.is-vertical-numbering .omr-cardview-grid {
+  grid-template-columns: repeat(var(--omr-card-cols, 1), minmax(210px, 1fr));
+  grid-auto-flow: column;
+  align-items: start;
+}
+
+.omr-cardview.is-vertical-numbering .q-card {
+  min-height: 44px;
+  border-radius: var(--radius-md);
 }
 
 .q-card {

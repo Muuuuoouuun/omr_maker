@@ -12,12 +12,12 @@ import TeacherSessionChip from "@/components/TeacherSessionChip";
 import ThemeToggle from "@/components/ThemeToggle";
 import { useRouter, useSearchParams } from "next/navigation";
 import { toast } from "@/components/Toast";
-import { BrainCircuit, Crosshair, FileText, FolderOpen, Loader2, RefreshCw, Redo2, Unlink, Undo2 } from "lucide-react";
+import { BrainCircuit, Crosshair, FileText, FolderOpen, Loader2, PanelRightClose, PanelRightOpen, RefreshCw, Redo2, Unlink, Undo2 } from "lucide-react";
 
 const PDFViewer = dynamic(() => import("@/components/PDFViewer"), { ssr: false });
 import { Suspense, useState, useEffect, useRef, useCallback, useMemo } from "react";
 import html2canvas from "html2canvas";
-import { DEFAULT_CHOICE_COUNT, type Exam, type Question } from "@/types/omr";
+import { DEFAULT_CHOICE_COUNT, questionChoiceCount, type Exam, type Question } from "@/types/omr";
 import { ParsedAnswer } from "@/services/answerParser";
 import { saveFileDataUrl, storedDataUrlToFile } from "@/utils/blobStore";
 import { validateExamDraft } from "@/lib/examValidation";
@@ -33,8 +33,9 @@ import { evaluatePlanLimit, getCurrentPlan, getPlanLabel, PLAN_BY_KEY } from "@/
 const DRAFT_KEY = "omr_exam_draft";
 const AUTOSAVE_INTERVAL_MS = 2000;
 const HISTORY_LIMIT = 20;
+type QuestionDifficulty = NonNullable<NonNullable<Question["tags"]>["difficulty"]>;
 
-const DIFFICULTY_OPTIONS: Array<{ value: NonNullable<Question["tags"]>["difficulty"]; label: string; tone: string }> = [
+const DIFFICULTY_OPTIONS: Array<{ value: QuestionDifficulty; label: string; tone: string }> = [
     { value: "easy", label: "기초", tone: "#10b981" },
     { value: "medium", label: "표준", tone: "#6366f1" },
     { value: "hard", label: "심화", tone: "#f59e0b" },
@@ -48,8 +49,10 @@ const COGNITIVE_LEVEL_OPTIONS: Array<{ value: NonNullable<Question["tags"]>["cog
     { value: "reasoning", label: "추론" },
 ];
 
+const DEFAULT_LABEL_PRESETS = ["문법", "독해", "어휘", "듣기", "추론"];
 const DEFAULT_MISTAKE_TYPES = ["개념 부족", "계산 실수", "시간 부족", "지문 오독", "선택지 함정"];
 const DURATION_PRESETS = [20, 30, 45, 50, 60, 90];
+const PDF_ACCEPT = "application/pdf,.pdf";
 const SCHEDULE_PRESETS = [
     { key: "now", label: "지금" },
     { key: "today-19", label: "오늘 19:00" },
@@ -80,11 +83,24 @@ interface HistorySnapshot {
     endAt: string;
 }
 
+interface LabelBatchState {
+    start: number;
+    end: number;
+    label: string;
+    unit: string;
+    concept: string;
+    difficulty: QuestionDifficulty | "";
+}
+
 type CreateConfirmState =
     | { kind: "restoreDraft"; draft: EditorDraft }
     | { kind: "shrinkQuestions"; nextCount: number; losing: number }
     | { kind: "fourChoices"; losing: number }
     | { kind: "expandImportedAnswers"; maxQuestion: number; answers: ParsedAnswer[] };
+
+function isPdfUploadFile(file: File): boolean {
+    return file.type === "application/pdf" || file.name.toLowerCase().endsWith(".pdf");
+}
 
 function CreateConfirmDialog({
     state,
@@ -264,6 +280,14 @@ function CreateOMRPageInner() {
     // Interaction State
     const [selectedQuestionId, setSelectedQuestionId] = useState<number | null>(null);
     const [customLabel, setCustomLabel] = useState("");
+    const [labelBatch, setLabelBatch] = useState<LabelBatchState>({
+        start: 1,
+        end: 20,
+        label: "",
+        unit: "",
+        concept: "",
+        difficulty: "",
+    });
 
     // Validation
     const [fastAnswer, setFastAnswer] = useState("");
@@ -273,6 +297,7 @@ function CreateOMRPageInner() {
     const [sidebarWidth, setSidebarWidth] = useState(320);
     const [previewMode, setPreviewMode] = useState<'modern' | 'paper'>('modern');
     const [showPaperAnswerKey, setShowPaperAnswerKey] = useState(true);
+    const [isPreviewCollapsed, setIsPreviewCollapsed] = useState(false);
 
     // PDF State
     const [pdfFile, setPdfFile] = useState<File | null>(null);
@@ -297,6 +322,14 @@ function CreateOMRPageInner() {
         () => questions.find(q => q.id === selectedQuestionId) || null,
         [questions, selectedQuestionId],
     );
+    const knownLabels = useMemo(() => {
+        const labels = new Set<string>(DEFAULT_LABEL_PRESETS);
+        questions.forEach(q => {
+            if (q.label) labels.add(q.label);
+            if (q.tags?.concept) labels.add(q.tags.concept);
+        });
+        return Array.from(labels).slice(0, 12);
+    }, [questions]);
     const hasProblemPdfForValidation = !!pdfFile || !!loadedExam?.pdfData || !!loadedExam?.pdfDataRef;
     const hasAnswerKeyPdfForValidation = !!answerKeyPdf || !!loadedExam?.answerKeyPdf || !!loadedExam?.answerKeyPdfRef;
 
@@ -354,6 +387,9 @@ function CreateOMRPageInner() {
         : selectedQuestion?.pdfLocation
             ? "위치 저장"
             : "미연결";
+    const selectedQuestionChoiceCount = selectedQuestion
+        ? questionChoiceCount(selectedQuestion, defaultChoices)
+        : defaultChoices;
 
     // Undo/Redo + autosave refs
     const historyRef = useRef<HistorySnapshot[]>([]);
@@ -492,6 +528,14 @@ function CreateOMRPageInner() {
         });
     }, [createDefaultQuestion, initialDefaultsReady, questionsCount]);
 
+    useEffect(() => {
+        setLabelBatch(prev => ({
+            ...prev,
+            start: Math.min(Math.max(prev.start, 1), Math.max(questionsCount, 1)),
+            end: Math.min(Math.max(prev.end, 1), Math.max(questionsCount, 1)),
+        }));
+    }, [questionsCount]);
+
     // ─── Draft restore on mount (non-edit mode only) ─────────────────
     useEffect(() => {
         if (draftPromptedRef.current) return;
@@ -603,14 +647,37 @@ function CreateOMRPageInner() {
         return () => window.removeEventListener('keydown', onKey);
     }, [undo, redo]);
 
-    const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-        if (e.target.files && e.target.files[0]) {
-            setPdfFile(e.target.files[0]);
+    const handleProblemPdfFile = (file: File | null | undefined) => {
+        if (!file) return false;
+        if (!isPdfUploadFile(file)) {
+            toast.error("PDF 업로드 실패", "문제지는 PDF 파일만 등록할 수 있습니다.");
+            return false;
         }
+        setPdfFile(file);
+        setActiveViewTab('problem');
+        toast.success("문제지 PDF 업로드됨", file.name);
+        return true;
+    };
+
+    const handleAnswerKeyPdfFile = (file: File | null | undefined) => {
+        if (!file) return false;
+        if (!isPdfUploadFile(file)) {
+            toast.error("PDF 업로드 실패", "답지는 PDF 파일만 등록할 수 있습니다.");
+            return false;
+        }
+        setAnswerKeyPdf(file);
+        setActiveViewTab('answer');
+        toast.success("답지 PDF 업로드됨", file.name);
+        return true;
+    };
+
+    const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+        handleProblemPdfFile(e.currentTarget.files?.[0]);
+        e.currentTarget.value = "";
     };
 
     const handleFileDrop = (file: File) => {
-        setPdfFile(file);
+        handleProblemPdfFile(file);
     };
 
     const handlePdfPageClick = (page: number, x: number, y: number) => {
@@ -711,6 +778,64 @@ function CreateOMRPageInner() {
             if (q.id !== selectedQuestionId) return q;
             return { ...q, label: label === q.label ? undefined : label };
         }));
+    };
+
+    const setLabelBatchRange = (start: number, end: number) => {
+        const safeStart = Math.min(Math.max(Math.floor(start) || 1, 1), Math.max(questionsCount, 1));
+        const safeEnd = Math.min(Math.max(Math.floor(end) || safeStart, 1), Math.max(questionsCount, 1));
+        setLabelBatch(prev => ({
+            ...prev,
+            start: safeStart,
+            end: safeEnd,
+        }));
+    };
+
+    const setSelectedQuestionAsLabelRange = () => {
+        if (!selectedQuestion) {
+            toast.info("문항 먼저 선택", "일괄 적용 기준으로 쓸 문항을 먼저 선택하세요.");
+            return;
+        }
+        setLabelBatchRange(selectedQuestion.number, selectedQuestion.number);
+    };
+
+    const applyBatchLabels = (onlyEmpty = false) => {
+        const start = Math.max(1, Math.min(labelBatch.start, labelBatch.end));
+        const end = Math.min(questionsCount, Math.max(labelBatch.start, labelBatch.end));
+        const label = labelBatch.label.trim();
+        const unit = labelBatch.unit.trim();
+        const concept = labelBatch.concept.trim();
+        const difficulty = labelBatch.difficulty || undefined;
+
+        if (!label && !unit && !concept && !difficulty) {
+            toast.info("적용할 라벨 없음", "유형/단원/개념/난이도 중 하나를 입력하세요.");
+            return;
+        }
+
+        let applied = 0;
+        const nextQuestions = questions.map(q => {
+            if (q.number < start || q.number > end) return q;
+            if (onlyEmpty && (q.label || q.tags?.concept)) return q;
+
+            const nextTags = { ...(q.tags || {}) };
+            if (unit) nextTags.unit = unit;
+            if (concept) nextTags.concept = concept;
+            if (difficulty) nextTags.difficulty = difficulty;
+
+            applied += 1;
+            return {
+                ...q,
+                label: label || q.label,
+                tags: Object.keys(nextTags).length > 0 ? nextTags : undefined,
+            };
+        });
+
+        if (applied === 0) {
+            toast.info("적용된 문항 없음", "선택한 범위에 빈 라벨 문항이 없습니다.");
+            return;
+        }
+
+        setQuestions(nextQuestions);
+        toast.success("문항 라벨 적용됨", `${start}~${end}번 ${applied}개 문항을 업데이트했습니다.`);
     };
 
     const setAnswer = (answer: number) => {
@@ -1081,14 +1206,13 @@ function CreateOMRPageInner() {
                         </button>
                         <label className="btn btn-secondary" style={{ cursor: 'pointer', padding: '0.55rem 1rem', fontSize: '0.85rem' }}>
                             문제지 업로드
-                            <input id="pdf-upload-input" type="file" accept=".pdf" onChange={handleFileChange} style={{ display: 'none' }} />
+                            <input id="pdf-upload-input" type="file" accept={PDF_ACCEPT} onChange={handleFileChange} style={{ display: 'none' }} />
                         </label>
                         <label className="btn btn-secondary" style={{ cursor: 'pointer', padding: '0.55rem 1rem', fontSize: '0.85rem' }}>
                             답지 업로드
-                            <input type="file" accept=".pdf" onChange={(e) => {
-                                if (e.target.files && e.target.files[0]) {
-                                    setAnswerKeyPdf(e.target.files[0]);
-                                }
+                            <input type="file" accept={PDF_ACCEPT} onChange={(e) => {
+                                handleAnswerKeyPdfFile(e.currentTarget.files?.[0]);
+                                e.currentTarget.value = "";
                             }} style={{ display: 'none' }} />
                         </label>
                         <button
@@ -1124,8 +1248,7 @@ function CreateOMRPageInner() {
                 onClose={() => setIsImportModalOpen(false)}
                 onApply={handleAnswerImport}
                 onUploadAnswerPdf={(file) => {
-                    setAnswerKeyPdf(file);
-                    setActiveViewTab('answer'); // Switch to answer tab when uploaded
+                    handleAnswerKeyPdfFile(file);
                 }}
             />
 
@@ -1560,6 +1683,197 @@ function CreateOMRPageInner() {
                                 {`1~${defaultChoices}의 숫자를 입력하면 문항 순서대로 정답이 즉시 반영됩니다.`}
                             </div>
                         </div>
+
+                        <div className="create-question-quick-card">
+                            <div className="create-question-quick-header">
+                                <div>
+                                    <div className="create-question-quick-title">문항 빠른 세팅</div>
+                                    <div className="create-question-quick-subtitle">
+                                        {selectedQuestion
+                                            ? `${selectedQuestion.number}번 · ${selectedAnswerStatus} · ${selectedQuestion.label || selectedQuestion.tags?.concept || "라벨 없음"}`
+                                            : "OMR에서 문항을 선택하면 바로 답안과 라벨을 조정합니다."}
+                                    </div>
+                                </div>
+                                <span className="create-question-quick-badge">
+                                    {selectedQuestion ? `${selectedQuestion.number}번` : "미선택"}
+                                </span>
+                            </div>
+
+                            {selectedQuestion ? (
+                                <div className="create-question-quick-body">
+                                    <div className="create-question-quick-row" aria-label="선택 문항 정답">
+                                        <span>답안</span>
+                                        <div className="create-question-answer-buttons">
+                                            {Array.from({ length: selectedQuestionChoiceCount }, (_, i) => i + 1).map(num => (
+                                                <button
+                                                    key={num}
+                                                    type="button"
+                                                    className={selectedQuestion.answer === num ? "is-active" : ""}
+                                                    onClick={() => setAnswer(num)}
+                                                    aria-pressed={selectedQuestion.answer === num}
+                                                >
+                                                    {num}
+                                                </button>
+                                            ))}
+                                        </div>
+                                    </div>
+
+                                    <div className="create-question-quick-row" aria-label="선택 문항 배점">
+                                        <span>배점</span>
+                                        <div className="create-question-score-buttons">
+                                            {[2, 3, 4, 5].map(pts => (
+                                                <button
+                                                    key={pts}
+                                                    type="button"
+                                                    className={selectedQuestion.score === pts ? "is-active" : ""}
+                                                    onClick={() => setScore(pts)}
+                                                    aria-pressed={selectedQuestion.score === pts}
+                                                >
+                                                    {pts}
+                                                </button>
+                                            ))}
+                                            <input
+                                                type="number"
+                                                min="0"
+                                                step="0.5"
+                                                aria-label="선택 문항 직접 배점"
+                                                value={selectedQuestion.score || ""}
+                                                onChange={(e) => {
+                                                    const val = parseFloat(e.target.value);
+                                                    if (!Number.isNaN(val)) setScore(val);
+                                                }}
+                                            />
+                                        </div>
+                                    </div>
+
+                                    <div className="create-question-quick-row" aria-label="선택 문항 라벨">
+                                        <span>라벨</span>
+                                        <div className="create-question-label-buttons">
+                                            {knownLabels.slice(0, 8).map(label => (
+                                                <button
+                                                    key={label}
+                                                    type="button"
+                                                    className={selectedQuestion.label === label ? "is-active" : ""}
+                                                    onClick={() => toggleLabel(label)}
+                                                    aria-pressed={selectedQuestion.label === label}
+                                                >
+                                                    {label}
+                                                </button>
+                                            ))}
+                                        </div>
+                                    </div>
+                                </div>
+                            ) : (
+                                <div className="create-question-quick-empty">
+                                    우측 OMR 문항을 누르면 답안·배점·라벨을 여기서 바로 바꿀 수 있습니다.
+                                </div>
+                            )}
+                        </div>
+
+                        <div className="create-label-batch-card">
+                            <div className="create-label-batch-header">
+                                <div>
+                                    <div className="create-label-batch-title">문항 라벨 일괄 적용</div>
+                                    <div className="create-label-batch-subtitle">
+                                        {labelBatch.start}~{labelBatch.end}번 · {designSummary.conceptTagged}/{questionsCount} 라벨
+                                    </div>
+                                </div>
+                                <span className="create-label-batch-count">{knownLabels.length}개 후보</span>
+                            </div>
+
+                            <div className="create-label-batch-range">
+                                <label>
+                                    시작
+                                    <input
+                                        type="number"
+                                        min={1}
+                                        max={questionsCount}
+                                        value={labelBatch.start}
+                                        onChange={(e) => setLabelBatchRange(parseInt(e.target.value, 10), labelBatch.end)}
+                                    />
+                                </label>
+                                <label>
+                                    끝
+                                    <input
+                                        type="number"
+                                        min={1}
+                                        max={questionsCount}
+                                        value={labelBatch.end}
+                                        onChange={(e) => setLabelBatchRange(labelBatch.start, parseInt(e.target.value, 10))}
+                                    />
+                                </label>
+                            </div>
+
+                            <input
+                                type="text"
+                                value={labelBatch.label}
+                                onChange={(e) => setLabelBatch(prev => ({ ...prev, label: e.target.value }))}
+                                placeholder="유형/라벨 예: 독해, 어법, 빈칸"
+                                className="input-field create-label-batch-input"
+                            />
+
+                            <div className="create-label-batch-presets" aria-label="라벨 후보">
+                                {knownLabels.map(label => (
+                                    <button
+                                        key={label}
+                                        type="button"
+                                        className={labelBatch.label === label ? "is-active" : ""}
+                                        onClick={() => setLabelBatch(prev => ({ ...prev, label }))}
+                                    >
+                                        {label}
+                                    </button>
+                                ))}
+                            </div>
+
+                            <div className="create-label-batch-grid">
+                                <input
+                                    type="text"
+                                    value={labelBatch.unit}
+                                    onChange={(e) => setLabelBatch(prev => ({ ...prev, unit: e.target.value }))}
+                                    placeholder="단원"
+                                    className="input-field"
+                                />
+                                <input
+                                    type="text"
+                                    value={labelBatch.concept}
+                                    onChange={(e) => setLabelBatch(prev => ({ ...prev, concept: e.target.value }))}
+                                    placeholder="세부 개념"
+                                    className="input-field"
+                                />
+                            </div>
+
+                            <div className="create-label-batch-difficulty" aria-label="난이도 일괄 설정">
+                                {DIFFICULTY_OPTIONS.map(option => (
+                                    <button
+                                        key={option.value}
+                                        type="button"
+                                        className={labelBatch.difficulty === option.value ? "is-active" : ""}
+                                        onClick={() => setLabelBatch(prev => ({
+                                            ...prev,
+                                            difficulty: prev.difficulty === option.value ? "" : option.value,
+                                        }))}
+                                        style={{ '--label-tone': option.tone } as React.CSSProperties}
+                                    >
+                                        {option.label}
+                                    </button>
+                                ))}
+                            </div>
+
+                            <div className="create-label-batch-actions">
+                                <button type="button" className="btn btn-secondary" onClick={setSelectedQuestionAsLabelRange}>
+                                    선택 기준
+                                </button>
+                                <button type="button" className="btn btn-secondary" onClick={() => setLabelBatchRange(1, questionsCount)}>
+                                    전체
+                                </button>
+                                <button type="button" className="btn btn-secondary" onClick={() => applyBatchLabels(true)}>
+                                    빈 라벨 채우기
+                                </button>
+                                <button type="button" className="btn btn-primary" onClick={() => applyBatchLabels(false)}>
+                                    범위 적용
+                                </button>
+                            </div>
+                        </div>
                     </div>
 
                     {/* Selected Question Detail Editor */}
@@ -1648,7 +1962,7 @@ function CreateOMRPageInner() {
                                 <div style={{ marginBottom: '1rem' }}>
                                     <label style={{ display: 'block', marginBottom: '0.3rem', fontSize: '0.85rem' }}>라벨 (클릭하여 선택)</label>
                                     <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.5rem', marginBottom: '0.5rem' }}>
-                                        {['문법', '독해', '어휘', '듣기', '추론'].map(tag => {
+                                        {knownLabels.map(tag => {
                                             const currentQ = questions.find(q => q.id === selectedQuestionId);
                                             const isActive = currentQ?.label === tag;
                                             return (
@@ -2106,14 +2420,30 @@ function CreateOMRPageInner() {
                 </div>
 
                 {/* 3. OMR Preview */}
-                <main className="create-preview-main" style={{
-                    flex: 1,
+                <main className={`create-preview-main ${isPreviewCollapsed ? 'is-collapsed' : ''}`} style={{
+                    flex: isPreviewCollapsed ? '0 0 64px' : 1,
+                    width: isPreviewCollapsed ? '64px' : undefined,
                     display: 'flex',
                     flexDirection: 'column',
-                    minWidth: '350px',
+                    minWidth: isPreviewCollapsed ? '64px' : '350px',
                     overflow: 'hidden',
                     background: 'var(--background)',
                 }}>
+                    {isPreviewCollapsed ? (
+                        <div className="create-preview-collapsed-rail">
+                            <button
+                                type="button"
+                                onClick={() => setIsPreviewCollapsed(false)}
+                                aria-label="OMR 미리보기 펼치기"
+                                title="OMR 미리보기 펼치기"
+                            >
+                                <PanelRightOpen size={18} />
+                                <span>OMR</span>
+                                <strong>{designSummary.answered}/{questionsCount}</strong>
+                            </button>
+                        </div>
+                    ) : (
+                        <>
                     {/* Preview mode toggle */}
                     <div className="create-preview-toolbar" style={{
                         padding: '0.75rem 1.25rem',
@@ -2141,6 +2471,15 @@ function CreateOMRPageInner() {
                             flexWrap: 'wrap',
                             justifyContent: 'flex-end',
                         }}>
+                            <button
+                                type="button"
+                                className="create-preview-icon-button"
+                                onClick={() => setIsPreviewCollapsed(true)}
+                                aria-label="OMR 미리보기 접기"
+                                title="OMR 미리보기 접기"
+                            >
+                                <PanelRightClose size={16} />
+                            </button>
                             {previewMode === 'paper' && (
                                 <div style={{
                                     display: 'flex',
@@ -2273,6 +2612,8 @@ function CreateOMRPageInner() {
                                     selectedQuestionId={selectedQuestionId}
                                     onQuestionClick={setSelectedQuestionId}
                                     onAnswerClick={handleOMRAnswerClick}
+                                    columns={columns}
+                                    numberingLayout="vertical"
                                     showMeta={true}
                                 />
                             </div>
@@ -2300,6 +2641,8 @@ function CreateOMRPageInner() {
                             </div>
                         )}
                     </div>
+                        </>
+                    )}
                 </main>
 
             </div >

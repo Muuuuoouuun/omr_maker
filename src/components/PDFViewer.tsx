@@ -64,6 +64,10 @@ const PEN_COLORS = ['#ef4444', '#111827', '#2563eb', '#16a34a'];
 const HIGHLIGHTER_COLOR = 'rgba(250, 204, 21, 0.38)';
 const MIN_POINT_DISTANCE = 0.0012;
 
+function isPdfUploadFile(file: File): boolean {
+    return file.type === 'application/pdf' || file.name.toLowerCase().endsWith('.pdf');
+}
+
 export default function PDFViewer({
     file,
     onLoadSuccess,
@@ -125,6 +129,13 @@ export default function PDFViewer({
         observer.observe(wrapperRef.current);
         return () => observer.disconnect();
     }, []);
+
+    useEffect(() => {
+        setNumPages(0);
+        setPageNumber(1);
+        setInputPage("1");
+        setActivePopupKey(null);
+    }, [file]);
 
     useEffect(() => {
         if (typeof forcePage === 'number' && forcePage >= 1 && forcePage <= numPages) {
@@ -528,11 +539,16 @@ export default function PDFViewer({
     const handleDragLeave = (e: React.DragEvent) => { e.preventDefault(); setIsDragging(false); };
     const handleDrop = (e: React.DragEvent) => {
         e.preventDefault(); setIsDragging(false);
-        if (onFileDrop && e.dataTransfer.files[0] && e.dataTransfer.files[0].type === 'application/pdf') {
+        if (onFileDrop && e.dataTransfer.files[0] && isPdfUploadFile(e.dataTransfer.files[0])) {
             onFileDrop(e.dataTransfer.files[0]);
         } else {
             toast.error("PDF 파일만 업로드 가능", "문제지 또는 정답지는 PDF 형식으로 올려주세요.");
         }
+    };
+
+    const handleDocumentLoadError = (error: Error) => {
+        console.error("PDF load failed", error);
+        toast.error("PDF 열기 실패", "파일이 손상되었거나 브라우저에서 읽을 수 없는 PDF입니다.");
     };
 
     return (
@@ -746,7 +762,13 @@ export default function PDFViewer({
             <div ref={wrapperRef} className="pdf-viewer-scroll scroll-custom" style={{ flex: 1, overflow: 'auto', display: 'flex', flexDirection: 'column', alignItems: 'center', background: '#525659', position: 'relative' }}>
                 <div className="pdf-viewer-page-wrap" style={{ flex: 1, display: 'flex', justifyContent: 'center', padding: '2rem', width: '100%' }}>
                     {file ? (
-                        <Document file={file} onLoadSuccess={onDocumentLoadSuccess} loading={<div style={{ color: 'white' }}>문서 로딩 중...</div>}>
+                        <Document
+                            file={file}
+                            onLoadSuccess={onDocumentLoadSuccess}
+                            onLoadError={handleDocumentLoadError}
+                            loading={<div style={{ color: 'white' }}>문서 로딩 중...</div>}
+                            error={<div style={{ color: 'white', fontWeight: 700 }}>PDF를 열 수 없습니다.</div>}
+                        >
                             <div
                                 ref={containerRef}
                                 onClick={handlePageClick}

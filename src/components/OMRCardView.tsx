@@ -18,6 +18,7 @@ interface OMRCardViewProps {
   columns?: number; // Optional hint for column count
   showMeta?: boolean; // Show label/score/PDF indicators
   questionDrawings?: QuestionDrawingSummary[];
+  numberingLayout?: "grid" | "vertical";
 }
 
 function LinkIcon() {
@@ -53,6 +54,7 @@ export default function OMRCardView({
   columns = 1,
   showMeta = false,
   questionDrawings = [],
+  numberingLayout = "grid",
 }: OMRCardViewProps) {
   const isEditor = mode === "editor";
   const fallbackChoiceCount = normalizeChoiceCount(optionsCount);
@@ -73,9 +75,11 @@ export default function OMRCardView({
 
   const cardRefs = useRef<Record<number, HTMLDivElement | null>>({});
   const gridMetrics = getCardViewGridMetrics(questions.length, columns);
+  const gridRows = Math.max(gridMetrics.rows, 1);
   const gridStyle = {
     "--omr-card-cols": gridMetrics.columns,
-    "--omr-card-rows": Math.max(gridMetrics.rows, 1),
+    "--omr-card-rows": gridRows,
+    gridTemplateRows: `repeat(${gridRows}, auto)`,
   } as React.CSSProperties;
   const handwritingByQuestionId = new Map(
     questionDrawings.map((drawing) => [drawing.questionId, drawing])
@@ -91,7 +95,7 @@ export default function OMRCardView({
   }, [selectedQuestionId]);
 
   return (
-    <div className="omr-cardview">
+    <div className={`omr-cardview ${numberingLayout === "vertical" ? "is-vertical-numbering" : ""}`}>
       {/* Header with progress */}
       <div className="omr-cardview-header">
         <div className="omr-cardview-header-top">

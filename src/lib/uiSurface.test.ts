@@ -38,9 +38,14 @@ describe("service UI surface", () => {
         expect(createPage).toContain("A4 가로");
         expect(createPage).toContain("create-preview-context-strip");
         expect(createPage).toContain("create-preview-context-meter");
+        expect(createPage).toContain("isPreviewCollapsed");
+        expect(createPage).toContain("create-preview-collapsed-rail");
+        expect(createPage).toContain("OMR 미리보기 접기");
+        expect(createPage).toContain("OMR 미리보기 펼치기");
         expect(createPage).toContain("선택 문항");
         expect(createPage).toContain("PDF 영역");
         expect(css).toContain(".create-preview-scroll.paper-mode");
+        expect(css).toContain(".create-preview-main.is-collapsed");
         expect(css).toContain(".create-preview-context-grid");
         expect(css).toContain(".create-paper-frame .omr-sheet::before");
         expect(css).toContain(".create-paper-frame-toolbar span");
@@ -341,6 +346,29 @@ describe("service UI surface", () => {
         expect(pdfViewer).toContain("interface MarkerRegion");
         expect(pdfViewer).toContain("title={`문항 영역 ${marker.label}번`}");
         expect(pdfViewer).toContain("marker.region.width");
+    });
+
+    it("keeps exam PDF upload recoverable and question labeling quick in creation", () => {
+        const createPage = readProjectFile("src/app/create/page.tsx");
+        const pdfViewer = readProjectFile("src/components/PDFViewer.tsx");
+        const omrCardView = readProjectFile("src/components/OMRCardView.tsx");
+        const css = readProjectFile("src/app/globals.css");
+
+        expect(createPage).toContain('const PDF_ACCEPT = "application/pdf,.pdf"');
+        expect(createPage).toContain("handleProblemPdfFile");
+        expect(createPage).toContain("handleAnswerKeyPdfFile");
+        expect(createPage).toContain("문항 빠른 세팅");
+        expect(createPage).toContain("create-question-quick-card");
+        expect(createPage).toContain("questionChoiceCount");
+        expect(createPage).toContain("문항 라벨 일괄 적용");
+        expect(createPage).toContain("applyBatchLabels");
+        expect(createPage).toContain('numberingLayout="vertical"');
+        expect(pdfViewer).toContain("function isPdfUploadFile(file: File): boolean");
+        expect(pdfViewer).toContain("onLoadError={handleDocumentLoadError}");
+        expect(omrCardView).toContain('numberingLayout?: "grid" | "vertical"');
+        expect(css).toContain(".create-question-answer-buttons");
+        expect(css).toContain(".create-label-batch-card");
+        expect(css).toContain(".omr-cardview.is-vertical-numbering .omr-cardview-grid");
     });
 
     it("keeps tablet solving usable with a collapsible right-side quick OMR rail", () => {
