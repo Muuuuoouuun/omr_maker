@@ -2,6 +2,12 @@
 
 import { GoogleGenerativeAI } from "@google/generative-ai";
 import { resolveGeminiApiKey } from "@/lib/geminiApiKey";
+import {
+    extractAnswerJsonArrayPayload,
+    invalidAiJsonError,
+    safeAiAnswerErrorMessage,
+    safeAiAnswerLogMeta,
+} from "@/lib/aiAnswerSafety";
 
 export async function analyzeAnswerImages(imageParts: string[], personalApiKey?: string) {
     const apiKey = resolveGeminiApiKey(personalApiKey, process.env.GEMINI_API_KEY);
@@ -51,22 +57,18 @@ export async function analyzeAnswerImages(imageParts: string[], personalApiKey?:
 
         const response = await generatedContent.response;
         const text = response.text();
-        console.log("Gemini Raw Response:", text);
 
-        // More robust JSON extraction
-        const jsonMatch = text.match(/\[\s*{[\s\S]*}\s*\]/);
-        const jsonStr = jsonMatch ? jsonMatch[0] : text.replace(/```json/g, '').replace(/```/g, '').trim();
+        const jsonStr = extractAnswerJsonArrayPayload(text);
 
         try {
             return JSON.parse(jsonStr);
         } catch {
-            console.error("JSON Parse Error. Raw Text:", text);
-            throw new Error(`AI가 유효한 정답 형식을 반환하지 않았습니다. 원본 응답:\n${text.substring(0, 100)}...`);
+            throw invalidAiJsonError(text.length);
         }
     } catch (error: unknown) {
-        console.error("Gemini API Error Object:", error);
-        const err = error as Error;
-        console.error("Error Message:", err.message);
-        throw new Error(`AI 인식 실패: ${err.message || '알 수 없는 오류'}`);
+        console.warn("AI answer analysis failed", safeAiAnswerLogMeta(error, {
+            imageCount: imageParts.length,
+        }));
+        throw new Error(safeAiAnswerErrorMessage(error));
     }
 }

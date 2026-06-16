@@ -18,11 +18,35 @@ export default function TrendChart({ data, labels, color = "#ffffff", height = 1
         }));
     }, [data, labels]);
 
-    if (data.length === 0) return <div style={{ height }} />;
+    if (data.length === 0) {
+        return (
+            <div style={{
+                height,
+                minWidth: 0,
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                color,
+                opacity: 0.78,
+                fontSize: '0.9rem',
+                fontWeight: 700,
+                textAlign: 'center',
+                padding: '0 1rem',
+            }}>
+                아직 제출 점수가 없습니다
+            </div>
+        );
+    }
 
     return (
-        <div style={{ width: '100%', height: `${height}px` }}>
-            <ResponsiveContainer width="100%" height="100%">
+        <div style={{ width: '100%', minWidth: 0, height }}>
+            <ResponsiveContainer
+                width="100%"
+                height="100%"
+                minWidth={0}
+                minHeight={height}
+                initialDimension={{ width: 640, height }}
+            >
                 <AreaChart data={chartData} margin={{ top: 10, right: 10, left: 10, bottom: 0 }}>
                     <defs>
                         <linearGradient id={`gradient_${color}`} x1="0" y1="0" x2="0" y2="1">

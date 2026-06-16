@@ -2,21 +2,32 @@
 
 import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
-import { Attempt, Group } from "@/types/omr";
 import ThemeToggle from "@/components/ThemeToggle";
 import { toast } from "@/components/Toast";
 import { verifyTeacherPassword } from "@/app/actions/auth";
-import { getOrCreateGuestId, saveSession, studentIdFor, type StudentSession } from "@/utils/storage";
-
-// 6-char alphanumeric code — avoids ambiguous chars (0/O, 1/I).
-function generateStartCode(): string {
-    const alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
-    let out = "";
-    for (let i = 0; i < 6; i++) {
-        out += alphabet[Math.floor(Math.random() * alphabet.length)];
-    }
-    return out;
-}
+import { formatRegionScopedLabel } from "@/lib/dashboardSelection";
+import { readLocalAttempts } from "@/lib/omrPersistence";
+import { readRosterGroups, readRosterStudents, type RosterGroup, type RosterStudent } from "@/lib/rosterStorage";
+import {
+  hasStudentStartCode,
+  normalizeStartCodeInput,
+  readStudentCodes,
+  resolveStudentIdentity,
+  resolveStudentStartCodeLogin,
+  writeStudentCodes,
+} from "@/lib/studentCodes";
+import {
+  consumePendingGuestMerge,
+  getSession,
+  getOrCreateGuestId,
+  mergeGuestAttempts,
+  previewGuestMerge,
+  readPendingGuestMerge,
+  saveSession,
+  type GuestMergePreview,
+  type StudentSession,
+} from "@/utils/storage";
+import { normalizeTeacherRedirectPath, saveTeacherSession } from "@/lib/teacherSession";
 
 /* ─── SVG Icons ──────────────────────────────────────── */
 
@@ -73,23 +84,58 @@ function ChevronLeft({ size = 16 }: { size?: number }) {
 
 /* ─── Page ───────────────────────────────────────────── */
 
+function cleanText(value: string | undefined): string {
+  return value?.trim() || "";
+}
+
+function resolveSessionRegion(params: {
+  name: string;
+  selectedGroupId: string;
+  groupName: string;
+  studentId: string;
+  groups: RosterGroup[];
+  students: RosterStudent[];
+}): Pick<StudentSession, "regionId" | "regionName"> {
+  const group = params.groups.find(item => item.id === params.selectedGroupId || item.name === params.groupName);
+  const groupRegion = cleanText(group?.region);
+  const matchingStudents = params.students.filter(item => item.name.trim() === params.name && item.group === params.groupName);
+  const student = params.students.find(item => item.id === params.studentId)
+    || (groupRegion ? matchingStudents.find(item => cleanText(item.region) === groupRegion) : undefined)
+    || matchingStudents[0];
+  const regionName = cleanText(student?.region) || cleanText(group?.region);
+
+  return regionName ? { regionId: regionName, regionName } : {};
+}
+
 export default function Home() {
   const router = useRouter();
   const [role, setRole] = useState<"none" | "teacher" | "student">("none");
   const [studentName, setStudentName] = useState("");
   const [selectedGroupId, setSelectedGroupId] = useState("");
-  const [groups, setGroups] = useState<Group[]>([]);
+  const [groups, setGroups] = useState<RosterGroup[]>([]);
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
+  const [pendingGuestPreview, setPendingGuestPreview] = useState<GuestMergePreview | null>(null);
+  const [recentStudentSession, setRecentStudentSession] = useState<StudentSession | null>(null);
   // Anti-spoof: require a start-code for returning students.
   const [startCode, setStartCode] = useState("");
   const [needsCode, setNeedsCode] = useState(false);
 
   useEffect(() => {
-    const stored = localStorage.getItem("omr_groups");
-    // Hydrate client-only localStorage state after mount.
-    // eslint-disable-next-line react-hooks/set-state-in-effect
-    if (stored) setGroups(JSON.parse(stored));
+    try {
+      // Hydrate client-only localStorage state after mount.
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      setGroups(readRosterGroups(localStorage));
+      const restoredSession = getSession();
+      setRecentStudentSession(restoredSession && !restoredSession.isGuest ? restoredSession : null);
+    } catch {
+      // Keep the empty group list and show the existing teacher-contact message.
+    }
+
+    const requestedRole = new URLSearchParams(window.location.search).get("role");
+    if (requestedRole === "student" || requestedRole === "teacher") {
+      setRole(requestedRole);
+    }
   }, []);
 
   // Surface the start-code field proactively for returning students.
@@ -101,34 +147,48 @@ export default function Home() {
       return;
     }
     try {
-      const raw = localStorage.getItem("omr_student_codes");
-      if (!raw) {
-        setNeedsCode(false);
-        return;
-      }
-      const codes: Record<string, string> = JSON.parse(raw);
-      let sid = studentIdFor(studentName, selectedGroupId);
-      try {
-        const group = groups.find(g => g.id === selectedGroupId);
-        const rawStudents = localStorage.getItem("omr_students");
-        if (rawStudents) {
-          const students = JSON.parse(rawStudents) as Array<{ id?: string; name?: string; group?: string }>;
-          const profile = students.find(s => s.name === studentName.trim() && (!group?.name || s.group === group.name));
-          if (profile?.id) sid = profile.id;
-        }
-      } catch { /* ignore local profile lookup */ }
-      setNeedsCode(!!codes[sid] || !!codes[studentIdFor(studentName, selectedGroupId)]);
+      const codes = readStudentCodes(localStorage);
+      const students = readRosterStudents(localStorage);
+      const identity = resolveStudentIdentity({
+        name: studentName,
+        selectedGroupId,
+        groups,
+        students,
+      });
+      setNeedsCode(hasStudentStartCode(codes, identity.studentId, identity.legacyStudentId));
     } catch {
       setNeedsCode(false);
     }
   }, [role, studentName, selectedGroupId, groups]);
 
+  useEffect(() => {
+    if (role !== "student") {
+      // Derived from localStorage after role selection.
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      setPendingGuestPreview(null);
+      return;
+    }
+    try {
+      const pending = readPendingGuestMerge();
+      const preview = pending ? previewGuestMerge(pending.guestId) : null;
+      setPendingGuestPreview(preview && preview.mergeableCount > 0 ? preview : null);
+    } catch {
+      setPendingGuestPreview(null);
+    }
+  }, [role]);
+
   const handleTeacherLogin = async () => {
     try {
       const res = await verifyTeacherPassword(password);
       if (res.success && res.token) {
-        sessionStorage.setItem("omr_teacher_token", res.token);
-        router.push("/teacher/dashboard");
+        const saved = saveTeacherSession(res.token);
+        if (!saved) {
+          setError("브라우저 세션 저장을 사용할 수 없습니다.");
+          setTimeout(() => setError(""), 2000);
+          return;
+        }
+        const next = normalizeTeacherRedirectPath(new URLSearchParams(window.location.search).get("next"));
+        router.push(next);
       } else {
         setError(res.error || "잘못된 비밀번호입니다.");
         setTimeout(() => setError(""), 2000);
@@ -146,76 +206,92 @@ export default function Home() {
       setTimeout(() => setError(""), 2000);
       return;
     }
-    const group = groups.find((g) => g.id === selectedGroupId);
-    const legacySid = studentIdFor(trimmedName, selectedGroupId);
-    let sid = legacySid;
-
-    try {
-      const rawStudents = localStorage.getItem("omr_students");
-      if (rawStudents) {
-        const students = JSON.parse(rawStudents) as Array<{ id?: string; name?: string; group?: string }>;
-        const profile = students.find(s => s.name === trimmedName && (!group?.name || s.group === group.name));
-        if (profile?.id) sid = profile.id;
-      }
-    } catch { /* ignore local profile lookup */ }
+    const students = readRosterStudents(localStorage);
+    const identity = resolveStudentIdentity({
+      name: trimmedName,
+      selectedGroupId,
+      groups,
+      students,
+    });
+    const regionSnapshot = resolveSessionRegion({
+      name: trimmedName,
+      selectedGroupId,
+      groupName: identity.groupName,
+      studentId: identity.studentId,
+      groups,
+      students,
+    });
 
     // Load existing start-code registry + attempts to decide anti-spoof path.
-    let codes: Record<string, string> = {};
-    try {
-      const raw = localStorage.getItem("omr_student_codes");
-      if (raw) codes = JSON.parse(raw);
-    } catch { /* ignore */ }
+    const codes = readStudentCodes(localStorage);
+    const attempts = readLocalAttempts();
 
-    let attempts: Attempt[] = [];
-    try {
-      const raw = localStorage.getItem("omr_attempts");
-      if (raw) attempts = JSON.parse(raw);
-    } catch { /* ignore */ }
-
-    const hasPriorAttempt = attempts.some(a => a.studentId === sid
-      || a.studentId === legacySid
+    const hasPriorAttempt = attempts.some(a => a.studentId === identity.studentId
+      || a.studentId === identity.legacyStudentId
       || (a.studentName === trimmedName && !a.guestId));
-    const storedCode = codes[sid] || codes[legacySid];
-    if (storedCode && !codes[sid]) {
-      codes[sid] = storedCode;
-      try { localStorage.setItem("omr_student_codes", JSON.stringify(codes)); } catch { /* ignore quota */ }
+
+    const codeDecision = resolveStudentStartCodeLogin({
+      studentId: identity.studentId,
+      legacyStudentId: identity.legacyStudentId,
+      codes,
+      hasPriorAttempt,
+      providedCode: startCode,
+    });
+
+    if (codeDecision.codesChanged && !writeStudentCodes(localStorage, codeDecision.codes)) {
+      setError("시작 코드 저장에 실패했습니다. 브라우저 저장소를 확인해주세요.");
+      setTimeout(() => setError(""), 2500);
+      return;
     }
 
-    // CASE 1: returning student — must enter their start code.
-    if (storedCode && hasPriorAttempt) {
-      if (!startCode.trim()) {
-        setNeedsCode(true);
-        setError("이미 등록된 학생입니다. 시작 코드를 입력해주세요.");
-        setTimeout(() => setError(""), 2500);
-        return;
-      }
-      if (startCode.trim().toUpperCase() !== storedCode) {
-        setError("시작 코드가 일치하지 않습니다.");
-        setTimeout(() => setError(""), 2500);
-        return;
-      }
-    } else if (!storedCode) {
-      // CASE 2: brand-new student — mint + show their code.
-      const fresh = generateStartCode();
-      codes[sid] = fresh;
-      try {
-        localStorage.setItem("omr_student_codes", JSON.stringify(codes));
-      } catch { /* ignore quota */ }
+    if (codeDecision.status === "code_required") {
+      setNeedsCode(true);
+      setError("이미 등록된 학생입니다. 시작 코드를 입력해주세요.");
+      setTimeout(() => setError(""), 2500);
+      return;
+    }
+
+    if (codeDecision.status === "code_mismatch") {
+      setError("시작 코드가 일치하지 않습니다.");
+      setTimeout(() => setError(""), 2500);
+      return;
+    }
+
+    if (codeDecision.status === "new_code_issued") {
       toast.success(
         "시작 코드 발급",
-        `다음 로그인 시 이 코드를 입력하세요: ${fresh}`
+        `다음 로그인 시 이 코드를 입력하세요: ${codeDecision.code}`
       );
     }
 
     const session: StudentSession = {
       name: trimmedName,
-      studentId: sid,
-      loginId: legacySid,
+      studentId: identity.studentId,
+      loginId: identity.legacyStudentId,
       groupId: selectedGroupId,
-      groupName: group?.name || "Unknown",
+      groupName: identity.groupName,
+      ...regionSnapshot,
       isGuest: false,
       identityType: "temporary",
     };
+
+    const pendingGuestMerge = consumePendingGuestMerge();
+    if (pendingGuestMerge) {
+      const mergedCount = mergeGuestAttempts(pendingGuestMerge.guestId, {
+        studentId: identity.studentId,
+        name: trimmedName,
+        groupId: selectedGroupId,
+        groupName: identity.groupName,
+        ...regionSnapshot,
+        identityType: "temporary",
+      });
+      if (mergedCount > 0) {
+        toast.success("게스트 기록 연결됨", `${mergedCount}개의 시험 기록을 학생 기록으로 저장했습니다.`);
+      } else {
+        toast.info("연결할 새 게스트 기록 없음", "이후 제출 기록은 학생 기록으로 저장됩니다.");
+      }
+    }
+
     saveSession(session);
     router.push("/student/dashboard");
   };
@@ -233,6 +309,16 @@ export default function Home() {
     saveSession(session);
     localStorage.setItem("omr_guest_id", guestId);
     router.push("/student/dashboard");
+  };
+
+  const handleContinueRecentStudent = () => {
+    const restoredSession = getSession();
+    if (restoredSession && !restoredSession.isGuest) {
+      router.push("/student/dashboard");
+      return;
+    }
+    setRecentStudentSession(null);
+    toast.info("최근 학생 정보 없음", "이름과 반으로 다시 로그인해주세요.");
   };
 
   const handleBack = () => {
@@ -460,6 +546,50 @@ export default function Home() {
           </div>
         )}
 
+        {role === "none" && recentStudentSession && (
+          <div
+            className="glass-panel animate-fade-in"
+            style={{
+              margin: "1.5rem auto 0",
+              maxWidth: "560px",
+              padding: "1rem 1.1rem",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "space-between",
+              gap: "1rem",
+              flexWrap: "wrap",
+              border: "1px solid rgba(236,72,153,0.18)",
+              background: "rgba(236,72,153,0.06)",
+            }}
+          >
+            <div style={{ minWidth: 0 }}>
+              <div style={{ fontSize: "0.82rem", fontWeight: 850, color: "var(--secondary)", marginBottom: "0.2rem" }}>
+                최근 학생
+              </div>
+              <div style={{ fontSize: "0.94rem", fontWeight: 800, color: "var(--foreground)" }}>
+                {recentStudentSession.name}
+                <span style={{ color: "var(--muted)", fontWeight: 600 }}>
+                  {" · "}{recentStudentSession.regionName ? `${recentStudentSession.regionName} ` : ""}{recentStudentSession.groupName || "반 미지정"}
+                </span>
+              </div>
+            </div>
+            <button
+              type="button"
+              onClick={handleContinueRecentStudent}
+              className="btn btn-primary"
+              style={{
+                background: "linear-gradient(135deg, var(--secondary), #c026d3)",
+                boxShadow: "0 4px 18px rgba(236,72,153,0.25)",
+                padding: "0.65rem 1rem",
+                fontSize: "0.88rem",
+                flexShrink: 0,
+              }}
+            >
+              이어가기
+            </button>
+          </div>
+        )}
+
         {/* ── Login Forms ────────────────────── */}
         {role !== "none" && (
           <div
@@ -535,7 +665,7 @@ export default function Home() {
                     </p>
                   ) : (
                     <p style={{ fontSize: "0.8rem", color: "var(--muted)", marginTop: "0.5rem", opacity: 0.75 }}>
-                      Demo: admin123
+                      교사용 비밀번호를 입력하세요.
                     </p>
                   )}
                 </div>
@@ -612,7 +742,7 @@ export default function Home() {
                     <option value="">반을 선택하세요</option>
                     {groups.map((g) => (
                       <option key={g.id} value={g.id}>
-                        {g.name}
+                        {formatRegionScopedLabel(g.name, g.region)}
                       </option>
                     ))}
                   </select>
@@ -639,6 +769,27 @@ export default function Home() {
                   )}
                 </div>
 
+                {pendingGuestPreview && (
+                  <div
+                    style={{
+                      marginBottom: "1.25rem",
+                      padding: "0.85rem 0.95rem",
+                      borderRadius: "var(--radius-md)",
+                      border: "1px solid rgba(99,102,241,0.2)",
+                      background: "rgba(99,102,241,0.08)",
+                      color: "var(--foreground)",
+                    }}
+                  >
+                    <div style={{ fontSize: "0.82rem", fontWeight: 850, color: "var(--primary)", marginBottom: "0.25rem" }}>
+                      게스트 기록 연결 예정
+                    </div>
+                    <p style={{ fontSize: "0.78rem", color: "var(--muted)", lineHeight: 1.55, wordBreak: "keep-all" }}>
+                      로그인하면 이 기기의 게스트 제출 {pendingGuestPreview.mergeableCount}건을 학생 기록에 합칩니다.
+                      {pendingGuestPreview.examTitles.length > 0 ? ` 대상: ${pendingGuestPreview.examTitles.join(", ")}` : ""}
+                    </p>
+                  </div>
+                )}
+
                 {needsCode && (
                   <div style={{ marginBottom: "1.75rem" }}>
                     <label
@@ -658,7 +809,7 @@ export default function Home() {
                       type="text"
                       className="input-field"
                       value={startCode}
-                      onChange={(e) => setStartCode(e.target.value.toUpperCase())}
+                      onChange={(e) => setStartCode(normalizeStartCodeInput(e.target.value))}
                       onKeyDown={(e) => e.key === "Enter" && handleStudentLogin()}
                       placeholder="6자리 코드 입력"
                       maxLength={6}

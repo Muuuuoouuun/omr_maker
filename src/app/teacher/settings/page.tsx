@@ -2,57 +2,29 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import TeacherHeader from "@/components/TeacherHeader";
-import { User, Bell, FileText, CheckCircle, Key, Palette, Shield, Copy, Eye, EyeOff, Save, RotateCcw, Download, Upload } from "lucide-react";
+import { User, Bell, FileText, CheckCircle, Key, Palette, Shield, Copy, Eye, EyeOff, Save, RotateCcw, Download, Upload, LogOut, Database, RefreshCw, AlertTriangle, CloudOff } from "lucide-react";
 import { toast } from "@/components/Toast";
 import { SETTINGS_STORAGE_KEY, maskGeminiApiKey } from "@/lib/geminiApiKey";
+import { DEFAULT_SETTINGS, mergeSettings, readStoredSettings, type AppSettings } from "@/lib/appSettings";
+import { buildDataDbReadiness, type DataDbReadinessSummary, type DataDbReadinessTone } from "@/lib/dataDbReadiness";
+import { loadAttempts, loadExams } from "@/lib/omrPersistence";
+import { loadRosterSnapshot, readRosterTombstones } from "@/lib/rosterPersistence";
+import { PRIMARY_NOTIFICATION_CHANNEL } from "@/lib/serviceRoadmap";
+import {
+    buildTeacherSessionDisplay,
+    clearTeacherSession,
+    readTeacherSession,
+    type TeacherSessionDisplay,
+} from "@/lib/teacherSession";
 
-type Section = "profile" | "notifications" | "exam-defaults" | "grading" | "api" | "theme" | "security";
-
-interface Settings {
-    profile: { name: string; email: string; school: string; subject: string; publicProfile: boolean };
-    notifications: { email: boolean; push: boolean; weekly: boolean; autoRemind: boolean; quietStart: string; quietEnd: string };
-    examDefaults: { questions: number; duration: number; scorePerQ: number; choices: 4 | 5; autosaveSec: number };
-    grading: { negative: boolean; partial: boolean; autoRelease: boolean; rounding: "half" | "up" | "down" | "none" };
-    api: { geminiKey: string };
-    theme: { mode: "light" | "dark" | "auto"; accent: string; density: "comfortable" | "compact"; motion: boolean };
-    security: { twoFactor: boolean; loginAlerts: boolean };
-}
-
-const DEFAULT_SETTINGS: Settings = {
-    profile: { name: "김선생", email: "teacher@school.ac.kr", school: "한빛고등학교", subject: "수학 · 과학", publicProfile: true },
-    notifications: { email: true, push: true, weekly: false, autoRemind: true, quietStart: "22:00", quietEnd: "07:00" },
-    examDefaults: { questions: 20, duration: 50, scorePerQ: 5, choices: 5, autosaveSec: 30 },
-    grading: { negative: false, partial: true, autoRelease: false, rounding: "half" },
-    api: { geminiKey: "" },
-    theme: { mode: "light", accent: "#4f46e5", density: "comfortable", motion: true },
-    security: { twoFactor: false, loginAlerts: true },
-};
+type Section = "profile" | "notifications" | "exam-defaults" | "grading" | "api" | "theme" | "data" | "security";
 
 const STORAGE_KEY = SETTINGS_STORAGE_KEY;
 const THEME_KEY = "omr_theme";
-
-function mergeSettings(parsed: Partial<Settings> | null | undefined): Settings {
-    if (!parsed || typeof parsed !== "object") return DEFAULT_SETTINGS;
-    return {
-        profile: { ...DEFAULT_SETTINGS.profile, ...(parsed.profile ?? {}) },
-        notifications: { ...DEFAULT_SETTINGS.notifications, ...(parsed.notifications ?? {}) },
-        examDefaults: { ...DEFAULT_SETTINGS.examDefaults, ...(parsed.examDefaults ?? {}) },
-        grading: { ...DEFAULT_SETTINGS.grading, ...(parsed.grading ?? {}) },
-        api: { ...DEFAULT_SETTINGS.api, ...(parsed.api ?? {}) },
-        theme: { ...DEFAULT_SETTINGS.theme, ...(parsed.theme ?? {}) },
-        security: { ...DEFAULT_SETTINGS.security, ...(parsed.security ?? {}) },
-    };
-}
+type Settings = AppSettings;
 
 function loadPersisted(): Settings {
-    if (typeof window === "undefined") return DEFAULT_SETTINGS;
-    try {
-        const raw = window.localStorage.getItem(STORAGE_KEY);
-        if (!raw) return DEFAULT_SETTINGS;
-        return mergeSettings(JSON.parse(raw) as Partial<Settings>);
-    } catch {
-        return DEFAULT_SETTINGS;
-    }
+    return readStoredSettings();
 }
 
 function applyTheme(theme: Settings["theme"]) {
@@ -75,6 +47,15 @@ function applyTheme(theme: Settings["theme"]) {
     }
 }
 
+function readTeacherSessionDisplay(now = Date.now()): TeacherSessionDisplay {
+    if (typeof window === "undefined") {
+        return buildTeacherSessionDisplay(null, now);
+    }
+
+    const session = readTeacherSession(undefined, now);
+    return buildTeacherSessionDisplay(session, now);
+}
+
 const SECTIONS: { key: Section; label: string; icon: React.ReactNode; color: string }[] = [
     { key: "profile", label: "프로필", icon: <User size={18} />, color: "#4f46e5" },
     { key: "notifications", label: "알림", icon: <Bell size={18} />, color: "#ec4899" },
@@ -82,8 +63,86 @@ const SECTIONS: { key: Section; label: string; icon: React.ReactNode; color: str
     { key: "grading", label: "채점", icon: <CheckCircle size={18} />, color: "#10b981" },
     { key: "api", label: "API 키", icon: <Key size={18} />, color: "#f59e0b" },
     { key: "theme", label: "테마", icon: <Palette size={18} />, color: "#0ea5e9" },
+    { key: "data", label: "데이터 · DB", icon: <Database size={18} />, color: "#14b8a6" },
     { key: "security", label: "보안", icon: <Shield size={18} />, color: "#ef4444" },
 ];
+
+function initialDataDbReadiness(): DataDbReadinessSummary {
+    return buildDataDbReadiness({
+        syncSources: [],
+        examCount: 0,
+        attemptCount: 0,
+        rosterStudentCount: 0,
+        rosterGroupCount: 0,
+        tombstones: { students: {}, groups: {} },
+    });
+}
+
+function ResetSettingsConfirmDialog({
+    onCancel,
+    onConfirm,
+}: {
+    onCancel: () => void;
+    onConfirm: () => void;
+}) {
+    return (
+        <div
+            role="presentation"
+            onClick={onCancel}
+            style={{
+                position: 'fixed',
+                inset: 0,
+                zIndex: 1200,
+                background: 'rgba(15,23,42,0.58)',
+                backdropFilter: 'blur(8px)',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                padding: '1rem',
+            }}
+        >
+            <div
+                role="dialog"
+                aria-modal="true"
+                aria-label="설정 초기화 확인"
+                onClick={(e) => e.stopPropagation()}
+                style={{
+                    width: '100%',
+                    maxWidth: 430,
+                    background: 'var(--surface)',
+                    color: 'var(--foreground)',
+                    border: '1px solid var(--border)',
+                    borderRadius: 'var(--radius-lg)',
+                    boxShadow: '0 24px 60px rgba(0,0,0,0.28)',
+                    padding: '1.5rem',
+                }}
+            >
+                <h2 style={{ fontSize: '1.15rem', fontWeight: 800, marginBottom: '0.65rem' }}>
+                    설정 초기화
+                </h2>
+                <p style={{ color: 'var(--muted)', lineHeight: 1.7, fontSize: '0.95rem', wordBreak: 'keep-all', marginBottom: '1.25rem' }}>
+                    프로필, 알림, 시험 기본값, 채점, 테마, 보안 설정을 기본값으로 되돌립니다. API 키도 저장된 기본 상태로 초기화됩니다.
+                </p>
+                <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.5rem' }}>
+                    <button
+                        type="button"
+                        onClick={onCancel}
+                        style={{ padding: '0.7rem 1rem', background: 'var(--surface)', color: 'var(--foreground)', border: '1px solid var(--border)', borderRadius: 'var(--radius-md)', fontWeight: 700, fontSize: '0.9rem' }}
+                    >
+                        취소
+                    </button>
+                    <button
+                        type="button"
+                        onClick={onConfirm}
+                        style={{ padding: '0.7rem 1rem', background: 'var(--error)', color: 'white', borderRadius: 'var(--radius-md)', fontWeight: 800, fontSize: '0.9rem' }}
+                    >
+                        기본값으로 초기화
+                    </button>
+                </div>
+            </div>
+        </div>
+    );
+}
 
 export default function SettingsPage() {
     const [section, setSection] = useState<Section>("profile");
@@ -93,6 +152,9 @@ export default function SettingsPage() {
     // The last persisted settings (what 취소 reverts to, and what 저장 writes).
     const [persisted, setPersisted] = useState<Settings>(DEFAULT_SETTINGS);
     const [hydrated, setHydrated] = useState(false);
+    const [resetConfirmOpen, setResetConfirmOpen] = useState(false);
+    const [dataReadiness, setDataReadiness] = useState<DataDbReadinessSummary>(() => initialDataDbReadiness());
+    const [isCheckingDataDb, setIsCheckingDataDb] = useState(false);
     const draftRef = useRef<Settings>(DEFAULT_SETTINGS);
     const persistedRef = useRef<Settings>(DEFAULT_SETTINGS);
 
@@ -104,7 +166,6 @@ export default function SettingsPage() {
     useEffect(() => {
         const initial = loadPersisted();
         // Hydrate client-only persisted settings after mount.
-        // eslint-disable-next-line react-hooks/set-state-in-effect
         setDraft(initial);
         setPersisted(initial);
         draftRef.current = initial;
@@ -151,7 +212,6 @@ export default function SettingsPage() {
     const importInputRef = useRef<HTMLInputElement | null>(null);
 
     const resetAllToDefaults = useCallback(() => {
-        if (!window.confirm("모든 설정을 기본값으로 되돌리시겠습니까?")) return;
         setDraft(DEFAULT_SETTINGS);
         setPersisted(DEFAULT_SETTINGS);
         draftRef.current = DEFAULT_SETTINGS;
@@ -162,6 +222,7 @@ export default function SettingsPage() {
             // ignore
         }
         applyTheme(DEFAULT_SETTINGS.theme);
+        setResetConfirmOpen(false);
         toast.success("초기화 완료", "모든 설정을 기본값으로 되돌렸습니다.");
     }, []);
 
@@ -198,6 +259,47 @@ export default function SettingsPage() {
             toast.error("가져오기 실패", "JSON 파일 형식을 확인해주세요.");
         }
     }, []);
+
+    const refreshDataDbReadiness = useCallback(async (notify = false) => {
+        if (typeof window === "undefined") return;
+        setIsCheckingDataDb(true);
+        try {
+            const [examResult, attemptResult, rosterResult] = await Promise.all([
+                loadExams(),
+                loadAttempts(),
+                loadRosterSnapshot(window.localStorage),
+            ]);
+            const summary = buildDataDbReadiness({
+                syncSources: [
+                    { ...examResult, sourceKey: "exams", sourceLabel: "시험" },
+                    { ...attemptResult, sourceKey: "attempts", sourceLabel: "제출" },
+                    { ...rosterResult, sourceKey: "roster", sourceLabel: "명단" },
+                ],
+                examCount: examResult.items.length,
+                attemptCount: attemptResult.items.length,
+                rosterStudentCount: rosterResult.students.length,
+                rosterGroupCount: rosterResult.groups.length,
+                tombstones: readRosterTombstones(window.localStorage),
+            });
+            setDataReadiness(summary);
+            if (notify) {
+                if (summary.persistence.kind === "error") {
+                    toast.info("DB 상태 확인 완료", "일부 원격 동기화는 다음 로드에서 다시 시도됩니다.");
+                } else {
+                    toast.success("DB 상태 확인 완료", summary.detail);
+                }
+            }
+        } catch {
+            toast.error("DB 상태 확인 실패", "브라우저 저장소 또는 네트워크 상태를 확인해주세요.");
+        } finally {
+            setIsCheckingDataDb(false);
+        }
+    }, []);
+
+    useEffect(() => {
+        if (!hydrated || section !== "data") return;
+        void refreshDataDbReadiness();
+    }, [hydrated, refreshDataDbReadiness, section]);
 
     return (
         <div className="layout-main">
@@ -241,6 +343,7 @@ export default function SettingsPage() {
                         {section === "grading" && <GradingSection value={draft.grading} onChange={v => updateSection("grading", v)} onSave={() => saveSection("grading")} onCancel={() => cancelSection("grading")} />}
                         {section === "api" && <ApiSection value={draft.api} onChange={v => updateSection("api", v)} onSave={() => saveSection("api")} onCancel={() => cancelSection("api")} showKey={showKey} setShowKey={setShowKey} />}
                         {section === "theme" && <ThemeSection value={draft.theme} onChange={v => updateSection("theme", v)} onSave={() => saveSection("theme")} onCancel={() => cancelSection("theme")} />}
+                        {section === "data" && <DataDbSection summary={dataReadiness} isChecking={isCheckingDataDb} onRefresh={() => refreshDataDbReadiness(true)} />}
                         {section === "security" && <SecuritySection value={draft.security} onChange={v => updateSection("security", v)} onSave={() => saveSection("security")} onCancel={() => cancelSection("security")} />}
 
                         {/* Global settings actions */}
@@ -276,7 +379,7 @@ export default function SettingsPage() {
                                     }}>
                                         <Upload size={14} /> 가져오기
                                     </button>
-                                    <button onClick={resetAllToDefaults} style={{
+                                    <button onClick={() => setResetConfirmOpen(true)} style={{
                                         padding: '0.55rem 1rem', background: 'rgba(239,68,68,0.08)', color: '#ef4444',
                                         border: '1px solid rgba(239,68,68,0.25)', borderRadius: 'var(--radius-md)',
                                         fontSize: '0.85rem', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '0.4rem'
@@ -295,6 +398,12 @@ export default function SettingsPage() {
                     .settings-grid { grid-template-columns: 1fr !important; }
                 }
             `}</style>
+            {resetConfirmOpen && (
+                <ResetSettingsConfirmDialog
+                    onCancel={() => setResetConfirmOpen(false)}
+                    onConfirm={resetAllToDefaults}
+                />
+            )}
         </div>
     );
 }
@@ -405,7 +514,7 @@ function ProfileSection({ value, onChange, onSave, onCancel }: SectionProps<Sett
             </div>
 
             <Field label="이름"><input className="input-field" value={value.name} onChange={e => onChange({ name: e.target.value })} /></Field>
-            <Field label="이메일" hint="로그인 및 알림에 사용됩니다."><input className="input-field" value={value.email} onChange={e => onChange({ email: e.target.value })} /></Field>
+            <Field label="이메일" hint="로그인에 사용됩니다. 카카오 알림 연락처는 학생/초대 관리에서 별도로 연결합니다."><input className="input-field" value={value.email} onChange={e => onChange({ email: e.target.value })} /></Field>
             <Field label="소속"><input className="input-field" value={value.school} onChange={e => onChange({ school: e.target.value })} /></Field>
             <Field label="담당 과목"><input className="input-field" value={value.subject} onChange={e => onChange({ subject: e.target.value })} /></Field>
 
@@ -418,11 +527,11 @@ function ProfileSection({ value, onChange, onSave, onCancel }: SectionProps<Sett
 
 function NotificationsSection({ value, onChange, onSave, onCancel }: SectionProps<Settings["notifications"]>) {
     return (
-        <Card title="알림" desc="언제, 어떤 방식으로 알림을 받을지 설정하세요.">
-            <Toggle checked={value.email} onChange={v => onChange({ email: v })} label="이메일 알림" desc="학생 제출, 성적 집계, 시스템 공지" />
+        <Card title="알림" desc={`${PRIMARY_NOTIFICATION_CHANNEL.label} 우선 채널을 기준으로 알림 대상을 관리합니다.`}>
+            <Toggle checked={value.email} onChange={v => onChange({ email: v })} label="카카오 알림 준비" desc="초대, 미응시 독려, 결과 안내의 1차 발송 채널" />
             <Toggle checked={value.push} onChange={v => onChange({ push: v })} label="브라우저 푸시" desc="실시간 시험 현황 알림" />
             <Toggle checked={value.weekly} onChange={v => onChange({ weekly: v })} label="주간 리포트" desc="매주 월요일 오전 9시, 지난 주 요약" />
-            <Toggle checked={value.autoRemind} onChange={v => onChange({ autoRemind: v })} label="미응시 학생 자동 독려" desc="시험 시작 24시간 전 자동 알림 발송" />
+            <Toggle checked={value.autoRemind} onChange={v => onChange({ autoRemind: v })} label="미응시 학생 독려 후보" desc="시험 시작 24시간 전 카카오 발송 대상 후보를 표시" />
 
             <div style={{ marginTop: '1.5rem', padding: '1rem', background: 'rgba(99,102,241,0.05)', borderRadius: 'var(--radius-md)', border: '1px solid rgba(99,102,241,0.15)' }}>
                 <div style={{ fontSize: '0.8rem', fontWeight: 700, color: 'var(--primary)', marginBottom: '0.5rem' }}>알림 정숙 시간</div>
@@ -447,8 +556,8 @@ function ExamDefaultsSection({ value, onChange, onSave, onCancel }: SectionProps
                 <Field label="문항당 기본 배점"><input className="input-field" type="number" value={value.scorePerQ} step={0.5} onChange={e => onChange({ scorePerQ: Number(e.target.value) })} /></Field>
                 <Field label="선택지 수">
                     <select className="input-field" value={value.choices} onChange={e => onChange({ choices: Number(e.target.value) as 4 | 5 })}>
-                        <option value={4}>4지선다</option>
                         <option value={5}>5지선다</option>
+                        <option value={4}>4지선다</option>
                     </select>
                 </Field>
             </div>
@@ -631,25 +740,306 @@ function ThemeSection({ value, onChange, onSave, onCancel }: SectionProps<Settin
     );
 }
 
+function dataToneStyle(tone: DataDbReadinessTone): { color: string; background: string; border: string; icon: React.ReactNode } {
+    if (tone === "ready") {
+        return {
+            color: 'var(--success)',
+            background: 'rgba(16,185,129,0.1)',
+            border: 'rgba(16,185,129,0.22)',
+            icon: <CheckCircle size={15} />,
+        };
+    }
+    if (tone === "warning") {
+        return {
+            color: 'var(--warning)',
+            background: 'rgba(245,158,11,0.1)',
+            border: 'rgba(245,158,11,0.24)',
+            icon: <AlertTriangle size={15} />,
+        };
+    }
+    if (tone === "error") {
+        return {
+            color: 'var(--error)',
+            background: 'rgba(239,68,68,0.1)',
+            border: 'rgba(239,68,68,0.24)',
+            icon: <AlertTriangle size={15} />,
+        };
+    }
+    return {
+        color: 'var(--muted)',
+        background: 'rgba(100,116,139,0.1)',
+        border: 'rgba(100,116,139,0.22)',
+        icon: <CloudOff size={15} />,
+    };
+}
+
+function DataDbSection({
+    summary,
+    isChecking,
+    onRefresh,
+}: {
+    summary: DataDbReadinessSummary;
+    isChecking: boolean;
+    onRefresh: () => void;
+}) {
+    const mainTone = dataToneStyle(
+        summary.persistence.kind === "error"
+            ? "error"
+            : summary.persistence.kind === "pending"
+                ? "warning"
+                : summary.persistence.kind === "synced"
+                    ? "ready"
+                    : "neutral",
+    );
+
+    return (
+        <Card title="데이터 · DB" desc="시험, 제출, 명단, 삭제 보관 표시가 저장소와 맞는지 확인합니다.">
+            <div style={{
+                display: 'flex',
+                justifyContent: 'space-between',
+                gap: '1rem',
+                alignItems: 'flex-start',
+                flexWrap: 'wrap',
+                padding: '1rem 1.1rem',
+                borderRadius: 'var(--radius-lg)',
+                border: `1px solid ${mainTone.border}`,
+                background: mainTone.background,
+                marginBottom: '1.25rem',
+            }}>
+                <div style={{ minWidth: 0 }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', color: mainTone.color, fontWeight: 900, marginBottom: '0.3rem' }}>
+                        <Database size={18} />
+                        {summary.label}
+                    </div>
+                    <p style={{ color: 'var(--muted)', fontSize: '0.86rem', lineHeight: 1.65, wordBreak: 'keep-all' }}>
+                        {summary.detail}
+                    </p>
+                    {summary.persistence.pendingCount > 0 && (
+                        <div style={{ marginTop: '0.45rem', color: 'var(--warning)', fontSize: '0.78rem', fontWeight: 800 }}>
+                            재시도 대기 {summary.persistence.pendingCount}건
+                        </div>
+                    )}
+                </div>
+                <button
+                    type="button"
+                    onClick={onRefresh}
+                    disabled={isChecking}
+                    aria-label="데이터 DB 상태 새로고침"
+                    style={{
+                        padding: '0.58rem 0.9rem',
+                        borderRadius: 'var(--radius-md)',
+                        border: '1px solid var(--border)',
+                        background: 'var(--surface)',
+                        color: 'var(--foreground)',
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '0.42rem',
+                        fontSize: '0.82rem',
+                        fontWeight: 850,
+                        cursor: isChecking ? 'wait' : 'pointer',
+                        whiteSpace: 'nowrap',
+                    }}
+                >
+                    <RefreshCw size={14} className={isChecking ? "animate-spin" : undefined} />
+                    상태 확인
+                </button>
+            </div>
+
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: '0.75rem', marginBottom: '1.25rem' }}>
+                {summary.metrics.map(metric => (
+                    <div
+                        key={metric.key}
+                        style={{
+                            padding: '0.95rem',
+                            borderRadius: 'var(--radius-md)',
+                            border: '1px solid var(--border)',
+                            background: 'var(--background)',
+                        }}
+                    >
+                        <div style={{ fontSize: '0.76rem', color: 'var(--muted)', fontWeight: 800, marginBottom: '0.4rem' }}>
+                            {metric.label}
+                        </div>
+                        <div style={{ fontSize: '1.45rem', fontWeight: 950, color: 'var(--foreground)', lineHeight: 1 }}>
+                            {metric.value}
+                        </div>
+                        <div style={{ marginTop: '0.42rem', fontSize: '0.75rem', color: 'var(--muted)' }}>
+                            {metric.detail}
+                        </div>
+                    </div>
+                ))}
+            </div>
+
+            {summary.syncSources.length > 0 && (
+                <div style={{ marginBottom: '1.25rem' }}>
+                    <div style={{ fontSize: '0.82rem', color: 'var(--foreground)', fontWeight: 900, marginBottom: '0.55rem' }}>
+                        원격 동기화 세부 상태
+                    </div>
+                    <div style={{ display: 'grid', gap: '0.55rem' }}>
+                        {summary.syncSources.map(source => {
+                            const tone = dataToneStyle(source.tone);
+                            return (
+                                <div
+                                    key={source.key}
+                                    style={{
+                                        display: 'flex',
+                                        alignItems: 'center',
+                                        justifyContent: 'space-between',
+                                        gap: '0.75rem',
+                                        padding: '0.72rem 0.85rem',
+                                        borderRadius: 'var(--radius-md)',
+                                        border: `1px solid ${tone.border}`,
+                                        background: tone.background,
+                                    }}
+                                >
+                                    <span style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', minWidth: 0 }}>
+                                        <span style={{ color: tone.color, flexShrink: 0 }}>{tone.icon}</span>
+                                        <span style={{ minWidth: 0 }}>
+                                            <span style={{ display: 'block', color: tone.color, fontSize: '0.8rem', fontWeight: 900 }}>
+                                                {source.label}
+                                            </span>
+                                            <span style={{ display: 'block', color: 'var(--muted)', fontSize: '0.74rem', lineHeight: 1.45, wordBreak: 'keep-all' }}>
+                                                {source.detail}
+                                            </span>
+                                        </span>
+                                    </span>
+                                    <span style={{
+                                        flexShrink: 0,
+                                        color: tone.color,
+                                        border: `1px solid ${tone.border}`,
+                                        borderRadius: 'var(--radius-full)',
+                                        padding: '0.18rem 0.5rem',
+                                        fontSize: '0.68rem',
+                                        fontWeight: 950,
+                                        whiteSpace: 'nowrap',
+                                    }}>
+                                        {source.pendingCount > 0 ? `${source.pendingCount}건 대기` : source.remoteLoaded ? "원격" : "로컬"}
+                                    </span>
+                                </div>
+                            );
+                        })}
+                    </div>
+                </div>
+            )}
+
+            <div style={{ display: 'grid', gap: '0.65rem' }}>
+                {summary.checks.map(check => {
+                    const tone = dataToneStyle(check.tone);
+                    return (
+                        <div
+                            key={check.key}
+                            style={{
+                                display: 'flex',
+                                alignItems: 'flex-start',
+                                gap: '0.7rem',
+                                padding: '0.85rem 0.95rem',
+                                borderRadius: 'var(--radius-md)',
+                                border: `1px solid ${tone.border}`,
+                                background: tone.background,
+                            }}
+                        >
+                            <span style={{ color: tone.color, flexShrink: 0, marginTop: 1 }}>
+                                {tone.icon}
+                            </span>
+                            <span style={{ minWidth: 0 }}>
+                                <span style={{ display: 'block', color: tone.color, fontSize: '0.84rem', fontWeight: 900, marginBottom: '0.2rem' }}>
+                                    {check.label}
+                                </span>
+                                <span style={{ display: 'block', color: 'var(--muted)', fontSize: '0.78rem', lineHeight: 1.55, wordBreak: 'keep-all' }}>
+                                    {check.detail}
+                                </span>
+                            </span>
+                        </div>
+                    );
+                })}
+            </div>
+        </Card>
+    );
+}
+
 function SecuritySection({ value, onChange, onSave, onCancel }: SectionProps<Settings["security"]>) {
+    const [sessionDisplay, setSessionDisplay] = useState<TeacherSessionDisplay>(() => buildTeacherSessionDisplay(null));
+
+    useEffect(() => {
+        const updateSessionDisplay = () => setSessionDisplay(readTeacherSessionDisplay());
+        const initialTimer = window.setTimeout(updateSessionDisplay, 0);
+        const interval = window.setInterval(updateSessionDisplay, 60 * 1000);
+        return () => {
+            window.clearTimeout(initialTimer);
+            window.clearInterval(interval);
+        };
+    }, []);
+
+    const handleEndCurrentSession = () => {
+        clearTeacherSession();
+        toast.success("세션 종료됨", "교사 세션을 종료했습니다. 다시 로그인해주세요.");
+        window.location.href = "/?role=teacher";
+    };
+
     return (
         <Card title="보안" desc="계정 보안을 관리하세요.">
-            <Field label="비밀번호 변경">
-                <input className="input-field" type="password" placeholder="현재 비밀번호" style={{ marginBottom: '0.5rem' }} />
-                <input className="input-field" type="password" placeholder="새 비밀번호" style={{ marginBottom: '0.5rem' }} />
-                <input className="input-field" type="password" placeholder="새 비밀번호 확인" />
+            <Field label="교사 비밀번호">
+                <div style={{
+                    padding: '0.9rem 1rem',
+                    background: 'var(--background)',
+                    borderRadius: 'var(--radius-md)',
+                    border: '1px solid var(--border)',
+                    display: 'grid',
+                    gap: '0.45rem',
+                }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.45rem', color: 'var(--foreground)', fontSize: '0.9rem', fontWeight: 800 }}>
+                        <Shield size={15} color="var(--primary)" />
+                        서버 인증으로 관리됨
+                    </div>
+                    <p style={{ color: 'var(--muted)', fontSize: '0.82rem', lineHeight: 1.65, wordBreak: 'keep-all' }}>
+                        교사 비밀번호는 브라우저 설정에 저장하지 않습니다. 운영 환경에서는 서버 환경변수 <code style={{ fontWeight: 800 }}>TEACHER_PASSWORD</code>를 변경한 뒤 다시 배포해 교체하세요.
+                    </p>
+                </div>
             </Field>
 
             <Toggle checked={value.twoFactor} onChange={v => onChange({ twoFactor: v })} label="2단계 인증" desc="로그인 시 앱에서 추가 코드 입력" />
-            <Toggle checked={value.loginAlerts} onChange={v => onChange({ loginAlerts: v })} label="로그인 알림" desc="새 기기 로그인 시 이메일 발송" />
+            <Toggle checked={value.loginAlerts} onChange={v => onChange({ loginAlerts: v })} label="로그인 알림" desc="새 기기 로그인 시 알림 후보 기록" />
 
             <Field label="활성 세션">
                 <div style={{ padding: '0.85rem 1rem', background: 'var(--background)', borderRadius: 'var(--radius-md)', border: '1px solid var(--border)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                     <div>
-                        <div style={{ fontSize: '0.9rem', fontWeight: 600 }}>Chrome · macOS</div>
-                        <div style={{ fontSize: '0.78rem', color: 'var(--muted)' }}>현재 세션 · 서울</div>
+                        <div style={{ fontSize: '0.9rem', fontWeight: 800, display: 'flex', alignItems: 'center', gap: '0.45rem', flexWrap: 'wrap' }}>
+                            <span>현재 브라우저</span>
+                            <span style={{
+                                color: sessionDisplay.isExpired ? 'var(--error)' : 'var(--success)',
+                                background: sessionDisplay.isExpired ? 'rgba(239,68,68,0.08)' : 'rgba(16,185,129,0.1)',
+                                border: `1px solid ${sessionDisplay.isExpired ? 'rgba(239,68,68,0.2)' : 'rgba(16,185,129,0.2)'}`,
+                                borderRadius: 'var(--radius-full)',
+                                padding: '0.16rem 0.5rem',
+                                fontSize: '0.72rem',
+                                fontWeight: 900,
+                            }}>
+                                {sessionDisplay.label}
+                            </span>
+                        </div>
+                        <div style={{ fontSize: '0.78rem', color: 'var(--muted)', marginTop: '0.22rem' }}>
+                            {sessionDisplay.detail}
+                        </div>
                     </div>
-                    <span className="badge badge-success">현재</span>
+                    <button
+                        type="button"
+                        onClick={handleEndCurrentSession}
+                        style={{
+                            padding: '0.45rem 0.75rem',
+                            borderRadius: 'var(--radius-md)',
+                            background: 'rgba(239,68,68,0.08)',
+                            color: 'var(--error)',
+                            border: '1px solid rgba(239,68,68,0.2)',
+                            fontSize: '0.78rem',
+                            fontWeight: 800,
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: '0.35rem',
+                            whiteSpace: 'nowrap',
+                        }}
+                    >
+                        <LogOut size={13} />
+                        세션 종료
+                    </button>
                 </div>
             </Field>
             <SaveBar onCancel={onCancel} onSave={onSave} />

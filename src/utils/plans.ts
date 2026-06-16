@@ -127,6 +127,110 @@ export const PLAN_BY_KEY: Record<PlanKey, PlanCatalogEntry> = PLAN_CATALOG.reduc
     return acc;
 }, {} as Record<PlanKey, PlanCatalogEntry>);
 
+export type PlanLimitMetric = keyof PlanCatalogEntry["limits"];
+export type PlanEntitlementKey = keyof PlanCatalogEntry["entitlements"];
+
+export interface PlanEntitlementCopy {
+    label: string;
+    description: string;
+}
+
+export interface PlanEntitlementView extends PlanEntitlementCopy {
+    key: PlanEntitlementKey;
+    enabled: boolean;
+    unlockPlan?: PlanKey;
+}
+
+export const PLAN_ENTITLEMENT_COPY: Record<PlanEntitlementKey, PlanEntitlementCopy> = {
+    handwritingArchive: {
+        label: "필기 원본 보관",
+        description: "제출 후 문항별 필기와 OMR 흔적을 장기 저장합니다.",
+    },
+    advancedAnalytics: {
+        label: "고급 오답 분석",
+        description: "학생별, 반별, 시험별 약점 유형을 비교합니다.",
+    },
+    teachingActionCenter: {
+        label: "수업 액션 센터",
+        description: "재시험, 보충, 알림 후보를 한 화면에서 정리합니다.",
+    },
+    studentGrowthReports: {
+        label: "학생 성장 리포트",
+        description: "학생별 누적 성취와 반복 약점을 리포트로 정리합니다.",
+    },
+    csvExport: {
+        label: "CSV 내보내기",
+        description: "성적과 응시 데이터를 CSV로 내려받습니다.",
+    },
+    pdfExport: {
+        label: "PDF 리포트",
+        description: "상담과 공유용 PDF 리포트를 생성합니다.",
+    },
+    reminders: {
+        label: "카카오 알림 후보",
+        description: "미응시, 재응시, 보충 대상 알림 후보를 만듭니다.",
+    },
+    retakeAssignments: {
+        label: "재추천/재응시 링크",
+        description: "틀린 문제와 약점 유형 기반 재응시 링크를 만듭니다.",
+    },
+    multiTeacher: {
+        label: "다중 선생님",
+        description: "여러 선생님이 같은 학원 데이터를 함께 관리합니다.",
+    },
+    organizationDashboard: {
+        label: "조직 대시보드",
+        description: "반과 선생님 단위의 운영 지표를 한 화면에서 봅니다.",
+    },
+    rolesAndPermissions: {
+        label: "역할/권한",
+        description: "관리자, 선생님, 조교 권한을 분리합니다.",
+    },
+    sso: {
+        label: "SSO",
+        description: "기관 계정 기반 로그인을 연동합니다.",
+    },
+    apiAccess: {
+        label: "API 접근",
+        description: "외부 운영 시스템과 시험/성적 데이터를 연동합니다.",
+    },
+    customDomain: {
+        label: "커스텀 도메인",
+        description: "학원 전용 도메인으로 접속 환경을 구성합니다.",
+    },
+    auditLogs: {
+        label: "감사 로그",
+        description: "데이터 조회와 변경 이력을 추적합니다.",
+    },
+    retentionControls: {
+        label: "보관 정책",
+        description: "필기, 시험지, 성적 데이터 보관 기간을 제어합니다.",
+    },
+    prioritySupport: {
+        label: "우선 지원",
+        description: "운영 중 막히는 문제를 우선 처리합니다.",
+    },
+    dedicatedSupport: {
+        label: "전담 지원",
+        description: "학원 운영 흐름에 맞춰 전담 지원을 제공합니다.",
+    },
+};
+
+export interface PlanLimitDecision {
+    allowed: boolean;
+    plan: PlanKey;
+    metric: PlanLimitMetric;
+    used: number;
+    attempted: number;
+    limit: number;
+    remaining: number;
+    upgradeTarget?: PlanKey;
+}
+
+function safeUsageCount(value: number | undefined): number {
+    return Number.isFinite(value) && value && value > 0 ? Math.floor(value) : 0;
+}
+
 export function normalizePlan(value: unknown): PlanKey | null {
     if (value === "school") return "academy";
     return typeof value === "string" && value in PLAN_BY_KEY
@@ -164,6 +268,68 @@ export function canArchiveHandwriting(plan: StoredPlanKey | null | undefined): b
 export function getPlanLabel(plan: StoredPlanKey | null | undefined): string {
     const normalized = normalizePlan(plan) || "free";
     return PLAN_BY_KEY[normalized].name;
+}
+
+export function nextPaidPlan(plan: StoredPlanKey | null | undefined): PlanKey | undefined {
+    const normalized = normalizePlan(plan) || "free";
+    if (normalized === "free") return "pro";
+    if (normalized === "pro") return "academy";
+    return undefined;
+}
+
+export function getPlanEntitlementViews(
+    plan: StoredPlanKey | null | undefined,
+    keys: readonly PlanEntitlementKey[] = Object.keys(PLAN_ENTITLEMENT_COPY) as PlanEntitlementKey[],
+): PlanEntitlementView[] {
+    const normalized = normalizePlan(plan) || "free";
+    const planIndex = PLAN_CATALOG.findIndex(entry => entry.key === normalized);
+    const safePlanIndex = planIndex >= 0 ? planIndex : 0;
+
+    return keys.map(key => {
+        const enabled = PLAN_BY_KEY[normalized].entitlements[key];
+        const unlockPlan = enabled
+            ? undefined
+            : PLAN_CATALOG.slice(safePlanIndex + 1).find(entry => entry.entitlements[key])?.key;
+
+        return {
+            key,
+            ...PLAN_ENTITLEMENT_COPY[key],
+            enabled,
+            unlockPlan,
+        };
+    });
+}
+
+export function hasPlanEntitlement(
+    plan: StoredPlanKey | null | undefined,
+    entitlement: PlanEntitlementKey,
+): boolean {
+    const normalized = normalizePlan(plan) || "free";
+    return !!PLAN_BY_KEY[normalized].entitlements[entitlement];
+}
+
+export function evaluatePlanLimit(
+    plan: StoredPlanKey | null | undefined,
+    metric: PlanLimitMetric,
+    used: number,
+    attempted = 1,
+): PlanLimitDecision {
+    const normalized = normalizePlan(plan) || "free";
+    const safeUsed = safeUsageCount(used);
+    const safeAttempted = Math.max(0, Math.floor(Number.isFinite(attempted) ? attempted : 1));
+    const limit = PLAN_BY_KEY[normalized].limits[metric];
+    const remaining = limit === Infinity ? Infinity : Math.max(0, limit - safeUsed);
+
+    return {
+        allowed: limit === Infinity || safeUsed + safeAttempted <= limit,
+        plan: normalized,
+        metric,
+        used: safeUsed,
+        attempted: safeAttempted,
+        limit,
+        remaining,
+        upgradeTarget: nextPaidPlan(normalized),
+    };
 }
 
 export function readAiRecognitionUsage(): number {

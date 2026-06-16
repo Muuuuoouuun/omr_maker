@@ -10,7 +10,7 @@ NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY=sb_publishable_your_full_key_here
 
 3. Restart the Next.js dev server after changing `.env.local`.
 
-The app keeps localStorage as a fallback. When Supabase is configured, exams and attempts are synced to:
+The app keeps localStorage as a fallback. When Supabase is configured, exams, attempts, and the teacher roster are synced to:
 
 - `public.omr_organizations`
 - `public.omr_user_profiles`
@@ -23,12 +23,30 @@ The app keeps localStorage as a fallback. When Supabase is configured, exams and
 - `public.omr_materials`
 - `public.omr_exam_materials`
 - `public.omr_exams`
+- `public.omr_exam_questions`
 - `public.omr_assignments`
 - `public.omr_assignment_targets`
 - `public.omr_attempts`
+- `public.omr_question_results`
 - `public.omr_assignment_submissions`
+- `public.omr_kakao_candidate_reviews`
+- `public.omr_kakao_dispatch_logs`
 - `public.omr_comments`
 - `public.omr_audit_logs`
+
+Canonical organization plans are `free`, `pro`, and `academy`. Older `school` rows are migrated to `academy` inside `schema.sql` so app entitlements, billing UI, and database constraints stay aligned.
+
+`/teacher/users` writes student and class roster snapshots through `src/lib/rosterPersistence.ts`.
+It stores students in `omr_student_profiles`, classes/regions in `omr_classes`, and membership in `omr_class_students` while keeping invite drafts local until the Kakao/provider invite flow is finalized.
+Roster deletions are soft-synced: missing students are marked `withdrawn`, missing classes are marked `archived`, and old class memberships are marked `inactive` so historical attempts can keep their student/class references without making deleted rows reappear in the active roster.
+
+Before changing persistence row mappings or `schema.sql`, run:
+
+```bash
+npm test -- --run src/lib/supabaseSchemaContract.test.ts src/lib/omrPersistence.test.ts src/lib/rosterPersistence.test.ts
+```
+
+The contract test checks that the SQL schema still exposes the roster, fact, region, retake, guest-merge, and Kakao pre-send columns/indexes used by the app.
 
 ## Data Model
 
@@ -41,10 +59,14 @@ The schema separates the current JSON sync surface from the future relational pr
 - `omr_class_teachers` and `omr_class_students` model many-to-many class membership.
 - `omr_materials` stores worksheet/PDF/link/file metadata, while actual files should live in Supabase Storage.
 - `omr_exam_materials` links reusable materials to exams as problem PDFs, answer keys, solutions, references, or attachments.
+- `omr_exam_questions` stores one normalized row per exam question: answer, score, labels/tags, choice count, and PDF anchor/crop metadata. It does not store cropped question images; premium review can reconstruct the question area from the original problem PDF plus `pdf_region`.
 - `omr_assignments` represents a distributed exam/work item with open/due/close windows.
 - `omr_assignment_targets` scopes an assignment to a class, student, or group.
-- `omr_attempts` remains compatible with the app's JSON payload sync and now has nullable `assignment_id` and `student_profile_id`.
+- `omr_attempts` remains compatible with the app's JSON payload sync and also exposes score, status, identity type, region, retake source, and guest-merge metadata as indexed columns for faster dashboards.
+- `omr_question_results` stores one normalized result fact per attempt/question so premium analytics can slice wrong questions by student, class, region, exam, concept, source, difficulty, and mistake type without rehydrating every attempt payload.
 - `omr_assignment_submissions` is the normalized assignment-gradebook layer that can point at an `omr_attempts` row.
+- `omr_kakao_candidate_reviews` stores teacher-reviewed pre-send Kakao candidates such as missing-exam nudges and retake recommendations.
+- `omr_kakao_dispatch_logs` is the provider-neutral audit trail for future Kakao send attempts, failures, and provider message IDs.
 - `omr_comments` supports teacher-only and student-visible feedback on students, materials, exams, assignments, submissions, attempts, or questions.
 - `omr_audit_logs` is the future trail for sensitive admin actions.
 
@@ -60,11 +82,16 @@ erDiagram
     omr_organizations ||--o{ omr_materials : owns
     omr_materials ||--o{ omr_exam_materials : attaches
     omr_exams ||--o{ omr_exam_materials : uses
+    omr_exams ||--o{ omr_exam_questions : defines
     omr_exams ||--o{ omr_assignments : distributed_as
     omr_assignments ||--o{ omr_assignment_targets : targets
     omr_assignments ||--o{ omr_assignment_submissions : receives
     omr_student_profiles ||--o{ omr_assignment_submissions : submits
     omr_attempts ||--o| omr_assignment_submissions : normalizes
+    omr_attempts ||--o{ omr_question_results : contains
+    omr_exams ||--o{ omr_question_results : analyzes
+    omr_exams ||--o{ omr_kakao_candidate_reviews : reviews
+    omr_kakao_candidate_reviews ||--o{ omr_kakao_dispatch_logs : dispatches
     omr_organizations ||--o{ omr_comments : contains
     omr_organizations ||--o{ omr_audit_logs : audits
 ```

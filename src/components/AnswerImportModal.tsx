@@ -4,7 +4,14 @@ import { useState, useEffect, useId } from 'react';
 import { parseAnswerKeyPdf, ParsedAnswer } from '@/services/answerParser';
 import { readStoredGeminiApiKey } from '@/lib/geminiApiKey';
 import { BrainCircuit, FileText, FolderOpen, UploadCloud, X } from 'lucide-react';
-import { incrementAiRecognitionUsage } from '@/utils/plans';
+import {
+    evaluatePlanLimit,
+    getCurrentPlan,
+    getPlanLabel,
+    incrementAiRecognitionUsage,
+    PLAN_BY_KEY,
+    readAiRecognitionUsage,
+} from '@/utils/plans';
 
 interface AnswerImportModalProps {
     isOpen: boolean;
@@ -37,6 +44,13 @@ export default function AnswerImportModal({ isOpen, onClose, onApply, onUploadAn
         try {
             let results;
             if (isAiMode) {
+                const plan = getCurrentPlan();
+                const limit = evaluatePlanLimit(plan, "aiRecognition", readAiRecognitionUsage(), 1);
+                if (!limit.allowed) {
+                    const upgradeName = limit.upgradeTarget ? PLAN_BY_KEY[limit.upgradeTarget].name : "상위";
+                    setError(`${getPlanLabel(plan)} 플랜의 AI 정답 인식 한도(${limit.limit}회)를 모두 사용했습니다. ${upgradeName} 플랜에서 계속 사용할 수 있습니다.`);
+                    return;
+                }
                 const { parseAnswerKeyWithGemini } = await import('@/services/answerParser');
                 results = await parseAnswerKeyWithGemini(targetFile, readStoredGeminiApiKey());
             } else {
@@ -52,13 +66,12 @@ export default function AnswerImportModal({ isOpen, onClose, onApply, onUploadAn
                 incrementAiRecognitionUsage();
             }
             setParsedData(results);
-            // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        } catch (err: any) {
-            console.error(err);
-            if (err.message && (err.message.includes("Gemini API key") || err.message.includes("GEMINI_API_KEY"))) {
+        } catch (err: unknown) {
+            const message = err instanceof Error ? err.message : String(err || "");
+            if (message.includes("Gemini API key") || message.includes("GEMINI_API_KEY") || message.includes("Gemini API 키")) {
                 setError("개인설정 > API 키에서 Gemini API 키를 저장한 뒤 다시 시도해주세요.");
             } else {
-                setError(`분석 실패: ${err.message || err.toString()}`);
+                setError(`분석 실패: ${message || "처리 중 오류가 발생했습니다."}`);
             }
         } finally {
             setIsProcessing(false);

@@ -10,7 +10,7 @@ create table if not exists public.omr_organizations (
     id text primary key,
     name text not null,
     plan text not null default 'free'
-        check (plan in ('free', 'pro', 'school')),
+        check (plan in ('free', 'pro', 'academy')),
     billing_email text,
     metadata jsonb not null default '{}'::jsonb,
     created_at timestamptz not null default now(),
@@ -152,6 +152,41 @@ create table if not exists public.omr_exams (
     archived boolean not null default false
 );
 
+create table if not exists public.omr_exam_questions (
+    id text primary key,
+    organization_id text,
+    class_id text,
+    exam_id text not null references public.omr_exams(id) on delete cascade,
+    question_id integer not null,
+    question_number integer not null,
+    canonical_question_id text not null,
+    label text,
+    subject text,
+    unit text,
+    concept text,
+    skill text,
+    source text,
+    difficulty text,
+    cognitive_level text,
+    mistake_types text[] not null default '{}'::text[],
+    prerequisites text[] not null default '{}'::text[],
+    expected_time_sec integer,
+    choices integer not null default 5 check (choices in (4, 5)),
+    correct_answer integer,
+    score numeric not null default 0,
+    pdf_page integer,
+    pdf_location jsonb,
+    pdf_region jsonb,
+    has_pdf_region boolean not null default false,
+    asset_status text not null default 'metadata_only'
+        check (asset_status in ('metadata_only', 'pdf_region_ready', 'image_asset_ready')),
+    image_asset_ref jsonb,
+    payload jsonb not null,
+    created_at timestamptz not null default now(),
+    updated_at timestamptz not null default now(),
+    unique (exam_id, question_id)
+);
+
 create table if not exists public.omr_exam_materials (
     exam_id text not null references public.omr_exams(id) on delete cascade,
     material_id text not null references public.omr_materials(id) on delete cascade,
@@ -211,9 +246,83 @@ create table if not exists public.omr_attempts (
     student_id text,
     group_id text,
     group_name text,
+    region_id text,
+    region_name text,
+    identity_type text
+        check (identity_type in ('guest', 'temporary', 'registered')),
+    status text not null default 'completed'
+        check (status in ('completed', 'in_progress')),
+    score numeric not null default 0,
+    total_score numeric not null default 0,
+    score_percent numeric not null default 0,
+    retake_source_attempt_id text,
+    retake_mode text
+        check (retake_mode in ('wrong', 'similar', 'custom')),
+    retake_question_ids integer[] not null default '{}'::integer[],
+    merged_from_guest_id text,
+    merged_at timestamptz,
     payload jsonb not null,
     started_at timestamptz not null,
     finished_at timestamptz not null
+);
+
+create table if not exists public.omr_question_results (
+    id text primary key,
+    organization_id text,
+    class_id text,
+    assignment_id text,
+    student_profile_id text,
+    attempt_id text not null references public.omr_attempts(id) on delete cascade,
+    exam_id text not null references public.omr_exams(id) on delete cascade,
+    student_name text not null,
+    student_id text,
+    group_id text,
+    group_name text,
+    region_id text,
+    region_name text,
+    identity_type text
+        check (identity_type in ('guest', 'temporary', 'registered')),
+    question_id integer not null,
+    question_number integer not null,
+    canonical_question_id text,
+    label text,
+    subject text,
+    unit text,
+    concept text,
+    skill text,
+    source text,
+    difficulty text,
+    cognitive_level text,
+    mistake_types text[] not null default '{}'::text[],
+    prerequisites text[] not null default '{}'::text[],
+    expected_time_sec integer,
+    selected_answer integer,
+    correct_answer integer,
+    status text not null
+        check (status in ('correct', 'wrong', 'unanswered', 'ungraded')),
+    is_correct boolean not null default false,
+    is_wrong boolean not null default false,
+    is_unanswered boolean not null default false,
+    score numeric not null default 0,
+    earned_score numeric not null default 0,
+    pdf_page integer,
+    pdf_location jsonb,
+    pdf_region jsonb,
+    time_sec integer,
+    visit_count integer,
+    revisit_count integer,
+    answer_change_count integer,
+    handwriting_stroke_count integer,
+    handwriting_page integer,
+    retake_source_attempt_id text,
+    retake_mode text
+        check (retake_mode in ('wrong', 'similar', 'custom')),
+    answered_at timestamptz,
+    finished_at timestamptz not null,
+    payload jsonb not null,
+    created_at timestamptz not null default now(),
+    updated_at timestamptz not null default now(),
+    unique (attempt_id, question_id)
 );
 
 create table if not exists public.omr_assignment_submissions (
@@ -234,6 +343,51 @@ create table if not exists public.omr_assignment_submissions (
     metadata jsonb not null default '{}'::jsonb,
     created_at timestamptz not null default now(),
     updated_at timestamptz not null default now()
+);
+
+create table if not exists public.omr_kakao_candidate_reviews (
+    id text primary key,
+    organization_id text references public.omr_organizations(id) on delete cascade,
+    exam_id text not null references public.omr_exams(id) on delete cascade,
+    candidate_kind text not null
+        check (candidate_kind in ('missing_exam', 'retake_recommendation', 'class_retake_recommendation')),
+    channel text not null default 'kakao'
+        check (channel in ('kakao')),
+    status text not null
+        check (status in ('ready', 'hold', 'excluded')),
+    title text not null,
+    target_count integer not null default 0 check (target_count >= 0),
+    student_ids text[] not null default '{}'::text[],
+    student_names text[] not null default '{}'::text[],
+    group_names text[] not null default '{}'::text[],
+    region_names text[] not null default '{}'::text[],
+    message_preview text not null,
+    reason text,
+    href text,
+    reviewed_by_user_id text,
+    payload jsonb not null default '{}'::jsonb,
+    reviewed_at timestamptz not null default now(),
+    updated_at timestamptz not null default now()
+);
+
+create table if not exists public.omr_kakao_dispatch_logs (
+    id text primary key,
+    organization_id text references public.omr_organizations(id) on delete cascade,
+    review_id text references public.omr_kakao_candidate_reviews(id) on delete set null,
+    exam_id text references public.omr_exams(id) on delete set null,
+    channel text not null default 'kakao'
+        check (channel in ('kakao')),
+    provider text,
+    status text not null
+        check (status in ('queued', 'sent', 'failed', 'cancelled', 'skipped')),
+    target_count integer not null default 0 check (target_count >= 0),
+    student_ids text[] not null default '{}'::text[],
+    message_preview text not null,
+    provider_message_id text,
+    error_message text,
+    payload jsonb not null default '{}'::jsonb,
+    created_at timestamptz not null default now(),
+    sent_at timestamptz
 );
 
 create table if not exists public.omr_comments (
@@ -288,14 +442,123 @@ alter table public.omr_attempts
     add column if not exists organization_id text,
     add column if not exists class_id text,
     add column if not exists assignment_id text,
-    add column if not exists student_profile_id text;
+    add column if not exists student_profile_id text,
+    add column if not exists region_id text,
+    add column if not exists region_name text,
+    add column if not exists identity_type text,
+    add column if not exists status text not null default 'completed',
+    add column if not exists score numeric not null default 0,
+    add column if not exists total_score numeric not null default 0,
+    add column if not exists score_percent numeric not null default 0,
+    add column if not exists retake_source_attempt_id text,
+    add column if not exists retake_mode text,
+    add column if not exists retake_question_ids integer[] not null default '{}'::integer[],
+    add column if not exists merged_from_guest_id text,
+    add column if not exists merged_at timestamptz;
+
+alter table public.omr_question_results
+    add column if not exists organization_id text,
+    add column if not exists class_id text,
+    add column if not exists assignment_id text,
+    add column if not exists student_profile_id text,
+    add column if not exists region_id text,
+    add column if not exists region_name text,
+    add column if not exists identity_type text,
+    add column if not exists expected_time_sec integer,
+    add column if not exists retake_source_attempt_id text,
+    add column if not exists retake_mode text,
+    add column if not exists payload jsonb not null default '{}'::jsonb;
+
+alter table public.omr_exam_questions
+    add column if not exists asset_status text not null default 'metadata_only',
+    add column if not exists image_asset_ref jsonb;
+
+update public.omr_attempts
+    set
+        identity_type = case
+            when payload->>'identityType' in ('guest', 'temporary', 'registered') then payload->>'identityType'
+            else identity_type
+        end,
+        status = case
+            when payload->>'status' in ('completed', 'in_progress') then payload->>'status'
+            else status
+        end,
+        score = case
+            when payload->>'score' ~ '^-?[0-9]+(\.[0-9]+)?$' then (payload->>'score')::numeric
+            else score
+        end,
+        total_score = case
+            when payload->>'totalScore' ~ '^-?[0-9]+(\.[0-9]+)?$' then (payload->>'totalScore')::numeric
+            else total_score
+        end,
+        retake_source_attempt_id = coalesce(retake_source_attempt_id, payload #>> '{retake,sourceAttemptId}'),
+        retake_mode = case
+            when payload #>> '{retake,mode}' in ('wrong', 'similar', 'custom') then payload #>> '{retake,mode}'
+            else retake_mode
+        end,
+        retake_question_ids = case
+            when jsonb_typeof(payload #> '{retake,questionIds}') = 'array' then (
+                select coalesce(array_agg(value::integer), '{}'::integer[])
+                from jsonb_array_elements_text(payload #> '{retake,questionIds}') as items(value)
+                where value ~ '^-?[0-9]+$'
+            )
+            else retake_question_ids
+        end,
+        region_id = coalesce(region_id, payload->>'regionId'),
+        region_name = coalesce(region_name, payload->>'regionName'),
+        merged_from_guest_id = coalesce(merged_from_guest_id, payload->>'mergedFromGuestId'),
+        merged_at = case
+            when merged_at is null and payload->>'mergedAt' ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}[T ]' then (payload->>'mergedAt')::timestamptz
+            else merged_at
+        end;
+
+update public.omr_attempts
+    set score_percent = round((score / total_score) * 100)
+    where total_score > 0;
+
+update public.omr_question_results
+    set
+        identity_type = case
+            when payload->>'identityType' in ('guest', 'temporary', 'registered') then payload->>'identityType'
+            else identity_type
+        end,
+        expected_time_sec = case
+            when payload->>'expectedTimeSec' ~ '^-?[0-9]+$' then (payload->>'expectedTimeSec')::integer
+            else expected_time_sec
+        end,
+        region_id = coalesce(region_id, payload->>'regionId'),
+        region_name = coalesce(region_name, payload->>'regionName'),
+        retake_source_attempt_id = coalesce(retake_source_attempt_id, payload->>'retakeSourceAttemptId'),
+        retake_mode = case
+            when payload->>'retakeMode' in ('wrong', 'similar', 'custom') then payload->>'retakeMode'
+            else retake_mode
+        end;
+
+update public.omr_question_results qr
+    set
+        region_id = coalesce(qr.region_id, attempts.region_id),
+        region_name = coalesce(qr.region_name, attempts.region_name)
+    from public.omr_attempts attempts
+    where qr.attempt_id = attempts.id
+        and (qr.region_id is null or qr.region_name is null);
 
 do $$
 begin
-    if not exists (select 1 from pg_constraint where conname = 'omr_organizations_plan_check') then
-        alter table public.omr_organizations
-            add constraint omr_organizations_plan_check
-            check (plan in ('free', 'pro', 'school')) not valid;
+    update public.omr_organizations
+        set plan = 'academy'
+        where plan = 'school';
+
+    alter table public.omr_organizations
+        drop constraint if exists omr_organizations_plan_check;
+
+    alter table public.omr_organizations
+        add constraint omr_organizations_plan_check
+        check (plan in ('free', 'pro', 'academy')) not valid;
+
+    if not exists (select 1 from pg_constraint where conname = 'omr_exam_questions_asset_status_check') then
+        alter table public.omr_exam_questions
+            add constraint omr_exam_questions_asset_status_check
+            check (asset_status in ('metadata_only', 'pdf_region_ready', 'image_asset_ready')) not valid;
     end if;
 
     if not exists (select 1 from pg_constraint where conname = 'omr_organization_members_role_check') then
@@ -314,6 +577,36 @@ begin
         alter table public.omr_classes
             add constraint omr_classes_status_check
             check (status in ('active', 'archived')) not valid;
+    end if;
+
+    if not exists (select 1 from pg_constraint where conname = 'omr_attempts_identity_type_check') then
+        alter table public.omr_attempts
+            add constraint omr_attempts_identity_type_check
+            check (identity_type in ('guest', 'temporary', 'registered')) not valid;
+    end if;
+
+    if not exists (select 1 from pg_constraint where conname = 'omr_attempts_status_check') then
+        alter table public.omr_attempts
+            add constraint omr_attempts_status_check
+            check (status in ('completed', 'in_progress')) not valid;
+    end if;
+
+    if not exists (select 1 from pg_constraint where conname = 'omr_attempts_retake_mode_check') then
+        alter table public.omr_attempts
+            add constraint omr_attempts_retake_mode_check
+            check (retake_mode in ('wrong', 'similar', 'custom')) not valid;
+    end if;
+
+    if not exists (select 1 from pg_constraint where conname = 'omr_question_results_identity_type_check') then
+        alter table public.omr_question_results
+            add constraint omr_question_results_identity_type_check
+            check (identity_type in ('guest', 'temporary', 'registered')) not valid;
+    end if;
+
+    if not exists (select 1 from pg_constraint where conname = 'omr_question_results_retake_mode_check') then
+        alter table public.omr_question_results
+            add constraint omr_question_results_retake_mode_check
+            check (retake_mode in ('wrong', 'similar', 'custom')) not valid;
     end if;
 end $$;
 
@@ -403,6 +696,12 @@ create index if not exists omr_attempts_organization_id_idx
 create index if not exists omr_attempts_class_id_idx
     on public.omr_attempts (class_id);
 
+create index if not exists omr_attempts_region_idx
+    on public.omr_attempts (region_id, region_name, finished_at desc);
+
+create index if not exists omr_attempts_exam_region_idx
+    on public.omr_attempts (exam_id, region_id, region_name, finished_at desc);
+
 create index if not exists omr_attempts_assignment_id_idx
     on public.omr_attempts (assignment_id);
 
@@ -412,11 +711,98 @@ create index if not exists omr_attempts_student_profile_idx
 create index if not exists omr_attempts_finished_at_idx
     on public.omr_attempts (finished_at desc);
 
+create index if not exists omr_attempts_exam_status_idx
+    on public.omr_attempts (exam_id, status, finished_at desc);
+
+create index if not exists omr_attempts_score_idx
+    on public.omr_attempts (exam_id, score_percent);
+
+create index if not exists omr_attempts_identity_idx
+    on public.omr_attempts (identity_type, finished_at desc);
+
+create index if not exists omr_attempts_retake_idx
+    on public.omr_attempts (exam_id, retake_mode, retake_source_attempt_id);
+
+create index if not exists omr_exam_questions_exam_idx
+    on public.omr_exam_questions (exam_id, question_number);
+
+create index if not exists omr_exam_questions_canonical_idx
+    on public.omr_exam_questions (canonical_question_id);
+
+create index if not exists omr_exam_questions_concept_idx
+    on public.omr_exam_questions (exam_id, concept, difficulty);
+
+create index if not exists omr_exam_questions_mistake_types_idx
+    on public.omr_exam_questions using gin (mistake_types);
+
+create index if not exists omr_exam_questions_pdf_region_idx
+    on public.omr_exam_questions (exam_id, has_pdf_region);
+
+create index if not exists omr_exam_questions_asset_status_idx
+    on public.omr_exam_questions (exam_id, asset_status);
+
+create index if not exists omr_question_results_attempt_idx
+    on public.omr_question_results (attempt_id, question_number);
+
+create index if not exists omr_question_results_exam_question_idx
+    on public.omr_question_results (exam_id, question_id);
+
+create index if not exists omr_question_results_canonical_idx
+    on public.omr_question_results (canonical_question_id);
+
+create index if not exists omr_question_results_exam_status_idx
+    on public.omr_question_results (exam_id, status);
+
+create index if not exists omr_question_results_student_idx
+    on public.omr_question_results (student_id, finished_at desc);
+
+create index if not exists omr_question_results_group_idx
+    on public.omr_question_results (group_id, finished_at desc);
+
+create index if not exists omr_question_results_region_idx
+    on public.omr_question_results (region_id, region_name, finished_at desc);
+
+create index if not exists omr_question_results_exam_region_status_idx
+    on public.omr_question_results (exam_id, region_id, region_name, status);
+
+create index if not exists omr_question_results_concept_idx
+    on public.omr_question_results (exam_id, concept, status);
+
+create index if not exists omr_question_results_option_idx
+    on public.omr_question_results (exam_id, question_id, selected_answer);
+
+create index if not exists omr_question_results_mistake_types_idx
+    on public.omr_question_results using gin (mistake_types);
+
+create index if not exists omr_question_results_retake_idx
+    on public.omr_question_results (exam_id, retake_mode, retake_source_attempt_id);
+
 create index if not exists omr_assignment_submissions_assignment_idx
     on public.omr_assignment_submissions (assignment_id, status);
 
 create index if not exists omr_assignment_submissions_student_idx
     on public.omr_assignment_submissions (student_profile_id, submitted_at desc);
+
+create index if not exists omr_kakao_candidate_reviews_exam_status_idx
+    on public.omr_kakao_candidate_reviews (exam_id, status, updated_at desc);
+
+create index if not exists omr_kakao_candidate_reviews_org_status_idx
+    on public.omr_kakao_candidate_reviews (organization_id, status, updated_at desc);
+
+create index if not exists omr_kakao_candidate_reviews_kind_idx
+    on public.omr_kakao_candidate_reviews (candidate_kind, updated_at desc);
+
+create index if not exists omr_kakao_candidate_reviews_student_ids_idx
+    on public.omr_kakao_candidate_reviews using gin (student_ids);
+
+create index if not exists omr_kakao_dispatch_logs_review_idx
+    on public.omr_kakao_dispatch_logs (review_id, created_at desc);
+
+create index if not exists omr_kakao_dispatch_logs_exam_idx
+    on public.omr_kakao_dispatch_logs (exam_id, created_at desc);
+
+create index if not exists omr_kakao_dispatch_logs_status_idx
+    on public.omr_kakao_dispatch_logs (status, created_at desc);
 
 create index if not exists omr_comments_entity_idx
     on public.omr_comments (entity_type, entity_id, created_at desc);
@@ -434,11 +820,15 @@ alter table public.omr_class_teachers enable row level security;
 alter table public.omr_class_students enable row level security;
 alter table public.omr_materials enable row level security;
 alter table public.omr_exams enable row level security;
+alter table public.omr_exam_questions enable row level security;
 alter table public.omr_exam_materials enable row level security;
 alter table public.omr_assignments enable row level security;
 alter table public.omr_assignment_targets enable row level security;
 alter table public.omr_attempts enable row level security;
+alter table public.omr_question_results enable row level security;
 alter table public.omr_assignment_submissions enable row level security;
+alter table public.omr_kakao_candidate_reviews enable row level security;
+alter table public.omr_kakao_dispatch_logs enable row level security;
 alter table public.omr_comments enable row level security;
 alter table public.omr_audit_logs enable row level security;
 
@@ -521,6 +911,13 @@ create policy "OMR exams are publicly writable"
     using (true)
     with check (true);
 
+drop policy if exists "OMR exam questions are publicly writable" on public.omr_exam_questions;
+create policy "OMR exam questions are publicly writable"
+    on public.omr_exam_questions
+    for all
+    using (true)
+    with check (true);
+
 drop policy if exists "OMR exam materials are publicly writable" on public.omr_exam_materials;
 create policy "OMR exam materials are publicly writable"
     on public.omr_exam_materials
@@ -555,9 +952,36 @@ create policy "OMR attempts are publicly writable"
     using (true)
     with check (true);
 
+drop policy if exists "OMR question results are publicly readable" on public.omr_question_results;
+create policy "OMR question results are publicly readable"
+    on public.omr_question_results
+    for select
+    using (true);
+
+drop policy if exists "OMR question results are publicly writable" on public.omr_question_results;
+create policy "OMR question results are publicly writable"
+    on public.omr_question_results
+    for all
+    using (true)
+    with check (true);
+
 drop policy if exists "OMR assignment submissions are publicly writable" on public.omr_assignment_submissions;
 create policy "OMR assignment submissions are publicly writable"
     on public.omr_assignment_submissions
+    for all
+    using (true)
+    with check (true);
+
+drop policy if exists "OMR Kakao candidate reviews are publicly writable" on public.omr_kakao_candidate_reviews;
+create policy "OMR Kakao candidate reviews are publicly writable"
+    on public.omr_kakao_candidate_reviews
+    for all
+    using (true)
+    with check (true);
+
+drop policy if exists "OMR Kakao dispatch logs are publicly writable" on public.omr_kakao_dispatch_logs;
+create policy "OMR Kakao dispatch logs are publicly writable"
+    on public.omr_kakao_dispatch_logs
     for all
     using (true)
     with check (true);

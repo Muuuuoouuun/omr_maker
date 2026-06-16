@@ -1,3 +1,5 @@
+export const DEFAULT_CHOICE_COUNT = 5;
+
 export interface StoredDataRef {
     store: 'indexeddb';
     key: string;
@@ -5,6 +7,14 @@ export interface StoredDataRef {
     mimeType?: string;
     size?: number;
     updatedAt?: string;
+}
+
+export interface QuestionPdfRegion {
+    page: number;
+    x: number;
+    y: number;
+    width: number;
+    height: number;
 }
 
 export interface Question {
@@ -35,6 +45,19 @@ export interface Question {
         x: number;
         y: number;
     };
+    /** Optional precise crop box for premium question-level review/DB. */
+    pdfRegion?: QuestionPdfRegion;
+    /** Optional cropped question image asset for future premium question-bank storage. */
+    imageAssetRef?: StoredDataRef;
+}
+
+export function normalizeChoiceCount(value: unknown, fallback: 4 | 5 = DEFAULT_CHOICE_COUNT): 4 | 5 {
+    if (value === 4 || value === 5) return value;
+    return fallback;
+}
+
+export function questionChoiceCount(question: Pick<Question, "choices">, fallback: 4 | 5 = DEFAULT_CHOICE_COUNT): 4 | 5 {
+    return normalizeChoiceCount(question.choices, fallback);
 }
 
 export interface Exam {
@@ -78,6 +101,58 @@ export interface QuestionDrawingSummary {
     questionNumber: number;
     page: number;
     strokeCount: number;
+}
+
+export type QuestionResultStatus = 'correct' | 'wrong' | 'unanswered' | 'ungraded';
+
+export interface QuestionResult {
+    schemaVersion: 1;
+    attemptId: string;
+    examId: string;
+    examTitle: string;
+    studentName: string;
+    studentId?: string;
+    groupId?: string;
+    groupName?: string;
+    /** Optional operating region/campus snapshot for academy-level analytics. */
+    regionId?: string;
+    regionName?: string;
+    identityType?: IdentityType;
+    questionId: number;
+    questionNumber: number;
+    canonicalQuestionId?: string;
+    label?: string;
+    score: number;
+    earnedScore: number;
+    selectedAnswer?: number;
+    correctAnswer?: number;
+    status: QuestionResultStatus;
+    isCorrect: boolean;
+    isWrong: boolean;
+    isUnanswered: boolean;
+    subject?: string;
+    unit?: string;
+    concept?: string;
+    skill?: string;
+    source?: string;
+    difficulty?: NonNullable<Question["tags"]>["difficulty"];
+    cognitiveLevel?: NonNullable<Question["tags"]>["cognitiveLevel"];
+    mistakeTypes?: string[];
+    prerequisites?: string[];
+    expectedTimeSec?: number;
+    pdfPage?: number;
+    pdfLocation?: Question["pdfLocation"];
+    pdfRegion?: QuestionPdfRegion;
+    timeSec?: number;
+    visitCount?: number;
+    revisitCount?: number;
+    answerChangeCount?: number;
+    handwritingStrokeCount?: number;
+    handwritingPage?: number;
+    retakeSourceAttemptId?: string;
+    retakeMode?: RetakeMetadata["mode"];
+    answeredAt?: string;
+    finishedAt: string;
 }
 
 export type HandwritingStatus = 'none' | 'saved' | 'failed' | 'unavailable' | 'plan_required';
@@ -134,6 +209,9 @@ export interface Attempt {
     /** Group snapshot at submission time. */
     groupId?: string;
     groupName?: string;
+    /** Optional operating region/campus snapshot at submission time. */
+    regionId?: string;
+    regionName?: string;
     /** Whether this attempt belongs to a guest, class-issued temporary ID, or registered account. */
     identityType?: IdentityType;
     startedAt: string;
@@ -156,6 +234,8 @@ export interface Attempt {
     drawingStrokeCount?: number;
     /** Per-question handwriting summary. The heavy payload remains in drawingsRef. */
     questionDrawings?: QuestionDrawingSummary[];
+    /** Stable per-question result rows used for student/class/exam/type analytics. */
+    questionResults?: QuestionResult[];
     status: 'completed' | 'in_progress';
     guestId?: string; // For tracking guest attempts
     /** If true, submitted because the timer hit zero. */

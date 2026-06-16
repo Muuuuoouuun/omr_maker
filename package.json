@@ -38,6 +38,7 @@
     "vitest": "^4.1.4"
   },
   "overrides": {
+    "pdfjs-dist": "$pdfjs-dist",
     "postcss": "8.5.10"
   }
 }

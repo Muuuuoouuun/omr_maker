@@ -8,21 +8,19 @@ import StatCard from "@/components/dashboard/StatCard";
 import { toast } from "@/components/Toast";
 import { loadAttempts, loadExam } from "@/lib/omrPersistence";
 import { formatKoreanDateTime } from "@/lib/pure";
+import { resolveAttemptScore, type ResolvedAttemptScore } from "@/lib/attemptScores";
+import { serializeCsvRows } from "@/lib/csv";
+import { getAttemptQuestionResults } from "@/lib/premiumAnalytics";
 
 type SortKey = "name" | "percent" | "finishedAt";
 type SortDir = "asc" | "desc";
 
-function percent(a: Attempt): number {
-    if (!a.totalScore || a.totalScore <= 0) return 0;
-    return (a.score / a.totalScore) * 100;
-}
-
-function csvEscape(val: string | number): string {
-    const s = String(val ?? "");
-    if (s.includes(",") || s.includes('"') || s.includes("\n")) {
-        return `"${s.replace(/"/g, '""')}"`;
-    }
-    return s;
+interface AttemptTableSummary {
+    score: ResolvedAttemptScore;
+    correctCount: number;
+    wrongCount: number;
+    unansweredCount: number;
+    ungradedCount: number;
 }
 
 export default function ExamDetailPage() {
@@ -53,20 +51,42 @@ export default function ExamDetailPage() {
         return () => { cancelled = true; };
     }, [id]);
 
-    // Correct avg: percent-based, not raw score.
+    const attemptSummaryById = useMemo(() => {
+        const summaries = new Map<string, AttemptTableSummary>();
+        if (!exam) return summaries;
+
+        for (const attempt of attempts) {
+            const score = resolveAttemptScore(attempt, exam);
+            const counts = getAttemptQuestionResults(exam, attempt).reduce((acc, result) => {
+                if (result.status === "correct") acc.correctCount += 1;
+                if (result.status === "wrong") acc.wrongCount += 1;
+                if (result.status === "unanswered") acc.unansweredCount += 1;
+                if (result.status === "ungraded") acc.ungradedCount += 1;
+                return acc;
+            }, { correctCount: 0, wrongCount: 0, unansweredCount: 0, ungradedCount: 0 });
+            summaries.set(attempt.id, { score, ...counts });
+        }
+
+        return summaries;
+    }, [attempts, exam]);
+
+    const baseAttempts = useMemo(() => attempts.filter(attempt => !attempt.retake), [attempts]);
+    const retakeAttempts = useMemo(() => attempts.filter(attempt => !!attempt.retake), [attempts]);
+
+    // Correct avg: percent-based, not raw score. Retakes stay visible, but don't skew original exam stats.
     const stats = useMemo(() => {
-        if (attempts.length === 0) {
+        if (baseAttempts.length === 0) {
             return { avgPct: 0, maxPct: 0, submitCount: 0 };
         }
-        const percents = attempts.map(percent);
+        const percents = baseAttempts.map(attempt => attemptSummaryById.get(attempt.id)?.score.scorePercent ?? 0);
         const avg = percents.reduce((s, v) => s + v, 0) / percents.length;
         const max = Math.max(...percents);
         return {
             avgPct: Math.round(avg * 10) / 10,
             maxPct: Math.round(max * 10) / 10,
-            submitCount: attempts.length,
+            submitCount: baseAttempts.length,
         };
-    }, [attempts]);
+    }, [attemptSummaryById, baseAttempts]);
 
     const sortedAttempts = useMemo(() => {
         const arr = [...attempts];
@@ -76,13 +96,13 @@ export default function ExamDetailPage() {
                 return (a.studentName || "").localeCompare(b.studentName || "", "ko") * mult;
             }
             if (sortKey === "percent") {
-                return (percent(a) - percent(b)) * mult;
+                return ((attemptSummaryById.get(a.id)?.score.scorePercent ?? 0) - (attemptSummaryById.get(b.id)?.score.scorePercent ?? 0)) * mult;
             }
             // finishedAt
             return (new Date(a.finishedAt).getTime() - new Date(b.finishedAt).getTime()) * mult;
         });
         return arr;
-    }, [attempts, sortKey, sortDir]);
+    }, [attempts, sortKey, sortDir, attemptSummaryById]);
 
     const handleSort = (key: SortKey) => {
         if (key === sortKey) {
@@ -98,16 +118,29 @@ export default function ExamDetailPage() {
             toast.info("내보낼 제출이 없습니다.");
             return;
         }
-        const header = ["name", "score", "total", "percent", "finishedAt", "fociLostCount"];
-        const rows = sortedAttempts.map(a => [
-            a.studentName || "Anonymous",
-            a.score,
-            a.totalScore,
-            (Math.round(percent(a) * 10) / 10).toString(),
-            a.finishedAt,
-            a.tabFociLostCount ?? 0,
-        ].map(csvEscape).join(","));
-        const csv = [header.join(","), ...rows].join("\n");
+        const rows = sortedAttempts.map(a => {
+            const summary = attemptSummaryById.get(a.id);
+            const score = summary?.score ?? resolveAttemptScore(a, exam);
+            return [
+                a.studentName || "Anonymous",
+                a.retake ? "retake" : "original",
+                a.retake?.sourceAttemptId || "",
+                a.retake?.questionIds.length || 0,
+                score.earnedScore,
+                score.totalScore,
+                (Math.round(score.scorePercent * 10) / 10).toString(),
+                summary?.correctCount ?? 0,
+                summary?.wrongCount ?? 0,
+                summary?.unansweredCount ?? 0,
+                score.source,
+                a.finishedAt,
+                a.tabFociLostCount ?? 0,
+            ];
+        });
+        const csv = serializeCsvRows([
+            ["name", "attemptKind", "retakeSourceAttemptId", "retakeQuestionCount", "score", "total", "percent", "correctCount", "wrongCount", "unansweredCount", "scoreSource", "finishedAt", "fociLostCount"],
+            ...rows,
+        ]);
         // BOM for Excel-friendly Korean.
         const blob = new Blob(["\uFEFF" + csv], { type: "text/csv;charset=utf-8;" });
         const url = URL.createObjectURL(blob);
@@ -143,10 +176,11 @@ export default function ExamDetailPage() {
             <main className="container animate-fade-in" style={{ padding: '2rem 1rem' }}>
 
                 {/* Stats Row */}
-                <div className="bento-grid" style={{ marginBottom: '2rem', gridTemplateColumns: 'repeat(3, 1fr)', gridAutoRows: 'auto' }}>
-                    <StatCard title="Submissions" value={stats.submitCount} icon={<span>📝</span>} />
-                    <StatCard title="Average %" value={`${stats.avgPct}%`} icon={<span>📊</span>} color="var(--primary)" />
-                    <StatCard title="Highest %" value={`${stats.maxPct}%`} icon={<span>🏆</span>} color="var(--warning)" />
+                <div className="bento-grid" style={{ marginBottom: '2rem', gridTemplateColumns: 'repeat(4, 1fr)', gridAutoRows: 'auto' }}>
+                    <StatCard title="원시험 제출" value={stats.submitCount} icon={<span>📝</span>} />
+                    <StatCard title="원시험 평균" value={`${stats.avgPct}%`} icon={<span>📊</span>} color="var(--primary)" />
+                    <StatCard title="원시험 최고" value={`${stats.maxPct}%`} icon={<span>🏆</span>} color="var(--warning)" />
+                    <StatCard title="재시험 제출" value={retakeAttempts.length} icon={<span>↻</span>} color="#0f766e" />
                 </div>
 
                 {/* Students Table */}
@@ -203,13 +237,33 @@ export default function ExamDetailPage() {
                                     </tr>
                                 ) : (
                                     sortedAttempts.map(attempt => {
-                                        const p = percent(attempt);
+                                        const summary = attemptSummaryById.get(attempt.id);
+                                        const score = summary?.score ?? resolveAttemptScore(attempt, exam);
+                                        const p = score.scorePercent;
                                         return (
                                             <tr key={attempt.id} style={{ borderBottom: '1px solid var(--border)' }}>
-                                                <td style={{ padding: '1rem', fontWeight: 600 }}>{attempt.studentName || 'Anonymous'}</td>
+                                                <td style={{ padding: '1rem', fontWeight: 600 }}>
+                                                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.45rem', flexWrap: 'wrap' }}>
+                                                        <span>{attempt.studentName || 'Anonymous'}</span>
+                                                        {attempt.retake && (
+                                                            <span style={{
+                                                                padding: '0.16rem 0.45rem',
+                                                                borderRadius: '999px',
+                                                                background: '#f0fdfa',
+                                                                color: '#0f766e',
+                                                                border: '1px solid #99f6e4',
+                                                                fontSize: '0.72rem',
+                                                                fontWeight: 800,
+                                                                whiteSpace: 'nowrap',
+                                                            }}>
+                                                                재시험 {attempt.retake.questionIds.length}문항
+                                                            </span>
+                                                        )}
+                                                    </div>
+                                                </td>
                                                 <td style={{ padding: '1rem' }}>
                                                     <span style={{ fontWeight: 700, color: 'var(--foreground)' }}>{Math.round(p * 10) / 10}%</span>
-                                                    <span style={{ color: 'var(--muted)', fontSize: '0.8rem' }}> ({attempt.score}/{attempt.totalScore})</span>
+                                                    <span style={{ color: 'var(--muted)', fontSize: '0.8rem' }}> ({score.earnedScore}/{score.totalScore})</span>
                                                 </td>
                                                 <td style={{ padding: '1rem', color: 'var(--muted)' }}>
                                                     {formatKoreanDateTime(attempt.finishedAt)}
@@ -217,9 +271,12 @@ export default function ExamDetailPage() {
                                                 <td style={{ padding: '1rem' }}>
                                                     <span style={{
                                                         padding: '2px 8px', borderRadius: '4px', fontSize: '0.8rem', fontWeight: 600,
-                                                        background: '#dcfce7', color: '#166534'
+                                                        background: summary && (summary.wrongCount > 0 || summary.unansweredCount > 0) ? '#fef2f2' : '#dcfce7',
+                                                        color: summary && (summary.wrongCount > 0 || summary.unansweredCount > 0) ? '#991b1b' : '#166534'
                                                     }}>
-                                                        Completed
+                                                        {summary
+                                                            ? `정 ${summary.correctCount} · 오 ${summary.wrongCount} · 미 ${summary.unansweredCount}`
+                                                            : "Completed"}
                                                     </span>
                                                 </td>
                                                 <td style={{ padding: '1rem' }}>

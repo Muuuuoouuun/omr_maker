@@ -1,5 +1,6 @@
 // Answer parsing utility using PDF text extraction and Gemini AI for OCR
 import { analyzeAnswerImages } from '@/app/actions/analyzeKey';
+import { safeAiAnswerErrorMessage, safeAiAnswerLogMeta } from '@/lib/aiAnswerSafety';
 
 export interface ParsedAnswer {
     questionNum: number;
@@ -235,8 +236,9 @@ export async function parseAnswerKeyWithGemini(file: File, geminiApiKey?: string
 
         return normalizeGeminiAnswerRows(aiResults);
     } catch (e: unknown) {
-        console.error("AI Parsing failed:", e);
-        const message = e instanceof Error ? e.message : '알 수 없는 오류';
-        throw new Error(`AI 인식 실패: ${message}`);
+        console.warn("AI answer parsing failed", safeAiAnswerLogMeta(e, {
+            pageCount: maxPages,
+        }));
+        throw new Error(`AI 인식 실패: ${safeAiAnswerErrorMessage(e)}`);
     }
 }

@@ -4,82 +4,119 @@ import { Suspense, useState, useMemo, useEffect, useRef } from "react";
 import { useSearchParams } from "next/navigation";
 import NextLink from "next/link";
 import TeacherHeader from "@/components/TeacherHeader";
-import { Users, UserPlus, Upload, Search, Mail, TrendingUp, TrendingDown, MoreVertical, Link as LinkIcon, FolderPlus, CheckCircle2, Clock, X, Trash2, Download, PenLine } from "lucide-react";
+import { Users, UserPlus, Upload, Search, MessageCircle, TrendingUp, TrendingDown, MoreVertical, Link as LinkIcon, FolderPlus, CheckCircle2, Clock, X, Trash2, Download, PenLine, Target, AlertTriangle, FileText, BarChart3, Copy, KeyRound, RefreshCw, Lock, MapPin } from "lucide-react";
 import { toast } from "@/components/Toast";
-import type { Attempt } from "@/types/omr";
-import { attemptMatchesStudentProfile } from "@/utils/storage";
+import type { Attempt, Exam, PlanKey } from "@/types/omr";
+import { parseCsvRows, serializeCsvRows } from "@/lib/csv";
+import { shouldUseDemoData } from "@/lib/demoData";
+import { loadAttempts, loadExams } from "@/lib/omrPersistence";
+import { loadRosterSnapshot, saveRosterSnapshot } from "@/lib/rosterPersistence";
+import { resolveAttemptScore } from "@/lib/attemptScores";
+import {
+    applyRosterPerformance,
+    buildRosterPerformanceMap,
+    recomputeRosterGroupsFromStudents,
+} from "@/lib/rosterAnalytics";
+import {
+    AVATAR_COLORS,
+    GROUP_COLORS,
+    ROSTER_STORAGE_KEYS,
+    hasStoredRosterData,
+    readRosterGroups,
+    readRosterInvites,
+    readRosterStudents,
+    rosterGroupScopeKey,
+    rosterStudentFallbackId,
+    type RosterGroup,
+    type RosterInvite,
+    type RosterStudent,
+} from "@/lib/rosterStorage";
+import {
+    buildStudentProfileInsight,
+    type StudentProfileInsight,
+    type StudentProfileWeaknessInsight,
+} from "@/lib/studentProfileAnalytics";
+import {
+    buildGroupProfileInsight,
+    type GroupProfileInsight,
+    type GroupProfileWeaknessInsight,
+} from "@/lib/groupProfileAnalytics";
+import {
+    DEFAULT_REGION_NAME,
+    buildRegionalLearningScopes,
+    regionKeyFor,
+    regionNameForGroup,
+    type RegionalLearningScope,
+} from "@/lib/regionalAnalytics";
+import { buildRetakeHref } from "@/lib/retakeLinks";
+import { findStudentStartCode, generateStartCode, readStudentCodes, writeStudentCodes } from "@/lib/studentCodes";
+import { getCurrentPlan, hasPlanEntitlement } from "@/utils/plans";
+import { studentIdFor } from "@/utils/storage";
 
 type TabType = "students" | "groups" | "invites";
+type RosterDataMode = "real" | "demo";
 
-interface Student {
-    id: string;
-    name: string;
-    email: string;
-    group: string;
-    avatar: string;
-    avgScore: number;
-    examsTaken: number;
-    lastActive: string;
-    trend: "up" | "down" | "flat";
-    status: "active" | "idle";
-}
+type ConfirmAction =
+    | { kind: "student"; id: string; label: string }
+    | { kind: "bulk"; count: number }
+    | { kind: "invite"; id: string; label: string };
+type StudentFormData = { name: string; email: string; group: string; groupId: string; region: string };
+type GroupFormData = { name: string; color: string; region: string };
 
-interface Group {
-    id: string;
-    name: string;
-    count: number;
-    avgScore: number;
-    color: string;
-}
+const ALL_REGION_KEY = "__all_regions__";
 
-interface Invite {
-    id: string;
-    email: string;
-    sentAt: string;
-    status: string;
-}
-
-const STORAGE_KEYS = {
-    students: "omr_students",
-    groups: "omr_groups",
-    invites: "omr_invites",
-} as const;
-
-const GROUP_COLORS = ["#4f46e5", "#ec4899", "#8b5cf6", "#10b981", "#f59e0b", "#ef4444"];
-
-const AVATAR_COLORS = ["#4f46e5", "#ec4899", "#8b5cf6", "#10b981", "#f59e0b", "#0ea5e9", "#ef4444"];
-
-const MOCK_STUDENTS: Student[] = Array.from({ length: 24 }).map((_, i) => {
+const MOCK_STUDENTS: RosterStudent[] = Array.from({ length: 24 }).map((_, i) => {
     const names = ["김민준", "이서연", "박도윤", "최예은", "정하준", "강지우", "조시우", "윤수아", "장재윤", "임유나", "한건우", "오하윤", "서지호", "신서아", "권선우", "황지민", "안윤서", "송태호", "류예준", "홍채원", "전주원", "고은서", "문이준", "양리아"];
     const groups = ["3학년 A반", "3학년 B반", "2학년 A반", "2학년 B반", "1학년 A반"];
+    const regions = ["서울", "서울", "부산", "부산", "온라인"];
     return {
         id: `s-${i}`,
         name: names[i],
         email: `${names[i].toLowerCase().replace(/\s/g, '')}${i}@school.ac.kr`,
         group: groups[i % groups.length],
+        region: regions[i % regions.length],
         avatar: AVATAR_COLORS[i % AVATAR_COLORS.length],
-        avgScore: Math.round(55 + Math.random() * 40),
-        examsTaken: Math.floor(3 + Math.random() * 15),
-        lastActive: `${Math.floor(Math.random() * 48)}시간 전`,
+        avgScore: 55 + ((i * 7) % 40),
+        examsTaken: 3 + ((i * 5) % 15),
+        lastActive: `${1 + ((i * 11) % 48)}시간 전`,
         trend: (["up", "down", "flat"] as const)[i % 3],
-        status: Math.random() > 0.3 ? "active" : "idle",
+        status: i % 4 === 0 ? "idle" : "active",
     };
 });
 
-const MOCK_GROUPS: Group[] = [
-    { id: "g1", name: "3학년 A반", count: 28, avgScore: 82, color: "#4f46e5" },
-    { id: "g2", name: "3학년 B반", count: 26, avgScore: 78, color: "#ec4899" },
-    { id: "g3", name: "2학년 A반", count: 30, avgScore: 75, color: "#8b5cf6" },
-    { id: "g4", name: "2학년 B반", count: 29, avgScore: 80, color: "#10b981" },
-    { id: "g5", name: "1학년 A반", count: 25, avgScore: 73, color: "#f59e0b" },
+const MOCK_GROUPS: RosterGroup[] = [
+    { id: "g1", name: "3학년 A반", region: "서울", count: 28, avgScore: 82, color: "#4f46e5" },
+    { id: "g2", name: "3학년 B반", region: "서울", count: 26, avgScore: 78, color: "#ec4899" },
+    { id: "g3", name: "2학년 A반", region: "부산", count: 30, avgScore: 75, color: "#8b5cf6" },
+    { id: "g4", name: "2학년 B반", region: "부산", count: 29, avgScore: 80, color: "#10b981" },
+    { id: "g5", name: "1학년 A반", region: "온라인", count: 25, avgScore: 73, color: "#f59e0b" },
 ];
 
-const MOCK_INVITES: Invite[] = [
+const MOCK_INVITES: RosterInvite[] = [
     { id: "i1", email: "new.student1@school.ac.kr", sentAt: "2시간 전", status: "pending" },
     { id: "i2", email: "new.student2@school.ac.kr", sentAt: "어제", status: "pending" },
     { id: "i3", email: "parent.notify@gmail.com", sentAt: "3일 전", status: "accepted" },
     { id: "i4", email: "transferred@school.ac.kr", sentAt: "1주 전", status: "expired" },
 ];
+
+function isLegacyDemoRosterSnapshot(
+    students: RosterStudent[],
+    groups: RosterGroup[],
+    invites: RosterInvite[],
+): boolean {
+    return students.length === MOCK_STUDENTS.length
+        && students.every((student, index) => {
+            const demo = MOCK_STUDENTS[index];
+            return student.id === demo.id
+                && student.name === demo.name
+                && student.email === demo.email
+                && student.group === demo.group;
+        })
+        && groups.length === MOCK_GROUPS.length
+        && groups.every((group, index) => group.id === MOCK_GROUPS[index].id && group.name === MOCK_GROUPS[index].name)
+        && invites.length === MOCK_INVITES.length
+        && invites.every((invite, index) => invite.id === MOCK_INVITES[index].id && invite.email === MOCK_INVITES[index].email);
+}
 
 function hasArchivedHandwriting(attempt: Attempt): boolean {
     return !!attempt.handwritingArchived && !!(attempt.handwriting?.strokesRef || attempt.drawingsRef);
@@ -90,6 +127,62 @@ function handwritingLabel(attempt: Attempt): string {
     if (questionCount > 0) return `${questionCount}문항`;
     if (attempt.drawingPageCount) return `${attempt.drawingPageCount}쪽`;
     return "저장됨";
+}
+
+function rosterGroupForStudentInput(groupName: string, region: string, groups: RosterGroup[], groupId?: string): RosterGroup | undefined {
+    const requestedRegion = region.trim();
+    if (groupId) {
+        const selected = groups.find(item => item.id === groupId);
+        if (selected) return selected;
+    }
+    return groups.find(item =>
+        item.name === groupName
+        && (requestedRegion ? item.region?.trim() === requestedRegion : true)
+    ) || groups.find(item => item.name === groupName && !item.region?.trim())
+        || groups.find(item => item.name === groupName);
+}
+
+function studentIdForRoster(name: string, groupName: string, groups: RosterGroup[], region = "", groupId = ""): string {
+    const group = rosterGroupForStudentInput(groupName, region, groups, groupId);
+    return group ? studentIdFor(name, group.id) : rosterStudentFallbackId(name, groupName, region);
+}
+
+function groupOptionLabel(group: RosterGroup): string {
+    return group.region ? `${group.name} · ${group.region}` : group.name;
+}
+
+function initialStudentGroupId(student: RosterStudent | null, groups: RosterGroup[]): string {
+    if (!student) return groups[0]?.id ?? "";
+    return rosterGroupForStudentInput(student.group, student.region || "", groups)?.id || groups.find(group => group.name === student.group)?.id || "";
+}
+
+function nextGroupColor(index: number): string {
+    return GROUP_COLORS[index % GROUP_COLORS.length];
+}
+
+function optionalRegion(value: string): { region?: string } {
+    const region = value.trim();
+    return region ? { region } : {};
+}
+
+function rosterStudentRegionName(student: RosterStudent, groups: RosterGroup[]): string {
+    const direct = student.region?.trim();
+    if (direct) return direct;
+    const group = groups.find(item => item.name === student.group);
+    return group?.region?.trim() || DEFAULT_REGION_NAME;
+}
+
+function regionLabel(scope: RegionalLearningScope): string {
+    return scope.regionName || DEFAULT_REGION_NAME;
+}
+
+function normalizeEmail(value: string): string {
+    return value.trim().toLowerCase();
+}
+
+function resolveInviteUrl(): string {
+    if (typeof window === "undefined") return "/?role=student";
+    return `${window.location.origin}/?role=student`;
 }
 
 export default function ManageUsersPage() {
@@ -109,138 +202,324 @@ function ManageUsersInner() {
     })();
     const [tab, setTab] = useState<TabType>(initialTab);
     const [query, setQuery] = useState("");
+    const [selectedRegionKey, setSelectedRegionKey] = useState(ALL_REGION_KEY);
     const [selectedId, setSelectedId] = useState<string | null>(null);
 
-    const [students, setStudents] = useState<Student[]>([]);
-    const [groups, setGroups] = useState<Group[]>([]);
-    const [invites, setInvites] = useState<Invite[]>([]);
+    const [students, setStudents] = useState<RosterStudent[]>([]);
+    const [groups, setGroups] = useState<RosterGroup[]>([]);
+    const [invites, setInvites] = useState<RosterInvite[]>([]);
+    const [rosterDataMode, setRosterDataMode] = useState<RosterDataMode>("real");
+    const [allAttempts, setAllAttempts] = useState<Attempt[]>([]);
+    const [exams, setExams] = useState<Exam[]>([]);
+    const [studentCodeRegistry, setStudentCodeRegistry] = useState<Record<string, string>>({});
+    const [currentPlan] = useState<PlanKey>(() => getCurrentPlan());
     const [hydrated, setHydrated] = useState(false);
+    const studentGrowthReportsEnabled = hasPlanEntitlement(currentPlan, "studentGrowthReports");
+    const advancedAnalyticsEnabled = hasPlanEntitlement(currentPlan, "advancedAnalytics");
 
     // UI state for modals/popovers
     const [showStudentModal, setShowStudentModal] = useState(false);
-    const [editingStudent, setEditingStudent] = useState<Student | null>(null);
+    const [editingStudent, setEditingStudent] = useState<RosterStudent | null>(null);
     const [showGroupModal, setShowGroupModal] = useState(false);
+    const [showGroupProfileModal, setShowGroupProfileModal] = useState(false);
+    const [showInviteModal, setShowInviteModal] = useState(false);
+    const [showMessageModal, setShowMessageModal] = useState(false);
+    const [showProfileModal, setShowProfileModal] = useState(false);
+    const [confirmAction, setConfirmAction] = useState<ConfirmAction | null>(null);
     const [popoverId, setPopoverId] = useState<string | null>(null);
     const [copyFlash, setCopyFlash] = useState(false);
     const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+    const [selectedGroupId, setSelectedGroupId] = useState<string | null>(null);
 
     const fileInputRef = useRef<HTMLInputElement | null>(null);
 
-    // Hydrate from localStorage
+    // Hydrate real roster rows from localStorage. Demo rows stay display-only so
+    // they cannot be mistaken for academy data in later sessions.
     useEffect(() => {
-        try {
-            const s = localStorage.getItem(STORAGE_KEYS.students);
-            const g = localStorage.getItem(STORAGE_KEYS.groups);
-            const i = localStorage.getItem(STORAGE_KEYS.invites);
+        let cancelled = false;
+        const hydrateRoster = async () => {
+            try {
+                const storedRosterExists = hasStoredRosterData(localStorage);
+                const storedStudents = readRosterStudents(localStorage);
+                const storedGroups = readRosterGroups(localStorage);
+                const storedInvites = readRosterInvites(localStorage);
+                const legacyDemoRoster = storedRosterExists
+                    && shouldUseDemoData()
+                    && isLegacyDemoRosterSnapshot(storedStudents, storedGroups, storedInvites);
+                if (legacyDemoRoster) {
+                    Object.values(ROSTER_STORAGE_KEYS).forEach(key => localStorage.removeItem(key));
+                }
 
-            if (s) {
+                const rosterResult = await loadRosterSnapshot(localStorage);
+                if (cancelled) return;
+                const hasRosterRows = rosterResult.students.length > 0
+                    || rosterResult.groups.length > 0
+                    || rosterResult.invites.length > 0;
+                const useDemoRoster = shouldUseDemoData() && !hasRosterRows;
+                const nextStudents = useDemoRoster ? [] : rosterResult.students;
+                const nextGroups = useDemoRoster ? [] : rosterResult.groups;
+                const nextInvites = useDemoRoster ? [] : rosterResult.invites;
                 // Hydrate client-only localStorage data after mount.
-                // eslint-disable-next-line react-hooks/set-state-in-effect
-                setStudents(JSON.parse(s));
-            } else {
-                localStorage.setItem(STORAGE_KEYS.students, JSON.stringify(MOCK_STUDENTS));
-                setStudents(MOCK_STUDENTS);
+                setStudents(nextStudents);
+                setGroups(nextGroups);
+                setInvites(nextInvites);
+                setRosterDataMode(useDemoRoster ? "demo" : "real");
+                if (rosterResult.remoteError) {
+                    toast.info(
+                        "명단은 로컬 기준으로 표시 중",
+                        "Supabase 명단 동기화가 지연되어 현재 기기 데이터를 우선 사용했습니다."
+                    );
+                }
+                setStudentCodeRegistry(readStudentCodes(localStorage));
+            } catch {
+                if (cancelled) return;
+                setStudents([]);
+                setGroups([]);
+                setInvites([]);
+                setStudentCodeRegistry({});
+                setRosterDataMode("real");
             }
-            if (g) {
-                setGroups(JSON.parse(g));
-            } else {
-                localStorage.setItem(STORAGE_KEYS.groups, JSON.stringify(MOCK_GROUPS));
-                setGroups(MOCK_GROUPS);
+            setHydrated(true);
+        };
+
+        void hydrateRoster();
+        return () => { cancelled = true; };
+    }, []);
+
+    useEffect(() => {
+        let cancelled = false;
+        const loadRosterAnalytics = async () => {
+            const [attemptResult, examResult] = await Promise.all([
+                loadAttempts(),
+                loadExams(),
+            ]);
+            if (cancelled) return;
+            setAllAttempts(attemptResult.items);
+            setExams(examResult.items);
+            if (attemptResult.remoteError || examResult.remoteError) {
+                toast.info(
+                    "로컬 응시 데이터 기준으로 표시 중",
+                    "서버 동기화가 일부 지연되어 학생 평균은 현재 기기 데이터로 계산했습니다."
+                );
             }
-            if (i) {
-                setInvites(JSON.parse(i));
-            } else {
-                localStorage.setItem(STORAGE_KEYS.invites, JSON.stringify(MOCK_INVITES));
-                setInvites(MOCK_INVITES);
-            }
-        } catch {
-            setStudents(MOCK_STUDENTS);
-            setGroups(MOCK_GROUPS);
-            setInvites(MOCK_INVITES);
-        }
-        setHydrated(true);
+        };
+
+        void loadRosterAnalytics();
+        return () => { cancelled = true; };
     }, []);
 
     // Write-through helpers
-    const persistStudents = (next: Student[]) => {
-        setStudents(next);
-        try { localStorage.setItem(STORAGE_KEYS.students, JSON.stringify(next)); } catch {}
-    };
-    const persistGroups = (next: Group[]) => {
-        setGroups(next);
-        try { localStorage.setItem(STORAGE_KEYS.groups, JSON.stringify(next)); } catch {}
-    };
-    const persistInvites = (next: Invite[]) => {
-        setInvites(next);
-        try { localStorage.setItem(STORAGE_KEYS.invites, JSON.stringify(next)); } catch {}
-    };
-
-    // Recompute group stats from current students
-    const recomputeGroups = (studentsList: Student[], groupsList: Group[]): Group[] => {
-        return groupsList.map(g => {
-            const inGroup = studentsList.filter(s => s.group === g.name);
-            const count = inGroup.length;
-            const avgScore = count > 0 ? Math.round(inGroup.reduce((sum, s) => sum + s.avgScore, 0) / count) : 0;
-            return { ...g, count, avgScore };
+    const persistRoster = (nextStudents: RosterStudent[], nextGroups: RosterGroup[], nextInvites: RosterInvite[]) => {
+        setRosterDataMode("real");
+        setStudents(nextStudents);
+        setGroups(nextGroups);
+        setInvites(nextInvites);
+        setSelectedId(prev => nextStudents.some(student => student.id === prev) ? prev : null);
+        setSelectedIds(prev => {
+            const validIds = new Set(nextStudents.map(student => student.id));
+            const filteredIds = [...prev].filter(id => validIds.has(id));
+            return filteredIds.length === prev.size ? prev : new Set(filteredIds);
+        });
+        setSelectedGroupId(prev => nextGroups.some(group => group.id === prev) ? prev : null);
+        void saveRosterSnapshot(localStorage, {
+            students: nextStudents,
+            groups: nextGroups,
+            invites: nextInvites,
+        }).then(result => {
+            if (result.remoteError) {
+                toast.info(
+                    "명단은 로컬에 저장됨",
+                    "Supabase 명단 동기화는 다음 로드 때 다시 시도합니다."
+                );
+            }
         });
     };
 
-    const filtered = useMemo(() =>
-        students.filter(s =>
-            s.name.toLowerCase().includes(query.toLowerCase()) ||
-            s.email.toLowerCase().includes(query.toLowerCase()) ||
-            s.group.includes(query)
-        ), [query, students]);
+    // Recompute group stats from current students
+    const recomputeGroups = (studentsList: RosterStudent[], groupsList: RosterGroup[]): RosterGroup[] => (
+        recomputeRosterGroupsFromStudents(studentsList, groupsList)
+    );
 
-    const selected = students.find(s => s.id === selectedId);
+    const examById = useMemo(() => (
+        new Map(exams.map(exam => [exam.id, exam]))
+    ), [exams]);
+
+    const isDemoRoster = rosterDataMode === "demo";
+    const rosterStudents = isDemoRoster ? MOCK_STUDENTS : students;
+    const rosterGroups = isDemoRoster ? MOCK_GROUPS : groups;
+    const rosterInvites = isDemoRoster ? MOCK_INVITES : invites;
+
+    const performanceByStudentId = useMemo(() => (
+        buildRosterPerformanceMap(rosterStudents, allAttempts, examById)
+    ), [rosterStudents, allAttempts, examById]);
+
+    const displayStudents = useMemo(() => (
+        applyRosterPerformance(rosterStudents, performanceByStudentId)
+    ), [rosterStudents, performanceByStudentId]);
+
+    const displayGroups = useMemo(() => (
+        recomputeRosterGroupsFromStudents(displayStudents, rosterGroups)
+    ), [displayStudents, rosterGroups]);
+
+    const regionalScopes = useMemo(() => (
+        buildRegionalLearningScopes({
+            students: displayStudents,
+            groups: displayGroups,
+            attempts: allAttempts,
+            exams,
+        })
+    ), [displayStudents, displayGroups, allAttempts, exams]);
+
+    const activeRegionKey = selectedRegionKey === ALL_REGION_KEY || regionalScopes.some(scope => scope.regionKey === selectedRegionKey)
+        ? selectedRegionKey
+        : ALL_REGION_KEY;
+    const activeRegionName = activeRegionKey === ALL_REGION_KEY
+        ? "전체 지역"
+        : regionLabel(regionalScopes.find(scope => scope.regionKey === activeRegionKey) || {
+            regionKey: regionKeyFor(DEFAULT_REGION_NAME),
+            regionName: DEFAULT_REGION_NAME,
+            studentCount: 0,
+            groupCount: 0,
+            attemptCount: 0,
+            retakeAttemptCount: 0,
+            examCount: 0,
+            averageScore: 0,
+            groupNames: [],
+        });
+
+    const filtered = useMemo(() =>
+        displayStudents.filter(s => {
+            const studentRegion = rosterStudentRegionName(s, displayGroups);
+            const matchesRegion = activeRegionKey === ALL_REGION_KEY || regionKeyFor(studentRegion) === activeRegionKey;
+            const normalizedQuery = query.trim().toLowerCase();
+            const matchesQuery = !normalizedQuery
+                || s.name.toLowerCase().includes(normalizedQuery)
+                || s.email.toLowerCase().includes(normalizedQuery)
+                || s.group.toLowerCase().includes(normalizedQuery)
+                || studentRegion.toLowerCase().includes(normalizedQuery);
+            return matchesRegion && matchesQuery;
+        }), [activeRegionKey, query, displayStudents, displayGroups]);
+
+    const selected = displayStudents.find(s => s.id === selectedId);
+    const selectedGroup = displayGroups.find(group => group.id === selectedGroupId) || null;
+    const selectedLegacyStudentId = selected ? studentIdForRoster(selected.name, selected.group, rosterGroups) : "";
+    const selectedStartCode = selected ? findStudentStartCode(studentCodeRegistry, selected.id, selectedLegacyStudentId) : "";
 
     // Recent attempts for the selected student (from omr_attempts)
     const selectedRecentAttempts = useMemo<Attempt[]>(() => {
         if (!selected) return [];
-        if (typeof window === "undefined") return [];
-        try {
-            const raw = localStorage.getItem("omr_attempts");
-            if (!raw) return [];
-            const parsed = JSON.parse(raw);
-            if (!Array.isArray(parsed)) return [];
-            const mine = (parsed as Attempt[])
-                .filter(a => a && attemptMatchesStudentProfile(a, selected))
-                .sort((a, b) => {
-                    const ta = new Date(a.finishedAt || a.startedAt || 0).getTime();
-                    const tb = new Date(b.finishedAt || b.startedAt || 0).getTime();
-                    return tb - ta;
-                })
-                .slice(0, 3);
-            return mine;
-        } catch {
-            return [];
-        }
-    }, [selected]);
+        return performanceByStudentId.get(selected.id)?.attempts.slice(0, 3) || [];
+    }, [selected, performanceByStudentId]);
 
-    const selectedHandwritingCount = useMemo(() => {
-        return selectedRecentAttempts.filter(hasArchivedHandwriting).length;
-    }, [selectedRecentAttempts]);
+    const selectedProfile = useMemo<StudentProfileInsight | null>(() => {
+        if (!selected) return null;
+        return buildStudentProfileInsight(selected, allAttempts, examById, {
+            recentLimit: 8,
+            weaknessLimit: 6,
+        });
+    }, [selected, allAttempts, examById]);
+
+    const selectedHandwritingCount = selectedProfile?.handwritingArchiveCount ?? 0;
+
+    const selectedGroupProfile = useMemo<GroupProfileInsight | null>(() => {
+        if (!selectedGroup) return null;
+        return buildGroupProfileInsight(selectedGroup, displayStudents, allAttempts, examById, {
+            examLimit: 6,
+            weaknessLimit: 6,
+            riskLimit: 5,
+        });
+    }, [selectedGroup, displayStudents, allAttempts, examById]);
 
     // Detail-panel button handlers
     const handleSendMessage = () => {
-        if (typeof window === "undefined") return;
-        const body = window.prompt("메시지 내용:");
-        if (body && body.trim().length > 0) {
-            toast.success("메시지 전송됨");
+        if (isDemoRoster) {
+            toast.info("데모 명단은 전송하지 않음", "실제 학생을 추가하거나 CSV로 업로드한 뒤 카카오 메시지를 준비할 수 있습니다.");
+            return;
         }
+        setShowMessageModal(true);
     };
     const handleOpenDetail = () => {
-        toast.info("상세 프로필 준비 중");
+        if (!studentGrowthReportsEnabled) {
+            toast.info("학생 성장 리포트는 Pro 기능입니다", "기본 명단과 최근 점수는 확인할 수 있고, 누적 성장/취약 유형 리포트는 Pro 이상에서 열립니다.");
+            return;
+        }
+        if (!selectedProfile) {
+            toast.info("상세 데이터를 찾을 수 없음", "학생을 다시 선택한 뒤 열어주세요.");
+            return;
+        }
+        setShowProfileModal(true);
+    };
+
+    const handleOpenGroupProfile = (groupId: string) => {
+        if (!advancedAnalyticsEnabled) {
+            toast.info("반별 분석 리포트는 Pro 기능입니다", "반 목록과 평균은 확인할 수 있고, 반별 약점/집중 관리 리포트는 Pro 이상에서 열립니다.");
+            return;
+        }
+        setSelectedGroupId(groupId);
+        setShowGroupProfileModal(true);
+    };
+
+    const handleIssueStudentStartCode = () => {
+        if (!selected || isDemoRoster) {
+            toast.info("실제 학생에서만 코드 발급", "저장된 명단의 학생을 선택한 뒤 시작 코드를 발급할 수 있습니다.");
+            return;
+        }
+        const nextCode = generateStartCode();
+        const nextRegistry = { ...studentCodeRegistry, [selected.id]: nextCode };
+        if (!writeStudentCodes(localStorage, nextRegistry)) {
+            toast.error("코드 저장 실패", "브라우저 저장소를 확인한 뒤 다시 시도해주세요.");
+            return;
+        }
+        setStudentCodeRegistry(nextRegistry);
+        toast.success(selectedStartCode ? "시작 코드 재발급" : "시작 코드 발급", `${selected.name}: ${nextCode}`);
+    };
+
+    const handleCopyStudentStartCode = async () => {
+        if (!selectedStartCode) return;
+        try {
+            await navigator.clipboard.writeText(selectedStartCode);
+            toast.success("시작 코드 복사됨", `${selected?.name || "학생"} 코드 ${selectedStartCode}`);
+        } catch {
+            toast.error("복사 실패", "브라우저 클립보드 권한을 확인해주세요.");
+        }
     };
 
     // ===== Student CRUD =====
-    const handleAddStudent = (data: { name: string; email: string; group: string }) => {
+    const handleAddStudent = (data: StudentFormData) => {
         const idx = students.length;
-        const newStudent: Student = {
-            id: `s-${Date.now()}`,
+        const selectedGroup = groups.find(group => group.id === data.groupId);
+        const resolvedRegion = data.region.trim() || selectedGroup?.region || "";
+        const regionPatch = optionalRegion(resolvedRegion);
+        const existingGroup = rosterGroupForStudentInput(data.group, resolvedRegion, groups, data.groupId);
+        const baseGroups = existingGroup
+            ? groups.map(group => (
+                group.id === existingGroup.id && regionPatch.region && !group.region
+                    ? { ...group, region: regionPatch.region }
+                    : group
+            ))
+            : [
+                ...groups,
+                {
+                    id: `group:${rosterGroupScopeKey(data.group, resolvedRegion)}`,
+                    name: data.group,
+                    ...regionPatch,
+                    count: 0,
+                    avgScore: 0,
+                    color: nextGroupColor(groups.length),
+                },
+            ];
+        const id = studentIdForRoster(data.name, data.group, baseGroups, resolvedRegion, existingGroup?.id || data.groupId);
+        const emailKey = normalizeEmail(data.email);
+        if (students.some(student => student.id === id || normalizeEmail(student.email) === emailKey)) {
+            toast.info("이미 등록된 학생", "같은 반/이름 또는 이메일의 학생이 이미 있습니다.");
+            return;
+        }
+        const newStudent: RosterStudent = {
+            id,
             name: data.name,
-            email: data.email,
+            email: data.email.trim(),
             group: data.group,
+            ...regionPatch,
             avatar: AVATAR_COLORS[idx % AVATAR_COLORS.length],
             avgScore: 0,
             examsTaken: 0,
@@ -249,23 +528,47 @@ function ManageUsersInner() {
             status: "active",
         };
         const next = [newStudent, ...students];
-        persistStudents(next);
-        persistGroups(recomputeGroups(next, groups));
+        persistRoster(next, recomputeGroups(next, baseGroups), invites);
     };
 
-    const handleEditStudent = (id: string, data: { name: string; email: string; group: string }) => {
-        const next = students.map(s => s.id === id ? { ...s, ...data } : s);
-        persistStudents(next);
-        persistGroups(recomputeGroups(next, groups));
+    const handleEditStudent = (id: string, data: StudentFormData) => {
+        if (isDemoRoster) {
+            toast.info("데모 명단은 편집되지 않음", "실제 학생을 추가하거나 CSV로 업로드하면 저장 가능한 명단으로 전환됩니다.");
+            return;
+        }
+        const selectedGroup = groups.find(group => group.id === data.groupId);
+        const resolvedRegion = data.region.trim() || selectedGroup?.region || "";
+        const regionPatch = optionalRegion(resolvedRegion);
+        const next = students.map(s => s.id === id ? {
+            ...s,
+            name: data.name,
+            email: data.email,
+            group: data.group,
+            region: regionPatch.region,
+        } : s);
+        const targetGroup = rosterGroupForStudentInput(data.group, resolvedRegion, groups, data.groupId);
+        const nextGroups = groups.map(group => (
+            group.id === targetGroup?.id && regionPatch.region && !group.region
+                ? { ...group, region: regionPatch.region }
+                : group
+        ));
+        persistRoster(next, recomputeGroups(next, nextGroups), invites);
     };
 
     const handleDeleteStudent = (id: string) => {
-        if (!window.confirm("이 학생을 삭제하시겠습니까?")) return;
-        const next = students.filter(s => s.id !== id);
-        persistStudents(next);
-        persistGroups(recomputeGroups(next, groups));
-        if (selectedId === id) setSelectedId(null);
+        if (isDemoRoster) {
+            toast.info("데모 명단은 삭제되지 않음", "실제 학생을 추가하거나 CSV로 업로드하면 저장 가능한 명단으로 전환됩니다.");
+            return;
+        }
+        const target = students.find(s => s.id === id);
+        setConfirmAction({ kind: "student", id, label: target?.name || "학생" });
         setPopoverId(null);
+    };
+
+    const deleteStudent = (id: string) => {
+        const next = students.filter(s => s.id !== id);
+        persistRoster(next, recomputeGroups(next, groups), invites);
+        if (selectedId === id) setSelectedId(null);
         setSelectedIds(prev => {
             if (!prev.has(id)) return prev;
             const n = new Set(prev);
@@ -276,6 +579,7 @@ function ManageUsersInner() {
 
     // ===== Bulk selection =====
     const toggleSelect = (id: string) => {
+        if (isDemoRoster) return;
         setSelectedIds(prev => {
             const n = new Set(prev);
             if (n.has(id)) n.delete(id); else n.add(id);
@@ -283,6 +587,7 @@ function ManageUsersInner() {
         });
     };
     const toggleSelectAll = (visibleIds: string[]) => {
+        if (isDemoRoster) return;
         setSelectedIds(prev => {
             const allSelected = visibleIds.every(id => prev.has(id));
             if (allSelected) {
@@ -298,31 +603,49 @@ function ManageUsersInner() {
     const clearSelection = () => setSelectedIds(new Set());
 
     const handleBulkDelete = () => {
+        if (isDemoRoster) {
+            toast.info("데모 명단은 삭제되지 않음", "실제 학생을 추가하거나 CSV로 업로드하면 저장 가능한 명단으로 전환됩니다.");
+            return;
+        }
         if (selectedIds.size === 0) return;
-        if (!window.confirm(`선택된 ${selectedIds.size}명을 삭제하시겠습니까?`)) return;
+        setConfirmAction({ kind: "bulk", count: selectedIds.size });
+    };
+
+    const deleteSelectedStudents = () => {
         const next = students.filter(s => !selectedIds.has(s.id));
-        persistStudents(next);
-        persistGroups(recomputeGroups(next, groups));
+        persistRoster(next, recomputeGroups(next, groups), invites);
         if (selectedId && selectedIds.has(selectedId)) setSelectedId(null);
         clearSelection();
     };
 
     // ===== CSV export =====
-    const csvEscape = (v: string) => /[",\n]/.test(v) ? `"${v.replace(/"/g, '""')}"` : v;
     const handleExportCsv = () => {
+        if (isDemoRoster) {
+            toast.info("데모 명단은 내보내지 않음", "실제 학생을 추가하거나 CSV로 업로드한 명단만 내보낼 수 있습니다.");
+            return;
+        }
         const rows = selectedIds.size > 0
-            ? students.filter(s => selectedIds.has(s.id))
+            ? displayStudents.filter(s => selectedIds.has(s.id))
             : filtered;
         if (rows.length === 0) {
             toast.info("내보낼 학생 없음", "선택하거나 필터를 조정해보세요.");
             return;
         }
-        const header = ["name", "email", "group", "avgScore", "examsTaken", "status"];
-        const lines = [
-            header.join(","),
-            ...rows.map(s => [s.name, s.email, s.group, String(s.avgScore), String(s.examsTaken), s.status].map(csvEscape).join(","))
-        ];
-        const blob = new Blob(["\uFEFF" + lines.join("\n")], { type: "text/csv;charset=utf-8" });
+        const csv = serializeCsvRows([
+            ["name", "email", "group", "region", "avgScore", "examsTaken", "lastActive", "trend", "status"],
+            ...rows.map(s => [
+                s.name,
+                s.email,
+                s.group,
+                rosterStudentRegionName(s, displayGroups),
+                s.avgScore,
+                s.examsTaken,
+                s.lastActive,
+                s.trend,
+                s.status,
+            ]),
+        ]);
+        const blob = new Blob(["\uFEFF" + csv], { type: "text/csv;charset=utf-8" });
         const url = URL.createObjectURL(blob);
         const a = document.createElement("a");
         a.href = url;
@@ -334,107 +657,198 @@ function ManageUsersInner() {
     };
 
     // ===== Group CRUD =====
-    const handleAddGroup = (data: { name: string; color: string }) => {
-        const newGroup: Group = {
+    const handleAddGroup = (data: GroupFormData) => {
+        const newGroup: RosterGroup = {
             id: `g-${Date.now()}`,
             name: data.name,
+            ...optionalRegion(data.region),
             color: data.color,
             count: 0,
             avgScore: 0,
         };
         const next = recomputeGroups(students, [...groups, newGroup]);
-        persistGroups(next);
+        persistRoster(students, next, invites);
     };
 
     // ===== Invite actions =====
     const handleCopyInvite = async () => {
         try {
-            await navigator.clipboard.writeText("https://classin.app/join/xYz9Ab");
+            await navigator.clipboard.writeText(resolveInviteUrl());
             setCopyFlash(true);
             setTimeout(() => setCopyFlash(false), 1500);
         } catch {}
     };
 
     const handleResendInvite = (id: string) => {
-        const next = invites.map(inv => inv.id === id ? { ...inv, sentAt: "방금 전", status: "pending" } : inv);
-        persistInvites(next);
+        if (isDemoRoster) {
+            toast.info("데모 초대는 갱신하지 않음", "실제 초대 기록을 생성하면 카카오 발송 상태를 관리할 수 있습니다.");
+            return;
+        }
+        const next = invites.map(inv => inv.id === id ? { ...inv, sentAt: "방금 전", status: "pending" as const } : inv);
+        persistRoster(students, groups, next);
+        toast.info("초대 기록 갱신됨", "카카오 발송 연동 전이라 실제 메시지는 보내지 않았습니다.");
     };
 
     const handleCancelInvite = (id: string) => {
-        if (!window.confirm("이 초대를 취소하시겠습니까?")) return;
-        persistInvites(invites.filter(inv => inv.id !== id));
+        if (isDemoRoster) {
+            toast.info("데모 초대는 취소하지 않음", "실제 초대를 생성하면 취소 상태를 관리할 수 있습니다.");
+            return;
+        }
+        const target = invites.find(inv => inv.id === id);
+        setConfirmAction({ kind: "invite", id, label: target?.email || "초대" });
     };
 
-    const handleCreateInvite = () => {
-        const email = window.prompt("초대할 이메일 주소를 입력하세요");
-        if (!email) return;
-        const trimmed = email.trim();
-        // Simple email validation
+    const handleCreateInvite = (contact: string) => {
+        const trimmed = contact.trim();
         if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(trimmed)) {
-            toast.error("이메일 형식 오류", "올바른 이메일 주소를 입력해주세요.");
-            return;
+            toast.error("초대 연락처 오류", "현재는 이메일 형식 연락처만 저장합니다. 카카오 발송 채널은 연동 전입니다.");
+            return false;
         }
-        if (invites.some(inv => inv.email === trimmed && inv.status === "pending")) {
-            toast.info("이미 대기 중", "동일 주소로 대기 중인 초대가 있습니다.");
-            return;
+        const emailKey = normalizeEmail(trimmed);
+        if (invites.some(inv => normalizeEmail(inv.email) === emailKey && inv.status === "pending")) {
+            toast.info("이미 대기 중", "동일 연락처로 대기 중인 초대 기록이 있습니다.");
+            return false;
         }
-        const newInvite: Invite = {
+        const newInvite: RosterInvite = {
             id: `i-${Date.now()}`,
             email: trimmed,
             sentAt: "방금 전",
             status: "pending",
         };
-        persistInvites([newInvite, ...invites]);
-        toast.success("초대 발송됨", `${trimmed}에게 초대를 보냈습니다.`);
+        persistRoster(students, groups, [newInvite, ...invites]);
+        toast.success("초대 기록 추가됨", `${trimmed} 연락처를 카카오 초대 대기 목록에 저장했습니다.`);
+        return true;
+    };
+
+    const handleConfirmAction = () => {
+        if (!confirmAction) return;
+        if (confirmAction.kind === "student") {
+            deleteStudent(confirmAction.id);
+            toast.success("학생 삭제됨", `${confirmAction.label} 학생을 목록에서 삭제했습니다.`);
+        } else if (confirmAction.kind === "bulk") {
+            deleteSelectedStudents();
+            toast.success("학생 삭제됨", `${confirmAction.count}명을 목록에서 삭제했습니다.`);
+        } else {
+            persistRoster(students, groups, invites.filter(inv => inv.id !== confirmAction.id));
+            toast.success("초대 취소됨", `${confirmAction.label} 초대를 취소했습니다.`);
+        }
+        setConfirmAction(null);
     };
 
     // ===== CSV upload =====
     const handleCsvFile = async (file: File) => {
         try {
             const text = await file.text();
-            const lines = text.split(/\r?\n/).filter(l => l.trim().length > 0);
-            if (lines.length < 2) {
+            const rows = parseCsvRows(text);
+            if (rows.length < 2) {
                 toast.error("CSV 파싱 실패", "데이터가 없습니다.");
                 return;
             }
-            const header = lines[0].split(",").map(h => h.trim().toLowerCase());
+            const header = rows[0].map(h => h.trim().toLowerCase());
             const nameIdx = header.indexOf("name");
             const emailIdx = header.indexOf("email");
             const groupIdx = header.indexOf("group");
+            const regionIdx = header.findIndex(item => ["region", "campus", "branch", "지역", "지점", "캠퍼스"].includes(item));
             if (nameIdx === -1 || emailIdx === -1 || groupIdx === -1) {
-                toast.error("헤더 형식 오류", "첫 줄은 name,email,group 이어야 합니다.");
+                toast.error("헤더 형식 오류", "첫 줄은 name,email,group 이어야 합니다. region/campus/branch는 선택입니다.");
                 return;
             }
-            const added: Student[] = [];
-            for (let i = 1; i < lines.length; i++) {
-                const cols = lines[i].split(",").map(c => c.trim());
-                const name = cols[nameIdx];
-                const email = cols[emailIdx];
-                const group = cols[groupIdx];
-                if (!name || !email || !group) continue;
-                added.push({
-                    id: `s-${Date.now()}-${i}`,
+
+            let nextGroups = [...groups];
+            const groupByScope = new Map(nextGroups.map(group => [rosterGroupScopeKey(group.name, group.region), group]));
+            const nextStudents = [...students];
+            let addedCount = 0;
+            let updatedCount = 0;
+            let skippedCount = 0;
+            let createdGroupCount = 0;
+
+            for (let i = 1; i < rows.length; i++) {
+                const cols = rows[i];
+                const name = (cols[nameIdx] || "").trim();
+                const email = (cols[emailIdx] || "").trim();
+                const group = (cols[groupIdx] || "").trim();
+                const region = regionIdx >= 0 ? (cols[regionIdx] || "").trim() : "";
+                const regionPatch = optionalRegion(region);
+                const emailKey = normalizeEmail(email || "");
+                if (!name || !email || !group || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(emailKey)) {
+                    skippedCount += 1;
+                    continue;
+                }
+
+                const groupScopeKey = rosterGroupScopeKey(group, region);
+                let currentGroup = groupByScope.get(groupScopeKey)
+                    || nextGroups.find(item => item.name === group && !item.region?.trim());
+
+                if (!currentGroup) {
+                    const newGroup: RosterGroup = {
+                        id: `g-${Date.now()}-${i}`,
+                        name: group,
+                        ...regionPatch,
+                        count: 0,
+                        avgScore: 0,
+                        color: nextGroupColor(nextGroups.length),
+                    };
+                    nextGroups = [...nextGroups, newGroup];
+                    groupByScope.set(groupScopeKey, newGroup);
+                    currentGroup = newGroup;
+                    createdGroupCount += 1;
+                } else if (regionPatch.region && currentGroup) {
+                    if (!currentGroup.region) {
+                        const currentGroupId = currentGroup.id;
+                        const updatedGroup = { ...currentGroup, region: regionPatch.region };
+                        nextGroups = nextGroups.map(item => item.id === currentGroupId ? updatedGroup : item);
+                        groupByScope.delete(rosterGroupScopeKey(currentGroup.name, currentGroup.region));
+                        groupByScope.set(groupScopeKey, updatedGroup);
+                        currentGroup = updatedGroup;
+                    }
+                }
+                if (!currentGroup) {
+                    skippedCount += 1;
+                    continue;
+                }
+
+                const id = studentIdForRoster(name, group, nextGroups, region, currentGroup.id);
+                const existingIndex = nextStudents.findIndex(student => student.id === id || normalizeEmail(student.email) === emailKey);
+                if (existingIndex >= 0) {
+                    nextStudents[existingIndex] = {
+                        ...nextStudents[existingIndex],
+                        name,
+                        email,
+                        group,
+                        ...(regionIdx >= 0 ? { region: regionPatch.region } : {}),
+                    };
+                    updatedCount += 1;
+                    continue;
+                }
+
+                nextStudents.unshift({
+                    id,
                     name,
                     email,
                     group,
-                    avatar: AVATAR_COLORS[(students.length + added.length) % AVATAR_COLORS.length],
+                    ...regionPatch,
+                    avatar: AVATAR_COLORS[(nextStudents.length + addedCount) % AVATAR_COLORS.length],
                     avgScore: 0,
                     examsTaken: 0,
                     lastActive: "방금 전",
                     trend: "flat",
                     status: "active",
                 });
+                addedCount += 1;
             }
-            if (added.length > 0) {
-                const next = [...added, ...students];
-                persistStudents(next);
-                persistGroups(recomputeGroups(next, groups));
-                toast.success("CSV 업로드 완료", `${added.length}명이 추가되었습니다.`);
+
+            if (addedCount > 0 || updatedCount > 0 || createdGroupCount > 0) {
+                const recomputedGroups = recomputeGroups(nextStudents, nextGroups);
+                persistRoster(nextStudents, recomputedGroups, invites);
+                toast.success(
+                    "CSV 업로드 완료",
+                    `${addedCount}명 추가 · ${updatedCount}명 업데이트 · ${createdGroupCount}개 반 생성${skippedCount ? ` · ${skippedCount}행 제외` : ""}`
+                );
             } else {
-                toast.info("추가된 학생 없음", "유효한 데이터 행이 없습니다.");
+                toast.info("추가된 학생 없음", skippedCount ? `${skippedCount}개 행이 비어 있거나 형식이 맞지 않습니다.` : "새로 반영할 데이터가 없습니다.");
             }
         } catch {
-            toast.error("CSV 파싱 실패", "파일 형식을 확인해주세요 (name,email,group).");
+            toast.error("CSV 파싱 실패", "파일 형식을 확인해주세요 (name,email,group,region).");
         }
     };
 
@@ -483,18 +897,114 @@ function ManageUsersInner() {
                                 display: 'flex', alignItems: 'center', gap: '0.5rem',
                                 boxShadow: '0 4px 12px rgba(34,197,94,0.3)'
                             }}>
-                            <UserPlus size={16} /> 학생 초대
+                            <UserPlus size={16} /> 학생 추가
                         </button>
                     </div>
                 </div>
 
+                {isDemoRoster && (
+                    <div
+                        role="status"
+                        aria-label="데모 명단 안내"
+                        style={{
+                            display: 'flex',
+                            alignItems: 'flex-start',
+                            gap: '0.85rem',
+                            padding: '1rem 1.1rem',
+                            marginBottom: '1.5rem',
+                            borderRadius: 'var(--radius-lg)',
+                            border: '1px solid rgba(245,158,11,0.28)',
+                            background: 'rgba(245,158,11,0.09)',
+                            color: 'var(--foreground)',
+                        }}
+                    >
+                        <AlertTriangle size={19} color="var(--warning)" style={{ flexShrink: 0, marginTop: 2 }} />
+                        <div style={{ minWidth: 0 }}>
+                            <div style={{ fontSize: '0.9rem', fontWeight: 900, color: 'var(--warning)', marginBottom: '0.2rem' }}>
+                                데모 명단 모드
+                            </div>
+                            <p style={{ fontSize: '0.82rem', color: 'var(--muted)', lineHeight: 1.55, wordBreak: 'keep-all' }}>
+                                저장된 학생/반/초대 데이터가 없어 예시 명단을 표시 중입니다. 이 예시 명단은 저장하지 않으며, 학생 추가·반 생성·CSV 업로드를 시작하면 실제 명단으로 전환됩니다.
+                            </p>
+                        </div>
+                    </div>
+                )}
+
                 {/* KPI */}
                 <div className="bento-grid" style={{ marginBottom: '1.25rem' }}>
-                    <KPI label="전체 학생" value={students.length} color="#4f46e5" icon={<Users size={22} />} />
-                    <KPI label="활동 중" value={students.filter(s => s.status === "active").length} color="#10b981" icon={<CheckCircle2 size={22} />} />
-                    <KPI label="반 개수" value={groups.length} color="#8b5cf6" icon={<FolderPlus size={22} />} />
-                    <KPI label="미수락 초대" value={invites.filter(i => i.status === "pending").length} color="#f59e0b" icon={<Clock size={22} />} />
+                    <KPI label="전체 학생" value={displayStudents.length} color="#4f46e5" icon={<Users size={22} />} />
+                    <KPI label="활동 중" value={displayStudents.filter(s => s.status === "active").length} color="#10b981" icon={<CheckCircle2 size={22} />} />
+                    <KPI label="반 개수" value={displayGroups.length} color="#8b5cf6" icon={<FolderPlus size={22} />} />
+                    <KPI label="지역 수" value={regionalScopes.length} color="#0ea5e9" icon={<MapPin size={22} />} />
+                    <KPI label="미수락 초대" value={rosterInvites.filter(i => i.status === "pending").length} color="#f59e0b" icon={<Clock size={22} />} />
                 </div>
+
+                {regionalScopes.length > 0 && (
+                    <div className="bento-card" style={{ padding: '1.25rem 1.35rem', marginBottom: '1.25rem' }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', gap: '1rem', alignItems: 'flex-start', marginBottom: '1rem', flexWrap: 'wrap' }}>
+                            <div>
+                                <h2 style={{ fontSize: '1.05rem', fontWeight: 850, marginBottom: '0.25rem' }}>지역별 현황</h2>
+                                <p style={{ fontSize: '0.82rem', color: 'var(--muted)', lineHeight: 1.5 }}>
+                                    {activeRegionName} · 학생 {activeRegionKey === ALL_REGION_KEY ? displayStudents.length : filtered.length}명
+                                </p>
+                            </div>
+                            <select
+                                aria-label="지역 필터"
+                                value={activeRegionKey}
+                                onChange={e => setSelectedRegionKey(e.target.value)}
+                                style={{
+                                    minWidth: 150,
+                                    padding: '0.55rem 0.75rem',
+                                    background: 'var(--background)',
+                                    border: '1px solid var(--border)',
+                                    borderRadius: 'var(--radius-md)',
+                                    color: 'var(--foreground)',
+                                    fontSize: '0.85rem',
+                                    fontWeight: 700,
+                                }}
+                            >
+                                <option value={ALL_REGION_KEY}>전체 지역</option>
+                                {regionalScopes.map(scope => (
+                                    <option key={scope.regionKey} value={scope.regionKey}>{regionLabel(scope)}</option>
+                                ))}
+                            </select>
+                        </div>
+
+                        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: '0.75rem' }}>
+                            {regionalScopes.map(scope => {
+                                const selectedRegion = activeRegionKey === scope.regionKey;
+                                return (
+                                    <button
+                                        key={scope.regionKey}
+                                        type="button"
+                                        onClick={() => setSelectedRegionKey(selectedRegion ? ALL_REGION_KEY : scope.regionKey)}
+                                        style={{
+                                            padding: '0.85rem 0.9rem',
+                                            borderRadius: 'var(--radius-md)',
+                                            border: selectedRegion ? '1px solid var(--primary)' : '1px solid var(--border)',
+                                            background: selectedRegion ? 'rgba(99,102,241,0.08)' : 'var(--background)',
+                                            textAlign: 'left',
+                                            color: 'var(--foreground)',
+                                        }}
+                                    >
+                                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.45rem', marginBottom: '0.55rem' }}>
+                                            <MapPin size={14} color={selectedRegion ? 'var(--primary)' : 'var(--muted)'} />
+                                            <span style={{ fontSize: '0.86rem', fontWeight: 850 }}>{regionLabel(scope)}</span>
+                                        </div>
+                                        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '0.35rem' }}>
+                                            <MiniRegionMetric label="학생" value={`${scope.studentCount}명`} />
+                                            <MiniRegionMetric label="반" value={`${scope.groupCount}개`} />
+                                            <MiniRegionMetric label="평균" value={`${scope.averageScore}점`} />
+                                        </div>
+                                        <div style={{ marginTop: '0.55rem', fontSize: '0.72rem', color: 'var(--muted)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                                            원시험 {scope.attemptCount}건 · 재시험 {scope.retakeAttemptCount}건 · 시험 {scope.examCount}개
+                                        </div>
+                                    </button>
+                                );
+                            })}
+                        </div>
+                    </div>
+                )}
 
                 {/* Sub-tabs */}
                 <div style={{
@@ -504,9 +1014,9 @@ function ManageUsersInner() {
                     boxShadow: '0 4px 6px rgba(0,0,0,0.02)'
                 }}>
                     {([
-                        { key: "students", label: `학생 (${students.length})` },
-                        { key: "groups", label: `반 · 그룹 (${groups.length})` },
-                        { key: "invites", label: `초대 (${invites.length})` },
+                        { key: "students", label: `학생 (${displayStudents.length})` },
+                        { key: "groups", label: `반 · 그룹 (${displayGroups.length})` },
+                        { key: "invites", label: `초대 (${rosterInvites.length})` },
                     ] as const).map(t => (
                         <button
                             key={t.key}
@@ -527,14 +1037,33 @@ function ManageUsersInner() {
                     <div style={{ display: 'grid', gridTemplateColumns: selectedId ? '1fr 380px' : '1fr', gap: '1.25rem' }}>
                         <div className="bento-card" style={{ padding: '1.5rem' }}>
                             {/* Search */}
-                            <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', marginBottom: '1rem', padding: '0.75rem 1rem', background: 'var(--background)', borderRadius: 'var(--radius-md)', border: '1px solid var(--border)' }}>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', marginBottom: '1rem', padding: '0.75rem 1rem', background: 'var(--background)', borderRadius: 'var(--radius-md)', border: '1px solid var(--border)', flexWrap: 'wrap' }}>
                                 <Search size={16} color="var(--muted)" />
                                 <input
                                     value={query}
                                     onChange={e => setQuery(e.target.value)}
-                                    placeholder="이름, 이메일, 반 검색"
-                                    style={{ flex: 1, background: 'transparent', border: 'none', outline: 'none', color: 'var(--foreground)', fontSize: '0.95rem' }}
+                                    placeholder="이름, 이메일, 반, 지역 검색"
+                                    style={{ flex: '1 1 220px', background: 'transparent', border: 'none', outline: 'none', color: 'var(--foreground)', fontSize: '0.95rem' }}
                                 />
+                                <select
+                                    aria-label="학생 지역 필터"
+                                    value={activeRegionKey}
+                                    onChange={e => setSelectedRegionKey(e.target.value)}
+                                    style={{
+                                        padding: '0.35rem 0.55rem',
+                                        background: 'var(--surface)',
+                                        border: '1px solid var(--border)',
+                                        borderRadius: 'var(--radius-sm)',
+                                        color: 'var(--foreground)',
+                                        fontSize: '0.8rem',
+                                        fontWeight: 700,
+                                    }}
+                                >
+                                    <option value={ALL_REGION_KEY}>전체 지역</option>
+                                    {regionalScopes.map(scope => (
+                                        <option key={scope.regionKey} value={scope.regionKey}>{regionLabel(scope)}</option>
+                                    ))}
+                                </select>
                                 <span style={{ fontSize: '0.8rem', color: 'var(--muted)' }}>{filtered.length}명</span>
                             </div>
 
@@ -592,11 +1121,13 @@ function ManageUsersInner() {
                                                 ref={el => { if (el) el.indeterminate = filtered.some(s => selectedIds.has(s.id)) && !filtered.every(s => selectedIds.has(s.id)); }}
                                                 onChange={() => toggleSelectAll(filtered.map(s => s.id))}
                                                 onClick={e => e.stopPropagation()}
-                                                style={{ cursor: 'pointer', accentColor: 'var(--primary)' }}
+                                                disabled={isDemoRoster}
+                                                style={{ cursor: isDemoRoster ? 'not-allowed' : 'pointer', accentColor: 'var(--primary)' }}
                                             />
                                         </th>
                                         <th style={{ padding: '0.85rem 0.5rem' }}>학생</th>
                                         <th style={{ padding: '0.85rem 0.5rem' }}>반</th>
+                                        <th style={{ padding: '0.85rem 0.5rem' }}>지역</th>
                                         <th style={{ padding: '0.85rem 0.5rem' }}>평균 점수</th>
                                         <th style={{ padding: '0.85rem 0.5rem' }}>응시 수</th>
                                         <th style={{ padding: '0.85rem 0.5rem' }}>최근 활동</th>
@@ -617,7 +1148,8 @@ function ManageUsersInner() {
                                                     aria-label={`${s.name} 선택`}
                                                     checked={selectedIds.has(s.id)}
                                                     onChange={() => toggleSelect(s.id)}
-                                                    style={{ cursor: 'pointer', accentColor: 'var(--primary)' }}
+                                                    disabled={isDemoRoster}
+                                                    style={{ cursor: isDemoRoster ? 'not-allowed' : 'pointer', accentColor: 'var(--primary)' }}
                                                 />
                                             </td>
                                             <td style={{ padding: '0.85rem 0.5rem' }}>
@@ -630,6 +1162,7 @@ function ManageUsersInner() {
                                                 </div>
                                             </td>
                                             <td style={{ padding: '0.85rem 0.5rem', fontSize: '0.85rem', color: 'var(--muted)' }}>{s.group}</td>
+                                            <td style={{ padding: '0.85rem 0.5rem', fontSize: '0.85rem', color: 'var(--muted)' }}>{rosterStudentRegionName(s, displayGroups)}</td>
                                             <td style={{ padding: '0.85rem 0.5rem' }}>
                                                 <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
                                                     <span style={{ fontSize: '0.95rem', fontWeight: 700, color: s.avgScore >= 80 ? 'var(--success)' : s.avgScore >= 65 ? 'var(--warning)' : 'var(--error)' }}>{s.avgScore}</span>
@@ -645,21 +1178,23 @@ function ManageUsersInner() {
                                                 </span>
                                             </td>
                                             <td style={{ padding: '0.85rem 0.5rem', textAlign: 'right', position: 'relative' }}>
-                                                <button
-                                                    aria-label={`${s.name} 작업 메뉴 열기`}
-                                                    onClick={(e) => {
-                                                        e.stopPropagation();
-                                                        setPopoverId(popoverId === s.id ? null : s.id);
-                                                    }}
-                                                    style={{ background: 'transparent', padding: 4, borderRadius: 6 }}
-                                                >
-                                                    <MoreVertical size={16} color="var(--muted)" />
-                                                </button>
+                                                {!isDemoRoster && (
+                                                    <button
+                                                        aria-label={`${s.name} 작업 메뉴 열기`}
+                                                        onClick={(e) => {
+                                                            e.stopPropagation();
+                                                            setPopoverId(popoverId === s.id ? null : s.id);
+                                                        }}
+                                                        style={{ background: 'transparent', padding: 4, borderRadius: 6 }}
+                                                    >
+                                                        <MoreVertical size={16} color="var(--muted)" />
+                                                    </button>
+                                                )}
                                                 {popoverId === s.id && (
                                                     <div
                                                         onClick={(e) => e.stopPropagation()}
                                                         style={{
-                                                            position: 'absolute', right: 8, top: '100%', zIndex: 10,
+                                                            position: 'absolute', right: 8, top: '100%', zIndex: 200,
                                                             background: 'var(--surface)', border: '1px solid var(--border)',
                                                             borderRadius: 'var(--radius-md)', boxShadow: '0 8px 24px rgba(0,0,0,0.08)',
                                                             minWidth: 120, overflow: 'hidden', textAlign: 'left'
@@ -699,14 +1234,14 @@ function ManageUsersInner() {
                                         <Users size={28} />
                                     </div>
                                     <div style={{ fontSize: '1rem', fontWeight: 700, marginBottom: '0.35rem' }}>
-                                        {students.length === 0 ? '아직 등록된 학생이 없습니다' : '검색 결과가 없습니다'}
+                                        {displayStudents.length === 0 ? '아직 등록된 학생이 없습니다' : '검색 결과가 없습니다'}
                                     </div>
                                     <div style={{ fontSize: '0.85rem', color: 'var(--muted)', marginBottom: '1.25rem' }}>
-                                        {students.length === 0
-                                            ? '학생을 초대하거나 CSV로 업로드해서 시작하세요.'
+                                        {displayStudents.length === 0
+                                            ? '학생을 추가하거나 CSV로 업로드해서 시작하세요.'
                                             : '다른 키워드로 검색해보세요.'}
                                     </div>
-                                    {students.length === 0 && (
+                                    {displayStudents.length === 0 && (
                                         <div style={{ display: 'inline-flex', gap: '0.5rem' }}>
                                             <button
                                                 onClick={() => { setEditingStudent(null); setShowStudentModal(true); }}
@@ -715,7 +1250,7 @@ function ManageUsersInner() {
                                                     color: 'white', borderRadius: 'var(--radius-md)', fontWeight: 600, fontSize: '0.85rem',
                                                     display: 'flex', alignItems: 'center', gap: '0.4rem'
                                                 }}>
-                                                <UserPlus size={14} /> 학생 초대
+                                                <UserPlus size={14} /> 학생 추가
                                             </button>
                                             <button
                                                 onClick={() => fileInputRef.current?.click()}
@@ -749,14 +1284,89 @@ function ManageUsersInner() {
                                     }}>{selected.name.slice(1, 2)}</div>
                                     <div style={{ fontSize: '1.1rem', fontWeight: 700 }}>{selected.name}</div>
                                     <div style={{ fontSize: '0.85rem', color: 'var(--muted)' }}>{selected.email}</div>
-                                    <div style={{ marginTop: '0.6rem' }}>
+                                    <div style={{ marginTop: '0.6rem', display: 'inline-flex', gap: '0.4rem', flexWrap: 'wrap', justifyContent: 'center' }}>
                                         <span className="badge badge-primary">{selected.group}</span>
+                                        <span className="badge badge-secondary">{rosterStudentRegionName(selected, displayGroups)}</span>
                                     </div>
                                 </div>
-                                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '0.6rem', marginBottom: '1.25rem' }}>
-                                    <MiniStat label="평균 점수" value={`${selected.avgScore}점`} color="#4f46e5" />
-                                    <MiniStat label="응시 수" value={`${selected.examsTaken}회`} color="#10b981" />
+                                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '0.6rem', marginBottom: '1.25rem' }}>
+                                    <MiniStat label="원시험 평균" value={`${selected.avgScore}점`} color="#4f46e5" />
+                                    <MiniStat label="원시험" value={`${selected.examsTaken}회`} color="#10b981" />
+                                    <MiniStat label="재시험" value={`${selectedProfile?.retakeAttemptCount ?? 0}회`} color="#0f766e" />
                                     <MiniStat label="필기 보관" value={`${selectedHandwritingCount}건`} color="#8b5cf6" />
+                                </div>
+                                <div style={{ padding: '1rem', background: 'var(--background)', borderRadius: 'var(--radius-md)', marginBottom: '1rem', border: '1px solid var(--border)' }}>
+                                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '0.75rem', marginBottom: '0.7rem' }}>
+                                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', fontSize: '0.75rem', fontWeight: 800, color: 'var(--muted)', letterSpacing: '0.08em' }}>
+                                            <KeyRound size={13} />
+                                            시작 코드
+                                        </div>
+                                        <span style={{
+                                            minWidth: 86,
+                                            textAlign: 'center',
+                                            padding: '0.25rem 0.5rem',
+                                            borderRadius: '999px',
+                                            background: selectedStartCode ? 'rgba(16,185,129,0.1)' : 'rgba(245,158,11,0.12)',
+                                            color: selectedStartCode ? '#047857' : '#b45309',
+                                            fontSize: '0.72rem',
+                                            fontWeight: 850,
+                                            fontVariantNumeric: 'tabular-nums',
+                                            letterSpacing: selectedStartCode ? '0.08em' : 0,
+                                        }}>
+                                            {selectedStartCode || '미발급'}
+                                        </span>
+                                    </div>
+                                    <p style={{ fontSize: '0.76rem', color: 'var(--muted)', lineHeight: 1.55, marginBottom: '0.75rem', wordBreak: 'keep-all' }}>
+                                        학생 포털 재로그인과 반 제한 시험 입장에 쓰는 6자리 코드입니다.
+                                    </p>
+                                    <div style={{ display: 'flex', gap: '0.5rem' }}>
+                                        <button
+                                            type="button"
+                                            onClick={handleIssueStudentStartCode}
+                                            disabled={isDemoRoster}
+                                            style={{
+                                                flex: 1,
+                                                padding: '0.55rem 0.65rem',
+                                                borderRadius: 'var(--radius-md)',
+                                                background: 'var(--surface)',
+                                                border: '1px solid var(--border)',
+                                                color: 'var(--foreground)',
+                                                fontSize: '0.78rem',
+                                                fontWeight: 800,
+                                                display: 'flex',
+                                                alignItems: 'center',
+                                                justifyContent: 'center',
+                                                gap: '0.35rem',
+                                                opacity: isDemoRoster ? 0.55 : 1,
+                                            }}
+                                        >
+                                            <RefreshCw size={13} />
+                                            {selectedStartCode ? '재발급' : '발급'}
+                                        </button>
+                                        <button
+                                            type="button"
+                                            onClick={handleCopyStudentStartCode}
+                                            disabled={!selectedStartCode}
+                                            style={{
+                                                flex: 1,
+                                                padding: '0.55rem 0.65rem',
+                                                borderRadius: 'var(--radius-md)',
+                                                background: selectedStartCode ? 'var(--primary)' : 'var(--surface)',
+                                                border: selectedStartCode ? '1px solid var(--primary)' : '1px solid var(--border)',
+                                                color: selectedStartCode ? 'white' : 'var(--muted)',
+                                                fontSize: '0.78rem',
+                                                fontWeight: 800,
+                                                display: 'flex',
+                                                alignItems: 'center',
+                                                justifyContent: 'center',
+                                                gap: '0.35rem',
+                                                opacity: selectedStartCode ? 1 : 0.55,
+                                            }}
+                                        >
+                                            <Copy size={13} />
+                                            복사
+                                        </button>
+                                    </div>
                                 </div>
                                 <div style={{ padding: '1rem', background: 'var(--background)', borderRadius: 'var(--radius-md)', marginBottom: '1rem' }}>
                                     <div style={{ fontSize: '0.75rem', fontWeight: 700, color: 'var(--muted)', letterSpacing: '0.08em', marginBottom: '0.5rem' }}>최근 응시 이력</div>
@@ -766,14 +1376,17 @@ function ManageUsersInner() {
                                         </div>
                                     ) : (
                                         selectedRecentAttempts.map((a, i) => {
-                                            const pct = a.totalScore > 0
-                                                ? Math.round((a.score / a.totalScore) * 100)
-                                                : 0;
+                                            const pct = resolveAttemptScore(a, examById.get(a.examId)).scorePercent;
                                             const hasHandwriting = hasArchivedHandwriting(a);
                                             return (
                                                 <div key={a.id} style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) auto', gap: '0.6rem', alignItems: 'center', fontSize: '0.85rem', padding: '0.45rem 0', borderBottom: i < selectedRecentAttempts.length - 1 ? '1px dashed var(--border)' : 'none' }}>
                                                     <div style={{ minWidth: 0 }}>
                                                         <div style={{ fontWeight: 600, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: 220 }}>{a.examTitle}</div>
+                                                        {a.retake && (
+                                                            <div style={{ marginTop: '0.25rem', display: 'inline-flex', alignItems: 'center', gap: '0.25rem', color: '#0f766e', background: '#f0fdfa', border: '1px solid #99f6e4', borderRadius: '999px', padding: '0.1rem 0.4rem', fontSize: '0.7rem', fontWeight: 900 }}>
+                                                                재시험 {a.retake.questionIds.length}문항
+                                                            </div>
+                                                        )}
                                                         {hasHandwriting && (
                                                             <div style={{ marginTop: '0.25rem', display: 'flex', alignItems: 'center', gap: '0.35rem', color: '#7c3aed', fontSize: '0.73rem', fontWeight: 800 }}>
                                                                 <PenLine size={12} />
@@ -812,11 +1425,35 @@ function ManageUsersInner() {
                                 </div>
                                 <div style={{ display: 'flex', gap: '0.5rem' }}>
                                     <button onClick={handleSendMessage} style={{ flex: 1, padding: '0.7rem', background: 'var(--primary)', color: 'white', borderRadius: 'var(--radius-md)', fontWeight: 600, fontSize: '0.85rem', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.4rem' }}>
-                                        <Mail size={14} /> 메시지
+                                        <MessageCircle size={14} /> 메시지
                                     </button>
-                                    <button onClick={handleOpenDetail} style={{ flex: 1, padding: '0.7rem', background: 'var(--surface)', color: 'var(--foreground)', border: '1px solid var(--border)', borderRadius: 'var(--radius-md)', fontWeight: 600, fontSize: '0.85rem' }}>
-                                        상세 보기
-                                    </button>
+                                    {studentGrowthReportsEnabled ? (
+                                        <button onClick={handleOpenDetail} style={{ flex: 1, padding: '0.7rem', background: 'var(--surface)', color: 'var(--foreground)', border: '1px solid var(--border)', borderRadius: 'var(--radius-md)', fontWeight: 600, fontSize: '0.85rem' }}>
+                                            상세 보기
+                                        </button>
+                                    ) : (
+                                        <NextLink
+                                            href="/teacher/billing"
+                                            title="Pro 이상에서 학생 성장 리포트를 열 수 있습니다."
+                                            style={{
+                                                flex: 1,
+                                                padding: '0.7rem',
+                                                background: 'var(--surface)',
+                                                color: 'var(--muted)',
+                                                border: '1px solid var(--border)',
+                                                borderRadius: 'var(--radius-md)',
+                                                fontWeight: 800,
+                                                fontSize: '0.85rem',
+                                                display: 'flex',
+                                                alignItems: 'center',
+                                                justifyContent: 'center',
+                                                gap: '0.35rem',
+                                            }}
+                                        >
+                                            <Lock size={14} />
+                                            성장 리포트 Pro
+                                        </NextLink>
+                                    )}
                                 </div>
                             </div>
                         )}
@@ -825,23 +1462,74 @@ function ManageUsersInner() {
 
                 {tab === "groups" && (
                     <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(260px, 1fr))', gap: '1.25rem' }}>
-                        {groups.map(g => (
-                            <div key={g.id} className="bento-card card-hover" style={{ padding: '1.5rem', cursor: 'pointer' }}>
-                                <div style={{
-                                    width: 46, height: 46, borderRadius: 'var(--radius-md)',
-                                    background: `color-mix(in srgb, ${g.color}, transparent 88%)`, color: g.color,
-                                    display: 'flex', alignItems: 'center', justifyContent: 'center', marginBottom: '1rem'
-                                }}>
-                                    <Users size={22} />
-                                </div>
-                                <h3 style={{ fontSize: '1.05rem', fontWeight: 700, marginBottom: '0.25rem' }}>{g.name}</h3>
-                                <p style={{ fontSize: '0.85rem', color: 'var(--muted)', marginBottom: '1.25rem' }}>{g.count}명 등록</p>
-                                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                                    <span style={{ fontSize: '0.75rem', color: 'var(--muted)', fontWeight: 700, letterSpacing: '0.05em' }}>AVG</span>
-                                    <span style={{ fontSize: '1.4rem', fontWeight: 800, color: g.color }}>{g.avgScore}점</span>
-                                </div>
-                            </div>
-                        ))}
+                        {displayGroups.map(g => {
+                            const groupRegion = regionNameForGroup(g, displayStudents);
+                            const content = (
+                                <>
+                                    <div style={{
+                                        width: 46, height: 46, borderRadius: 'var(--radius-md)',
+                                        background: `color-mix(in srgb, ${g.color}, transparent 88%)`, color: g.color,
+                                        display: 'flex', alignItems: 'center', justifyContent: 'center', marginBottom: '1rem'
+                                    }}>
+                                        <Users size={22} />
+                                    </div>
+                                    <h3 style={{ fontSize: '1.05rem', fontWeight: 700, marginBottom: '0.25rem' }}>{g.name}</h3>
+                                    <p style={{ fontSize: '0.85rem', color: 'var(--muted)', marginBottom: '1.25rem' }}>{g.count}명 등록 · {groupRegion}</p>
+                                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '0.75rem' }}>
+                                        <span style={{ fontSize: '0.75rem', color: 'var(--muted)', fontWeight: 700, letterSpacing: '0.05em' }}>AVG</span>
+                                        <span style={{ fontSize: '1.4rem', fontWeight: 800, color: g.color }}>{g.avgScore}점</span>
+                                    </div>
+                                    {!advancedAnalyticsEnabled && (
+                                        <div style={{
+                                            marginTop: '0.85rem',
+                                            display: 'inline-flex',
+                                            alignItems: 'center',
+                                            gap: '0.3rem',
+                                            color: 'var(--muted)',
+                                            fontSize: '0.76rem',
+                                            fontWeight: 900,
+                                        }}>
+                                            <Lock size={13} />
+                                            반별 리포트 Pro
+                                        </div>
+                                    )}
+                                </>
+                            );
+
+                            return advancedAnalyticsEnabled ? (
+                                <button
+                                    key={g.id}
+                                    type="button"
+                                    onClick={() => handleOpenGroupProfile(g.id)}
+                                    className="bento-card card-hover"
+                                    style={{
+                                        padding: '1.5rem',
+                                        cursor: 'pointer',
+                                        textAlign: 'left',
+                                        color: 'var(--foreground)',
+                                        minHeight: 160,
+                                    }}
+                                >
+                                    {content}
+                                </button>
+                            ) : (
+                                <NextLink
+                                    key={g.id}
+                                    href="/teacher/billing"
+                                    title="Pro 이상에서 반별 분석 리포트를 열 수 있습니다."
+                                    className="bento-card card-hover"
+                                    style={{
+                                        padding: '1.5rem',
+                                        cursor: 'pointer',
+                                        textAlign: 'left',
+                                        color: 'var(--foreground)',
+                                        minHeight: 160,
+                                    }}
+                                >
+                                    {content}
+                                </NextLink>
+                            );
+                        })}
                         <button
                             onClick={() => setShowGroupModal(true)}
                             className="bento-card card-hover"
@@ -868,7 +1556,7 @@ function ManageUsersInner() {
                             <LinkIcon size={20} color="var(--primary)" style={{ flexShrink: 0, marginTop: 2 }} />
                             <div style={{ flex: 1 }}>
                                 <div style={{ fontSize: '0.85rem', fontWeight: 700, marginBottom: '0.25rem' }}>초대 링크</div>
-                                <code style={{ fontSize: '0.8rem', color: 'var(--muted)' }}>https://classin.app/join/xYz9Ab</code>
+                                <code style={{ fontSize: '0.8rem', color: 'var(--muted)' }}>현재 도메인/?role=student</code>
                             </div>
                             {copyFlash && (
                                 <span style={{ fontSize: '0.8rem', color: 'var(--success)', fontWeight: 700 }}>복사됨</span>
@@ -880,24 +1568,24 @@ function ManageUsersInner() {
                                 링크 복사
                             </button>
                             <button
-                                onClick={handleCreateInvite}
+                                onClick={() => setShowInviteModal(true)}
                                 style={{ padding: '0.5rem 1rem', background: 'var(--primary)', color: 'white', borderRadius: 'var(--radius-md)', fontWeight: 600, fontSize: '0.8rem', display: 'flex', alignItems: 'center', gap: '0.3rem' }}
                             >
-                                <Mail size={13} /> 이메일로 초대
+                                <MessageCircle size={13} /> 카카오 초대 기록
                             </button>
                         </div>
 
                         <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left' }}>
                             <thead>
                                 <tr style={{ color: 'var(--muted)', fontSize: '0.8rem', borderBottom: '1px solid var(--border)', fontWeight: 700, letterSpacing: '0.05em', textTransform: 'uppercase' }}>
-                                    <th style={{ padding: '0.85rem 0.5rem' }}>이메일</th>
-                                    <th style={{ padding: '0.85rem 0.5rem' }}>발송 시각</th>
+                                    <th style={{ padding: '0.85rem 0.5rem' }}>초대 연락처</th>
+                                    <th style={{ padding: '0.85rem 0.5rem' }}>기록 시각</th>
                                     <th style={{ padding: '0.85rem 0.5rem' }}>상태</th>
                                     <th style={{ padding: '0.85rem 0.5rem', textAlign: 'right' }}>작업</th>
                                 </tr>
                             </thead>
                             <tbody>
-                                {invites.map(inv => {
+                                {rosterInvites.map(inv => {
                                     const map = {
                                         pending: { color: '#f59e0b', bg: 'rgba(245,158,11,0.1)', label: '대기 중' },
                                         accepted: { color: '#10b981', bg: 'rgba(16,185,129,0.1)', label: '수락됨' },
@@ -921,7 +1609,7 @@ function ManageUsersInner() {
                                                             onClick={() => handleResendInvite(inv.id)}
                                                             style={{ fontSize: '0.8rem', color: 'var(--primary)', fontWeight: 600 }}
                                                         >
-                                                            재발송
+                                                            기록 갱신
                                                         </button>
                                                     )}
                                                     <button
@@ -937,9 +1625,9 @@ function ManageUsersInner() {
                                 })}
                             </tbody>
                         </table>
-                        {hydrated && invites.length === 0 && (
+                        {hydrated && rosterInvites.length === 0 && (
                             <div style={{ padding: '2.5rem 1rem', textAlign: 'center', color: 'var(--muted)', fontSize: '0.9rem' }}>
-                                아직 발송된 초대가 없습니다. 위의 <strong style={{ color: 'var(--primary)' }}>이메일로 초대</strong> 버튼으로 시작하세요.
+                                아직 저장된 초대 기록이 없습니다. 위의 <strong style={{ color: 'var(--primary)' }}>카카오 초대 기록</strong> 버튼으로 시작하세요.
                             </div>
                         )}
                     </div>
@@ -949,7 +1637,7 @@ function ManageUsersInner() {
             {/* Student Modal (add/edit) */}
             {showStudentModal && (
                 <StudentModal
-                    groups={groups}
+                    groups={rosterGroups}
                     initial={editingStudent}
                     onClose={() => { setShowStudentModal(false); setEditingStudent(null); }}
                     onSubmit={(data) => {
@@ -975,13 +1663,55 @@ function ManageUsersInner() {
                 />
             )}
 
-            {/* Close popover on outside click */}
-            {popoverId && (
-                <div
-                    onClick={() => setPopoverId(null)}
-                    style={{ position: 'fixed', inset: 0, zIndex: 5 }}
+            {/* Group Profile Modal */}
+            {showGroupProfileModal && selectedGroup && selectedGroupProfile && (
+                <GroupProfileModal
+                    group={selectedGroup}
+                    profile={selectedGroupProfile}
+                    onClose={() => setShowGroupProfileModal(false)}
                 />
             )}
+
+            {/* Invite Modal */}
+            {showInviteModal && (
+                <InviteModal
+                    onClose={() => setShowInviteModal(false)}
+                    onSubmit={(email) => {
+                        if (handleCreateInvite(email)) setShowInviteModal(false);
+                    }}
+                />
+            )}
+
+            {/* Message Modal */}
+            {showMessageModal && selected && (
+                <MessageModal
+                    recipient={selected.name}
+                    onClose={() => setShowMessageModal(false)}
+                    onSubmit={(body) => {
+                        toast.info("카카오 메시지 연동 전", `${selected.name} 학생에게 보낼 ${body.length}자 메시지를 확인했습니다. 실제 발송은 아직 지원하지 않습니다.`);
+                        setShowMessageModal(false);
+                    }}
+                />
+            )}
+
+            {/* Student Profile Modal */}
+            {showProfileModal && selected && selectedProfile && (
+                <StudentProfileModal
+                    student={selected}
+                    profile={selectedProfile}
+                    onClose={() => setShowProfileModal(false)}
+                />
+            )}
+
+            {/* Confirm Modal */}
+            {confirmAction && (
+                <ConfirmModal
+                    action={confirmAction}
+                    onClose={() => setConfirmAction(null)}
+                    onConfirm={handleConfirmAction}
+                />
+            )}
+
         </div>
     );
 }
@@ -1013,9 +1743,489 @@ function MiniStat({ label, value, color }: { label: string; value: string; color
     );
 }
 
+function MiniRegionMetric({ label, value }: { label: string; value: string }) {
+    return (
+        <div>
+            <div style={{ fontSize: '0.65rem', color: 'var(--muted)', fontWeight: 800, marginBottom: '0.15rem' }}>{label}</div>
+            <div style={{ fontSize: '0.9rem', color: 'var(--foreground)', fontWeight: 900, fontVariantNumeric: 'tabular-nums' }}>{value}</div>
+        </div>
+    );
+}
+
 // ===== Inline modals =====
 
-function ModalShell({ title, onClose, children }: { title: string; onClose: () => void; children: React.ReactNode }) {
+function formatAttemptDate(value: string): string {
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) return "일시 없음";
+    return new Intl.DateTimeFormat("ko-KR", {
+        month: "short",
+        day: "numeric",
+        hour: "2-digit",
+        minute: "2-digit",
+    }).format(date);
+}
+
+function scoreColor(score: number): string {
+    if (score >= 80) return "var(--success)";
+    if (score >= 65) return "var(--warning)";
+    return "var(--error)";
+}
+
+function weaknessKindLabel(kind: StudentProfileWeaknessInsight["kind"] | GroupProfileWeaknessInsight["kind"]): string {
+    const labels: Record<StudentProfileWeaknessInsight["kind"] | GroupProfileWeaknessInsight["kind"], string> = {
+        concept: "개념",
+        mistakeType: "오답 원인",
+        unit: "단원",
+        source: "지문",
+        skill: "스킬",
+        difficulty: "난도",
+        label: "라벨",
+    };
+    return labels[kind] || "유형";
+}
+
+function questionNumberLabel(numbers: number[]): string {
+    return numbers.length > 0 ? numbers.map(number => `${number}번`).join(", ") : "문항 없음";
+}
+
+function weaknessRetakeHref(weakness: StudentProfileWeaknessInsight | GroupProfileWeaknessInsight): string {
+    return buildRetakeHref(weakness.examId, weakness.sourceAttemptId, weakness.retakeQuestionIds, weakness.retakeMode, {
+        labels: weakness.retakeLabels,
+        concepts: weakness.retakeConcepts,
+    });
+}
+
+function ProfileMetric({ label, value, icon, color }: { label: string; value: string; icon: React.ReactNode; color: string }) {
+    return (
+        <div style={{
+            padding: '1rem',
+            background: `color-mix(in srgb, ${color}, transparent 93%)`,
+            border: `1px solid ${color}24`,
+            borderRadius: 'var(--radius-md)',
+            minWidth: 0,
+        }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.45rem', color, marginBottom: '0.55rem' }}>
+                {icon}
+                <span style={{ fontSize: '0.72rem', fontWeight: 800, letterSpacing: '0.06em' }}>{label}</span>
+            </div>
+            <div style={{ fontSize: '1.25rem', fontWeight: 900, color: 'var(--foreground)', fontVariantNumeric: 'tabular-nums' }}>{value}</div>
+        </div>
+    );
+}
+
+function WeaknessRetakeLink({ weakness }: { weakness: StudentProfileWeaknessInsight | GroupProfileWeaknessInsight }) {
+    if (weakness.retakeQuestionIds.length === 0) return null;
+    return (
+        <NextLink
+            href={weaknessRetakeHref(weakness)}
+            style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                padding: '0.36rem 0.62rem',
+                borderRadius: 'var(--radius-md)',
+                background: 'var(--surface)',
+                border: '1px solid var(--border)',
+                color: 'var(--foreground)',
+                fontSize: '0.74rem',
+                fontWeight: 850,
+                lineHeight: 1,
+                whiteSpace: 'nowrap',
+            }}
+        >
+            재추천 {weakness.retakeQuestionIds.length}문항
+        </NextLink>
+    );
+}
+
+function GroupProfileModal({
+    group, profile, onClose,
+}: {
+    group: RosterGroup;
+    profile: GroupProfileInsight;
+    onClose: () => void;
+}) {
+    return (
+        <ModalShell title={`${group.name} 반 분석`} onClose={onClose} maxWidth={940}>
+            <div style={{ display: 'grid', gap: '1rem' }}>
+                <div style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'space-between',
+                    gap: '1rem',
+                    padding: '1rem',
+                    background: 'var(--background)',
+                    border: '1px solid var(--border)',
+                    borderRadius: 'var(--radius-md)',
+                    flexWrap: 'wrap',
+                }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.8rem', minWidth: 0 }}>
+                        <div style={{
+                            width: 48,
+                            height: 48,
+                            borderRadius: 'var(--radius-md)',
+                            background: `color-mix(in srgb, ${group.color}, transparent 86%)`,
+                            color: group.color,
+                            display: 'grid',
+                            placeItems: 'center',
+                            flexShrink: 0,
+                        }}>
+                            <Users size={22} />
+                        </div>
+                        <div style={{ minWidth: 0 }}>
+                            <div style={{ fontSize: '1.05rem', fontWeight: 900 }}>{group.name}</div>
+                            <div style={{ color: 'var(--muted)', fontSize: '0.83rem' }}>
+                                등록 {profile.rosterStudentCount}명 · 응시 {profile.activeStudentCount}명 · 원시험 {profile.attemptCount}건 · 재시험 {profile.retakeAttemptCount}건
+                            </div>
+                        </div>
+                    </div>
+                    <span style={{
+                        padding: '0.35rem 0.7rem',
+                        borderRadius: 'var(--radius-full)',
+                        background: `color-mix(in srgb, ${group.color}, transparent 88%)`,
+                        color: group.color,
+                        fontWeight: 900,
+                        fontSize: '0.8rem',
+                    }}>
+                        평균 {profile.averageScore}점
+                    </span>
+                </div>
+
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: '0.75rem' }}>
+                    <ProfileMetric label="시험 수" value={`${profile.examCount}개`} color="#4f46e5" icon={<FileText size={15} />} />
+                    <ProfileMetric label="원시험" value={`${profile.attemptCount}건`} color="#10b981" icon={<CheckCircle2 size={15} />} />
+                    <ProfileMetric label="재시험" value={`${profile.retakeAttemptCount}건`} color="#0f766e" icon={<RefreshCw size={15} />} />
+                    <ProfileMetric label="응시 학생" value={`${profile.activeStudentCount}명`} color={group.color} icon={<Users size={15} />} />
+                    <ProfileMetric label="오답/미응답" value={`${profile.wrongQuestionCount}/${profile.unansweredQuestionCount}`} color="#ef4444" icon={<AlertTriangle size={15} />} />
+                </div>
+
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: '1rem' }}>
+                    <section style={{ minWidth: 0 }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.45rem', marginBottom: '0.65rem' }}>
+                            <BarChart3 size={16} color="var(--primary)" />
+                            <h4 style={{ fontSize: '0.92rem', fontWeight: 800 }}>시험별 현황</h4>
+                        </div>
+                        <div style={{ display: 'grid', gap: '0.55rem', maxHeight: 360, overflowY: 'auto', paddingRight: '0.25rem' }}>
+                            {profile.exams.length === 0 ? (
+                                <div style={{ padding: '1rem', background: 'var(--background)', borderRadius: 'var(--radius-md)', color: 'var(--muted)', fontSize: '0.86rem' }}>
+                                    아직 이 반의 응시 데이터가 없습니다.
+                                </div>
+                            ) : profile.exams.map(exam => (
+                                <div key={exam.examId} style={{ padding: '0.85rem', background: 'var(--background)', border: '1px solid var(--border)', borderRadius: 'var(--radius-md)' }}>
+                                    <div style={{ display: 'flex', justifyContent: 'space-between', gap: '0.75rem', alignItems: 'flex-start' }}>
+                                        <div style={{ minWidth: 0 }}>
+                                            <div style={{ fontWeight: 900, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{exam.examTitle}</div>
+                                            <div style={{ color: 'var(--muted)', fontSize: '0.75rem', marginTop: '0.2rem' }}>
+                                                응시 {exam.studentCount}명 · 제출 {exam.attemptCount}건
+                                            </div>
+                                        </div>
+                                        <div style={{ color: scoreColor(exam.averageScore), fontWeight: 900, fontVariantNumeric: 'tabular-nums' }}>{exam.averageScore}점</div>
+                                    </div>
+                                    <div style={{ color: 'var(--muted)', fontSize: '0.76rem', marginTop: '0.55rem', lineHeight: 1.6 }}>
+                                        오답 {exam.wrongQuestionCount}건 · 미응답 {exam.unansweredQuestionCount}건
+                                        {exam.topWeakness ? ` · 최우선 ${exam.topWeakness.title}` : ""}
+                                    </div>
+                                    <div style={{ marginTop: '0.7rem', display: 'flex', justifyContent: 'flex-end' }}>
+                                        <NextLink
+                                            href={`/teacher/exam/${exam.examId}`}
+                                            style={{
+                                                padding: '0.35rem 0.65rem',
+                                                borderRadius: 'var(--radius-md)',
+                                                background: 'var(--surface)',
+                                                border: '1px solid var(--border)',
+                                                color: 'var(--foreground)',
+                                                fontSize: '0.76rem',
+                                                fontWeight: 800,
+                                            }}
+                                        >
+                                            시험 분석
+                                        </NextLink>
+                                    </div>
+                                </div>
+                            ))}
+                        </div>
+                    </section>
+
+                    <section style={{ minWidth: 0 }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.45rem', marginBottom: '0.65rem' }}>
+                            <Target size={16} color="var(--error)" />
+                            <h4 style={{ fontSize: '0.92rem', fontWeight: 800 }}>반 취약 유형</h4>
+                        </div>
+                        <div style={{ display: 'grid', gap: '0.55rem', maxHeight: 360, overflowY: 'auto', paddingRight: '0.25rem' }}>
+                            {profile.weaknessGroups.length === 0 ? (
+                                <div style={{ padding: '1rem', background: 'var(--background)', borderRadius: 'var(--radius-md)', color: 'var(--muted)', fontSize: '0.86rem' }}>
+                                    누적 오답 유형이 아직 없습니다.
+                                </div>
+                            ) : profile.weaknessGroups.map(weakness => (
+                                <div key={weakness.key} style={{ padding: '0.85rem', background: 'var(--background)', border: '1px solid var(--border)', borderRadius: 'var(--radius-md)' }}>
+                                    <div style={{ display: 'flex', justifyContent: 'space-between', gap: '0.75rem', marginBottom: '0.4rem' }}>
+                                        <div style={{ minWidth: 0 }}>
+                                            <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', marginBottom: '0.2rem', flexWrap: 'wrap' }}>
+                                                <span style={{
+                                                    padding: '0.18rem 0.45rem',
+                                                    background: 'rgba(239,68,68,0.1)',
+                                                    color: '#ef4444',
+                                                    borderRadius: 'var(--radius-full)',
+                                                    fontSize: '0.68rem',
+                                                    fontWeight: 900,
+                                                }}>
+                                                    {weaknessKindLabel(weakness.kind)}
+                                                </span>
+                                                <span style={{ color: 'var(--muted)', fontSize: '0.72rem' }}>{weakness.examTitle}</span>
+                                            </div>
+                                            <div style={{ fontWeight: 900, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{weakness.title}</div>
+                                        </div>
+                                        <div style={{ textAlign: 'right', flexShrink: 0 }}>
+                                            <div style={{ color: '#ef4444', fontWeight: 900, fontVariantNumeric: 'tabular-nums' }}>{weakness.wrongRate}%</div>
+                                            <div style={{ color: 'var(--muted)', fontSize: '0.7rem' }}>{weakness.wrongCount}/{weakness.totalCount}</div>
+                                        </div>
+                                    </div>
+                                    <div style={{ fontSize: '0.76rem', color: 'var(--muted)', lineHeight: 1.6 }}>
+                                        {weakness.basis} · {questionNumberLabel(weakness.questionNumbers)}
+                                        {weakness.unansweredCount > 0 ? ` · 미응답 ${weakness.unansweredCount}건` : ""}
+                                    </div>
+                                    <div style={{ marginTop: '0.28rem', color: 'var(--muted)', fontSize: '0.72rem', lineHeight: 1.45 }}>
+                                        {weakness.reason}
+                                    </div>
+                                    <div style={{ marginTop: '0.55rem', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '0.55rem', flexWrap: 'wrap' }}>
+                                        <div style={{ color: 'var(--primary)', fontSize: '0.76rem', fontWeight: 850 }}>
+                                            {weakness.recommendedAction}
+                                        </div>
+                                        <WeaknessRetakeLink weakness={weakness} />
+                                    </div>
+                                </div>
+                            ))}
+                        </div>
+                    </section>
+                </div>
+
+                <section>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.45rem', marginBottom: '0.65rem' }}>
+                        <AlertTriangle size={16} color="var(--warning)" />
+                        <h4 style={{ fontSize: '0.92rem', fontWeight: 800 }}>집중 관리 학생</h4>
+                    </div>
+                    {profile.studentsNeedingAttention.length === 0 ? (
+                        <div style={{ padding: '1rem', background: 'var(--background)', borderRadius: 'var(--radius-md)', color: 'var(--muted)', fontSize: '0.86rem' }}>
+                            현재 기준으로 집중 관리 학생이 없습니다.
+                        </div>
+                    ) : (
+                        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: '0.65rem' }}>
+                            {profile.studentsNeedingAttention.map(student => (
+                                <div key={student.key} style={{ padding: '0.85rem', background: 'var(--background)', border: '1px solid var(--border)', borderRadius: 'var(--radius-md)' }}>
+                                    <div style={{ fontWeight: 900, marginBottom: '0.3rem' }}>{student.name}</div>
+                                    <div style={{ display: 'flex', justifyContent: 'space-between', gap: '0.5rem', color: 'var(--muted)', fontSize: '0.76rem' }}>
+                                        <span>평균 {student.averageScore}점</span>
+                                        <span>최근 {student.latestScore}점</span>
+                                    </div>
+                                    <div style={{
+                                        marginTop: '0.45rem',
+                                        color: student.trendDelta >= 0 ? 'var(--success)' : 'var(--error)',
+                                        fontSize: '0.75rem',
+                                        fontWeight: 900,
+                                    }}>
+                                        추세 {student.trendDelta > 0 ? "+" : ""}{student.trendDelta}점 · {student.attemptCount}회
+                                    </div>
+                                </div>
+                            ))}
+                        </div>
+                    )}
+                </section>
+            </div>
+        </ModalShell>
+    );
+}
+
+function StudentProfileModal({
+    student, profile, onClose,
+}: {
+    student: RosterStudent;
+    profile: StudentProfileInsight;
+    onClose: () => void;
+}) {
+    const trendColor = profile.trendDelta >= 0 ? "var(--success)" : "var(--error)";
+    const trendLabel = profile.trendDelta === 0
+        ? "변화 없음"
+        : `${profile.trendDelta > 0 ? "+" : ""}${profile.trendDelta}점`;
+
+    return (
+        <ModalShell title={`${student.name} 학생 성장 리포트`} onClose={onClose} maxWidth={900}>
+            <div style={{ display: 'grid', gap: '1rem' }}>
+                <div style={{
+                    display: 'flex',
+                    justifyContent: 'space-between',
+                    alignItems: 'center',
+                    gap: '1rem',
+                    padding: '1rem',
+                    background: 'var(--background)',
+                    border: '1px solid var(--border)',
+                    borderRadius: 'var(--radius-md)',
+                    flexWrap: 'wrap',
+                }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.8rem', minWidth: 0 }}>
+                        <div style={{
+                            width: 48,
+                            height: 48,
+                            borderRadius: '50%',
+                            background: student.avatar,
+                            color: 'white',
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                            fontWeight: 900,
+                            flexShrink: 0,
+                        }}>
+                            {student.name.slice(1, 2)}
+                        </div>
+                        <div style={{ minWidth: 0 }}>
+                            <div style={{ fontSize: '1rem', fontWeight: 800 }}>{student.name}</div>
+                            <div style={{ color: 'var(--muted)', fontSize: '0.83rem', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{student.email}</div>
+                        </div>
+                    </div>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
+                        <span className="badge badge-primary">{student.group}</span>
+                        <span style={{
+                            padding: '0.35rem 0.65rem',
+                            borderRadius: 'var(--radius-full)',
+                            background: `color-mix(in srgb, ${trendColor}, transparent 88%)`,
+                            color: trendColor,
+                            fontSize: '0.78rem',
+                            fontWeight: 800,
+                        }}>
+                            최근 추세 {trendLabel}
+                        </span>
+                    </div>
+                </div>
+
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: '0.75rem' }}>
+                    <ProfileMetric label="원시험 평균" value={`${profile.averageScore}점`} color="#4f46e5" icon={<BarChart3 size={15} />} />
+                    <ProfileMetric label="최근 원시험" value={`${profile.latestScore}점`} color={scoreColor(profile.latestScore)} icon={<TrendingUp size={15} />} />
+                    <ProfileMetric label="재시험" value={`${profile.retakeAttemptCount}회`} color="#0f766e" icon={<RefreshCw size={15} />} />
+                    <ProfileMetric label="오답/미응답" value={`${profile.wrongQuestionCount}/${profile.unansweredQuestionCount}`} color="#ef4444" icon={<AlertTriangle size={15} />} />
+                    <ProfileMetric label="필기 보관" value={`${profile.handwritingArchiveCount}건`} color="#7c3aed" icon={<PenLine size={15} />} />
+                </div>
+
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: '1rem' }}>
+                    <section style={{ minWidth: 0 }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.45rem', marginBottom: '0.65rem' }}>
+                            <FileText size={16} color="var(--primary)" />
+                            <h4 style={{ fontSize: '0.92rem', fontWeight: 800 }}>최근 응시</h4>
+                        </div>
+                        <div style={{ display: 'grid', gap: '0.55rem', maxHeight: 360, overflowY: 'auto', paddingRight: '0.25rem' }}>
+                            {profile.attempts.length === 0 ? (
+                                <div style={{ padding: '1rem', background: 'var(--background)', borderRadius: 'var(--radius-md)', color: 'var(--muted)', fontSize: '0.86rem' }}>
+                                    아직 응시 이력이 없습니다.
+                                </div>
+                            ) : profile.attempts.map(attempt => (
+                                <div key={attempt.id} style={{ padding: '0.85rem', background: 'var(--background)', border: '1px solid var(--border)', borderRadius: 'var(--radius-md)' }}>
+                                    <div style={{ display: 'flex', justifyContent: 'space-between', gap: '0.75rem', alignItems: 'flex-start' }}>
+                                        <div style={{ minWidth: 0 }}>
+                                            <div style={{ fontSize: '0.9rem', fontWeight: 800, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{attempt.examTitle}</div>
+                                            <div style={{ display: 'flex', gap: '0.35rem', alignItems: 'center', flexWrap: 'wrap', marginTop: '0.15rem' }}>
+                                                <span style={{ fontSize: '0.76rem', color: 'var(--muted)' }}>{formatAttemptDate(attempt.finishedAt)}</span>
+                                                {attempt.isRetake && (
+                                                    <span style={{ color: '#0f766e', background: '#f0fdfa', border: '1px solid #99f6e4', borderRadius: '999px', padding: '0.08rem 0.38rem', fontSize: '0.68rem', fontWeight: 900 }}>
+                                                        재시험 {attempt.retakeQuestionCount}문항
+                                                    </span>
+                                                )}
+                                            </div>
+                                        </div>
+                                        <div style={{ color: scoreColor(attempt.scorePercent), fontWeight: 900, fontVariantNumeric: 'tabular-nums' }}>{attempt.scorePercent}점</div>
+                                    </div>
+                                    <div style={{ display: 'grid', gap: '0.35rem', marginTop: '0.65rem', color: 'var(--muted)', fontSize: '0.78rem' }}>
+                                        <div>오답 {questionNumberLabel(attempt.wrongQuestionNumbers)}</div>
+                                        <div>미응답 {questionNumberLabel(attempt.unansweredQuestionNumbers)}</div>
+                                        {attempt.handwritingArchived && (
+                                            <div style={{ color: '#7c3aed', fontWeight: 800, display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
+                                                <PenLine size={12} /> 필기 {attempt.handwritingLabel}
+                                            </div>
+                                        )}
+                                    </div>
+                                    <div style={{ marginTop: '0.7rem', display: 'flex', justifyContent: 'flex-end' }}>
+                                        <NextLink
+                                            href={attempt.detailHref}
+                                            style={{
+                                                padding: '0.35rem 0.65rem',
+                                                borderRadius: 'var(--radius-md)',
+                                                background: 'var(--surface)',
+                                                border: '1px solid var(--border)',
+                                                color: 'var(--foreground)',
+                                                fontSize: '0.76rem',
+                                                fontWeight: 800,
+                                            }}
+                                        >
+                                            리포트 열기
+                                        </NextLink>
+                                    </div>
+                                </div>
+                            ))}
+                        </div>
+                    </section>
+
+                    <section style={{ minWidth: 0 }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.45rem', marginBottom: '0.65rem' }}>
+                            <Target size={16} color="var(--error)" />
+                            <h4 style={{ fontSize: '0.92rem', fontWeight: 800 }}>취약 유형</h4>
+                        </div>
+                        <div style={{ display: 'grid', gap: '0.55rem', maxHeight: 360, overflowY: 'auto', paddingRight: '0.25rem' }}>
+                            {profile.weaknessGroups.length === 0 ? (
+                                <div style={{ padding: '1rem', background: 'var(--background)', borderRadius: 'var(--radius-md)', color: 'var(--muted)', fontSize: '0.86rem' }}>
+                                    누적 오답 유형이 아직 없습니다.
+                                </div>
+                            ) : profile.weaknessGroups.map(group => (
+                                <div key={group.key} style={{ padding: '0.85rem', background: 'var(--background)', border: '1px solid var(--border)', borderRadius: 'var(--radius-md)' }}>
+                                    <div style={{ display: 'flex', justifyContent: 'space-between', gap: '0.75rem', marginBottom: '0.4rem' }}>
+                                        <div style={{ minWidth: 0 }}>
+                                            <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', marginBottom: '0.2rem', flexWrap: 'wrap' }}>
+                                                <span style={{
+                                                    padding: '0.18rem 0.45rem',
+                                                    background: 'rgba(239,68,68,0.1)',
+                                                    color: '#ef4444',
+                                                    borderRadius: 'var(--radius-full)',
+                                                    fontSize: '0.68rem',
+                                                    fontWeight: 900,
+                                                }}>
+                                                    {weaknessKindLabel(group.kind)}
+                                                </span>
+                                                <span style={{ color: 'var(--muted)', fontSize: '0.72rem' }}>{group.examTitle}</span>
+                                            </div>
+                                            <div style={{ fontWeight: 900, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{group.title}</div>
+                                        </div>
+                                        <div style={{ textAlign: 'right', flexShrink: 0 }}>
+                                            <div style={{ color: '#ef4444', fontWeight: 900, fontVariantNumeric: 'tabular-nums' }}>{group.wrongRate}%</div>
+                                            <div style={{ color: 'var(--muted)', fontSize: '0.7rem' }}>{group.wrongCount}/{group.totalCount}</div>
+                                        </div>
+                                    </div>
+                                    <div style={{ fontSize: '0.76rem', color: 'var(--muted)', lineHeight: 1.6 }}>
+                                        {group.basis} · {questionNumberLabel(group.questionNumbers)}
+                                        {group.unansweredCount > 0 ? ` · 미응답 ${group.unansweredCount}건` : ""}
+                                    </div>
+                                    <div style={{ marginTop: '0.28rem', color: 'var(--muted)', fontSize: '0.72rem', lineHeight: 1.45 }}>
+                                        {group.reason}
+                                    </div>
+                                    <div style={{ marginTop: '0.55rem', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '0.55rem', flexWrap: 'wrap' }}>
+                                        <div style={{ color: 'var(--primary)', fontSize: '0.76rem', fontWeight: 850 }}>
+                                            {group.recommendedAction}
+                                        </div>
+                                        <WeaknessRetakeLink weakness={group} />
+                                    </div>
+                                </div>
+                            ))}
+                        </div>
+                    </section>
+                </div>
+            </div>
+        </ModalShell>
+    );
+}
+
+function ModalShell({
+    title, onClose, children, maxWidth = 420,
+}: {
+    title: string;
+    onClose: () => void;
+    children: React.ReactNode;
+    maxWidth?: number | string;
+}) {
     return (
         <div
             onClick={onClose}
@@ -1029,7 +2239,9 @@ function ModalShell({ title, onClose, children }: { title: string; onClose: () =
                 onClick={(e) => e.stopPropagation()}
                 className="bento-card"
                 style={{
-                    width: '100%', maxWidth: 420, padding: '1.5rem',
+                    width: '100%', maxWidth, padding: '1.5rem',
+                    maxHeight: 'calc(100vh - 2rem)',
+                    overflowY: 'auto',
                     background: 'var(--surface)', borderRadius: 'var(--radius-lg)',
                     boxShadow: '0 20px 40px rgba(0,0,0,0.15)'
                 }}
@@ -1049,14 +2261,18 @@ function ModalShell({ title, onClose, children }: { title: string; onClose: () =
 function StudentModal({
     groups, initial, onClose, onSubmit,
 }: {
-    groups: Group[];
-    initial: Student | null;
+    groups: RosterGroup[];
+    initial: RosterStudent | null;
     onClose: () => void;
-    onSubmit: (data: { name: string; email: string; group: string }) => void;
+    onSubmit: (data: StudentFormData) => void;
 }) {
+    const initialGroupIdValue = initialStudentGroupId(initial, groups);
+    const initialGroup = groups.find(item => item.id === initialGroupIdValue);
     const [name, setName] = useState(initial?.name ?? "");
     const [email, setEmail] = useState(initial?.email ?? "");
-    const [group, setGroup] = useState(initial?.group ?? (groups[0]?.name ?? ""));
+    const [groupId, setGroupId] = useState(initialGroupIdValue);
+    const [region, setRegion] = useState(initial?.region ?? initialGroup?.region ?? "");
+    const selectedGroup = groups.find(item => item.id === groupId);
 
     const inputStyle: React.CSSProperties = {
         width: '100%', padding: '0.65rem 0.85rem', background: 'var(--background)',
@@ -1070,12 +2286,18 @@ function StudentModal({
     };
 
     return (
-        <ModalShell title={initial ? "학생 편집" : "학생 초대"} onClose={onClose}>
+        <ModalShell title={initial ? "학생 편집" : "학생 추가"} onClose={onClose}>
             <form
                 onSubmit={(e) => {
                     e.preventDefault();
-                    if (!name.trim() || !email.trim() || !group) return;
-                    onSubmit({ name: name.trim(), email: email.trim(), group });
+                    if (!name.trim() || !email.trim() || !selectedGroup) return;
+                    onSubmit({
+                        name: name.trim(),
+                        email: email.trim(),
+                        group: selectedGroup.name,
+                        groupId: selectedGroup.id,
+                        region: region.trim() || selectedGroup.region || "",
+                    });
                 }}
             >
                 <div style={{ marginBottom: '1rem' }}>
@@ -1088,10 +2310,30 @@ function StudentModal({
                 </div>
                 <div style={{ marginBottom: '1.25rem' }}>
                     <label style={labelStyle}>반</label>
-                    <select value={group} onChange={e => setGroup(e.target.value)} style={inputStyle} required>
+                    <select
+                        value={groupId}
+                        onChange={e => {
+                            const nextGroup = groups.find(item => item.id === e.target.value);
+                            setGroupId(e.target.value);
+                            if (nextGroup?.region && !region.trim()) {
+                                setRegion(nextGroup.region);
+                            }
+                        }}
+                        style={inputStyle}
+                        required
+                    >
                         {groups.length === 0 && <option value="">반을 먼저 만들어주세요</option>}
-                        {groups.map(g => <option key={g.id} value={g.name}>{g.name}</option>)}
+                        {groups.map(g => <option key={g.id} value={g.id}>{groupOptionLabel(g)}</option>)}
                     </select>
+                </div>
+                <div style={{ marginBottom: '1.25rem' }}>
+                    <label style={labelStyle}>지역</label>
+                    <input
+                        value={region}
+                        onChange={e => setRegion(e.target.value)}
+                        style={inputStyle}
+                        placeholder="예: 서울, 부산, 온라인"
+                    />
                 </div>
                 <div style={{ display: 'flex', gap: '0.5rem', justifyContent: 'flex-end' }}>
                     <button
@@ -1105,7 +2347,7 @@ function StudentModal({
                         type="submit"
                         style={{ padding: '0.65rem 1.1rem', background: 'linear-gradient(135deg, #22c55e, #10b981)', color: 'white', borderRadius: 'var(--radius-md)', fontWeight: 700, fontSize: '0.85rem' }}
                     >
-                        {initial ? "저장" : "초대"}
+                        {initial ? "저장" : "추가"}
                     </button>
                 </div>
             </form>
@@ -1117,9 +2359,10 @@ function GroupModal({
     onClose, onSubmit,
 }: {
     onClose: () => void;
-    onSubmit: (data: { name: string; color: string }) => void;
+    onSubmit: (data: GroupFormData) => void;
 }) {
     const [name, setName] = useState("");
+    const [region, setRegion] = useState("");
     const [color, setColor] = useState(GROUP_COLORS[0]);
 
     const inputStyle: React.CSSProperties = {
@@ -1139,12 +2382,21 @@ function GroupModal({
                 onSubmit={(e) => {
                     e.preventDefault();
                     if (!name.trim()) return;
-                    onSubmit({ name: name.trim(), color });
+                    onSubmit({ name: name.trim(), region: region.trim(), color });
                 }}
             >
                 <div style={{ marginBottom: '1rem' }}>
                     <label style={labelStyle}>이름</label>
                     <input value={name} onChange={e => setName(e.target.value)} style={inputStyle} required />
+                </div>
+                <div style={{ marginBottom: '1rem' }}>
+                    <label style={labelStyle}>지역</label>
+                    <input
+                        value={region}
+                        onChange={e => setRegion(e.target.value)}
+                        style={inputStyle}
+                        placeholder="예: 서울, 부산, 온라인"
+                    />
                 </div>
                 <div style={{ marginBottom: '1.25rem' }}>
                     <label style={labelStyle}>색상</label>
@@ -1181,6 +2433,169 @@ function GroupModal({
                     </button>
                 </div>
             </form>
+        </ModalShell>
+    );
+}
+
+function InviteModal({
+    onClose, onSubmit,
+}: {
+    onClose: () => void;
+    onSubmit: (email: string) => void;
+}) {
+    const [contact, setContact] = useState("");
+    const inputStyle: React.CSSProperties = {
+        width: '100%', padding: '0.75rem 0.9rem', background: 'var(--background)',
+        border: '1px solid var(--border)', borderRadius: 'var(--radius-md)',
+        fontSize: '0.95rem', color: 'var(--foreground)', outline: 'none',
+    };
+    const labelStyle: React.CSSProperties = {
+        display: 'block', fontSize: '0.75rem', fontWeight: 700,
+        color: 'var(--muted)', letterSpacing: '0.05em',
+        textTransform: 'uppercase', marginBottom: '0.4rem',
+    };
+
+    return (
+        <ModalShell title="카카오 초대 기록" onClose={onClose}>
+            <form
+                onSubmit={(e) => {
+                    e.preventDefault();
+                    onSubmit(contact);
+                }}
+            >
+                <div style={{ marginBottom: '1.25rem' }}>
+                    <label style={labelStyle}>초대 연락처</label>
+                    <input
+                        type="email"
+                        value={contact}
+                        onChange={e => setContact(e.target.value)}
+                        style={inputStyle}
+                        placeholder="student@example.com"
+                        autoFocus
+                        required
+                    />
+                    <p style={{ marginTop: '0.45rem', color: 'var(--muted)', fontSize: '0.78rem', lineHeight: 1.55, wordBreak: 'keep-all' }}>
+                        현재는 초대 기록만 저장합니다. 실제 카카오 발송은 채널 연동 후 지원합니다.
+                    </p>
+                </div>
+                <div style={{ display: 'flex', gap: '0.5rem', justifyContent: 'flex-end' }}>
+                    <button
+                        type="button"
+                        onClick={onClose}
+                        style={{ padding: '0.65rem 1rem', background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 'var(--radius-md)', fontWeight: 600, fontSize: '0.85rem', color: 'var(--foreground)' }}
+                    >
+                        닫기
+                    </button>
+                    <button
+                        type="submit"
+                        style={{ padding: '0.65rem 1.1rem', background: 'var(--primary)', color: 'white', borderRadius: 'var(--radius-md)', fontWeight: 700, fontSize: '0.85rem' }}
+                    >
+                        기록 추가
+                    </button>
+                </div>
+            </form>
+        </ModalShell>
+    );
+}
+
+function MessageModal({
+    recipient, onClose, onSubmit,
+}: {
+    recipient: string;
+    onClose: () => void;
+    onSubmit: (body: string) => void;
+}) {
+    const [body, setBody] = useState("");
+    const textareaStyle: React.CSSProperties = {
+        width: '100%', minHeight: 120, resize: 'vertical',
+        padding: '0.75rem 0.9rem', background: 'var(--background)',
+        border: '1px solid var(--border)', borderRadius: 'var(--radius-md)',
+        fontSize: '0.95rem', color: 'var(--foreground)', outline: 'none',
+        lineHeight: 1.6,
+    };
+
+    return (
+        <ModalShell title={`${recipient} 메시지`} onClose={onClose}>
+            <form
+                onSubmit={(e) => {
+                    e.preventDefault();
+                    const trimmed = body.trim();
+                    if (!trimmed) return;
+                    onSubmit(trimmed);
+                }}
+            >
+                <textarea
+                    value={body}
+                    onChange={e => setBody(e.target.value)}
+                    style={textareaStyle}
+                    placeholder="전달할 내용을 입력하세요"
+                    autoFocus
+                    required
+                />
+                <div style={{ display: 'flex', gap: '0.5rem', justifyContent: 'flex-end', marginTop: '1rem' }}>
+                    <button
+                        type="button"
+                        onClick={onClose}
+                        style={{ padding: '0.65rem 1rem', background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 'var(--radius-md)', fontWeight: 600, fontSize: '0.85rem', color: 'var(--foreground)' }}
+                    >
+                        닫기
+                    </button>
+                    <button
+                        type="submit"
+                        style={{ padding: '0.65rem 1.1rem', background: 'var(--primary)', color: 'white', borderRadius: 'var(--radius-md)', fontWeight: 700, fontSize: '0.85rem' }}
+                    >
+                        보내기
+                    </button>
+                </div>
+            </form>
+        </ModalShell>
+    );
+}
+
+function ConfirmModal({
+    action, onClose, onConfirm,
+}: {
+    action: ConfirmAction;
+    onClose: () => void;
+    onConfirm: () => void;
+}) {
+    const copy = action.kind === "student"
+        ? {
+            title: "학생 삭제",
+            body: `${action.label} 학생을 삭제합니다. 목록과 반 통계에서 바로 제외됩니다.`,
+            confirm: "삭제",
+        }
+        : action.kind === "bulk"
+            ? {
+                title: "선택 학생 삭제",
+                body: `선택된 ${action.count}명을 삭제합니다. 목록과 반 통계에서 바로 제외됩니다.`,
+                confirm: "삭제",
+            }
+            : {
+                title: "초대 취소",
+                body: `${action.label} 초대를 취소합니다. 취소된 초대는 목록에서 제거됩니다.`,
+                confirm: "초대 취소",
+            };
+
+    return (
+        <ModalShell title={copy.title} onClose={onClose}>
+            <p style={{ color: 'var(--muted)', fontSize: '0.95rem', lineHeight: 1.7, marginBottom: '1.25rem', wordBreak: 'keep-all' }}>
+                {copy.body}
+            </p>
+            <div style={{ display: 'flex', gap: '0.5rem', justifyContent: 'flex-end' }}>
+                <button
+                    onClick={onClose}
+                    style={{ padding: '0.65rem 1rem', background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 'var(--radius-md)', fontWeight: 600, fontSize: '0.85rem', color: 'var(--foreground)' }}
+                >
+                    닫기
+                </button>
+                <button
+                    onClick={onConfirm}
+                    style={{ padding: '0.65rem 1.1rem', background: 'var(--error)', color: 'white', borderRadius: 'var(--radius-md)', fontWeight: 700, fontSize: '0.85rem' }}
+                >
+                    {copy.confirm}
+                </button>
+            </div>
         </ModalShell>
     );
 }
