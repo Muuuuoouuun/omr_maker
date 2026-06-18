@@ -3,7 +3,8 @@
 import { useState, useEffect, useId } from 'react';
 import { parseAnswerKeyPdf, ParsedAnswer } from '@/services/answerParser';
 import { readStoredGeminiApiKey } from '@/lib/geminiApiKey';
-import { BrainCircuit, FileText, FolderOpen, UploadCloud, X } from 'lucide-react';
+import type { AiAnswerRecognitionMode } from '@/lib/aiAnswerModelRouting';
+import { BrainCircuit, FileText, FolderOpen, RefreshCw, UploadCloud, X } from 'lucide-react';
 import {
     evaluatePlanLimit,
     getCurrentPlan,
@@ -36,7 +37,11 @@ export default function AnswerImportModal({ isOpen, onClose, onApply, onUploadAn
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [useAI]);
 
-    const analyzeFile = async (targetFile: File, isAiMode: boolean) => {
+    const analyzeFile = async (
+        targetFile: File,
+        isAiMode: boolean,
+        recognitionMode: AiAnswerRecognitionMode = "default",
+    ) => {
         setIsProcessing(true);
         setError(null);
         setParsedData([]);
@@ -52,7 +57,7 @@ export default function AnswerImportModal({ isOpen, onClose, onApply, onUploadAn
                     return;
                 }
                 const { parseAnswerKeyWithGemini } = await import('@/services/answerParser');
-                results = await parseAnswerKeyWithGemini(targetFile, readStoredGeminiApiKey());
+                results = await parseAnswerKeyWithGemini(targetFile, readStoredGeminiApiKey(), { recognitionMode });
             } else {
                 results = await parseAnswerKeyPdf(targetFile);
             }
@@ -181,9 +186,24 @@ export default function AnswerImportModal({ isOpen, onClose, onApply, onUploadAn
 
                     {parsedData.length > 0 && (
                         <div>
-                            <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '1rem', alignItems: 'center' }}>
+                            <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '1rem', alignItems: 'center', gap: '0.75rem', flexWrap: 'wrap' }}>
                                 <h3 style={{ fontWeight: 600 }}>추출 결과 ({parsedData.length}문항)</h3>
-                                <span style={{ fontSize: '0.8rem', color: 'var(--muted)' }}>필요시 직접 수정하세요</span>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+                                    {useAI && file && (
+                                        <button
+                                            type="button"
+                                            onClick={() => analyzeFile(file, true, "rerecognition")}
+                                            className="btn btn-secondary"
+                                            disabled={isProcessing}
+                                            style={{ display: 'inline-flex', alignItems: 'center', gap: '0.35rem', padding: '0.45rem 0.65rem', fontSize: '0.82rem' }}
+                                            title="정답 이미지 다시 인식"
+                                        >
+                                            <RefreshCw size={14} />
+                                            재인식
+                                        </button>
+                                    )}
+                                    <span style={{ fontSize: '0.8rem', color: 'var(--muted)' }}>필요시 직접 수정하세요</span>
+                                </div>
                             </div>
                             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(100px, 1fr))', gap: '0.5rem' }}>
                                 {parsedData.map((item, idx) => (

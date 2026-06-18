@@ -1,6 +1,7 @@
 // Answer parsing utility using PDF text extraction and Gemini AI for OCR
 import { analyzeAnswerImages } from '@/app/actions/analyzeKey';
 import { safeAiAnswerErrorMessage, safeAiAnswerLogMeta } from '@/lib/aiAnswerSafety';
+import type { AiAnswerModelRoutingOptions } from '@/lib/aiAnswerModelRouting';
 
 export interface ParsedAnswer {
     questionNum: number;
@@ -201,7 +202,11 @@ export function normalizeGeminiAnswerRows(rows: unknown[]): ParsedAnswer[] {
     return [...candidates.values()].sort((a, b) => a.questionNum - b.questionNum);
 }
 
-export async function parseAnswerKeyWithGemini(file: File, geminiApiKey?: string): Promise<ParsedAnswer[]> {
+export async function parseAnswerKeyWithGemini(
+    file: File,
+    geminiApiKey?: string,
+    options: AiAnswerModelRoutingOptions = {},
+): Promise<ParsedAnswer[]> {
     const pdfjsLib = await getPdfJs();
     const arrayBuffer = await file.arrayBuffer();
     const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
@@ -228,7 +233,7 @@ export async function parseAnswerKeyWithGemini(file: File, geminiApiKey?: string
     }
 
     try {
-        const aiResults = await analyzeAnswerImages(images, geminiApiKey);
+        const aiResults = await analyzeAnswerImages(images, geminiApiKey, options);
 
         if (!Array.isArray(aiResults)) {
             throw new Error("AI response is not an array");
