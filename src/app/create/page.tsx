@@ -304,7 +304,7 @@ function CreateOMRPageInner() {
     const [pdfWidth, setPdfWidth] = useState(600);
     const [sidebarWidth, setSidebarWidth] = useState(320);
     const [previewMode, setPreviewMode] = useState<'modern' | 'paper'>('modern');
-    const [showPaperAnswerKey, setShowPaperAnswerKey] = useState(true);
+    const [showPaperAnswerKey, setShowPaperAnswerKey] = useState(false);
     const [isPreviewCollapsed, setIsPreviewCollapsed] = useState(false);
 
     // PDF State

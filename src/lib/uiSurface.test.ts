@@ -33,6 +33,7 @@ describe("service UI surface", () => {
         const omrPreview = readProjectFile("src/components/OMRPreview.tsx");
 
         expect(createPage).toContain("previewMode === 'paper'");
+        expect(createPage).toContain("const [showPaperAnswerKey, setShowPaperAnswerKey] = useState(false)");
         expect(createPage).toContain("인쇄용 (A4)");
         expect(createPage).toContain("create-paper-frame-toolbar");
         expect(createPage).toContain("A4 가로");
