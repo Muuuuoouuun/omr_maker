@@ -1,4 +1,5 @@
 import type { PdfDrawings, Question, QuestionDrawingSummary, QuestionPdfRegion } from "@/types/omr";
+import type { PdfTextLocatorItem } from "./pdfQuestionDetection";
 
 interface DrawingPoint {
     x: number;
@@ -19,6 +20,17 @@ interface LocatedQuestion {
 interface ColumnCluster {
     centerX: number;
     items: LocatedQuestion[];
+}
+
+interface QuestionPdfTextPage {
+    page: number;
+    items: PdfTextLocatorItem[];
+}
+
+interface QuestionPassageBoundary {
+    startQuestion: number;
+    page: number;
+    y: number;
 }
 
 const REGION_PADDING = 0.015;
@@ -43,6 +55,15 @@ const LAST_ROW_GAP_MULTIPLIER = 1.55;
 const MIN_LAST_ROW_EXTENSION = 0.26;
 const MIN_MID_PAGE_LAST_ROW_EXTENSION = 0.41;
 const MIN_TOP_SINGLE_ROW_EXTENSION = 0.6;
+const TEXT_REGION_X_PADDING = 0.012;
+const TEXT_REGION_TOP_PADDING = 0.006;
+const TEXT_REGION_BOTTOM_PADDING = 0.03;
+const PASSAGE_BOUNDARY_TOP_PADDING = 0.014;
+const FOOTER_NOTICE_TOP_PADDING = 0.014;
+const FOOTER_NOTICE_MIN_Y = 0.72;
+const MIN_TEXT_ITEMS_FOR_BOTTOM_SHRINK = 4;
+const MIN_EMPTY_TAIL_FOR_TEXT_SHRINK = 0.12;
+const FOOTER_NOTICE_PATTERNS = [/확인사항/, /답안지의해당란/];
 
 function isFiniteNumber(value: unknown): value is number {
     return typeof value === "number" && Number.isFinite(value);
@@ -276,6 +297,122 @@ function inferRowBottom(
     return bottomWithMinimumHeight(top, bottom);
 }
 
+function itemText(value: PdfTextLocatorItem): string {
+    return (value.str || "").replace(/\s+/g, " ").trim();
+}
+
+function compactItemText(value: PdfTextLocatorItem): string {
+    return itemText(value).replace(/\s+/g, "");
+}
+
+function itemBottom(item: PdfTextLocatorItem): number {
+    return clamp(item.y + Math.max(item.height || 0.008, 0.006));
+}
+
+function itemInRegionColumn(item: PdfTextLocatorItem, region: QuestionPdfRegion): boolean {
+    const centerX = item.x + (item.width || 0) / 2;
+    return centerX >= region.x - TEXT_REGION_X_PADDING
+        && centerX <= region.x + region.width + TEXT_REGION_X_PADDING;
+}
+
+function findNextPassageBoundaryBottom(
+    question: Question,
+    region: QuestionPdfRegion,
+    passageGroups: QuestionPassageBoundary[],
+): number | null {
+    const boundary = passageGroups
+        .filter(group => (
+            group.page === region.page &&
+            group.startQuestion > question.number &&
+            group.y > region.y + MIN_REGION_HEIGHT * 0.4
+        ))
+        .sort((a, b) => a.y - b.y)[0];
+
+    return boundary ? clamp(boundary.y - PASSAGE_BOUNDARY_TOP_PADDING, region.y, 1) : null;
+}
+
+function findFooterNoticeBoundaryBottom(
+    region: QuestionPdfRegion,
+    pageItems: PdfTextLocatorItem[] | undefined,
+): number | null {
+    if (!pageItems) return null;
+
+    const notice = pageItems
+        .filter(item => item.y >= FOOTER_NOTICE_MIN_Y)
+        .filter(item => item.y > region.y + MIN_REGION_HEIGHT * 0.4)
+        .filter(item => itemInRegionColumn(item, region))
+        .filter(item => FOOTER_NOTICE_PATTERNS.some(pattern => pattern.test(compactItemText(item))))
+        .sort((a, b) => a.y - b.y)[0];
+
+    return notice ? clamp(notice.y - FOOTER_NOTICE_TOP_PADDING, region.y, 1) : null;
+}
+
+function findTextContentBottom(
+    region: QuestionPdfRegion,
+    pageItems: PdfTextLocatorItem[] | undefined,
+    hardBottom: number,
+): { bottom: number; count: number } | null {
+    if (!pageItems) return null;
+
+    const items = pageItems.filter(item => {
+        if (!itemText(item)) return false;
+        if (!itemInRegionColumn(item, region)) return false;
+        return item.y >= region.y - TEXT_REGION_TOP_PADDING && item.y <= hardBottom - TEXT_REGION_TOP_PADDING;
+    });
+    if (items.length < MIN_TEXT_ITEMS_FOR_BOTTOM_SHRINK) return null;
+
+    return {
+        bottom: Math.max(...items.map(itemBottom)),
+        count: items.length,
+    };
+}
+
+function refineQuestionPdfRegionsWithText(
+    questions: Question[],
+    regionsByQuestionId: Map<number, QuestionPdfRegion>,
+    textPages: QuestionPdfTextPage[] | undefined,
+    passageGroups: QuestionPassageBoundary[] | undefined,
+): Map<number, QuestionPdfRegion> {
+    if (!textPages?.length && !passageGroups?.length) return regionsByQuestionId;
+
+    const textByPage = new Map((textPages || []).map(page => [page.page, page.items]));
+    const refined = new Map(regionsByQuestionId);
+
+    for (const question of questions) {
+        if (!question.tags?.source) continue;
+        const region = refined.get(question.id);
+        if (!region) continue;
+
+        const currentBottom = region.y + region.height;
+        const passageBoundaryBottom = findNextPassageBoundaryBottom(question, region, passageGroups || []);
+        const pageItems = textByPage.get(region.page);
+        const footerBoundaryBottom = findFooterNoticeBoundaryBottom(region, pageItems);
+        const hardBottom = Math.min(
+            currentBottom,
+            passageBoundaryBottom ?? currentBottom,
+            footerBoundaryBottom ?? currentBottom,
+        );
+        let nextBottom = hardBottom;
+
+        const textBottom = findTextContentBottom(region, pageItems, hardBottom);
+        if (
+            textBottom &&
+            hardBottom - textBottom.bottom >= MIN_EMPTY_TAIL_FOR_TEXT_SHRINK
+        ) {
+            nextBottom = Math.min(nextBottom, textBottom.bottom + TEXT_REGION_BOTTOM_PADDING);
+        }
+
+        if (nextBottom < currentBottom - 0.004) {
+            refined.set(question.id, sanitizeRegion({
+                ...region,
+                height: bottomWithMinimumHeight(region.y, nextBottom) - region.y,
+            }));
+        }
+    }
+
+    return refined;
+}
+
 export function inferQuestionPdfRegions(questions: Question[]): Map<number, QuestionPdfRegion> {
     const regions = new Map<number, QuestionPdfRegion>();
     const byPage = new Map<number, LocatedQuestion[]>();
@@ -329,7 +466,11 @@ export function inferQuestionPdfRegions(questions: Question[]): Map<number, Ques
 
 export function attachInferredQuestionPdfRegions(
     questions: Question[],
-    options: { overwriteExisting?: boolean } = {},
+    options: {
+        overwriteExisting?: boolean;
+        textPages?: QuestionPdfTextPage[];
+        passageGroups?: QuestionPassageBoundary[];
+    } = {},
 ): Question[] {
     const regionSource = options.overwriteExisting
         ? questions.map(question => question.pdfLocation
@@ -337,7 +478,12 @@ export function attachInferredQuestionPdfRegions(
             : question
         )
         : questions;
-    const regionsByQuestionId = inferQuestionPdfRegions(regionSource);
+    const regionsByQuestionId = refineQuestionPdfRegionsWithText(
+        regionSource,
+        inferQuestionPdfRegions(regionSource),
+        options.textPages,
+        options.passageGroups,
+    );
 
     return questions.map(question => {
         const region = regionsByQuestionId.get(question.id);

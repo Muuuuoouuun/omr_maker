@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { detectQuestionLocationsFromText, type PdfTextLocatorItem } from "./pdfQuestionDetection";
+import {
+    detectQuestionLocationsFromText,
+    isBetterDetectedQuestionPlacement,
+    type DetectedQuestionPlacement,
+    type PdfTextLocatorItem,
+} from "./pdfQuestionDetection";
 
 describe("pdf question detection", () => {
     it("prefers a real question heading over footer or table numbers", () => {
@@ -73,5 +78,23 @@ describe("pdf question detection", () => {
             questionNumber: 6,
             x: 0.08,
         });
+    });
+
+    it("prefers the earlier repeated PDF form unless the later candidate is much stronger", () => {
+        const early: DetectedQuestionPlacement = {
+            page: 14,
+            location: { questionNumber: 38, x: 0.1, y: 0.7, score: 82, text: "38. ..." },
+        };
+        const repeatedLater: DetectedQuestionPlacement = {
+            page: 18,
+            location: { questionNumber: 38, x: 0.1, y: 0.12, score: 96, text: "38. ..." },
+        };
+        const muchStrongerLater: DetectedQuestionPlacement = {
+            page: 18,
+            location: { questionNumber: 38, x: 0.1, y: 0.12, score: 110, text: "38. ..." },
+        };
+
+        expect(isBetterDetectedQuestionPlacement(repeatedLater, early)).toBe(false);
+        expect(isBetterDetectedQuestionPlacement(muchStrongerLater, early)).toBe(true);
     });
 });

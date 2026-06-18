@@ -14,6 +14,11 @@ export interface DetectedQuestionLocation {
     text: string;
 }
 
+export interface DetectedQuestionPlacement {
+    page: number;
+    location: DetectedQuestionLocation;
+}
+
 interface NormalizedTextItem extends PdfTextLocatorItem {
     index: number;
     str: string;
@@ -231,6 +236,14 @@ export function isBetterDetectedQuestionLocation(next: DetectedQuestionLocation,
     if (next.y < current.y - 0.02) return true;
     if (Math.abs(next.y - current.y) <= 0.02 && next.x < current.x) return true;
     return false;
+}
+
+export function isBetterDetectedQuestionPlacement(next: DetectedQuestionPlacement, current: DetectedQuestionPlacement | undefined): boolean {
+    if (!current) return true;
+    if (next.page < current.page && next.location.score >= current.location.score - 20) return true;
+    if (current.page < next.page && current.location.score >= next.location.score - 20) return false;
+    if (next.page !== current.page) return next.location.score > current.location.score;
+    return isBetterDetectedQuestionLocation(next.location, current.location);
 }
 
 export function detectQuestionLocationsFromText(

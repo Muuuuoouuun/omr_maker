@@ -179,4 +179,118 @@ describe("handwriting analytics", () => {
         expect(materialized[2].pdfRegion?.x).toBeGreaterThan(0.68);
         expect(materialized[0].pdfRegion).not.toEqual(questions[0].pdfRegion);
     });
+
+    it("stops Korean passage questions before the next passage heading", () => {
+        const questions: Question[] = [
+            {
+                id: 9,
+                number: 9,
+                pdfLocation: { page: 3, x: 0.52, y: 0.6 },
+                tags: { source: "지문 02 (4-9번)" },
+            },
+        ];
+
+        const materialized = attachInferredQuestionPdfRegions(questions, {
+            overwriteExisting: true,
+            textPages: [{
+                page: 3,
+                items: [
+                    { str: "9.", x: 0.52, y: 0.6, height: 0.01 },
+                    { str: "윗글에", x: 0.55, y: 0.6, height: 0.01 },
+                    { str: "대한", x: 0.6, y: 0.64, height: 0.01 },
+                    { str: "답은", x: 0.55, y: 0.7, height: 0.01 },
+                    { str: "[10~13]", x: 0.1, y: 0.79, height: 0.01 },
+                    { str: "다음 글을 읽고 물음에 답하시오.", x: 0.18, y: 0.79, height: 0.01 },
+                ],
+            }],
+            passageGroups: [
+                { startQuestion: 10, page: 3, y: 0.79 },
+            ],
+        });
+
+        const bottom = (materialized[0].pdfRegion?.y || 0) + (materialized[0].pdfRegion?.height || 0);
+
+        expect(bottom).toBeLessThan(0.79);
+        expect(bottom).toBeGreaterThan(0.7);
+    });
+
+    it("shrinks excessive empty tail for text-heavy Korean questions", () => {
+        const questions: Question[] = [
+            {
+                id: 31,
+                number: 31,
+                pdfLocation: { page: 12, x: 0.105, y: 0.28 },
+                tags: { source: "지문 08 (31-34번)" },
+            },
+            {
+                id: 32,
+                number: 32,
+                pdfLocation: { page: 12, x: 0.105, y: 0.7 },
+                tags: { source: "지문 08 (31-34번)" },
+            },
+        ];
+
+        const materialized = attachInferredQuestionPdfRegions(questions, {
+            overwriteExisting: true,
+            textPages: [{
+                page: 12,
+                items: [
+                    { str: "31.", x: 0.105, y: 0.28, height: 0.01 },
+                    { str: "다음", x: 0.14, y: 0.31, height: 0.01 },
+                    { str: "내용으로", x: 0.18, y: 0.36, height: 0.01 },
+                    { str: "적절한", x: 0.14, y: 0.42, height: 0.01 },
+                    { str: "것은?", x: 0.2, y: 0.46, height: 0.01 },
+                    { str: "32.", x: 0.105, y: 0.7, height: 0.01 },
+                ],
+            }],
+        });
+
+        const q31Bottom = (materialized[0].pdfRegion?.y || 0) + (materialized[0].pdfRegion?.height || 0);
+        const q32Top = materialized[1].pdfRegion?.y || 0;
+
+        expect(q31Bottom).toBeLessThan(0.55);
+        expect(q32Top).toBeGreaterThan(0.68);
+    });
+
+    it("clips Korean passage regions before same-column footer notices only", () => {
+        const questions: Question[] = [
+            {
+                id: 32,
+                number: 32,
+                pdfLocation: { page: 12, x: 0.105, y: 0.7 },
+                tags: { source: "지문 08 (31-34번)" },
+            },
+            {
+                id: 34,
+                number: 34,
+                pdfLocation: { page: 12, x: 0.518, y: 0.29 },
+                tags: { source: "지문 08 (31-34번)" },
+            },
+        ];
+
+        const materialized = attachInferredQuestionPdfRegions(questions, {
+            overwriteExisting: true,
+            textPages: [{
+                page: 12,
+                items: [
+                    { str: "32.", x: 0.105, y: 0.7, height: 0.01 },
+                    { str: "선택지", x: 0.14, y: 0.8, height: 0.01 },
+                    { str: "마지막 보기", x: 0.14, y: 0.88, height: 0.01 },
+                    { str: "34.", x: 0.518, y: 0.29, height: 0.01 },
+                    { str: "윗글을", x: 0.55, y: 0.36, height: 0.01 },
+                    { str: "바탕으로", x: 0.55, y: 0.48, height: 0.01 },
+                    { str: "고른 것은?", x: 0.55, y: 0.68, height: 0.01 },
+                    { str: "확인 사항", x: 0.546, y: 0.823, height: 0.01 },
+                    { str: "답안지의 해당란에 필요한 내용을", x: 0.545, y: 0.841, height: 0.01 },
+                ],
+            }],
+        });
+
+        const q32Bottom = (materialized[0].pdfRegion?.y || 0) + (materialized[0].pdfRegion?.height || 0);
+        const q34Bottom = (materialized[1].pdfRegion?.y || 0) + (materialized[1].pdfRegion?.height || 0);
+
+        expect(q32Bottom).toBeGreaterThan(0.88);
+        expect(q34Bottom).toBeLessThan(0.823);
+        expect(q34Bottom).toBeGreaterThan(0.68);
+    });
 });

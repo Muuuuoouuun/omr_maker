@@ -26,10 +26,16 @@ import { loadExam, loadExams, saveExam } from "@/lib/omrPersistence";
 import { attachInferredQuestionPdfRegions } from "@/lib/handwritingAnalytics";
 import {
     detectQuestionLocationsFromText,
-    isBetterDetectedQuestionLocation,
-    type DetectedQuestionLocation,
+    isBetterDetectedQuestionPlacement,
+    type DetectedQuestionPlacement,
     type PdfTextLocatorItem,
 } from "@/lib/pdfQuestionDetection";
+import {
+    attachInferredPassageSources,
+    detectPassageGroupsFromPdfText,
+    selectPassageGroupsForQuestions,
+    type PdfPageTextItems,
+} from "@/lib/pdfPassageGrouping";
 import { summarizePersistenceWrite } from "@/lib/persistenceFeedback";
 import { buildBillingUsageSummary } from "@/lib/billingUsage";
 import { evaluatePlanLimit, getCurrentPlan, getPlanLabel, PLAN_BY_KEY } from "@/utils/plans";
@@ -914,7 +920,8 @@ function CreateOMRPageInner() {
             let mappedCount = 0;
             let updatedCount = 0;
             const expectedQuestionNumbers = new Set(newQuestions.map(q => q.number));
-            const bestLocations = new Map<number, { page: number; location: DetectedQuestionLocation }>();
+            const bestLocations = new Map<number, DetectedQuestionPlacement>();
+            const pdfTextPages: PdfPageTextItems[] = [];
 
             for (let i = 1; i <= pdf.numPages; i++) {
                 const page = await pdf.getPage(i);
@@ -943,12 +950,13 @@ function CreateOMRPageInner() {
                         };
                     })
                     .filter((item): item is PdfTextLocatorItem => !!item);
+                pdfTextPages.push({ page: i, items });
 
                 const locations = detectQuestionLocationsFromText(items, expectedQuestionNumbers);
 
                 for (const [qNum, location] of locations.entries()) {
                     const current = bestLocations.get(qNum);
-                    if (isBetterDetectedQuestionLocation(location, current?.location)) {
+                    if (isBetterDetectedQuestionPlacement({ page: i, location }, current)) {
                         bestLocations.set(qNum, { page: i, location });
                     }
                 }
@@ -970,8 +978,18 @@ function CreateOMRPageInner() {
                 }
             }
 
-            setQuestions(attachInferredQuestionPdfRegions(newQuestions, { overwriteExisting: true }));
-            toast.success("위치 자동 매칭 완료", `총 ${pdf.numPages}페이지에서 새로 ${mappedCount}개, 갱신 ${updatedCount}개 문항의 위치와 영역을 찾았습니다.`);
+            const passageGroups = selectPassageGroupsForQuestions(
+                detectPassageGroupsFromPdfText(pdfTextPages, expectedQuestionNumbers),
+                newQuestions,
+            );
+            const questionsWithPassages = attachInferredPassageSources(newQuestions, passageGroups);
+            setQuestions(attachInferredQuestionPdfRegions(questionsWithPassages, {
+                overwriteExisting: true,
+                textPages: pdfTextPages,
+                passageGroups,
+            }));
+            const passageMessage = passageGroups.length > 0 ? `, 지문 묶음 ${passageGroups.length}개` : "";
+            toast.success("위치 자동 매칭 완료", `총 ${pdf.numPages}페이지에서 새로 ${mappedCount}개, 갱신 ${updatedCount}개 문항의 위치와 영역${passageMessage}를 찾았습니다.`);
         } catch (e) {
             console.error(e);
             toast.error("자동 매칭 실패", "위치 자동 매칭 중 오류가 발생했습니다.");
