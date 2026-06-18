@@ -20,6 +20,7 @@ import {
     type SupabaseRosterClassStudentRow,
     type SupabaseRosterStudentProfileRow,
 } from "./rosterPersistence";
+import { workspaceContextFromIdentity } from "./workspaceContext";
 
 function createStorage(initial: Record<string, string> = {}): Storage {
     const data = new Map(Object.entries(initial));
@@ -148,6 +149,27 @@ describe("roster persistence", () => {
                 enrollment_status: "inactive",
             },
         ]);
+    });
+
+    it("can map roster snapshots into a teacher-scoped organization", () => {
+        const context = workspaceContextFromIdentity({
+            teacherId: "teacher-a",
+            displayName: "Teacher A",
+        });
+        const rows = rosterSnapshotToSupabaseRows(
+            { students: [students[0]], groups: [groups[0]], invites: [] },
+            context.organizationId,
+            "2026-06-16T00:00:00.000Z",
+            context.organizationName,
+        );
+
+        expect(rows.organization).toMatchObject({
+            id: context.organizationId,
+            name: "Teacher A Workspace",
+        });
+        expect(rows.classes[0].organization_id).toBe(context.organizationId);
+        expect(rows.students[0].organization_id).toBe(context.organizationId);
+        expect(rows.enrollments[0].organization_id).toBe(context.organizationId);
     });
 
     it("adds missing student groups before remote enrollment rows are generated", () => {

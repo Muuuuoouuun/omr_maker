@@ -17,12 +17,19 @@ import {
     type RosterStudent,
 } from "@/lib/rosterStorage";
 import { getSupabaseConfigFromEnv, isSupabaseConfigured, type SupabaseConfig } from "@/lib/omrPersistence";
+import {
+    DEFAULT_WORKSPACE_ORGANIZATION_ID,
+    DEFAULT_WORKSPACE_ORGANIZATION_NAME,
+    readActiveWorkspaceContext,
+    workspaceBootstrapRows,
+    type WorkspaceContext,
+} from "@/lib/workspaceContext";
 
 type Env = Record<string, string | undefined>;
 
-export const DEFAULT_ROSTER_ORGANIZATION_ID = "default";
+export const DEFAULT_ROSTER_ORGANIZATION_ID = DEFAULT_WORKSPACE_ORGANIZATION_ID;
 export const ROSTER_TOMBSTONE_STORAGE_KEY = "omr_roster_tombstones";
-const DEFAULT_ROSTER_ORGANIZATION_NAME = "OMR Maker";
+const DEFAULT_ROSTER_ORGANIZATION_NAME = DEFAULT_WORKSPACE_ORGANIZATION_NAME;
 
 export interface RosterSnapshot {
     students: RosterStudent[];
@@ -165,6 +172,58 @@ function metadata(value: unknown): Record<string, unknown> {
         : {};
 }
 
+function activeRosterOrganizationId(): string {
+    return readActiveWorkspaceContext().organizationId;
+}
+
+function activeRosterOrganizationName(organizationId: string): string {
+    const context = readActiveWorkspaceContext();
+    return context.organizationId === organizationId
+        ? context.organizationName
+        : DEFAULT_ROSTER_ORGANIZATION_NAME;
+}
+
+function workspaceContextForRosterOrganization(organizationId: string): WorkspaceContext {
+    const context = readActiveWorkspaceContext();
+    if (context.organizationId === organizationId) return context;
+    return {
+        organizationId,
+        organizationName: DEFAULT_ROSTER_ORGANIZATION_NAME,
+    };
+}
+
+async function upsertRemoteWorkspaceBootstrap(
+    client: SupabaseClientLike,
+    context: WorkspaceContext,
+): Promise<void> {
+    const rows = workspaceBootstrapRows(context);
+    const organizationResult = await client.from("omr_organizations").upsert(rows.organization);
+    if (organizationResult.error) {
+        throw new Error(organizationResult.error.message || "Failed to bootstrap roster organization in Supabase");
+    }
+
+    if (rows.userProfile) {
+        const userResult = await client.from("omr_user_profiles").upsert(rows.userProfile);
+        if (userResult.error) {
+            throw new Error(userResult.error.message || "Failed to bootstrap roster user profile in Supabase");
+        }
+    }
+
+    if (rows.member) {
+        const memberResult = await client.from("omr_organization_members").upsert(rows.member);
+        if (memberResult.error) {
+            throw new Error(memberResult.error.message || "Failed to bootstrap roster organization member in Supabase");
+        }
+    }
+
+    if (rows.teacherProfile) {
+        const teacherResult = await client.from("omr_teacher_profiles").upsert(rows.teacherProfile);
+        if (teacherResult.error) {
+            throw new Error(teacherResult.error.message || "Failed to bootstrap roster teacher profile in Supabase");
+        }
+    }
+}
+
 function parseJson(value: string | null | undefined): unknown {
     if (!value) return null;
     try {
@@ -286,12 +345,13 @@ export function rosterSnapshotToSupabaseRows(
     snapshot: RosterSnapshot,
     organizationId = DEFAULT_ROSTER_ORGANIZATION_ID,
     updatedAt = new Date().toISOString(),
+    organizationName = DEFAULT_ROSTER_ORGANIZATION_NAME,
 ): SupabaseRosterRows {
     const normalized = rosterSnapshotWithStudentGroups(snapshot);
     return {
         organization: {
             id: organizationId,
-            name: DEFAULT_ROSTER_ORGANIZATION_NAME,
+            name: organizationName,
             plan: "free",
             metadata: { source: "omr_maker_roster" },
         },
@@ -493,7 +553,7 @@ function mergeRosterSnapshots(localSnapshot: RosterSnapshot, remoteSnapshot: Ros
 }
 
 async function fetchRemoteRosterSnapshot(
-    organizationId = DEFAULT_ROSTER_ORGANIZATION_ID,
+    organizationId = activeRosterOrganizationId(),
 ): Promise<RosterSnapshot> {
     const client = await getSupabaseClient();
     if (!client && isSupabaseConfigured()) throw new Error("Supabase client unavailable");
@@ -535,7 +595,7 @@ async function fetchRemoteRosterSnapshot(
 
 async function fetchRemoteRosterRows(
     client: SupabaseClientLike,
-    organizationId = DEFAULT_ROSTER_ORGANIZATION_ID,
+    organizationId = activeRosterOrganizationId(),
 ): Promise<SupabaseRemoteRosterRows> {
     const [classResult, studentResult, enrollmentResult] = await Promise.all([
         client.from("omr_classes").select("*").eq("organization_id", organizationId),
@@ -556,19 +616,22 @@ async function fetchRemoteRosterRows(
 
 async function upsertRemoteRosterSnapshot(
     snapshot: RosterSnapshot,
-    organizationId = DEFAULT_ROSTER_ORGANIZATION_ID,
+    organizationId = activeRosterOrganizationId(),
 ): Promise<void> {
     const client = await getSupabaseClient();
     if (!client && isSupabaseConfigured()) throw new Error("Supabase client unavailable");
     if (!client) return;
 
+    const workspaceContext = workspaceContextForRosterOrganization(organizationId);
     const remoteRows = await fetchRemoteRosterRows(client, organizationId);
-    const rows = rosterSnapshotToSupabaseRows(snapshot, organizationId);
+    const rows = rosterSnapshotToSupabaseRows(
+        snapshot,
+        organizationId,
+        undefined,
+        workspaceContext.organizationName || activeRosterOrganizationName(organizationId),
+    );
     const staleRows = staleRosterRowsForSnapshot(snapshot, remoteRows, organizationId);
-    const organizationResult = await client.from("omr_organizations").upsert(rows.organization);
-    if (organizationResult.error) {
-        throw new Error(organizationResult.error.message || "Failed to save roster organization to Supabase");
-    }
+    await upsertRemoteWorkspaceBootstrap(client, workspaceContext);
 
     const classRows = [...rows.classes, ...staleRows.classes];
     if (classRows.length > 0) {

@@ -6,7 +6,6 @@ import OMRPreview from "@/components/OMRPreview";
 import dynamic from "next/dynamic";
 import AnswerImportModal from "@/components/AnswerImportModal";
 import DistributeModal from "@/components/DistributeModal";
-import TeacherAuthGate from "@/components/TeacherAuthGate";
 import TeacherLogoutButton from "@/components/TeacherLogoutButton";
 import TeacherSessionChip from "@/components/TeacherSessionChip";
 import ThemeToggle from "@/components/ThemeToggle";
@@ -25,6 +24,12 @@ import { buildExamServiceReadiness, type ExamServiceReadinessLevel } from "@/lib
 import { readStoredExamDefaults } from "@/lib/appSettings";
 import { loadExam, loadExams, saveExam } from "@/lib/omrPersistence";
 import { attachInferredQuestionPdfRegions } from "@/lib/handwritingAnalytics";
+import {
+    detectQuestionLocationsFromText,
+    isBetterDetectedQuestionLocation,
+    type DetectedQuestionLocation,
+    type PdfTextLocatorItem,
+} from "@/lib/pdfQuestionDetection";
 import { summarizePersistenceWrite } from "@/lib/persistenceFeedback";
 import { buildBillingUsageSummary } from "@/lib/billingUsage";
 import { evaluatePlanLimit, getCurrentPlan, getPlanLabel, PLAN_BY_KEY } from "@/utils/plans";
@@ -33,6 +38,11 @@ import { evaluatePlanLimit, getCurrentPlan, getPlanLabel, PLAN_BY_KEY } from "@/
 const DRAFT_KEY = "omr_exam_draft";
 const AUTOSAVE_INTERVAL_MS = 2000;
 const HISTORY_LIMIT = 20;
+const PDF_PANE_MIN_WIDTH = 200;
+const SETTINGS_SIDEBAR_MIN_WIDTH = 250;
+const PREVIEW_PANE_MIN_WIDTH = 260;
+const PREVIEW_RAIL_WIDTH = 64;
+const DESKTOP_RESIZER_TOTAL_WIDTH = 12;
 type QuestionDifficulty = NonNullable<NonNullable<Question["tags"]>["difficulty"]>;
 
 const DIFFICULTY_OPTIONS: Array<{ value: QuestionDifficulty; label: string; tone: string }> = [
@@ -252,11 +262,9 @@ function readinessTone(level: ExamServiceReadinessLevel): { color: string; backg
 
 export default function CreateOMRPage() {
     return (
-        <TeacherAuthGate>
-            <Suspense fallback={<div style={{ minHeight: '100vh', background: 'var(--background)' }} />}>
-                <CreateOMRPageInner />
-            </Suspense>
-        </TeacherAuthGate>
+        <Suspense fallback={<div style={{ minHeight: '100vh', background: 'var(--background)' }} />}>
+            <CreateOMRPageInner />
+        </Suspense>
     );
 }
 
@@ -904,36 +912,66 @@ function CreateOMRPageInner() {
 
             const newQuestions = [...questions];
             let mappedCount = 0;
+            let updatedCount = 0;
+            const expectedQuestionNumbers = new Set(newQuestions.map(q => q.number));
+            const bestLocations = new Map<number, { page: number; location: DetectedQuestionLocation }>();
 
             for (let i = 1; i <= pdf.numPages; i++) {
                 const page = await pdf.getPage(i);
                 const viewport = page.getViewport({ scale: 1.0 });
                 const textContent = await page.getTextContent();
 
-                // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                const items = textContent.items.map((item: any) => ({
-                    str: item.str.trim(),
-                    x: item.transform[4] / viewport.width,
-                    y: (viewport.height - item.transform[5]) / viewport.height
-                }));
+                const items: PdfTextLocatorItem[] = textContent.items
+                    .map((rawItem): PdfTextLocatorItem | null => {
+                        const item = rawItem as {
+                            str?: unknown;
+                            transform?: unknown;
+                            width?: unknown;
+                            height?: unknown;
+                        };
+                        const transform = Array.isArray(item.transform) ? item.transform : [];
+                        const x = typeof transform[4] === "number" ? transform[4] / viewport.width : NaN;
+                        const y = typeof transform[5] === "number" ? (viewport.height - transform[5]) / viewport.height : NaN;
+                        if (!Number.isFinite(x) || !Number.isFinite(y)) return null;
 
-                items.forEach(item => {
-                    const exactMatch = item.str.match(/^\[?(\d+)[\]\.\)]?$/);
-                    // Match numbers with dots or parenthesis like "1.", "1)" or alone if confident.
-                    // Text blocks sometimes separate numbers from content.
-                    if (exactMatch) {
-                        const qNum = parseInt(exactMatch[1], 10);
-                        const qIndex = newQuestions.findIndex(q => q.number === qNum);
-                        if (qIndex !== -1 && !newQuestions[qIndex].pdfLocation) {
-                            newQuestions[qIndex] = { ...newQuestions[qIndex], pdfLocation: { page: i, x: item.x, y: Math.max(0, item.y - 0.02) } };
-                            mappedCount++;
-                        }
+                        return {
+                            str: typeof item.str === "string" ? item.str : "",
+                            x,
+                            y,
+                            width: typeof item.width === "number" ? item.width / viewport.width : undefined,
+                            height: typeof item.height === "number" ? item.height / viewport.height : undefined,
+                        };
+                    })
+                    .filter((item): item is PdfTextLocatorItem => !!item);
+
+                const locations = detectQuestionLocationsFromText(items, expectedQuestionNumbers);
+
+                for (const [qNum, location] of locations.entries()) {
+                    const current = bestLocations.get(qNum);
+                    if (isBetterDetectedQuestionLocation(location, current?.location)) {
+                        bestLocations.set(qNum, { page: i, location });
                     }
-                });
+                }
+            }
+
+            for (const [qNum, best] of bestLocations.entries()) {
+                const qIndex = newQuestions.findIndex(q => q.number === qNum);
+                if (qIndex === -1) continue;
+
+                const hadLocation = !!newQuestions[qIndex].pdfLocation;
+                newQuestions[qIndex] = {
+                    ...newQuestions[qIndex],
+                    pdfLocation: { page: best.page, x: best.location.x, y: best.location.y },
+                };
+                if (hadLocation) {
+                    updatedCount++;
+                } else {
+                    mappedCount++;
+                }
             }
 
             setQuestions(attachInferredQuestionPdfRegions(newQuestions, { overwriteExisting: true }));
-            toast.success("위치 자동 매칭 완료", `총 ${pdf.numPages}페이지에서 ${mappedCount}개 문항의 위치와 영역을 찾았습니다.`);
+            toast.success("위치 자동 매칭 완료", `총 ${pdf.numPages}페이지에서 새로 ${mappedCount}개, 갱신 ${updatedCount}개 문항의 위치와 영역을 찾았습니다.`);
         } catch (e) {
             console.error(e);
             toast.error("자동 매칭 실패", "위치 자동 매칭 중 오류가 발생했습니다.");
@@ -1268,13 +1306,13 @@ function CreateOMRPageInner() {
                 />
             )}
 
-            <div className="create-workspace" style={{ display: 'flex', flex: 1, height: 'calc(100vh - 4rem)', overflow: 'hidden' }}>
+            <div className={`create-workspace ${isPreviewCollapsed ? 'is-preview-collapsed' : ''}`} style={{ display: 'flex', flex: 1, height: 'calc(100vh - 4rem)', overflow: 'hidden' }}>
 
                 {/* 1. PDF Viewer Area */}
                 <div className="create-pdf-pane" style={{
                     width: `${pdfWidth}px`,
-                    minWidth: '300px',
-                    flexShrink: 0,
+                    minWidth: isPreviewCollapsed ? `${PDF_PANE_MIN_WIDTH}px` : '300px',
+                    flex: isPreviewCollapsed ? `1 1 ${pdfWidth}px` : `0 0 ${pdfWidth}px`,
                     borderRight: '1px solid var(--border)',
                     background: '#222',
                     position: 'relative',
@@ -1372,7 +1410,12 @@ function CreateOMRPageInner() {
                         const startWidth = pdfWidth;
                         const onMouseMove = (moveEvent: MouseEvent) => {
                             const newWidth = startWidth + (moveEvent.clientX - startX);
-                            setPdfWidth(Math.max(200, Math.min(newWidth, window.innerWidth - 400)));
+                            const previewWidth = isPreviewCollapsed ? PREVIEW_RAIL_WIDTH : PREVIEW_PANE_MIN_WIDTH;
+                            const maxPdfWidth = Math.max(
+                                PDF_PANE_MIN_WIDTH,
+                                window.innerWidth - sidebarWidth - previewWidth - DESKTOP_RESIZER_TOTAL_WIDTH
+                            );
+                            setPdfWidth(Math.max(PDF_PANE_MIN_WIDTH, Math.min(newWidth, maxPdfWidth)));
                         };
                         const onMouseUp = () => {
                             document.removeEventListener('mousemove', onMouseMove);
@@ -1388,7 +1431,7 @@ function CreateOMRPageInner() {
                 {/* 2. Settings Sidebar */}
                 <aside className="glass-panel scroll-custom create-settings-sidebar" style={{
                     width: `${sidebarWidth}px`,
-                    minWidth: '250px',
+                    minWidth: `${SETTINGS_SIDEBAR_MIN_WIDTH}px`,
                     padding: '1.5rem',
                     flexShrink: 0,
                     overflowY: 'auto',
@@ -2406,7 +2449,12 @@ function CreateOMRPageInner() {
                         const startWidth = sidebarWidth;
                         const onMouseMove = (moveEvent: MouseEvent) => {
                             const newWidth = startWidth + (moveEvent.clientX - startX);
-                            setSidebarWidth(Math.max(250, Math.min(newWidth, 600)));
+                            const previewWidth = isPreviewCollapsed ? PREVIEW_RAIL_WIDTH : PREVIEW_PANE_MIN_WIDTH;
+                            const maxSidebarWidth = Math.max(
+                                SETTINGS_SIDEBAR_MIN_WIDTH,
+                                window.innerWidth - pdfWidth - previewWidth - DESKTOP_RESIZER_TOTAL_WIDTH
+                            );
+                            setSidebarWidth(Math.max(SETTINGS_SIDEBAR_MIN_WIDTH, Math.min(newWidth, maxSidebarWidth)));
                         };
                         const onMouseUp = () => {
                             document.removeEventListener('mousemove', onMouseMove);
@@ -2421,11 +2469,11 @@ function CreateOMRPageInner() {
 
                 {/* 3. OMR Preview */}
                 <main className={`create-preview-main ${isPreviewCollapsed ? 'is-collapsed' : ''}`} style={{
-                    flex: isPreviewCollapsed ? '0 0 64px' : 1,
-                    width: isPreviewCollapsed ? '64px' : undefined,
+                    flex: isPreviewCollapsed ? `0 0 ${PREVIEW_RAIL_WIDTH}px` : 1,
+                    width: isPreviewCollapsed ? `${PREVIEW_RAIL_WIDTH}px` : undefined,
                     display: 'flex',
                     flexDirection: 'column',
-                    minWidth: isPreviewCollapsed ? '64px' : '350px',
+                    minWidth: isPreviewCollapsed ? `${PREVIEW_RAIL_WIDTH}px` : `${PREVIEW_PANE_MIN_WIDTH}px`,
                     overflow: 'hidden',
                     background: 'var(--background)',
                 }}>
@@ -2623,7 +2671,7 @@ function CreateOMRPageInner() {
                                     <div className="create-paper-frame-toolbar" aria-label="인쇄 미리보기 상태">
                                         <span>A4 가로</span>
                                         <span>{questionsCount}문항</span>
-                                        <span>{showPaperAnswerKey ? '정답키' : '빈 OMR'}</span>
+                                        <span>{showPaperAnswerKey ? '정답키' : '빈 OMR'} · 번호+보기만</span>
                                     </div>
                                     <div className="omr-print-preview-scale">
                                         <OMRPreview
@@ -2635,6 +2683,7 @@ function CreateOMRPageInner() {
                                             onQuestionClick={setSelectedQuestionId}
                                             onAnswerClick={handleOMRAnswerClick}
                                             showAnswerKey={showPaperAnswerKey}
+                                            printVariant="numbersOnly"
                                         />
                                     </div>
                                 </div>

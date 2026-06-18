@@ -21,6 +21,7 @@ import {
     AVATAR_COLORS,
     GROUP_COLORS,
     ROSTER_STORAGE_KEYS,
+    disambiguateRosterStudentId,
     hasStoredRosterData,
     readRosterGroups,
     readRosterInvites,
@@ -145,6 +146,12 @@ function rosterGroupForStudentInput(groupName: string, region: string, groups: R
 function studentIdForRoster(name: string, groupName: string, groups: RosterGroup[], region = "", groupId = ""): string {
     const group = rosterGroupForStudentInput(groupName, region, groups, groupId);
     return group ? studentIdFor(name, group.id) : rosterStudentFallbackId(name, groupName, region);
+}
+
+function uniqueStudentIdForRoster(baseId: string, emailKey: string, students: RosterStudent[]): string {
+    const idTakenByOtherEmail = students.some(student => student.id === baseId && normalizeEmail(student.email) !== emailKey);
+    if (!idTakenByOtherEmail) return baseId;
+    return disambiguateRosterStudentId(baseId, emailKey);
 }
 
 function groupOptionLabel(group: RosterGroup): string {
@@ -484,6 +491,16 @@ function ManageUsersInner() {
         }
     };
 
+    const handleCopyStudentId = async () => {
+        if (!selected) return;
+        try {
+            await navigator.clipboard.writeText(selected.id);
+            toast.success("학생번호 복사됨", `${selected.name}: ${selected.id}`);
+        } catch {
+            toast.error("복사 실패", "브라우저 클립보드 권한을 확인해주세요.");
+        }
+    };
+
     // ===== Student CRUD =====
     const handleAddStudent = (data: StudentFormData) => {
         const idx = students.length;
@@ -508,10 +525,11 @@ function ManageUsersInner() {
                     color: nextGroupColor(groups.length),
                 },
             ];
-        const id = studentIdForRoster(data.name, data.group, baseGroups, resolvedRegion, existingGroup?.id || data.groupId);
         const emailKey = normalizeEmail(data.email);
-        if (students.some(student => student.id === id || normalizeEmail(student.email) === emailKey)) {
-            toast.info("이미 등록된 학생", "같은 반/이름 또는 이메일의 학생이 이미 있습니다.");
+        const baseId = studentIdForRoster(data.name, data.group, baseGroups, resolvedRegion, existingGroup?.id || data.groupId);
+        const id = uniqueStudentIdForRoster(baseId, emailKey, students);
+        if (students.some(student => normalizeEmail(student.email) === emailKey || student.id === id)) {
+            toast.info("이미 등록된 학생", "같은 이메일 또는 학생번호의 학생이 이미 있습니다.");
             return;
         }
         const newStudent: RosterStudent = {
@@ -539,6 +557,11 @@ function ManageUsersInner() {
         const selectedGroup = groups.find(group => group.id === data.groupId);
         const resolvedRegion = data.region.trim() || selectedGroup?.region || "";
         const regionPatch = optionalRegion(resolvedRegion);
+        const emailKey = normalizeEmail(data.email);
+        if (students.some(student => student.id !== id && normalizeEmail(student.email) === emailKey)) {
+            toast.info("이미 등록된 이메일", "다른 학생이 같은 이메일을 사용 중입니다.");
+            return;
+        }
         const next = students.map(s => s.id === id ? {
             ...s,
             name: data.name,
@@ -632,8 +655,9 @@ function ManageUsersInner() {
             return;
         }
         const csv = serializeCsvRows([
-            ["name", "email", "group", "region", "avgScore", "examsTaken", "lastActive", "trend", "status"],
+            ["id", "name", "email", "group", "region", "avgScore", "examsTaken", "lastActive", "trend", "status"],
             ...rows.map(s => [
+                s.id,
                 s.name,
                 s.email,
                 s.group,
@@ -745,6 +769,7 @@ function ManageUsersInner() {
                 return;
             }
             const header = rows[0].map(h => h.trim().toLowerCase());
+            const idIdx = header.indexOf("id");
             const nameIdx = header.indexOf("name");
             const emailIdx = header.indexOf("email");
             const groupIdx = header.indexOf("group");
@@ -764,6 +789,7 @@ function ManageUsersInner() {
 
             for (let i = 1; i < rows.length; i++) {
                 const cols = rows[i];
+                const importedId = idIdx >= 0 ? (cols[idIdx] || "").trim() : "";
                 const name = (cols[nameIdx] || "").trim();
                 const email = (cols[emailIdx] || "").trim();
                 const group = (cols[groupIdx] || "").trim();
@@ -807,8 +833,11 @@ function ManageUsersInner() {
                     continue;
                 }
 
-                const id = studentIdForRoster(name, group, nextGroups, region, currentGroup.id);
-                const existingIndex = nextStudents.findIndex(student => student.id === id || normalizeEmail(student.email) === emailKey);
+                const baseId = studentIdForRoster(name, group, nextGroups, region, currentGroup.id);
+                const id = importedId || uniqueStudentIdForRoster(baseId, emailKey, nextStudents);
+                const existingByEmailIndex = nextStudents.findIndex(student => normalizeEmail(student.email) === emailKey);
+                const existingByIdIndex = nextStudents.findIndex(student => student.id === id);
+                const existingIndex = existingByEmailIndex >= 0 ? existingByEmailIndex : existingByIdIndex;
                 if (existingIndex >= 0) {
                     nextStudents[existingIndex] = {
                         ...nextStudents[existingIndex],
@@ -1284,6 +1313,31 @@ function ManageUsersInner() {
                                     }}>{selected.name.slice(1, 2)}</div>
                                     <div style={{ fontSize: '1.1rem', fontWeight: 700 }}>{selected.name}</div>
                                     <div style={{ fontSize: '0.85rem', color: 'var(--muted)' }}>{selected.email}</div>
+                                    <button
+                                        type="button"
+                                        onClick={handleCopyStudentId}
+                                        title="학생번호 복사"
+                                        style={{
+                                            marginTop: '0.45rem',
+                                            display: 'inline-flex',
+                                            alignItems: 'center',
+                                            justifyContent: 'center',
+                                            gap: '0.3rem',
+                                            maxWidth: '100%',
+                                            padding: '0.28rem 0.55rem',
+                                            borderRadius: 'var(--radius-full)',
+                                            background: 'var(--background)',
+                                            border: '1px solid var(--border)',
+                                            color: 'var(--muted)',
+                                            fontSize: '0.72rem',
+                                            fontWeight: 800,
+                                        }}
+                                    >
+                                        <Copy size={12} />
+                                        <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                                            학생번호 {selected.id}
+                                        </span>
+                                    </button>
                                     <div style={{ marginTop: '0.6rem', display: 'inline-flex', gap: '0.4rem', flexWrap: 'wrap', justifyContent: 'center' }}>
                                         <span className="badge badge-primary">{selected.group}</span>
                                         <span className="badge badge-secondary">{rosterStudentRegionName(selected, displayGroups)}</span>

@@ -6,11 +6,14 @@ import { ShieldCheck } from "lucide-react";
 import {
     normalizeTeacherRedirectPath,
     readTeacherSession,
+    saveTeacherSessionSnapshot,
+    type TeacherSession,
     teacherSessionRemainingMs,
 } from "@/lib/teacherSession";
 
 interface TeacherAuthGateProps {
     children: ReactNode;
+    initialSession?: TeacherSession | null;
 }
 
 const MAX_SESSION_RECHECK_DELAY_MS = 2_147_000_000;
@@ -27,11 +30,15 @@ function nextSessionRecheckDelay(remainingMs: number): number {
     return Math.min(Math.max(remainingMs + 250, 1000), MAX_SESSION_RECHECK_DELAY_MS);
 }
 
-export default function TeacherAuthGate({ children }: TeacherAuthGateProps) {
+function initialAuthStatus(initialSession: TeacherSession | null | undefined): "checking" | "authenticated" {
+    return teacherSessionRemainingMs(initialSession) > 0 ? "authenticated" : "checking";
+}
+
+export default function TeacherAuthGate({ children, initialSession = null }: TeacherAuthGateProps) {
     const [authState, setAuthState] = useState<{
         status: "checking" | "authenticated" | "anonymous";
         loginHref: string;
-    }>({ status: "checking", loginHref: "/?role=teacher" });
+    }>(() => ({ status: initialAuthStatus(initialSession), loginHref: "/?role=teacher" }));
 
     useEffect(() => {
         let cancelled = false;
@@ -46,8 +53,11 @@ export default function TeacherAuthGate({ children }: TeacherAuthGateProps) {
 
         const syncAuthState = () => {
             if (cancelled) return;
-            const session = readTeacherSession();
+            const session = readTeacherSession() || initialSession;
             const remainingMs = teacherSessionRemainingMs(session);
+            if (remainingMs > 0) {
+                saveTeacherSessionSnapshot(session);
+            }
             setAuthState({
                 loginHref: buildLoginHref(),
                 status: remainingMs > 0 ? "authenticated" : "anonymous",
@@ -76,7 +86,7 @@ export default function TeacherAuthGate({ children }: TeacherAuthGateProps) {
             window.removeEventListener("focus", handleFocus);
             document.removeEventListener("visibilitychange", handleVisibilityChange);
         };
-    }, []);
+    }, [initialSession]);
 
     if (authState.status === "checking") {
         return (

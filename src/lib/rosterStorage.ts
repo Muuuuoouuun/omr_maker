@@ -69,6 +69,20 @@ export function rosterStudentFallbackId(name: string, group: string, region?: st
     return studentIdFor(name, rosterStudentFallbackGroupKey(group, region));
 }
 
+export function disambiguateRosterStudentId(baseId: string, uniqueHint: string): string {
+    const normalizedBase = asString(baseId);
+    const normalizedHint = asString(uniqueHint).toLocaleLowerCase("ko-KR");
+    if (!normalizedBase || !normalizedHint) return normalizedBase;
+
+    let hash = 2166136261;
+    for (let i = 0; i < normalizedHint.length; i += 1) {
+        hash ^= normalizedHint.charCodeAt(i);
+        hash = Math.imul(hash, 16777619);
+    }
+
+    return `${normalizedBase}#${(hash >>> 0).toString(36)}`;
+}
+
 export function scopedGroupKeyForStudentId(studentId: string | undefined): string {
     const normalized = asString(studentId);
     const separator = normalized.indexOf("::");

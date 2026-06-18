@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+    disambiguateRosterStudentId,
     hasStoredRosterData,
     parseStoredRosterGroups,
     parseStoredRosterInvites,
@@ -50,6 +51,16 @@ describe("roster storage", () => {
             "서울/A반::김학생",
             "부산/A반::김학생",
         ]);
+    });
+
+    it("derives stable duplicate-safe student ids without exposing the email", () => {
+        const first = disambiguateRosterStudentId("group-a::김학생", "first@example.edu");
+        const second = disambiguateRosterStudentId("group-a::김학생", "second@example.edu");
+
+        expect(first).toMatch(/^group-a::김학생#[a-z0-9]+$/);
+        expect(second).toMatch(/^group-a::김학생#[a-z0-9]+$/);
+        expect(first).not.toBe(second);
+        expect(first).not.toContain("first@example.edu");
     });
 
     it("matches students to same-name groups by region when region is available", () => {

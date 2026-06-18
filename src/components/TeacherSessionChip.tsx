@@ -56,7 +56,7 @@ export default function TeacherSessionChip({ compact = false }: TeacherSessionCh
         <span
             className={`teacher-session-chip ${compact ? "is-compact" : ""} ${display.level === "expiring" ? "is-expiring" : ""} ${display.level === "expired" ? "is-expired" : ""}`}
             title={display.detail}
-            aria-label={`교사 세션 ${display.label}`}
+            aria-label={`교사 세션 ${display.actorLabel} ${display.label}`}
             style={{
                 color: tone.color,
                 background: tone.background,
@@ -64,7 +64,7 @@ export default function TeacherSessionChip({ compact = false }: TeacherSessionCh
             }}
         >
             <Icon size={compact ? 13 : 14} aria-hidden="true" />
-            {!compact && <span className="teacher-session-chip-prefix">교사 세션</span>}
+            {!compact && <span className="teacher-session-chip-prefix">{display.actorLabel}</span>}
             <strong>{display.label}</strong>
         </span>
     );

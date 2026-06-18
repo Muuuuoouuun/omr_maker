@@ -1,6 +1,7 @@
 "use client";
 
 import { LogOut } from "lucide-react";
+import { clearTeacherAuthSession } from "@/app/actions/auth";
 import { clearTeacherSession } from "@/lib/teacherSession";
 
 interface TeacherLogoutButtonProps {
@@ -12,7 +13,9 @@ export default function TeacherLogoutButton({ size = "normal" }: TeacherLogoutBu
 
     const handleLogout = () => {
         clearTeacherSession();
-        window.location.href = "/?role=teacher";
+        void clearTeacherAuthSession().finally(() => {
+            window.location.href = "/?role=teacher";
+        });
     };
 
     return (

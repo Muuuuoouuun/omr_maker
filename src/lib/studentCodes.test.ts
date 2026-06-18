@@ -65,6 +65,10 @@ describe("student start codes", () => {
             groupId: "group-a",
             groupName: "A반",
             matchedRosterProfile: true,
+            rosterMatchCount: 1,
+            requiresStudentLookup: false,
+            lookupMatched: false,
+            lookupMismatch: false,
         });
     });
 
@@ -86,6 +90,43 @@ describe("student start codes", () => {
             groupId: "seoul-a",
             groupName: "A반",
             matchedRosterProfile: true,
+            rosterMatchCount: 1,
+            requiresStudentLookup: false,
+            lookupMatched: false,
+            lookupMismatch: false,
+        });
+    });
+
+    it("requires a student lookup when same-name roster profiles share the selected class", () => {
+        const base = {
+            name: "김학생",
+            selectedGroupId: "group-a",
+            groups: [{ id: "group-a", name: "A반" }],
+            students: [
+                { id: "student-1", name: "김학생", group: "A반", email: "first@example.edu" },
+                { id: "student-2", name: "김학생", group: "A반", email: "second@example.edu" },
+            ],
+        };
+
+        expect(resolveStudentIdentity(base)).toMatchObject({
+            studentId: "student-1",
+            rosterMatchCount: 2,
+            requiresStudentLookup: true,
+            lookupMatched: false,
+            lookupMismatch: false,
+        });
+        expect(resolveStudentIdentity({ ...base, studentLookup: "second@example.edu" })).toMatchObject({
+            studentId: "student-2",
+            rosterMatchCount: 2,
+            requiresStudentLookup: false,
+            lookupMatched: true,
+            lookupMismatch: false,
+        });
+        expect(resolveStudentIdentity({ ...base, studentLookup: "wrong@example.edu" })).toMatchObject({
+            rosterMatchCount: 2,
+            requiresStudentLookup: true,
+            lookupMatched: false,
+            lookupMismatch: true,
         });
     });
 

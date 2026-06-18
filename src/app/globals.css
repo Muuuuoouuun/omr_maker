@@ -827,6 +827,23 @@ button {
   font-weight: 900;
 }
 
+.omr-sheet--numbers-only {
+  padding: 13mm 14mm 10mm;
+}
+
+.omr-sheet--numbers-only .omr-body {
+  flex: 1;
+  border-top: 1.5px solid #111;
+  border-bottom: 0;
+  padding-top: 5mm;
+  padding-bottom: 0;
+}
+
+.omr-sheet--numbers-only .omr-meta,
+.omr-sheet--numbers-only .omr-footer {
+  display: none !important;
+}
+
 .omr-body {
   flex: 1;
   display: flex;
@@ -1072,6 +1089,10 @@ button {
     pointer-events: none;
   }
 
+  .create-paper-frame .omr-sheet--numbers-only::before {
+    content: none;
+  }
+
   .create-paper-frame .omr-sheet::after {
     content: '';
     position: absolute;
@@ -1089,8 +1110,22 @@ button {
   }
 }
 
+.create-workspace {
+  min-width: 0;
+}
+
 .create-pdf-pane {
   scrollbar-gutter: stable;
+}
+
+.create-pdf-pane,
+.create-settings-sidebar,
+.create-preview-main {
+  transition:
+    flex-basis 0.22s ease,
+    width 0.22s ease,
+    min-width 0.22s ease,
+    box-shadow 0.22s ease;
 }
 
 .create-resizer {
@@ -2142,6 +2177,18 @@ button {
   flex-shrink: 0;
 }
 
+.omr-cardview.is-vertical-numbering .q-card-num {
+  width: auto;
+  height: auto;
+  min-width: 2.2ch;
+  padding: 0 0.1rem;
+  border-color: transparent;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+  color: var(--foreground);
+}
+
 .q-card-bubbles {
   display: flex;
   gap: 0.3rem;
@@ -2267,8 +2314,9 @@ button {
 }
 
 @container (max-width: 540px) {
-  .omr-cardview-grid {
-    grid-template-columns: 1fr;
+  .omr-cardview-grid,
+  .omr-cardview.is-vertical-numbering .omr-cardview-grid {
+    grid-template-columns: minmax(0, 1fr);
     grid-template-rows: none;
     grid-auto-flow: row;
   }
@@ -3160,6 +3208,17 @@ button {
     max-width: none;
     border-radius: 0;
     overflow: hidden;
+  }
+
+  .omr-sheet--numbers-only {
+    padding: 11mm 12mm 8mm;
+  }
+
+  .omr-sheet--numbers-only .omr-body {
+    border-top: 1.5px solid #111;
+    border-bottom: 0;
+    padding-top: 4mm;
+    padding-bottom: 0;
   }
 
   .omr-header {

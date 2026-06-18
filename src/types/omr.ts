@@ -63,6 +63,12 @@ export function questionChoiceCount(question: Pick<Question, "choices">, fallbac
 export interface Exam {
     id: string; // generated ID
     title: string;
+    /** App workspace/organization scope for remote persistence. */
+    organizationId?: string;
+    /** Optional class scope when an exam belongs to one class. */
+    classId?: string;
+    /** App-managed teacher user id until Supabase Auth owns user ids. */
+    createdByUserId?: string;
     questions: Question[];
     createdAt: string;
     updatedAt?: string;
@@ -110,6 +116,14 @@ export interface QuestionResult {
     attemptId: string;
     examId: string;
     examTitle: string;
+    /** App workspace/organization scope for remote persistence. */
+    organizationId?: string;
+    /** Optional class scope. Falls back to groupId when absent. */
+    classId?: string;
+    /** Optional assignment scope for future gradebook flows. */
+    assignmentId?: string;
+    /** Canonical roster/student profile id. Falls back to studentId when absent. */
+    studentProfileId?: string;
     studentName: string;
     studentId?: string;
     groupId?: string;
@@ -203,6 +217,14 @@ export interface Attempt {
     id: string; // specific attempt ID
     examId: string;
     examTitle: string;
+    /** App workspace/organization scope for remote persistence. */
+    organizationId?: string;
+    /** Optional class scope. Falls back to groupId when absent. */
+    classId?: string;
+    /** Optional assignment scope for future gradebook flows. */
+    assignmentId?: string;
+    /** Canonical roster/student profile id. Falls back to studentId when absent. */
+    studentProfileId?: string;
     studentName: string; // "Student" for anonymous
     /** Stable student identifier — preferred over studentName for joins. */
     studentId?: string;

@@ -36,9 +36,13 @@ describe("service UI surface", () => {
         expect(createPage).toContain("인쇄용 (A4)");
         expect(createPage).toContain("create-paper-frame-toolbar");
         expect(createPage).toContain("A4 가로");
+        expect(createPage).toContain("번호+보기만");
+        expect(createPage).toContain('printVariant="numbersOnly"');
         expect(createPage).toContain("create-preview-context-strip");
         expect(createPage).toContain("create-preview-context-meter");
         expect(createPage).toContain("isPreviewCollapsed");
+        expect(createPage).toContain("is-preview-collapsed");
+        expect(createPage).toContain("const PREVIEW_RAIL_WIDTH = 64");
         expect(createPage).toContain("create-preview-collapsed-rail");
         expect(createPage).toContain("OMR 미리보기 접기");
         expect(createPage).toContain("OMR 미리보기 펼치기");
@@ -46,12 +50,37 @@ describe("service UI surface", () => {
         expect(createPage).toContain("PDF 영역");
         expect(css).toContain(".create-preview-scroll.paper-mode");
         expect(css).toContain(".create-preview-main.is-collapsed");
+        expect(css).toContain(".create-workspace");
+        expect(css).toContain("flex-basis 0.22s ease");
         expect(css).toContain(".create-preview-context-grid");
         expect(css).toContain(".create-paper-frame .omr-sheet::before");
+        expect(css).toContain(".create-paper-frame .omr-sheet--numbers-only::before");
+        expect(css).toContain(".omr-sheet--numbers-only");
         expect(css).toContain(".create-paper-frame-toolbar span");
+        expect(omrPreview).toContain("printVariant?: 'standard' | 'numbersOnly'");
+        expect(omrPreview).toContain("isNumbersOnlyPrint");
         expect(omrPreview).toContain("수험번호 마킹란");
         expect(omrPreview).toContain("omr-marker-tl");
         expect(omrPreview).toContain("OMR Maker - Generated Answer Sheet");
+    });
+
+    it("allows the creation card preview to shrink into one question column", () => {
+        const css = readProjectFile("src/app/globals.css");
+        const createPage = readProjectFile("src/app/create/page.tsx");
+
+        expect(createPage).toContain("const PREVIEW_PANE_MIN_WIDTH = 260");
+        expect(createPage).toContain("const PREVIEW_RAIL_WIDTH = 64");
+        expect(createPage).toContain("isPreviewCollapsed ? `1 1 ${pdfWidth}px`");
+        expect(createPage).toContain("isPreviewCollapsed ? PREVIEW_RAIL_WIDTH : PREVIEW_PANE_MIN_WIDTH");
+        expect(createPage).toContain("window.innerWidth - sidebarWidth - previewWidth");
+        expect(createPage).toContain("window.innerWidth - pdfWidth - previewWidth");
+        expect(css).toContain("@container (max-width: 540px)");
+        expect(css).toContain(".omr-cardview.is-vertical-numbering .omr-cardview-grid");
+        expect(css).toContain("grid-template-columns: minmax(0, 1fr)");
+        expect(css).toContain("grid-auto-flow: row");
+        expect(css).toContain(".omr-cardview.is-vertical-numbering .q-card-num");
+        expect(css).toContain("border-color: transparent");
+        expect(css).toContain("background: transparent");
     });
 
     it("keeps existing distribution access settings when reopening the share flow", () => {
@@ -127,22 +156,45 @@ describe("service UI surface", () => {
     });
 
     it("keeps teacher session health visible in operational headers", () => {
+        const nextConfig = readProjectFile("next.config.ts");
         const teacherHeader = readProjectFile("src/components/TeacherHeader.tsx");
         const sessionChip = readProjectFile("src/components/TeacherSessionChip.tsx");
         const dashboardPage = readProjectFile("src/app/teacher/dashboard/page.tsx");
         const createPage = readProjectFile("src/app/create/page.tsx");
+        const homePage = readProjectFile("src/app/page.tsx");
         const settingsPage = readProjectFile("src/app/teacher/settings/page.tsx");
         const css = readProjectFile("src/app/globals.css");
 
         expect(sessionChip).toContain("buildTeacherSessionDisplay");
         expect(sessionChip).toContain("교사 세션");
+        expect(sessionChip).toContain("display.actorLabel");
         expect(sessionChip).toContain("visibilitychange");
         expect(teacherHeader).toContain("<TeacherSessionChip");
         expect(dashboardPage).toContain("<TeacherSessionChip");
         expect(createPage).toContain("<TeacherSessionChip compact");
+        expect(homePage).toContain("아이디 또는 이메일");
+        expect(homePage).toContain('type="button"');
+        expect(homePage).toContain("teacherIdentifier");
+        expect(homePage).toContain("saveTeacherSessionWithIdentity");
+        expect(homePage).toContain("학생번호 또는 이메일");
+        expect(homePage).toContain("studentLookup");
+        expect(homePage).toContain("needsStudentLookup");
+        expect(homePage).toContain("동명이인이 있습니다");
         expect(settingsPage).toContain("buildTeacherSessionDisplay");
+        expect(settingsPage).toContain("TEACHER_ACCOUNTS");
+        expect(settingsPage).toContain("clearTeacherAuthSession");
+        expect(settingsPage).toContain("SECURITY_POSTURE_ITEMS");
+        expect(settingsPage).toContain("운영 보안 점검");
+        expect(settingsPage).toContain("readySecurityItems");
+        expect(settingsPage).toContain("운영 준비도");
+        expect(settingsPage).toContain("gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 220px), 1fr))'");
+        expect(settingsPage).toContain("로그인 시도 제한");
+        expect(settingsPage).toContain("서버 워크스페이스 준비");
+        expect(settingsPage).toContain("SUPABASE_SERVICE_ROLE_KEY");
+        expect(settingsPage).toContain("Supabase Auth, 조직 멤버십, production-rls.sql 정책");
         expect(css).toContain(".teacher-session-chip");
         expect(css).toContain(".teacher-session-chip-prefix");
+        expect(nextConfig).toContain('allowedDevOrigins: ["127.0.0.1"]');
     });
 
     it("keeps billing local-plan changes clear until real payment integration exists", () => {
@@ -403,6 +455,11 @@ describe("service UI surface", () => {
         expect(usersPage).toContain("시작 코드");
         expect(usersPage).toContain("handleIssueStudentStartCode");
         expect(usersPage).toContain("generateStartCode");
+        expect(usersPage).toContain("disambiguateRosterStudentId");
+        expect(usersPage).toContain("uniqueStudentIdForRoster");
+        expect(usersPage).toContain('"id", "name", "email"');
+        expect(usersPage).toContain("학생번호 {selected.id}");
+        expect(usersPage).toContain("handleCopyStudentId");
         expect(notificationBell).toContain("buildKakaoNotificationCandidates");
         expect(notificationBell).toContain("카카오 발송 후보 대기");
         expect(notificationBell).toContain("classRetakeRecommendationCount");

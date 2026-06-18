@@ -9,8 +9,17 @@ export interface TeacherSession {
     schemaVersion: 1;
     role: "teacher";
     token: string;
+    teacherId?: string;
+    email?: string;
+    displayName?: string;
     issuedAt: number;
     expiresAt: number;
+}
+
+export interface TeacherSessionIdentity {
+    teacherId: string;
+    email?: string;
+    displayName?: string;
 }
 
 export interface TeacherSessionStorage {
@@ -24,6 +33,7 @@ export type TeacherSessionDisplayLevel = "active" | "expiring" | "expired";
 export interface TeacherSessionDisplay {
     label: string;
     detail: string;
+    actorLabel: string;
     level: TeacherSessionDisplayLevel;
     remainingMs: number;
     isExpired: boolean;
@@ -38,11 +48,14 @@ export function isTeacherToken(token: unknown): token is string {
     return typeof token === "string" && /^tkn_[a-z0-9]+_[a-f0-9]{32}$/i.test(token.trim());
 }
 
-export function createTeacherSession(token: string, now = Date.now()): TeacherSession {
+export function createTeacherSession(token: string, now = Date.now(), identity?: TeacherSessionIdentity): TeacherSession {
     return {
         schemaVersion: 1,
         role: "teacher",
         token,
+        teacherId: identity?.teacherId?.trim() || undefined,
+        email: identity?.email?.trim() || undefined,
+        displayName: identity?.displayName?.trim() || undefined,
         issuedAt: now,
         expiresAt: now + TEACHER_SESSION_TTL_MS,
     };
@@ -65,6 +78,9 @@ export function parseTeacherSession(raw: string | null | undefined, now = Date.n
             schemaVersion: parsed.schemaVersion === 1 ? 1 : 1,
             role: "teacher",
             token: typeof parsed.token === "string" ? parsed.token : "",
+            teacherId: typeof parsed.teacherId === "string" ? parsed.teacherId.trim() || undefined : undefined,
+            email: typeof parsed.email === "string" ? parsed.email.trim() || undefined : undefined,
+            displayName: typeof parsed.displayName === "string" ? parsed.displayName.trim() || undefined : undefined,
             issuedAt: typeof parsed.issuedAt === "number" ? parsed.issuedAt : 0,
             expiresAt: typeof parsed.expiresAt === "number" ? parsed.expiresAt : 0,
         };
@@ -111,6 +127,38 @@ export function saveTeacherSession(token: string, storage: TeacherSessionStorage
     }
 }
 
+export function saveTeacherSessionWithIdentity(
+    token: string,
+    identity: TeacherSessionIdentity | undefined,
+    storage: TeacherSessionStorage | null = getBrowserSessionStorage(),
+    now = Date.now(),
+): boolean {
+    if (!storage || !isTeacherToken(token)) return false;
+    try {
+        const session = createTeacherSession(token, now, identity);
+        storage.setItem(TEACHER_SESSION_KEY, JSON.stringify(session));
+        storage.setItem(LEGACY_TEACHER_TOKEN_KEY, token);
+        return true;
+    } catch {
+        return false;
+    }
+}
+
+export function saveTeacherSessionSnapshot(
+    session: TeacherSession | null | undefined,
+    storage: TeacherSessionStorage | null = getBrowserSessionStorage(),
+    now = Date.now(),
+): boolean {
+    if (!storage || !isTeacherSessionActive(session, now)) return false;
+    try {
+        storage.setItem(TEACHER_SESSION_KEY, JSON.stringify(session));
+        storage.setItem(LEGACY_TEACHER_TOKEN_KEY, session.token);
+        return true;
+    } catch {
+        return false;
+    }
+}
+
 export function clearTeacherSession(storage: TeacherSessionStorage | null = getBrowserSessionStorage()): void {
     if (!storage) return;
     try {
@@ -146,10 +194,13 @@ export function buildTeacherSessionDisplay(session: TeacherSession | null | unde
             ? "expiring"
             : "active";
 
+    const actorLabel = session?.displayName || session?.email || session?.teacherId || "교사";
+
     return {
         label: formatTeacherSessionRemaining(remainingMs),
+        actorLabel,
         detail: session && !isExpired
-            ? `만료 시각 ${new Date(session.expiresAt).toLocaleString('ko-KR')}`
+            ? `${actorLabel} · 만료 시각 ${new Date(session.expiresAt).toLocaleString('ko-KR')}`
             : "교사 세션이 없거나 만료되었습니다.",
         level,
         remainingMs,

@@ -6,6 +6,7 @@
 ```bash
 NEXT_PUBLIC_SUPABASE_URL=https://wqhiajvisirxdjivhmlt.supabase.co
 NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY=sb_publishable_your_full_key_here
+SUPABASE_SERVICE_ROLE_KEY=server_only_service_role_key_for_workspace_bootstrap
 ```
 
 3. Restart the Next.js dev server after changing `.env.local`.
@@ -43,16 +44,27 @@ Roster deletions are soft-synced: missing students are marked `withdrawn`, missi
 Before changing persistence row mappings or `schema.sql`, run:
 
 ```bash
-npm test -- --run src/lib/supabaseSchemaContract.test.ts src/lib/omrPersistence.test.ts src/lib/rosterPersistence.test.ts
+npm test -- --run src/lib/supabaseSchemaContract.test.ts src/lib/workspaceContext.test.ts src/lib/omrPersistence.test.ts src/lib/rosterPersistence.test.ts
 ```
 
-The contract test checks that the SQL schema still exposes the roster, fact, region, retake, guest-merge, and Kakao pre-send columns/indexes used by the app.
+The contract test checks that the SQL schema still exposes the roster, fact, region, retake, guest-merge, and Kakao pre-send columns/indexes used by the app. The workspace-context tests check that app-managed teacher sessions create stable interim `teacher_<hash>` organization/user scopes without exposing raw email addresses in row ids.
+
+Under the current alpha public-policy sync model, remote roster/exam/attempt saves also bootstrap:
+
+- `omr_organizations`
+- `omr_user_profiles`
+- `omr_organization_members`
+- `omr_teacher_profiles`
+
+Teacher login also attempts the same bootstrap through a server action when `SUPABASE_SERVICE_ROLE_KEY` or `OMR_SUPABASE_SERVICE_ROLE_KEY` is configured. Service role keys must stay server-only and must never use a `NEXT_PUBLIC_` prefix.
+
+Those bootstrap writes must move fully to trusted server/service-role code before `production-rls.sql` is applied.
 
 ## Data Model
 
 The schema separates the current JSON sync surface from the future relational product model:
 
-- `organization_id` separates academy, school, or teacher-owned data.
+- `organization_id` separates academy, school, or teacher-owned data. Until Supabase Auth membership is connected, the app derives an interim `teacher_<hash>` organization scope from the active teacher session and falls back to `default` only when no teacher session is available.
 - `omr_user_profiles` stores global app user metadata without forcing every student to have an auth account.
 - `omr_organization_members` is the workspace role boundary for owner/admin/teacher/assistant/viewer access.
 - `omr_teacher_profiles` and `omr_student_profiles` keep role-specific metadata such as subjects, external student IDs, guardian contact, and roster status.
@@ -106,14 +118,20 @@ For large assets, keep metadata in Postgres and binary data in Supabase Storage:
 - File location: `storage_bucket` + `storage_path`
 - External resources: `source_url`
 
-## RLS warning
+## Production RLS Handoff
 
 The current policies in `schema.sql` are intentionally open for alpha/local testing because the app does not have real Supabase Auth yet. Do not store real student data with these policies.
 
-Before using production or sensitive real student data:
+`production-rls.sql` is the production policy handoff file. It removes the alpha public policies, revokes anonymous table access, forces RLS, and gates data through Supabase Auth plus `omr_organization_members`.
+
+Before running `production-rls.sql` or using sensitive real student data:
 
 1. Enable Supabase Auth for teachers and students.
-2. Replace public read/write policies with organization-scoped checks.
-3. Restrict `omr_audit_logs` insert/read access by role.
-4. Add server-side entitlement checks for Pro and Academy features.
-5. Add data retention rules for archived handwriting.
+2. Backfill every production row with the correct `organization_id`.
+3. Create `omr_organization_members` rows for each active staff account.
+4. Move organization creation, first-owner bootstrap, and audit-log writes to trusted server/service-role code.
+5. Run `supabase/production-rls.sql` in the Supabase SQL Editor.
+6. Add server-side entitlement checks for Pro and Academy features.
+7. Add data retention rules for archived handwriting.
+
+After this handoff, anonymous quick-entry students can no longer write directly through the publishable Supabase key. Keep student submissions server-mediated until student Auth accounts or signed assignment tokens are implemented.

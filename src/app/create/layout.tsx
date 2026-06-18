@@ -6,11 +6,11 @@ import { bootstrapWorkspaceWithServiceRole } from "@/lib/supabaseServerAdmin";
 import { parseSignedTeacherSessionCookie, TEACHER_SERVER_SESSION_COOKIE } from "@/lib/teacherServerSession";
 import { workspaceContextFromTeacherSession } from "@/lib/workspaceContext";
 
-export default async function TeacherLayout({ children }: { children: ReactNode }) {
+export default async function CreateLayout({ children }: { children: ReactNode }) {
     const cookieStore = await cookies();
     const serverSession = parseSignedTeacherSessionCookie(cookieStore.get(TEACHER_SERVER_SESSION_COOKIE)?.value);
     if (!serverSession) {
-        redirect("/?role=teacher&next=%2Fteacher%2Fdashboard");
+        redirect("/?role=teacher&next=%2Fcreate");
     }
 
     const bootstrapResult = await bootstrapWorkspaceWithServiceRole(workspaceContextFromTeacherSession(serverSession));

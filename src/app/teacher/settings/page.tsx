@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import TeacherHeader from "@/components/TeacherHeader";
 import { User, Bell, FileText, CheckCircle, Key, Palette, Shield, Copy, Eye, EyeOff, Save, RotateCcw, Download, Upload, LogOut, Database, RefreshCw, AlertTriangle, CloudOff } from "lucide-react";
 import { toast } from "@/components/Toast";
+import { clearTeacherAuthSession } from "@/app/actions/auth";
 import { SETTINGS_STORAGE_KEY, maskGeminiApiKey } from "@/lib/geminiApiKey";
 import { DEFAULT_SETTINGS, mergeSettings, readStoredSettings, type AppSettings } from "@/lib/appSettings";
 import { buildDataDbReadiness, type DataDbReadinessSummary, type DataDbReadinessTone } from "@/lib/dataDbReadiness";
@@ -66,6 +67,39 @@ const SECTIONS: { key: Section; label: string; icon: React.ReactNode; color: str
     { key: "data", label: "데이터 · DB", icon: <Database size={18} />, color: "#14b8a6" },
     { key: "security", label: "보안", icon: <Shield size={18} />, color: "#ef4444" },
 ];
+
+const SECURITY_POSTURE_ITEMS = [
+    {
+        key: "credential-source",
+        label: "교사 계정 원천",
+        detail: "현재 교사 계정은 서버 환경변수에서만 읽고 브라우저 설정에는 저장하지 않습니다.",
+        tone: "ready",
+    },
+    {
+        key: "server-session",
+        label: "서버 세션 쿠키",
+        detail: "/teacher와 /create는 HttpOnly 서명 쿠키가 없으면 서버에서 먼저 차단합니다.",
+        tone: "ready",
+    },
+    {
+        key: "login-throttle",
+        label: "로그인 시도 제한",
+        detail: "동일 식별자와 클라이언트의 반복 실패는 5회 이후 10분 동안 제한됩니다.",
+        tone: "ready",
+    },
+    {
+        key: "server-workspace-bootstrap",
+        label: "서버 워크스페이스 준비",
+        detail: "SUPABASE_SERVICE_ROLE_KEY가 서버에 있으면 로그인과 교사 화면 진입 때 조직·멤버·교사 프로필을 서버에서 준비합니다.",
+        tone: "ready",
+    },
+    {
+        key: "supabase-auth",
+        label: "운영 전환 대기",
+        detail: "실사용 전에는 Supabase Auth, 조직 멤버십, production-rls.sql 정책으로 계정 권한을 이관해야 합니다.",
+        tone: "warning",
+    },
+] as const;
 
 function initialDataDbReadiness(): DataDbReadinessSummary {
     return buildDataDbReadiness({
@@ -958,6 +992,7 @@ function DataDbSection({
 
 function SecuritySection({ value, onChange, onSave, onCancel }: SectionProps<Settings["security"]>) {
     const [sessionDisplay, setSessionDisplay] = useState<TeacherSessionDisplay>(() => buildTeacherSessionDisplay(null));
+    const readySecurityItems = SECURITY_POSTURE_ITEMS.filter(item => item.tone === "ready").length;
 
     useEffect(() => {
         const updateSessionDisplay = () => setSessionDisplay(readTeacherSessionDisplay());
@@ -972,12 +1007,14 @@ function SecuritySection({ value, onChange, onSave, onCancel }: SectionProps<Set
     const handleEndCurrentSession = () => {
         clearTeacherSession();
         toast.success("세션 종료됨", "교사 세션을 종료했습니다. 다시 로그인해주세요.");
-        window.location.href = "/?role=teacher";
+        void clearTeacherAuthSession().finally(() => {
+            window.location.href = "/?role=teacher";
+        });
     };
 
     return (
         <Card title="보안" desc="계정 보안을 관리하세요.">
-            <Field label="교사 비밀번호">
+            <Field label="교사 계정">
                 <div style={{
                     padding: '0.9rem 1rem',
                     background: 'var(--background)',
@@ -991,13 +1028,75 @@ function SecuritySection({ value, onChange, onSave, onCancel }: SectionProps<Set
                         서버 인증으로 관리됨
                     </div>
                     <p style={{ color: 'var(--muted)', fontSize: '0.82rem', lineHeight: 1.65, wordBreak: 'keep-all' }}>
-                        교사 비밀번호는 브라우저 설정에 저장하지 않습니다. 운영 환경에서는 서버 환경변수 <code style={{ fontWeight: 800 }}>TEACHER_PASSWORD</code>를 변경한 뒤 다시 배포해 교체하세요.
+                        교사 계정 정보는 브라우저 설정에 저장하지 않습니다. 운영 환경에서는 <code style={{ fontWeight: 800 }}>TEACHER_ACCOUNTS</code> 또는 <code style={{ fontWeight: 800 }}>TEACHER_LOGIN_ID</code>/<code style={{ fontWeight: 800 }}>TEACHER_PASSWORD</code> 서버 환경변수를 변경한 뒤 다시 배포해 교체하세요.
                     </p>
                 </div>
             </Field>
 
             <Toggle checked={value.twoFactor} onChange={v => onChange({ twoFactor: v })} label="2단계 인증" desc="로그인 시 앱에서 추가 코드 입력" />
             <Toggle checked={value.loginAlerts} onChange={v => onChange({ loginAlerts: v })} label="로그인 알림" desc="새 기기 로그인 시 알림 후보 기록" />
+
+            <Field label="운영 보안 점검">
+                <div style={{ display: 'grid', gap: '0.75rem' }}>
+                    <div style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'space-between',
+                        gap: '0.75rem',
+                        padding: '0.85rem 1rem',
+                        background: 'var(--background)',
+                        border: '1px solid var(--border)',
+                        borderRadius: 'var(--radius-md)',
+                        flexWrap: 'wrap',
+                    }}>
+                        <span style={{ color: 'var(--muted)', fontSize: '0.82rem', fontWeight: 800 }}>
+                            운영 준비도
+                        </span>
+                        <strong style={{ color: 'var(--foreground)', fontSize: '0.9rem' }}>
+                            {readySecurityItems}/{SECURITY_POSTURE_ITEMS.length} 항목 준비
+                        </strong>
+                    </div>
+                    <div style={{
+                        display: 'grid',
+                        gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 220px), 1fr))',
+                        gap: '0.7rem',
+                        alignItems: 'stretch',
+                    }}>
+                        {SECURITY_POSTURE_ITEMS.map(item => {
+                            const isWarning = item.tone === "warning";
+                            return (
+                                <div
+                                    key={item.key}
+                                    style={{
+                                        display: 'flex',
+                                        alignItems: 'flex-start',
+                                        gap: '0.65rem',
+                                        minHeight: 118,
+                                        height: '100%',
+                                        padding: '0.9rem 0.95rem',
+                                        background: isWarning ? 'rgba(245,158,11,0.08)' : 'rgba(16,185,129,0.08)',
+                                        border: `1px solid ${isWarning ? 'rgba(245,158,11,0.22)' : 'rgba(16,185,129,0.2)'}`,
+                                        borderRadius: 'var(--radius-md)',
+                                        boxShadow: '0 10px 24px rgba(15,23,42,0.04)',
+                                    }}
+                                >
+                                    <span style={{ color: isWarning ? 'var(--warning)' : 'var(--success)', flexShrink: 0, marginTop: 1 }}>
+                                        {isWarning ? <AlertTriangle size={15} /> : <CheckCircle size={15} />}
+                                    </span>
+                                    <span style={{ minWidth: 0 }}>
+                                        <span style={{ display: 'block', color: 'var(--foreground)', fontSize: '0.84rem', fontWeight: 900, marginBottom: '0.18rem' }}>
+                                            {item.label}
+                                        </span>
+                                        <span style={{ display: 'block', color: 'var(--muted)', fontSize: '0.76rem', lineHeight: 1.55, wordBreak: 'keep-all' }}>
+                                            {item.detail}
+                                        </span>
+                                    </span>
+                                </div>
+                            );
+                        })}
+                    </div>
+                </div>
+            </Field>
 
             <Field label="활성 세션">
                 <div style={{ padding: '0.85rem 1rem', background: 'var(--background)', borderRadius: 'var(--radius-md)', border: '1px solid var(--border)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>

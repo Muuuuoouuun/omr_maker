@@ -77,14 +77,27 @@ describe("persistence integration", () => {
         const teacherLayout = readProjectFile("src/app/teacher/layout.tsx");
         const teacherAuthGate = readProjectFile("src/components/TeacherAuthGate.tsx");
         const createPage = readProjectFile("src/app/create/page.tsx");
+        const createLayout = readProjectFile("src/app/create/layout.tsx");
         const groupsPage = readProjectFile("src/app/groups/page.tsx");
 
         expect(teacherLayout).toContain("TeacherAuthGate");
+        expect(teacherLayout).toContain("parseSignedTeacherSessionCookie");
+        expect(teacherLayout).toContain("TEACHER_SERVER_SESSION_COOKIE");
+        expect(teacherLayout).toContain("bootstrapWorkspaceWithServiceRole");
+        expect(teacherLayout).toContain("workspaceContextFromTeacherSession(serverSession)");
+        expect(teacherLayout).toContain("initialSession={serverSession}");
+        expect(createLayout).toContain("parseSignedTeacherSessionCookie");
+        expect(createLayout).toContain("next=%2Fcreate");
+        expect(createLayout).toContain("bootstrapWorkspaceWithServiceRole");
+        expect(createLayout).toContain("workspaceContextFromTeacherSession(serverSession)");
+        expect(createLayout).toContain("TeacherAuthGate");
+        expect(createLayout).toContain("initialSession={serverSession}");
         expect(teacherAuthGate).toContain("readTeacherSession");
+        expect(teacherAuthGate).toContain("saveTeacherSessionSnapshot");
         expect(teacherAuthGate).toContain("teacherSessionRemainingMs");
         expect(teacherAuthGate).toContain("visibilitychange");
         expect(teacherAuthGate).toContain('window.addEventListener("focus"');
-        expect(createPage).toContain("<TeacherAuthGate>");
+        expect(createPage).not.toContain("<TeacherAuthGate>");
         expect(groupsPage).toContain('router.replace("/teacher/users?tab=groups")');
     });
 
@@ -92,14 +105,36 @@ describe("persistence integration", () => {
         const source = readProjectFile("src/app/teacher/settings/page.tsx");
         const teacherSession = readProjectFile("src/lib/teacherSession.ts");
 
-        expect(source).toContain("TEACHER_PASSWORD");
+        expect(source).toContain("TEACHER_ACCOUNTS");
+        expect(source).toContain("clearTeacherAuthSession");
         expect(source).toContain("clearTeacherSession");
         expect(source).toContain("buildTeacherSessionDisplay");
+        expect(source).toContain("운영 보안 점검");
+        expect(source).toContain("HttpOnly 서명 쿠키");
+        expect(source).toContain("5회 이후 10분");
+        expect(source).toContain("Supabase Auth, 조직 멤버십, production-rls.sql 정책");
         expect(teacherSession).toContain("만료 시각");
         expect(source).toContain("세션 종료");
         expect(source).not.toContain('placeholder="현재 비밀번호"');
         expect(source).not.toContain('placeholder="새 비밀번호"');
         expect(source).not.toContain('placeholder="새 비밀번호 확인"');
+    });
+
+    it("teacher login action throttles repeated credential failures", () => {
+        const source = readProjectFile("src/app/actions/auth.ts");
+        const limiter = readProjectFile("src/lib/teacherLoginRateLimit.ts");
+
+        expect(source).toContain("buildTeacherLoginRateLimitKeys");
+        expect(source).toContain("checkTeacherLoginRateLimit");
+        expect(source).toContain("recordTeacherLoginFailure");
+        expect(source).toContain("recordTeacherLoginSuccess");
+        expect(source).toContain("TEACHER_LOGIN_RATE_LIMIT_ERROR");
+        expect(source).toContain("clientFingerprintFromHeaders");
+        expect(source).toContain("bootstrapWorkspaceWithServiceRole");
+        expect(source).toContain("workspaceContextFromIdentity(result.teacher)");
+        expect(limiter).toContain("TEACHER_LOGIN_MAX_FAILURES");
+        expect(limiter).toContain("TEACHER_LOGIN_LOCKOUT_MS");
+        expect(limiter).toContain("teacher-login:client");
     });
 
     it("Supabase schema includes alpha organization boundaries", () => {
@@ -196,6 +231,29 @@ describe("persistence integration", () => {
         expect(docs).toContain("Older `school` rows are migrated to `academy`");
         expect(docs).toContain("omr_kakao_candidate_reviews");
         expect(docs).toContain("omr_kakao_dispatch_logs");
+    });
+
+    it("threads active workspace context into Supabase persistence rows", () => {
+        const workspaceContext = readProjectFile("src/lib/workspaceContext.ts");
+        const persistence = readProjectFile("src/lib/omrPersistence.ts");
+        const rosterPersistence = readProjectFile("src/lib/rosterPersistence.ts");
+        const docs = readProjectFile("docs/account-security-usability-checklist.md");
+
+        expect(workspaceContext).toContain("workspaceContextFromIdentity");
+        expect(workspaceContext).toContain("workspaceBootstrapRows");
+        expect(workspaceContext).toContain("teacher_${hash}");
+        expect(workspaceContext).toContain("DEFAULT_WORKSPACE_ORGANIZATION_ID");
+        expect(persistence).toContain("examWithPersistenceContext");
+        expect(persistence).toContain("attemptWithPersistenceContext");
+        expect(persistence).toContain("upsertRemoteWorkspaceBootstrap");
+        expect(persistence).toContain("organization_id: scopedValue(exam.organizationId) || contextOrganizationId(context)");
+        expect(persistence).toContain("created_by_user_id: scopedValue(exam.createdByUserId) || contextActorUserId(context)");
+        expect(persistence).toContain("questionResultRowsForAttempt(scopedAttempt, undefined, context)");
+        expect(rosterPersistence).toContain("activeRosterOrganizationId");
+        expect(rosterPersistence).toContain("readActiveWorkspaceContext");
+        expect(rosterPersistence).toContain("workspaceBootstrapRows(context)");
+        expect(docs).toContain("interim `teacher_<hash>` organization/user scope");
+        expect(docs).toContain("bootstrap matching organization, user profile, organization member, and teacher profile rows");
     });
 
     it("configured Supabase failures surface as sync errors instead of silent local success", () => {

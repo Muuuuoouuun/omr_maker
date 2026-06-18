@@ -27,7 +27,7 @@ import {
   type GuestMergePreview,
   type StudentSession,
 } from "@/utils/storage";
-import { normalizeTeacherRedirectPath, saveTeacherSession } from "@/lib/teacherSession";
+import { normalizeTeacherRedirectPath, saveTeacherSessionWithIdentity } from "@/lib/teacherSession";
 
 /* ─── SVG Icons ──────────────────────────────────────── */
 
@@ -111,8 +111,10 @@ export default function Home() {
   const router = useRouter();
   const [role, setRole] = useState<"none" | "teacher" | "student">("none");
   const [studentName, setStudentName] = useState("");
+  const [studentLookup, setStudentLookup] = useState("");
   const [selectedGroupId, setSelectedGroupId] = useState("");
   const [groups, setGroups] = useState<RosterGroup[]>([]);
+  const [teacherIdentifier, setTeacherIdentifier] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
   const [pendingGuestPreview, setPendingGuestPreview] = useState<GuestMergePreview | null>(null);
@@ -120,6 +122,7 @@ export default function Home() {
   // Anti-spoof: require a start-code for returning students.
   const [startCode, setStartCode] = useState("");
   const [needsCode, setNeedsCode] = useState(false);
+  const [needsStudentLookup, setNeedsStudentLookup] = useState(false);
 
   useEffect(() => {
     try {
@@ -144,6 +147,7 @@ export default function Home() {
       // Derived from client-only localStorage inputs.
       // eslint-disable-next-line react-hooks/set-state-in-effect
       setNeedsCode(false);
+      setNeedsStudentLookup(false);
       return;
     }
     try {
@@ -154,12 +158,20 @@ export default function Home() {
         selectedGroupId,
         groups,
         students,
+        studentLookup,
       });
+      const lookupRequired = identity.requiresStudentLookup || identity.lookupMismatch;
+      setNeedsStudentLookup(lookupRequired);
+      if (lookupRequired) {
+        setNeedsCode(false);
+        return;
+      }
       setNeedsCode(hasStudentStartCode(codes, identity.studentId, identity.legacyStudentId));
     } catch {
       setNeedsCode(false);
+      setNeedsStudentLookup(false);
     }
-  }, [role, studentName, selectedGroupId, groups]);
+  }, [role, studentName, studentLookup, selectedGroupId, groups]);
 
   useEffect(() => {
     if (role !== "student") {
@@ -179,9 +191,16 @@ export default function Home() {
 
   const handleTeacherLogin = async () => {
     try {
-      const res = await verifyTeacherPassword(password);
+      const identifier = teacherIdentifier.trim();
+      if (!identifier || !password.trim()) {
+        setError("아이디와 비밀번호를 모두 입력해주세요.");
+        setTimeout(() => setError(""), 2000);
+        return;
+      }
+
+      const res = await verifyTeacherPassword(identifier, password);
       if (res.success && res.token) {
-        const saved = saveTeacherSession(res.token);
+        const saved = saveTeacherSessionWithIdentity(res.token, res.teacher);
         if (!saved) {
           setError("브라우저 세션 저장을 사용할 수 없습니다.");
           setTimeout(() => setError(""), 2000);
@@ -212,7 +231,20 @@ export default function Home() {
       selectedGroupId,
       groups,
       students,
+      studentLookup,
     });
+    if (identity.lookupMismatch) {
+      setNeedsStudentLookup(true);
+      setError("학생번호 또는 이메일이 명단과 일치하지 않습니다.");
+      setTimeout(() => setError(""), 2500);
+      return;
+    }
+    if (identity.requiresStudentLookup) {
+      setNeedsStudentLookup(true);
+      setError("동명이인이 있습니다. 선생님이 알려준 학생번호 또는 이메일을 입력해주세요.");
+      setTimeout(() => setError(""), 3000);
+      return;
+    }
     const regionSnapshot = resolveSessionRegion({
       name: trimmedName,
       selectedGroupId,
@@ -228,7 +260,11 @@ export default function Home() {
 
     const hasPriorAttempt = attempts.some(a => a.studentId === identity.studentId
       || a.studentId === identity.legacyStudentId
-      || (a.studentName === trimmedName && !a.guestId));
+      || (
+        a.studentName === trimmedName
+        && !a.guestId
+        && (!a.groupName || a.groupName === identity.groupName || a.groupId === identity.groupId)
+      ));
 
     const codeDecision = resolveStudentStartCodeLogin({
       studentId: identity.studentId,
@@ -325,10 +361,13 @@ export default function Home() {
     setRole("none");
     setError("");
     setPassword("");
+    setTeacherIdentifier("");
     setStudentName("");
+    setStudentLookup("");
     setSelectedGroupId("");
     setStartCode("");
     setNeedsCode(false);
+    setNeedsStudentLookup(false);
   };
 
   return (
@@ -404,6 +443,7 @@ export default function Home() {
           >
             {/* Student */}
             <button
+              type="button"
               onClick={() => setRole("student")}
               className="glass-panel card-hover"
               style={{
@@ -475,6 +515,7 @@ export default function Home() {
 
             {/* Teacher */}
             <button
+              type="button"
               onClick={() => setRole("teacher")}
               className="glass-panel card-hover"
               style={{
@@ -636,6 +677,32 @@ export default function Home() {
                   </h2>
                 </div>
 
+                <div style={{ marginBottom: "1.05rem" }}>
+                  <label
+                    style={{
+                      display: "block",
+                      marginBottom: "0.55rem",
+                      fontSize: "0.75rem",
+                      fontWeight: 700,
+                      color: "var(--muted)",
+                      textTransform: "uppercase",
+                      letterSpacing: "0.07em",
+                    }}
+                  >
+                    아이디 또는 이메일
+                  </label>
+                  <input
+                    type="text"
+                    className="input-field"
+                    value={teacherIdentifier}
+                    onChange={(e) => setTeacherIdentifier(e.target.value)}
+                    onKeyDown={(e) => e.key === "Enter" && handleTeacherLogin()}
+                    placeholder="admin 또는 teacher@example.com"
+                    autoFocus
+                    autoComplete="username"
+                  />
+                </div>
+
                 <div style={{ marginBottom: "1.75rem" }}>
                   <label
                     style={{
@@ -657,7 +724,7 @@ export default function Home() {
                     onChange={(e) => setPassword(e.target.value)}
                     onKeyDown={(e) => e.key === "Enter" && handleTeacherLogin()}
                     placeholder="비밀번호 입력"
-                    autoFocus
+                    autoComplete="current-password"
                   />
                   {error ? (
                     <p style={{ fontSize: "0.8rem", color: "var(--error)", marginTop: "0.5rem", fontWeight: 600 }}>
@@ -665,7 +732,7 @@ export default function Home() {
                     </p>
                   ) : (
                     <p style={{ fontSize: "0.8rem", color: "var(--muted)", marginTop: "0.5rem", opacity: 0.75 }}>
-                      교사용 비밀번호를 입력하세요.
+                      교사용 계정 정보를 입력하세요.
                     </p>
                   )}
                 </div>
@@ -717,6 +784,45 @@ export default function Home() {
                     placeholder="이름을 입력하세요"
                     autoFocus
                   />
+                </div>
+
+                <div style={{ marginBottom: "1.1rem" }}>
+                  <label
+                    style={{
+                      display: "block",
+                      marginBottom: "0.55rem",
+                      fontSize: "0.75rem",
+                      fontWeight: 700,
+                      color: needsStudentLookup ? "var(--warning)" : "var(--muted)",
+                      textTransform: "uppercase",
+                      letterSpacing: "0.07em",
+                    }}
+                  >
+                    학생번호 또는 이메일
+                  </label>
+                  <input
+                    type="text"
+                    className="input-field"
+                    value={studentLookup}
+                    onChange={(e) => setStudentLookup(e.target.value)}
+                    onKeyDown={(e) => e.key === "Enter" && handleStudentLogin()}
+                    placeholder="동명이인일 때 입력"
+                    autoComplete="email"
+                    style={{
+                      borderColor: needsStudentLookup ? "rgba(245,158,11,0.45)" : undefined,
+                    }}
+                  />
+                  <p style={{
+                    fontSize: "0.75rem",
+                    color: needsStudentLookup ? "var(--warning)" : "var(--muted)",
+                    marginTop: "0.45rem",
+                    lineHeight: 1.45,
+                    wordBreak: "keep-all",
+                  }}>
+                    {needsStudentLookup
+                      ? "같은 이름의 학생이 있습니다. 명단 이메일이나 선생님이 알려준 학생번호를 입력하세요."
+                      : "선택 입력입니다. 같은 이름이 있는 반에서만 확인용으로 사용합니다."}
+                  </p>
                 </div>
 
                 <div style={{ marginBottom: "1.75rem" }}>

@@ -28,6 +28,8 @@ import {
     storedDataRefsForExamDeletion,
     stripHeavyAttemptPayload,
 } from "./omrPersistence";
+import { createTeacherSession } from "./teacherSession";
+import { stableWorkspaceHash, workspaceContextFromIdentity } from "./workspaceContext";
 
 function createStorage(initial: Record<string, string> = {}): Storage {
     const data = new Map(Object.entries(initial));
@@ -100,6 +102,27 @@ describe("Supabase persistence mapping", () => {
         });
         expect(row.payload).toEqual(exam);
         expect(examFromSupabaseRow(row)).toEqual(exam);
+    });
+
+    it("scopes exam rows to the active workspace context", () => {
+        const context = workspaceContextFromIdentity({
+            teacherId: "teacher-a",
+            displayName: "Teacher A",
+        });
+        const row = examToSupabaseRow(exam, context);
+
+        expect(row).toMatchObject({
+            organization_id: `teacher_${stableWorkspaceHash("teacher-a")}`,
+            created_by_user_id: `teacher_${stableWorkspaceHash("teacher-a")}`,
+        });
+        expect(examFromSupabaseRow(row)).toMatchObject({
+            id: "exam-1",
+            organizationId: row.organization_id,
+            createdByUserId: row.created_by_user_id,
+        });
+        expect(examQuestionRowsForExam(exam, "2026-06-14T09:31:00.000Z", context)[0]).toMatchObject({
+            organization_id: row.organization_id,
+        });
     });
 
     it("maps exam questions to normalized DB rows without cropped images", () => {
@@ -215,6 +238,83 @@ describe("Supabase persistence mapping", () => {
         });
         expect(row.payload).toEqual(attempt);
         expect(attemptFromSupabaseRow(row)).toEqual(attempt);
+    });
+
+    it("scopes attempt and question-result rows to the exam or active workspace", () => {
+        const context = workspaceContextFromIdentity({
+            teacherId: "teacher-a",
+            displayName: "Teacher A",
+        });
+        const scopedAttempt: Attempt = {
+            ...attempt,
+            organizationId: context.organizationId,
+            classId: "class-a",
+            studentProfileId: "student-profile-1",
+        };
+
+        const attemptRow = attemptToSupabaseRow(scopedAttempt, context);
+        expect(attemptRow).toMatchObject({
+            organization_id: context.organizationId,
+            class_id: "class-a",
+            student_profile_id: "student-profile-1",
+        });
+        expect(attemptFromSupabaseRow(attemptRow)).toMatchObject({
+            organizationId: context.organizationId,
+            classId: "class-a",
+            studentProfileId: "student-profile-1",
+        });
+
+        const resultRow = questionResultToSupabaseRow({
+            schemaVersion: 1,
+            attemptId: "attempt-1",
+            examId: "exam-1",
+            examTitle: "Final OMR",
+            studentName: "Kim",
+            questionId: 1,
+            questionNumber: 1,
+            score: 4,
+            earnedScore: 4,
+            selectedAnswer: 3,
+            correctAnswer: 3,
+            status: "correct",
+            isCorrect: true,
+            isWrong: false,
+            isUnanswered: false,
+            finishedAt: "2026-06-14T09:30:00.000Z",
+        }, scopedAttempt, "2026-06-14T09:31:00.000Z", context);
+
+        expect(resultRow).toMatchObject({
+            organization_id: context.organizationId,
+            class_id: "class-a",
+            student_profile_id: "student-profile-1",
+        });
+        expect(resultRow.payload).toMatchObject({
+            organizationId: context.organizationId,
+            classId: "class-a",
+            studentProfileId: "student-profile-1",
+        });
+    });
+
+    it("stamps local exam saves with the active teacher workspace", async () => {
+        const localStorage = createStorage();
+        const teacherSession = createTeacherSession("tkn_test_0123456789abcdef0123456789abcdef", Date.now(), {
+            teacherId: "teacher-a",
+            displayName: "Teacher A",
+        });
+        const sessionStorage = createStorage({
+            omr_teacher_session: JSON.stringify(teacherSession),
+        });
+        vi.stubGlobal("window", { localStorage, sessionStorage });
+        vi.stubGlobal("localStorage", localStorage);
+
+        const { saveExam } = await import("./omrPersistence");
+        const result = await saveExam(exam);
+
+        expect(result).toEqual({ localSaved: true, remoteSaved: false });
+        expect(readLocalExam("exam-1")).toMatchObject({
+            organizationId: `teacher_${stableWorkspaceHash("teacher-a")}`,
+            createdByUserId: `teacher_${stableWorkspaceHash("teacher-a")}`,
+        });
     });
 
     it("promotes retake and guest merge metadata into attempt fact columns", () => {

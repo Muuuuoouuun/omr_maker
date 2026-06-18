@@ -2,8 +2,10 @@ import { describe, expect, it } from "vitest";
 import { isTeacherToken } from "./teacherSession";
 import {
     mintTeacherToken,
+    resolveTeacherCredentials,
     resolveTeacherPassword,
     TEACHER_AUTH_ERROR,
+    verifyTeacherLogin,
     verifyTeacherPasswordValue,
 } from "./teacherAuth";
 
@@ -12,10 +14,29 @@ describe("teacher auth", () => {
         expect(resolveTeacherPassword({ NODE_ENV: "development", TEACHER_PASSWORD: undefined })).toBe("admin123");
         expect(resolveTeacherPassword({ NODE_ENV: "test", TEACHER_PASSWORD: undefined })).toBe("admin123");
         expect(resolveTeacherPassword({ NODE_ENV: "production", TEACHER_PASSWORD: undefined })).toBeNull();
+        expect(resolveTeacherCredentials({ NODE_ENV: "development" })).toEqual([{
+            id: "admin",
+            email: "admin@example.com",
+            name: "Demo Admin",
+            password: "admin123",
+        }]);
+        expect(resolveTeacherCredentials({ NODE_ENV: "production" })).toEqual([]);
     });
 
-    it("prefers a configured teacher password and trims accidental whitespace", () => {
+    it("prefers configured teacher credentials and trims accidental whitespace", () => {
         expect(resolveTeacherPassword({ NODE_ENV: "production", TEACHER_PASSWORD: "  secret-pass  " })).toBe("secret-pass");
+        expect(resolveTeacherCredentials({
+            NODE_ENV: "production",
+            TEACHER_LOGIN_ID: " director ",
+            TEACHER_EMAIL: " Director@School.test ",
+            TEACHER_NAME: " 김선생 ",
+            TEACHER_PASSWORD: "  secret-pass  ",
+        })).toEqual([{
+            id: "director",
+            email: "director@school.test",
+            name: "김선생",
+            password: "secret-pass",
+        }]);
         expect(verifyTeacherPasswordValue("secret-pass", {
             NODE_ENV: "production",
             TEACHER_PASSWORD: "  secret-pass  ",
@@ -26,9 +47,49 @@ describe("teacher auth", () => {
         })).toBe(false);
     });
 
+    it("verifies teacher id or email without revealing which side failed", () => {
+        const env = {
+            NODE_ENV: "production",
+            TEACHER_LOGIN_ID: "director",
+            TEACHER_EMAIL: "director@school.test",
+            TEACHER_NAME: "김선생",
+            TEACHER_PASSWORD: "secret-pass",
+        };
+
+        expect(verifyTeacherLogin("director", "secret-pass", env)).toEqual({
+            success: true,
+            teacher: {
+                teacherId: "director",
+                email: "director@school.test",
+                displayName: "김선생",
+            },
+        });
+        expect(verifyTeacherLogin("DIRECTOR@SCHOOL.TEST", "secret-pass", env)).toMatchObject({ success: true });
+        expect(verifyTeacherLogin("director", "wrong", env)).toEqual({ success: false });
+        expect(verifyTeacherLogin("unknown", "secret-pass", env)).toEqual({ success: false });
+    });
+
+    it("supports multiple teacher accounts from JSON env", () => {
+        const env = {
+            NODE_ENV: "production",
+            TEACHER_ACCOUNTS: JSON.stringify([
+                { id: "teacher-a", email: "a@example.com", name: "A Teacher", password: "pass-a" },
+                { id: "teacher-b", email: "b@example.com", name: "B Teacher", password: "pass-b" },
+            ]),
+        };
+
+        expect(resolveTeacherCredentials(env).map(item => item.id)).toEqual(["teacher-a", "teacher-b"]);
+        expect(verifyTeacherLogin("b@example.com", "pass-b", env)).toMatchObject({
+            success: true,
+            teacher: { teacherId: "teacher-b", displayName: "B Teacher" },
+        });
+        expect(verifyTeacherLogin("teacher-a", "pass-b", env)).toEqual({ success: false });
+    });
+
     it("rejects invalid password inputs without enabling production defaults", () => {
         expect(verifyTeacherPasswordValue(undefined, { NODE_ENV: "development" })).toBe(false);
         expect(verifyTeacherPasswordValue("admin123", { NODE_ENV: "production" })).toBe(false);
+        expect(verifyTeacherLogin(undefined, "admin123", { NODE_ENV: "development" })).toEqual({ success: false });
     });
 
     it("mints teacher session tokens compatible with session validation", () => {
@@ -42,6 +103,6 @@ describe("teacher auth", () => {
     });
 
     it("keeps a shared generic failure message", () => {
-        expect(TEACHER_AUTH_ERROR).toBe("비밀번호가 올바르지 않습니다.");
+        expect(TEACHER_AUTH_ERROR).toBe("아이디 또는 비밀번호가 올바르지 않습니다.");
     });
 });

@@ -8,6 +8,10 @@ function readSchema(): string {
     return readFileSync(path.join(rootDir, "supabase/schema.sql"), "utf8");
 }
 
+function readProductionRls(): string {
+    return readFileSync(path.join(rootDir, "supabase/production-rls.sql"), "utf8");
+}
+
 function columnExists(schema: string, table: string, column: string): boolean {
     const createPattern = new RegExp(`create table if not exists public\\.${table}\\s*\\(([\\s\\S]*?)\\n\\);`, "i");
     const createMatch = schema.match(createPattern);
@@ -28,6 +32,7 @@ function expectIndex(schema: string, indexName: string) {
 
 describe("Supabase schema contract", () => {
     const schema = readSchema();
+    const productionRls = readProductionRls();
 
     it("keeps roster columns and indexes aligned with teacher user management sync", () => {
         expectColumns(schema, "omr_organizations", [
@@ -261,5 +266,48 @@ describe("Supabase schema contract", () => {
         expectIndex(schema, "omr_kakao_candidate_reviews_exam_status_idx");
         expectIndex(schema, "omr_kakao_candidate_reviews_student_ids_idx");
         expectIndex(schema, "omr_kakao_dispatch_logs_status_idx");
+    });
+
+    it("keeps the production RLS handoff separate from alpha public policies", () => {
+        const protectedTables = [
+            "omr_organizations",
+            "omr_user_profiles",
+            "omr_organization_members",
+            "omr_teacher_profiles",
+            "omr_student_profiles",
+            "omr_classes",
+            "omr_class_teachers",
+            "omr_class_students",
+            "omr_materials",
+            "omr_exams",
+            "omr_exam_questions",
+            "omr_exam_materials",
+            "omr_assignments",
+            "omr_assignment_targets",
+            "omr_attempts",
+            "omr_question_results",
+            "omr_assignment_submissions",
+            "omr_kakao_candidate_reviews",
+            "omr_kakao_dispatch_logs",
+            "omr_comments",
+            "omr_audit_logs",
+        ];
+
+        expect(productionRls).toContain("create or replace function public.omr_is_org_member");
+        expect(productionRls).toContain("create or replace function public.omr_has_org_role");
+        expect(productionRls).toContain("create or replace function public.omr_can_read_assignment");
+        expect(productionRls).toContain("auth.uid()");
+        expect(productionRls).toContain("to authenticated");
+        expect(productionRls).toContain("revoke all on all tables in schema public from anon");
+        expect(productionRls).toContain("grant select on public.omr_audit_logs to authenticated");
+
+        for (const table of protectedTables) {
+            expect(productionRls, `${table} should force RLS`).toContain(`alter table public.${table} force row level security`);
+        }
+
+        expect(productionRls).toContain('drop policy if exists "OMR organizations are publicly writable"');
+        expect(productionRls).toContain('drop policy if exists "OMR attempts are publicly writable"');
+        expect(productionRls).not.toMatch(/using\s*\(\s*true\s*\)/i);
+        expect(productionRls).not.toMatch(/with check\s*\(\s*true\s*\)/i);
     });
 });

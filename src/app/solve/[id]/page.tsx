@@ -10,7 +10,7 @@ import { toast } from "@/components/Toast";
 import { AlertTriangle, Clock, PanelRightClose, PanelRightOpen, PenLine, Save } from "lucide-react";
 import { storedDataUrlToFile, saveJsonRecord, loadJsonRecord } from "@/utils/blobStore";
 import { verifyTeacherPassword } from "@/app/actions/auth";
-import { saveTeacherSession } from "@/lib/teacherSession";
+import { saveTeacherSessionWithIdentity } from "@/lib/teacherSession";
 import { getOrCreateGuestId, getSession, saveSession, type StudentSession } from "@/utils/storage";
 import { canArchiveHandwriting, getCurrentPlan, getPlanLabel } from "@/utils/plans";
 import { loadExam as loadPersistedExam, saveAttempt } from "@/lib/omrPersistence";
@@ -393,16 +393,20 @@ function GuestNameDialog({
 }
 
 function TeacherPasswordDialog({
+    identifier,
     password,
     error,
     isChecking,
+    onIdentifierChange,
     onPasswordChange,
     onClose,
     onSubmit,
 }: {
+    identifier: string;
     password: string;
     error: string;
     isChecking: boolean;
+    onIdentifierChange: (value: string) => void;
     onPasswordChange: (value: string) => void;
     onClose: () => void;
     onSubmit: () => void;
@@ -410,17 +414,38 @@ function TeacherPasswordDialog({
     return (
         <SolveDialogShell title="선생님 모드 인증" onClose={onClose}>
             <p style={{ color: 'var(--muted)', fontSize: '0.95rem', lineHeight: 1.7, marginBottom: '1rem', wordBreak: 'keep-all' }}>
-                정답/해설 PDF와 문제지를 전환하려면 선생님 비밀번호가 필요합니다.
+                정답/해설 PDF와 문제지를 전환하려면 선생님 계정 인증이 필요합니다.
             </p>
+            <input
+                type="text"
+                value={identifier}
+                onChange={(e) => onIdentifierChange(e.target.value)}
+                onKeyDown={(e) => {
+                    if (e.key === 'Enter' && identifier.trim() && password.trim()) onSubmit();
+                }}
+                autoFocus
+                placeholder="아이디 또는 이메일"
+                autoComplete="username"
+                style={{
+                    width: '100%',
+                    padding: '0.8rem 0.95rem',
+                    borderRadius: 'var(--radius-md)',
+                    border: `1px solid ${error ? 'var(--error)' : 'var(--border)'}`,
+                    background: 'var(--background)',
+                    color: 'var(--foreground)',
+                    fontSize: '1rem',
+                    marginBottom: '0.65rem',
+                }}
+            />
             <input
                 type="password"
                 value={password}
                 onChange={(e) => onPasswordChange(e.target.value)}
                 onKeyDown={(e) => {
-                    if (e.key === 'Enter' && password.trim()) onSubmit();
+                    if (e.key === 'Enter' && identifier.trim() && password.trim()) onSubmit();
                 }}
-                autoFocus
                 placeholder="비밀번호"
+                autoComplete="current-password"
                 style={{
                     width: '100%',
                     padding: '0.8rem 0.95rem',
@@ -440,7 +465,7 @@ function TeacherPasswordDialog({
                 <button type="button" onClick={onClose} style={{ ...dialogButtonBase, background: 'var(--surface)', color: 'var(--foreground)', border: '1px solid var(--border)' }}>
                     닫기
                 </button>
-                <button type="button" onClick={onSubmit} disabled={!password.trim() || isChecking} style={{ ...dialogButtonBase, background: 'var(--primary)', color: 'white', opacity: password.trim() && !isChecking ? 1 : 0.55 }}>
+                <button type="button" onClick={onSubmit} disabled={!identifier.trim() || !password.trim() || isChecking} style={{ ...dialogButtonBase, background: 'var(--primary)', color: 'white', opacity: identifier.trim() && password.trim() && !isChecking ? 1 : 0.55 }}>
                     {isChecking ? "확인 중..." : "인증"}
                 </button>
             </div>
@@ -500,6 +525,7 @@ export default function SolvePage() {
     const [activeTab, setActiveTab] = useState<'problem' | 'answer'>('problem');
     const [answerFile, setAnswerFile] = useState<File | null>(null);
     const [teacherAuthOpen, setTeacherAuthOpen] = useState(false);
+    const [teacherIdentifier, setTeacherIdentifier] = useState("");
     const [teacherPassword, setTeacherPassword] = useState("");
     const [teacherAuthError, setTeacherAuthError] = useState("");
     const [isTeacherAuthing, setIsTeacherAuthing] = useState(false);
@@ -1133,6 +1159,7 @@ export default function SolvePage() {
 
     const toggleTeacherMode = async (checked: boolean) => {
         if (checked) {
+            setTeacherIdentifier("");
             setTeacherPassword("");
             setTeacherAuthError("");
             setTeacherAuthOpen(true);
@@ -1142,17 +1169,18 @@ export default function SolvePage() {
     };
 
     const submitTeacherPassword = async () => {
+        const identifier = teacherIdentifier.trim();
         const password = teacherPassword.trim();
-        if (!password) {
-            setTeacherAuthError("비밀번호를 입력해주세요.");
+        if (!identifier || !password) {
+            setTeacherAuthError("아이디와 비밀번호를 모두 입력해주세요.");
             return;
         }
         setIsTeacherAuthing(true);
         setTeacherAuthError("");
         try {
-            const res = await verifyTeacherPassword(password);
+            const res = await verifyTeacherPassword(identifier, password);
             if (res.success && res.token) {
-                const saved = saveTeacherSession(res.token);
+                const saved = saveTeacherSessionWithIdentity(res.token, res.teacher);
                 if (!saved) {
                     setTeacherAuthError("브라우저 세션 저장을 사용할 수 없습니다.");
                     setIsTeacherMode(false);
@@ -1160,6 +1188,7 @@ export default function SolvePage() {
                 }
                 setIsTeacherMode(true);
                 setTeacherAuthOpen(false);
+                setTeacherIdentifier("");
                 setTeacherPassword("");
                 toast.success("선생님 모드 켜짐", "정답/해설 PDF를 확인할 수 있습니다.");
             } else {
@@ -1715,12 +1744,15 @@ export default function SolvePage() {
 
             {teacherAuthOpen && (
                 <TeacherPasswordDialog
+                    identifier={teacherIdentifier}
                     password={teacherPassword}
                     error={teacherAuthError}
                     isChecking={isTeacherAuthing}
+                    onIdentifierChange={setTeacherIdentifier}
                     onPasswordChange={setTeacherPassword}
                     onClose={() => {
                         setTeacherAuthOpen(false);
+                        setTeacherIdentifier("");
                         setTeacherPassword("");
                         setTeacherAuthError("");
                         setIsTeacherMode(false);

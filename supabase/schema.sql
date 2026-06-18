@@ -4,7 +4,9 @@
 -- This schema is intentionally compatible with the current alpha app:
 -- - Existing client code can keep syncing exams/attempts through JSON payloads.
 -- - New relational tables model users, rosters, materials, assignments, and feedback.
--- - Public RLS policies are kept for alpha/local testing only. Replace before production.
+-- - Public RLS policies are kept for alpha/local testing only.
+-- - Apply supabase/production-rls.sql after Supabase Auth, organization_id backfill,
+--   and staff membership bootstrap are ready for production.
 
 create table if not exists public.omr_organizations (
     id text primary key,

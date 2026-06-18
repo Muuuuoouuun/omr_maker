@@ -10,6 +10,8 @@ import {
     parseTeacherSession,
     readTeacherSession,
     saveTeacherSession,
+    saveTeacherSessionSnapshot,
+    saveTeacherSessionWithIdentity,
     TEACHER_SESSION_KEY,
     teacherSessionRemainingMs,
 } from "./teacherSession";
@@ -35,6 +37,45 @@ describe("teacher session", () => {
             token: VALID_TOKEN,
         });
         expect(hasTeacherSession(storage, 1000)).toBe(true);
+    });
+
+    it("stores and displays teacher identity when provided", () => {
+        const storage = memoryStorage();
+        expect(saveTeacherSessionWithIdentity(VALID_TOKEN, {
+            teacherId: "teacher-a",
+            email: "a@example.com",
+            displayName: "A Teacher",
+        }, storage, 1000)).toBe(true);
+
+        const session = readTeacherSession(storage, 1000);
+        expect(session).toMatchObject({
+            role: "teacher",
+            token: VALID_TOKEN,
+            teacherId: "teacher-a",
+            email: "a@example.com",
+            displayName: "A Teacher",
+        });
+        expect(buildTeacherSessionDisplay(session, 1000)).toMatchObject({
+            actorLabel: "A Teacher",
+            detail: expect.stringContaining("A Teacher"),
+        });
+    });
+
+    it("stores a server-provided session snapshot without extending its expiry", () => {
+        const storage = memoryStorage();
+        const session = createTeacherSession(VALID_TOKEN, 1000, {
+            teacherId: "teacher-a",
+            displayName: "A Teacher",
+        });
+
+        expect(saveTeacherSessionSnapshot(session, storage, 2000)).toBe(true);
+        expect(JSON.parse(storage.data[TEACHER_SESSION_KEY])).toMatchObject({
+            token: VALID_TOKEN,
+            teacherId: "teacher-a",
+            displayName: "A Teacher",
+            issuedAt: 1000,
+            expiresAt: session.expiresAt,
+        });
     });
 
     it("rejects malformed and expired sessions", () => {
@@ -104,6 +145,7 @@ describe("teacher session", () => {
 
         expect(buildTeacherSessionDisplay(session, 1000)).toMatchObject({
             label: "12시간 남음",
+            actorLabel: "교사",
             level: "active",
             isExpired: false,
         });

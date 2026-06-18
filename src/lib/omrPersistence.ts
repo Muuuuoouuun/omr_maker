@@ -1,5 +1,12 @@
 import { deleteStoredData } from "@/utils/blobStore";
 import { canonicalQuestionIdFor } from "@/lib/questionBank";
+import {
+    DEFAULT_WORKSPACE_ORGANIZATION_ID,
+    DEFAULT_WORKSPACE_ORGANIZATION_NAME,
+    readActiveWorkspaceContext,
+    workspaceBootstrapRows,
+    type WorkspaceContext,
+} from "@/lib/workspaceContext";
 import { questionChoiceCount, type Attempt, type Exam, type QuestionResult, type QuestionResultStatus, type StoredDataRef } from "@/types/omr";
 
 type Env = Record<string, string | undefined>;
@@ -11,8 +18,11 @@ export interface SupabaseConfig {
 
 export interface SupabaseExamRow {
     id: string;
+    organization_id?: string | null;
+    class_id?: string | null;
     title: string;
     payload: Exam;
+    created_by_user_id?: string | null;
     created_at: string;
     updated_at: string;
     archived: boolean;
@@ -151,14 +161,15 @@ interface SupabaseQueryResult<T> {
     error: { message?: string } | null;
 }
 
+type SupabaseSelectQuery = {
+    eq(column: string, value: string): SupabaseSelectQuery;
+    maybeSingle(): Promise<SupabaseQueryResult<unknown>>;
+    order(column: string, options?: { ascending?: boolean }): Promise<SupabaseQueryResult<unknown[]>>;
+};
+
 type SupabaseClientLike = {
     from(table: string): {
-        select(columns?: string): {
-            eq(column: string, value: string): {
-                maybeSingle(): Promise<SupabaseQueryResult<unknown>>;
-            };
-            order(column: string, options?: { ascending?: boolean }): Promise<SupabaseQueryResult<unknown[]>>;
-        };
+        select(columns?: string): SupabaseSelectQuery;
         upsert(row: unknown): Promise<SupabaseQueryResult<unknown>>;
         delete(): {
             eq(column: string, value: string): Promise<SupabaseQueryResult<unknown>>;
@@ -172,6 +183,77 @@ const DELETED_EXAMS_KEY = "omr_deleted_exam_ids";
 const SOLVE_DRAFT_PREFIX = "omr_draft_";
 
 let supabaseClientPromise: Promise<SupabaseClientLike | null> | null = null;
+
+function clean(value: unknown): string {
+    return typeof value === "string" ? value.trim() : "";
+}
+
+function scopedValue(value: unknown): string | null {
+    return clean(value) || null;
+}
+
+function contextOrganizationId(context?: WorkspaceContext | null): string | null {
+    return scopedValue(context?.organizationId);
+}
+
+function contextActorUserId(context?: WorkspaceContext | null): string | null {
+    return scopedValue(context?.actorUserId);
+}
+
+function storedScopeContext(scope: {
+    organizationId?: string;
+    createdByUserId?: string;
+} | null | undefined): WorkspaceContext | null {
+    const organizationId = scopedValue(scope?.organizationId);
+    if (!organizationId) return null;
+    return {
+        organizationId,
+        organizationName: DEFAULT_WORKSPACE_ORGANIZATION_NAME,
+        actorUserId: scopedValue(scope?.createdByUserId) || undefined,
+    };
+}
+
+function activePersistenceContext(): WorkspaceContext {
+    return readActiveWorkspaceContext();
+}
+
+function shouldFilterRemoteByOrganization(context: WorkspaceContext): boolean {
+    return context.organizationId !== DEFAULT_WORKSPACE_ORGANIZATION_ID;
+}
+
+function examWithPersistenceContext(exam: Exam, context = activePersistenceContext()): Exam {
+    const organizationId = scopedValue(exam.organizationId) || contextOrganizationId(context);
+    const createdByUserId = scopedValue(exam.createdByUserId) || contextActorUserId(context);
+    return {
+        ...exam,
+        ...(organizationId ? { organizationId } : {}),
+        ...(createdByUserId ? { createdByUserId } : {}),
+    };
+}
+
+function contextForAttempt(attempt: Attempt): WorkspaceContext {
+    const attemptContext = storedScopeContext(attempt);
+    if (attemptContext) return attemptContext;
+
+    const examContext = storedScopeContext(readLocalExam(attempt.examId));
+    if (examContext) return examContext;
+
+    return activePersistenceContext();
+}
+
+function attemptWithPersistenceContext(attempt: Attempt, context = contextForAttempt(attempt)): Attempt {
+    const organizationId = scopedValue(attempt.organizationId) || contextOrganizationId(context);
+    const classId = scopedValue(attempt.classId) || scopedValue(attempt.groupId);
+    const assignmentId = scopedValue(attempt.assignmentId);
+    const studentProfileId = scopedValue(attempt.studentProfileId) || scopedValue(attempt.studentId);
+    return {
+        ...attempt,
+        ...(organizationId ? { organizationId } : {}),
+        ...(classId ? { classId } : {}),
+        ...(assignmentId ? { assignmentId } : {}),
+        ...(studentProfileId ? { studentProfileId } : {}),
+    };
+}
 
 export function getSupabaseConfigFromEnv(env: Env): SupabaseConfig | null {
     const url = env.NEXT_PUBLIC_SUPABASE_URL?.trim();
@@ -192,12 +274,15 @@ export function isSupabaseConfigured(): boolean {
     return !!getSupabaseConfig();
 }
 
-export function examToSupabaseRow(exam: Exam): SupabaseExamRow {
+export function examToSupabaseRow(exam: Exam, context?: WorkspaceContext | null): SupabaseExamRow {
     const createdAt = exam.createdAt || new Date().toISOString();
     return {
         id: exam.id,
+        organization_id: scopedValue(exam.organizationId) || contextOrganizationId(context),
+        class_id: scopedValue(exam.classId),
         title: exam.title,
         payload: exam,
+        created_by_user_id: scopedValue(exam.createdByUserId) || contextActorUserId(context),
         created_at: createdAt,
         updated_at: exam.updatedAt || createdAt,
         archived: !!exam.archived,
@@ -207,6 +292,14 @@ export function examToSupabaseRow(exam: Exam): SupabaseExamRow {
 export function examFromSupabaseRow(row: SupabaseExamRow | { payload: Exam }): Exam {
     const exam = sanitizeExamPayload(row.payload);
     if (!exam) throw new Error("Invalid exam payload");
+    if ("organization_id" in row || "class_id" in row || "created_by_user_id" in row) {
+        return {
+            ...exam,
+            organizationId: scopedValue(row.organization_id) || exam.organizationId,
+            classId: scopedValue(row.class_id) || exam.classId,
+            createdByUserId: scopedValue(row.created_by_user_id) || exam.createdByUserId,
+        };
+    }
     return exam;
 }
 
@@ -214,6 +307,7 @@ export function examQuestionToSupabaseRow(
     exam: Exam,
     question: Exam["questions"][number],
     updatedAt = new Date().toISOString(),
+    context?: WorkspaceContext | null,
 ): SupabaseExamQuestionRow {
     const questionId = numberValue(question.id);
     if (questionId === undefined) {
@@ -233,8 +327,8 @@ export function examQuestionToSupabaseRow(
 
     return {
         id: canonicalQuestionId,
-        organization_id: null,
-        class_id: null,
+        organization_id: scopedValue(exam.organizationId) || contextOrganizationId(context),
+        class_id: scopedValue(exam.classId),
         exam_id: exam.id,
         question_id: questionId,
         question_number: questionNumber,
@@ -264,10 +358,14 @@ export function examQuestionToSupabaseRow(
     };
 }
 
-export function examQuestionRowsForExam(exam: Exam, updatedAt = new Date().toISOString()): SupabaseExamQuestionRow[] {
+export function examQuestionRowsForExam(
+    exam: Exam,
+    updatedAt = new Date().toISOString(),
+    context?: WorkspaceContext | null,
+): SupabaseExamQuestionRow[] {
     return exam.questions.flatMap(question => {
         try {
-            return [examQuestionToSupabaseRow(exam, question, updatedAt)];
+            return [examQuestionToSupabaseRow(exam, question, updatedAt, context)];
         } catch {
             return [];
         }
@@ -279,17 +377,19 @@ export function stripHeavyAttemptPayload(attempt: Attempt): Attempt {
     return { ...attempt, drawings: undefined };
 }
 
-export function attemptToSupabaseRow(attempt: Attempt): SupabaseAttemptRow {
+export function attemptToSupabaseRow(attempt: Attempt, context?: WorkspaceContext | null): SupabaseAttemptRow {
     const score = numberValue(attempt.score) || 0;
     const totalScore = numberValue(attempt.totalScore) || 0;
     const scorePercent = totalScore > 0 ? Math.round((score / totalScore) * 100) : 0;
+    const classId = scopedValue(attempt.classId) || scopedValue(attempt.groupId);
+    const studentProfileId = scopedValue(attempt.studentProfileId) || scopedValue(attempt.studentId);
 
     return {
         id: attempt.id,
-        organization_id: null,
-        class_id: attempt.groupId || null,
-        assignment_id: null,
-        student_profile_id: attempt.studentId || null,
+        organization_id: scopedValue(attempt.organizationId) || contextOrganizationId(context),
+        class_id: classId,
+        assignment_id: scopedValue(attempt.assignmentId),
+        student_profile_id: studentProfileId,
         exam_id: attempt.examId,
         student_name: attempt.studentName,
         student_id: attempt.studentId || null,
@@ -316,6 +416,19 @@ export function attemptToSupabaseRow(attempt: Attempt): SupabaseAttemptRow {
 export function attemptFromSupabaseRow(row: SupabaseAttemptRow | { payload: Attempt }): Attempt {
     const attempt = sanitizeAttemptPayload(row.payload);
     if (!attempt) throw new Error("Invalid attempt payload");
+    if ("organization_id" in row || "class_id" in row || "assignment_id" in row || "student_profile_id" in row) {
+        const organizationId = scopedValue(row.organization_id);
+        const classId = scopedValue(row.class_id);
+        const assignmentId = scopedValue(row.assignment_id);
+        const studentProfileId = scopedValue(row.student_profile_id);
+        return {
+            ...attempt,
+            ...(organizationId ? { organizationId } : {}),
+            ...(classId && classId !== attempt.groupId ? { classId } : {}),
+            ...(assignmentId ? { assignmentId } : {}),
+            ...(studentProfileId && studentProfileId !== attempt.studentId ? { studentProfileId } : {}),
+        };
+    }
     return attempt;
 }
 
@@ -353,6 +466,7 @@ export function questionResultToSupabaseRow(
     result: QuestionResult,
     attempt?: Attempt,
     updatedAt = new Date().toISOString(),
+    context?: WorkspaceContext | null,
 ): SupabaseQuestionResultRow {
     const attemptId = stringValue(result.attemptId) || attempt?.id;
     const examId = stringValue(result.examId) || attempt?.examId;
@@ -368,6 +482,12 @@ export function questionResultToSupabaseRow(
     const studentId = nullableString(result.studentId) || nullableString(attempt?.studentId);
     const groupId = nullableString(result.groupId) || nullableString(attempt?.groupId);
     const groupName = nullableString(result.groupName) || nullableString(attempt?.groupName);
+    const classId = scopedValue(result.classId) || scopedValue(attempt?.classId) || groupId;
+    const assignmentId = scopedValue(result.assignmentId) || scopedValue(attempt?.assignmentId);
+    const studentProfileId = scopedValue(result.studentProfileId) || scopedValue(attempt?.studentProfileId) || studentId;
+    const organizationId = scopedValue(result.organizationId)
+        || scopedValue(attempt?.organizationId)
+        || contextOrganizationId(context);
     const regionId = nullableString(result.regionId) || nullableString(attempt?.regionId);
     const regionName = nullableString(result.regionName) || nullableString(attempt?.regionName);
     const canonicalQuestionId = nullableString(result.canonicalQuestionId) || canonicalQuestionIdFor(examId, questionId);
@@ -379,6 +499,10 @@ export function questionResultToSupabaseRow(
         ...result,
         attemptId,
         examId,
+        organizationId: organizationId || undefined,
+        classId: classId || undefined,
+        assignmentId: assignmentId || undefined,
+        studentProfileId: studentProfileId || undefined,
         studentName,
         studentId: studentId || undefined,
         groupId: groupId || undefined,
@@ -400,10 +524,10 @@ export function questionResultToSupabaseRow(
 
     return {
         id: `${attemptId}:${questionId}`,
-        organization_id: null,
-        class_id: groupId,
-        assignment_id: null,
-        student_profile_id: studentId,
+        organization_id: organizationId,
+        class_id: classId,
+        assignment_id: assignmentId,
+        student_profile_id: studentProfileId,
         attempt_id: attemptId,
         exam_id: examId,
         student_name: studentName,
@@ -453,10 +577,14 @@ export function questionResultToSupabaseRow(
     };
 }
 
-export function questionResultRowsForAttempt(attempt: Attempt, updatedAt = new Date().toISOString()): SupabaseQuestionResultRow[] {
+export function questionResultRowsForAttempt(
+    attempt: Attempt,
+    updatedAt = new Date().toISOString(),
+    context?: WorkspaceContext | null,
+): SupabaseQuestionResultRow[] {
     return (attempt.questionResults || []).flatMap(result => {
         try {
-            return [questionResultToSupabaseRow(result, attempt, updatedAt)];
+            return [questionResultToSupabaseRow(result, attempt, updatedAt, context)];
         } catch {
             return [];
         }
@@ -862,6 +990,38 @@ async function getAvailableSupabaseClient(): Promise<SupabaseClientLike | null> 
     return client;
 }
 
+async function upsertRemoteWorkspaceBootstrap(
+    client: SupabaseClientLike,
+    context: WorkspaceContext,
+): Promise<void> {
+    const rows = workspaceBootstrapRows(context);
+    const organizationResult = await client.from("omr_organizations").upsert(rows.organization);
+    if (organizationResult.error) {
+        throw new Error(organizationResult.error.message || "Failed to bootstrap Supabase organization");
+    }
+
+    if (rows.userProfile) {
+        const userResult = await client.from("omr_user_profiles").upsert(rows.userProfile);
+        if (userResult.error) {
+            throw new Error(userResult.error.message || "Failed to bootstrap Supabase user profile");
+        }
+    }
+
+    if (rows.member) {
+        const memberResult = await client.from("omr_organization_members").upsert(rows.member);
+        if (memberResult.error) {
+            throw new Error(memberResult.error.message || "Failed to bootstrap Supabase organization member");
+        }
+    }
+
+    if (rows.teacherProfile) {
+        const teacherResult = await client.from("omr_teacher_profiles").upsert(rows.teacherProfile);
+        if (teacherResult.error) {
+            throw new Error(teacherResult.error.message || "Failed to bootstrap Supabase teacher profile");
+        }
+    }
+}
+
 function errorMessage(error: unknown): string {
     if (error instanceof Error) return error.message;
     if (error && typeof error === "object" && "message" in error) {
@@ -944,11 +1104,13 @@ async function fetchRemoteExam(id: string): Promise<Exam | null> {
 async function fetchRemoteExams(): Promise<Exam[]> {
     const client = await getAvailableSupabaseClient();
     if (!client) return [];
+    const context = activePersistenceContext();
+    const query = client.from("omr_exams").select("*");
+    const scopedQuery = shouldFilterRemoteByOrganization(context)
+        ? query.eq("organization_id", context.organizationId)
+        : query;
 
-    const { data, error } = await client
-        .from("omr_exams")
-        .select("*")
-        .order("updated_at", { ascending: false });
+    const { data, error } = await scopedQuery.order("updated_at", { ascending: false });
 
     if (error) throw new Error(error.message || "Failed to load exams from Supabase");
     return (data || [])
@@ -965,11 +1127,13 @@ async function fetchRemoteExams(): Promise<Exam[]> {
 async function fetchRemoteAttempts(): Promise<Attempt[]> {
     const client = await getAvailableSupabaseClient();
     if (!client) return [];
+    const context = activePersistenceContext();
+    const query = client.from("omr_attempts").select("*");
+    const scopedQuery = shouldFilterRemoteByOrganization(context)
+        ? query.eq("organization_id", context.organizationId)
+        : query;
 
-    const { data, error } = await client
-        .from("omr_attempts")
-        .select("*")
-        .order("finished_at", { ascending: false });
+    const { data, error } = await scopedQuery.order("finished_at", { ascending: false });
 
     if (error) throw new Error(error.message || "Failed to load attempts from Supabase");
     return (data || [])
@@ -1005,14 +1169,17 @@ async function fetchRemoteAttempt(id: string): Promise<Attempt | null> {
 async function upsertRemoteExam(exam: Exam): Promise<void> {
     const client = await getAvailableSupabaseClient();
     if (!client) return;
+    const context = activePersistenceContext();
+    const scopedExam = examWithPersistenceContext(exam, context);
+    await upsertRemoteWorkspaceBootstrap(client, context);
 
-    const { error } = await client.from("omr_exams").upsert(examToSupabaseRow(exam));
+    const { error } = await client.from("omr_exams").upsert(examToSupabaseRow(scopedExam, context));
     if (error) throw new Error(error.message || "Failed to save exam to Supabase");
 
-    await replaceRemoteExamQuestions(exam);
+    await replaceRemoteExamQuestions(scopedExam, context);
 }
 
-async function replaceRemoteExamQuestions(exam: Exam): Promise<void> {
+async function replaceRemoteExamQuestions(exam: Exam, context = activePersistenceContext()): Promise<void> {
     const client = await getAvailableSupabaseClient();
     if (!client) return;
 
@@ -1021,7 +1188,7 @@ async function replaceRemoteExamQuestions(exam: Exam): Promise<void> {
         throw new Error(deleteResult.error.message || "Failed to replace exam questions in Supabase");
     }
 
-    const questionRows = examQuestionRowsForExam(exam);
+    const questionRows = examQuestionRowsForExam(exam, undefined, context);
     if (questionRows.length > 0) {
         const upsertResult = await client.from("omr_exam_questions").upsert(questionRows);
         if (upsertResult.error) {
@@ -1033,18 +1200,22 @@ async function replaceRemoteExamQuestions(exam: Exam): Promise<void> {
 async function upsertRemoteAttempt(attempt: Attempt): Promise<void> {
     const client = await getAvailableSupabaseClient();
     if (!client) return;
+    const context = contextForAttempt(attempt);
+    const scopedAttempt = attemptWithPersistenceContext(attempt, context);
+    await upsertRemoteWorkspaceBootstrap(client, context);
 
-    const { error } = await client.from("omr_attempts").upsert(attemptToSupabaseRow(attempt));
+    const { error } = await client.from("omr_attempts").upsert(attemptToSupabaseRow(scopedAttempt, context));
     if (error) throw new Error(error.message || "Failed to save attempt to Supabase");
 
-    await upsertRemoteQuestionResults(attempt);
+    await upsertRemoteQuestionResults(scopedAttempt, context);
 }
 
-async function upsertRemoteQuestionResults(attempt: Attempt): Promise<void> {
+async function upsertRemoteQuestionResults(attempt: Attempt, context = contextForAttempt(attempt)): Promise<void> {
     const client = await getAvailableSupabaseClient();
     if (!client) return;
+    const scopedAttempt = attemptWithPersistenceContext(attempt, context);
 
-    const questionRows = questionResultRowsForAttempt(attempt);
+    const questionRows = questionResultRowsForAttempt(scopedAttempt, undefined, context);
     if (questionRows.length > 0) {
         const result = await client.from("omr_question_results").upsert(questionRows);
         if (result.error) {
@@ -1203,11 +1374,13 @@ export async function loadAttempt(id: string): Promise<Attempt | null> {
 }
 
 export async function saveExam(exam: Exam): Promise<PersistenceResult> {
-    const localSaved = saveLocalExam(exam);
+    const context = activePersistenceContext();
+    const scopedExam = examWithPersistenceContext(exam, context);
+    const localSaved = saveLocalExam(scopedExam);
     if (!isSupabaseConfigured()) return { localSaved, remoteSaved: false };
 
     try {
-        await upsertRemoteExam(exam);
+        await upsertRemoteExam(scopedExam);
         return { localSaved, remoteSaved: true };
     } catch (error) {
         return { localSaved, remoteSaved: false, remoteError: errorMessage(error) };
@@ -1215,11 +1388,13 @@ export async function saveExam(exam: Exam): Promise<PersistenceResult> {
 }
 
 export async function saveAttempt(attempt: Attempt): Promise<PersistenceResult> {
-    const localSaved = saveLocalAttempt(attempt);
+    const context = contextForAttempt(attempt);
+    const scopedAttempt = attemptWithPersistenceContext(attempt, context);
+    const localSaved = saveLocalAttempt(scopedAttempt);
     if (!isSupabaseConfigured()) return { localSaved, remoteSaved: false };
 
     try {
-        await upsertRemoteAttempt(attempt);
+        await upsertRemoteAttempt(scopedAttempt);
         return { localSaved, remoteSaved: true };
     } catch (error) {
         return { localSaved, remoteSaved: false, remoteError: errorMessage(error) };

@@ -14,6 +14,7 @@ export interface StudentCodeStudentLike {
     name: string;
     group?: string;
     region?: string;
+    email?: string;
 }
 
 export interface StudentIdentityResolution {
@@ -22,6 +23,10 @@ export interface StudentIdentityResolution {
     groupId: string;
     groupName: string;
     matchedRosterProfile: boolean;
+    rosterMatchCount: number;
+    requiresStudentLookup: boolean;
+    lookupMatched: boolean;
+    lookupMismatch: boolean;
 }
 
 export type StudentStartCodeDecision =
@@ -52,6 +57,19 @@ function normalizeCode(value: unknown): string | null {
     if (typeof value !== "string") return null;
     const code = value.trim().toUpperCase();
     return code ? code : null;
+}
+
+function clean(value: unknown): string {
+    return typeof value === "string" ? value.trim() : "";
+}
+
+function normalizeLookup(value: unknown): string {
+    return clean(value).toLowerCase();
+}
+
+function studentMatchesLookup(student: StudentCodeStudentLike, lookup: string): boolean {
+    if (!lookup) return false;
+    return normalizeLookup(student.id) === lookup || normalizeLookup(student.email) === lookup;
 }
 
 export function normalizeStartCodeInput(value: string): string {
@@ -105,6 +123,7 @@ export function resolveStudentIdentity(params: {
     selectedGroupId: string;
     groups: StudentCodeGroupLike[];
     students: StudentCodeStudentLike[];
+    studentLookup?: string;
 }): StudentIdentityResolution {
     const trimmedName = params.name.trim();
     const group = params.groups.find(item => item.id === params.selectedGroupId);
@@ -114,10 +133,22 @@ export function resolveStudentIdentity(params: {
         student.name.trim() === trimmedName && (!group?.name || student.group === group.name)
     );
     const groupRegion = group?.region?.trim();
-    const profile = groupRegion
-        ? matchingProfiles.find(student => student.region?.trim() === groupRegion) || matchingProfiles.find(student => !student.region?.trim())
-        : matchingProfiles[0];
+    const exactRegionProfiles = groupRegion
+        ? matchingProfiles.filter(student => student.region?.trim() === groupRegion)
+        : matchingProfiles;
+    const fallbackRegionProfiles = groupRegion
+        ? matchingProfiles.filter(student => !student.region?.trim())
+        : [];
+    const candidateProfiles = exactRegionProfiles.length > 0
+        ? exactRegionProfiles
+        : fallbackRegionProfiles.length > 0
+            ? fallbackRegionProfiles
+            : matchingProfiles;
+    const lookup = normalizeLookup(params.studentLookup);
+    const lookupProfile = lookup ? candidateProfiles.find(student => studentMatchesLookup(student, lookup)) : undefined;
+    const profile = lookupProfile || candidateProfiles[0];
     const studentId = profile?.id?.trim() || legacyStudentId;
+    const hasLookup = !!lookup;
 
     return {
         studentId,
@@ -125,6 +156,10 @@ export function resolveStudentIdentity(params: {
         groupId: params.selectedGroupId,
         groupName,
         matchedRosterProfile: !!profile?.id,
+        rosterMatchCount: candidateProfiles.length,
+        requiresStudentLookup: candidateProfiles.length > 1 && !lookupProfile,
+        lookupMatched: !!lookupProfile,
+        lookupMismatch: hasLookup && candidateProfiles.length > 0 && !lookupProfile,
     };
 }
 
