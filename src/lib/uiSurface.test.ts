@@ -163,6 +163,7 @@ describe("service UI surface", () => {
         const dashboardPage = readProjectFile("src/app/teacher/dashboard/page.tsx");
         const createPage = readProjectFile("src/app/create/page.tsx");
         const homePage = readProjectFile("src/app/page.tsx");
+        const authMessages = readProjectFile("src/lib/teacherAuthMessages.ts");
         const settingsPage = readProjectFile("src/app/teacher/settings/page.tsx");
         const css = readProjectFile("src/app/globals.css");
 
@@ -177,6 +178,9 @@ describe("service UI surface", () => {
         expect(homePage).toContain('type="button"');
         expect(homePage).toContain("teacherIdentifier");
         expect(homePage).toContain("saveTeacherSessionWithIdentity");
+        expect(homePage).toContain("shouldShowTeacherDeploymentHelp(error)");
+        expect(authMessages).toContain("Supabase가 아니라");
+        expect(authMessages).toContain("TEACHER_ACCOUNTS");
         expect(homePage).toContain("학생번호 또는 이메일");
         expect(homePage).toContain("studentLookup");
         expect(homePage).toContain("needsStudentLookup");

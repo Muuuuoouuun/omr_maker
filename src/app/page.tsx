@@ -8,6 +8,7 @@ import { verifyTeacherPassword } from "@/app/actions/auth";
 import { formatRegionScopedLabel } from "@/lib/dashboardSelection";
 import { readLocalAttempts } from "@/lib/omrPersistence";
 import { readRosterGroups, readRosterStudents, type RosterGroup, type RosterStudent } from "@/lib/rosterStorage";
+import { TEACHER_AUTH_DEPLOYMENT_HELP, shouldShowTeacherDeploymentHelp } from "@/lib/teacherAuthMessages";
 import {
   hasStudentStartCode,
   normalizeStartCodeInput,
@@ -727,9 +728,16 @@ export default function Home() {
                     autoComplete="current-password"
                   />
                   {error ? (
-                    <p style={{ fontSize: "0.8rem", color: "var(--error)", marginTop: "0.5rem", fontWeight: 600 }}>
-                      {error}
-                    </p>
+                    <div style={{ marginTop: "0.5rem", display: "grid", gap: "0.35rem" }}>
+                      <p style={{ fontSize: "0.8rem", color: "var(--error)", fontWeight: 600 }}>
+                        {error}
+                      </p>
+                      {shouldShowTeacherDeploymentHelp(error) && (
+                        <p style={{ fontSize: "0.75rem", color: "var(--muted)", lineHeight: 1.45, wordBreak: "keep-all" }}>
+                          {TEACHER_AUTH_DEPLOYMENT_HELP}
+                        </p>
+                      )}
+                    </div>
                   ) : (
                     <p style={{ fontSize: "0.8rem", color: "var(--muted)", marginTop: "0.5rem", opacity: 0.75 }}>
                       교사용 계정 정보를 입력하세요.

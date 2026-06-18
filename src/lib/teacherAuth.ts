@@ -1,6 +1,6 @@
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 
-export const TEACHER_AUTH_ERROR = "아이디 또는 비밀번호가 올바르지 않습니다.";
+export { TEACHER_AUTH_ERROR } from "./teacherAuthMessages";
 
 export interface TeacherCredential {
     id: string;
