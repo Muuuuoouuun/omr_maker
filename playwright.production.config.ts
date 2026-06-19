@@ -2,7 +2,8 @@ import { defineConfig, devices } from "@playwright/test";
 
 export default defineConfig({
     testDir: "./e2e",
-    testMatch: /full-journey\.spec\.ts/,
+    testMatch: /(?:full-journey|teacher-pages)\.spec\.ts/,
+    grep: /Teacher and student full journey|issued student start code gates the student portal login/,
     fullyParallel: false,
     forbidOnly: !!process.env.CI,
     retries: process.env.CI ? 1 : 0,
