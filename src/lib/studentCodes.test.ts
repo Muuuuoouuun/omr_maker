@@ -173,6 +173,19 @@ describe("student start codes", () => {
         });
     });
 
+    it("does not auto-issue a start code when prior attempts already exist", () => {
+        expect(resolveStudentStartCodeLogin({
+            studentId: "student-1",
+            codes: {},
+            hasPriorAttempt: true,
+            generateCode: () => "ABC123",
+        })).toEqual({
+            status: "code_required",
+            codes: {},
+            codesChanged: false,
+        });
+    });
+
     it("migrates legacy stored codes to the canonical roster student ID", () => {
         expect(resolveStudentStartCodeLogin({
             studentId: "student-1",

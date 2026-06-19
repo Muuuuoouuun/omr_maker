@@ -11,6 +11,13 @@ const TEST_STUDENT_ID = `${TEST_GROUP_ID}::김학생`;
 const TEST_STUDENT_NAME = "김학생";
 const CREATED_EXAM_TITLE = "E2E 생성 UI 국어 시험";
 const CREATED_ANSWER_KEY = "12345123451234512345";
+const SAME_NAME_GROUP_ID = "same-name-class-a";
+const SAME_NAME_GROUP_NAME = "동명이인 A반";
+const SAME_NAME_STUDENT_NAME = "김학생";
+const SAME_NAME_FIRST_ID = "same-name-001";
+const SAME_NAME_SECOND_ID = "same-name-002";
+const SAME_NAME_SECOND_EMAIL = "same.second@example.edu";
+const SAME_NAME_START_CODE = "ZXCV12";
 
 async function seedStudentRoster(page: Page) {
     await page.evaluate((seed) => {
@@ -44,6 +51,82 @@ async function seedStudentRoster(page: Page) {
         groupName: TEST_GROUP_NAME,
         studentId: TEST_STUDENT_ID,
         studentName: TEST_STUDENT_NAME,
+    });
+}
+
+async function seedSameNameRosterWithProtectedHistory(page: Page) {
+    await page.evaluate((seed) => {
+        const group = {
+            id: seed.groupId,
+            name: seed.groupName,
+            region: "서울",
+            count: 2,
+            avgScore: 0,
+            color: "#4f46e5",
+        };
+        const students = [
+            {
+                id: seed.firstId,
+                name: seed.studentName,
+                email: "same.first@example.edu",
+                group: seed.groupName,
+                region: "서울",
+                avatar: "#4f46e5",
+                avgScore: 0,
+                examsTaken: 1,
+                lastActive: "2026. 6. 19.",
+                trend: "flat",
+                status: "active",
+            },
+            {
+                id: seed.secondId,
+                name: seed.studentName,
+                email: seed.secondEmail,
+                group: seed.groupName,
+                region: "서울",
+                avatar: "#10b981",
+                avgScore: 0,
+                examsTaken: 1,
+                lastActive: "2026. 6. 19.",
+                trend: "flat",
+                status: "active",
+            },
+        ];
+        const protectedAttempt = {
+            id: "attempt-same-name-second",
+            examId: "same-name-exam",
+            examTitle: "동명이인 보호 시험",
+            studentProfileId: seed.secondId,
+            studentName: seed.studentName,
+            studentId: seed.secondId,
+            groupId: seed.groupId,
+            groupName: seed.groupName,
+            regionId: "서울",
+            regionName: "서울",
+            identityType: "temporary",
+            startedAt: "2026-06-19T00:00:00.000Z",
+            finishedAt: "2026-06-19T00:10:00.000Z",
+            score: 0,
+            totalScore: 0,
+            answers: {},
+            status: "completed",
+            questionResults: [],
+        };
+
+        window.localStorage.setItem("omr_groups", JSON.stringify([group]));
+        window.localStorage.setItem("omr_students", JSON.stringify(students));
+        window.localStorage.setItem("omr_attempts", JSON.stringify([protectedAttempt]));
+        window.localStorage.setItem("omr_student_codes", JSON.stringify({
+            [seed.secondId]: seed.startCode,
+        }));
+    }, {
+        groupId: SAME_NAME_GROUP_ID,
+        groupName: SAME_NAME_GROUP_NAME,
+        studentName: SAME_NAME_STUDENT_NAME,
+        firstId: SAME_NAME_FIRST_ID,
+        secondId: SAME_NAME_SECOND_ID,
+        secondEmail: SAME_NAME_SECOND_EMAIL,
+        startCode: SAME_NAME_START_CODE,
     });
 }
 
@@ -317,6 +400,49 @@ async function seedCompletedAttempt(page: Page) {
 test.describe("Teacher and student full journey", () => {
     test.beforeEach(async ({ page, context }) => {
         await resetBrowserState(page, context);
+    });
+
+    test("requires lookup and start code before opening a same-name student account with history", async ({ page }) => {
+        await seedSameNameRosterWithProtectedHistory(page);
+        await page.goto("/?role=student");
+        await expect(page.getByText("학생 포털")).toBeVisible();
+
+        await page.getByLabel("이름").fill(SAME_NAME_STUDENT_NAME);
+        await page.getByLabel("반 선택").selectOption(SAME_NAME_GROUP_ID);
+        await expect(page.getByText("같은 이름의 학생이 있습니다.")).toBeVisible();
+
+        await page.getByRole("button", { name: "시험 시작하기" }).click();
+        await expect(page.getByText("동명이인이 있습니다. 선생님이 알려준 학생번호 또는 이메일을 입력해주세요.")).toBeVisible();
+
+        await page.getByLabel("학생번호 또는 이메일").fill("wrong@example.edu");
+        await page.getByRole("button", { name: "시험 시작하기" }).click();
+        await expect(page.getByText("학생번호 또는 이메일이 명단과 일치하지 않습니다.")).toBeVisible();
+
+        await page.getByLabel("학생번호 또는 이메일").fill(SAME_NAME_SECOND_EMAIL);
+        await expect(page.getByLabel("시작 코드")).toBeVisible();
+        await page.getByRole("button", { name: "시험 시작하기" }).click();
+        await expect(page.getByText("이미 등록된 학생입니다. 선생님이 발급한 시작 코드를 입력해주세요.")).toBeVisible();
+
+        await page.getByLabel("시작 코드").fill("WRONG1");
+        await page.getByRole("button", { name: "시험 시작하기" }).click();
+        await expect(page.getByText("시작 코드가 일치하지 않습니다.")).toBeVisible();
+
+        await page.getByLabel("시작 코드").fill(SAME_NAME_START_CODE);
+        await page.getByRole("button", { name: "시험 시작하기" }).click();
+        await expect(page).toHaveURL(/\/student\/dashboard$/);
+
+        const session = await page.evaluate(() => JSON.parse(window.sessionStorage.getItem("omr_student_session") || "null"));
+        expect(session).toMatchObject({
+            studentId: SAME_NAME_SECOND_ID,
+            loginId: `${SAME_NAME_GROUP_ID}::${SAME_NAME_STUDENT_NAME}`,
+            name: SAME_NAME_STUDENT_NAME,
+            groupId: SAME_NAME_GROUP_ID,
+            groupName: SAME_NAME_GROUP_NAME,
+            regionId: "서울",
+            regionName: "서울",
+            isGuest: false,
+            identityType: "temporary",
+        });
     });
 
     test("creates an exam through the teacher UI before student submission and analytics", async ({ page }) => {

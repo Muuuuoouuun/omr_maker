@@ -284,7 +284,7 @@ export default function Home() {
 
     if (codeDecision.status === "code_required") {
       setNeedsCode(true);
-      setError("이미 등록된 학생입니다. 시작 코드를 입력해주세요.");
+      setError("이미 등록된 학생입니다. 선생님이 발급한 시작 코드를 입력해주세요.");
       setTimeout(() => setError(""), 2500);
       return;
     }

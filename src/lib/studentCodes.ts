@@ -207,6 +207,10 @@ export function resolveStudentStartCodeLogin(params: {
         return { status: "allowed", codes: nextCodes, code: storedCode, codesChanged };
     }
 
+    if (!storedCode && params.hasPriorAttempt) {
+        return { status: "code_required", codes: nextCodes, codesChanged };
+    }
+
     if (!storedCode) {
         const code = params.generateCode?.() || generateStartCode();
         nextCodes[params.studentId] = code;
