@@ -9,6 +9,7 @@ const TEST_GROUP_ID = "class-a";
 const TEST_GROUP_NAME = "A반";
 const TEST_STUDENT_ID = `${TEST_GROUP_ID}::김학생`;
 const TEST_STUDENT_NAME = "김학생";
+const TEST_STUDENT_START_CODE = "E2E777";
 const CREATED_EXAM_TITLE = "E2E 생성 UI 국어 시험";
 const CREATED_ANSWER_KEY = "12345123451234512345";
 const SAME_NAME_GROUP_ID = "same-name-class-a";
@@ -149,6 +150,30 @@ async function loginAsStudent(page: Page) {
         regionName: "서울",
         isGuest: false,
         identityType: "temporary",
+    });
+}
+
+async function requireStartCodeForSeedStudent(page: Page) {
+    await page.evaluate((seed) => {
+        const rawCodes = window.localStorage.getItem("omr_student_codes");
+        let codes: Record<string, string> = {};
+
+        try {
+            const parsed = JSON.parse(rawCodes || "{}");
+            if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+                codes = parsed;
+            }
+        } catch {
+            codes = {};
+        }
+
+        codes[seed.studentId] = seed.startCode;
+        window.localStorage.setItem("omr_student_codes", JSON.stringify(codes));
+        window.localStorage.removeItem("omr_student_session_backup");
+        window.sessionStorage.removeItem("omr_student_session");
+    }, {
+        studentId: TEST_STUDENT_ID,
+        startCode: TEST_STUDENT_START_CODE,
     });
 }
 
@@ -443,6 +468,77 @@ test.describe("Teacher and student full journey", () => {
             isGuest: false,
             identityType: "temporary",
         });
+    });
+
+    test("lets a start-code student submit an exam and feed teacher analytics", async ({ page }) => {
+        await seedExamAndStudent(page);
+        await requireStartCodeForSeedStudent(page);
+
+        await page.goto("/?role=student");
+        await expect(page.getByText("학생 포털")).toBeVisible();
+        await page.getByLabel("이름").fill(TEST_STUDENT_NAME);
+        await page.getByLabel("학생번호 또는 이메일").fill("kim.student@example.com");
+        await page.getByLabel("반 선택").selectOption(TEST_GROUP_ID);
+        await expect(page.getByLabel("시작 코드")).toBeVisible();
+
+        await page.getByRole("button", { name: "시험 시작하기" }).click();
+        await expect(page.getByText("이미 등록된 학생입니다. 선생님이 발급한 시작 코드를 입력해주세요.")).toBeVisible();
+
+        await page.getByLabel("시작 코드").fill(TEST_STUDENT_START_CODE);
+        await page.getByRole("button", { name: "시험 시작하기" }).click();
+        await expect(page).toHaveURL(/\/student\/dashboard$/);
+        await expect(page.getByRole("heading", { name: `${TEST_STUDENT_NAME}님,` })).toBeVisible();
+        await expect(page.getByText(TEST_EXAM_TITLE)).toBeVisible();
+
+        const session = await page.evaluate(() => JSON.parse(window.sessionStorage.getItem("omr_student_session") || "null"));
+        expect(session).toMatchObject({
+            studentId: TEST_STUDENT_ID,
+            loginId: TEST_STUDENT_ID,
+            name: TEST_STUDENT_NAME,
+            groupId: TEST_GROUP_ID,
+            groupName: TEST_GROUP_NAME,
+            regionId: "서울",
+            regionName: "서울",
+            isGuest: false,
+            identityType: "temporary",
+        });
+
+        await page.getByRole("link", { name: "시작" }).click();
+        await expect(page).toHaveURL(new RegExp(`/solve/${TEST_EXAM_ID}$`));
+        await ensureAnswerPaneVisible(page);
+
+        await page.getByRole("button", { name: "문제 1번 보기 2" }).click();
+        await page.getByRole("button", { name: "문제 2번 보기 3" }).click();
+        await page.getByRole("button", { name: "문제 3번 보기 1" }).click();
+        await expect(page.getByText("모든 문제 표기 완료")).toBeVisible();
+
+        await page.locator(".solve-submit-button").click();
+        const confirmDialog = page.getByRole("dialog", { name: "답안 제출" });
+        await expect(confirmDialog).toBeVisible();
+        await confirmDialog.getByRole("button", { name: "제출하기" }).click();
+
+        await expect(page).toHaveURL(/\/student\/review\/\d+$/);
+        await expect(page.getByText("결과 리포트")).toBeVisible();
+        await expect(page.getByText(TEST_EXAM_TITLE)).toBeVisible();
+        await expect(page.getByText("20 / 30 점")).toBeVisible();
+
+        const storedAttempts = await page.evaluate(() => JSON.parse(window.localStorage.getItem("omr_attempts") || "[]"));
+        expect(storedAttempts).toHaveLength(1);
+        expect(storedAttempts[0]).toMatchObject({
+            examId: TEST_EXAM_ID,
+            examTitle: TEST_EXAM_TITLE,
+            studentName: TEST_STUDENT_NAME,
+            studentId: TEST_STUDENT_ID,
+            score: 20,
+            totalScore: 30,
+            status: "completed",
+            identityType: "temporary",
+        });
+
+        await loginAsTeacher(page, "/teacher/dashboard?tab=exam");
+        await expect(page.getByRole("heading", { name: "Analytics Center" })).toBeVisible();
+        await expect(page.getByText("학생별 점수 및 성취도")).toBeVisible();
+        await expect(page.getByRole("row", { name: new RegExp(`${TEST_STUDENT_NAME}.*20점`) })).toBeVisible();
     });
 
     test("creates an exam through the teacher UI before student submission and analytics", async ({ page }) => {
