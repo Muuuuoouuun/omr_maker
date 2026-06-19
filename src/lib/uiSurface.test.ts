@@ -518,6 +518,7 @@ describe("service UI surface", () => {
 
     it("keeps settings data DB readiness tied to shared storage sources", () => {
         const settingsPage = readProjectFile("src/app/teacher/settings/page.tsx");
+        const dataReadiness = readProjectFile("src/lib/dataDbReadiness.ts");
 
         expect(settingsPage).toContain("데이터 · DB");
         expect(settingsPage).toContain("DataDbSection");
@@ -529,6 +530,8 @@ describe("service UI surface", () => {
         expect(settingsPage).toContain('aria-label="데이터 DB 상태 새로고침"');
         expect(settingsPage).toContain("원격 동기화 세부 상태");
         expect(settingsPage).toContain("summary.syncSources");
+        expect(dataReadiness).toContain("실사용 RLS 전환 확인");
+        expect(dataReadiness).toContain("production-rls.sql");
         expect(settingsPage).toContain('sourceLabel: "시험"');
         expect(settingsPage).toContain('sourceLabel: "제출"');
         expect(settingsPage).toContain('sourceLabel: "명단"');
