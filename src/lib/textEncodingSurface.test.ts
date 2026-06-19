@@ -73,6 +73,7 @@ const coreJourneyFiles = [
     "src/app/student/review/[attemptId]/page.tsx",
     "src/components/dashboard/AssignmentBlock.tsx",
     "src/app/teacher/dashboard/page.tsx",
+    "src/app/teacher/users/page.tsx",
     "src/components/dashboard/tabs/OverviewTab.tsx",
     "src/components/dashboard/tabs/ExamAnalyticsTab.tsx",
     "src/components/dashboard/tabs/StudentAnalyticsTab.tsx",
@@ -154,6 +155,13 @@ const requiredStringsByFile: Record<string, string[]> = {
         "시험 분석",
         "학생 성취도",
         "데모 데이터 모드",
+    ],
+    "src/app/teacher/users/page.tsx": [
+        "학생 계정 안내",
+        "로그인 ID",
+        "이메일 ID",
+        "시작 코드",
+        "학생에게 이름, 반, 로그인 ID, 시작 코드를 함께 전달하세요.",
     ],
     "src/components/dashboard/tabs/OverviewTab.tsx": [
         "Quick Action",

@@ -501,6 +501,12 @@ describe("service UI surface", () => {
         expect(usersPage).toContain("카카오 초대 기록");
         expect(usersPage).toContain("초대 기록 추가됨");
         expect(usersPage).toContain("시작 코드");
+        expect(usersPage).toContain("학생 계정 안내");
+        expect(usersPage).toContain("로그인 ID");
+        expect(usersPage).toContain("학생에게 이름, 반, 로그인 ID, 시작 코드를 함께 전달하세요.");
+        expect(usersPage).toContain("handleCopyStudentLoginInfo");
+        expect(usersPage).toContain("student-login-id-value");
+        expect(usersPage).toContain("student-login-start-code-value");
         expect(usersPage).toContain("handleIssueStudentStartCode");
         expect(usersPage).toContain("generateStartCode");
         expect(usersPage).toContain("disambiguateRosterStudentId");

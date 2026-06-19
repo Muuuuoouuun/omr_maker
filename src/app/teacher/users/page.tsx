@@ -501,6 +501,25 @@ function ManageUsersInner() {
         }
     };
 
+    const handleCopyStudentLoginInfo = async () => {
+        if (!selected) return;
+        const loginInfo = [
+            "OMR Maker 학생 로그인 안내",
+            `이름: ${selected.name}`,
+            `반: ${selected.group}`,
+            `로그인 ID(학생번호): ${selected.id}`,
+            `이메일 로그인 ID: ${selected.email}`,
+            `시작 코드: ${selectedStartCode || "미발급 - 선생님에게 발급 요청"}`,
+        ].join("\n");
+
+        try {
+            await navigator.clipboard.writeText(loginInfo);
+            toast.success("학생 계정 안내 복사됨", `${selected.name} 로그인 정보를 복사했습니다.`);
+        } catch {
+            toast.error("복사 실패", "브라우저 클립보드 권한을 확인해주세요.");
+        }
+    };
+
     // ===== Student CRUD =====
     const handleAddStudent = (data: StudentFormData) => {
         const idx = students.length;
@@ -1348,6 +1367,61 @@ function ManageUsersInner() {
                                     <MiniStat label="원시험" value={`${selected.examsTaken}회`} color="#10b981" />
                                     <MiniStat label="재시험" value={`${selectedProfile?.retakeAttemptCount ?? 0}회`} color="#0f766e" />
                                     <MiniStat label="필기 보관" value={`${selectedHandwritingCount}건`} color="#8b5cf6" />
+                                </div>
+                                <div data-testid="student-login-guide-panel" style={{ padding: '1rem', background: 'var(--background)', borderRadius: 'var(--radius-md)', marginBottom: '1rem', border: '1px solid var(--border)' }}>
+                                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '0.75rem', marginBottom: '0.75rem' }}>
+                                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', fontSize: '0.75rem', fontWeight: 800, color: 'var(--muted)', letterSpacing: '0.08em' }}>
+                                            <Lock size={13} />
+                                            학생 계정 안내
+                                        </div>
+                                        <button
+                                            type="button"
+                                            aria-label="학생 계정 안내 복사"
+                                            data-testid="copy-student-login-credentials"
+                                            onClick={handleCopyStudentLoginInfo}
+                                            style={{
+                                                padding: '0.35rem 0.55rem',
+                                                borderRadius: 'var(--radius-md)',
+                                                background: 'var(--surface)',
+                                                border: '1px solid var(--border)',
+                                                color: 'var(--foreground)',
+                                                fontSize: '0.72rem',
+                                                fontWeight: 800,
+                                                display: 'inline-flex',
+                                                alignItems: 'center',
+                                                justifyContent: 'center',
+                                                gap: '0.3rem',
+                                                whiteSpace: 'nowrap',
+                                            }}
+                                        >
+                                            <Copy size={12} />
+                                            안내 복사
+                                        </button>
+                                    </div>
+                                    <div style={{ display: 'grid', gap: '0.45rem', fontSize: '0.78rem' }}>
+                                        <div style={{ display: 'grid', gridTemplateColumns: '86px minmax(0, 1fr)', gap: '0.55rem', alignItems: 'center' }}>
+                                            <span style={{ color: 'var(--muted)', fontWeight: 750 }}>로그인 ID</span>
+                                            <code data-testid="student-login-id-value" style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', color: 'var(--foreground)', fontWeight: 850 }}>{selected.id}</code>
+                                        </div>
+                                        <div style={{ display: 'grid', gridTemplateColumns: '86px minmax(0, 1fr)', gap: '0.55rem', alignItems: 'center' }}>
+                                            <span style={{ color: 'var(--muted)', fontWeight: 750 }}>이메일 ID</span>
+                                            <code data-testid="student-login-email-value" style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', color: 'var(--foreground)', fontWeight: 850 }}>{selected.email}</code>
+                                        </div>
+                                        <div style={{ display: 'grid', gridTemplateColumns: '86px minmax(0, 1fr)', gap: '0.55rem', alignItems: 'center' }}>
+                                            <span style={{ color: 'var(--muted)', fontWeight: 750 }}>시작 코드</span>
+                                            <code data-testid="student-login-start-code-value" style={{
+                                                overflow: 'hidden',
+                                                textOverflow: 'ellipsis',
+                                                whiteSpace: 'nowrap',
+                                                color: selectedStartCode ? '#047857' : '#b45309',
+                                                fontWeight: 850,
+                                                letterSpacing: selectedStartCode ? '0.08em' : 0,
+                                            }}>{selectedStartCode || '미발급'}</code>
+                                        </div>
+                                    </div>
+                                    <p style={{ fontSize: '0.74rem', color: 'var(--muted)', lineHeight: 1.55, marginTop: '0.75rem', wordBreak: 'keep-all' }}>
+                                        학생에게 이름, 반, 로그인 ID, 시작 코드를 함께 전달하세요. 이메일도 로그인 ID로 사용할 수 있습니다.
+                                    </p>
                                 </div>
                                 <div data-testid="student-start-code-panel" style={{ padding: '1rem', background: 'var(--background)', borderRadius: 'var(--radius-md)', marginBottom: '1rem', border: '1px solid var(--border)' }}>
                                     <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '0.75rem', marginBottom: '0.7rem' }}>

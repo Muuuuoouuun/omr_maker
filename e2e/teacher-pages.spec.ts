@@ -130,11 +130,17 @@ test.describe("Manage Users page", () => {
         await expect(studentRow).toHaveCount(1);
         await studentRow.click();
         await expect(page.getByText("학생 상세")).toBeVisible();
+        await expect(page.getByText("학생 계정 안내")).toBeVisible();
+        await expect(page.getByTestId("student-login-id-value")).toHaveText("e2e-class-a::김학생");
+        await expect(page.getByTestId("student-login-email-value")).toHaveText("kim.student@example.com");
+        await expect(page.getByTestId("student-login-start-code-value")).toHaveText("미발급");
+        await expect(page.getByTestId("copy-student-login-credentials")).toBeVisible();
         await expect(page.getByTestId("student-start-code-value")).toHaveText("미발급");
 
         await page.getByTestId("issue-student-start-code").click();
         const issuedCode = (await page.getByTestId("student-start-code-value").innerText()).trim();
         expect(issuedCode).toMatch(/^[A-Z2-9]{6}$/);
+        await expect(page.getByTestId("student-login-start-code-value")).toHaveText(issuedCode);
 
         const storedCodes = await page.evaluate(() => JSON.parse(window.localStorage.getItem("omr_student_codes") || "{}"));
         expect(storedCodes["e2e-class-a::김학생"]).toBe(issuedCode);
