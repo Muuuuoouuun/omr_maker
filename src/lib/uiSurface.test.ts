@@ -185,6 +185,8 @@ describe("service UI surface", () => {
         expect(authMessages).toContain("TEACHER_ACCOUNTS");
         expect(homePage).toContain("학생번호 또는 이메일");
         expect(homePage).toContain("계정 ID처럼 사용합니다.");
+        expect(homePage).toContain("명단 학생은 선생님이 알려준 학생번호 또는 이메일을 입력해주세요.");
+        expect(homePage).toContain("명단 이메일이나 선생님이 알려준 학생번호로 본인 계정을 확인합니다.");
         expect(homePage).toContain("학생 계정 비밀번호처럼 쓰이는 6자리 코드입니다.");
         expect(homePage).toContain('aria-label="이름"');
         expect(homePage).toContain('aria-label="학생번호 또는 이메일"');

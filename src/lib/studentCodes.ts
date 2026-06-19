@@ -157,7 +157,7 @@ export function resolveStudentIdentity(params: {
         groupName,
         matchedRosterProfile: !!profile?.id,
         rosterMatchCount: candidateProfiles.length,
-        requiresStudentLookup: candidateProfiles.length > 1 && !lookupProfile,
+        requiresStudentLookup: candidateProfiles.length > 0 && !lookupProfile,
         lookupMatched: !!lookupProfile,
         lookupMismatch: hasLookup && candidateProfiles.length > 0 && !lookupProfile,
     };

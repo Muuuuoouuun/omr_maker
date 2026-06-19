@@ -243,7 +243,9 @@ export default function Home() {
     }
     if (identity.requiresStudentLookup) {
       setNeedsStudentLookup(true);
-      setError("동명이인이 있습니다. 선생님이 알려준 학생번호 또는 이메일을 입력해주세요.");
+      setError(identity.rosterMatchCount > 1
+        ? "동명이인이 있습니다. 선생님이 알려준 학생번호 또는 이메일을 입력해주세요."
+        : "명단 학생은 선생님이 알려준 학생번호 또는 이메일을 입력해주세요.");
       setTimeout(() => setError(""), 3000);
       return;
     }
@@ -838,7 +840,7 @@ export default function Home() {
                     wordBreak: "keep-all",
                   }}>
                     {needsStudentLookup
-                      ? "같은 이름의 학생이 있습니다. 명단 이메일이나 선생님이 알려준 학생번호를 입력하세요."
+                      ? "명단 이메일이나 선생님이 알려준 학생번호로 본인 계정을 확인합니다."
                       : "계정 ID처럼 사용합니다. 입력하면 같은 이름의 학생도 정확히 구분됩니다."}
                   </p>
                 </div>

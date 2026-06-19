@@ -427,6 +427,38 @@ test.describe("Teacher and student full journey", () => {
         await resetBrowserState(page, context);
     });
 
+    test("requires student ID or email before opening a roster-backed student account", async ({ page }) => {
+        await seedStudentRoster(page);
+        await page.goto("/?role=student");
+        await expect(page.getByText("학생 포털")).toBeVisible();
+
+        await page.getByLabel("이름").fill(TEST_STUDENT_NAME);
+        await page.getByLabel("반 선택").selectOption(TEST_GROUP_ID);
+        await page.getByRole("button", { name: "시험 시작하기" }).click();
+        await expect(page.getByText("명단 학생은 선생님이 알려준 학생번호 또는 이메일을 입력해주세요.")).toBeVisible();
+        await expect(page.getByText("명단 이메일이나 선생님이 알려준 학생번호로 본인 계정을 확인합니다.")).toBeVisible();
+
+        await page.getByLabel("학생번호 또는 이메일").fill("kim.student@example.com");
+        await page.getByRole("button", { name: "시험 시작하기" }).click();
+        await expect(page).toHaveURL(/\/student\/dashboard$/);
+
+        const session = await page.evaluate(() => JSON.parse(window.sessionStorage.getItem("omr_student_session") || "null"));
+        expect(session).toMatchObject({
+            studentId: TEST_STUDENT_ID,
+            loginId: TEST_STUDENT_ID,
+            name: TEST_STUDENT_NAME,
+            groupId: TEST_GROUP_ID,
+            groupName: TEST_GROUP_NAME,
+            regionId: "서울",
+            regionName: "서울",
+            isGuest: false,
+            identityType: "temporary",
+        });
+
+        const storedCodes = await page.evaluate(() => JSON.parse(window.localStorage.getItem("omr_student_codes") || "{}"));
+        expect(storedCodes[TEST_STUDENT_ID]).toMatch(/^[A-HJ-NP-Z2-9]{6}$/);
+    });
+
     test("requires lookup and start code before opening a same-name student account with history", async ({ page }) => {
         await seedSameNameRosterWithProtectedHistory(page);
         await page.goto("/?role=student");
@@ -434,7 +466,7 @@ test.describe("Teacher and student full journey", () => {
 
         await page.getByLabel("이름").fill(SAME_NAME_STUDENT_NAME);
         await page.getByLabel("반 선택").selectOption(SAME_NAME_GROUP_ID);
-        await expect(page.getByText("같은 이름의 학생이 있습니다.")).toBeVisible();
+        await expect(page.getByText("명단 이메일이나 선생님이 알려준 학생번호로 본인 계정을 확인합니다.")).toBeVisible();
 
         await page.getByRole("button", { name: "시험 시작하기" }).click();
         await expect(page.getByText("동명이인이 있습니다. 선생님이 알려준 학생번호 또는 이메일을 입력해주세요.")).toBeVisible();
