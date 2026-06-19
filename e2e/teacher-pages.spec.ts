@@ -135,6 +135,8 @@ test.describe("Manage Users page", () => {
         await expect(page.getByTestId("student-login-email-value")).toHaveText("kim.student@example.com");
         await expect(page.getByTestId("student-login-start-code-value")).toHaveText("미발급");
         await expect(page.getByTestId("copy-student-login-credentials")).toBeVisible();
+        const hasAccountGuideBodyOverflow = await page.evaluate(() => document.documentElement.scrollWidth > document.documentElement.clientWidth + 1);
+        expect(hasAccountGuideBodyOverflow).toBe(false);
         await expect(page.getByTestId("student-start-code-value")).toHaveText("미발급");
 
         await page.getByTestId("issue-student-start-code").click();
