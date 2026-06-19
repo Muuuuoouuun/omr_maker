@@ -1,5 +1,7 @@
+import { readFile } from "node:fs/promises";
 import { test, expect, type Page } from "@playwright/test";
 import { loginAsTeacher, resetBrowserState } from "./helpers";
+import { parseCsvRows } from "../src/lib/csv";
 
 const TEST_EXAM_ID = "e2e-korean-integrated-exam";
 const TEST_EXAM_TITLE = "E2E 국어 통합 시험";
@@ -312,6 +314,17 @@ test.describe("Teacher and student full journey", () => {
             page.getByRole("button", { name: "통계 CSV" }).click(),
         ]);
         expect(download.suggestedFilename()).toMatch(/^dashboard-stats-\d{4}-\d{2}-\d{2}\.csv$/);
+        const csvPath = await download.path();
+        expect(csvPath).toBeTruthy();
+        const csvText = await readFile(csvPath!, "utf8");
+        expect(csvText.charCodeAt(0)).toBe(0xfeff);
+        const csvRows = parseCsvRows(csvText);
+        expect(csvRows[0]).toEqual(["OMR Maker 통계 내보내기"]);
+        expect(csvRows).toContainEqual(["요약 통계"]);
+        expect(csvRows).toContainEqual(["전체 학생", "1"]);
+        expect(csvRows).toContainEqual(["평균 점수", "67"]);
+        expect(csvRows).toContainEqual(["시험별 통계"]);
+        expect(csvRows).toContainEqual(["완료", TEST_EXAM_TITLE, "2026. 6. 19.", "1", "1", "100", "0", "N"]);
 
         await page.getByRole("button", { name: "시험 분석", exact: true }).click();
         await expect(page.getByText("학생별 점수 및 성취도")).toBeVisible();

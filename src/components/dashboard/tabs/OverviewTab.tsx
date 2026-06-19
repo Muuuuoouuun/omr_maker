@@ -288,7 +288,7 @@ export default function OverviewTab({ exams: examsProp, attempts, stats, trendDa
             </div>
 
             {/* 3. Project Summary (Currently Ongoing / Completed Exams) */}
-            <div className="bento-card overview-exam-summary-card" style={{ gridColumn: 'span 4', overflowX: 'auto' }}>
+            <div className="bento-card overview-exam-summary-card" style={{ gridColumn: 'span 4', overflow: 'hidden' }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.5rem' }}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: '1.5rem' }}>
                         <h3 style={{ fontSize: '1.1rem', fontWeight: 700 }}>Exam Summary</h3>
@@ -349,119 +349,133 @@ export default function OverviewTab({ exams: examsProp, attempts, stats, trendDa
                     </div>
                 </div>
 
-                <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left', minWidth: '800px' }}>
-                    <thead>
-                        <tr style={{ color: 'var(--muted)', fontSize: '0.85rem', borderBottom: '1px solid var(--border)' }}>
-                            <th style={{ padding: '1rem 0' }}>Exam Title</th>
-                            <th style={{ padding: '1rem 0' }}>Created At</th>
-                            <th style={{ padding: '1rem 0' }}>Progress (Participation)</th>
-                            <th style={{ padding: '1rem 0' }}>Participants / Total</th>
-                            <th style={{ padding: '1rem 0' }}>Retakes</th>
-                            <th style={{ padding: '1rem 0' }}>Status</th>
-                            {activeTab === 'ongoing' && <th style={{ padding: '1rem 0', textAlign: 'right' }}>Action</th>}
-                            <th style={{ padding: '1rem 0', textAlign: 'right', width: 60 }}>작업</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        {displayExams.map((exam) => {
-                            const participationRate = Math.min(100, safeRatePercent(exam.completedCount, exam.total));
+                <div className="overview-exam-summary-scroll">
+                    <table className="overview-exam-summary-table">
+                        <colgroup>
+                            <col style={{ width: '220px' }} />
+                            <col style={{ width: '115px' }} />
+                            <col style={{ width: '190px' }} />
+                            <col style={{ width: '135px' }} />
+                            <col style={{ width: '85px' }} />
+                            <col style={{ width: '120px' }} />
+                            {activeTab === 'ongoing' && <col style={{ width: '130px' }} />}
+                            <col style={{ width: '60px' }} />
+                        </colgroup>
+                        <thead>
+                            <tr style={{ color: 'var(--muted)', fontSize: '0.85rem', borderBottom: '1px solid var(--border)' }}>
+                                <th>Exam Title</th>
+                                <th>Created At</th>
+                                <th>Progress (Participation)</th>
+                                <th>Participants / Total</th>
+                                <th>Retakes</th>
+                                <th>Status</th>
+                                {activeTab === 'ongoing' && <th style={{ textAlign: 'right' }}>Action</th>}
+                                <th style={{ textAlign: 'right' }}>작업</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {displayExams.map((exam) => {
+                                const participationRate = Math.min(100, safeRatePercent(exam.completedCount, exam.total));
 
-                            const targetColor = participationRate > 70 ? 'var(--success)' : (participationRate > 30 ? 'var(--warning)' : 'var(--error)');
-                            const isArchived = exam.archived;
-                            const statusText = isArchived ? 'Archived' : participationRate === 100 ? 'Completed' : 'In Progress';
-                            const statusBg = isArchived ? 'rgba(100,116,139,0.12)' : participationRate === 100 ? 'rgba(16, 185, 129, 0.1)' : 'rgba(139, 92, 246, 0.1)';
-                            const statusColor = isArchived ? 'var(--muted)' : participationRate === 100 ? 'var(--success)' : 'var(--accent)';
+                                const targetColor = participationRate > 70 ? 'var(--success)' : (participationRate > 30 ? 'var(--warning)' : 'var(--error)');
+                                const isArchived = exam.archived;
+                                const statusText = isArchived ? 'Archived' : participationRate === 100 ? 'Completed' : 'In Progress';
+                                const statusBg = isArchived ? 'rgba(100,116,139,0.12)' : participationRate === 100 ? 'rgba(16, 185, 129, 0.1)' : 'rgba(139, 92, 246, 0.1)';
+                                const statusColor = isArchived ? 'var(--muted)' : participationRate === 100 ? 'var(--success)' : 'var(--accent)';
 
-                            return (
-                                <tr key={exam.id} style={{ borderBottom: '1px solid var(--border)', transition: 'background 0.2s', opacity: isArchived ? 0.6 : 1 }} className="hover:bg-slate-50 dark:hover:bg-slate-800/50">
-                                    <td style={{ padding: '1.2rem 0', fontWeight: 600, fontSize: '0.95rem' }}>
-                                        <span
-                                            onClick={() => onNavigateToExamAnalytics && onNavigateToExamAnalytics(exam.id)}
-                                            style={{ cursor: 'pointer', transition: 'color 0.2s' }}
-                                            className="hover:text-primary hover:underline hover:underline-offset-4"
-                                        >
-                                            {exam.title}
-                                        </span>
-                                        {isArchived && (
-                                            <span style={{
-                                                marginLeft: '0.5rem',
-                                                display: 'inline-block',
-                                                padding: '0.15rem 0.5rem',
-                                                fontSize: '0.7rem',
-                                                fontWeight: 700,
-                                                background: 'rgba(100,116,139,0.15)',
-                                                color: 'var(--muted)',
-                                                borderRadius: 'var(--radius-full)',
-                                                verticalAlign: 'middle',
-                                            }}>보관됨</span>
-                                        )}
-                                    </td>
-                                    <td style={{ padding: '1.2rem 0', color: 'var(--muted)', fontSize: '0.9rem' }}>{formatKoreanDate(exam.createdAt)}</td>
-                                    <td style={{ padding: '1.2rem 0', display: 'flex', alignItems: 'center', gap: '1rem', height: '100%' }}>
-                                        <div style={{ flex: 1, height: '6px', background: 'var(--border)', borderRadius: 'var(--radius-full)', overflow: 'hidden' }}>
-                                            <div style={{ width: `${participationRate}%`, height: '100%', background: targetColor, borderRadius: 'var(--radius-full)', transition: 'width 1s ease-out' }}></div>
-                                        </div>
-                                        <span style={{ fontSize: '0.85rem', fontWeight: 600, color: targetColor, minWidth: '40px' }}>{participationRate}%</span>
-                                    </td>
-                                    <td style={{ padding: '1.2rem 0', fontSize: '0.9rem', color: 'var(--muted)', fontWeight: 500 }}>
-                                        <span style={{ color: 'var(--foreground)', fontWeight: 600 }}>{exam.completedCount}</span> / {exam.total}
-                                    </td>
-                                    <td style={{ padding: '1.2rem 0' }}>
-                                        <span style={{
-                                            padding: '0.25rem 0.6rem',
-                                            borderRadius: 'var(--radius-full)',
-                                            fontSize: '0.75rem',
-                                            fontWeight: 800,
-                                            background: exam.retakeCount > 0 ? '#f0fdfa' : 'var(--background)',
-                                            color: exam.retakeCount > 0 ? '#0f766e' : 'var(--muted)',
-                                            border: exam.retakeCount > 0 ? '1px solid #99f6e4' : '1px solid var(--border)',
-                                            whiteSpace: 'nowrap',
-                                        }}>
-                                            {exam.retakeCount}건
-                                        </span>
-                                    </td>
-                                    <td style={{ padding: '1.2rem 0' }}>
-                                        <span style={{ background: statusBg, color: statusColor, padding: '0.3rem 0.6rem', borderRadius: 'var(--radius-full)', fontSize: '0.75rem', fontWeight: 700, textTransform: 'uppercase' }}>
-                                            {statusText}
-                                        </span>
-                                    </td>
-                                    {activeTab === 'ongoing' && (
-                                        <td style={{ padding: '1.2rem 0', textAlign: 'right' }}>
-                                            <button
-                                                onClick={() => handleSendAlarm(exam.title)}
-                                                style={{
-                                                    background: 'var(--surface)', color: 'var(--foreground)', padding: '0.5rem 1rem',
-                                                    borderRadius: 'var(--radius-md)', fontSize: '0.85rem', fontWeight: 600,
-                                                    display: 'flex', alignItems: 'center', gap: '0.4rem', marginLeft: 'auto',
-                                                    transition: 'var(--transition-base)', border: '1px solid var(--border)'
-                                                }}
-                                                className="hover:border-primary hover:text-primary"
+                                return (
+                                    <tr key={exam.id} style={{ borderBottom: '1px solid var(--border)', transition: 'background 0.2s', opacity: isArchived ? 0.6 : 1 }} className="hover:bg-slate-50 dark:hover:bg-slate-800/50">
+                                        <td className="overview-exam-summary-title-cell" style={{ fontWeight: 600, fontSize: '0.95rem' }}>
+                                            <span
+                                                onClick={() => onNavigateToExamAnalytics && onNavigateToExamAnalytics(exam.id)}
+                                                style={{ cursor: 'pointer', transition: 'color 0.2s' }}
+                                                className="hover:text-primary hover:underline hover:underline-offset-4"
                                             >
-                                                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="22" y1="2" x2="11" y2="13"></line><polygon points="22 2 15 22 11 13 2 9 22 2"></polygon></svg>
-                                                독려 알람
-                                            </button>
+                                                {exam.title}
+                                            </span>
+                                            {isArchived && (
+                                                <span style={{
+                                                    marginLeft: '0.5rem',
+                                                    display: 'inline-block',
+                                                    padding: '0.15rem 0.5rem',
+                                                    fontSize: '0.7rem',
+                                                    fontWeight: 700,
+                                                    background: 'rgba(100,116,139,0.15)',
+                                                    color: 'var(--muted)',
+                                                    borderRadius: 'var(--radius-full)',
+                                                    verticalAlign: 'middle',
+                                                }}>보관됨</span>
+                                            )}
                                         </td>
-                                    )}
-                                    <td style={{ padding: '1.2rem 0', textAlign: 'right' }}>
-                                        <ExamActionsMenu
-                                            exam={{ id: exam.id, title: exam.title, archived: isArchived }}
-                                            onAction={handleExamAction}
-                                        />
+                                        <td style={{ color: 'var(--muted)', fontSize: '0.9rem' }}>{formatKoreanDate(exam.createdAt)}</td>
+                                        <td>
+                                            <div className="overview-exam-summary-progress">
+                                                <div style={{ flex: 1, height: '6px', background: 'var(--border)', borderRadius: 'var(--radius-full)', overflow: 'hidden' }}>
+                                                    <div style={{ width: `${participationRate}%`, height: '100%', background: targetColor, borderRadius: 'var(--radius-full)', transition: 'width 1s ease-out' }}></div>
+                                                </div>
+                                                <span style={{ fontSize: '0.85rem', fontWeight: 600, color: targetColor, minWidth: '40px' }}>{participationRate}%</span>
+                                            </div>
+                                        </td>
+                                        <td style={{ fontSize: '0.9rem', color: 'var(--muted)', fontWeight: 500 }}>
+                                            <span style={{ color: 'var(--foreground)', fontWeight: 600 }}>{exam.completedCount}</span> / {exam.total}
+                                        </td>
+                                        <td>
+                                            <span style={{
+                                                padding: '0.25rem 0.6rem',
+                                                borderRadius: 'var(--radius-full)',
+                                                fontSize: '0.75rem',
+                                                fontWeight: 800,
+                                                background: exam.retakeCount > 0 ? '#f0fdfa' : 'var(--background)',
+                                                color: exam.retakeCount > 0 ? '#0f766e' : 'var(--muted)',
+                                                border: exam.retakeCount > 0 ? '1px solid #99f6e4' : '1px solid var(--border)',
+                                                whiteSpace: 'nowrap',
+                                            }}>
+                                                {exam.retakeCount}건
+                                            </span>
+                                        </td>
+                                        <td>
+                                            <span style={{ background: statusBg, color: statusColor, padding: '0.3rem 0.6rem', borderRadius: 'var(--radius-full)', fontSize: '0.75rem', fontWeight: 700, textTransform: 'uppercase', whiteSpace: 'nowrap' }}>
+                                                {statusText}
+                                            </span>
+                                        </td>
+                                        {activeTab === 'ongoing' && (
+                                            <td style={{ textAlign: 'right' }}>
+                                                <button
+                                                    onClick={() => handleSendAlarm(exam.title)}
+                                                    style={{
+                                                        background: 'var(--surface)', color: 'var(--foreground)', padding: '0.5rem 1rem',
+                                                        borderRadius: 'var(--radius-md)', fontSize: '0.85rem', fontWeight: 600,
+                                                        display: 'flex', alignItems: 'center', gap: '0.4rem', marginLeft: 'auto',
+                                                        transition: 'var(--transition-base)', border: '1px solid var(--border)', whiteSpace: 'nowrap',
+                                                    }}
+                                                    className="hover:border-primary hover:text-primary"
+                                                >
+                                                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="22" y1="2" x2="11" y2="13"></line><polygon points="22 2 15 22 11 13 2 9 22 2"></polygon></svg>
+                                                    독려 알람
+                                                </button>
+                                            </td>
+                                        )}
+                                        <td style={{ textAlign: 'right' }}>
+                                            <ExamActionsMenu
+                                                exam={{ id: exam.id, title: exam.title, archived: isArchived }}
+                                                onAction={handleExamAction}
+                                            />
+                                        </td>
+                                    </tr>
+                                );
+                            })}
+                            {displayExams.length === 0 && (
+                                <tr>
+                                    <td colSpan={activeTab === 'ongoing' ? 8 : 7} style={{ padding: '2rem 1rem', textAlign: 'center', color: 'var(--muted)', fontSize: '0.92rem', borderBottom: '1px solid var(--border)' }}>
+                                        {activeTab === 'ongoing'
+                                            ? '진행 중인 실제 시험이 없습니다. 새 시험을 출제하거나 배포하면 여기에 표시됩니다.'
+                                            : '완료 또는 보관된 실제 시험이 없습니다.'}
                                     </td>
                                 </tr>
-                            );
-                        })}
-                        {displayExams.length === 0 && (
-                            <tr>
-                                <td colSpan={activeTab === 'ongoing' ? 8 : 7} style={{ padding: '2rem 1rem', textAlign: 'center', color: 'var(--muted)', fontSize: '0.92rem', borderBottom: '1px solid var(--border)' }}>
-                                    {activeTab === 'ongoing'
-                                        ? '진행 중인 실제 시험이 없습니다. 새 시험을 출제하거나 배포하면 여기에 표시됩니다.'
-                                        : '완료 또는 보관된 실제 시험이 없습니다.'}
-                                </td>
-                            </tr>
-                        )}
-                    </tbody>
-                </table>
+                            )}
+                        </tbody>
+                    </table>
+                </div>
             </div>
 
             {/* 4. Statistics stacked vertically (col-span-1) + Exam list (col-span-3) */}

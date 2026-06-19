@@ -515,6 +515,61 @@ button {
   box-shadow: var(--shadow-lg);
 }
 
+.overview-exam-summary-scroll {
+  width: 100%;
+  overflow-x: auto;
+  padding-bottom: 0.35rem;
+  scrollbar-gutter: stable;
+  -webkit-overflow-scrolling: touch;
+}
+
+.overview-exam-summary-table {
+  width: 100%;
+  min-width: 1040px;
+  border-collapse: separate;
+  border-spacing: 0;
+  table-layout: fixed;
+  text-align: left;
+}
+
+.overview-exam-summary-table th,
+.overview-exam-summary-table td {
+  padding: 1rem 0.75rem;
+  vertical-align: middle;
+  white-space: nowrap;
+}
+
+.overview-exam-summary-table th:first-child,
+.overview-exam-summary-table td:first-child {
+  padding-left: 0;
+}
+
+.overview-exam-summary-table th:last-child,
+.overview-exam-summary-table td:last-child {
+  padding-right: 0;
+}
+
+.overview-exam-summary-table thead th {
+  border-bottom: 1px solid var(--border);
+}
+
+.overview-exam-summary-table tbody td {
+  border-bottom: 1px solid var(--border);
+}
+
+.overview-exam-summary-title-cell {
+  line-height: 1.35;
+  white-space: normal !important;
+  word-break: keep-all;
+}
+
+.overview-exam-summary-progress {
+  display: flex;
+  align-items: center;
+  gap: 0.85rem;
+  min-width: 150px;
+}
+
 .col-span-2 { grid-column: span 2; }
 
 @media (max-width: 1024px) {
