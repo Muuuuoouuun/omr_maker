@@ -121,6 +121,51 @@ test.describe("Manage Users page", () => {
         await page.getByRole("button", { name: /반 · 그룹/ }).click();
         await expect(page.getByText("새 반 만들기")).toBeVisible();
     });
+
+    test("issued student start code gates the student portal login", async ({ page }) => {
+        await seedStoredRoster(page);
+        await openTeacherPage(page, "/teacher/users");
+
+        const studentRow = page.locator('tbody tr:has-text("kim.student@example.com")');
+        await expect(studentRow).toHaveCount(1);
+        await studentRow.click();
+        await expect(page.getByText("학생 상세")).toBeVisible();
+        await expect(page.getByTestId("student-start-code-value")).toHaveText("미발급");
+
+        await page.getByTestId("issue-student-start-code").click();
+        const issuedCode = (await page.getByTestId("student-start-code-value").innerText()).trim();
+        expect(issuedCode).toMatch(/^[A-Z2-9]{6}$/);
+
+        const storedCodes = await page.evaluate(() => JSON.parse(window.localStorage.getItem("omr_student_codes") || "{}"));
+        expect(storedCodes["e2e-class-a::김학생"]).toBe(issuedCode);
+
+        await page.goto("/?role=student");
+        await expect(page.getByText("학생 포털")).toBeVisible();
+        await page.getByLabel("이름").fill("김학생");
+        await page.getByLabel("학생번호 또는 이메일").fill("kim.student@example.com");
+        await page.getByLabel("반 선택").selectOption("e2e-class-a");
+        await expect(page.getByLabel("시작 코드")).toBeVisible();
+
+        await page.getByRole("button", { name: "시험 시작하기" }).click();
+        await expect(page.getByText("이미 등록된 학생입니다. 선생님이 발급한 시작 코드를 입력해주세요.")).toBeVisible();
+
+        await page.getByLabel("시작 코드").fill(issuedCode);
+        await page.getByRole("button", { name: "시험 시작하기" }).click();
+        await expect(page).toHaveURL(/\/student\/dashboard$/);
+
+        const session = await page.evaluate(() => JSON.parse(window.sessionStorage.getItem("omr_student_session") || "null"));
+        expect(session).toMatchObject({
+            studentId: "e2e-class-a::김학생",
+            loginId: "e2e-class-a::김학생",
+            name: "김학생",
+            groupId: "e2e-class-a",
+            groupName: "E2E A반",
+            regionId: "서울",
+            regionName: "서울",
+            isGuest: false,
+            identityType: "temporary",
+        });
+    });
 });
 
 test.describe("Settings page", () => {

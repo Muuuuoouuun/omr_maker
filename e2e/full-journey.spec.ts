@@ -462,6 +462,7 @@ test.describe("Teacher and student full journey", () => {
 
         await page.getByRole("button", { name: "링크 생성하기" }).click();
         await expect(page.getByRole("button", { name: "링크 복사" })).toBeVisible();
+        await expect(page).toHaveURL(/\/create\?edit=/);
 
         const createdExamHandle = await page.waitForFunction((title) => {
             for (let index = 0; index < window.localStorage.length; index += 1) {

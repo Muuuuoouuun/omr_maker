@@ -173,6 +173,24 @@ describe("student start codes", () => {
         });
     });
 
+    it("requires a teacher-issued code even before the first attempt", () => {
+        const base = {
+            studentId: "student-1",
+            codes: { "student-1": "ABC123" },
+            hasPriorAttempt: false,
+        };
+
+        expect(resolveStudentStartCodeLogin(base)).toMatchObject({
+            status: "code_required",
+            codesChanged: false,
+        });
+        expect(resolveStudentStartCodeLogin({ ...base, providedCode: "ABC123" })).toMatchObject({
+            status: "allowed",
+            code: "ABC123",
+            codesChanged: false,
+        });
+    });
+
     it("does not auto-issue a start code when prior attempts already exist", () => {
         expect(resolveStudentStartCodeLogin({
             studentId: "student-1",

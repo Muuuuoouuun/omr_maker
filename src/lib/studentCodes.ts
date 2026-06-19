@@ -196,7 +196,7 @@ export function resolveStudentStartCodeLogin(params: {
         codesChanged = true;
     }
 
-    if (storedCode && params.hasPriorAttempt) {
+    if (storedCode) {
         const providedCode = normalizeStartCodeInput(params.providedCode || "");
         if (!providedCode) {
             return { status: "code_required", codes: nextCodes, codesChanged };

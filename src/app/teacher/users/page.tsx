@@ -1349,7 +1349,7 @@ function ManageUsersInner() {
                                     <MiniStat label="재시험" value={`${selectedProfile?.retakeAttemptCount ?? 0}회`} color="#0f766e" />
                                     <MiniStat label="필기 보관" value={`${selectedHandwritingCount}건`} color="#8b5cf6" />
                                 </div>
-                                <div style={{ padding: '1rem', background: 'var(--background)', borderRadius: 'var(--radius-md)', marginBottom: '1rem', border: '1px solid var(--border)' }}>
+                                <div data-testid="student-start-code-panel" style={{ padding: '1rem', background: 'var(--background)', borderRadius: 'var(--radius-md)', marginBottom: '1rem', border: '1px solid var(--border)' }}>
                                     <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '0.75rem', marginBottom: '0.7rem' }}>
                                         <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', fontSize: '0.75rem', fontWeight: 800, color: 'var(--muted)', letterSpacing: '0.08em' }}>
                                             <KeyRound size={13} />
@@ -1366,7 +1366,7 @@ function ManageUsersInner() {
                                             fontWeight: 850,
                                             fontVariantNumeric: 'tabular-nums',
                                             letterSpacing: selectedStartCode ? '0.08em' : 0,
-                                        }}>
+                                        }} data-testid="student-start-code-value">
                                             {selectedStartCode || '미발급'}
                                         </span>
                                     </div>
@@ -1376,6 +1376,8 @@ function ManageUsersInner() {
                                     <div style={{ display: 'flex', gap: '0.5rem' }}>
                                         <button
                                             type="button"
+                                            aria-label={selectedStartCode ? '학생 시작 코드 재발급' : '학생 시작 코드 발급'}
+                                            data-testid="issue-student-start-code"
                                             onClick={handleIssueStudentStartCode}
                                             disabled={isDemoRoster}
                                             style={{
@@ -1399,6 +1401,8 @@ function ManageUsersInner() {
                                         </button>
                                         <button
                                             type="button"
+                                            aria-label="학생 시작 코드 복사"
+                                            data-testid="copy-student-start-code"
                                             onClick={handleCopyStudentStartCode}
                                             disabled={!selectedStartCode}
                                             style={{
