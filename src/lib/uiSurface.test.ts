@@ -341,6 +341,7 @@ describe("service UI surface", () => {
     it("keeps the dashboard overview bento grid usable on mobile", () => {
         const css = readProjectFile("src/app/globals.css");
         const overviewTab = readProjectFile("src/components/dashboard/tabs/OverviewTab.tsx");
+        const usersPage = readProjectFile("src/app/teacher/users/page.tsx");
 
         expect(overviewTab).toContain("overview-quick-actions-grid");
         expect(overviewTab).toContain("overview-exam-summary-card");
@@ -356,6 +357,12 @@ describe("service UI surface", () => {
         expect(css).toContain(".bento-grid > .bento-card");
         expect(css).toContain(".overview-quick-actions-grid");
         expect(css).toContain("repeat(2, minmax(0, 1fr)) !important");
+        expect(usersPage).toContain("teacher-users-students-grid");
+        expect(usersPage).toContain("teacher-users-table-scroll");
+        expect(usersPage).toContain("teacher-users-detail-card");
+        expect(css).toContain(".teacher-users-students-grid.has-detail");
+        expect(css).toContain(".teacher-users-table");
+        expect(css).toContain("min-width: 760px");
     });
 
     it("keeps original exam achievement separate from retake recovery in student-facing analytics", () => {

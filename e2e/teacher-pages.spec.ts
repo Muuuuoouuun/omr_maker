@@ -135,6 +135,19 @@ test.describe("Manage Users page", () => {
         await expect(page.getByTestId("student-login-email-value")).toHaveText("kim.student@example.com");
         await expect(page.getByTestId("student-login-start-code-value")).toHaveText("미발급");
         await expect(page.getByTestId("copy-student-login-credentials")).toBeVisible();
+        const studentGridColumnCount = await page.locator(".teacher-users-students-grid.has-detail").evaluate(element =>
+            window.getComputedStyle(element).gridTemplateColumns.split(/\s+/).filter(Boolean).length
+        );
+        if ((page.viewportSize()?.width || 0) <= 1024) {
+            expect(studentGridColumnCount).toBe(1);
+        } else {
+            expect(studentGridColumnCount).toBeGreaterThan(1);
+        }
+        const tableScrollMetrics = await page.locator(".teacher-users-table-scroll").evaluate(element => ({
+            clientWidth: element.clientWidth,
+            scrollWidth: element.scrollWidth,
+        }));
+        expect(tableScrollMetrics.scrollWidth).toBeGreaterThanOrEqual(tableScrollMetrics.clientWidth);
         const hasAccountGuideBodyOverflow = await page.evaluate(() => document.documentElement.scrollWidth > document.documentElement.clientWidth + 1);
         expect(hasAccountGuideBodyOverflow).toBe(false);
         await expect(page.getByTestId("student-start-code-value")).toHaveText("미발급");

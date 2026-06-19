@@ -1082,8 +1082,11 @@ function ManageUsersInner() {
                 </div>
 
                 {tab === "students" && (
-                    <div style={{ display: 'grid', gridTemplateColumns: selectedId ? '1fr 380px' : '1fr', gap: '1.25rem' }}>
-                        <div className="bento-card" style={{ padding: '1.5rem' }}>
+                    <div
+                        className={selectedId ? "teacher-users-students-grid has-detail" : "teacher-users-students-grid"}
+                        style={{ display: 'grid', gridTemplateColumns: selectedId ? 'minmax(0, 1fr) minmax(320px, 380px)' : 'minmax(0, 1fr)', gap: '1.25rem' }}
+                    >
+                        <div className="bento-card teacher-users-list-card" style={{ padding: '1.5rem' }}>
                             {/* Search */}
                             <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', marginBottom: '1rem', padding: '0.75rem 1rem', background: 'var(--background)', borderRadius: 'var(--radius-md)', border: '1px solid var(--border)', flexWrap: 'wrap' }}>
                                 <Search size={16} color="var(--muted)" />
@@ -1158,119 +1161,121 @@ function ManageUsersInner() {
                                 </div>
                             )}
 
-                            <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left' }}>
-                                <thead>
-                                    <tr style={{ color: 'var(--muted)', fontSize: '0.8rem', borderBottom: '1px solid var(--border)', fontWeight: 700, letterSpacing: '0.05em', textTransform: 'uppercase' }}>
-                                        <th style={{ padding: '0.85rem 0.5rem', width: 32 }}>
-                                            <input
-                                                type="checkbox"
-                                                aria-label="전체 학생 선택 토글"
-                                                checked={filtered.length > 0 && filtered.every(s => selectedIds.has(s.id))}
-                                                ref={el => { if (el) el.indeterminate = filtered.some(s => selectedIds.has(s.id)) && !filtered.every(s => selectedIds.has(s.id)); }}
-                                                onChange={() => toggleSelectAll(filtered.map(s => s.id))}
-                                                onClick={e => e.stopPropagation()}
-                                                disabled={isDemoRoster}
-                                                style={{ cursor: isDemoRoster ? 'not-allowed' : 'pointer', accentColor: 'var(--primary)' }}
-                                            />
-                                        </th>
-                                        <th style={{ padding: '0.85rem 0.5rem' }}>학생</th>
-                                        <th style={{ padding: '0.85rem 0.5rem' }}>반</th>
-                                        <th style={{ padding: '0.85rem 0.5rem' }}>지역</th>
-                                        <th style={{ padding: '0.85rem 0.5rem' }}>평균 점수</th>
-                                        <th style={{ padding: '0.85rem 0.5rem' }}>응시 수</th>
-                                        <th style={{ padding: '0.85rem 0.5rem' }}>최근 활동</th>
-                                        <th style={{ padding: '0.85rem 0.5rem', width: 40 }}></th>
-                                    </tr>
-                                </thead>
-                                <tbody>
-                                    {filtered.map(s => (
-                                        <tr key={s.id}
-                                            onClick={() => setSelectedId(s.id)}
-                                            style={{ borderBottom: '1px solid var(--border)', cursor: 'pointer', transition: 'background 0.2s', background: selectedIds.has(s.id) ? 'rgba(99,102,241,0.06)' : selectedId === s.id ? 'rgba(99,102,241,0.05)' : 'transparent' }}
-                                            onMouseEnter={e => e.currentTarget.style.background = 'rgba(99,102,241,0.04)'}
-                                            onMouseLeave={e => e.currentTarget.style.background = selectedIds.has(s.id) ? 'rgba(99,102,241,0.06)' : selectedId === s.id ? 'rgba(99,102,241,0.05)' : 'transparent'}
-                                        >
-                                            <td style={{ padding: '0.85rem 0.5rem' }} onClick={(e) => e.stopPropagation()}>
+                            <div className="teacher-users-table-scroll scroll-custom">
+                                <table className="teacher-users-table" style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left' }}>
+                                    <thead>
+                                        <tr style={{ color: 'var(--muted)', fontSize: '0.8rem', borderBottom: '1px solid var(--border)', fontWeight: 700, letterSpacing: '0.05em', textTransform: 'uppercase' }}>
+                                            <th style={{ padding: '0.85rem 0.5rem', width: 32 }}>
                                                 <input
                                                     type="checkbox"
-                                                    aria-label={`${s.name} 선택`}
-                                                    checked={selectedIds.has(s.id)}
-                                                    onChange={() => toggleSelect(s.id)}
+                                                    aria-label="전체 학생 선택 토글"
+                                                    checked={filtered.length > 0 && filtered.every(s => selectedIds.has(s.id))}
+                                                    ref={el => { if (el) el.indeterminate = filtered.some(s => selectedIds.has(s.id)) && !filtered.every(s => selectedIds.has(s.id)); }}
+                                                    onChange={() => toggleSelectAll(filtered.map(s => s.id))}
+                                                    onClick={e => e.stopPropagation()}
                                                     disabled={isDemoRoster}
                                                     style={{ cursor: isDemoRoster ? 'not-allowed' : 'pointer', accentColor: 'var(--primary)' }}
                                                 />
-                                            </td>
-                                            <td style={{ padding: '0.85rem 0.5rem' }}>
-                                                <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
-                                                    <div style={{ width: 34, height: 34, borderRadius: '50%', background: s.avatar, color: 'white', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '0.8rem', fontWeight: 700, flexShrink: 0 }}>{s.name.slice(1, 2)}</div>
-                                                    <div>
-                                                        <div style={{ fontSize: '0.9rem', fontWeight: 600 }}>{s.name}</div>
-                                                        <div style={{ fontSize: '0.75rem', color: 'var(--muted)' }}>{s.email}</div>
-                                                    </div>
-                                                </div>
-                                            </td>
-                                            <td style={{ padding: '0.85rem 0.5rem', fontSize: '0.85rem', color: 'var(--muted)' }}>{s.group}</td>
-                                            <td style={{ padding: '0.85rem 0.5rem', fontSize: '0.85rem', color: 'var(--muted)' }}>{rosterStudentRegionName(s, displayGroups)}</td>
-                                            <td style={{ padding: '0.85rem 0.5rem' }}>
-                                                <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
-                                                    <span style={{ fontSize: '0.95rem', fontWeight: 700, color: s.avgScore >= 80 ? 'var(--success)' : s.avgScore >= 65 ? 'var(--warning)' : 'var(--error)' }}>{s.avgScore}</span>
-                                                    {s.trend === "up" && <TrendingUp size={14} color="var(--success)" />}
-                                                    {s.trend === "down" && <TrendingDown size={14} color="var(--error)" />}
-                                                </div>
-                                            </td>
-                                            <td style={{ padding: '0.85rem 0.5rem', fontSize: '0.9rem', fontWeight: 600 }}>{s.examsTaken}회</td>
-                                            <td style={{ padding: '0.85rem 0.5rem', fontSize: '0.8rem', color: 'var(--muted)' }}>
-                                                <span style={{ display: 'inline-flex', alignItems: 'center', gap: '0.3rem' }}>
-                                                    <span style={{ width: 6, height: 6, borderRadius: '50%', background: s.status === "active" ? 'var(--success)' : 'var(--muted)' }} />
-                                                    {s.lastActive}
-                                                </span>
-                                            </td>
-                                            <td style={{ padding: '0.85rem 0.5rem', textAlign: 'right', position: 'relative' }}>
-                                                {!isDemoRoster && (
-                                                    <button
-                                                        aria-label={`${s.name} 작업 메뉴 열기`}
-                                                        onClick={(e) => {
-                                                            e.stopPropagation();
-                                                            setPopoverId(popoverId === s.id ? null : s.id);
-                                                        }}
-                                                        style={{ background: 'transparent', padding: 4, borderRadius: 6 }}
-                                                    >
-                                                        <MoreVertical size={16} color="var(--muted)" />
-                                                    </button>
-                                                )}
-                                                {popoverId === s.id && (
-                                                    <div
-                                                        onClick={(e) => e.stopPropagation()}
-                                                        style={{
-                                                            position: 'absolute', right: 8, top: '100%', zIndex: 200,
-                                                            background: 'var(--surface)', border: '1px solid var(--border)',
-                                                            borderRadius: 'var(--radius-md)', boxShadow: '0 8px 24px rgba(0,0,0,0.08)',
-                                                            minWidth: 120, overflow: 'hidden', textAlign: 'left'
-                                                        }}
-                                                    >
-                                                        <button
-                                                            onClick={() => {
-                                                                setEditingStudent(s);
-                                                                setShowStudentModal(true);
-                                                                setPopoverId(null);
-                                                            }}
-                                                            style={{ display: 'block', width: '100%', textAlign: 'left', padding: '0.6rem 0.9rem', fontSize: '0.85rem', color: 'var(--foreground)', background: 'transparent' }}
-                                                        >
-                                                            편집
-                                                        </button>
-                                                        <button
-                                                            onClick={() => handleDeleteStudent(s.id)}
-                                                            style={{ display: 'block', width: '100%', textAlign: 'left', padding: '0.6rem 0.9rem', fontSize: '0.85rem', color: 'var(--error)', background: 'transparent', borderTop: '1px solid var(--border)' }}
-                                                        >
-                                                            삭제
-                                                        </button>
-                                                    </div>
-                                                )}
-                                            </td>
+                                            </th>
+                                            <th style={{ padding: '0.85rem 0.5rem' }}>학생</th>
+                                            <th style={{ padding: '0.85rem 0.5rem' }}>반</th>
+                                            <th style={{ padding: '0.85rem 0.5rem' }}>지역</th>
+                                            <th style={{ padding: '0.85rem 0.5rem' }}>평균 점수</th>
+                                            <th style={{ padding: '0.85rem 0.5rem' }}>응시 수</th>
+                                            <th style={{ padding: '0.85rem 0.5rem' }}>최근 활동</th>
+                                            <th style={{ padding: '0.85rem 0.5rem', width: 40 }}></th>
                                         </tr>
-                                    ))}
-                                </tbody>
-                            </table>
+                                    </thead>
+                                    <tbody>
+                                        {filtered.map(s => (
+                                            <tr key={s.id}
+                                                onClick={() => setSelectedId(s.id)}
+                                                style={{ borderBottom: '1px solid var(--border)', cursor: 'pointer', transition: 'background 0.2s', background: selectedIds.has(s.id) ? 'rgba(99,102,241,0.06)' : selectedId === s.id ? 'rgba(99,102,241,0.05)' : 'transparent' }}
+                                                onMouseEnter={e => e.currentTarget.style.background = 'rgba(99,102,241,0.04)'}
+                                                onMouseLeave={e => e.currentTarget.style.background = selectedIds.has(s.id) ? 'rgba(99,102,241,0.06)' : selectedId === s.id ? 'rgba(99,102,241,0.05)' : 'transparent'}
+                                            >
+                                                <td style={{ padding: '0.85rem 0.5rem' }} onClick={(e) => e.stopPropagation()}>
+                                                    <input
+                                                        type="checkbox"
+                                                        aria-label={`${s.name} 선택`}
+                                                        checked={selectedIds.has(s.id)}
+                                                        onChange={() => toggleSelect(s.id)}
+                                                        disabled={isDemoRoster}
+                                                        style={{ cursor: isDemoRoster ? 'not-allowed' : 'pointer', accentColor: 'var(--primary)' }}
+                                                    />
+                                                </td>
+                                                <td style={{ padding: '0.85rem 0.5rem' }}>
+                                                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
+                                                        <div style={{ width: 34, height: 34, borderRadius: '50%', background: s.avatar, color: 'white', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '0.8rem', fontWeight: 700, flexShrink: 0 }}>{s.name.slice(1, 2)}</div>
+                                                        <div>
+                                                            <div style={{ fontSize: '0.9rem', fontWeight: 600 }}>{s.name}</div>
+                                                            <div style={{ fontSize: '0.75rem', color: 'var(--muted)' }}>{s.email}</div>
+                                                        </div>
+                                                    </div>
+                                                </td>
+                                                <td style={{ padding: '0.85rem 0.5rem', fontSize: '0.85rem', color: 'var(--muted)' }}>{s.group}</td>
+                                                <td style={{ padding: '0.85rem 0.5rem', fontSize: '0.85rem', color: 'var(--muted)' }}>{rosterStudentRegionName(s, displayGroups)}</td>
+                                                <td style={{ padding: '0.85rem 0.5rem' }}>
+                                                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+                                                        <span style={{ fontSize: '0.95rem', fontWeight: 700, color: s.avgScore >= 80 ? 'var(--success)' : s.avgScore >= 65 ? 'var(--warning)' : 'var(--error)' }}>{s.avgScore}</span>
+                                                        {s.trend === "up" && <TrendingUp size={14} color="var(--success)" />}
+                                                        {s.trend === "down" && <TrendingDown size={14} color="var(--error)" />}
+                                                    </div>
+                                                </td>
+                                                <td style={{ padding: '0.85rem 0.5rem', fontSize: '0.9rem', fontWeight: 600 }}>{s.examsTaken}회</td>
+                                                <td style={{ padding: '0.85rem 0.5rem', fontSize: '0.8rem', color: 'var(--muted)' }}>
+                                                    <span style={{ display: 'inline-flex', alignItems: 'center', gap: '0.3rem' }}>
+                                                        <span style={{ width: 6, height: 6, borderRadius: '50%', background: s.status === "active" ? 'var(--success)' : 'var(--muted)' }} />
+                                                        {s.lastActive}
+                                                    </span>
+                                                </td>
+                                                <td style={{ padding: '0.85rem 0.5rem', textAlign: 'right', position: 'relative' }}>
+                                                    {!isDemoRoster && (
+                                                        <button
+                                                            aria-label={`${s.name} 작업 메뉴 열기`}
+                                                            onClick={(e) => {
+                                                                e.stopPropagation();
+                                                                setPopoverId(popoverId === s.id ? null : s.id);
+                                                            }}
+                                                            style={{ background: 'transparent', padding: 4, borderRadius: 6 }}
+                                                        >
+                                                            <MoreVertical size={16} color="var(--muted)" />
+                                                        </button>
+                                                    )}
+                                                    {popoverId === s.id && (
+                                                        <div
+                                                            onClick={(e) => e.stopPropagation()}
+                                                            style={{
+                                                                position: 'absolute', right: 8, top: '100%', zIndex: 200,
+                                                                background: 'var(--surface)', border: '1px solid var(--border)',
+                                                                borderRadius: 'var(--radius-md)', boxShadow: '0 8px 24px rgba(0,0,0,0.08)',
+                                                                minWidth: 120, overflow: 'hidden', textAlign: 'left'
+                                                            }}
+                                                        >
+                                                            <button
+                                                                onClick={() => {
+                                                                    setEditingStudent(s);
+                                                                    setShowStudentModal(true);
+                                                                    setPopoverId(null);
+                                                                }}
+                                                                style={{ display: 'block', width: '100%', textAlign: 'left', padding: '0.6rem 0.9rem', fontSize: '0.85rem', color: 'var(--foreground)', background: 'transparent' }}
+                                                            >
+                                                                편집
+                                                            </button>
+                                                            <button
+                                                                onClick={() => handleDeleteStudent(s.id)}
+                                                                style={{ display: 'block', width: '100%', textAlign: 'left', padding: '0.6rem 0.9rem', fontSize: '0.85rem', color: 'var(--error)', background: 'transparent', borderTop: '1px solid var(--border)' }}
+                                                            >
+                                                                삭제
+                                                            </button>
+                                                        </div>
+                                                    )}
+                                                </td>
+                                            </tr>
+                                        ))}
+                                    </tbody>
+                                </table>
+                            </div>
                             {hydrated && filtered.length === 0 && (
                                 <div style={{ padding: '3rem 2rem', textAlign: 'center' }}>
                                     <div style={{
@@ -1317,7 +1322,7 @@ function ManageUsersInner() {
                         </div>
 
                         {selected && (
-                            <div className="bento-card" style={{ padding: '1.5rem', position: 'sticky', top: '5.5rem', alignSelf: 'flex-start', animation: 'fadeIn 0.3s both' }}>
+                            <div className="bento-card teacher-users-detail-card" style={{ padding: '1.5rem', position: 'sticky', top: '5.5rem', alignSelf: 'flex-start', animation: 'fadeIn 0.3s both' }}>
                                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '1.25rem' }}>
                                     <h3 style={{ fontSize: '1rem', fontWeight: 700 }}>학생 상세</h3>
                                     <button onClick={() => setSelectedId(null)} style={{ color: 'var(--muted)' }}>

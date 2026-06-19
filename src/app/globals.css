@@ -563,6 +563,24 @@ button {
   word-break: keep-all;
 }
 
+.teacher-users-students-grid,
+.teacher-users-list-card,
+.teacher-users-detail-card {
+  min-width: 0;
+}
+
+.teacher-users-table-scroll {
+  width: 100%;
+  max-width: 100%;
+  overflow-x: auto;
+  padding-bottom: 0.25rem;
+  -webkit-overflow-scrolling: touch;
+}
+
+.teacher-users-table {
+  min-width: 760px;
+}
+
 .overview-exam-summary-progress {
   display: flex;
   align-items: center;
@@ -575,6 +593,14 @@ button {
 @media (max-width: 1024px) {
   .bento-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .col-span-2 { grid-column: span 2; }
+
+  .teacher-users-students-grid.has-detail {
+    grid-template-columns: minmax(0, 1fr) !important;
+  }
+
+  .teacher-users-detail-card {
+    position: static !important;
+  }
 
   .overview-exam-summary-card,
   .overview-stats-stack,
