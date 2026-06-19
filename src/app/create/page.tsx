@@ -1616,6 +1616,7 @@ function CreateOMRPageInner() {
                         <label style={{ display: 'block', marginBottom: '0.5rem', fontSize: '0.9rem', fontWeight: 500 }}>시험 제목</label>
                         <input
                             type="text"
+                            aria-label="시험 제목"
                             value={title}
                             onChange={(e) => setTitle(e.target.value)}
                             className="input-field"
@@ -1732,6 +1733,7 @@ function CreateOMRPageInner() {
                             </label>
                             <input
                                 type="text"
+                                aria-label="빠른 정답 입력"
                                 placeholder={defaultChoices === 4 ? "예: 3124..." : "예: 31251..."}
                                 value={fastAnswer}
                                 onChange={handleFastAnswerChange}

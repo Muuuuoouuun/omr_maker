@@ -35,6 +35,8 @@ describe("service UI surface", () => {
         expect(createPage).toContain("previewMode === 'paper'");
         expect(createPage).toContain("const [showPaperAnswerKey, setShowPaperAnswerKey] = useState(false)");
         expect(createPage).toContain("인쇄용 (A4)");
+        expect(createPage).toContain('aria-label="시험 제목"');
+        expect(createPage).toContain('aria-label="빠른 정답 입력"');
         expect(createPage).toContain("create-paper-frame-toolbar");
         expect(createPage).toContain("A4 가로");
         expect(createPage).toContain("번호+보기만");

@@ -7,6 +7,56 @@ const TEST_GROUP_ID = "class-a";
 const TEST_GROUP_NAME = "A반";
 const TEST_STUDENT_ID = `${TEST_GROUP_ID}::김학생`;
 const TEST_STUDENT_NAME = "김학생";
+const CREATED_EXAM_TITLE = "E2E 생성 UI 국어 시험";
+const CREATED_ANSWER_KEY = "12345123451234512345";
+
+async function seedStudentAccount(page: Page) {
+    await page.evaluate((seed) => {
+        const group = {
+            id: seed.groupId,
+            name: seed.groupName,
+            region: "서울",
+            count: 1,
+            avgScore: 0,
+            color: "#4f46e5",
+        };
+        const student = {
+            id: seed.studentId,
+            name: seed.studentName,
+            email: "kim.student@example.com",
+            group: seed.groupName,
+            region: "서울",
+            avatar: "#4f46e5",
+            avgScore: 0,
+            examsTaken: 0,
+            lastActive: "기록 없음",
+            trend: "flat",
+            status: "active",
+        };
+        const session = {
+            studentId: seed.studentId,
+            loginId: seed.studentId,
+            name: seed.studentName,
+            groupId: seed.groupId,
+            groupName: seed.groupName,
+            regionId: "서울",
+            regionName: "서울",
+            isGuest: false,
+            identityType: "temporary",
+        };
+
+        window.localStorage.setItem("omr_groups", JSON.stringify([group]));
+        window.localStorage.setItem("omr_students", JSON.stringify([student]));
+        window.localStorage.setItem("omr_attempts", JSON.stringify([]));
+        window.localStorage.setItem("omr_student_session_backup", JSON.stringify(session));
+        window.sessionStorage.setItem("omr_student_session", JSON.stringify(session));
+    }, {
+        groupId: TEST_GROUP_ID,
+        groupName: TEST_GROUP_NAME,
+        studentId: TEST_STUDENT_ID,
+        studentName: TEST_STUDENT_NAME,
+    });
+}
 
 async function seedExamAndStudent(page: Page) {
     await page.evaluate((seed) => {
@@ -125,6 +175,80 @@ async function seedExamAndStudent(page: Page) {
 test.describe("Teacher and student full journey", () => {
     test.beforeEach(async ({ page, context }) => {
         await resetBrowserState(page, context);
+    });
+
+    test("creates an exam through the teacher UI before student submission and analytics", async ({ page }) => {
+        await loginAsTeacher(page, "/create");
+        await expect(page.getByText("Smart Editor")).toBeVisible();
+
+        await page.getByLabel("시험 제목").fill(CREATED_EXAM_TITLE);
+        await page.getByLabel("빠른 정답 입력").fill(CREATED_ANSWER_KEY);
+        await expect(page.getByText("20/20 정답", { exact: true })).toBeVisible();
+
+        await page.getByRole("button", { name: "배포하기" }).click();
+        await expect(page.getByRole("heading", { name: "시험 배포하기" })).toBeVisible();
+        await expect(page.getByText("20/20 정답 · 총점 100점")).toBeVisible();
+        await expect(
+            page.getByText("문제지 PDF가 없으면 학생 화면에서 별도 파일 업로드가 필요합니다.")
+        ).toHaveCount(3);
+
+        await page.getByRole("button", { name: "링크 생성하기" }).click();
+        await expect(page.getByRole("button", { name: "링크 복사" })).toBeVisible();
+
+        const createdExamHandle = await page.waitForFunction((title) => {
+            for (let index = 0; index < window.localStorage.length; index += 1) {
+                const key = window.localStorage.key(index);
+                if (!key?.startsWith("omr_exam_")) continue;
+                const exam = JSON.parse(window.localStorage.getItem(key) || "null");
+                if (exam?.title === title) return exam;
+            }
+            return null;
+        }, CREATED_EXAM_TITLE);
+        const createdExam = await createdExamHandle.jsonValue() as {
+            id: string;
+            title: string;
+            accessConfig?: { type?: string };
+            questions?: Array<{ answer?: number; score?: number }>;
+        };
+        expect(createdExam).toMatchObject({
+            title: CREATED_EXAM_TITLE,
+            accessConfig: { type: "public" },
+        });
+        expect(createdExam.questions).toHaveLength(20);
+        expect(createdExam.questions?.map(question => question.answer).join("")).toBe(CREATED_ANSWER_KEY);
+
+        await seedStudentAccount(page);
+        await page.goto("/student/dashboard");
+        await expect(page.getByRole("heading", { name: `${TEST_STUDENT_NAME}님,` })).toBeVisible();
+        await expect(page.getByText(CREATED_EXAM_TITLE)).toBeVisible();
+
+        await page.getByRole("link", { name: "시작" }).click();
+        await expect(page).toHaveURL(new RegExp(`/solve/${createdExam.id}$`));
+        await expect(page.getByText("OMR 답안")).toBeVisible();
+
+        for (const [index, answer] of [...CREATED_ANSWER_KEY].entries()) {
+            await page.getByRole("button", { name: `문제 ${index + 1}번 보기 ${answer}` }).click();
+        }
+        await expect(page.getByText("모든 문제 표기 완료")).toBeVisible();
+
+        await page.locator(".solve-submit-button").click();
+        const confirmDialog = page.getByRole("dialog", { name: "답안 제출" });
+        await expect(confirmDialog).toBeVisible();
+        await confirmDialog.getByRole("button", { name: "제출하기" }).click();
+
+        await expect(page).toHaveURL(/\/student\/review\/\d+$/);
+        await expect(page.getByText("결과 리포트")).toBeVisible();
+        await expect(page.getByText(CREATED_EXAM_TITLE)).toBeVisible();
+        await expect(page.getByText("100 / 100 점")).toBeVisible();
+
+        await loginAsTeacher(page, "/teacher/dashboard");
+        await expect(page.getByRole("heading", { name: "Analytics Center" })).toBeVisible();
+        await expect(page.getByText(CREATED_EXAM_TITLE)).toBeVisible();
+        await expect(page.getByRole("button", { name: "통계 CSV" })).toBeVisible();
+
+        await page.getByRole("button", { name: "시험 분석", exact: true }).click();
+        await expect(page.getByText("학생별 점수 및 성취도")).toBeVisible();
+        await expect(page.getByRole("row", { name: new RegExp(`${TEST_STUDENT_NAME}.*100점`) })).toBeVisible();
     });
 
     test("covers creation entry, student submission, teacher analytics, and statistics CSV", async ({ page }) => {
