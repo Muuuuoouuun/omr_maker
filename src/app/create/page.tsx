@@ -15,7 +15,6 @@ import { BrainCircuit, Crosshair, FileText, FolderOpen, Loader2, PanelRightClose
 
 const PDFViewer = dynamic(() => import("@/components/PDFViewer"), { ssr: false });
 import { Suspense, useState, useEffect, useRef, useCallback, useMemo } from "react";
-import html2canvas from "html2canvas";
 import { DEFAULT_CHOICE_COUNT, questionChoiceCount, type Exam, type Question } from "@/types/omr";
 import type { ParsedAnswer } from "@/services/answerParser";
 import { saveFileDataUrl, storedDataUrlToFile } from "@/utils/blobStore";
@@ -1211,6 +1210,7 @@ function CreateOMRPageInner() {
 
         setIsSaving(true);
         try {
+            const { default: html2canvas } = await import("html2canvas");
             const canvas = await html2canvas(element, { scale: 2 });
             const dataUrl = canvas.toDataURL("image/png");
 

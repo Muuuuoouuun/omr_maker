@@ -458,6 +458,15 @@ describe("service UI surface", () => {
         expect(answerImportModal).toContain("const { parseAnswerKeyWithGemini } = await import('@/services/answerParser')");
     });
 
+    it("keeps image export tooling lazy until the teacher saves the preview image", () => {
+        const createPage = readProjectFile("src/app/create/page.tsx");
+
+        expect(createPage).not.toContain('import html2canvas from "html2canvas"');
+        expect(createPage).toContain('const { default: html2canvas } = await import("html2canvas")');
+        expect(createPage).toContain("이미지 저장");
+        expect(createPage).toContain("이미지 저장 완료");
+    });
+
     it("keeps tablet solving usable with a collapsible right-side quick OMR rail", () => {
         const solvePage = readProjectFile("src/app/solve/[id]/page.tsx");
         const css = readProjectFile("src/app/globals.css");
