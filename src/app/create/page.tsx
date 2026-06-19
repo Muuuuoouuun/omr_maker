@@ -1,6 +1,6 @@
 "use client";
 
-import Link from "next/link";
+import BrandLogo from "@/components/BrandLogo";
 import OMRCardView from "@/components/OMRCardView";
 import OMRPreview from "@/components/OMRPreview";
 import dynamic from "next/dynamic";
@@ -1232,9 +1232,7 @@ function CreateOMRPageInner() {
             <header className="header" style={{ flexShrink: 0 }}>
                 <div className="container header-content create-editor-header" style={{ maxWidth: '100%', padding: '0 2rem' }}>
                     <div className="create-editor-brand" style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
-                        <Link href="/" className="logo" style={{ textDecoration: 'none' }}>
-                            OMR Maker
-                        </Link>
+                        <BrandLogo compact />
                         <span className="badge badge-primary" style={{ fontSize: '0.68rem' }}>
                             Smart Editor
                         </span>

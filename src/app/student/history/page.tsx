@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
+import BrandLogo from "@/components/BrandLogo";
 import { Attempt, Exam } from "@/types/omr";
 import { attemptBelongsToSession, getSession, type StudentSession } from "@/utils/storage";
 import { loadAttempts, loadExams } from "@/lib/omrPersistence";
@@ -118,7 +119,7 @@ export default function HistoryPage() {
         <div className="layout-main" style={{ minHeight: '100vh', background: '#f8fafc' }}>
             <header className="header" style={{ background: 'white', borderBottom: '1px solid #e2e8f0' }}>
                 <div className="container header-content">
-                    <Link href="/" className="logo">OMR Maker</Link>
+                    <BrandLogo />
                     <nav>
                         <Link href="/student/history" className="nav-link" style={{ fontWeight: 'bold', color: 'var(--primary)' }}>
                             내 시험 기록

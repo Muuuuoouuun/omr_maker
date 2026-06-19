@@ -2,6 +2,7 @@
 
 import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
+import BrandLogo from "@/components/BrandLogo";
 import ThemeToggle from "@/components/ThemeToggle";
 import { toast } from "@/components/Toast";
 import { verifyTeacherPassword } from "@/app/actions/auth";
@@ -390,7 +391,14 @@ export default function Home() {
         {/* ── Hero ───────────────────────────── */}
         <div style={{ textAlign: "center", marginBottom: "4rem" }}>
           <div
-            className="badge badge-primary stagger-1 animate-fade-in"
+            className="stagger-1 animate-fade-in"
+            style={{ marginBottom: "1.4rem", opacity: 0 }}
+          >
+            <BrandLogo markOnly className="brand-logo--hero" priorityLabel="OMR Maker" />
+          </div>
+
+          <div
+            className="badge badge-primary stagger-2 animate-fade-in"
             style={{ marginBottom: "1.75rem", opacity: 0 }}
           >
             <svg width="8" height="8" viewBox="0 0 8 8" fill="currentColor">
@@ -400,7 +408,7 @@ export default function Home() {
           </div>
 
           <h1
-            className="title-gradient stagger-2 animate-fade-in"
+            className="title-gradient stagger-3 animate-fade-in"
             style={{
               fontSize: "clamp(3.2rem, 8vw, 5.5rem)",
               lineHeight: 1.04,
@@ -414,7 +422,7 @@ export default function Home() {
           </h1>
 
           <p
-            className="stagger-3 animate-fade-in"
+            className="stagger-4 animate-fade-in"
             style={{
               fontSize: "1.15rem",
               color: "var(--muted)",
@@ -434,7 +442,7 @@ export default function Home() {
         {/* ── Role Selection ─────────────────── */}
         {role === "none" && (
           <div
-            className="stagger-4 animate-fade-in"
+            className="stagger-5 animate-fade-in"
             style={{
               display: "grid",
               gridTemplateColumns: "repeat(auto-fit, minmax(300px, 1fr))",

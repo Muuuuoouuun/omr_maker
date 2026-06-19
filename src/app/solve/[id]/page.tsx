@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState, type CSSProperties } from "react";
 import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
+import BrandLogo from "@/components/BrandLogo";
 import OMRCardView from "@/components/OMRCardView";
 import ThemeToggle from "@/components/ThemeToggle";
 import dynamic from "next/dynamic";
@@ -1317,7 +1318,7 @@ export default function SolvePage() {
             }}>
                 <div className="container header-content solve-header-content" style={{ gap: '1rem' }}>
                     <div className="solve-title-group" style={{ display: 'flex', alignItems: 'center', gap: '1rem', minWidth: 0, flex: 1 }}>
-                        <Link href="/" className="logo solve-brand" style={{ fontSize: '1.15rem', flexShrink: 0 }}>OMR Maker</Link>
+                        <BrandLogo compact className="solve-brand" style={{ fontSize: '1rem' }} />
                         <div className="solve-divider" style={{
                             height: '22px',
                             width: '1px',

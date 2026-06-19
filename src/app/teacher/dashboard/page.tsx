@@ -3,6 +3,7 @@
 import { Suspense, useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
+import BrandLogo from "@/components/BrandLogo";
 import { Exam, Attempt, type PlanKey } from "@/types/omr";
 import OverviewTab from "@/components/dashboard/tabs/OverviewTab";
 import ExamAnalyticsTab from "@/components/dashboard/tabs/ExamAnalyticsTab";
@@ -387,7 +388,7 @@ function TeacherDashboard() {
             <header className="header">
                 <div className="container header-content">
                     <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
-                        <Link href="/" className="logo">Classin</Link>
+                        <BrandLogo />
                         <span style={{
                             fontSize: '0.75rem', fontWeight: 700,
                             background: 'rgba(99, 102, 241, 0.1)', color: 'var(--primary)',
