@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync, statSync } from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 
@@ -8,7 +8,64 @@ function readProjectFile(filePath: string): string {
     return readFileSync(path.join(rootDir, filePath), "utf8");
 }
 
-const userFacingFiles = [
+const textExtensions = new Set([".css", ".csv", ".html", ".js", ".json", ".md", ".mjs", ".ts", ".tsx"]);
+
+const textSurfaceRoots = [
+    "docs",
+    "e2e",
+    "examples",
+    "src",
+    "supabase",
+];
+
+const rootTextSurfaceFiles = [
+    "README.md",
+    "TASK.md",
+    "TECHNICAL_SPECS.md",
+    "eslint.config.mjs",
+    "next.config.ts",
+    "package.json",
+    "playwright.config.ts",
+    "playwright.production.config.ts",
+    "tsconfig.json",
+    "vitest.config.ts",
+];
+
+const broadScanExclusions = new Set([
+    "src/lib/textEncodingSurface.test.ts",
+]);
+
+function toProjectPath(absolutePath: string): string {
+    return path.relative(rootDir, absolutePath).split(path.sep).join("/");
+}
+
+function listTextSurfaceFiles(relativeRoot: string): string[] {
+    const absoluteRoot = path.join(rootDir, relativeRoot);
+    const entries = readdirSync(absoluteRoot);
+    const files: string[] = [];
+
+    for (const entry of entries) {
+        const absoluteEntry = path.join(absoluteRoot, entry);
+        const relativeEntry = toProjectPath(absoluteEntry);
+        const stats = statSync(absoluteEntry);
+        if (stats.isDirectory()) {
+            files.push(...listTextSurfaceFiles(relativeEntry));
+            continue;
+        }
+        if (stats.isFile() && textExtensions.has(path.extname(entry)) && !broadScanExclusions.has(relativeEntry)) {
+            files.push(relativeEntry);
+        }
+    }
+
+    return files;
+}
+
+const broadTextSurfaceFiles = [
+    ...rootTextSurfaceFiles,
+    ...textSurfaceRoots.flatMap(listTextSurfaceFiles),
+].sort();
+
+const coreJourneyFiles = [
     "src/app/page.tsx",
     "src/app/create/page.tsx",
     "src/app/solve/[id]/page.tsx",
@@ -32,6 +89,20 @@ const mojibakeFragments = [
     "ê°",
     "ë",
     "ðŸ",
+    "?쒗",
+    "?좏",
+    "?몄",
+    "?ㅽ",
+    "?댁",
+    "?대",
+    "?뺣",
+    "?꾩",
+    "?쒖",
+    "?",
+    "AI媛",
+    "諛뷀깢",
+    "濡쒓렇",
+    "寃뚯뒪",
 ];
 
 const requiredStringsByFile: Record<string, string[]> = {
@@ -105,8 +176,18 @@ const requiredStringsByFile: Record<string, string[]> = {
 };
 
 describe("text encoding surface", () => {
+    it("keeps tracked source, docs, and e2e text surfaces free of common mojibake fragments", () => {
+        for (const filePath of broadTextSurfaceFiles) {
+            const content = readProjectFile(filePath);
+
+            for (const fragment of mojibakeFragments) {
+                expect(content, `${filePath} contains mojibake fragment ${JSON.stringify(fragment)}`).not.toContain(fragment);
+            }
+        }
+    });
+
     it("keeps core Korean and English UI copy readable across the main journey", () => {
-        for (const filePath of userFacingFiles) {
+        for (const filePath of coreJourneyFiles) {
             const content = readProjectFile(filePath);
 
             for (const fragment of mojibakeFragments) {
