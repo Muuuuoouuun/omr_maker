@@ -33,6 +33,7 @@ export default defineConfig({
             TEACHER_NAME: "Demo Admin",
             TEACHER_PASSWORD: "admin123",
             TEACHER_SESSION_SECRET: "e2e-production-teacher-session-secret",
+            OMR_ALLOW_INSECURE_TEACHER_COOKIE_FOR_LOCAL_E2E: "true",
             NEXT_PUBLIC_SUPABASE_URL: "",
             NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY: "",
             NEXT_PUBLIC_SUPABASE_ANON_KEY: "",

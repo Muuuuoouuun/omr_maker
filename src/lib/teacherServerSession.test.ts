@@ -3,6 +3,7 @@ import {
     createSignedTeacherSessionCookie,
     parseSignedTeacherSessionCookie,
     resolveTeacherSessionSecret,
+    shouldUseSecureTeacherSessionCookie,
     TEACHER_SERVER_SESSION_COOKIE,
     TEACHER_SERVER_SESSION_MAX_AGE_SECONDS,
 } from "./teacherServerSession";
@@ -54,6 +55,15 @@ describe("teacher server session", () => {
         expect(parseSignedTeacherSessionCookie(`${payload}x.${signature}`, env, 1000)).toBeNull();
         expect(parseSignedTeacherSessionCookie(cookie, { NODE_ENV: "production", TEACHER_SESSION_SECRET: "other" }, 1000)).toBeNull();
         expect(parseSignedTeacherSessionCookie(cookie, env, 1000 + TEACHER_SERVER_SESSION_MAX_AGE_SECONDS * 1000 + 1)).toBeNull();
+    });
+
+    it("keeps production teacher cookies secure unless local production e2e opts out", () => {
+        expect(shouldUseSecureTeacherSessionCookie({ NODE_ENV: "production" })).toBe(true);
+        expect(shouldUseSecureTeacherSessionCookie({ NODE_ENV: "development" })).toBe(false);
+        expect(shouldUseSecureTeacherSessionCookie({
+            NODE_ENV: "production",
+            OMR_ALLOW_INSECURE_TEACHER_COOKIE_FOR_LOCAL_E2E: "true",
+        })).toBe(false);
     });
 
     it("exports the stable cookie name used by server guards", () => {

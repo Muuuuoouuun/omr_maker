@@ -22,6 +22,12 @@ export function resolveTeacherSessionSecret(env: Env = process.env): string | nu
     return env.NODE_ENV === "production" ? null : "dev-teacher-session-secret";
 }
 
+export function shouldUseSecureTeacherSessionCookie(env: Env = process.env): boolean {
+    const localE2eOverride = clean(env.OMR_ALLOW_INSECURE_TEACHER_COOKIE_FOR_LOCAL_E2E).toLowerCase();
+    if (localE2eOverride === "1" || localE2eOverride === "true") return false;
+    return env.NODE_ENV === "production";
+}
+
 function base64UrlEncode(value: string): string {
     return Buffer.from(value, "utf8").toString("base64url");
 }
