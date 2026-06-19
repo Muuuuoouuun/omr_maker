@@ -9,12 +9,13 @@ import TrendChart from "@/components/dashboard/TrendChart";
 import ExamListBlock from "@/components/dashboard/ExamListBlock";
 import ExamActionsMenu, { ExamActionKind } from "@/components/dashboard/ExamActionsMenu";
 import { toast } from "@/components/Toast";
-import { Users, BarChart3, PlusCircle, Activity } from "lucide-react";
+import { Users, BarChart3, PlusCircle, Activity, Download } from "lucide-react";
 import { copyStoredData } from "@/utils/blobStore";
 import { deleteExam, saveExam } from "@/lib/omrPersistence";
 import { formatKoreanDate } from "@/lib/pure";
 import { safeRatePercent } from "@/lib/scoreUtils";
 import { buildExamSummaryRows, splitExamSummaryRows } from "@/lib/dashboardSummary";
+import { buildDashboardStatsCsv } from "@/lib/dashboardStatsExport";
 import { summarizePersistenceWrite } from "@/lib/persistenceFeedback";
 
 interface OverviewTabProps {
@@ -217,6 +218,20 @@ export default function OverviewTab({ exams: examsProp, attempts, stats, trendDa
         );
     };
 
+    const handleExportStatsCsv = () => {
+        const csv = buildDashboardStatsCsv({ stats, trendData, examRows: examSummaryRows });
+        const blob = new Blob(["\uFEFF" + csv], { type: "text/csv;charset=utf-8;" });
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement("a");
+        link.href = url;
+        link.download = `dashboard-stats-${new Date().toISOString().slice(0, 10)}.csv`;
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+        URL.revokeObjectURL(url);
+        toast.success("통계 CSV 생성됨", "대시보드 요약과 시험별 통계를 내보냈습니다.");
+    };
+
     return (
         <div className="bento-grid fade-in-up">
             {/* 1. Quick Actions (New Section from UI image) */}
@@ -299,8 +314,24 @@ export default function OverviewTab({ exams: examsProp, attempts, stats, trendDa
                         </div>
                     </div>
 
-                    {/* Send All Alarms Button */}
-                    {activeTab === 'ongoing' && displayExams.length > 0 && (
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: '0.5rem', flexWrap: 'wrap' }}>
+                        <button
+                            type="button"
+                            onClick={handleExportStatsCsv}
+                            style={{
+                                background: 'var(--surface)', color: 'var(--foreground)', padding: '0.6rem 1rem',
+                                borderRadius: 'var(--radius-lg)', fontSize: '0.85rem', fontWeight: 700,
+                                display: 'flex', alignItems: 'center', gap: '0.4rem',
+                                transition: 'var(--transition-base)', border: '1px solid var(--border)'
+                            }}
+                            className="hover:border-primary hover:text-primary"
+                        >
+                            <Download size={15} />
+                            통계 CSV
+                        </button>
+
+                        {/* Send All Alarms Button */}
+                        {activeTab === 'ongoing' && displayExams.length > 0 && (
                         <button
                             onClick={handleSendAllAlarms}
                             style={{
@@ -314,7 +345,8 @@ export default function OverviewTab({ exams: examsProp, attempts, stats, trendDa
                             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"></path><path d="M13.73 21a2 2 0 0 1-3.46 0"></path></svg>
                             미응시자 전체 알람 발송
                         </button>
-                    )}
+                        )}
+                    </div>
                 </div>
 
                 <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left', minWidth: '800px' }}>

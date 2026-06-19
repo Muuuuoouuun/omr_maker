@@ -238,6 +238,18 @@ describe("service UI surface", () => {
         expect(billingPage).toContain("카카오페이");
     });
 
+    it("keeps dashboard statistics exportable as CSV", () => {
+        const overviewTab = readProjectFile("src/components/dashboard/tabs/OverviewTab.tsx");
+        const exportHelper = readProjectFile("src/lib/dashboardStatsExport.ts");
+
+        expect(overviewTab).toContain("buildDashboardStatsCsv");
+        expect(overviewTab).toContain("통계 CSV");
+        expect(overviewTab).toContain("dashboard-stats-${new Date().toISOString().slice(0, 10)}.csv");
+        expect(exportHelper).toContain("OMR Maker 통계 내보내기");
+        expect(exportHelper).toContain("시험별 통계");
+        expect(exportHelper).toContain("serializeCsvRows");
+    });
+
     it("keeps premium analytics actions gated by the current plan", () => {
         const dashboardPage = readProjectFile("src/app/teacher/dashboard/page.tsx");
         const examAnalyticsTab = readProjectFile("src/components/dashboard/tabs/ExamAnalyticsTab.tsx");
