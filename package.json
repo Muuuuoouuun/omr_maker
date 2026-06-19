@@ -10,7 +10,8 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:ui": "vitest --ui",
-    "test:e2e": "playwright test"
+    "test:e2e": "playwright test",
+    "test:e2e:prod": "npm run build && playwright test --config=playwright.production.config.ts"
   },
   "dependencies": {
     "@google/generative-ai": "^0.24.1",
