@@ -20,6 +20,7 @@ This document tracks the baseline product logic needed before OMR Maker handles 
 ## Deployment Login Triage
 
 - If production login says the ID or password is invalid, first check the deployment provider env vars, not Supabase.
+- If production login says the teacher account is not configured, the app found zero valid server-side teacher credentials; adding Supabase env vars alone will not fix teacher login.
 - For one teacher, set `TEACHER_LOGIN_ID=admin` and `TEACHER_PASSWORD=<strong password>`; optionally add `TEACHER_NAME` and `TEACHER_EMAIL`.
 - For multiple teachers, set `TEACHER_ACCOUNTS` to a JSON array with unique `id` values and per-teacher passwords.
 - Add `TEACHER_SESSION_SECRET` so signed route-guard cookies do not depend on a password value.
