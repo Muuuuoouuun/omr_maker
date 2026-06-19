@@ -824,7 +824,7 @@ export default function Home() {
                     value={studentLookup}
                     onChange={(e) => setStudentLookup(e.target.value)}
                     onKeyDown={(e) => e.key === "Enter" && handleStudentLogin()}
-                    placeholder="동명이인일 때 입력"
+                    placeholder="선생님이 알려준 학생번호 또는 이메일"
                     autoComplete="email"
                     style={{
                       borderColor: needsStudentLookup ? "rgba(245,158,11,0.45)" : undefined,
@@ -839,7 +839,7 @@ export default function Home() {
                   }}>
                     {needsStudentLookup
                       ? "같은 이름의 학생이 있습니다. 명단 이메일이나 선생님이 알려준 학생번호를 입력하세요."
-                      : "선택 입력입니다. 같은 이름이 있는 반에서만 확인용으로 사용합니다."}
+                      : "계정 ID처럼 사용합니다. 입력하면 같은 이름의 학생도 정확히 구분됩니다."}
                   </p>
                 </div>
 
@@ -942,7 +942,7 @@ export default function Home() {
                       style={{ letterSpacing: "0.25em", fontFamily: "monospace", textTransform: "uppercase" }}
                     />
                     <p style={{ fontSize: "0.75rem", color: "var(--muted)", marginTop: "0.45rem", opacity: 0.85 }}>
-                      이미 등록된 학생입니다. 처음 로그인 시 발급받은 코드를 입력해주세요.
+                      학생 계정 비밀번호처럼 쓰이는 6자리 코드입니다. 분실 시 선생님에게 재발급을 요청하세요.
                     </p>
                   </div>
                 )}
