@@ -184,6 +184,10 @@ describe("service UI surface", () => {
         expect(authMessages).toContain("Supabase가 아니라");
         expect(authMessages).toContain("TEACHER_ACCOUNTS");
         expect(homePage).toContain("학생번호 또는 이메일");
+        expect(homePage).toContain('aria-label="이름"');
+        expect(homePage).toContain('aria-label="학생번호 또는 이메일"');
+        expect(homePage).toContain('aria-label="반 선택"');
+        expect(homePage).toContain('aria-label="시작 코드"');
         expect(homePage).toContain("studentLookup");
         expect(homePage).toContain("needsStudentLookup");
         expect(homePage).toContain("동명이인이 있습니다");

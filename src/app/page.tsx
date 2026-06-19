@@ -795,6 +795,7 @@ export default function Home() {
                   <input
                     type="text"
                     className="input-field"
+                    aria-label="이름"
                     value={studentName}
                     onChange={(e) => setStudentName(e.target.value)}
                     placeholder="이름을 입력하세요"
@@ -819,6 +820,7 @@ export default function Home() {
                   <input
                     type="text"
                     className="input-field"
+                    aria-label="학생번호 또는 이메일"
                     value={studentLookup}
                     onChange={(e) => setStudentLookup(e.target.value)}
                     onKeyDown={(e) => e.key === "Enter" && handleStudentLogin()}
@@ -856,6 +858,7 @@ export default function Home() {
                     반 선택
                   </label>
                   <select
+                    aria-label="반 선택"
                     value={selectedGroupId}
                     onChange={(e) => setSelectedGroupId(e.target.value)}
                     className="input-field"
@@ -930,6 +933,7 @@ export default function Home() {
                     <input
                       type="text"
                       className="input-field"
+                      aria-label="시작 코드"
                       value={startCode}
                       onChange={(e) => setStartCode(normalizeStartCodeInput(e.target.value))}
                       onKeyDown={(e) => e.key === "Enter" && handleStudentLogin()}

@@ -10,7 +10,7 @@ const TEST_STUDENT_NAME = "김학생";
 const CREATED_EXAM_TITLE = "E2E 생성 UI 국어 시험";
 const CREATED_ANSWER_KEY = "12345123451234512345";
 
-async function seedStudentAccount(page: Page) {
+async function seedStudentRoster(page: Page) {
     await page.evaluate((seed) => {
         const group = {
             id: seed.groupId,
@@ -33,28 +33,37 @@ async function seedStudentAccount(page: Page) {
             trend: "flat",
             status: "active",
         };
-        const session = {
-            studentId: seed.studentId,
-            loginId: seed.studentId,
-            name: seed.studentName,
-            groupId: seed.groupId,
-            groupName: seed.groupName,
-            regionId: "서울",
-            regionName: "서울",
-            isGuest: false,
-            identityType: "temporary",
-        };
 
         window.localStorage.setItem("omr_groups", JSON.stringify([group]));
         window.localStorage.setItem("omr_students", JSON.stringify([student]));
         window.localStorage.setItem("omr_attempts", JSON.stringify([]));
-        window.localStorage.setItem("omr_student_session_backup", JSON.stringify(session));
-        window.sessionStorage.setItem("omr_student_session", JSON.stringify(session));
     }, {
         groupId: TEST_GROUP_ID,
         groupName: TEST_GROUP_NAME,
         studentId: TEST_STUDENT_ID,
         studentName: TEST_STUDENT_NAME,
+    });
+}
+
+async function loginAsStudent(page: Page) {
+    await page.goto("/?role=student");
+    await expect(page.getByText("학생 포털")).toBeVisible();
+    await page.getByLabel("이름").fill(TEST_STUDENT_NAME);
+    await page.getByLabel("학생번호 또는 이메일").fill("kim.student@example.com");
+    await page.getByLabel("반 선택").selectOption(TEST_GROUP_ID);
+    await page.getByRole("button", { name: "시험 시작하기" }).click();
+    await expect(page).toHaveURL(/\/student\/dashboard$/);
+    const session = await page.evaluate(() => JSON.parse(window.sessionStorage.getItem("omr_student_session") || "null"));
+    expect(session).toMatchObject({
+        studentId: TEST_STUDENT_ID,
+        loginId: TEST_STUDENT_ID,
+        name: TEST_STUDENT_NAME,
+        groupId: TEST_GROUP_ID,
+        groupName: TEST_GROUP_NAME,
+        regionId: "서울",
+        regionName: "서울",
+        isGuest: false,
+        identityType: "temporary",
     });
 }
 
@@ -217,8 +226,8 @@ test.describe("Teacher and student full journey", () => {
         expect(createdExam.questions).toHaveLength(20);
         expect(createdExam.questions?.map(question => question.answer).join("")).toBe(CREATED_ANSWER_KEY);
 
-        await seedStudentAccount(page);
-        await page.goto("/student/dashboard");
+        await seedStudentRoster(page);
+        await loginAsStudent(page);
         await expect(page.getByRole("heading", { name: `${TEST_STUDENT_NAME}님,` })).toBeVisible();
         await expect(page.getByText(CREATED_EXAM_TITLE)).toBeVisible();
 
