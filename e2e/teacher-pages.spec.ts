@@ -208,6 +208,15 @@ test.describe("Settings page", () => {
         await expect(page.getByText("카카오 우선 채널을 기준으로 알림 대상을 관리합니다.")).toBeVisible();
     });
 
+    test("security tab shows deployment login diagnostics", async ({ page }) => {
+        await openTeacherPage(page, "/teacher/settings");
+        await page.getByRole("button", { name: "보안", exact: true }).click();
+        await expect(page.getByText("배포 로그인 진단")).toBeVisible();
+        await expect(page.getByText("교사 계정 환경변수")).toBeVisible();
+        await expect(page.getByText("Supabase 클라이언트 동기화")).toBeVisible();
+        await expect(page.getByRole("button", { name: "배포 로그인 진단 새로고침" })).toBeVisible();
+    });
+
     test("backup card shows export/import/reset buttons", async ({ page }) => {
         await openTeacherPage(page, "/teacher/settings");
         await expect(page.getByRole("button", { name: /내보내기/ })).toBeVisible();

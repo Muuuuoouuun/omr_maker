@@ -4,10 +4,11 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import TeacherHeader from "@/components/TeacherHeader";
 import { User, Bell, FileText, CheckCircle, Key, Palette, Shield, Copy, Eye, EyeOff, Save, RotateCcw, Download, Upload, LogOut, Database, RefreshCw, AlertTriangle, CloudOff } from "lucide-react";
 import { toast } from "@/components/Toast";
-import { clearTeacherAuthSession } from "@/app/actions/auth";
+import { clearTeacherAuthSession, getTeacherDeploymentReadiness } from "@/app/actions/auth";
 import { SETTINGS_STORAGE_KEY, maskGeminiApiKey } from "@/lib/geminiApiKey";
 import { DEFAULT_SETTINGS, mergeSettings, readStoredSettings, type AppSettings } from "@/lib/appSettings";
 import { buildDataDbReadiness, type DataDbReadinessSummary, type DataDbReadinessTone } from "@/lib/dataDbReadiness";
+import type { DeploymentReadinessSummary, DeploymentReadinessTone } from "@/lib/deploymentReadiness";
 import { loadAttempts, loadExams } from "@/lib/omrPersistence";
 import { loadRosterSnapshot, readRosterTombstones } from "@/lib/rosterPersistence";
 import { PRIMARY_NOTIFICATION_CHANNEL } from "@/lib/serviceRoadmap";
@@ -112,6 +113,17 @@ function initialDataDbReadiness(): DataDbReadinessSummary {
     });
 }
 
+function initialDeploymentReadiness(): DeploymentReadinessSummary {
+    return {
+        label: "배포 진단 대기",
+        detail: "보안 탭을 열면 현재 서버 환경변수 기준으로 교사 로그인과 Supabase 준비 상태를 확인합니다.",
+        credentialCount: 0,
+        readyCount: 0,
+        totalCount: 0,
+        checks: [],
+    };
+}
+
 function ResetSettingsConfirmDialog({
     onCancel,
     onConfirm,
@@ -189,6 +201,8 @@ export default function SettingsPage() {
     const [resetConfirmOpen, setResetConfirmOpen] = useState(false);
     const [dataReadiness, setDataReadiness] = useState<DataDbReadinessSummary>(() => initialDataDbReadiness());
     const [isCheckingDataDb, setIsCheckingDataDb] = useState(false);
+    const [deploymentReadiness, setDeploymentReadiness] = useState<DeploymentReadinessSummary>(() => initialDeploymentReadiness());
+    const [isCheckingDeployment, setIsCheckingDeployment] = useState(false);
     const draftRef = useRef<Settings>(DEFAULT_SETTINGS);
     const persistedRef = useRef<Settings>(DEFAULT_SETTINGS);
 
@@ -335,6 +349,31 @@ export default function SettingsPage() {
         void refreshDataDbReadiness();
     }, [hydrated, refreshDataDbReadiness, section]);
 
+    const refreshDeploymentReadiness = useCallback(async (notify = false) => {
+        setIsCheckingDeployment(true);
+        try {
+            const summary = await getTeacherDeploymentReadiness();
+            setDeploymentReadiness(summary);
+            if (notify) {
+                const hasError = summary.checks.some(check => check.tone === "error");
+                if (hasError) {
+                    toast.info("배포 진단 완료", "교사 계정 또는 세션 환경변수를 확인해야 합니다.");
+                } else {
+                    toast.success("배포 진단 완료", summary.detail);
+                }
+            }
+        } catch {
+            toast.error("배포 진단 실패", "서버 환경변수 상태를 불러오지 못했습니다.");
+        } finally {
+            setIsCheckingDeployment(false);
+        }
+    }, []);
+
+    useEffect(() => {
+        if (!hydrated || section !== "security") return;
+        void refreshDeploymentReadiness();
+    }, [hydrated, refreshDeploymentReadiness, section]);
+
     return (
         <div className="layout-main">
             <div className="orb orb-primary" />
@@ -378,7 +417,17 @@ export default function SettingsPage() {
                         {section === "api" && <ApiSection value={draft.api} onChange={v => updateSection("api", v)} onSave={() => saveSection("api")} onCancel={() => cancelSection("api")} showKey={showKey} setShowKey={setShowKey} />}
                         {section === "theme" && <ThemeSection value={draft.theme} onChange={v => updateSection("theme", v)} onSave={() => saveSection("theme")} onCancel={() => cancelSection("theme")} />}
                         {section === "data" && <DataDbSection summary={dataReadiness} isChecking={isCheckingDataDb} onRefresh={() => refreshDataDbReadiness(true)} />}
-                        {section === "security" && <SecuritySection value={draft.security} onChange={v => updateSection("security", v)} onSave={() => saveSection("security")} onCancel={() => cancelSection("security")} />}
+                        {section === "security" && (
+                            <SecuritySection
+                                value={draft.security}
+                                onChange={v => updateSection("security", v)}
+                                onSave={() => saveSection("security")}
+                                onCancel={() => cancelSection("security")}
+                                deploymentReadiness={deploymentReadiness}
+                                isCheckingDeployment={isCheckingDeployment}
+                                onRefreshDeployment={() => refreshDeploymentReadiness(true)}
+                            />
+                        )}
 
                         {/* Global settings actions */}
                         <div className="bento-card" style={{ padding: '1.5rem', marginTop: '0.25rem', background: 'var(--background)', border: '1px dashed var(--border)' }}>
@@ -774,7 +823,7 @@ function ThemeSection({ value, onChange, onSave, onCancel }: SectionProps<Settin
     );
 }
 
-function dataToneStyle(tone: DataDbReadinessTone): { color: string; background: string; border: string; icon: React.ReactNode } {
+function dataToneStyle(tone: DataDbReadinessTone | DeploymentReadinessTone): { color: string; background: string; border: string; icon: React.ReactNode } {
     if (tone === "ready") {
         return {
             color: 'var(--success)',
@@ -990,9 +1039,30 @@ function DataDbSection({
     );
 }
 
-function SecuritySection({ value, onChange, onSave, onCancel }: SectionProps<Settings["security"]>) {
+function SecuritySection({
+    value,
+    onChange,
+    onSave,
+    onCancel,
+    deploymentReadiness,
+    isCheckingDeployment,
+    onRefreshDeployment,
+}: SectionProps<Settings["security"]> & {
+    deploymentReadiness: DeploymentReadinessSummary;
+    isCheckingDeployment: boolean;
+    onRefreshDeployment: () => void;
+}) {
     const [sessionDisplay, setSessionDisplay] = useState<TeacherSessionDisplay>(() => buildTeacherSessionDisplay(null));
     const readySecurityItems = SECURITY_POSTURE_ITEMS.filter(item => item.tone === "ready").length;
+    const deploymentTone = dataToneStyle(
+        deploymentReadiness.checks.some(check => check.tone === "error")
+            ? "error"
+            : deploymentReadiness.checks.some(check => check.tone === "warning")
+                ? "warning"
+                : deploymentReadiness.checks.length > 0
+                    ? "ready"
+                    : "neutral",
+    );
 
     useEffect(() => {
         const updateSessionDisplay = () => setSessionDisplay(readTeacherSessionDisplay());
@@ -1035,6 +1105,96 @@ function SecuritySection({ value, onChange, onSave, onCancel }: SectionProps<Set
 
             <Toggle checked={value.twoFactor} onChange={v => onChange({ twoFactor: v })} label="2단계 인증" desc="로그인 시 앱에서 추가 코드 입력" />
             <Toggle checked={value.loginAlerts} onChange={v => onChange({ loginAlerts: v })} label="로그인 알림" desc="새 기기 로그인 시 알림 후보 기록" />
+
+            <Field label="배포 로그인 진단">
+                <div style={{
+                    display: 'grid',
+                    gap: '0.85rem',
+                    padding: '1rem',
+                    borderRadius: 'var(--radius-lg)',
+                    border: `1px solid ${deploymentTone.border}`,
+                    background: deploymentTone.background,
+                }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '0.75rem', flexWrap: 'wrap' }}>
+                        <div style={{ minWidth: 0 }}>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', color: deploymentTone.color, fontWeight: 950, marginBottom: '0.28rem' }}>
+                                {deploymentTone.icon}
+                                {deploymentReadiness.label}
+                            </div>
+                            <p style={{ color: 'var(--muted)', fontSize: '0.82rem', lineHeight: 1.6, wordBreak: 'keep-all' }}>
+                                {deploymentReadiness.detail}
+                            </p>
+                            <div style={{ marginTop: '0.38rem', color: 'var(--foreground)', fontSize: '0.78rem', fontWeight: 850 }}>
+                                {deploymentReadiness.totalCount > 0
+                                    ? `${deploymentReadiness.readyCount}/${deploymentReadiness.totalCount} 항목 준비 · 교사 계정 ${deploymentReadiness.credentialCount}개`
+                                    : "서버 진단을 기다리는 중"}
+                            </div>
+                        </div>
+                        <button
+                            type="button"
+                            onClick={onRefreshDeployment}
+                            disabled={isCheckingDeployment}
+                            aria-label="배포 로그인 진단 새로고침"
+                            style={{
+                                padding: '0.58rem 0.9rem',
+                                borderRadius: 'var(--radius-md)',
+                                border: '1px solid var(--border)',
+                                background: 'var(--surface)',
+                                color: 'var(--foreground)',
+                                display: 'flex',
+                                alignItems: 'center',
+                                gap: '0.42rem',
+                                fontSize: '0.82rem',
+                                fontWeight: 850,
+                                cursor: isCheckingDeployment ? 'wait' : 'pointer',
+                                whiteSpace: 'nowrap',
+                            }}
+                        >
+                            <RefreshCw size={14} className={isCheckingDeployment ? "animate-spin" : undefined} />
+                            진단
+                        </button>
+                    </div>
+
+                    {deploymentReadiness.checks.length > 0 && (
+                        <div style={{
+                            display: 'grid',
+                            gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 220px), 1fr))',
+                            gap: '0.65rem',
+                        }}>
+                            {deploymentReadiness.checks.map(check => {
+                                const tone = dataToneStyle(check.tone);
+                                return (
+                                    <div
+                                        key={check.key}
+                                        style={{
+                                            display: 'flex',
+                                            alignItems: 'flex-start',
+                                            gap: '0.6rem',
+                                            padding: '0.78rem 0.85rem',
+                                            borderRadius: 'var(--radius-md)',
+                                            border: `1px solid ${tone.border}`,
+                                            background: 'var(--surface)',
+                                            minHeight: 108,
+                                        }}
+                                    >
+                                        <span style={{ color: tone.color, flexShrink: 0, marginTop: 1 }}>
+                                            {tone.icon}
+                                        </span>
+                                        <span style={{ minWidth: 0 }}>
+                                            <span style={{ display: 'block', color: 'var(--foreground)', fontSize: '0.8rem', fontWeight: 900, marginBottom: '0.18rem' }}>
+                                                {check.label}
+                                            </span>
+                                            <span style={{ display: 'block', color: 'var(--muted)', fontSize: '0.74rem', lineHeight: 1.52, wordBreak: 'keep-all' }}>
+                                                {check.detail}
+                                            </span>
+                                        </span>
+                                    </div>
+                                );
+                            })}
+                        </div>
+                    )}
+                </div>
+            </Field>
 
             <Field label="운영 보안 점검">
                 <div style={{ display: 'grid', gap: '0.75rem' }}>

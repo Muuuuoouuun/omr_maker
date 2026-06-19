@@ -196,9 +196,14 @@ describe("service UI surface", () => {
         expect(homePage).toContain("needsStudentLookup");
         expect(homePage).toContain("동명이인이 있습니다");
         expect(settingsPage).toContain("buildTeacherSessionDisplay");
+        expect(settingsPage).toContain("getTeacherDeploymentReadiness");
+        expect(settingsPage).toContain("DeploymentReadinessSummary");
         expect(settingsPage).toContain("TEACHER_ACCOUNTS");
         expect(settingsPage).toContain("clearTeacherAuthSession");
         expect(settingsPage).toContain("SECURITY_POSTURE_ITEMS");
+        expect(settingsPage).toContain("배포 로그인 진단");
+        expect(settingsPage).toContain('aria-label="배포 로그인 진단 새로고침"');
+        expect(settingsPage).toContain("교사 계정 ${deploymentReadiness.credentialCount}개");
         expect(settingsPage).toContain("운영 보안 점검");
         expect(settingsPage).toContain("readySecurityItems");
         expect(settingsPage).toContain("운영 준비도");

@@ -23,6 +23,7 @@ import {
     TEACHER_SERVER_SESSION_COOKIE,
     TEACHER_SERVER_SESSION_MAX_AGE_SECONDS,
 } from "@/lib/teacherServerSession";
+import { buildDeploymentReadiness, type DeploymentReadinessSummary } from "@/lib/deploymentReadiness";
 import { workspaceContextFromIdentity } from "@/lib/workspaceContext";
 
 function clientFingerprintFromHeaders(headerStore: Headers): string {
@@ -96,4 +97,8 @@ export async function clearTeacherAuthSession(): Promise<{ success: true }> {
     const cookieStore = await cookies();
     cookieStore.delete(TEACHER_SERVER_SESSION_COOKIE);
     return { success: true };
+}
+
+export async function getTeacherDeploymentReadiness(): Promise<DeploymentReadinessSummary> {
+    return buildDeploymentReadiness();
 }
