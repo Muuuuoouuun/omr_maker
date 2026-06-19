@@ -330,7 +330,24 @@ test.describe("Teacher and student full journey", () => {
         await expect(page.getByText("학생별 점수 및 성취도")).toBeVisible();
         const studentScoreRow = page.getByRole("row", { name: new RegExp(`${TEST_STUDENT_NAME}.*20점`) });
         await expect(studentScoreRow).toBeVisible();
-        await expect(studentScoreRow.getByRole("button", { name: "정오표(CSV)" })).toBeVisible();
+        const correctionCsvButton = studentScoreRow.getByRole("button", { name: "정오표(CSV)" });
+        await expect(correctionCsvButton).toBeVisible();
+
+        const [correctionDownload] = await Promise.all([
+            page.waitForEvent("download"),
+            correctionCsvButton.click(),
+        ]);
+        expect(correctionDownload.suggestedFilename()).toBe(`${TEST_STUDENT_NAME}_${TEST_EXAM_TITLE}_분석.csv`);
+        const correctionCsvPath = await correctionDownload.path();
+        expect(correctionCsvPath).toBeTruthy();
+        const correctionCsvText = await readFile(correctionCsvPath!, "utf8");
+        expect(correctionCsvText.charCodeAt(0)).toBe(0xfeff);
+        const correctionRows = parseCsvRows(correctionCsvText);
+        expect(correctionRows[0]).toEqual(["문항 번호", "라벨(장르)", "배점", "학생 선택", "정답", "정오"]);
+        expect(correctionRows).toContainEqual(["1", "문법", "10", "2", "2", "O"]);
+        expect(correctionRows).toContainEqual(["2", "독해", "10", "3", "3", "O"]);
+        expect(correctionRows).toContainEqual(["3", "어휘", "10", "1", "4", "X"]);
+        expect(correctionRows).toContainEqual(["장르별 통계"]);
     });
 
     test("keeps the tablet solve rail usable for answer entry", async ({ page }) => {

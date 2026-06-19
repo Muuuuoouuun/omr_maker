@@ -859,6 +859,7 @@ export default function ExamAnalyticsTab({
         document.body.appendChild(link);
         link.click();
         document.body.removeChild(link);
+        URL.revokeObjectURL(url);
     };
 
     if (exams.length === 0) {
