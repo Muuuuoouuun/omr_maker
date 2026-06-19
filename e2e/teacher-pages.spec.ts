@@ -1,20 +1,59 @@
 import { test, expect, type Page } from "@playwright/test";
+import { openTeacherPage, resetBrowserState } from "./helpers";
 
 // Each test starts with a clean localStorage so mocks are deterministic.
-async function clearStorage(page: Page) {
-    await page.addInitScript(() => {
-        try { window.localStorage.clear(); } catch {}
-        try { window.sessionStorage.clear(); } catch {}
+async function clearStorage(page: Page, context: Parameters<typeof resetBrowserState>[1]) {
+    await resetBrowserState(page, context);
+}
+
+async function seedStoredRoster(page: Page) {
+    await page.evaluate(() => {
+        window.localStorage.setItem("omr_groups", JSON.stringify([{
+            id: "e2e-class-a",
+            name: "E2E A반",
+            region: "서울",
+            count: 2,
+            avgScore: 0,
+            color: "#4f46e5",
+        }]));
+        window.localStorage.setItem("omr_students", JSON.stringify([
+            {
+                id: "e2e-class-a::김학생",
+                name: "김학생",
+                email: "kim.student@example.com",
+                group: "E2E A반",
+                region: "서울",
+                avatar: "#4f46e5",
+                avgScore: 0,
+                examsTaken: 0,
+                lastActive: "기록 없음",
+                trend: "flat",
+                status: "active",
+            },
+            {
+                id: "e2e-class-a::이학생",
+                name: "이학생",
+                email: "lee.student@example.com",
+                group: "E2E A반",
+                region: "서울",
+                avatar: "#10b981",
+                avgScore: 0,
+                examsTaken: 0,
+                lastActive: "기록 없음",
+                trend: "flat",
+                status: "active",
+            },
+        ]));
     });
 }
 
 test.describe("Teacher dashboard", () => {
-    test.beforeEach(async ({ page }) => {
-        await clearStorage(page);
+    test.beforeEach(async ({ page, context }) => {
+        await clearStorage(page, context);
     });
 
     test("loads and shows Quick Action tiles", async ({ page }) => {
-        await page.goto("/teacher/dashboard");
+        await openTeacherPage(page, "/teacher/dashboard");
         await expect(page.getByRole("heading", { name: "Analytics Center" })).toBeVisible();
         await expect(page.getByText("Quick Action", { exact: false })).toBeVisible();
         // 6 Quick Action tiles
@@ -24,31 +63,31 @@ test.describe("Teacher dashboard", () => {
     });
 
     test("Quick Action Live Results navigates to /teacher/live", async ({ page }) => {
-        await page.goto("/teacher/dashboard");
+        await openTeacherPage(page, "/teacher/dashboard");
         await page.getByRole("link", { name: /Live Results/ }).click();
         await expect(page).toHaveURL(/\/teacher\/live$/);
-        await expect(page.getByRole("heading", { name: "실시간 결과" })).toBeVisible();
+        await expect(page.getByRole("heading", { name: "응시 결과 확인" })).toBeVisible();
     });
 });
 
 test.describe("Live Results page", () => {
-    test.beforeEach(async ({ page }) => {
-        await clearStorage(page);
+    test.beforeEach(async ({ page, context }) => {
+        await clearStorage(page, context);
     });
 
     test("renders timer, stat tiles, students grid, heatmap", async ({ page }) => {
-        await page.goto("/teacher/live");
+        await openTeacherPage(page, "/teacher/live");
         await expect(page.getByText("REMAINING TIME")).toBeVisible();
         // Stat labels
-        for (const label of ["제출 완료", "응시 중", "미응시", "실시간 평균"]) {
+        for (const label of ["제출 완료", "응시 중", "미응시", "제출 평균"]) {
             await expect(page.getByText(label, { exact: true }).first()).toBeVisible();
         }
-        await expect(page.getByRole("heading", { name: "학생별 실시간 현황" })).toBeVisible();
+        await expect(page.getByRole("heading", { name: "학생별 제출 현황" })).toBeVisible();
         await expect(page.getByRole("heading", { name: "문항별 정답률" })).toBeVisible();
     });
 
     test("pause button toggles label", async ({ page }) => {
-        await page.goto("/teacher/live");
+        await openTeacherPage(page, "/teacher/live");
         const pauseBtn = page.getByRole("button", { name: "일시정지" });
         await expect(pauseBtn).toBeVisible();
         await pauseBtn.click();
@@ -57,12 +96,12 @@ test.describe("Live Results page", () => {
 });
 
 test.describe("Manage Users page", () => {
-    test.beforeEach(async ({ page }) => {
-        await clearStorage(page);
+    test.beforeEach(async ({ page, context }) => {
+        await clearStorage(page, context);
     });
 
     test("renders tabs and student table with mock data", async ({ page }) => {
-        await page.goto("/teacher/users");
+        await openTeacherPage(page, "/teacher/users");
         await expect(page.getByRole("heading", { name: "사용자 관리" })).toBeVisible();
         // Wait for hydration (table rows seed from localStorage on mount)
         const rows = page.locator("tbody tr");
@@ -70,26 +109,27 @@ test.describe("Manage Users page", () => {
     });
 
     test("bulk selection banner appears after checking boxes", async ({ page }) => {
-        await page.goto("/teacher/users");
+        await seedStoredRoster(page);
+        await openTeacherPage(page, "/teacher/users");
         const firstBox = page.locator('tbody input[type="checkbox"]').first();
         await firstBox.check();
         await expect(page.getByText(/\d+명 선택됨/)).toBeVisible();
     });
 
     test("switching to groups tab shows group cards", async ({ page }) => {
-        await page.goto("/teacher/users");
+        await openTeacherPage(page, "/teacher/users");
         await page.getByRole("button", { name: /반 · 그룹/ }).click();
         await expect(page.getByText("새 반 만들기")).toBeVisible();
     });
 });
 
 test.describe("Settings page", () => {
-    test.beforeEach(async ({ page }) => {
-        await clearStorage(page);
+    test.beforeEach(async ({ page, context }) => {
+        await clearStorage(page, context);
     });
 
     test("sidebar + profile section renders", async ({ page }) => {
-        await page.goto("/teacher/settings");
+        await openTeacherPage(page, "/teacher/settings");
         await expect(page.getByRole("heading", { name: "설정" })).toBeVisible();
         for (const label of ["프로필", "알림", "시험 기본값", "채점", "API 키", "테마", "보안"]) {
             await expect(page.getByRole("button", { name: label, exact: true })).toBeVisible();
@@ -97,13 +137,13 @@ test.describe("Settings page", () => {
     });
 
     test("switching section updates panel", async ({ page }) => {
-        await page.goto("/teacher/settings");
+        await openTeacherPage(page, "/teacher/settings");
         await page.getByRole("button", { name: "알림", exact: true }).click();
-        await expect(page.getByText("언제, 어떤 방식으로 알림을 받을지 설정하세요.")).toBeVisible();
+        await expect(page.getByText("카카오 우선 채널을 기준으로 알림 대상을 관리합니다.")).toBeVisible();
     });
 
     test("backup card shows export/import/reset buttons", async ({ page }) => {
-        await page.goto("/teacher/settings");
+        await openTeacherPage(page, "/teacher/settings");
         await expect(page.getByRole("button", { name: /내보내기/ })).toBeVisible();
         await expect(page.getByRole("button", { name: /가져오기/ })).toBeVisible();
         await expect(page.getByRole("button", { name: /전체 초기화/ })).toBeVisible();
@@ -111,21 +151,21 @@ test.describe("Settings page", () => {
 });
 
 test.describe("Billing page", () => {
-    test.beforeEach(async ({ page }) => {
-        await clearStorage(page);
+    test.beforeEach(async ({ page, context }) => {
+        await clearStorage(page, context);
     });
 
     test("shows current plan hero + usage + plan grid + invoices", async ({ page }) => {
-        await page.goto("/teacher/billing");
+        await openTeacherPage(page, "/teacher/billing");
         await expect(page.getByRole("heading", { name: "결제 및 플랜" })).toBeVisible();
         await expect(page.getByText("CURRENT PLAN")).toBeVisible();
         await expect(page.getByRole("heading", { name: "이달 사용량" })).toBeVisible();
         await expect(page.getByRole("heading", { name: "플랜 비교" })).toBeVisible();
-        await expect(page.getByRole("heading", { name: "결제 내역" })).toBeVisible();
+        await expect(page.getByRole("heading", { name: "결제/플랜 기록" })).toBeVisible();
     });
 
     test("monthly/yearly toggle changes prices", async ({ page }) => {
-        await page.goto("/teacher/billing");
+        await openTeacherPage(page, "/teacher/billing");
         const yearly = page.getByRole("button", { name: /연간/ });
         await yearly.click();
         // Pro plan yearly = 19000 * 12 * 0.8 = 182400
@@ -134,8 +174,8 @@ test.describe("Billing page", () => {
 });
 
 test.describe("Global Search", () => {
-    test.beforeEach(async ({ page }) => {
-        await clearStorage(page);
+    test.beforeEach(async ({ page, context }) => {
+        await clearStorage(page, context);
     });
 
     // Search lives inside TeacherHeader, which is rendered on the 4 subpages
@@ -143,7 +183,7 @@ test.describe("Global Search", () => {
     // Wait for the header search trigger to appear as a proxy for TeacherHeader
     // (and therefore GlobalSearch) being fully hydrated before pressing Cmd+K.
     test("Cmd+K opens modal and Escape closes", async ({ page }) => {
-        await page.goto("/teacher/live");
+        await openTeacherPage(page, "/teacher/live");
         await expect(page.getByRole("button", { name: "빠른 검색" })).toBeVisible();
         await page.keyboard.press("ControlOrMeta+K");
         await expect(page.getByPlaceholder(/빠른 검색/)).toBeVisible();
@@ -152,7 +192,7 @@ test.describe("Global Search", () => {
     });
 
     test("typing filters results and Enter navigates", async ({ page }) => {
-        await page.goto("/teacher/live");
+        await openTeacherPage(page, "/teacher/live");
         await expect(page.getByRole("button", { name: "빠른 검색" })).toBeVisible();
         await page.keyboard.press("ControlOrMeta+K");
         await page.getByPlaceholder(/빠른 검색/).fill("결제");
