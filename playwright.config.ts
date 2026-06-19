@@ -16,6 +16,14 @@ export default defineConfig({
             name: "chromium",
             use: { ...devices["Desktop Chrome"] },
         },
+        {
+            name: "webkit",
+            use: { ...devices["Desktop Safari"] },
+        },
+        {
+            name: "webkit-ipad",
+            use: { ...devices["iPad Pro 11"] },
+        },
     ],
     webServer: {
         command: "npm run dev",

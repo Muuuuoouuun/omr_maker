@@ -69,6 +69,14 @@ async function loginAsStudent(page: Page) {
     });
 }
 
+async function ensureAnswerPaneVisible(page: Page) {
+    const expandButton = page.getByRole("button", { name: "답안지 펼치기", exact: true });
+    if (await expandButton.isVisible().catch(() => false)) {
+        await expandButton.click();
+    }
+    await expect(page.getByText("OMR 답안")).toBeVisible();
+}
+
 async function seedExamAndStudent(page: Page) {
     await page.evaluate((seed) => {
         const now = "2026-06-19T00:00:00.000Z";
@@ -358,7 +366,7 @@ test.describe("Teacher and student full journey", () => {
 
         await page.getByRole("link", { name: "시작" }).click();
         await expect(page).toHaveURL(new RegExp(`/solve/${createdExam.id}$`));
-        await expect(page.getByText("OMR 답안")).toBeVisible();
+        await ensureAnswerPaneVisible(page);
 
         for (const [index, answer] of [...CREATED_ANSWER_KEY].entries()) {
             await page.getByRole("button", { name: `문제 ${index + 1}번 보기 ${answer}` }).click();
@@ -397,7 +405,7 @@ test.describe("Teacher and student full journey", () => {
 
         await page.getByRole("link", { name: "시작" }).click();
         await expect(page).toHaveURL(new RegExp(`/solve/${TEST_EXAM_ID}$`));
-        await expect(page.getByText("OMR 답안")).toBeVisible();
+        await ensureAnswerPaneVisible(page);
 
         await page.getByRole("button", { name: "문제 1번 보기 2" }).click();
         await page.getByRole("button", { name: "문제 2번 보기 3" }).click();
@@ -460,7 +468,7 @@ test.describe("Teacher and student full journey", () => {
             page.waitForEvent("download"),
             correctionCsvButton.click(),
         ]);
-        expect(correctionDownload.suggestedFilename()).toBe(`${TEST_STUDENT_NAME}_${TEST_EXAM_TITLE}_분석.csv`);
+        expect(correctionDownload.suggestedFilename().normalize("NFC")).toBe(`${TEST_STUDENT_NAME}_${TEST_EXAM_TITLE}_분석.csv`);
         const correctionCsvPath = await correctionDownload.path();
         expect(correctionCsvPath).toBeTruthy();
         const correctionCsvText = await readFile(correctionCsvPath!, "utf8");
