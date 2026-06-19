@@ -446,6 +446,18 @@ describe("service UI surface", () => {
         expect(css).toContain(".omr-cardview.is-vertical-numbering .omr-cardview-grid");
     });
 
+    it("keeps answer PDF parsing lazy until the teacher uploads an answer key", () => {
+        const createPage = readProjectFile("src/app/create/page.tsx");
+        const answerImportModal = readProjectFile("src/components/AnswerImportModal.tsx");
+
+        expect(createPage).toContain('import type { ParsedAnswer } from "@/services/answerParser"');
+        expect(createPage).not.toContain('import { ParsedAnswer } from "@/services/answerParser"');
+        expect(answerImportModal).toContain("import type { ParsedAnswer } from '@/services/answerParser'");
+        expect(answerImportModal).not.toContain("import { parseAnswerKeyPdf");
+        expect(answerImportModal).toContain("const { parseAnswerKeyPdf } = await import('@/services/answerParser')");
+        expect(answerImportModal).toContain("const { parseAnswerKeyWithGemini } = await import('@/services/answerParser')");
+    });
+
     it("keeps tablet solving usable with a collapsible right-side quick OMR rail", () => {
         const solvePage = readProjectFile("src/app/solve/[id]/page.tsx");
         const css = readProjectFile("src/app/globals.css");

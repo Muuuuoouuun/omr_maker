@@ -17,7 +17,7 @@ const PDFViewer = dynamic(() => import("@/components/PDFViewer"), { ssr: false }
 import { Suspense, useState, useEffect, useRef, useCallback, useMemo } from "react";
 import html2canvas from "html2canvas";
 import { DEFAULT_CHOICE_COUNT, questionChoiceCount, type Exam, type Question } from "@/types/omr";
-import { ParsedAnswer } from "@/services/answerParser";
+import type { ParsedAnswer } from "@/services/answerParser";
 import { saveFileDataUrl, storedDataUrlToFile } from "@/utils/blobStore";
 import { validateExamDraft } from "@/lib/examValidation";
 import { buildExamServiceReadiness, type ExamServiceReadinessLevel } from "@/lib/examServiceReadiness";
