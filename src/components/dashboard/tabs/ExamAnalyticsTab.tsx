@@ -2562,7 +2562,10 @@ export default function ExamAnalyticsTab({
                             </h3>
                         </div>
 
-                        <div style={{ overflowX: 'auto', borderRadius: 'var(--radius-lg)', border: '1px solid var(--border)' }}>
+                        <div
+                            data-testid="exam-analytics-student-table-scroll"
+                            style={{ overflowX: 'auto', borderRadius: 'var(--radius-lg)', border: '1px solid var(--border)' }}
+                        >
                             <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left', minWidth: '940px' }}>
                                 <thead style={{ background: 'var(--surface)' }}>
                                     <tr>

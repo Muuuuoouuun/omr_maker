@@ -183,6 +183,129 @@ async function seedExamAndStudent(page: Page) {
     });
 }
 
+async function seedCompletedAttempt(page: Page) {
+    await page.evaluate((seed) => {
+        const finishedAt = "2026-06-19T00:20:00.000Z";
+        const base = {
+            schemaVersion: 1,
+            attemptId: "attempt-tablet-analytics",
+            examId: seed.examId,
+            examTitle: seed.examTitle,
+            studentProfileId: seed.studentId,
+            studentName: seed.studentName,
+            studentId: seed.studentId,
+            groupId: seed.groupId,
+            groupName: seed.groupName,
+            regionId: "서울",
+            regionName: "서울",
+            identityType: "temporary",
+            finishedAt,
+        };
+        const questionResults = [
+            {
+                ...base,
+                questionId: 1,
+                questionNumber: 1,
+                label: "문법",
+                score: 10,
+                earnedScore: 10,
+                selectedAnswer: 2,
+                correctAnswer: 2,
+                status: "correct",
+                isCorrect: true,
+                isWrong: false,
+                isUnanswered: false,
+                subject: "국어",
+                unit: "문법",
+                concept: "높임 표현",
+                difficulty: "easy",
+                mistakeTypes: ["개념 부족"],
+                timeSec: 35,
+                visitCount: 1,
+                revisitCount: 0,
+            },
+            {
+                ...base,
+                questionId: 2,
+                questionNumber: 2,
+                label: "독해",
+                score: 10,
+                earnedScore: 10,
+                selectedAnswer: 3,
+                correctAnswer: 3,
+                status: "correct",
+                isCorrect: true,
+                isWrong: false,
+                isUnanswered: false,
+                subject: "국어",
+                unit: "독해",
+                concept: "중심 내용",
+                difficulty: "medium",
+                mistakeTypes: ["지문 오독"],
+                timeSec: 50,
+                visitCount: 2,
+                revisitCount: 1,
+            },
+            {
+                ...base,
+                questionId: 3,
+                questionNumber: 3,
+                label: "어휘",
+                score: 10,
+                earnedScore: 0,
+                selectedAnswer: 1,
+                correctAnswer: 4,
+                status: "wrong",
+                isCorrect: false,
+                isWrong: true,
+                isUnanswered: false,
+                subject: "국어",
+                unit: "어휘",
+                concept: "문맥 어휘",
+                difficulty: "medium",
+                mistakeTypes: ["선택지 함정"],
+                timeSec: 40,
+                visitCount: 1,
+                revisitCount: 0,
+            },
+        ];
+        const attempt = {
+            id: "attempt-tablet-analytics",
+            examId: seed.examId,
+            examTitle: seed.examTitle,
+            studentProfileId: seed.studentId,
+            studentName: seed.studentName,
+            studentId: seed.studentId,
+            groupId: seed.groupId,
+            groupName: seed.groupName,
+            regionId: "서울",
+            regionName: "서울",
+            identityType: "temporary",
+            startedAt: "2026-06-19T00:00:00.000Z",
+            finishedAt,
+            score: 20,
+            totalScore: 30,
+            answers: { 1: 2, 2: 3, 3: 1 },
+            status: "completed",
+            questionResults,
+            questionTimings: [
+                { questionId: 1, questionNumber: 1, totalTimeSec: 35, visitCount: 1, revisitCount: 0, answerChangeCount: 0 },
+                { questionId: 2, questionNumber: 2, totalTimeSec: 50, visitCount: 2, revisitCount: 1, answerChangeCount: 1 },
+                { questionId: 3, questionNumber: 3, totalTimeSec: 40, visitCount: 1, revisitCount: 0, answerChangeCount: 0 },
+            ],
+        };
+
+        window.localStorage.setItem("omr_attempts", JSON.stringify([attempt]));
+    }, {
+        examId: TEST_EXAM_ID,
+        examTitle: TEST_EXAM_TITLE,
+        groupId: TEST_GROUP_ID,
+        groupName: TEST_GROUP_NAME,
+        studentId: TEST_STUDENT_ID,
+        studentName: TEST_STUDENT_NAME,
+    });
+}
+
 test.describe("Teacher and student full journey", () => {
     test.beforeEach(async ({ page, context }) => {
         await resetBrowserState(page, context);
@@ -358,6 +481,36 @@ test.describe("Teacher and student full journey", () => {
         await expect(page.getByRole("button", { name: "답안지 펼치기 · 0/3 · 미답 3개" })).toBeVisible();
         await page.getByRole("button", { name: "1번 보기 2", exact: true }).click();
         await expect(page.getByRole("button", { name: "답안지 펼치기 · 1/3 · 미답 2개" })).toBeVisible();
+
+        const hasBodyOverflow = await page.evaluate(() => document.documentElement.scrollWidth > document.documentElement.clientWidth + 1);
+        expect(hasBodyOverflow).toBe(false);
+    });
+
+    test("keeps tablet teacher analytics usable with real submission data", async ({ page }) => {
+        await seedExamAndStudent(page);
+        await seedCompletedAttempt(page);
+        await page.setViewportSize({ width: 820, height: 1180 });
+
+        await loginAsTeacher(page, "/teacher/dashboard?tab=exam");
+        await expect(page.getByRole("heading", { name: "Analytics Center" })).toBeVisible();
+        await expect(page.getByText("학생별 점수 및 성취도")).toBeVisible();
+
+        const studentScoreRow = page.getByRole("row", { name: new RegExp(`${TEST_STUDENT_NAME}.*20점`) });
+        await expect(studentScoreRow).toBeVisible();
+        const tableScroller = page.getByTestId("exam-analytics-student-table-scroll");
+        await expect(tableScroller).toBeVisible();
+        await expect(tableScroller).toHaveJSProperty("scrollLeft", 0);
+
+        const tableMetrics = await tableScroller.evaluate(element => ({
+            clientWidth: element.clientWidth,
+            scrollWidth: element.scrollWidth,
+        }));
+        expect(tableMetrics.scrollWidth).toBeGreaterThan(tableMetrics.clientWidth);
+
+        await tableScroller.evaluate(element => {
+            element.scrollLeft = element.scrollWidth;
+        });
+        await expect(studentScoreRow.getByRole("button", { name: "정오표(CSV)" })).toBeVisible();
 
         const hasBodyOverflow = await page.evaluate(() => document.documentElement.scrollWidth > document.documentElement.clientWidth + 1);
         expect(hasBodyOverflow).toBe(false);
