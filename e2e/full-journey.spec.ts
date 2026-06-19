@@ -515,4 +515,35 @@ test.describe("Teacher and student full journey", () => {
         const hasBodyOverflow = await page.evaluate(() => document.documentElement.scrollWidth > document.documentElement.clientWidth + 1);
         expect(hasBodyOverflow).toBe(false);
     });
+
+    test("keeps tablet student history and review usable with real submission data", async ({ page }) => {
+        await seedExamAndStudent(page);
+        await seedCompletedAttempt(page);
+        await page.setViewportSize({ width: 820, height: 1180 });
+
+        await page.goto("/student/history");
+        await expect(page.getByRole("heading", { name: "내 시험 기록" })).toBeVisible();
+        await expect(page.getByText("원시험 응시")).toBeVisible();
+        await expect(page.getByText("1회")).toBeVisible();
+
+        const historyCard = page.locator('a[href="/student/review/attempt-tablet-analytics"]');
+        await expect(historyCard).toBeVisible();
+        await expect(historyCard).toContainText(TEST_EXAM_TITLE);
+        await expect(historyCard).toContainText("67%");
+
+        let hasBodyOverflow = await page.evaluate(() => document.documentElement.scrollWidth > document.documentElement.clientWidth + 1);
+        expect(hasBodyOverflow).toBe(false);
+
+        await historyCard.click();
+        await expect(page).toHaveURL(/\/student\/review\/attempt-tablet-analytics$/);
+        await expect(page.getByText("결과 리포트")).toBeVisible();
+        await expect(page.getByRole("heading", { name: TEST_EXAM_TITLE })).toBeVisible();
+        await expect(page.getByText("20 / 30 점")).toBeVisible();
+        await expect(page.getByText("오답 재시험")).toBeVisible();
+        await expect(page.getByRole("link", { name: "오답만 재시험" })).toBeVisible();
+        await expect(page.getByText("유형 재추천 큐")).toBeVisible();
+
+        hasBodyOverflow = await page.evaluate(() => document.documentElement.scrollWidth > document.documentElement.clientWidth + 1);
+        expect(hasBodyOverflow).toBe(false);
+    });
 });
