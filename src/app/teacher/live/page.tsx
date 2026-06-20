@@ -1,12 +1,20 @@
 "use client";
 
 import { useState, useEffect, useMemo, useCallback } from "react";
+import Link from "next/link";
 import TeacherHeader from "@/components/TeacherHeader";
-import { Activity, Users, CheckCircle2, Clock, AlertTriangle, Bell, PlayCircle, PauseCircle } from "lucide-react";
+import { Activity, Users, CheckCircle2, Clock, AlertTriangle, Bell, PlayCircle, PauseCircle, PlusCircle } from "lucide-react";
 import { toast } from "@/components/Toast";
 import type { Exam, Attempt } from "@/types/omr";
+import { shouldUseDemoData } from "@/lib/demoData";
+import { loadAttempts, loadExams, saveAttempt } from "@/lib/omrPersistence";
+import { resolveAttemptScore } from "@/lib/attemptScores";
+import { buildLiveQuestionHeatmap } from "@/lib/liveAnalytics";
+import { forceCompleteLiveAttempt, liveAttemptsNeedingForceFinish } from "@/lib/liveControls";
+import { safeRatePercent } from "@/lib/scoreUtils";
 
 type StudentStatus = "submitted" | "in_progress" | "not_started";
+type LiveDataMode = "real" | "demo";
 
 interface LiveStudent {
     id: string;
@@ -26,6 +34,7 @@ interface LiveExam {
     total: number;
     duration: number;
     questions?: { id: number; answer?: number }[];
+    sourceExam?: Exam;
 }
 
 const MOCK_EXAMS: LiveExam[] = [
@@ -33,6 +42,8 @@ const MOCK_EXAMS: LiveExam[] = [
     { id: "ex2", title: "Chapter 4 Mathematics", total: 32, duration: 45 },
     { id: "ex3", title: "Science Pop Quiz", total: 30, duration: 20 },
 ];
+
+const EMPTY_LIVE_EXAM: LiveExam = { id: "", title: "", total: 0, duration: 0, questions: [] };
 
 const AVATAR_COLORS = ["#4f46e5", "#ec4899", "#8b5cf6", "#10b981", "#f59e0b", "#0ea5e9"];
 
@@ -61,7 +72,7 @@ function countAnsweredEntries(answers: Record<number, number> | undefined): numb
     return c;
 }
 
-function attemptToStudent(a: Attempt, totalQ: number): LiveStudent {
+function attemptToStudent(a: Attempt, totalQ: number, exam?: Exam): LiveStudent {
     const status: StudentStatus =
         a.status === "completed" ? "submitted" :
         a.status === "in_progress" ? "in_progress" : "not_started";
@@ -69,11 +80,10 @@ function attemptToStudent(a: Attempt, totalQ: number): LiveStudent {
     const name = a.studentName || "Student";
     const progress =
         status === "submitted" ? 100 :
-        status === "in_progress" ? (totalQ > 0 ? Math.round((answered / totalQ) * 100) : 0) : 0;
-    const score =
-        status === "submitted" && a.totalScore > 0
-            ? Math.round((a.score / a.totalScore) * 100)
-            : undefined;
+        status === "in_progress" ? safeRatePercent(answered, totalQ) : 0;
+    const score = status === "submitted"
+        ? resolveAttemptScore(a, exam).scorePercent
+        : undefined;
     return {
         id: a.id,
         name,
@@ -114,118 +124,198 @@ function genSyntheticStudents(count: number, totalQ: number, startIdx: number): 
     return out;
 }
 
-function loadExamsFromStorage(): LiveExam[] {
-    if (typeof window === "undefined") return [];
-    const out: LiveExam[] = [];
-    try {
-        for (let i = 0; i < localStorage.length; i++) {
-            const key = localStorage.key(i);
-            if (!key || !key.startsWith("omr_exam_")) continue;
-            const raw = localStorage.getItem(key);
-            if (!raw) continue;
-            try {
-                const parsed = JSON.parse(raw) as Exam;
-                if (!parsed || !parsed.id || !parsed.title) continue;
-                const questions = Array.isArray(parsed.questions) ? parsed.questions : [];
-                out.push({
-                    id: parsed.id,
-                    title: parsed.title,
-                    total: questions.length,
-                    duration: 60,
-                    questions: questions.map(q => ({ id: q.id, answer: q.answer })),
-                });
-            } catch {
-                // skip malformed
-            }
-        }
-    } catch {
-        // localStorage unavailable
-    }
-    return out;
+function examToLiveExam(exam: Exam): LiveExam {
+    const questions = Array.isArray(exam.questions) ? exam.questions : [];
+    return {
+        id: exam.id,
+        title: exam.title,
+        total: questions.length,
+        duration: exam.durationMin || 60,
+        questions: questions.map(q => ({ id: q.id, answer: q.answer })),
+        sourceExam: { ...exam, pdfData: undefined, answerKeyPdf: undefined },
+    };
 }
 
-function loadAttemptsFromStorage(): Attempt[] {
-    if (typeof window === "undefined") return [];
-    try {
-        const raw = localStorage.getItem("omr_attempts");
-        if (!raw) return [];
-        const parsed = JSON.parse(raw);
-        return Array.isArray(parsed) ? parsed as Attempt[] : [];
-    } catch {
-        return [];
-    }
+function resolveLiveExamData(exams: Exam[]): { exams: LiveExam[]; mode: LiveDataMode } {
+    const loaded = exams.map(examToLiveExam);
+    if (loaded.length > 0) return { exams: loaded, mode: "real" };
+    return shouldUseDemoData()
+        ? { exams: MOCK_EXAMS, mode: "demo" }
+        : { exams: [], mode: "real" };
+}
+
+function ForceFinishConfirmDialog({
+    examTitle,
+    body,
+    confirmLabel,
+    onCancel,
+    onConfirm,
+}: {
+    examTitle: string;
+    body: string;
+    confirmLabel: string;
+    onCancel: () => void;
+    onConfirm: () => void;
+}) {
+    return (
+        <div
+            role="presentation"
+            onClick={onCancel}
+            style={{
+                position: 'fixed',
+                inset: 0,
+                zIndex: 1200,
+                background: 'rgba(15,23,42,0.58)',
+                backdropFilter: 'blur(8px)',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                padding: '1rem',
+            }}
+        >
+            <div
+                role="dialog"
+                aria-modal="true"
+                aria-label="응시 종료 처리 확인"
+                onClick={(e) => e.stopPropagation()}
+                style={{
+                    width: '100%',
+                    maxWidth: 430,
+                    background: 'var(--surface)',
+                    color: 'var(--foreground)',
+                    border: '1px solid var(--border)',
+                    borderRadius: 'var(--radius-lg)',
+                    boxShadow: '0 24px 60px rgba(0,0,0,0.28)',
+                    padding: '1.5rem',
+                }}
+            >
+                <h2 style={{ fontSize: '1.15rem', fontWeight: 800, marginBottom: '0.65rem' }}>
+                    응시 종료 처리
+                </h2>
+                <p style={{ color: 'var(--muted)', lineHeight: 1.7, fontSize: '0.95rem', wordBreak: 'keep-all', marginBottom: '1.25rem' }}>
+                    “{examTitle}” {body}
+                </p>
+                <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.5rem' }}>
+                    <button
+                        type="button"
+                        onClick={onCancel}
+                        style={{ padding: '0.7rem 1rem', background: 'var(--surface)', color: 'var(--foreground)', border: '1px solid var(--border)', borderRadius: 'var(--radius-md)', fontWeight: 700, fontSize: '0.9rem' }}
+                    >
+                        취소
+                    </button>
+                    <button
+                        type="button"
+                        onClick={onConfirm}
+                        style={{ padding: '0.7rem 1rem', background: 'var(--error)', color: 'white', borderRadius: 'var(--radius-md)', fontWeight: 800, fontSize: '0.9rem' }}
+                    >
+                        {confirmLabel}
+                    </button>
+                </div>
+            </div>
+        </div>
+    );
 }
 
 const MIN_STUDENT_CARDS = 8;
 
 export default function LiveResultsPage() {
-    const [exams, setExams] = useState<LiveExam[]>(MOCK_EXAMS);
+    const [exams, setExams] = useState<LiveExam[]>(() => shouldUseDemoData() ? MOCK_EXAMS : []);
+    const [liveDataMode, setLiveDataMode] = useState<LiveDataMode>(() => shouldUseDemoData() ? "demo" : "real");
     const [attempts, setAttempts] = useState<Attempt[]>([]);
-    const [selectedExamId, setSelectedExamId] = useState<string>(MOCK_EXAMS[0].id);
+    const [selectedExamId, setSelectedExamId] = useState<string>(() => shouldUseDemoData() ? MOCK_EXAMS[0].id : "");
     const [, setTick] = useState(0);
     const [timerSeconds, setTimerSeconds] = useState(38 * 60 + 24);
     const [isPaused, setIsPaused] = useState(false);
+    const [forceFinishConfirmOpen, setForceFinishConfirmOpen] = useState(false);
     // Synthetic students per exam — mutable state so they can "progress" over time
     const [syntheticByExam, setSyntheticByExam] = useState<Record<string, LiveStudent[]>>({});
 
-    const refreshFromStorage = useCallback(() => {
-        const loaded = loadExamsFromStorage();
-        setExams(loaded.length > 0 ? loaded : MOCK_EXAMS);
-        setAttempts(loadAttemptsFromStorage());
+    const refreshFromStorage = useCallback(async () => {
+        const [examResult, attemptResult] = await Promise.all([
+            loadExams(),
+            loadAttempts(),
+        ]);
+        const liveData = resolveLiveExamData(examResult.items);
+        setExams(liveData.exams);
+        setLiveDataMode(liveData.mode);
+        if (liveData.mode === "real") setSyntheticByExam({});
+        setAttempts(attemptResult.items);
+        setSelectedExamId(prev => {
+            if (liveData.exams.length === 0) return "";
+            return liveData.exams.some(e => e.id === prev) ? prev : liveData.exams[0].id;
+        });
     }, []);
 
     // Initial load + adjust selected exam if real exams found
     useEffect(() => {
-        const loaded = loadExamsFromStorage();
-        const effective = loaded.length > 0 ? loaded : MOCK_EXAMS;
-        // Hydrate from client-only localStorage after mount.
-        // eslint-disable-next-line react-hooks/set-state-in-effect
-        setExams(effective);
-        setAttempts(loadAttemptsFromStorage());
-        setSelectedExamId(prev => effective.some(e => e.id === prev) ? prev : effective[0].id);
+        let cancelled = false;
+        const loadInitial = async () => {
+            const [examResult, attemptResult] = await Promise.all([
+                loadExams(),
+                loadAttempts(),
+            ]);
+            if (cancelled) return;
+            const liveData = resolveLiveExamData(examResult.items);
+            setExams(liveData.exams);
+            setLiveDataMode(liveData.mode);
+            if (liveData.mode === "real") setSyntheticByExam({});
+            setAttempts(attemptResult.items);
+            setSelectedExamId(prev => {
+                if (liveData.exams.length === 0) return "";
+                return liveData.exams.some(e => e.id === prev) ? prev : liveData.exams[0].id;
+            });
+        };
+        void loadInitial();
+        return () => { cancelled = true; };
     }, []);
 
     // Poll every 3s when tab is visible
     useEffect(() => {
         const id = setInterval(() => {
             if (typeof document === "undefined" || document.visibilityState === "visible") {
-                refreshFromStorage();
+                void refreshFromStorage();
             }
         }, 3000);
         return () => clearInterval(id);
     }, [refreshFromStorage]);
 
-    const exam = exams.find(e => e.id === selectedExamId) ?? exams[0] ?? MOCK_EXAMS[0];
+    const selectedExam = exams.find(e => e.id === selectedExamId) ?? exams[0];
+    const hasExam = !!selectedExam;
+    const exam = selectedExam ?? EMPTY_LIVE_EXAM;
+    const isDemoLive = liveDataMode === "demo";
 
     const examAttempts = useMemo(
-        () => attempts.filter(a => a && a.examId === exam.id),
-        [attempts, exam.id]
+        () => hasExam ? attempts.filter(a => a && a.examId === exam.id) : [],
+        [attempts, exam.id, hasExam]
     );
 
     // Initialize synthetic students for this exam if not yet seeded
     useEffect(() => {
+        if (!hasExam || !isDemoLive) return;
         // Seed derived display-only data once the selected exam is known.
         // eslint-disable-next-line react-hooks/set-state-in-effect
         setSyntheticByExam(prev => {
             if (prev[exam.id]) return prev;
-            const real = examAttempts.map(a => attemptToStudent(a, exam.total));
+            const real = examAttempts.map(a => attemptToStudent(a, exam.total, exam.sourceExam));
             const needed = Math.max(MIN_STUDENT_CARDS - real.length, 0);
             if (needed === 0) return prev;
             return { ...prev, [exam.id]: genSyntheticStudents(needed, exam.total || 20, real.length) };
         });
-    }, [exam.id, exam.total, examAttempts]);
+    }, [exam.id, exam.sourceExam, exam.total, examAttempts, hasExam, isDemoLive]);
 
     // Advance synthetic students every 3s when not paused — makes "Live" feel live
     useEffect(() => {
-        if (isPaused) return;
+        if (!hasExam || isPaused || !isDemoLive) return;
         const id = setInterval(() => {
             setSyntheticByExam(prev => {
                 const list = prev[exam.id];
                 if (!list || list.length === 0) return prev;
                 const totalQ = exam.total || 20;
+                const pulse = Math.floor(Date.now() / 3000);
                 const next = list.map(s => {
-                    if (s.status === "in_progress" && Math.random() < 0.45) {
-                        const inc = Math.floor(5 + Math.random() * 12);
+                    const seed = hashString(`${exam.id}:${s.id}:${s.progress}:${s.currentQ}:${pulse}`);
+                    if (s.status === "in_progress" && seed % 100 < 45) {
+                        const inc = 5 + (seed % 12);
                         const newProgress = Math.min(100, s.progress + inc);
                         const newQ = Math.max(s.currentQ, Math.ceil((newProgress / 100) * totalQ));
                         if (newProgress >= 100) {
@@ -234,16 +324,16 @@ export default function LiveResultsPage() {
                                 status: "submitted" as const,
                                 progress: 100,
                                 currentQ: totalQ,
-                                score: Math.round(50 + Math.random() * 50),
+                                score: 50 + (hashString(`${s.id}:score:${pulse}`) % 51),
                             };
                         }
                         return { ...s, progress: newProgress, currentQ: newQ };
                     }
-                    if (s.status === "not_started" && Math.random() < 0.18) {
+                    if (s.status === "not_started" && seed % 100 < 18) {
                         return {
                             ...s,
                             status: "in_progress" as const,
-                            progress: Math.floor(5 + Math.random() * 15),
+                            progress: 5 + (seed % 15),
                             currentQ: 1,
                             startedAt: new Date().toISOString(),
                         };
@@ -254,81 +344,109 @@ export default function LiveResultsPage() {
             });
         }, 3000);
         return () => clearInterval(id);
-    }, [exam.id, exam.total, isPaused]);
+    }, [exam.id, exam.total, hasExam, isDemoLive, isPaused]);
 
     const students = useMemo<LiveStudent[]>(() => {
+        if (!hasExam) return [];
         const totalQ = exam.total;
-        const real = examAttempts.map(a => attemptToStudent(a, totalQ));
-        if (real.length >= MIN_STUDENT_CARDS) return real;
+        const real = examAttempts.map(a => attemptToStudent(a, totalQ, exam.sourceExam));
+        if (!isDemoLive || real.length >= MIN_STUDENT_CARDS) return real;
         const synthetic = syntheticByExam[exam.id] ?? [];
         return [...real, ...synthetic];
-    }, [examAttempts, exam.id, exam.total, syntheticByExam]);
+    }, [examAttempts, exam.id, exam.sourceExam, exam.total, hasExam, isDemoLive, syntheticByExam]);
 
     useEffect(() => {
+        if (!hasExam) return;
         const id = setInterval(() => {
             setTick(t => t + 1);
             if (!isPaused) setTimerSeconds(s => Math.max(0, s - 1));
         }, 1000);
         return () => clearInterval(id);
-    }, [isPaused]);
+    }, [hasExam, isPaused]);
 
     const counts = {
         submitted: students.filter(s => s.status === "submitted").length,
         inProgress: students.filter(s => s.status === "in_progress").length,
         notStarted: students.filter(s => s.status === "not_started").length,
     };
+    const forceFinishTargets = useMemo(
+        () => liveAttemptsNeedingForceFinish(examAttempts),
+        [examAttempts]
+    );
     const submittedStudents = students.filter(s => s.status === "submitted");
     const avgScore = submittedStudents.length > 0
         ? Math.round(submittedStudents.reduce((a, s) => a + (s.score || 0), 0) / submittedStudents.length)
         : 0;
 
-    // Question heatmap:
-    // - If we have real submitted attempts with answer data, derive accuracy from them.
-    // - Otherwise, simulate realistic per-question accuracy from the count of submitted
-    //   (real + synthetic) students, with a deterministic per-question baseline so the
-    //   heatmap "stabilizes" as more students submit instead of jumping randomly.
     const heatmap = useMemo(() => {
-        const questions = exam.questions ?? [];
-        const submittedReal = examAttempts.filter(a => a.status === "completed");
-        const submittedAll = students.filter(s => s.status === "submitted");
-        const totalReal = submittedReal.length;
-        const totalAll = submittedAll.length;
-        const qList = questions.length > 0
-            ? questions
-            : Array.from({ length: exam.total || 20 }, (_, i) => ({ id: i + 1, answer: undefined as number | undefined }));
-
-        return qList.map((q, i) => {
-            // Path 1: real attempts with known correct answers
-            if (totalReal > 0 && q.answer !== undefined && q.answer !== null) {
-                let correct = 0;
-                for (const a of submittedReal) {
-                    const selected = a.answers ? a.answers[q.id] : undefined;
-                    if (selected !== undefined && selected === q.answer) correct++;
-                }
-                return { q: i + 1, correct, total: totalReal };
-            }
-
-            // Path 2: synthetic — deterministic baseline per question (35%..90%)
-            const seed = hashString(`${exam.id}:${i + 1}`);
-            const baseline = 35 + (seed % 56); // 35..90
-            const correct = Math.round((baseline / 100) * Math.max(totalAll, 1));
-            return { q: i + 1, correct, total: Math.max(totalAll, 1) };
+        return buildLiveQuestionHeatmap({
+            examId: exam.id,
+            sourceExam: exam.sourceExam,
+            questions: exam.questions ?? [],
+            totalQuestionCount: exam.total || 20,
+            submittedAttempts: examAttempts,
+            submittedDisplayCount: students.filter(s => s.status === "submitted").length,
+            allowSynthetic: isDemoLive,
         });
-    }, [examAttempts, exam.questions, exam.total, exam.id, students]);
+    }, [examAttempts, exam.questions, exam.total, exam.id, exam.sourceExam, isDemoLive, students]);
+    const hasHeatmapData = heatmap.some(h => h.total > 0);
+    const weakHeatmapCells = heatmap.filter(h => h.total > 0 && safeRatePercent(h.correct, h.total) < 45);
 
     const mm = Math.floor(timerSeconds / 60).toString().padStart(2, "0");
     const ss = (timerSeconds % 60).toString().padStart(2, "0");
 
     // Handlers for timer-bar actions
     const handleExtendTime = () => {
+        if (!hasExam) return;
         setTimerSeconds(s => s + 300);
         toast.success("시간 5분 연장됨");
     };
 
     const handleForceFinish = () => {
-        if (typeof window === "undefined") return;
-        const ok = window.confirm("모든 학생의 시험을 지금 종료하시겠습니까?");
-        if (!ok) return;
+        if (!hasExam) return;
+        setForceFinishConfirmOpen(true);
+    };
+
+    const confirmForceFinish = async () => {
+        if (!hasExam) return;
+        if (!isDemoLive) {
+            const targets = forceFinishTargets;
+            if (targets.length === 0) {
+                setTimerSeconds(0);
+                setIsPaused(true);
+                setForceFinishConfirmOpen(false);
+                toast.info("진행 중인 제출 없음", "저장된 응시 중 제출이 없어 로컬 타이머만 종료했습니다.");
+                return;
+            }
+
+            const finishedAt = new Date().toISOString();
+            const completedAttempts = targets.map(attempt => (
+                forceCompleteLiveAttempt(attempt, exam.sourceExam, finishedAt)
+            ));
+            const completedById = new Map(completedAttempts.map(attempt => [attempt.id, attempt]));
+            setAttempts(prev => prev.map(attempt => completedById.get(attempt.id) ?? attempt));
+
+            const results = await Promise.all(completedAttempts.map(attempt => saveAttempt(attempt)));
+            const failedLocalCount = results.filter(result => !result.localSaved).length;
+            const remoteIssueCount = results.filter(result => result.remoteError).length;
+
+            setTimerSeconds(0);
+            setIsPaused(true);
+            setForceFinishConfirmOpen(false);
+
+            if (failedLocalCount > 0) {
+                toast.error("종료 처리 일부 실패", `${failedLocalCount}건을 저장하지 못했습니다. 다시 시도해주세요.`);
+                void refreshFromStorage();
+                return;
+            }
+
+            toast.success(
+                "응시 종료 처리됨",
+                `${completedAttempts.length}건을 완료 제출로 저장했습니다.${remoteIssueCount ? " 서버 동기화는 다음 로드에서 재시도됩니다." : ""}`
+            );
+            return;
+        }
+
         setSyntheticByExam(prev => {
             const list = prev[exam.id];
             if (!list) return prev;
@@ -349,12 +467,21 @@ export default function LiveResultsPage() {
         });
         setTimerSeconds(0);
         setIsPaused(true);
-        toast.success("시험 강제 종료됨");
+        setForceFinishConfirmOpen(false);
+        toast.success("데모 시험 종료됨");
     };
 
     const handleNotifyNotStarted = () => {
+        if (!hasExam) return;
         const n = counts.notStarted;
-        toast.success(`${n}명에게 독려 알림을 발송했습니다`);
+        if (n === 0) {
+            toast.info("미응시자 없음", "현재 확인할 미응시 학생이 없습니다.");
+            return;
+        }
+        toast.info(
+            "카카오 알림 연동 전",
+            `현재는 미응시 ${n}명 확인만 지원합니다. 실제 카카오 발송 채널이 연결되면 이 버튼에서 발송합니다.`
+        );
     };
 
     return (
@@ -377,141 +504,241 @@ export default function LiveResultsPage() {
                             </span>
                         </div>
                         <h1 className="title-gradient" style={{ fontSize: '2.5rem', marginBottom: '0.5rem', lineHeight: 1.2 }}>
-                            실시간 결과
+                            응시 결과 확인
                         </h1>
                         <p className="text-muted" style={{ fontSize: '1.05rem' }}>
-                            학생들의 시험 진행 상황을 실시간으로 모니터링하세요.
+                            제출 상태와 문항별 결과를 자동 갱신해서 확인합니다.
                         </p>
                     </div>
-                    <select
-                        value={selectedExamId}
-                        onChange={e => setSelectedExamId(e.target.value)}
-                        className="input-field"
-                        style={{ maxWidth: 340, fontWeight: 600 }}
+                    {hasExam ? (
+                        <select
+                            value={selectedExamId}
+                            onChange={e => setSelectedExamId(e.target.value)}
+                            className="input-field"
+                            style={{ maxWidth: 340, fontWeight: 600 }}
+                        >
+                            {exams.map(e => (
+                                <option key={e.id} value={e.id}>{e.title}</option>
+                            ))}
+                        </select>
+                    ) : (
+                        <Link
+                            href="/create"
+                            style={{
+                                padding: '0.75rem 1.2rem',
+                                background: 'var(--primary)',
+                                color: 'white',
+                                borderRadius: 'var(--radius-full)',
+                                fontWeight: 800,
+                                fontSize: '0.9rem',
+                                display: 'flex',
+                                alignItems: 'center',
+                                gap: '0.5rem',
+                                boxShadow: '0 8px 20px rgba(79,70,229,0.22)',
+                            }}
+                        >
+                            <PlusCircle size={18} /> 시험 만들기
+                        </Link>
+                    )}
+                </div>
+
+                {isDemoLive && (
+                    <div
+                        role="status"
+                        aria-label="데모 실시간 데이터 안내"
+                        style={{
+                            display: 'flex',
+                            alignItems: 'flex-start',
+                            gap: '0.85rem',
+                            padding: '1rem 1.1rem',
+                            marginBottom: '1.5rem',
+                            borderRadius: 'var(--radius-lg)',
+                            border: '1px solid rgba(245,158,11,0.28)',
+                            background: 'rgba(245,158,11,0.09)',
+                            color: 'var(--foreground)',
+                        }}
                     >
-                        {MOCK_EXAMS.map(e => (
-                            <option key={e.id} value={e.id}>{e.title}</option>
-                        ))}
-                    </select>
-                </div>
-
-                {/* Timer + actions */}
-                <div className="bento-card" style={{
-                    background: 'linear-gradient(135deg, #ef4444, #f59e0b)',
-                    color: 'white', border: 'none', marginBottom: '1.25rem',
-                    position: 'relative', overflow: 'hidden', padding: '1.5rem 2rem'
-                }}>
-                    <div style={{ position: 'absolute', top: '-30%', right: '-5%', width: 260, height: 260, background: 'radial-gradient(circle, rgba(255,255,255,0.25) 0%, transparent 70%)' }} />
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '1rem', position: 'relative', zIndex: 1 }}>
-                        <div>
-                            <div style={{ fontSize: '0.8rem', opacity: 0.9, letterSpacing: '0.1em', fontWeight: 700, marginBottom: 6 }}>REMAINING TIME</div>
-                            <div style={{ fontSize: '3rem', fontWeight: 900, letterSpacing: '-0.03em', fontVariantNumeric: 'tabular-nums', lineHeight: 1 }}>
-                                {mm}:{ss}
+                        <AlertTriangle size={19} color="var(--warning)" style={{ flexShrink: 0, marginTop: 2 }} />
+                        <div style={{ minWidth: 0 }}>
+                            <div style={{ fontSize: '0.9rem', fontWeight: 900, color: 'var(--warning)', marginBottom: '0.2rem' }}>
+                                데모 실시간 모드
                             </div>
-                            <div style={{ fontSize: '0.9rem', opacity: 0.9, marginTop: 6 }}>
-                                총 {exam.duration}분 · {exam.title}
-                            </div>
-                        </div>
-                        <div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap' }}>
-                            <button
-                                onClick={() => setIsPaused(p => !p)}
-                                style={{
-                                    background: 'rgba(255,255,255,0.18)', color: 'white', padding: '0.75rem 1.25rem',
-                                    borderRadius: 'var(--radius-full)', fontSize: '0.9rem', fontWeight: 700,
-                                    display: 'flex', alignItems: 'center', gap: '0.5rem',
-                                    border: '1px solid rgba(255,255,255,0.25)', backdropFilter: 'blur(10px)'
-                                }}
-                            >
-                                {isPaused ? <PlayCircle size={18} /> : <PauseCircle size={18} />}
-                                {isPaused ? '재개' : '일시정지'}
-                            </button>
-                            <button onClick={handleExtendTime} style={{
-                                background: 'rgba(255,255,255,0.18)', color: 'white', padding: '0.75rem 1.25rem',
-                                borderRadius: 'var(--radius-full)', fontSize: '0.9rem', fontWeight: 700,
-                                display: 'flex', alignItems: 'center', gap: '0.5rem',
-                                border: '1px solid rgba(255,255,255,0.25)', backdropFilter: 'blur(10px)'
-                            }}>
-                                <Clock size={18} /> +5분 연장
-                            </button>
-                            <button onClick={handleForceFinish} style={{
-                                background: 'white', color: '#ef4444', padding: '0.75rem 1.25rem',
-                                borderRadius: 'var(--radius-full)', fontSize: '0.9rem', fontWeight: 700,
-                                display: 'flex', alignItems: 'center', gap: '0.5rem',
-                                boxShadow: '0 4px 14px rgba(0,0,0,0.15)'
-                            }}>
-                                <AlertTriangle size={18} /> 강제 종료
-                            </button>
+                            <p style={{ fontSize: '0.82rem', color: 'var(--muted)', lineHeight: 1.55, wordBreak: 'keep-all' }}>
+                                저장된 시험이 없어 예시 시험과 합성 응시 흐름을 표시 중입니다. 실제 시험을 만들면 합성 학생과 예시 정답률은 자동으로 사라집니다.
+                            </p>
                         </div>
                     </div>
-                </div>
+                )}
 
-                {/* Stats */}
-                <div className="bento-grid" style={{ marginBottom: '1.25rem' }}>
-                    <StatTile icon={<CheckCircle2 size={22} />} label="제출 완료" value={counts.submitted} color="#10b981" />
-                    <StatTile icon={<Activity size={22} />} label="응시 중" value={counts.inProgress} color="#6366f1" pulse />
-                    <StatTile icon={<Clock size={22} />} label="미응시" value={counts.notStarted} color="#ef4444" />
-                    <StatTile icon={<Users size={22} />} label="실시간 평균" value={avgScore > 0 ? `${avgScore}점` : "—"} color="#8b5cf6" />
-                </div>
-
-                {/* Main grid: Students + Heatmap */}
-                <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr', gap: '1.25rem' }} className="live-grid">
-                    {/* Students live view */}
-                    <div className="bento-card" style={{ padding: '1.5rem' }}>
-                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.25rem' }}>
-                            <h3 style={{ fontSize: '1.1rem', fontWeight: 700 }}>학생별 실시간 현황</h3>
-                            <button onClick={handleNotifyNotStarted} style={{
-                                background: 'rgba(239,68,68,0.1)', color: '#ef4444', padding: '0.5rem 1rem',
-                                borderRadius: 'var(--radius-full)', fontSize: '0.8rem', fontWeight: 700,
-                                display: 'flex', alignItems: 'center', gap: '0.4rem', border: '1px solid rgba(239,68,68,0.2)'
-                            }}>
-                                <Bell size={14} /> 미응시자 알림
-                            </button>
-                        </div>
-                        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))', gap: '0.8rem' }}>
-                            {students.map((s, idx) => (
-                                <StudentCard key={s.id} student={s} delay={idx * 20} />
-                            ))}
-                        </div>
-                    </div>
-
-                    {/* Question heatmap */}
-                    <div className="bento-card" style={{ padding: '1.5rem' }}>
-                        <h3 style={{ fontSize: '1.1rem', fontWeight: 700, marginBottom: '0.25rem' }}>문항별 정답률</h3>
-                        <p style={{ fontSize: '0.8rem', color: 'var(--muted)', marginBottom: '1.25rem' }}>제출 완료한 {submittedStudents.length}명 기준</p>
-                        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '0.5rem' }}>
-                            {heatmap.map(h => {
-                                const pct = Math.round((h.correct / h.total) * 100) || 0;
-                                const color = pct >= 75 ? '#10b981' : pct >= 50 ? '#f59e0b' : '#ef4444';
-                                const bg = pct >= 75 ? 'rgba(16,185,129,0.12)' : pct >= 50 ? 'rgba(245,158,11,0.12)' : 'rgba(239,68,68,0.12)';
-                                return (
-                                    <div key={h.q} style={{
-                                        padding: '0.75rem 0.5rem', background: bg, borderRadius: 'var(--radius-md)',
-                                        textAlign: 'center', border: `1px solid ${color}33`,
-                                        transition: 'var(--transition-base)', cursor: 'default'
-                                    }}
-                                        title={`Q${h.q}: ${pct}%`}
-                                    >
-                                        <div style={{ fontSize: '0.7rem', color: 'var(--muted)', fontWeight: 700 }}>Q{h.q}</div>
-                                        <div style={{ fontSize: '1rem', fontWeight: 800, color }}>{pct}%</div>
+                {hasExam ? (
+                    <>
+                        {/* Timer + actions */}
+                        <div className="bento-card" style={{
+                            background: 'linear-gradient(135deg, #ef4444, #f59e0b)',
+                            color: 'white', border: 'none', marginBottom: '1.25rem',
+                            position: 'relative', overflow: 'hidden', padding: '1.5rem 2rem'
+                        }}>
+                            <div style={{ position: 'absolute', top: '-30%', right: '-5%', width: 260, height: 260, background: 'radial-gradient(circle, rgba(255,255,255,0.25) 0%, transparent 70%)' }} />
+                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '1rem', position: 'relative', zIndex: 1 }}>
+                                <div>
+                                    <div style={{ fontSize: '0.8rem', opacity: 0.9, letterSpacing: '0.1em', fontWeight: 700, marginBottom: 6 }}>REMAINING TIME</div>
+                                    <div style={{ fontSize: '3rem', fontWeight: 900, letterSpacing: '-0.03em', fontVariantNumeric: 'tabular-nums', lineHeight: 1 }}>
+                                        {mm}:{ss}
                                     </div>
-                                );
-                            })}
+                                    <div style={{ fontSize: '0.9rem', opacity: 0.9, marginTop: 6 }}>
+                                        총 {exam.duration}분 · {exam.title}
+                                    </div>
+                                </div>
+                                <div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap' }}>
+                                    <button
+                                        onClick={() => setIsPaused(p => !p)}
+                                        style={{
+                                            background: 'rgba(255,255,255,0.18)', color: 'white', padding: '0.75rem 1.25rem',
+                                            borderRadius: 'var(--radius-full)', fontSize: '0.9rem', fontWeight: 700,
+                                            display: 'flex', alignItems: 'center', gap: '0.5rem',
+                                            border: '1px solid rgba(255,255,255,0.25)', backdropFilter: 'blur(10px)'
+                                        }}
+                                    >
+                                        {isPaused ? <PlayCircle size={18} /> : <PauseCircle size={18} />}
+                                        {isPaused ? '재개' : '일시정지'}
+                                    </button>
+                                    <button onClick={handleExtendTime} style={{
+                                        background: 'rgba(255,255,255,0.18)', color: 'white', padding: '0.75rem 1.25rem',
+                                        borderRadius: 'var(--radius-full)', fontSize: '0.9rem', fontWeight: 700,
+                                        display: 'flex', alignItems: 'center', gap: '0.5rem',
+                                        border: '1px solid rgba(255,255,255,0.25)', backdropFilter: 'blur(10px)'
+                                    }}>
+                                        <Clock size={18} /> +5분 연장
+                                    </button>
+                                    <button onClick={handleForceFinish} style={{
+                                        background: 'white', color: '#ef4444', padding: '0.75rem 1.25rem',
+                                        borderRadius: 'var(--radius-full)', fontSize: '0.9rem', fontWeight: 700,
+                                        display: 'flex', alignItems: 'center', gap: '0.5rem',
+                                        boxShadow: '0 4px 14px rgba(0,0,0,0.15)'
+                                    }}>
+                                        <AlertTriangle size={18} /> 종료 처리
+                                    </button>
+                                </div>
+                            </div>
                         </div>
 
-                        <div style={{ marginTop: '1.5rem', padding: '1rem', background: 'var(--background)', borderRadius: 'var(--radius-md)', border: '1px dashed var(--border)' }}>
-                            <div style={{ fontSize: '0.75rem', fontWeight: 700, color: 'var(--muted)', letterSpacing: '0.08em', marginBottom: '0.5rem' }}>⚠️ 주의 문항</div>
-                            {heatmap.filter(h => (h.correct / h.total) * 100 < 45).slice(0, 3).map(h => (
-                                <div key={h.q} style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.85rem', padding: '0.35rem 0' }}>
-                                    <span style={{ fontWeight: 600 }}>Q{h.q}</span>
-                                    <span style={{ color: '#ef4444', fontWeight: 700 }}>{Math.round((h.correct / h.total) * 100)}%</span>
-                                </div>
-                            ))}
-                            {heatmap.filter(h => (h.correct / h.total) * 100 < 45).length === 0 && (
-                                <div style={{ fontSize: '0.85rem', color: 'var(--muted)' }}>현재까진 양호합니다 ✨</div>
-                            )}
+                        {/* Stats */}
+                        <div className="bento-grid" style={{ marginBottom: '1.25rem' }}>
+                            <StatTile icon={<CheckCircle2 size={22} />} label="제출 완료" value={counts.submitted} color="#10b981" />
+                            <StatTile icon={<Activity size={22} />} label="응시 중" value={counts.inProgress} color="#6366f1" pulse />
+                            <StatTile icon={<Clock size={22} />} label="미응시" value={counts.notStarted} color="#ef4444" />
+                            <StatTile icon={<Users size={22} />} label="제출 평균" value={avgScore > 0 ? `${avgScore}점` : "—"} color="#8b5cf6" />
                         </div>
+
+                        {/* Main grid: Students + Heatmap */}
+                        <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr', gap: '1.25rem' }} className="live-grid">
+                            {/* Students live view */}
+                            <div className="bento-card" style={{ padding: '1.5rem' }}>
+                                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.25rem' }}>
+                                    <h3 style={{ fontSize: '1.1rem', fontWeight: 700 }}>학생별 제출 현황</h3>
+                                    <button onClick={handleNotifyNotStarted} style={{
+                                        background: 'rgba(239,68,68,0.1)', color: '#ef4444', padding: '0.5rem 1rem',
+                                        borderRadius: 'var(--radius-full)', fontSize: '0.8rem', fontWeight: 700,
+                                        display: 'flex', alignItems: 'center', gap: '0.4rem', border: '1px solid rgba(239,68,68,0.2)'
+                                    }}>
+                                        <Bell size={14} /> 미응시자 확인
+                                    </button>
+                                </div>
+                                {students.length > 0 ? (
+                                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))', gap: '0.8rem' }}>
+                                        {students.map((s, idx) => (
+                                            <StudentCard key={s.id} student={s} delay={idx * 20} />
+                                        ))}
+                                    </div>
+                                ) : (
+                                    <div style={{ padding: '3rem 1rem', textAlign: 'center', color: 'var(--muted)', fontSize: '0.9rem' }}>
+                                        아직 응시 기록이 없습니다.
+                                    </div>
+                                )}
+                            </div>
+
+                            {/* Question heatmap */}
+                            <div className="bento-card" style={{ padding: '1.5rem' }}>
+                                <h3 style={{ fontSize: '1.1rem', fontWeight: 700, marginBottom: '0.25rem' }}>문항별 정답률</h3>
+                                <p style={{ fontSize: '0.8rem', color: 'var(--muted)', marginBottom: '1.25rem' }}>제출 완료한 {submittedStudents.length}명 기준</p>
+                                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '0.5rem' }}>
+                                    {heatmap.map(h => {
+                                        const hasData = h.total > 0;
+                                        const pct = hasData ? safeRatePercent(h.correct, h.total) : 0;
+                                        const color = !hasData ? 'var(--muted)' : pct >= 75 ? '#10b981' : pct >= 50 ? '#f59e0b' : '#ef4444';
+                                        const bg = !hasData ? 'var(--background)' : pct >= 75 ? 'rgba(16,185,129,0.12)' : pct >= 50 ? 'rgba(245,158,11,0.12)' : 'rgba(239,68,68,0.12)';
+                                        return (
+                                            <div key={h.q} style={{
+                                                padding: '0.75rem 0.5rem', background: bg, borderRadius: 'var(--radius-md)',
+                                                textAlign: 'center', border: `1px solid ${color}33`,
+                                                transition: 'var(--transition-base)', cursor: 'default'
+                                            }}
+                                                title={hasData ? `Q${h.q}: ${pct}% (${h.correct}/${h.total})` : `Q${h.q}: 제출 데이터 없음`}
+                                            >
+                                                <div style={{ fontSize: '0.7rem', color: 'var(--muted)', fontWeight: 700 }}>Q{h.q}</div>
+                                                <div style={{ fontSize: '1rem', fontWeight: 800, color }}>{hasData ? `${pct}%` : '—'}</div>
+                                            </div>
+                                        );
+                                    })}
+                                </div>
+
+                                <div style={{ marginTop: '1.5rem', padding: '1rem', background: 'var(--background)', borderRadius: 'var(--radius-md)', border: '1px dashed var(--border)' }}>
+                                    <div style={{ fontSize: '0.75rem', fontWeight: 700, color: 'var(--muted)', letterSpacing: '0.08em', marginBottom: '0.5rem' }}>주의 문항</div>
+                                    {!hasHeatmapData && (
+                                        <div style={{ fontSize: '0.85rem', color: 'var(--muted)' }}>제출 완료 데이터가 쌓이면 자동으로 표시됩니다.</div>
+                                    )}
+                                    {hasHeatmapData && weakHeatmapCells.slice(0, 3).map(h => (
+                                        <div key={h.q} style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.85rem', padding: '0.35rem 0' }}>
+                                            <span style={{ fontWeight: 600 }}>Q{h.q}</span>
+                                            <span style={{ color: '#ef4444', fontWeight: 700 }}>{safeRatePercent(h.correct, h.total)}%</span>
+                                        </div>
+                                    ))}
+                                    {hasHeatmapData && weakHeatmapCells.length === 0 && (
+                                        <div style={{ fontSize: '0.85rem', color: 'var(--muted)' }}>현재까진 양호합니다.</div>
+                                    )}
+                                </div>
+                            </div>
+                        </div>
+                    </>
+                ) : (
+                    <div className="bento-card" style={{ padding: '3rem 2rem', textAlign: 'center' }}>
+                        <div style={{
+                            width: 72,
+                            height: 72,
+                            borderRadius: '50%',
+                            background: 'rgba(99,102,241,0.1)',
+                            color: 'var(--primary)',
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                            marginBottom: '1rem',
+                        }}>
+                            <Activity size={32} />
+                        </div>
+                        <h2 style={{ fontSize: '1.3rem', fontWeight: 800, marginBottom: '0.45rem' }}>
+                            진행 중인 시험이 없습니다
+                        </h2>
+                        <p style={{ color: 'var(--muted)', fontSize: '0.95rem', lineHeight: 1.7, marginBottom: '1.35rem', wordBreak: 'keep-all' }}>
+                            시험을 만든 뒤 학생 응시가 시작되면 실시간 현황과 문항별 정답률이 표시됩니다.
+                        </p>
+                        <Link
+                            href="/create"
+                            style={{
+                                padding: '0.75rem 1.2rem',
+                                background: 'var(--primary)',
+                                color: 'white',
+                                borderRadius: 'var(--radius-full)',
+                                fontWeight: 800,
+                                fontSize: '0.9rem',
+                                display: 'inline-flex',
+                                alignItems: 'center',
+                                gap: '0.5rem',
+                            }}
+                        >
+                            <PlusCircle size={18} /> 시험 만들기
+                        </Link>
                     </div>
-                </div>
+                )}
             </main>
 
             <style>{`
@@ -519,6 +746,21 @@ export default function LiveResultsPage() {
                     .live-grid { grid-template-columns: 1fr !important; }
                 }
             `}</style>
+            {forceFinishConfirmOpen && hasExam && (
+                <ForceFinishConfirmDialog
+                    examTitle={exam.title}
+                    body={
+                        isDemoLive
+                            ? "시험을 지금 종료합니다. 아직 제출하지 않은 합성 학생은 현재 진행률 기준으로 제출 처리됩니다."
+                            : forceFinishTargets.length > 0
+                                ? `시험의 저장된 응시 중 제출 ${forceFinishTargets.length}건을 완료 처리합니다. 답안이 없는 문항은 미응답으로 채점되며 이미 제출된 답안은 변경하지 않습니다.`
+                                : "시험의 진행 중 제출이 없어 저장 데이터는 변경하지 않고 로컬 타이머만 종료합니다."
+                    }
+                    confirmLabel={isDemoLive || forceFinishTargets.length > 0 ? "지금 종료" : "타이머 종료"}
+                    onCancel={() => setForceFinishConfirmOpen(false)}
+                    onConfirm={confirmForceFinish}
+                />
+            )}
         </div>
     );
 }

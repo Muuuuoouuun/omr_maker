@@ -1,5 +1,7 @@
 // Answer parsing utility using PDF text extraction and Gemini AI for OCR
 import { analyzeAnswerImages } from '@/app/actions/analyzeKey';
+import { safeAiAnswerErrorMessage, safeAiAnswerLogMeta } from '@/lib/aiAnswerSafety';
+import type { AiAnswerModelRoutingOptions } from '@/lib/aiAnswerModelRouting';
 
 export interface ParsedAnswer {
     questionNum: number;
@@ -8,6 +10,29 @@ export interface ParsedAnswer {
     confidence: number; // 0-1
     rawText: string;
 }
+
+const ANSWER_MAP: Record<string, number> = {
+    A: 1,
+    B: 2,
+    C: 3,
+    D: 4,
+    E: 5,
+    "①": 1,
+    "②": 2,
+    "③": 3,
+    "④": 4,
+    "⑤": 5,
+    "가": 1,
+    "나": 2,
+    "다": 3,
+    "라": 4,
+    "마": 5,
+    "ㄱ": 1,
+    "ㄴ": 2,
+    "ㄷ": 3,
+    "ㄹ": 4,
+    "ㅁ": 5,
+};
 
 async function getPdfJs() {
     const pdfjsLib = await import('pdfjs-dist');
@@ -54,61 +79,134 @@ export async function parseAnswerKeyPdf(file: File): Promise<ParsedAnswer[]> {
     return extractAnswersFromText(allText);
 }
 
-function extractAnswersFromText(text: string): ParsedAnswer[] {
-    const results: ParsedAnswer[] = [];
-    const mapAnswerToNum = (ans: string): number => {
-        ans = ans.toUpperCase().trim();
-        const map: Record<string, number> = { 'A': 1, 'B': 2, 'C': 3, 'D': 4, 'E': 5, '①': 1, '②': 2, '③': 3, '④': 4, '⑤': 5 };
-        return map[ans] || 0;
-    };
+export function normalizeAnswerValue(value: unknown): number | null {
+    if (typeof value === "number") {
+        return Number.isInteger(value) && value >= 1 && value <= 5 ? value : null;
+    }
+    if (typeof value !== "string") return null;
 
-    // Strategy 1: "1. A", "2) B", "3-C" patterns
-    // Regex explanation:
-    // (\d+) : Question number
-    // \s*[\.\)\-]?\s* : Separator (dot, parenthesis, hyphen, or just space)
-    // ([A-E①-⑤]) : Answer (A-E or circled numbers)
-    const regex1 = /(\d+)\s*[\.\)\-]\s*([A-E①-⑤])/gi;
+    const trimmed = value.trim();
+    if (!trimmed) return null;
 
-    let match;
-    while ((match = regex1.exec(text)) !== null) {
-        const qNum = parseInt(match[1], 10);
-        const ansStr = match[2];
-        const ansNum = mapAnswerToNum(ansStr);
+    const mapped = ANSWER_MAP[trimmed.toUpperCase()] ?? ANSWER_MAP[trimmed];
+    if (mapped) return mapped;
 
-        if (qNum > 0 && ansNum > 0) {
-            // Check if duplicate, keep the one with higher confidence (or just overwrite)
-            // Here we assume sequential parsing is mostly correct
-            results.push({
-                questionNum: qNum,
-                answer: ansNum,
-                confidence: 0.9,
-                rawText: match[0]
-            });
+    const numeric = trimmed.match(/[1-5](?=\s*번|\s*$|[^0-9])/);
+    if (numeric) return Number(numeric[0]);
+
+    for (const token of Object.keys(ANSWER_MAP)) {
+        if (trimmed.toUpperCase().includes(token.toUpperCase())) {
+            return ANSWER_MAP[token];
         }
     }
 
-    // Strategy 2: Table format "1 A", "2 B" (if Strategy 1 failed for many)
-    if (results.length < 5) {
-        const regex2 = /(\d+)\s+([A-E])/gi;
-        while ((match = regex2.exec(text)) !== null) {
-            const qNum = parseInt(match[1], 10);
-            const ansNum = mapAnswerToNum(match[2]);
-            // Avoid duplicates
-            if (!results.find(r => r.questionNum === qNum)) {
-                results.push({
-                    questionNum: qNum,
-                    answer: ansNum,
-                    confidence: 0.7, // Lower confidence for just space separation
-                    rawText: match[0]
-                });
-            }
-        }
-    }
-
-    return results.sort((a, b) => a.questionNum - b.questionNum);
+    return null;
 }
 
-export async function parseAnswerKeyWithGemini(file: File): Promise<ParsedAnswer[]> {
+function parseNumberValue(value: unknown): number | null {
+    if (typeof value === "number") {
+        return Number.isFinite(value) && value > 0 ? Math.floor(value) : null;
+    }
+    if (typeof value !== "string") return null;
+    const match = value.match(/\d+/);
+    return match ? Number(match[0]) : null;
+}
+
+function addCandidate(
+    candidates: Map<number, ParsedAnswer>,
+    questionNum: number,
+    answer: number | null,
+    confidence: number,
+    rawText: string,
+    score?: number,
+) {
+    if (!questionNum || !answer) return;
+    const candidate: ParsedAnswer = {
+        questionNum,
+        answer,
+        score,
+        confidence,
+        rawText: rawText.trim(),
+    };
+    const previous = candidates.get(questionNum);
+    if (!previous || candidate.confidence > previous.confidence) {
+        candidates.set(questionNum, candidate);
+    }
+}
+
+export function extractAnswersFromText(text: string): ParsedAnswer[] {
+    const candidates = new Map<number, ParsedAnswer>();
+    const answerToken = String.raw`([A-Ea-e①-⑤가나다라마ㄱㄴㄷㄹㅁ]|[1-5]\s*번?)`;
+
+    const patterns: Array<{ regex: RegExp; confidence: number }> = [
+        {
+            regex: new RegExp(String.raw`(?:^|[^\d])(\d{1,3})\s*[\.\)\]\:：\-]\s*${answerToken}`, "g"),
+            confidence: 0.95,
+        },
+        {
+            regex: new RegExp(String.raw`(?:^|[^\d])(\d{1,3})\s*(?:번|문항)?\s*정답\s*[:：]?\s*${answerToken}`, "g"),
+            confidence: 0.86,
+        },
+        {
+            regex: new RegExp(String.raw`(?:^|[^\d])(\d{1,3})\s+${answerToken}(?=\s|$)`, "g"),
+            confidence: 0.7,
+        },
+    ];
+
+    for (const { regex, confidence } of patterns) {
+        let match: RegExpExecArray | null;
+        while ((match = regex.exec(text)) !== null) {
+            addCandidate(
+                candidates,
+                Number(match[1]),
+                normalizeAnswerValue(match[2]),
+                confidence,
+                match[0],
+            );
+        }
+    }
+
+    return [...candidates.values()].sort((a, b) => a.questionNum - b.questionNum);
+}
+
+export function normalizeGeminiAnswerRows(rows: unknown[]): ParsedAnswer[] {
+    const candidates = new Map<number, ParsedAnswer>();
+
+    for (const row of rows) {
+        if (!row || typeof row !== "object") continue;
+        const item = row as Record<string, unknown>;
+        const questionNum = parseNumberValue(
+            item.questionNum ?? item.question ?? item.number ?? item.id ?? item.no ?? item.q,
+        );
+        const answer = normalizeAnswerValue(
+            item.answer ?? item.correctAnswer ?? item.correct ?? item.value ?? item.val ?? item.choice,
+        );
+        const rawScore = item.score ?? item.points ?? item.point;
+        const score = rawScore === undefined || rawScore === null || rawScore === ""
+            ? undefined
+            : Number(rawScore);
+        const confidence = typeof item.confidence === "number" && item.confidence >= 0 && item.confidence <= 1
+            ? item.confidence
+            : 0.95;
+
+        addCandidate(
+            candidates,
+            questionNum || 0,
+            answer,
+            confidence,
+            JSON.stringify(item),
+            Number.isFinite(score) ? score : undefined,
+        );
+    }
+
+    return [...candidates.values()].sort((a, b) => a.questionNum - b.questionNum);
+}
+
+export async function parseAnswerKeyWithGemini(
+    file: File,
+    geminiApiKey?: string,
+    options: AiAnswerModelRoutingOptions = {},
+): Promise<ParsedAnswer[]> {
     const pdfjsLib = await getPdfJs();
     const arrayBuffer = await file.arrayBuffer();
     const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
@@ -135,27 +233,17 @@ export async function parseAnswerKeyWithGemini(file: File): Promise<ParsedAnswer
     }
 
     try {
-        const aiResults = await analyzeAnswerImages(images);
+        const aiResults = await analyzeAnswerImages(images, geminiApiKey, options);
 
         if (!Array.isArray(aiResults)) {
             throw new Error("AI response is not an array");
         }
 
-        // Convert to ParsedAnswer format
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        return aiResults.map((item: any) => ({
-            questionNum: parseInt(item.questionNum || item.id || item.number),
-            answer: parseInt(item.answer || item.val),
-            score: item.score ? parseFloat(item.score) : undefined,
-            confidence: 0.95,
-            rawText: JSON.stringify(item)
-            // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        })).filter((item: any) => !isNaN(item.questionNum) && !isNaN(item.answer))
-            // eslint-disable-next-line @typescript-eslint/no-explicit-any
-            .sort((a: any, b: any) => a.questionNum - b.questionNum);
+        return normalizeGeminiAnswerRows(aiResults);
     } catch (e: unknown) {
-        console.error("AI Parsing failed:", e);
-        const message = e instanceof Error ? e.message : '알 수 없는 오류';
-        throw new Error(`AI 인식 실패: ${message}`);
+        console.warn("AI answer parsing failed", safeAiAnswerLogMeta(e, {
+            pageCount: maxPages,
+        }));
+        throw new Error(`AI 인식 실패: ${safeAiAnswerErrorMessage(e)}`);
     }
 }

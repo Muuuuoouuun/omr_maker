@@ -2,7 +2,12 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
-import { Bell, AlertCircle, CheckCircle2, CreditCard, Users, Clock } from "lucide-react";
+import { Bell, CheckCircle2, CreditCard, MessageCircle, Users, Clock } from "lucide-react";
+import { readLocalAttempts, readLocalExams } from "@/lib/omrPersistence";
+import { readRosterGroups, readRosterInvites, readRosterStudents } from "@/lib/rosterStorage";
+import { createLocalPlanCycleReminder } from "@/lib/billingRecords";
+import { buildKakaoNotificationCandidates } from "@/lib/kakaoNotificationQueue";
+import { getPlanLabel, normalizePlan } from "@/utils/plans";
 
 interface Notification {
     id: string;
@@ -13,7 +18,7 @@ interface Notification {
     href?: string;
     kind: "info" | "success" | "warning" | "billing";
     /** Stable key for auto-generated notifications so we don't spawn duplicates on refresh */
-    source?: "invites" | "recent-exams" | "plan-renewal";
+    source?: "invites" | "recent-exams" | "plan-renewal" | "kakao-candidates";
 }
 
 const STORAGE_KEY = "omr_notifications";
@@ -27,72 +32,91 @@ function computeAutoNotifications(): Notification[] {
 
     // 1) Pending invites
     try {
-        const raw = localStorage.getItem("omr_invites");
-        if (raw) {
-            const parsed = JSON.parse(raw);
-            if (Array.isArray(parsed)) {
-                const pending = parsed.filter((i: { status?: string }) => i && i.status === "pending").length;
-                if (pending > 0) {
-                    out.push({
-                        id: "auto-invites",
-                        source: "invites",
-                        kind: "info",
-                        title: "초대 수락 대기",
-                        message: `${pending}개 초대가 수락 대기 중`,
-                        time: "방금",
-                        unread: true,
-                        href: "/teacher/users",
-                    });
-                }
-            }
+        const pending = readRosterInvites(localStorage).filter(invite => invite.status === "pending").length;
+        if (pending > 0) {
+            out.push({
+                id: "auto-invites",
+                source: "invites",
+                kind: "info",
+                title: "초대 수락 대기",
+                message: `${pending}개 초대가 수락 대기 중`,
+                time: "방금",
+                unread: true,
+                href: "/teacher/users",
+            });
         }
     } catch {}
 
     // 2) Attempts finished in last 24h
     try {
-        const raw = localStorage.getItem("omr_attempts");
-        if (raw) {
-            const parsed = JSON.parse(raw);
-            if (Array.isArray(parsed)) {
-                const cutoff = Date.now() - 24 * 60 * 60 * 1000;
-                const recent = (parsed as { finishedAt?: string; status?: string }[]).filter(a => {
-                    if (!a || a.status !== "completed") return false;
-                    const t = a.finishedAt ? new Date(a.finishedAt).getTime() : NaN;
-                    return !Number.isNaN(t) && t >= cutoff;
-                }).length;
-                if (recent > 0) {
-                    out.push({
-                        id: "auto-recent-exams",
-                        source: "recent-exams",
-                        kind: "success",
-                        title: "최근 시험 제출",
-                        message: `최근 24시간 내 ${recent}개 시험 제출 완료`,
-                        time: "최근 24시간",
-                        unread: true,
-                        href: "/teacher/live",
-                    });
-                }
-            }
+        const cutoff = Date.now() - 24 * 60 * 60 * 1000;
+        const recent = readLocalAttempts().filter(a => {
+            if (a.status !== "completed") return false;
+            const t = new Date(a.finishedAt).getTime();
+            return !Number.isNaN(t) && t >= cutoff;
+        }).length;
+        if (recent > 0) {
+            out.push({
+                id: "auto-recent-exams",
+                source: "recent-exams",
+                kind: "success",
+                title: "최근 시험 제출",
+                message: `최근 24시간 내 ${recent}개 시험 제출 완료`,
+                time: "최근 24시간",
+                unread: true,
+                href: "/teacher/live",
+            });
         }
     } catch {}
 
-    // 3) Plan renewal within 7 days
+    // 3) Kakao notification candidates. These are planning records only:
+    // no message is sent from this local UI.
     try {
-        const plan = localStorage.getItem("omr_plan");
-        if (plan === "pro" || plan === "school") {
-            // Use the 1st of next month as the mock renewal date
+        const queue = buildKakaoNotificationCandidates({
+            exams: readLocalExams(),
+            attempts: readLocalAttempts(),
+            students: readRosterStudents(localStorage),
+            groups: readRosterGroups(localStorage),
+            limit: 8,
+        });
+        if (queue.totalCount > 0) {
+            const parts = [
+                queue.missingExamCount > 0 ? `미응시 ${queue.missingExamCount}건` : "",
+                queue.classRetakeRecommendationCount > 0 ? `반별 재시험 ${queue.classRetakeRecommendationCount}건` : "",
+                queue.retakeRecommendationCount > 0 ? `재시험 ${queue.retakeRecommendationCount}건` : "",
+            ].filter(Boolean);
+            out.push({
+                id: "auto-kakao-candidates",
+                source: "kakao-candidates",
+                kind: "warning",
+                title: "카카오 발송 후보 대기",
+                message: `${parts.join(" · ")} · 대상 학생 ${queue.targetStudentCount}명`,
+                time: "발송 전",
+                unread: true,
+                href: "/teacher/dashboard?tab=exam",
+            });
+        }
+    } catch {}
+
+    // 4) Plan renewal within 7 days
+    try {
+        const plan = normalizePlan(localStorage.getItem("omr_plan"));
+        if (plan === "pro" || plan === "academy") {
             const now = new Date();
             const renewal = new Date(now.getFullYear(), now.getMonth() + 1, 1);
-            const daysUntil = Math.ceil((renewal.getTime() - now.getTime()) / (24 * 60 * 60 * 1000));
-            if (daysUntil >= 0 && daysUntil <= 7) {
-                const planName = plan === "pro" ? "Pro" : "School";
+            const reminder = createLocalPlanCycleReminder({
+                planName: getPlanLabel(plan),
+                now,
+                cycleDate: renewal,
+            });
+            if (reminder) {
                 out.push({
                     id: "auto-plan-renewal",
                     source: "plan-renewal",
                     kind: "billing",
-                    title: `${planName} 플랜 갱신 예정`,
-                    message: `${daysUntil}일 후 (${renewal.toISOString().slice(0, 10)}) 자동 결제됩니다`,
-                    time: `${daysUntil}일 후`,
+                    title: reminder.title,
+                    message: reminder.message,
+                    time: reminder.time,
                     unread: true,
                     href: "/teacher/billing",
                 });
@@ -106,7 +130,7 @@ function computeAutoNotifications(): Notification[] {
 const KIND_META: Record<Notification["kind"], { color: string; icon: React.ReactNode }> = {
     info: { color: "#4f46e5", icon: <Users size={16} /> },
     success: { color: "#10b981", icon: <CheckCircle2 size={16} /> },
-    warning: { color: "#f59e0b", icon: <AlertCircle size={16} /> },
+    warning: { color: "#f59e0b", icon: <MessageCircle size={16} /> },
     billing: { color: "#a855f7", icon: <CreditCard size={16} /> },
 };
 
@@ -114,6 +138,7 @@ export default function NotificationBell() {
     const [open, setOpen] = useState(false);
     const [notifications, setNotifications] = useState<Notification[]>([]);
     const [hydrated, setHydrated] = useState(false);
+    const [clearConfirmOpen, setClearConfirmOpen] = useState(false);
     const rootRef = useRef<HTMLDivElement | null>(null);
 
     // Merge auto-generated (dynamic) notifications with persisted user
@@ -196,7 +221,6 @@ export default function NotificationBell() {
         persist(notifications.map(n => n.id === id ? { ...n, unread: false } : n));
     };
     const clearAll = () => {
-        if (!window.confirm("모든 알림을 삭제하시겠습니까?")) return;
         // Remember which auto-generated notifications were dismissed so they
         // don't get re-added on the next refresh tick.
         try {
@@ -215,6 +239,7 @@ export default function NotificationBell() {
             }
         } catch {}
         persist([]);
+        setClearConfirmOpen(false);
     };
 
     return (
@@ -293,7 +318,7 @@ export default function NotificationBell() {
                                     </button>
                                 )}
                                 <button
-                                    onClick={clearAll}
+                                    onClick={() => setClearConfirmOpen(true)}
                                     style={{ fontSize: '0.75rem', color: 'var(--muted)', fontWeight: 500 }}
                                 >
                                     모두 삭제
@@ -301,6 +326,47 @@ export default function NotificationBell() {
                             </div>
                         )}
                     </div>
+
+                    {clearConfirmOpen && (
+                        <div
+                            role="alertdialog"
+                            aria-label="모든 알림 삭제 확인"
+                            style={{
+                                display: 'flex',
+                                alignItems: 'center',
+                                justifyContent: 'space-between',
+                                gap: '0.75rem',
+                                padding: '0.75rem 1rem',
+                                background: 'rgba(239,68,68,0.08)',
+                                borderBottom: '1px solid rgba(239,68,68,0.18)',
+                            }}
+                        >
+                            <span style={{ fontSize: '0.8rem', color: 'var(--foreground)', fontWeight: 700, wordBreak: 'keep-all' }}>
+                                모든 알림을 삭제할까요?
+                            </span>
+                            <div style={{ display: 'flex', gap: '0.45rem', flexShrink: 0 }}>
+                                <button
+                                    onClick={() => setClearConfirmOpen(false)}
+                                    style={{ fontSize: '0.75rem', color: 'var(--muted)', fontWeight: 700 }}
+                                >
+                                    취소
+                                </button>
+                                <button
+                                    onClick={clearAll}
+                                    style={{
+                                        padding: '0.35rem 0.6rem',
+                                        borderRadius: 'var(--radius-md)',
+                                        background: 'var(--error)',
+                                        color: 'white',
+                                        fontSize: '0.75rem',
+                                        fontWeight: 800,
+                                    }}
+                                >
+                                    삭제
+                                </button>
+                            </div>
+                        </div>
+                    )}
 
                     {/* List */}
                     <div style={{ maxHeight: 420, overflowY: 'auto' }}>

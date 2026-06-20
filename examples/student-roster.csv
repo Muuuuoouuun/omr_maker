@@ -1,0 +1,7 @@
+id,name,email,group,region
+seoul-a-001,김민준,minjun.kim@example.edu,3학년 A반,서울
+seoul-a-002,이서연,seoyeon.lee@example.edu,3학년 A반,서울
+seoul-b-001,박도윤,doyun.park@example.edu,3학년 B반,서울
+busan-a-001,최예은,yeeun.choi@example.edu,2학년 A반,부산
+busan-a-002,정하준,hajun.jung@example.edu,2학년 A반,부산
+online-a-001,강지우,jiwoo.kang@example.edu,1학년 A반,온라인

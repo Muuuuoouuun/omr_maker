@@ -1,0 +1,62 @@
+import { describe, expect, it } from "vitest";
+import {
+    createSignedTeacherSessionCookie,
+    parseSignedTeacherSessionCookie,
+    resolveTeacherSessionSecret,
+    TEACHER_SERVER_SESSION_COOKIE,
+    TEACHER_SERVER_SESSION_MAX_AGE_SECONDS,
+} from "./teacherServerSession";
+
+const TOKEN = "tkn_abc123_0123456789abcdef0123456789abcdef";
+const env = { NODE_ENV: "production", TEACHER_SESSION_SECRET: "server-secret" };
+
+describe("teacher server session", () => {
+    it("resolves an explicit session secret before credential fallbacks", () => {
+        expect(resolveTeacherSessionSecret({
+            NODE_ENV: "production",
+            TEACHER_SESSION_SECRET: " session-secret ",
+            TEACHER_PASSWORD: "password-secret",
+        })).toBe("session-secret");
+        expect(resolveTeacherSessionSecret({
+            NODE_ENV: "production",
+            TEACHER_PASSWORD: "password-secret",
+        })).toBe("password-secret");
+        expect(resolveTeacherSessionSecret({
+            NODE_ENV: "production",
+            TEACHER_ACCOUNTS: "[{\"id\":\"a\"}]",
+        })).toBe("[{\"id\":\"a\"}]");
+        expect(resolveTeacherSessionSecret({ NODE_ENV: "development" })).toBe("dev-teacher-session-secret");
+        expect(resolveTeacherSessionSecret({ NODE_ENV: "production" })).toBeNull();
+    });
+
+    it("signs and verifies a teacher session cookie with identity", () => {
+        const cookie = createSignedTeacherSessionCookie(TOKEN, {
+            teacherId: "teacher-a",
+            email: "a@example.com",
+            displayName: "A Teacher",
+        }, env, 1000);
+
+        expect(cookie).toMatch(/^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/);
+        expect(parseSignedTeacherSessionCookie(cookie, env, 1000)).toMatchObject({
+            role: "teacher",
+            token: TOKEN,
+            teacherId: "teacher-a",
+            email: "a@example.com",
+            displayName: "A Teacher",
+        });
+    });
+
+    it("rejects tampered, wrong-secret, and expired cookies", () => {
+        const cookie = createSignedTeacherSessionCookie(TOKEN, { teacherId: "teacher-a" }, env, 1000);
+        expect(cookie).toBeTruthy();
+        const [payload, signature] = cookie!.split(".");
+
+        expect(parseSignedTeacherSessionCookie(`${payload}x.${signature}`, env, 1000)).toBeNull();
+        expect(parseSignedTeacherSessionCookie(cookie, { NODE_ENV: "production", TEACHER_SESSION_SECRET: "other" }, 1000)).toBeNull();
+        expect(parseSignedTeacherSessionCookie(cookie, env, 1000 + TEACHER_SERVER_SESSION_MAX_AGE_SECONDS * 1000 + 1)).toBeNull();
+    });
+
+    it("exports the stable cookie name used by server guards", () => {
+        expect(TEACHER_SERVER_SESSION_COOKIE).toBe("omr_teacher_server_session");
+    });
+});

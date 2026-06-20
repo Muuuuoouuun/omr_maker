@@ -2,18 +2,16 @@
 
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
-import { Attempt } from "@/types/omr";
+import { Attempt, Exam } from "@/types/omr";
 import { attemptBelongsToSession, getSession, type StudentSession } from "@/utils/storage";
+import { loadAttempts, loadExams } from "@/lib/omrPersistence";
+import { formatKoreanDateTime } from "@/lib/pure";
+import { baseAttemptsOnly, buildAttemptScoreLookup, retakeAttemptsOnly } from "@/lib/attemptScores";
 
 type PeriodFilter = "all" | "30d" | "7d";
 type SortMode = "recent" | "high" | "low";
 
 const PAGE_SIZE = 10;
-
-function pct(a: Attempt): number {
-    if (!a.totalScore || a.totalScore <= 0) return 0;
-    return (a.score / a.totalScore) * 100;
-}
 
 function badgeForPct(p: number): { bg: string; color: string } {
     if (p >= 80) return { bg: '#dcfce7', color: '#15803d' };
@@ -23,6 +21,7 @@ function badgeForPct(p: number): { bg: string; color: string } {
 
 export default function HistoryPage() {
     const [attempts, setAttempts] = useState<Attempt[]>([]);
+    const [exams, setExams] = useState<Exam[]>([]);
     const [session, setSession] = useState<StudentSession | null>(null);
     const [period, setPeriod] = useState<PeriodFilter>("all");
     const [sortMode, setSortMode] = useState<SortMode>("recent");
@@ -31,45 +30,59 @@ export default function HistoryPage() {
 
     useEffect(() => {
         let cancelled = false;
-        queueMicrotask(() => {
+        const loadHistory = async () => {
             if (cancelled) return;
             const currentSession = getSession();
             setSession(currentSession);
-            const data = localStorage.getItem('omr_attempts');
-            if (data) {
-                try {
-                    const parsed = JSON.parse(data) as Attempt[];
-                    const mine = currentSession
-                        ? parsed.filter(attempt => attemptBelongsToSession(attempt, currentSession))
-                        : [];
-                    setAttempts(mine);
-                } catch (e) {
-                    console.error("Failed to load history", e);
-                }
+            try {
+                const [attemptResult, examResult] = await Promise.all([
+                    loadAttempts(),
+                    loadExams(),
+                ]);
+                if (cancelled) return;
+                const mine = currentSession
+                    ? attemptResult.items.filter(attempt => attemptBelongsToSession(attempt, currentSession))
+                    : [];
+                setAttempts(mine);
+                setExams(examResult.items);
+            } catch (e) {
+                console.error("Failed to load history", e);
             }
-        });
+        };
+        void loadHistory();
         return () => { cancelled = true; };
     }, []);
 
-    // Summary uses all attempts regardless of filters.
+    const examById = useMemo(() => (
+        new Map(exams.map(exam => [exam.id, exam]))
+    ), [exams]);
+
+    const scoreByAttemptId = useMemo(() => (
+        buildAttemptScoreLookup(attempts, examById)
+    ), [attempts, examById]);
+    const baseAttempts = useMemo(() => baseAttemptsOnly(attempts), [attempts]);
+    const retakeAttempts = useMemo(() => retakeAttemptsOnly(attempts), [attempts]);
+
+    // Summary uses original exams; retakes are tracked as separate recovery activity.
     const summary = useMemo(() => {
-        if (attempts.length === 0) {
-            return { total: 0, avgPct: 0, bestPct: 0, trend: [] as number[] };
+        if (baseAttempts.length === 0) {
+            return { total: 0, retakeTotal: retakeAttempts.length, avgPct: 0, bestPct: 0, trend: [] as number[] };
         }
-        const pcts = attempts.map(pct);
+        const pcts = baseAttempts.map(attempt => scoreByAttemptId.get(attempt.id)?.scorePercent ?? 0);
         const avg = pcts.reduce((s, v) => s + v, 0) / pcts.length;
         const best = Math.max(...pcts);
-        const sortedByDate = [...attempts].sort(
+        const sortedByDate = [...baseAttempts].sort(
             (a, b) => new Date(b.finishedAt).getTime() - new Date(a.finishedAt).getTime()
         );
-        const trend = sortedByDate.slice(0, 3).map(pct);
+        const trend = sortedByDate.slice(0, 3).map(attempt => scoreByAttemptId.get(attempt.id)?.scorePercent ?? 0);
         return {
-            total: attempts.length,
+            total: baseAttempts.length,
+            retakeTotal: retakeAttempts.length,
             avgPct: Math.round(avg),
             bestPct: Math.round(best),
             trend: trend.map(v => Math.round(v)),
         };
-    }, [attempts]);
+    }, [baseAttempts, retakeAttempts.length, scoreByAttemptId]);
 
     // Apply period filter + sort.
     const visibleAttempts = useMemo(() => {
@@ -84,12 +97,12 @@ export default function HistoryPage() {
         if (sortMode === "recent") {
             sorted.sort((a, b) => new Date(b.finishedAt).getTime() - new Date(a.finishedAt).getTime());
         } else if (sortMode === "high") {
-            sorted.sort((a, b) => pct(b) - pct(a));
+            sorted.sort((a, b) => (scoreByAttemptId.get(b.id)?.scorePercent ?? 0) - (scoreByAttemptId.get(a.id)?.scorePercent ?? 0));
         } else {
-            sorted.sort((a, b) => pct(a) - pct(b));
+            sorted.sort((a, b) => (scoreByAttemptId.get(a.id)?.scorePercent ?? 0) - (scoreByAttemptId.get(b.id)?.scorePercent ?? 0));
         }
         return sorted;
-    }, [attempts, period, sortMode, now]);
+    }, [attempts, period, sortMode, now, scoreByAttemptId]);
 
     // Reset pagination when filters change.
     useEffect(() => {
@@ -138,19 +151,23 @@ export default function HistoryPage() {
                             marginBottom: '1.5rem',
                         }}>
                             <div className="bento-card" style={{ padding: '1rem 1.1rem', background: 'white', borderRadius: '12px', border: '1px solid #e2e8f0' }}>
-                                <div style={{ fontSize: '0.75rem', color: '#64748b', fontWeight: 600, marginBottom: '0.25rem' }}>총 응시</div>
+                                <div style={{ fontSize: '0.75rem', color: '#64748b', fontWeight: 600, marginBottom: '0.25rem' }}>원시험 응시</div>
                                 <div style={{ fontSize: '1.5rem', fontWeight: 800, color: '#0f172a' }}>{summary.total}회</div>
                             </div>
                             <div className="bento-card" style={{ padding: '1rem 1.1rem', background: 'white', borderRadius: '12px', border: '1px solid #e2e8f0' }}>
-                                <div style={{ fontSize: '0.75rem', color: '#64748b', fontWeight: 600, marginBottom: '0.25rem' }}>평균 점수</div>
+                                <div style={{ fontSize: '0.75rem', color: '#64748b', fontWeight: 600, marginBottom: '0.25rem' }}>원시험 평균</div>
                                 <div style={{ fontSize: '1.5rem', fontWeight: 800, color: 'var(--primary)' }}>{summary.avgPct}%</div>
                             </div>
                             <div className="bento-card" style={{ padding: '1rem 1.1rem', background: 'white', borderRadius: '12px', border: '1px solid #e2e8f0' }}>
-                                <div style={{ fontSize: '0.75rem', color: '#64748b', fontWeight: 600, marginBottom: '0.25rem' }}>최고 점수</div>
+                                <div style={{ fontSize: '0.75rem', color: '#64748b', fontWeight: 600, marginBottom: '0.25rem' }}>원시험 최고</div>
                                 <div style={{ fontSize: '1.5rem', fontWeight: 800, color: '#16a34a' }}>{summary.bestPct}%</div>
                             </div>
                             <div className="bento-card" style={{ padding: '1rem 1.1rem', background: 'white', borderRadius: '12px', border: '1px solid #e2e8f0' }}>
-                                <div style={{ fontSize: '0.75rem', color: '#64748b', fontWeight: 600, marginBottom: '0.25rem' }}>최근 추이 (최근 3회)</div>
+                                <div style={{ fontSize: '0.75rem', color: '#64748b', fontWeight: 600, marginBottom: '0.25rem' }}>재시험 회복</div>
+                                <div style={{ fontSize: '1.5rem', fontWeight: 800, color: '#0f766e' }}>{summary.retakeTotal}회</div>
+                            </div>
+                            <div className="bento-card" style={{ padding: '1rem 1.1rem', background: 'white', borderRadius: '12px', border: '1px solid #e2e8f0' }}>
+                                <div style={{ fontSize: '0.75rem', color: '#64748b', fontWeight: 600, marginBottom: '0.25rem' }}>원시험 추이 (최근 3회)</div>
                                 <div style={{ fontSize: '0.95rem', fontWeight: 700, color: '#0f172a' }}>
                                     {summary.trend.length > 0
                                         ? summary.trend.map(v => `${v}%`).join(' → ')
@@ -208,7 +225,8 @@ export default function HistoryPage() {
                         ) : (
                             <div style={{ display: 'grid', gap: '1rem' }}>
                                 {pageItems.map((attempt) => {
-                                    const p = pct(attempt);
+                                    const score = scoreByAttemptId.get(attempt.id);
+                                    const p = score?.scorePercent ?? 0;
                                     const badge = badgeForPct(p);
                                     return (
                                         <Link
@@ -229,22 +247,44 @@ export default function HistoryPage() {
                                         >
                                             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '0.5rem', gap: '0.75rem' }}>
                                                 <h3 style={{ fontSize: '1.1rem', fontWeight: 600, color: '#0f172a' }}>{attempt.examTitle}</h3>
-                                                <span
-                                                    className="badge"
-                                                    style={{
-                                                        padding: '0.2rem 0.6rem', borderRadius: '999px',
-                                                        fontSize: '0.8rem', fontWeight: 700,
-                                                        background: badge.bg, color: badge.color,
-                                                        whiteSpace: 'nowrap',
-                                                    }}
-                                                >
-                                                    {Math.round(p)}%
-                                                </span>
+                                                <div style={{ display: 'flex', gap: '0.35rem', flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+                                                    {attempt.retake && (
+                                                        <span style={{
+                                                            padding: '0.2rem 0.6rem',
+                                                            borderRadius: '999px',
+                                                            fontSize: '0.78rem',
+                                                            fontWeight: 800,
+                                                            background: '#f0fdfa',
+                                                            color: '#0f766e',
+                                                            border: '1px solid #99f6e4',
+                                                            whiteSpace: 'nowrap',
+                                                        }}>
+                                                            재시험 {attempt.retake.questionIds.length}문항
+                                                        </span>
+                                                    )}
+                                                    <span
+                                                        className="badge"
+                                                        style={{
+                                                            padding: '0.2rem 0.6rem', borderRadius: '999px',
+                                                            fontSize: '0.8rem', fontWeight: 700,
+                                                            background: badge.bg, color: badge.color,
+                                                            whiteSpace: 'nowrap',
+                                                        }}
+                                                    >
+                                                        {Math.round(p)}%
+                                                    </span>
+                                                </div>
                                             </div>
                                             <div style={{ color: '#64748b', fontSize: '0.9rem', display: 'flex', gap: '0.75rem', flexWrap: 'wrap' }}>
-                                                <span>응시일: {new Date(attempt.finishedAt).toLocaleString()}</span>
+                                                <span>응시일: {formatKoreanDateTime(attempt.finishedAt)}</span>
                                                 <span style={{ color: '#94a3b8' }}>·</span>
-                                                <span>{attempt.score} / {attempt.totalScore} 점</span>
+                                                <span>{score?.earnedScore ?? attempt.score} / {score?.totalScore ?? attempt.totalScore} 점</span>
+                                                {score?.source === "storedScore" && (
+                                                    <>
+                                                        <span style={{ color: '#94a3b8' }}>·</span>
+                                                        <span>저장 점수 기준</span>
+                                                    </>
+                                                )}
                                             </div>
                                         </Link>
                                     );

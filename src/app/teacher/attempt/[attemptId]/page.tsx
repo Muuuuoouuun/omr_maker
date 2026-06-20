@@ -4,21 +4,34 @@ import { useEffect, useMemo, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
 import dynamic from "next/dynamic";
-import { PenLine } from "lucide-react";
-import { gradeAttempt } from "@/types/omr";
-import type { Attempt, Exam, PdfDrawings } from "@/types/omr";
+import { Download, Lock, PenLine, Repeat2, Target } from "lucide-react";
+import type { Attempt, Exam, PdfDrawings, PlanKey, QuestionResult } from "@/types/omr";
 import { loadJsonRecord, storedDataUrlToFile } from "@/utils/blobStore";
-import { getPlanLabel } from "@/utils/plans";
+import { getCurrentPlan, getPlanLabel, hasPlanEntitlement } from "@/utils/plans";
+import { formatKoreanDateTime } from "@/lib/pure";
+import { loadAttempt, loadExam } from "@/lib/omrPersistence";
+import {
+    buildLearningRecommendations,
+    buildRetakeQuestionIds,
+    buildStudentWeaknessGroups,
+    getAttemptQuestionResults,
+    summarizeAttemptScore,
+} from "@/lib/premiumAnalytics";
+import { hasTeacherSession } from "@/lib/teacherSession";
+import { buildRetakeHref } from "@/lib/retakeLinks";
 
 const PDFViewer = dynamic(() => import("@/components/PDFViewer"), { ssr: false });
 
 function hasTeacherAccess(): boolean {
-    if (typeof window === "undefined") return false;
-    return !!sessionStorage.getItem("omr_teacher_token");
+    return hasTeacherSession();
 }
 
 function hasDrawings(drawings?: PdfDrawings): boolean {
     return !!drawings && Object.values(drawings).some(paths => paths.length > 0);
+}
+
+function formatAnswer(answer?: number): string {
+    return typeof answer === "number" && answer > 0 ? `${answer}번` : "미응답";
 }
 
 export default function TeacherAttemptPage() {
@@ -32,11 +45,13 @@ export default function TeacherAttemptPage() {
     const [pdfFile, setPdfFile] = useState<File | null>(null);
     const [accessDenied, setAccessDenied] = useState(false);
     const [handwritingUnavailable, setHandwritingUnavailable] = useState(false);
+    const [currentPlan] = useState<PlanKey>(() => getCurrentPlan());
     const [loaded, setLoaded] = useState(false);
+    const pdfExportEnabled = hasPlanEntitlement(currentPlan, "pdfExport");
 
     useEffect(() => {
         let cancelled = false;
-        queueMicrotask(() => {
+        const loadTeacherAttempt = async () => {
             if (!hasTeacherAccess()) {
                 setAccessDenied(true);
                 setLoaded(true);
@@ -44,9 +59,7 @@ export default function TeacherAttemptPage() {
             }
 
             try {
-                const attemptsRaw = localStorage.getItem("omr_attempts");
-                const attempts = attemptsRaw ? JSON.parse(attemptsRaw) as Attempt[] : [];
-                const found = attempts.find(a => a.id === id);
+                const found = await loadAttempt(id);
                 if (!found || cancelled) {
                     setLoaded(true);
                     return;
@@ -54,9 +67,8 @@ export default function TeacherAttemptPage() {
 
                 setAttempt(found);
 
-                const examRaw = localStorage.getItem(`omr_exam_${found.examId}`);
-                if (examRaw) {
-                    const parsedExam = JSON.parse(examRaw) as Exam;
+                const parsedExam = await loadExam(found.examId);
+                if (parsedExam) {
                     setExam(parsedExam);
                     storedDataUrlToFile("problem.pdf", parsedExam.pdfData, parsedExam.pdfDataRef)
                         .then(file => {
@@ -67,16 +79,19 @@ export default function TeacherAttemptPage() {
                         });
                 }
 
+                const inlineDrawings = hasDrawings(found.drawings) ? found.drawings : undefined;
+                if (inlineDrawings) setDrawings(inlineDrawings);
+
                 const drawingsRef = found.handwriting?.strokesRef || found.drawingsRef;
                 if (found.handwritingArchived && drawingsRef) {
                     loadJsonRecord<PdfDrawings>(drawingsRef)
                         .then(restored => {
                             if (cancelled) return;
                             if (restored) setDrawings(restored);
-                            else setHandwritingUnavailable(true);
+                            else if (!inlineDrawings) setHandwritingUnavailable(true);
                         })
                         .catch(() => {
-                            if (!cancelled) setHandwritingUnavailable(true);
+                            if (!cancelled && !inlineDrawings) setHandwritingUnavailable(true);
                         })
                         .finally(() => {
                             if (!cancelled) setLoaded(true);
@@ -87,14 +102,42 @@ export default function TeacherAttemptPage() {
             } catch {
                 if (!cancelled) setLoaded(true);
             }
-        });
+        };
+
+        void loadTeacherAttempt();
 
         return () => { cancelled = true; };
     }, [id]);
 
-    const stats = useMemo(() => {
+    const analytics = useMemo(() => {
         if (!attempt || !exam) return null;
-        return gradeAttempt(exam.questions, attempt.answers);
+        const questionResults = getAttemptQuestionResults(exam, attempt);
+        const score = summarizeAttemptScore(exam, attempt);
+        const counts = questionResults.reduce((acc, result) => {
+            if (result.status === "correct") acc.correctCount += 1;
+            if (result.status === "wrong") acc.incorrectCount += 1;
+            if (result.status === "unanswered") acc.unansweredCount += 1;
+            if (result.status === "ungraded") acc.ungradedCount += 1;
+            return acc;
+        }, { correctCount: 0, incorrectCount: 0, unansweredCount: 0, ungradedCount: 0 });
+        const wrongResults = questionResults.filter(result => result.status === "wrong" || result.status === "unanswered");
+        const retakeQuestionIds = buildRetakeQuestionIds(exam, attempt);
+        const weaknessGroups = buildStudentWeaknessGroups(exam, attempt).slice(0, 3);
+        const recommendations = buildLearningRecommendations(exam, [attempt], {
+            scope: "attempt",
+            attempt,
+            limit: 3,
+        });
+
+        return {
+            questionResults,
+            score,
+            counts,
+            wrongResults,
+            retakeQuestionIds,
+            weaknessGroups,
+            recommendations,
+        };
     }, [attempt, exam]);
 
     if (accessDenied) {
@@ -113,7 +156,7 @@ export default function TeacherAttemptPage() {
         return <div style={{ padding: '2rem', textAlign: 'center' }}>Loading...</div>;
     }
 
-    const percent = stats && stats.totalScore > 0 ? Math.round((stats.earnedScore / stats.totalScore) * 100) : 0;
+    const percent = analytics?.score.scorePercent ?? 0;
     const handwriting = attempt.handwriting;
     const questionSummaries = Object.values(handwriting?.questions || {});
     const canShowDrawings = hasDrawings(drawings);
@@ -126,12 +169,35 @@ export default function TeacherAttemptPage() {
                         <button onClick={() => router.back()} style={{ border: 'none', background: 'none', fontSize: '1.2rem', cursor: 'pointer' }}>←</button>
                         <div style={{ minWidth: 0 }}>
                             <div style={{ fontWeight: 800, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{attempt.examTitle}</div>
-                            <div style={{ fontSize: '0.78rem', color: '#64748b' }}>{attempt.studentName} · {new Date(attempt.finishedAt).toLocaleString('ko-KR')}</div>
+                            <div style={{ fontSize: '0.78rem', color: '#64748b' }}>{attempt.studentName} · {formatKoreanDateTime(attempt.finishedAt)}</div>
                         </div>
                     </div>
-                    <Link href={`/teacher/exam/${attempt.examId}`} className="btn btn-secondary" style={{ fontSize: '0.85rem' }}>
-                        시험 결과로
-                    </Link>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+                        {pdfExportEnabled ? (
+                            <button
+                                type="button"
+                                onClick={() => window.print()}
+                                className="btn btn-secondary"
+                                style={{ fontSize: '0.85rem', display: 'inline-flex', alignItems: 'center', gap: '0.35rem' }}
+                            >
+                                <Download size={14} />
+                                PDF 리포트
+                            </button>
+                        ) : (
+                            <Link
+                                href="/teacher/billing"
+                                title="Pro 이상에서 PDF 리포트를 출력할 수 있습니다."
+                                className="btn btn-secondary"
+                                style={{ fontSize: '0.85rem', display: 'inline-flex', alignItems: 'center', gap: '0.35rem', color: '#64748b' }}
+                            >
+                                <Lock size={14} />
+                                PDF 리포트 Pro
+                            </Link>
+                        )}
+                        <Link href={`/teacher/exam/${attempt.examId}`} className="btn btn-secondary" style={{ fontSize: '0.85rem' }}>
+                            시험 결과로
+                        </Link>
+                    </div>
                 </div>
             </header>
 
@@ -148,16 +214,111 @@ export default function TeacherAttemptPage() {
                             <h1 style={{ fontSize: '1.25rem', fontWeight: 900, marginBottom: '0.25rem' }}>{attempt.studentName}</h1>
                             <div style={{ fontSize: '2.6rem', fontWeight: 900, color: 'var(--primary)', lineHeight: 1, marginTop: '0.75rem' }}>{percent}%</div>
                             <div style={{ color: '#475569', fontWeight: 700, marginTop: '0.25rem' }}>
-                                {attempt.score} / {attempt.totalScore}점
+                                {analytics?.score.earnedScore ?? attempt.score} / {analytics?.score.totalScore ?? attempt.totalScore}점
                             </div>
-                            {stats && (
-                                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '0.45rem', marginTop: '1rem' }}>
-                                    <SmallStat label="정답" value={stats.correctCount} color="#16a34a" />
-                                    <SmallStat label="오답" value={stats.incorrectCount} color="#dc2626" />
-                                    <SmallStat label="미응답" value={stats.unansweredCount} color="#64748b" />
+                            {analytics && (
+                                <div style={{ display: 'grid', gridTemplateColumns: `repeat(${analytics.counts.ungradedCount > 0 ? 4 : 3}, 1fr)`, gap: '0.45rem', marginTop: '1rem' }}>
+                                    <SmallStat label="정답" value={analytics.counts.correctCount} color="#16a34a" />
+                                    <SmallStat label="오답" value={analytics.counts.incorrectCount} color="#dc2626" />
+                                    <SmallStat label="미응답" value={analytics.counts.unansweredCount} color="#64748b" />
+                                    {analytics.counts.ungradedCount > 0 && (
+                                        <SmallStat label="미채점" value={analytics.counts.ungradedCount} color="#64748b" />
+                                    )}
                                 </div>
                             )}
                         </div>
+
+                        {analytics && (
+                            <div className="bento-card" style={{ padding: '1.25rem' }}>
+                                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '0.75rem', marginBottom: '0.8rem' }}>
+                                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.45rem', fontWeight: 900 }}>
+                                        <Target size={17} />
+                                        오답/유형 분석
+                                    </div>
+                                    <span style={{
+                                        fontSize: '0.72rem',
+                                        fontWeight: 800,
+                                        color: '#dc2626',
+                                        background: '#fef2f2',
+                                        borderRadius: '999px',
+                                        padding: '0.25rem 0.55rem'
+                                    }}>
+                                        {analytics.wrongResults.length}문항
+                                    </span>
+                                </div>
+
+                                {analytics.wrongResults.length > 0 ? (
+                                    <div style={{ display: 'grid', gap: '0.55rem' }}>
+                                        {analytics.wrongResults.slice(0, 8).map(result => (
+                                            <QuestionResultRow key={result.questionId} result={result} />
+                                        ))}
+                                        {analytics.wrongResults.length > 8 && (
+                                            <div style={{ color: '#64748b', fontSize: '0.78rem', fontWeight: 700 }}>
+                                                외 {analytics.wrongResults.length - 8}문항
+                                            </div>
+                                        )}
+                                    </div>
+                                ) : (
+                                    <div style={{ color: '#16a34a', fontSize: '0.86rem', fontWeight: 800 }}>
+                                        오답 또는 미응답 문항이 없습니다.
+                                    </div>
+                                )}
+
+                                {analytics.recommendations.length > 0 && (
+                                    <div style={{ marginTop: '0.95rem', display: 'grid', gap: '0.5rem' }}>
+                                        {analytics.recommendations.map(group => (
+                                            <div key={group.key} style={{ padding: '0.7rem', borderRadius: '8px', border: '1px solid #c7d2fe', background: '#eef2ff' }}>
+                                                <div style={{ color: '#312e81', fontWeight: 900, fontSize: '0.84rem' }}>{group.title}</div>
+                                                <div style={{ color: '#4338ca', fontSize: '0.74rem', fontWeight: 700, marginTop: '0.15rem' }}>
+                                                    {group.questionNumbers.join(', ')}번 · 오답/미답 {group.wrongCount}/{group.totalCount}
+                                                </div>
+                                                <Link
+                                                    href={buildRetakeHref(attempt.examId, group.sourceAttemptId, group.retakeQuestionIds, group.retakeMode, {
+                                                        labels: group.retakeLabels,
+                                                        concepts: group.retakeConcepts,
+                                                    })}
+                                                    className="btn btn-secondary"
+                                                    style={{ marginTop: '0.55rem', fontSize: '0.76rem', padding: '0.32rem 0.65rem', display: 'inline-flex', alignItems: 'center', gap: '0.35rem' }}
+                                                >
+                                                    <Repeat2 size={14} />
+                                                    유형 재시험
+                                                </Link>
+                                            </div>
+                                        ))}
+                                    </div>
+                                )}
+
+                                {analytics.recommendations.length === 0 && analytics.weaknessGroups.length > 0 && (
+                                    <div style={{ marginTop: '0.95rem', display: 'grid', gap: '0.5rem' }}>
+                                        {analytics.weaknessGroups.map(group => (
+                                            <Link
+                                                key={group.key}
+                                                href={buildRetakeHref(attempt.examId, attempt.id, group.questionIds, "similar", {
+                                                    labels: group.labels,
+                                                    concepts: group.concepts,
+                                                })}
+                                                className="btn btn-secondary"
+                                                style={{ fontSize: '0.78rem', padding: '0.45rem 0.7rem', justifyContent: 'space-between' }}
+                                            >
+                                                {group.title}
+                                                <span>{group.questionNumbers.join(', ')}번</span>
+                                            </Link>
+                                        ))}
+                                    </div>
+                                )}
+
+                                {analytics.retakeQuestionIds.length > 0 && (
+                                    <Link
+                                        href={buildRetakeHref(attempt.examId, attempt.id, analytics.retakeQuestionIds, "wrong")}
+                                        className="btn btn-primary"
+                                        style={{ width: '100%', marginTop: '0.95rem', fontSize: '0.84rem', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: '0.4rem' }}
+                                    >
+                                        <Repeat2 size={15} />
+                                        오답만 재시험 링크
+                                    </Link>
+                                )}
+                            </div>
+                        )}
 
                         <div className="bento-card" style={{ padding: '1.25rem' }}>
                             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '0.75rem', marginBottom: '0.75rem' }}>
@@ -268,6 +429,33 @@ function SmallStat({ label, value, color }: { label: string; value: number; colo
         <div style={{ background: `${color}12`, border: `1px solid ${color}24`, borderRadius: 10, padding: '0.55rem', textAlign: 'center' }}>
             <div style={{ fontSize: '0.68rem', color: '#64748b', fontWeight: 800, marginBottom: '0.15rem' }}>{label}</div>
             <div style={{ color, fontWeight: 900, fontSize: '1.05rem' }}>{value}</div>
+        </div>
+    );
+}
+
+function QuestionResultRow({ result }: { result: QuestionResult }) {
+    const accent = result.status === "unanswered" ? '#64748b' : '#dc2626';
+    const typeLabel = result.concept || result.label || result.source || '유형 미지정';
+
+    return (
+        <div style={{ padding: '0.7rem', borderRadius: '8px', border: '1px solid #fee2e2', background: '#fff7f7' }}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '0.6rem' }}>
+                <div style={{ color: accent, fontWeight: 900, fontSize: '0.86rem' }}>{result.questionNumber}번</div>
+                <div style={{ color: '#64748b', fontSize: '0.72rem', fontWeight: 800 }}>{typeLabel}</div>
+            </div>
+            <div style={{ color: '#475569', fontSize: '0.78rem', fontWeight: 700, marginTop: '0.25rem' }}>
+                학생 {formatAnswer(result.selectedAnswer)}
+                {result.correctAnswer !== undefined && ` · 정답 ${formatAnswer(result.correctAnswer)}`}
+            </div>
+            {!!result.mistakeTypes?.length && (
+                <div style={{ marginTop: '0.3rem', display: 'flex', gap: '0.3rem', flexWrap: 'wrap' }}>
+                    {result.mistakeTypes.slice(0, 2).map(type => (
+                        <span key={type} style={{ color: '#7f1d1d', background: '#fee2e2', borderRadius: '999px', padding: '0.16rem 0.45rem', fontSize: '0.68rem', fontWeight: 800 }}>
+                            {type}
+                        </span>
+                    ))}
+                </div>
+            )}
         </div>
     );
 }

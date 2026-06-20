@@ -1,16 +1,41 @@
 "use client";
 
-import { Suspense, useEffect, useState } from "react";
+import { Suspense, useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
-import { Exam, Attempt } from "@/types/omr";
+import { Exam, Attempt, type PlanKey } from "@/types/omr";
 import OverviewTab from "@/components/dashboard/tabs/OverviewTab";
 import ExamAnalyticsTab from "@/components/dashboard/tabs/ExamAnalyticsTab";
 import StudentAnalyticsTab from "@/components/dashboard/tabs/StudentAnalyticsTab";
-import { LayoutDashboard, BarChart2, GraduationCap } from "lucide-react";
+import { AlertTriangle, BarChart2, CheckCircle2, CloudOff, Database, GraduationCap, LayoutDashboard, RefreshCw } from "lucide-react";
 import ThemeToggle from "@/components/ThemeToggle";
+import TeacherLogoutButton from "@/components/TeacherLogoutButton";
+import NotificationBell from "@/components/NotificationBell";
+import TeacherSessionChip from "@/components/TeacherSessionChip";
+import { toast } from "@/components/Toast";
+import { buildDemoDashboardData, shouldUseDemoData } from "@/lib/demoData";
+import { buildQuestionResultRepairPlan } from "@/lib/analyticsDataRepair";
+import { loadAttempts, loadExams, saveAttempt } from "@/lib/omrPersistence";
+import { summarizeAnalyticsDataHealth, summarizePersistenceHealth, type PersistenceHealth } from "@/lib/persistenceHealth";
+import { loadRosterSnapshot } from "@/lib/rosterPersistence";
+import type { RosterGroup, RosterStudent } from "@/lib/rosterStorage";
+import { buildTeacherDashboardMetrics } from "@/lib/teacherDashboardMetrics";
+import { getCurrentPlan } from "@/utils/plans";
 
 type TabType = 'overview' | 'exam' | 'student';
+type DashboardDataMode = "real" | "demo";
+type DashboardAnalysisActionKey = "create" | "exam" | "student" | "repair" | "refresh";
+interface DashboardAnalysisAction {
+    key: DashboardAnalysisActionKey;
+    label: string;
+    detail: string;
+    tone: "primary" | "warning" | "muted";
+}
+type DashboardLoadOptions = {
+    isCancelled?: () => boolean;
+    notifyOnSuccess?: boolean;
+    notifyOnError?: boolean;
+};
 
 // Wrap the inner component so useSearchParams is inside a Suspense boundary
 // (required by Next 16 to avoid deopting the whole page to client-only rendering).
@@ -31,122 +56,276 @@ function TeacherDashboard() {
     const [selectedExamIdForAnalytics, setSelectedExamIdForAnalytics] = useState<string | undefined>(undefined);
     const [exams, setExams] = useState<Exam[]>([]);
     const [attempts, setAttempts] = useState<Attempt[]>([]);
+    const [rosterStudents, setRosterStudents] = useState<RosterStudent[]>([]);
+    const [rosterGroups, setRosterGroups] = useState<RosterGroup[]>([]);
     const [stats, setStats] = useState({
         totalStudents: 0,
         avgScore: 0,
         activeExams: 0
     });
     const [trendData, setTrendData] = useState<number[]>([]);
+    const [dataMode, setDataMode] = useState<DashboardDataMode>("real");
+    const [currentPlan] = useState<PlanKey>(() => getCurrentPlan());
+    const [syncStatus, setSyncStatus] = useState<PersistenceHealth>(() => summarizePersistenceHealth([]));
+    const [isRefreshingDashboardData, setIsRefreshingDashboardData] = useState(false);
+    const [isRepairingAnalyticsData, setIsRepairingAnalyticsData] = useState(false);
+    const analyticsDataHealth = useMemo(
+        () => dataMode === "demo"
+            ? summarizeAnalyticsDataHealth([], [])
+            : summarizeAnalyticsDataHealth(exams, attempts),
+        [attempts, dataMode, exams],
+    );
+    const questionResultRepairPlan = useMemo(
+        () => dataMode === "demo"
+            ? buildQuestionResultRepairPlan([], [])
+            : buildQuestionResultRepairPlan(exams, attempts),
+        [attempts, dataMode, exams],
+    );
 
-    useEffect(() => {
-        // Load Data
-        const loadedExams: Exam[] = [];
-        const loadedAttempts: Attempt[] = [];
+    const loadDashboardData = useCallback(async (options: DashboardLoadOptions = {}) => {
+        const [examResult, attemptResult, rosterResult] = await Promise.all([
+            loadExams(),
+            loadAttempts(),
+            loadRosterSnapshot(localStorage),
+        ]);
+        if (options.isCancelled?.()) return;
 
-        // Scan localStorage for exams
-        for (let i = 0; i < localStorage.length; i++) {
-            const key = localStorage.key(i);
-            if (key?.startsWith("omr_exam_")) {
-                try {
-                    const val = JSON.parse(localStorage.getItem(key) || "");
-                    loadedExams.push(val);
-                    // eslint-disable-next-line @typescript-eslint/no-unused-vars
-                } catch (e) { }
-            }
-        }
-        // Load attempts
-        const attemptsStr = localStorage.getItem("omr_attempts");
-        if (attemptsStr) {
-            try {
-                loadedAttempts.push(...JSON.parse(attemptsStr));
-                // eslint-disable-next-line @typescript-eslint/no-unused-vars
-            } catch (e) { }
+        const loadedExams = [...examResult.items];
+        const loadedAttempts = [...attemptResult.items];
+        const loadedRosterStudents = [...rosterResult.students];
+        const loadedRosterGroups = [...rosterResult.groups];
+        const nextSyncStatus = summarizePersistenceHealth([examResult, attemptResult, rosterResult]);
+        setSyncStatus(nextSyncStatus);
+        if (nextSyncStatus.kind === "error" && options.notifyOnError !== false) {
+            toast.info(
+                "로컬 데이터 기준으로 표시 중",
+                "Supabase 동기화가 일부 지연되고 있어 시험·제출·명단은 다음 로드 때 다시 재시도합니다."
+            );
         }
 
         // Seed demo data only when the DB is completely empty AND only in development.
         // Prevents the "[예시]" mock exams from appearing in production.
-        const isDev = process.env.NODE_ENV !== 'production';
-        const shouldSeedDemo = isDev && loadedExams.length === 0 && loadedAttempts.length === 0;
+        const shouldSeedDemo = shouldUseDemoData() && loadedExams.length === 0 && loadedAttempts.length === 0;
         if (shouldSeedDemo) {
-            const MOCK_EXAMS: Exam[] = [
-                {
-                    id: 'mock-1', title: '[예시] Midterm English Test', createdAt: new Date(Date.now() - 86400000 * 2).toISOString(),
-                    questions: Array.from({ length: 20 }).map((_, i) => ({
-                        id: i + 1, number: i + 1, label: i < 5 ? '문법' : (i < 10 ? '독해' : '어휘'), score: 5, answer: 1
-                    }))
-                },
-                {
-                    id: 'mock-2', title: '[예시] Chapter 4 Mathematics', createdAt: new Date(Date.now() - 86400000 * 5).toISOString(),
-                    questions: Array.from({ length: 15 }).map((_, i) => ({
-                        id: i + 1, number: i + 1, label: i < 5 ? '계산' : (i < 10 ? '이해' : '응용'), score: 6.66, answer: 1
-                    }))
-                }
-            ];
-            MOCK_EXAMS.forEach(mockExam => {
-                loadedExams.push(mockExam);
-                const mockAttempts: Attempt[] = Array.from({ length: 25 }).map((_, i) => ({
-                    id: `mock-attempt-${mockExam.id}-${i}`,
-                    examId: mockExam.id,
-                    examTitle: mockExam.title,
-                    studentName: `학생 ${i + 1}`,
-                    startedAt: new Date(Date.now() - 86400000 * 1).toISOString(),
-                    finishedAt: new Date(Date.now() - 86400000 * 1 + i * 1000).toISOString(),
-                    score: mockExam.id === 'mock-1' ? (50 + Math.random() * 50) : (40 + Math.random() * 50),
-                    totalScore: 100,
-                    status: 'completed',
-                    answers: Array.from({ length: mockExam.questions.length }).reduce((acc: Record<number, number>, _, qIdx) => {
-                        const isCorrect = Math.random() > 0.3;
-                        const correctAns = mockExam.questions[qIdx].answer || 1;
-                        acc[qIdx + 1] = isCorrect ? correctAns : (correctAns === 1 ? 2 : 1);
-                        return acc;
-                    }, {})
-                }));
-                loadedAttempts.push(...mockAttempts);
-            });
+            const demo = buildDemoDashboardData();
+            loadedExams.push(...demo.exams);
+            loadedAttempts.push(...demo.attempts);
         }
+        setDataMode(shouldSeedDemo ? "demo" : "real");
 
         // Sort exams by date
         loadedExams.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
-        // eslint-disable-next-line react-hooks/set-state-in-effect
         setExams(loadedExams);
         setAttempts(loadedAttempts);
+        setRosterStudents(loadedRosterStudents);
+        setRosterGroups(loadedRosterGroups);
 
-        // Calculate Stats
-        const totalScore = loadedAttempts.reduce((acc, curr) => acc + (curr.score / curr.totalScore) * 100, 0);
-        const avg = loadedAttempts.length > 0 ? Math.round(totalScore / loadedAttempts.length) : 0;
-
-        setStats({
-            totalStudents: new Set(loadedAttempts.map(a => a.studentName + a.id)).size,
-            avgScore: avg,
-            activeExams: loadedExams.length
+        const metrics = buildTeacherDashboardMetrics(loadedExams, loadedAttempts, {
+            rosterStudents: shouldSeedDemo ? undefined : loadedRosterStudents,
         });
 
-        // Calculate Trend Data (Last N attempts scores)
-        const scores = loadedAttempts
-            .sort((a, b) => new Date(a.finishedAt).getTime() - new Date(b.finishedAt).getTime())
-            .map(a => Math.round((a.score / a.totalScore) * 100))
-            .slice(-10);
+        setStats({
+            totalStudents: metrics.totalStudents,
+            avgScore: metrics.avgScore,
+            activeExams: metrics.activeExams
+        });
 
-        if (scores.length < 5) {
-            // Mock data with average if not enough
-            setTrendData([65, 78, 72, 85, 82, 90, avg || 80]);
+        if (metrics.trendData.length === 0 && shouldSeedDemo) {
+            // Development-only fallback keeps the chart visually useful on a blank local workspace.
+            setTrendData([65, 78, 72, 85, 82, 90, metrics.avgScore || 80]);
         } else {
-            setTrendData(scores);
+            setTrendData(metrics.trendData);
         }
 
+        if (options.notifyOnSuccess && nextSyncStatus.kind !== "error") {
+            toast.success("동기화 확인 완료", nextSyncStatus.detail);
+        }
     }, []);
+
+    useEffect(() => {
+        let cancelled = false;
+        void loadDashboardData({ isCancelled: () => cancelled });
+        return () => { cancelled = true; };
+    }, [loadDashboardData]);
 
     const handleNavigateToExamAnalytics = (examId: string) => {
         setSelectedExamIdForAnalytics(examId);
         setActiveTab('exam');
     };
 
+    const handleRefreshDashboardData = async () => {
+        if (isRefreshingDashboardData) return;
+        setIsRefreshingDashboardData(true);
+        setSyncStatus(summarizePersistenceHealth([]));
+        try {
+            await loadDashboardData({ notifyOnSuccess: true });
+        } catch {
+            toast.error("동기화 확인 실패", "데이터를 다시 읽지 못했습니다. 네트워크와 저장소 상태를 확인해주세요.");
+        } finally {
+            setIsRefreshingDashboardData(false);
+        }
+    };
+
+    const handleRepairAnalyticsData = async () => {
+        if (questionResultRepairPlan.repairableCount === 0) {
+            toast.info("복구할 문항 결과 없음", "현재 자동 복구 가능한 제출이 없습니다.");
+            return;
+        }
+
+        setIsRepairingAnalyticsData(true);
+        try {
+            const repairedAttempts: Attempt[] = [];
+            let failedCount = 0;
+            for (const item of questionResultRepairPlan.items) {
+                const result = await saveAttempt(item.repairedAttempt);
+                if (result.localSaved || result.remoteSaved) {
+                    repairedAttempts.push(item.repairedAttempt);
+                } else {
+                    failedCount += 1;
+                }
+            }
+
+            if (repairedAttempts.length > 0) {
+                const repairedById = new Map(repairedAttempts.map(attempt => [attempt.id, attempt]));
+                setAttempts(prev => prev.map(attempt => repairedById.get(attempt.id) || attempt));
+            }
+
+            if (failedCount > 0) {
+                toast.error("일부 복구 실패", `${failedCount}건은 저장하지 못했습니다. 저장소 권한과 용량을 확인하세요.`);
+            } else {
+                toast.success(
+                    "문항 결과 복구 완료",
+                    `${repairedAttempts.length}개 제출, ${questionResultRepairPlan.repairedQuestionResultCount}개 문항 결과를 정리했습니다.`
+                );
+            }
+        } finally {
+            setIsRepairingAnalyticsData(false);
+        }
+    };
+
+    const syncTone = {
+        checking: {
+            icon: RefreshCw,
+            background: 'rgba(99,102,241,0.1)',
+            border: 'rgba(99,102,241,0.22)',
+            color: 'var(--primary)',
+        },
+        local: {
+            icon: CloudOff,
+            background: 'rgba(100,116,139,0.1)',
+            border: 'rgba(100,116,139,0.22)',
+            color: 'var(--muted)',
+        },
+        synced: {
+            icon: CheckCircle2,
+            background: 'rgba(16,185,129,0.1)',
+            border: 'rgba(16,185,129,0.24)',
+            color: 'var(--success)',
+        },
+        pending: {
+            icon: RefreshCw,
+            background: 'rgba(245,158,11,0.12)',
+            border: 'rgba(245,158,11,0.26)',
+            color: 'var(--warning)',
+        },
+        error: {
+            icon: AlertTriangle,
+            background: 'rgba(239,68,68,0.1)',
+            border: 'rgba(239,68,68,0.24)',
+            color: 'var(--error)',
+        },
+    }[syncStatus.kind];
+    const SyncIcon = syncTone.icon;
+
+    const dataHealthTone = {
+        empty: {
+            icon: Database,
+            background: 'rgba(100,116,139,0.1)',
+            border: 'rgba(100,116,139,0.22)',
+            color: 'var(--muted)',
+        },
+        ready: {
+            icon: CheckCircle2,
+            background: 'rgba(16,185,129,0.1)',
+            border: 'rgba(16,185,129,0.24)',
+            color: 'var(--success)',
+        },
+        attention: {
+            icon: AlertTriangle,
+            background: 'rgba(245,158,11,0.12)',
+            border: 'rgba(245,158,11,0.26)',
+            color: 'var(--warning)',
+        },
+        blocked: {
+            icon: AlertTriangle,
+            background: 'rgba(239,68,68,0.1)',
+            border: 'rgba(239,68,68,0.24)',
+            color: 'var(--error)',
+        },
+    }[analyticsDataHealth.kind];
+    const DataHealthIcon = dataHealthTone.icon;
+    const dashboardAnalysisActions = useMemo<DashboardAnalysisAction[]>(() => {
+        const actions: DashboardAnalysisAction[] = [];
+
+        if (dataMode === "demo" || analyticsDataHealth.kind === "empty") {
+            actions.push({
+                key: "create",
+                label: "시험 출제하기",
+                detail: "실제 시험을 만들면 예시 데이터 대신 실데이터 분석으로 전환됩니다.",
+                tone: "primary",
+            });
+            actions.push({
+                key: "refresh",
+                label: "데이터 다시 확인",
+                detail: "저장소와 Supabase 동기화 상태를 다시 읽습니다.",
+                tone: "muted",
+            });
+            return actions;
+        }
+
+        if (questionResultRepairPlan.repairableCount > 0) {
+            actions.push({
+                key: "repair",
+                label: "문항 결과 복구",
+                detail: `${questionResultRepairPlan.repairableCount}개 제출의 오답/유형 분석 행을 채웁니다.`,
+                tone: "warning",
+            });
+        }
+
+        if (analyticsDataHealth.issues.some(issue => issue.key === "missing-answers" || issue.key === "untagged-questions" || issue.key === "region-missing" || issue.key === "pdf-unlinked")) {
+            actions.push({
+                key: "create",
+                label: "시험 메타 보강",
+                detail: "정답, 유형 태그, PDF 영역을 보강해 재추천 품질을 높입니다.",
+                tone: "muted",
+            });
+        }
+
+        actions.push({
+            key: "exam",
+            label: "시험 분석 보기",
+            detail: "시험별 오답, 유형, 반별 약점 매트릭스를 확인합니다.",
+            tone: "primary",
+        });
+        actions.push({
+            key: "student",
+            label: "학생 성취도 보기",
+            detail: "학생별 원시험/재시험 흐름과 반복 약점을 확인합니다.",
+            tone: "primary",
+        });
+
+        return actions;
+    }, [analyticsDataHealth.issues, analyticsDataHealth.kind, dataMode, questionResultRepairPlan.repairableCount]);
+
     // Tab Navigation Component
     const renderTabs = () => (
         <div style={{
-            display: 'flex', gap: '0.5rem', marginBottom: '2rem',
+            display: 'grid',
+            gridTemplateColumns: 'repeat(auto-fit, minmax(min(160px, 100%), 1fr))',
+            gap: '0.5rem',
+            marginBottom: '2rem',
             background: 'var(--surface)', padding: '0.5rem', borderRadius: 'var(--radius-lg)',
-            border: '1px solid var(--border)', overflowX: 'auto',
+            border: '1px solid var(--border)',
             boxShadow: '0 4px 6px rgba(0,0,0,0.02)'
         }}>
             <button
@@ -157,7 +336,10 @@ function TeacherDashboard() {
                     background: activeTab === 'overview' ? 'var(--primary)' : 'transparent',
                     color: activeTab === 'overview' ? 'white' : 'var(--muted)',
                     fontWeight: activeTab === 'overview' ? 700 : 500,
-                    transition: 'all 0.2s cubic-bezier(0.4, 0, 0.2, 1)', flex: 1, justifyContent: 'center', whiteSpace: 'nowrap'
+                    transition: 'all 0.2s cubic-bezier(0.4, 0, 0.2, 1)',
+                    justifyContent: 'center',
+                    whiteSpace: 'nowrap',
+                    minWidth: 0,
                 }}
             >
                 <LayoutDashboard size={18} />
@@ -171,7 +353,10 @@ function TeacherDashboard() {
                     background: activeTab === 'exam' ? 'var(--primary)' : 'transparent',
                     color: activeTab === 'exam' ? 'white' : 'var(--muted)',
                     fontWeight: activeTab === 'exam' ? 700 : 500,
-                    transition: 'all 0.2s cubic-bezier(0.4, 0, 0.2, 1)', flex: 1, justifyContent: 'center', whiteSpace: 'nowrap'
+                    transition: 'all 0.2s cubic-bezier(0.4, 0, 0.2, 1)',
+                    justifyContent: 'center',
+                    whiteSpace: 'nowrap',
+                    minWidth: 0,
                 }}
             >
                 <BarChart2 size={18} />
@@ -185,7 +370,10 @@ function TeacherDashboard() {
                     background: activeTab === 'student' ? 'var(--primary)' : 'transparent',
                     color: activeTab === 'student' ? 'white' : 'var(--muted)',
                     fontWeight: activeTab === 'student' ? 700 : 500,
-                    transition: 'all 0.2s cubic-bezier(0.4, 0, 0.2, 1)', flex: 1, justifyContent: 'center', whiteSpace: 'nowrap'
+                    transition: 'all 0.2s cubic-bezier(0.4, 0, 0.2, 1)',
+                    justifyContent: 'center',
+                    whiteSpace: 'nowrap',
+                    minWidth: 0,
                 }}
             >
                 <GraduationCap size={18} />
@@ -209,14 +397,19 @@ function TeacherDashboard() {
                             TEACHER
                         </span>
                     </div>
-                    <ThemeToggle />
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.65rem' }}>
+                        <TeacherSessionChip />
+                        <NotificationBell />
+                        <TeacherLogoutButton />
+                        <ThemeToggle />
+                    </div>
                 </div>
             </header>
 
             <main className="container animate-fade-in" style={{ paddingBottom: '4rem' }}>
                 {/* Welcome Section */}
-                <div style={{ margin: '3rem 0', display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end' }}>
-                    <div>
+                <div style={{ margin: '3rem 0', display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end', gap: '1rem', flexWrap: 'wrap' }}>
+                    <div style={{ minWidth: 0 }}>
                         <h1 className="title-gradient" style={{ fontSize: '2.5rem', marginBottom: '0.75rem', lineHeight: 1.2 }}>
                             Analytics Center
                         </h1>
@@ -224,16 +417,315 @@ function TeacherDashboard() {
                             방대한 리포트와 시험 통계를 한 번에 관리하세요.
                         </p>
                     </div>
-                    {activeTab !== 'overview' && (
-                        <Link href="/create" style={{
-                            padding: '0.75rem 1.5rem', background: 'var(--primary)',
-                            color: 'white', borderRadius: 'var(--radius-full)',
-                            fontWeight: 600, display: 'flex', alignItems: 'center', gap: '0.5rem',
-                            boxShadow: '0 4px 12px rgba(99, 102, 241, 0.3)'
-                        }}>
-                            시험 출제하기
-                        </Link>
-                    )}
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+                        <div
+                            aria-label="데이터 동기화 상태"
+                            title={syncStatus.error || syncStatus.detail}
+                            style={{
+                                display: 'flex',
+                                alignItems: 'center',
+                                gap: '0.6rem',
+                                padding: '0.65rem 0.85rem',
+                                borderRadius: 'var(--radius-full)',
+                                border: `1px solid ${syncTone.border}`,
+                                background: syncTone.background,
+                                color: syncTone.color,
+                                minWidth: 0,
+                            }}
+                        >
+                            <SyncIcon size={17} />
+                            <span style={{ display: 'grid', gap: 2, minWidth: 0 }}>
+                                <span style={{ fontSize: '0.8rem', fontWeight: 800, lineHeight: 1.1, whiteSpace: 'nowrap' }}>
+                                    {syncStatus.label}
+                                </span>
+                                <span style={{ fontSize: '0.72rem', color: 'var(--muted)', lineHeight: 1.1, whiteSpace: 'nowrap' }}>
+                                    {syncStatus.detail}
+                                </span>
+                            </span>
+                            <button
+                                type="button"
+                                onClick={handleRefreshDashboardData}
+                                disabled={isRefreshingDashboardData}
+                                aria-label="동기화 다시 확인"
+                                title="로컬과 Supabase 데이터를 다시 확인합니다"
+                                style={{
+                                    width: 28,
+                                    height: 28,
+                                    borderRadius: 'var(--radius-full)',
+                                    border: `1px solid ${syncTone.border}`,
+                                    background: 'var(--surface)',
+                                    color: syncTone.color,
+                                    display: 'inline-flex',
+                                    alignItems: 'center',
+                                    justifyContent: 'center',
+                                    cursor: isRefreshingDashboardData ? 'wait' : 'pointer',
+                                    flexShrink: 0,
+                                }}
+                            >
+                                <RefreshCw size={14} className={isRefreshingDashboardData ? "animate-spin" : undefined} />
+                            </button>
+                        </div>
+                        <div
+                            aria-label="분석 데이터 상태"
+                            title={analyticsDataHealth.issues[0]?.detail || analyticsDataHealth.detail}
+                            style={{
+                                display: 'flex',
+                                alignItems: 'center',
+                                gap: '0.6rem',
+                                padding: '0.65rem 0.85rem',
+                                borderRadius: 'var(--radius-full)',
+                                border: `1px solid ${dataHealthTone.border}`,
+                                background: dataHealthTone.background,
+                                color: dataHealthTone.color,
+                                minWidth: 0,
+                            }}
+                        >
+                            <DataHealthIcon size={17} />
+                            <span style={{ display: 'grid', gap: 2, minWidth: 0 }}>
+                                <span style={{ fontSize: '0.8rem', fontWeight: 800, lineHeight: 1.1, whiteSpace: 'nowrap' }}>
+                                    {analyticsDataHealth.label}
+                                </span>
+                                <span style={{ fontSize: '0.72rem', color: 'var(--muted)', lineHeight: 1.1, whiteSpace: 'nowrap' }}>
+                                    {analyticsDataHealth.score}점 · {analyticsDataHealth.detail}
+                                </span>
+                            </span>
+                        </div>
+                        {activeTab !== 'overview' && (
+                            <Link href="/create" style={{
+                                padding: '0.75rem 1.5rem', background: 'var(--primary)',
+                                color: 'white', borderRadius: 'var(--radius-full)',
+                                fontWeight: 600, display: 'flex', alignItems: 'center', gap: '0.5rem',
+                                boxShadow: '0 4px 12px rgba(99, 102, 241, 0.3)'
+                            }}>
+                                시험 출제하기
+                            </Link>
+                        )}
+                    </div>
+                </div>
+
+                {dataMode === "demo" && (
+                    <div
+                        role="status"
+                        aria-label="데모 데이터 안내"
+                        style={{
+                            display: 'flex',
+                            alignItems: 'flex-start',
+                            gap: '0.85rem',
+                            padding: '1rem 1.1rem',
+                            marginBottom: '1.5rem',
+                            borderRadius: 'var(--radius-lg)',
+                            border: '1px solid rgba(245,158,11,0.28)',
+                            background: 'rgba(245,158,11,0.09)',
+                            color: 'var(--foreground)',
+                        }}
+                    >
+                        <AlertTriangle size={19} color="var(--warning)" style={{ flexShrink: 0, marginTop: 2 }} />
+                        <div style={{ minWidth: 0 }}>
+                            <div style={{ fontSize: '0.9rem', fontWeight: 900, color: 'var(--warning)', marginBottom: '0.2rem' }}>
+                                데모 데이터 모드
+                            </div>
+                            <p style={{ fontSize: '0.82rem', color: 'var(--muted)', lineHeight: 1.55, wordBreak: 'keep-all' }}>
+                                현재 저장된 시험과 제출이 없어 예시 시험/학생 데이터로 화면을 채웠습니다. 실제 시험을 만들거나 제출이 들어오면 예시 데이터는 자동으로 사라집니다.
+                            </p>
+                        </div>
+                    </div>
+                )}
+
+                {dataMode === "real" && analyticsDataHealth.kind !== "ready" && (
+                    <div
+                        role="status"
+                        aria-label="분석 데이터 상태"
+                        style={{
+                            display: 'grid',
+                            gridTemplateColumns: 'minmax(0, 1.2fr) minmax(220px, 1fr)',
+                            gap: '1rem',
+                            alignItems: 'stretch',
+                            padding: '1rem 1.1rem',
+                            marginBottom: '1.5rem',
+                            borderRadius: 'var(--radius-lg)',
+                            border: `1px solid ${dataHealthTone.border}`,
+                            background: dataHealthTone.background,
+                            color: 'var(--foreground)',
+                        }}
+                        className="dashboard-data-health"
+                    >
+                        <div style={{ display: 'flex', alignItems: 'flex-start', gap: '0.85rem', minWidth: 0 }}>
+                            <DataHealthIcon size={20} color={dataHealthTone.color} style={{ flexShrink: 0, marginTop: 2 }} />
+                            <div style={{ minWidth: 0 }}>
+                                <div style={{ fontSize: '0.9rem', fontWeight: 900, color: dataHealthTone.color, marginBottom: '0.2rem' }}>
+                                    {analyticsDataHealth.label}
+                                </div>
+                                <p style={{ fontSize: '0.82rem', color: 'var(--muted)', lineHeight: 1.55, wordBreak: 'keep-all' }}>
+                                    시험 {analyticsDataHealth.totalExamCount}개, 제출 {analyticsDataHealth.totalAttemptCount}건, 문항 {analyticsDataHealth.totalQuestionCount}개 기준입니다. {analyticsDataHealth.detail}
+                                </p>
+                            </div>
+                        </div>
+                        <div style={{ display: 'grid', gap: '0.45rem', alignContent: 'center' }}>
+                            {analyticsDataHealth.issues.slice(0, 4).map(issue => (
+                                <div
+                                    key={issue.key}
+                                    style={{
+                                        display: 'flex',
+                                        justifyContent: 'space-between',
+                                        alignItems: 'center',
+                                        gap: '0.75rem',
+                                        padding: '0.45rem 0.55rem',
+                                        borderRadius: 'var(--radius-md)',
+                                        border: '1px solid var(--border)',
+                                        background: 'var(--surface)',
+                                    }}
+                                >
+                                    <span style={{ fontSize: '0.78rem', fontWeight: 800, color: 'var(--foreground)', minWidth: 0 }}>
+                                        {issue.label}
+                                    </span>
+                                    <span style={{
+                                        flexShrink: 0,
+                                        fontSize: '0.72rem',
+                                        fontWeight: 900,
+                                        color: issue.severity === "error" ? 'var(--error)' : 'var(--warning)',
+                                    }}>
+                                        {issue.count}건
+                                    </span>
+                                </div>
+                            ))}
+                            {questionResultRepairPlan.repairableCount > 0 && (
+                                <>
+                                    <button
+                                        type="button"
+                                        onClick={handleRepairAnalyticsData}
+                                        disabled={isRepairingAnalyticsData}
+                                        style={{
+                                            display: 'flex',
+                                            alignItems: 'center',
+                                            justifyContent: 'space-between',
+                                            gap: '0.75rem',
+                                            padding: '0.58rem 0.7rem',
+                                            borderRadius: 'var(--radius-md)',
+                                            border: '1px solid rgba(99,102,241,0.28)',
+                                            background: 'rgba(99,102,241,0.1)',
+                                            color: 'var(--primary)',
+                                            cursor: isRepairingAnalyticsData ? 'wait' : 'pointer',
+                                            fontSize: '0.8rem',
+                                            fontWeight: 900,
+                                        }}
+                                    >
+                                        <span>{isRepairingAnalyticsData ? "문항 결과 복구 중..." : "문항 결과 자동 복구"}</span>
+                                        <span style={{ flexShrink: 0, color: 'var(--muted)', fontSize: '0.72rem' }}>
+                                            {questionResultRepairPlan.repairableCount}제출 · {questionResultRepairPlan.repairedQuestionResultCount}문항
+                                        </span>
+                                    </button>
+                                    <div style={{
+                                        display: 'grid',
+                                        gap: '0.35rem',
+                                        padding: '0.62rem 0.68rem',
+                                        borderRadius: 'var(--radius-md)',
+                                        border: '1px dashed var(--border)',
+                                        background: 'var(--surface)',
+                                    }}>
+                                        <div style={{ fontSize: '0.72rem', color: 'var(--muted)', fontWeight: 900 }}>
+                                            복구 대상 미리보기
+                                        </div>
+                                        {questionResultRepairPlan.items.slice(0, 3).map(item => (
+                                            <div key={item.attemptId} style={{ display: 'flex', justifyContent: 'space-between', gap: '0.65rem', fontSize: '0.72rem', color: 'var(--foreground)', lineHeight: 1.35 }}>
+                                                <span style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                                                    {item.examTitle} · {item.studentName || "학생 미상"}
+                                                </span>
+                                                <span style={{ color: 'var(--primary)', fontWeight: 900, flexShrink: 0 }}>
+                                                    {item.missingQuestionResultCount}/{item.expectedQuestionCount}문항
+                                                </span>
+                                            </div>
+                                        ))}
+                                        {questionResultRepairPlan.repairableCount > 3 && (
+                                            <div style={{ color: 'var(--muted)', fontSize: '0.7rem', fontWeight: 800 }}>
+                                                외 {questionResultRepairPlan.repairableCount - 3}개 제출 추가 복구 예정
+                                            </div>
+                                        )}
+                                    </div>
+                                </>
+                            )}
+                            {(questionResultRepairPlan.skippedOrphanAttemptCount > 0 || questionResultRepairPlan.skippedInProgressAttemptCount > 0) && (
+                                <div style={{ fontSize: '0.72rem', color: 'var(--muted)', fontWeight: 800, lineHeight: 1.5, wordBreak: 'keep-all' }}>
+                                    자동 복구 제외:
+                                    {questionResultRepairPlan.skippedOrphanAttemptCount > 0 ? ` 시험 없는 제출 ${questionResultRepairPlan.skippedOrphanAttemptCount}건` : ""}
+                                    {questionResultRepairPlan.skippedOrphanAttemptCount > 0 && questionResultRepairPlan.skippedInProgressAttemptCount > 0 ? " ·" : ""}
+                                    {questionResultRepairPlan.skippedInProgressAttemptCount > 0 ? ` 진행 중 제출 ${questionResultRepairPlan.skippedInProgressAttemptCount}건` : ""}
+                                </div>
+                            )}
+                            {analyticsDataHealth.issues.length === 0 && (
+                                <div style={{ fontSize: '0.8rem', color: 'var(--muted)', fontWeight: 800 }}>
+                                    실제 시험과 제출이 쌓이면 자동으로 점검합니다.
+                                </div>
+                            )}
+                        </div>
+                    </div>
+                )}
+
+                <div
+                    className="dashboard-analysis-actions"
+                    aria-label="분석 다음 조치"
+                    style={{
+                        display: 'grid',
+                        gridTemplateColumns: 'repeat(auto-fit, minmax(min(210px, 100%), 1fr))',
+                        gap: '0.75rem',
+                        marginBottom: '1.5rem',
+                    }}
+                >
+                    {dashboardAnalysisActions.map(action => {
+                        const actionTone = action.tone === "primary"
+                            ? { border: 'rgba(99,102,241,0.24)', background: 'rgba(99,102,241,0.08)', color: 'var(--primary)' }
+                            : action.tone === "warning"
+                                ? { border: 'rgba(245,158,11,0.28)', background: 'rgba(245,158,11,0.09)', color: 'var(--warning)' }
+                                : { border: 'var(--border)', background: 'var(--surface)', color: 'var(--foreground)' };
+                        const content = (
+                            <>
+                                <span style={{ display: 'block', color: actionTone.color, fontSize: '0.86rem', fontWeight: 950, marginBottom: '0.2rem' }}>
+                                    {action.label}
+                                </span>
+                                <span style={{ display: 'block', color: 'var(--muted)', fontSize: '0.76rem', lineHeight: 1.45, wordBreak: 'keep-all' }}>
+                                    {action.detail}
+                                </span>
+                            </>
+                        );
+                        const sharedStyle = {
+                            width: '100%',
+                            minHeight: 78,
+                            padding: '0.85rem 0.95rem',
+                            borderRadius: 'var(--radius-lg)',
+                            border: `1px solid ${actionTone.border}`,
+                            background: actionTone.background,
+                            textAlign: 'left' as const,
+                            cursor: 'pointer',
+                        };
+
+                        if (action.key === "create") {
+                            return (
+                                <Link key={action.key} href="/create" style={sharedStyle}>
+                                    {content}
+                                </Link>
+                            );
+                        }
+
+                        return (
+                            <button
+                                key={action.key}
+                                type="button"
+                                onClick={() => {
+                                    if (action.key === "exam") setActiveTab("exam");
+                                    if (action.key === "student") setActiveTab("student");
+                                    if (action.key === "repair") void handleRepairAnalyticsData();
+                                    if (action.key === "refresh") void handleRefreshDashboardData();
+                                }}
+                                disabled={(action.key === "repair" && isRepairingAnalyticsData) || (action.key === "refresh" && isRefreshingDashboardData)}
+                                style={{
+                                    ...sharedStyle,
+                                    opacity: (action.key === "repair" && isRepairingAnalyticsData) || (action.key === "refresh" && isRefreshingDashboardData) ? 0.62 : 1,
+                                    cursor: (action.key === "repair" && isRepairingAnalyticsData) || (action.key === "refresh" && isRefreshingDashboardData) ? 'wait' : 'pointer',
+                                }}
+                            >
+                                {content}
+                            </button>
+                        );
+                    })}
                 </div>
 
                 {/* Tabs */}
@@ -251,10 +743,23 @@ function TeacherDashboard() {
                         />
                     )}
                     {activeTab === 'exam' && (
-                        <ExamAnalyticsTab exams={exams} attempts={attempts} initialExamId={selectedExamIdForAnalytics} />
+                        <ExamAnalyticsTab
+                            exams={exams}
+                            attempts={attempts}
+                            rosterStudents={rosterStudents}
+                            rosterGroups={rosterGroups}
+                            initialExamId={selectedExamIdForAnalytics}
+                            currentPlan={currentPlan}
+                        />
                     )}
                     {activeTab === 'student' && (
-                        <StudentAnalyticsTab exams={exams} attempts={attempts} />
+                        <StudentAnalyticsTab
+                            exams={exams}
+                            attempts={attempts}
+                            rosterStudents={rosterStudents}
+                            rosterGroups={rosterGroups}
+                            currentPlan={currentPlan}
+                        />
                     )}
                 </div>
 
@@ -262,4 +767,3 @@ function TeacherDashboard() {
         </div>
     );
 }
-

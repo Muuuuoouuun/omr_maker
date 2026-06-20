@@ -1,3 +1,5 @@
+export const DEFAULT_CHOICE_COUNT = 5;
+
 export interface StoredDataRef {
     store: 'indexeddb';
     key: string;
@@ -5,6 +7,14 @@ export interface StoredDataRef {
     mimeType?: string;
     size?: number;
     updatedAt?: string;
+}
+
+export interface QuestionPdfRegion {
+    page: number;
+    x: number;
+    y: number;
+    width: number;
+    height: number;
 }
 
 export interface Question {
@@ -35,11 +45,30 @@ export interface Question {
         x: number;
         y: number;
     };
+    /** Optional precise crop box for premium question-level review/DB. */
+    pdfRegion?: QuestionPdfRegion;
+    /** Optional cropped question image asset for future premium question-bank storage. */
+    imageAssetRef?: StoredDataRef;
+}
+
+export function normalizeChoiceCount(value: unknown, fallback: 4 | 5 = DEFAULT_CHOICE_COUNT): 4 | 5 {
+    if (value === 4 || value === 5) return value;
+    return fallback;
+}
+
+export function questionChoiceCount(question: Pick<Question, "choices">, fallback: 4 | 5 = DEFAULT_CHOICE_COUNT): 4 | 5 {
+    return normalizeChoiceCount(question.choices, fallback);
 }
 
 export interface Exam {
     id: string; // generated ID
     title: string;
+    /** App workspace/organization scope for remote persistence. */
+    organizationId?: string;
+    /** Optional class scope when an exam belongs to one class. */
+    classId?: string;
+    /** App-managed teacher user id until Supabase Auth owns user ids. */
+    createdByUserId?: string;
     questions: Question[];
     createdAt: string;
     updatedAt?: string;
@@ -70,7 +99,8 @@ export interface Exam {
 export type PdfDrawings = Record<number, string[]>;
 
 export type IdentityType = 'guest' | 'temporary' | 'registered';
-export type PlanKey = 'free' | 'pro' | 'school';
+export type PlanKey = 'free' | 'pro' | 'academy';
+export type StoredPlanKey = PlanKey | 'school';
 
 export interface QuestionDrawingSummary {
     questionId: number;
@@ -79,13 +109,73 @@ export interface QuestionDrawingSummary {
     strokeCount: number;
 }
 
+export type QuestionResultStatus = 'correct' | 'wrong' | 'unanswered' | 'ungraded';
+
+export interface QuestionResult {
+    schemaVersion: 1;
+    attemptId: string;
+    examId: string;
+    examTitle: string;
+    /** App workspace/organization scope for remote persistence. */
+    organizationId?: string;
+    /** Optional class scope. Falls back to groupId when absent. */
+    classId?: string;
+    /** Optional assignment scope for future gradebook flows. */
+    assignmentId?: string;
+    /** Canonical roster/student profile id. Falls back to studentId when absent. */
+    studentProfileId?: string;
+    studentName: string;
+    studentId?: string;
+    groupId?: string;
+    groupName?: string;
+    /** Optional operating region/campus snapshot for academy-level analytics. */
+    regionId?: string;
+    regionName?: string;
+    identityType?: IdentityType;
+    questionId: number;
+    questionNumber: number;
+    canonicalQuestionId?: string;
+    label?: string;
+    score: number;
+    earnedScore: number;
+    selectedAnswer?: number;
+    correctAnswer?: number;
+    status: QuestionResultStatus;
+    isCorrect: boolean;
+    isWrong: boolean;
+    isUnanswered: boolean;
+    subject?: string;
+    unit?: string;
+    concept?: string;
+    skill?: string;
+    source?: string;
+    difficulty?: NonNullable<Question["tags"]>["difficulty"];
+    cognitiveLevel?: NonNullable<Question["tags"]>["cognitiveLevel"];
+    mistakeTypes?: string[];
+    prerequisites?: string[];
+    expectedTimeSec?: number;
+    pdfPage?: number;
+    pdfLocation?: Question["pdfLocation"];
+    pdfRegion?: QuestionPdfRegion;
+    timeSec?: number;
+    visitCount?: number;
+    revisitCount?: number;
+    answerChangeCount?: number;
+    handwritingStrokeCount?: number;
+    handwritingPage?: number;
+    retakeSourceAttemptId?: string;
+    retakeMode?: RetakeMetadata["mode"];
+    answeredAt?: string;
+    finishedAt: string;
+}
+
 export type HandwritingStatus = 'none' | 'saved' | 'failed' | 'unavailable' | 'plan_required';
 
 export interface AttemptHandwriting {
     schemaVersion: 1;
     status: HandwritingStatus;
     strokesRef?: StoredDataRef;
-    plan: PlanKey;
+    plan: StoredPlanKey;
     summary: {
         pageCount: number;
         strokeCount: number;
@@ -94,16 +184,56 @@ export interface AttemptHandwriting {
     questions: Record<number, QuestionDrawingSummary>;
 }
 
+export interface QuestionTiming {
+    questionId: number;
+    questionNumber: number;
+    totalTimeSec: number;
+    visitCount: number;
+    revisitCount: number;
+    answerChangeCount: number;
+    firstVisitedAt?: string;
+    lastVisitedAt?: string;
+    lastAnsweredAt?: string;
+}
+
+export interface FocusLossEvent {
+    at: string;
+    questionId?: number;
+    questionNumber?: number;
+    count: number;
+    reason: 'blur' | 'hidden';
+}
+
+export interface RetakeMetadata {
+    sourceAttemptId: string;
+    questionIds: number[];
+    mode: 'wrong' | 'similar' | 'custom';
+    labels?: string[];
+    concepts?: string[];
+    createdAt: string;
+}
+
 export interface Attempt {
     id: string; // specific attempt ID
     examId: string;
     examTitle: string;
+    /** App workspace/organization scope for remote persistence. */
+    organizationId?: string;
+    /** Optional class scope. Falls back to groupId when absent. */
+    classId?: string;
+    /** Optional assignment scope for future gradebook flows. */
+    assignmentId?: string;
+    /** Canonical roster/student profile id. Falls back to studentId when absent. */
+    studentProfileId?: string;
     studentName: string; // "Student" for anonymous
     /** Stable student identifier — preferred over studentName for joins. */
     studentId?: string;
     /** Group snapshot at submission time. */
     groupId?: string;
     groupName?: string;
+    /** Optional operating region/campus snapshot at submission time. */
+    regionId?: string;
+    regionName?: string;
     /** Whether this attempt belongs to a guest, class-issued temporary ID, or registered account. */
     identityType?: IdentityType;
     startedAt: string;
@@ -120,18 +250,26 @@ export interface Attempt {
     /** True when the submitted handwriting payload was archived for later review. */
     handwritingArchived?: boolean;
     /** Plan snapshot used when deciding whether to archive handwriting. */
-    handwritingPlan?: PlanKey;
+    handwritingPlan?: StoredPlanKey;
     /** Lightweight handwriting metrics for teacher lists and premium usage. */
     drawingPageCount?: number;
     drawingStrokeCount?: number;
     /** Per-question handwriting summary. The heavy payload remains in drawingsRef. */
     questionDrawings?: QuestionDrawingSummary[];
+    /** Stable per-question result rows used for student/class/exam/type analytics. */
+    questionResults?: QuestionResult[];
     status: 'completed' | 'in_progress';
     guestId?: string; // For tracking guest attempts
     /** If true, submitted because the timer hit zero. */
     autoSubmitted?: boolean;
     /** Number of times the student switched tabs or lost focus during the exam. */
     tabFociLostCount?: number;
+    /** Per-question timing and revisit metrics captured while solving. */
+    questionTimings?: QuestionTiming[];
+    /** Timestamped focus-loss events with the active question when available. */
+    focusLossEvents?: FocusLossEvent[];
+    /** Present when this attempt is a premium retake over selected questions. */
+    retake?: RetakeMetadata;
     /** Guest provenance after a merge into a canonical student profile. */
     mergedFromGuestId?: string;
     mergedAt?: string;

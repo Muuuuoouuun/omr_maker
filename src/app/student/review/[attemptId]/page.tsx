@@ -4,16 +4,33 @@ import { useEffect, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
 import dynamic from "next/dynamic";
-import { BookOpen, ChevronDown, ChevronUp } from "lucide-react";
-import { gradeAttempt } from "@/types/omr";
+import { BookOpen, ChevronDown, ChevronUp, Clock, Repeat2, Target } from "lucide-react";
 import type { Attempt, Exam, PdfDrawings } from "@/types/omr";
 import { storedDataUrlToFile, loadJsonRecord } from "@/utils/blobStore";
 import { attemptBelongsToSession, getSession } from "@/utils/storage";
+import { loadAttempt, loadExam } from "@/lib/omrPersistence";
+import { formatKoreanDateTime } from "@/lib/pure";
+import {
+    buildLearningRecommendations,
+    buildRetakeQuestionIds,
+    buildStudentWeaknessGroups,
+    getAttemptQuestionResults,
+    summarizeAttemptScore,
+    summarizeAttemptBehavior,
+} from "@/lib/premiumAnalytics";
+import { buildRetakeHref } from "@/lib/retakeLinks";
 
 const PDFViewer = dynamic(() => import("@/components/PDFViewer"), { ssr: false });
 
 function hasDrawings(drawings?: PdfDrawings): boolean {
     return !!drawings && Object.values(drawings).some(paths => paths.length > 0);
+}
+
+function formatSeconds(totalSec: number): string {
+    if (totalSec < 60) return `${totalSec}초`;
+    const minutes = Math.floor(totalSec / 60);
+    const seconds = totalSec % 60;
+    return seconds > 0 ? `${minutes}분 ${seconds}초` : `${minutes}분`;
 }
 
 export default function ReviewPage() {
@@ -33,63 +50,65 @@ export default function ReviewPage() {
 
     useEffect(() => {
         let cancelled = false;
-        queueMicrotask(() => {
+        const loadReview = async () => {
             if (!id || cancelled) return;
             // Load Attempt
-            const attemptsData = localStorage.getItem('omr_attempts');
-            if (attemptsData) {
-                const attempts: Attempt[] = JSON.parse(attemptsData);
-                const found = attempts.find(a => a.id === id);
-                if (found && !cancelled) {
-                    const session = getSession();
-                    if (!session || !attemptBelongsToSession(found, session)) {
-                        setAccessDenied(true);
-                        return;
-                    }
-                    setAttempt(found);
-                    
-                    const drawingsRef = found.handwriting?.strokesRef || found.drawingsRef;
-                    if (drawingsRef) {
-                        loadJsonRecord<PdfDrawings>(drawingsRef)
-                            .then(drawings => {
-                                if (cancelled) return;
-                                if (drawings) {
-                                    setRestoredDrawings(drawings);
-                                    setHandwritingUnavailable(false);
-                                } else if (found.drawings) {
-                                    setRestoredDrawings(found.drawings);
-                                } else {
-                                    setHandwritingUnavailable(true);
-                                }
-                            })
-                            .catch(err => {
-                                console.error("Failed to restore drawings from IndexedDB", err);
-                                if (!cancelled && found.drawings) setRestoredDrawings(found.drawings);
-                                else if (!cancelled) setHandwritingUnavailable(true);
-                            });
-                    } else if (found.drawings) {
-                        setRestoredDrawings(found.drawings);
-                    }
+            const found = await loadAttempt(id);
+            if (found && !cancelled) {
+                const session = getSession();
+                if (!session || !attemptBelongsToSession(found, session)) {
+                    setAccessDenied(true);
+                    return;
+                }
+                setAttempt(found);
 
-                    // Load Exam Data associated with this attempt
-                    const examDataStr = localStorage.getItem(`omr_exam_${found.examId}`);
-                    if (examDataStr) {
-                        const parsedExam = JSON.parse(examDataStr) as Exam;
-                        setExam(parsedExam);
-                        setPdfFile(null);
-                        setPdfLoadFailed(false);
+                const inlineDrawings = hasDrawings(found.drawings) ? found.drawings : undefined;
+                if (inlineDrawings) {
+                    setRestoredDrawings(inlineDrawings);
+                    setHandwritingUnavailable(false);
+                }
 
-                        storedDataUrlToFile("problem.pdf", parsedExam.pdfData, parsedExam.pdfDataRef)
-                            .then(file => {
-                                if (!cancelled && file) setPdfFile(file);
-                            })
-                            .catch(() => {
-                                if (!cancelled) setPdfLoadFailed(true);
-                            });
-                    }
+                const drawingsRef = found.handwriting?.strokesRef || found.drawingsRef;
+                if (drawingsRef) {
+                    loadJsonRecord<PdfDrawings>(drawingsRef)
+                        .then(drawings => {
+                            if (cancelled) return;
+                            if (drawings) {
+                                setRestoredDrawings(drawings);
+                                setHandwritingUnavailable(false);
+                            } else if (found.drawings) {
+                                setRestoredDrawings(found.drawings);
+                            } else {
+                                setHandwritingUnavailable(true);
+                            }
+                        })
+                        .catch(err => {
+                            console.error("Failed to restore drawings from IndexedDB", err);
+                            if (!cancelled && found.drawings) setRestoredDrawings(found.drawings);
+                            else if (!cancelled) setHandwritingUnavailable(true);
+                        });
+                } else if (found.drawings) {
+                    setRestoredDrawings(found.drawings);
+                }
+
+                // Load Exam Data associated with this attempt
+                const parsedExam = await loadExam(found.examId);
+                if (parsedExam && !cancelled) {
+                    setExam(parsedExam);
+                    setPdfFile(null);
+                    setPdfLoadFailed(false);
+
+                    storedDataUrlToFile("problem.pdf", parsedExam.pdfData, parsedExam.pdfDataRef)
+                        .then(file => {
+                            if (!cancelled && file) setPdfFile(file);
+                        })
+                        .catch(() => {
+                            if (!cancelled) setPdfLoadFailed(true);
+                        });
                 }
             }
-        });
+        };
+        void loadReview();
         return () => { cancelled = true; };
     }, [id]);
 
@@ -107,15 +126,47 @@ export default function ReviewPage() {
         return <div style={{ padding: '2rem', textAlign: 'center' }}>Loading...</div>;
     }
 
-    const stats = gradeAttempt(exam.questions, attempt.answers);
-    const percentCorrect = stats.totalScore > 0
-        ? Math.round((stats.earnedScore / stats.totalScore) * 100)
-        : 0;
-
-    const filteredQuestions = filterWrong
-        ? exam.questions.filter(q => q.answer && attempt.answers[q.id] !== q.answer)
+    const reviewQuestionIds = attempt.retake?.questionIds?.length
+        ? new Set(attempt.retake.questionIds)
+        : null;
+    const reviewQuestions = reviewQuestionIds
+        ? exam.questions.filter(q => reviewQuestionIds.has(q.id))
         : exam.questions;
+    const reviewExam: Exam = { ...exam, questions: reviewQuestions };
+    const questionResults = getAttemptQuestionResults(reviewExam, attempt);
+    const resultByQuestionId = new Map(questionResults.map(result => [result.questionId, result]));
+    const scoreSummary = summarizeAttemptScore(reviewExam, attempt);
+    const resultCounts = questionResults.reduce((counts, result) => {
+        if (result.status === "correct") counts.correctCount += 1;
+        if (result.status === "wrong") counts.incorrectCount += 1;
+        if (result.status === "unanswered") counts.unansweredCount += 1;
+        if (result.status === "ungraded") counts.ungradedCount += 1;
+        return counts;
+    }, { correctCount: 0, incorrectCount: 0, unansweredCount: 0, ungradedCount: 0 });
+    const percentCorrect = scoreSummary.scorePercent;
+
+    const wrongQuestionIds = new Set(questionResults
+        .filter(result => result.status === "wrong" || result.status === "unanswered")
+        .map(result => result.questionId));
+    const filteredQuestions = filterWrong
+        ? reviewQuestions.filter(q => wrongQuestionIds.has(q.id))
+        : reviewQuestions;
     const hasHandwriting = hasDrawings(restoredDrawings);
+    const retakeQuestionIds = buildRetakeQuestionIds(reviewExam, attempt);
+    const weaknessGroups = buildStudentWeaknessGroups(reviewExam, attempt).slice(0, 3);
+    const recommendationGroups = buildLearningRecommendations(reviewExam, [attempt], {
+        scope: "attempt",
+        attempt,
+        limit: 5,
+    });
+    const behaviorSummary = summarizeAttemptBehavior(attempt);
+    const timingByQuestionId = new Map((attempt.questionTimings || []).map(timing => [timing.questionId, timing]));
+    const questionNumberById = new Map(reviewQuestions.map(question => [question.id, question.number]));
+    const formatRetakeNumbers = (questionIds: number[]) => questionIds
+        .map(questionId => questionNumberById.get(questionId))
+        .filter((questionNumber): questionNumber is number => typeof questionNumber === "number")
+        .sort((a, b) => a - b)
+        .join(", ");
 
     const toggleExplanation = (qId: number) => {
         setOpenExplanations(prev => ({ ...prev, [qId]: !prev[qId] }));
@@ -144,10 +195,10 @@ export default function ReviewPage() {
                         <span style={{ fontSize: '1.5rem', color: '#94a3b8', fontWeight: 500 }}>%</span>
                     </div>
                     <div style={{ fontSize: '1rem', color: '#475569', marginTop: '0.4rem', fontWeight: 600 }}>
-                        {stats.earnedScore} / {stats.totalScore} 점
+                        {scoreSummary.earnedScore} / {scoreSummary.totalScore} 점
                     </div>
                     <p style={{ color: '#64748b', marginTop: '0.5rem' }}>
-                        {new Date(attempt.finishedAt).toLocaleString()} 응시 완료
+                        {formatKoreanDateTime(attempt.finishedAt)} 응시 완료
                     </p>
                     {attempt.handwritingArchived && (
                         <div style={{
@@ -163,6 +214,22 @@ export default function ReviewPage() {
                             fontWeight: 800
                         }}>
                             필기 보관 {attempt.questionDrawings?.length || attempt.drawingPageCount || 0}문항
+                        </div>
+                    )}
+                    {attempt.retake && (
+                        <div style={{
+                            margin: '0.6rem auto 0',
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            gap: '0.4rem',
+                            padding: '0.35rem 0.75rem',
+                            borderRadius: '999px',
+                            background: '#f0fdfa',
+                            color: '#0f766e',
+                            fontSize: '0.78rem',
+                            fontWeight: 800
+                        }}>
+                            재시험 {attempt.retake.questionIds.length}문항
                         </div>
                     )}
                 </div>
@@ -185,22 +252,28 @@ export default function ReviewPage() {
                 {/* Stat Row */}
                 <div style={{
                     display: 'grid',
-                    gridTemplateColumns: 'repeat(3, 1fr)',
+                    gridTemplateColumns: `repeat(${resultCounts.ungradedCount > 0 ? 4 : 3}, 1fr)`,
                     gap: '0.75rem',
                     marginBottom: '1.5rem',
                 }}>
                     <div style={{ background: 'white', padding: '1rem', borderRadius: '12px', border: '1px solid #e2e8f0', textAlign: 'center' }}>
                         <div style={{ fontSize: '0.75rem', color: '#64748b', fontWeight: 600, marginBottom: '0.25rem' }}>정답</div>
-                        <div style={{ fontSize: '1.5rem', fontWeight: 800, color: 'var(--success, #16a34a)' }}>{stats.correctCount}</div>
+                        <div style={{ fontSize: '1.5rem', fontWeight: 800, color: 'var(--success, #16a34a)' }}>{resultCounts.correctCount}</div>
                     </div>
                     <div style={{ background: 'white', padding: '1rem', borderRadius: '12px', border: '1px solid #e2e8f0', textAlign: 'center' }}>
                         <div style={{ fontSize: '0.75rem', color: '#64748b', fontWeight: 600, marginBottom: '0.25rem' }}>오답</div>
-                        <div style={{ fontSize: '1.5rem', fontWeight: 800, color: 'var(--error, #dc2626)' }}>{stats.incorrectCount}</div>
+                        <div style={{ fontSize: '1.5rem', fontWeight: 800, color: 'var(--error, #dc2626)' }}>{resultCounts.incorrectCount}</div>
                     </div>
                     <div style={{ background: 'white', padding: '1rem', borderRadius: '12px', border: '1px solid #e2e8f0', textAlign: 'center' }}>
                         <div style={{ fontSize: '0.75rem', color: '#64748b', fontWeight: 600, marginBottom: '0.25rem' }}>미응답</div>
-                        <div style={{ fontSize: '1.5rem', fontWeight: 800, color: '#94a3b8' }}>{stats.unansweredCount}</div>
+                        <div style={{ fontSize: '1.5rem', fontWeight: 800, color: '#94a3b8' }}>{resultCounts.unansweredCount}</div>
                     </div>
+                    {resultCounts.ungradedCount > 0 && (
+                        <div style={{ background: 'white', padding: '1rem', borderRadius: '12px', border: '1px solid #e2e8f0', textAlign: 'center' }}>
+                            <div style={{ fontSize: '0.75rem', color: '#64748b', fontWeight: 600, marginBottom: '0.25rem' }}>미채점</div>
+                            <div style={{ fontSize: '1.5rem', fontWeight: 800, color: '#64748b' }}>{resultCounts.ungradedCount}</div>
+                        </div>
+                    )}
                 </div>
 
                 {hasHandwriting && (
@@ -267,16 +340,194 @@ export default function ReviewPage() {
                     </section>
                 )}
 
-                {/* Action: retake */}
-                <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: '1rem' }}>
-                    <Link
-                        href={`/solve/${attempt.examId}`}
-                        className="btn btn-primary"
-                        style={{ fontSize: '0.9rem' }}
-                    >
-                        시험 다시 보기
-                    </Link>
-                </div>
+                <section style={{
+                    background: 'white',
+                    border: '1px solid #e2e8f0',
+                    borderRadius: '12px',
+                    padding: '1.25rem',
+                    marginBottom: '1.25rem',
+                    display: 'grid',
+                    gap: '1rem'
+                }}>
+                    <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: '1rem', flexWrap: 'wrap' }}>
+                        <div>
+                            <h2 style={{ fontSize: '1rem', fontWeight: 800, color: '#0f172a', display: 'flex', alignItems: 'center', gap: '0.45rem' }}>
+                                <Target size={17} color="#4f46e5" />
+                                오답 재시험
+                            </h2>
+                            <p style={{ color: '#64748b', fontSize: '0.84rem', marginTop: '0.25rem' }}>
+                                틀린 문항과 같은 유형을 묶어 다시 풀 수 있습니다.
+                            </p>
+                        </div>
+                        <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+                            {retakeQuestionIds.length > 0 ? (
+                                <Link
+                                    href={buildRetakeHref(attempt.examId, attempt.id, retakeQuestionIds, "wrong")}
+                                    className="btn btn-primary"
+                                    style={{ fontSize: '0.86rem', display: 'inline-flex', alignItems: 'center', gap: '0.4rem' }}
+                                >
+                                    <Repeat2 size={15} />
+                                    오답만 재시험
+                                </Link>
+                            ) : (
+                                <span style={{ color: '#16a34a', fontWeight: 800, fontSize: '0.86rem' }}>재시험할 오답이 없습니다</span>
+                            )}
+                            <Link
+                                href={`/solve/${attempt.examId}`}
+                                className="btn btn-secondary"
+                                style={{ fontSize: '0.86rem' }}
+                            >
+                                전체 다시 보기
+                            </Link>
+                        </div>
+                    </div>
+
+                    {recommendationGroups.length > 0 && (
+                        <div style={{
+                            display: 'grid',
+                            gap: '0.65rem',
+                            padding: '0.9rem',
+                            borderRadius: '10px',
+                            border: '1px solid #c7d2fe',
+                            background: '#eef2ff'
+                        }}>
+                            <div style={{ display: 'flex', justifyContent: 'space-between', gap: '0.75rem', flexWrap: 'wrap' }}>
+                                <div>
+                                    <div style={{ fontWeight: 900, color: '#312e81', fontSize: '0.92rem' }}>
+                                        유형 재추천 큐
+                                    </div>
+                                    <div style={{ color: '#4338ca', fontSize: '0.78rem', marginTop: '0.2rem', fontWeight: 700 }}>
+                                        이번 시험에서 틀린 유형만 묶었습니다.
+                                    </div>
+                                </div>
+                                <span style={{
+                                    color: '#4338ca',
+                                    background: 'white',
+                                    border: '1px solid #c7d2fe',
+                                    borderRadius: '999px',
+                                    padding: '0.25rem 0.6rem',
+                                    fontSize: '0.72rem',
+                                    fontWeight: 900,
+                                    height: 'fit-content'
+                                }}>
+                                    {retakeQuestionIds.length}문항 대상
+                                </span>
+                            </div>
+
+                            <div style={{ display: 'grid', gap: '0.55rem' }}>
+                                {recommendationGroups.map(group => {
+                                    const retakeIds = group.retakeQuestionIds;
+                                    const retakeNumbers = formatRetakeNumbers(retakeIds);
+
+                                    return (
+                                        <div key={group.key} style={{
+                                            display: 'flex',
+                                            alignItems: 'center',
+                                            justifyContent: 'space-between',
+                                            gap: '0.75rem',
+                                            padding: '0.85rem',
+                                            borderRadius: '8px',
+                                            background: 'white',
+                                            border: '1px solid #c7d2fe'
+                                        }}>
+                                            <div style={{ minWidth: 0 }}>
+                                                <div style={{ fontWeight: 900, color: '#0f172a', fontSize: '0.9rem', lineHeight: 1.3 }}>
+                                                    {group.title}
+                                                    <span style={{ marginLeft: '0.45rem', color: '#64748b', fontSize: '0.74rem', fontWeight: 800 }}>
+                                                        {group.basis}
+                                                    </span>
+                                                </div>
+                                                <div style={{ color: '#64748b', fontSize: '0.78rem', marginTop: '0.22rem' }}>
+                                                    {retakeNumbers || group.questionNumbers.join(', ')}번 · 오답/미답 {group.wrongCount}/{group.totalCount}
+                                                </div>
+                                                <div style={{ color: '#4338ca', fontSize: '0.72rem', marginTop: '0.18rem', fontWeight: 700 }}>
+                                                    {group.reason}
+                                                </div>
+                                            </div>
+                                            <Link
+                                                href={buildRetakeHref(attempt.examId, group.sourceAttemptId, retakeIds, group.retakeMode, {
+                                                    labels: group.retakeLabels,
+                                                    concepts: group.retakeConcepts,
+                                                })}
+                                                className="btn btn-secondary"
+                                                style={{ fontSize: '0.78rem', padding: '0.35rem 0.7rem', whiteSpace: 'nowrap' }}
+                                            >
+                                                유형 재시험
+                                            </Link>
+                                        </div>
+                                    );
+                                })}
+                            </div>
+                        </div>
+                    )}
+
+                    {recommendationGroups.length === 0 && weaknessGroups.length > 0 && (
+                        <div style={{ display: 'grid', gap: '0.55rem' }}>
+                            {weaknessGroups.map(group => (
+                                <div key={group.key} style={{
+                                    display: 'flex',
+                                    alignItems: 'center',
+                                    justifyContent: 'space-between',
+                                    gap: '0.75rem',
+                                    padding: '0.8rem 0.9rem',
+                                    borderRadius: '8px',
+                                    background: '#f8fafc',
+                                    border: '1px solid #e2e8f0'
+                                }}>
+                                    <div style={{ minWidth: 0 }}>
+                                        <div style={{ fontWeight: 800, color: '#0f172a', fontSize: '0.9rem' }}>
+                                            {group.title}
+                                            <span style={{ marginLeft: '0.45rem', color: '#64748b', fontSize: '0.76rem', fontWeight: 700 }}>
+                                                {group.basis}
+                                            </span>
+                                        </div>
+                                        <div style={{ color: '#64748b', fontSize: '0.78rem', marginTop: '0.2rem' }}>
+                                            {group.questionNumbers.join(', ')}번 · 오답률 {group.wrongRate}%
+                                        </div>
+                                    </div>
+                                    <Link
+                                        href={buildRetakeHref(attempt.examId, attempt.id, group.questionIds, "similar", {
+                                            labels: group.labels,
+                                            concepts: group.concepts,
+                                        })}
+                                        className="btn btn-secondary"
+                                        style={{ fontSize: '0.78rem', padding: '0.35rem 0.7rem', whiteSpace: 'nowrap' }}
+                                    >
+                                        유형 재시험
+                                    </Link>
+                                </div>
+                            ))}
+                        </div>
+                    )}
+                </section>
+
+                {(attempt.questionTimings?.length || behaviorSummary.focusLossCount > 0) && (
+                    <section style={{
+                        background: 'white',
+                        border: '1px solid #e2e8f0',
+                        borderRadius: '12px',
+                        padding: '1rem',
+                        marginBottom: '1.25rem',
+                    }}>
+                        <h2 style={{ fontSize: '0.96rem', fontWeight: 800, color: '#0f172a', display: 'flex', alignItems: 'center', gap: '0.4rem', marginBottom: '0.75rem' }}>
+                            <Clock size={16} color="#4f46e5" />
+                            풀이 행동 요약
+                        </h2>
+                        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '0.6rem' }}>
+                            {[
+                                { label: '추적 시간', value: formatSeconds(behaviorSummary.totalTrackedTimeSec) },
+                                { label: '평균 문항 시간', value: formatSeconds(behaviorSummary.averageTimeSec) },
+                                { label: '다시 본 문항', value: behaviorSummary.revisitedQuestionNumbers.length ? `${behaviorSummary.revisitedQuestionNumbers.join(', ')}번` : '없음' },
+                                { label: '이탈 기록', value: `${behaviorSummary.focusLossCount}회` },
+                            ].map(item => (
+                                <div key={item.label} style={{ padding: '0.75rem', borderRadius: '8px', background: '#f8fafc', border: '1px solid #e2e8f0' }}>
+                                    <div style={{ color: '#64748b', fontSize: '0.72rem', fontWeight: 700, marginBottom: '0.25rem' }}>{item.label}</div>
+                                    <div style={{ color: '#0f172a', fontSize: '0.9rem', fontWeight: 800 }}>{item.value}</div>
+                                </div>
+                            ))}
+                        </div>
+                    </section>
+                )}
 
                 {/* Filters */}
                 <div style={{ display: 'flex', gap: '1rem', marginBottom: '1.5rem', borderBottom: '1px solid #e2e8f0', paddingBottom: '1rem' }}>
@@ -285,40 +536,53 @@ export default function ReviewPage() {
                         className={`btn ${!filterWrong ? 'btn-primary' : 'btn-secondary'}`}
                         style={{ borderRadius: '999px' }}
                     >
-                        전체 문항 ({exam.questions.length})
+                        전체 문항 ({reviewQuestions.length})
                     </button>
                     <button
                         onClick={() => setFilterWrong(true)}
                         className={`btn ${filterWrong ? 'btn-primary' : 'btn-secondary'}`}
                         style={{ borderRadius: '999px', background: filterWrong ? '#ef4444' : undefined, color: filterWrong ? 'white' : undefined }}
                     >
-                        오답만 보기 ({stats.incorrectCount + stats.unansweredCount})
+                        오답만 보기 ({resultCounts.incorrectCount + resultCounts.unansweredCount})
                     </button>
                 </div>
 
                 {/* Question List */}
                 <div style={{ display: 'grid', gap: '1rem' }}>
                     {filteredQuestions.map((q) => {
-                        const userAns = attempt.answers[q.id];
-                        const isCorrect = userAns === q.answer;
-                        const isSkipped = userAns === undefined || userAns === null || userAns === 0;
+                        const result = resultByQuestionId.get(q.id);
+                        const userAns = result?.selectedAnswer ?? attempt.answers[q.id];
+                        const correctAnswer = result?.correctAnswer ?? q.answer;
+                        const status = result?.status
+                            ?? (correctAnswer === undefined
+                                ? "ungraded"
+                                : userAns === undefined || userAns === null || userAns === 0
+                                    ? "unanswered"
+                                    : userAns === correctAnswer
+                                        ? "correct"
+                                        : "wrong");
+                        const isCorrect = status === "correct";
+                        const isSkipped = status === "unanswered";
+                        const isUngraded = status === "ungraded";
                         const explanationOpen = !!openExplanations[q.id];
+                        const timing = timingByQuestionId.get(q.id);
+                        const statusLabel = isUngraded ? "미채점" : isCorrect ? "정답" : isSkipped ? "미응답" : "오답";
 
                         return (
                             <div key={q.id} style={{
                                 background: 'white', padding: '1.5rem', borderRadius: '12px',
-                                border: '1px solid', borderColor: isCorrect ? '#e2e8f0' : '#fecaca',
+                                border: '1px solid', borderColor: isCorrect || isUngraded ? '#e2e8f0' : '#fecaca',
                                 position: 'relative'
                             }}>
                                 <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '1rem' }}>
-                                    <span style={{ fontWeight: 700, fontSize: '1.1rem', color: isCorrect ? '#0f172a' : '#ef4444' }}>
+                                    <span style={{ fontWeight: 700, fontSize: '1.1rem', color: isCorrect || isUngraded ? '#0f172a' : '#ef4444' }}>
                                         문항 {q.number}
                                     </span>
                                     <span style={{
                                         fontWeight: 600, fontSize: '0.9rem',
-                                        color: isCorrect ? '#16a34a' : '#dc2626'
+                                        color: isUngraded ? '#64748b' : isCorrect ? '#16a34a' : '#dc2626'
                                     }}>
-                                        {isCorrect ? "정답" : isSkipped ? "미응답" : "오답"}
+                                        {statusLabel}
                                     </span>
                                 </div>
 
@@ -331,25 +595,34 @@ export default function ReviewPage() {
                                     ) : (
                                         <div>
                                             <span style={{ color: '#64748b', marginRight: '0.5rem' }}>내 답:</span>
-                                            <span style={{ fontWeight: 700, color: '#ef4444' }}>
-                                                {isSkipped ? '(미응답)' : `${userAns}번`}
+                                            <span style={{ fontWeight: 700, color: isUngraded ? '#475569' : '#ef4444' }}>
+                                                {isSkipped ? '(미응답)' : typeof userAns === "number" ? `${userAns}번` : '-'}
                                             </span>
-                                            {q.answer !== undefined && (
+                                            {correctAnswer !== undefined && (
                                                 <>
                                                     <span style={{ color: '#94a3b8', margin: '0 0.5rem' }}>·</span>
                                                     <span style={{ color: '#64748b', marginRight: '0.5rem' }}>정답:</span>
-                                                    <span style={{ fontWeight: 700, color: '#16a34a' }}>{q.answer}번</span>
+                                                    <span style={{ fontWeight: 700, color: '#16a34a' }}>{correctAnswer}번</span>
                                                 </>
                                             )}
                                         </div>
                                     )}
                                 </div>
 
-                                {q.label && (
-                                    <div style={{ marginTop: '1rem', display: 'flex', gap: '0.5rem' }}>
-                                        <span style={{ fontSize: '0.75rem', padding: '2px 8px', borderRadius: '4px', background: '#f1f5f9', color: '#64748b' }}>
+                                {(q.label || q.tags?.concept || q.tags?.source || timing) && (
+                                    <div style={{ marginTop: '1rem', display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
+                                        {q.label && <span style={{ fontSize: '0.75rem', padding: '2px 8px', borderRadius: '4px', background: '#f1f5f9', color: '#64748b' }}>
                                             #{q.label}
-                                        </span>
+                                        </span>}
+                                        {q.tags?.concept && <span style={{ fontSize: '0.75rem', padding: '2px 8px', borderRadius: '4px', background: '#eef2ff', color: '#4f46e5' }}>
+                                            {q.tags.concept}
+                                        </span>}
+                                        {q.tags?.source && <span style={{ fontSize: '0.75rem', padding: '2px 8px', borderRadius: '4px', background: '#f0fdfa', color: '#0f766e' }}>
+                                            {q.tags.source}
+                                        </span>}
+                                        {timing && <span style={{ fontSize: '0.75rem', padding: '2px 8px', borderRadius: '4px', background: '#fff7ed', color: '#9a3412' }}>
+                                            {formatSeconds(timing.totalTimeSec)} · 방문 {timing.visitCount}회
+                                        </span>}
                                     </div>
                                 )}
 

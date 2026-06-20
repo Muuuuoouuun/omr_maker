@@ -1,7 +1,9 @@
 "use client";
 
 import React, { useEffect, useRef } from "react";
-import { Question } from "@/types/omr";
+import { PenLine } from "lucide-react";
+import { DEFAULT_CHOICE_COUNT, normalizeChoiceCount, questionChoiceCount, type Question, type QuestionDrawingSummary } from "@/types/omr";
+import { getCardViewGridMetrics } from "@/lib/pure";
 
 interface OMRCardViewProps {
   title?: string;
@@ -15,6 +17,8 @@ interface OMRCardViewProps {
   correctAnswers?: Record<number, number>;
   columns?: number; // Optional hint for column count
   showMeta?: boolean; // Show label/score/PDF indicators
+  questionDrawings?: QuestionDrawingSummary[];
+  numberingLayout?: "grid" | "vertical";
 }
 
 function LinkIcon() {
@@ -40,16 +44,20 @@ const difficultyLabels: Record<string, string> = {
 export default function OMRCardView({
   title = "OMR 답안지",
   questions,
-  optionsCount = 5,
+  optionsCount = DEFAULT_CHOICE_COUNT,
   userAnswers = {},
   selectedQuestionId = null,
   onAnswerClick,
   onQuestionClick,
   mode = "solve",
   correctAnswers,
+  columns = 1,
   showMeta = false,
+  questionDrawings = [],
+  numberingLayout = "grid",
 }: OMRCardViewProps) {
   const isEditor = mode === "editor";
+  const fallbackChoiceCount = normalizeChoiceCount(optionsCount);
 
   // In editor mode, "answers" to show as marked are the correct answers stored in the questions themselves
   const effectiveAnswers: Record<number, number> = isEditor
@@ -66,6 +74,16 @@ export default function OMRCardView({
   const progress = totalCount > 0 ? (answeredCount / totalCount) * 100 : 0;
 
   const cardRefs = useRef<Record<number, HTMLDivElement | null>>({});
+  const gridMetrics = getCardViewGridMetrics(questions.length, columns);
+  const gridRows = Math.max(gridMetrics.rows, 1);
+  const gridStyle = {
+    "--omr-card-cols": gridMetrics.columns,
+    "--omr-card-rows": gridRows,
+    gridTemplateRows: `repeat(${gridRows}, auto)`,
+  } as React.CSSProperties;
+  const handwritingByQuestionId = new Map(
+    questionDrawings.map((drawing) => [drawing.questionId, drawing])
+  );
 
   useEffect(() => {
     if (selectedQuestionId !== null && cardRefs.current[selectedQuestionId]) {
@@ -77,7 +95,7 @@ export default function OMRCardView({
   }, [selectedQuestionId]);
 
   return (
-    <div className="omr-cardview">
+    <div className={`omr-cardview ${numberingLayout === "vertical" ? "is-vertical-numbering" : ""}`}>
       {/* Header with progress */}
       <div className="omr-cardview-header">
         <div className="omr-cardview-header-top">
@@ -111,12 +129,13 @@ export default function OMRCardView({
       </div>
 
       {/* Card Grid */}
-      <div className="omr-cardview-grid">
+      <div className="omr-cardview-grid" style={gridStyle}>
         {questions.map((q) => {
           const answered = effectiveAnswers[q.id];
           const isSelected = selectedQuestionId === q.id;
           const isAnswered = answered !== undefined && answered !== null;
-          const questionOptionsCount = q.choices || optionsCount;
+          const questionOptionsCount = questionChoiceCount(q, fallbackChoiceCount);
+          const handwritingSummary = handwritingByQuestionId.get(q.id);
 
           return (
             <div
@@ -126,7 +145,7 @@ export default function OMRCardView({
               }}
               className={`q-card ${isAnswered ? "answered" : ""} ${
                 isSelected ? "selected" : ""
-              } ${isEditor ? "editor-card" : ""}`}
+              } ${isEditor ? "editor-card" : ""} ${handwritingSummary ? "has-handwriting" : ""}`}
               onClick={() => onQuestionClick?.(q.id)}
             >
               <div className="q-card-num">{q.number}</div>
@@ -168,8 +187,19 @@ export default function OMRCardView({
                 })}
               </div>
 
+              {handwritingSummary && (
+                <span
+                  className="q-handwriting-chip"
+                  title={`${handwritingSummary.page}p 필기 ${handwritingSummary.strokeCount}획`}
+                  aria-label={`문제 ${q.number}번 필기 ${handwritingSummary.strokeCount}획`}
+                >
+                  <PenLine size={10} aria-hidden="true" />
+                  {handwritingSummary.strokeCount}
+                </span>
+              )}
+
               {/* Meta indicators (editor mode) */}
-              {showMeta && (q.label || q.tags?.concept || q.tags?.difficulty || q.score !== undefined || q.pdfLocation) && (
+              {showMeta && (q.label || q.tags?.concept || q.tags?.difficulty || q.score !== undefined || q.pdfLocation || q.pdfRegion) && (
                 <div className="q-card-meta">
                   {q.label && (
                     <span className="q-meta-chip q-meta-label">{q.label}</span>
@@ -183,8 +213,8 @@ export default function OMRCardView({
                   {q.score !== undefined && (
                     <span className="q-meta-chip q-meta-score">{q.score}점</span>
                   )}
-                  {q.pdfLocation && (
-                    <span className="q-meta-chip q-meta-pdf" title={`PDF ${q.pdfLocation.page}p 연결됨`}>
+                  {(q.pdfLocation || q.pdfRegion) && (
+                    <span className="q-meta-chip q-meta-pdf" title={`PDF ${q.pdfLocation?.page || q.pdfRegion?.page}p 연결됨`}>
                       <LinkIcon />
                     </span>
                   )}
