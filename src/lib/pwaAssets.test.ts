@@ -1,4 +1,5 @@
 import { existsSync, readFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
 import path from "node:path";
 import vm from "node:vm";
 import { createCanvas, loadImage } from "canvas";
@@ -34,6 +35,10 @@ function getPwaRegisterSource(): string {
 
 function getPwaSmokeSource(): string {
     return readFileSync(path.join(rootDir, "scripts/pwa-prod-smoke.mjs"), "utf8");
+}
+
+function getPwaProofSource(): string {
+    return readFileSync(path.join(rootDir, "scripts/pwa-proof-verify.mjs"), "utf8");
 }
 
 function getRootLayoutSource(): string {
@@ -570,5 +575,69 @@ describe("PWA assets", () => {
         expect(source).toContain("Page.getInstallabilityErrors");
         expect(source).toContain("Chromium reported PWA installability errors");
         expect(source).toContain("chromiumInstallabilityState");
+    });
+
+    it("validates copied installed app proof reports from real devices", () => {
+        const source = getPwaProofSource();
+        const proofScriptPath = path.join(rootDir, "scripts/pwa-proof-verify.mjs");
+        const passingReport = [
+            "OMR Maker PWA device check",
+            "url=https://omr-maker-eight.vercel.app/pwa-check",
+            "checkedAt=2026. 6. 22. 4시 10분 00초",
+            "verdict=앱 실행 통과",
+            "displayMode=standalone",
+            "installedDisplay=yes",
+            "proofStatus=pass",
+            "displayEvidence=css-fullscreen=no · css-standalone=yes · ios-navigator-standalone=no",
+            "summary=14 pass, 0 warn, 0 fail",
+            "userAgent=Mozilla/5.0",
+            "- secure-context=pass:보안 컨텍스트 (https://omr-maker-eight.vercel.app)",
+            "- display-mode=pass:standalone (홈 화면 아이콘 실행 상태)",
+            "- launch-proof=pass:확인됨 (css-fullscreen=no · css-standalone=yes · ios-navigator-standalone=no)",
+            "- service-worker=pass:제어 중 (https://omr-maker-eight.vercel.app/sw.js)",
+            "- offline-cache=pass:준비 (caches=omr-maker-v8-shell, omr-maker-v8-runtime · required=/, /pwa-check, /offline.html, /logo.png · missing=none)",
+            "- manifest=pass:standalone (OMR Maker · icons 12 · screenshots 2)",
+            "- viewport=pass:cover (width=device-width, initial-scale=1, viewport-fit=cover)",
+            "- viewport-height=pass:동기화 (css=727px · visual=727px · inner=727px · delta=0px)",
+            "- keyboard-safe-area=pass:준비 (keyboard=0px · state=closed · width=393px · offsetTop=0px · offsetLeft=0px · scale=1)",
+            "- mobile-meta=pass:준비 (Android yes · iOS yes)",
+            "- handoff-origin=pass:공유 가능 (https://omr-maker-eight.vercel.app/pwa-check)",
+            "- overflow=pass:정상 (scroll 393px / viewport 393px)",
+            "- storage=pass:사용 가능 (localStorage ok · sessionStorage ok)",
+            "- install-prompt=pass:없음 (진단 화면에는 설치 배너 없음)",
+        ].join("\n");
+        const pendingReport = passingReport
+            .replace("verdict=앱 실행 통과", "verdict=설치 실행 전")
+            .replace("displayMode=standalone", "displayMode=browser")
+            .replace("installedDisplay=yes", "installedDisplay=no")
+            .replace("proofStatus=pass", "proofStatus=pending");
+
+        const passing = spawnSync(process.execPath, [proofScriptPath], {
+            encoding: "utf8",
+            input: passingReport,
+        });
+        const failing = spawnSync(process.execPath, [proofScriptPath], {
+            encoding: "utf8",
+            input: pendingReport,
+        });
+
+        expect(source).toContain("proofStatus must be pass");
+        expect(source).toContain("installedDisplay must be yes");
+        expect(source).toContain("displayMode must be standalone or fullscreen");
+        expect(source).toContain("Report URL must be the deployed HTTPS URL");
+        expect(passing.status).toBe(0);
+        expect(JSON.parse(passing.stdout)).toMatchObject({
+            displayMode: "standalone",
+            installedDisplay: "yes",
+            proofStatus: "pass",
+            status: "passed",
+        });
+        expect(failing.status).toBe(1);
+        expect(JSON.parse(failing.stdout)).toMatchObject({
+            displayMode: "browser",
+            installedDisplay: "no",
+            proofStatus: "pending",
+            status: "failed",
+        });
     });
 });
