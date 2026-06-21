@@ -193,6 +193,12 @@ describe("service UI surface", () => {
         expect(pwaCheck).toContain("pwa-device-report");
         expect(pwaCheck).toContain("pwa-device-handoff");
         expect(pwaCheck).toContain("pwa-device-handoff-qr");
+        expect(pwaCheck).toContain("pwa-proof-verifier");
+        expect(pwaCheck).toContain("pwa-proof-input");
+        expect(pwaCheck).toContain("pwa-proof-result");
+        expect(pwaCheck).toContain("validateProofReport");
+        expect(pwaCheck).toContain("리포트 통과");
+        expect(pwaCheck).toContain("리포트 미통과");
         expect(pwaCheck).toContain("INSTALL_PROOF_STEPS");
         expect(pwaCheck).toContain("pwa-install-proof-guide");
         expect(pwaCheck).toContain("pwa-install-proof-step-${index + 1}");

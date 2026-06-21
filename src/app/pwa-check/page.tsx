@@ -29,6 +29,22 @@ interface CheckSummary {
   warnings: number;
 }
 
+interface ParsedProofReport {
+  checks: Record<string, { detail: string; tone: string; value: string }>;
+  fields: Record<string, string>;
+  header: string;
+}
+
+interface ProofValidationResult {
+  displayMode: string;
+  errors: string[];
+  installedDisplay: string;
+  proofStatus: string;
+  status: "failed" | "passed";
+  url: string;
+  verdict: string;
+}
+
 const VIEWPORT_HEIGHT_VAR = "--app-viewport-height";
 const VIEWPORT_WIDTH_VAR = "--app-viewport-width";
 const VIEWPORT_OFFSET_TOP_VAR = "--app-visual-viewport-offset-top";
@@ -36,6 +52,23 @@ const VIEWPORT_OFFSET_LEFT_VAR = "--app-visual-viewport-offset-left";
 const VIEWPORT_SCALE_VAR = "--app-visual-viewport-scale";
 const KEYBOARD_INSET_BOTTOM_VAR = "--app-keyboard-inset-bottom";
 const OFFLINE_CACHE_REQUIRED_PATHS = ["/", "/pwa-check", "/offline.html", "/logo.png"];
+const PROOF_INSTALLED_MODES = new Set(["standalone", "fullscreen"]);
+const REQUIRED_PROOF_PASS_CHECKS = [
+  "secure-context",
+  "display-mode",
+  "launch-proof",
+  "service-worker",
+  "offline-cache",
+  "manifest",
+  "viewport",
+  "viewport-height",
+  "keyboard-safe-area",
+  "mobile-meta",
+  "handoff-origin",
+  "overflow",
+  "storage",
+  "install-prompt",
+];
 
 const CHECK_TONE_META: Record<CheckTone, { background: string; color: string; icon: typeof CheckCircle2; label: string }> = {
   pass: { background: "rgba(16, 185, 129, 0.1)", color: "var(--success)", icon: CheckCircle2, label: "통과" },
@@ -107,6 +140,15 @@ function isLocalHandoffHost(hostname: string): boolean {
     || normalized === "127.0.0.1"
     || normalized === "::1"
     || normalized.endsWith(".localhost");
+}
+
+function isDeviceReachableHttps(urlValue: string): boolean {
+  try {
+    const url = new URL(urlValue);
+    return url.protocol === "https:" && !isLocalHandoffHost(url.hostname);
+  } catch {
+    return false;
+  }
 }
 
 function readRootCssVar(name: string): string {
@@ -202,6 +244,92 @@ function buildDeviceReport(snapshot: RuntimeSnapshot, summary: CheckSummary): st
     `userAgent=${snapshot.userAgent}`,
     checks,
   ].join("\n");
+}
+
+function parseProofReport(reportText: string): ParsedProofReport {
+  const lines = reportText
+    .replace(/\r\n/g, "\n")
+    .split("\n")
+    .map(line => line.trim())
+    .filter(Boolean);
+  const fields: ParsedProofReport["fields"] = {};
+  const checks: ParsedProofReport["checks"] = {};
+
+  for (const line of lines.slice(1)) {
+    if (line.startsWith("- ")) {
+      const match = line.match(/^- ([^=]+)=([^:]+):([^(]+?)(?: \((.*)\))?$/);
+      if (match) {
+        checks[match[1]] = {
+          detail: match[4] || "",
+          tone: match[2],
+          value: match[3].trim(),
+        };
+      }
+      continue;
+    }
+
+    const separator = line.indexOf("=");
+    if (separator > 0) {
+      fields[line.slice(0, separator)] = line.slice(separator + 1);
+    }
+  }
+
+  return {
+    checks,
+    fields,
+    header: lines[0] || "",
+  };
+}
+
+function validateProofReport(reportText: string): ProofValidationResult {
+  const parsed = parseProofReport(reportText);
+  const errors: string[] = [];
+
+  if (parsed.header !== "OMR Maker PWA device check") {
+    errors.push("Report header is not an OMR Maker PWA device check report.");
+  }
+  if (!isDeviceReachableHttps(parsed.fields.url || "")) {
+    errors.push("Report URL must be the deployed HTTPS URL, not localhost or an invalid URL.");
+  }
+  if (parsed.fields.verdict !== "앱 실행 통과") {
+    errors.push("Report verdict is not 앱 실행 통과.");
+  }
+  if (!PROOF_INSTALLED_MODES.has(parsed.fields.displayMode || "")) {
+    errors.push("displayMode must be standalone or fullscreen.");
+  }
+  if (parsed.fields.installedDisplay !== "yes") {
+    errors.push("installedDisplay must be yes.");
+  }
+  if (parsed.fields.proofStatus !== "pass") {
+    errors.push("proofStatus must be pass.");
+  }
+  if (!/0 fail/.test(parsed.fields.summary || "")) {
+    errors.push("Report summary must include 0 fail.");
+  }
+  if (!/yes/.test(parsed.fields.displayEvidence || "")) {
+    errors.push("displayEvidence must include at least one yes signal.");
+  }
+
+  for (const checkId of REQUIRED_PROOF_PASS_CHECKS) {
+    const check = parsed.checks[checkId];
+    if (!check) {
+      errors.push(`Missing check: ${checkId}.`);
+      continue;
+    }
+    if (check.tone !== "pass") {
+      errors.push(`Check ${checkId} must be pass, got ${check.tone}:${check.value}.`);
+    }
+  }
+
+  return {
+    displayMode: parsed.fields.displayMode || "",
+    errors,
+    installedDisplay: parsed.fields.installedDisplay || "",
+    proofStatus: parsed.fields.proofStatus || "",
+    status: errors.length === 0 ? "passed" : "failed",
+    url: parsed.fields.url || "",
+    verdict: parsed.fields.verdict || "",
+  };
 }
 
 async function copyText(text: string): Promise<void> {
@@ -485,6 +613,7 @@ export default function PwaCheckPage() {
   const [copyState, setCopyState] = useState<"copied" | "failed" | "idle" | "shared">("idle");
   const [handoffState, setHandoffState] = useState<"copied" | "failed" | "idle" | "shared">("idle");
   const [handoffUrl, setHandoffUrl] = useState("");
+  const [proofInput, setProofInput] = useState("");
 
   const runCheck = useCallback(async () => {
     setIsChecking(true);
@@ -524,8 +653,12 @@ export default function PwaCheckPage() {
   const summary = useMemo(() => snapshot ? checkSummary(snapshot.checks) : { fails: 0, passes: 0, warnings: 0 }, [snapshot]);
   const verdict = useMemo(() => deviceVerdict(snapshot, summary), [snapshot, summary]);
   const reportText = useMemo(() => snapshot ? buildDeviceReport(snapshot, summary) : "", [snapshot, summary]);
+  const proofResult = useMemo(() => proofInput.trim() ? validateProofReport(proofInput) : null, [proofInput]);
   const verdictMeta = CHECK_TONE_META[verdict.tone];
   const VerdictIcon = verdictMeta.icon;
+  const proofTone: CheckTone = proofResult ? proofResult.status === "passed" ? "pass" : "fail" : "warn";
+  const proofMeta = CHECK_TONE_META[proofTone];
+  const ProofIcon = proofMeta.icon;
 
   const copyReport = useCallback(async () => {
     if (!reportText) return;
@@ -1006,6 +1139,103 @@ export default function PwaCheckPage() {
                 </span>
               </div>
             </div>
+          </section>
+
+          <section
+            aria-label="실기기 리포트 판정"
+            data-testid="pwa-proof-verifier"
+            style={{
+              background: "var(--surface)",
+              border: "1px solid var(--border)",
+              borderRadius: "8px",
+              display: "grid",
+              gap: "0.85rem",
+              padding: "1rem",
+            }}
+          >
+            <div style={{ alignItems: "center", display: "grid", gap: "0.75rem", gridTemplateColumns: "auto minmax(0, 1fr)" }}>
+              <span
+                aria-label={proofMeta.label}
+                style={{
+                  alignItems: "center",
+                  background: proofMeta.background,
+                  borderRadius: "8px",
+                  color: proofMeta.color,
+                  display: "inline-flex",
+                  height: "2.5rem",
+                  justifyContent: "center",
+                  width: "2.5rem",
+                }}
+              >
+                <ProofIcon size={18} />
+              </span>
+              <div style={{ minWidth: 0 }}>
+                <strong
+                  data-testid="pwa-proof-result"
+                  style={{ color: "var(--foreground)", display: "block", fontSize: "0.95rem", fontWeight: 900 }}
+                >
+                  {proofResult ? proofResult.status === "passed" ? "리포트 통과" : "리포트 미통과" : "리포트 대기"}
+                </strong>
+                <span style={{ color: "var(--muted)", display: "block", fontSize: "0.75rem", lineHeight: 1.35, overflowWrap: "anywhere" }}>
+                  {proofResult
+                    ? `${proofResult.displayMode || "unknown"} · installed=${proofResult.installedDisplay || "missing"} · proof=${proofResult.proofStatus || "missing"}`
+                    : "폰에서 공유한 PWA device check 리포트를 붙여넣습니다."}
+                </span>
+              </div>
+            </div>
+            <textarea
+              aria-label="실기기 리포트 입력"
+              data-testid="pwa-proof-input"
+              onChange={event => setProofInput(event.target.value)}
+              placeholder="OMR Maker PWA device check"
+              value={proofInput}
+              style={{
+                background: "var(--background)",
+                border: "1px solid var(--border)",
+                borderRadius: "8px",
+                color: "var(--foreground)",
+                fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
+                fontSize: "0.75rem",
+                lineHeight: 1.45,
+                minHeight: "7rem",
+                padding: "0.8rem",
+                resize: "vertical",
+                width: "100%",
+              }}
+            />
+            {proofResult?.url ? (
+              <div
+                data-testid="pwa-proof-url"
+                style={{ color: "var(--muted)", fontSize: "0.72rem", lineHeight: 1.35, overflowWrap: "anywhere" }}
+              >
+                {proofResult.url}
+              </div>
+            ) : null}
+            {proofResult?.errors.length ? (
+              <ul
+                data-testid="pwa-proof-errors"
+                style={{
+                  color: "var(--error)",
+                  display: "grid",
+                  fontSize: "0.73rem",
+                  gap: "0.35rem",
+                  lineHeight: 1.35,
+                  margin: 0,
+                  paddingLeft: "1rem",
+                }}
+              >
+                {proofResult.errors.slice(0, 5).map(error => (
+                  <li key={error}>{error}</li>
+                ))}
+              </ul>
+            ) : proofResult?.status === "passed" ? (
+              <div
+                data-testid="pwa-proof-errors"
+                style={{ color: "var(--success)", fontSize: "0.75rem", fontWeight: 850 }}
+              >
+                installed home-screen launch verified
+              </div>
+            ) : null}
           </section>
 
           <section aria-label="PWA 체크 목록" style={{ display: "grid", gap: "0.7rem" }}>

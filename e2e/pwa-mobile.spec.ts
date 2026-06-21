@@ -152,6 +152,35 @@ async function stubClipboard(page: Page) {
     });
 }
 
+function validInstalledProofReport(): string {
+    return [
+        "OMR Maker PWA device check",
+        "url=https://omr-maker-eight.vercel.app/pwa-check",
+        "checkedAt=2026. 6. 22. 4시 10분 00초",
+        "verdict=앱 실행 통과",
+        "displayMode=standalone",
+        "installedDisplay=yes",
+        "proofStatus=pass",
+        "displayEvidence=css-fullscreen=no · css-standalone=yes · ios-navigator-standalone=no",
+        "summary=14 pass, 0 warn, 0 fail",
+        "userAgent=Mozilla/5.0",
+        "- secure-context=pass:보안 컨텍스트 (https://omr-maker-eight.vercel.app)",
+        "- display-mode=pass:standalone (홈 화면 아이콘 실행 상태)",
+        "- launch-proof=pass:확인됨 (css-fullscreen=no · css-standalone=yes · ios-navigator-standalone=no)",
+        "- service-worker=pass:제어 중 (https://omr-maker-eight.vercel.app/sw.js)",
+        "- offline-cache=pass:준비 (caches=omr-maker-v8-shell, omr-maker-v8-runtime · required=/, /pwa-check, /offline.html, /logo.png · missing=none)",
+        "- manifest=pass:standalone (OMR Maker · icons 12 · screenshots 2)",
+        "- viewport=pass:cover (width=device-width, initial-scale=1, viewport-fit=cover)",
+        "- viewport-height=pass:동기화 (css=727px · visual=727px · inner=727px · delta=0px)",
+        "- keyboard-safe-area=pass:준비 (keyboard=0px · state=closed · width=393px · offsetTop=0px · offsetLeft=0px · scale=1)",
+        "- mobile-meta=pass:준비 (Android yes · iOS yes)",
+        "- handoff-origin=pass:공유 가능 (https://omr-maker-eight.vercel.app/pwa-check)",
+        "- overflow=pass:정상 (scroll 393px / viewport 393px)",
+        "- storage=pass:사용 가능 (localStorage ok · sessionStorage ok)",
+        "- install-prompt=pass:없음 (진단 화면에는 설치 배너 없음)",
+    ].join("\n");
+}
+
 async function seedStudentSession(page: Page) {
     await page.addInitScript(() => {
         const studentSession = {
@@ -400,6 +429,8 @@ test.describe("Mobile PWA entry", () => {
         await expect(page.getByTestId("pwa-device-handoff")).toContainText("폰으로 열기");
         await expect(page.getByTestId("pwa-device-handoff-url")).toContainText("/pwa-check");
         await expect(page.getByTestId("pwa-device-handoff-qr")).toBeVisible();
+        await expect(page.getByTestId("pwa-proof-verifier")).toBeVisible();
+        await expect(page.getByTestId("pwa-proof-result")).toContainText("리포트 대기");
         await expectTouchTarget(page.getByRole("link", { name: "홈" }));
         await expectTouchTarget(page.getByTestId("pwa-device-report-copy"));
         await expectTouchTarget(page.getByTestId("pwa-device-report-share"));
@@ -433,6 +464,11 @@ test.describe("Mobile PWA entry", () => {
         expect(copiedReport).toContain("viewport-height=pass:동기화");
         expect(copiedReport).toContain("keyboard-safe-area=pass:준비");
         expect(copiedReport).toContain("overflow=pass:정상");
+
+        await page.getByTestId("pwa-proof-input").fill(copiedReport);
+        await expect(page.getByTestId("pwa-proof-result")).toContainText("리포트 미통과");
+        await expect(page.getByTestId("pwa-proof-errors")).toContainText("proofStatus must be pass");
+        await expect(page.getByTestId("pwa-proof-errors")).toContainText("installedDisplay must be yes");
 
         await page.getByTestId("pwa-device-report-share").click();
         await expect(page.getByTestId("pwa-device-copy-status")).toContainText("공유됨");
@@ -514,6 +550,9 @@ test.describe("Mobile PWA entry", () => {
         await expect(page.getByTestId("pwa-device-report")).toContainText("offline-cache=");
         await expect(page.getByTestId("pwa-device-report")).toContainText("viewport-height=pass:동기화");
         await expect(page.getByTestId("pwa-device-report")).toContainText("keyboard-safe-area=pass:준비");
+        await page.getByTestId("pwa-proof-input").fill(validInstalledProofReport());
+        await expect(page.getByTestId("pwa-proof-result")).toContainText("리포트 통과");
+        await expect(page.getByTestId("pwa-proof-errors")).toContainText("installed home-screen launch verified");
         await expectNoHorizontalOverflow(page);
 
         expect(consoleProblems).toEqual([]);
