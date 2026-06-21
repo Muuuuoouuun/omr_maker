@@ -243,7 +243,10 @@ describe("PWA assets", () => {
         expect(currentManifest.display).toBe("standalone");
         expect(currentManifest.lang).toBe("ko");
         expect(currentManifest.categories).toContain("education");
-        expect(currentManifest.shortcuts?.length).toBeGreaterThanOrEqual(3);
+        expect(currentManifest.shortcuts?.length).toBeGreaterThanOrEqual(4);
+        expect(currentManifest.shortcuts?.map(shortcut => shortcut.url)).toEqual(
+            expect.arrayContaining(["/create", "/teacher/dashboard", "/?role=student", "/pwa-check"]),
+        );
         currentManifest.shortcuts?.forEach(shortcut => {
             expect(shortcut.url.startsWith("/")).toBe(true);
             expect(shortcut.icons?.every(icon => publicPathExists(icon.src))).toBe(true);

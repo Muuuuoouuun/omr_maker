@@ -308,7 +308,13 @@ async function runSmoke() {
         assert(metadata.manifest?.display === "standalone", "Manifest display must be standalone", metadata.manifest);
         assert(metadata.manifest?.display_override?.includes("standalone"), "Manifest display_override should include standalone", metadata.manifest);
         assert(metadata.manifest?.categories?.includes("education"), "Manifest should be categorized for education", metadata.manifest);
-        assert(metadata.manifest?.shortcuts?.length >= 3, "Manifest shortcuts are missing", metadata.manifest);
+        assert(metadata.manifest?.shortcuts?.length >= 4, "Manifest shortcuts are missing", metadata.manifest);
+        assert(
+            ["/create", "/teacher/dashboard", "/?role=student", "/pwa-check"]
+                .every(url => metadata.manifest.shortcuts.some(shortcut => shortcut.url === url)),
+            "Manifest shortcuts must include core app and device-check entries",
+            metadata.manifest,
+        );
         assert(metadata.manifest?.icons?.some(icon => icon.purpose === "maskable"), "Manifest must include a maskable icon", metadata.manifest);
         assert(metadata.manifest?.icons?.some(icon => icon.sizes === "192x192"), "Manifest must include a 192x192 icon", metadata.manifest);
         assert(metadata.manifest?.icons?.some(icon => icon.sizes === "512x512"), "Manifest must include a 512x512 icon", metadata.manifest);
@@ -416,6 +422,7 @@ async function runSmoke() {
                 manifestDisplay: metadata.manifest.display,
                 screenshots: metadata.manifest.screenshots?.length || 0,
                 icons: metadata.manifest.icons?.length || 0,
+                shortcuts: metadata.manifest.shortcuts?.length || 0,
             },
             offlineDeviceCheckState,
             offlineState,

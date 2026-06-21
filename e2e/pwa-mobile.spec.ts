@@ -114,6 +114,12 @@ test.describe("Mobile PWA entry", () => {
         await expect(page.locator('link[rel="apple-touch-icon"]').first()).toHaveAttribute("href", "/apple-touch-icon.png");
         await expectMetaContent(page, "mobile-web-app-capable", "yes");
         await expectMetaContent(page, "apple-mobile-web-app-capable", "yes");
+        const shortcutUrls = await page.evaluate(async () => {
+            const manifestUrl = document.querySelector('link[rel="manifest"]')?.getAttribute("href") || "";
+            const manifest = await fetch(manifestUrl).then(response => response.json());
+            return (manifest.shortcuts || []).map((shortcut: { url?: string }) => shortcut.url);
+        });
+        expect(shortcutUrls).toEqual(expect.arrayContaining(["/create", "/teacher/dashboard", "/?role=student", "/pwa-check"]));
         await expectTouchTarget(page.locator('button[aria-label$="모드로 전환"]'));
         await expectTouchTarget(page.getByRole("button", { name: /학생.*시작하기/ }));
         await expectTouchTarget(page.getByRole("button", { name: /교사.*대시보드/ }));

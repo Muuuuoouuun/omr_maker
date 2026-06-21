@@ -81,6 +81,13 @@ export default function manifest(): MetadataRoute.Manifest {
         url: "/?role=student",
         icons: [{ src: "/icons/icon-192.png", sizes: "192x192", type: "image/png" }],
       },
+      {
+        name: "앱 상태 체크",
+        short_name: "체크",
+        description: "설치 실행 상태와 모바일 PWA 준비 상태를 확인합니다.",
+        url: "/pwa-check",
+        icons: [{ src: "/icons/icon-192.png", sizes: "192x192", type: "image/png" }],
+      },
     ],
   };
 }
