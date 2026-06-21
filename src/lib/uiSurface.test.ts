@@ -200,7 +200,13 @@ describe("service UI surface", () => {
         expect(pwaCheck).toContain("pwa-proof-result");
         expect(pwaCheck).toContain("pwa-proof-result-android");
         expect(pwaCheck).toContain("pwa-proof-result-ios");
+        expect(pwaCheck).toContain("pwa-proof-bundle");
+        expect(pwaCheck).toContain("pwa-proof-bundle-copy");
+        expect(pwaCheck).toContain("pwa-proof-bundle-share");
+        expect(pwaCheck).toContain("pwa-proof-bundle-report");
         expect(pwaCheck).toContain("validateProofReport");
+        expect(pwaCheck).toContain("buildDualProofBundle");
+        expect(pwaCheck).toContain("OMR Maker PWA dual device proof");
         expect(pwaCheck).toContain("readProofPlatform");
         expect(pwaCheck).toContain("Android/iOS 리포트 통과");
         expect(pwaCheck).toContain("Android/iOS 리포트 미통과");

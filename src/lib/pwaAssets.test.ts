@@ -599,7 +599,7 @@ describe("PWA assets", () => {
             "proofStatus=pass",
             "displayEvidence=css-fullscreen=no · css-standalone=yes · ios-navigator-standalone=no",
             "summary=14 pass, 0 warn, 0 fail",
-            "userAgent=Mozilla/5.0",
+            "userAgent=Mozilla/5.0 (Linux; Android 15; Pixel 9) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.7727.15 Mobile Safari/537.36",
             "- secure-context=pass:보안 컨텍스트 (https://omr-maker-eight.vercel.app)",
             "- display-mode=pass:standalone (홈 화면 아이콘 실행 상태)",
             "- launch-proof=pass:확인됨 (css-fullscreen=no · css-standalone=yes · ios-navigator-standalone=no)",
@@ -620,6 +620,24 @@ describe("PWA assets", () => {
             .replace("displayMode=standalone", "displayMode=browser")
             .replace("installedDisplay=yes", "installedDisplay=no")
             .replace("proofStatus=pass", "proofStatus=pending");
+        const iosReport = passingReport
+            .replace("css-fullscreen=no · css-standalone=yes · ios-navigator-standalone=no", "css-fullscreen=no · css-standalone=yes · ios-navigator-standalone=yes")
+            .replace("css-fullscreen=no · css-standalone=yes · ios-navigator-standalone=no", "css-fullscreen=no · css-standalone=yes · ios-navigator-standalone=yes")
+            .replace("Mozilla/5.0 (Linux; Android 15; Pixel 9) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.7727.15 Mobile Safari/537.36", "Mozilla/5.0 (iPhone; CPU iPhone OS 18_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.5 Mobile/15E148 Safari/604.1");
+        const passingBundle = [
+            "OMR Maker PWA dual device proof",
+            "generatedAt=2026. 6. 22. 4시 15분 00초",
+            "status=passed",
+            "requiredDevices=Android, iOS",
+            "android=android:standalone:pass",
+            "ios=ios:standalone:pass",
+            "-----BEGIN ANDROID PWA REPORT-----",
+            passingReport,
+            "-----END ANDROID PWA REPORT-----",
+            "-----BEGIN IOS PWA REPORT-----",
+            iosReport,
+            "-----END IOS PWA REPORT-----",
+        ].join("\n");
 
         const passing = spawnSync(process.execPath, [proofScriptPath], {
             encoding: "utf8",
@@ -629,15 +647,23 @@ describe("PWA assets", () => {
             encoding: "utf8",
             input: pendingReport,
         });
+        const bundle = spawnSync(process.execPath, [proofScriptPath], {
+            encoding: "utf8",
+            input: passingBundle,
+        });
 
         expect(source).toContain("proofStatus must be pass");
         expect(source).toContain("installedDisplay must be yes");
         expect(source).toContain("displayMode must be standalone or fullscreen");
         expect(source).toContain("Report URL must be the deployed HTTPS URL");
+        expect(source).toContain("OMR Maker PWA dual device proof");
+        expect(source).toContain("Android proof report must pass");
+        expect(source).toContain("iOS proof report must pass");
         expect(passing.status).toBe(0);
         expect(JSON.parse(passing.stdout)).toMatchObject({
             displayMode: "standalone",
             installedDisplay: "yes",
+            platform: "android",
             proofStatus: "pass",
             status: "passed",
         });
@@ -647,6 +673,13 @@ describe("PWA assets", () => {
             installedDisplay: "no",
             proofStatus: "pending",
             status: "failed",
+        });
+        expect(bundle.status).toBe(0);
+        expect(JSON.parse(bundle.stdout)).toMatchObject({
+            android: { platform: "android", status: "passed" },
+            ios: { platform: "ios", status: "passed" },
+            mode: "dual",
+            status: "passed",
         });
     });
 });

@@ -511,6 +511,7 @@ test.describe("Mobile PWA entry", () => {
     test("keeps installed standalone app mode clean and usable", async ({ page }) => {
         const consoleProblems = collectConsoleProblems(page);
         await emulateStandaloneDisplay(page);
+        await stubClipboard(page);
 
         await page.goto("/");
         await expect(page.getByRole("heading", { name: "OMR Maker" })).toBeVisible();
@@ -574,6 +575,21 @@ test.describe("Mobile PWA entry", () => {
         await expect(page.getByTestId("pwa-proof-result-ios")).toContainText("iOS 리포트 통과");
         await expect(page.getByTestId("pwa-proof-errors")).toContainText("installed home-screen launch verified");
         await expect(page.getByTestId("pwa-proof-errors-ios")).toContainText("installed home-screen launch verified");
+        await expect(page.getByTestId("pwa-proof-bundle")).toContainText("Android/iOS 통합 proof");
+        await expect(page.getByTestId("pwa-proof-bundle-report")).toContainText("OMR Maker PWA dual device proof");
+        await expect(page.getByTestId("pwa-proof-bundle-report")).toContainText("-----BEGIN ANDROID PWA REPORT-----");
+        await expect(page.getByTestId("pwa-proof-bundle-report")).toContainText("-----BEGIN IOS PWA REPORT-----");
+        await expectTouchTarget(page.getByTestId("pwa-proof-bundle-copy"));
+        await expectTouchTarget(page.getByTestId("pwa-proof-bundle-share"));
+        await page.getByTestId("pwa-proof-bundle-copy").click();
+        await expect(page.getByTestId("pwa-proof-bundle-status")).toContainText("복사됨");
+        const copiedProofBundle = await page.evaluate(() => (
+            (window as Window & { __omrCopiedReport?: string }).__omrCopiedReport || ""
+        ));
+        expect(copiedProofBundle).toContain("OMR Maker PWA dual device proof");
+        expect(copiedProofBundle).toContain("requiredDevices=Android, iOS");
+        expect(copiedProofBundle).toContain("-----BEGIN ANDROID PWA REPORT-----");
+        expect(copiedProofBundle).toContain("-----BEGIN IOS PWA REPORT-----");
         await expectNoHorizontalOverflow(page);
 
         expect(consoleProblems).toEqual([]);

@@ -8,6 +8,7 @@ import { QRCodeCanvas } from "qrcode.react";
 type CheckTone = "pass" | "warn" | "fail";
 type ProofPlatform = "android" | "ios" | "unknown";
 type ProofTarget = Exclude<ProofPlatform, "unknown">;
+type ProofBundleState = "copied" | "failed" | "idle" | "shared";
 
 interface DeviceCheck {
   detail: string;
@@ -65,6 +66,7 @@ const VIEWPORT_OFFSET_LEFT_VAR = "--app-visual-viewport-offset-left";
 const VIEWPORT_SCALE_VAR = "--app-visual-viewport-scale";
 const KEYBOARD_INSET_BOTTOM_VAR = "--app-keyboard-inset-bottom";
 const OFFLINE_CACHE_REQUIRED_PATHS = ["/", "/pwa-check", "/offline.html", "/logo.png"];
+const DUAL_PROOF_HEADER = "OMR Maker PWA dual device proof";
 const PROOF_INSTALLED_MODES = new Set(["standalone", "fullscreen"]);
 const REQUIRED_PROOF_PASS_CHECKS = [
   "secure-context",
@@ -387,6 +389,26 @@ function validateProofReport(reportText: string, expectedPlatform?: ProofTarget)
   };
 }
 
+function buildDualProofBundle(
+  proofInputs: Record<ProofTarget, string>,
+  proofResults: Record<ProofTarget, ProofValidationResult | null>,
+): string {
+  return [
+    DUAL_PROOF_HEADER,
+    `generatedAt=${new Date().toLocaleString("ko-KR", { hour12: false })}`,
+    "status=passed",
+    "requiredDevices=Android, iOS",
+    `android=${proofResults.android?.platform || "missing"}:${proofResults.android?.displayMode || "missing"}:${proofResults.android?.proofStatus || "missing"}`,
+    `ios=${proofResults.ios?.platform || "missing"}:${proofResults.ios?.displayMode || "missing"}:${proofResults.ios?.proofStatus || "missing"}`,
+    "-----BEGIN ANDROID PWA REPORT-----",
+    proofInputs.android.trim(),
+    "-----END ANDROID PWA REPORT-----",
+    "-----BEGIN IOS PWA REPORT-----",
+    proofInputs.ios.trim(),
+    "-----END IOS PWA REPORT-----",
+  ].join("\n");
+}
+
 async function copyText(text: string): Promise<void> {
   if (navigator.clipboard?.writeText) {
     try {
@@ -668,6 +690,7 @@ export default function PwaCheckPage() {
   const [copyState, setCopyState] = useState<"copied" | "failed" | "idle" | "shared">("idle");
   const [handoffState, setHandoffState] = useState<"copied" | "failed" | "idle" | "shared">("idle");
   const [handoffUrl, setHandoffUrl] = useState("");
+  const [proofBundleState, setProofBundleState] = useState<ProofBundleState>("idle");
   const [proofInputs, setProofInputs] = useState<Record<ProofTarget, string>>({ android: "", ios: "" });
 
   const runCheck = useCallback(async () => {
@@ -705,6 +728,12 @@ export default function PwaCheckPage() {
     return () => window.clearTimeout(timeout);
   }, [handoffState]);
 
+  useEffect(() => {
+    if (proofBundleState === "idle") return;
+    const timeout = window.setTimeout(() => setProofBundleState("idle"), 2200);
+    return () => window.clearTimeout(timeout);
+  }, [proofBundleState]);
+
   const summary = useMemo(() => snapshot ? checkSummary(snapshot.checks) : { fails: 0, passes: 0, warnings: 0 }, [snapshot]);
   const verdict = useMemo(() => deviceVerdict(snapshot, summary), [snapshot, summary]);
   const reportText = useMemo(() => snapshot ? buildDeviceReport(snapshot, summary) : "", [snapshot, summary]);
@@ -728,6 +757,9 @@ export default function PwaCheckPage() {
         ? "Android/iOS 리포트 미통과"
         : "Android/iOS 리포트 미완료";
   const proofOverallDetail = `${proofPassedCount}/${PROOF_TARGETS.length} 통과 · ${proofFailedCount} 미통과`;
+  const dualProofBundle = useMemo(() => (
+    proofPassedCount === PROOF_TARGETS.length ? buildDualProofBundle(proofInputs, proofResults) : ""
+  ), [proofInputs, proofPassedCount, proofResults]);
 
   const copyReport = useCallback(async () => {
     if (!reportText) return;
@@ -786,6 +818,35 @@ export default function PwaCheckPage() {
       setHandoffState("idle");
     }
   }, [copyHandoffUrl, handoffUrl]);
+
+  const copyDualProofBundle = useCallback(async () => {
+    if (!dualProofBundle) return;
+    try {
+      await copyText(dualProofBundle);
+      setProofBundleState("copied");
+    } catch {
+      setProofBundleState("failed");
+    }
+  }, [dualProofBundle]);
+
+  const shareDualProofBundle = useCallback(async () => {
+    if (!dualProofBundle) return;
+    if (!navigator.share) {
+      await copyDualProofBundle();
+      return;
+    }
+
+    try {
+      await navigator.share({
+        text: dualProofBundle,
+        title: "OMR Maker PWA dual device proof",
+        url: location.href,
+      });
+      setProofBundleState("shared");
+    } catch {
+      setProofBundleState("idle");
+    }
+  }, [copyDualProofBundle, dualProofBundle]);
 
   return (
     <main className="layout-main pwa-check-page" style={{ background: "var(--background)" }}>
@@ -1354,6 +1415,101 @@ export default function PwaCheckPage() {
                 );
               })}
             </div>
+            {dualProofBundle ? (
+              <section
+                aria-label="통합 실기기 증거"
+                data-testid="pwa-proof-bundle"
+                style={{
+                  background: "var(--background)",
+                  border: "1px solid var(--border)",
+                  borderRadius: "8px",
+                  display: "grid",
+                  gap: "0.7rem",
+                  padding: "0.85rem",
+                }}
+              >
+                <div style={{ alignItems: "center", display: "flex", flexWrap: "wrap", gap: "0.65rem", justifyContent: "space-between" }}>
+                  <span style={{ minWidth: 0 }}>
+                    <strong style={{ color: "var(--foreground)", display: "block", fontSize: "0.86rem", fontWeight: 900 }}>
+                      Android/iOS 통합 proof
+                    </strong>
+                    <span style={{ color: "var(--muted)", display: "block", fontSize: "0.72rem", lineHeight: 1.35 }}>
+                      이 묶음은 npm run pwa:proof 로 재검증할 수 있습니다.
+                    </span>
+                  </span>
+                  <span
+                    aria-live="polite"
+                    data-testid="pwa-proof-bundle-status"
+                    style={{ color: proofBundleState === "failed" ? "var(--warning)" : "var(--success)", fontSize: "0.72rem", fontWeight: 850 }}
+                  >
+                    {proofBundleState === "copied" ? "복사됨" : proofBundleState === "shared" ? "공유됨" : proofBundleState === "failed" ? "직접 복사" : ""}
+                  </span>
+                </div>
+                <div style={{ display: "flex", flexWrap: "wrap", gap: "0.5rem" }}>
+                  <button
+                    type="button"
+                    onClick={copyDualProofBundle}
+                    data-testid="pwa-proof-bundle-copy"
+                    style={{
+                      alignItems: "center",
+                      background: "var(--surface)",
+                      border: "1px solid var(--border)",
+                      borderRadius: "8px",
+                      color: "var(--foreground)",
+                      display: "inline-flex",
+                      fontSize: "0.8rem",
+                      fontWeight: 850,
+                      gap: "0.35rem",
+                      minHeight: "2.75rem",
+                      padding: "0 0.85rem",
+                    }}
+                  >
+                    {proofBundleState === "copied" ? <Check size={15} /> : <Clipboard size={15} />}
+                    묶음 복사
+                  </button>
+                  <button
+                    type="button"
+                    onClick={shareDualProofBundle}
+                    data-testid="pwa-proof-bundle-share"
+                    style={{
+                      alignItems: "center",
+                      background: "var(--foreground)",
+                      borderRadius: "8px",
+                      color: "var(--surface)",
+                      display: "inline-flex",
+                      fontSize: "0.8rem",
+                      fontWeight: 850,
+                      gap: "0.35rem",
+                      minHeight: "2.75rem",
+                      padding: "0 0.85rem",
+                    }}
+                  >
+                    <Share2 size={15} />
+                    공유
+                  </button>
+                </div>
+                <pre
+                  data-testid="pwa-proof-bundle-report"
+                  style={{
+                    background: "var(--surface)",
+                    border: "1px solid var(--border)",
+                    borderRadius: "8px",
+                    color: "var(--muted)",
+                    fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
+                    fontSize: "0.68rem",
+                    lineHeight: 1.45,
+                    margin: 0,
+                    maxHeight: "7rem",
+                    overflow: "auto",
+                    padding: "0.75rem",
+                    whiteSpace: "pre-wrap",
+                    wordBreak: "break-word",
+                  }}
+                >
+                  {dualProofBundle}
+                </pre>
+              </section>
+            ) : null}
           </section>
 
           <section aria-label="PWA 체크 목록" style={{ display: "grid", gap: "0.7rem" }}>

@@ -7,8 +7,10 @@ function usage() {
         "Usage:",
         "  npm run pwa:proof < pwa-report.txt",
         "  npm run pwa:proof -- --file pwa-report.txt",
+        "  npm run pwa:proof < pwa-dual-proof.txt",
         "",
-        "The input must be the copied report from /pwa-check after opening the installed home-screen app.",
+        "The input must be a copied report from /pwa-check after opening the installed home-screen app,",
+        "or the Android/iOS dual device proof bundle copied after both reports pass.",
     ].join("\n");
 }
 
@@ -54,6 +56,23 @@ function isDeviceReachableHttps(urlValue) {
     }
 }
 
+function proofPlatformLabel(platform) {
+    if (platform === "android") return "Android";
+    if (platform === "ios") return "iOS";
+    return "unknown";
+}
+
+function readProofPlatform(fields) {
+    const userAgent = fields.userAgent || "";
+    const displayEvidence = fields.displayEvidence || "";
+
+    if (/Android/i.test(userAgent)) return "android";
+    if (/(iPhone|iPad|iPod)/i.test(userAgent) || /ios-navigator-standalone=yes/i.test(displayEvidence)) {
+        return "ios";
+    }
+    return "unknown";
+}
+
 function parseReport(reportText) {
     const lines = reportText
         .replace(/\r\n/g, "\n")
@@ -89,8 +108,9 @@ function parseReport(reportText) {
     };
 }
 
-function validateProof(parsed) {
+function validateProof(parsed, expectedPlatform = "") {
     const errors = [];
+    const platform = readProofPlatform(parsed.fields);
     const installedModes = new Set(["standalone", "fullscreen"]);
     const requiredPassChecks = [
         "secure-context",
@@ -111,6 +131,9 @@ function validateProof(parsed) {
 
     if (parsed.header !== "OMR Maker PWA device check") {
         errors.push("Report header is not an OMR Maker PWA device check report.");
+    }
+    if (expectedPlatform && platform !== expectedPlatform) {
+        errors.push(`Report must come from ${proofPlatformLabel(expectedPlatform)}, got ${proofPlatformLabel(platform)}.`);
     }
     if (!isDeviceReachableHttps(parsed.fields.url || "")) {
         errors.push("Report URL must be the deployed HTTPS URL, not localhost or an invalid URL.");
@@ -148,6 +171,85 @@ function validateProof(parsed) {
     return errors;
 }
 
+function resultForReport(reportText, expectedPlatform = "") {
+    const parsed = parseReport(reportText);
+    const errors = validateProof(parsed, expectedPlatform);
+
+    return {
+        checks: Object.fromEntries(Object.entries(parsed.checks).map(([id, check]) => [id, `${check.tone}:${check.value}`])),
+        displayMode: parsed.fields.displayMode || "",
+        errors,
+        installedDisplay: parsed.fields.installedDisplay || "",
+        platform: readProofPlatform(parsed.fields),
+        proofStatus: parsed.fields.proofStatus || "",
+        status: errors.length === 0 ? "passed" : "failed",
+        url: parsed.fields.url || "",
+        userAgent: parsed.fields.userAgent || "",
+        verdict: parsed.fields.verdict || "",
+    };
+}
+
+function parseBundleFields(bundleText) {
+    const lines = bundleText
+        .replace(/\r\n/g, "\n")
+        .split("\n")
+        .map(line => line.trim())
+        .filter(Boolean);
+    const fields = {};
+
+    for (const line of lines.slice(1)) {
+        if (line.startsWith("-----BEGIN ")) break;
+        const separator = line.indexOf("=");
+        if (separator > 0) {
+            fields[line.slice(0, separator)] = line.slice(separator + 1);
+        }
+    }
+
+    return {
+        fields,
+        header: lines[0] || "",
+    };
+}
+
+function extractBundleReport(bundleText, platform) {
+    const label = platform.toUpperCase();
+    const pattern = new RegExp(`-----BEGIN ${label} PWA REPORT-----\\n([\\s\\S]*?)\\n-----END ${label} PWA REPORT-----`);
+    return pattern.exec(bundleText)?.[1]?.trim() || "";
+}
+
+function resultForDualBundle(bundleText) {
+    const bundle = parseBundleFields(bundleText);
+    const errors = [];
+
+    if (bundle.header !== "OMR Maker PWA dual device proof") {
+        errors.push("Bundle header is not an OMR Maker PWA dual device proof bundle.");
+    }
+    if (bundle.fields.status !== "passed") {
+        errors.push("Bundle status must be passed.");
+    }
+    if (!/Android/.test(bundle.fields.requiredDevices || "") || !/iOS/.test(bundle.fields.requiredDevices || "")) {
+        errors.push("Bundle must require Android and iOS.");
+    }
+
+    const androidText = extractBundleReport(bundleText, "android");
+    const iosText = extractBundleReport(bundleText, "ios");
+    const android = androidText ? resultForReport(androidText, "android") : null;
+    const ios = iosText ? resultForReport(iosText, "ios") : null;
+
+    if (!androidText) errors.push("Missing Android PWA report section.");
+    if (!iosText) errors.push("Missing iOS PWA report section.");
+    if (android && android.status !== "passed") errors.push("Android proof report must pass.");
+    if (ios && ios.status !== "passed") errors.push("iOS proof report must pass.");
+
+    return {
+        android,
+        errors,
+        ios,
+        mode: "dual",
+        status: errors.length === 0 ? "passed" : "failed",
+    };
+}
+
 async function main() {
     const args = parseArgs(process.argv.slice(2));
     if (args.help) {
@@ -160,21 +262,12 @@ async function main() {
         throw new Error(`No PWA proof report provided.\n${usage()}`);
     }
 
-    const parsed = parseReport(reportText);
-    const errors = validateProof(parsed);
-    const result = {
-        checks: Object.fromEntries(Object.entries(parsed.checks).map(([id, check]) => [id, `${check.tone}:${check.value}`])),
-        displayMode: parsed.fields.displayMode || "",
-        errors,
-        installedDisplay: parsed.fields.installedDisplay || "",
-        proofStatus: parsed.fields.proofStatus || "",
-        status: errors.length === 0 ? "passed" : "failed",
-        url: parsed.fields.url || "",
-        verdict: parsed.fields.verdict || "",
-    };
+    const result = reportText.trim().startsWith("OMR Maker PWA dual device proof")
+        ? resultForDualBundle(reportText)
+        : resultForReport(reportText);
 
     console.log(JSON.stringify(result, null, 2));
-    return errors.length === 0 ? 0 : 1;
+    return result.status === "passed" ? 0 : 1;
 }
 
 main()
