@@ -21,6 +21,7 @@ interface DeviceCheck {
 interface RuntimeSnapshot {
   checks: DeviceCheck[];
   checkedAt: string;
+  checkedAtEpoch: number;
   displayMode: string;
   displayModeEvidence: string;
   userAgent: string;
@@ -70,6 +71,8 @@ const OFFLINE_CACHE_REQUIRED_PATHS = ["/", "/pwa-check", "/offline.html", "/logo
 const DUAL_PROOF_HEADER = "OMR Maker PWA dual device proof";
 const PROOF_INPUT_STORAGE_KEY = "omr_pwa_device_proof_inputs_v1";
 const PROOF_INSTALLED_MODES = new Set(["standalone", "fullscreen"]);
+const PROOF_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
+const PROOF_MAX_CLOCK_SKEW_MS = 10 * 60 * 1000;
 const REQUIRED_PROOF_PASS_CHECKS = [
   "secure-context",
   "display-mode",
@@ -456,6 +459,7 @@ function buildDeviceReport(snapshot: RuntimeSnapshot, summary: CheckSummary): st
     "OMR Maker PWA device check",
     `url=${url}`,
     `checkedAt=${snapshot.checkedAt}`,
+    `checkedAtEpoch=${snapshot.checkedAtEpoch}`,
     `verdict=${verdict.label}`,
     `displayMode=${snapshot.displayMode}`,
     `installedDisplay=${installedDisplay ? "yes" : "no"}`,
@@ -502,6 +506,27 @@ function parseProofReport(reportText: string): ParsedProofReport {
   };
 }
 
+function readProofEpoch(epochValue: string | undefined): number | null {
+  if (!epochValue || !/^\d+$/.test(epochValue)) return null;
+  const epoch = Number(epochValue);
+  if (!Number.isSafeInteger(epoch) || epoch <= 0) return null;
+  return epoch;
+}
+
+function validateFreshProofEpoch(epochValue: string | undefined, label: string): string[] {
+  const epoch = readProofEpoch(epochValue);
+  if (epoch === null) return [`${label} must be a valid millisecond timestamp.`];
+
+  const now = Date.now();
+  if (epoch > now + PROOF_MAX_CLOCK_SKEW_MS) {
+    return [`${label} cannot be more than 10 minutes in the future.`];
+  }
+  if (now - epoch > PROOF_MAX_AGE_MS) {
+    return [`${label} must be newer than 7 days.`];
+  }
+  return [];
+}
+
 function validateProofReport(reportText: string, expectedPlatform?: ProofTarget): ProofValidationResult {
   const parsed = parseProofReport(reportText);
   const errors: string[] = [];
@@ -531,6 +556,7 @@ function validateProofReport(reportText: string, expectedPlatform?: ProofTarget)
   if (!/0 fail/.test(parsed.fields.summary || "")) {
     errors.push("Report summary must include 0 fail.");
   }
+  errors.push(...validateFreshProofEpoch(parsed.fields.checkedAtEpoch, "checkedAtEpoch"));
   if (!/yes/.test(parsed.fields.displayEvidence || "")) {
     errors.push("displayEvidence must include at least one yes signal.");
   }
@@ -589,10 +615,12 @@ function buildDualProofBundle(
   proofResults: Record<ProofTarget, ProofValidationResult | null>,
 ): string {
   const origin = readProofOrigin(proofResults.android?.url || proofResults.ios?.url || "");
+  const generatedAt = new Date();
 
   return [
     DUAL_PROOF_HEADER,
-    `generatedAt=${new Date().toLocaleString("ko-KR", { hour12: false })}`,
+    `generatedAt=${generatedAt.toLocaleString("ko-KR", { hour12: false })}`,
+    `generatedAtEpoch=${generatedAt.getTime()}`,
     "status=passed",
     "requiredDevices=Android, iOS",
     `origin=${origin || "missing"}`,
@@ -744,6 +772,7 @@ async function readOfflineCacheSummary(): Promise<{ detail: string; tone: CheckT
 async function collectRuntimeSnapshot(): Promise<RuntimeSnapshot> {
   await waitForViewportHeightSync();
 
+  const checkedAtDate = new Date();
   const displayModeState = readDisplayModeState();
   const displayMode = displayModeState.mode;
   const [manifest, serviceWorker, offlineCache, storage] = await Promise.all([
@@ -766,7 +795,8 @@ async function collectRuntimeSnapshot(): Promise<RuntimeSnapshot> {
   const hasDeviceReachableHandoff = location.protocol === "https:" && !isLocalHandoff;
 
   return {
-    checkedAt: new Date().toLocaleString("ko-KR", { hour12: false }),
+    checkedAt: checkedAtDate.toLocaleString("ko-KR", { hour12: false }),
+    checkedAtEpoch: checkedAtDate.getTime(),
     displayMode,
     displayModeEvidence: displayModeState.evidence,
     userAgent: navigator.userAgent,

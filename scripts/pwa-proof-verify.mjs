@@ -92,6 +92,30 @@ function proofPlatformLabel(platform) {
     return "unknown";
 }
 
+function readProofEpoch(epochValue) {
+    if (!epochValue || !/^\d+$/.test(epochValue)) return null;
+    const epoch = Number(epochValue);
+    if (!Number.isSafeInteger(epoch) || epoch <= 0) return null;
+    return epoch;
+}
+
+function validateFreshProofEpoch(epochValue, label) {
+    const proofMaxAgeMs = 7 * 24 * 60 * 60 * 1000;
+    const proofMaxClockSkewMs = 10 * 60 * 1000;
+    const epoch = readProofEpoch(epochValue);
+
+    if (epoch === null) return [`${label} must be a valid millisecond timestamp.`];
+
+    const now = Date.now();
+    if (epoch > now + proofMaxClockSkewMs) {
+        return [`${label} cannot be more than 10 minutes in the future.`];
+    }
+    if (now - epoch > proofMaxAgeMs) {
+        return [`${label} must be newer than 7 days.`];
+    }
+    return [];
+}
+
 function readProofPlatform(fields) {
     const userAgent = fields.userAgent || "";
     const displayEvidence = fields.displayEvidence || "";
@@ -188,6 +212,7 @@ function validateProof(parsed, expectedPlatform = "", expectedOrigin = "") {
     if (!/0 fail/.test(parsed.fields.summary || "")) {
         errors.push("Report summary must include 0 fail.");
     }
+    errors.push(...validateFreshProofEpoch(parsed.fields.checkedAtEpoch, "checkedAtEpoch"));
     if (!/yes/.test(parsed.fields.displayEvidence || "")) {
         errors.push("displayEvidence must include at least one yes signal.");
     }
@@ -227,6 +252,7 @@ function resultForReport(reportText, expectedPlatform = "", expectedOrigin = "")
 
     return {
         checks: Object.fromEntries(Object.entries(parsed.checks).map(([id, check]) => [id, `${check.tone}:${check.value}`])),
+        checkedAtEpoch: readProofEpoch(parsed.fields.checkedAtEpoch || ""),
         displayMode: parsed.fields.displayMode || "",
         errors,
         installedDisplay: parsed.fields.installedDisplay || "",
@@ -281,6 +307,7 @@ function resultForDualBundle(bundleText, expectedOrigin = "") {
     if (!/Android/.test(bundle.fields.requiredDevices || "") || !/iOS/.test(bundle.fields.requiredDevices || "")) {
         errors.push("Bundle must require Android and iOS.");
     }
+    errors.push(...validateFreshProofEpoch(bundle.fields.generatedAtEpoch, "generatedAtEpoch"));
 
     const androidText = extractBundleReport(bundleText, "android");
     const iosText = extractBundleReport(bundleText, "ios");

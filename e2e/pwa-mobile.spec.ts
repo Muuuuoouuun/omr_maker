@@ -1,5 +1,7 @@
 import { expect, test, type Locator, type Page } from "@playwright/test";
 
+const VALID_PROOF_EPOCH = Date.now();
+
 async function clearStorage(page: Page) {
     await page.addInitScript(() => {
         const clearedKey = "__omr_e2e_storage_cleared";
@@ -194,6 +196,7 @@ function validInstalledProofReport(platform: "android" | "ios" = "android"): str
         "OMR Maker PWA device check",
         "url=https://omr-maker-eight.vercel.app/pwa-check",
         "checkedAt=2026. 6. 22. 4시 10분 00초",
+        `checkedAtEpoch=${VALID_PROOF_EPOCH}`,
         "verdict=앱 실행 통과",
         "displayMode=standalone",
         "installedDisplay=yes",
@@ -489,6 +492,7 @@ test.describe("Mobile PWA entry", () => {
         await expect(page.getByTestId("pwa-device-check-overflow")).toContainText("정상");
         await expect(page.getByTestId("pwa-device-check-storage")).toContainText("indexedDB ok");
         await expect(page.getByTestId("pwa-device-report")).toContainText("OMR Maker PWA device check");
+        await expect(page.getByTestId("pwa-device-report")).toContainText("checkedAtEpoch=");
         await expect(page.getByTestId("pwa-device-report")).toContainText("displayMode=browser");
         await expect(page.getByTestId("pwa-device-report")).toContainText("installedDisplay=no");
         await expect(page.getByTestId("pwa-device-report")).toContainText("proofStatus=pending");
@@ -539,6 +543,7 @@ test.describe("Mobile PWA entry", () => {
         ));
         expect(copiedReport).toContain("OMR Maker PWA device check");
         expect(copiedReport).toContain("displayMode=browser");
+        expect(copiedReport).toContain("checkedAtEpoch=");
         expect(copiedReport).toContain("installedDisplay=no");
         expect(copiedReport).toContain("proofStatus=pending");
         expect(copiedReport).toContain("displayEvidence=");
@@ -673,6 +678,7 @@ test.describe("Mobile PWA entry", () => {
             (window as Window & { __omrCopiedReport?: string }).__omrCopiedReport || ""
         ));
         expect(copiedProofBundle).toContain("OMR Maker PWA dual device proof");
+        expect(copiedProofBundle).toContain("generatedAtEpoch=");
         expect(copiedProofBundle).toContain("requiredDevices=Android, iOS");
         expect(copiedProofBundle).toContain("origin=https://omr-maker-eight.vercel.app");
         expect(copiedProofBundle).toContain("-----BEGIN ANDROID PWA REPORT-----");

@@ -688,10 +688,13 @@ describe("PWA assets", () => {
     it("validates copied installed app proof reports from real devices", () => {
         const source = getPwaProofSource();
         const proofScriptPath = path.join(rootDir, "scripts/pwa-proof-verify.mjs");
+        const freshProofEpoch = String(Date.now());
+        const staleProofEpoch = String(Date.now() - 8 * 24 * 60 * 60 * 1000);
         const passingReport = [
             "OMR Maker PWA device check",
             "url=https://omr-maker-eight.vercel.app/pwa-check",
             "checkedAt=2026. 6. 22. 4시 10분 00초",
+            `checkedAtEpoch=${freshProofEpoch}`,
             "verdict=앱 실행 통과",
             "displayMode=standalone",
             "installedDisplay=yes",
@@ -721,6 +724,7 @@ describe("PWA assets", () => {
             .replace("installedDisplay=yes", "installedDisplay=no")
             .replace("proofStatus=pass", "proofStatus=pending");
         const staleCacheReport = passingReport.replaceAll("omr-maker-v10", "omr-maker-v9");
+        const staleTimeReport = passingReport.replace(`checkedAtEpoch=${freshProofEpoch}`, `checkedAtEpoch=${staleProofEpoch}`);
         const uncontrolledWorkerReport = passingReport.replace("controller=yes", "controller=no");
         const legacyStorageReport = passingReport.replace(" · indexedDB ok · quota=512MB · usage=1MB · persisted=unknown", "");
         const wrongPathReport = passingReport.replace("url=https://omr-maker-eight.vercel.app/pwa-check", "url=https://omr-maker-eight.vercel.app/teacher/dashboard");
@@ -733,6 +737,7 @@ describe("PWA assets", () => {
         const passingBundle = [
             "OMR Maker PWA dual device proof",
             "generatedAt=2026. 6. 22. 4시 15분 00초",
+            `generatedAtEpoch=${freshProofEpoch}`,
             "status=passed",
             "requiredDevices=Android, iOS",
             "origin=https://omr-maker-eight.vercel.app",
@@ -746,6 +751,7 @@ describe("PWA assets", () => {
             "-----END IOS PWA REPORT-----",
         ].join("\n");
         const mixedOriginBundle = passingBundle.replace(iosReport, wrongOriginIosReport);
+        const staleGeneratedBundle = passingBundle.replace(`generatedAtEpoch=${freshProofEpoch}`, `generatedAtEpoch=${staleProofEpoch}`);
 
         const passing = spawnSync(process.execPath, [proofScriptPath], {
             encoding: "utf8",
@@ -762,6 +768,10 @@ describe("PWA assets", () => {
         const staleCache = spawnSync(process.execPath, [proofScriptPath], {
             encoding: "utf8",
             input: staleCacheReport,
+        });
+        const staleTime = spawnSync(process.execPath, [proofScriptPath], {
+            encoding: "utf8",
+            input: staleTimeReport,
         });
         const uncontrolledWorker = spawnSync(process.execPath, [proofScriptPath], {
             encoding: "utf8",
@@ -791,12 +801,20 @@ describe("PWA assets", () => {
             encoding: "utf8",
             input: mixedOriginBundle,
         });
+        const staleGenerated = spawnSync(process.execPath, [proofScriptPath], {
+            encoding: "utf8",
+            input: staleGeneratedBundle,
+        });
 
         expect(source).toContain("proofStatus must be pass");
         expect(source).toContain("installedDisplay must be yes");
         expect(source).toContain("displayMode must be standalone or fullscreen");
         expect(source).toContain("Report URL must be the deployed HTTPS /pwa-check URL");
         expect(source).toContain("Report URL origin must be ${expectedOrigin}");
+        expect(source).toContain("validateFreshProofEpoch");
+        expect(source).toContain("checkedAtEpoch");
+        expect(source).toContain("generatedAtEpoch");
+        expect(source).toContain("must be newer than 7 days.");
         expect(source).toContain('const expectedCachePrefix = "omr-maker-v10"');
         expect(source).toContain("offline-cache must include ${expectedCachePrefix}");
         expect(source).toContain("storage must include IndexedDB availability.");
@@ -827,6 +845,8 @@ describe("PWA assets", () => {
             status: "failed",
         });
         expect(JSON.parse(staleCache.stdout).errors).toContain("offline-cache must include omr-maker-v10.");
+        expect(staleTime.status).toBe(1);
+        expect(JSON.parse(staleTime.stdout).errors).toContain("checkedAtEpoch must be newer than 7 days.");
         expect(uncontrolledWorker.status).toBe(1);
         expect(JSON.parse(uncontrolledWorker.stdout).errors).toContain("service-worker must be controlled by the active PWA worker.");
         expect(legacyStorage.status).toBe(1);
@@ -846,6 +866,8 @@ describe("PWA assets", () => {
         expect(bundleWithOrigin.status).toBe(0);
         expect(mixedOrigin.status).toBe(1);
         expect(JSON.parse(mixedOrigin.stdout).errors).toContain("Android and iOS proof reports must come from the same deployed origin.");
+        expect(staleGenerated.status).toBe(1);
+        expect(JSON.parse(staleGenerated.stdout).errors).toContain("generatedAtEpoch must be newer than 7 days.");
     });
 
     it("keeps the device-check page proof status aligned with strict installed app evidence", () => {
@@ -853,6 +875,9 @@ describe("PWA assets", () => {
 
         expect(pageSource).toContain("function isInstalledLaunchProof");
         expect(pageSource).toContain("requiredProofChecksPass(snapshot.checks)");
+        expect(pageSource).toContain("checkedAtEpoch");
+        expect(pageSource).toContain("validateFreshProofEpoch");
+        expect(pageSource).toContain("generatedAtEpoch");
         expect(pageSource).toContain('`proofStatus=${proofReady ? "pass" : "pending"}`');
         expect(pageSource).toContain("function validateDualProofOrigins");
         expect(pageSource).toContain("Android/iOS reports must come from the same deployed origin");
