@@ -721,6 +721,17 @@ function CreateOMRPageInner() {
         toast.success("문항 영역 재계산", `${linkedCount}개 문항 위치를 기준으로 필기 수집 영역을 다시 잡았습니다.`);
     };
 
+    const handleAutoMatchMissingRegions = () => {
+        const next = attachInferredQuestionPdfRegions(questions, { overwriteExisting: false });
+        const filled = next.filter(q => q.pdfRegion).length - questions.filter(q => q.pdfRegion).length;
+        if (filled <= 0) {
+            toast.info("자동 매칭 대상 없음", "PDF 위치가 찍힌 미연결 문항이 없습니다. PDF에서 문항 위치를 먼저 지정하세요.");
+            return;
+        }
+        setQuestions(next);
+        toast.success("문항 영역 자동 매칭", `${filled}개 문항의 필기 수집 영역을 새로 잡았습니다.`);
+    };
+
     const handleClearSelectedPdfLink = () => {
         if (selectedQuestionId === null) {
             toast.info("문항 먼저 선택", "PDF 연결을 해제할 문항을 선택하세요.");
@@ -1059,7 +1070,8 @@ function CreateOMRPageInner() {
                 answerKeyPdfRef = stored.ref;
             }
 
-            const questionsWithRegions = attachInferredQuestionPdfRegions(questions, { overwriteExisting: true });
+            // Fill only missing regions so teacher-tuned regions survive every re-share.
+            const questionsWithRegions = attachInferredQuestionPdfRegions(questions, { overwriteExisting: false });
 
             const examData: Exam = {
                 ...(loadedExam || {}),
@@ -1312,6 +1324,7 @@ function CreateOMRPageInner() {
                 isOpen={isDistributeModalOpen}
                 onClose={() => setIsDistributeModalOpen(false)}
                 onSaveAndShare={handleShareConfig}
+                onAutoMatchRegions={handleAutoMatchMissingRegions}
                 validationSummary={validationSummary}
                 initialAccessConfig={loadedExam?.accessConfig}
             />

@@ -16,11 +16,12 @@ interface DistributeModalProps {
     isOpen: boolean;
     onClose: () => void;
     onSaveAndShare: (config: AccessConfig) => Promise<string>; // Returns share URL
+    onAutoMatchRegions?: () => void;
     validationSummary?: ExamValidationSummary;
     initialAccessConfig?: AccessConfig;
 }
 
-export default function DistributeModal({ isOpen, onClose, onSaveAndShare, validationSummary, initialAccessConfig }: DistributeModalProps) {
+export default function DistributeModal({ isOpen, onClose, onSaveAndShare, onAutoMatchRegions, validationSummary, initialAccessConfig }: DistributeModalProps) {
     const [accessType, setAccessType] = useState<'public' | 'group'>('public');
     const [selectedGroups, setSelectedGroups] = useState<string[]>([]);
     const [groups, setGroups] = useState<RosterGroup[]>([]);
@@ -191,6 +192,25 @@ export default function DistributeModal({ isOpen, onClose, onSaveAndShare, valid
                                             {item.message}
                                         </div>
                                     ))}
+                                    {onAutoMatchRegions && validationSummary.warnings.some(w => w.code === 'pdf_regions_incomplete') && (
+                                        <button
+                                            type="button"
+                                            onClick={onAutoMatchRegions}
+                                            style={{
+                                                marginTop: '0.6rem',
+                                                padding: '0.45rem 0.75rem',
+                                                fontSize: '0.74rem',
+                                                fontWeight: 800,
+                                                borderRadius: '6px',
+                                                border: '1px solid #fcd34d',
+                                                background: '#fffbeb',
+                                                color: '#b45309',
+                                                cursor: 'pointer',
+                                            }}
+                                        >
+                                            지금 자동 매칭 · 필기 수집 영역 채우기
+                                        </button>
+                                    )}
                                     {validationSummary.errors.length === 0 && validationSummary.warnings.length === 0 && (
                                         <div style={{ fontSize: '0.78rem', color: '#15803d', lineHeight: 1.45, fontWeight: 700 }}>
                                             필수 항목이 모두 준비됐습니다.

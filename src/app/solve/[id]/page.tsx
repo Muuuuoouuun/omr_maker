@@ -9,6 +9,7 @@ import dynamic from "next/dynamic";
 import { toast } from "@/components/Toast";
 import { AlertTriangle, Clock, PanelRightClose, PanelRightOpen, PenLine, Save } from "lucide-react";
 import { storedDataUrlToFile, saveJsonRecord, loadJsonRecord } from "@/utils/blobStore";
+import { resolveDraftDrawings } from "@/lib/draftRecovery";
 import { verifyTeacherPassword } from "@/app/actions/auth";
 import { saveTeacherSessionWithIdentity } from "@/lib/teacherSession";
 import { getOrCreateGuestId, getSession, saveSession, type StudentSession } from "@/utils/storage";
@@ -473,13 +474,6 @@ function TeacherPasswordDialog({
     );
 }
 
-function isPdfDrawings(value: unknown): value is PdfDrawings {
-    if (!value || typeof value !== "object" || Array.isArray(value)) return false;
-    return Object.values(value as Record<string, unknown>).every(paths =>
-        Array.isArray(paths) && paths.every(path => typeof path === "string")
-    );
-}
-
 function compactDrawings(drawings: PdfDrawings): PdfDrawings {
     return Object.fromEntries(
         Object.entries(drawings).filter(([, paths]) => paths.length > 0)
@@ -813,13 +807,20 @@ export default function SolvePage() {
                         if (draft.answers && typeof draft.answers === "object") {
                             setStudentAnswers(draft.answers);
                         }
+                        let loadedDrawings: unknown = null;
                         if (draft.drawingsRef) {
-                            const draftDrawings = await loadJsonRecord<PdfDrawings>(draft.drawingsRef);
-                            if (draftDrawings && isPdfDrawings(draftDrawings)) {
-                                setDrawings(draftDrawings);
+                            try {
+                                loadedDrawings = await loadJsonRecord<PdfDrawings>(draft.drawingsRef);
+                            } catch {
+                                loadedDrawings = null;
                             }
-                        } else if (isPdfDrawings(draft.drawings)) {
-                            setDrawings(draft.drawings);
+                        }
+                        const recovery = resolveDraftDrawings(loadedDrawings, draft.drawings, !!draft.drawingsRef);
+                        if (recovery.drawings) {
+                            setDrawings(recovery.drawings);
+                        }
+                        if (recovery.lost) {
+                            toast.error("필기 복구 실패", "저장된 필기를 불러오지 못했습니다. 답안과 진행 상태는 그대로 유지됩니다.");
                         }
                         if (typeof draft.timeRemaining === "number") {
                             setTimeRemaining(draft.timeRemaining);
