@@ -2,6 +2,7 @@
 
 import { useEffect, useRef } from "react";
 import { usePathname } from "next/navigation";
+import { showToast } from "@/components/Toast";
 
 const SKIP_WAITING_MESSAGE = "OMR_SKIP_WAITING";
 
@@ -28,6 +29,8 @@ export default function PWARegister() {
 
     let cleanupRegistrationListener: (() => void) | undefined;
     let reloadOnNextController = false;
+    let notifyOnNextController = false;
+    let hasShownDeferredUpdateNotice = false;
     let isDisposed = false;
 
     const checkForUpdates = (registration: ServiceWorkerRegistration) => {
@@ -48,14 +51,30 @@ export default function PWARegister() {
 
     const requestActivation = (worker: ServiceWorker | null | undefined) => {
       if (!worker) return;
-      reloadOnNextController = canReloadForServiceWorkerUpdate(pathnameRef.current);
+      const shouldReload = canReloadForServiceWorkerUpdate(pathnameRef.current);
+      reloadOnNextController = shouldReload;
+      notifyOnNextController = !shouldReload && Boolean(navigator.serviceWorker.controller);
       askWorkerToActivate(worker);
     };
 
     const handleControllerChange = () => {
-      if (isDisposed || !reloadOnNextController) return;
-      reloadOnNextController = false;
-      window.location.reload();
+      if (isDisposed) return;
+      if (reloadOnNextController) {
+        reloadOnNextController = false;
+        notifyOnNextController = false;
+        window.location.reload();
+        return;
+      }
+      if (notifyOnNextController && !hasShownDeferredUpdateNotice) {
+        notifyOnNextController = false;
+        hasShownDeferredUpdateNotice = true;
+        showToast(
+          "info",
+          "새 버전 준비됨",
+          "현재 작업은 유지됩니다. 제출하거나 저장한 뒤 새로고침하면 최신 앱으로 전환됩니다.",
+          6500,
+        );
+      }
     };
 
     const handleVisibilityChange = () => {

@@ -523,6 +523,7 @@ describe("PWA assets", () => {
     it("PWA registration checks for mobile app updates without reloading active work screens", () => {
         const source = getPwaRegisterSource();
 
+        expect(source).toContain("showToast");
         expect(source).toContain("visibilitychange");
         expect(source).toContain("window.addEventListener(\"online\", handleOnline)");
         expect(source).toContain("window.removeEventListener(\"online\", handleOnline)");
@@ -530,6 +531,11 @@ describe("PWA assets", () => {
         expect(source).toContain("updatefound");
         expect(source).toContain("getRegistration(\"/sw.js\")");
         expect(source).toContain("pathname !== \"/create\" && !pathname.startsWith(\"/solve/\")");
+        expect(source).toContain("notifyOnNextController");
+        expect(source).toContain("hasShownDeferredUpdateNotice");
+        expect(source).toContain("새 버전 준비됨");
+        expect(source).toContain("현재 작업은 유지됩니다");
+        expect(source).toContain("6500");
         expect(source).toContain("OMR_SKIP_WAITING");
     });
 

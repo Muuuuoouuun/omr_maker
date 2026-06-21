@@ -16,10 +16,15 @@ interface ToastMessage {
 // Singleton event-bus: any component can call `showToast(...)` without context.
 type Listener = (t: ToastMessage) => void;
 const listeners = new Set<Listener>();
+const pendingMessages: ToastMessage[] = [];
 let nextId = 1;
 
 export function showToast(kind: ToastKind, title: string, description?: string, duration = 3000) {
     const msg: ToastMessage = { id: nextId++, kind, title, description, duration };
+    if (listeners.size === 0) {
+        pendingMessages.push(msg);
+        return;
+    }
     listeners.forEach(l => l(msg));
 }
 
@@ -48,6 +53,9 @@ export default function ToastHost() {
             setTimeout(() => remove(msg.id), msg.duration);
         };
         listeners.add(listener);
+        if (pendingMessages.length > 0) {
+            pendingMessages.splice(0).forEach(listener);
+        }
         return () => { listeners.delete(listener); };
     }, [remove]);
 

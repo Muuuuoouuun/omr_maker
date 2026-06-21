@@ -140,6 +140,9 @@ describe("service UI surface", () => {
         expect(toastHost).toContain("width: 'min(400px, 100%)'");
         expect(toastHost).toContain("minWidth: 'min(280px, 100%)'");
         expect(toastHost).toContain("overflowWrap: 'anywhere'");
+        expect(toastHost).toContain("pendingMessages");
+        expect(toastHost).toContain("listeners.size === 0");
+        expect(toastHost).toContain("pendingMessages.splice(0).forEach(listener)");
     });
 
     it("keeps decorative motion off on mobile, installed app, and reduced-motion surfaces", () => {
