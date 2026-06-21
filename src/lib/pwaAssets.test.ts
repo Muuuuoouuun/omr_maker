@@ -42,6 +42,10 @@ function getPwaProofSource(): string {
     return readFileSync(path.join(rootDir, "scripts/pwa-proof-verify.mjs"), "utf8");
 }
 
+function getPwaCheckPageSource(): string {
+    return readFileSync(path.join(rootDir, "src/app/pwa-check/page.tsx"), "utf8");
+}
+
 function getRootLayoutSource(): string {
     return readFileSync(path.join(rootDir, "src/app/layout.tsx"), "utf8");
 }
@@ -717,15 +721,19 @@ describe("PWA assets", () => {
         const staleCacheReport = passingReport.replaceAll("omr-maker-v10", "omr-maker-v9");
         const uncontrolledWorkerReport = passingReport.replace("controller=yes", "controller=no");
         const legacyStorageReport = passingReport.replace(" · indexedDB ok · quota=512MB · usage=1MB · persisted=unknown", "");
+        const wrongPathReport = passingReport.replace("url=https://omr-maker-eight.vercel.app/pwa-check", "url=https://omr-maker-eight.vercel.app/teacher/dashboard");
+        const wrongOriginReport = passingReport.replaceAll("https://omr-maker-eight.vercel.app", "https://preview.example.com");
         const iosReport = passingReport
             .replace("css-fullscreen=no · css-standalone=yes · ios-navigator-standalone=no", "css-fullscreen=no · css-standalone=yes · ios-navigator-standalone=yes")
             .replace("css-fullscreen=no · css-standalone=yes · ios-navigator-standalone=no", "css-fullscreen=no · css-standalone=yes · ios-navigator-standalone=yes")
             .replace("Mozilla/5.0 (Linux; Android 15; Pixel 9) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.7727.15 Mobile Safari/537.36", "Mozilla/5.0 (iPhone; CPU iPhone OS 18_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.5 Mobile/15E148 Safari/604.1");
+        const wrongOriginIosReport = iosReport.replaceAll("https://omr-maker-eight.vercel.app", "https://preview.example.com");
         const passingBundle = [
             "OMR Maker PWA dual device proof",
             "generatedAt=2026. 6. 22. 4시 15분 00초",
             "status=passed",
             "requiredDevices=Android, iOS",
+            "origin=https://omr-maker-eight.vercel.app",
             "android=android:standalone:pass",
             "ios=ios:standalone:pass",
             "-----BEGIN ANDROID PWA REPORT-----",
@@ -735,8 +743,13 @@ describe("PWA assets", () => {
             iosReport,
             "-----END IOS PWA REPORT-----",
         ].join("\n");
+        const mixedOriginBundle = passingBundle.replace(iosReport, wrongOriginIosReport);
 
         const passing = spawnSync(process.execPath, [proofScriptPath], {
+            encoding: "utf8",
+            input: passingReport,
+        });
+        const passingWithOrigin = spawnSync(process.execPath, [proofScriptPath, "--origin", "https://omr-maker-eight.vercel.app"], {
             encoding: "utf8",
             input: passingReport,
         });
@@ -756,15 +769,32 @@ describe("PWA assets", () => {
             encoding: "utf8",
             input: legacyStorageReport,
         });
+        const wrongPath = spawnSync(process.execPath, [proofScriptPath], {
+            encoding: "utf8",
+            input: wrongPathReport,
+        });
+        const wrongOrigin = spawnSync(process.execPath, [proofScriptPath, "--origin", "https://omr-maker-eight.vercel.app"], {
+            encoding: "utf8",
+            input: wrongOriginReport,
+        });
         const bundle = spawnSync(process.execPath, [proofScriptPath], {
             encoding: "utf8",
             input: passingBundle,
+        });
+        const bundleWithOrigin = spawnSync(process.execPath, [proofScriptPath, "--origin", "https://omr-maker-eight.vercel.app"], {
+            encoding: "utf8",
+            input: passingBundle,
+        });
+        const mixedOrigin = spawnSync(process.execPath, [proofScriptPath], {
+            encoding: "utf8",
+            input: mixedOriginBundle,
         });
 
         expect(source).toContain("proofStatus must be pass");
         expect(source).toContain("installedDisplay must be yes");
         expect(source).toContain("displayMode must be standalone or fullscreen");
-        expect(source).toContain("Report URL must be the deployed HTTPS URL");
+        expect(source).toContain("Report URL must be the deployed HTTPS /pwa-check URL");
+        expect(source).toContain("Report URL origin must be ${expectedOrigin}");
         expect(source).toContain('const expectedCachePrefix = "omr-maker-v10"');
         expect(source).toContain("offline-cache must include ${expectedCachePrefix}");
         expect(source).toContain("storage must include IndexedDB availability.");
@@ -772,14 +802,17 @@ describe("PWA assets", () => {
         expect(source).toContain("OMR Maker PWA dual device proof");
         expect(source).toContain("Android proof report must pass");
         expect(source).toContain("iOS proof report must pass");
+        expect(source).toContain("Android and iOS proof reports must come from the same deployed origin.");
         expect(passing.status).toBe(0);
         expect(JSON.parse(passing.stdout)).toMatchObject({
             displayMode: "standalone",
             installedDisplay: "yes",
+            origin: "https://omr-maker-eight.vercel.app",
             platform: "android",
             proofStatus: "pass",
             status: "passed",
         });
+        expect(passingWithOrigin.status).toBe(0);
         expect(failing.status).toBe(1);
         expect(JSON.parse(failing.stdout)).toMatchObject({
             displayMode: "browser",
@@ -796,12 +829,32 @@ describe("PWA assets", () => {
         expect(JSON.parse(uncontrolledWorker.stdout).errors).toContain("service-worker must be controlled by the active PWA worker.");
         expect(legacyStorage.status).toBe(1);
         expect(JSON.parse(legacyStorage.stdout).errors).toContain("storage must include IndexedDB availability.");
+        expect(wrongPath.status).toBe(1);
+        expect(JSON.parse(wrongPath.stdout).errors).toContain("Report URL must be the deployed HTTPS /pwa-check URL, not localhost, another path, or another origin.");
+        expect(wrongOrigin.status).toBe(1);
+        expect(JSON.parse(wrongOrigin.stdout).errors).toContain("Report URL origin must be https://omr-maker-eight.vercel.app.");
         expect(bundle.status).toBe(0);
         expect(JSON.parse(bundle.stdout)).toMatchObject({
             android: { platform: "android", status: "passed" },
             ios: { platform: "ios", status: "passed" },
             mode: "dual",
+            origin: "https://omr-maker-eight.vercel.app",
             status: "passed",
         });
+        expect(bundleWithOrigin.status).toBe(0);
+        expect(mixedOrigin.status).toBe(1);
+        expect(JSON.parse(mixedOrigin.stdout).errors).toContain("Android and iOS proof reports must come from the same deployed origin.");
+    });
+
+    it("keeps the device-check page proof status aligned with strict installed app evidence", () => {
+        const pageSource = getPwaCheckPageSource();
+
+        expect(pageSource).toContain("function isInstalledLaunchProof");
+        expect(pageSource).toContain("requiredProofChecksPass(snapshot.checks)");
+        expect(pageSource).toContain('`proofStatus=${proofReady ? "pass" : "pending"}`');
+        expect(pageSource).toContain("function validateDualProofOrigins");
+        expect(pageSource).toContain("Android/iOS reports must come from the same deployed origin");
+        expect(pageSource).toContain('`origin=${origin || "missing"}`');
+        expect(pageSource).toContain("npm run pwa:proof -- --origin 배포URL");
     });
 });

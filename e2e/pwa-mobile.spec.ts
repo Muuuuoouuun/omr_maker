@@ -77,6 +77,14 @@ async function expectTouchTarget(locator: Locator) {
     expect(Math.round(box?.height || 0)).toBeGreaterThanOrEqual(44);
 }
 
+function isLocalAppUrl(urlValue: string): boolean {
+    const url = new URL(urlValue);
+    return url.hostname === "localhost"
+        || url.hostname === "127.0.0.1"
+        || url.hostname === "::1"
+        || url.hostname.endsWith(".localhost");
+}
+
 async function smallTargets(page: Page, selector: string) {
     return page.evaluate((selector) => {
         return [...document.querySelectorAll<HTMLElement>(selector)]
@@ -621,17 +629,29 @@ test.describe("Mobile PWA entry", () => {
         expect(standaloneState.layoutHeight).toBeGreaterThan(0);
 
         await page.goto("/pwa-check");
-        await expect(page.getByTestId("pwa-device-verdict")).toContainText("앱 실행 통과");
         await expect(page.getByTestId("pwa-device-check-display-mode")).toContainText(/standalone|fullscreen/);
         await expect(page.getByTestId("pwa-device-check-launch-proof")).toContainText("확인됨");
         await expect(page.getByTestId("pwa-device-report")).toContainText("installedDisplay=yes");
-        await expect(page.getByTestId("pwa-device-report")).toContainText("proofStatus=pass");
         await expect(page.getByTestId("pwa-device-report")).toContainText("launch-proof=pass:확인됨");
         await expect(page.getByTestId("pwa-device-report")).toContainText("handoff-origin=");
         await expect(page.getByTestId("pwa-device-report")).toContainText("offline-cache=");
         await expect(page.getByTestId("pwa-device-report")).toContainText("viewport-height=pass:동기화");
         await expect(page.getByTestId("pwa-device-report")).toContainText("keyboard-safe-area=pass:준비");
+        const pwaCheckUrl = page.url();
+        if (isLocalAppUrl(pwaCheckUrl)) {
+            await expect(page.getByTestId("pwa-device-verdict")).toContainText("실기기 검증 필요");
+            await expect(page.getByTestId("pwa-device-report")).toContainText("proofStatus=pending");
+        } else {
+            await expect(page.getByTestId("pwa-device-verdict")).toContainText("앱 실행 통과");
+            await expect(page.getByTestId("pwa-device-report")).toContainText("proofStatus=pass");
+        }
         await page.getByTestId("pwa-proof-input").fill(validInstalledProofReport("android"));
+        await page.getByTestId("pwa-proof-input-ios").fill(
+            validInstalledProofReport("ios").replaceAll("https://omr-maker-eight.vercel.app", "https://preview.example.com"),
+        );
+        await expect(page.getByTestId("pwa-proof-result")).toContainText("origin 불일치");
+        await expect(page.getByTestId("pwa-proof-bundle")).toHaveCount(0);
+
         await page.getByTestId("pwa-proof-input-ios").fill(validInstalledProofReport("ios"));
         await expect(page.getByTestId("pwa-proof-result")).toContainText("Android/iOS 리포트 통과");
         await expect(page.getByTestId("pwa-proof-result-android")).toContainText("Android 리포트 통과");
@@ -651,6 +671,7 @@ test.describe("Mobile PWA entry", () => {
         ));
         expect(copiedProofBundle).toContain("OMR Maker PWA dual device proof");
         expect(copiedProofBundle).toContain("requiredDevices=Android, iOS");
+        expect(copiedProofBundle).toContain("origin=https://omr-maker-eight.vercel.app");
         expect(copiedProofBundle).toContain("-----BEGIN ANDROID PWA REPORT-----");
         expect(copiedProofBundle).toContain("-----BEGIN IOS PWA REPORT-----");
         await expectNoHorizontalOverflow(page);

@@ -7,6 +7,7 @@ function usage() {
         "Usage:",
         "  npm run pwa:proof < pwa-report.txt",
         "  npm run pwa:proof -- --file pwa-report.txt",
+        "  npm run pwa:proof -- --origin https://omr-maker-eight.vercel.app < pwa-dual-proof.txt",
         "  npm run pwa:proof < pwa-dual-proof.txt",
         "",
         "The input must be a copied report from /pwa-check after opening the installed home-screen app,",
@@ -15,7 +16,7 @@ function usage() {
 }
 
 function parseArgs(argv) {
-    const args = { file: "", help: false };
+    const args = { file: "", help: false, origin: process.env.PWA_PROOF_EXPECTED_ORIGIN || "" };
 
     for (let index = 0; index < argv.length; index += 1) {
         const value = argv[index];
@@ -25,6 +26,11 @@ function parseArgs(argv) {
         }
         if (value === "--file") {
             args.file = argv[index + 1] || "";
+            index += 1;
+            continue;
+        }
+        if (value === "--origin") {
+            args.origin = argv[index + 1] || "";
             index += 1;
             continue;
         }
@@ -42,18 +48,42 @@ async function readStdin() {
     return data;
 }
 
-function isDeviceReachableHttps(urlValue) {
+function readExpectedOrigin(originValue) {
+    if (!originValue) return "";
     try {
-        const url = new URL(urlValue);
-        const hostname = url.hostname.toLowerCase();
-        const isLocalhost = hostname === "localhost"
-            || hostname === "127.0.0.1"
-            || hostname === "::1"
-            || hostname.endsWith(".localhost");
-        return url.protocol === "https:" && !isLocalhost;
+        return new URL(originValue).origin;
     } catch {
+        throw new Error(`Invalid --origin value: ${originValue}`);
+    }
+}
+
+function readProofUrl(urlValue) {
+    try {
+        return new URL(urlValue);
+    } catch {
+        return null;
+    }
+}
+
+function isLocalhostName(hostname) {
+    const normalized = hostname.toLowerCase();
+    return normalized === "localhost"
+        || normalized === "127.0.0.1"
+        || normalized === "::1"
+        || normalized.endsWith(".localhost");
+}
+
+function isDeviceCheckHttpsUrl(urlValue, expectedOrigin = "") {
+    const url = readProofUrl(urlValue);
+    if (!url) return false;
+    if (url.protocol !== "https:" || isLocalhostName(url.hostname) || url.pathname !== "/pwa-check") {
         return false;
     }
+    return !expectedOrigin || url.origin === expectedOrigin;
+}
+
+function readProofOrigin(urlValue) {
+    return readProofUrl(urlValue)?.origin || "";
 }
 
 function proofPlatformLabel(platform) {
@@ -108,7 +138,7 @@ function parseReport(reportText) {
     };
 }
 
-function validateProof(parsed, expectedPlatform = "") {
+function validateProof(parsed, expectedPlatform = "", expectedOrigin = "") {
     const errors = [];
     const platform = readProofPlatform(parsed.fields);
     const installedModes = new Set(["standalone", "fullscreen"]);
@@ -137,8 +167,11 @@ function validateProof(parsed, expectedPlatform = "") {
     if (expectedPlatform && platform !== expectedPlatform) {
         errors.push(`Report must come from ${proofPlatformLabel(expectedPlatform)}, got ${proofPlatformLabel(platform)}.`);
     }
-    if (!isDeviceReachableHttps(parsed.fields.url || "")) {
-        errors.push("Report URL must be the deployed HTTPS URL, not localhost or an invalid URL.");
+    if (!isDeviceCheckHttpsUrl(parsed.fields.url || "", expectedOrigin)) {
+        errors.push("Report URL must be the deployed HTTPS /pwa-check URL, not localhost, another path, or another origin.");
+    }
+    if (expectedOrigin && readProofOrigin(parsed.fields.url || "") && readProofOrigin(parsed.fields.url || "") !== expectedOrigin) {
+        errors.push(`Report URL origin must be ${expectedOrigin}.`);
     }
     if (parsed.fields.verdict !== "앱 실행 통과") {
         errors.push("Report verdict is not 앱 실행 통과.");
@@ -188,15 +221,16 @@ function validateProof(parsed, expectedPlatform = "") {
     return errors;
 }
 
-function resultForReport(reportText, expectedPlatform = "") {
+function resultForReport(reportText, expectedPlatform = "", expectedOrigin = "") {
     const parsed = parseReport(reportText);
-    const errors = validateProof(parsed, expectedPlatform);
+    const errors = validateProof(parsed, expectedPlatform, expectedOrigin);
 
     return {
         checks: Object.fromEntries(Object.entries(parsed.checks).map(([id, check]) => [id, `${check.tone}:${check.value}`])),
         displayMode: parsed.fields.displayMode || "",
         errors,
         installedDisplay: parsed.fields.installedDisplay || "",
+        origin: readProofOrigin(parsed.fields.url || ""),
         platform: readProofPlatform(parsed.fields),
         proofStatus: parsed.fields.proofStatus || "",
         status: errors.length === 0 ? "passed" : "failed",
@@ -234,7 +268,7 @@ function extractBundleReport(bundleText, platform) {
     return pattern.exec(bundleText)?.[1]?.trim() || "";
 }
 
-function resultForDualBundle(bundleText) {
+function resultForDualBundle(bundleText, expectedOrigin = "") {
     const bundle = parseBundleFields(bundleText);
     const errors = [];
 
@@ -250,19 +284,28 @@ function resultForDualBundle(bundleText) {
 
     const androidText = extractBundleReport(bundleText, "android");
     const iosText = extractBundleReport(bundleText, "ios");
-    const android = androidText ? resultForReport(androidText, "android") : null;
-    const ios = iosText ? resultForReport(iosText, "ios") : null;
+    const android = androidText ? resultForReport(androidText, "android", expectedOrigin) : null;
+    const ios = iosText ? resultForReport(iosText, "ios", expectedOrigin) : null;
+    const androidOrigin = android ? readProofOrigin(android.url) : "";
+    const iosOrigin = ios ? readProofOrigin(ios.url) : "";
 
     if (!androidText) errors.push("Missing Android PWA report section.");
     if (!iosText) errors.push("Missing iOS PWA report section.");
     if (android && android.status !== "passed") errors.push("Android proof report must pass.");
     if (ios && ios.status !== "passed") errors.push("iOS proof report must pass.");
+    if (androidOrigin && iosOrigin && androidOrigin !== iosOrigin) {
+        errors.push("Android and iOS proof reports must come from the same deployed origin.");
+    }
+    if (bundle.fields.origin && androidOrigin && bundle.fields.origin !== androidOrigin) {
+        errors.push("Bundle origin must match the Android/iOS proof report origin.");
+    }
 
     return {
         android,
         errors,
         ios,
         mode: "dual",
+        origin: androidOrigin || iosOrigin || "",
         status: errors.length === 0 ? "passed" : "failed",
     };
 }
@@ -273,6 +316,7 @@ async function main() {
         console.log(usage());
         return 0;
     }
+    const expectedOrigin = readExpectedOrigin(args.origin);
 
     const reportText = args.file ? await readFile(args.file, "utf8") : await readStdin();
     if (!reportText.trim()) {
@@ -280,8 +324,8 @@ async function main() {
     }
 
     const result = reportText.trim().startsWith("OMR Maker PWA dual device proof")
-        ? resultForDualBundle(reportText)
-        : resultForReport(reportText);
+        ? resultForDualBundle(reportText, expectedOrigin)
+        : resultForReport(reportText, "", expectedOrigin);
 
     console.log(JSON.stringify(result, null, 2));
     return result.status === "passed" ? 0 : 1;

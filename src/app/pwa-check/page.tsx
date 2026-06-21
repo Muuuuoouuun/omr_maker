@@ -279,19 +279,28 @@ function isLocalHandoffHost(hostname: string): boolean {
     || normalized.endsWith(".localhost");
 }
 
-function isDeviceReachableHttps(urlValue: string): boolean {
-  try {
-    const url = new URL(urlValue);
-    return url.protocol === "https:" && !isLocalHandoffHost(url.hostname);
-  } catch {
-    return false;
-  }
-}
-
 function proofPlatformLabel(platform: ProofPlatform): string {
   if (platform === "android") return "Android";
   if (platform === "ios") return "iOS";
   return "unknown";
+}
+
+function readProofUrl(urlValue: string): URL | null {
+  try {
+    return new URL(urlValue);
+  } catch {
+    return null;
+  }
+}
+
+function readProofOrigin(urlValue: string): string {
+  return readProofUrl(urlValue)?.origin || "";
+}
+
+function isDeviceCheckHttpsUrl(urlValue: string): boolean {
+  const url = readProofUrl(urlValue);
+  if (!url) return false;
+  return url.protocol === "https:" && !isLocalHandoffHost(url.hostname) && url.pathname === "/pwa-check";
 }
 
 function readProofPlatform(fields: ParsedProofReport["fields"]): ProofPlatform {
@@ -360,6 +369,15 @@ function checkSummary(checks: DeviceCheck[]): CheckSummary {
   );
 }
 
+function requiredProofChecksPass(checks: DeviceCheck[]): boolean {
+  const checksById = new Map(checks.map(check => [check.id, check]));
+  return REQUIRED_PROOF_PASS_CHECKS.every(checkId => checksById.get(checkId)?.tone === "pass");
+}
+
+function isInstalledLaunchProof(snapshot: RuntimeSnapshot, summary: CheckSummary): boolean {
+  return isInstalledDisplay(snapshot.displayMode) && summary.fails === 0 && requiredProofChecksPass(snapshot.checks);
+}
+
 function deviceVerdict(snapshot: RuntimeSnapshot | null, summary: CheckSummary): { detail: string; label: string; tone: CheckTone } {
   if (!snapshot) return { detail: "기기 상태를 읽는 중", label: "검사 중", tone: "warn" };
   if (summary.fails > 0) return { detail: `${summary.fails}개 항목 조치 필요`, label: "조치 필요", tone: "fail" };
@@ -367,6 +385,13 @@ function deviceVerdict(snapshot: RuntimeSnapshot | null, summary: CheckSummary):
     return {
       detail: "홈 화면 아이콘 실행 증거가 아직 없음",
       label: "설치 실행 전",
+      tone: "warn",
+    };
+  }
+  if (!requiredProofChecksPass(snapshot.checks)) {
+    return {
+      detail: "배포 HTTPS와 필수 항목 통과 후 proof 제출 가능",
+      label: "실기기 검증 필요",
       tone: "warn",
     };
   }
@@ -381,6 +406,7 @@ function buildDeviceReport(snapshot: RuntimeSnapshot, summary: CheckSummary): st
   const url = typeof location === "undefined" ? "" : location.href;
   const verdict = deviceVerdict(snapshot, summary);
   const installedDisplay = isInstalledDisplay(snapshot.displayMode);
+  const proofReady = isInstalledLaunchProof(snapshot, summary);
   const checks = snapshot.checks
     .map(check => `- ${check.id}=${check.tone}:${check.value} (${check.detail})`)
     .join("\n");
@@ -392,7 +418,7 @@ function buildDeviceReport(snapshot: RuntimeSnapshot, summary: CheckSummary): st
     `verdict=${verdict.label}`,
     `displayMode=${snapshot.displayMode}`,
     `installedDisplay=${installedDisplay ? "yes" : "no"}`,
-    `proofStatus=${installedDisplay ? "pass" : "pending"}`,
+    `proofStatus=${proofReady ? "pass" : "pending"}`,
     `displayEvidence=${snapshot.displayModeEvidence}`,
     `summary=${summary.passes} pass, ${summary.warnings} warn, ${summary.fails} fail`,
     `userAgent=${snapshot.userAgent}`,
@@ -446,8 +472,8 @@ function validateProofReport(reportText: string, expectedPlatform?: ProofTarget)
   if (expectedPlatform && platform !== expectedPlatform) {
     errors.push(`Report must come from ${proofPlatformLabel(expectedPlatform)}, got ${proofPlatformLabel(platform)}.`);
   }
-  if (!isDeviceReachableHttps(parsed.fields.url || "")) {
-    errors.push("Report URL must be the deployed HTTPS URL, not localhost or an invalid URL.");
+  if (!isDeviceCheckHttpsUrl(parsed.fields.url || "")) {
+    errors.push("Report URL must be the deployed HTTPS /pwa-check URL, not localhost or another path.");
   }
   if (parsed.fields.verdict !== "앱 실행 통과") {
     errors.push("Report verdict is not 앱 실행 통과.");
@@ -507,15 +533,28 @@ function validateProofReport(reportText: string, expectedPlatform?: ProofTarget)
   };
 }
 
+function validateDualProofOrigins(proofResults: Record<ProofTarget, ProofValidationResult | null>): string[] {
+  const androidOrigin = proofResults.android?.status === "passed" ? readProofOrigin(proofResults.android.url) : "";
+  const iosOrigin = proofResults.ios?.status === "passed" ? readProofOrigin(proofResults.ios.url) : "";
+  if (!androidOrigin || !iosOrigin) return [];
+  if (androidOrigin !== iosOrigin) {
+    return [`Android/iOS reports must come from the same deployed origin (${androidOrigin} != ${iosOrigin}).`];
+  }
+  return [];
+}
+
 function buildDualProofBundle(
   proofInputs: Record<ProofTarget, string>,
   proofResults: Record<ProofTarget, ProofValidationResult | null>,
 ): string {
+  const origin = readProofOrigin(proofResults.android?.url || proofResults.ios?.url || "");
+
   return [
     DUAL_PROOF_HEADER,
     `generatedAt=${new Date().toLocaleString("ko-KR", { hour12: false })}`,
     "status=passed",
     "requiredDevices=Android, iOS",
+    `origin=${origin || "missing"}`,
     `android=${proofResults.android?.platform || "missing"}:${proofResults.android?.displayMode || "missing"}:${proofResults.android?.proofStatus || "missing"}`,
     `ios=${proofResults.ios?.platform || "missing"}:${proofResults.ios?.displayMode || "missing"}:${proofResults.ios?.proofStatus || "missing"}`,
     "-----BEGIN ANDROID PWA REPORT-----",
@@ -904,22 +943,26 @@ export default function PwaCheckPage() {
   const proofEnteredCount = PROOF_TARGETS.filter(target => proofInputs[target.platform].trim()).length;
   const proofPassedCount = PROOF_TARGETS.filter(target => proofResults[target.platform]?.status === "passed").length;
   const proofFailedCount = PROOF_TARGETS.filter(target => proofResults[target.platform]?.status === "failed").length;
+  const proofBundleIssues = useMemo(() => validateDualProofOrigins(proofResults), [proofResults]);
+  const canBuildDualProofBundle = proofPassedCount === PROOF_TARGETS.length && proofBundleIssues.length === 0;
   const verdictMeta = CHECK_TONE_META[verdict.tone];
   const VerdictIcon = verdictMeta.icon;
-  const proofTone: CheckTone = proofPassedCount === PROOF_TARGETS.length ? "pass" : proofFailedCount > 0 ? "fail" : "warn";
+  const proofTone: CheckTone = canBuildDualProofBundle ? "pass" : proofFailedCount > 0 || proofBundleIssues.length > 0 ? "fail" : "warn";
   const proofMeta = CHECK_TONE_META[proofTone];
   const ProofIcon = proofMeta.icon;
-  const proofOverallLabel = proofPassedCount === PROOF_TARGETS.length
+  const proofOverallLabel = canBuildDualProofBundle
     ? "Android/iOS 리포트 통과"
     : proofEnteredCount === 0
       ? "Android/iOS 리포트 대기"
-      : proofFailedCount > 0
+      : proofBundleIssues.length > 0
+        ? "Android/iOS origin 불일치"
+        : proofFailedCount > 0
         ? "Android/iOS 리포트 미통과"
         : "Android/iOS 리포트 미완료";
-  const proofOverallDetail = `${proofPassedCount}/${PROOF_TARGETS.length} 통과 · ${proofFailedCount} 미통과`;
+  const proofOverallDetail = proofBundleIssues[0] || `${proofPassedCount}/${PROOF_TARGETS.length} 통과 · ${proofFailedCount} 미통과`;
   const dualProofBundle = useMemo(() => (
-    proofPassedCount === PROOF_TARGETS.length ? buildDualProofBundle(proofInputs, proofResults) : ""
-  ), [proofInputs, proofPassedCount, proofResults]);
+    canBuildDualProofBundle ? buildDualProofBundle(proofInputs, proofResults) : ""
+  ), [canBuildDualProofBundle, proofInputs, proofResults]);
 
   const copyReport = useCallback(async () => {
     if (!reportText) return;
@@ -1594,7 +1637,7 @@ export default function PwaCheckPage() {
                       Android/iOS 통합 proof
                     </strong>
                     <span style={{ color: "var(--muted)", display: "block", fontSize: "0.72rem", lineHeight: 1.35 }}>
-                      이 묶음은 npm run pwa:proof 로 재검증할 수 있습니다.
+                      이 묶음은 npm run pwa:proof -- --origin 배포URL 로 재검증할 수 있습니다.
                     </span>
                   </span>
                   <span
