@@ -398,6 +398,40 @@ async function runSmoke() {
         assert(offlineDeviceCheckState.report.includes("displayEvidence="), "Offline PWA device check display evidence is missing", offlineDeviceCheckState);
         assert(offlineDeviceCheckState.report.includes("launch-proof="), "Offline PWA device check launch proof is missing", offlineDeviceCheckState);
 
+        await page.goto("/offline.html", { waitUntil: "domcontentloaded", timeout: 15_000 });
+        await page.getByRole("heading", { name: "오프라인 상태입니다" }).waitFor({ state: "visible", timeout: 10_000 });
+        const offlineFallbackState = await page.evaluate(() => {
+            const actions = [...document.querySelectorAll(".offline-action")].map(action => {
+                const box = action.getBoundingClientRect();
+                return {
+                    height: Math.round(box.height),
+                    href: action instanceof HTMLAnchorElement ? action.getAttribute("href") : null,
+                    label: action.textContent?.trim() || "",
+                    tagName: action.tagName.toLowerCase(),
+                    width: Math.round(box.width),
+                };
+            });
+
+            return {
+                actionHrefs: actions.map(action => action.href).filter(Boolean),
+                actionLabels: actions.map(action => action.label),
+                actions,
+                hasHorizontalOverflow: document.documentElement.scrollWidth > document.documentElement.clientWidth,
+                title: document.title,
+                url: window.location.href,
+            };
+        });
+        assert(offlineFallbackState.title === "OMR Maker 오프라인", "Offline fallback page title is incorrect", offlineFallbackState);
+        assert(!offlineFallbackState.hasHorizontalOverflow, "Offline fallback page has horizontal overflow", offlineFallbackState);
+        assert(offlineFallbackState.actionHrefs.includes("/"), "Offline fallback is missing a home return action", offlineFallbackState);
+        assert(offlineFallbackState.actionHrefs.includes("/pwa-check"), "Offline fallback is missing a PWA device check action", offlineFallbackState);
+        assert(offlineFallbackState.actionLabels.includes("다시 연결 시도"), "Offline fallback is missing a reconnect action", offlineFallbackState);
+        assert(
+            offlineFallbackState.actions.every(action => action.width >= 44 && action.height >= 44),
+            "Offline fallback touch targets are too small",
+            offlineFallbackState,
+        );
+
         const unexpectedOfflineConsoleProblems = offlineConsoleProblems.filter(problem => !isExpectedOfflineBrowserProblem(problem));
         assert(onlineConsoleProblems.length === 0, "Online console warnings/errors were emitted during PWA smoke", onlineConsoleProblems);
         assert(
@@ -425,6 +459,7 @@ async function runSmoke() {
                 shortcuts: metadata.manifest.shortcuts?.length || 0,
             },
             offlineDeviceCheckState,
+            offlineFallbackState,
             offlineState,
             onlineDeviceCheckState,
             offlineConsoleProblems,

@@ -11,6 +11,11 @@
         background: #f8fafc;
         color: #0f172a;
       }
+      *,
+      *::before,
+      *::after {
+        box-sizing: border-box;
+      }
       body {
         min-height: 100dvh;
         display: grid;
@@ -41,20 +46,38 @@
         color: #64748b;
         line-height: 1.6;
       }
-      button {
+      .actions {
+        display: grid;
+        gap: 10px;
+        margin-top: 22px;
+      }
+      .offline-action {
         min-height: 44px;
-        margin-top: 18px;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
         padding: 0 18px;
-        border: 0;
+        border: 1px solid #bfdbfe;
         border-radius: 12px;
-        background: #2563eb;
-        color: #fff;
+        background: #eff6ff;
+        color: #1e40af;
         font: inherit;
         font-weight: 800;
+        text-align: center;
+        text-decoration: none;
         cursor: pointer;
         touch-action: manipulation;
       }
-      button:focus-visible {
+      .offline-action.primary {
+        border-color: transparent;
+        background: #2563eb;
+        color: #fff;
+      }
+      button.offline-action {
+        width: 100%;
+        min-height: 44px;
+      }
+      .offline-action:focus-visible {
         outline: 3px solid rgba(37, 99, 235, 0.32);
         outline-offset: 3px;
       }
@@ -70,7 +93,13 @@
         p {
           color: #cbd5e1;
         }
-        button {
+        .offline-action {
+          border-color: #334155;
+          background: #0f172a;
+          color: #bfdbfe;
+        }
+        .offline-action.primary {
+          border-color: transparent;
           background: #60a5fa;
           color: #0f172a;
         }
@@ -82,7 +111,11 @@
       <img src="/logo.png" alt="" />
       <h1>오프라인 상태입니다</h1>
       <p>인터넷 연결이 복구되면 OMR Maker가 다시 시험과 리포트를 불러옵니다. 이 기기에 저장된 페이지는 계속 열릴 수 있습니다.</p>
-      <button type="button" onclick="window.location.reload()">다시 연결 시도</button>
+      <nav class="actions" aria-label="오프라인 빠른 이동">
+        <a class="offline-action primary" href="/">홈으로</a>
+        <a class="offline-action" href="/pwa-check">앱 상태 체크</a>
+        <button class="offline-action" type="button" onclick="window.location.reload()">다시 연결 시도</button>
+      </nav>
     </main>
   </body>
 </html>

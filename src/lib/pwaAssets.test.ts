@@ -364,13 +364,20 @@ describe("PWA assets", () => {
         });
     });
 
-    it("offline page is mobile-safe and gives users a reconnect action", () => {
+    it("offline page is mobile-safe and gives users reconnect and app return actions", () => {
         const offlinePage = getOfflinePageSource();
 
         expect(offlinePage).toContain("viewport-fit=cover");
         expect(offlinePage).toContain("min-height: 100dvh");
+        expect(offlinePage).toContain("box-sizing: border-box");
+        expect(offlinePage).toContain("min-height: 44px");
         expect(offlinePage).toContain("touch-action: manipulation");
         expect(offlinePage).toContain("<img src=\"/logo.png\"");
+        expect(offlinePage).toContain("aria-label=\"오프라인 빠른 이동\"");
+        expect(offlinePage).toContain("href=\"/\"");
+        expect(offlinePage).toContain("href=\"/pwa-check\"");
+        expect(offlinePage).toContain("홈으로");
+        expect(offlinePage).toContain("앱 상태 체크");
         expect(offlinePage).toContain("window.location.reload()");
         expect(offlinePage).toContain("다시 연결 시도");
     });
@@ -487,6 +494,8 @@ describe("PWA assets", () => {
         expect(source).toContain("Unexpected offline console warnings/errors were emitted during PWA smoke");
         expect(source).toContain("onlineDeviceCheckState");
         expect(source).toContain("offlineDeviceCheckState");
+        expect(source).toContain("offlineFallbackState");
+        expect(source).toContain("Offline fallback touch targets are too small");
         expect(source).toContain("cachedPwaCheck");
         expect(source).toContain("displayEvidence=");
         expect(source).toContain("launch-proof=");
