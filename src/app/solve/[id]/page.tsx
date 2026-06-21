@@ -277,7 +277,7 @@ function SolveLoadErrorCard({ error }: { error: SolveLoadError }) {
     return (
         <div className="layout-main solve-page" style={{
             background: 'var(--background)',
-            minHeight: '100dvh',
+            minHeight: 'var(--app-viewport-height, 100dvh)',
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'center',
@@ -1239,7 +1239,7 @@ export default function SolvePage() {
         return (
             <div className="layout-main solve-page" style={{
                 background: 'var(--background)',
-                minHeight: '100dvh',
+                minHeight: 'var(--app-viewport-height, 100dvh)',
                 display: 'flex',
                 alignItems: 'center',
                 justifyContent: 'center',
@@ -1264,7 +1264,7 @@ export default function SolvePage() {
         return (
             <div className="layout-main solve-page" style={{
                 background: 'var(--background)',
-                minHeight: '100dvh',
+                minHeight: 'var(--app-viewport-height, 100dvh)',
                 display: 'flex',
                 alignItems: 'center',
                 justifyContent: 'center',
@@ -1310,7 +1310,7 @@ export default function SolvePage() {
     return (
         <div className="layout-main solve-page" style={{
             background: 'var(--background)',
-            height: '100dvh',
+            height: 'var(--app-viewport-height, 100dvh)',
             overflow: 'hidden',
             display: 'flex',
             flexDirection: 'column'

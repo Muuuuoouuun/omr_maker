@@ -23,6 +23,26 @@ async function expectNoHorizontalOverflow(page: Page) {
     ))).toBe(false);
 }
 
+async function expectSyncedViewportHeight(page: Page) {
+    await expect.poll(async () => page.evaluate(() => (
+        getComputedStyle(document.documentElement).getPropertyValue("--app-viewport-height").trim()
+    ))).toMatch(/^\d+px$/);
+
+    return page.evaluate(() => {
+        const value = getComputedStyle(document.documentElement).getPropertyValue("--app-viewport-height").trim();
+        const parsedValue = Number.parseInt(value, 10);
+        const visualViewportHeight = Math.round(window.visualViewport?.height || window.innerHeight);
+        const layout = document.querySelector(".layout-main");
+
+        return {
+            layoutHeight: layout ? Math.round(layout.getBoundingClientRect().height) : 0,
+            parsedValue,
+            value,
+            visualViewportHeight,
+        };
+    });
+}
+
 async function expectTouchTarget(locator: Locator) {
     await expect(locator).toHaveCount(1);
     await expect(locator).toBeVisible();
@@ -110,6 +130,9 @@ test.describe("Mobile PWA entry", () => {
 
         await expect(page).toHaveTitle("OMR Maker");
         await expect(page.getByRole("heading", { name: "OMR Maker" })).toBeVisible();
+        const viewportHeightState = await expectSyncedViewportHeight(page);
+        expect(viewportHeightState.parsedValue).toBeGreaterThan(0);
+        expect(Math.abs(viewportHeightState.parsedValue - viewportHeightState.visualViewportHeight)).toBeLessThanOrEqual(2);
         await expect(page.locator('link[rel="manifest"]')).toHaveAttribute("href", "/manifest.webmanifest");
         await expect(page.locator('link[rel="apple-touch-icon"]').first()).toHaveAttribute("href", "/apple-touch-icon.png");
         await expectMetaContent(page, "mobile-web-app-capable", "yes");
@@ -239,9 +262,11 @@ test.describe("Mobile PWA entry", () => {
             return {
                 displayMode: window.matchMedia("(display-mode: standalone)").matches,
                 headerPaddingTop: header ? window.getComputedStyle(header).paddingTop : null,
+                layoutHeight: layout ? Math.round(layout.getBoundingClientRect().height) : 0,
                 layoutPaddingBottom: layout ? window.getComputedStyle(layout).paddingBottom : null,
                 promptCount: document.querySelectorAll(".mobile-install-prompt").length,
                 viewport: document.querySelector('meta[name="viewport"]')?.getAttribute("content") || "",
+                viewportHeightVar: getComputedStyle(document.documentElement).getPropertyValue("--app-viewport-height").trim(),
             };
         });
 
@@ -250,6 +275,8 @@ test.describe("Mobile PWA entry", () => {
             promptCount: 0,
         });
         expect(standaloneState.viewport).toContain("viewport-fit=cover");
+        expect(standaloneState.viewportHeightVar).toMatch(/^\d+px$/);
+        expect(standaloneState.layoutHeight).toBeGreaterThan(0);
 
         await page.goto("/pwa-check");
         await expect(page.getByTestId("pwa-device-verdict")).toContainText("앱 실행 통과");

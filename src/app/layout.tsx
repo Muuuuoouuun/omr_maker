@@ -4,6 +4,7 @@ import "./globals.css";
 import ToastHost from "@/components/Toast";
 import PWARegister from "@/components/PWARegister";
 import MobileInstallPrompt from "@/components/MobileInstallPrompt";
+import ViewportHeightSync from "@/components/ViewportHeightSync";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -91,6 +92,7 @@ export default function RootLayout({
         <script dangerouslySetInnerHTML={{ __html: themeInitScript }} />
       </head>
       <body className={`${geistSans.variable} ${geistMono.variable}`}>
+        <ViewportHeightSync />
         <PWARegister />
         {children}
         <MobileInstallPrompt />

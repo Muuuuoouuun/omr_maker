@@ -422,7 +422,7 @@ export default function PwaCheckPage() {
             display: "grid",
             gap: "1rem",
             margin: "0 auto",
-            minHeight: "calc(100dvh - 3.5rem)",
+            minHeight: "calc(var(--app-viewport-height, 100dvh) - 3.5rem)",
             padding: "1rem 0",
           }}
         >
