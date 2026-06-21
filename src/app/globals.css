@@ -755,6 +755,36 @@ html[data-motion="off"] .orb {
   width: 100%;
 }
 
+.teacher-header {
+  height: auto;
+  min-height: 4.5rem;
+}
+
+.teacher-header .header-content {
+  gap: 0.75rem;
+  flex-wrap: wrap;
+  padding-top: 0.55rem;
+  padding-bottom: 0.55rem;
+}
+
+.teacher-header-brand,
+.teacher-header-actions {
+  min-width: 0;
+}
+
+.teacher-header-actions {
+  justify-content: flex-end;
+  flex-wrap: wrap;
+}
+
+.teacher-header .nav-link {
+  margin-left: 0;
+}
+
+.nav-link-live {
+  min-height: 2.75rem;
+}
+
 .logo {
   display: inline-flex;
   align-items: center;
@@ -1885,6 +1915,8 @@ body:has(.home-page[data-home-role="teacher"]) .mobile-install-prompt {
 .create-editor-actions .btn,
 .create-editor-actions label,
 .create-editor-actions button {
+  min-height: 2.75rem;
+  min-width: 2.75rem;
   white-space: nowrap;
   flex: 0 0 auto;
 }
@@ -2206,6 +2238,15 @@ body:has(.home-page[data-home-role="teacher"]) .mobile-install-prompt {
 }
 
 @media (max-width: 720px) {
+  .teacher-header .header-content {
+    padding-top: 0.65rem;
+    padding-bottom: 0.65rem;
+  }
+
+  .teacher-header-actions {
+    gap: 0.45rem !important;
+  }
+
   .create-editor-header {
     align-items: center !important;
     flex-wrap: wrap;
@@ -2236,7 +2277,7 @@ body:has(.home-page[data-home-role="teacher"]) .mobile-install-prompt {
   .create-editor-actions .btn,
   .create-editor-actions label,
   .create-editor-actions button {
-    min-height: 36px;
+    min-height: 2.75rem;
     padding: 0.45rem 0.65rem !important;
     font-size: 0.74rem !important;
   }

@@ -238,6 +238,34 @@ describe("service UI surface", () => {
         expect(css).toContain("min-height: 2.75rem");
     });
 
+    it("keeps teacher app chrome controls comfortable on touch devices", () => {
+        const css = readProjectFile("src/app/globals.css");
+        const notificationBell = readProjectFile("src/components/NotificationBell.tsx");
+        const teacherHeader = readProjectFile("src/components/TeacherHeader.tsx");
+        const teacherDashboard = readProjectFile("src/app/teacher/dashboard/page.tsx");
+        const teacherLogout = readProjectFile("src/components/TeacherLogoutButton.tsx");
+        const playwrightConfig = readProjectFile("playwright.config.ts");
+        const teacherMobileE2e = readProjectFile("e2e/teacher-mobile.spec.ts");
+
+        expect(teacherLogout).toContain("const dimension = 44");
+        expect(notificationBell).toContain("width: 44, height: 44");
+        expect(notificationBell).toContain("minHeight: 44");
+        expect(teacherHeader).toContain('className="header teacher-header"');
+        expect(teacherHeader).toContain("minHeight: '2.75rem'");
+        expect(teacherDashboard).toContain('className="header teacher-header"');
+        expect(teacherDashboard).toContain('className="nav-link-live"');
+        expect(css).toContain(".teacher-header-actions");
+        expect(css).toContain(".teacher-header .nav-link");
+        expect(css).toContain(".nav-link-live");
+        expect(css).toContain(".create-editor-actions .btn");
+        expect(css).toContain("min-height: 2.75rem");
+        expect(css).toContain("min-width: 2.75rem");
+        expect(playwrightConfig).toContain("teacher-mobile-chrome");
+        expect(playwrightConfig).toContain("teacher-tablet-ios-like");
+        expect(teacherMobileE2e).toContain("expectTeacherHeaderTouchFriendly");
+        expect(teacherMobileE2e).toContain(".create-editor-actions button, .create-editor-actions label");
+    });
+
     it("keeps installed phone and tablet app shells inside safe areas", () => {
         const css = readProjectFile("src/app/globals.css");
         const layout = readProjectFile("src/app/layout.tsx");

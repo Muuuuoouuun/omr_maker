@@ -28,9 +28,9 @@ export default function TeacherHeader({ badge = "TEACHER", badgeColor }: Teacher
     }, []);
     return (
         <>
-            <header className="header">
+            <header className="header teacher-header">
                 <div className="container header-content">
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
+                    <div className="teacher-header-brand" style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
                         <Link href="/" className="logo">Classin</Link>
                         <span style={{
                             fontSize: '0.75rem', fontWeight: 700,
@@ -42,7 +42,7 @@ export default function TeacherHeader({ badge = "TEACHER", badgeColor }: Teacher
                             {badge}
                         </span>
                     </div>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+                    <div className="teacher-header-actions" style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
                         {/* Search trigger — opens modal via Cmd+K */}
                         <button
                             onClick={() => {
@@ -59,6 +59,7 @@ export default function TeacherHeader({ badge = "TEACHER", badgeColor }: Teacher
                                 color: 'var(--muted)',
                                 fontSize: '0.82rem',
                                 transition: 'var(--transition-base)',
+                                minHeight: '2.75rem',
                                 minWidth: 180
                             }}
                             className="header-search-btn"
@@ -91,9 +92,10 @@ export default function TeacherHeader({ badge = "TEACHER", badgeColor }: Teacher
                             border: '1px solid rgba(16,185,129,0.28)',
                             background: 'rgba(16,185,129,0.08)',
                             transition: 'var(--transition-base)',
+                            minHeight: '2.75rem',
                         }} className="nav-link-live" aria-label="실시간 모니터링">
                             <Activity size={14} />
-                            Live
+                            <span>Live</span>
                         </Link>
                         <TeacherSessionChip />
                         <NotificationBell />
@@ -105,9 +107,11 @@ export default function TeacherHeader({ badge = "TEACHER", badgeColor }: Teacher
             <GlobalSearch />
             <style>{`
                 @media (max-width: 640px) {
-                    .header-search-btn { min-width: 0 !important; padding: 0.45rem 0.6rem !important; }
+                    .header-search-btn { min-width: 2.75rem !important; width: 2.75rem !important; padding: 0 !important; justify-content: center !important; }
                     .header-search-btn span { display: none !important; }
                     .header-search-btn kbd { display: none !important; }
+                    .nav-link-live { min-width: 2.75rem !important; width: 2.75rem !important; padding: 0 !important; justify-content: center !important; }
+                    .nav-link-live span { display: none !important; }
                 }
             `}</style>
         </>

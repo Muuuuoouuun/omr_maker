@@ -385,9 +385,9 @@ function TeacherDashboard() {
 
     return (
         <div className="layout-main">
-            <header className="header">
+            <header className="header teacher-header">
                 <div className="container header-content">
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
+                    <div className="teacher-header-brand" style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
                         <Link href="/" className="logo">Classin</Link>
                         <span style={{
                             fontSize: '0.75rem', fontWeight: 700,
@@ -398,7 +398,7 @@ function TeacherDashboard() {
                             TEACHER
                         </span>
                     </div>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.65rem' }}>
+                    <div className="teacher-header-actions" style={{ display: 'flex', alignItems: 'center', gap: '0.65rem' }}>
                         <Link href="/teacher/live" style={{
                             display: 'inline-flex', alignItems: 'center', gap: '0.35rem',
                             fontSize: '0.82rem', fontWeight: 700,
@@ -406,9 +406,10 @@ function TeacherDashboard() {
                             padding: '0.45rem 0.85rem', borderRadius: 'var(--radius-full)',
                             border: '1px solid rgba(16,185,129,0.28)',
                             background: 'rgba(16,185,129,0.08)',
-                        }} aria-label="실시간 모니터링">
+                            minHeight: '2.75rem',
+                        }} className="nav-link-live" aria-label="실시간 모니터링">
                             <Activity size={14} />
-                            Live
+                            <span>Live</span>
                         </Link>
                         <TeacherSessionChip />
                         <NotificationBell />

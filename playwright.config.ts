@@ -17,7 +17,7 @@ export default defineConfig({
     projects: [
         {
             name: "chromium",
-            testIgnore: /pwa-mobile\.spec\.ts/,
+            testIgnore: /(?:pwa-mobile|teacher-mobile)\.spec\.ts/,
             use: { ...devices["Desktop Chrome"] },
         },
         {
@@ -49,6 +49,16 @@ export default defineConfig({
             name: "tablet-ios-like-landscape-pwa",
             testMatch: /pwa-mobile\.spec\.ts/,
             use: { ...devices["iPad Pro 11 landscape"], browserName: "chromium" },
+        },
+        {
+            name: "teacher-mobile-chrome",
+            testMatch: /teacher-mobile\.spec\.ts/,
+            use: { ...devices["Pixel 5"], browserName: "chromium" },
+        },
+        {
+            name: "teacher-tablet-ios-like",
+            testMatch: /teacher-mobile\.spec\.ts/,
+            use: { ...devices["iPad Pro 11"], browserName: "chromium" },
         },
     ],
     webServer: externalBaseURL ? undefined : {
