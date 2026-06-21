@@ -429,7 +429,7 @@ describe("PWA assets", () => {
         const sw = getServiceWorkerSource();
 
         expect(sw).toContain("CACHE_FIRST_PATHS.has(url.pathname)");
-        expect(sw).toContain('const CACHE_VERSION = "omr-maker-v8"');
+        expect(sw).toContain('const CACHE_VERSION = "omr-maker-v9"');
         expect(sw).toContain("canRememberNavigation(url.pathname)");
         expect(sw).toContain('url.pathname.startsWith("/startup/")');
         expect(sw).toContain("if (!response.ok) return");
@@ -478,7 +478,7 @@ describe("PWA assets", () => {
 
         await harness.dispatchInstall();
 
-        expect(await harness.caches.keys()).toContain("omr-maker-v8-shell");
+        expect(await harness.caches.keys()).toContain("omr-maker-v9-shell");
         expect(harness.self.skipWaiting).toHaveBeenCalledOnce();
         await expect(harness.caches.match("/pwa-check")).resolves.toBeInstanceOf(Response);
         await expect(harness.caches.match("/offline.html")).resolves.toBeInstanceOf(Response);
@@ -642,7 +642,7 @@ describe("PWA assets", () => {
             "- display-mode=pass:standalone (홈 화면 아이콘 실행 상태)",
             "- launch-proof=pass:확인됨 (css-fullscreen=no · css-standalone=yes · ios-navigator-standalone=no)",
             "- service-worker=pass:제어 중 (https://omr-maker-eight.vercel.app/sw.js)",
-            "- offline-cache=pass:준비 (caches=omr-maker-v8-shell, omr-maker-v8-runtime · required=/, /pwa-check, /offline.html, /logo.png · missing=none)",
+            "- offline-cache=pass:준비 (caches=omr-maker-v9-shell, omr-maker-v9-runtime · required=/, /pwa-check, /offline.html, /logo.png · expected=omr-maker-v9-shell · missingCaches=none · missing=none)",
             "- manifest=pass:standalone (OMR Maker · icons 12 · screenshots 2)",
             "- viewport=pass:cover (width=device-width, initial-scale=1, viewport-fit=cover)",
             "- viewport-height=pass:동기화 (css=727px · visual=727px · inner=727px · delta=0px)",
@@ -659,6 +659,7 @@ describe("PWA assets", () => {
             .replace("displayMode=standalone", "displayMode=browser")
             .replace("installedDisplay=yes", "installedDisplay=no")
             .replace("proofStatus=pass", "proofStatus=pending");
+        const staleCacheReport = passingReport.replaceAll("omr-maker-v9", "omr-maker-v8");
         const iosReport = passingReport
             .replace("css-fullscreen=no · css-standalone=yes · ios-navigator-standalone=no", "css-fullscreen=no · css-standalone=yes · ios-navigator-standalone=yes")
             .replace("css-fullscreen=no · css-standalone=yes · ios-navigator-standalone=no", "css-fullscreen=no · css-standalone=yes · ios-navigator-standalone=yes")
@@ -686,6 +687,10 @@ describe("PWA assets", () => {
             encoding: "utf8",
             input: pendingReport,
         });
+        const staleCache = spawnSync(process.execPath, [proofScriptPath], {
+            encoding: "utf8",
+            input: staleCacheReport,
+        });
         const bundle = spawnSync(process.execPath, [proofScriptPath], {
             encoding: "utf8",
             input: passingBundle,
@@ -695,6 +700,8 @@ describe("PWA assets", () => {
         expect(source).toContain("installedDisplay must be yes");
         expect(source).toContain("displayMode must be standalone or fullscreen");
         expect(source).toContain("Report URL must be the deployed HTTPS URL");
+        expect(source).toContain('const expectedCachePrefix = "omr-maker-v9"');
+        expect(source).toContain("offline-cache must include ${expectedCachePrefix}");
         expect(source).toContain("OMR Maker PWA dual device proof");
         expect(source).toContain("Android proof report must pass");
         expect(source).toContain("iOS proof report must pass");
@@ -713,6 +720,11 @@ describe("PWA assets", () => {
             proofStatus: "pending",
             status: "failed",
         });
+        expect(staleCache.status).toBe(1);
+        expect(JSON.parse(staleCache.stdout)).toMatchObject({
+            status: "failed",
+        });
+        expect(JSON.parse(staleCache.stdout).errors).toContain("offline-cache must include omr-maker-v9.");
         expect(bundle.status).toBe(0);
         expect(JSON.parse(bundle.stdout)).toMatchObject({
             android: { platform: "android", status: "passed" },

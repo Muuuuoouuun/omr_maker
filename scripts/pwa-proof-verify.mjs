@@ -112,6 +112,7 @@ function validateProof(parsed, expectedPlatform = "") {
     const errors = [];
     const platform = readProofPlatform(parsed.fields);
     const installedModes = new Set(["standalone", "fullscreen"]);
+    const expectedCachePrefix = "omr-maker-v9";
     const requiredPassChecks = [
         "secure-context",
         "display-mode",
@@ -156,6 +157,9 @@ function validateProof(parsed, expectedPlatform = "") {
     }
     if (!/yes/.test(parsed.fields.displayEvidence || "")) {
         errors.push("displayEvidence must include at least one yes signal.");
+    }
+    if (!parsed.checks["offline-cache"]?.detail.includes(expectedCachePrefix)) {
+        errors.push(`offline-cache must include ${expectedCachePrefix}.`);
     }
 
     for (const checkId of requiredPassChecks) {

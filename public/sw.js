@@ -1,4 +1,4 @@
-const CACHE_VERSION = "omr-maker-v8";
+const CACHE_VERSION = "omr-maker-v9";
 const APP_SHELL_CACHE = `${CACHE_VERSION}-shell`;
 const RUNTIME_CACHE = `${CACHE_VERSION}-runtime`;
 const CACHE_FIRST_PATHS = new Set([

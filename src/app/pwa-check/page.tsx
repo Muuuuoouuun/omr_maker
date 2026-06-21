@@ -65,6 +65,7 @@ const VIEWPORT_OFFSET_TOP_VAR = "--app-visual-viewport-offset-top";
 const VIEWPORT_OFFSET_LEFT_VAR = "--app-visual-viewport-offset-left";
 const VIEWPORT_SCALE_VAR = "--app-visual-viewport-scale";
 const KEYBOARD_INSET_BOTTOM_VAR = "--app-keyboard-inset-bottom";
+const EXPECTED_OFFLINE_CACHE_PREFIX = "omr-maker-v9";
 const OFFLINE_CACHE_REQUIRED_PATHS = ["/", "/pwa-check", "/offline.html", "/logo.png"];
 const DUAL_PROOF_HEADER = "OMR Maker PWA dual device proof";
 const PROOF_INSTALLED_MODES = new Set(["standalone", "fullscreen"]);
@@ -365,6 +366,9 @@ function validateProofReport(reportText: string, expectedPlatform?: ProofTarget)
   if (!/yes/.test(parsed.fields.displayEvidence || "")) {
     errors.push("displayEvidence must include at least one yes signal.");
   }
+  if (!parsed.checks["offline-cache"]?.detail.includes(EXPECTED_OFFLINE_CACHE_PREFIX)) {
+    errors.push(`offline-cache must include ${EXPECTED_OFFLINE_CACHE_PREFIX}.`);
+  }
 
   for (const checkId of REQUIRED_PROOF_PASS_CHECKS) {
     const check = parsed.checks[checkId];
@@ -510,16 +514,21 @@ async function readOfflineCacheSummary(): Promise<{ detail: string; tone: CheckT
     ]);
     const missingPaths = OFFLINE_CACHE_REQUIRED_PATHS.filter((_, index) => !matches[index]);
     const omrCaches = cacheKeys.filter(key => key.startsWith("omr-maker-"));
+    const expectedCaches = [`${EXPECTED_OFFLINE_CACHE_PREFIX}-shell`];
+    const missingExpectedCaches = expectedCaches.filter(cacheName => !cacheKeys.includes(cacheName));
     const detail = [
       `caches=${omrCaches.length ? omrCaches.join(", ") : "none"}`,
       `required=${OFFLINE_CACHE_REQUIRED_PATHS.join(", ")}`,
+      `expected=${expectedCaches.join(", ")}`,
+      `missingCaches=${missingExpectedCaches.length ? missingExpectedCaches.join(", ") : "none"}`,
       `missing=${missingPaths.length ? missingPaths.join(", ") : "none"}`,
     ].join(" · ");
+    const isReady = missingPaths.length === 0 && missingExpectedCaches.length === 0;
 
     return {
       detail,
-      tone: missingPaths.length === 0 ? "pass" : "warn",
-      value: missingPaths.length === 0 ? "준비" : "대기",
+      tone: isReady ? "pass" : "warn",
+      value: isReady ? "준비" : "대기",
     };
   } catch {
     return { detail: "cache 조회 실패", tone: "warn", value: "확인 필요" };
