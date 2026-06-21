@@ -35,6 +35,7 @@ function readViewportMetrics() {
 export default function ViewportHeightSync() {
   useEffect(() => {
     let frame: number | null = null;
+    let settleTimer: number | null = null;
 
     const applyMetrics = () => {
       frame = null;
@@ -55,20 +56,29 @@ export default function ViewportHeightSync() {
       frame = window.requestAnimationFrame(applyMetrics);
     };
 
+    const scheduleSettledApplyMetrics = () => {
+      scheduleApplyMetrics();
+      if (settleTimer !== null) window.clearTimeout(settleTimer);
+      settleTimer = window.setTimeout(scheduleApplyMetrics, 180);
+    };
+
     const visualViewport = window.visualViewport;
 
     scheduleApplyMetrics();
 
     window.addEventListener("resize", scheduleApplyMetrics, { passive: true });
-    window.addEventListener("orientationchange", scheduleApplyMetrics);
+    window.addEventListener("orientationchange", scheduleSettledApplyMetrics);
+    window.addEventListener("pageshow", scheduleSettledApplyMetrics, { passive: true });
     visualViewport?.addEventListener("resize", scheduleApplyMetrics, { passive: true });
     visualViewport?.addEventListener("scroll", scheduleApplyMetrics, { passive: true });
     document.addEventListener("visibilitychange", scheduleApplyMetrics);
 
     return () => {
       if (frame !== null) window.cancelAnimationFrame(frame);
+      if (settleTimer !== null) window.clearTimeout(settleTimer);
       window.removeEventListener("resize", scheduleApplyMetrics);
-      window.removeEventListener("orientationchange", scheduleApplyMetrics);
+      window.removeEventListener("orientationchange", scheduleSettledApplyMetrics);
+      window.removeEventListener("pageshow", scheduleSettledApplyMetrics);
       visualViewport?.removeEventListener("resize", scheduleApplyMetrics);
       visualViewport?.removeEventListener("scroll", scheduleApplyMetrics);
       document.removeEventListener("visibilitychange", scheduleApplyMetrics);

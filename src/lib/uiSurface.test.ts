@@ -322,10 +322,13 @@ describe("service UI surface", () => {
         expect(viewportHeightSync).toContain("KEYBOARD_OPEN_THRESHOLD");
         expect(viewportHeightSync).toContain("window.visualViewport");
         expect(viewportHeightSync).toContain("window.requestAnimationFrame");
+        expect(viewportHeightSync).toContain("scheduleSettledApplyMetrics");
         expect(viewportHeightSync).toContain('window.addEventListener("resize", scheduleApplyMetrics, { passive: true })');
         expect(viewportHeightSync).toContain('visualViewport?.addEventListener("resize", scheduleApplyMetrics, { passive: true })');
         expect(viewportHeightSync).toContain('visualViewport?.addEventListener("scroll", scheduleApplyMetrics, { passive: true })');
-        expect(viewportHeightSync).toContain('window.addEventListener("orientationchange", scheduleApplyMetrics)');
+        expect(viewportHeightSync).toContain('window.addEventListener("orientationchange", scheduleSettledApplyMetrics)');
+        expect(viewportHeightSync).toContain('window.addEventListener("pageshow", scheduleSettledApplyMetrics, { passive: true })');
+        expect(viewportHeightSync).toContain('window.removeEventListener("pageshow", scheduleSettledApplyMetrics)');
         expect(viewportHeightSync).toContain('document.addEventListener("visibilitychange", scheduleApplyMetrics)');
         expect(css).toContain("--app-safe-area-top: env(safe-area-inset-top, 0px)");
         expect(css).toContain("--app-safe-area-right: env(safe-area-inset-right, 0px)");

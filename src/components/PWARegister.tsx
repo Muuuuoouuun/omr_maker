@@ -5,14 +5,47 @@ import { usePathname } from "next/navigation";
 import { showToast } from "@/components/Toast";
 
 const SKIP_WAITING_MESSAGE = "OMR_SKIP_WAITING";
+const DEFERRED_UPDATE_KEY = "omr_pwa_deferred_update_v1";
+
+function isActiveWorkScreen(pathname: string): boolean {
+  return pathname === "/create"
+    || pathname.startsWith("/solve/")
+    || pathname.startsWith("/teacher/exam/")
+    || pathname.startsWith("/teacher/live")
+    || pathname.startsWith("/teacher/billing");
+}
 
 function canReloadForServiceWorkerUpdate(pathname: string | null): boolean {
   if (!pathname) return true;
-  return pathname !== "/create" && !pathname.startsWith("/solve/");
+  return !isActiveWorkScreen(pathname);
 }
 
 function askWorkerToActivate(worker: ServiceWorker | null | undefined): void {
   worker?.postMessage({ type: SKIP_WAITING_MESSAGE });
+}
+
+function hasDeferredUpdate(): boolean {
+  try {
+    return window.sessionStorage.getItem(DEFERRED_UPDATE_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+
+function rememberDeferredUpdate(): void {
+  try {
+    window.sessionStorage.setItem(DEFERRED_UPDATE_KEY, "1");
+  } catch {
+    // Restricted webviews can reject sessionStorage; the toast still explains the next step.
+  }
+}
+
+function clearDeferredUpdate(): void {
+  try {
+    window.sessionStorage.removeItem(DEFERRED_UPDATE_KEY);
+  } catch {
+    // Storage access is best-effort in installed webviews.
+  }
 }
 
 export default function PWARegister() {
@@ -21,6 +54,13 @@ export default function PWARegister() {
 
   useEffect(() => {
     pathnameRef.current = pathname;
+
+    if (process.env.NODE_ENV !== "production") return;
+    if (!canReloadForServiceWorkerUpdate(pathname)) return;
+    if (!hasDeferredUpdate()) return;
+
+    clearDeferredUpdate();
+    window.location.reload();
   }, [pathname]);
 
   useEffect(() => {
@@ -62,16 +102,18 @@ export default function PWARegister() {
       if (reloadOnNextController) {
         reloadOnNextController = false;
         notifyOnNextController = false;
+        clearDeferredUpdate();
         window.location.reload();
         return;
       }
       if (notifyOnNextController && !hasShownDeferredUpdateNotice) {
         notifyOnNextController = false;
         hasShownDeferredUpdateNotice = true;
+        rememberDeferredUpdate();
         showToast(
           "info",
           "새 버전 준비됨",
-          "현재 작업은 유지됩니다. 제출하거나 저장한 뒤 새로고침하면 최신 앱으로 전환됩니다.",
+          "현재 작업은 유지됩니다. 제출하거나 저장한 뒤 안전한 화면으로 이동하면 최신 앱으로 전환됩니다.",
           6500,
         );
       }

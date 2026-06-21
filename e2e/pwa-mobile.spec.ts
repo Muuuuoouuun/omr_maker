@@ -47,6 +47,22 @@ async function expectSyncedViewportHeight(page: Page) {
     });
 }
 
+async function expectViewportResyncsAfterPageShow(page: Page) {
+    await page.evaluate(() => {
+        document.documentElement.style.setProperty("--app-viewport-height", "1px");
+        document.documentElement.style.setProperty("--app-keyboard-inset-bottom", "999px");
+        window.dispatchEvent(new Event("pageshow"));
+    });
+
+    await expect.poll(async () => page.evaluate(() => (
+        Number.parseInt(getComputedStyle(document.documentElement).getPropertyValue("--app-viewport-height"), 10)
+    ))).toBeGreaterThan(100);
+
+    const recovered = await expectSyncedViewportHeight(page);
+    expect(recovered.keyboardInsetBottom).not.toBe("999px");
+    return recovered;
+}
+
 async function expectTouchTarget(locator: Locator) {
     await expect(locator).toHaveCount(1);
     await expect(locator).toBeVisible();
@@ -261,6 +277,8 @@ test.describe("Mobile PWA entry", () => {
         expect(viewportHeightState.viewportOffsetTop).toMatch(/^\d+px$/);
         expect(viewportHeightState.keyboardInsetBottom).toMatch(/^\d+px$/);
         expect(viewportHeightState.keyboardState).toMatch(/open|closed/);
+        const pageShowViewportState = await expectViewportResyncsAfterPageShow(page);
+        expect(Math.abs(pageShowViewportState.parsedValue - pageShowViewportState.visualViewportHeight)).toBeLessThanOrEqual(2);
         await expect(page.locator('link[rel="manifest"]')).toHaveAttribute("href", "/manifest.webmanifest");
         await expect(page.locator('link[rel="apple-touch-icon"]').first()).toHaveAttribute("href", "/apple-touch-icon.png");
         await expectMetaContent(page, "mobile-web-app-capable", "yes");
