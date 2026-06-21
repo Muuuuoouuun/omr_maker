@@ -2,8 +2,13 @@ import { expect, test, type Locator, type Page } from "@playwright/test";
 
 async function clearStorage(page: Page) {
     await page.addInitScript(() => {
+        const clearedKey = "__omr_e2e_storage_cleared";
+        try {
+            if (window.sessionStorage.getItem(clearedKey) === "1") return;
+        } catch {}
         try { window.localStorage.clear(); } catch {}
         try { window.sessionStorage.clear(); } catch {}
+        try { window.sessionStorage.setItem(clearedKey, "1"); } catch {}
     });
 }
 
@@ -359,7 +364,28 @@ test.describe("Mobile PWA entry", () => {
         expect(await smallTargets(page, ".solve-controls button, .solve-controls label, .solve-omr-scroll .q-bubble, .solve-omr-next-button, .solve-omr-pane-close")).toEqual([]);
 
         await page.getByRole("button", { name: "문제 1번 보기 2" }).click();
+        await expect.poll(async () => page.evaluate(() => {
+            const draft = JSON.parse(window.localStorage.getItem("omr_draft_mobile-qa-exam_mobile-qa-student") || "{}");
+            return draft.answers?.["1"];
+        })).toBe(2);
+
         await page.getByRole("button", { name: "문제 2번 보기 4" }).click();
+        await page.evaluate(() => {
+            window.dispatchEvent(new Event("pagehide"));
+        });
+        const backgroundDraft = await page.evaluate(() => (
+            JSON.parse(window.localStorage.getItem("omr_draft_mobile-qa-exam_mobile-qa-student") || "{}")
+        ));
+        expect(backgroundDraft.answers).toMatchObject({ "1": 2, "2": 4 });
+        expect(backgroundDraft.drawings).toBeUndefined();
+
+        await page.reload();
+        await expect(page.locator(".solve-omr-scroll .omr-cardview-title").getByText("모바일 실전 시험")).toBeVisible();
+        await expect(page.getByRole("button", { name: "문제 1번 보기 2" })).toHaveClass(/marked/);
+        await expect(page.getByRole("button", { name: "문제 2번 보기 4" })).toHaveClass(/marked/);
+        await expect(page.locator(".solve-progress")).toContainText("2/4");
+        await expectNoHorizontalOverflow(page);
+
         await page.getByRole("button", { name: "문제 3번 보기 1" }).click();
         await page.getByRole("button", { name: "문제 4번 보기 3" }).click();
 
