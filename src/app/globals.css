@@ -577,12 +577,31 @@ button {
 }
 
 .logo {
-  font-weight: 800;
-  font-size: 1.4rem;
-  background: linear-gradient(135deg, var(--primary), var(--secondary));
-  -webkit-background-clip: text;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 2.75rem;
+  height: 2.75rem;
+  flex: 0 0 auto;
+  overflow: hidden;
+  white-space: nowrap;
+  background: url("/logo.png") center / contain no-repeat;
+  color: transparent !important;
   -webkit-text-fill-color: transparent;
-  letter-spacing: -0.02em;
+  font-size: 0 !important;
+  line-height: 0 !important;
+  letter-spacing: 0;
+  transition: var(--transition-base);
+}
+
+.logo:hover {
+  transform: translateY(-1px);
+}
+
+.logo:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: 4px;
+  border-radius: var(--radius-md);
 }
 
 .nav-link {
@@ -1871,8 +1890,8 @@ button {
   }
 
   .create-editor-brand .logo {
-    font-size: 1.35rem;
-    white-space: nowrap;
+    width: 2.55rem;
+    height: 2.55rem;
   }
 
   .create-editor-actions {
@@ -2735,7 +2754,8 @@ button {
   }
 
   .solve-brand {
-    font-size: 1rem !important;
+    width: 2.3rem !important;
+    height: 2.3rem !important;
   }
 
   .solve-divider {

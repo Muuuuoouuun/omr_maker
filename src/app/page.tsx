@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect } from "react";
+import Image from "next/image";
 import { useRouter } from "next/navigation";
 import ThemeToggle from "@/components/ThemeToggle";
 import { toast } from "@/components/Toast";
@@ -389,8 +390,24 @@ export default function Home() {
       >
         {/* ── Hero ───────────────────────────── */}
         <div style={{ textAlign: "center", marginBottom: "4rem" }}>
+          <Image
+            src="/logo.png"
+            alt=""
+            width={112}
+            height={112}
+            priority
+            className="stagger-1 animate-fade-in"
+            style={{
+              width: 112,
+              height: 112,
+              objectFit: "contain",
+              margin: "0 auto 1.25rem",
+              opacity: 0,
+              filter: "drop-shadow(0 18px 35px rgba(15, 23, 42, 0.14))",
+            }}
+          />
           <div
-            className="badge badge-primary stagger-1 animate-fade-in"
+            className="badge badge-primary stagger-2 animate-fade-in"
             style={{ marginBottom: "1.75rem", opacity: 0 }}
           >
             <svg width="8" height="8" viewBox="0 0 8 8" fill="currentColor">
@@ -400,7 +417,7 @@ export default function Home() {
           </div>
 
           <h1
-            className="title-gradient stagger-2 animate-fade-in"
+            className="title-gradient stagger-3 animate-fade-in"
             style={{
               fontSize: "clamp(3.2rem, 8vw, 5.5rem)",
               lineHeight: 1.04,
@@ -414,7 +431,7 @@ export default function Home() {
           </h1>
 
           <p
-            className="stagger-3 animate-fade-in"
+            className="stagger-4 animate-fade-in"
             style={{
               fontSize: "1.15rem",
               color: "var(--muted)",
