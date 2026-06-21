@@ -7,7 +7,7 @@ import { Exam, Attempt, type PlanKey } from "@/types/omr";
 import OverviewTab from "@/components/dashboard/tabs/OverviewTab";
 import ExamAnalyticsTab from "@/components/dashboard/tabs/ExamAnalyticsTab";
 import StudentAnalyticsTab from "@/components/dashboard/tabs/StudentAnalyticsTab";
-import { AlertTriangle, BarChart2, CheckCircle2, CloudOff, Database, GraduationCap, LayoutDashboard, RefreshCw } from "lucide-react";
+import { Activity, AlertTriangle, BarChart2, CheckCircle2, CloudOff, Database, GraduationCap, LayoutDashboard, RefreshCw } from "lucide-react";
 import ThemeToggle from "@/components/ThemeToggle";
 import TeacherLogoutButton from "@/components/TeacherLogoutButton";
 import NotificationBell from "@/components/NotificationBell";
@@ -50,10 +50,11 @@ export default function TeacherDashboardPage() {
 function TeacherDashboard() {
     const searchParams = useSearchParams();
     const initialTab = (searchParams.get('tab') as TabType) || 'overview';
+    const initialExamId = searchParams.get('examId') || undefined;
     const [activeTab, setActiveTab] = useState<TabType>(
         ['overview', 'exam', 'student'].includes(initialTab) ? initialTab : 'overview'
     );
-    const [selectedExamIdForAnalytics, setSelectedExamIdForAnalytics] = useState<string | undefined>(undefined);
+    const [selectedExamIdForAnalytics, setSelectedExamIdForAnalytics] = useState<string | undefined>(initialExamId);
     const [exams, setExams] = useState<Exam[]>([]);
     const [attempts, setAttempts] = useState<Attempt[]>([]);
     const [rosterStudents, setRosterStudents] = useState<RosterStudent[]>([]);
@@ -398,6 +399,17 @@ function TeacherDashboard() {
                         </span>
                     </div>
                     <div style={{ display: 'flex', alignItems: 'center', gap: '0.65rem' }}>
+                        <Link href="/teacher/live" style={{
+                            display: 'inline-flex', alignItems: 'center', gap: '0.35rem',
+                            fontSize: '0.82rem', fontWeight: 700,
+                            color: 'var(--success)',
+                            padding: '0.45rem 0.85rem', borderRadius: 'var(--radius-full)',
+                            border: '1px solid rgba(16,185,129,0.28)',
+                            background: 'rgba(16,185,129,0.08)',
+                        }} aria-label="실시간 모니터링">
+                            <Activity size={14} />
+                            Live
+                        </Link>
                         <TeacherSessionChip />
                         <NotificationBell />
                         <TeacherLogoutButton />

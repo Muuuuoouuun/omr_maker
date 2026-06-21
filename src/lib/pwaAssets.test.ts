@@ -1,6 +1,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import vm from "node:vm";
+import { describe, expect, it, vi } from "vitest";
 import manifest from "@/app/manifest";
 
 const rootDir = process.cwd();
@@ -11,16 +12,246 @@ function publicPathExists(assetPath: string): boolean {
 }
 
 function getServiceWorkerAppShellAssets(): string[] {
-    const sw = readFileSync(path.join(publicDir, "sw.js"), "utf8");
+    const sw = getServiceWorkerSource();
     const match = sw.match(/const APP_SHELL = \[([\s\S]*?)\];/);
     if (!match) return [];
 
     return [...match[1].matchAll(/"([^"]+)"/g)].map(item => item[1]);
 }
 
+function getServiceWorkerSource(): string {
+    return readFileSync(path.join(publicDir, "sw.js"), "utf8");
+}
+
+function getOfflinePageSource(): string {
+    return readFileSync(path.join(publicDir, "offline.html"), "utf8");
+}
+
+function getPwaRegisterSource(): string {
+    return readFileSync(path.join(rootDir, "src/components/PWARegister.tsx"), "utf8");
+}
+
+function getPwaSmokeSource(): string {
+    return readFileSync(path.join(rootDir, "scripts/pwa-prod-smoke.mjs"), "utf8");
+}
+
+function getRootLayoutSource(): string {
+    return readFileSync(path.join(rootDir, "src/app/layout.tsx"), "utf8");
+}
+
+function readImageSize(assetPath: string): { width: number; height: number } {
+    const buffer = readFileSync(path.join(publicDir, assetPath.replace(/^\//, "")));
+
+    if (buffer[0] === 0x89 && buffer.toString("ascii", 1, 4) === "PNG") {
+        return {
+            width: buffer.readUInt32BE(16),
+            height: buffer.readUInt32BE(20),
+        };
+    }
+
+    if (buffer[0] === 0xff && buffer[1] === 0xd8) {
+        let offset = 2;
+        while (offset < buffer.length) {
+            if (buffer[offset] !== 0xff) {
+                offset += 1;
+                continue;
+            }
+
+            const marker = buffer[offset + 1];
+            const length = buffer.readUInt16BE(offset + 2);
+            const isStartOfFrame = (
+                (marker >= 0xc0 && marker <= 0xc3)
+                || (marker >= 0xc5 && marker <= 0xc7)
+                || (marker >= 0xc9 && marker <= 0xcb)
+                || (marker >= 0xcd && marker <= 0xcf)
+            );
+
+            if (isStartOfFrame) {
+                return {
+                    width: buffer.readUInt16BE(offset + 7),
+                    height: buffer.readUInt16BE(offset + 5),
+                };
+            }
+
+            offset += 2 + length;
+        }
+    }
+
+    throw new Error(`Unsupported image format: ${assetPath}`);
+}
+
+function manifestScreenshotPaths(): string[] {
+    const currentManifest = manifest();
+    return (currentManifest.screenshots || []).map(screenshot => screenshot.src);
+}
+
+function manifestScreenshotSpecs() {
+    const currentManifest = manifest();
+    return currentManifest.screenshots || [];
+}
+
+function assertImageSizeMatchesSpec(asset: { src: string; sizes: string }) {
+    const [width, height] = asset.sizes.split("x").map(Number);
+
+    return {
+        actual: readImageSize(asset.src),
+        expected: { width, height },
+    };
+}
+
+function manifestIconPaths(): string[] {
+    const currentManifest = manifest();
+    const iconPaths = (currentManifest.icons || [])
+        .map(icon => typeof icon === "string" ? icon : icon.src);
+    const shortcutIconPaths = (currentManifest.shortcuts || [])
+        .flatMap(shortcut => shortcut.icons || [])
+        .map(icon => icon.src);
+
+    return [...iconPaths, ...shortcutIconPaths];
+}
+
+function createServiceWorkerHarness() {
+    const origin = "https://omr-maker.test";
+    const listeners = new Map<string, Array<(event: Record<string, unknown>) => void>>();
+    const stores = new Map<string, Map<string, Response>>();
+    let networkFetch: (request: { url: string }) => Promise<Response> = async request => (
+        new Response(`network:${new URL(request.url).pathname}`)
+    );
+
+    function toAbsoluteUrl(request: string | { url: string }): string {
+        if (typeof request === "string") return new URL(request, origin).href;
+        return request.url;
+    }
+
+    const caches = {
+        open: async (name: string) => {
+            if (!stores.has(name)) stores.set(name, new Map());
+            const store = stores.get(name);
+            if (!store) throw new Error(`Missing cache ${name}`);
+
+            return {
+                addAll: async (assets: string[]) => {
+                    assets.forEach(asset => {
+                        const url = new URL(asset, origin).href;
+                        store.set(url, new Response(`cached:${asset}`));
+                    });
+                },
+                put: async (request: { url: string }, response: Response) => {
+                    store.set(request.url, response.clone());
+                },
+                keys: async () => [...store.keys()].map(url => ({ url })),
+            };
+        },
+        keys: async () => [...stores.keys()],
+        delete: async (name: string) => stores.delete(name),
+        match: async (request: string | { url: string }) => {
+            const url = toAbsoluteUrl(request);
+            for (const store of stores.values()) {
+                const match = store.get(url);
+                if (match) return match.clone();
+            }
+            return undefined;
+        },
+    };
+
+    const self = {
+        location: { origin },
+        clients: { claim: vi.fn(() => Promise.resolve()) },
+        skipWaiting: vi.fn(() => Promise.resolve()),
+        addEventListener: (type: string, listener: (event: Record<string, unknown>) => void) => {
+            const current = listeners.get(type) || [];
+            current.push(listener);
+            listeners.set(type, current);
+        },
+    };
+
+    vm.runInNewContext(getServiceWorkerSource(), {
+        URL,
+        Response,
+        Set,
+        Promise,
+        console,
+        caches,
+        fetch: (request: { url: string }) => networkFetch(request),
+        self,
+    });
+
+    async function dispatchInstall() {
+        const waits: Array<Promise<unknown>> = [];
+        listeners.get("install")?.forEach(listener => {
+            listener({ waitUntil: (promise: Promise<unknown>) => waits.push(promise) });
+        });
+        await Promise.all(waits);
+    }
+
+    async function dispatchActivate() {
+        const waits: Array<Promise<unknown>> = [];
+        listeners.get("activate")?.forEach(listener => {
+            listener({ waitUntil: (promise: Promise<unknown>) => waits.push(promise) });
+        });
+        await Promise.all(waits);
+    }
+
+    async function dispatchFetch(pathname: string, options: { mode?: string; method?: string } = {}) {
+        const responses: Array<Promise<Response>> = [];
+        const request = {
+            method: options.method || "GET",
+            mode: options.mode || "same-origin",
+            url: new URL(pathname, origin).href,
+        };
+        listeners.get("fetch")?.forEach(listener => {
+            listener({
+                request,
+                respondWith: (promise: Promise<Response>) => responses.push(promise),
+            });
+        });
+
+        if (responses.length === 0) return null;
+        return responses[0];
+    }
+
+    async function dispatchMessage(data: unknown) {
+        const waits: Array<Promise<unknown>> = [];
+        listeners.get("message")?.forEach(listener => {
+            listener({ data, waitUntil: (promise: Promise<unknown>) => waits.push(promise) });
+        });
+        await Promise.all(waits);
+    }
+
+    return {
+        caches,
+        dispatchActivate,
+        dispatchFetch,
+        dispatchInstall,
+        dispatchMessage,
+        setNetworkFetch: (nextFetch: typeof networkFetch) => {
+            networkFetch = nextFetch;
+        },
+        self,
+    };
+}
+
 describe("PWA assets", () => {
+    it("manifest declares the installable app contract", () => {
+        const currentManifest = manifest();
+
+        expect(currentManifest.name).toBe("OMR Maker");
+        expect(currentManifest.short_name).toBe("OMR Maker");
+        expect(currentManifest.id).toBe("/");
+        expect(currentManifest.start_url).toBe("/");
+        expect(currentManifest.scope).toBe("/");
+        expect(currentManifest.display).toBe("standalone");
+        expect(currentManifest.lang).toBe("ko");
+        expect(currentManifest.categories).toContain("education");
+        expect(currentManifest.shortcuts?.length).toBeGreaterThanOrEqual(3);
+        currentManifest.shortcuts?.forEach(shortcut => {
+            expect(shortcut.url.startsWith("/")).toBe(true);
+            expect(shortcut.icons?.every(icon => publicPathExists(icon.src))).toBe(true);
+        });
+    });
+
     it("precache shell references only generated routes or existing public assets", () => {
-        const generatedRoutes = new Set(["/", "/manifest.webmanifest"]);
+        const generatedRoutes = new Set(["/", "/pwa-check", "/favicon.ico", "/icon.png", "/manifest.webmanifest"]);
         const missing = getServiceWorkerAppShellAssets()
             .filter(asset => !generatedRoutes.has(asset))
             .filter(asset => !publicPathExists(asset));
@@ -28,13 +259,233 @@ describe("PWA assets", () => {
         expect(missing).toEqual([]);
     });
 
+    it("precache shell includes install and offline critical assets", () => {
+        const appShell = new Set(getServiceWorkerAppShellAssets());
+        const requiredShellAssets = [
+            "/",
+            "/pwa-check",
+            "/offline.html",
+            "/manifest.webmanifest",
+            "/favicon.ico",
+            "/icon.png",
+            "/logo.png",
+            "/pdf.worker.min.mjs",
+            "/apple-touch-icon.png",
+            "/browserconfig.xml",
+            ...manifestIconPaths(),
+            ...manifestScreenshotPaths(),
+        ];
+
+        const missing = [...new Set(requiredShellAssets)]
+            .filter(asset => asset.startsWith("/"))
+            .filter(asset => !appShell.has(asset));
+
+        expect(missing).toEqual([]);
+    });
+
+    it("layout advertises mobile app install metadata for Android and iOS", () => {
+        const layout = getRootLayoutSource();
+
+        expect(layout).toContain('manifest: "/manifest.webmanifest"');
+        expect(layout).toContain("appleWebApp");
+        expect(layout).toContain("capable: true");
+        expect(layout).toContain('{ url: "/apple-touch-icon.png", sizes: "180x180", type: "image/png" }');
+        expect(layout).toContain('"mobile-web-app-capable": "yes"');
+        expect(layout).toContain('"apple-mobile-web-app-capable": "yes"');
+        expect(layout).toContain('"apple-mobile-web-app-title": "OMR Maker"');
+        expect(layout).toContain('"msapplication-config": "/browserconfig.xml"');
+    });
+
     it("manifest icon files exist in public", () => {
-        const icons = manifest().icons || [];
-        const missing = icons
-            .map(icon => typeof icon === "string" ? icon : icon.src)
+        const missing = manifestIconPaths()
             .filter(src => src.startsWith("/"))
             .filter(src => !publicPathExists(src));
 
         expect(missing).toEqual([]);
+    });
+
+    it("manifest includes installable app icons with expected dimensions", () => {
+        const icons = manifest().icons || [];
+        const iconSpecs = icons.filter(icon => typeof icon !== "string");
+        const maskableIcon = iconSpecs.find(icon => icon.purpose === "maskable");
+
+        expect(maskableIcon?.src).toBe("/icons/maskable-icon-512.png");
+        expect(iconSpecs.some(icon => icon.sizes === "192x192")).toBe(true);
+        expect(iconSpecs.some(icon => icon.sizes === "512x512")).toBe(true);
+
+        iconSpecs.forEach(icon => {
+            const [width, height] = icon.sizes.split("x").map(Number);
+            expect(readImageSize(icon.src)).toEqual({ width, height });
+        });
+    });
+
+    it("manifest includes app screenshots for richer Android install previews", () => {
+        const screenshots = manifestScreenshotSpecs();
+
+        expect(screenshots).toHaveLength(2);
+        expect(screenshots.map(screenshot => screenshot.form_factor).sort()).toEqual(["narrow", "wide"]);
+        expect(screenshots.every(screenshot => screenshot.type === "image/jpeg")).toBe(true);
+        expect(screenshots.every(screenshot => publicPathExists(screenshot.src))).toBe(true);
+        screenshots.forEach(screenshot => {
+            expect(screenshot.label?.length).toBeGreaterThan(12);
+            expect(assertImageSizeMatchesSpec(screenshot).actual).toEqual(assertImageSizeMatchesSpec(screenshot).expected);
+        });
+    });
+
+    it("service worker serves app shell assets from cache when offline", () => {
+        const sw = getServiceWorkerSource();
+
+        expect(sw).toContain("CACHE_FIRST_PATHS.has(url.pathname)");
+        expect(sw).toContain('const CACHE_VERSION = "omr-maker-v8"');
+        expect(sw).toContain("canRememberNavigation(url.pathname)");
+        expect(sw).toContain("if (!response.ok) return");
+        expect(sw).toContain(".catch(() => undefined)");
+        expect(sw).toContain("caches.match(url.pathname)");
+        expect(sw).toContain("caches.match(\"/\")");
+        expect(sw).toContain("caches.match(\"/pwa-check\")");
+        expect(sw).toContain("caches.match(\"/offline.html\")");
+        expect(sw).toContain("OMR_SKIP_WAITING");
+        [
+            "/offline.html",
+            "/manifest.webmanifest",
+            "/favicon.ico",
+            "/icon.png",
+            "/logo.png",
+            "/apple-touch-icon.png",
+            "/browserconfig.xml",
+            "/pdf.worker.min.mjs",
+            "/screenshots/omr-mobile-home.jpg",
+            "/screenshots/omr-wide-home.jpg",
+        ].forEach(asset => {
+            expect(sw).toContain(`"${asset}"`);
+        });
+    });
+
+    it("offline page is mobile-safe and gives users a reconnect action", () => {
+        const offlinePage = getOfflinePageSource();
+
+        expect(offlinePage).toContain("viewport-fit=cover");
+        expect(offlinePage).toContain("min-height: 100dvh");
+        expect(offlinePage).toContain("touch-action: manipulation");
+        expect(offlinePage).toContain("<img src=\"/logo.png\"");
+        expect(offlinePage).toContain("window.location.reload()");
+        expect(offlinePage).toContain("다시 연결 시도");
+    });
+
+    it("service worker precaches the app shell during install", async () => {
+        const harness = createServiceWorkerHarness();
+
+        await harness.dispatchInstall();
+
+        expect(await harness.caches.keys()).toContain("omr-maker-v8-shell");
+        expect(harness.self.skipWaiting).toHaveBeenCalledOnce();
+        await expect(harness.caches.match("/pwa-check")).resolves.toBeInstanceOf(Response);
+        await expect(harness.caches.match("/offline.html")).resolves.toBeInstanceOf(Response);
+        await expect(harness.caches.match("/favicon.ico")).resolves.toBeInstanceOf(Response);
+        await expect(harness.caches.match("/icon.png")).resolves.toBeInstanceOf(Response);
+        await expect(harness.caches.match("/screenshots/omr-mobile-home.jpg")).resolves.toBeInstanceOf(Response);
+        await expect(harness.caches.match("/screenshots/omr-wide-home.jpg")).resolves.toBeInstanceOf(Response);
+        await expect(harness.caches.match("/icons/maskable-icon-512.png")).resolves.toBeInstanceOf(Response);
+    });
+
+    it("service worker returns cached assets and offline navigation fallback when network fails", async () => {
+        const harness = createServiceWorkerHarness();
+        await harness.dispatchInstall();
+        await harness.dispatchActivate();
+        harness.setNetworkFetch(async () => {
+            throw new Error("offline");
+        });
+
+        const logoResponse = await harness.dispatchFetch("/logo.png");
+        const navigationResponse = await harness.dispatchFetch("/teacher/dashboard", { mode: "navigate" });
+
+        await expect(logoResponse?.text()).resolves.toBe("cached:/logo.png");
+        await expect(navigationResponse?.text()).resolves.toBe("cached:/offline.html");
+    });
+
+    it("service worker reuses cached home for offline student shortcut launches", async () => {
+        const harness = createServiceWorkerHarness();
+        await harness.dispatchInstall();
+        await harness.dispatchActivate();
+        harness.setNetworkFetch(async () => {
+            throw new Error("offline");
+        });
+
+        const navigationResponse = await harness.dispatchFetch("/?role=student", { mode: "navigate" });
+
+        await expect(navigationResponse?.text()).resolves.toBe("cached:/");
+    });
+
+    it("service worker reuses cached device check for offline install proof launches", async () => {
+        const harness = createServiceWorkerHarness();
+        await harness.dispatchInstall();
+        await harness.dispatchActivate();
+        harness.setNetworkFetch(async () => {
+            throw new Error("offline");
+        });
+
+        const navigationResponse = await harness.dispatchFetch("/pwa-check", { mode: "navigate" });
+
+        await expect(navigationResponse?.text()).resolves.toBe("cached:/pwa-check");
+    });
+
+    it("service worker keeps dynamic app pages out of the runtime navigation cache", async () => {
+        const harness = createServiceWorkerHarness();
+        await harness.dispatchInstall();
+        await harness.dispatchActivate();
+
+        const navigationResponse = await harness.dispatchFetch("/teacher/dashboard", { mode: "navigate" });
+
+        await expect(navigationResponse?.text()).resolves.toBe("network:/teacher/dashboard");
+        await expect(harness.caches.match("/teacher/dashboard")).resolves.toBeUndefined();
+    });
+
+    it("service worker does not cache failed navigation responses", async () => {
+        const harness = createServiceWorkerHarness();
+        await harness.dispatchInstall();
+        await harness.dispatchActivate();
+        harness.setNetworkFetch(async () => new Response("server-error", { status: 500 }));
+
+        const navigationResponse = await harness.dispatchFetch("/teacher/dashboard", { mode: "navigate" });
+
+        await expect(navigationResponse?.text()).resolves.toBe("server-error");
+        await expect(harness.caches.match("/teacher/dashboard")).resolves.toBeUndefined();
+    });
+
+    it("service worker accepts update activation messages", async () => {
+        const harness = createServiceWorkerHarness();
+
+        await harness.dispatchMessage({ type: "OMR_SKIP_WAITING" });
+
+        expect(harness.self.skipWaiting).toHaveBeenCalledOnce();
+    });
+
+    it("PWA registration checks for mobile app updates without reloading active work screens", () => {
+        const source = getPwaRegisterSource();
+
+        expect(source).toContain("visibilitychange");
+        expect(source).toContain("window.addEventListener(\"online\", handleOnline)");
+        expect(source).toContain("window.removeEventListener(\"online\", handleOnline)");
+        expect(source).toContain("controllerchange");
+        expect(source).toContain("updatefound");
+        expect(source).toContain("getRegistration(\"/sw.js\")");
+        expect(source).toContain("pathname !== \"/create\" && !pathname.startsWith(\"/solve/\")");
+        expect(source).toContain("OMR_SKIP_WAITING");
+    });
+
+    it("external PWA smoke requires HTTPS and separates offline browser network noise", () => {
+        const source = getPwaSmokeSource();
+
+        expect(source).toContain("External PWA smoke URLs must use HTTPS for installability");
+        expect(source).toContain("isExpectedOfflineBrowserProblem");
+        expect(source).toContain("ERR_INTERNET_DISCONNECTED");
+        expect(source).toContain("onlineConsoleProblems");
+        expect(source).toContain("offlineConsoleProblems");
+        expect(source).toContain("Unexpected offline console warnings/errors were emitted during PWA smoke");
+        expect(source).toContain("onlineDeviceCheckState");
+        expect(source).toContain("offlineDeviceCheckState");
+        expect(source).toContain("cachedPwaCheck");
+        expect(source).toContain("displayEvidence=");
+        expect(source).toContain("launch-proof=");
     });
 });

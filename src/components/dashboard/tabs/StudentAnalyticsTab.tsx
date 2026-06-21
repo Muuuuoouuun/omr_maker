@@ -125,6 +125,7 @@ export default function StudentAnalyticsTab({
     const activeStudentLabel = activeStudentProfile?.label || "";
     const [excludedExamIds, setExcludedExamIds] = useState<Set<string>>(new Set());
     const [reminderExamIds, setReminderExamIds] = useState<Set<string>>(new Set());
+    const studentGrowthReportsEnabled = hasPlanEntitlement(currentPlan, "studentGrowthReports");
     const retakeAssignmentsEnabled = hasPlanEntitlement(currentPlan, "retakeAssignments");
     const remindersEnabled = hasPlanEntitlement(currentPlan, "reminders");
 
@@ -410,9 +411,17 @@ export default function StudentAnalyticsTab({
                             원시험 점수 추이와 전체 학생의 원시험 평균을 같이 비교합니다.
                         </p>
                     </div>
+                    {!studentGrowthReportsEnabled && (
+                        <PremiumFeatureCard
+                            title="성취도 추이 차트"
+                            description="Pro 이상에서 학생별 원시험 점수 추이와 전체 학생 평균을 비교할 수 있습니다."
+                            badge="Pro"
+                            style={{ marginBottom: '1rem' }}
+                        />
+                    )}
 
-                    <div style={{ flex: 1, minHeight: '350px', width: '100%', minWidth: 0 }}>
-                        {trendData.length > 0 ? (
+                    <div style={{ flex: 1, minHeight: studentGrowthReportsEnabled ? '350px' : 0, width: '100%', minWidth: 0 }}>
+                        {studentGrowthReportsEnabled && trendData.length > 0 ? (
                             <ResponsiveContainer
                                 width="100%"
                                 height="100%"
@@ -451,11 +460,11 @@ export default function StudentAnalyticsTab({
                                     />
                                 </LineChart>
                             </ResponsiveContainer>
-                        ) : (
+                        ) : studentGrowthReportsEnabled ? (
                             <div style={{ height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--muted)' }}>
                                 표시할 원시험 데이터가 없습니다. (모든 시험 목록이 제외됨)
                             </div>
-                        )}
+                        ) : null}
                     </div>
                 </div>
 

@@ -92,7 +92,7 @@ function SolveDialogShell({
                 display: 'flex',
                 alignItems: 'center',
                 justifyContent: 'center',
-                padding: '1rem',
+                padding: 'max(1rem, env(safe-area-inset-top)) max(1rem, env(safe-area-inset-right)) max(1rem, env(safe-area-inset-bottom)) max(1rem, env(safe-area-inset-left))',
             }}
         >
             <div
@@ -160,6 +160,7 @@ function ExamPinDialog({
                 type="text"
                 inputMode="numeric"
                 pattern="[0-9]*"
+                autoComplete="one-time-code"
                 maxLength={6}
                 value={value}
                 onChange={(event) => onChange(normalizeExamPin(event.target.value))}
@@ -276,7 +277,7 @@ function SolveLoadErrorCard({ error }: { error: SolveLoadError }) {
     return (
         <div className="layout-main solve-page" style={{
             background: 'var(--background)',
-            minHeight: '100vh',
+            minHeight: '100dvh',
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'center',
@@ -370,6 +371,7 @@ function GuestNameDialog({
                 }}
                 autoFocus
                 placeholder="이름 입력"
+                autoComplete="name"
                 style={{
                     width: '100%',
                     padding: '0.8rem 0.95rem',
@@ -427,6 +429,9 @@ function TeacherPasswordDialog({
                 autoFocus
                 placeholder="아이디 또는 이메일"
                 autoComplete="username"
+                autoCapitalize="none"
+                inputMode="email"
+                spellCheck={false}
                 style={{
                     width: '100%',
                     padding: '0.8rem 0.95rem',
@@ -1234,7 +1239,7 @@ export default function SolvePage() {
         return (
             <div className="layout-main solve-page" style={{
                 background: 'var(--background)',
-                minHeight: '100vh',
+                minHeight: '100dvh',
                 display: 'flex',
                 alignItems: 'center',
                 justifyContent: 'center',
@@ -1259,7 +1264,7 @@ export default function SolvePage() {
         return (
             <div className="layout-main solve-page" style={{
                 background: 'var(--background)',
-                minHeight: '100vh',
+                minHeight: '100dvh',
                 display: 'flex',
                 alignItems: 'center',
                 justifyContent: 'center',
@@ -1305,7 +1310,7 @@ export default function SolvePage() {
     return (
         <div className="layout-main solve-page" style={{
             background: 'var(--background)',
-            height: '100vh',
+            height: '100dvh',
             overflow: 'hidden',
             display: 'flex',
             flexDirection: 'column'

@@ -268,7 +268,7 @@ function readinessTone(level: ExamServiceReadinessLevel): { color: string; backg
 
 export default function CreateOMRPage() {
     return (
-        <Suspense fallback={<div style={{ minHeight: '100vh', background: 'var(--background)' }} />}>
+        <Suspense fallback={<div style={{ minHeight: '100dvh', background: 'var(--background)' }} />}>
             <CreateOMRPageInner />
         </Suspense>
     );
@@ -1240,7 +1240,7 @@ function CreateOMRPageInner() {
     };
 
     return (
-        <div className="layout-main" style={{ background: 'var(--background)', height: '100vh', overflow: 'hidden' }}>
+        <div className="layout-main" style={{ background: 'var(--background)', height: '100dvh', overflow: 'hidden' }}>
             <header className="header" style={{ flexShrink: 0 }}>
                 <div className="container header-content create-editor-header" style={{ maxWidth: '100%', padding: '0 2rem' }}>
                     <div className="create-editor-brand" style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
@@ -1327,6 +1327,7 @@ function CreateOMRPageInner() {
                 onAutoMatchRegions={handleAutoMatchMissingRegions}
                 validationSummary={validationSummary}
                 initialAccessConfig={loadedExam?.accessConfig}
+                examId={loadedExam?.id}
             />
 
             {confirmState && (
@@ -1337,7 +1338,7 @@ function CreateOMRPageInner() {
                 />
             )}
 
-            <div className={`create-workspace ${isPreviewCollapsed ? 'is-preview-collapsed' : ''}`} style={{ display: 'flex', flex: 1, height: 'calc(100vh - 4rem)', overflow: 'hidden' }}>
+            <div className={`create-workspace ${isPreviewCollapsed ? 'is-preview-collapsed' : ''}`} style={{ display: 'flex', flex: 1, height: 'calc(100dvh - 4rem)', overflow: 'hidden' }}>
 
                 {/* 1. PDF Viewer Area */}
                 <div className="create-pdf-pane" style={{

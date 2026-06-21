@@ -3,6 +3,7 @@ import {
     createSignedTeacherSessionCookie,
     parseSignedTeacherSessionCookie,
     resolveTeacherSessionSecret,
+    shouldUseSecureTeacherSessionCookie,
     TEACHER_SERVER_SESSION_COOKIE,
     TEACHER_SERVER_SESSION_MAX_AGE_SECONDS,
 } from "./teacherServerSession";
@@ -54,6 +55,15 @@ describe("teacher server session", () => {
         expect(parseSignedTeacherSessionCookie(`${payload}x.${signature}`, env, 1000)).toBeNull();
         expect(parseSignedTeacherSessionCookie(cookie, { NODE_ENV: "production", TEACHER_SESSION_SECRET: "other" }, 1000)).toBeNull();
         expect(parseSignedTeacherSessionCookie(cookie, env, 1000 + TEACHER_SERVER_SESSION_MAX_AGE_SECONDS * 1000 + 1)).toBeNull();
+    });
+
+    it("keeps secure cookies for production domains while allowing localhost QA", () => {
+        expect(shouldUseSecureTeacherSessionCookie("omr.example.com", env)).toBe(true);
+        expect(shouldUseSecureTeacherSessionCookie("localhost:3004", env)).toBe(false);
+        expect(shouldUseSecureTeacherSessionCookie("127.0.0.1:3004", env)).toBe(false);
+        expect(shouldUseSecureTeacherSessionCookie("[::1]:3004", env)).toBe(false);
+        expect(shouldUseSecureTeacherSessionCookie("omr.localhost:3004", env)).toBe(false);
+        expect(shouldUseSecureTeacherSessionCookie("omr.example.com", { NODE_ENV: "development" })).toBe(false);
     });
 
     it("exports the stable cookie name used by server guards", () => {

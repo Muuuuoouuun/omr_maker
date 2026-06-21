@@ -26,6 +26,12 @@
         padding: 28px;
         box-shadow: 0 18px 42px rgba(15, 23, 42, 0.08);
       }
+      img {
+        width: 56px;
+        height: 56px;
+        object-fit: contain;
+        margin-bottom: 16px;
+      }
       h1 {
         margin: 0 0 10px;
         font-size: 1.35rem;
@@ -34,6 +40,23 @@
         margin: 0;
         color: #64748b;
         line-height: 1.6;
+      }
+      button {
+        min-height: 44px;
+        margin-top: 18px;
+        padding: 0 18px;
+        border: 0;
+        border-radius: 12px;
+        background: #2563eb;
+        color: #fff;
+        font: inherit;
+        font-weight: 800;
+        cursor: pointer;
+        touch-action: manipulation;
+      }
+      button:focus-visible {
+        outline: 3px solid rgba(37, 99, 235, 0.32);
+        outline-offset: 3px;
       }
       @media (prefers-color-scheme: dark) {
         :root {
@@ -47,13 +70,19 @@
         p {
           color: #cbd5e1;
         }
+        button {
+          background: #60a5fa;
+          color: #0f172a;
+        }
       }
     </style>
   </head>
   <body>
     <main>
+      <img src="/logo.png" alt="" />
       <h1>오프라인 상태입니다</h1>
       <p>인터넷 연결이 복구되면 OMR Maker가 다시 시험과 리포트를 불러옵니다. 이 기기에 저장된 페이지는 계속 열릴 수 있습니다.</p>
+      <button type="button" onclick="window.location.reload()">다시 연결 시도</button>
     </main>
   </body>
 </html>

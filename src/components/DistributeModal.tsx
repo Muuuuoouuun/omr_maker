@@ -19,9 +19,10 @@ interface DistributeModalProps {
     onAutoMatchRegions?: () => void;
     validationSummary?: ExamValidationSummary;
     initialAccessConfig?: AccessConfig;
+    examId?: string;
 }
 
-export default function DistributeModal({ isOpen, onClose, onSaveAndShare, onAutoMatchRegions, validationSummary, initialAccessConfig }: DistributeModalProps) {
+export default function DistributeModal({ isOpen, onClose, onSaveAndShare, onAutoMatchRegions, validationSummary, initialAccessConfig, examId }: DistributeModalProps) {
     const [accessType, setAccessType] = useState<'public' | 'group'>('public');
     const [selectedGroups, setSelectedGroups] = useState<string[]>([]);
     const [groups, setGroups] = useState<RosterGroup[]>([]);
@@ -354,9 +355,31 @@ export default function DistributeModal({ isOpen, onClose, onSaveAndShare, onAut
                                 </button>
                             </div>
 
-                            <div style={{ background: 'var(--background)', border: '1px solid var(--border)', padding: '0.5rem', borderRadius: '4px', fontSize: '0.8rem', wordBreak: 'break-all', color: 'var(--muted)' }}>
+                            <div style={{ background: 'var(--background)', border: '1px solid var(--border)', padding: '0.5rem', borderRadius: '4px', fontSize: '0.8rem', wordBreak: 'break-all', color: 'var(--muted)', marginBottom: '1.25rem' }}>
                                 {shareUrl}
                             </div>
+
+                            {examId && (
+                                <a
+                                    href={`/teacher/dashboard?tab=exam&examId=${examId}`}
+                                    style={{
+                                        display: 'inline-flex',
+                                        alignItems: 'center',
+                                        gap: '0.4rem',
+                                        fontSize: '0.85rem',
+                                        fontWeight: 700,
+                                        color: 'var(--primary)',
+                                        textDecoration: 'none',
+                                        padding: '0.6rem 1rem',
+                                        borderRadius: 'var(--radius-full)',
+                                        border: '1px solid rgba(99,102,241,0.28)',
+                                        background: 'rgba(99,102,241,0.07)',
+                                        transition: 'all 0.15s',
+                                    }}
+                                >
+                                    결과 분석 보러 가기 →
+                                </a>
+                            )}
                         </div>
                     )}
                 </div>

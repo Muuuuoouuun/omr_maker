@@ -49,6 +49,11 @@
 
   --font-sans: var(--font-geist-sans), system-ui, -apple-system, sans-serif;
   --font-mono: var(--font-geist-mono), monospace;
+
+  --app-safe-area-top: env(safe-area-inset-top, 0px);
+  --app-safe-area-right: env(safe-area-inset-right, 0px);
+  --app-safe-area-bottom: env(safe-area-inset-bottom, 0px);
+  --app-safe-area-left: env(safe-area-inset-left, 0px);
 }
 
 /* Explicit dark theme via [data-theme="dark"] (default is light) */
@@ -69,6 +74,8 @@
 /* Smooth theme transition */
 html {
   transition: color-scheme 0.3s;
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
 }
 
 html[data-theme="dark"] { color-scheme: dark; }
@@ -122,6 +129,7 @@ body {
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
   transition: color 0.3s ease, background-color 0.3s ease;
+  overscroll-behavior-x: none;
 }
 
 a {
@@ -136,11 +144,31 @@ button {
   background: none;
   font-family: inherit;
   -webkit-tap-highlight-color: transparent;
+  touch-action: manipulation;
+}
+
+a,
+label,
+input,
+select,
+textarea,
+[role="button"] {
+  -webkit-tap-highlight-color: transparent;
+  touch-action: manipulation;
+}
+
+@media (hover: none) and (pointer: coarse), (max-width: 820px) {
+  input,
+  select,
+  textarea {
+    font-size: 16px !important;
+  }
 }
 
 /* ─── Layout ─────────────────────────────────────────── */
 .layout-main {
   min-height: 100vh;
+  min-height: 100dvh;
   display: flex;
   flex-direction: column;
   position: relative;
@@ -181,6 +209,7 @@ button {
   align-items: center;
   justify-content: center;
   min-height: 100vh;
+  min-height: 100dvh;
 }
 
 /* ─── Animated Background Orbs ───────────────────────── */
@@ -218,6 +247,30 @@ button {
   top: 42%;
   left: 58%;
   animation: floatOrb3 16s ease-in-out infinite;
+}
+
+@media (max-width: 920px), (hover: none) and (pointer: coarse), (display-mode: standalone), (prefers-reduced-motion: reduce) {
+  .orb {
+    display: none;
+    animation: none;
+    filter: none;
+    will-change: auto;
+  }
+}
+
+html[data-motion="off"] .orb {
+  display: none;
+  animation: none;
+  filter: none;
+  will-change: auto;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    scroll-behavior: auto !important;
+  }
 }
 
 @keyframes floatOrb1 {
@@ -401,6 +454,122 @@ button {
   transform: translateY(-8px) scale(1.012);
   box-shadow: 0 28px 56px rgba(0, 0, 0, 0.11), 0 0 0 1px rgba(99, 102, 241, 0.18);
   border-color: rgba(99, 102, 241, 0.22);
+}
+
+/* ─── Home App Entry ─────────────────────────────────── */
+@media (max-width: 640px) {
+  .home-page.center-content {
+    align-items: stretch;
+    justify-content: flex-start;
+  }
+
+  .home-container {
+    max-width: 430px !important;
+    padding: max(0.85rem, env(safe-area-inset-top)) 1rem 1.25rem !important;
+  }
+
+  .home-hero {
+    margin-bottom: 0.95rem !important;
+  }
+
+  .home-logo {
+    width: 74px !important;
+    height: 74px !important;
+    margin-bottom: 0.55rem !important;
+  }
+
+  .home-eyebrow {
+    margin-bottom: 0.7rem !important;
+    max-width: 100%;
+    padding: 0.22rem 0.55rem !important;
+    font-size: 0.58rem !important;
+    white-space: nowrap;
+  }
+
+  .home-title {
+    margin-bottom: 0.35rem !important;
+    font-size: 2.35rem !important;
+    line-height: 1.08 !important;
+    letter-spacing: 0 !important;
+  }
+
+  .home-subtitle {
+    max-width: 20rem !important;
+    font-size: 0.88rem !important;
+    line-height: 1.45 !important;
+  }
+
+  .home-role-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+    gap: 0.7rem !important;
+  }
+
+  .home-role-card {
+    min-height: 154px;
+    padding: 0.95rem 0.85rem !important;
+    border-radius: var(--radius-lg) !important;
+  }
+
+  .home-role-card:hover {
+    transform: translateY(-2px);
+  }
+
+  .home-role-icon {
+    margin-bottom: 0.7rem !important;
+    padding: 0.55rem !important;
+    border-radius: var(--radius-md) !important;
+  }
+
+  .home-role-icon svg {
+    width: 26px;
+    height: 26px;
+  }
+
+  .home-role-card h2 {
+    margin-bottom: 0.25rem !important;
+    font-size: 1.05rem !important;
+    letter-spacing: 0 !important;
+  }
+
+  .home-role-description {
+    margin-bottom: 0.7rem !important;
+    font-size: 0.75rem !important;
+    line-height: 1.38 !important;
+  }
+
+  .home-role-action {
+    font-size: 0.78rem !important;
+  }
+
+  .home-login-card {
+    width: 100%;
+    padding: 1.35rem 1.1rem !important;
+  }
+
+  .home-page:not([data-home-role="none"]) .home-container {
+    padding-top: max(4rem, calc(env(safe-area-inset-top) + 3.25rem)) !important;
+  }
+
+  .home-page:not([data-home-role="none"]) .home-hero {
+    display: none;
+  }
+
+  .home-page .stagger-1,
+  .home-page .stagger-2,
+  .home-page .stagger-3,
+  .home-page .stagger-4 {
+    animation-delay: 0.04s;
+  }
+}
+
+@media (max-width: 360px) {
+  .home-title {
+    font-size: 2.05rem !important;
+  }
+
+  .home-role-card {
+    padding: 0.85rem 0.75rem !important;
+  }
 }
 
 /* ─── Badge / Chip ───────────────────────────────────── */
@@ -616,6 +785,140 @@ button {
 .nav-link:hover {
   color: var(--primary);
   background: rgba(99, 102, 241, 0.05);
+}
+
+.mobile-install-prompt {
+  position: fixed;
+  left: max(1rem, env(safe-area-inset-left));
+  right: max(1rem, env(safe-area-inset-right));
+  bottom: max(1rem, env(safe-area-inset-bottom));
+  z-index: 110;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 0.75rem;
+  width: min(430px, calc(100vw - 2rem));
+  margin: 0 auto;
+  padding: 0.72rem 0.7rem 0.72rem 0.82rem;
+  border: 1px solid color-mix(in srgb, var(--primary), transparent 78%);
+  border-radius: var(--radius-lg);
+  background: color-mix(in srgb, var(--surface-glass-strong), transparent 4%);
+  box-shadow: 0 18px 44px rgba(15, 23, 42, 0.2);
+  backdrop-filter: blur(18px);
+  -webkit-backdrop-filter: blur(18px);
+}
+
+.mobile-install-prompt__icon,
+.mobile-install-prompt__hint,
+.mobile-install-prompt__close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+}
+
+.mobile-install-prompt__icon {
+  width: 2.75rem;
+  height: 2.75rem;
+  border-radius: var(--radius-md);
+  color: var(--primary);
+  background: color-mix(in srgb, var(--primary), transparent 88%);
+}
+
+.mobile-install-prompt__copy {
+  display: grid;
+  gap: 0.16rem;
+  min-width: 0;
+}
+
+.mobile-install-prompt__copy strong {
+  color: var(--foreground);
+  font-size: 0.9rem;
+  line-height: 1.15;
+}
+
+.mobile-install-prompt__copy span {
+  color: var(--muted);
+  font-size: 0.76rem;
+  line-height: 1.25;
+  word-break: keep-all;
+}
+
+.mobile-install-prompt__action {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.32rem;
+  min-height: 2.75rem;
+  min-width: 2.75rem;
+  padding: 0 0.78rem;
+  border-radius: var(--radius-md);
+  background: var(--primary);
+  color: white;
+  font-size: 0.82rem;
+  font-weight: 800;
+  box-shadow: 0 10px 24px color-mix(in srgb, var(--primary), transparent 72%);
+}
+
+.mobile-install-prompt__hint {
+  width: 2.75rem;
+  height: 2.75rem;
+  border-radius: var(--radius-md);
+  color: var(--primary);
+  background: color-mix(in srgb, var(--primary), transparent 90%);
+}
+
+.mobile-install-prompt__close {
+  width: 2.75rem;
+  height: 2.75rem;
+  border-radius: var(--radius-full);
+  color: var(--muted);
+  transition: var(--transition-fast);
+}
+
+.mobile-install-prompt__close:hover {
+  color: var(--foreground);
+  background: color-mix(in srgb, var(--muted), transparent 88%);
+}
+
+@media (min-width: 1181px) and (hover: hover) and (pointer: fine) {
+  .mobile-install-prompt {
+    display: none;
+  }
+}
+
+@media (max-width: 380px) {
+  .mobile-install-prompt {
+    grid-template-columns: auto minmax(0, 1fr) auto;
+  }
+
+  .mobile-install-prompt__hint {
+    display: none;
+  }
+
+  .mobile-install-prompt__action span {
+    display: none;
+  }
+}
+
+@media (display-mode: standalone), (display-mode: fullscreen) {
+  .layout-main {
+    min-height: calc(100vh - var(--app-safe-area-bottom));
+    min-height: calc(100dvh - var(--app-safe-area-bottom));
+    padding-right: var(--app-safe-area-right);
+    padding-bottom: var(--app-safe-area-bottom);
+    padding-left: var(--app-safe-area-left);
+  }
+
+  .header {
+    height: auto;
+    min-height: calc(4.5rem + var(--app-safe-area-top));
+    padding-top: var(--app-safe-area-top);
+  }
+
+  .mobile-install-prompt {
+    display: none !important;
+  }
 }
 
 /* ─── OMR Sheet Styles ───────────────────────────────── */
@@ -1823,8 +2126,10 @@ button {
   .create-workspace {
     flex-direction: column !important;
     height: auto !important;
-    min-height: calc(100vh - 4rem);
+    min-height: calc(100dvh - 4rem);
     overflow: auto !important;
+    overscroll-behavior: contain;
+    -webkit-overflow-scrolling: touch;
   }
 
   .create-pdf-pane,
@@ -1837,7 +2142,9 @@ button {
   }
 
   .create-pdf-pane {
-    height: min(58vh, 520px);
+    flex: 0 0 min(52dvh, 520px) !important;
+    height: min(52dvh, 520px);
+    min-height: 330px;
     border-right: 0 !important;
     border-bottom: 1px solid var(--border);
   }
@@ -1909,6 +2216,12 @@ button {
     min-height: 36px;
     padding: 0.45rem 0.65rem !important;
     font-size: 0.74rem !important;
+  }
+
+  .create-pdf-pane {
+    flex-basis: min(42dvh, 420px) !important;
+    height: min(42dvh, 420px) !important;
+    min-height: 280px;
   }
 
   .create-preview-toolbar {

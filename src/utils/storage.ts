@@ -10,6 +10,9 @@ export const STORAGE_KEYS = {
     PENDING_GUEST_MERGE: "omr_pending_guest_merge",
 };
 
+const STUDENT_SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
+const CONSUMED_GUEST_MERGE_KEY = "omr_consumed_guest_merge";
+
 export interface StudentSession {
     studentId: string;
     name: string;
@@ -21,6 +24,7 @@ export interface StudentSession {
     identityType: IdentityType;
     guestId?: string; // specific UUID for guest
     loginId?: string;
+    createdAt?: string; // ISO timestamp — used for TTL enforcement
 }
 
 // Stable local identifier for a class-issued temporary student identity.
@@ -46,7 +50,8 @@ export function getOrCreateGuestId(): string {
 
 export function saveSession(session: StudentSession) {
     if (typeof window === 'undefined') return;
-    const payload = JSON.stringify(session);
+    const stamped: StudentSession = session.createdAt ? session : { ...session, createdAt: new Date().toISOString() };
+    const payload = JSON.stringify(stamped);
     try {
         sessionStorage.setItem(STORAGE_KEYS.STUDENT_SESSION, payload);
     } catch {
@@ -61,6 +66,11 @@ export function saveSession(session: StudentSession) {
 
 function normalizeSession(raw: Partial<StudentSession> | null): StudentSession | null {
     if (!raw || !raw.name) return null;
+    // Expire sessions older than 30 days so stale identities don't linger.
+    if (raw.createdAt) {
+        const age = Date.now() - new Date(raw.createdAt).getTime();
+        if (age > STUDENT_SESSION_TTL_MS) return null;
+    }
     const isGuest = !!raw.isGuest || !!raw.guestId;
     const studentId = raw.studentId
         || (isGuest && raw.guestId ? `guest:${raw.guestId}` : undefined)
@@ -177,10 +187,21 @@ export function consumePendingGuestMerge(): PendingGuestMerge | null {
     try {
         const pending = readPendingGuestMerge();
         if (!pending) return null;
+        // Tab-local guard: if this tab already consumed this exact merge (same
+        // guestId + queuedAt), don't process it again on re-mount. Prevents
+        // duplicate merges when a component unmounts/remounts within the same tab.
+        const claimKey = `${pending.guestId}::${pending.queuedAt}`;
+        try {
+            const prior = sessionStorage.getItem(CONSUMED_GUEST_MERGE_KEY);
+            if (prior === claimKey) return null;
+            sessionStorage.setItem(CONSUMED_GUEST_MERGE_KEY, claimKey);
+        } catch {
+            // sessionStorage unavailable — proceed without the guard.
+        }
         localStorage.removeItem(STORAGE_KEYS.PENDING_GUEST_MERGE);
         return pending;
     } catch {
-        localStorage.removeItem(STORAGE_KEYS.PENDING_GUEST_MERGE);
+        try { localStorage.removeItem(STORAGE_KEYS.PENDING_GUEST_MERGE); } catch { /* ignore */ }
         return null;
     }
 }
@@ -199,14 +220,21 @@ export function attemptBelongsToSession(attempt: Attempt, session: StudentSessio
         return !!session.guestId && attempt.guestId === session.guestId;
     }
 
+    // Primary path: stable studentId match (covers most cases post-canonical-id era).
     if (attempt.studentId && attempt.studentId === session.studentId) return true;
 
-    // Legacy fallback for attempts created before canonical studentId was saved.
+    // Legacy fallback: loginId alias used before canonical studentId was stored.
     if (session.loginId && attempt.studentId === session.loginId) return true;
+
+    // Legacy name-based match for very old attempts that never recorded a studentId.
+    // Only allowed when both the session and the attempt carry group context so we
+    // can narrow to the correct student — prevents same-name collisions across groups.
     if (!attempt.studentId && attempt.studentName === session.name) {
-        if (!session.groupName && !session.groupId) return true;
-        if (!attempt.groupName && !attempt.groupId) return false;
-        return attempt.groupName === session.groupName || attempt.groupId === session.groupId;
+        const sessionHasGroup = !!(session.groupId || session.groupName);
+        const attemptHasGroup = !!(attempt.groupId || attempt.groupName);
+        if (!sessionHasGroup && !attemptHasGroup) return true;
+        if (!sessionHasGroup || !attemptHasGroup) return false;
+        return attempt.groupId === session.groupId || attempt.groupName === session.groupName;
     }
 
     return false;

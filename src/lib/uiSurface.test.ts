@@ -130,6 +130,111 @@ describe("service UI surface", () => {
         expect(css).toContain(".solve-omr-pane-handwriting");
     });
 
+    it("keeps toast notifications inside mobile safe areas", () => {
+        const toastHost = readProjectFile("src/components/Toast.tsx");
+
+        expect(toastHost).toContain("env(safe-area-inset-left)");
+        expect(toastHost).toContain("env(safe-area-inset-right)");
+        expect(toastHost).toContain("env(safe-area-inset-bottom)");
+        expect(toastHost).toContain("alignItems: 'flex-end'");
+        expect(toastHost).toContain("width: 'min(400px, 100%)'");
+        expect(toastHost).toContain("minWidth: 'min(280px, 100%)'");
+        expect(toastHost).toContain("overflowWrap: 'anywhere'");
+    });
+
+    it("keeps decorative motion off on mobile, installed app, and reduced-motion surfaces", () => {
+        const css = readProjectFile("src/app/globals.css");
+
+        expect(css).toContain("@media (max-width: 920px)");
+        expect(css).toContain("(hover: none) and (pointer: coarse)");
+        expect(css).toContain("(display-mode: standalone)");
+        expect(css).toContain("(prefers-reduced-motion: reduce)");
+        expect(css).toContain('html[data-motion="off"] .orb');
+        expect(css).toContain("will-change: auto");
+        expect(css).toContain("scroll-behavior: auto !important");
+    });
+
+    it("keeps the app install prompt reachable on touch tablets", () => {
+        const css = readProjectFile("src/app/globals.css");
+        const installPrompt = readProjectFile("src/components/MobileInstallPrompt.tsx");
+
+        expect(installPrompt).toContain('(max-width: 820px), (pointer: coarse)');
+        expect(css).not.toContain("@media (min-width: 821px)");
+        expect(css).toContain("@media (min-width: 1181px) and (hover: hover) and (pointer: fine)");
+        expect(css).toContain("left: max(1rem, env(safe-area-inset-left))");
+        expect(css).toContain("right: max(1rem, env(safe-area-inset-right))");
+        expect(css).toContain("bottom: max(1rem, env(safe-area-inset-bottom))");
+        expect(css).toContain("min-height: 2.75rem");
+        expect(css).toContain("min-width: 2.75rem");
+        expect(css).toContain("width: 2.75rem");
+        expect(css).toContain("height: 2.75rem");
+        expect(installPrompt).toContain("useId");
+        expect(installPrompt).toContain("aria-describedby={descriptionId}");
+        expect(installPrompt).toContain('aria-live="polite"');
+        expect(installPrompt).toContain("id={descriptionId}");
+        expect(installPrompt).toContain('pathname === "/pwa-check"');
+    });
+
+    it("keeps device QA evidence copyable from the PWA check page", () => {
+        const pwaCheck = readProjectFile("src/app/pwa-check/page.tsx");
+
+        expect(pwaCheck).toContain("pwa-device-verdict");
+        expect(pwaCheck).toContain("pwa-device-report-copy");
+        expect(pwaCheck).toContain("pwa-device-copy-status");
+        expect(pwaCheck).toContain("pwa-device-report");
+        expect(pwaCheck).toContain("pwa-device-handoff");
+        expect(pwaCheck).toContain("pwa-device-handoff-qr");
+        expect(pwaCheck).toContain("QRCodeCanvas");
+        expect(pwaCheck).toContain("navigator.share");
+        expect(pwaCheck).toContain("buildDeviceReport");
+        expect(pwaCheck).toContain("OMR Maker PWA device check");
+        expect(pwaCheck).toContain("displayMode=");
+        expect(pwaCheck).toContain("앱 실행 통과");
+        expect(pwaCheck).toContain("설치 실행 전");
+    });
+
+    it("keeps installed phone and tablet app shells inside safe areas", () => {
+        const css = readProjectFile("src/app/globals.css");
+        const layout = readProjectFile("src/app/layout.tsx");
+        const installPrompt = readProjectFile("src/components/MobileInstallPrompt.tsx");
+
+        expect(layout).toContain('viewportFit: "cover"');
+        expect(css).toContain("--app-safe-area-top: env(safe-area-inset-top, 0px)");
+        expect(css).toContain("--app-safe-area-right: env(safe-area-inset-right, 0px)");
+        expect(css).toContain("--app-safe-area-bottom: env(safe-area-inset-bottom, 0px)");
+        expect(css).toContain("--app-safe-area-left: env(safe-area-inset-left, 0px)");
+        expect(css).toContain("@media (display-mode: standalone), (display-mode: fullscreen)");
+        expect(css).toContain("min-height: calc(100dvh - var(--app-safe-area-bottom))");
+        expect(css).toContain("padding-right: var(--app-safe-area-right)");
+        expect(css).toContain("padding-bottom: var(--app-safe-area-bottom)");
+        expect(css).toContain("padding-left: var(--app-safe-area-left)");
+        expect(css).toContain("min-height: calc(4.5rem + var(--app-safe-area-top))");
+        expect(css).toContain("padding-top: var(--app-safe-area-top)");
+        expect(css).toContain("display: none !important");
+        expect(installPrompt).toContain("(display-mode: fullscreen)");
+        expect(installPrompt).toContain("appinstalled");
+    });
+
+    it("keeps mobile login and PIN inputs keyboard-friendly", () => {
+        const homePage = readProjectFile("src/app/page.tsx");
+        const solvePage = readProjectFile("src/app/solve/[id]/page.tsx");
+
+        expect(homePage).toContain('autoComplete="username"');
+        expect(homePage).toContain('autoComplete="current-password"');
+        expect(homePage).toContain('autoComplete="name"');
+        expect(homePage).toContain('autoComplete="email"');
+        expect(homePage).toContain('inputMode="email"');
+        expect(homePage).toContain('autoComplete="one-time-code"');
+        expect(homePage).toContain('autoCapitalize="characters"');
+        expect(homePage).toContain("spellCheck={false}");
+        expect(solvePage).toContain('inputMode="numeric"');
+        expect(solvePage).toContain('pattern="[0-9]*"');
+        expect(solvePage).toContain('autoComplete="one-time-code"');
+        expect(solvePage).toContain('autoComplete="name"');
+        expect(solvePage).toContain('autoComplete="username"');
+        expect(solvePage).toContain('inputMode="email"');
+    });
+
     it("shows a recoverable student-facing error when a solve link cannot load an exam", () => {
         const solvePage = readProjectFile("src/app/solve/[id]/page.tsx");
 

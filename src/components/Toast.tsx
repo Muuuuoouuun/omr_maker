@@ -59,8 +59,12 @@ export default function ToastHost() {
             aria-label="알림"
             aria-live="polite"
             style={{
-                position: 'fixed', bottom: '1.5rem', right: '1.5rem',
+                position: 'fixed',
+                left: 'max(1rem, env(safe-area-inset-left))',
+                right: 'max(1rem, env(safe-area-inset-right))',
+                bottom: 'max(1rem, env(safe-area-inset-bottom))',
                 display: 'flex', flexDirection: 'column', gap: '0.6rem',
+                alignItems: 'flex-end',
                 zIndex: 2000, pointerEvents: 'none'
             }}
         >
@@ -73,7 +77,9 @@ export default function ToastHost() {
                             pointerEvents: 'auto',
                             display: 'flex', alignItems: 'flex-start', gap: '0.75rem',
                             padding: '0.85rem 1rem',
-                            minWidth: 280, maxWidth: 400,
+                            width: 'min(400px, 100%)',
+                            minWidth: 'min(280px, 100%)',
+                            maxWidth: '100%',
                             background: 'var(--surface)',
                             border: `1px solid color-mix(in srgb, ${meta.color}, transparent 78%)`,
                             borderLeft: `4px solid ${meta.color}`,
@@ -84,9 +90,9 @@ export default function ToastHost() {
                     >
                         <div style={{ color: meta.color, flexShrink: 0, marginTop: 2 }}>{meta.icon}</div>
                         <div style={{ flex: 1, minWidth: 0 }}>
-                            <div style={{ fontSize: '0.9rem', fontWeight: 700, color: 'var(--foreground)' }}>{t.title}</div>
+                            <div style={{ fontSize: '0.9rem', fontWeight: 700, color: 'var(--foreground)', overflowWrap: 'anywhere' }}>{t.title}</div>
                             {t.description && (
-                                <div style={{ fontSize: '0.82rem', color: 'var(--muted)', marginTop: '0.2rem' }}>{t.description}</div>
+                                <div style={{ fontSize: '0.82rem', color: 'var(--muted)', marginTop: '0.2rem', lineHeight: 1.45, overflowWrap: 'anywhere' }}>{t.description}</div>
                             )}
                         </div>
                         <button

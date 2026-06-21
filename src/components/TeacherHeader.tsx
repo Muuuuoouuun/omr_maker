@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
-import { Search } from "lucide-react";
+import { Activity, Search } from "lucide-react";
 import ThemeToggle from "./ThemeToggle";
 import GlobalSearch from "./GlobalSearch";
 import NotificationBell from "./NotificationBell";
@@ -83,6 +83,18 @@ export default function TeacherHeader({ badge = "TEACHER", badgeColor }: Teacher
                             padding: '0.5rem 0.9rem', borderRadius: 'var(--radius-full)',
                             transition: 'var(--transition-base)'
                         }} className="nav-link">Dashboard</Link>
+                        <Link href="/teacher/live" style={{
+                            display: 'inline-flex', alignItems: 'center', gap: '0.35rem',
+                            fontSize: '0.85rem', fontWeight: 700,
+                            color: 'var(--success)',
+                            padding: '0.5rem 0.9rem', borderRadius: 'var(--radius-full)',
+                            border: '1px solid rgba(16,185,129,0.28)',
+                            background: 'rgba(16,185,129,0.08)',
+                            transition: 'var(--transition-base)',
+                        }} className="nav-link-live" aria-label="실시간 모니터링">
+                            <Activity size={14} />
+                            Live
+                        </Link>
                         <TeacherSessionChip />
                         <NotificationBell />
                         <TeacherLogoutButton />

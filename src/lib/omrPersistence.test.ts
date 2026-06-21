@@ -237,7 +237,9 @@ describe("Supabase persistence mapping", () => {
             finished_at: "2026-06-14T09:30:00.000Z",
         });
         expect(row.payload).toEqual(attempt);
-        expect(attemptFromSupabaseRow(row)).toEqual(attempt);
+        // attemptFromSupabaseRow always resolves studentProfileId from the indexed column;
+        // even if the original attempt lacked it, it's backfilled from student_profile_id.
+        expect(attemptFromSupabaseRow(row)).toEqual({ ...attempt, studentProfileId: row.student_profile_id });
     });
 
     it("scopes attempt and question-result rows to the exam or active workspace", () => {
