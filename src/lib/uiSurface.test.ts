@@ -188,6 +188,7 @@ describe("service UI surface", () => {
 
         expect(pwaCheck).toContain("pwa-device-verdict");
         expect(pwaCheck).toContain("pwa-device-report-copy");
+        expect(pwaCheck).toContain("pwa-device-report-share");
         expect(pwaCheck).toContain("pwa-device-copy-status");
         expect(pwaCheck).toContain("pwa-device-report");
         expect(pwaCheck).toContain("pwa-device-handoff");

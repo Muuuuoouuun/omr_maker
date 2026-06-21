@@ -482,7 +482,7 @@ function CheckRow({ check }: { check: DeviceCheck }) {
 export default function PwaCheckPage() {
   const [snapshot, setSnapshot] = useState<RuntimeSnapshot | null>(null);
   const [isChecking, setIsChecking] = useState(true);
-  const [copyState, setCopyState] = useState<"copied" | "failed" | "idle">("idle");
+  const [copyState, setCopyState] = useState<"copied" | "failed" | "idle" | "shared">("idle");
   const [handoffState, setHandoffState] = useState<"copied" | "failed" | "idle" | "shared">("idle");
   const [handoffUrl, setHandoffUrl] = useState("");
 
@@ -536,6 +536,25 @@ export default function PwaCheckPage() {
       setCopyState("failed");
     }
   }, [reportText]);
+
+  const shareReport = useCallback(async () => {
+    if (!reportText) return;
+    if (!navigator.share) {
+      await copyReport();
+      return;
+    }
+
+    try {
+      await navigator.share({
+        text: reportText,
+        title: "OMR Maker PWA device check",
+        url: location.href,
+      });
+      setCopyState("shared");
+    } catch {
+      setCopyState("idle");
+    }
+  }, [copyReport, reportText]);
 
   const copyHandoffUrl = useCallback(async () => {
     if (!handoffUrl) return;
@@ -695,6 +714,29 @@ export default function PwaCheckPage() {
                 </button>
                 <button
                   type="button"
+                  onClick={shareReport}
+                  disabled={!snapshot}
+                  data-testid="pwa-device-report-share"
+                  style={{
+                    alignItems: "center",
+                    background: "var(--surface)",
+                    border: "1px solid var(--border)",
+                    borderRadius: "8px",
+                    color: "var(--foreground)",
+                    display: "inline-flex",
+                    fontSize: "0.8rem",
+                    fontWeight: 850,
+                    gap: "0.35rem",
+                    minHeight: "2.75rem",
+                    opacity: snapshot ? 1 : 0.55,
+                    padding: "0 0.85rem",
+                  }}
+                >
+                  {copyState === "shared" ? <Check size={15} /> : <Share2 size={15} />}
+                  공유
+                </button>
+                <button
+                  type="button"
                   onClick={runCheck}
                   style={{
                     alignItems: "center",
@@ -728,7 +770,7 @@ export default function PwaCheckPage() {
                 data-testid="pwa-device-copy-status"
                 style={{ color: copyState === "failed" ? "var(--warning)" : "var(--success)", fontSize: "0.75rem", fontWeight: 850, minWidth: "4rem", textAlign: "right" }}
               >
-                {copyState === "copied" ? "복사됨" : copyState === "failed" ? "직접 복사" : ""}
+                {copyState === "copied" ? "복사됨" : copyState === "shared" ? "공유됨" : copyState === "failed" ? "직접 복사" : ""}
               </span>
             </div>
             <div style={{ color: "var(--muted)", fontSize: "0.72rem", lineHeight: 1.35, overflowWrap: "anywhere" }}>

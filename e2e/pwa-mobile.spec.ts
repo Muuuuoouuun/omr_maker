@@ -143,6 +143,12 @@ async function stubClipboard(page: Page) {
                 },
             },
         });
+        Object.defineProperty(navigator, "share", {
+            configurable: true,
+            value: async (payload: ShareData) => {
+                (window as Window & { __omrSharedReport?: ShareData }).__omrSharedReport = payload;
+            },
+        });
     });
 }
 
@@ -396,6 +402,7 @@ test.describe("Mobile PWA entry", () => {
         await expect(page.getByTestId("pwa-device-handoff-qr")).toBeVisible();
         await expectTouchTarget(page.getByRole("link", { name: "홈" }));
         await expectTouchTarget(page.getByTestId("pwa-device-report-copy"));
+        await expectTouchTarget(page.getByTestId("pwa-device-report-share"));
         await expectTouchTarget(page.getByRole("button", { name: "검사" }));
         await expectTouchTarget(page.getByTestId("pwa-device-handoff-copy"));
         await expectTouchTarget(page.getByTestId("pwa-device-handoff-share"));
@@ -426,6 +433,16 @@ test.describe("Mobile PWA entry", () => {
         expect(copiedReport).toContain("viewport-height=pass:동기화");
         expect(copiedReport).toContain("keyboard-safe-area=pass:준비");
         expect(copiedReport).toContain("overflow=pass:정상");
+
+        await page.getByTestId("pwa-device-report-share").click();
+        await expect(page.getByTestId("pwa-device-copy-status")).toContainText("공유됨");
+        const sharedReport = await page.evaluate(() => (
+            (window as Window & { __omrSharedReport?: ShareData }).__omrSharedReport
+        ));
+        expect(sharedReport?.title).toBe("OMR Maker PWA device check");
+        expect(sharedReport?.text).toContain("OMR Maker PWA device check");
+        expect(sharedReport?.text).toContain("proofStatus=pending");
+        expect(sharedReport?.url).toContain("/pwa-check");
 
         await triggerAndroidInstallPrompt(page);
         await expect(page.getByRole("complementary", { name: "앱 설치 안내" })).toHaveCount(0);
