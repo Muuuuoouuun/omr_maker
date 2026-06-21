@@ -1855,7 +1855,11 @@ export default function SolvePage() {
                     justifyContent: 'center',
                     padding: '1.5rem'
                 }}>
-                    <div style={{
+                    <div
+                        role="dialog"
+                        aria-modal="true"
+                        aria-labelledby="solve-focus-warning-title"
+                        style={{
                         background: 'var(--background, white)',
                         border: '2px solid #ef4444',
                         borderRadius: '16px',
@@ -1872,7 +1876,7 @@ export default function SolvePage() {
                         }}>
                             ⚠️
                         </div>
-                        <h2 style={{
+                        <h2 id="solve-focus-warning-title" style={{
                             fontSize: '1.4rem',
                             fontWeight: 800,
                             color: '#ef4444',
@@ -1913,6 +1917,7 @@ export default function SolvePage() {
                                 fontSize: '0.95rem',
                                 cursor: 'pointer',
                                 transition: 'background 0.2s',
+                                minHeight: '44px',
                                 width: '100%'
                             }}
                             onMouseOver={(e) => e.currentTarget.style.background = '#dc2626'}

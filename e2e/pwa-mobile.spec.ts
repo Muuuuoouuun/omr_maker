@@ -399,6 +399,32 @@ test.describe("Mobile PWA entry", () => {
         await expectNoHorizontalOverflow(page);
 
         await page.getByRole("button", { name: "문제 3번 보기 1" }).click();
+        await page.evaluate(() => {
+            Object.defineProperty(document, "visibilityState", {
+                configurable: true,
+                value: "hidden",
+            });
+            document.dispatchEvent(new Event("visibilitychange"));
+        });
+        await expect.poll(async () => page.evaluate(() => {
+            const draft = JSON.parse(window.localStorage.getItem("omr_draft_mobile-qa-exam_mobile-qa-student") || "{}");
+            return draft.answers?.["3"];
+        })).toBe(1);
+        await page.evaluate(() => {
+            Object.defineProperty(document, "visibilityState", {
+                configurable: true,
+                value: "visible",
+            });
+            document.dispatchEvent(new Event("visibilitychange"));
+        });
+        const focusWarning = page.getByRole("dialog", { name: /시험 이탈 경고/ });
+        await expect(focusWarning).toBeVisible();
+        await expect(focusWarning).toContainText(/현재 이탈 횟수:\s*\d+회/);
+        const returnToExamButton = focusWarning.getByRole("button", { name: "시험으로 돌아가기" });
+        await expectTouchTarget(returnToExamButton);
+        await returnToExamButton.click();
+        await expect(focusWarning).toBeHidden();
+
         await page.getByRole("button", { name: "문제 4번 보기 3" }).click();
 
         await expect(page.locator(".solve-progress")).toContainText("4/4");
