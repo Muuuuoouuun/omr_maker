@@ -101,6 +101,14 @@ function isInstalledDisplay(displayMode: string): boolean {
   return displayMode === "standalone" || displayMode === "fullscreen";
 }
 
+function isLocalHandoffHost(hostname: string): boolean {
+  const normalized = hostname.toLowerCase();
+  return normalized === "localhost"
+    || normalized === "127.0.0.1"
+    || normalized === "::1"
+    || normalized.endsWith(".localhost");
+}
+
 function readRootCssVar(name: string): string {
   return getComputedStyle(document.documentElement).getPropertyValue(name).trim();
 }
@@ -313,6 +321,8 @@ async function collectRuntimeSnapshot(): Promise<RuntimeSnapshot> {
   const promptCount = document.querySelectorAll(".mobile-install-prompt").length;
   const localStorageOk = canUseStorage(() => window.localStorage);
   const sessionStorageOk = canUseStorage(() => window.sessionStorage);
+  const isLocalHandoff = isLocalHandoffHost(location.hostname);
+  const hasDeviceReachableHandoff = location.protocol === "https:" && !isLocalHandoff;
 
   return {
     checkedAt: new Date().toLocaleString("ko-KR", { hour12: false }),
@@ -389,6 +399,15 @@ async function collectRuntimeSnapshot(): Promise<RuntimeSnapshot> {
         label: "모바일 메타",
         tone: androidCapable && appleCapable ? "pass" : "fail",
         value: androidCapable && appleCapable ? "준비" : "누락",
+      },
+      {
+        detail: hasDeviceReachableHandoff
+          ? `${location.origin}/pwa-check`
+          : `${location.origin} · 실제 Android/iPhone에서는 배포 HTTPS 링크로 열어야 함`,
+        id: "handoff-origin",
+        label: "실기기 링크",
+        tone: hasDeviceReachableHandoff ? "pass" : "warn",
+        value: hasDeviceReachableHandoff ? "공유 가능" : "로컬 전용",
       },
       {
         detail: `scroll ${document.documentElement.scrollWidth}px / viewport ${document.documentElement.clientWidth}px`,

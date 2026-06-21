@@ -202,6 +202,11 @@ describe("service UI surface", () => {
         expect(pwaCheck).toContain("buildDeviceReport");
         expect(pwaCheck).toContain("OMR Maker PWA device check");
         expect(pwaCheck).toContain("displayMode=");
+        expect(pwaCheck).toContain("isLocalHandoffHost");
+        expect(pwaCheck).toContain('id: "handoff-origin"');
+        expect(pwaCheck).toContain("실제 Android/iPhone에서는 배포 HTTPS 링크로 열어야 함");
+        expect(pwaCheck).toContain("공유 가능");
+        expect(pwaCheck).toContain("로컬 전용");
         expect(pwaCheck).toContain('"--app-viewport-height"');
         expect(pwaCheck).toContain('"--app-keyboard-inset-bottom"');
         expect(pwaCheck).toContain('const OFFLINE_CACHE_REQUIRED_PATHS = ["/", "/pwa-check", "/offline.html", "/logo.png"]');
