@@ -341,6 +341,7 @@ test.describe("Mobile PWA entry", () => {
         await expect(page).toHaveURL(/\/pwa-check$/);
         await expect(page.getByRole("heading", { name: "PWA 디바이스 체크" })).toBeVisible();
         await expectNoHorizontalOverflow(page);
+        await page.waitForLoadState("load");
 
         await page.goto("/");
         await expect(page.getByRole("heading", { name: "OMR Maker" })).toBeVisible();
