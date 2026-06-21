@@ -822,6 +822,11 @@ html[data-app-keyboard="open"] .mobile-install-prompt {
   display: none;
 }
 
+body:has(.home-page[data-home-role="student"]) .mobile-install-prompt,
+body:has(.home-page[data-home-role="teacher"]) .mobile-install-prompt {
+  display: none;
+}
+
 .mobile-install-prompt__icon,
 .mobile-install-prompt__hint,
 .mobile-install-prompt__close {

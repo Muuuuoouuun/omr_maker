@@ -181,6 +181,12 @@ test.describe("Mobile PWA entry", () => {
             await expect(page.getByRole("button", { name: "설치", exact: true })).toBeVisible();
         }
 
+        await page.getByRole("button", { name: /학생.*시작하기/ }).click();
+
+        await expect(page.getByRole("heading", { name: "학습 시작" })).toBeVisible();
+        await expect(page.locator(".home-page")).toHaveAttribute("data-home-role", "student");
+        await expect(page.getByRole("complementary", { name: "앱 설치 안내" })).toHaveCount(0);
+
         await page.goto("/create");
         await triggerAndroidInstallPrompt(page);
 

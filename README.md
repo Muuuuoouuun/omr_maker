@@ -58,7 +58,7 @@ PWA release checks:
 ```bash
 npm run test:pwa:prod
 PWA_SMOKE_BASE_URL=https://your-public-https-deployment.example npm run pwa:smoke
-PLAYWRIGHT_BASE_URL=https://your-public-https-deployment.example npm run test:e2e -- --project=mobile-chrome-pwa --project=mobile-ios-like-pwa
+PLAYWRIGHT_BASE_URL=https://your-public-https-deployment.example npm run test:e2e -- --project=mobile-chrome-pwa --project=mobile-ios-like-pwa --project=tablet-android-pwa --project=tablet-android-landscape-pwa --project=tablet-ios-like-pwa --project=tablet-ios-like-landscape-pwa
 ```
 
 Use a public HTTPS URL for phone/tablet install testing. Preview deployments that return HTTP 401 because of deployment protection cannot prove installability in mobile Chrome or iOS Safari. For the final device pass, open the public URL on Android Chrome and iOS Safari, add it to the home screen, launch it from the app icon, confirm it opens standalone, and run the student start flow without horizontal overflow.

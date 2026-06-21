@@ -164,6 +164,8 @@ describe("service UI surface", () => {
         expect(css).toContain("left: max(1rem, env(safe-area-inset-left))");
         expect(css).toContain("right: max(1rem, env(safe-area-inset-right))");
         expect(css).toContain("bottom: max(1rem, env(safe-area-inset-bottom), var(--app-keyboard-inset-bottom))");
+        expect(css).toContain('body:has(.home-page[data-home-role="student"]) .mobile-install-prompt');
+        expect(css).toContain('body:has(.home-page[data-home-role="teacher"]) .mobile-install-prompt');
         expect(css).toContain("min-height: 2.75rem");
         expect(css).toContain("min-width: 2.75rem");
         expect(css).toContain("width: 2.75rem");

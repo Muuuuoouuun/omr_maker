@@ -30,6 +30,26 @@ export default defineConfig({
             testMatch: /pwa-mobile\.spec\.ts/,
             use: { ...devices["iPhone 13"], browserName: "chromium" },
         },
+        {
+            name: "tablet-android-pwa",
+            testMatch: /pwa-mobile\.spec\.ts/,
+            use: { ...devices["Galaxy Tab S9"], browserName: "chromium" },
+        },
+        {
+            name: "tablet-android-landscape-pwa",
+            testMatch: /pwa-mobile\.spec\.ts/,
+            use: { ...devices["Galaxy Tab S9 landscape"], browserName: "chromium" },
+        },
+        {
+            name: "tablet-ios-like-pwa",
+            testMatch: /pwa-mobile\.spec\.ts/,
+            use: { ...devices["iPad Pro 11"], browserName: "chromium" },
+        },
+        {
+            name: "tablet-ios-like-landscape-pwa",
+            testMatch: /pwa-mobile\.spec\.ts/,
+            use: { ...devices["iPad Pro 11 landscape"], browserName: "chromium" },
+        },
     ],
     webServer: externalBaseURL ? undefined : {
         command: "npm run dev",
