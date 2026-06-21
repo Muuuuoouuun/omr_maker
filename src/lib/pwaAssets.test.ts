@@ -119,6 +119,12 @@ function manifestScreenshotSpecs() {
     return currentManifest.screenshots || [];
 }
 
+type SizedManifestAsset = { sizes: string; src: string };
+
+function expectSizedManifestAsset(asset: { sizes?: string; src: string }): asserts asset is SizedManifestAsset {
+    expect(asset.sizes).toMatch(/^\d+x\d+$/);
+}
+
 function assertImageSizeMatchesSpec(asset: { src: string; sizes: string }) {
     const [width, height] = asset.sizes.split("x").map(Number);
 
@@ -346,6 +352,7 @@ describe("PWA assets", () => {
         expect(iconSpecs.some(icon => icon.sizes === "512x512")).toBe(true);
 
         iconSpecs.forEach(icon => {
+            expectSizedManifestAsset(icon);
             const [width, height] = icon.sizes.split("x").map(Number);
             expect(readImageSize(icon.src)).toEqual({ width, height });
         });
@@ -386,7 +393,9 @@ describe("PWA assets", () => {
         expect(screenshots.every(screenshot => publicPathExists(screenshot.src))).toBe(true);
         screenshots.forEach(screenshot => {
             expect(screenshot.label?.length).toBeGreaterThan(12);
-            expect(assertImageSizeMatchesSpec(screenshot).actual).toEqual(assertImageSizeMatchesSpec(screenshot).expected);
+            expectSizedManifestAsset(screenshot);
+            const dimensions = assertImageSizeMatchesSpec(screenshot);
+            expect(dimensions.actual).toEqual(dimensions.expected);
         });
     });
 
