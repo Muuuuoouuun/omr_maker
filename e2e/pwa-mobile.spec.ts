@@ -208,7 +208,7 @@ function validInstalledProofReport(platform: "android" | "ios" = "android"): str
         "- display-mode=pass:standalone (홈 화면 아이콘 실행 상태)",
         `- launch-proof=pass:확인됨 (${displayEvidence})`,
         "- service-worker=pass:제어 중 (script=https://omr-maker-eight.vercel.app/sw.js · controller=yes · active=activated · waiting=none · installing=none)",
-        "- offline-cache=pass:준비 (caches=omr-maker-v12-shell, omr-maker-v12-runtime · required=/, /pwa-check, /offline.html, /logo.png · expected=omr-maker-v12-shell · missingCaches=none · missing=none)",
+        "- offline-cache=pass:준비 (caches=omr-maker-v13-shell, omr-maker-v13-runtime · required=/, /pwa-check, /offline.html, /logo.png · expected=omr-maker-v13-shell · missingCaches=none · missing=none)",
         "- manifest=pass:standalone (OMR Maker · icons 12 · screenshots 2)",
         "- viewport=pass:cover (width=device-width, initial-scale=1, viewport-fit=cover)",
         "- viewport-height=pass:동기화 (css=727px · visual=727px · inner=727px · delta=0px)",

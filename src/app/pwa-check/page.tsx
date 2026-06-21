@@ -66,7 +66,7 @@ const VIEWPORT_OFFSET_TOP_VAR = "--app-visual-viewport-offset-top";
 const VIEWPORT_OFFSET_LEFT_VAR = "--app-visual-viewport-offset-left";
 const VIEWPORT_SCALE_VAR = "--app-visual-viewport-scale";
 const KEYBOARD_INSET_BOTTOM_VAR = "--app-keyboard-inset-bottom";
-const EXPECTED_OFFLINE_CACHE_PREFIX = "omr-maker-v12";
+const EXPECTED_OFFLINE_CACHE_PREFIX = "omr-maker-v13";
 const OFFLINE_CACHE_REQUIRED_PATHS = ["/", "/pwa-check", "/offline.html", "/logo.png"];
 const DUAL_PROOF_HEADER = "OMR Maker PWA dual device proof";
 const PROOF_INPUT_STORAGE_KEY = "omr_pwa_device_proof_inputs_v1";
@@ -76,6 +76,8 @@ const PROOF_MAX_CLOCK_SKEW_MS = 10 * 60 * 1000;
 const PERFORMANCE_DOM_READY_BUDGET_MS = 3000;
 const PERFORMANCE_LOAD_BUDGET_MS = 5000;
 const PERFORMANCE_FCP_BUDGET_MS = 2500;
+const SERVICE_WORKER_SETTLE_TIMEOUT_MS = 4000;
+const OFFLINE_CACHE_SETTLE_TIMEOUT_MS = 4000;
 const REQUIRED_PROOF_PASS_CHECKS = [
   "secure-context",
   "display-mode",
@@ -180,6 +182,35 @@ async function waitForViewportHeightSync(): Promise<void> {
     window.requestAnimationFrame(() => {
       window.requestAnimationFrame(() => resolve());
     });
+  });
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise(resolve => window.setTimeout(resolve, ms));
+}
+
+async function waitForServiceWorkerControl(timeoutMs = SERVICE_WORKER_SETTLE_TIMEOUT_MS): Promise<void> {
+  if (!("serviceWorker" in navigator) || navigator.serviceWorker.controller) return;
+
+  await new Promise<void>(resolve => {
+    let settled = false;
+    let timeout: number | null = null;
+
+    const finish = () => {
+      if (settled) return;
+      settled = true;
+      if (timeout !== null) window.clearTimeout(timeout);
+      navigator.serviceWorker.removeEventListener("controllerchange", finish);
+      resolve();
+    };
+
+    timeout = window.setTimeout(finish, timeoutMs);
+    navigator.serviceWorker.addEventListener("controllerchange", finish, { once: true });
+    navigator.serviceWorker.ready
+      .then(() => {
+        if (navigator.serviceWorker.controller) finish();
+      })
+      .catch(finish);
   });
 }
 
@@ -802,14 +833,7 @@ async function readOfflineCacheSummary(): Promise<{ detail: string; tone: CheckT
   }
 
   try {
-    const [cacheKeys, matches] = await Promise.all([
-      caches.keys(),
-      Promise.all(OFFLINE_CACHE_REQUIRED_PATHS.map(path => caches.match(path))),
-    ]);
-    const missingPaths = OFFLINE_CACHE_REQUIRED_PATHS.filter((_, index) => !matches[index]);
-    const omrCaches = cacheKeys.filter(key => key.startsWith("omr-maker-"));
-    const expectedCaches = [`${EXPECTED_OFFLINE_CACHE_PREFIX}-shell`];
-    const missingExpectedCaches = expectedCaches.filter(cacheName => !cacheKeys.includes(cacheName));
+    const { expectedCaches, missingExpectedCaches, missingPaths, omrCaches } = await readOfflineCacheReadiness();
     const detail = [
       `caches=${omrCaches.length ? omrCaches.join(", ") : "none"}`,
       `required=${OFFLINE_CACHE_REQUIRED_PATHS.join(", ")}`,
@@ -829,8 +853,51 @@ async function readOfflineCacheSummary(): Promise<{ detail: string; tone: CheckT
   }
 }
 
+async function readOfflineCacheReadiness(): Promise<{
+  expectedCaches: string[];
+  missingExpectedCaches: string[];
+  missingPaths: string[];
+  omrCaches: string[];
+}> {
+  const [cacheKeys, matches] = await Promise.all([
+    caches.keys(),
+    Promise.all(OFFLINE_CACHE_REQUIRED_PATHS.map(path => caches.match(path))),
+  ]);
+  const expectedCaches = [`${EXPECTED_OFFLINE_CACHE_PREFIX}-shell`];
+
+  return {
+    expectedCaches,
+    missingExpectedCaches: expectedCaches.filter(cacheName => !cacheKeys.includes(cacheName)),
+    missingPaths: OFFLINE_CACHE_REQUIRED_PATHS.filter((_, index) => !matches[index]),
+    omrCaches: cacheKeys.filter(key => key.startsWith("omr-maker-")),
+  };
+}
+
+async function waitForOfflineCacheReadiness(timeoutMs = OFFLINE_CACHE_SETTLE_TIMEOUT_MS): Promise<void> {
+  if (!("caches" in window)) return;
+
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() <= deadline) {
+    try {
+      const { missingExpectedCaches, missingPaths } = await readOfflineCacheReadiness();
+      if (missingExpectedCaches.length === 0 && missingPaths.length === 0) return;
+    } catch {
+      return;
+    }
+    await delay(150);
+  }
+}
+
+async function waitForPwaRuntimeReadiness(): Promise<void> {
+  await Promise.all([
+    waitForServiceWorkerControl(),
+    waitForOfflineCacheReadiness(),
+  ]);
+}
+
 async function collectRuntimeSnapshot(): Promise<RuntimeSnapshot> {
   await waitForViewportHeightSync();
+  await waitForPwaRuntimeReadiness();
 
   const checkedAtDate = new Date();
   const displayModeState = readDisplayModeState();
