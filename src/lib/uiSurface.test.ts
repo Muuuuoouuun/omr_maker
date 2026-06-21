@@ -270,6 +270,10 @@ describe("service UI surface", () => {
         expect(css).toContain("min-width: 2.75rem");
         expect(playwrightConfig).toContain("teacher-mobile-chrome");
         expect(playwrightConfig).toContain("teacher-tablet-ios-like");
+        expect(playwrightConfig).toContain("PLAYWRIGHT_ENABLE_WEBKIT");
+        expect(playwrightConfig).toContain("mobile-ios-webkit-pwa");
+        expect(playwrightConfig).toContain("tablet-ios-webkit-pwa");
+        expect(playwrightConfig).toContain("tablet-ios-webkit-landscape-pwa");
         expect(teacherMobileE2e).toContain("expectTeacherHeaderTouchFriendly");
         expect(teacherMobileE2e).toContain(".create-editor-actions button, .create-editor-actions label");
     });

@@ -274,7 +274,7 @@ test.describe("Mobile PWA entry", () => {
 
         await page.goto("/solve/mobile-qa-exam");
 
-        await expect(page.getByText("모바일 실전 시험").first()).toBeVisible();
+        await expect(page.locator(".solve-omr-scroll .omr-cardview-title").getByText("모바일 실전 시험")).toBeVisible();
         await expectTouchTarget(page.getByRole("link", { name: "OMR Maker" }));
         await expectTouchTarget(page.locator(".solve-controls .solve-collapse-button"));
         await expectTouchTarget(page.locator(".solve-controls .solve-submit-button"));

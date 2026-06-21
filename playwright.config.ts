@@ -2,13 +2,31 @@ import { defineConfig, devices } from "@playwright/test";
 
 const externalBaseURL = process.env.PLAYWRIGHT_BASE_URL;
 const baseURL = externalBaseURL || "http://localhost:3003";
+const enableWebKitPwa = process.env.PLAYWRIGHT_ENABLE_WEBKIT === "1";
+const webKitPwaProjects = enableWebKitPwa ? [
+    {
+        name: "mobile-ios-webkit-pwa",
+        testMatch: /pwa-mobile\.spec\.ts/,
+        use: { ...devices["iPhone 13"], browserName: "webkit" as const },
+    },
+    {
+        name: "tablet-ios-webkit-pwa",
+        testMatch: /pwa-mobile\.spec\.ts/,
+        use: { ...devices["iPad Pro 11"], browserName: "webkit" as const },
+    },
+    {
+        name: "tablet-ios-webkit-landscape-pwa",
+        testMatch: /pwa-mobile\.spec\.ts/,
+        use: { ...devices["iPad Pro 11 landscape"], browserName: "webkit" as const },
+    },
+] : [];
 
 export default defineConfig({
     testDir: "./e2e",
     fullyParallel: true,
     forbidOnly: !!process.env.CI,
     retries: process.env.CI ? 1 : 0,
-    workers: process.env.CI ? 1 : undefined,
+    workers: process.env.CI || enableWebKitPwa ? 1 : undefined,
     reporter: [["list"]],
     use: {
         baseURL,
@@ -50,6 +68,7 @@ export default defineConfig({
             testMatch: /pwa-mobile\.spec\.ts/,
             use: { ...devices["iPad Pro 11 landscape"], browserName: "chromium" },
         },
+        ...webKitPwaProjects,
         {
             name: "teacher-mobile-chrome",
             testMatch: /teacher-mobile\.spec\.ts/,
