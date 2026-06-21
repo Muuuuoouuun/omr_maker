@@ -321,8 +321,11 @@ describe("service UI surface", () => {
         const pwaCheckPage = readProjectFile("src/app/pwa-check/page.tsx");
 
         expect(layout).toContain('viewportFit: "cover"');
+        expect(layout).not.toContain('interactiveWidget: "resizes-content"');
         expect(layout).toContain("ViewportHeightSync");
         expect(layout).toContain("<ViewportHeightSync />");
+        expect(viewportHeightSync).toContain('"interactive-widget=resizes-content"');
+        expect(viewportHeightSync).toContain("isIOSLikeDevice");
         expect(viewportHeightSync).toContain('"--app-viewport-height"');
         expect(viewportHeightSync).toContain('"--app-viewport-width"');
         expect(viewportHeightSync).toContain('"--app-visual-viewport-offset-top"');

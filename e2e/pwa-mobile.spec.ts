@@ -281,7 +281,7 @@ test.describe("Mobile PWA entry", () => {
         await clearStorage(page);
     });
 
-    test("advertises app metadata and opens the student flow without mobile overflow", async ({ page }) => {
+    test("advertises app metadata and opens the student flow without mobile overflow", async ({ page }, testInfo) => {
         const consoleProblems = collectConsoleProblems(page);
 
         await page.goto("/");
@@ -299,6 +299,13 @@ test.describe("Mobile PWA entry", () => {
         expect(Math.abs(pageShowViewportState.parsedValue - pageShowViewportState.visualViewportHeight)).toBeLessThanOrEqual(2);
         await expect(page.locator('link[rel="manifest"]')).toHaveAttribute("href", "/manifest.webmanifest");
         await expect(page.locator('link[rel="apple-touch-icon"]').first()).toHaveAttribute("href", "/apple-touch-icon.png");
+        const viewportContent = await page.locator('meta[name="viewport"]').getAttribute("content");
+        expect(viewportContent).toContain("viewport-fit=cover");
+        if (testInfo.project.name.includes("ios")) {
+            expect(viewportContent).not.toContain("interactive-widget=");
+        } else {
+            expect(viewportContent).toContain("interactive-widget=resizes-content");
+        }
         await expectMetaContent(page, "mobile-web-app-capable", "yes");
         await expectMetaContent(page, "apple-mobile-web-app-capable", "yes");
         const startupImages = await page.locator('link[rel="apple-touch-startup-image"]').evaluateAll(links => (
@@ -616,7 +623,7 @@ test.describe("Mobile PWA entry", () => {
         expect(consoleProblems).toEqual([]);
     });
 
-    test("keeps installed standalone app mode clean and usable", async ({ page }) => {
+    test("keeps installed standalone app mode clean and usable", async ({ page }, testInfo) => {
         const consoleProblems = collectConsoleProblems(page);
         await emulateStandaloneDisplay(page);
         await stubClipboard(page);
@@ -660,6 +667,11 @@ test.describe("Mobile PWA entry", () => {
             promptCount: 0,
         });
         expect(standaloneState.viewport).toContain("viewport-fit=cover");
+        if (testInfo.project.name.includes("ios")) {
+            expect(standaloneState.viewport).not.toContain("interactive-widget=");
+        } else {
+            expect(standaloneState.viewport).toContain("interactive-widget=resizes-content");
+        }
         expect(standaloneState.viewportHeightVar).toMatch(/^\d+px$/);
         expect(standaloneState.viewportKeyboardVar).toMatch(/^\d+px$/);
         expect(standaloneState.viewportKeyboardState).toMatch(/open|closed/);

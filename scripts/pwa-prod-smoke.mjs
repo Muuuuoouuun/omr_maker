@@ -194,6 +194,7 @@ async function collectPwaMetadata(page) {
             mobileCapable: [...document.querySelectorAll('meta[name="mobile-web-app-capable"]')]
                 .map(meta => meta.getAttribute("content")),
             title: document.title,
+            viewport: document.querySelector('meta[name="viewport"]')?.getAttribute("content") || "",
         };
     });
 }
@@ -339,6 +340,7 @@ async function runSmoke() {
 
         const metadata = await collectPwaMetadata(page);
         assert(metadata.manifestHref === "/manifest.webmanifest", "Manifest link is missing or incorrect", metadata);
+        assert(metadata.viewport.includes("interactive-widget=resizes-content"), "Viewport must ask mobile keyboards to resize app content", metadata);
         assert(metadata.appleIcon === "/apple-touch-icon.png", "Apple touch icon is missing or incorrect", metadata);
         assert(metadata.mobileCapable.every(value => value === "yes") && metadata.mobileCapable.length > 0, "Android mobile app metadata is missing", metadata);
         assert(metadata.appleCapable.every(value => value === "yes") && metadata.appleCapable.length > 0, "iOS web app metadata is missing", metadata);

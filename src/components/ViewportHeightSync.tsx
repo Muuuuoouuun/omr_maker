@@ -10,6 +10,27 @@ const VIEWPORT_SCALE_VAR = "--app-visual-viewport-scale";
 const KEYBOARD_INSET_BOTTOM_VAR = "--app-keyboard-inset-bottom";
 const KEYBOARD_STATE_ATTRIBUTE = "data-app-keyboard";
 const KEYBOARD_OPEN_THRESHOLD = 80;
+const KEYBOARD_VIEWPORT_MODE = "interactive-widget=resizes-content";
+
+function isIOSLikeDevice() {
+  const platform = window.navigator.platform.toLowerCase();
+  const userAgent = window.navigator.userAgent.toLowerCase();
+  const touchMac = platform === "macintel" && window.navigator.maxTouchPoints > 1;
+
+  return /iphone|ipad|ipod/.test(userAgent) || touchMac;
+}
+
+function enableSupportedKeyboardViewportMode() {
+  if (isIOSLikeDevice()) return;
+
+  const viewportMeta = document.querySelector<HTMLMetaElement>('meta[name="viewport"]');
+  if (!viewportMeta) return;
+
+  const content = viewportMeta.getAttribute("content") || "";
+  if (content.includes("interactive-widget=")) return;
+
+  viewportMeta.setAttribute("content", `${content}, ${KEYBOARD_VIEWPORT_MODE}`);
+}
 
 function readViewportMetrics() {
   const visualViewport = window.visualViewport;
@@ -64,6 +85,7 @@ export default function ViewportHeightSync() {
 
     const visualViewport = window.visualViewport;
 
+    enableSupportedKeyboardViewportMode();
     scheduleApplyMetrics();
 
     window.addEventListener("resize", scheduleApplyMetrics, { passive: true });
