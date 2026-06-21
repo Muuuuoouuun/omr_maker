@@ -200,11 +200,15 @@ describe("service UI surface", () => {
         expect(pwaCheck).toContain("displayMode=");
         expect(pwaCheck).toContain('"--app-viewport-height"');
         expect(pwaCheck).toContain('"--app-keyboard-inset-bottom"');
+        expect(pwaCheck).toContain('const OFFLINE_CACHE_REQUIRED_PATHS = ["/", "/pwa-check", "/offline.html", "/logo.png"]');
         expect(pwaCheck).toContain("readViewportHeightSummary");
         expect(pwaCheck).toContain("readKeyboardSafeAreaSummary");
+        expect(pwaCheck).toContain("readOfflineCacheSummary");
         expect(pwaCheck).toContain("waitForViewportHeightSync");
         expect(pwaCheck).toContain('id: "viewport-height"');
         expect(pwaCheck).toContain('id: "keyboard-safe-area"');
+        expect(pwaCheck).toContain('id: "offline-cache"');
+        expect(pwaCheck).toContain("caches.match(path)");
         expect(pwaCheck).toContain("visualViewport?.height");
         expect(pwaCheck).toContain("앱 실행 통과");
         expect(pwaCheck).toContain("설치 실행 전");

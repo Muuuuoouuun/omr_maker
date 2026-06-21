@@ -35,6 +35,7 @@ const VIEWPORT_OFFSET_TOP_VAR = "--app-visual-viewport-offset-top";
 const VIEWPORT_OFFSET_LEFT_VAR = "--app-visual-viewport-offset-left";
 const VIEWPORT_SCALE_VAR = "--app-visual-viewport-scale";
 const KEYBOARD_INSET_BOTTOM_VAR = "--app-keyboard-inset-bottom";
+const OFFLINE_CACHE_REQUIRED_PATHS = ["/", "/pwa-check", "/offline.html", "/logo.png"];
 
 const CHECK_TONE_META: Record<CheckTone, { background: string; color: string; icon: typeof CheckCircle2; label: string }> = {
   pass: { background: "rgba(16, 185, 129, 0.1)", color: "var(--success)", icon: CheckCircle2, label: "통과" },
@@ -263,13 +264,44 @@ async function readServiceWorkerSummary(): Promise<{ detail: string; tone: Check
   }
 }
 
+async function readOfflineCacheSummary(): Promise<{ detail: string; tone: CheckTone; value: string }> {
+  if (!("caches" in window)) {
+    return { detail: "Cache Storage를 지원하지 않음", tone: "fail", value: "미지원" };
+  }
+
+  try {
+    const [cacheKeys, matches] = await Promise.all([
+      caches.keys(),
+      Promise.all(OFFLINE_CACHE_REQUIRED_PATHS.map(path => caches.match(path))),
+    ]);
+    const missingPaths = OFFLINE_CACHE_REQUIRED_PATHS.filter((_, index) => !matches[index]);
+    const omrCaches = cacheKeys.filter(key => key.startsWith("omr-maker-"));
+    const detail = [
+      `caches=${omrCaches.length ? omrCaches.join(", ") : "none"}`,
+      `required=${OFFLINE_CACHE_REQUIRED_PATHS.join(", ")}`,
+      `missing=${missingPaths.length ? missingPaths.join(", ") : "none"}`,
+    ].join(" · ");
+
+    return {
+      detail,
+      tone: missingPaths.length === 0 ? "pass" : "warn",
+      value: missingPaths.length === 0 ? "준비" : "대기",
+    };
+  } catch {
+    return { detail: "cache 조회 실패", tone: "warn", value: "확인 필요" };
+  }
+}
+
 async function collectRuntimeSnapshot(): Promise<RuntimeSnapshot> {
   await waitForViewportHeightSync();
 
   const displayModeState = readDisplayModeState();
   const displayMode = displayModeState.mode;
-  const manifest = await readManifestSummary();
-  const serviceWorker = await readServiceWorkerSummary();
+  const [manifest, serviceWorker, offlineCache] = await Promise.all([
+    readManifestSummary(),
+    readServiceWorkerSummary(),
+    readOfflineCacheSummary(),
+  ]);
   const viewportHeight = readViewportHeightSummary();
   const keyboardSafeArea = readKeyboardSafeAreaSummary();
   const viewport = document.querySelector('meta[name="viewport"]')?.getAttribute("content") || "";
@@ -315,6 +347,13 @@ async function collectRuntimeSnapshot(): Promise<RuntimeSnapshot> {
         label: "서비스워커",
         tone: serviceWorker.tone,
         value: serviceWorker.value,
+      },
+      {
+        detail: offlineCache.detail,
+        id: "offline-cache",
+        label: "오프라인 캐시",
+        tone: offlineCache.tone,
+        value: offlineCache.value,
       },
       {
         detail: manifest.detail,

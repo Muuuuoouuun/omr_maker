@@ -502,6 +502,7 @@ describe("PWA assets", () => {
         expect(source).toContain("cachedPwaCheck");
         expect(source).toContain("displayEvidence=");
         expect(source).toContain("launch-proof=");
+        expect(source).toContain("offline-cache=pass:준비");
         expect(source).toContain("viewport-height=pass:동기화");
         expect(source).toContain("keyboard-safe-area=pass:준비");
         expect(source).toContain("Page.getAppManifest");
