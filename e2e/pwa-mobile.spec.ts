@@ -509,6 +509,7 @@ test.describe("Mobile PWA entry", () => {
         await expect(page.getByTestId("pwa-device-handoff-qr")).toBeVisible();
         await expect(page.getByTestId("pwa-proof-verifier")).toBeVisible();
         await expect(page.getByTestId("pwa-proof-result")).toContainText("리포트 대기");
+        await expect(page.getByTestId("pwa-proof-storage-status")).toContainText("자동 저장");
         await expect(page.getByTestId("pwa-proof-slot-android")).toContainText("Android");
         await expect(page.getByTestId("pwa-proof-slot-ios")).toContainText("iOS");
         await expect(page.getByTestId("pwa-proof-result-android")).toContainText("Android 리포트 대기");
@@ -519,6 +520,7 @@ test.describe("Mobile PWA entry", () => {
         await expectTouchTarget(page.getByRole("button", { name: "검사" }));
         await expectTouchTarget(page.getByTestId("pwa-device-handoff-copy"));
         await expectTouchTarget(page.getByTestId("pwa-device-handoff-share"));
+        await expectTouchTarget(page.getByTestId("pwa-proof-clear"));
         await expectTouchTarget(page.getByTestId("pwa-install-proof-step-1"));
         await expectTouchTarget(page.getByTestId("pwa-install-proof-step-2"));
         await expectTouchTarget(page.getByTestId("pwa-install-proof-step-3"));
@@ -654,6 +656,7 @@ test.describe("Mobile PWA entry", () => {
 
         await page.getByTestId("pwa-proof-input-ios").fill(validInstalledProofReport("ios"));
         await expect(page.getByTestId("pwa-proof-result")).toContainText("Android/iOS 리포트 통과");
+        await expect(page.getByTestId("pwa-proof-storage-status")).toContainText("2/2 리포트");
         await expect(page.getByTestId("pwa-proof-result-android")).toContainText("Android 리포트 통과");
         await expect(page.getByTestId("pwa-proof-result-ios")).toContainText("iOS 리포트 통과");
         await expect(page.getByTestId("pwa-proof-errors")).toContainText("installed home-screen launch verified");
@@ -674,6 +677,20 @@ test.describe("Mobile PWA entry", () => {
         expect(copiedProofBundle).toContain("origin=https://omr-maker-eight.vercel.app");
         expect(copiedProofBundle).toContain("-----BEGIN ANDROID PWA REPORT-----");
         expect(copiedProofBundle).toContain("-----BEGIN IOS PWA REPORT-----");
+
+        await page.reload();
+        await expect(page.getByRole("heading", { name: "PWA 디바이스 체크" })).toBeVisible();
+        await expect(page.getByTestId("pwa-proof-input")).toHaveValue(validInstalledProofReport("android"));
+        await expect(page.getByTestId("pwa-proof-input-ios")).toHaveValue(validInstalledProofReport("ios"));
+        await expect(page.getByTestId("pwa-proof-result")).toContainText("Android/iOS 리포트 통과");
+        await expect(page.getByTestId("pwa-proof-storage-status")).toContainText("2/2 리포트");
+
+        await page.getByTestId("pwa-proof-clear").click();
+        await expect(page.getByTestId("pwa-proof-result")).toContainText("Android/iOS 리포트 대기");
+        await expect(page.getByTestId("pwa-proof-storage-status")).toContainText("자동 저장");
+        await expect(page.getByTestId("pwa-proof-input")).toHaveValue("");
+        await expect(page.getByTestId("pwa-proof-input-ios")).toHaveValue("");
+        await expect(page.getByTestId("pwa-proof-bundle")).toHaveCount(0);
         await expectNoHorizontalOverflow(page);
 
         expect(consoleProblems).toEqual([]);

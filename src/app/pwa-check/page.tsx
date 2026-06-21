@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Activity, AlertTriangle, Check, CheckCircle2, Clipboard, ExternalLink, RefreshCcw, Share2, Smartphone } from "lucide-react";
+import { Activity, AlertTriangle, Check, CheckCircle2, Clipboard, ExternalLink, RefreshCcw, Share2, Smartphone, Trash2 } from "lucide-react";
 import { QRCodeCanvas } from "qrcode.react";
 
 type CheckTone = "pass" | "warn" | "fail";
@@ -68,6 +68,7 @@ const KEYBOARD_INSET_BOTTOM_VAR = "--app-keyboard-inset-bottom";
 const EXPECTED_OFFLINE_CACHE_PREFIX = "omr-maker-v10";
 const OFFLINE_CACHE_REQUIRED_PATHS = ["/", "/pwa-check", "/offline.html", "/logo.png"];
 const DUAL_PROOF_HEADER = "OMR Maker PWA dual device proof";
+const PROOF_INPUT_STORAGE_KEY = "omr_pwa_device_proof_inputs_v1";
 const PROOF_INSTALLED_MODES = new Set(["standalone", "fullscreen"]);
 const REQUIRED_PROOF_PASS_CHECKS = [
   "secure-context",
@@ -126,6 +127,46 @@ const PROOF_TARGETS: ProofTargetConfig[] = [
     resultTestId: "pwa-proof-result-ios",
   },
 ];
+
+function emptyProofInputs(): Record<ProofTarget, string> {
+  return { android: "", ios: "" };
+}
+
+function hasProofInput(proofInputs: Record<ProofTarget, string>): boolean {
+  return PROOF_TARGETS.some(target => proofInputs[target.platform].trim().length > 0);
+}
+
+function readStoredProofInputs(): Record<ProofTarget, string> {
+  if (typeof window === "undefined") return emptyProofInputs();
+
+  try {
+    const raw = window.localStorage.getItem(PROOF_INPUT_STORAGE_KEY);
+    if (!raw) return emptyProofInputs();
+    const parsed = JSON.parse(raw) as Partial<Record<ProofTarget, unknown>>;
+
+    return {
+      android: typeof parsed.android === "string" ? parsed.android : "",
+      ios: typeof parsed.ios === "string" ? parsed.ios : "",
+    };
+  } catch {
+    return emptyProofInputs();
+  }
+}
+
+function writeStoredProofInputs(proofInputs: Record<ProofTarget, string>): boolean {
+  if (typeof window === "undefined") return false;
+
+  try {
+    if (hasProofInput(proofInputs)) {
+      window.localStorage.setItem(PROOF_INPUT_STORAGE_KEY, JSON.stringify(proofInputs));
+    } else {
+      window.localStorage.removeItem(PROOF_INPUT_STORAGE_KEY);
+    }
+    return true;
+  } catch {
+    return false;
+  }
+}
 
 async function waitForViewportHeightSync(): Promise<void> {
   await new Promise<void>(resolve => {
@@ -890,7 +931,8 @@ export default function PwaCheckPage() {
   const [handoffState, setHandoffState] = useState<"copied" | "failed" | "idle" | "shared">("idle");
   const [handoffUrl, setHandoffUrl] = useState("");
   const [proofBundleState, setProofBundleState] = useState<ProofBundleState>("idle");
-  const [proofInputs, setProofInputs] = useState<Record<ProofTarget, string>>({ android: "", ios: "" });
+  const [proofInputs, setProofInputs] = useState<Record<ProofTarget, string>>(emptyProofInputs);
+  const [proofStorageState, setProofStorageState] = useState<"cleared" | "failed" | "idle" | "restored" | "saved">("idle");
 
   const runCheck = useCallback(async () => {
     setIsChecking(true);
@@ -901,7 +943,16 @@ export default function PwaCheckPage() {
 
   useEffect(() => {
     let isCancelled = false;
+    let restoreTimer: number | null = null;
     const currentUrl = location.href;
+    const storedProofInputs = readStoredProofInputs();
+    if (hasProofInput(storedProofInputs)) {
+      restoreTimer = window.setTimeout(() => {
+        if (isCancelled) return;
+        setProofInputs(storedProofInputs);
+        setProofStorageState("restored");
+      }, 0);
+    }
 
     collectRuntimeSnapshot().then(next => {
       if (isCancelled) return;
@@ -912,6 +963,7 @@ export default function PwaCheckPage() {
 
     return () => {
       isCancelled = true;
+      if (restoreTimer !== null) window.clearTimeout(restoreTimer);
     };
   }, []);
 
@@ -963,6 +1015,11 @@ export default function PwaCheckPage() {
   const dualProofBundle = useMemo(() => (
     canBuildDualProofBundle ? buildDualProofBundle(proofInputs, proofResults) : ""
   ), [canBuildDualProofBundle, proofInputs, proofResults]);
+  const proofStorageLabel = proofStorageState === "failed"
+    ? "입력 자동 저장 실패"
+    : proofEnteredCount
+      ? `${proofEnteredCount}/${PROOF_TARGETS.length} 리포트 이 브라우저에 저장됨`
+      : "리포트는 이 브라우저에 자동 저장됩니다.";
 
   const copyReport = useCallback(async () => {
     if (!reportText) return;
@@ -1050,6 +1107,18 @@ export default function PwaCheckPage() {
       setProofBundleState("idle");
     }
   }, [copyDualProofBundle, dualProofBundle]);
+
+  const updateProofInput = useCallback((platform: ProofTarget, value: string) => {
+    const nextInputs = { ...proofInputs, [platform]: value };
+    setProofInputs(nextInputs);
+    setProofStorageState(writeStoredProofInputs(nextInputs) ? "saved" : "failed");
+  }, [proofInputs]);
+
+  const clearProofInputs = useCallback(() => {
+    const nextInputs = emptyProofInputs();
+    setProofInputs(nextInputs);
+    setProofStorageState(writeStoredProofInputs(nextInputs) ? "cleared" : "failed");
+  }, []);
 
   return (
     <main className="layout-main pwa-check-page" style={{ background: "var(--background)" }}>
@@ -1514,6 +1583,43 @@ export default function PwaCheckPage() {
                 </span>
               </div>
             </div>
+            <div style={{ alignItems: "center", display: "flex", flexWrap: "wrap", gap: "0.55rem", justifyContent: "space-between" }}>
+              <span
+                aria-live="polite"
+                data-testid="pwa-proof-storage-status"
+                style={{
+                  color: proofStorageState === "failed" ? "var(--warning)" : "var(--muted)",
+                  fontSize: "0.72rem",
+                  fontWeight: 800,
+                  lineHeight: 1.35,
+                }}
+              >
+                {proofStorageLabel}
+              </span>
+              <button
+                type="button"
+                onClick={clearProofInputs}
+                disabled={proofEnteredCount === 0}
+                data-testid="pwa-proof-clear"
+                style={{
+                  alignItems: "center",
+                  background: "var(--background)",
+                  border: "1px solid var(--border)",
+                  borderRadius: "8px",
+                  color: "var(--muted)",
+                  display: "inline-flex",
+                  fontSize: "0.75rem",
+                  fontWeight: 850,
+                  gap: "0.35rem",
+                  minHeight: "2.75rem",
+                  opacity: proofEnteredCount ? 1 : 0.55,
+                  padding: "0 0.75rem",
+                }}
+              >
+                <Trash2 size={14} />
+                입력 지우기
+              </button>
+            </div>
             <div style={{ display: "grid", gap: "0.75rem", gridTemplateColumns: "repeat(auto-fit, minmax(230px, 1fr))" }}>
               {PROOF_TARGETS.map(target => {
                 const proofInput = proofInputs[target.platform];
@@ -1564,7 +1670,7 @@ export default function PwaCheckPage() {
                     <textarea
                       aria-label={`${target.label} 실기기 리포트 입력`}
                       data-testid={target.inputTestId}
-                      onChange={event => setProofInputs(current => ({ ...current, [target.platform]: event.target.value }))}
+                      onChange={event => updateProofInput(target.platform, event.target.value)}
                       placeholder="OMR Maker PWA device check"
                       value={proofInput}
                       style={{

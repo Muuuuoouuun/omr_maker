@@ -457,6 +457,7 @@ async function runSmoke() {
         assert(onlineDeviceCheckState.installProofGuide.includes("Android") && onlineDeviceCheckState.installProofGuide.includes("iOS"), "PWA install proof guide must cover Android and iOS", onlineDeviceCheckState);
         assert(onlineDeviceCheckState.installProofGuide.includes("standalone") && onlineDeviceCheckState.installProofGuide.includes("fullscreen"), "PWA install proof guide must name installed display modes", onlineDeviceCheckState);
         assert(onlineDeviceCheckState.proofVerifier.includes("Android") && onlineDeviceCheckState.proofVerifier.includes("iOS"), "PWA proof verifier must collect Android and iOS reports", onlineDeviceCheckState);
+        assert(onlineDeviceCheckState.proofVerifier.includes("자동 저장") && onlineDeviceCheckState.proofVerifier.includes("입력 지우기"), "PWA proof verifier must persist and clear collected reports", onlineDeviceCheckState);
 
         await seedOfflineSolveExam(page);
         await page.goto("/solve/mobile-pwa-smoke-exam", { waitUntil: "networkidle" });
@@ -528,6 +529,7 @@ async function runSmoke() {
         assert(offlineDeviceCheckState.installProofGuide.includes("Android") && offlineDeviceCheckState.installProofGuide.includes("iOS"), "Offline PWA install proof guide must cover Android and iOS", offlineDeviceCheckState);
         assert(offlineDeviceCheckState.installProofGuide.includes("standalone") && offlineDeviceCheckState.installProofGuide.includes("fullscreen"), "Offline PWA install proof guide must name installed display modes", offlineDeviceCheckState);
         assert(offlineDeviceCheckState.proofVerifier.includes("Android") && offlineDeviceCheckState.proofVerifier.includes("iOS"), "Offline PWA proof verifier must collect Android and iOS reports", offlineDeviceCheckState);
+        assert(offlineDeviceCheckState.proofVerifier.includes("자동 저장") && offlineDeviceCheckState.proofVerifier.includes("입력 지우기"), "Offline PWA proof verifier must persist and clear collected reports", offlineDeviceCheckState);
 
         await page.goto("/solve/mobile-pwa-smoke-exam", { waitUntil: "domcontentloaded", timeout: 15_000 });
         await page.locator(".solve-omr-scroll .omr-cardview-title").getByText("모바일 오프라인 시험").waitFor({ state: "visible", timeout: 10_000 });

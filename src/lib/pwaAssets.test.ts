@@ -660,6 +660,8 @@ describe("PWA assets", () => {
         expect(source).toContain("installProofGuide");
         expect(source).toContain("PWA install proof guide is missing");
         expect(source).toContain("PWA install proof guide must cover Android and iOS");
+        expect(source).toContain("PWA proof verifier must persist and clear collected reports");
+        expect(source).toContain("Offline PWA proof verifier must persist and clear collected reports");
         expect(source).toContain("cachedPwaCheck");
         expect(source).toContain("cachedMobileSolve");
         expect(source).toContain("Offline mobile solve route did not render from cache");
@@ -856,5 +858,10 @@ describe("PWA assets", () => {
         expect(pageSource).toContain("Android/iOS reports must come from the same deployed origin");
         expect(pageSource).toContain('`origin=${origin || "missing"}`');
         expect(pageSource).toContain("npm run pwa:proof -- --origin 배포URL");
+        expect(pageSource).toContain("omr_pwa_device_proof_inputs_v1");
+        expect(pageSource).toContain("function readStoredProofInputs");
+        expect(pageSource).toContain("function writeStoredProofInputs");
+        expect(pageSource).toContain("pwa-proof-storage-status");
+        expect(pageSource).toContain("pwa-proof-clear");
     });
 });
