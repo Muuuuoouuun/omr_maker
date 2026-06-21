@@ -186,7 +186,7 @@ function validInstalledProofReport(platform: "android" | "ios" = "android"): str
         "installedDisplay=yes",
         "proofStatus=pass",
         `displayEvidence=${displayEvidence}`,
-        "summary=14 pass, 0 warn, 0 fail",
+        "summary=15 pass, 0 warn, 0 fail",
         `userAgent=${userAgent}`,
         "- secure-context=pass:보안 컨텍스트 (https://omr-maker-eight.vercel.app)",
         "- display-mode=pass:standalone (홈 화면 아이콘 실행 상태)",
@@ -198,6 +198,7 @@ function validInstalledProofReport(platform: "android" | "ios" = "android"): str
         "- viewport-height=pass:동기화 (css=727px · visual=727px · inner=727px · delta=0px)",
         "- keyboard-safe-area=pass:준비 (keyboard=0px · state=closed · width=393px · offsetTop=0px · offsetLeft=0px · scale=1)",
         "- mobile-meta=pass:준비 (Android yes · iOS yes)",
+        "- ios-startup-image=pass:준비 (16 images · iPhone portrait yes · iPad portrait yes · iPad landscape yes)",
         "- handoff-origin=pass:공유 가능 (https://omr-maker-eight.vercel.app/pwa-check)",
         "- overflow=pass:정상 (scroll 393px / viewport 393px)",
         "- storage=pass:사용 가능 (localStorage ok · sessionStorage ok)",
@@ -283,6 +284,16 @@ test.describe("Mobile PWA entry", () => {
         await expect(page.locator('link[rel="apple-touch-icon"]').first()).toHaveAttribute("href", "/apple-touch-icon.png");
         await expectMetaContent(page, "mobile-web-app-capable", "yes");
         await expectMetaContent(page, "apple-mobile-web-app-capable", "yes");
+        const startupImages = await page.locator('link[rel="apple-touch-startup-image"]').evaluateAll(links => (
+            links.map(link => ({
+                href: link.getAttribute("href") || "",
+                media: link.getAttribute("media") || "",
+            }))
+        ));
+        expect(startupImages.length).toBeGreaterThanOrEqual(12);
+        expect(startupImages.every(image => image.href.startsWith("/startup/"))).toBe(true);
+        expect(startupImages.some(image => image.media.includes("device-width: 393px") && image.media.includes("orientation: portrait"))).toBe(true);
+        expect(startupImages.some(image => image.media.includes("device-width: 834px") && image.media.includes("orientation: landscape"))).toBe(true);
         const manifestState = await page.evaluate(async () => {
             const manifestUrl = document.querySelector('link[rel="manifest"]')?.getAttribute("href") || "";
             const manifest = await fetch(manifestUrl).then(response => response.json());
@@ -440,6 +451,7 @@ test.describe("Mobile PWA entry", () => {
         await expect(page.getByTestId("pwa-device-check-handoff-origin")).toContainText(/공유 가능|로컬 전용/);
         await expect(page.getByTestId("pwa-device-check-viewport-height")).toContainText("동기화");
         await expect(page.getByTestId("pwa-device-check-keyboard-safe-area")).toContainText("준비");
+        await expect(page.getByTestId("pwa-device-check-ios-startup-image")).toContainText("준비");
         await expect(page.getByTestId("pwa-device-check-overflow")).toContainText("정상");
         await expect(page.getByTestId("pwa-device-report")).toContainText("OMR Maker PWA device check");
         await expect(page.getByTestId("pwa-device-report")).toContainText("displayMode=browser");
@@ -448,6 +460,7 @@ test.describe("Mobile PWA entry", () => {
         await expect(page.getByTestId("pwa-device-report")).toContainText("displayEvidence=");
         await expect(page.getByTestId("pwa-device-report")).toContainText("viewport-height=pass:동기화");
         await expect(page.getByTestId("pwa-device-report")).toContainText("keyboard-safe-area=pass:준비");
+        await expect(page.getByTestId("pwa-device-report")).toContainText("ios-startup-image=pass:준비");
         await expect(page.getByTestId("pwa-install-proof-guide")).toContainText("실기기 설치 확인");
         await expect(page.getByTestId("pwa-install-proof-guide")).toContainText("standalone");
         await expect(page.getByTestId("pwa-install-proof-guide")).toContainText("fullscreen");

@@ -5,6 +5,7 @@ import ToastHost from "@/components/Toast";
 import PWARegister from "@/components/PWARegister";
 import MobileInstallPrompt from "@/components/MobileInstallPrompt";
 import ViewportHeightSync from "@/components/ViewportHeightSync";
+import { PWA_STARTUP_IMAGE_LINKS } from "@/lib/pwaStartupImages";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -23,6 +24,7 @@ export const metadata: Metadata = {
   manifest: "/manifest.webmanifest",
   appleWebApp: {
     capable: true,
+    startupImage: PWA_STARTUP_IMAGE_LINKS,
     title: "OMR Maker",
     statusBarStyle: "default",
   },

@@ -184,6 +184,11 @@ async function collectPwaMetadata(page) {
             appleCapable: [...document.querySelectorAll('meta[name="apple-mobile-web-app-capable"]')]
                 .map(meta => meta.getAttribute("content")),
             appleIcon: document.querySelector('link[rel="apple-touch-icon"]')?.getAttribute("href") || null,
+            appleStartupImages: [...document.querySelectorAll('link[rel="apple-touch-startup-image"]')]
+                .map(link => ({
+                    href: link.getAttribute("href") || "",
+                    media: link.getAttribute("media") || "",
+                })),
             manifest,
             manifestHref,
             mobileCapable: [...document.querySelectorAll('meta[name="mobile-web-app-capable"]')]
@@ -202,7 +207,7 @@ async function collectOriginState(page) {
     }));
 }
 
-async function collectImageState(page) {
+async function collectImageState(page, imageSpecs = requiredImageSpecs) {
     return page.evaluate(async requiredImageSpecs => {
         function loadImage(spec) {
             return new Promise(resolve => {
@@ -224,7 +229,7 @@ async function collectImageState(page) {
         }
 
         return Promise.all(requiredImageSpecs.map(loadImage));
-    }, requiredImageSpecs);
+    }, imageSpecs);
 }
 
 async function collectCacheState(page) {
@@ -305,6 +310,14 @@ async function runSmoke() {
         assert(metadata.appleIcon === "/apple-touch-icon.png", "Apple touch icon is missing or incorrect", metadata);
         assert(metadata.mobileCapable.every(value => value === "yes") && metadata.mobileCapable.length > 0, "Android mobile app metadata is missing", metadata);
         assert(metadata.appleCapable.every(value => value === "yes") && metadata.appleCapable.length > 0, "iOS web app metadata is missing", metadata);
+        assert(metadata.appleStartupImages.length >= 12, "iOS startup image links are missing", metadata.appleStartupImages);
+        assert(metadata.appleStartupImages.every(image => image.href.startsWith("/startup/")), "iOS startup images must be served from /startup", metadata.appleStartupImages);
+        assert(
+            metadata.appleStartupImages.some(image => image.media.includes("device-width: 393px") && image.media.includes("orientation: portrait"))
+                && metadata.appleStartupImages.some(image => image.media.includes("device-width: 834px") && image.media.includes("orientation: landscape")),
+            "iOS startup images must include modern iPhone portrait and iPad landscape media queries",
+            metadata.appleStartupImages,
+        );
         assert(metadata.manifest?.name === "OMR Maker", "Manifest name is incorrect", metadata.manifest);
         assert(metadata.manifest?.short_name === "OMR Maker", "Manifest short_name is incorrect", metadata.manifest);
         assert(metadata.manifest?.id === "/", "Manifest id is incorrect", metadata.manifest);
@@ -335,11 +348,31 @@ async function runSmoke() {
         );
 
         const imageState = await collectImageState(page);
+        const startupImageSpecs = metadata.appleStartupImages.map(image => {
+            const pathname = new URL(image.href, baseUrl).pathname;
+            const match = pathname.match(/-(\d+)x(\d+)-(?:portrait|landscape)\.png$/);
+            assert(match, "iOS startup image filename must include rendered dimensions", image);
+
+            return {
+                height: Number(match[2]),
+                src: pathname,
+                width: Number(match[1]),
+            };
+        });
+        const startupImageState = await collectImageState(page, startupImageSpecs);
         imageState.forEach(image => {
             assert(image.loaded, "PWA image asset failed to load", image);
             assert(
                 image.actualWidth === image.width && image.actualHeight === image.height,
                 "PWA image dimensions do not match their manifest/install contract",
+                image,
+            );
+        });
+        startupImageState.forEach(image => {
+            assert(image.loaded, "iOS startup image asset failed to load", image);
+            assert(
+                image.actualWidth === image.width && image.actualHeight === image.height,
+                "iOS startup image dimensions do not match their media contract",
                 image,
             );
         });
@@ -493,6 +526,7 @@ async function runSmoke() {
             metadata: {
                 manifestDisplay: metadata.manifest.display,
                 launchHandler: metadata.manifest.launch_handler?.client_mode || [],
+                startupImages: metadata.appleStartupImages.length,
                 screenshots: metadata.manifest.screenshots?.length || 0,
                 icons: metadata.manifest.icons?.length || 0,
                 shortcuts: metadata.manifest.shortcuts?.length || 0,

@@ -79,6 +79,7 @@ const REQUIRED_PROOF_PASS_CHECKS = [
   "viewport-height",
   "keyboard-safe-area",
   "mobile-meta",
+  "ios-startup-image",
   "handoff-origin",
   "overflow",
   "storage",
@@ -455,6 +456,23 @@ async function readManifestSummary(): Promise<{ detail: string; ok: boolean; val
   }
 }
 
+function readIosStartupImageSummary(): { detail: string; tone: CheckTone; value: string } {
+  const links = [...document.querySelectorAll<HTMLLinkElement>('link[rel="apple-touch-startup-image"]')];
+  const media = links.map(link => link.media || "");
+  const hrefs = links.map(link => link.href || "");
+  const hasStartupPaths = hrefs.length > 0 && hrefs.every(href => new URL(href, location.href).pathname.startsWith("/startup/"));
+  const hasPhonePortrait = media.some(value => value.includes("orientation: portrait") && /device-width: (390|393|414|428|430)px/.test(value));
+  const hasTabletPortrait = media.some(value => value.includes("orientation: portrait") && /device-width: (768|810|834|1024)px/.test(value));
+  const hasTabletLandscape = media.some(value => value.includes("orientation: landscape") && /device-width: (768|810|834|1024)px/.test(value));
+  const isReady = links.length >= 12 && hasStartupPaths && hasPhonePortrait && hasTabletPortrait && hasTabletLandscape;
+
+  return {
+    detail: `${links.length} images · iPhone portrait ${hasPhonePortrait ? "yes" : "no"} · iPad portrait ${hasTabletPortrait ? "yes" : "no"} · iPad landscape ${hasTabletLandscape ? "yes" : "no"}`,
+    tone: isReady ? "pass" : "fail",
+    value: isReady ? "준비" : "누락",
+  };
+}
+
 async function readServiceWorkerSummary(): Promise<{ detail: string; tone: CheckTone; value: string }> {
   if (!("serviceWorker" in navigator)) {
     return { detail: "현재 브라우저가 service worker를 지원하지 않음", tone: "fail", value: "미지원" };
@@ -525,6 +543,7 @@ async function collectRuntimeSnapshot(): Promise<RuntimeSnapshot> {
     .some(meta => meta.getAttribute("content") === "yes");
   const appleCapable = [...document.querySelectorAll('meta[name="apple-mobile-web-app-capable"]')]
     .some(meta => meta.getAttribute("content") === "yes");
+  const iosStartupImage = readIosStartupImageSummary();
   const hasHorizontalOverflow = document.documentElement.scrollWidth > document.documentElement.clientWidth;
   const promptCount = document.querySelectorAll(".mobile-install-prompt").length;
   const localStorageOk = canUseStorage(() => window.localStorage);
@@ -607,6 +626,13 @@ async function collectRuntimeSnapshot(): Promise<RuntimeSnapshot> {
         label: "모바일 메타",
         tone: androidCapable && appleCapable ? "pass" : "fail",
         value: androidCapable && appleCapable ? "준비" : "누락",
+      },
+      {
+        detail: iosStartupImage.detail,
+        id: "ios-startup-image",
+        label: "iOS 시작 화면",
+        tone: iosStartupImage.tone,
+        value: iosStartupImage.value,
       },
       {
         detail: hasDeviceReachableHandoff

@@ -123,6 +123,7 @@ function validateProof(parsed, expectedPlatform = "") {
         "viewport-height",
         "keyboard-safe-area",
         "mobile-meta",
+        "ios-startup-image",
         "handoff-origin",
         "overflow",
         "storage",

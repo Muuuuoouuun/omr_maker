@@ -5,6 +5,7 @@ import vm from "node:vm";
 import { createCanvas, loadImage } from "canvas";
 import { describe, expect, it, vi } from "vitest";
 import manifest from "@/app/manifest";
+import { PWA_STARTUP_IMAGES } from "@/lib/pwaStartupImages";
 
 const rootDir = process.cwd();
 const publicDir = path.join(rootDir, "public");
@@ -143,6 +144,10 @@ function manifestIconPaths(): string[] {
         .map(icon => icon.src);
 
     return [...iconPaths, ...shortcutIconPaths];
+}
+
+function startupImagePaths(): string[] {
+    return PWA_STARTUP_IMAGES.map(image => image.url);
 }
 
 function createServiceWorkerHarness() {
@@ -330,6 +335,7 @@ describe("PWA assets", () => {
         expect(layout).toContain('manifest: "/manifest.webmanifest"');
         expect(layout).toContain("appleWebApp");
         expect(layout).toContain("capable: true");
+        expect(layout).toContain("startupImage: PWA_STARTUP_IMAGE_LINKS");
         expect(layout).toContain('{ url: "/apple-touch-icon.png", sizes: "180x180", type: "image/png" }');
         expect(layout).toContain('"mobile-web-app-capable": "yes"');
         expect(layout).toContain('"apple-mobile-web-app-capable": "yes"');
@@ -387,6 +393,23 @@ describe("PWA assets", () => {
         }
     });
 
+    it("provides iOS startup images for phone and tablet home-screen launch", () => {
+        const startupPaths = startupImagePaths();
+
+        expect(PWA_STARTUP_IMAGES.length).toBeGreaterThanOrEqual(12);
+        expect(new Set(startupPaths).size).toBe(PWA_STARTUP_IMAGES.length);
+        expect(PWA_STARTUP_IMAGES.some(image => image.cssWidth === 393 && image.orientation === "portrait")).toBe(true);
+        expect(PWA_STARTUP_IMAGES.some(image => image.cssWidth === 834 && image.orientation === "landscape")).toBe(true);
+        expect(PWA_STARTUP_IMAGES.every(image => image.media.includes(`orientation: ${image.orientation}`))).toBe(true);
+        expect(PWA_STARTUP_IMAGES.every(image => image.media.includes(`device-width: ${image.cssWidth}px`))).toBe(true);
+        expect(PWA_STARTUP_IMAGES.every(image => publicPathExists(image.url))).toBe(true);
+
+        PWA_STARTUP_IMAGES.forEach(image => {
+            expect(image.url).toMatch(/\/startup\/.+-\d+x\d+-(portrait|landscape)\.png$/);
+            expect(readImageSize(image.url)).toEqual({ width: image.width, height: image.height });
+        });
+    });
+
     it("manifest includes app screenshots for richer Android install previews", () => {
         const screenshots = manifestScreenshotSpecs();
 
@@ -408,6 +431,7 @@ describe("PWA assets", () => {
         expect(sw).toContain("CACHE_FIRST_PATHS.has(url.pathname)");
         expect(sw).toContain('const CACHE_VERSION = "omr-maker-v8"');
         expect(sw).toContain("canRememberNavigation(url.pathname)");
+        expect(sw).toContain('url.pathname.startsWith("/startup/")');
         expect(sw).toContain("if (!response.ok) return");
         expect(sw).toContain(".catch(() => undefined)");
         expect(sw).toContain("caches.match(url.pathname)");
@@ -612,7 +636,7 @@ describe("PWA assets", () => {
             "installedDisplay=yes",
             "proofStatus=pass",
             "displayEvidence=css-fullscreen=no · css-standalone=yes · ios-navigator-standalone=no",
-            "summary=14 pass, 0 warn, 0 fail",
+            "summary=15 pass, 0 warn, 0 fail",
             "userAgent=Mozilla/5.0 (Linux; Android 15; Pixel 9) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.7727.15 Mobile Safari/537.36",
             "- secure-context=pass:보안 컨텍스트 (https://omr-maker-eight.vercel.app)",
             "- display-mode=pass:standalone (홈 화면 아이콘 실행 상태)",
@@ -624,6 +648,7 @@ describe("PWA assets", () => {
             "- viewport-height=pass:동기화 (css=727px · visual=727px · inner=727px · delta=0px)",
             "- keyboard-safe-area=pass:준비 (keyboard=0px · state=closed · width=393px · offsetTop=0px · offsetLeft=0px · scale=1)",
             "- mobile-meta=pass:준비 (Android yes · iOS yes)",
+            "- ios-startup-image=pass:준비 (16 images · iPhone portrait yes · iPad portrait yes · iPad landscape yes)",
             "- handoff-origin=pass:공유 가능 (https://omr-maker-eight.vercel.app/pwa-check)",
             "- overflow=pass:정상 (scroll 393px / viewport 393px)",
             "- storage=pass:사용 가능 (localStorage ok · sessionStorage ok)",

@@ -122,6 +122,7 @@ self.addEventListener("fetch", event => {
   if (
     url.pathname.startsWith("/_next/static/")
     || url.pathname.startsWith("/icons/")
+    || url.pathname.startsWith("/startup/")
     || CACHE_FIRST_PATHS.has(url.pathname)
   ) {
     event.respondWith(
