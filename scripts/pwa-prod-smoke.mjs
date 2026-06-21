@@ -7,7 +7,7 @@ const port = Number(process.env.PWA_SMOKE_PORT || 3004);
 const externalBaseUrl = process.env.PWA_SMOKE_BASE_URL?.replace(/\/$/, "");
 const baseUrl = externalBaseUrl || `http://localhost:${port}`;
 const ownsServer = !externalBaseUrl;
-const expectedCachePrefix = "omr-maker-v10";
+const expectedCachePrefix = "omr-maker-v11";
 const requiredHttpResources = [
     { contentType: "text/html", pathname: "/pwa-check" },
     { contentType: "application/manifest+json", pathname: "/manifest.webmanifest" },
