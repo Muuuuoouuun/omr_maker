@@ -313,6 +313,8 @@ async function runSmoke() {
         assert(metadata.manifest?.lang === "ko", "Manifest lang is incorrect", metadata.manifest);
         assert(metadata.manifest?.display === "standalone", "Manifest display must be standalone", metadata.manifest);
         assert(metadata.manifest?.display_override?.includes("standalone"), "Manifest display_override should include standalone", metadata.manifest);
+        assert(metadata.manifest?.launch_handler?.client_mode?.includes("navigate-existing"), "Manifest launch handler should reuse the installed app window", metadata.manifest);
+        assert(metadata.manifest?.launch_handler?.client_mode?.includes("auto"), "Manifest launch handler should keep a browser fallback", metadata.manifest);
         assert(metadata.manifest?.categories?.includes("education"), "Manifest should be categorized for education", metadata.manifest);
         assert(metadata.manifest?.shortcuts?.length >= 4, "Manifest shortcuts are missing", metadata.manifest);
         assert(
@@ -490,6 +492,7 @@ async function runSmoke() {
             chromiumInstallabilityState,
             metadata: {
                 manifestDisplay: metadata.manifest.display,
+                launchHandler: metadata.manifest.launch_handler?.client_mode || [],
                 screenshots: metadata.manifest.screenshots?.length || 0,
                 icons: metadata.manifest.icons?.length || 0,
                 shortcuts: metadata.manifest.shortcuts?.length || 0,

@@ -278,6 +278,9 @@ describe("PWA assets", () => {
         expect(currentManifest.display).toBe("standalone");
         expect(currentManifest.lang).toBe("ko");
         expect(currentManifest.categories).toContain("education");
+        expect(currentManifest.launch_handler.client_mode).toEqual(
+            expect.arrayContaining(["navigate-existing", "auto"]),
+        );
         expect(currentManifest.shortcuts?.length).toBeGreaterThanOrEqual(4);
         expect(currentManifest.shortcuts?.map(shortcut => shortcut.url)).toEqual(
             expect.arrayContaining(["/create", "/teacher/dashboard", "/?role=student", "/pwa-check"]),

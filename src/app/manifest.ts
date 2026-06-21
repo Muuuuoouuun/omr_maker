@@ -1,5 +1,11 @@
 import type { MetadataRoute } from "next";
 
+type OmrManifest = MetadataRoute.Manifest & {
+  launch_handler: {
+    client_mode: Array<"navigate-existing" | "auto">;
+  };
+};
+
 const appIcons = [
   48,
   72,
@@ -19,7 +25,7 @@ const appIcons = [
   purpose: "any" as const,
 }));
 
-export default function manifest(): MetadataRoute.Manifest {
+export default function manifest(): OmrManifest {
   return {
     name: "OMR Maker",
     short_name: "OMR Maker",
@@ -30,6 +36,9 @@ export default function manifest(): MetadataRoute.Manifest {
     scope: "/",
     display: "standalone",
     display_override: ["standalone", "minimal-ui", "browser"],
+    launch_handler: {
+      client_mode: ["navigate-existing", "auto"],
+    },
     orientation: "any",
     background_color: "#f8fafc",
     theme_color: "#f8fafc",
