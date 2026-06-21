@@ -369,6 +369,15 @@ function validateProofReport(reportText: string, expectedPlatform?: ProofTarget)
   if (!parsed.checks["offline-cache"]?.detail.includes(EXPECTED_OFFLINE_CACHE_PREFIX)) {
     errors.push(`offline-cache must include ${EXPECTED_OFFLINE_CACHE_PREFIX}.`);
   }
+  if (
+    parsed.checks["service-worker"]
+    && (
+      parsed.checks["service-worker"].value !== "제어 중"
+      || !parsed.checks["service-worker"].detail.includes("controller=yes")
+    )
+  ) {
+    errors.push("service-worker must be controlled by the active PWA worker.");
+  }
 
   for (const checkId of REQUIRED_PROOF_PASS_CHECKS) {
     const check = parsed.checks[checkId];
@@ -492,10 +501,23 @@ async function readServiceWorkerSummary(): Promise<{ detail: string; tone: Check
       };
     }
 
+    const controlled = Boolean(navigator.serviceWorker.controller);
+    const scriptURL = registration.active?.scriptURL
+      || registration.waiting?.scriptURL
+      || registration.installing?.scriptURL
+      || "unknown";
+    const detail = [
+      `script=${scriptURL}`,
+      `controller=${controlled ? "yes" : "no"}`,
+      `active=${registration.active?.state || "none"}`,
+      `waiting=${registration.waiting?.state || "none"}`,
+      `installing=${registration.installing?.state || "none"}`,
+    ].join(" · ");
+
     return {
-      detail: registration.active?.scriptURL || registration.waiting?.scriptURL || registration.installing?.scriptURL || "등록됨",
-      tone: registration.active ? "pass" : "warn",
-      value: navigator.serviceWorker.controller ? "제어 중" : "등록됨",
+      detail,
+      tone: registration.active && controlled ? "pass" : "warn",
+      value: controlled ? "제어 중" : "미제어",
     };
   } catch {
     return { detail: "registration 조회 실패", tone: "fail", value: "오류" };

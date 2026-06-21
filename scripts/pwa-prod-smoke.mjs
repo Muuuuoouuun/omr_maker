@@ -414,6 +414,8 @@ async function runSmoke() {
         assert(onlineDeviceCheckState.report.includes("proofStatus=pending"), "PWA device check proof status is missing", onlineDeviceCheckState);
         assert(onlineDeviceCheckState.report.includes("launch-proof="), "PWA device check launch proof is missing", onlineDeviceCheckState);
         assert(onlineDeviceCheckState.report.includes(expectedHandoffOriginReport()), "PWA device check handoff URL readiness is incorrect", onlineDeviceCheckState);
+        assert(onlineDeviceCheckState.report.includes("service-worker=pass:제어 중"), "PWA device check service worker control proof is missing", onlineDeviceCheckState);
+        assert(onlineDeviceCheckState.report.includes("controller=yes"), "PWA device check service worker controller evidence is missing", onlineDeviceCheckState);
         assert(onlineDeviceCheckState.report.includes("offline-cache=pass:준비"), "PWA device check offline cache readiness is missing", onlineDeviceCheckState);
         assert(onlineDeviceCheckState.report.includes("viewport-height=pass:동기화"), "PWA device check viewport height sync is missing", onlineDeviceCheckState);
         assert(onlineDeviceCheckState.report.includes("keyboard-safe-area=pass:준비"), "PWA device check keyboard safe area is missing", onlineDeviceCheckState);
@@ -461,6 +463,8 @@ async function runSmoke() {
         assert(offlineDeviceCheckState.report.includes("proofStatus=pending"), "Offline PWA device check proof status is missing", offlineDeviceCheckState);
         assert(offlineDeviceCheckState.report.includes("launch-proof="), "Offline PWA device check launch proof is missing", offlineDeviceCheckState);
         assert(offlineDeviceCheckState.report.includes(expectedHandoffOriginReport()), "Offline PWA device check handoff URL readiness is incorrect", offlineDeviceCheckState);
+        assert(offlineDeviceCheckState.report.includes("service-worker=pass:제어 중"), "Offline PWA device check service worker control proof is missing", offlineDeviceCheckState);
+        assert(offlineDeviceCheckState.report.includes("controller=yes"), "Offline PWA device check service worker controller evidence is missing", offlineDeviceCheckState);
         assert(offlineDeviceCheckState.report.includes("offline-cache=pass:준비"), "Offline PWA device check offline cache readiness is missing", offlineDeviceCheckState);
         assert(offlineDeviceCheckState.report.includes("viewport-height=pass:동기화"), "Offline PWA device check viewport height sync is missing", offlineDeviceCheckState);
         assert(offlineDeviceCheckState.report.includes("keyboard-safe-area=pass:준비"), "Offline PWA device check keyboard safe area is missing", offlineDeviceCheckState);

@@ -238,6 +238,8 @@ describe("service UI surface", () => {
         expect(pwaCheck).toContain("readViewportHeightSummary");
         expect(pwaCheck).toContain("readKeyboardSafeAreaSummary");
         expect(pwaCheck).toContain("readOfflineCacheSummary");
+        expect(pwaCheck).toContain("controller=yes");
+        expect(pwaCheck).toContain("service-worker must be controlled by the active PWA worker.");
         expect(pwaCheck).toContain("waitForViewportHeightSync");
         expect(pwaCheck).toContain('id: "viewport-height"');
         expect(pwaCheck).toContain('id: "keyboard-safe-area"');

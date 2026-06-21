@@ -161,6 +161,15 @@ function validateProof(parsed, expectedPlatform = "") {
     if (!parsed.checks["offline-cache"]?.detail.includes(expectedCachePrefix)) {
         errors.push(`offline-cache must include ${expectedCachePrefix}.`);
     }
+    if (
+        parsed.checks["service-worker"]
+        && (
+            parsed.checks["service-worker"].value !== "제어 중"
+            || !parsed.checks["service-worker"].detail.includes("controller=yes")
+        )
+    ) {
+        errors.push("service-worker must be controlled by the active PWA worker.");
+    }
 
     for (const checkId of requiredPassChecks) {
         const check = parsed.checks[checkId];

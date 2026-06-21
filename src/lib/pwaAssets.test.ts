@@ -615,6 +615,8 @@ describe("PWA assets", () => {
         expect(source).toContain("expectedHandoffOriginReport");
         expect(source).toContain("handoff-origin=pass:공유 가능");
         expect(source).toContain("handoff-origin=warn:로컬 전용");
+        expect(source).toContain("service-worker=pass:제어 중");
+        expect(source).toContain("controller=yes");
         expect(source).toContain("offline-cache=pass:준비");
         expect(source).toContain("viewport-height=pass:동기화");
         expect(source).toContain("keyboard-safe-area=pass:준비");
@@ -641,7 +643,7 @@ describe("PWA assets", () => {
             "- secure-context=pass:보안 컨텍스트 (https://omr-maker-eight.vercel.app)",
             "- display-mode=pass:standalone (홈 화면 아이콘 실행 상태)",
             "- launch-proof=pass:확인됨 (css-fullscreen=no · css-standalone=yes · ios-navigator-standalone=no)",
-            "- service-worker=pass:제어 중 (https://omr-maker-eight.vercel.app/sw.js)",
+            "- service-worker=pass:제어 중 (script=https://omr-maker-eight.vercel.app/sw.js · controller=yes · active=activated · waiting=none · installing=none)",
             "- offline-cache=pass:준비 (caches=omr-maker-v9-shell, omr-maker-v9-runtime · required=/, /pwa-check, /offline.html, /logo.png · expected=omr-maker-v9-shell · missingCaches=none · missing=none)",
             "- manifest=pass:standalone (OMR Maker · icons 12 · screenshots 2)",
             "- viewport=pass:cover (width=device-width, initial-scale=1, viewport-fit=cover)",
@@ -660,6 +662,7 @@ describe("PWA assets", () => {
             .replace("installedDisplay=yes", "installedDisplay=no")
             .replace("proofStatus=pass", "proofStatus=pending");
         const staleCacheReport = passingReport.replaceAll("omr-maker-v9", "omr-maker-v8");
+        const uncontrolledWorkerReport = passingReport.replace("controller=yes", "controller=no");
         const iosReport = passingReport
             .replace("css-fullscreen=no · css-standalone=yes · ios-navigator-standalone=no", "css-fullscreen=no · css-standalone=yes · ios-navigator-standalone=yes")
             .replace("css-fullscreen=no · css-standalone=yes · ios-navigator-standalone=no", "css-fullscreen=no · css-standalone=yes · ios-navigator-standalone=yes")
@@ -691,6 +694,10 @@ describe("PWA assets", () => {
             encoding: "utf8",
             input: staleCacheReport,
         });
+        const uncontrolledWorker = spawnSync(process.execPath, [proofScriptPath], {
+            encoding: "utf8",
+            input: uncontrolledWorkerReport,
+        });
         const bundle = spawnSync(process.execPath, [proofScriptPath], {
             encoding: "utf8",
             input: passingBundle,
@@ -702,6 +709,7 @@ describe("PWA assets", () => {
         expect(source).toContain("Report URL must be the deployed HTTPS URL");
         expect(source).toContain('const expectedCachePrefix = "omr-maker-v9"');
         expect(source).toContain("offline-cache must include ${expectedCachePrefix}");
+        expect(source).toContain("service-worker must be controlled by the active PWA worker.");
         expect(source).toContain("OMR Maker PWA dual device proof");
         expect(source).toContain("Android proof report must pass");
         expect(source).toContain("iOS proof report must pass");
@@ -725,6 +733,8 @@ describe("PWA assets", () => {
             status: "failed",
         });
         expect(JSON.parse(staleCache.stdout).errors).toContain("offline-cache must include omr-maker-v9.");
+        expect(uncontrolledWorker.status).toBe(1);
+        expect(JSON.parse(uncontrolledWorker.stdout).errors).toContain("service-worker must be controlled by the active PWA worker.");
         expect(bundle.status).toBe(0);
         expect(JSON.parse(bundle.stdout)).toMatchObject({
             android: { platform: "android", status: "passed" },
