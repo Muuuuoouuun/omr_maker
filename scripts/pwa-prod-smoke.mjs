@@ -372,6 +372,8 @@ async function runSmoke() {
         assert(onlineDeviceCheckState.handoffUrl.includes("/pwa-check"), "PWA device check handoff URL is missing", onlineDeviceCheckState);
         assert(onlineDeviceCheckState.report.includes("OMR Maker PWA device check"), "PWA device check report is missing", onlineDeviceCheckState);
         assert(onlineDeviceCheckState.report.includes("displayEvidence="), "PWA device check display evidence is missing", onlineDeviceCheckState);
+        assert(onlineDeviceCheckState.report.includes("installedDisplay=no"), "PWA device check installed display proof flag is missing", onlineDeviceCheckState);
+        assert(onlineDeviceCheckState.report.includes("proofStatus=pending"), "PWA device check proof status is missing", onlineDeviceCheckState);
         assert(onlineDeviceCheckState.report.includes("launch-proof="), "PWA device check launch proof is missing", onlineDeviceCheckState);
         assert(onlineDeviceCheckState.report.includes(expectedHandoffOriginReport()), "PWA device check handoff URL readiness is incorrect", onlineDeviceCheckState);
         assert(onlineDeviceCheckState.report.includes("offline-cache=pass:준비"), "PWA device check offline cache readiness is missing", onlineDeviceCheckState);
@@ -415,6 +417,8 @@ async function runSmoke() {
         assert(!offlineDeviceCheckState.hasHorizontalOverflow, "Offline PWA device check has horizontal overflow", offlineDeviceCheckState);
         assert(offlineDeviceCheckState.report.includes("OMR Maker PWA device check"), "Offline PWA device check report is missing", offlineDeviceCheckState);
         assert(offlineDeviceCheckState.report.includes("displayEvidence="), "Offline PWA device check display evidence is missing", offlineDeviceCheckState);
+        assert(offlineDeviceCheckState.report.includes("installedDisplay=no"), "Offline PWA device check installed display proof flag is missing", offlineDeviceCheckState);
+        assert(offlineDeviceCheckState.report.includes("proofStatus=pending"), "Offline PWA device check proof status is missing", offlineDeviceCheckState);
         assert(offlineDeviceCheckState.report.includes("launch-proof="), "Offline PWA device check launch proof is missing", offlineDeviceCheckState);
         assert(offlineDeviceCheckState.report.includes(expectedHandoffOriginReport()), "Offline PWA device check handoff URL readiness is incorrect", offlineDeviceCheckState);
         assert(offlineDeviceCheckState.report.includes("offline-cache=pass:준비"), "Offline PWA device check offline cache readiness is missing", offlineDeviceCheckState);

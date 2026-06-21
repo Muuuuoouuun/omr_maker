@@ -184,6 +184,7 @@ function deviceVerdict(snapshot: RuntimeSnapshot | null, summary: CheckSummary):
 function buildDeviceReport(snapshot: RuntimeSnapshot, summary: CheckSummary): string {
   const url = typeof location === "undefined" ? "" : location.href;
   const verdict = deviceVerdict(snapshot, summary);
+  const installedDisplay = isInstalledDisplay(snapshot.displayMode);
   const checks = snapshot.checks
     .map(check => `- ${check.id}=${check.tone}:${check.value} (${check.detail})`)
     .join("\n");
@@ -194,6 +195,8 @@ function buildDeviceReport(snapshot: RuntimeSnapshot, summary: CheckSummary): st
     `checkedAt=${snapshot.checkedAt}`,
     `verdict=${verdict.label}`,
     `displayMode=${snapshot.displayMode}`,
+    `installedDisplay=${installedDisplay ? "yes" : "no"}`,
+    `proofStatus=${installedDisplay ? "pass" : "pending"}`,
     `displayEvidence=${snapshot.displayModeEvidence}`,
     `summary=${summary.passes} pass, ${summary.warnings} warn, ${summary.fails} fail`,
     `userAgent=${snapshot.userAgent}`,

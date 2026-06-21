@@ -557,6 +557,8 @@ describe("PWA assets", () => {
         expect(source).toContain("PWA install proof guide must cover Android and iOS");
         expect(source).toContain("cachedPwaCheck");
         expect(source).toContain("displayEvidence=");
+        expect(source).toContain("installedDisplay=no");
+        expect(source).toContain("proofStatus=pending");
         expect(source).toContain("launch-proof=");
         expect(source).toContain("expectedHandoffOriginReport");
         expect(source).toContain("handoff-origin=pass:공유 가능");

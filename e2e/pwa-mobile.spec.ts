@@ -377,6 +377,8 @@ test.describe("Mobile PWA entry", () => {
         await expect(page.getByTestId("pwa-device-check-overflow")).toContainText("정상");
         await expect(page.getByTestId("pwa-device-report")).toContainText("OMR Maker PWA device check");
         await expect(page.getByTestId("pwa-device-report")).toContainText("displayMode=browser");
+        await expect(page.getByTestId("pwa-device-report")).toContainText("installedDisplay=no");
+        await expect(page.getByTestId("pwa-device-report")).toContainText("proofStatus=pending");
         await expect(page.getByTestId("pwa-device-report")).toContainText("displayEvidence=");
         await expect(page.getByTestId("pwa-device-report")).toContainText("viewport-height=pass:동기화");
         await expect(page.getByTestId("pwa-device-report")).toContainText("keyboard-safe-area=pass:준비");
@@ -414,6 +416,8 @@ test.describe("Mobile PWA entry", () => {
         ));
         expect(copiedReport).toContain("OMR Maker PWA device check");
         expect(copiedReport).toContain("displayMode=browser");
+        expect(copiedReport).toContain("installedDisplay=no");
+        expect(copiedReport).toContain("proofStatus=pending");
         expect(copiedReport).toContain("displayEvidence=");
         expect(copiedReport).toContain("launch-proof=warn:대기");
         expect(copiedReport).toContain("handoff-origin=");
@@ -485,6 +489,8 @@ test.describe("Mobile PWA entry", () => {
         await expect(page.getByTestId("pwa-device-verdict")).toContainText("앱 실행 통과");
         await expect(page.getByTestId("pwa-device-check-display-mode")).toContainText(/standalone|fullscreen/);
         await expect(page.getByTestId("pwa-device-check-launch-proof")).toContainText("확인됨");
+        await expect(page.getByTestId("pwa-device-report")).toContainText("installedDisplay=yes");
+        await expect(page.getByTestId("pwa-device-report")).toContainText("proofStatus=pass");
         await expect(page.getByTestId("pwa-device-report")).toContainText("launch-proof=pass:확인됨");
         await expect(page.getByTestId("pwa-device-report")).toContainText("handoff-origin=");
         await expect(page.getByTestId("pwa-device-report")).toContainText("offline-cache=");

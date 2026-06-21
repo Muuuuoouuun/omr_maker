@@ -205,6 +205,8 @@ describe("service UI surface", () => {
         expect(pwaCheck).toContain("buildDeviceReport");
         expect(pwaCheck).toContain("OMR Maker PWA device check");
         expect(pwaCheck).toContain("displayMode=");
+        expect(pwaCheck).toContain("installedDisplay=");
+        expect(pwaCheck).toContain("proofStatus=");
         expect(pwaCheck).toContain("isLocalHandoffHost");
         expect(pwaCheck).toContain('id: "handoff-origin"');
         expect(pwaCheck).toContain("실제 Android/iPhone에서는 배포 HTTPS 링크로 열어야 함");
