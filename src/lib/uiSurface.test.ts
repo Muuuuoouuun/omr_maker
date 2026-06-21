@@ -238,6 +238,8 @@ describe("service UI surface", () => {
         expect(pwaCheck).toContain("readViewportHeightSummary");
         expect(pwaCheck).toContain("readKeyboardSafeAreaSummary");
         expect(pwaCheck).toContain("readOfflineCacheSummary");
+        expect(pwaCheck).toContain("readRuntimePerformanceSummary");
+        expect(pwaCheck).toContain('id: "runtime-performance"');
         expect(pwaCheck).toContain("readStorageSummary");
         expect(pwaCheck).toContain("canUseIndexedDb");
         expect(pwaCheck).toContain("navigator.storage?.estimate");

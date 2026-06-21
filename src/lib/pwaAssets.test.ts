@@ -438,7 +438,7 @@ describe("PWA assets", () => {
         const sw = getServiceWorkerSource();
 
         expect(sw).toContain("CACHE_FIRST_PATHS.has(url.pathname)");
-        expect(sw).toContain('const CACHE_VERSION = "omr-maker-v11"');
+        expect(sw).toContain('const CACHE_VERSION = "omr-maker-v12"');
         expect(sw).toContain("canRememberNavigation(url.pathname)");
         expect(sw).toContain("NAVIGATION_CACHE_PATHS");
         expect(sw).toContain("NAVIGATION_CACHE_PREFIXES");
@@ -495,7 +495,7 @@ describe("PWA assets", () => {
 
         await harness.dispatchInstall();
 
-        expect(await harness.caches.keys()).toContain("omr-maker-v11-shell");
+        expect(await harness.caches.keys()).toContain("omr-maker-v12-shell");
         expect(harness.self.skipWaiting).toHaveBeenCalledOnce();
         await expect(harness.caches.match("/pwa-check")).resolves.toBeInstanceOf(Response);
         await expect(harness.caches.match("/offline.html")).resolves.toBeInstanceOf(Response);
@@ -515,7 +515,7 @@ describe("PWA assets", () => {
         await harness.dispatchActivate();
 
         expect(await harness.caches.keys()).toEqual(
-            expect.arrayContaining(["omr-maker-v11-shell"]),
+            expect.arrayContaining(["omr-maker-v12-shell"]),
         );
         expect(await harness.caches.keys()).not.toEqual(
             expect.arrayContaining(["omr-maker-v10-shell", "omr-maker-v10-runtime"]),
@@ -716,13 +716,13 @@ describe("PWA assets", () => {
             "installedDisplay=yes",
             "proofStatus=pass",
             "displayEvidence=css-fullscreen=no · css-standalone=yes · ios-navigator-standalone=no",
-            "summary=15 pass, 0 warn, 0 fail",
+            "summary=16 pass, 0 warn, 0 fail",
             "userAgent=Mozilla/5.0 (Linux; Android 15; Pixel 9) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.7727.15 Mobile Safari/537.36",
             "- secure-context=pass:보안 컨텍스트 (https://omr-maker-eight.vercel.app)",
             "- display-mode=pass:standalone (홈 화면 아이콘 실행 상태)",
             "- launch-proof=pass:확인됨 (css-fullscreen=no · css-standalone=yes · ios-navigator-standalone=no)",
             "- service-worker=pass:제어 중 (script=https://omr-maker-eight.vercel.app/sw.js · controller=yes · active=activated · waiting=none · installing=none)",
-            "- offline-cache=pass:준비 (caches=omr-maker-v11-shell, omr-maker-v11-runtime · required=/, /pwa-check, /offline.html, /logo.png · expected=omr-maker-v11-shell · missingCaches=none · missing=none)",
+            "- offline-cache=pass:준비 (caches=omr-maker-v12-shell, omr-maker-v12-runtime · required=/, /pwa-check, /offline.html, /logo.png · expected=omr-maker-v12-shell · missingCaches=none · missing=none)",
             "- manifest=pass:standalone (OMR Maker · icons 12 · screenshots 2)",
             "- viewport=pass:cover (width=device-width, initial-scale=1, viewport-fit=cover)",
             "- viewport-height=pass:동기화 (css=727px · visual=727px · inner=727px · delta=0px)",
@@ -732,6 +732,7 @@ describe("PWA assets", () => {
             "- handoff-origin=pass:공유 가능 (https://omr-maker-eight.vercel.app/pwa-check)",
             "- overflow=pass:정상 (scroll 393px / viewport 393px)",
             "- storage=pass:사용 가능 (localStorage ok · sessionStorage ok · indexedDB ok · quota=512MB · usage=1MB · persisted=unknown)",
+            "- runtime-performance=pass:쾌적 (domReady=742ms · load=980ms · response=180ms · fcp=520ms · longTasks=not-sampled · budget=3000/5000ms)",
             "- install-prompt=pass:없음 (진단 화면에는 설치 배너 없음)",
         ].join("\n");
         const pendingReport = passingReport
@@ -739,10 +740,11 @@ describe("PWA assets", () => {
             .replace("displayMode=standalone", "displayMode=browser")
             .replace("installedDisplay=yes", "installedDisplay=no")
             .replace("proofStatus=pass", "proofStatus=pending");
-        const staleCacheReport = passingReport.replaceAll("omr-maker-v11", "omr-maker-v9");
+        const staleCacheReport = passingReport.replaceAll("omr-maker-v12", "omr-maker-v9");
         const staleTimeReport = passingReport.replace(`checkedAtEpoch=${freshProofEpoch}`, `checkedAtEpoch=${staleProofEpoch}`);
         const uncontrolledWorkerReport = passingReport.replace("controller=yes", "controller=no");
         const legacyStorageReport = passingReport.replace(" · indexedDB ok · quota=512MB · usage=1MB · persisted=unknown", "");
+        const legacyPerformanceReport = passingReport.replace(/\n- runtime-performance=pass:쾌적 \([^)]+\)/, "");
         const wrongPathReport = passingReport.replace("url=https://omr-maker-eight.vercel.app/pwa-check", "url=https://omr-maker-eight.vercel.app/teacher/dashboard");
         const wrongOriginReport = passingReport.replaceAll("https://omr-maker-eight.vercel.app", "https://preview.example.com");
         const iosReport = passingReport
@@ -797,6 +799,10 @@ describe("PWA assets", () => {
             encoding: "utf8",
             input: legacyStorageReport,
         });
+        const legacyPerformance = spawnSync(process.execPath, [proofScriptPath], {
+            encoding: "utf8",
+            input: legacyPerformanceReport,
+        });
         const wrongPath = spawnSync(process.execPath, [proofScriptPath], {
             encoding: "utf8",
             input: wrongPathReport,
@@ -831,9 +837,10 @@ describe("PWA assets", () => {
         expect(source).toContain("checkedAtEpoch");
         expect(source).toContain("generatedAtEpoch");
         expect(source).toContain("must be newer than 7 days.");
-        expect(source).toContain('const expectedCachePrefix = "omr-maker-v11"');
+        expect(source).toContain('const expectedCachePrefix = "omr-maker-v12"');
         expect(source).toContain("offline-cache must include ${expectedCachePrefix}");
         expect(source).toContain("storage must include IndexedDB availability.");
+        expect(source).toContain("runtime-performance must include the device timing budget evidence.");
         expect(source).toContain("service-worker must be controlled by the active PWA worker.");
         expect(source).toContain("OMR Maker PWA dual device proof");
         expect(source).toContain("Android proof report must pass");
@@ -860,13 +867,15 @@ describe("PWA assets", () => {
         expect(JSON.parse(staleCache.stdout)).toMatchObject({
             status: "failed",
         });
-        expect(JSON.parse(staleCache.stdout).errors).toContain("offline-cache must include omr-maker-v11.");
+        expect(JSON.parse(staleCache.stdout).errors).toContain("offline-cache must include omr-maker-v12.");
         expect(staleTime.status).toBe(1);
         expect(JSON.parse(staleTime.stdout).errors).toContain("checkedAtEpoch must be newer than 7 days.");
         expect(uncontrolledWorker.status).toBe(1);
         expect(JSON.parse(uncontrolledWorker.stdout).errors).toContain("service-worker must be controlled by the active PWA worker.");
         expect(legacyStorage.status).toBe(1);
         expect(JSON.parse(legacyStorage.stdout).errors).toContain("storage must include IndexedDB availability.");
+        expect(legacyPerformance.status).toBe(1);
+        expect(JSON.parse(legacyPerformance.stdout).errors).toContain("Missing check: runtime-performance.");
         expect(wrongPath.status).toBe(1);
         expect(JSON.parse(wrongPath.stdout).errors).toContain("Report URL must be the deployed HTTPS /pwa-check URL, not localhost, another path, or another origin.");
         expect(wrongOrigin.status).toBe(1);

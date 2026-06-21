@@ -202,13 +202,13 @@ function validInstalledProofReport(platform: "android" | "ios" = "android"): str
         "installedDisplay=yes",
         "proofStatus=pass",
         `displayEvidence=${displayEvidence}`,
-        "summary=15 pass, 0 warn, 0 fail",
+        "summary=16 pass, 0 warn, 0 fail",
         `userAgent=${userAgent}`,
         "- secure-context=pass:보안 컨텍스트 (https://omr-maker-eight.vercel.app)",
         "- display-mode=pass:standalone (홈 화면 아이콘 실행 상태)",
         `- launch-proof=pass:확인됨 (${displayEvidence})`,
         "- service-worker=pass:제어 중 (script=https://omr-maker-eight.vercel.app/sw.js · controller=yes · active=activated · waiting=none · installing=none)",
-        "- offline-cache=pass:준비 (caches=omr-maker-v11-shell, omr-maker-v11-runtime · required=/, /pwa-check, /offline.html, /logo.png · expected=omr-maker-v11-shell · missingCaches=none · missing=none)",
+        "- offline-cache=pass:준비 (caches=omr-maker-v12-shell, omr-maker-v12-runtime · required=/, /pwa-check, /offline.html, /logo.png · expected=omr-maker-v12-shell · missingCaches=none · missing=none)",
         "- manifest=pass:standalone (OMR Maker · icons 12 · screenshots 2)",
         "- viewport=pass:cover (width=device-width, initial-scale=1, viewport-fit=cover)",
         "- viewport-height=pass:동기화 (css=727px · visual=727px · inner=727px · delta=0px)",
@@ -218,6 +218,7 @@ function validInstalledProofReport(platform: "android" | "ios" = "android"): str
         "- handoff-origin=pass:공유 가능 (https://omr-maker-eight.vercel.app/pwa-check)",
         "- overflow=pass:정상 (scroll 393px / viewport 393px)",
         "- storage=pass:사용 가능 (localStorage ok · sessionStorage ok · indexedDB ok · quota=512MB · usage=1MB · persisted=unknown)",
+        "- runtime-performance=pass:쾌적 (domReady=742ms · load=980ms · response=180ms · fcp=520ms · longTasks=not-sampled · budget=3000/5000ms)",
         "- install-prompt=pass:없음 (진단 화면에는 설치 배너 없음)",
     ].join("\n");
 }
@@ -491,6 +492,7 @@ test.describe("Mobile PWA entry", () => {
         await expect(page.getByTestId("pwa-device-check-ios-startup-image")).toContainText("준비");
         await expect(page.getByTestId("pwa-device-check-overflow")).toContainText("정상");
         await expect(page.getByTestId("pwa-device-check-storage")).toContainText("indexedDB ok");
+        await expect(page.getByTestId("pwa-device-check-runtime-performance")).toContainText(/쾌적|지연|측정 불가/);
         await expect(page.getByTestId("pwa-device-report")).toContainText("OMR Maker PWA device check");
         await expect(page.getByTestId("pwa-device-report")).toContainText("checkedAtEpoch=");
         await expect(page.getByTestId("pwa-device-report")).toContainText("displayMode=browser");
@@ -500,6 +502,7 @@ test.describe("Mobile PWA entry", () => {
         await expect(page.getByTestId("pwa-device-report")).toContainText("viewport-height=pass:동기화");
         await expect(page.getByTestId("pwa-device-report")).toContainText("keyboard-safe-area=pass:준비");
         await expect(page.getByTestId("pwa-device-report")).toContainText("ios-startup-image=pass:준비");
+        await expect(page.getByTestId("pwa-device-report")).toContainText("runtime-performance=");
         await expect(page.getByTestId("pwa-install-proof-guide")).toContainText("실기기 설치 확인");
         await expect(page.getByTestId("pwa-install-proof-guide")).toContainText("standalone");
         await expect(page.getByTestId("pwa-install-proof-guide")).toContainText("fullscreen");
@@ -553,6 +556,7 @@ test.describe("Mobile PWA entry", () => {
         expect(copiedReport).toContain("viewport-height=pass:동기화");
         expect(copiedReport).toContain("keyboard-safe-area=pass:준비");
         expect(copiedReport).toContain("overflow=pass:정상");
+        expect(copiedReport).toContain("runtime-performance=");
         expect(copiedReport).toContain("indexedDB ok");
 
         const currentProofInputId = testInfo.project.name.includes("ios") ? "pwa-proof-input-ios" : "pwa-proof-input";
@@ -644,6 +648,7 @@ test.describe("Mobile PWA entry", () => {
         await expect(page.getByTestId("pwa-device-report")).toContainText("offline-cache=");
         await expect(page.getByTestId("pwa-device-report")).toContainText("viewport-height=pass:동기화");
         await expect(page.getByTestId("pwa-device-report")).toContainText("keyboard-safe-area=pass:준비");
+        await expect(page.getByTestId("pwa-device-report")).toContainText("runtime-performance=");
         const pwaCheckUrl = page.url();
         if (isLocalAppUrl(pwaCheckUrl)) {
             await expect(page.getByTestId("pwa-device-verdict")).toContainText("실기기 검증 필요");

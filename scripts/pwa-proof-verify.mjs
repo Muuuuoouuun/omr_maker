@@ -166,7 +166,7 @@ function validateProof(parsed, expectedPlatform = "", expectedOrigin = "") {
     const errors = [];
     const platform = readProofPlatform(parsed.fields);
     const installedModes = new Set(["standalone", "fullscreen"]);
-    const expectedCachePrefix = "omr-maker-v11";
+    const expectedCachePrefix = "omr-maker-v12";
     const requiredPassChecks = [
         "secure-context",
         "display-mode",
@@ -182,6 +182,7 @@ function validateProof(parsed, expectedPlatform = "", expectedOrigin = "") {
         "handoff-origin",
         "overflow",
         "storage",
+        "runtime-performance",
         "install-prompt",
     ];
 
@@ -221,6 +222,9 @@ function validateProof(parsed, expectedPlatform = "", expectedOrigin = "") {
     }
     if (parsed.checks.storage && !parsed.checks.storage.detail.includes("indexedDB ok")) {
         errors.push("storage must include IndexedDB availability.");
+    }
+    if (parsed.checks["runtime-performance"] && !parsed.checks["runtime-performance"].detail.includes("budget=")) {
+        errors.push("runtime-performance must include the device timing budget evidence.");
     }
     if (
         parsed.checks["service-worker"]

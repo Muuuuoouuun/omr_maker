@@ -7,7 +7,7 @@ const port = Number(process.env.PWA_SMOKE_PORT || 3004);
 const externalBaseUrl = process.env.PWA_SMOKE_BASE_URL?.replace(/\/$/, "");
 const baseUrl = externalBaseUrl || `http://localhost:${port}`;
 const ownsServer = !externalBaseUrl;
-const expectedCachePrefix = "omr-maker-v11";
+const expectedCachePrefix = "omr-maker-v12";
 const requiredHttpResources = [
     { contentType: "text/html", pathname: "/pwa-check" },
     { contentType: "application/manifest+json", pathname: "/manifest.webmanifest" },
@@ -452,6 +452,8 @@ async function runSmoke() {
         assert(onlineDeviceCheckState.report.includes("offline-cache=pass:준비"), "PWA device check offline cache readiness is missing", onlineDeviceCheckState);
         assert(onlineDeviceCheckState.report.includes("storage=pass:사용 가능"), "PWA device check storage readiness is missing", onlineDeviceCheckState);
         assert(onlineDeviceCheckState.report.includes("indexedDB ok"), "PWA device check IndexedDB readiness is missing", onlineDeviceCheckState);
+        assert(onlineDeviceCheckState.report.includes("runtime-performance="), "PWA device check runtime performance proof is missing", onlineDeviceCheckState);
+        assert(onlineDeviceCheckState.report.includes("budget=3000/5000ms"), "PWA device check runtime performance budget evidence is missing", onlineDeviceCheckState);
         assert(onlineDeviceCheckState.report.includes("viewport-height=pass:동기화"), "PWA device check viewport height sync is missing", onlineDeviceCheckState);
         assert(onlineDeviceCheckState.report.includes("keyboard-safe-area=pass:준비"), "PWA device check keyboard safe area is missing", onlineDeviceCheckState);
         assert(onlineDeviceCheckState.installProofGuide.includes("실기기 설치 확인"), "PWA install proof guide is missing", onlineDeviceCheckState);
@@ -525,6 +527,8 @@ async function runSmoke() {
         assert(offlineDeviceCheckState.report.includes("offline-cache=pass:준비"), "Offline PWA device check offline cache readiness is missing", offlineDeviceCheckState);
         assert(offlineDeviceCheckState.report.includes("storage=pass:사용 가능"), "Offline PWA device check storage readiness is missing", offlineDeviceCheckState);
         assert(offlineDeviceCheckState.report.includes("indexedDB ok"), "Offline PWA device check IndexedDB readiness is missing", offlineDeviceCheckState);
+        assert(offlineDeviceCheckState.report.includes("runtime-performance="), "Offline PWA device check runtime performance proof is missing", offlineDeviceCheckState);
+        assert(offlineDeviceCheckState.report.includes("budget=3000/5000ms"), "Offline PWA device check runtime performance budget evidence is missing", offlineDeviceCheckState);
         assert(offlineDeviceCheckState.report.includes("viewport-height=pass:동기화"), "Offline PWA device check viewport height sync is missing", offlineDeviceCheckState);
         assert(offlineDeviceCheckState.report.includes("keyboard-safe-area=pass:준비"), "Offline PWA device check keyboard safe area is missing", offlineDeviceCheckState);
         assert(offlineDeviceCheckState.installProofGuide.includes("실기기 설치 확인"), "Offline PWA install proof guide is missing", offlineDeviceCheckState);

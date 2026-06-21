@@ -66,13 +66,16 @@ const VIEWPORT_OFFSET_TOP_VAR = "--app-visual-viewport-offset-top";
 const VIEWPORT_OFFSET_LEFT_VAR = "--app-visual-viewport-offset-left";
 const VIEWPORT_SCALE_VAR = "--app-visual-viewport-scale";
 const KEYBOARD_INSET_BOTTOM_VAR = "--app-keyboard-inset-bottom";
-const EXPECTED_OFFLINE_CACHE_PREFIX = "omr-maker-v11";
+const EXPECTED_OFFLINE_CACHE_PREFIX = "omr-maker-v12";
 const OFFLINE_CACHE_REQUIRED_PATHS = ["/", "/pwa-check", "/offline.html", "/logo.png"];
 const DUAL_PROOF_HEADER = "OMR Maker PWA dual device proof";
 const PROOF_INPUT_STORAGE_KEY = "omr_pwa_device_proof_inputs_v1";
 const PROOF_INSTALLED_MODES = new Set(["standalone", "fullscreen"]);
 const PROOF_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 const PROOF_MAX_CLOCK_SKEW_MS = 10 * 60 * 1000;
+const PERFORMANCE_DOM_READY_BUDGET_MS = 3000;
+const PERFORMANCE_LOAD_BUDGET_MS = 5000;
+const PERFORMANCE_FCP_BUDGET_MS = 2500;
 const REQUIRED_PROOF_PASS_CHECKS = [
   "secure-context",
   "display-mode",
@@ -88,6 +91,7 @@ const REQUIRED_PROOF_PASS_CHECKS = [
   "handoff-origin",
   "overflow",
   "storage",
+  "runtime-performance",
   "install-prompt",
 ];
 
@@ -308,6 +312,59 @@ async function readStorageSummary(): Promise<{ detail: string; tone: CheckTone; 
     ].join(" · "),
     tone: isReady ? "pass" : "warn",
     value: isReady ? "사용 가능" : "제한됨",
+  };
+}
+
+function formatPerformanceMs(value: number | null): string {
+  return value === null ? "n/a" : `${value}ms`;
+}
+
+function readTimingMetric(
+  navigation: PerformanceNavigationTiming | undefined,
+  legacyTiming: PerformanceTiming | undefined,
+  metric: "domContentLoadedEventEnd" | "loadEventEnd" | "responseEnd",
+): number | null {
+  if (navigation && navigation[metric] > 0) {
+    return Math.round(navigation[metric] - navigation.startTime);
+  }
+
+  if (legacyTiming && legacyTiming.navigationStart > 0 && legacyTiming[metric] > 0) {
+    return Math.round(legacyTiming[metric] - legacyTiming.navigationStart);
+  }
+
+  return null;
+}
+
+function readPaintMetric(name: string): number | null {
+  const entry = performance.getEntriesByType("paint").find(item => item.name === name);
+  return entry ? Math.round(entry.startTime) : null;
+}
+
+function readRuntimePerformanceSummary(): { detail: string; tone: CheckTone; value: string } {
+  const navigation = performance.getEntriesByType("navigation")[0] as PerformanceNavigationTiming | undefined;
+  const legacyTiming = performance.timing;
+  const domReadyMs = readTimingMetric(navigation, legacyTiming, "domContentLoadedEventEnd");
+  const loadMs = readTimingMetric(navigation, legacyTiming, "loadEventEnd");
+  const responseMs = readTimingMetric(navigation, legacyTiming, "responseEnd");
+  const fcpMs = readPaintMetric("first-contentful-paint");
+  const hasUsableTiming = domReadyMs !== null || fcpMs !== null;
+  const domOrPaintReady = domReadyMs === null
+    ? fcpMs !== null && fcpMs <= PERFORMANCE_FCP_BUDGET_MS
+    : domReadyMs <= PERFORMANCE_DOM_READY_BUDGET_MS;
+  const loadReady = loadMs === null || loadMs <= PERFORMANCE_LOAD_BUDGET_MS;
+  const isComfortable = hasUsableTiming && domOrPaintReady && loadReady;
+
+  return {
+    detail: [
+      `domReady=${formatPerformanceMs(domReadyMs)}`,
+      `load=${formatPerformanceMs(loadMs)}`,
+      `response=${formatPerformanceMs(responseMs)}`,
+      `fcp=${formatPerformanceMs(fcpMs)}`,
+      "longTasks=not-sampled",
+      `budget=${PERFORMANCE_DOM_READY_BUDGET_MS}/${PERFORMANCE_LOAD_BUDGET_MS}ms`,
+    ].join(" · "),
+    tone: isComfortable ? "pass" : hasUsableTiming ? "warn" : "fail",
+    value: isComfortable ? "쾌적" : hasUsableTiming ? "지연" : "측정 불가",
   };
 }
 
@@ -566,6 +623,9 @@ function validateProofReport(reportText: string, expectedPlatform?: ProofTarget)
   if (parsed.checks.storage && !parsed.checks.storage.detail.includes("indexedDB ok")) {
     errors.push("storage must include IndexedDB availability.");
   }
+  if (parsed.checks["runtime-performance"] && !parsed.checks["runtime-performance"].detail.includes("budget=")) {
+    errors.push("runtime-performance must include the device timing budget evidence.");
+  }
   if (
     parsed.checks["service-worker"]
     && (
@@ -793,6 +853,7 @@ async function collectRuntimeSnapshot(): Promise<RuntimeSnapshot> {
   const promptCount = document.querySelectorAll(".mobile-install-prompt").length;
   const isLocalHandoff = isLocalHandoffHost(location.hostname);
   const hasDeviceReachableHandoff = location.protocol === "https:" && !isLocalHandoff;
+  const runtimePerformance = readRuntimePerformanceSummary();
 
   return {
     checkedAt: checkedAtDate.toLocaleString("ko-KR", { hour12: false }),
@@ -900,6 +961,13 @@ async function collectRuntimeSnapshot(): Promise<RuntimeSnapshot> {
         label: "저장소",
         tone: storage.tone,
         value: storage.value,
+      },
+      {
+        detail: runtimePerformance.detail,
+        id: "runtime-performance",
+        label: "런타임 성능",
+        tone: runtimePerformance.tone,
+        value: runtimePerformance.value,
       },
       {
         detail: promptCount === 0 ? "진단 화면에는 설치 배너 없음" : `${promptCount}개 감지`,
