@@ -234,6 +234,7 @@ function createServiceWorkerHarness() {
 
     async function dispatchFetch(pathname: string, options: { mode?: string; method?: string } = {}) {
         const responses: Array<Promise<Response>> = [];
+        const waits: Array<Promise<unknown>> = [];
         const request = {
             method: options.method || "GET",
             mode: options.mode || "same-origin",
@@ -243,11 +244,15 @@ function createServiceWorkerHarness() {
             listener({
                 request,
                 respondWith: (promise: Promise<Response>) => responses.push(promise),
+                waitUntil: (promise: Promise<unknown>) => waits.push(promise),
             });
         });
 
         if (responses.length === 0) return null;
-        return responses[0];
+        return responses[0].then(async response => {
+            await Promise.all(waits);
+            return response;
+        });
     }
 
     async function dispatchMessage(data: unknown) {
@@ -429,8 +434,16 @@ describe("PWA assets", () => {
         const sw = getServiceWorkerSource();
 
         expect(sw).toContain("CACHE_FIRST_PATHS.has(url.pathname)");
-        expect(sw).toContain('const CACHE_VERSION = "omr-maker-v9"');
+        expect(sw).toContain('const CACHE_VERSION = "omr-maker-v10"');
         expect(sw).toContain("canRememberNavigation(url.pathname)");
+        expect(sw).toContain("NAVIGATION_CACHE_PATHS");
+        expect(sw).toContain("NAVIGATION_CACHE_PREFIXES");
+        expect(sw).toContain('pathname.startsWith(prefix)');
+        expect(sw).toContain('"/student/dashboard"');
+        expect(sw).toContain('"/student/history"');
+        expect(sw).toContain('"/solve/"');
+        expect(sw).toContain('"/student/review/"');
+        expect(sw).toContain("readNavigationFallback(request, url)");
         expect(sw).toContain('url.pathname.startsWith("/startup/")');
         expect(sw).toContain("if (!response.ok) return");
         expect(sw).toContain(".catch(() => undefined)");
@@ -478,7 +491,7 @@ describe("PWA assets", () => {
 
         await harness.dispatchInstall();
 
-        expect(await harness.caches.keys()).toContain("omr-maker-v9-shell");
+        expect(await harness.caches.keys()).toContain("omr-maker-v10-shell");
         expect(harness.self.skipWaiting).toHaveBeenCalledOnce();
         await expect(harness.caches.match("/pwa-check")).resolves.toBeInstanceOf(Response);
         await expect(harness.caches.match("/offline.html")).resolves.toBeInstanceOf(Response);
@@ -530,7 +543,41 @@ describe("PWA assets", () => {
         await expect(navigationResponse?.text()).resolves.toBe("cached:/pwa-check");
     });
 
-    it("service worker keeps dynamic app pages out of the runtime navigation cache", async () => {
+    it("service worker reuses cached student app pages for offline installed launches", async () => {
+        const harness = createServiceWorkerHarness();
+        await harness.dispatchInstall();
+        await harness.dispatchActivate();
+
+        const solveResponse = await harness.dispatchFetch("/solve/mobile-qa-exam", { mode: "navigate" });
+        const dashboardResponse = await harness.dispatchFetch("/student/dashboard", { mode: "navigate" });
+        const historyResponse = await harness.dispatchFetch("/student/history", { mode: "navigate" });
+        const reviewResponse = await harness.dispatchFetch("/student/review/attempt-1", { mode: "navigate" });
+
+        await expect(solveResponse?.text()).resolves.toBe("network:/solve/mobile-qa-exam");
+        await expect(dashboardResponse?.text()).resolves.toBe("network:/student/dashboard");
+        await expect(historyResponse?.text()).resolves.toBe("network:/student/history");
+        await expect(reviewResponse?.text()).resolves.toBe("network:/student/review/attempt-1");
+        await expect(harness.caches.match("/solve/mobile-qa-exam")).resolves.toBeInstanceOf(Response);
+        await expect(harness.caches.match("/student/dashboard")).resolves.toBeInstanceOf(Response);
+        await expect(harness.caches.match("/student/history")).resolves.toBeInstanceOf(Response);
+        await expect(harness.caches.match("/student/review/attempt-1")).resolves.toBeInstanceOf(Response);
+
+        harness.setNetworkFetch(async () => {
+            throw new Error("offline");
+        });
+
+        const offlineSolveResponse = await harness.dispatchFetch("/solve/mobile-qa-exam", { mode: "navigate" });
+        const offlineDashboardResponse = await harness.dispatchFetch("/student/dashboard", { mode: "navigate" });
+        const offlineHistoryResponse = await harness.dispatchFetch("/student/history", { mode: "navigate" });
+        const offlineReviewResponse = await harness.dispatchFetch("/student/review/attempt-1", { mode: "navigate" });
+
+        await expect(offlineSolveResponse?.text()).resolves.toBe("network:/solve/mobile-qa-exam");
+        await expect(offlineDashboardResponse?.text()).resolves.toBe("network:/student/dashboard");
+        await expect(offlineHistoryResponse?.text()).resolves.toBe("network:/student/history");
+        await expect(offlineReviewResponse?.text()).resolves.toBe("network:/student/review/attempt-1");
+    });
+
+    it("service worker keeps teacher app pages out of the runtime navigation cache", async () => {
         const harness = createServiceWorkerHarness();
         await harness.dispatchInstall();
         await harness.dispatchActivate();
@@ -603,11 +650,15 @@ describe("PWA assets", () => {
         expect(source).toContain("onlineDeviceCheckState");
         expect(source).toContain("offlineDeviceCheckState");
         expect(source).toContain("offlineFallbackState");
+        expect(source).toContain("onlineSolveState");
+        expect(source).toContain("offlineSolveState");
         expect(source).toContain("Offline fallback touch targets are too small");
         expect(source).toContain("installProofGuide");
         expect(source).toContain("PWA install proof guide is missing");
         expect(source).toContain("PWA install proof guide must cover Android and iOS");
         expect(source).toContain("cachedPwaCheck");
+        expect(source).toContain("cachedMobileSolve");
+        expect(source).toContain("Offline mobile solve route did not render from cache");
         expect(source).toContain("displayEvidence=");
         expect(source).toContain("installedDisplay=no");
         expect(source).toContain("proofStatus=pending");
@@ -646,7 +697,7 @@ describe("PWA assets", () => {
             "- display-mode=pass:standalone (홈 화면 아이콘 실행 상태)",
             "- launch-proof=pass:확인됨 (css-fullscreen=no · css-standalone=yes · ios-navigator-standalone=no)",
             "- service-worker=pass:제어 중 (script=https://omr-maker-eight.vercel.app/sw.js · controller=yes · active=activated · waiting=none · installing=none)",
-            "- offline-cache=pass:준비 (caches=omr-maker-v9-shell, omr-maker-v9-runtime · required=/, /pwa-check, /offline.html, /logo.png · expected=omr-maker-v9-shell · missingCaches=none · missing=none)",
+            "- offline-cache=pass:준비 (caches=omr-maker-v10-shell, omr-maker-v10-runtime · required=/, /pwa-check, /offline.html, /logo.png · expected=omr-maker-v10-shell · missingCaches=none · missing=none)",
             "- manifest=pass:standalone (OMR Maker · icons 12 · screenshots 2)",
             "- viewport=pass:cover (width=device-width, initial-scale=1, viewport-fit=cover)",
             "- viewport-height=pass:동기화 (css=727px · visual=727px · inner=727px · delta=0px)",
@@ -663,7 +714,7 @@ describe("PWA assets", () => {
             .replace("displayMode=standalone", "displayMode=browser")
             .replace("installedDisplay=yes", "installedDisplay=no")
             .replace("proofStatus=pass", "proofStatus=pending");
-        const staleCacheReport = passingReport.replaceAll("omr-maker-v9", "omr-maker-v8");
+        const staleCacheReport = passingReport.replaceAll("omr-maker-v10", "omr-maker-v9");
         const uncontrolledWorkerReport = passingReport.replace("controller=yes", "controller=no");
         const legacyStorageReport = passingReport.replace(" · indexedDB ok · quota=512MB · usage=1MB · persisted=unknown", "");
         const iosReport = passingReport
@@ -714,7 +765,7 @@ describe("PWA assets", () => {
         expect(source).toContain("installedDisplay must be yes");
         expect(source).toContain("displayMode must be standalone or fullscreen");
         expect(source).toContain("Report URL must be the deployed HTTPS URL");
-        expect(source).toContain('const expectedCachePrefix = "omr-maker-v9"');
+        expect(source).toContain('const expectedCachePrefix = "omr-maker-v10"');
         expect(source).toContain("offline-cache must include ${expectedCachePrefix}");
         expect(source).toContain("storage must include IndexedDB availability.");
         expect(source).toContain("service-worker must be controlled by the active PWA worker.");
@@ -740,7 +791,7 @@ describe("PWA assets", () => {
         expect(JSON.parse(staleCache.stdout)).toMatchObject({
             status: "failed",
         });
-        expect(JSON.parse(staleCache.stdout).errors).toContain("offline-cache must include omr-maker-v9.");
+        expect(JSON.parse(staleCache.stdout).errors).toContain("offline-cache must include omr-maker-v10.");
         expect(uncontrolledWorker.status).toBe(1);
         expect(JSON.parse(uncontrolledWorker.stdout).errors).toContain("service-worker must be controlled by the active PWA worker.");
         expect(legacyStorage.status).toBe(1);

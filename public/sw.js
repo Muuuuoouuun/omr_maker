@@ -1,4 +1,4 @@
-const CACHE_VERSION = "omr-maker-v9";
+const CACHE_VERSION = "omr-maker-v10";
 const APP_SHELL_CACHE = `${CACHE_VERSION}-shell`;
 const RUNTIME_CACHE = `${CACHE_VERSION}-runtime`;
 const CACHE_FIRST_PATHS = new Set([
@@ -45,18 +45,51 @@ const APP_SHELL = [
   "/icons/apple-touch-icon.png",
   "/icons/mstile-150.png",
 ];
+const NAVIGATION_CACHE_PATHS = new Set([
+  "/",
+  "/pwa-check",
+  "/student/dashboard",
+  "/student/history",
+]);
+const NAVIGATION_CACHE_PREFIXES = [
+  "/solve/",
+  "/student/review/",
+];
 
 function rememberRuntimeResponse(request, response) {
-  if (!response.ok) return;
+  if (!response.ok) return Promise.resolve();
 
   const copy = response.clone();
-  caches.open(RUNTIME_CACHE)
+  return caches.open(RUNTIME_CACHE)
     .then(cache => cache.put(request, copy))
     .catch(() => undefined);
 }
 
 function canRememberNavigation(pathname) {
-  return pathname === "/" || pathname === "/pwa-check";
+  return NAVIGATION_CACHE_PATHS.has(pathname)
+    || NAVIGATION_CACHE_PREFIXES.some(prefix => pathname.startsWith(prefix));
+}
+
+async function readNavigationFallback(request, url) {
+  const cached = await caches.match(request);
+  if (cached) return cached;
+
+  if (url.pathname === "/") {
+    const cachedHome = await caches.match("/");
+    if (cachedHome) return cachedHome;
+  }
+
+  if (url.pathname === "/pwa-check") {
+    const cachedPwaCheck = await caches.match("/pwa-check");
+    if (cachedPwaCheck) return cachedPwaCheck;
+  }
+
+  if (canRememberNavigation(url.pathname)) {
+    const cachedHome = await caches.match("/");
+    if (cachedHome) return cachedHome;
+  }
+
+  return caches.match("/offline.html");
 }
 
 self.addEventListener("install", event => {
@@ -95,25 +128,12 @@ self.addEventListener("fetch", event => {
       fetch(request)
         .then(response => {
           if (canRememberNavigation(url.pathname)) {
-            rememberRuntimeResponse(request, response);
+            event.waitUntil(rememberRuntimeResponse(request, response));
           }
           return response;
         })
         .catch(async () => {
-          const cached = await caches.match(request);
-          if (cached) return cached;
-
-          if (url.pathname === "/") {
-            const cachedHome = await caches.match("/");
-            if (cachedHome) return cachedHome;
-          }
-
-          if (url.pathname === "/pwa-check") {
-            const cachedPwaCheck = await caches.match("/pwa-check");
-            if (cachedPwaCheck) return cachedPwaCheck;
-          }
-
-          return caches.match("/offline.html");
+          return readNavigationFallback(request, url);
         }),
     );
     return;

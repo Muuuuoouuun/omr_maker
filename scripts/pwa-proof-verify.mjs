@@ -112,7 +112,7 @@ function validateProof(parsed, expectedPlatform = "") {
     const errors = [];
     const platform = readProofPlatform(parsed.fields);
     const installedModes = new Set(["standalone", "fullscreen"]);
-    const expectedCachePrefix = "omr-maker-v9";
+    const expectedCachePrefix = "omr-maker-v10";
     const requiredPassChecks = [
         "secure-context",
         "display-mode",
