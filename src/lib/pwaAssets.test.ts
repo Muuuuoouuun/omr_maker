@@ -487,5 +487,9 @@ describe("PWA assets", () => {
         expect(source).toContain("cachedPwaCheck");
         expect(source).toContain("displayEvidence=");
         expect(source).toContain("launch-proof=");
+        expect(source).toContain("Page.getAppManifest");
+        expect(source).toContain("Page.getInstallabilityErrors");
+        expect(source).toContain("Chromium reported PWA installability errors");
+        expect(source).toContain("chromiumInstallabilityState");
     });
 });

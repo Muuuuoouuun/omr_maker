@@ -235,6 +235,25 @@ async function collectCacheState(page) {
     }, expectedCachePrefix);
 }
 
+async function collectChromiumInstallabilityState(context, page) {
+    const session = await context.newCDPSession(page);
+
+    try {
+        await session.send("Page.enable");
+        const manifest = await session.send("Page.getAppManifest");
+        const installability = await session.send("Page.getInstallabilityErrors");
+
+        return {
+            hasManifestData: Boolean(manifest.data),
+            installabilityErrors: installability.installabilityErrors || [],
+            manifestErrors: manifest.errors || [],
+            manifestUrl: manifest.url || "",
+        };
+    } finally {
+        await session.detach().catch(() => undefined);
+    }
+}
+
 async function runSmoke() {
     assertDeployableOrigin(baseUrl);
 
@@ -320,6 +339,12 @@ async function runSmoke() {
         serviceWorker = await waitForServiceWorker(page);
         assert(serviceWorker.controller, "Service worker did not control the app after reload", serviceWorker);
 
+        const chromiumInstallabilityState = await collectChromiumInstallabilityState(context, page);
+        assert(chromiumInstallabilityState.hasManifestData, "Chromium could not read the web app manifest", chromiumInstallabilityState);
+        assert(chromiumInstallabilityState.manifestUrl.endsWith("/manifest.webmanifest"), "Chromium manifest URL is incorrect", chromiumInstallabilityState);
+        assert(chromiumInstallabilityState.manifestErrors.length === 0, "Chromium reported web app manifest errors", chromiumInstallabilityState);
+        assert(chromiumInstallabilityState.installabilityErrors.length === 0, "Chromium reported PWA installability errors", chromiumInstallabilityState);
+
         await page.goto("/pwa-check", { waitUntil: "networkidle" });
         await page.getByRole("heading", { name: "PWA 디바이스 체크" }).waitFor({ state: "visible", timeout: 10_000 });
         await page.getByTestId("pwa-device-handoff-qr").waitFor({ state: "visible", timeout: 10_000 });
@@ -380,11 +405,13 @@ async function runSmoke() {
             cacheState,
             imageState,
             installability: {
+                chromiumInstallable: chromiumInstallabilityState.installabilityErrors.length === 0,
                 externalUrl: Boolean(externalBaseUrl),
                 httpsRequired: Boolean(externalBaseUrl),
                 localOriginAllowed: ownsServer && isLocalhostUrl(baseUrl),
                 secureContext: originState.isSecureContext,
             },
+            chromiumInstallabilityState,
             metadata: {
                 manifestDisplay: metadata.manifest.display,
                 screenshots: metadata.manifest.screenshots?.length || 0,
