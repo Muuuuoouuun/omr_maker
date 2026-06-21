@@ -117,7 +117,16 @@ function SolveDialogShell({
                         type="button"
                         onClick={onClose}
                         aria-label="닫기"
-                        style={{ color: 'var(--muted)', fontSize: '1.25rem', lineHeight: 1 }}
+                        style={{
+                            width: 44,
+                            height: 44,
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                            color: 'var(--muted)',
+                            fontSize: '1.25rem',
+                            lineHeight: 1,
+                        }}
                     >
                         ×
                     </button>
@@ -129,6 +138,10 @@ function SolveDialogShell({
 }
 
 const dialogButtonBase: CSSProperties = {
+    minHeight: 44,
+    display: 'inline-flex',
+    alignItems: 'center',
+    justifyContent: 'center',
     padding: '0.7rem 1rem',
     borderRadius: 'var(--radius-md)',
     fontWeight: 700,
@@ -1532,7 +1545,7 @@ export default function SolvePage() {
                         <button className="btn btn-primary solve-submit-button" style={{ padding: '0.5rem 1rem', fontSize: '0.85rem' }} onClick={handleSubmit}>
                             제출하기
                         </button>
-                        <ThemeToggle size="small" />
+                        <ThemeToggle />
                     </div>
                 </div>
             </header>

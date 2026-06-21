@@ -56,6 +56,30 @@ async function expectTouchTarget(locator: Locator) {
     expect(Math.round(box?.height || 0)).toBeGreaterThanOrEqual(44);
 }
 
+async function smallTargets(page: Page, selector: string) {
+    return page.evaluate((selector) => {
+        return [...document.querySelectorAll<HTMLElement>(selector)]
+            .filter((element) => {
+                const rect = element.getBoundingClientRect();
+                const style = window.getComputedStyle(element);
+                return rect.width > 0
+                    && rect.height > 0
+                    && style.display !== "none"
+                    && style.visibility !== "hidden";
+            })
+            .map((element) => {
+                const rect = element.getBoundingClientRect();
+                return {
+                    label: (element.getAttribute("aria-label") || element.textContent || element.tagName).trim().replace(/\s+/g, " "),
+                    tag: element.tagName.toLowerCase(),
+                    width: Math.round(rect.width),
+                    height: Math.round(rect.height),
+                };
+            })
+            .filter(target => target.width < 44 || target.height < 44);
+    }, selector);
+}
+
 async function expectMetaContent(page: Page, name: string, content: string) {
     await expect.poll(async () => page.evaluate(({ name }) => (
         document.querySelectorAll(`meta[name="${name}"]`).length
@@ -140,6 +164,41 @@ async function seedStudentSession(page: Page) {
     });
 }
 
+async function seedMobileSolveExam(page: Page) {
+    await page.addInitScript(() => {
+        const exam = {
+            id: "mobile-qa-exam",
+            title: "모바일 실전 시험",
+            createdAt: "2026-06-22T00:00:00.000Z",
+            durationMin: 30,
+            questions: [
+                { id: 1, number: 1, answer: 2, choices: 4, score: 25 },
+                { id: 2, number: 2, answer: 4, choices: 4, score: 25 },
+                { id: 3, number: 3, answer: 1, choices: 5, score: 25 },
+                { id: 4, number: 4, answer: 3, choices: 5, score: 25 },
+            ],
+            updatedAt: "2026-06-22T00:00:00.000Z",
+            accessConfig: { type: "public" },
+        };
+        const studentSession = {
+            groupId: "mobile-qa-group",
+            groupName: "모바일반",
+            identityType: "temporary",
+            isGuest: false,
+            name: "모바일학생",
+            studentId: "mobile-qa-student",
+            createdAt: "2026-06-22T00:00:00.000Z",
+        };
+        const sessionPayload = JSON.stringify(studentSession);
+        try {
+            window.localStorage.setItem("omr_exam_mobile-qa-exam", JSON.stringify(exam));
+            window.localStorage.setItem("omr_student_session_backup", sessionPayload);
+            window.sessionStorage.setItem("omr_student_session", sessionPayload);
+            window.localStorage.setItem("omr_solve_panel_mobile-qa-exam_mobile-qa-student", "expanded");
+        } catch {}
+    });
+}
+
 test.describe("Mobile PWA entry", () => {
     test.beforeEach(async ({ page }) => {
         await clearStorage(page);
@@ -207,6 +266,59 @@ test.describe("Mobile PWA entry", () => {
         await expect(page.getByRole("heading", { name: "환영합니다" })).toBeVisible();
         await expectTouchTarget(page.getByRole("button", { name: "역할 선택으로" }));
         await expectNoHorizontalOverflow(page);
+    });
+
+    test("lets students answer and submit an exam in the phone and tablet app shell", async ({ page }) => {
+        const consoleProblems = collectConsoleProblems(page);
+        await seedMobileSolveExam(page);
+
+        await page.goto("/solve/mobile-qa-exam");
+
+        await expect(page.getByText("모바일 실전 시험").first()).toBeVisible();
+        await expectTouchTarget(page.getByRole("link", { name: "OMR Maker" }));
+        await expectTouchTarget(page.locator(".solve-controls .solve-collapse-button"));
+        await expectTouchTarget(page.locator(".solve-controls .solve-submit-button"));
+        await expectTouchTarget(page.getByRole("button", { name: "문제 1번 보기 2" }));
+        await expectNoHorizontalOverflow(page);
+        expect(await smallTargets(page, ".solve-controls button, .solve-controls label, .solve-omr-scroll .q-bubble, .solve-omr-next-button, .solve-omr-pane-close")).toEqual([]);
+
+        await page.getByRole("button", { name: "문제 1번 보기 2" }).click();
+        await page.getByRole("button", { name: "문제 2번 보기 4" }).click();
+        await page.getByRole("button", { name: "문제 3번 보기 1" }).click();
+        await page.getByRole("button", { name: "문제 4번 보기 3" }).click();
+
+        await expect(page.locator(".solve-progress")).toContainText("4/4");
+        await expectNoHorizontalOverflow(page);
+
+        await page.getByRole("button", { name: "제출하기" }).click();
+
+        const submitDialog = page.getByRole("dialog", { name: "답안 제출" });
+        await expect(submitDialog).toBeVisible();
+        await expect(submitDialog).toContainText("전체 4문항 답안을 모두 선택했습니다.");
+        await expectTouchTarget(submitDialog.getByRole("button", { name: "계속 풀기" }));
+        await expectTouchTarget(submitDialog.getByRole("button", { name: "제출하기" }));
+
+        await submitDialog.getByRole("button", { name: "제출하기" }).click();
+
+        await expect(page).toHaveURL(/\/student\/review\/\d+/);
+        await expect(page.getByRole("heading", { name: "모바일 실전 시험" })).toBeVisible();
+        await expect(page.getByText("100%")).toBeVisible();
+        await expectNoHorizontalOverflow(page);
+
+        const savedAttempt = await page.evaluate(() => {
+            const attempts = JSON.parse(window.localStorage.getItem("omr_attempts") || "[]");
+            return attempts.find((attempt: { examId?: string }) => attempt.examId === "mobile-qa-exam") || null;
+        });
+        expect(savedAttempt).toMatchObject({
+            answers: { 1: 2, 2: 4, 3: 1, 4: 3 },
+            examId: "mobile-qa-exam",
+            score: 100,
+            status: "completed",
+            studentId: "mobile-qa-student",
+            studentName: "모바일학생",
+            totalScore: 100,
+        });
+        expect(consoleProblems).toEqual([]);
     });
 
     test("shows platform install guidance and suppresses it on work screens", async ({ page }, testInfo) => {

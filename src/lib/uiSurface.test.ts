@@ -350,6 +350,30 @@ describe("service UI surface", () => {
         expect(solvePage).toContain('inputMode="email"');
     });
 
+    it("keeps the student solve flow touch friendly on phone and tablet shells", () => {
+        const css = readProjectFile("src/app/globals.css");
+        const solvePage = readProjectFile("src/app/solve/[id]/page.tsx");
+        const pwaMobileE2e = readProjectFile("e2e/pwa-mobile.spec.ts");
+
+        expect(solvePage).toContain("<ThemeToggle />");
+        expect(css).toContain(".solve-brand");
+        expect(css).toContain("width: 2.75rem !important");
+        expect(css).toContain(".solve-teacher-toggle");
+        expect(css).toContain("min-height: 44px");
+        expect(css).toContain(".solve-tab-button");
+        expect(css).toContain(".solve-pdf-button");
+        expect(css).toContain(".solve-submit-button");
+        expect(css).toContain(".solve-omr-rail-button");
+        expect(css).toContain("width: 44px");
+        expect(css).toContain(".solve-omr-scroll .q-bubble");
+        expect(css).toContain("height: 44px");
+        expect(pwaMobileE2e).toContain("lets students answer and submit an exam in the phone and tablet app shell");
+        expect(pwaMobileE2e).toContain("omr_exam_mobile-qa-exam");
+        expect(pwaMobileE2e).toContain("omr_solve_panel_mobile-qa-exam_mobile-qa-student");
+        expect(pwaMobileE2e).toContain("문제 4번 보기 3");
+        expect(pwaMobileE2e).toContain("score: 100");
+    });
+
     it("shows a recoverable student-facing error when a solve link cannot load an exam", () => {
         const solvePage = readProjectFile("src/app/solve/[id]/page.tsx");
 

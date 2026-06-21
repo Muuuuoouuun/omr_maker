@@ -2827,8 +2827,8 @@ body:has(.home-page[data-home-role="teacher"]) .mobile-install-prompt {
 }
 
 .solve-omr-rail {
-  flex: 0 0 42px;
-  width: 42px;
+  flex: 0 0 52px;
+  width: 52px;
   background: var(--surface);
   border-left: 1px solid var(--border);
   display: flex;
@@ -2843,15 +2843,16 @@ body:has(.home-page[data-home-role="teacher"]) .mobile-install-prompt {
 }
 
 .solve-omr-rail.is-collapsed {
-  flex-basis: 64px;
-  width: 64px;
+  flex-basis: 72px;
+  width: 72px;
   padding: 0.55rem 0.35rem;
   justify-content: flex-start;
   background: color-mix(in srgb, var(--surface) 92%, var(--primary));
 }
 
 .solve-omr-rail-button {
-  width: 34px;
+  width: 44px;
+  min-width: 44px;
   min-height: 154px;
   border-radius: 8px;
   border: 1px solid var(--border);
@@ -2925,8 +2926,9 @@ body:has(.home-page[data-home-role="teacher"]) .mobile-install-prompt {
 .solve-omr-quick-question,
 .solve-omr-quick-bubble,
 .solve-omr-quick-next {
-  width: 32px;
-  min-width: 32px;
+  width: 44px;
+  min-width: 44px;
+  min-height: 44px;
   border-radius: 8px;
   border: 1px solid var(--border);
   background: var(--surface);
@@ -2940,7 +2942,7 @@ body:has(.home-page[data-home-role="teacher"]) .mobile-install-prompt {
 }
 
 .solve-omr-quick-question {
-  height: 28px;
+  height: 44px;
   background: color-mix(in srgb, var(--primary) 10%, var(--surface));
   color: var(--primary);
   font-size: 0.76rem;
@@ -2952,7 +2954,7 @@ body:has(.home-page[data-home-role="teacher"]) .mobile-install-prompt {
 }
 
 .solve-omr-quick-bubble {
-  height: 32px;
+  height: 44px;
   border-radius: 50%;
   font-size: 0.76rem;
 }
@@ -2972,8 +2974,8 @@ body:has(.home-page[data-home-role="teacher"]) .mobile-install-prompt {
 }
 
 .solve-omr-quick-handwriting {
-  width: 32px;
-  min-height: 26px;
+  width: 44px;
+  min-height: 44px;
   border-radius: 8px;
   display: inline-flex;
   align-items: center;
@@ -2994,7 +2996,7 @@ body:has(.home-page[data-home-role="teacher"]) .mobile-install-prompt {
 }
 
 .solve-omr-quick-next {
-  height: 28px;
+  height: 44px;
   font-size: 0.62rem;
   color: var(--muted);
 }
@@ -3064,7 +3066,8 @@ body:has(.home-page[data-home-role="teacher"]) .mobile-install-prompt {
 
 .solve-omr-next-button,
 .solve-omr-pane-close {
-  height: 32px;
+  min-height: 44px;
+  height: 44px;
   border-radius: 8px;
   border: 1px solid var(--border);
   background: var(--background);
@@ -3096,8 +3099,27 @@ body:has(.home-page[data-home-role="teacher"]) .mobile-install-prompt {
 }
 
 .solve-omr-pane-close {
-  width: 32px;
+  width: 44px;
   padding: 0;
+}
+
+.solve-omr-scroll .q-bubble {
+  width: 44px;
+  height: 44px;
+}
+
+.solve-controls .solve-teacher-toggle,
+.solve-controls .solve-tab-button,
+.solve-controls .solve-pdf-button,
+.solve-controls .solve-collapse-button,
+.solve-controls .solve-submit-button {
+  min-height: 44px;
+}
+
+.solve-controls .solve-collapse-button {
+  width: 44px;
+  min-width: 44px;
+  justify-content: center;
 }
 
 /* ─── Solve Page Mobile App Layout ───────────────────── */
@@ -3131,8 +3153,8 @@ body:has(.home-page[data-home-role="teacher"]) .mobile-install-prompt {
   }
 
   .solve-brand {
-    width: 2.3rem !important;
-    height: 2.3rem !important;
+    width: 2.75rem !important;
+    height: 2.75rem !important;
   }
 
   .solve-divider {
@@ -3183,6 +3205,7 @@ body:has(.home-page[data-home-role="teacher"]) .mobile-install-prompt {
   .solve-teacher-toggle {
     flex: 1 1 132px;
     justify-content: center;
+    min-height: 44px;
     padding: 0.38rem 0.55rem !important;
     font-size: 0.74rem !important;
   }
@@ -3194,6 +3217,7 @@ body:has(.home-page[data-home-role="teacher"]) .mobile-install-prompt {
 
   .solve-tab-button {
     flex: 1 1 0;
+    min-height: 44px;
     padding: 0.34rem 0.45rem !important;
     white-space: nowrap;
   }
@@ -3201,7 +3225,7 @@ body:has(.home-page[data-home-role="teacher"]) .mobile-install-prompt {
   .solve-pdf-button,
   .solve-collapse-button,
   .solve-submit-button {
-    min-height: 36px;
+    min-height: 44px;
   }
 
   .solve-pdf-button {
@@ -3211,7 +3235,9 @@ body:has(.home-page[data-home-role="teacher"]) .mobile-install-prompt {
   }
 
   .solve-collapse-button {
-    flex: 0 0 42px;
+    flex: 0 0 44px;
+    width: 44px;
+    min-width: 44px;
     justify-content: center;
     padding: 0.45rem !important;
   }
@@ -3310,8 +3336,8 @@ body:has(.home-page[data-home-role="teacher"]) .mobile-install-prompt {
   }
 
   .solve-omr-scroll .q-bubble {
-    width: 28px;
-    height: 28px;
+    width: 44px;
+    height: 44px;
   }
 
   .pdf-viewer-toolbar {
@@ -3363,7 +3389,7 @@ body:has(.home-page[data-home-role="teacher"]) .mobile-install-prompt {
 
   .pdf-viewer-controls button,
   .pdf-viewer-bottom-toolbar button {
-    min-height: 30px;
+    min-height: 44px;
   }
 
   .pdf-viewer-scroll {
@@ -3384,6 +3410,22 @@ body:has(.home-page[data-home-role="teacher"]) .mobile-install-prompt {
 
 /* ─── Solve Page Tablet Sidebar ──────────────────────── */
 @media (min-width: 641px) and (max-width: 1180px) {
+  .solve-teacher-toggle,
+  .solve-tab-button,
+  .solve-pdf-button,
+  .solve-collapse-button,
+  .solve-submit-button {
+    min-height: 44px;
+  }
+
+  .solve-collapse-button {
+    flex: 0 0 44px;
+    width: 44px;
+    min-width: 44px;
+    justify-content: center;
+    padding: 0.45rem !important;
+  }
+
   .solve-body {
     flex-direction: row !important;
   }
@@ -3395,13 +3437,13 @@ body:has(.home-page[data-home-role="teacher"]) .mobile-install-prompt {
 
   .solve-omr-rail {
     display: flex !important;
-    flex: 0 0 42px !important;
-    width: 42px !important;
+    flex: 0 0 52px !important;
+    width: 52px !important;
   }
 
   .solve-omr-rail.is-collapsed {
-    flex-basis: 64px !important;
-    width: 64px !important;
+    flex-basis: 72px !important;
+    width: 72px !important;
   }
 
   .solve-omr-pane {
@@ -3434,6 +3476,11 @@ body:has(.home-page[data-home-role="teacher"]) .mobile-install-prompt {
 
   .solve-omr-scroll .q-card {
     border-radius: 8px;
+  }
+
+  .solve-omr-scroll .q-bubble {
+    width: 44px;
+    height: 44px;
   }
 }
 
