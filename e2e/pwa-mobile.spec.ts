@@ -192,10 +192,12 @@ test.describe("Mobile PWA entry", () => {
         await expect(page.getByTestId("pwa-device-check-launch-proof")).toContainText("대기");
         await expect(page.getByTestId("pwa-device-check-service-worker")).toBeVisible();
         await expect(page.getByTestId("pwa-device-check-manifest")).toBeVisible();
+        await expect(page.getByTestId("pwa-device-check-viewport-height")).toContainText("동기화");
         await expect(page.getByTestId("pwa-device-check-overflow")).toContainText("정상");
         await expect(page.getByTestId("pwa-device-report")).toContainText("OMR Maker PWA device check");
         await expect(page.getByTestId("pwa-device-report")).toContainText("displayMode=browser");
         await expect(page.getByTestId("pwa-device-report")).toContainText("displayEvidence=");
+        await expect(page.getByTestId("pwa-device-report")).toContainText("viewport-height=pass:동기화");
         await expect(page.getByTestId("pwa-device-handoff")).toContainText("폰으로 열기");
         await expect(page.getByTestId("pwa-device-handoff-url")).toContainText("/pwa-check");
         await expect(page.getByTestId("pwa-device-handoff-qr")).toBeVisible();
@@ -221,6 +223,7 @@ test.describe("Mobile PWA entry", () => {
         expect(copiedReport).toContain("displayMode=browser");
         expect(copiedReport).toContain("displayEvidence=");
         expect(copiedReport).toContain("launch-proof=warn:대기");
+        expect(copiedReport).toContain("viewport-height=pass:동기화");
         expect(copiedReport).toContain("overflow=pass:정상");
 
         await triggerAndroidInstallPrompt(page);
@@ -283,6 +286,7 @@ test.describe("Mobile PWA entry", () => {
         await expect(page.getByTestId("pwa-device-check-display-mode")).toContainText(/standalone|fullscreen/);
         await expect(page.getByTestId("pwa-device-check-launch-proof")).toContainText("확인됨");
         await expect(page.getByTestId("pwa-device-report")).toContainText("launch-proof=pass:확인됨");
+        await expect(page.getByTestId("pwa-device-report")).toContainText("viewport-height=pass:동기화");
         await expectNoHorizontalOverflow(page);
 
         expect(consoleProblems).toEqual([]);

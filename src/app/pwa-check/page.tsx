@@ -29,11 +29,21 @@ interface CheckSummary {
   warnings: number;
 }
 
+const VIEWPORT_HEIGHT_VAR = "--app-viewport-height";
+
 const CHECK_TONE_META: Record<CheckTone, { background: string; color: string; icon: typeof CheckCircle2; label: string }> = {
   pass: { background: "rgba(16, 185, 129, 0.1)", color: "var(--success)", icon: CheckCircle2, label: "통과" },
   warn: { background: "rgba(245, 158, 11, 0.12)", color: "var(--warning)", icon: AlertTriangle, label: "확인" },
   fail: { background: "rgba(239, 68, 68, 0.1)", color: "var(--error)", icon: AlertTriangle, label: "조치" },
 };
+
+async function waitForViewportHeightSync(): Promise<void> {
+  await new Promise<void>(resolve => {
+    window.requestAnimationFrame(() => {
+      window.requestAnimationFrame(() => resolve());
+    });
+  });
+}
 
 function readDisplayModeState(): { evidence: string; mode: string } {
   if (typeof window === "undefined") return { evidence: "server", mode: "unknown" };
@@ -68,6 +78,22 @@ function canUseStorage(readStorage: () => Storage): boolean {
 
 function isInstalledDisplay(displayMode: string): boolean {
   return displayMode === "standalone" || displayMode === "fullscreen";
+}
+
+function readViewportHeightSummary(): { detail: string; tone: CheckTone; value: string } {
+  const cssValue = getComputedStyle(document.documentElement).getPropertyValue(VIEWPORT_HEIGHT_VAR).trim();
+  const visualViewportHeight = Math.round(window.visualViewport?.height || window.innerHeight);
+  const innerHeight = Math.round(window.innerHeight);
+  const cssPixels = Number.parseInt(cssValue, 10);
+  const cssIsSyncedPixels = /^\d+px$/.test(cssValue);
+  const delta = cssIsSyncedPixels ? Math.abs(cssPixels - visualViewportHeight) : Number.POSITIVE_INFINITY;
+  const isSynced = cssIsSyncedPixels && delta <= 2;
+
+  return {
+    detail: `css=${cssValue || "missing"} · visual=${visualViewportHeight}px · inner=${innerHeight}px · delta=${Number.isFinite(delta) ? `${delta}px` : "n/a"}`,
+    tone: isSynced ? "pass" : cssIsSyncedPixels ? "warn" : "fail",
+    value: isSynced ? "동기화" : cssIsSyncedPixels ? "차이 있음" : "대기",
+  };
 }
 
 function checkSummary(checks: DeviceCheck[]): CheckSummary {
@@ -191,10 +217,13 @@ async function readServiceWorkerSummary(): Promise<{ detail: string; tone: Check
 }
 
 async function collectRuntimeSnapshot(): Promise<RuntimeSnapshot> {
+  await waitForViewportHeightSync();
+
   const displayModeState = readDisplayModeState();
   const displayMode = displayModeState.mode;
   const manifest = await readManifestSummary();
   const serviceWorker = await readServiceWorkerSummary();
+  const viewportHeight = readViewportHeightSummary();
   const viewport = document.querySelector('meta[name="viewport"]')?.getAttribute("content") || "";
   const androidCapable = [...document.querySelectorAll('meta[name="mobile-web-app-capable"]')]
     .some(meta => meta.getAttribute("content") === "yes");
@@ -252,6 +281,13 @@ async function collectRuntimeSnapshot(): Promise<RuntimeSnapshot> {
         label: "Viewport",
         tone: viewport.includes("viewport-fit=cover") ? "pass" : "fail",
         value: viewport.includes("viewport-fit=cover") ? "cover" : "확인 필요",
+      },
+      {
+        detail: viewportHeight.detail,
+        id: "viewport-height",
+        label: "화면 높이",
+        tone: viewportHeight.tone,
+        value: viewportHeight.value,
       },
       {
         detail: `Android ${androidCapable ? "yes" : "no"} · iOS ${appleCapable ? "yes" : "no"}`,

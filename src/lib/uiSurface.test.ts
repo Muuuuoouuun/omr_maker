@@ -190,6 +190,11 @@ describe("service UI surface", () => {
         expect(pwaCheck).toContain("buildDeviceReport");
         expect(pwaCheck).toContain("OMR Maker PWA device check");
         expect(pwaCheck).toContain("displayMode=");
+        expect(pwaCheck).toContain('"--app-viewport-height"');
+        expect(pwaCheck).toContain("readViewportHeightSummary");
+        expect(pwaCheck).toContain("waitForViewportHeightSync");
+        expect(pwaCheck).toContain('id: "viewport-height"');
+        expect(pwaCheck).toContain("visualViewport?.height");
         expect(pwaCheck).toContain("앱 실행 통과");
         expect(pwaCheck).toContain("설치 실행 전");
         expect(pwaCheck).toContain('minHeight: "2.75rem"');

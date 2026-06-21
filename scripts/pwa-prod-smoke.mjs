@@ -354,6 +354,9 @@ async function runSmoke() {
         await page.goto("/pwa-check", { waitUntil: "networkidle" });
         await page.getByRole("heading", { name: "PWA 디바이스 체크" }).waitFor({ state: "visible", timeout: 10_000 });
         await page.getByTestId("pwa-device-handoff-qr").waitFor({ state: "visible", timeout: 10_000 });
+        await page.waitForFunction(() => (
+            document.querySelector('[data-testid="pwa-device-report"]')?.textContent?.includes("OMR Maker PWA device check")
+        ), null, { timeout: 10_000 });
         const onlineDeviceCheckState = await page.evaluate(() => ({
             handoffUrl: document.querySelector('[data-testid="pwa-device-handoff-url"]')?.textContent || "",
             hasHorizontalOverflow: document.documentElement.scrollWidth > document.documentElement.clientWidth,
@@ -365,6 +368,7 @@ async function runSmoke() {
         assert(onlineDeviceCheckState.report.includes("OMR Maker PWA device check"), "PWA device check report is missing", onlineDeviceCheckState);
         assert(onlineDeviceCheckState.report.includes("displayEvidence="), "PWA device check display evidence is missing", onlineDeviceCheckState);
         assert(onlineDeviceCheckState.report.includes("launch-proof="), "PWA device check launch proof is missing", onlineDeviceCheckState);
+        assert(onlineDeviceCheckState.report.includes("viewport-height=pass:동기화"), "PWA device check viewport height sync is missing", onlineDeviceCheckState);
 
         const cacheState = await collectCacheState(page);
         assert(cacheState.expectedCacheKeys.length >= 1, "Expected PWA cache was not created", cacheState);
@@ -387,6 +391,9 @@ async function runSmoke() {
 
         await page.goto("/pwa-check", { waitUntil: "domcontentloaded", timeout: 15_000 });
         await page.getByRole("heading", { name: "PWA 디바이스 체크" }).waitFor({ state: "visible", timeout: 10_000 });
+        await page.waitForFunction(() => (
+            document.querySelector('[data-testid="pwa-device-report"]')?.textContent?.includes("OMR Maker PWA device check")
+        ), null, { timeout: 10_000 });
         const offlineDeviceCheckState = await page.evaluate(() => ({
             hasHorizontalOverflow: document.documentElement.scrollWidth > document.documentElement.clientWidth,
             report: document.querySelector('[data-testid="pwa-device-report"]')?.textContent || "",
@@ -397,6 +404,7 @@ async function runSmoke() {
         assert(offlineDeviceCheckState.report.includes("OMR Maker PWA device check"), "Offline PWA device check report is missing", offlineDeviceCheckState);
         assert(offlineDeviceCheckState.report.includes("displayEvidence="), "Offline PWA device check display evidence is missing", offlineDeviceCheckState);
         assert(offlineDeviceCheckState.report.includes("launch-proof="), "Offline PWA device check launch proof is missing", offlineDeviceCheckState);
+        assert(offlineDeviceCheckState.report.includes("viewport-height=pass:동기화"), "Offline PWA device check viewport height sync is missing", offlineDeviceCheckState);
 
         await page.goto("/offline.html", { waitUntil: "domcontentloaded", timeout: 15_000 });
         await page.getByRole("heading", { name: "오프라인 상태입니다" }).waitFor({ state: "visible", timeout: 10_000 });
