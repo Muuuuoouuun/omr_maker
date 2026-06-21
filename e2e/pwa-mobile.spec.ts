@@ -35,10 +35,14 @@ async function expectSyncedViewportHeight(page: Page) {
         const layout = document.querySelector(".layout-main");
 
         return {
+            keyboardInsetBottom: getComputedStyle(document.documentElement).getPropertyValue("--app-keyboard-inset-bottom").trim(),
+            keyboardState: document.documentElement.getAttribute("data-app-keyboard"),
             layoutHeight: layout ? Math.round(layout.getBoundingClientRect().height) : 0,
             parsedValue,
             value,
             visualViewportHeight,
+            viewportOffsetTop: getComputedStyle(document.documentElement).getPropertyValue("--app-visual-viewport-offset-top").trim(),
+            viewportWidth: getComputedStyle(document.documentElement).getPropertyValue("--app-viewport-width").trim(),
         };
     });
 }
@@ -133,6 +137,10 @@ test.describe("Mobile PWA entry", () => {
         const viewportHeightState = await expectSyncedViewportHeight(page);
         expect(viewportHeightState.parsedValue).toBeGreaterThan(0);
         expect(Math.abs(viewportHeightState.parsedValue - viewportHeightState.visualViewportHeight)).toBeLessThanOrEqual(2);
+        expect(viewportHeightState.viewportWidth).toMatch(/^\d+px$/);
+        expect(viewportHeightState.viewportOffsetTop).toMatch(/^\d+px$/);
+        expect(viewportHeightState.keyboardInsetBottom).toMatch(/^\d+px$/);
+        expect(viewportHeightState.keyboardState).toMatch(/open|closed/);
         await expect(page.locator('link[rel="manifest"]')).toHaveAttribute("href", "/manifest.webmanifest");
         await expect(page.locator('link[rel="apple-touch-icon"]').first()).toHaveAttribute("href", "/apple-touch-icon.png");
         await expectMetaContent(page, "mobile-web-app-capable", "yes");
@@ -193,11 +201,13 @@ test.describe("Mobile PWA entry", () => {
         await expect(page.getByTestId("pwa-device-check-service-worker")).toBeVisible();
         await expect(page.getByTestId("pwa-device-check-manifest")).toBeVisible();
         await expect(page.getByTestId("pwa-device-check-viewport-height")).toContainText("동기화");
+        await expect(page.getByTestId("pwa-device-check-keyboard-safe-area")).toContainText("준비");
         await expect(page.getByTestId("pwa-device-check-overflow")).toContainText("정상");
         await expect(page.getByTestId("pwa-device-report")).toContainText("OMR Maker PWA device check");
         await expect(page.getByTestId("pwa-device-report")).toContainText("displayMode=browser");
         await expect(page.getByTestId("pwa-device-report")).toContainText("displayEvidence=");
         await expect(page.getByTestId("pwa-device-report")).toContainText("viewport-height=pass:동기화");
+        await expect(page.getByTestId("pwa-device-report")).toContainText("keyboard-safe-area=pass:준비");
         await expect(page.getByTestId("pwa-device-handoff")).toContainText("폰으로 열기");
         await expect(page.getByTestId("pwa-device-handoff-url")).toContainText("/pwa-check");
         await expect(page.getByTestId("pwa-device-handoff-qr")).toBeVisible();
@@ -224,6 +234,7 @@ test.describe("Mobile PWA entry", () => {
         expect(copiedReport).toContain("displayEvidence=");
         expect(copiedReport).toContain("launch-proof=warn:대기");
         expect(copiedReport).toContain("viewport-height=pass:동기화");
+        expect(copiedReport).toContain("keyboard-safe-area=pass:준비");
         expect(copiedReport).toContain("overflow=pass:정상");
 
         await triggerAndroidInstallPrompt(page);
@@ -270,6 +281,8 @@ test.describe("Mobile PWA entry", () => {
                 promptCount: document.querySelectorAll(".mobile-install-prompt").length,
                 viewport: document.querySelector('meta[name="viewport"]')?.getAttribute("content") || "",
                 viewportHeightVar: getComputedStyle(document.documentElement).getPropertyValue("--app-viewport-height").trim(),
+                viewportKeyboardState: document.documentElement.getAttribute("data-app-keyboard"),
+                viewportKeyboardVar: getComputedStyle(document.documentElement).getPropertyValue("--app-keyboard-inset-bottom").trim(),
             };
         });
 
@@ -279,6 +292,8 @@ test.describe("Mobile PWA entry", () => {
         });
         expect(standaloneState.viewport).toContain("viewport-fit=cover");
         expect(standaloneState.viewportHeightVar).toMatch(/^\d+px$/);
+        expect(standaloneState.viewportKeyboardVar).toMatch(/^\d+px$/);
+        expect(standaloneState.viewportKeyboardState).toMatch(/open|closed/);
         expect(standaloneState.layoutHeight).toBeGreaterThan(0);
 
         await page.goto("/pwa-check");
@@ -287,6 +302,7 @@ test.describe("Mobile PWA entry", () => {
         await expect(page.getByTestId("pwa-device-check-launch-proof")).toContainText("확인됨");
         await expect(page.getByTestId("pwa-device-report")).toContainText("launch-proof=pass:확인됨");
         await expect(page.getByTestId("pwa-device-report")).toContainText("viewport-height=pass:동기화");
+        await expect(page.getByTestId("pwa-device-report")).toContainText("keyboard-safe-area=pass:준비");
         await expectNoHorizontalOverflow(page);
 
         expect(consoleProblems).toEqual([]);

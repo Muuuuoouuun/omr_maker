@@ -30,6 +30,11 @@ interface CheckSummary {
 }
 
 const VIEWPORT_HEIGHT_VAR = "--app-viewport-height";
+const VIEWPORT_WIDTH_VAR = "--app-viewport-width";
+const VIEWPORT_OFFSET_TOP_VAR = "--app-visual-viewport-offset-top";
+const VIEWPORT_OFFSET_LEFT_VAR = "--app-visual-viewport-offset-left";
+const VIEWPORT_SCALE_VAR = "--app-visual-viewport-scale";
+const KEYBOARD_INSET_BOTTOM_VAR = "--app-keyboard-inset-bottom";
 
 const CHECK_TONE_META: Record<CheckTone, { background: string; color: string; icon: typeof CheckCircle2; label: string }> = {
   pass: { background: "rgba(16, 185, 129, 0.1)", color: "var(--success)", icon: CheckCircle2, label: "통과" },
@@ -80,12 +85,20 @@ function isInstalledDisplay(displayMode: string): boolean {
   return displayMode === "standalone" || displayMode === "fullscreen";
 }
 
+function readRootCssVar(name: string): string {
+  return getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+}
+
+function isPixelValue(value: string): boolean {
+  return /^\d+px$/.test(value);
+}
+
 function readViewportHeightSummary(): { detail: string; tone: CheckTone; value: string } {
-  const cssValue = getComputedStyle(document.documentElement).getPropertyValue(VIEWPORT_HEIGHT_VAR).trim();
+  const cssValue = readRootCssVar(VIEWPORT_HEIGHT_VAR);
   const visualViewportHeight = Math.round(window.visualViewport?.height || window.innerHeight);
   const innerHeight = Math.round(window.innerHeight);
   const cssPixels = Number.parseInt(cssValue, 10);
-  const cssIsSyncedPixels = /^\d+px$/.test(cssValue);
+  const cssIsSyncedPixels = isPixelValue(cssValue);
   const delta = cssIsSyncedPixels ? Math.abs(cssPixels - visualViewportHeight) : Number.POSITIVE_INFINITY;
   const isSynced = cssIsSyncedPixels && delta <= 2;
 
@@ -93,6 +106,25 @@ function readViewportHeightSummary(): { detail: string; tone: CheckTone; value: 
     detail: `css=${cssValue || "missing"} · visual=${visualViewportHeight}px · inner=${innerHeight}px · delta=${Number.isFinite(delta) ? `${delta}px` : "n/a"}`,
     tone: isSynced ? "pass" : cssIsSyncedPixels ? "warn" : "fail",
     value: isSynced ? "동기화" : cssIsSyncedPixels ? "차이 있음" : "대기",
+  };
+}
+
+function readKeyboardSafeAreaSummary(): { detail: string; tone: CheckTone; value: string } {
+  const viewportWidth = readRootCssVar(VIEWPORT_WIDTH_VAR);
+  const offsetTop = readRootCssVar(VIEWPORT_OFFSET_TOP_VAR);
+  const offsetLeft = readRootCssVar(VIEWPORT_OFFSET_LEFT_VAR);
+  const scale = readRootCssVar(VIEWPORT_SCALE_VAR);
+  const keyboardInsetBottom = readRootCssVar(KEYBOARD_INSET_BOTTOM_VAR);
+  const keyboardState = document.documentElement.getAttribute("data-app-keyboard") || "unknown";
+  const scaleNumber = Number.parseFloat(scale);
+  const isPrepared = [viewportWidth, offsetTop, offsetLeft, keyboardInsetBottom].every(isPixelValue)
+    && Number.isFinite(scaleNumber)
+    && (keyboardState === "open" || keyboardState === "closed");
+
+  return {
+    detail: `keyboard=${keyboardInsetBottom || "missing"} · state=${keyboardState} · width=${viewportWidth || "missing"} · offsetTop=${offsetTop || "missing"} · offsetLeft=${offsetLeft || "missing"} · scale=${scale || "missing"}`,
+    tone: isPrepared ? "pass" : "fail",
+    value: isPrepared ? "준비" : "대기",
   };
 }
 
@@ -224,6 +256,7 @@ async function collectRuntimeSnapshot(): Promise<RuntimeSnapshot> {
   const manifest = await readManifestSummary();
   const serviceWorker = await readServiceWorkerSummary();
   const viewportHeight = readViewportHeightSummary();
+  const keyboardSafeArea = readKeyboardSafeAreaSummary();
   const viewport = document.querySelector('meta[name="viewport"]')?.getAttribute("content") || "";
   const androidCapable = [...document.querySelectorAll('meta[name="mobile-web-app-capable"]')]
     .some(meta => meta.getAttribute("content") === "yes");
@@ -288,6 +321,13 @@ async function collectRuntimeSnapshot(): Promise<RuntimeSnapshot> {
         label: "화면 높이",
         tone: viewportHeight.tone,
         value: viewportHeight.value,
+      },
+      {
+        detail: keyboardSafeArea.detail,
+        id: "keyboard-safe-area",
+        label: "키보드 여백",
+        tone: keyboardSafeArea.tone,
+        value: keyboardSafeArea.value,
       },
       {
         detail: `Android ${androidCapable ? "yes" : "no"} · iOS ${appleCapable ? "yes" : "no"}`,

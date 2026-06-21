@@ -500,6 +500,7 @@ describe("PWA assets", () => {
         expect(source).toContain("displayEvidence=");
         expect(source).toContain("launch-proof=");
         expect(source).toContain("viewport-height=pass:동기화");
+        expect(source).toContain("keyboard-safe-area=pass:준비");
         expect(source).toContain("Page.getAppManifest");
         expect(source).toContain("Page.getInstallabilityErrors");
         expect(source).toContain("Chromium reported PWA installability errors");

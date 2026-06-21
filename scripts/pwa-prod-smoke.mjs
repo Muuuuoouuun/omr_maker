@@ -369,6 +369,7 @@ async function runSmoke() {
         assert(onlineDeviceCheckState.report.includes("displayEvidence="), "PWA device check display evidence is missing", onlineDeviceCheckState);
         assert(onlineDeviceCheckState.report.includes("launch-proof="), "PWA device check launch proof is missing", onlineDeviceCheckState);
         assert(onlineDeviceCheckState.report.includes("viewport-height=pass:동기화"), "PWA device check viewport height sync is missing", onlineDeviceCheckState);
+        assert(onlineDeviceCheckState.report.includes("keyboard-safe-area=pass:준비"), "PWA device check keyboard safe area is missing", onlineDeviceCheckState);
 
         const cacheState = await collectCacheState(page);
         assert(cacheState.expectedCacheKeys.length >= 1, "Expected PWA cache was not created", cacheState);
@@ -405,6 +406,7 @@ async function runSmoke() {
         assert(offlineDeviceCheckState.report.includes("displayEvidence="), "Offline PWA device check display evidence is missing", offlineDeviceCheckState);
         assert(offlineDeviceCheckState.report.includes("launch-proof="), "Offline PWA device check launch proof is missing", offlineDeviceCheckState);
         assert(offlineDeviceCheckState.report.includes("viewport-height=pass:동기화"), "Offline PWA device check viewport height sync is missing", offlineDeviceCheckState);
+        assert(offlineDeviceCheckState.report.includes("keyboard-safe-area=pass:준비"), "Offline PWA device check keyboard safe area is missing", offlineDeviceCheckState);
 
         await page.goto("/offline.html", { waitUntil: "domcontentloaded", timeout: 15_000 });
         await page.getByRole("heading", { name: "오프라인 상태입니다" }).waitFor({ state: "visible", timeout: 10_000 });
