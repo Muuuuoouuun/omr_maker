@@ -1,6 +1,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 import vm from "node:vm";
+import { createCanvas, loadImage } from "canvas";
 import { describe, expect, it, vi } from "vitest";
 import manifest from "@/app/manifest";
 
@@ -78,6 +79,29 @@ function readImageSize(assetPath: string): { width: number; height: number } {
     }
 
     throw new Error(`Unsupported image format: ${assetPath}`);
+}
+
+async function readAlphaStats(projectPath: string): Promise<{ opaquePixels: number; partialPixels: number; transparentPixels: number }> {
+    const image = await loadImage(path.join(rootDir, projectPath));
+    const canvas = createCanvas(image.width, image.height);
+    const context = canvas.getContext("2d");
+    context.clearRect(0, 0, canvas.width, canvas.height);
+    context.drawImage(image, 0, 0);
+    const { data } = context.getImageData(0, 0, canvas.width, canvas.height);
+    let opaquePixels = 0;
+    let transparentPixels = 0;
+
+    for (let index = 3; index < data.length; index += 4) {
+        if (data[index] === 0) transparentPixels += 1;
+        if (data[index] === 255) opaquePixels += 1;
+    }
+
+    const totalPixels = canvas.width * canvas.height;
+    return {
+        opaquePixels,
+        partialPixels: totalPixels - opaquePixels - transparentPixels,
+        transparentPixels,
+    };
 }
 
 function manifestScreenshotPaths(): string[] {
@@ -320,6 +344,32 @@ describe("PWA assets", () => {
             const [width, height] = icon.sizes.split("x").map(Number);
             expect(readImageSize(icon.src)).toEqual({ width, height });
         });
+    });
+
+    it("keeps browser-facing icons transparent while launcher safety icons stay opaque", async () => {
+        const transparentTargets = [
+            "public/logo.png",
+            "src/app/icon.png",
+            "public/icons/icon-512.png",
+        ];
+        const opaqueLauncherTargets = [
+            "public/apple-touch-icon.png",
+            "public/icons/apple-touch-icon.png",
+            "public/icons/maskable-icon-512.png",
+            "public/icons/mstile-150.png",
+        ];
+
+        for (const target of transparentTargets) {
+            const stats = await readAlphaStats(target);
+            expect(stats.transparentPixels).toBeGreaterThan(0);
+            expect(stats.opaquePixels).toBeGreaterThan(stats.transparentPixels);
+        }
+
+        for (const target of opaqueLauncherTargets) {
+            const stats = await readAlphaStats(target);
+            expect(stats.transparentPixels).toBe(0);
+            expect(stats.partialPixels).toBe(0);
+        }
     });
 
     it("manifest includes app screenshots for richer Android install previews", () => {
