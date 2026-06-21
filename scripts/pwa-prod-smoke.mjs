@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { chromium, devices } from "@playwright/test";
 
@@ -115,7 +116,8 @@ async function collectResourceState() {
 }
 
 function startNextServer() {
-    const child = spawn("npm", ["run", "start", "--", "-p", String(port)], {
+    const nextCliPath = path.join(process.cwd(), "node_modules", "next", "dist", "bin", "next");
+    const child = spawn(process.execPath, [nextCliPath, "start", "-p", String(port)], {
         env: { ...process.env, PORT: String(port) },
         stdio: ["ignore", "pipe", "pipe"],
     });
