@@ -618,6 +618,8 @@ describe("PWA assets", () => {
         expect(source).toContain("service-worker=pass:제어 중");
         expect(source).toContain("controller=yes");
         expect(source).toContain("offline-cache=pass:준비");
+        expect(source).toContain("storage=pass:사용 가능");
+        expect(source).toContain("indexedDB ok");
         expect(source).toContain("viewport-height=pass:동기화");
         expect(source).toContain("keyboard-safe-area=pass:준비");
         expect(source).toContain("Page.getAppManifest");
@@ -653,7 +655,7 @@ describe("PWA assets", () => {
             "- ios-startup-image=pass:준비 (16 images · iPhone portrait yes · iPad portrait yes · iPad landscape yes)",
             "- handoff-origin=pass:공유 가능 (https://omr-maker-eight.vercel.app/pwa-check)",
             "- overflow=pass:정상 (scroll 393px / viewport 393px)",
-            "- storage=pass:사용 가능 (localStorage ok · sessionStorage ok)",
+            "- storage=pass:사용 가능 (localStorage ok · sessionStorage ok · indexedDB ok · quota=512MB · usage=1MB · persisted=unknown)",
             "- install-prompt=pass:없음 (진단 화면에는 설치 배너 없음)",
         ].join("\n");
         const pendingReport = passingReport
@@ -663,6 +665,7 @@ describe("PWA assets", () => {
             .replace("proofStatus=pass", "proofStatus=pending");
         const staleCacheReport = passingReport.replaceAll("omr-maker-v9", "omr-maker-v8");
         const uncontrolledWorkerReport = passingReport.replace("controller=yes", "controller=no");
+        const legacyStorageReport = passingReport.replace(" · indexedDB ok · quota=512MB · usage=1MB · persisted=unknown", "");
         const iosReport = passingReport
             .replace("css-fullscreen=no · css-standalone=yes · ios-navigator-standalone=no", "css-fullscreen=no · css-standalone=yes · ios-navigator-standalone=yes")
             .replace("css-fullscreen=no · css-standalone=yes · ios-navigator-standalone=no", "css-fullscreen=no · css-standalone=yes · ios-navigator-standalone=yes")
@@ -698,6 +701,10 @@ describe("PWA assets", () => {
             encoding: "utf8",
             input: uncontrolledWorkerReport,
         });
+        const legacyStorage = spawnSync(process.execPath, [proofScriptPath], {
+            encoding: "utf8",
+            input: legacyStorageReport,
+        });
         const bundle = spawnSync(process.execPath, [proofScriptPath], {
             encoding: "utf8",
             input: passingBundle,
@@ -709,6 +716,7 @@ describe("PWA assets", () => {
         expect(source).toContain("Report URL must be the deployed HTTPS URL");
         expect(source).toContain('const expectedCachePrefix = "omr-maker-v9"');
         expect(source).toContain("offline-cache must include ${expectedCachePrefix}");
+        expect(source).toContain("storage must include IndexedDB availability.");
         expect(source).toContain("service-worker must be controlled by the active PWA worker.");
         expect(source).toContain("OMR Maker PWA dual device proof");
         expect(source).toContain("Android proof report must pass");
@@ -735,6 +743,8 @@ describe("PWA assets", () => {
         expect(JSON.parse(staleCache.stdout).errors).toContain("offline-cache must include omr-maker-v9.");
         expect(uncontrolledWorker.status).toBe(1);
         expect(JSON.parse(uncontrolledWorker.stdout).errors).toContain("service-worker must be controlled by the active PWA worker.");
+        expect(legacyStorage.status).toBe(1);
+        expect(JSON.parse(legacyStorage.stdout).errors).toContain("storage must include IndexedDB availability.");
         expect(bundle.status).toBe(0);
         expect(JSON.parse(bundle.stdout)).toMatchObject({
             android: { platform: "android", status: "passed" },

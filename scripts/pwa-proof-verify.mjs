@@ -161,6 +161,9 @@ function validateProof(parsed, expectedPlatform = "") {
     if (!parsed.checks["offline-cache"]?.detail.includes(expectedCachePrefix)) {
         errors.push(`offline-cache must include ${expectedCachePrefix}.`);
     }
+    if (parsed.checks.storage && !parsed.checks.storage.detail.includes("indexedDB ok")) {
+        errors.push("storage must include IndexedDB availability.");
+    }
     if (
         parsed.checks["service-worker"]
         && (

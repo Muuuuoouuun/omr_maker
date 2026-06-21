@@ -201,7 +201,7 @@ function validInstalledProofReport(platform: "android" | "ios" = "android"): str
         "- ios-startup-image=pass:준비 (16 images · iPhone portrait yes · iPad portrait yes · iPad landscape yes)",
         "- handoff-origin=pass:공유 가능 (https://omr-maker-eight.vercel.app/pwa-check)",
         "- overflow=pass:정상 (scroll 393px / viewport 393px)",
-        "- storage=pass:사용 가능 (localStorage ok · sessionStorage ok)",
+        "- storage=pass:사용 가능 (localStorage ok · sessionStorage ok · indexedDB ok · quota=512MB · usage=1MB · persisted=unknown)",
         "- install-prompt=pass:없음 (진단 화면에는 설치 배너 없음)",
     ].join("\n");
 }
@@ -453,6 +453,7 @@ test.describe("Mobile PWA entry", () => {
         await expect(page.getByTestId("pwa-device-check-keyboard-safe-area")).toContainText("준비");
         await expect(page.getByTestId("pwa-device-check-ios-startup-image")).toContainText("준비");
         await expect(page.getByTestId("pwa-device-check-overflow")).toContainText("정상");
+        await expect(page.getByTestId("pwa-device-check-storage")).toContainText("indexedDB ok");
         await expect(page.getByTestId("pwa-device-report")).toContainText("OMR Maker PWA device check");
         await expect(page.getByTestId("pwa-device-report")).toContainText("displayMode=browser");
         await expect(page.getByTestId("pwa-device-report")).toContainText("installedDisplay=no");
@@ -511,6 +512,7 @@ test.describe("Mobile PWA entry", () => {
         expect(copiedReport).toContain("viewport-height=pass:동기화");
         expect(copiedReport).toContain("keyboard-safe-area=pass:준비");
         expect(copiedReport).toContain("overflow=pass:정상");
+        expect(copiedReport).toContain("indexedDB ok");
 
         const currentProofInputId = testInfo.project.name.includes("ios") ? "pwa-proof-input-ios" : "pwa-proof-input";
         const currentProofResultId = testInfo.project.name.includes("ios") ? "pwa-proof-result-ios" : "pwa-proof-result-android";

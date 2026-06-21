@@ -166,6 +166,107 @@ function canUseStorage(readStorage: () => Storage): boolean {
   }
 }
 
+async function canUseIndexedDb(): Promise<boolean> {
+  if (typeof window === "undefined" || !("indexedDB" in window)) return false;
+
+  return new Promise(resolve => {
+    const dbName = "__omr_pwa_check__";
+    const storeName = "checks";
+    let settled = false;
+    let timeout: number | null = null;
+
+    const finish = (ok: boolean, db?: IDBDatabase) => {
+      if (settled) {
+        try {
+          db?.close();
+        } catch {
+          // Ignore late cleanup failures from browser storage internals.
+        }
+        return;
+      }
+
+      settled = true;
+      if (timeout !== null) window.clearTimeout(timeout);
+      try {
+        db?.close();
+      } catch {
+        // A failed probe still answers the readiness check.
+      }
+      try {
+        if (ok) indexedDB.deleteDatabase(dbName);
+      } catch {
+        // Cleanup is best-effort and should not fail the probe.
+      }
+      resolve(ok);
+    };
+
+    timeout = window.setTimeout(() => finish(false), 1500);
+
+    try {
+      const request = indexedDB.open(dbName, 1);
+      request.onupgradeneeded = () => {
+        const db = request.result;
+        if (!db.objectStoreNames.contains(storeName)) {
+          db.createObjectStore(storeName);
+        }
+      };
+      request.onerror = () => finish(false);
+      request.onblocked = () => finish(false);
+      request.onsuccess = () => {
+        const db = request.result;
+        if (settled) {
+          finish(false, db);
+          return;
+        }
+
+        try {
+          const transaction = db.transaction(storeName, "readwrite");
+          transaction.objectStore(storeName).put("ok", "probe");
+          transaction.oncomplete = () => finish(true, db);
+          transaction.onerror = () => finish(false, db);
+          transaction.onabort = () => finish(false, db);
+        } catch {
+          finish(false, db);
+        }
+      };
+    } catch {
+      finish(false);
+    }
+  });
+}
+
+function formatStorageBytes(value: number | undefined): string {
+  if (!Number.isFinite(value)) return "n/a";
+  const bytes = value || 0;
+  const mb = bytes / 1024 / 1024;
+  if (mb < 1024) return `${Math.round(mb)}MB`;
+  return `${(mb / 1024).toFixed(1)}GB`;
+}
+
+async function readStorageSummary(): Promise<{ detail: string; tone: CheckTone; value: string }> {
+  const [localStorageOk, sessionStorageOk, indexedDbOk, estimate, persisted] = await Promise.all([
+    Promise.resolve(canUseStorage(() => window.localStorage)),
+    Promise.resolve(canUseStorage(() => window.sessionStorage)),
+    canUseIndexedDb(),
+    navigator.storage?.estimate?.().catch(() => undefined) || Promise.resolve(undefined),
+    navigator.storage?.persisted?.().then(value => value ? "yes" : "no").catch(() => "unknown") || Promise.resolve("unknown"),
+  ]);
+  const isReady = localStorageOk && sessionStorageOk && indexedDbOk;
+
+  return {
+    detail: [
+      `localStorage ${localStorageOk ? "ok" : "blocked"}`,
+      `sessionStorage ${sessionStorageOk ? "ok" : "blocked"}`,
+      `indexedDB ${indexedDbOk ? "ok" : "blocked"}`,
+      `quota=${formatStorageBytes(estimate?.quota)}`,
+      `usage=${formatStorageBytes(estimate?.usage)}`,
+      `persisted=${persisted}`,
+    ].join(" · "),
+    tone: isReady ? "pass" : "warn",
+    value: isReady ? "사용 가능" : "제한됨",
+  };
+}
+
 function isInstalledDisplay(displayMode: string): boolean {
   return displayMode === "standalone" || displayMode === "fullscreen";
 }
@@ -369,6 +470,9 @@ function validateProofReport(reportText: string, expectedPlatform?: ProofTarget)
   if (!parsed.checks["offline-cache"]?.detail.includes(EXPECTED_OFFLINE_CACHE_PREFIX)) {
     errors.push(`offline-cache must include ${EXPECTED_OFFLINE_CACHE_PREFIX}.`);
   }
+  if (parsed.checks.storage && !parsed.checks.storage.detail.includes("indexedDB ok")) {
+    errors.push("storage must include IndexedDB availability.");
+  }
   if (
     parsed.checks["service-worker"]
     && (
@@ -562,10 +666,11 @@ async function collectRuntimeSnapshot(): Promise<RuntimeSnapshot> {
 
   const displayModeState = readDisplayModeState();
   const displayMode = displayModeState.mode;
-  const [manifest, serviceWorker, offlineCache] = await Promise.all([
+  const [manifest, serviceWorker, offlineCache, storage] = await Promise.all([
     readManifestSummary(),
     readServiceWorkerSummary(),
     readOfflineCacheSummary(),
+    readStorageSummary(),
   ]);
   const viewportHeight = readViewportHeightSummary();
   const keyboardSafeArea = readKeyboardSafeAreaSummary();
@@ -577,8 +682,6 @@ async function collectRuntimeSnapshot(): Promise<RuntimeSnapshot> {
   const iosStartupImage = readIosStartupImageSummary();
   const hasHorizontalOverflow = document.documentElement.scrollWidth > document.documentElement.clientWidth;
   const promptCount = document.querySelectorAll(".mobile-install-prompt").length;
-  const localStorageOk = canUseStorage(() => window.localStorage);
-  const sessionStorageOk = canUseStorage(() => window.sessionStorage);
   const isLocalHandoff = isLocalHandoffHost(location.hostname);
   const hasDeviceReachableHandoff = location.protocol === "https:" && !isLocalHandoff;
 
@@ -682,11 +785,11 @@ async function collectRuntimeSnapshot(): Promise<RuntimeSnapshot> {
         value: hasHorizontalOverflow ? "넘침" : "정상",
       },
       {
-        detail: `localStorage ${localStorageOk ? "ok" : "blocked"} · sessionStorage ${sessionStorageOk ? "ok" : "blocked"}`,
+        detail: storage.detail,
         id: "storage",
         label: "저장소",
-        tone: localStorageOk && sessionStorageOk ? "pass" : "warn",
-        value: localStorageOk && sessionStorageOk ? "사용 가능" : "제한됨",
+        tone: storage.tone,
+        value: storage.value,
       },
       {
         detail: promptCount === 0 ? "진단 화면에는 설치 배너 없음" : `${promptCount}개 감지`,

@@ -238,6 +238,11 @@ describe("service UI surface", () => {
         expect(pwaCheck).toContain("readViewportHeightSummary");
         expect(pwaCheck).toContain("readKeyboardSafeAreaSummary");
         expect(pwaCheck).toContain("readOfflineCacheSummary");
+        expect(pwaCheck).toContain("readStorageSummary");
+        expect(pwaCheck).toContain("canUseIndexedDb");
+        expect(pwaCheck).toContain("navigator.storage?.estimate");
+        expect(pwaCheck).toContain("indexedDB ok");
+        expect(pwaCheck).toContain("storage must include IndexedDB availability.");
         expect(pwaCheck).toContain("controller=yes");
         expect(pwaCheck).toContain("service-worker must be controlled by the active PWA worker.");
         expect(pwaCheck).toContain("waitForViewportHeightSync");
