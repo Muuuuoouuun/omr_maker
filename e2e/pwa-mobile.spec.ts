@@ -122,6 +122,24 @@ async function stubClipboard(page: Page) {
     });
 }
 
+async function seedStudentSession(page: Page) {
+    await page.addInitScript(() => {
+        const studentSession = {
+            groupId: "mobile-qa-group",
+            groupName: "모바일반",
+            identityType: "temporary",
+            isGuest: false,
+            name: "모바일학생",
+            studentId: "mobile-qa-student",
+        };
+        const payload = JSON.stringify({ ...studentSession, savedAt: Date.now() });
+        try {
+            window.sessionStorage.setItem("omr_student_session", payload);
+            window.localStorage.setItem("omr_student_session_backup", payload);
+        } catch {}
+    });
+}
+
 test.describe("Mobile PWA entry", () => {
     test.beforeEach(async ({ page }) => {
         await clearStorage(page);
@@ -165,6 +183,30 @@ test.describe("Mobile PWA entry", () => {
         await expect(page.getByPlaceholder("동명이인일 때 입력")).toHaveAttribute("autocomplete", "email");
         await expectNoHorizontalOverflow(page);
         expect(consoleProblems).toEqual([]);
+    });
+
+    test("keeps signed-in student app chrome touch friendly", async ({ page }) => {
+        await seedStudentSession(page);
+
+        await page.goto("/student/dashboard");
+
+        await expect(page.getByRole("heading", { name: "모바일학생님," })).toBeVisible();
+        await expectTouchTarget(page.getByRole("button", { name: "로그아웃" }));
+        await expectTouchTarget(page.getByRole("link", { name: /나의 원시험 평균/ }));
+        await expectNoHorizontalOverflow(page);
+
+        await page.goto("/student/history");
+
+        await expect(page.getByRole("heading", { name: "내 시험 기록" })).toBeVisible();
+        await expectTouchTarget(page.getByRole("link", { name: "내 시험 기록", exact: true }));
+        await expectTouchTarget(page.getByRole("link", { name: "시험 응시하러 가기" }));
+        await expectNoHorizontalOverflow(page);
+
+        await page.goto("/?role=teacher");
+
+        await expect(page.getByRole("heading", { name: "환영합니다" })).toBeVisible();
+        await expectTouchTarget(page.getByRole("button", { name: "역할 선택으로" }));
+        await expectNoHorizontalOverflow(page);
     });
 
     test("shows platform install guidance and suppresses it on work screens", async ({ page }, testInfo) => {

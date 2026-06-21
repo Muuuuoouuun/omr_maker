@@ -668,6 +668,9 @@ export default function Home() {
                 display: "flex",
                 alignItems: "center",
                 gap: "0.35rem",
+                minHeight: "2.75rem",
+                padding: "0.45rem 0.2rem",
+                borderRadius: "var(--radius-md)",
                 fontWeight: 600,
                 transition: "color 0.2s",
               }}

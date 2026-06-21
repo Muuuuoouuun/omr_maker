@@ -166,6 +166,8 @@ describe("service UI surface", () => {
         expect(css).toContain("bottom: max(1rem, env(safe-area-inset-bottom), var(--app-keyboard-inset-bottom))");
         expect(css).toContain('body:has(.home-page[data-home-role="student"]) .mobile-install-prompt');
         expect(css).toContain('body:has(.home-page[data-home-role="teacher"]) .mobile-install-prompt');
+        expect(css).toContain(".nav-link");
+        expect(css).toContain("min-height: 2.75rem");
         expect(css).toContain("min-height: 2.75rem");
         expect(css).toContain("min-width: 2.75rem");
         expect(css).toContain("width: 2.75rem");
@@ -218,6 +220,22 @@ describe("service UI surface", () => {
         expect(pwaCheck).toContain('minWidth: "2.75rem"');
         expect(themeToggle).toContain('size === "small" ? "40px" : "44px"');
         expect(themeToggle).toContain("const btnSize = size === \"small\" ? 40 : 44");
+    });
+
+    it("keeps student app chrome controls comfortable on touch devices", () => {
+        const homePage = readProjectFile("src/app/page.tsx");
+        const studentDashboard = readProjectFile("src/app/student/dashboard/page.tsx");
+        const css = readProjectFile("src/app/globals.css");
+
+        expect(homePage).toContain("역할 선택으로");
+        expect(homePage).toContain('minHeight: "2.75rem"');
+        expect(homePage).toContain('borderRadius: "var(--radius-md)"');
+        expect(studentDashboard).toContain("로그아웃");
+        expect(studentDashboard).toContain("minHeight: '2.75rem'");
+        expect(studentDashboard).toContain("borderRadius: 'var(--radius-md)'");
+        expect(css).toContain("display: inline-flex");
+        expect(css).toContain("align-items: center");
+        expect(css).toContain("min-height: 2.75rem");
     });
 
     it("keeps installed phone and tablet app shells inside safe areas", () => {
