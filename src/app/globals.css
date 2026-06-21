@@ -837,9 +837,13 @@ html[data-motion="off"] .orb {
   bottom: max(1rem, env(safe-area-inset-bottom), var(--app-keyboard-inset-bottom));
   z-index: 110;
   display: grid;
-  grid-template-columns: auto minmax(0, 1fr) auto auto;
+  grid-template-areas:
+    "icon copy close"
+    "icon actions actions";
+  grid-template-columns: auto minmax(0, 1fr) auto;
   align-items: center;
-  gap: 0.75rem;
+  column-gap: 0.75rem;
+  row-gap: 0.55rem;
   width: min(430px, calc(100vw - 2rem));
   margin: 0 auto;
   padding: 0.72rem 0.7rem 0.72rem 0.82rem;
@@ -870,6 +874,7 @@ body:has(.home-page[data-home-role="teacher"]) .mobile-install-prompt {
 }
 
 .mobile-install-prompt__icon {
+  grid-area: icon;
   width: 2.75rem;
   height: 2.75rem;
   border-radius: var(--radius-md);
@@ -880,6 +885,7 @@ body:has(.home-page[data-home-role="teacher"]) .mobile-install-prompt {
 .mobile-install-prompt__copy {
   display: grid;
   gap: 0.16rem;
+  grid-area: copy;
   min-width: 0;
 }
 
@@ -887,6 +893,7 @@ body:has(.home-page[data-home-role="teacher"]) .mobile-install-prompt {
   color: var(--foreground);
   font-size: 0.9rem;
   line-height: 1.15;
+  white-space: nowrap;
 }
 
 .mobile-install-prompt__copy span {
@@ -912,6 +919,37 @@ body:has(.home-page[data-home-role="teacher"]) .mobile-install-prompt {
   box-shadow: 0 10px 24px color-mix(in srgb, var(--primary), transparent 72%);
 }
 
+.mobile-install-prompt__actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 0.5rem;
+  grid-area: actions;
+  min-width: 0;
+}
+
+.mobile-install-prompt__check {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.28rem;
+  min-height: 2.75rem;
+  min-width: 2.75rem;
+  padding: 0 0.72rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  color: var(--primary);
+  background: color-mix(in srgb, var(--primary), transparent 92%);
+  font-size: 0.8rem;
+  font-weight: 850;
+  transition: var(--transition-fast);
+}
+
+.mobile-install-prompt__check:hover {
+  border-color: color-mix(in srgb, var(--primary), transparent 55%);
+  background: color-mix(in srgb, var(--primary), transparent 88%);
+}
+
 .mobile-install-prompt__hint {
   width: 2.75rem;
   height: 2.75rem;
@@ -921,6 +959,7 @@ body:has(.home-page[data-home-role="teacher"]) .mobile-install-prompt {
 }
 
 .mobile-install-prompt__close {
+  grid-area: close;
   width: 2.75rem;
   height: 2.75rem;
   border-radius: var(--radius-full);
@@ -942,14 +981,20 @@ body:has(.home-page[data-home-role="teacher"]) .mobile-install-prompt {
 @media (max-width: 380px) {
   .mobile-install-prompt {
     grid-template-columns: auto minmax(0, 1fr) auto;
+    gap: 0.45rem;
   }
 
   .mobile-install-prompt__hint {
     display: none;
   }
 
-  .mobile-install-prompt__action span {
+  .mobile-install-prompt__action span,
+  .mobile-install-prompt__check span {
     display: none;
+  }
+
+  .mobile-install-prompt__check {
+    padding: 0;
   }
 }
 

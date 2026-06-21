@@ -1,7 +1,8 @@
 "use client";
 
+import Link from "next/link";
 import { useCallback, useEffect, useId, useState } from "react";
-import { Download, Share2, Smartphone, X } from "lucide-react";
+import { Activity, Download, Share2, Smartphone, X } from "lucide-react";
 import { usePathname } from "next/navigation";
 
 const DISMISS_KEY = "omr_install_prompt_dismissed_v1";
@@ -134,16 +135,22 @@ export default function MobileInstallPrompt() {
             : "홈 화면에서 바로 열 수 있어요."}
         </span>
       </div>
-      {deferredPrompt ? (
-        <button type="button" className="mobile-install-prompt__action" onClick={install}>
-          <Download size={16} />
-          <span>설치</span>
-        </button>
-      ) : (
-        <div className="mobile-install-prompt__hint" aria-hidden="true">
-          <Share2 size={16} />
-        </div>
-      )}
+      <div className="mobile-install-prompt__actions">
+        {deferredPrompt ? (
+          <button type="button" className="mobile-install-prompt__action" onClick={install}>
+            <Download size={16} />
+            <span>설치</span>
+          </button>
+        ) : (
+          <div className="mobile-install-prompt__hint" aria-hidden="true">
+            <Share2 size={16} />
+          </div>
+        )}
+        <Link href="/pwa-check" className="mobile-install-prompt__check" aria-label="앱 상태 체크" title="앱 상태 체크">
+          <Activity size={16} />
+          <span>체크</span>
+        </Link>
+      </div>
       <button type="button" className="mobile-install-prompt__close" onClick={dismiss} aria-label="앱 설치 안내 닫기">
         <X size={16} />
       </button>

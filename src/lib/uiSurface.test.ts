@@ -328,6 +328,15 @@ describe("service UI surface", () => {
         expect(css).toContain("display: none !important");
         expect(installPrompt).toContain("(display-mode: fullscreen)");
         expect(installPrompt).toContain("appinstalled");
+        expect(installPrompt).toContain('href="/pwa-check"');
+        expect(installPrompt).toContain('aria-label="앱 상태 체크"');
+        expect(installPrompt).toContain("mobile-install-prompt__actions");
+        expect(css).toContain(".mobile-install-prompt__check");
+        expect(css).toContain(".mobile-install-prompt__actions");
+        expect(css).toContain("grid-template-areas");
+        expect(css).toContain("white-space: nowrap");
+        expect(css).toContain("min-height: 2.75rem");
+        expect(css).toContain("min-width: 2.75rem");
     });
 
     it("keeps mobile login and PIN inputs keyboard-friendly", () => {

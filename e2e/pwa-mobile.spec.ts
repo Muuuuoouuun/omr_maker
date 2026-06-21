@@ -334,7 +334,16 @@ test.describe("Mobile PWA entry", () => {
             await expect(page.getByRole("complementary", { name: "앱 설치 안내" })).toBeVisible({ timeout: 2500 });
             await expect(page.getByRole("button", { name: "설치", exact: true })).toBeVisible();
         }
+        await expect(page.getByRole("link", { name: "앱 상태 체크" })).toHaveAttribute("href", "/pwa-check");
+        await expectTouchTarget(page.getByRole("link", { name: "앱 상태 체크" }));
 
+        await page.getByRole("link", { name: "앱 상태 체크" }).click();
+        await expect(page).toHaveURL(/\/pwa-check$/);
+        await expect(page.getByRole("heading", { name: "PWA 디바이스 체크" })).toBeVisible();
+        await expectNoHorizontalOverflow(page);
+
+        await page.goto("/");
+        await expect(page.getByRole("heading", { name: "OMR Maker" })).toBeVisible();
         await page.getByRole("button", { name: /학생.*시작하기/ }).click();
 
         await expect(page.getByRole("heading", { name: "학습 시작" })).toBeVisible();
