@@ -438,7 +438,7 @@ describe("PWA assets", () => {
         const sw = getServiceWorkerSource();
 
         expect(sw).toContain("CACHE_FIRST_PATHS.has(url.pathname)");
-        expect(sw).toContain('const CACHE_VERSION = "omr-maker-v13"');
+        expect(sw).toContain('const CACHE_VERSION = "omr-maker-v14"');
         expect(sw).toContain("canRememberNavigation(url.pathname)");
         expect(sw).toContain("NAVIGATION_CACHE_PATHS");
         expect(sw).toContain("NAVIGATION_CACHE_PREFIXES");
@@ -495,7 +495,7 @@ describe("PWA assets", () => {
 
         await harness.dispatchInstall();
 
-        expect(await harness.caches.keys()).toContain("omr-maker-v13-shell");
+        expect(await harness.caches.keys()).toContain("omr-maker-v14-shell");
         expect(harness.self.skipWaiting).toHaveBeenCalledOnce();
         await expect(harness.caches.match("/pwa-check")).resolves.toBeInstanceOf(Response);
         await expect(harness.caches.match("/offline.html")).resolves.toBeInstanceOf(Response);
@@ -515,7 +515,7 @@ describe("PWA assets", () => {
         await harness.dispatchActivate();
 
         expect(await harness.caches.keys()).toEqual(
-            expect.arrayContaining(["omr-maker-v13-shell"]),
+            expect.arrayContaining(["omr-maker-v14-shell"]),
         );
         expect(await harness.caches.keys()).not.toEqual(
             expect.arrayContaining(["omr-maker-v10-shell", "omr-maker-v10-runtime"]),
@@ -722,7 +722,7 @@ describe("PWA assets", () => {
             "- display-mode=pass:standalone (홈 화면 아이콘 실행 상태)",
             "- launch-proof=pass:확인됨 (css-fullscreen=no · css-standalone=yes · ios-navigator-standalone=no)",
             "- service-worker=pass:제어 중 (script=https://omr-maker-eight.vercel.app/sw.js · controller=yes · active=activated · waiting=none · installing=none)",
-            "- offline-cache=pass:준비 (caches=omr-maker-v13-shell, omr-maker-v13-runtime · required=/, /pwa-check, /offline.html, /logo.png · expected=omr-maker-v13-shell · missingCaches=none · missing=none)",
+            "- offline-cache=pass:준비 (caches=omr-maker-v14-shell, omr-maker-v14-runtime · required=/, /pwa-check, /offline.html, /logo.png · expected=omr-maker-v14-shell · missingCaches=none · missing=none)",
             "- manifest=pass:standalone (OMR Maker · icons 12 · screenshots 2)",
             "- viewport=pass:cover (width=device-width, initial-scale=1, viewport-fit=cover)",
             "- viewport-height=pass:동기화 (css=727px · visual=727px · inner=727px · delta=0px)",
@@ -740,7 +740,7 @@ describe("PWA assets", () => {
             .replace("displayMode=standalone", "displayMode=browser")
             .replace("installedDisplay=yes", "installedDisplay=no")
             .replace("proofStatus=pass", "proofStatus=pending");
-        const staleCacheReport = passingReport.replaceAll("omr-maker-v13", "omr-maker-v9");
+        const staleCacheReport = passingReport.replaceAll("omr-maker-v14", "omr-maker-v9");
         const staleTimeReport = passingReport.replace(`checkedAtEpoch=${freshProofEpoch}`, `checkedAtEpoch=${staleProofEpoch}`);
         const uncontrolledWorkerReport = passingReport.replace("controller=yes", "controller=no");
         const legacyStorageReport = passingReport.replace(" · indexedDB ok · quota=512MB · usage=1MB · persisted=unknown", "");
@@ -837,7 +837,7 @@ describe("PWA assets", () => {
         expect(source).toContain("checkedAtEpoch");
         expect(source).toContain("generatedAtEpoch");
         expect(source).toContain("must be newer than 7 days.");
-        expect(source).toContain('const expectedCachePrefix = "omr-maker-v13"');
+        expect(source).toContain('const expectedCachePrefix = "omr-maker-v14"');
         expect(source).toContain("offline-cache must include ${expectedCachePrefix}");
         expect(source).toContain("storage must include IndexedDB availability.");
         expect(source).toContain("runtime-performance must include the device timing budget evidence.");
@@ -867,7 +867,7 @@ describe("PWA assets", () => {
         expect(JSON.parse(staleCache.stdout)).toMatchObject({
             status: "failed",
         });
-        expect(JSON.parse(staleCache.stdout).errors).toContain("offline-cache must include omr-maker-v13.");
+        expect(JSON.parse(staleCache.stdout).errors).toContain("offline-cache must include omr-maker-v14.");
         expect(staleTime.status).toBe(1);
         expect(JSON.parse(staleTime.stdout).errors).toContain("checkedAtEpoch must be newer than 7 days.");
         expect(uncontrolledWorker.status).toBe(1);
