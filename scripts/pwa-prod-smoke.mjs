@@ -367,6 +367,7 @@ async function runSmoke() {
             handoffUrl: document.querySelector('[data-testid="pwa-device-handoff-url"]')?.textContent || "",
             hasHorizontalOverflow: document.documentElement.scrollWidth > document.documentElement.clientWidth,
             installProofGuide: document.querySelector('[data-testid="pwa-install-proof-guide"]')?.textContent || "",
+            proofVerifier: document.querySelector('[data-testid="pwa-proof-verifier"]')?.textContent || "",
             report: document.querySelector('[data-testid="pwa-device-report"]')?.textContent || "",
             verdict: document.querySelector('[data-testid="pwa-device-verdict"]')?.textContent || "",
         }));
@@ -384,6 +385,7 @@ async function runSmoke() {
         assert(onlineDeviceCheckState.installProofGuide.includes("실기기 설치 확인"), "PWA install proof guide is missing", onlineDeviceCheckState);
         assert(onlineDeviceCheckState.installProofGuide.includes("Android") && onlineDeviceCheckState.installProofGuide.includes("iOS"), "PWA install proof guide must cover Android and iOS", onlineDeviceCheckState);
         assert(onlineDeviceCheckState.installProofGuide.includes("standalone") && onlineDeviceCheckState.installProofGuide.includes("fullscreen"), "PWA install proof guide must name installed display modes", onlineDeviceCheckState);
+        assert(onlineDeviceCheckState.proofVerifier.includes("Android") && onlineDeviceCheckState.proofVerifier.includes("iOS"), "PWA proof verifier must collect Android and iOS reports", onlineDeviceCheckState);
 
         const cacheState = await collectCacheState(page);
         assert(cacheState.expectedCacheKeys.length >= 1, "Expected PWA cache was not created", cacheState);
@@ -412,6 +414,7 @@ async function runSmoke() {
         const offlineDeviceCheckState = await page.evaluate(() => ({
             hasHorizontalOverflow: document.documentElement.scrollWidth > document.documentElement.clientWidth,
             installProofGuide: document.querySelector('[data-testid="pwa-install-proof-guide"]')?.textContent || "",
+            proofVerifier: document.querySelector('[data-testid="pwa-proof-verifier"]')?.textContent || "",
             report: document.querySelector('[data-testid="pwa-device-report"]')?.textContent || "",
             url: window.location.href,
             verdict: document.querySelector('[data-testid="pwa-device-verdict"]')?.textContent || "",
@@ -429,6 +432,7 @@ async function runSmoke() {
         assert(offlineDeviceCheckState.installProofGuide.includes("실기기 설치 확인"), "Offline PWA install proof guide is missing", offlineDeviceCheckState);
         assert(offlineDeviceCheckState.installProofGuide.includes("Android") && offlineDeviceCheckState.installProofGuide.includes("iOS"), "Offline PWA install proof guide must cover Android and iOS", offlineDeviceCheckState);
         assert(offlineDeviceCheckState.installProofGuide.includes("standalone") && offlineDeviceCheckState.installProofGuide.includes("fullscreen"), "Offline PWA install proof guide must name installed display modes", offlineDeviceCheckState);
+        assert(offlineDeviceCheckState.proofVerifier.includes("Android") && offlineDeviceCheckState.proofVerifier.includes("iOS"), "Offline PWA proof verifier must collect Android and iOS reports", offlineDeviceCheckState);
 
         await page.goto("/offline.html", { waitUntil: "domcontentloaded", timeout: 15_000 });
         await page.getByRole("heading", { name: "오프라인 상태입니다" }).waitFor({ state: "visible", timeout: 10_000 });

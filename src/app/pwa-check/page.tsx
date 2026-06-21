@@ -6,6 +6,8 @@ import { Activity, AlertTriangle, Check, CheckCircle2, Clipboard, ExternalLink, 
 import { QRCodeCanvas } from "qrcode.react";
 
 type CheckTone = "pass" | "warn" | "fail";
+type ProofPlatform = "android" | "ios" | "unknown";
+type ProofTarget = Exclude<ProofPlatform, "unknown">;
 
 interface DeviceCheck {
   detail: string;
@@ -39,10 +41,21 @@ interface ProofValidationResult {
   displayMode: string;
   errors: string[];
   installedDisplay: string;
+  platform: ProofPlatform;
   proofStatus: string;
   status: "failed" | "passed";
   url: string;
+  userAgent: string;
   verdict: string;
+}
+
+interface ProofTargetConfig {
+  detail: string;
+  errorTestId: string;
+  inputTestId: string;
+  label: string;
+  platform: ProofTarget;
+  resultTestId: string;
 }
 
 const VIEWPORT_HEIGHT_VAR = "--app-viewport-height";
@@ -88,6 +101,25 @@ const INSTALL_PROOF_STEPS = [
   {
     detail: "홈 화면 아이콘으로 다시 열고 앱 실행 통과 리포트를 복사합니다.",
     label: "아이콘 실행",
+  },
+];
+
+const PROOF_TARGETS: ProofTargetConfig[] = [
+  {
+    detail: "Android Chrome에서 홈 화면 아이콘으로 실행한 리포트",
+    errorTestId: "pwa-proof-errors",
+    inputTestId: "pwa-proof-input",
+    label: "Android",
+    platform: "android",
+    resultTestId: "pwa-proof-result-android",
+  },
+  {
+    detail: "iPhone 또는 iPad Safari에서 홈 화면 아이콘으로 실행한 리포트",
+    errorTestId: "pwa-proof-errors-ios",
+    inputTestId: "pwa-proof-input-ios",
+    label: "iOS",
+    platform: "ios",
+    resultTestId: "pwa-proof-result-ios",
   },
 ];
 
@@ -149,6 +181,23 @@ function isDeviceReachableHttps(urlValue: string): boolean {
   } catch {
     return false;
   }
+}
+
+function proofPlatformLabel(platform: ProofPlatform): string {
+  if (platform === "android") return "Android";
+  if (platform === "ios") return "iOS";
+  return "unknown";
+}
+
+function readProofPlatform(fields: ParsedProofReport["fields"]): ProofPlatform {
+  const userAgent = fields.userAgent || "";
+  const displayEvidence = fields.displayEvidence || "";
+
+  if (/Android/i.test(userAgent)) return "android";
+  if (/(iPhone|iPad|iPod)/i.test(userAgent) || /ios-navigator-standalone=yes/i.test(displayEvidence)) {
+    return "ios";
+  }
+  return "unknown";
 }
 
 function readRootCssVar(name: string): string {
@@ -281,12 +330,16 @@ function parseProofReport(reportText: string): ParsedProofReport {
   };
 }
 
-function validateProofReport(reportText: string): ProofValidationResult {
+function validateProofReport(reportText: string, expectedPlatform?: ProofTarget): ProofValidationResult {
   const parsed = parseProofReport(reportText);
   const errors: string[] = [];
+  const platform = readProofPlatform(parsed.fields);
 
   if (parsed.header !== "OMR Maker PWA device check") {
     errors.push("Report header is not an OMR Maker PWA device check report.");
+  }
+  if (expectedPlatform && platform !== expectedPlatform) {
+    errors.push(`Report must come from ${proofPlatformLabel(expectedPlatform)}, got ${proofPlatformLabel(platform)}.`);
   }
   if (!isDeviceReachableHttps(parsed.fields.url || "")) {
     errors.push("Report URL must be the deployed HTTPS URL, not localhost or an invalid URL.");
@@ -325,9 +378,11 @@ function validateProofReport(reportText: string): ProofValidationResult {
     displayMode: parsed.fields.displayMode || "",
     errors,
     installedDisplay: parsed.fields.installedDisplay || "",
+    platform,
     proofStatus: parsed.fields.proofStatus || "",
     status: errors.length === 0 ? "passed" : "failed",
     url: parsed.fields.url || "",
+    userAgent: parsed.fields.userAgent || "",
     verdict: parsed.fields.verdict || "",
   };
 }
@@ -613,7 +668,7 @@ export default function PwaCheckPage() {
   const [copyState, setCopyState] = useState<"copied" | "failed" | "idle" | "shared">("idle");
   const [handoffState, setHandoffState] = useState<"copied" | "failed" | "idle" | "shared">("idle");
   const [handoffUrl, setHandoffUrl] = useState("");
-  const [proofInput, setProofInput] = useState("");
+  const [proofInputs, setProofInputs] = useState<Record<ProofTarget, string>>({ android: "", ios: "" });
 
   const runCheck = useCallback(async () => {
     setIsChecking(true);
@@ -653,12 +708,26 @@ export default function PwaCheckPage() {
   const summary = useMemo(() => snapshot ? checkSummary(snapshot.checks) : { fails: 0, passes: 0, warnings: 0 }, [snapshot]);
   const verdict = useMemo(() => deviceVerdict(snapshot, summary), [snapshot, summary]);
   const reportText = useMemo(() => snapshot ? buildDeviceReport(snapshot, summary) : "", [snapshot, summary]);
-  const proofResult = useMemo(() => proofInput.trim() ? validateProofReport(proofInput) : null, [proofInput]);
+  const proofResults = useMemo(() => ({
+    android: proofInputs.android.trim() ? validateProofReport(proofInputs.android, "android") : null,
+    ios: proofInputs.ios.trim() ? validateProofReport(proofInputs.ios, "ios") : null,
+  }), [proofInputs]);
+  const proofEnteredCount = PROOF_TARGETS.filter(target => proofInputs[target.platform].trim()).length;
+  const proofPassedCount = PROOF_TARGETS.filter(target => proofResults[target.platform]?.status === "passed").length;
+  const proofFailedCount = PROOF_TARGETS.filter(target => proofResults[target.platform]?.status === "failed").length;
   const verdictMeta = CHECK_TONE_META[verdict.tone];
   const VerdictIcon = verdictMeta.icon;
-  const proofTone: CheckTone = proofResult ? proofResult.status === "passed" ? "pass" : "fail" : "warn";
+  const proofTone: CheckTone = proofPassedCount === PROOF_TARGETS.length ? "pass" : proofFailedCount > 0 ? "fail" : "warn";
   const proofMeta = CHECK_TONE_META[proofTone];
   const ProofIcon = proofMeta.icon;
+  const proofOverallLabel = proofPassedCount === PROOF_TARGETS.length
+    ? "Android/iOS 리포트 통과"
+    : proofEnteredCount === 0
+      ? "Android/iOS 리포트 대기"
+      : proofFailedCount > 0
+        ? "Android/iOS 리포트 미통과"
+        : "Android/iOS 리포트 미완료";
+  const proofOverallDetail = `${proofPassedCount}/${PROOF_TARGETS.length} 통과 · ${proofFailedCount} 미통과`;
 
   const copyReport = useCallback(async () => {
     if (!reportText) return;
@@ -1174,68 +1243,117 @@ export default function PwaCheckPage() {
                   data-testid="pwa-proof-result"
                   style={{ color: "var(--foreground)", display: "block", fontSize: "0.95rem", fontWeight: 900 }}
                 >
-                  {proofResult ? proofResult.status === "passed" ? "리포트 통과" : "리포트 미통과" : "리포트 대기"}
+                  {proofOverallLabel}
                 </strong>
                 <span style={{ color: "var(--muted)", display: "block", fontSize: "0.75rem", lineHeight: 1.35, overflowWrap: "anywhere" }}>
-                  {proofResult
-                    ? `${proofResult.displayMode || "unknown"} · installed=${proofResult.installedDisplay || "missing"} · proof=${proofResult.proofStatus || "missing"}`
-                    : "폰에서 공유한 PWA device check 리포트를 붙여넣습니다."}
+                  {proofEnteredCount ? proofOverallDetail : "Android와 iOS 리포트를 각각 붙여넣습니다."}
                 </span>
               </div>
             </div>
-            <textarea
-              aria-label="실기기 리포트 입력"
-              data-testid="pwa-proof-input"
-              onChange={event => setProofInput(event.target.value)}
-              placeholder="OMR Maker PWA device check"
-              value={proofInput}
-              style={{
-                background: "var(--background)",
-                border: "1px solid var(--border)",
-                borderRadius: "8px",
-                color: "var(--foreground)",
-                fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
-                fontSize: "0.75rem",
-                lineHeight: 1.45,
-                minHeight: "7rem",
-                padding: "0.8rem",
-                resize: "vertical",
-                width: "100%",
-              }}
-            />
-            {proofResult?.url ? (
-              <div
-                data-testid="pwa-proof-url"
-                style={{ color: "var(--muted)", fontSize: "0.72rem", lineHeight: 1.35, overflowWrap: "anywhere" }}
-              >
-                {proofResult.url}
-              </div>
-            ) : null}
-            {proofResult?.errors.length ? (
-              <ul
-                data-testid="pwa-proof-errors"
-                style={{
-                  color: "var(--error)",
-                  display: "grid",
-                  fontSize: "0.73rem",
-                  gap: "0.35rem",
-                  lineHeight: 1.35,
-                  margin: 0,
-                  paddingLeft: "1rem",
-                }}
-              >
-                {proofResult.errors.slice(0, 5).map(error => (
-                  <li key={error}>{error}</li>
-                ))}
-              </ul>
-            ) : proofResult?.status === "passed" ? (
-              <div
-                data-testid="pwa-proof-errors"
-                style={{ color: "var(--success)", fontSize: "0.75rem", fontWeight: 850 }}
-              >
-                installed home-screen launch verified
-              </div>
-            ) : null}
+            <div style={{ display: "grid", gap: "0.75rem", gridTemplateColumns: "repeat(auto-fit, minmax(230px, 1fr))" }}>
+              {PROOF_TARGETS.map(target => {
+                const proofInput = proofInputs[target.platform];
+                const result = proofResults[target.platform];
+                const slotTone: CheckTone = result ? result.status === "passed" ? "pass" : "fail" : "warn";
+                const slotMeta = CHECK_TONE_META[slotTone];
+
+                return (
+                  <article
+                    key={target.platform}
+                    data-testid={`pwa-proof-slot-${target.platform}`}
+                    style={{
+                      background: "var(--background)",
+                      border: "1px solid var(--border)",
+                      borderRadius: "8px",
+                      display: "grid",
+                      gap: "0.65rem",
+                      padding: "0.8rem",
+                    }}
+                  >
+                    <div style={{ alignItems: "start", display: "grid", gap: "0.5rem", gridTemplateColumns: "auto minmax(0, 1fr)" }}>
+                      <span
+                        aria-label={slotMeta.label}
+                        style={{
+                          background: slotMeta.background,
+                          borderRadius: "8px",
+                          color: slotMeta.color,
+                          display: "inline-flex",
+                          height: "0.9rem",
+                          marginTop: "0.2rem",
+                          width: "0.9rem",
+                        }}
+                      />
+                      <span style={{ minWidth: 0 }}>
+                        <strong
+                          data-testid={target.resultTestId}
+                          style={{ color: "var(--foreground)", display: "block", fontSize: "0.84rem", fontWeight: 900 }}
+                        >
+                          {target.label} {result ? result.status === "passed" ? "리포트 통과" : "리포트 미통과" : "리포트 대기"}
+                        </strong>
+                        <span style={{ color: "var(--muted)", display: "block", fontSize: "0.72rem", lineHeight: 1.35, overflowWrap: "anywhere" }}>
+                          {result
+                            ? `${proofPlatformLabel(result.platform)} · ${result.displayMode || "unknown"} · installed=${result.installedDisplay || "missing"}`
+                            : target.detail}
+                        </span>
+                      </span>
+                    </div>
+                    <textarea
+                      aria-label={`${target.label} 실기기 리포트 입력`}
+                      data-testid={target.inputTestId}
+                      onChange={event => setProofInputs(current => ({ ...current, [target.platform]: event.target.value }))}
+                      placeholder="OMR Maker PWA device check"
+                      value={proofInput}
+                      style={{
+                        background: "var(--surface)",
+                        border: "1px solid var(--border)",
+                        borderRadius: "8px",
+                        color: "var(--foreground)",
+                        fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
+                        fontSize: "0.72rem",
+                        lineHeight: 1.45,
+                        minHeight: "7rem",
+                        padding: "0.75rem",
+                        resize: "vertical",
+                        width: "100%",
+                      }}
+                    />
+                    {result?.url ? (
+                      <div
+                        data-testid={target.platform === "android" ? "pwa-proof-url" : "pwa-proof-url-ios"}
+                        style={{ color: "var(--muted)", fontSize: "0.7rem", lineHeight: 1.35, overflowWrap: "anywhere" }}
+                      >
+                        {result.url}
+                      </div>
+                    ) : null}
+                    {result?.errors.length ? (
+                      <ul
+                        data-testid={target.errorTestId}
+                        style={{
+                          color: "var(--error)",
+                          display: "grid",
+                          fontSize: "0.7rem",
+                          gap: "0.35rem",
+                          lineHeight: 1.35,
+                          margin: 0,
+                          paddingLeft: "1rem",
+                        }}
+                      >
+                        {result.errors.slice(0, 5).map(error => (
+                          <li key={error}>{error}</li>
+                        ))}
+                      </ul>
+                    ) : result?.status === "passed" ? (
+                      <div
+                        data-testid={target.errorTestId}
+                        style={{ color: "var(--success)", fontSize: "0.72rem", fontWeight: 850 }}
+                      >
+                        installed home-screen launch verified
+                      </div>
+                    ) : null}
+                  </article>
+                );
+              })}
+            </div>
           </section>
 
           <section aria-label="PWA 체크 목록" style={{ display: "grid", gap: "0.7rem" }}>

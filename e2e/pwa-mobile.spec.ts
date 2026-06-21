@@ -152,7 +152,15 @@ async function stubClipboard(page: Page) {
     });
 }
 
-function validInstalledProofReport(): string {
+function validInstalledProofReport(platform: "android" | "ios" = "android"): string {
+    const isIos = platform === "ios";
+    const displayEvidence = isIos
+        ? "css-fullscreen=no · css-standalone=yes · ios-navigator-standalone=yes"
+        : "css-fullscreen=no · css-standalone=yes · ios-navigator-standalone=no";
+    const userAgent = isIos
+        ? "Mozilla/5.0 (iPhone; CPU iPhone OS 18_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.5 Mobile/15E148 Safari/604.1"
+        : "Mozilla/5.0 (Linux; Android 15; Pixel 9) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.7727.15 Mobile Safari/537.36";
+
     return [
         "OMR Maker PWA device check",
         "url=https://omr-maker-eight.vercel.app/pwa-check",
@@ -161,12 +169,12 @@ function validInstalledProofReport(): string {
         "displayMode=standalone",
         "installedDisplay=yes",
         "proofStatus=pass",
-        "displayEvidence=css-fullscreen=no · css-standalone=yes · ios-navigator-standalone=no",
+        `displayEvidence=${displayEvidence}`,
         "summary=14 pass, 0 warn, 0 fail",
-        "userAgent=Mozilla/5.0",
+        `userAgent=${userAgent}`,
         "- secure-context=pass:보안 컨텍스트 (https://omr-maker-eight.vercel.app)",
         "- display-mode=pass:standalone (홈 화면 아이콘 실행 상태)",
-        "- launch-proof=pass:확인됨 (css-fullscreen=no · css-standalone=yes · ios-navigator-standalone=no)",
+        `- launch-proof=pass:확인됨 (${displayEvidence})`,
         "- service-worker=pass:제어 중 (https://omr-maker-eight.vercel.app/sw.js)",
         "- offline-cache=pass:준비 (caches=omr-maker-v8-shell, omr-maker-v8-runtime · required=/, /pwa-check, /offline.html, /logo.png · missing=none)",
         "- manifest=pass:standalone (OMR Maker · icons 12 · screenshots 2)",
@@ -393,7 +401,7 @@ test.describe("Mobile PWA entry", () => {
         await expect(page.getByRole("complementary", { name: "앱 설치 안내" })).toHaveCount(0);
     });
 
-    test("renders the device diagnostics page without blocking app entry", async ({ page }) => {
+    test("renders the device diagnostics page without blocking app entry", async ({ page }, testInfo) => {
         const consoleProblems = collectConsoleProblems(page);
         await stubClipboard(page);
 
@@ -431,6 +439,10 @@ test.describe("Mobile PWA entry", () => {
         await expect(page.getByTestId("pwa-device-handoff-qr")).toBeVisible();
         await expect(page.getByTestId("pwa-proof-verifier")).toBeVisible();
         await expect(page.getByTestId("pwa-proof-result")).toContainText("리포트 대기");
+        await expect(page.getByTestId("pwa-proof-slot-android")).toContainText("Android");
+        await expect(page.getByTestId("pwa-proof-slot-ios")).toContainText("iOS");
+        await expect(page.getByTestId("pwa-proof-result-android")).toContainText("Android 리포트 대기");
+        await expect(page.getByTestId("pwa-proof-result-ios")).toContainText("iOS 리포트 대기");
         await expectTouchTarget(page.getByRole("link", { name: "홈" }));
         await expectTouchTarget(page.getByTestId("pwa-device-report-copy"));
         await expectTouchTarget(page.getByTestId("pwa-device-report-share"));
@@ -465,10 +477,15 @@ test.describe("Mobile PWA entry", () => {
         expect(copiedReport).toContain("keyboard-safe-area=pass:준비");
         expect(copiedReport).toContain("overflow=pass:정상");
 
-        await page.getByTestId("pwa-proof-input").fill(copiedReport);
+        const currentProofInputId = testInfo.project.name.includes("ios") ? "pwa-proof-input-ios" : "pwa-proof-input";
+        const currentProofResultId = testInfo.project.name.includes("ios") ? "pwa-proof-result-ios" : "pwa-proof-result-android";
+        const currentProofErrorsId = testInfo.project.name.includes("ios") ? "pwa-proof-errors-ios" : "pwa-proof-errors";
+
+        await page.getByTestId(currentProofInputId).fill(copiedReport);
         await expect(page.getByTestId("pwa-proof-result")).toContainText("리포트 미통과");
-        await expect(page.getByTestId("pwa-proof-errors")).toContainText("proofStatus must be pass");
-        await expect(page.getByTestId("pwa-proof-errors")).toContainText("installedDisplay must be yes");
+        await expect(page.getByTestId(currentProofResultId)).toContainText("리포트 미통과");
+        await expect(page.getByTestId(currentProofErrorsId)).toContainText("proofStatus must be pass");
+        await expect(page.getByTestId(currentProofErrorsId)).toContainText("installedDisplay must be yes");
 
         await page.getByTestId("pwa-device-report-share").click();
         await expect(page.getByTestId("pwa-device-copy-status")).toContainText("공유됨");
@@ -550,9 +567,13 @@ test.describe("Mobile PWA entry", () => {
         await expect(page.getByTestId("pwa-device-report")).toContainText("offline-cache=");
         await expect(page.getByTestId("pwa-device-report")).toContainText("viewport-height=pass:동기화");
         await expect(page.getByTestId("pwa-device-report")).toContainText("keyboard-safe-area=pass:준비");
-        await page.getByTestId("pwa-proof-input").fill(validInstalledProofReport());
-        await expect(page.getByTestId("pwa-proof-result")).toContainText("리포트 통과");
+        await page.getByTestId("pwa-proof-input").fill(validInstalledProofReport("android"));
+        await page.getByTestId("pwa-proof-input-ios").fill(validInstalledProofReport("ios"));
+        await expect(page.getByTestId("pwa-proof-result")).toContainText("Android/iOS 리포트 통과");
+        await expect(page.getByTestId("pwa-proof-result-android")).toContainText("Android 리포트 통과");
+        await expect(page.getByTestId("pwa-proof-result-ios")).toContainText("iOS 리포트 통과");
         await expect(page.getByTestId("pwa-proof-errors")).toContainText("installed home-screen launch verified");
+        await expect(page.getByTestId("pwa-proof-errors-ios")).toContainText("installed home-screen launch verified");
         await expectNoHorizontalOverflow(page);
 
         expect(consoleProblems).toEqual([]);
