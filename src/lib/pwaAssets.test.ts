@@ -496,6 +496,9 @@ describe("PWA assets", () => {
         expect(source).toContain("offlineDeviceCheckState");
         expect(source).toContain("offlineFallbackState");
         expect(source).toContain("Offline fallback touch targets are too small");
+        expect(source).toContain("installProofGuide");
+        expect(source).toContain("PWA install proof guide is missing");
+        expect(source).toContain("PWA install proof guide must cover Android and iOS");
         expect(source).toContain("cachedPwaCheck");
         expect(source).toContain("displayEvidence=");
         expect(source).toContain("launch-proof=");

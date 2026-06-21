@@ -185,6 +185,14 @@ describe("service UI surface", () => {
         expect(pwaCheck).toContain("pwa-device-report");
         expect(pwaCheck).toContain("pwa-device-handoff");
         expect(pwaCheck).toContain("pwa-device-handoff-qr");
+        expect(pwaCheck).toContain("INSTALL_PROOF_STEPS");
+        expect(pwaCheck).toContain("pwa-install-proof-guide");
+        expect(pwaCheck).toContain("pwa-install-proof-step-${index + 1}");
+        expect(pwaCheck).toContain("pwa-install-proof-android");
+        expect(pwaCheck).toContain("pwa-install-proof-ios");
+        expect(pwaCheck).toContain("실기기 설치 확인");
+        expect(pwaCheck).toContain("Android와 iOS 모두 마지막 단계");
+        expect(pwaCheck).toContain("홈 화면 아이콘으로 다시 열고 앱 실행 통과 리포트를 복사합니다.");
         expect(pwaCheck).toContain("QRCodeCanvas");
         expect(pwaCheck).toContain("navigator.share");
         expect(pwaCheck).toContain("buildDeviceReport");

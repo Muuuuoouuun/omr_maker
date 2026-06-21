@@ -208,6 +208,14 @@ test.describe("Mobile PWA entry", () => {
         await expect(page.getByTestId("pwa-device-report")).toContainText("displayEvidence=");
         await expect(page.getByTestId("pwa-device-report")).toContainText("viewport-height=pass:동기화");
         await expect(page.getByTestId("pwa-device-report")).toContainText("keyboard-safe-area=pass:준비");
+        await expect(page.getByTestId("pwa-install-proof-guide")).toContainText("실기기 설치 확인");
+        await expect(page.getByTestId("pwa-install-proof-guide")).toContainText("standalone");
+        await expect(page.getByTestId("pwa-install-proof-guide")).toContainText("fullscreen");
+        await expect(page.getByTestId("pwa-install-proof-step-1")).toContainText("실기기 열기");
+        await expect(page.getByTestId("pwa-install-proof-step-2")).toContainText("홈 화면 추가");
+        await expect(page.getByTestId("pwa-install-proof-step-3")).toContainText("아이콘 실행");
+        await expect(page.getByTestId("pwa-install-proof-android")).toContainText("Android");
+        await expect(page.getByTestId("pwa-install-proof-ios")).toContainText("iOS");
         await expect(page.getByTestId("pwa-device-handoff")).toContainText("폰으로 열기");
         await expect(page.getByTestId("pwa-device-handoff-url")).toContainText("/pwa-check");
         await expect(page.getByTestId("pwa-device-handoff-qr")).toBeVisible();
@@ -216,6 +224,9 @@ test.describe("Mobile PWA entry", () => {
         await expectTouchTarget(page.getByRole("button", { name: "검사" }));
         await expectTouchTarget(page.getByTestId("pwa-device-handoff-copy"));
         await expectTouchTarget(page.getByTestId("pwa-device-handoff-share"));
+        await expectTouchTarget(page.getByTestId("pwa-install-proof-step-1"));
+        await expectTouchTarget(page.getByTestId("pwa-install-proof-step-2"));
+        await expectTouchTarget(page.getByTestId("pwa-install-proof-step-3"));
 
         await page.getByTestId("pwa-device-handoff-copy").click();
         await expect(page.getByTestId("pwa-device-handoff-status")).toContainText("복사됨");

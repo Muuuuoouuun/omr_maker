@@ -42,6 +42,21 @@ const CHECK_TONE_META: Record<CheckTone, { background: string; color: string; ic
   fail: { background: "rgba(239, 68, 68, 0.1)", color: "var(--error)", icon: AlertTriangle, label: "조치" },
 };
 
+const INSTALL_PROOF_STEPS = [
+  {
+    detail: "QR 또는 링크를 실제 Android Chrome / iPhone Safari에서 엽니다.",
+    label: "실기기 열기",
+  },
+  {
+    detail: "Android는 설치, iOS는 공유 메뉴의 홈 화면에 추가를 완료합니다.",
+    label: "홈 화면 추가",
+  },
+  {
+    detail: "홈 화면 아이콘으로 다시 열고 앱 실행 통과 리포트를 복사합니다.",
+    label: "아이콘 실행",
+  },
+];
+
 async function waitForViewportHeightSync(): Promise<void> {
   await new Promise<void>(resolve => {
     window.requestAnimationFrame(() => {
@@ -679,6 +694,107 @@ export default function PwaCheckPage() {
             >
               {reportText || "검사 결과 준비 중"}
             </pre>
+          </section>
+
+          <section
+            aria-label="실기기 설치 확인"
+            data-testid="pwa-install-proof-guide"
+            style={{
+              background: "var(--surface)",
+              border: "1px solid var(--border)",
+              borderRadius: "8px",
+              display: "grid",
+              gap: "0.85rem",
+              padding: "1rem",
+            }}
+          >
+            <div style={{ display: "grid", gap: "0.3rem" }}>
+              <strong style={{ color: "var(--foreground)", fontSize: "0.98rem", fontWeight: 900 }}>
+                실기기 설치 확인
+              </strong>
+              <span style={{ color: "var(--muted)", fontSize: "0.78rem", lineHeight: 1.4 }}>
+                Android와 iOS 모두 마지막 단계에서 displayMode가 standalone 또는 fullscreen이면 통과입니다.
+              </span>
+            </div>
+            <div style={{ display: "grid", gap: "0.55rem" }}>
+              {INSTALL_PROOF_STEPS.map((step, index) => (
+                <div
+                  key={step.label}
+                  data-testid={`pwa-install-proof-step-${index + 1}`}
+                  style={{
+                    alignItems: "center",
+                    background: "var(--background)",
+                    border: "1px solid var(--border)",
+                    borderRadius: "8px",
+                    display: "grid",
+                    gap: "0.7rem",
+                    gridTemplateColumns: "auto minmax(0, 1fr)",
+                    minHeight: "3.25rem",
+                    padding: "0.7rem",
+                  }}
+                >
+                  <span
+                    aria-hidden="true"
+                    style={{
+                      alignItems: "center",
+                      background: "color-mix(in srgb, var(--primary), transparent 88%)",
+                      borderRadius: "8px",
+                      color: "var(--primary)",
+                      display: "inline-flex",
+                      fontSize: "0.78rem",
+                      fontWeight: 950,
+                      height: "2rem",
+                      justifyContent: "center",
+                      width: "2rem",
+                    }}
+                  >
+                    {index + 1}
+                  </span>
+                  <span style={{ minWidth: 0 }}>
+                    <strong style={{ color: "var(--foreground)", display: "block", fontSize: "0.84rem", fontWeight: 900 }}>
+                      {step.label}
+                    </strong>
+                    <span style={{ color: "var(--muted)", display: "block", fontSize: "0.74rem", lineHeight: 1.35, overflowWrap: "anywhere" }}>
+                      {step.detail}
+                    </span>
+                  </span>
+                </div>
+              ))}
+            </div>
+            <div style={{ display: "grid", gap: "0.55rem", gridTemplateColumns: "repeat(2, minmax(0, 1fr))" }}>
+              <div
+                data-testid="pwa-install-proof-android"
+                style={{
+                  background: "rgba(16, 185, 129, 0.08)",
+                  border: "1px solid rgba(16, 185, 129, 0.18)",
+                  borderRadius: "8px",
+                  color: "var(--foreground)",
+                  minHeight: "3.25rem",
+                  padding: "0.75rem",
+                }}
+              >
+                <strong style={{ display: "block", fontSize: "0.8rem", fontWeight: 900 }}>Android</strong>
+                <span style={{ color: "var(--muted)", display: "block", fontSize: "0.72rem", lineHeight: 1.35 }}>
+                  Chrome 설치 버튼 또는 메뉴의 앱 설치
+                </span>
+              </div>
+              <div
+                data-testid="pwa-install-proof-ios"
+                style={{
+                  background: "rgba(99, 102, 241, 0.08)",
+                  border: "1px solid rgba(99, 102, 241, 0.18)",
+                  borderRadius: "8px",
+                  color: "var(--foreground)",
+                  minHeight: "3.25rem",
+                  padding: "0.75rem",
+                }}
+              >
+                <strong style={{ display: "block", fontSize: "0.8rem", fontWeight: 900 }}>iOS</strong>
+                <span style={{ color: "var(--muted)", display: "block", fontSize: "0.72rem", lineHeight: 1.35 }}>
+                  Safari 공유 메뉴에서 홈 화면에 추가
+                </span>
+              </div>
+            </div>
           </section>
 
           <section
