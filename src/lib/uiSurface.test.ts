@@ -177,6 +177,7 @@ describe("service UI surface", () => {
 
     it("keeps device QA evidence copyable from the PWA check page", () => {
         const pwaCheck = readProjectFile("src/app/pwa-check/page.tsx");
+        const themeToggle = readProjectFile("src/components/ThemeToggle.tsx");
 
         expect(pwaCheck).toContain("pwa-device-verdict");
         expect(pwaCheck).toContain("pwa-device-report-copy");
@@ -191,6 +192,10 @@ describe("service UI surface", () => {
         expect(pwaCheck).toContain("displayMode=");
         expect(pwaCheck).toContain("앱 실행 통과");
         expect(pwaCheck).toContain("설치 실행 전");
+        expect(pwaCheck).toContain('minHeight: "2.75rem"');
+        expect(pwaCheck).toContain('minWidth: "2.75rem"');
+        expect(themeToggle).toContain('size === "small" ? "40px" : "44px"');
+        expect(themeToggle).toContain("const btnSize = size === \"small\" ? 40 : 44");
     });
 
     it("keeps installed phone and tablet app shells inside safe areas", () => {

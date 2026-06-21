@@ -437,6 +437,9 @@ export default function PwaCheckPage() {
                 fontWeight: 750,
                 gap: "0.35rem",
                 justifySelf: "start",
+                minHeight: "2.75rem",
+                minWidth: "2.75rem",
+                padding: "0 0.25rem",
               }}
             >
               <ExternalLink size={15} />

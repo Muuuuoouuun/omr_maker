@@ -1,4 +1,4 @@
-import { expect, test, type Page } from "@playwright/test";
+import { expect, test, type Locator, type Page } from "@playwright/test";
 
 async function clearStorage(page: Page) {
     await page.addInitScript(() => {
@@ -21,6 +21,15 @@ async function expectNoHorizontalOverflow(page: Page) {
     await expect.poll(async () => page.evaluate(() => (
         document.documentElement.scrollWidth > document.documentElement.clientWidth
     ))).toBe(false);
+}
+
+async function expectTouchTarget(locator: Locator) {
+    await expect(locator).toHaveCount(1);
+    await expect(locator).toBeVisible();
+    const box = await locator.boundingBox();
+    expect(box).not.toBeNull();
+    expect(Math.round(box?.width || 0)).toBeGreaterThanOrEqual(44);
+    expect(Math.round(box?.height || 0)).toBeGreaterThanOrEqual(44);
 }
 
 async function expectMetaContent(page: Page, name: string, content: string) {
@@ -105,6 +114,9 @@ test.describe("Mobile PWA entry", () => {
         await expect(page.locator('link[rel="apple-touch-icon"]').first()).toHaveAttribute("href", "/apple-touch-icon.png");
         await expectMetaContent(page, "mobile-web-app-capable", "yes");
         await expectMetaContent(page, "apple-mobile-web-app-capable", "yes");
+        await expectTouchTarget(page.locator('button[aria-label$="모드로 전환"]'));
+        await expectTouchTarget(page.getByRole("button", { name: /학생.*시작하기/ }));
+        await expectTouchTarget(page.getByRole("button", { name: /교사.*대시보드/ }));
         await expectNoHorizontalOverflow(page);
 
         await page.getByRole("button", { name: /학생.*시작하기/ }).click();
@@ -158,6 +170,11 @@ test.describe("Mobile PWA entry", () => {
         await expect(page.getByTestId("pwa-device-handoff")).toContainText("폰으로 열기");
         await expect(page.getByTestId("pwa-device-handoff-url")).toContainText("/pwa-check");
         await expect(page.getByTestId("pwa-device-handoff-qr")).toBeVisible();
+        await expectTouchTarget(page.getByRole("link", { name: "홈" }));
+        await expectTouchTarget(page.getByTestId("pwa-device-report-copy"));
+        await expectTouchTarget(page.getByRole("button", { name: "검사" }));
+        await expectTouchTarget(page.getByTestId("pwa-device-handoff-copy"));
+        await expectTouchTarget(page.getByTestId("pwa-device-handoff-share"));
 
         await page.getByTestId("pwa-device-handoff-copy").click();
         await expect(page.getByTestId("pwa-device-handoff-status")).toContainText("복사됨");
