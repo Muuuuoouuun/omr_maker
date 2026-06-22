@@ -116,6 +116,12 @@ test.describe("Manage Users page", () => {
         await expect(page.getByText(/\d+명 선택됨/)).toBeVisible();
     });
 
+    test("demo roster keeps bulk selection locked", async ({ page }) => {
+        await openTeacherPage(page, "/teacher/users");
+        const firstBox = page.locator('tbody input[type="checkbox"]').first();
+        await expect(firstBox).toBeDisabled();
+    });
+
     test("switching to groups tab shows group cards", async ({ page }) => {
         await openTeacherPage(page, "/teacher/users");
         await page.getByRole("button", { name: /반 · 그룹/ }).click();

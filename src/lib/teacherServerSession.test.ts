@@ -57,10 +57,14 @@ describe("teacher server session", () => {
         expect(parseSignedTeacherSessionCookie(cookie, env, 1000 + TEACHER_SERVER_SESSION_MAX_AGE_SECONDS * 1000 + 1)).toBeNull();
     });
 
-    it("keeps production teacher cookies secure unless local production e2e opts out", () => {
-        expect(shouldUseSecureTeacherSessionCookie({ NODE_ENV: "production" })).toBe(true);
-        expect(shouldUseSecureTeacherSessionCookie({ NODE_ENV: "development" })).toBe(false);
-        expect(shouldUseSecureTeacherSessionCookie({
+    it("keeps secure cookies for production domains while allowing localhost QA", () => {
+        expect(shouldUseSecureTeacherSessionCookie("omr.example.com", env)).toBe(true);
+        expect(shouldUseSecureTeacherSessionCookie("localhost:3004", env)).toBe(false);
+        expect(shouldUseSecureTeacherSessionCookie("127.0.0.1:3004", env)).toBe(false);
+        expect(shouldUseSecureTeacherSessionCookie("[::1]:3004", env)).toBe(false);
+        expect(shouldUseSecureTeacherSessionCookie("omr.localhost:3004", env)).toBe(false);
+        expect(shouldUseSecureTeacherSessionCookie("omr.example.com", { NODE_ENV: "development" })).toBe(false);
+        expect(shouldUseSecureTeacherSessionCookie("omr.example.com", {
             NODE_ENV: "production",
             OMR_ALLOW_INSECURE_TEACHER_COOKIE_FOR_LOCAL_E2E: "true",
         })).toBe(false);

@@ -10,6 +10,7 @@ import dynamic from "next/dynamic";
 import { toast } from "@/components/Toast";
 import { AlertTriangle, Clock, PanelRightClose, PanelRightOpen, PenLine, Save } from "lucide-react";
 import { storedDataUrlToFile, saveJsonRecord, loadJsonRecord } from "@/utils/blobStore";
+import { resolveDraftDrawings } from "@/lib/draftRecovery";
 import { verifyTeacherPassword } from "@/app/actions/auth";
 import { saveTeacherSessionWithIdentity } from "@/lib/teacherSession";
 import { getOrCreateGuestId, getSession, saveSession, type StudentSession } from "@/utils/storage";
@@ -92,7 +93,7 @@ function SolveDialogShell({
                 display: 'flex',
                 alignItems: 'center',
                 justifyContent: 'center',
-                padding: '1rem',
+                padding: 'max(1rem, env(safe-area-inset-top)) max(1rem, env(safe-area-inset-right)) max(1rem, env(safe-area-inset-bottom)) max(1rem, env(safe-area-inset-left))',
             }}
         >
             <div
@@ -117,7 +118,16 @@ function SolveDialogShell({
                         type="button"
                         onClick={onClose}
                         aria-label="닫기"
-                        style={{ color: 'var(--muted)', fontSize: '1.25rem', lineHeight: 1 }}
+                        style={{
+                            width: 44,
+                            height: 44,
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                            color: 'var(--muted)',
+                            fontSize: '1.25rem',
+                            lineHeight: 1,
+                        }}
                     >
                         ×
                     </button>
@@ -129,6 +139,10 @@ function SolveDialogShell({
 }
 
 const dialogButtonBase: CSSProperties = {
+    minHeight: 44,
+    display: 'inline-flex',
+    alignItems: 'center',
+    justifyContent: 'center',
     padding: '0.7rem 1rem',
     borderRadius: 'var(--radius-md)',
     fontWeight: 700,
@@ -160,6 +174,7 @@ function ExamPinDialog({
                 type="text"
                 inputMode="numeric"
                 pattern="[0-9]*"
+                autoComplete="one-time-code"
                 maxLength={6}
                 value={value}
                 onChange={(event) => onChange(normalizeExamPin(event.target.value))}
@@ -276,7 +291,7 @@ function SolveLoadErrorCard({ error }: { error: SolveLoadError }) {
     return (
         <div className="layout-main solve-page" style={{
             background: 'var(--background)',
-            minHeight: '100vh',
+            minHeight: 'var(--app-viewport-height, 100dvh)',
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'center',
@@ -370,6 +385,7 @@ function GuestNameDialog({
                 }}
                 autoFocus
                 placeholder="이름 입력"
+                autoComplete="name"
                 style={{
                     width: '100%',
                     padding: '0.8rem 0.95rem',
@@ -427,6 +443,9 @@ function TeacherPasswordDialog({
                 autoFocus
                 placeholder="아이디 또는 이메일"
                 autoComplete="username"
+                autoCapitalize="none"
+                inputMode="email"
+                spellCheck={false}
                 style={{
                     width: '100%',
                     padding: '0.8rem 0.95rem',
@@ -471,13 +490,6 @@ function TeacherPasswordDialog({
                 </button>
             </div>
         </SolveDialogShell>
-    );
-}
-
-function isPdfDrawings(value: unknown): value is PdfDrawings {
-    if (!value || typeof value !== "object" || Array.isArray(value)) return false;
-    return Object.values(value as Record<string, unknown>).every(paths =>
-        Array.isArray(paths) && paths.every(path => typeof path === "string")
     );
 }
 
@@ -546,6 +558,7 @@ export default function SolvePage() {
     const [pinInput, setPinInput] = useState("");
     const [pinError, setPinError] = useState("");
     const submittedRef = useRef(false);
+    const studentAnswersRef = useRef<Record<number, number>>({});
     const latestDraftRef = useRef<SolveDraft | null>(null);
     const autosaveErrorShownRef = useRef(false);
     const examQuestionsRef = useRef<Question[]>([]);
@@ -717,6 +730,63 @@ export default function SolvePage() {
     const LEGACY_DRAFT_KEY = id ? `omr_draft_${id}` : "";
     const OMR_PANEL_KEY = id && draftOwnerKey ? `${OMR_PANEL_STORAGE_PREFIX}_${id}_${draftOwnerKey}` : "";
 
+    const saveDraftSnapshot = useCallback(async (draftSnapshot = latestDraftRef.current) => {
+        if (typeof window === "undefined") return false;
+        if (!DRAFT_KEY || submittedRef.current || !draftSnapshot) return false;
+        if (examData && evaluateExamAccess(examData, { session: user, pinVerified }).status !== "allowed") return false;
+
+        const savedAt = new Date().toISOString();
+        const draftDrawings = compactDrawings(draftSnapshot.drawings || {});
+        const lightweightDraft: SolveDraft = {
+            answers: draftSnapshot.answers,
+            drawingsRef: draftSnapshot.drawingsRef,
+            timeRemaining: draftSnapshot.timeRemaining,
+            startedAt: draftSnapshot.startedAt,
+            savedAt,
+        };
+
+        try {
+            localStorage.setItem(DRAFT_KEY, JSON.stringify(lightweightDraft));
+            setLastSavedAt(new Date(savedAt));
+        } catch {
+            if (!autosaveErrorShownRef.current) {
+                autosaveErrorShownRef.current = true;
+                toast.error("임시저장 실패", "브라우저 저장소가 가득 찼거나 차단되어 답안을 저장하지 못했습니다.");
+            }
+            return false;
+        }
+
+        try {
+            let drawingsRef = draftSnapshot.drawingsRef;
+            if (hasDrawings(draftDrawings)) {
+                drawingsRef = await saveJsonRecord(`draft:${id}:${draftOwnerKey}:drawings`, draftDrawings);
+                if (!drawingsRef) throw new Error("Failed to save draft drawings");
+            }
+
+            const persistedDraft: SolveDraft = {
+                ...lightweightDraft,
+                drawingsRef,
+            };
+            localStorage.setItem(DRAFT_KEY, JSON.stringify(persistedDraft));
+            if (latestDraftRef.current) {
+                latestDraftRef.current = {
+                    ...latestDraftRef.current,
+                    drawingsRef,
+                    savedAt,
+                };
+            }
+            autosaveErrorShownRef.current = false;
+            setLastSavedAt(new Date(savedAt));
+            return true;
+        } catch {
+            if (!autosaveErrorShownRef.current) {
+                autosaveErrorShownRef.current = true;
+                toast.error("필기 임시저장 지연", "답안은 저장됐지만 필기 저장은 다시 시도합니다.");
+            }
+            return true;
+        }
+    }, [DRAFT_KEY, draftOwnerKey, examData, id, pinVerified, user]);
+
     useEffect(() => {
         if (typeof window === "undefined" || !OMR_PANEL_KEY) {
             setHydratedOMRPanelKey("");
@@ -810,24 +880,47 @@ export default function SolvePage() {
                     const draftStr = (scopedDraftKey ? localStorage.getItem(scopedDraftKey) : null)
                         || localStorage.getItem(`omr_draft_${id}`);
                     if (draftStr) {
-                        const draft = JSON.parse(draftStr);
-                        if (draft.answers && typeof draft.answers === "object") {
-                            setStudentAnswers(draft.answers);
+                        const draft = JSON.parse(draftStr) as Partial<SolveDraft>;
+                        const restoredAnswers = draft.answers && typeof draft.answers === "object" ? draft.answers : {};
+                        if (Object.keys(restoredAnswers).length > 0) {
+                            studentAnswersRef.current = restoredAnswers;
+                            setStudentAnswers(restoredAnswers);
                         }
+                        let loadedDrawings: unknown = null;
                         if (draft.drawingsRef) {
-                            const draftDrawings = await loadJsonRecord<PdfDrawings>(draft.drawingsRef);
-                            if (draftDrawings && isPdfDrawings(draftDrawings)) {
-                                setDrawings(draftDrawings);
+                            try {
+                                loadedDrawings = await loadJsonRecord<PdfDrawings>(draft.drawingsRef);
+                            } catch {
+                                loadedDrawings = null;
                             }
-                        } else if (isPdfDrawings(draft.drawings)) {
-                            setDrawings(draft.drawings);
                         }
+                        const recovery = resolveDraftDrawings(loadedDrawings, draft.drawings, !!draft.drawingsRef);
+                        if (recovery.drawings) {
+                            setDrawings(recovery.drawings);
+                        }
+                        if (recovery.lost) {
+                            toast.error("필기 복구 실패", "저장된 필기를 불러오지 못했습니다. 답안과 진행 상태는 그대로 유지됩니다.");
+                        }
+                        const restoredTimeRemaining = typeof draft.timeRemaining === "number"
+                            ? draft.timeRemaining
+                            : typeof parsed.durationMin === "number"
+                                ? parsed.durationMin * 60
+                                : null;
+                        const restoredStartedAt = typeof draft.startedAt === "string" ? draft.startedAt : new Date().toISOString();
                         if (typeof draft.timeRemaining === "number") {
-                            setTimeRemaining(draft.timeRemaining);
+                            setTimeRemaining(restoredTimeRemaining);
                         }
                         if (typeof draft.startedAt === "string") {
-                            setStartedAt(draft.startedAt);
+                            setStartedAt(restoredStartedAt);
                         }
+                        latestDraftRef.current = {
+                            answers: restoredAnswers,
+                            drawings: recovery.drawings || {},
+                            drawingsRef: draft.drawingsRef,
+                            timeRemaining: restoredTimeRemaining,
+                            startedAt: restoredStartedAt,
+                            savedAt: typeof draft.savedAt === "string" ? draft.savedAt : new Date().toISOString(),
+                        };
                         setHasResumed(true);
                     }
                 } catch {
@@ -872,9 +965,11 @@ export default function SolvePage() {
     }, [timeRemaining, examData, pinVerified, user]);
 
     useEffect(() => {
+        studentAnswersRef.current = studentAnswers;
         latestDraftRef.current = {
             answers: studentAnswers,
             drawings: compactDrawings(drawings),
+            drawingsRef: latestDraftRef.current?.drawingsRef,
             timeRemaining,
             startedAt,
             savedAt: new Date().toISOString(),
@@ -885,41 +980,15 @@ export default function SolvePage() {
     useEffect(() => {
         if (!DRAFT_KEY) return;
         if (examData && evaluateExamAccess(examData, { session: user, pinVerified }).status !== "allowed") return;
-        const saveDraft = async () => {
-            if (submittedRef.current || !latestDraftRef.current) return;
-            const savedAt = new Date().toISOString();
-            try {
-                const draftDrawings = latestDraftRef.current.drawings || {};
-                let drawingsRef = latestDraftRef.current.drawingsRef;
-                if (hasDrawings(draftDrawings)) {
-                    drawingsRef = await saveJsonRecord(`draft:${id}:${draftOwnerKey}:drawings`, draftDrawings);
-                    if (!drawingsRef) throw new Error("Failed to save draft drawings");
-                }
-                localStorage.setItem(DRAFT_KEY, JSON.stringify({
-                    ...latestDraftRef.current,
-                    drawings: undefined,
-                    drawingsRef,
-                    savedAt,
-                }));
-                autosaveErrorShownRef.current = false;
-                setLastSavedAt(new Date(savedAt));
-            } catch {
-                if (!autosaveErrorShownRef.current) {
-                    autosaveErrorShownRef.current = true;
-                    toast.error("Autosave failed", "Unable to save answers and handwriting.");
-                }
-                // quota exceeded: keep the first error visible without spamming toasts
-            }
-        };
 
         const handleVisibilityChange = () => {
-            if (document.visibilityState === "hidden") void saveDraft();
+            if (document.visibilityState === "hidden") void saveDraftSnapshot();
         };
         const handlePageHide = () => {
-            void saveDraft();
+            void saveDraftSnapshot();
         };
 
-        const intervalId = window.setInterval(() => { void saveDraft(); }, AUTOSAVE_INTERVAL_MS);
+        const intervalId = window.setInterval(() => { void saveDraftSnapshot(); }, AUTOSAVE_INTERVAL_MS);
         window.addEventListener("pagehide", handlePageHide);
         window.addEventListener("visibilitychange", handleVisibilityChange);
 
@@ -928,7 +997,7 @@ export default function SolvePage() {
             window.removeEventListener("pagehide", handlePageHide);
             window.removeEventListener("visibilitychange", handleVisibilityChange);
         };
-    }, [DRAFT_KEY, draftOwnerKey, examData, id, pinVerified, user]);
+    }, [DRAFT_KEY, examData, pinVerified, saveDraftSnapshot, user]);
 
     // Warn on tab close if there are unsaved answers
     useEffect(() => {
@@ -945,14 +1014,26 @@ export default function SolvePage() {
     const handleAnswerClick = (qId: number, optionIndex: number) => {
         const nowMs = Date.now();
         beginQuestionVisit(qId, nowMs);
-        setStudentAnswers(prev => {
-            if (prev[qId] !== optionIndex) {
-                const timing = ensureQuestionTiming(qId, nowMs);
-                timing.answerChangeCount += 1;
-                timing.lastAnsweredAt = new Date(nowMs).toISOString();
-            }
-            return { ...prev, [qId]: optionIndex };
-        });
+        const previousAnswers = studentAnswersRef.current;
+        if (previousAnswers[qId] !== optionIndex) {
+            const timing = ensureQuestionTiming(qId, nowMs);
+            timing.answerChangeCount += 1;
+            timing.lastAnsweredAt = new Date(nowMs).toISOString();
+        }
+
+        const nextAnswers = { ...previousAnswers, [qId]: optionIndex };
+        const nextDraft: SolveDraft = {
+            answers: nextAnswers,
+            drawings: compactDrawings(drawings),
+            drawingsRef: latestDraftRef.current?.drawingsRef,
+            timeRemaining,
+            startedAt,
+            savedAt: new Date().toISOString(),
+        };
+        studentAnswersRef.current = nextAnswers;
+        latestDraftRef.current = nextDraft;
+        setStudentAnswers(nextAnswers);
+        void saveDraftSnapshot(nextDraft);
     };
 
     const handleQuestionClick = (qId: number) => {
@@ -1234,7 +1315,7 @@ export default function SolvePage() {
         return (
             <div className="layout-main solve-page" style={{
                 background: 'var(--background)',
-                minHeight: '100vh',
+                minHeight: 'var(--app-viewport-height, 100dvh)',
                 display: 'flex',
                 alignItems: 'center',
                 justifyContent: 'center',
@@ -1259,7 +1340,7 @@ export default function SolvePage() {
         return (
             <div className="layout-main solve-page" style={{
                 background: 'var(--background)',
-                minHeight: '100vh',
+                minHeight: 'var(--app-viewport-height, 100dvh)',
                 display: 'flex',
                 alignItems: 'center',
                 justifyContent: 'center',
@@ -1305,7 +1386,7 @@ export default function SolvePage() {
     return (
         <div className="layout-main solve-page" style={{
             background: 'var(--background)',
-            height: '100vh',
+            height: 'var(--app-viewport-height, 100dvh)',
             overflow: 'hidden',
             display: 'flex',
             flexDirection: 'column'
@@ -1527,7 +1608,7 @@ export default function SolvePage() {
                         <button className="btn btn-primary solve-submit-button" style={{ padding: '0.5rem 1rem', fontSize: '0.85rem' }} onClick={handleSubmit}>
                             제출하기
                         </button>
-                        <ThemeToggle size="small" />
+                        <ThemeToggle />
                     </div>
                 </div>
             </header>
@@ -1775,7 +1856,11 @@ export default function SolvePage() {
                     justifyContent: 'center',
                     padding: '1.5rem'
                 }}>
-                    <div style={{
+                    <div
+                        role="dialog"
+                        aria-modal="true"
+                        aria-labelledby="solve-focus-warning-title"
+                        style={{
                         background: 'var(--background, white)',
                         border: '2px solid #ef4444',
                         borderRadius: '16px',
@@ -1792,7 +1877,7 @@ export default function SolvePage() {
                         }}>
                             ⚠️
                         </div>
-                        <h2 style={{
+                        <h2 id="solve-focus-warning-title" style={{
                             fontSize: '1.4rem',
                             fontWeight: 800,
                             color: '#ef4444',
@@ -1833,6 +1918,7 @@ export default function SolvePage() {
                                 fontSize: '0.95rem',
                                 cursor: 'pointer',
                                 transition: 'background 0.2s',
+                                minHeight: '44px',
                                 width: '100%'
                             }}
                             onMouseOver={(e) => e.currentTarget.style.background = '#dc2626'}

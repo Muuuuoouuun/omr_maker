@@ -69,7 +69,7 @@ export async function verifyTeacherPassword(
             cookieStore.set(TEACHER_SERVER_SESSION_COOKIE, serverSession, {
                 httpOnly: true,
                 sameSite: "lax",
-                secure: shouldUseSecureTeacherSessionCookie(),
+                secure: shouldUseSecureTeacherSessionCookie(headerStore.get("host")),
                 path: "/",
                 maxAge: TEACHER_SERVER_SESSION_MAX_AGE_SECONDS,
             });

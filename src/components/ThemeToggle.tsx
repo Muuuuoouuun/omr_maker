@@ -36,15 +36,15 @@ export default function ThemeToggle({ size = "default" }: { size?: "small" | "de
     return (
       <div
         style={{
-          width: size === "small" ? "32px" : "36px",
-          height: size === "small" ? "32px" : "36px",
+          width: size === "small" ? "40px" : "44px",
+          height: size === "small" ? "40px" : "44px",
         }}
       />
     );
   }
 
   const isDark = theme === "dark";
-  const btnSize = size === "small" ? 32 : 36;
+  const btnSize = size === "small" ? 40 : 44;
   const iconSize = size === "small" ? 16 : 18;
 
   return (

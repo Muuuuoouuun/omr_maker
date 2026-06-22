@@ -2,9 +2,9 @@ name: CI
 
 on:
   push:
-    branches: [main, "feat/**", "codex/**"]
+    branches: [main, "premier0.1", "feat/**", "codex/**"]
   pull_request:
-    branches: [main]
+    branches: [main, "premier0.1"]
 
 jobs:
   lint-and-test:
@@ -20,7 +20,6 @@ jobs:
         run: npm ci
       - name: Lint
         run: npm run lint
-        continue-on-error: true
       - name: Typecheck
         run: npx tsc --noEmit
       - name: Unit tests (Vitest)
@@ -54,8 +53,8 @@ jobs:
             test-results/
           retention-days: 7
 
-  build:
-    name: Next.js build
+  ios-webkit-pwa:
+    name: iOS WebKit PWA tests
     runs-on: ubuntu-latest
     needs: lint-and-test
     steps:
@@ -64,7 +63,40 @@ jobs:
         with:
           node-version: "20"
           cache: "npm"
+      - name: Install dependencies
+        run: npm ci
+      - name: Install Playwright WebKit
+        run: npx playwright install --with-deps webkit
+      - name: Run iOS WebKit PWA E2E
+        run: npm run test:e2e:ios-webkit
+        env:
+          CI: "true"
+      - name: Upload Playwright artifacts on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report-ios-webkit
+          path: |
+            playwright-report/
+            test-results/
+          retention-days: 7
+
+  build:
+    name: Next.js build · PWA smoke
+    runs-on: ubuntu-latest
+    needs: lint-and-test
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
       - name: Install
         run: npm ci
+      - name: Install Playwright Chromium
+        run: npx playwright install --with-deps chromium
       - name: Build
         run: npm run build
+      - name: PWA smoke
+        run: npm run pwa:smoke
