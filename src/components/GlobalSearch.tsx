@@ -3,7 +3,8 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Search, PlusCircle, Activity, Users, BarChart3, Settings as SettingsIcon, CreditCard, FileText, LayoutDashboard, X, CornerDownLeft } from "lucide-react";
-import { loadAllExams } from "@/utils/storage";
+import { readLocalExams } from "@/lib/omrPersistence";
+import { readRosterStudents } from "@/lib/rosterStorage";
 
 interface SearchItem {
     id: string;
@@ -22,7 +23,7 @@ const STATIC_ITEMS: SearchItem[] = [
     { id: "p-users", title: "사용자 관리", subtitle: "학생, 반, 초대", href: "/teacher/users", icon: <Users size={16} />, group: "page", keywords: "users students groups invites manage 학생 반 초대 관리" },
     { id: "p-analytics", title: "분석", subtitle: "시험 및 학생 분석", href: "/teacher/dashboard?tab=exam", icon: <BarChart3 size={16} />, group: "page", keywords: "analytics exam student statistics 분석 통계" },
     { id: "p-settings", title: "설정", subtitle: "프로필, 알림, 테마", href: "/teacher/settings", icon: <SettingsIcon size={16} />, group: "page", keywords: "settings profile notifications api theme 설정 프로필 알림 테마" },
-    { id: "p-billing", title: "결제 및 플랜", subtitle: "플랜 변경, 인보이스", href: "/teacher/billing", icon: <CreditCard size={16} />, group: "page", keywords: "billing plan invoice 결제 플랜 인보이스" },
+    { id: "p-billing", title: "결제 및 플랜", subtitle: "플랜 변경, 결제/플랜 기록", href: "/teacher/billing", icon: <CreditCard size={16} />, group: "page", keywords: "billing plan record 결제 플랜 기록" },
     { id: "s-theme", title: "테마 변경", subtitle: "라이트/다크/자동", href: "/teacher/settings#theme", icon: <SettingsIcon size={16} />, group: "setting", keywords: "theme dark light auto 테마 다크 라이트 자동" },
     { id: "s-api", title: "API 키 관리", subtitle: "Gemini 키", href: "/teacher/settings", icon: <SettingsIcon size={16} />, group: "setting", keywords: "api key gemini 키 제미나이" },
 ];
@@ -52,13 +53,8 @@ export default function GlobalSearch() {
                 setOpen(false);
             }
         };
-        const onOpenSearch = () => setOpen(true);
         window.addEventListener("keydown", onKey);
-        window.addEventListener("omr:open-search", onOpenSearch);
-        return () => {
-            window.removeEventListener("keydown", onKey);
-            window.removeEventListener("omr:open-search", onOpenSearch);
-        };
+        return () => window.removeEventListener("keydown", onKey);
     }, [open]);
 
     // When opening, load dynamic items from localStorage (exams + students)
@@ -68,7 +64,7 @@ export default function GlobalSearch() {
         try {
             const items: SearchItem[] = [];
             // Exams
-            loadAllExams().forEach(ex => {
+            readLocalExams().slice(0, 50).forEach(ex => {
                 items.push({
                     id: `exam-${ex.id}`,
                     title: ex.title,
@@ -81,23 +77,17 @@ export default function GlobalSearch() {
             });
             // Students
             try {
-                const raw = localStorage.getItem("omr_students");
-                if (raw) {
-                    const list = JSON.parse(raw);
-                    if (Array.isArray(list)) {
-                        list.slice(0, 50).forEach((s: { id: string; name: string; email: string; group: string }) => {
-                            items.push({
-                                id: `student-${s.id}`,
-                                title: s.name,
-                                subtitle: `${s.group} · ${s.email}`,
-                                href: `/teacher/users`,
-                                icon: <Users size={16} />,
-                                group: "student",
-                                keywords: `student ${s.name} ${s.email} ${s.group}`,
-                            });
-                        });
-                    }
-                }
+                readRosterStudents(localStorage).slice(0, 50).forEach(s => {
+                    items.push({
+                        id: `student-${s.id}`,
+                        title: s.name,
+                        subtitle: `${s.group} · ${s.email || "이메일 없음"}`,
+                        href: `/teacher/users`,
+                        icon: <Users size={16} />,
+                        group: "student",
+                        keywords: `student ${s.name} ${s.email} ${s.group}`,
+                    });
+                });
             } catch {
                 // ignore
             }

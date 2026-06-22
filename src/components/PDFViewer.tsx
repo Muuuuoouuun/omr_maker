@@ -1,13 +1,25 @@
 "use client";
 
-import { useState, useRef, useEffect } from 'react';
+import { useState, useRef, useEffect, useCallback } from 'react';
 import { Document, Page, pdfjs } from 'react-pdf';
-import type { PdfDrawings } from '@/types/omr';
+import { DEFAULT_CHOICE_COUNT, normalizeChoiceCount, type PdfDrawings } from '@/types/omr';
+import { toast } from '@/components/Toast';
+import {
+    Eraser,
+    FileText,
+    Hand,
+    Highlighter,
+    MousePointer2,
+    PenLine,
+    Redo2,
+    Trash2,
+    Undo2,
+} from 'lucide-react';
 import 'react-pdf/dist/Page/AnnotationLayer.css';
 import 'react-pdf/dist/Page/TextLayer.css';
 
 // Worker setup for Next.js
-pdfjs.GlobalWorkerOptions.workerSrc = `//unpkg.com/pdfjs-dist@${pdfjs.version}/build/pdf.worker.min.mjs`;
+pdfjs.GlobalWorkerOptions.workerSrc = '/pdf.worker.min.mjs';
 
 interface MarkerData {
     page: number;
@@ -15,12 +27,20 @@ interface MarkerData {
     y: number;
     label: string | number;
     color?: string;
+    region?: MarkerRegion;
     onClick?: () => void;
     // Floating OMR popup support
     questionId?: number;
     currentAnswer?: number;
     onAnswer?: (option: number) => void;
     optionsCount?: number;
+}
+
+interface MarkerRegion {
+    x: number;
+    y: number;
+    width: number;
+    height: number;
 }
 
 interface PDFViewerProps {
@@ -35,6 +55,17 @@ interface PDFViewerProps {
     onDrawingsChange?: (page: number, newPaths: string[]) => void;
     // Markers Props
     markers?: MarkerData[];
+}
+
+type DrawingMode = 'click' | 'pen' | 'highlighter' | 'eraser';
+type DrawPoint = { x: number; y: number };
+
+const PEN_COLORS = ['#ef4444', '#111827', '#2563eb', '#16a34a'];
+const HIGHLIGHTER_COLOR = 'rgba(250, 204, 21, 0.38)';
+const MIN_POINT_DISTANCE = 0.0012;
+
+function isPdfUploadFile(file: File): boolean {
+    return file.type === 'application/pdf' || file.name.toLowerCase().endsWith('.pdf');
 }
 
 export default function PDFViewer({
@@ -56,12 +87,22 @@ export default function PDFViewer({
     const [isDragging, setIsDragging] = useState(false);
 
     // Drawing State
-    const [isDrawing, setIsDrawing] = useState(false);
-    const [currentPath, setCurrentPath] = useState<{ x: number, y: number }[]>([]);
-    const [drawingMode, setDrawingMode] = useState<'pen' | 'eraser'>('eraser');
+    const [, setIsDrawing] = useState(false);
+    const [drawingMode, setDrawingMode] = useState<DrawingMode>('click');
     const [penColor, setPenColor] = useState('#ef4444'); // Default Red
+    const [penWidth, setPenWidth] = useState(2);
+    const [highlighterWidth, setHighlighterWidth] = useState(12);
+    const [eraserWidth, setEraserWidth] = useState(22);
+    const [fingerDrawingEnabled, setFingerDrawingEnabled] = useState(false);
+    const [undoStack, setUndoStack] = useState<Record<number, string[][]>>({});
+    const [redoStack, setRedoStack] = useState<Record<number, string[][]>>({});
+    const [clearConfirmOpen, setClearConfirmOpen] = useState(false);
     const shouldRenderDrawingLayer = enableDrawing || readOnlyDrawings;
     const canEditDrawing = enableDrawing && !readOnlyDrawings;
+    const isDrawingRef = useRef(false);
+    const activeDrawingModeRef = useRef<DrawingMode>('pen');
+    const currentPathRef = useRef<DrawPoint[]>([]);
+    const activePointerIdRef = useRef<number | null>(null);
 
     // Floating OMR popup state - tracks active marker index (page + list index)
     const [activePopupKey, setActivePopupKey] = useState<string | null>(null);
@@ -71,19 +112,30 @@ export default function PDFViewer({
     const containerRef = useRef<HTMLDivElement>(null);
     const wrapperRef = useRef<HTMLDivElement>(null);
     const [containerWidth, setContainerWidth] = useState<number>(0);
+    const activeStrokeWidth = drawingMode === 'eraser'
+        ? eraserWidth
+        : drawingMode === 'highlighter'
+            ? highlighterWidth
+            : penWidth;
 
     useEffect(() => {
         if (!wrapperRef.current) return;
         const observer = new ResizeObserver((entries) => {
             if (entries[0]) {
                 const { width } = entries[0].contentRect;
-                const horizontalPadding = width <= 900 ? 32 : 64;
-                setContainerWidth(Math.max(240, width - horizontalPadding));
+                setContainerWidth(width - 64); // Account for 2rem padding (32px * 2)
             }
         });
         observer.observe(wrapperRef.current);
         return () => observer.disconnect();
     }, []);
+
+    useEffect(() => {
+        setNumPages(0);
+        setPageNumber(1);
+        setInputPage("1");
+        setActivePopupKey(null);
+    }, [file]);
 
     useEffect(() => {
         if (typeof forcePage === 'number' && forcePage >= 1 && forcePage <= numPages) {
@@ -133,6 +185,94 @@ export default function PDFViewer({
 
     // --- Drawing Logic ---
 
+    const getCanvasMetrics = () => {
+        if (!canvasRef.current || !containerRef.current) return null;
+        const rect = containerRef.current.getBoundingClientRect();
+        const dpr = typeof window !== 'undefined' ? window.devicePixelRatio || 1 : 1;
+        return { rect, dpr };
+    };
+
+    const prepareCanvas = (canvas: HTMLCanvasElement, ctx: CanvasRenderingContext2D, rect: DOMRect, dpr: number) => {
+        const nextWidth = Math.max(1, Math.round(rect.width * dpr));
+        const nextHeight = Math.max(1, Math.round(rect.height * dpr));
+        if (canvas.width !== nextWidth || canvas.height !== nextHeight) {
+            canvas.width = nextWidth;
+            canvas.height = nextHeight;
+        }
+        canvas.style.width = `${rect.width}px`;
+        canvas.style.height = `${rect.height}px`;
+        ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+        ctx.clearRect(0, 0, rect.width, rect.height);
+    };
+
+    const applyStrokeStyle = useCallback((
+        ctx: CanvasRenderingContext2D,
+        mode: DrawingMode,
+        color: string,
+        width: number,
+    ) => {
+        const isEraser = mode === 'eraser';
+        ctx.globalCompositeOperation = isEraser ? 'destination-out' : 'source-over';
+        ctx.strokeStyle = isEraser ? 'rgba(0,0,0,1)' : color;
+        ctx.fillStyle = isEraser ? 'rgba(0,0,0,1)' : color;
+        ctx.lineWidth = width;
+        ctx.lineCap = 'round';
+        ctx.lineJoin = 'round';
+    }, []);
+
+    const drawSmoothPath = useCallback((
+        ctx: CanvasRenderingContext2D,
+        points: DrawPoint[],
+        rect: DOMRect,
+        mode: DrawingMode,
+        color: string,
+        width: number,
+    ) => {
+        if (points.length === 0) return;
+        applyStrokeStyle(ctx, mode, color, width);
+
+        const first = points[0];
+        const firstX = first.x * rect.width;
+        const firstY = first.y * rect.height;
+
+        if (points.length === 1) {
+            ctx.beginPath();
+            ctx.arc(firstX, firstY, Math.max(1, width / 2), 0, Math.PI * 2);
+            ctx.fill();
+            ctx.globalCompositeOperation = 'source-over';
+            return;
+        }
+
+        ctx.beginPath();
+        ctx.moveTo(firstX, firstY);
+        for (let i = 1; i < points.length - 1; i++) {
+            const current = points[i];
+            const next = points[i + 1];
+            const currentX = current.x * rect.width;
+            const currentY = current.y * rect.height;
+            const midX = ((current.x + next.x) / 2) * rect.width;
+            const midY = ((current.y + next.y) / 2) * rect.height;
+            ctx.quadraticCurveTo(currentX, currentY, midX, midY);
+        }
+
+        const last = points[points.length - 1];
+        ctx.lineTo(last.x * rect.width, last.y * rect.height);
+        ctx.stroke();
+        ctx.globalCompositeOperation = 'source-over';
+    }, [applyStrokeStyle]);
+
+    const getDrawingColor = (mode: DrawingMode) => {
+        if (mode === 'highlighter') return HIGHLIGHTER_COLOR;
+        if (mode === 'eraser') return 'rgba(0,0,0,1)';
+        return penColor;
+    };
+
+    const getDrawingWidth = (mode: DrawingMode) => {
+        if (mode === 'eraser') return eraserWidth;
+        if (mode === 'highlighter') return highlighterWidth;
+        return penWidth;
+    };
+
     // Render existing paths when page or drawings change
     useEffect(() => {
         if (!shouldRenderDrawingLayer || !canvasRef.current || !containerRef.current) return;
@@ -141,101 +281,240 @@ export default function PDFViewer({
         if (!ctx) return;
 
         // Resize canvas to match container (vital for scaling)
-        const rect = containerRef.current.getBoundingClientRect();
-        canvas.width = rect.width;
-        canvas.height = rect.height;
-
-        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        const metrics = getCanvasMetrics();
+        if (!metrics) return;
+        prepareCanvas(canvas, ctx, metrics.rect, metrics.dpr);
 
         // Draw saved paths
         const paths = drawings[pageNumber] || [];
         paths.forEach(pathStr => {
-            const pathData = JSON.parse(pathStr);
-            if (pathData.points && pathData.points.length > 0) {
-                ctx.beginPath();
-                ctx.strokeStyle = pathData.color;
-                ctx.lineWidth = 2;
-                ctx.moveTo(pathData.points[0].x * canvas.width, pathData.points[0].y * canvas.height);
-                for (let i = 1; i < pathData.points.length; i++) {
-                    ctx.lineTo(pathData.points[i].x * canvas.width, pathData.points[i].y * canvas.height);
+            try {
+                const pathData = JSON.parse(pathStr);
+                if (pathData.points && pathData.points.length > 0) {
+                    const mode = (pathData.mode || 'pen') as DrawingMode;
+                    const color = pathData.color || (mode === 'highlighter' ? HIGHLIGHTER_COLOR : '#ef4444');
+                    const width = pathData.width || (mode === 'eraser' ? eraserWidth : mode === 'highlighter' ? highlighterWidth : 2);
+                    drawSmoothPath(ctx, pathData.points, metrics.rect, mode, color, width);
                 }
-                ctx.stroke();
+            } catch (err) {
+                console.error("Failed to parse path JSON", err);
             }
         });
 
-    }, [pageNumber, drawings, shouldRenderDrawingLayer, scale, file]); // Re-render on these changes
+        // Reset globalCompositeOperation to default
+        ctx.globalCompositeOperation = 'source-over';
 
-    const startDrawing = (e: React.MouseEvent | React.TouchEvent) => {
-        if (!canEditDrawing || drawingMode === 'eraser') return;
-        e.preventDefault();
-        setIsDrawing(true);
-        const pos = getPos(e);
-        setCurrentPath([pos]);
+    }, [pageNumber, drawings, shouldRenderDrawingLayer, scale, file, eraserWidth, highlighterWidth, drawSmoothPath]); // Re-render on these changes
+
+    const handleUndo = useCallback(() => {
+        if (!canEditDrawing || !onDrawingsChange) return;
+        const pageUndo = undoStack[pageNumber] || [];
+        if (pageUndo.length === 0) return; // nothing to undo
+
+        const previousState = pageUndo[pageUndo.length - 1];
+        const newUndo = pageUndo.slice(0, -1);
+
+        // Push current state to redo stack
+        const currentState = drawings[pageNumber] || [];
+        setRedoStack(prev => ({
+            ...prev,
+            [pageNumber]: [...(prev[pageNumber] || []), currentState]
+        }));
+
+        setUndoStack(prev => ({
+            ...prev,
+            [pageNumber]: newUndo
+        }));
+
+        onDrawingsChange(pageNumber, previousState);
+    }, [canEditDrawing, drawings, onDrawingsChange, pageNumber, undoStack]);
+
+    const handleRedo = useCallback(() => {
+        if (!canEditDrawing || !onDrawingsChange) return;
+        const pageRedo = redoStack[pageNumber] || [];
+        if (pageRedo.length === 0) return; // nothing to redo
+
+        const nextState = pageRedo[pageRedo.length - 1];
+        const newRedo = pageRedo.slice(0, -1);
+
+        // Push current state to undo stack
+        const currentState = drawings[pageNumber] || [];
+        setUndoStack(prev => ({
+            ...prev,
+            [pageNumber]: [...(prev[pageNumber] || []), currentState]
+        }));
+
+        setRedoStack(prev => ({
+            ...prev,
+            [pageNumber]: newRedo
+        }));
+
+        onDrawingsChange(pageNumber, nextState);
+    }, [canEditDrawing, drawings, onDrawingsChange, pageNumber, redoStack]);
+
+    // Keyboard Shortcuts for Undo/Redo
+    useEffect(() => {
+        const handleKeyDown = (e: KeyboardEvent) => {
+            if (!canEditDrawing) return;
+
+            // Do not capture if editing an input
+            if (document.activeElement?.tagName === 'INPUT' || document.activeElement?.tagName === 'TEXTAREA') {
+                return;
+            }
+
+            const isMac = navigator.platform.toUpperCase().indexOf('MAC') >= 0;
+            const isCmdOrCtrl = isMac ? e.metaKey : e.ctrlKey;
+
+            if (isCmdOrCtrl && e.key.toLowerCase() === 'z') {
+                e.preventDefault();
+                if (e.shiftKey) {
+                    handleRedo();
+                } else {
+                    handleUndo();
+                }
+            } else if (isCmdOrCtrl && e.key.toLowerCase() === 'y') {
+                e.preventDefault();
+                handleRedo();
+            }
+        };
+
+        window.addEventListener('keydown', handleKeyDown);
+        return () => window.removeEventListener('keydown', handleKeyDown);
+    }, [canEditDrawing, handleRedo, handleUndo]);
+
+    const drawingModeForPointer = (e: React.PointerEvent<HTMLCanvasElement>): DrawingMode => {
+        if (e.pointerType === 'pen' && drawingMode === 'click') return 'pen';
+        return drawingMode;
     };
 
-    const draw = (e: React.MouseEvent | React.TouchEvent) => {
-        if (!isDrawing || !canEditDrawing || !canvasRef.current) return;
-        e.preventDefault();
-        const pos = getPos(e);
-        setCurrentPath(prev => [...prev, pos]);
+    const shouldHandlePointer = (e: React.PointerEvent<HTMLCanvasElement>) => {
+        if (!canEditDrawing) return false;
+        const pointerDrawingMode = drawingModeForPointer(e);
+        if (pointerDrawingMode === 'click') return false;
+        if (e.pointerType === 'mouse' && e.button !== 0) return false;
+        if (e.pointerType === 'touch' && !fingerDrawingEnabled) return false;
+        return true;
+    };
 
-        // Real-time visual feedback
+    const startDrawing = (e: React.PointerEvent<HTMLCanvasElement>) => {
+        if (!shouldHandlePointer(e)) return;
+        e.preventDefault();
+        setActivePopupKey(null);
+        e.currentTarget.setPointerCapture?.(e.pointerId);
+        activePointerIdRef.current = e.pointerId;
+        isDrawingRef.current = true;
+        setIsDrawing(true);
+        const pointerDrawingMode = drawingModeForPointer(e);
+        activeDrawingModeRef.current = pointerDrawingMode;
+        if (e.pointerType === 'pen' && drawingMode === 'click') setDrawingMode('pen');
+        currentPathRef.current = [getPos(e)];
+    };
+
+    const draw = (e: React.PointerEvent<HTMLCanvasElement>) => {
+        if (!isDrawingRef.current || activePointerIdRef.current !== e.pointerId || !canEditDrawing || !canvasRef.current) return;
+        e.preventDefault();
+
+        const pos = getPos(e);
+        const path = currentPathRef.current;
+        const last = path[path.length - 1];
+        if (last && Math.hypot(pos.x - last.x, pos.y - last.y) < MIN_POINT_DISTANCE) return;
+
+        currentPathRef.current = [...path, pos];
+
+        // Real-time visual feedback drawing segment-by-segment
         const ctx = canvasRef.current.getContext('2d');
-        if (ctx) {
-            const rect = canvasRef.current.getBoundingClientRect();
-            ctx.lineTo(pos.x * rect.width, pos.y * rect.height);
-            ctx.stroke();
-            // Note: This is a hacky visual update, real render happens on useEffect usually.
-            // Better: draw single segment.
-            ctx.beginPath();
-            const last = currentPath[currentPath.length - 1];
-            if (last) ctx.moveTo(last.x * rect.width, last.y * rect.height);
-            ctx.lineTo(pos.x * rect.width, pos.y * rect.height);
-            ctx.strokeStyle = penColor;
-            ctx.lineWidth = 2;
-            ctx.stroke();
+        const metrics = getCanvasMetrics();
+        if (ctx && metrics) {
+            const pointerDrawingMode = activeDrawingModeRef.current;
+            ctx.save();
+            ctx.setTransform(metrics.dpr, 0, 0, metrics.dpr, 0, 0);
+            drawSmoothPath(
+                ctx,
+                last ? [last, pos] : [pos],
+                metrics.rect,
+                pointerDrawingMode,
+                getDrawingColor(pointerDrawingMode),
+                getDrawingWidth(pointerDrawingMode),
+            );
+            ctx.restore();
+            ctx.globalCompositeOperation = 'source-over';
         }
     };
 
-    const stopDrawing = () => {
-        if (!isDrawing) return;
+    const stopDrawing = (e?: React.PointerEvent<HTMLCanvasElement>) => {
+        if (!isDrawingRef.current) return;
+        if (e && activePointerIdRef.current !== e.pointerId) return;
+        e?.preventDefault();
+        if (e && e.currentTarget.hasPointerCapture?.(e.pointerId)) {
+            e.currentTarget.releasePointerCapture?.(e.pointerId);
+        }
+
+        isDrawingRef.current = false;
+        activePointerIdRef.current = null;
         setIsDrawing(false);
 
+        const finishedPath = currentPathRef.current;
         // Save Path
-        if (currentPath.length > 1 && onDrawingsChange) {
+        if (finishedPath.length > 0 && onDrawingsChange) {
+            const pointerDrawingMode = activeDrawingModeRef.current;
             const newPath = {
-                color: penColor,
-                points: currentPath
+                mode: pointerDrawingMode,
+                color: getDrawingColor(pointerDrawingMode),
+                width: getDrawingWidth(pointerDrawingMode),
+                points: finishedPath
             };
             const currentPaths = drawings[pageNumber] || [];
+
+            // Push to Undo Stack and clear Redo Stack
+            setUndoStack(prev => ({
+                ...prev,
+                [pageNumber]: [...(prev[pageNumber] || []), currentPaths]
+            }));
+            setRedoStack(prev => ({
+                ...prev,
+                [pageNumber]: []
+            }));
+
             onDrawingsChange(pageNumber, [...currentPaths, JSON.stringify(newPath)]);
         }
-        setCurrentPath([]);
+        currentPathRef.current = [];
     };
 
-    const getPos = (e: React.MouseEvent | React.TouchEvent) => {
+    const getPos = (e: React.PointerEvent<HTMLCanvasElement>) => {
         if (!canvasRef.current) return { x: 0, y: 0 };
         const rect = canvasRef.current.getBoundingClientRect();
-        let clientX, clientY;
-        if ('touches' in e) {
-            clientX = e.touches[0].clientX;
-            clientY = e.touches[0].clientY;
-        } else {
-            clientX = (e as React.MouseEvent).clientX;
-            clientY = (e as React.MouseEvent).clientY;
-        }
+        const normalizedX = (e.clientX - rect.left) / rect.width;
+        const normalizedY = (e.clientY - rect.top) / rect.height;
         return {
-            x: (clientX - rect.left) / rect.width,
-            y: (clientY - rect.top) / rect.height
+            x: Math.min(1, Math.max(0, normalizedX)),
+            y: Math.min(1, Math.max(0, normalizedY))
         };
     };
 
-    const clearPage = () => {
-        if (confirm("Ïù¥ ÌéòÏù¥ÏßÄÏùò ÌïÑÍ∏∞Î•º Î™®Îëê ÏßÄÏö∞ÏãúÍ≤†ÏäµÎãàÍπå?")) {
-            if (onDrawingsChange) {
-                onDrawingsChange(pageNumber, []);
-            }
+    const requestClearPage = () => {
+        if (!onDrawingsChange) return;
+        const currentPaths = drawings[pageNumber] || [];
+        if (currentPaths.length === 0) {
+            toast.info("??†ú???ÑÍ∏∞ ?ÜÏùå", "?ÑÏû¨ ?òÏù¥ÏßÄ???Ä?•Îêú ?ÑÍ∏∞Í∞Ä ?ÜÏäµ?àÎã§.");
+            return;
         }
+        setClearConfirmOpen(true);
+    };
+
+    const confirmClearPage = () => {
+        if (!onDrawingsChange) return;
+        const currentPaths = drawings[pageNumber] || [];
+        setUndoStack(prev => ({
+            ...prev,
+            [pageNumber]: [...(prev[pageNumber] || []), currentPaths]
+        }));
+        setRedoStack(prev => ({
+            ...prev,
+            [pageNumber]: []
+        }));
+        onDrawingsChange(pageNumber, []);
+        setClearConfirmOpen(false);
+        toast.success("?ÑÍ∏∞ ??†ú??, "?ÑÏû¨ ?òÏù¥ÏßÄ???ÑÍ∏∞Î•?ÏßÄ?†Ïäµ?àÎã§.");
     };
 
     // --- End Drawing Logic ---
@@ -243,7 +522,7 @@ export default function PDFViewer({
 
     function handlePageClick(event: React.MouseEvent<HTMLDivElement>) {
         // ... (Existing click logic, maybe disable if drawing?)
-        if (canEditDrawing && drawingMode === 'pen') return; // Don't trigger link click while drawing
+        if (canEditDrawing && drawingMode !== 'click') return; // Don't trigger link click while drawing
         if (!onPageClick) return;
 
         const rect = event.currentTarget.getBoundingClientRect();
@@ -260,9 +539,16 @@ export default function PDFViewer({
     const handleDragLeave = (e: React.DragEvent) => { e.preventDefault(); setIsDragging(false); };
     const handleDrop = (e: React.DragEvent) => {
         e.preventDefault(); setIsDragging(false);
-        if (onFileDrop && e.dataTransfer.files[0] && e.dataTransfer.files[0].type === 'application/pdf') {
+        if (onFileDrop && e.dataTransfer.files[0] && isPdfUploadFile(e.dataTransfer.files[0])) {
             onFileDrop(e.dataTransfer.files[0]);
-        } else { alert('PDF ÌååÏùºÎßå ÏóÖÎ°úÎìú Í∞ÄÎä•Ìï©ÎãàÎã§.'); }
+        } else {
+            toast.error("PDF ?åÏùºÎß??ÖÎ°ú??Í∞Ä??, "Î¨∏Ï†úÏßÄ ?êÎäî ?ïÎãµÏßÄ??PDF ?ïÏãù?ºÎ°ú ?¨Î†§Ï£ºÏÑ∏??");
+        }
+    };
+
+    const handleDocumentLoadError = (error: Error) => {
+        console.error("PDF load failed", error);
+        toast.error("PDF ?¥Í∏∞ ?§Ìå®", "?åÏùº???êÏÉÅ?òÏóàÍ±∞ÎÇò Î∏åÎùº?∞Ï??êÏÑú ?ΩÏùÑ ???ÜÎäî PDF?ÖÎãà??");
     };
 
     return (
@@ -276,33 +562,182 @@ export default function PDFViewer({
         >
             {/* ... Drag Overlay ... */}
             {isDragging && (
-                <div style={{ position: 'absolute', inset: 0, zIndex: 50, background: 'rgba(99, 102, 241, 0.2)', border: '3px dashed #6366f1', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'white', fontWeight: 'bold', fontSize: '1.5rem', backdropFilter: 'blur(4px)' }}>PDF ÌååÏùºÏùÑ Ïó¨Í∏∞Ïóê ÎÜìÏúºÏÑ∏Ïöî</div>
+                <div style={{ position: 'absolute', inset: 0, zIndex: 50, background: 'rgba(99, 102, 241, 0.2)', border: '3px dashed #6366f1', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'white', fontWeight: 'bold', fontSize: '1.5rem', backdropFilter: 'blur(4px)' }}>PDF ?åÏùº???¨Í∏∞???ìÏúº?∏Ïöî</div>
             )}
 
             {/* PDF Toolbar */}
             <div className="pdf-viewer-toolbar" style={{ padding: '0.5rem 1rem', background: '#323639', color: 'white', display: 'flex', alignItems: 'center', justifyContent: 'space-between', fontSize: '0.9rem', borderBottom: '1px solid #000' }}>
-                <div className="pdf-toolbar-title" style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
-                    <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '200px' }}>{file ? file.name : 'PDF ÏóÜÏùå'}</span>
+                <div className="pdf-viewer-file" style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
+                    <span className="pdf-viewer-file-name" style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '200px' }}>{file ? file.name : 'PDF ?ÜÏùå'}</span>
                 </div>
 
                 {file && (
-                    <div className="pdf-toolbar-controls" style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                    <div className="pdf-viewer-controls" style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
                         {/* Drawing Tools */}
                         {canEditDrawing && (
-                            <div className="pdf-drawing-tools" style={{ display: 'flex', gap: '5px', marginRight: '1rem', paddingRight: '1rem', borderRight: '1px solid #666' }}>
-                                <button onClick={() => setDrawingMode(drawingMode === 'pen' ? 'eraser' : 'pen')} style={{ background: drawingMode === 'pen' ? '#6366f1' : 'transparent', border: '1px solid #666', borderRadius: '4px', padding: '2px 6px', color: 'white' }}>
-                                    {drawingMode === 'pen' ? '‚úèÔ∏è Í∑∏Î¶¨Í∏∞' : 'üëÜ ÌÅ¥Î¶≠Î™®Îìú'}
-                                </button>
+                            <div className="pdf-viewer-drawing-tools">
+                                <div className="pdf-tool-group" role="toolbar" aria-label="PDF ?ÑÍ∏∞ ?ÑÍµ¨">
+                                    <button
+                                        type="button"
+                                        className={`pdf-tool-button ${drawingMode === 'click' ? 'active' : ''}`}
+                                        onClick={() => setDrawingMode('click')}
+                                        title="?†ÌÉù"
+                                        aria-label="?†ÌÉù"
+                                    >
+                                        <MousePointer2 size={15} />
+                                    </button>
+                                    <button
+                                        type="button"
+                                        className={`pdf-tool-button ${drawingMode === 'pen' ? 'active' : ''}`}
+                                        onClick={() => setDrawingMode('pen')}
+                                        title="??
+                                        aria-label="??
+                                    >
+                                        <PenLine size={15} />
+                                    </button>
+                                    <button
+                                        type="button"
+                                        className={`pdf-tool-button ${drawingMode === 'highlighter' ? 'active' : ''}`}
+                                        onClick={() => setDrawingMode('highlighter')}
+                                        title="?ïÍ¥ë??
+                                        aria-label="?ïÍ¥ë??
+                                    >
+                                        <Highlighter size={15} />
+                                    </button>
+                                    <button
+                                        type="button"
+                                        className={`pdf-tool-button ${drawingMode === 'eraser' ? 'active' : ''}`}
+                                        onClick={() => setDrawingMode('eraser')}
+                                        title="ÏßÄ?∞Í∞ú"
+                                        aria-label="ÏßÄ?∞Í∞ú"
+                                    >
+                                        <Eraser size={15} />
+                                    </button>
+                                </div>
+
                                 {drawingMode === 'pen' && (
-                                    <>
-                                        <input type="color" value={penColor} onChange={(e) => setPenColor(e.target.value)} style={{ width: '24px', height: '24px', padding: 0, border: 'none', background: 'none' }} />
-                                        <button onClick={clearPage} style={{ fontSize: '0.8rem', padding: '2px 6px', background: '#ef4444', border: 'none', borderRadius: '4px', color: 'white' }}>ÏÇ≠Ï†ú</button>
-                                    </>
+                                    <div className="pdf-color-swatches" aria-label="???âÏÉÅ">
+                                        {PEN_COLORS.map(color => (
+                                            <button
+                                                key={color}
+                                                type="button"
+                                                className={`pdf-color-swatch ${penColor === color ? 'active' : ''}`}
+                                                onClick={() => setPenColor(color)}
+                                                title={`???âÏÉÅ ${color}`}
+                                                aria-label={`???âÏÉÅ ${color}`}
+                                                style={{ background: color }}
+                                            />
+                                        ))}
+                                        <input
+                                            className="pdf-color-input"
+                                            type="color"
+                                            value={penColor}
+                                            onChange={(e) => setPenColor(e.target.value)}
+                                            title="???âÏÉÅ ÏßÅÏ†ë ?†ÌÉù"
+                                            aria-label="???âÏÉÅ ÏßÅÏ†ë ?†ÌÉù"
+                                        />
+                                    </div>
+                                )}
+
+                                {drawingMode !== 'click' && (
+                                    <label className="pdf-width-control" title="ÍµµÍ∏∞">
+                                        <span>{activeStrokeWidth}px</span>
+                                        <input
+                                            type="range"
+                                            min={drawingMode === 'pen' ? 1 : 6}
+                                            max={drawingMode === 'eraser' ? 42 : drawingMode === 'highlighter' ? 24 : 8}
+                                            value={activeStrokeWidth}
+                                            onChange={(e) => {
+                                                const next = Number(e.target.value);
+                                                if (drawingMode === 'eraser') setEraserWidth(next);
+                                                else if (drawingMode === 'highlighter') setHighlighterWidth(next);
+                                                else setPenWidth(next);
+                                            }}
+                                            aria-label="?ÑÍ∏∞ ÍµµÍ∏∞"
+                                        />
+                                    </label>
+                                )}
+
+                                <button
+                                    type="button"
+                                    className={`pdf-tool-button ${fingerDrawingEnabled ? 'active' : ''}`}
+                                    onClick={() => setFingerDrawingEnabled(value => !value)}
+                                    title={fingerDrawingEnabled ? "?êÍ????ÑÍ∏∞ ÏºúÏßê" : "?êÍ????ÑÍ∏∞ Í∫ºÏßê"}
+                                    aria-label={fingerDrawingEnabled ? "?êÍ????ÑÍ∏∞ ?ÑÍ∏∞" : "?êÍ????ÑÍ∏∞ ÏºúÍ∏∞"}
+                                    aria-pressed={fingerDrawingEnabled}
+                                >
+                                    <Hand size={15} />
+                                </button>
+
+                                <div className="pdf-tool-divider" />
+
+                                <button
+                                    type="button"
+                                    className="pdf-tool-button"
+                                    onClick={handleUndo}
+                                    disabled={!(undoStack[pageNumber] && undoStack[pageNumber].length > 0)}
+                                    title="?§Ìñâ Ï∑®ÏÜå (Cmd/Ctrl+Z)"
+                                    aria-label="?§Ìñâ Ï∑®ÏÜå"
+                                >
+                                    <Undo2 size={15} />
+                                </button>
+                                <button
+                                    type="button"
+                                    className="pdf-tool-button"
+                                    onClick={handleRedo}
+                                    disabled={!(redoStack[pageNumber] && redoStack[pageNumber].length > 0)}
+                                    title="?§Ïãú ?§Ìñâ (Cmd/Ctrl+Y)"
+                                    aria-label="?§Ïãú ?§Ìñâ"
+                                >
+                                    <Redo2 size={15} />
+                                </button>
+                                <button
+                                    type="button"
+                                    className="pdf-tool-button danger"
+                                    onClick={requestClearPage}
+                                    title="???òÏù¥ÏßÄ??Î™®Îì† ?ÑÍ∏∞ ??†ú"
+                                    aria-label="???òÏù¥ÏßÄ??Î™®Îì† ?ÑÍ∏∞ ??†ú"
+                                >
+                                    <Trash2 size={15} />
+                                </button>
+                                {clearConfirmOpen && (
+                                    <div
+                                        role="alertdialog"
+                                        aria-label="?ÑÍ∏∞ ??†ú ?ïÏù∏"
+                                        style={{
+                                            display: 'flex',
+                                            alignItems: 'center',
+                                            gap: '0.35rem',
+                                            padding: '0.25rem',
+                                            borderRadius: 8,
+                                            background: 'rgba(15,23,42,0.92)',
+                                            border: '1px solid rgba(255,255,255,0.16)',
+                                            boxShadow: '0 8px 18px rgba(0,0,0,0.22)',
+                                        }}
+                                    >
+                                        <span style={{ fontSize: '0.72rem', fontWeight: 700, color: 'white', whiteSpace: 'nowrap', padding: '0 0.3rem' }}>
+                                            ???òÏù¥ÏßÄ ?ÑÍ∏∞ ??†ú?
+                                        </span>
+                                        <button
+                                            type="button"
+                                            onClick={() => setClearConfirmOpen(false)}
+                                            style={{ color: '#cbd5e1', fontSize: '0.72rem', fontWeight: 700, padding: '0.25rem 0.45rem' }}
+                                        >
+                                            Ï∑®ÏÜå
+                                        </button>
+                                        <button
+                                            type="button"
+                                            onClick={confirmClearPage}
+                                            style={{ color: 'white', background: '#ef4444', borderRadius: 6, fontSize: '0.72rem', fontWeight: 800, padding: '0.25rem 0.5rem' }}
+                                        >
+                                            ??†ú
+                                        </button>
+                                    </div>
                                 )}
                             </div>
                         )}
 
-                        <button onClick={() => setPageNumber(p => Math.max(1, p - 1))} disabled={pageNumber <= 1} style={{ color: 'white', padding: '0.2rem 0.5rem', cursor: 'pointer', background: 'transparent', border: 'none' }}>‚óÄ</button>
+                        <button onClick={() => setPageNumber(p => Math.max(1, p - 1))} disabled={pageNumber <= 1} style={{ color: 'white', padding: '0.2rem 0.5rem', cursor: 'pointer', background: 'transparent', border: 'none' }}>?Ä</button>
                         <span style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
                             <input
                                 type="text"
@@ -314,7 +749,7 @@ export default function PDFViewer({
                             />
                             / {numPages}
                         </span>
-                        <button onClick={() => setPageNumber(p => Math.min(numPages, p + 1))} disabled={pageNumber >= numPages} style={{ color: 'white', padding: '0.2rem 0.5rem', cursor: 'pointer', background: 'transparent', border: 'none' }}>‚ñ∂</button>
+                        <button onClick={() => setPageNumber(p => Math.min(numPages, p + 1))} disabled={pageNumber >= numPages} style={{ color: 'white', padding: '0.2rem 0.5rem', cursor: 'pointer', background: 'transparent', border: 'none' }}>??/button>
                         <div style={{ width: '1px', height: '15px', background: '#666', margin: '0 0.5rem' }}></div>
                         <button onClick={() => setScale(s => Math.max(0.5, s - 0.1))} style={{ color: 'white', cursor: 'pointer' }}>-</button>
                         <span>{Math.round(scale * 100)}%</span>
@@ -324,10 +759,16 @@ export default function PDFViewer({
             </div>
 
             {/* PDF Content */}
-            <div ref={wrapperRef} style={{ flex: 1, overflow: 'auto', display: 'flex', flexDirection: 'column', alignItems: 'center', background: '#525659', position: 'relative' }}>
-                <div className="pdf-page-shell" style={{ flex: 1, display: 'flex', justifyContent: 'center', padding: '2rem', width: '100%' }}>
+            <div ref={wrapperRef} className="pdf-viewer-scroll scroll-custom" style={{ flex: 1, overflow: 'auto', display: 'flex', flexDirection: 'column', alignItems: 'center', background: '#525659', position: 'relative' }}>
+                <div className="pdf-viewer-page-wrap" style={{ flex: 1, display: 'flex', justifyContent: 'center', padding: '2rem', width: '100%' }}>
                     {file ? (
-                        <Document file={file} onLoadSuccess={onDocumentLoadSuccess} loading={<div style={{ color: 'white' }}>Î¨∏ÏÑú Î°úÎî© Ï§ë...</div>}>
+                        <Document
+                            file={file}
+                            onLoadSuccess={onDocumentLoadSuccess}
+                            onLoadError={handleDocumentLoadError}
+                            loading={<div style={{ color: 'white' }}>Î¨∏ÏÑú Î°úÎî© Ï§?..</div>}
+                            error={<div style={{ color: 'white', fontWeight: 700 }}>PDFÎ•??????ÜÏäµ?àÎã§.</div>}
+                        >
                             <div
                                 ref={containerRef}
                                 onClick={handlePageClick}
@@ -337,21 +778,18 @@ export default function PDFViewer({
                                 {shouldRenderDrawingLayer && (
                                     <canvas
                                         ref={canvasRef}
-                                        onMouseDown={startDrawing}
-                                        onMouseMove={draw}
-                                        onMouseUp={stopDrawing}
-                                        onMouseLeave={stopDrawing}
-                                        onTouchStart={startDrawing}
-                                        onTouchMove={draw}
-                                        onTouchEnd={stopDrawing}
+                                        onPointerDown={startDrawing}
+                                        onPointerMove={draw}
+                                        onPointerUp={stopDrawing}
+                                        onPointerCancel={stopDrawing}
                                         style={{
                                             position: 'absolute',
                                             top: 0, left: 0,
                                             width: '100%', height: '100%',
                                             zIndex: 10,
-                                            cursor: canEditDrawing && drawingMode === 'pen' ? 'crosshair' : 'default',
-                                            touchAction: canEditDrawing && drawingMode === 'pen' ? 'none' : 'pan-x pan-y',
-                                            pointerEvents: canEditDrawing && drawingMode === 'pen' ? 'auto' : 'none' // Allow click through if not drawing
+                                            cursor: canEditDrawing ? (drawingMode === 'pen' || drawingMode === 'highlighter' ? 'crosshair' : drawingMode === 'eraser' ? 'cell' : 'default') : 'default',
+                                            pointerEvents: canEditDrawing ? 'auto' : 'none',
+                                            touchAction: fingerDrawingEnabled ? 'none' : 'pan-x pan-y pinch-zoom'
                                         }}
                                     />
                                 )}
@@ -360,93 +798,123 @@ export default function PDFViewer({
                                 {markers.filter(m => m.page === pageNumber).map((marker, i) => {
                                     const popupKey = `${pageNumber}-${i}`;
                                     const isPopupActive = activePopupKey === popupKey;
-                                    const optsCount = marker.optionsCount || 5;
+                                    const optsCount = normalizeChoiceCount(marker.optionsCount, DEFAULT_CHOICE_COUNT);
                                     const hasAnswerHandler = !!marker.onAnswer;
                                     const markerColor = marker.color || '#ef4444';
                                     const isMarked = marker.currentAnswer !== undefined && marker.currentAnswer !== null;
+                                    const regionBackground = markerColor === '#6366f1'
+                                        ? 'rgba(99,102,241,0.1)'
+                                        : 'rgba(239,68,68,0.07)';
 
                                     return (
                                         <div
                                             key={i}
                                             style={{
                                                 position: 'absolute',
-                                                left: `${marker.x * 100}%`,
-                                                top: `${marker.y * 100}%`,
-                                                transform: 'translate(-50%, -50%)',
+                                                inset: 0,
                                                 zIndex: isPopupActive ? 40 : 20,
+                                                pointerEvents: 'none',
                                             }}
                                         >
-                                            <button
-                                                onClick={(e) => {
-                                                    e.stopPropagation();
-                                                    if (marker.onClick) marker.onClick();
-                                                    if (hasAnswerHandler) {
-                                                        setActivePopupKey(isPopupActive ? null : popupKey);
-                                                    }
-                                                }}
-                                                style={{
-                                                    width: '28px', height: '28px',
-                                                    background: isMarked
-                                                        ? 'linear-gradient(135deg, #4f46e5, #3730a3)'
-                                                        : markerColor,
-                                                    color: 'white',
-                                                    borderRadius: '50%',
-                                                    display: 'flex', alignItems: 'center', justifyContent: 'center',
-                                                    fontWeight: 800, fontSize: '0.78rem',
-                                                    boxShadow: isPopupActive
-                                                        ? '0 4px 14px rgba(0,0,0,0.45), 0 0 0 3px rgba(99,102,241,0.3)'
-                                                        : '0 2px 6px rgba(0,0,0,0.3)',
-                                                    border: '2px solid white',
-                                                    cursor: 'pointer',
-                                                    padding: 0,
-                                                    transition: 'transform 0.15s, box-shadow 0.15s',
-                                                    transform: isPopupActive ? 'scale(1.15)' : 'scale(1)',
-                                                    fontVariantNumeric: 'tabular-nums',
-                                                }}
-                                                title={`Î¨∏Ï†ú ${marker.label}Î≤à${isMarked ? ` ¬∑ ÌòÑÏû¨: ${marker.currentAnswer}` : ''}`}
-                                            >
-                                                {marker.label}
-                                            </button>
-
-                                            {/* Floating OMR popup */}
-                                            {isPopupActive && hasAnswerHandler && (
+                                            {marker.region && (
                                                 <div
-                                                    className="pdf-marker-popup"
+                                                    aria-hidden="true"
+                                                    title={`Î¨∏Ìï≠ ?ÅÏó≠ ${marker.label}Î≤?}
                                                     style={{
-                                                        left: '50%',
-                                                        top: '-14px',
+                                                        position: 'absolute',
+                                                        left: `${marker.region.x * 100}%`,
+                                                        top: `${marker.region.y * 100}%`,
+                                                        width: `${marker.region.width * 100}%`,
+                                                        height: `${marker.region.height * 100}%`,
+                                                        border: `2px solid ${markerColor}`,
+                                                        background: regionBackground,
+                                                        borderRadius: 6,
+                                                        boxShadow: 'inset 0 0 0 1px rgba(255,255,255,0.55)',
                                                     }}
-                                                    onClick={(e) => e.stopPropagation()}
-                                                >
-                                                    {Array.from({ length: optsCount }, (_, j) => {
-                                                        const optNum = j + 1;
-                                                        const thisMarked = marker.currentAnswer === optNum;
-                                                        return (
-                                                            <button
-                                                                key={j}
-                                                                className={`pdf-popup-bubble ${thisMarked ? 'marked' : ''}`}
-                                                                onClick={(e) => {
-                                                                    e.stopPropagation();
-                                                                    marker.onAnswer?.(optNum);
-                                                                    setActivePopupKey(null);
-                                                                }}
-                                                            >
-                                                                {optNum}
-                                                            </button>
-                                                        );
-                                                    })}
-                                                    <button
-                                                        className="pdf-popup-close"
-                                                        onClick={(e) => {
-                                                            e.stopPropagation();
-                                                            setActivePopupKey(null);
-                                                        }}
-                                                        title="Îã´Í∏∞"
-                                                    >
-                                                        √ó
-                                                    </button>
-                                                </div>
+                                                />
                                             )}
+
+                                            <div
+                                                style={{
+                                                    position: 'absolute',
+                                                    left: `${marker.x * 100}%`,
+                                                    top: `${marker.y * 100}%`,
+                                                    transform: 'translate(-50%, -50%)',
+                                                    pointerEvents: 'auto',
+                                                }}
+                                            >
+                                                <button
+                                                    onClick={(e) => {
+                                                        e.stopPropagation();
+                                                        if (marker.onClick) marker.onClick();
+                                                        if (hasAnswerHandler) {
+                                                            setActivePopupKey(isPopupActive ? null : popupKey);
+                                                        }
+                                                    }}
+                                                    style={{
+                                                        width: '28px', height: '28px',
+                                                        background: isMarked
+                                                            ? 'linear-gradient(135deg, #4f46e5, #3730a3)'
+                                                            : markerColor,
+                                                        color: 'white',
+                                                        borderRadius: '50%',
+                                                        display: 'flex', alignItems: 'center', justifyContent: 'center',
+                                                        fontWeight: 800, fontSize: '0.78rem',
+                                                        boxShadow: isPopupActive
+                                                            ? '0 4px 14px rgba(0,0,0,0.45), 0 0 0 3px rgba(99,102,241,0.3)'
+                                                            : '0 2px 6px rgba(0,0,0,0.3)',
+                                                        border: '2px solid white',
+                                                        cursor: 'pointer',
+                                                        padding: 0,
+                                                        transition: 'transform 0.15s, box-shadow 0.15s',
+                                                        transform: isPopupActive ? 'scale(1.15)' : 'scale(1)',
+                                                        fontVariantNumeric: 'tabular-nums',
+                                                    }}
+                                                    title={`Î¨∏Ï†ú ${marker.label}Î≤?{isMarked ? ` ¬∑ ?ÑÏû¨: ${marker.currentAnswer}` : ''}`}
+                                                >
+                                                    {marker.label}
+                                                </button>
+
+                                                {/* Floating OMR popup */}
+                                                {isPopupActive && hasAnswerHandler && (
+                                                    <div
+                                                        className="pdf-marker-popup"
+                                                        style={{
+                                                            left: '50%',
+                                                            top: '-14px',
+                                                        }}
+                                                        onClick={(e) => e.stopPropagation()}
+                                                    >
+                                                        {Array.from({ length: optsCount }, (_, j) => {
+                                                            const optNum = j + 1;
+                                                            const thisMarked = marker.currentAnswer === optNum;
+                                                            return (
+                                                                <button
+                                                                    key={j}
+                                                                    className={`pdf-popup-bubble ${thisMarked ? 'marked' : ''}`}
+                                                                    onClick={(e) => {
+                                                                        e.stopPropagation();
+                                                                        marker.onAnswer?.(optNum);
+                                                                        setActivePopupKey(null);
+                                                                    }}
+                                                                >
+                                                                    {optNum}
+                                                                </button>
+                                                            );
+                                                        })}
+                                                        <button
+                                                            className="pdf-popup-close"
+                                                            onClick={(e) => {
+                                                                e.stopPropagation();
+                                                                setActivePopupKey(null);
+                                                            }}
+                                                            title="?´Í∏∞"
+                                                        >
+                                                            √ó
+                                                        </button>
+                                                    </div>
+                                                )}
+                                            </div>
                                         </div>
                                     );
                                 })}
@@ -454,16 +922,16 @@ export default function PDFViewer({
                         </Document>
                     ) : (
                         <div onClick={() => document.getElementById('pdf-upload-input')?.click()} style={{ color: '#aaa', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '100%', width: '100%', cursor: 'pointer', border: '2px dashed #666', margin: '1rem', borderRadius: '1rem' }}>
-                            <div style={{ fontSize: '3rem', marginBottom: '1rem' }}>üìÑ</div>
-                            <p style={{ fontWeight: 600 }}>PDF ÏóÖÎ°úÎìú</p>
-                            <p style={{ fontSize: '0.8rem', opacity: 0.7 }}>ÌÅ¥Î¶≠ÌïòÍ±∞ÎÇò ÌååÏùºÏùÑ ÎìúÎûòÍ∑∏ÌïòÏÑ∏Ïöî</p>
+                            <FileText size={48} style={{ marginBottom: '1rem' }} />
+                            <p style={{ fontWeight: 600 }}>PDF ?ÖÎ°ú??/p>
+                            <p style={{ fontSize: '0.8rem', opacity: 0.7 }}>?¥Î¶≠?òÍ±∞???åÏùº???úÎûòÍ∑∏Ìïò?∏Ïöî</p>
                         </div>
                     )}
                 </div>
 
                 {/* Bottom Pagination Toolbar (Only visible if file exists) */}
                 {file && (
-                    <div style={{
+                    <div className="pdf-viewer-bottom-toolbar" style={{
                         width: '100%',
                         padding: '0.5rem',
                         background: '#323639',
@@ -475,7 +943,7 @@ export default function PDFViewer({
                         borderTop: '1px solid #000',
                         marginTop: 'auto'
                     }}>
-                        <button onClick={() => setPageNumber(p => Math.max(1, p - 1))} disabled={pageNumber <= 1} style={{ color: 'white', padding: '0.2rem 0.5rem', cursor: 'pointer', background: 'rgba(255,255,255,0.1)', borderRadius: '4px', border: 'none' }}>‚óÄ Ïù¥Ï†Ñ</button>
+                        <button onClick={() => setPageNumber(p => Math.max(1, p - 1))} disabled={pageNumber <= 1} style={{ color: 'white', padding: '0.2rem 0.5rem', cursor: 'pointer', background: 'rgba(255,255,255,0.1)', borderRadius: '4px', border: 'none' }}>?Ä ?¥Ï†Ñ</button>
                         <span style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
                             <input
                                 type="text"
@@ -487,7 +955,7 @@ export default function PDFViewer({
                             />
                             / {numPages}
                         </span>
-                        <button onClick={() => setPageNumber(p => Math.min(numPages, p + 1))} disabled={pageNumber >= numPages} style={{ color: 'white', padding: '0.2rem 0.5rem', cursor: 'pointer', background: 'rgba(255,255,255,0.1)', borderRadius: '4px', border: 'none' }}>Îã§Ïùå ‚ñ∂</button>
+                        <button onClick={() => setPageNumber(p => Math.min(numPages, p + 1))} disabled={pageNumber >= numPages} style={{ color: 'white', padding: '0.2rem 0.5rem', cursor: 'pointer', background: 'rgba(255,255,255,0.1)', borderRadius: '4px', border: 'none' }}>?§Ïùå ??/button>
                     </div>
                 )}
             </div>

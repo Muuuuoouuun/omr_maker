@@ -1,7 +1,8 @@
 "use client";
 
 import React from 'react';
-import { Question } from '@/types/omr';
+import { computeExamTotalScore, DEFAULT_CHOICE_COUNT, normalizeChoiceCount, questionChoiceCount, type Question } from '@/types/omr';
+import { splitQuestionsIntoColumns } from '@/lib/pure';
 
 interface OMRPreviewProps {
     title?: string;
@@ -12,38 +13,40 @@ interface OMRPreviewProps {
     onQuestionClick?: (id: number) => void;
     // New Props
     mode?: 'editor' | 'solve' | 'view';
+    showAnswerKey?: boolean;
     userAnswers?: Record<number, number>; // Student marked answers
     onAnswerClick?: (questionId: number, optionIndex: number) => void;
+    printVariant?: 'standard' | 'numbersOnly';
 }
 
 export default function OMRPreview({
     title = "OMR ANSWER SHEET",
     questions = [],
-    optionsCount = 5,
+    optionsCount = DEFAULT_CHOICE_COUNT,
     columns = 2,
     selectedQuestionId = null,
     onQuestionClick,
     mode = 'editor',
+    showAnswerKey = mode === 'editor',
     userAnswers = {},
-    onAnswerClick
+    onAnswerClick,
+    printVariant = 'standard'
 }: OMRPreviewProps) {
+    const isNumbersOnlyPrint = printVariant === 'numbersOnly';
 
     // Helper to generate dummy questions if empty
     const displayQuestions = questions.length > 0
         ? questions
         : Array.from({ length: 20 }, (_, i) => ({ id: i + 1, number: i + 1 } as Question));
 
-    const totalQuestions = displayQuestions.length;
-
     // Layout Logic
-    const cols = Math.min(Math.max(columns || 2, 1), 3);
-    const questionsPerCol = Math.ceil(totalQuestions / cols);
-
-    const columnQuestions = Array.from({ length: cols }, (_, colIndex) => {
-        const start = colIndex * questionsPerCol;
-        const end = Math.min((colIndex + 1) * questionsPerCol, totalQuestions);
-        return displayQuestions.slice(start, end);
-    });
+    const columnQuestions = splitQuestionsIntoColumns(displayQuestions, columns || 2);
+    const cols = Math.max(columnQuestions.length, 1);
+    const effectiveOptionsCount = normalizeChoiceCount(optionsCount);
+    const answeredKeyCount = displayQuestions.filter(q => q.answer !== undefined && q.answer !== null).length;
+    const pdfLinkedCount = displayQuestions.filter(q => q.pdfLocation || q.pdfRegion).length;
+    const totalScore = computeExamTotalScore(displayQuestions);
+    const totalScoreLabel = Number.isInteger(totalScore) ? `${totalScore}` : totalScore.toFixed(1);
 
     const renderQuestion = (q: Question) => {
         const isRowSelected = selectedQuestionId === q.id;
@@ -53,30 +56,26 @@ export default function OMRPreview({
                 key={q.id}
                 className={`omr-row ${isRowSelected ? 'omr-row-selected' : ''}`}
                 onClick={() => onQuestionClick && onQuestionClick(q.id)}
+                aria-label={`${q.number}번 문항`}
                 style={{
                     cursor: onQuestionClick ? 'pointer' : 'default',
-                    padding: '4px 8px',
-                    borderRadius: '4px',
-                    background: isRowSelected ? 'rgba(99, 102, 241, 0.1)' : 'transparent',
-                    border: isRowSelected ? '1px solid var(--primary)' : '1px solid transparent',
-                    transition: 'all 0.2s ease'
                 }}
             >
-                <div className="omr-number" style={{ width: '30px', fontWeight: 'bold', color: isRowSelected ? 'var(--primary)' : 'inherit' }}>
+                <div className="omr-number">
                     {q.number}
                 </div>
                 <div className="omr-options">
-                    {Array.from({ length: optionsCount }, (_, i) => {
+                    {Array.from({ length: questionChoiceCount(q, effectiveOptionsCount) }, (_, i) => {
                         const optionNum = i + 1;
                         // Solve Mode: Student Answer
                         const isMarked = userAnswers[q.id] === optionNum;
                         // Editor Mode: Correct Answer (stored in q.answer)
-                        const isCorrect = mode === 'editor' && q.answer === optionNum;
+                        const isCorrect = showAnswerKey && q.answer === optionNum;
 
                         return (
                             <div
                                 key={i}
-                                className="omr-bubble"
+                                className={`omr-bubble ${isMarked ? 'is-marked' : ''} ${isCorrect ? 'is-key' : ''}`}
                                 onClick={(e) => {
                                     if ((mode === 'solve' || mode === 'editor') && onAnswerClick) {
                                         e.stopPropagation(); // Prevent row click
@@ -85,76 +84,119 @@ export default function OMRPreview({
                                 }}
                                 style={{
                                     cursor: (mode === 'solve' || mode === 'editor') ? 'pointer' : 'default',
-                                    background: isMarked ? '#000' : (isCorrect ? 'rgba(239, 68, 68, 0.1)' : 'white'), // Black for student, Red tint for teacher
-                                    color: isMarked ? '#fff' : (isCorrect ? '#ef4444' : 'inherit'),
-                                    borderColor: isCorrect ? '#ef4444' : undefined,
-                                    fontWeight: isMarked || isCorrect ? 'bold' : 'normal',
-                                    position: 'relative'
                                 }}
                             >
                                 {optionNum}
-                                {/* Teacher Key Indicator (Circle) */}
-                                {isCorrect && <div style={{ position: 'absolute', inset: -2, border: '2px solid #ef4444', borderRadius: '50%' }}></div>}
                             </div>
                         );
                     })}
                 </div>
 
-                {/* Metadata Tags */}
-                <div style={{ display: 'flex', gap: '4px', marginLeft: '8px' }}>
-                    {q.label && (
-                        <span style={{ fontSize: '0.7rem', background: '#e2e8f0', padding: '1px 5px', borderRadius: '4px', color: '#475569' }}>
-                            {q.label}
-                        </span>
-                    )}
-                    {q.score !== undefined && (
-                        <span style={{ fontSize: '0.7rem', background: 'rgba(236, 72, 153, 0.1)', padding: '1px 5px', borderRadius: '4px', color: 'var(--secondary)', fontWeight: 'bold' }}>
-                            {q.score}점
-                        </span>
-                    )}
-                    {q.pdfLocation && (
-                        <span style={{ fontSize: '0.8rem', cursor: 'help' }} title={`Page ${q.pdfLocation.page}`}>
-                            🔗
-                        </span>
-                    )}
-                </div>
+                {!isNumbersOnlyPrint && (
+                    <div className="omr-meta">
+                        {q.label && (
+                            <span className="omr-chip omr-chip-label" title={q.label}>
+                                {q.label}
+                            </span>
+                        )}
+                        {q.score !== undefined && (
+                            <span className="omr-chip omr-chip-score">
+                                {q.score}점
+                            </span>
+                        )}
+                        {(q.pdfLocation || q.pdfRegion) && (
+                            <span className="omr-chip omr-chip-pdf" title={`PDF ${q.pdfLocation?.page || q.pdfRegion?.page}쪽 연결`}>
+                                PDF
+                            </span>
+                        )}
+                    </div>
+                )}
             </div>
         );
     };
 
     return (
-        <div id="omr-preview" className="omr-sheet">
+        <div id="omr-preview" className={`omr-sheet omr-sheet--${mode} ${isNumbersOnlyPrint ? 'omr-sheet--numbers-only' : ''}`}>
             {/* OMR Markers */}
             <div className="omr-marker omr-marker-tl"></div>
             <div className="omr-marker omr-marker-tr"></div>
             <div className="omr-marker omr-marker-bl"></div>
             <div className="omr-marker omr-marker-br"></div>
 
-            <div className="omr-header">
-                <div className="omr-title-area">
-                    <h1 className="omr-title">{title}</h1>
-                    <p style={{ fontSize: '0.9rem', color: '#666' }}>컴퓨터용 사인펜을 사용하여 표기하십시오.</p>
-                </div>
+            {!isNumbersOnlyPrint && (
+                <>
+                    <div className="omr-header">
+                        <div className="omr-title-area">
+                            <h1 className="omr-title">{title}</h1>
+                            <p className="omr-subtitle">컴퓨터용 사인펜을 사용하여 표기하십시오.</p>
+                            <div className="omr-sheet-meta">
+                                <span>{displayQuestions.length}문항</span>
+                                <span>{effectiveOptionsCount}지선다</span>
+                                <span>{cols}단 구성</span>
+                            </div>
+                        </div>
 
-                <div className="omr-info-grid">
-                    <div className="omr-field">
-                        <span className="omr-label">과 목</span>
-                        <div className="omr-input-box"></div>
+                        <div className="omr-info-grid">
+                            <div className="omr-field">
+                                <span className="omr-label">과 목</span>
+                                <div className="omr-input-box"></div>
+                            </div>
+                            <div className="omr-field">
+                                <span className="omr-label">점 수</span>
+                                <div className="omr-input-box"></div>
+                            </div>
+                            <div className="omr-field">
+                                <span className="omr-label">성 명</span>
+                                <div className="omr-input-box"></div>
+                            </div>
+                            <div className="omr-field">
+                                <span className="omr-label">학 번</span>
+                                <div className="omr-input-box"></div>
+                            </div>
+                        </div>
                     </div>
-                    <div className="omr-field">
-                        <span className="omr-label">점 수</span>
-                        <div className="omr-input-box"></div>
+
+                    <div className="omr-control-band">
+                        <div className="omr-id-marking" aria-label="수험번호 마킹란">
+                            <div className="omr-section-title">수험번호 마킹란</div>
+                            <div className="omr-id-columns">
+                                {Array.from({ length: 6 }, (_, columnIndex) => (
+                                    <div className="omr-id-column" key={columnIndex}>
+                                        <div className="omr-id-column-label">{columnIndex + 1}</div>
+                                        {Array.from({ length: 10 }, (_, digit) => (
+                                            <span className="omr-id-bubble" key={digit}>
+                                                {digit}
+                                            </span>
+                                        ))}
+                                    </div>
+                                ))}
+                            </div>
+                        </div>
+
+                        <div className="omr-test-summary" aria-label="시험 요약">
+                            <div className="omr-section-title">검사지 정보</div>
+                            <div className="omr-summary-grid">
+                                <div className="omr-summary-card">
+                                    <span>총점</span>
+                                    <strong>{totalScoreLabel}</strong>
+                                </div>
+                                <div className="omr-summary-card">
+                                    <span>정답</span>
+                                    <strong>{answeredKeyCount}/{displayQuestions.length}</strong>
+                                </div>
+                                <div className="omr-summary-card">
+                                    <span>PDF</span>
+                                    <strong>{pdfLinkedCount}/{displayQuestions.length}</strong>
+                                </div>
+                            </div>
+                            <div className="omr-barcode-strip" aria-hidden="true" />
+                            <div className="omr-supervisor-box">
+                                <span>감독 확인</span>
+                            </div>
+                        </div>
                     </div>
-                    <div className="omr-field">
-                        <span className="omr-label">성 명</span>
-                        <div className="omr-input-box"></div>
-                    </div>
-                    <div className="omr-field">
-                        <span className="omr-label">학 번</span>
-                        <div className="omr-input-box"></div>
-                    </div>
-                </div>
-            </div>
+                </>
+            )}
 
             <div className="omr-body" style={{ '--omr-cols': cols } as React.CSSProperties}>
                 {columnQuestions.map((chunk, index) => (
@@ -162,16 +204,16 @@ export default function OMRPreview({
                         <div className="omr-column">
                             {chunk.map(renderQuestion)}
                         </div>
-                        {index < cols - 1 && (
-                            <div style={{ width: '1px', background: '#000', margin: '0 1rem' }}></div>
-                        )}
+                        {index < cols - 1 && <div className="omr-column-divider" aria-hidden="true" />}
                     </React.Fragment>
                 ))}
             </div>
 
-            <div style={{ marginTop: 'auto', textAlign: 'center', fontSize: '0.8rem', color: '#999' }}>
-                OMR Maker - Generated Answer Sheet
-            </div>
+            {!isNumbersOnlyPrint && (
+                <div className="omr-footer">
+                    OMR Maker - Generated Answer Sheet
+                </div>
+            )}
         </div>
     );
 }

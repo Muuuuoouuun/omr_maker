@@ -1,20 +1,33 @@
-import type { Attempt, Exam } from "@/types/omr";
+import type { Attempt, Exam, IdentityType } from "@/types/omr";
+import { readLocalAttempts, sortByNewestActivity } from "@/lib/omrPersistence";
 
 export const STORAGE_KEYS = {
     EXAM_PREFIX: "omr_exam_",
     EXAMS: "omr_exams", // Legacy aggregate key, kept for compatibility.
     ATTEMPTS: "omr_attempts",
     STUDENT_SESSION: "omr_student_session",
-    GUEST_ID: "omr_guest_id"
+    STUDENT_SESSION_BACKUP: "omr_student_session_backup",
+    GUEST_ID: "omr_guest_id",
+    PENDING_GUEST_MERGE: "omr_pending_guest_merge",
 } as const;
 
 export interface StudentSession {
+    studentId: string;
     name: string;
-    studentId?: string;
     groupId?: string; // Optional for guest
     groupName?: string;
-    isGuest?: boolean;
+    regionId?: string;
+    regionName?: string;
+    isGuest: boolean;
+    identityType: IdentityType;
     guestId?: string; // specific UUID for guest
+    loginId?: string;
+}
+
+// Stable local identifier for a class-issued temporary student identity.
+// DB-backed implementations should replace this with student_profiles.id.
+export function studentIdFor(name: string, groupId: string): string {
+    return `${groupId}::${name.trim()}`;
 }
 
 // Helper to generate UUID-like string
@@ -124,26 +137,260 @@ export function getOrCreateGuestId(): string {
 
 export function saveSession(session: StudentSession) {
     if (typeof window === 'undefined') return;
-    sessionStorage.setItem(STORAGE_KEYS.STUDENT_SESSION, JSON.stringify(session));
+    const payload = JSON.stringify(session);
+    try {
+        sessionStorage.setItem(STORAGE_KEYS.STUDENT_SESSION, payload);
+    } catch {
+        // Session storage can be blocked in some embedded/private modes.
+    }
+    try {
+        localStorage.setItem(STORAGE_KEYS.STUDENT_SESSION_BACKUP, payload);
+    } catch {
+        // Keep the in-tab session even if persistent storage is unavailable.
+    }
+}
+
+function normalizeSession(raw: Partial<StudentSession> | null): StudentSession | null {
+    if (!raw || !raw.name) return null;
+    const isGuest = !!raw.isGuest || !!raw.guestId;
+    const studentId = raw.studentId
+        || (isGuest && raw.guestId ? `guest:${raw.guestId}` : undefined)
+        || (raw.groupId ? studentIdFor(raw.name, raw.groupId) : undefined);
+    if (!studentId) return null;
+
+    return {
+        ...raw,
+        studentId,
+        name: raw.name,
+        regionId: normalizeIdentityText(raw.regionId) || undefined,
+        regionName: normalizeIdentityText(raw.regionName) || undefined,
+        isGuest,
+        identityType: raw.identityType || (isGuest ? 'guest' : 'temporary'),
+    };
 }
 
 export function getSession(): StudentSession | null {
     if (typeof window === 'undefined') return null;
-    const str = sessionStorage.getItem(STORAGE_KEYS.STUDENT_SESSION);
-    const parsed = safeParseJson<unknown>(str, null);
-    if (!isRecord(parsed) || typeof parsed.name !== "string") return null;
-    const session: StudentSession = { name: parsed.name };
-    if (typeof parsed.studentId === "string") session.studentId = parsed.studentId;
-    if (typeof parsed.groupId === "string") session.groupId = parsed.groupId;
-    if (typeof parsed.groupName === "string") session.groupName = parsed.groupName;
-    if (typeof parsed.guestId === "string") session.guestId = parsed.guestId;
-    if (typeof parsed.isGuest === "boolean") session.isGuest = parsed.isGuest;
-    return session;
+    try {
+        const rawSession = sessionStorage.getItem(STORAGE_KEYS.STUDENT_SESSION);
+        if (rawSession) return normalizeSession(JSON.parse(rawSession));
+    } catch {
+        // Fall through to the persistent same-device backup.
+    }
+
+    try {
+        const rawBackup = localStorage.getItem(STORAGE_KEYS.STUDENT_SESSION_BACKUP);
+        if (!rawBackup) return null;
+        const restored = normalizeSession(JSON.parse(rawBackup));
+        if (restored) {
+            try {
+                sessionStorage.setItem(STORAGE_KEYS.STUDENT_SESSION, JSON.stringify(restored));
+            } catch {
+                // A readable backup is enough for this request.
+            }
+        }
+        return restored;
+    } catch {
+        return null;
+    }
 }
 
 export function clearSession() {
     if (typeof window === 'undefined') return;
-    sessionStorage.removeItem(STORAGE_KEYS.STUDENT_SESSION);
+    try {
+        sessionStorage.removeItem(STORAGE_KEYS.STUDENT_SESSION);
+    } catch {
+        // ignore
+    }
+    try {
+        localStorage.removeItem(STORAGE_KEYS.STUDENT_SESSION_BACKUP);
+    } catch {
+        // ignore
+    }
+}
+
+export interface PendingGuestMerge {
+    guestId: string;
+    queuedAt: string;
+}
+
+export interface GuestMergeTarget {
+    studentId: string;
+    name: string;
+    groupId?: string;
+    groupName?: string;
+    regionId?: string;
+    regionName?: string;
+    identityType?: IdentityType;
+}
+
+export interface GuestMergePreview {
+    guestId: string;
+    mergeableCount: number;
+    alreadyLinkedCount: number;
+    latestFinishedAt?: string;
+    examTitles: string[];
+    attemptIds: string[];
+}
+
+export function queueGuestMerge(guestId: string): boolean {
+    if (typeof window === 'undefined' || !guestId) return false;
+    try {
+        const payload: PendingGuestMerge = {
+            guestId,
+            queuedAt: new Date().toISOString(),
+        };
+        localStorage.setItem(STORAGE_KEYS.PENDING_GUEST_MERGE, JSON.stringify(payload));
+        return true;
+    } catch {
+        return false;
+    }
+}
+
+export function readPendingGuestMerge(): PendingGuestMerge | null {
+    if (typeof window === 'undefined') return null;
+    try {
+        const raw = localStorage.getItem(STORAGE_KEYS.PENDING_GUEST_MERGE);
+        if (!raw) return null;
+        const parsed = JSON.parse(raw) as Partial<PendingGuestMerge>;
+        if (!parsed.guestId) return null;
+        return {
+            guestId: parsed.guestId,
+            queuedAt: parsed.queuedAt || new Date().toISOString(),
+        };
+    } catch {
+        return null;
+    }
+}
+
+export function consumePendingGuestMerge(): PendingGuestMerge | null {
+    if (typeof window === 'undefined') return null;
+    try {
+        const pending = readPendingGuestMerge();
+        if (!pending) return null;
+        localStorage.removeItem(STORAGE_KEYS.PENDING_GUEST_MERGE);
+        return pending;
+    } catch {
+        localStorage.removeItem(STORAGE_KEYS.PENDING_GUEST_MERGE);
+        return null;
+    }
+}
+
+export function readStoredGuestId(): string {
+    if (typeof window === 'undefined') return "";
+    try {
+        return localStorage.getItem(STORAGE_KEYS.GUEST_ID)?.trim() || "";
+    } catch {
+        return "";
+    }
+}
+
+export function attemptBelongsToSession(attempt: Attempt, session: StudentSession): boolean {
+    if (session.isGuest || session.identityType === 'guest') {
+        return !!session.guestId && attempt.guestId === session.guestId;
+    }
+
+    if (attempt.studentId && attempt.studentId === session.studentId) return true;
+
+    // Legacy fallback for attempts created before canonical studentId was saved.
+    if (session.loginId && attempt.studentId === session.loginId) return true;
+    if (!attempt.studentId && attempt.studentName === session.name) {
+        if (!session.groupName && !session.groupId) return true;
+        if (!attempt.groupName && !attempt.groupId) return false;
+        return attempt.groupName === session.groupName || attempt.groupId === session.groupId;
+    }
+
+    return false;
+}
+
+function normalizeIdentityText(value: string | undefined): string {
+    return value?.trim() || "";
+}
+
+function splitScopedStudentId(value: string | undefined): { groupKey: string; name: string } | null {
+    const normalized = normalizeIdentityText(value);
+    const separatorIndex = normalized.indexOf("::");
+    if (separatorIndex <= 0) return null;
+
+    const groupKey = normalized.slice(0, separatorIndex).trim();
+    const name = normalized.slice(separatorIndex + 2).trim();
+    if (!groupKey || !name) return null;
+    return { groupKey, name };
+}
+
+export function attemptMatchesStudentProfile(
+    attempt: Attempt,
+    student: { id: string; name: string; group?: string; groupName?: string; region?: string },
+): boolean {
+    const profileId = normalizeIdentityText(student.id);
+    const profileName = normalizeIdentityText(student.name);
+    const profileGroup = normalizeIdentityText(student.group || student.groupName);
+    const profileRegion = normalizeIdentityText(student.region);
+    const profileScoped = splitScopedStudentId(profileId);
+    const profileGroupKeys = new Set(
+        [profileGroup, profileScoped?.groupKey]
+            .map(normalizeIdentityText)
+            .filter(Boolean)
+    );
+
+    const attemptStudentId = normalizeIdentityText(attempt.studentId);
+    if (attemptStudentId && attemptStudentId === profileId) return true;
+
+    const attemptScoped = splitScopedStudentId(attemptStudentId);
+    const attemptName = normalizeIdentityText(attempt.studentName) || attemptScoped?.name || "";
+    if (attemptName !== profileName && attemptScoped?.name !== profileName) return false;
+
+    const attemptRegion = normalizeIdentityText(attempt.regionName) || normalizeIdentityText(attempt.regionId);
+    if (profileRegion && attemptRegion && profileRegion !== attemptRegion) return false;
+
+    if (profileGroupKeys.size === 0) return true;
+
+    const attemptGroupKeys = new Set(
+        [attempt.groupId, attempt.groupName, attemptScoped?.groupKey]
+            .map(normalizeIdentityText)
+            .filter(Boolean)
+    );
+    if (attemptGroupKeys.size === 0) return false;
+
+    return [...attemptGroupKeys].some(key => profileGroupKeys.has(key));
+}
+
+function normalizeMergeTarget(target: GuestMergeTarget | string): GuestMergeTarget {
+    return typeof target === 'string'
+        ? { studentId: target, name: target, identityType: 'temporary' }
+        : target;
+}
+
+function isGuestAttemptMergeable(attempt: Attempt, guestId: string, target?: GuestMergeTarget): boolean {
+    if (!guestId || attempt.guestId !== guestId) return false;
+    if (target && attempt.studentId === target.studentId) return false;
+
+    const alreadyLinkedToStudent = !!attempt.mergedFromGuestId
+        && attempt.identityType !== 'guest'
+        && !!attempt.studentId
+        && !attempt.studentId.startsWith("guest:");
+    return !alreadyLinkedToStudent;
+}
+
+export function previewGuestMerge(guestId: string, target?: GuestMergeTarget | string): GuestMergePreview {
+    if (typeof window === 'undefined' || !guestId) {
+        return { guestId, mergeableCount: 0, alreadyLinkedCount: 0, examTitles: [], attemptIds: [] };
+    }
+
+    const targetProfile = target ? normalizeMergeTarget(target) : undefined;
+    const matching = readLocalAttempts().filter(attempt => attempt.guestId === guestId);
+    const mergeable = matching.filter(attempt => isGuestAttemptMergeable(attempt, guestId, targetProfile));
+    const sortedMergeable = sortByNewestActivity(mergeable);
+    const examTitles = Array.from(new Set(sortedMergeable.map(attempt => attempt.examTitle || attempt.examId).filter(Boolean))).slice(0, 4);
+
+    return {
+        guestId,
+        mergeableCount: mergeable.length,
+        alreadyLinkedCount: matching.length - mergeable.length,
+        latestFinishedAt: sortedMergeable[0]?.finishedAt || sortedMergeable[0]?.startedAt,
+        examTitles,
+        attemptIds: sortedMergeable.map(attempt => attempt.id),
+    };
 }
 
 function normalizeName(name: string): string {
@@ -185,23 +432,58 @@ export function scorePercent(attempt: Pick<Attempt, "score" | "totalScore">): nu
 }
 
 // Data Merging Logic
-export function mergeGuestAttempts(guestId: string, realStudentName: string, realStudentId?: string) {
-    if (typeof window === 'undefined') return;
+export function mergeGuestAttempts(
+    guestId: string,
+    target: GuestMergeTarget | string,
+) {
+    if (typeof window === 'undefined') return 0;
 
-    const allAttempts = loadAttempts();
-    let updated = false;
+    const allAttempts = readLocalAttempts();
+    if (allAttempts.length === 0) return 0;
 
-    const newAttempts = allAttempts.map(attempt => {
-        if (attempt.guestId !== guestId) return attempt;
-        updated = true;
-        return {
-            ...attempt,
-            studentName: realStudentName,
-            studentId: realStudentId ?? attempt.studentId,
-        };
-    });
+    try {
+        const targetProfile = normalizeMergeTarget(target);
 
-    if (updated && !saveAttempts(newAttempts)) {
-        console.error("Failed to merge attempts");
+        let updated = false;
+        let mergedCount = 0;
+        const mergedAt = new Date().toISOString();
+
+        const newAttempts = allAttempts.map(attempt => {
+            if (isGuestAttemptMergeable(attempt, guestId, targetProfile)) {
+                updated = true;
+                mergedCount += 1;
+                return {
+                    ...attempt,
+                    studentId: targetProfile.studentId,
+                    studentName: targetProfile.name,
+                    groupId: targetProfile.groupId,
+                    groupName: targetProfile.groupName,
+                    regionId: targetProfile.regionId,
+                    regionName: targetProfile.regionName,
+                    identityType: targetProfile.identityType || 'temporary',
+                    mergedFromGuestId: attempt.mergedFromGuestId || guestId,
+                    mergedAt,
+                    questionResults: attempt.questionResults?.map(result => ({
+                        ...result,
+                        studentName: targetProfile.name,
+                        studentId: targetProfile.studentId,
+                        groupId: targetProfile.groupId,
+                        groupName: targetProfile.groupName,
+                        regionId: targetProfile.regionId,
+                        regionName: targetProfile.regionName,
+                        identityType: targetProfile.identityType || 'temporary',
+                    })),
+                };
+            }
+            return attempt;
+        });
+
+        if (updated) {
+            localStorage.setItem(STORAGE_KEYS.ATTEMPTS, JSON.stringify(sortByNewestActivity(newAttempts)));
+        }
+        return mergedCount;
+    } catch (e) {
+        console.error("Failed to merge attempts", e);
+        return 0;
     }
 }

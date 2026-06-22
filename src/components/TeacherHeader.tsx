@@ -6,6 +6,8 @@ import { Search } from "lucide-react";
 import ThemeToggle from "./ThemeToggle";
 import GlobalSearch from "./GlobalSearch";
 import NotificationBell from "./NotificationBell";
+import TeacherLogoutButton from "./TeacherLogoutButton";
+import TeacherSessionChip from "./TeacherSessionChip";
 
 interface TeacherHeaderProps {
     badge?: string;
@@ -80,7 +82,9 @@ export default function TeacherHeader({ badge = "TEACHER", badgeColor }: Teacher
                             padding: '0.5rem 0.9rem', borderRadius: 'var(--radius-full)',
                             transition: 'var(--transition-base)'
                         }} className="nav-link">Dashboard</Link>
+                        <TeacherSessionChip />
                         <NotificationBell />
+                        <TeacherLogoutButton />
                         <ThemeToggle />
                     </div>
                 </div>

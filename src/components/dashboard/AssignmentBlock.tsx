@@ -2,7 +2,7 @@ import Link from "next/link";
 import { Exam } from "@/types/omr";
 
 interface AssignmentBlockProps {
-  exams: Exam[];
+  exams: Array<Exam & { attemptId?: string }>;
   type: "todo" | "done";
 }
 
@@ -219,7 +219,7 @@ export default function AssignmentBlock({ exams, type }: AssignmentBlockProps) {
                 </Link>
               ) : (
                 <Link
-                  href={`/student/review/${exam.id}`}
+                  href={`/student/review/${exam.attemptId || exam.id}`}
                   className="btn btn-secondary"
                   style={{ padding: "0.5rem 1rem", fontSize: "0.85rem", flexShrink: 0 }}
                 >
