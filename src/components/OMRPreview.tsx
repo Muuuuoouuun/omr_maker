@@ -62,7 +62,7 @@ export default function OMRPreview({
                 }}
             >
                 <div className="omr-number">
-                    {q.number}
+                    {q.number}.
                 </div>
                 <div className="omr-options">
                     {Array.from({ length: questionChoiceCount(q, effectiveOptionsCount) }, (_, i) => {

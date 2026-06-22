@@ -148,7 +148,7 @@ export default function OMRCardView({
               } ${isEditor ? "editor-card" : ""} ${handwritingSummary ? "has-handwriting" : ""}`}
               onClick={() => onQuestionClick?.(q.id)}
             >
-              <div className="q-card-num">{q.number}</div>
+              <div className="q-card-num">{q.number}.</div>
 
               <div className="q-card-bubbles">
                 {Array.from({ length: questionOptionsCount }, (_, i) => {

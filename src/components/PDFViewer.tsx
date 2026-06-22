@@ -77,6 +77,11 @@ function isPdfUploadFile(file: File): boolean {
     return file.type === 'application/pdf' || file.name.toLowerCase().endsWith('.pdf');
 }
 
+function formatMarkerLabel(label: string | number): string {
+    const text = String(label).trim();
+    return text.endsWith('.') ? text : `${text}.`;
+}
+
 export default function PDFViewer({
     file,
     onLoadSuccess,
@@ -911,27 +916,27 @@ export default function PDFViewer({
                                                         }
                                                     }}
                                                     style={{
-                                                        width: '28px', height: '28px',
-                                                        background: isMarked
-                                                            ? 'linear-gradient(135deg, #4f46e5, #3730a3)'
-                                                            : markerColor,
-                                                        color: 'white',
-                                                        borderRadius: '50%',
+                                                        width: 'auto',
+                                                        minWidth: '20px',
+                                                        height: '22px',
+                                                        padding: '0 4px',
+                                                        background: 'rgba(255,255,255,0.92)',
+                                                        color: isMarked ? '#4f46e5' : markerColor,
+                                                        borderRadius: '5px',
                                                         display: 'flex', alignItems: 'center', justifyContent: 'center',
-                                                        fontWeight: 800, fontSize: '0.78rem',
+                                                        fontWeight: 900, fontSize: '0.76rem',
                                                         boxShadow: isPopupActive
-                                                            ? '0 4px 14px rgba(0,0,0,0.45), 0 0 0 3px rgba(99,102,241,0.3)'
-                                                            : '0 2px 6px rgba(0,0,0,0.3)',
-                                                        border: '2px solid white',
+                                                            ? '0 3px 12px rgba(0,0,0,0.32), 0 0 0 3px rgba(99,102,241,0.24)'
+                                                            : '0 1px 5px rgba(0,0,0,0.22)',
+                                                        border: `1px solid ${isMarked ? '#4f46e5' : markerColor}`,
                                                         cursor: 'pointer',
-                                                        padding: 0,
                                                         transition: 'transform 0.15s, box-shadow 0.15s',
-                                                        transform: isPopupActive ? 'scale(1.15)' : 'scale(1)',
+                                                        transform: isPopupActive ? 'scale(1.06)' : 'scale(1)',
                                                         fontVariantNumeric: 'tabular-nums',
                                                     }}
                                                     title={`문제 ${marker.label}번${isMarked ? ` · 현재: ${marker.currentAnswer}` : ''}`}
                                                 >
-                                                    {marker.label}
+                                                    {formatMarkerLabel(marker.label)}
                                                 </button>
 
                                                 {/* Floating OMR popup */}
