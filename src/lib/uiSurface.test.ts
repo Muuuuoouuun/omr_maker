@@ -73,10 +73,15 @@ describe("service UI surface", () => {
 
         expect(createPage).toContain("const PREVIEW_PANE_MIN_WIDTH = 260");
         expect(createPage).toContain("const PREVIEW_RAIL_WIDTH = 64");
-        expect(createPage).toContain("isPreviewCollapsed ? `1 1 ${pdfWidth}px`");
+        expect(createPage).toContain("flex: `0 0 ${pdfWidth}px`");
+        expect(createPage).toContain("createWorkspaceRef.current.getBoundingClientRect().width");
+        expect(createPage).toContain("setSidebarWidth(sharedPaneWidth - nextPdfWidth)");
+        expect(createPage).toContain("const nextPdfWidth = clampLayoutWidth(");
+        expect(createPage).toContain("sharedPaneWidth - nextSidebarWidth");
+        expect(createPage).toContain("setPdfWidth(nextPdfWidth)");
         expect(createPage).toContain("isPreviewCollapsed ? PREVIEW_RAIL_WIDTH : PREVIEW_PANE_MIN_WIDTH");
-        expect(createPage).toContain("window.innerWidth - sidebarWidth - previewWidth");
-        expect(createPage).toContain("window.innerWidth - pdfWidth - previewWidth");
+        expect(createPage).toContain("workspaceWidth - sidebarWidth - previewWidth");
+        expect(createPage).toContain("workspaceWidth - pdfWidth - previewWidth");
         expect(css).toContain("@container (max-width: 540px)");
         expect(css).toContain(".omr-cardview.is-vertical-numbering .omr-cardview-grid");
         expect(css).toContain("grid-template-columns: minmax(0, 1fr)");

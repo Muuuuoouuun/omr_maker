@@ -338,8 +338,10 @@ test.describe("Mobile PWA entry", () => {
         await expect(page.getByRole("heading", { name: "학습 시작" })).toBeVisible();
         await page.getByPlaceholder("이름을 입력하세요").fill("모바일학생");
         await expect(page.getByPlaceholder("이름을 입력하세요")).toHaveValue("모바일학생");
-        await expect(page.getByPlaceholder("동명이인일 때 입력")).toHaveAttribute("inputmode", "email");
-        await expect(page.getByPlaceholder("동명이인일 때 입력")).toHaveAttribute("autocomplete", "email");
+        const studentLookupInput = page.getByLabel("학생번호 또는 이메일");
+        await expect(studentLookupInput).toHaveAttribute("placeholder", "선생님이 알려준 학생번호 또는 이메일");
+        await expect(studentLookupInput).toHaveAttribute("inputmode", "email");
+        await expect(studentLookupInput).toHaveAttribute("autocomplete", "email");
         await expectNoHorizontalOverflow(page);
         expect(consoleProblems).toEqual([]);
     });

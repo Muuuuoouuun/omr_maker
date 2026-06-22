@@ -43,6 +43,13 @@ interface MarkerRegion {
     height: number;
 }
 
+interface PdfFocusTarget {
+    page: number;
+    x: number;
+    y: number;
+    key?: string | number;
+}
+
 interface PDFViewerProps {
     file: File | null;
     onLoadSuccess: (numPages: number) => void;
@@ -55,6 +62,8 @@ interface PDFViewerProps {
     onDrawingsChange?: (page: number, newPaths: string[]) => void;
     // Markers Props
     markers?: MarkerData[];
+    forcePage?: number;
+    focusTarget?: PdfFocusTarget | null;
 }
 
 type DrawingMode = 'click' | 'pen' | 'highlighter' | 'eraser';
@@ -78,13 +87,15 @@ export default function PDFViewer({
     drawings = {},
     onDrawingsChange,
     markers = [],
-    forcePage
-}: PDFViewerProps & { forcePage?: number }) {
+    forcePage,
+    focusTarget,
+}: PDFViewerProps) {
     const [numPages, setNumPages] = useState<number>(0);
     const [pageNumber, setPageNumber] = useState<number>(1);
     const [inputPage, setInputPage] = useState<string>("1");
     const [scale, setScale] = useState<number>(1.0);
     const [isDragging, setIsDragging] = useState(false);
+    const [pageRenderVersion, setPageRenderVersion] = useState(0);
 
     // Drawing State
     const [, setIsDrawing] = useState(false);
@@ -103,6 +114,7 @@ export default function PDFViewer({
     const activeDrawingModeRef = useRef<DrawingMode>('pen');
     const currentPathRef = useRef<DrawPoint[]>([]);
     const activePointerIdRef = useRef<number | null>(null);
+    const pendingFocusTargetRef = useRef<PdfFocusTarget | null>(null);
 
     // Floating OMR popup state - tracks active marker index (page + list index)
     const [activePopupKey, setActivePopupKey] = useState<string | null>(null);
@@ -142,6 +154,46 @@ export default function PDFViewer({
             setPageNumber(forcePage);
         }
     }, [forcePage, numPages]);
+
+    useEffect(() => {
+        if (!focusTarget) return;
+        if (focusTarget.page < 1 || (numPages > 0 && focusTarget.page > numPages)) return;
+        pendingFocusTargetRef.current = focusTarget;
+        setActivePopupKey(null);
+        setPageNumber(focusTarget.page);
+    }, [focusTarget, numPages]);
+
+    useEffect(() => {
+        const target = pendingFocusTargetRef.current;
+        if (!target || target.page !== pageNumber) return;
+
+        let firstFrame = 0;
+        let secondFrame = 0;
+        firstFrame = window.requestAnimationFrame(() => {
+            secondFrame = window.requestAnimationFrame(() => {
+                const wrapper = wrapperRef.current;
+                const page = containerRef.current;
+                if (!wrapper || !page || page.offsetWidth === 0 || page.offsetHeight === 0) return;
+
+                const x = Math.min(1, Math.max(0, target.x));
+                const y = Math.min(1, Math.max(0, target.y));
+                const left = page.offsetLeft + page.offsetWidth * x - wrapper.clientWidth / 2;
+                const top = page.offsetTop + page.offsetHeight * y - wrapper.clientHeight / 2;
+
+                wrapper.scrollTo({
+                    left: Math.max(0, left),
+                    top: Math.max(0, top),
+                    behavior: 'smooth',
+                });
+                pendingFocusTargetRef.current = null;
+            });
+        });
+
+        return () => {
+            window.cancelAnimationFrame(firstFrame);
+            window.cancelAnimationFrame(secondFrame);
+        };
+    }, [pageNumber, scale, containerWidth, file, focusTarget, pageRenderVersion]);
 
     // Close popup on Escape key
     useEffect(() => {
@@ -774,7 +826,14 @@ export default function PDFViewer({
                                 onClick={handlePageClick}
                                 style={{ position: 'relative', boxShadow: '0 4px 6px -1px rgba(0, 0, 0, 0.1)' }}
                             >
-                                <Page pageNumber={pageNumber} scale={scale} width={containerWidth > 0 ? containerWidth : undefined} renderTextLayer={true} renderAnnotationLayer={true} />{/* Canvas Overlay */}
+                                <Page
+                                    pageNumber={pageNumber}
+                                    scale={scale}
+                                    width={containerWidth > 0 ? containerWidth : undefined}
+                                    renderTextLayer={true}
+                                    renderAnnotationLayer={true}
+                                    onRenderSuccess={() => setPageRenderVersion(value => value + 1)}
+                                />{/* Canvas Overlay */}
                                 {shouldRenderDrawingLayer && (
                                     <canvas
                                         ref={canvasRef}

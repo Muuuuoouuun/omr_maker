@@ -532,6 +532,7 @@ export default function SolvePage() {
     // Navigation State
     const [currentQuestionId, setCurrentQuestionId] = useState<number | null>(null);
     const [pdfCurrentPage, setPdfCurrentPage] = useState<number | undefined>(undefined);
+    const [pdfFocusTarget, setPdfFocusTarget] = useState<{ page: number; x: number; y: number; key: number } | null>(null);
 
     // Teacher Mode State
     const [isTeacherMode, setIsTeacherMode] = useState(false);
@@ -566,6 +567,7 @@ export default function SolvePage() {
     const activeQuestionRef = useRef<{ questionId: number; startedAtMs: number } | null>(null);
     const questionTimingRef = useRef<Record<number, QuestionTimingDraft>>({});
     const focusLossEventsRef = useRef<FocusLossEvent[]>([]);
+    const pdfFocusRequestIdRef = useRef(0);
     const [hydratedOMRPanelKey, setHydratedOMRPanelKey] = useState("");
     
     // Focus Warning States (Anti-cheat)
@@ -1039,9 +1041,27 @@ export default function SolvePage() {
     const handleQuestionClick = (qId: number) => {
         beginQuestionVisit(qId);
         if (examData) {
-            const q = examData.questions.find(q => q.id === qId);
-            const page = q?.pdfLocation?.page || q?.pdfRegion?.page;
-            if (page) setPdfCurrentPage(page);
+            const activeQuestion = getActiveExamQuestions().find(q => q.id === qId);
+            const q = activeQuestion || examData.questions.find(q => q.id === qId);
+            const focusAnchor = q?.pdfLocation
+                ? q.pdfLocation
+                : q?.pdfRegion
+                    ? {
+                        page: q.pdfRegion.page,
+                        x: q.pdfRegion.x + q.pdfRegion.width / 2,
+                        y: q.pdfRegion.y + q.pdfRegion.height / 2,
+                    }
+                    : null;
+            if (focusAnchor) {
+                setPdfCurrentPage(focusAnchor.page);
+                pdfFocusRequestIdRef.current += 1;
+                setPdfFocusTarget({
+                    page: focusAnchor.page,
+                    x: focusAnchor.x,
+                    y: focusAnchor.y,
+                    key: pdfFocusRequestIdRef.current,
+                });
+            }
         }
     };
 
@@ -1651,6 +1671,7 @@ export default function SolvePage() {
                         drawings={drawings}
                         onDrawingsChange={handleDrawingsChange}
                         forcePage={activeTab === 'problem' ? pdfCurrentPage : undefined}
+                        focusTarget={activeTab === 'problem' ? pdfFocusTarget : null}
                         markers={(activeTab === 'problem' && examData.questions)
                             ? activeExamQuestions
                                 .filter((q: Question) => q.pdfLocation || q.pdfRegion)

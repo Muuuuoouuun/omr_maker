@@ -867,6 +867,11 @@ html[data-motion="off"] .orb {
   min-height: 2.75rem;
 }
 
+.teacher-header .brand-logo {
+  min-height: 2.75rem;
+  align-items: center;
+}
+
 .logo {
   display: inline-flex;
   align-items: center;
@@ -881,10 +886,12 @@ html[data-motion="off"] .orb {
 }
 
 .brand-logo__mark {
+  display: block;
   width: 2.1rem;
   height: 2.1rem;
   flex: 0 0 auto;
   border-radius: 0.82rem;
+  object-fit: contain;
   filter: drop-shadow(0 8px 18px rgba(15, 23, 42, 0.13));
   transition: transform 0.18s ease, filter 0.18s ease;
 }
@@ -1716,7 +1723,7 @@ body:has(.home-page[data-home-role="teacher"]) .mobile-install-prompt {
   top: -1.5rem;
   z-index: 20;
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   justify-content: space-between;
   gap: 0.75rem;
   margin: -1.5rem -1.5rem 1.15rem;
@@ -1725,6 +1732,62 @@ body:has(.home-page[data-home-role="teacher"]) .mobile-install-prompt {
     linear-gradient(180deg, var(--surface) 0%, var(--surface) 78%, rgba(255, 255, 255, 0) 100%);
   border-bottom: 1px solid var(--border);
   box-shadow: 0 12px 22px rgba(15, 23, 42, 0.05);
+}
+
+.create-settings-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 0.32rem;
+  flex-wrap: wrap;
+  min-width: 9.5rem;
+}
+
+.create-settings-tool-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 2rem;
+  height: 2rem;
+  flex: 0 0 auto;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--muted);
+  box-shadow: var(--shadow-sm);
+  transition: background-color 0.16s ease, color 0.16s ease, border-color 0.16s ease, transform 0.16s ease;
+}
+
+.create-settings-tool-button:hover:not(:disabled) {
+  border-color: color-mix(in srgb, var(--primary), var(--border) 54%);
+  color: var(--primary);
+  background: color-mix(in srgb, var(--primary), transparent 92%);
+  transform: translateY(-1px);
+}
+
+.create-settings-tool-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.4;
+}
+
+.create-settings-zoom-value {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 2.8rem;
+  height: 2rem;
+  padding: 0 0.35rem;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: var(--foreground);
+  background: var(--background);
+  font-size: 0.72rem;
+  font-weight: 900;
+  font-variant-numeric: tabular-nums;
+}
+
+.create-settings-content {
+  transform-origin: top left;
 }
 
 .create-question-quick-card {
@@ -3318,6 +3381,11 @@ body:has(.home-page[data-home-role="teacher"]) .mobile-install-prompt {
   width: 44px;
   min-width: 44px;
   justify-content: center;
+}
+
+.solve-brand {
+  min-height: 44px;
+  align-items: center;
 }
 
 /* ─── Solve Page Mobile App Layout ───────────────────── */

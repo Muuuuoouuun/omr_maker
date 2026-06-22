@@ -182,7 +182,9 @@ async function ensureAnswerPaneVisible(page: Page) {
     if (await expandButton.isVisible().catch(() => false)) {
         await expandButton.click();
     }
-    await expect(page.getByText("OMR 답안")).toBeVisible();
+    await expect(page.locator(".solve-omr-pane:not(.is-collapsed) .solve-omr-pane-title", {
+        hasText: "OMR 답안",
+    })).toBeVisible();
 }
 
 async function seedExamAndStudent(page: Page) {
