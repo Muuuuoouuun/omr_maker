@@ -164,9 +164,9 @@ function ExamPinDialog({
     onExit: () => void;
 }) {
     return (
-        <SolveDialogShell title="?�험 PIN ?�인" onClose={onExit}>
+        <SolveDialogShell title="시험 PIN 확인" onClose={onExit}>
             <p style={{ color: 'var(--muted)', fontSize: '0.9rem', lineHeight: 1.6, marginBottom: '1rem', wordBreak: 'keep-all' }}>
-                ??examTitle}???�험?� PIN???�정?�어 ?�습?�다. ?�생?�이 ?�내??4~6?�리 ?�자�??�력?�세??
+                “{examTitle}” 시험은 PIN이 설정되어 있습니다. 선생님이 안내한 4~6자리 숫자를 입력하세요.
             </p>
             <input
                 autoFocus
@@ -180,7 +180,7 @@ function ExamPinDialog({
                 onKeyDown={(event) => {
                     if (event.key === "Enter") onSubmit();
                 }}
-                aria-label="?�험 PIN"
+                aria-label="시험 PIN"
                 style={{
                     width: '100%',
                     padding: '0.8rem 0.95rem',
@@ -207,7 +207,7 @@ function ExamPinDialog({
                 onClick={onSubmit}
                 style={{ width: '100%', justifyContent: 'center', padding: '0.78rem 1rem' }}
             >
-                ?�장?�기
+                입장하기
             </button>
         </SolveDialogShell>
     );
@@ -217,47 +217,47 @@ function accessDecisionCopy(decision: ExamAccessDecision): { title: string; body
     const formatDate = (value?: string) => value ? new Date(value).toLocaleString('ko-KR') : "";
     if (decision.status === "not_started") {
         return {
-            title: "?�직 ?�시 ?�작 ?�입?�다",
+            title: "아직 응시 시작 전입니다",
             body: decision.at
-                ? `${formatDate(decision.at)}부???�시?????�습?�다.`
-                : "?�생?�이 ?�정???�작 ?�각 ?�후???�시?????�습?�다.",
-            action: "?�생 ?�으�?,
+                ? `${formatDate(decision.at)}부터 응시할 수 있습니다.`
+                : "선생님이 설정한 시작 시각 이후에 응시할 수 있습니다.",
+            action: "학생 홈으로",
         };
     }
     if (decision.status === "ended") {
         return {
-            title: "?�시 기간??종료?�었?�니??,
+            title: "응시 기간이 종료되었습니다",
             body: decision.at
-                ? `${formatDate(decision.at)}???�시 가???�간???�났?�니??`
-                : "???�험???�시 가???�간??지?�습?�다.",
-            action: "?�생 ?�으�?,
+                ? `${formatDate(decision.at)}에 응시 가능 시간이 끝났습니다.`
+                : "이 시험의 응시 가능 시간이 지났습니다.",
+            action: "학생 홈으로",
         };
     }
     if (decision.status === "login_required") {
         return {
-            title: "?�생 로그?�이 ?�요?�니??,
-            body: "???�험?� 지?�된 �??�생�??�시?????�습?�다. ?�생 ?�에???�름�?반을 ?�택?????�시 ?�어주세??",
-            action: "?�생 로그??,
+            title: "학생 로그인이 필요합니다",
+            body: "이 시험은 지정된 반 학생만 응시할 수 있습니다. 학생 홈에서 이름과 반을 선택한 뒤 다시 열어주세요.",
+            action: "학생 로그인",
         };
     }
     if (decision.status === "group_denied") {
         return {
-            title: "?�시 ?�??반이 ?�닙?�다",
-            body: "?�재 ?�생 계정?� ???�험??배포 ?�??반에 ?�함?�어 ?��? ?�습?�다. �??�택???�못?�다�??�생 ?�에???�시 로그?�하?�요.",
-            action: "?�생 ?�으�?,
+            title: "응시 대상 반이 아닙니다",
+            body: "현재 학생 계정은 이 시험의 배포 대상 반에 포함되어 있지 않습니다. 반 선택이 잘못됐다면 학생 홈에서 다시 로그인하세요.",
+            action: "학생 홈으로",
         };
     }
     if (decision.status === "archived") {
         return {
-            title: "보�????�험?�니??,
-            body: "?�생?�이 보�? 처리???�험?� ?�생 ?�시 ?�면?�서 ?????�습?�다.",
-            action: "?�생 ?�으�?,
+            title: "보관된 시험입니다",
+            body: "선생님이 보관 처리한 시험은 학생 응시 화면에서 열 수 없습니다.",
+            action: "학생 홈으로",
         };
     }
     return {
-        title: "?�험???????�습?�다",
-        body: "?�험 ?�근 ?�정???�인?�주?�요.",
-        action: "?�생 ?�으�?,
+        title: "시험을 열 수 없습니다",
+        body: "시험 접근 설정을 확인해주세요.",
+        action: "학생 홈으로",
     };
 }
 
@@ -324,7 +324,7 @@ function SolveLoadErrorCard({ error }: { error: SolveLoadError }) {
                     {error.body}
                 </p>
                 <Link href="/?role=student" className="btn btn-primary" style={{ justifyContent: 'center' }}>
-                    ?�생 ?�으�?
+                    학생 홈으로
                 </Link>
             </div>
         </div>
@@ -342,18 +342,18 @@ function SubmitConfirmDialog({
 }) {
     const hasUnanswered = state.unanswered > 0;
     return (
-        <SolveDialogShell title="?�안 ?�출" onClose={onClose}>
+        <SolveDialogShell title="답안 제출" onClose={onClose}>
             <p style={{ color: 'var(--muted)', fontSize: '0.95rem', lineHeight: 1.7, marginBottom: '1.25rem', wordBreak: 'keep-all' }}>
                 {hasUnanswered
-                    ? `?�체 ${state.total}문항 �?${state.unanswered}문항???�직 비어 ?�습?�다. 그�?�??�출?�까??`
-                    : `?�체 ${state.total}문항 ?�안??모두 ?�택?�습?�다. ?�출?�면 복습 ?�면?�로 ?�동?�니??`}
+                    ? `전체 ${state.total}문항 중 ${state.unanswered}문항이 아직 비어 있습니다. 그대로 제출할까요?`
+                    : `전체 ${state.total}문항 답안을 모두 선택했습니다. 제출하면 복습 화면으로 이동합니다.`}
             </p>
             <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.5rem' }}>
                 <button type="button" onClick={onClose} style={{ ...dialogButtonBase, background: 'var(--surface)', color: 'var(--foreground)', border: '1px solid var(--border)' }}>
-                    계속 ?��?
+                    계속 풀기
                 </button>
                 <button type="button" onClick={onConfirm} style={{ ...dialogButtonBase, background: 'var(--primary)', color: 'white' }}>
-                    ?�출?�기
+                    제출하기
                 </button>
             </div>
         </SolveDialogShell>
@@ -372,9 +372,9 @@ function GuestNameDialog({
     onSubmit: () => void;
 }) {
     return (
-        <SolveDialogShell title="게스???�출" onClose={onClose}>
+        <SolveDialogShell title="게스트 제출" onClose={onClose}>
             <p style={{ color: 'var(--muted)', fontSize: '0.95rem', lineHeight: 1.7, marginBottom: '1rem', wordBreak: 'keep-all' }}>
-                공개 ?�험?�니?? 결과�?구분???�름???�력?�면 ??기기??게스??기록?�로 ?�?�합?�다.
+                공개 시험입니다. 결과를 구분할 이름을 입력하면 이 기기의 게스트 기록으로 저장합니다.
             </p>
             <input
                 value={value}
@@ -401,7 +401,7 @@ function GuestNameDialog({
                     취소
                 </button>
                 <button type="button" onClick={onSubmit} disabled={!value.trim()} style={{ ...dialogButtonBase, background: 'var(--primary)', color: 'white', opacity: value.trim() ? 1 : 0.55 }}>
-                    ?�?�하�??�출
+                    저장하고 제출
                 </button>
             </div>
         </SolveDialogShell>
@@ -428,9 +428,9 @@ function TeacherPasswordDialog({
     onSubmit: () => void;
 }) {
     return (
-        <SolveDialogShell title="?�생??모드 ?�증" onClose={onClose}>
+        <SolveDialogShell title="선생님 모드 인증" onClose={onClose}>
             <p style={{ color: 'var(--muted)', fontSize: '0.95rem', lineHeight: 1.7, marginBottom: '1rem', wordBreak: 'keep-all' }}>
-                ?�답/?�설 PDF?� 문제지�??�환?�려�??�생??계정 ?�증???�요?�니??
+                정답/해설 PDF와 문제지를 전환하려면 선생님 계정 인증이 필요합니다.
             </p>
             <input
                 type="text"
@@ -440,7 +440,7 @@ function TeacherPasswordDialog({
                     if (e.key === 'Enter' && identifier.trim() && password.trim()) onSubmit();
                 }}
                 autoFocus
-                placeholder="?�이???�는 ?�메??
+                placeholder="아이디 또는 이메일"
                 autoComplete="username"
                 autoCapitalize="none"
                 inputMode="email"
@@ -463,7 +463,7 @@ function TeacherPasswordDialog({
                 onKeyDown={(e) => {
                     if (e.key === 'Enter' && identifier.trim() && password.trim()) onSubmit();
                 }}
-                placeholder="비�?번호"
+                placeholder="비밀번호"
                 autoComplete="current-password"
                 style={{
                     width: '100%',
@@ -482,10 +482,10 @@ function TeacherPasswordDialog({
             )}
             <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.5rem', marginTop: '1.25rem' }}>
                 <button type="button" onClick={onClose} style={{ ...dialogButtonBase, background: 'var(--surface)', color: 'var(--foreground)', border: '1px solid var(--border)' }}>
-                    ?�기
+                    닫기
                 </button>
                 <button type="button" onClick={onSubmit} disabled={!identifier.trim() || !password.trim() || isChecking} style={{ ...dialogButtonBase, background: 'var(--primary)', color: 'white', opacity: identifier.trim() && password.trim() && !isChecking ? 1 : 0.55 }}>
-                    {isChecking ? "?�인 �?.." : "?�증"}
+                    {isChecking ? "확인 중..." : "인증"}
                 </button>
             </div>
         </SolveDialogShell>
@@ -816,8 +816,8 @@ export default function SolvePage() {
             const parsed = await loadPersistedExam(id);
             if (!parsed) {
                 setLoadError({
-                    title: "?�험??찾을 ???�습?�다",
-                    body: "링크가 ?�못?�거???�생?�이 ?�험????��?�을 ???�습?�다. 받�? 링크�??�시 ?�인?�주?�요.",
+                    title: "시험을 찾을 수 없습니다",
+                    body: "링크가 잘못됐거나 선생님이 시험을 삭제했을 수 있습니다. 받은 링크를 다시 확인해주세요.",
                 });
                 return;
             }
@@ -852,7 +852,7 @@ export default function SolvePage() {
                         labels: (searchParams.get("labels") || "").split(",").filter(Boolean),
                         concepts: (searchParams.get("concepts") || "").split(",").filter(Boolean),
                     });
-                    toast.info("?�시??모드", `${validQuestionIds.length}�?문항�??�시 ?�니??`);
+                    toast.info("재시험 모드", `${validQuestionIds.length}개 문항만 다시 풉니다.`);
                     if (shouldBeginQuestionVisit) beginQuestionVisit(validQuestionIds[0]);
                 } else if (parsed.questions[0]) {
                     if (shouldBeginQuestionVisit) beginQuestionVisit(parsed.questions[0].id);
@@ -861,10 +861,10 @@ export default function SolvePage() {
                 // Enforce schedule window (startAt/endAt)
                 const now = Date.now();
                 if (parsed.startAt && new Date(parsed.startAt).getTime() > now) {
-                    toast.info("?�직 ?�시 ?�작 ?�입?�다", `${new Date(parsed.startAt).toLocaleString('ko-KR')}???�작?�니??`);
+                    toast.info("아직 응시 시작 전입니다", `${new Date(parsed.startAt).toLocaleString('ko-KR')}에 시작합니다.`);
                 }
                 if (parsed.endAt && new Date(parsed.endAt).getTime() < now) {
-                    toast.error("?�시 기간 종료", "???�험???�시 가??기간??지?�습?�다.");
+                    toast.error("응시 기간 종료", "이 시험의 응시 가능 기간이 지났습니다.");
                 }
 
                 // Initialize timer from duration
@@ -933,10 +933,10 @@ export default function SolvePage() {
                 if (answerPdf) setAnswerFile(answerPdf);
             } catch {
                 setLoadError({
-                    title: "?�험 ?�이?��? ?��? 못했?�니??,
-                    body: "문제지 PDF ?�는 ?�험 ?�정??불러?�는 �?문제가 발생?�습?�다. ?�시 ???�시 ?�거???�생?�에�?문의?�주?�요.",
+                    title: "시험 데이터를 읽지 못했습니다",
+                    body: "문제지 PDF 또는 시험 설정을 불러오는 중 문제가 발생했습니다. 잠시 후 다시 열거나 선생님에게 문의해주세요.",
                 });
-                toast.error("?�험 ?�이??로드 ?�패", "?�?�된 PDF ?�는 ?�험 ?�정???��? 못했?�니??");
+                toast.error("시험 데이터 로드 실패", "저장된 PDF 또는 시험 설정을 읽지 못했습니다.");
             }
         };
 
@@ -946,7 +946,7 @@ export default function SolvePage() {
     // Show resume banner once after initial load
     useEffect(() => {
         if (hasResumed) {
-            toast.info("?�시?�??복원??, "?�전???�???�안??불러?�습?�다.");
+            toast.info("임시저장 복원됨", "이전에 풀던 답안을 불러왔습니다.");
         }
     }, [hasResumed]);
 
@@ -1076,7 +1076,7 @@ export default function SolvePage() {
         const accessDecision = evaluateExamAccess(examData, { session: submitter, pinVerified });
         if (accessDecision.status !== "allowed") {
             if (accessDecision.status === "login_required") {
-                toast.error("로그???�요", "???�험?� 지?�된 �??�생�??�시?????�습?�다.");
+                toast.error("로그인 필요", "이 시험은 지정된 반 학생만 응시할 수 있습니다.");
                 router.push("/?role=student");
                 return;
             }
@@ -1119,12 +1119,12 @@ export default function SolvePage() {
             }
             if (!drawingsRef) {
                 submittedRef.current = false;
-                toast.error("?�기 ?�???�패", "?�안 ?�출 ???�기 ?�?�에 ?�패?�습?�다. ?�시 ???�시 ?�출?�주?�요.");
+                toast.error("필기 저장 실패", "답안 제출 전 필기 저장에 실패했습니다. 잠시 후 다시 제출해주세요.");
                 return;
             }
         }
         if (hasDrawings(activeDrawings) && !canStoreHandwriting) {
-            toast.info("?�기 보�??� Pro 기능?�니??, "?�안?� ?�?�됐�??�기 ?�본?� ?�기 보�??��? ?�습?�다.");
+            toast.info("필기 보관은 Pro 기능입니다", "답안은 저장됐고 필기 원본은 장기 보관되지 않습니다.");
         }
 
         const attemptData: Attempt = {
@@ -1185,10 +1185,10 @@ export default function SolvePage() {
         try {
             const result = await saveAttempt(attemptData);
             const feedback = summarizePersistenceWrite(result, {
-                target: "?�안",
-                action: "?�??,
-                failureTitle: "?�안 ?�???�패",
-                failureDetail: "브라?��? ?�?�소가 가??찼거??Supabase ?�?�에 ?�패?�습?�다.",
+                target: "답안",
+                action: "저장",
+                failureTitle: "답안 저장 실패",
+                failureDetail: "브라우저 저장소가 가득 찼거나 Supabase 저장에 실패했습니다.",
             });
             if (!feedback.ok) {
                 throw new Error(feedback.detail);
@@ -1201,12 +1201,12 @@ export default function SolvePage() {
             try { localStorage.removeItem(LEGACY_DRAFT_KEY); } catch {}
         } catch {
             submittedRef.current = false;
-            toast.error("?�??공간 부�?, "브라?��? ?�?�소가 가??찼습?�다. 관리자?�게 문의?�세??");
+            toast.error("저장 공간 부족", "브라우저 저장소가 가득 찼습니다. 관리자에게 문의하세요.");
             return;
         }
 
         if (autoSubmitted) {
-            toast.info("?�간 종료", "?�안???�동?�로 ?�출?�었?�니??");
+            toast.info("시간 종료", "답안이 자동으로 제출되었습니다.");
         }
         router.push(`/student/review/${attemptId}`);
     };
@@ -1253,7 +1253,7 @@ export default function SolvePage() {
         const identifier = teacherIdentifier.trim();
         const password = teacherPassword.trim();
         if (!identifier || !password) {
-            setTeacherAuthError("?�이?��? 비�?번호�?모두 ?�력?�주?�요.");
+            setTeacherAuthError("아이디와 비밀번호를 모두 입력해주세요.");
             return;
         }
         setIsTeacherAuthing(true);
@@ -1263,7 +1263,7 @@ export default function SolvePage() {
             if (res.success && res.token) {
                 const saved = saveTeacherSessionWithIdentity(res.token, res.teacher);
                 if (!saved) {
-                    setTeacherAuthError("브라?��? ?�션 ?�?�을 ?�용?????�습?�다.");
+                    setTeacherAuthError("브라우저 세션 저장을 사용할 수 없습니다.");
                     setIsTeacherMode(false);
                     return;
                 }
@@ -1271,13 +1271,13 @@ export default function SolvePage() {
                 setTeacherAuthOpen(false);
                 setTeacherIdentifier("");
                 setTeacherPassword("");
-                toast.success("?�생??모드 켜짐", "?�답/?�설 PDF�??�인?????�습?�다.");
+                toast.success("선생님 모드 켜짐", "정답/해설 PDF를 확인할 수 있습니다.");
             } else {
-                setTeacherAuthError(res.error || "비�?번호가 ?�?�습?�다.");
+                setTeacherAuthError(res.error || "비밀번호가 틀렸습니다.");
                 setIsTeacherMode(false);
             }
         } catch {
-            setTeacherAuthError("?�증 ?�류가 발생?�습?�다. ?�시 ???�시 ?�도?�주?�요.");
+            setTeacherAuthError("인증 오류가 발생했습니다. 잠시 후 다시 시도해주세요.");
             setIsTeacherMode(false);
         } finally {
             setIsTeacherAuthing(false);
@@ -1291,8 +1291,8 @@ export default function SolvePage() {
     if (!examData) {
         return (
             <div style={{ padding: '2rem', textAlign: 'center' }}>
-                <h2>?�험??불러?�는 �?..</h2>
-                <Link href="/" className="btn btn-secondary">?�으�??�아가�?/Link>
+                <h2>시험을 불러오는 중...</h2>
+                <Link href="/" className="btn btn-secondary">홈으로 돌아가기</Link>
             </div>
         );
     }
@@ -1301,7 +1301,7 @@ export default function SolvePage() {
     const requiresPin = accessDecision.status === "pin_required";
     const submitPin = () => {
         if (!verifyExamPin(examData, pinInput)) {
-            setPinError("PIN???�치?��? ?�습?�다.");
+            setPinError("PIN이 일치하지 않습니다.");
             return;
         }
         setPinVerified(true);
@@ -1370,8 +1370,8 @@ export default function SolvePage() {
     const hasActiveDrawings = activeDrawingStrokeCount > 0;
     const handwritingArchiveEnabled = canArchiveHandwriting(currentPlan);
     const handwritingStatusDetail = activeQuestionDrawingCount > 0
-        ? `${activeQuestionDrawingCount}문항 · ${activeDrawingStrokeCount}??
-        : `${activeDrawingStrokeCount}??;
+        ? `${activeQuestionDrawingCount}문항 · ${activeDrawingStrokeCount}획`
+        : `${activeDrawingStrokeCount}획`;
     const currentQuestion = activeExamQuestions.find(q => q.id === currentQuestionId) || null;
     const quickAnswerQuestion = currentQuestion || nextUnansweredQuestion || activeExamQuestions[0] || null;
     const quickAnswerChoiceCount = quickAnswerQuestion
@@ -1414,7 +1414,7 @@ export default function SolvePage() {
                             whiteSpace: 'nowrap'
                         }}>
                             {examData.title}
-                            {retakeConfig ? ` · ?�시??${retakeConfig.questionIds.length}문항` : ''}
+                            {retakeConfig ? ` · 재시험 ${retakeConfig.questionIds.length}문항` : ''}
                         </span>
                     </div>
 
@@ -1483,20 +1483,20 @@ export default function SolvePage() {
                     {lastSavedAt && (
                         <span
                             className="solve-autosave"
-                            title={`마�?�??�?? ${lastSavedAt.toLocaleTimeString('ko-KR')}`}
+                            title={`마지막 저장: ${lastSavedAt.toLocaleTimeString('ko-KR')}`}
                             style={{
                                 display: 'inline-flex', alignItems: 'center', gap: '0.3rem',
                                 fontSize: '0.72rem', color: 'var(--muted)', fontWeight: 600, flexShrink: 0
                             }}>
-                            <Save size={11} /> ?�?�됨
+                            <Save size={11} /> 저장됨
                         </span>
                     )}
                     {(hasActiveDrawings || handwritingArchiveEnabled) && (
                         <span
                             className="solve-autosave solve-handwriting-status"
                             title={handwritingArchiveEnabled
-                                ? `${getPlanLabel(currentPlan)} ?�랜: ?�출 ???�기 보�? · ${activeDrawingPageCount}p · ${handwritingStatusDetail}`
-                                : "Free ?�랜: ?�출 ???�기 ?�본 미보관"}
+                                ? `${getPlanLabel(currentPlan)} 플랜: 제출 후 필기 보관 · ${activeDrawingPageCount}p · ${handwritingStatusDetail}`
+                                : "Free 플랜: 제출 후 필기 원본 미보관"}
                             style={{
                                 display: 'inline-flex', alignItems: 'center', gap: '0.3rem',
                                 fontSize: '0.72rem', color: handwritingArchiveEnabled ? 'var(--primary)' : '#f59e0b',
@@ -1504,8 +1504,8 @@ export default function SolvePage() {
                             }}>
                             <PenLine size={11} />
                             {handwritingArchiveEnabled
-                                ? `?�기 보�?${hasActiveDrawings ? ` ${handwritingStatusDetail}` : ''}`
-                                : '?�기 ?�시'}
+                                ? `필기 보관${hasActiveDrawings ? ` ${handwritingStatusDetail}` : ''}`
+                                : '필기 임시'}
                         </span>
                     )}
 
@@ -1529,7 +1529,7 @@ export default function SolvePage() {
                                 onChange={(e) => toggleTeacherMode(e.target.checked)}
                                 style={{ margin: 0 }}
                             />
-                            ?�생??모드
+                            선생님 모드
                         </label>
 
                         {isTeacherMode ? (
@@ -1572,7 +1572,7 @@ export default function SolvePage() {
                                         transition: 'all 0.2s'
                                     }}
                                 >
-                                    ?�답/?�설
+                                    정답/해설
                                 </button>
                             </div>
                         ) : (
@@ -1581,7 +1581,7 @@ export default function SolvePage() {
                                 fontSize: '0.8rem',
                                 padding: '0.45rem 0.85rem'
                             }}>
-                                PDF ?�기
+                                PDF 열기
                                 <input id="pdf-upload-input" type="file" accept=".pdf" onChange={(e) => e.target.files && setPdfFile(e.target.files[0])} style={{ display: 'none' }} />
                             </label>
                         )}
@@ -1596,8 +1596,8 @@ export default function SolvePage() {
                                 alignItems: 'center',
                                 gap: '0.35rem'
                             }}
-                            title={isOMRCollapsed ? '?�안지 ?�치�? : '?�안지 ?�기'}
-                            aria-label={isOMRCollapsed ? '?�안지 ?�치�? : '?�안지 ?�기'}
+                            title={isOMRCollapsed ? '답안지 펼치기' : '답안지 접기'}
+                            aria-label={isOMRCollapsed ? '답안지 펼치기' : '답안지 접기'}
                             aria-expanded={!isOMRCollapsed}
                             aria-controls="solve-omr-pane"
                         >
@@ -1605,7 +1605,7 @@ export default function SolvePage() {
                         </button>
 
                         <button className="btn btn-primary solve-submit-button" style={{ padding: '0.5rem 1rem', fontSize: '0.85rem' }} onClick={handleSubmit}>
-                            ?�출?�기
+                            제출하기
                         </button>
                         <ThemeToggle />
                     </div>
@@ -1627,7 +1627,7 @@ export default function SolvePage() {
                     {isTeacherMode && activeTab === 'answer' && !answerFile && (
                         <div className="solve-upload-overlay" style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 10, pointerEvents: 'none' }}>
                             <label className="btn btn-primary" style={{ pointerEvents: 'auto', cursor: 'pointer', boxShadow: '0 4px 10px rgba(0,0,0,0.3)' }}>
-                                ?�설/?�답 PDF ?�로??
+                                해설/정답 PDF 업로드
                                 <input type="file" accept=".pdf" onChange={(e) => e.target.files && setAnswerFile(e.target.files[0])} style={{ display: 'none' }} />
                             </label>
                         </div>
@@ -1636,7 +1636,7 @@ export default function SolvePage() {
                     {isTeacherMode && activeTab === 'problem' && !pdfFile && (
                         <div className="solve-upload-overlay" style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 10, pointerEvents: 'none' }}>
                             <label className="btn btn-secondary" style={{ pointerEvents: 'auto', cursor: 'pointer', boxShadow: '0 4px 10px rgba(0,0,0,0.3)' }}>
-                                문제지 PDF ?�로??
+                                문제지 PDF 업로드
                                 <input type="file" accept=".pdf" onChange={(e) => e.target.files && setPdfFile(e.target.files[0])} style={{ display: 'none' }} />
                             </label>
                         </div>
@@ -1672,34 +1672,34 @@ export default function SolvePage() {
                     />
                 </div>
 
-                <div className={`solve-omr-rail ${isOMRCollapsed ? 'is-collapsed' : ''}`} aria-label="빠른 ?�안 ?�일">
+                <div className={`solve-omr-rail ${isOMRCollapsed ? 'is-collapsed' : ''}`} aria-label="빠른 답안 레일">
                     <button
                         type="button"
                         className={`solve-omr-rail-button ${isOMRCollapsed ? 'is-collapsed' : ''}`}
                         onClick={toggleOMRPanel}
-                        title={isOMRCollapsed ? '?�안지 ?�치�? : '?�안지 ?�기'}
-                        aria-label={`${isOMRCollapsed ? '?�안지 ?�치�? : '?�안지 ?�기'} · ${answeredCount}/${totalQuestions} · 미답 ${unansweredCount}�?}
+                        title={isOMRCollapsed ? '답안지 펼치기' : '답안지 접기'}
+                        aria-label={`${isOMRCollapsed ? '답안지 펼치기' : '답안지 접기'} · ${answeredCount}/${totalQuestions} · 미답 ${unansweredCount}개`}
                         aria-expanded={!isOMRCollapsed}
                         aria-controls="solve-omr-pane"
                     >
                         {isOMRCollapsed ? <PanelRightOpen size={18} /> : <PanelRightClose size={18} />}
-                        <span className="solve-omr-rail-text">?�안</span>
+                        <span className="solve-omr-rail-text">답안</span>
                         <span className={`solve-omr-rail-count ${unansweredCount === 0 ? 'is-complete' : ''}`}>{answeredCount}/{totalQuestions}</span>
                         {unansweredCount > 0 && (
                             <span className="solve-omr-rail-missing">{unansweredCount}미답</span>
                         )}
                     </button>
                     {isOMRCollapsed && quickAnswerQuestion && (
-                        <div className="solve-omr-quick-card" aria-label={`${quickAnswerQuestion.number}�?빠른 ?�안`}>
+                        <div className="solve-omr-quick-card" aria-label={`${quickAnswerQuestion.number}번 빠른 답안`}>
                             <button
                                 type="button"
                                 className="solve-omr-quick-question"
                                 onClick={() => handleQuestionClick(quickAnswerQuestion.id)}
-                                title={`${quickAnswerQuestion.number}�?문항?�로 ?�동`}
+                                title={`${quickAnswerQuestion.number}번 문항으로 이동`}
                             >
                                 {quickAnswerQuestion.number}
                             </button>
-                            <div className="solve-omr-quick-bubbles" aria-label={`${quickAnswerQuestion.number}�?보기 ?�택`}>
+                            <div className="solve-omr-quick-bubbles" aria-label={`${quickAnswerQuestion.number}번 보기 선택`}>
                                 {Array.from({ length: quickAnswerChoiceCount }, (_, index) => {
                                     const optionNumber = index + 1;
                                     const isMarked = quickAnswerValue === optionNumber;
@@ -1709,7 +1709,7 @@ export default function SolvePage() {
                                             type="button"
                                             className={`solve-omr-quick-bubble ${isMarked ? 'is-marked' : ''}`}
                                             onClick={() => handleAnswerClick(quickAnswerQuestion.id, optionNumber)}
-                                            aria-label={`${quickAnswerQuestion.number}�?보기 ${optionNumber}`}
+                                            aria-label={`${quickAnswerQuestion.number}번 보기 ${optionNumber}`}
                                             aria-pressed={isMarked}
                                         >
                                             {optionNumber}
@@ -1720,7 +1720,7 @@ export default function SolvePage() {
                             {hasActiveDrawings && (
                                 <span
                                     className={`solve-omr-quick-handwriting ${handwritingArchiveEnabled ? '' : 'is-temporary'}`}
-                                    title={handwritingArchiveEnabled ? "?�기 보�?" : "?�기 ?�시"}
+                                    title={handwritingArchiveEnabled ? "필기 보관" : "필기 임시"}
                                 >
                                     <PenLine size={11} aria-hidden="true" />
                                     {activeDrawingStrokeCount}
@@ -1731,7 +1731,7 @@ export default function SolvePage() {
                                     type="button"
                                     className="solve-omr-quick-next"
                                     onClick={() => handleQuestionClick(nextQuickTarget.id)}
-                                    title={`${nextQuickTarget.number}�?미답 문항?�로 ?�동`}
+                                    title={`${nextQuickTarget.number}번 미답 문항으로 이동`}
                                 >
                                     미답
                                 </button>
@@ -1753,17 +1753,17 @@ export default function SolvePage() {
                 }}>
                     <div className="solve-omr-pane-header">
                         <div className="solve-omr-pane-title">
-                            <span>OMR ?�안</span>
+                            <span>OMR 답안</span>
                             <strong>{answeredCount}/{totalQuestions}</strong>
                             {hasActiveDrawings && (
                                 <div
                                     className={`solve-omr-pane-handwriting ${handwritingArchiveEnabled ? '' : 'is-temporary'}`}
                                     title={handwritingArchiveEnabled
-                                        ? `${getPlanLabel(currentPlan)} ?�랜: ?�출 ???�기 보�? · ${activeDrawingPageCount}p · ${handwritingStatusDetail}`
-                                        : "Free ?�랜: ?�출 ???�기 ?�본 미보관"}
+                                        ? `${getPlanLabel(currentPlan)} 플랜: 제출 후 필기 보관 · ${activeDrawingPageCount}p · ${handwritingStatusDetail}`
+                                        : "Free 플랜: 제출 후 필기 원본 미보관"}
                                 >
                                     <PenLine size={12} aria-hidden="true" />
-                                    <span>{handwritingArchiveEnabled ? '?�기 보�?' : '?�기 ?�시'} {handwritingStatusDetail}</span>
+                                    <span>{handwritingArchiveEnabled ? '필기 보관' : '필기 임시'} {handwritingStatusDetail}</span>
                                 </div>
                             )}
                         </div>
@@ -1773,16 +1773,16 @@ export default function SolvePage() {
                                 className="solve-omr-next-button"
                                 onClick={() => nextUnansweredQuestion && handleQuestionClick(nextUnansweredQuestion.id)}
                                 disabled={!nextUnansweredQuestion}
-                                title={nextUnansweredQuestion ? `${nextUnansweredQuestion.number}�?미답 문항?�로 ?�동` : "모든 문제 ?�기 ?�료"}
+                                title={nextUnansweredQuestion ? `${nextUnansweredQuestion.number}번 미답 문항으로 이동` : "모든 문제 표기 완료"}
                             >
-                                {nextUnansweredQuestion ? `${nextUnansweredQuestion.number}�?미답` : "?�료"}
+                                {nextUnansweredQuestion ? `${nextUnansweredQuestion.number}번 미답` : "완료"}
                             </button>
                             <button
                                 type="button"
                                 className="solve-omr-pane-close"
                                 onClick={toggleOMRPanel}
-                                title="?�안지 ?�기"
-                                aria-label="?�안지 ?�기"
+                                title="답안지 접기"
+                                aria-label="답안지 접기"
                             >
                                 <PanelRightClose size={16} />
                             </button>
@@ -1874,7 +1874,7 @@ export default function SolvePage() {
                             marginBottom: '1rem',
                             animation: 'pulse 2s infinite'
                         }}>
-                            ?�️
+                            ⚠️
                         </div>
                         <h2 id="solve-focus-warning-title" style={{
                             fontSize: '1.4rem',
@@ -1882,7 +1882,7 @@ export default function SolvePage() {
                             color: '#ef4444',
                             marginBottom: '0.75rem'
                         }}>
-                            ?�험 ?�탈 경고!
+                            시험 이탈 경고!
                         </h2>
                         <p style={{
                             fontSize: '0.95rem',
@@ -1890,8 +1890,8 @@ export default function SolvePage() {
                             lineHeight: 1.6,
                             marginBottom: '1.5rem'
                         }}>
-                            ?�험 ?�중 ?�른 ??���??�동?�거??브라?��? ?�면 ?�커?��? ?�탈???�역??감�??�었?�니??<br />
-                            <strong style={{ color: '#ef4444' }}>?�탈 기록?� ?�생?�의 감독 ?�?�보?�에 ?�시간으�?기록?�니??</strong>
+                            시험 도중 다른 탭으로 이동하거나 브라우저 화면 포커스를 이탈한 내역이 감지되었습니다.<br />
+                            <strong style={{ color: '#ef4444' }}>이탈 기록은 선생님의 감독 대시보드에 실시간으로 기록됩니다.</strong>
                         </p>
                         <div style={{
                             background: 'rgba(239, 68, 68, 0.1)',
@@ -1903,7 +1903,7 @@ export default function SolvePage() {
                             fontWeight: 700,
                             color: '#ef4444'
                         }}>
-                            ?�재 ?�탈 ?�수: <span style={{ fontSize: '1.1rem' }}>{tabFociLostCount}</span>??
+                            현재 이탈 횟수: <span style={{ fontSize: '1.1rem' }}>{tabFociLostCount}</span>회
                         </div>
                         <button
                             onClick={() => setShowFocusWarning(false)}
@@ -1923,7 +1923,7 @@ export default function SolvePage() {
                             onMouseOver={(e) => e.currentTarget.style.background = '#dc2626'}
                             onMouseOut={(e) => e.currentTarget.style.background = '#ef4444'}
                         >
-                            ?�험?�로 ?�아가�?
+                            시험으로 돌아가기
                         </button>
                     </div>
                 </div>

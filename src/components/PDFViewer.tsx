@@ -495,7 +495,7 @@ export default function PDFViewer({
         if (!onDrawingsChange) return;
         const currentPaths = drawings[pageNumber] || [];
         if (currentPaths.length === 0) {
-            toast.info("??��???�기 ?�음", "?�재 ?�이지???�?�된 ?�기가 ?�습?�다.");
+            toast.info("삭제할 필기 없음", "현재 페이지에 저장된 필기가 없습니다.");
             return;
         }
         setClearConfirmOpen(true);
@@ -514,7 +514,7 @@ export default function PDFViewer({
         }));
         onDrawingsChange(pageNumber, []);
         setClearConfirmOpen(false);
-        toast.success("?�기 ??��??, "?�재 ?�이지???�기�?지?�습?�다.");
+        toast.success("필기 삭제됨", "현재 페이지의 필기를 지웠습니다.");
     };
 
     // --- End Drawing Logic ---
@@ -542,13 +542,13 @@ export default function PDFViewer({
         if (onFileDrop && e.dataTransfer.files[0] && isPdfUploadFile(e.dataTransfer.files[0])) {
             onFileDrop(e.dataTransfer.files[0]);
         } else {
-            toast.error("PDF ?�일�??�로??가??, "문제지 ?�는 ?�답지??PDF ?�식?�로 ?�려주세??");
+            toast.error("PDF 파일만 업로드 가능", "문제지 또는 정답지는 PDF 형식으로 올려주세요.");
         }
     };
 
     const handleDocumentLoadError = (error: Error) => {
         console.error("PDF load failed", error);
-        toast.error("PDF ?�기 ?�패", "?�일???�상?�었거나 브라?��??�서 ?�을 ???�는 PDF?�니??");
+        toast.error("PDF 열기 실패", "파일이 손상되었거나 브라우저에서 읽을 수 없는 PDF입니다.");
     };
 
     return (
@@ -562,13 +562,13 @@ export default function PDFViewer({
         >
             {/* ... Drag Overlay ... */}
             {isDragging && (
-                <div style={{ position: 'absolute', inset: 0, zIndex: 50, background: 'rgba(99, 102, 241, 0.2)', border: '3px dashed #6366f1', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'white', fontWeight: 'bold', fontSize: '1.5rem', backdropFilter: 'blur(4px)' }}>PDF ?�일???�기???�으?�요</div>
+                <div style={{ position: 'absolute', inset: 0, zIndex: 50, background: 'rgba(99, 102, 241, 0.2)', border: '3px dashed #6366f1', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'white', fontWeight: 'bold', fontSize: '1.5rem', backdropFilter: 'blur(4px)' }}>PDF 파일을 여기에 놓으세요</div>
             )}
 
             {/* PDF Toolbar */}
             <div className="pdf-viewer-toolbar" style={{ padding: '0.5rem 1rem', background: '#323639', color: 'white', display: 'flex', alignItems: 'center', justifyContent: 'space-between', fontSize: '0.9rem', borderBottom: '1px solid #000' }}>
                 <div className="pdf-viewer-file" style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
-                    <span className="pdf-viewer-file-name" style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '200px' }}>{file ? file.name : 'PDF ?�음'}</span>
+                    <span className="pdf-viewer-file-name" style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '200px' }}>{file ? file.name : 'PDF 없음'}</span>
                 </div>
 
                 {file && (
@@ -576,13 +576,13 @@ export default function PDFViewer({
                         {/* Drawing Tools */}
                         {canEditDrawing && (
                             <div className="pdf-viewer-drawing-tools">
-                                <div className="pdf-tool-group" role="toolbar" aria-label="PDF ?�기 ?�구">
+                                <div className="pdf-tool-group" role="toolbar" aria-label="PDF 필기 도구">
                                     <button
                                         type="button"
                                         className={`pdf-tool-button ${drawingMode === 'click' ? 'active' : ''}`}
                                         onClick={() => setDrawingMode('click')}
-                                        title="?�택"
-                                        aria-label="?�택"
+                                        title="선택"
+                                        aria-label="선택"
                                     >
                                         <MousePointer2 size={15} />
                                     </button>
@@ -590,8 +590,8 @@ export default function PDFViewer({
                                         type="button"
                                         className={`pdf-tool-button ${drawingMode === 'pen' ? 'active' : ''}`}
                                         onClick={() => setDrawingMode('pen')}
-                                        title="??
-                                        aria-label="??
+                                        title="펜"
+                                        aria-label="펜"
                                     >
                                         <PenLine size={15} />
                                     </button>
@@ -599,8 +599,8 @@ export default function PDFViewer({
                                         type="button"
                                         className={`pdf-tool-button ${drawingMode === 'highlighter' ? 'active' : ''}`}
                                         onClick={() => setDrawingMode('highlighter')}
-                                        title="?�광??
-                                        aria-label="?�광??
+                                        title="형광펜"
+                                        aria-label="형광펜"
                                     >
                                         <Highlighter size={15} />
                                     </button>
@@ -608,23 +608,23 @@ export default function PDFViewer({
                                         type="button"
                                         className={`pdf-tool-button ${drawingMode === 'eraser' ? 'active' : ''}`}
                                         onClick={() => setDrawingMode('eraser')}
-                                        title="지?�개"
-                                        aria-label="지?�개"
+                                        title="지우개"
+                                        aria-label="지우개"
                                     >
                                         <Eraser size={15} />
                                     </button>
                                 </div>
 
                                 {drawingMode === 'pen' && (
-                                    <div className="pdf-color-swatches" aria-label="???�상">
+                                    <div className="pdf-color-swatches" aria-label="펜 색상">
                                         {PEN_COLORS.map(color => (
                                             <button
                                                 key={color}
                                                 type="button"
                                                 className={`pdf-color-swatch ${penColor === color ? 'active' : ''}`}
                                                 onClick={() => setPenColor(color)}
-                                                title={`???�상 ${color}`}
-                                                aria-label={`???�상 ${color}`}
+                                                title={`펜 색상 ${color}`}
+                                                aria-label={`펜 색상 ${color}`}
                                                 style={{ background: color }}
                                             />
                                         ))}
@@ -633,8 +633,8 @@ export default function PDFViewer({
                                             type="color"
                                             value={penColor}
                                             onChange={(e) => setPenColor(e.target.value)}
-                                            title="???�상 직접 ?�택"
-                                            aria-label="???�상 직접 ?�택"
+                                            title="펜 색상 직접 선택"
+                                            aria-label="펜 색상 직접 선택"
                                         />
                                     </div>
                                 )}
@@ -653,7 +653,7 @@ export default function PDFViewer({
                                                 else if (drawingMode === 'highlighter') setHighlighterWidth(next);
                                                 else setPenWidth(next);
                                             }}
-                                            aria-label="?�기 굵기"
+                                            aria-label="필기 굵기"
                                         />
                                     </label>
                                 )}
@@ -662,8 +662,8 @@ export default function PDFViewer({
                                     type="button"
                                     className={`pdf-tool-button ${fingerDrawingEnabled ? 'active' : ''}`}
                                     onClick={() => setFingerDrawingEnabled(value => !value)}
-                                    title={fingerDrawingEnabled ? "?��????�기 켜짐" : "?��????�기 꺼짐"}
-                                    aria-label={fingerDrawingEnabled ? "?��????�기 ?�기" : "?��????�기 켜기"}
+                                    title={fingerDrawingEnabled ? "손가락 필기 켜짐" : "손가락 필기 꺼짐"}
+                                    aria-label={fingerDrawingEnabled ? "손가락 필기 끄기" : "손가락 필기 켜기"}
                                     aria-pressed={fingerDrawingEnabled}
                                 >
                                     <Hand size={15} />
@@ -676,8 +676,8 @@ export default function PDFViewer({
                                     className="pdf-tool-button"
                                     onClick={handleUndo}
                                     disabled={!(undoStack[pageNumber] && undoStack[pageNumber].length > 0)}
-                                    title="?�행 취소 (Cmd/Ctrl+Z)"
-                                    aria-label="?�행 취소"
+                                    title="실행 취소 (Cmd/Ctrl+Z)"
+                                    aria-label="실행 취소"
                                 >
                                     <Undo2 size={15} />
                                 </button>
@@ -686,8 +686,8 @@ export default function PDFViewer({
                                     className="pdf-tool-button"
                                     onClick={handleRedo}
                                     disabled={!(redoStack[pageNumber] && redoStack[pageNumber].length > 0)}
-                                    title="?�시 ?�행 (Cmd/Ctrl+Y)"
-                                    aria-label="?�시 ?�행"
+                                    title="다시 실행 (Cmd/Ctrl+Y)"
+                                    aria-label="다시 실행"
                                 >
                                     <Redo2 size={15} />
                                 </button>
@@ -695,15 +695,15 @@ export default function PDFViewer({
                                     type="button"
                                     className="pdf-tool-button danger"
                                     onClick={requestClearPage}
-                                    title="???�이지??모든 ?�기 ??��"
-                                    aria-label="???�이지??모든 ?�기 ??��"
+                                    title="이 페이지의 모든 필기 삭제"
+                                    aria-label="이 페이지의 모든 필기 삭제"
                                 >
                                     <Trash2 size={15} />
                                 </button>
                                 {clearConfirmOpen && (
                                     <div
                                         role="alertdialog"
-                                        aria-label="?�기 ??�� ?�인"
+                                        aria-label="필기 삭제 확인"
                                         style={{
                                             display: 'flex',
                                             alignItems: 'center',
@@ -716,7 +716,7 @@ export default function PDFViewer({
                                         }}
                                     >
                                         <span style={{ fontSize: '0.72rem', fontWeight: 700, color: 'white', whiteSpace: 'nowrap', padding: '0 0.3rem' }}>
-                                            ???�이지 ?�기 ??��?
+                                            이 페이지 필기 삭제?
                                         </span>
                                         <button
                                             type="button"
@@ -730,14 +730,14 @@ export default function PDFViewer({
                                             onClick={confirmClearPage}
                                             style={{ color: 'white', background: '#ef4444', borderRadius: 6, fontSize: '0.72rem', fontWeight: 800, padding: '0.25rem 0.5rem' }}
                                         >
-                                            ??��
+                                            삭제
                                         </button>
                                     </div>
                                 )}
                             </div>
                         )}
 
-                        <button onClick={() => setPageNumber(p => Math.max(1, p - 1))} disabled={pageNumber <= 1} style={{ color: 'white', padding: '0.2rem 0.5rem', cursor: 'pointer', background: 'transparent', border: 'none' }}>?�</button>
+                        <button onClick={() => setPageNumber(p => Math.max(1, p - 1))} disabled={pageNumber <= 1} style={{ color: 'white', padding: '0.2rem 0.5rem', cursor: 'pointer', background: 'transparent', border: 'none' }}>◀</button>
                         <span style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
                             <input
                                 type="text"
@@ -749,7 +749,7 @@ export default function PDFViewer({
                             />
                             / {numPages}
                         </span>
-                        <button onClick={() => setPageNumber(p => Math.min(numPages, p + 1))} disabled={pageNumber >= numPages} style={{ color: 'white', padding: '0.2rem 0.5rem', cursor: 'pointer', background: 'transparent', border: 'none' }}>??/button>
+                        <button onClick={() => setPageNumber(p => Math.min(numPages, p + 1))} disabled={pageNumber >= numPages} style={{ color: 'white', padding: '0.2rem 0.5rem', cursor: 'pointer', background: 'transparent', border: 'none' }}>▶</button>
                         <div style={{ width: '1px', height: '15px', background: '#666', margin: '0 0.5rem' }}></div>
                         <button onClick={() => setScale(s => Math.max(0.5, s - 0.1))} style={{ color: 'white', cursor: 'pointer' }}>-</button>
                         <span>{Math.round(scale * 100)}%</span>
@@ -766,8 +766,8 @@ export default function PDFViewer({
                             file={file}
                             onLoadSuccess={onDocumentLoadSuccess}
                             onLoadError={handleDocumentLoadError}
-                            loading={<div style={{ color: 'white' }}>문서 로딩 �?..</div>}
-                            error={<div style={{ color: 'white', fontWeight: 700 }}>PDF�??????�습?�다.</div>}
+                            loading={<div style={{ color: 'white' }}>문서 로딩 중...</div>}
+                            error={<div style={{ color: 'white', fontWeight: 700 }}>PDF를 열 수 없습니다.</div>}
                         >
                             <div
                                 ref={containerRef}
@@ -819,7 +819,7 @@ export default function PDFViewer({
                                             {marker.region && (
                                                 <div
                                                     aria-hidden="true"
-                                                    title={`문항 ?�역 ${marker.label}�?}
+                                                    title={`문항 영역 ${marker.label}번`}
                                                     style={{
                                                         position: 'absolute',
                                                         left: `${marker.region.x * 100}%`,
@@ -870,7 +870,7 @@ export default function PDFViewer({
                                                         transform: isPopupActive ? 'scale(1.15)' : 'scale(1)',
                                                         fontVariantNumeric: 'tabular-nums',
                                                     }}
-                                                    title={`문제 ${marker.label}�?{isMarked ? ` · ?�재: ${marker.currentAnswer}` : ''}`}
+                                                    title={`문제 ${marker.label}번${isMarked ? ` · 현재: ${marker.currentAnswer}` : ''}`}
                                                 >
                                                     {marker.label}
                                                 </button>
@@ -908,7 +908,7 @@ export default function PDFViewer({
                                                                 e.stopPropagation();
                                                                 setActivePopupKey(null);
                                                             }}
-                                                            title="?�기"
+                                                            title="닫기"
                                                         >
                                                             ×
                                                         </button>
@@ -923,8 +923,8 @@ export default function PDFViewer({
                     ) : (
                         <div onClick={() => document.getElementById('pdf-upload-input')?.click()} style={{ color: '#aaa', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '100%', width: '100%', cursor: 'pointer', border: '2px dashed #666', margin: '1rem', borderRadius: '1rem' }}>
                             <FileText size={48} style={{ marginBottom: '1rem' }} />
-                            <p style={{ fontWeight: 600 }}>PDF ?�로??/p>
-                            <p style={{ fontSize: '0.8rem', opacity: 0.7 }}>?�릭?�거???�일???�래그하?�요</p>
+                            <p style={{ fontWeight: 600 }}>PDF 업로드</p>
+                            <p style={{ fontSize: '0.8rem', opacity: 0.7 }}>클릭하거나 파일을 드래그하세요</p>
                         </div>
                     )}
                 </div>
@@ -943,7 +943,7 @@ export default function PDFViewer({
                         borderTop: '1px solid #000',
                         marginTop: 'auto'
                     }}>
-                        <button onClick={() => setPageNumber(p => Math.max(1, p - 1))} disabled={pageNumber <= 1} style={{ color: 'white', padding: '0.2rem 0.5rem', cursor: 'pointer', background: 'rgba(255,255,255,0.1)', borderRadius: '4px', border: 'none' }}>?� ?�전</button>
+                        <button onClick={() => setPageNumber(p => Math.max(1, p - 1))} disabled={pageNumber <= 1} style={{ color: 'white', padding: '0.2rem 0.5rem', cursor: 'pointer', background: 'rgba(255,255,255,0.1)', borderRadius: '4px', border: 'none' }}>◀ 이전</button>
                         <span style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
                             <input
                                 type="text"
@@ -955,7 +955,7 @@ export default function PDFViewer({
                             />
                             / {numPages}
                         </span>
-                        <button onClick={() => setPageNumber(p => Math.min(numPages, p + 1))} disabled={pageNumber >= numPages} style={{ color: 'white', padding: '0.2rem 0.5rem', cursor: 'pointer', background: 'rgba(255,255,255,0.1)', borderRadius: '4px', border: 'none' }}>?�음 ??/button>
+                        <button onClick={() => setPageNumber(p => Math.min(numPages, p + 1))} disabled={pageNumber >= numPages} style={{ color: 'white', padding: '0.2rem 0.5rem', cursor: 'pointer', background: 'rgba(255,255,255,0.1)', borderRadius: '4px', border: 'none' }}>다음 ▶</button>
                     </div>
                 )}
             </div>
