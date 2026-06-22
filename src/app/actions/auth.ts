@@ -12,6 +12,7 @@ import {
 } from "@/lib/teacherLoginRateLimit";
 import {
     createSignedTeacherSessionCookie,
+    shouldUseSecureTeacherSessionCookie,
     TEACHER_SERVER_SESSION_COOKIE,
     TEACHER_SERVER_SESSION_MAX_AGE_SECONDS,
 } from "@/lib/teacherServerSession";
@@ -52,7 +53,7 @@ export async function verifyTeacherPassword(
             cookieStore.set(TEACHER_SERVER_SESSION_COOKIE, serverSession, {
                 httpOnly: true,
                 sameSite: "lax",
-                secure: process.env.NODE_ENV === "production",
+                secure: shouldUseSecureTeacherSessionCookie(headerStore.get("host")),
                 path: "/",
                 maxAge: TEACHER_SERVER_SESSION_MAX_AGE_SECONDS,
             });

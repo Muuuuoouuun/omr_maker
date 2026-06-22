@@ -130,6 +130,305 @@ describe("service UI surface", () => {
         expect(css).toContain(".solve-omr-pane-handwriting");
     });
 
+    it("keeps toast notifications inside mobile safe areas", () => {
+        const toastHost = readProjectFile("src/components/Toast.tsx");
+
+        expect(toastHost).toContain("env(safe-area-inset-left)");
+        expect(toastHost).toContain("env(safe-area-inset-right)");
+        expect(toastHost).toContain("env(safe-area-inset-bottom)");
+        expect(toastHost).toContain("alignItems: 'flex-end'");
+        expect(toastHost).toContain("width: 'min(400px, 100%)'");
+        expect(toastHost).toContain("minWidth: 'min(280px, 100%)'");
+        expect(toastHost).toContain("overflowWrap: 'anywhere'");
+        expect(toastHost).toContain("pendingMessages");
+        expect(toastHost).toContain("listeners.size === 0");
+        expect(toastHost).toContain("pendingMessages.splice(0).forEach(listener)");
+    });
+
+    it("keeps decorative motion off on mobile, installed app, and reduced-motion surfaces", () => {
+        const css = readProjectFile("src/app/globals.css");
+
+        expect(css).toContain("@media (max-width: 920px)");
+        expect(css).toContain("(hover: none) and (pointer: coarse)");
+        expect(css).toContain("(display-mode: standalone)");
+        expect(css).toContain("(prefers-reduced-motion: reduce)");
+        expect(css).toContain('html[data-motion="off"] .orb');
+        expect(css).toContain("will-change: auto");
+        expect(css).toContain("scroll-behavior: auto !important");
+    });
+
+    it("keeps the app install prompt reachable on touch tablets", () => {
+        const css = readProjectFile("src/app/globals.css");
+        const installPrompt = readProjectFile("src/components/MobileInstallPrompt.tsx");
+
+        expect(installPrompt).toContain('(max-width: 820px), (pointer: coarse)');
+        expect(css).not.toContain("@media (min-width: 821px)");
+        expect(css).toContain("@media (min-width: 1181px) and (hover: hover) and (pointer: fine)");
+        expect(css).toContain("left: max(1rem, env(safe-area-inset-left))");
+        expect(css).toContain("right: max(1rem, env(safe-area-inset-right))");
+        expect(css).toContain("bottom: max(1rem, env(safe-area-inset-bottom), var(--app-keyboard-inset-bottom))");
+        expect(css).toContain('body:has(.home-page[data-home-role="student"]) .mobile-install-prompt');
+        expect(css).toContain('body:has(.home-page[data-home-role="teacher"]) .mobile-install-prompt');
+        expect(css).toContain(".nav-link");
+        expect(css).toContain("min-height: 2.75rem");
+        expect(css).toContain("min-height: 2.75rem");
+        expect(css).toContain("min-width: 2.75rem");
+        expect(css).toContain("width: 2.75rem");
+        expect(css).toContain("height: 2.75rem");
+        expect(installPrompt).toContain("useId");
+        expect(installPrompt).toContain("aria-describedby={descriptionId}");
+        expect(installPrompt).toContain('aria-live="polite"');
+        expect(installPrompt).toContain("id={descriptionId}");
+        expect(installPrompt).toContain('pathname === "/pwa-check"');
+    });
+
+    it("keeps device QA evidence copyable from the PWA check page", () => {
+        const pwaCheck = readProjectFile("src/app/pwa-check/page.tsx");
+        const themeToggle = readProjectFile("src/components/ThemeToggle.tsx");
+
+        expect(pwaCheck).toContain("pwa-device-verdict");
+        expect(pwaCheck).toContain("pwa-device-report-copy");
+        expect(pwaCheck).toContain("pwa-device-report-share");
+        expect(pwaCheck).toContain("pwa-device-copy-status");
+        expect(pwaCheck).toContain("pwa-device-report");
+        expect(pwaCheck).toContain("pwa-device-handoff");
+        expect(pwaCheck).toContain("pwa-device-handoff-qr");
+        expect(pwaCheck).toContain("pwa-proof-verifier");
+        expect(pwaCheck).toContain("pwa-proof-input");
+        expect(pwaCheck).toContain("pwa-proof-input-ios");
+        expect(pwaCheck).toContain("pwa-proof-slot-${target.platform}");
+        expect(pwaCheck).toContain("pwa-proof-result");
+        expect(pwaCheck).toContain("pwa-proof-result-android");
+        expect(pwaCheck).toContain("pwa-proof-result-ios");
+        expect(pwaCheck).toContain("pwa-proof-bundle");
+        expect(pwaCheck).toContain("pwa-proof-bundle-copy");
+        expect(pwaCheck).toContain("pwa-proof-bundle-share");
+        expect(pwaCheck).toContain("pwa-proof-bundle-report");
+        expect(pwaCheck).toContain("validateProofReport");
+        expect(pwaCheck).toContain("buildDualProofBundle");
+        expect(pwaCheck).toContain("OMR Maker PWA dual device proof");
+        expect(pwaCheck).toContain("readProofPlatform");
+        expect(pwaCheck).toContain("Android/iOS 리포트 통과");
+        expect(pwaCheck).toContain("Android/iOS 리포트 미통과");
+        expect(pwaCheck).toContain("리포트 통과");
+        expect(pwaCheck).toContain("리포트 미통과");
+        expect(pwaCheck).toContain("INSTALL_PROOF_STEPS");
+        expect(pwaCheck).toContain("pwa-install-proof-guide");
+        expect(pwaCheck).toContain("pwa-install-proof-step-${index + 1}");
+        expect(pwaCheck).toContain("pwa-install-proof-android");
+        expect(pwaCheck).toContain("pwa-install-proof-ios");
+        expect(pwaCheck).toContain("실기기 설치 확인");
+        expect(pwaCheck).toContain("Android와 iOS 모두 마지막 단계");
+        expect(pwaCheck).toContain("홈 화면 아이콘으로 다시 열고 앱 실행 통과 리포트를 복사합니다.");
+        expect(pwaCheck).toContain("QRCodeCanvas");
+        expect(pwaCheck).toContain("navigator.share");
+        expect(pwaCheck).toContain("buildDeviceReport");
+        expect(pwaCheck).toContain("OMR Maker PWA device check");
+        expect(pwaCheck).toContain("displayMode=");
+        expect(pwaCheck).toContain("installedDisplay=");
+        expect(pwaCheck).toContain("proofStatus=");
+        expect(pwaCheck).toContain("isLocalHandoffHost");
+        expect(pwaCheck).toContain('id: "handoff-origin"');
+        expect(pwaCheck).toContain("실제 Android/iPhone에서는 배포 HTTPS 링크로 열어야 함");
+        expect(pwaCheck).toContain("공유 가능");
+        expect(pwaCheck).toContain("로컬 전용");
+        expect(pwaCheck).toContain('"--app-viewport-height"');
+        expect(pwaCheck).toContain('"--app-keyboard-inset-bottom"');
+        expect(pwaCheck).toContain('const OFFLINE_CACHE_REQUIRED_PATHS = ["/", "/pwa-check", "/offline.html", "/logo.png"]');
+        expect(pwaCheck).toContain("readViewportHeightSummary");
+        expect(pwaCheck).toContain("readKeyboardSafeAreaSummary");
+        expect(pwaCheck).toContain("readOfflineCacheSummary");
+        expect(pwaCheck).toContain("readRuntimePerformanceSummary");
+        expect(pwaCheck).toContain('id: "runtime-performance"');
+        expect(pwaCheck).toContain("waitForPwaRuntimeReadiness");
+        expect(pwaCheck).toContain('navigator.serviceWorker.addEventListener("controllerchange"');
+        expect(pwaCheck).toContain("readStorageSummary");
+        expect(pwaCheck).toContain("canUseIndexedDb");
+        expect(pwaCheck).toContain("navigator.storage?.estimate");
+        expect(pwaCheck).toContain("indexedDB ok");
+        expect(pwaCheck).toContain("storage must include IndexedDB availability.");
+        expect(pwaCheck).toContain("controller=yes");
+        expect(pwaCheck).toContain("service-worker must be controlled by the active PWA worker.");
+        expect(pwaCheck).toContain("waitForViewportHeightSync");
+        expect(pwaCheck).toContain('id: "viewport-height"');
+        expect(pwaCheck).toContain('id: "keyboard-safe-area"');
+        expect(pwaCheck).toContain('id: "offline-cache"');
+        expect(pwaCheck).toContain("caches.match(path)");
+        expect(pwaCheck).toContain("visualViewport?.height");
+        expect(pwaCheck).toContain("앱 실행 통과");
+        expect(pwaCheck).toContain("설치 실행 전");
+        expect(pwaCheck).toContain('minHeight: "2.75rem"');
+        expect(pwaCheck).toContain('minWidth: "2.75rem"');
+        expect(themeToggle).toContain('size === "small" ? "40px" : "44px"');
+        expect(themeToggle).toContain("const btnSize = size === \"small\" ? 40 : 44");
+    });
+
+    it("keeps student app chrome controls comfortable on touch devices", () => {
+        const homePage = readProjectFile("src/app/page.tsx");
+        const studentDashboard = readProjectFile("src/app/student/dashboard/page.tsx");
+        const css = readProjectFile("src/app/globals.css");
+
+        expect(homePage).toContain("역할 선택으로");
+        expect(homePage).toContain('minHeight: "2.75rem"');
+        expect(homePage).toContain('borderRadius: "var(--radius-md)"');
+        expect(studentDashboard).toContain("로그아웃");
+        expect(studentDashboard).toContain("minHeight: '2.75rem'");
+        expect(studentDashboard).toContain("borderRadius: 'var(--radius-md)'");
+        expect(css).toContain("display: inline-flex");
+        expect(css).toContain("align-items: center");
+        expect(css).toContain("min-height: 2.75rem");
+    });
+
+    it("keeps teacher app chrome controls comfortable on touch devices", () => {
+        const css = readProjectFile("src/app/globals.css");
+        const notificationBell = readProjectFile("src/components/NotificationBell.tsx");
+        const teacherHeader = readProjectFile("src/components/TeacherHeader.tsx");
+        const teacherDashboard = readProjectFile("src/app/teacher/dashboard/page.tsx");
+        const teacherLogout = readProjectFile("src/components/TeacherLogoutButton.tsx");
+        const playwrightConfig = readProjectFile("playwright.config.ts");
+        const teacherMobileE2e = readProjectFile("e2e/teacher-mobile.spec.ts");
+
+        expect(teacherLogout).toContain("const dimension = 44");
+        expect(notificationBell).toContain("width: 44, height: 44");
+        expect(notificationBell).toContain("minHeight: 44");
+        expect(teacherHeader).toContain('className="header teacher-header"');
+        expect(teacherHeader).toContain("minHeight: '2.75rem'");
+        expect(teacherDashboard).toContain('className="header teacher-header"');
+        expect(teacherDashboard).toContain('className="nav-link-live"');
+        expect(css).toContain(".teacher-header-actions");
+        expect(css).toContain(".teacher-header .nav-link");
+        expect(css).toContain(".nav-link-live");
+        expect(css).toContain(".create-editor-actions .btn");
+        expect(css).toContain("min-height: 2.75rem");
+        expect(css).toContain("min-width: 2.75rem");
+        expect(playwrightConfig).toContain("teacher-mobile-chrome");
+        expect(playwrightConfig).toContain("teacher-tablet-ios-like");
+        expect(playwrightConfig).toContain("PLAYWRIGHT_ENABLE_WEBKIT");
+        expect(playwrightConfig).toContain("mobile-ios-webkit-pwa");
+        expect(playwrightConfig).toContain("tablet-ios-webkit-pwa");
+        expect(playwrightConfig).toContain("tablet-ios-webkit-landscape-pwa");
+        expect(teacherMobileE2e).toContain("expectTeacherHeaderTouchFriendly");
+        expect(teacherMobileE2e).toContain(".create-editor-actions button, .create-editor-actions label");
+    });
+
+    it("keeps installed phone and tablet app shells inside safe areas", () => {
+        const css = readProjectFile("src/app/globals.css");
+        const layout = readProjectFile("src/app/layout.tsx");
+        const installPrompt = readProjectFile("src/components/MobileInstallPrompt.tsx");
+        const viewportHeightSync = readProjectFile("src/components/ViewportHeightSync.tsx");
+        const createPage = readProjectFile("src/app/create/page.tsx");
+        const solvePage = readProjectFile("src/app/solve/[id]/page.tsx");
+        const pwaCheckPage = readProjectFile("src/app/pwa-check/page.tsx");
+
+        expect(layout).toContain('viewportFit: "cover"');
+        expect(layout).not.toContain('interactiveWidget: "resizes-content"');
+        expect(layout).toContain("ViewportHeightSync");
+        expect(layout).toContain("<ViewportHeightSync />");
+        expect(viewportHeightSync).toContain('"interactive-widget=resizes-content"');
+        expect(viewportHeightSync).toContain("isIOSLikeDevice");
+        expect(viewportHeightSync).toContain('"--app-viewport-height"');
+        expect(viewportHeightSync).toContain('"--app-viewport-width"');
+        expect(viewportHeightSync).toContain('"--app-visual-viewport-offset-top"');
+        expect(viewportHeightSync).toContain('"--app-visual-viewport-offset-left"');
+        expect(viewportHeightSync).toContain('"--app-visual-viewport-scale"');
+        expect(viewportHeightSync).toContain('"--app-keyboard-inset-bottom"');
+        expect(viewportHeightSync).toContain('"data-app-keyboard"');
+        expect(viewportHeightSync).toContain("KEYBOARD_OPEN_THRESHOLD");
+        expect(viewportHeightSync).toContain("window.visualViewport");
+        expect(viewportHeightSync).toContain("window.requestAnimationFrame");
+        expect(viewportHeightSync).toContain("scheduleSettledApplyMetrics");
+        expect(viewportHeightSync).toContain('window.addEventListener("resize", scheduleApplyMetrics, { passive: true })');
+        expect(viewportHeightSync).toContain('visualViewport?.addEventListener("resize", scheduleApplyMetrics, { passive: true })');
+        expect(viewportHeightSync).toContain('visualViewport?.addEventListener("scroll", scheduleApplyMetrics, { passive: true })');
+        expect(viewportHeightSync).toContain('window.addEventListener("orientationchange", scheduleSettledApplyMetrics)');
+        expect(viewportHeightSync).toContain('window.addEventListener("pageshow", scheduleSettledApplyMetrics, { passive: true })');
+        expect(viewportHeightSync).toContain('window.removeEventListener("pageshow", scheduleSettledApplyMetrics)');
+        expect(viewportHeightSync).toContain('document.addEventListener("visibilitychange", scheduleApplyMetrics)');
+        expect(css).toContain("--app-safe-area-top: env(safe-area-inset-top, 0px)");
+        expect(css).toContain("--app-safe-area-right: env(safe-area-inset-right, 0px)");
+        expect(css).toContain("--app-safe-area-bottom: env(safe-area-inset-bottom, 0px)");
+        expect(css).toContain("--app-safe-area-left: env(safe-area-inset-left, 0px)");
+        expect(css).toContain("--app-viewport-height: 100dvh");
+        expect(css).toContain("--app-viewport-width: 100vw");
+        expect(css).toContain("--app-visual-viewport-offset-top: 0px");
+        expect(css).toContain("--app-visual-viewport-offset-left: 0px");
+        expect(css).toContain("--app-visual-viewport-scale: 1");
+        expect(css).toContain("--app-keyboard-inset-bottom: 0px");
+        expect(css).toContain("scroll-padding-bottom: max(1rem, var(--app-safe-area-bottom), var(--app-keyboard-inset-bottom))");
+        expect(css).toContain("html[data-app-keyboard=\"open\"] .mobile-install-prompt");
+        expect(css).toContain("bottom: max(1rem, env(safe-area-inset-bottom), var(--app-keyboard-inset-bottom))");
+        expect(css).toContain("min-height: var(--app-viewport-height, 100dvh)");
+        expect(css).toContain("@media (display-mode: standalone), (display-mode: fullscreen)");
+        expect(css).toContain("min-height: calc(var(--app-viewport-height, 100dvh) - var(--app-safe-area-bottom))");
+        expect(css).toContain("padding-right: var(--app-safe-area-right)");
+        expect(css).toContain("padding-bottom: var(--app-safe-area-bottom)");
+        expect(css).toContain("padding-left: var(--app-safe-area-left)");
+        expect(css).toContain("min-height: calc(4.5rem + var(--app-safe-area-top))");
+        expect(css).toContain("padding-top: var(--app-safe-area-top)");
+        expect(css).toContain("height: var(--app-viewport-height, 100dvh) !important");
+        expect(createPage).toContain("height: 'var(--app-viewport-height, 100dvh)'");
+        expect(createPage).toContain("calc(var(--app-viewport-height, 100dvh) - 4rem)");
+        expect(solvePage).toContain("height: 'var(--app-viewport-height, 100dvh)'");
+        expect(solvePage).toContain("minHeight: 'var(--app-viewport-height, 100dvh)'");
+        expect(pwaCheckPage).toContain("calc(var(--app-viewport-height, 100dvh) - 3.5rem)");
+        expect(css).toContain("display: none !important");
+        expect(installPrompt).toContain("(display-mode: fullscreen)");
+        expect(installPrompt).toContain("appinstalled");
+        expect(installPrompt).toContain('href="/pwa-check"');
+        expect(installPrompt).toContain('aria-label="앱 상태 체크"');
+        expect(installPrompt).toContain("mobile-install-prompt__actions");
+        expect(css).toContain(".mobile-install-prompt__check");
+        expect(css).toContain(".mobile-install-prompt__actions");
+        expect(css).toContain("grid-template-areas");
+        expect(css).toContain("white-space: nowrap");
+        expect(css).toContain("min-height: 2.75rem");
+        expect(css).toContain("min-width: 2.75rem");
+    });
+
+    it("keeps mobile login and PIN inputs keyboard-friendly", () => {
+        const homePage = readProjectFile("src/app/page.tsx");
+        const solvePage = readProjectFile("src/app/solve/[id]/page.tsx");
+
+        expect(homePage).toContain('autoComplete="username"');
+        expect(homePage).toContain('autoComplete="current-password"');
+        expect(homePage).toContain('autoComplete="name"');
+        expect(homePage).toContain('autoComplete="email"');
+        expect(homePage).toContain('inputMode="email"');
+        expect(homePage).toContain('autoComplete="one-time-code"');
+        expect(homePage).toContain('autoCapitalize="characters"');
+        expect(homePage).toContain("spellCheck={false}");
+        expect(solvePage).toContain('inputMode="numeric"');
+        expect(solvePage).toContain('pattern="[0-9]*"');
+        expect(solvePage).toContain('autoComplete="one-time-code"');
+        expect(solvePage).toContain('autoComplete="name"');
+        expect(solvePage).toContain('autoComplete="username"');
+        expect(solvePage).toContain('inputMode="email"');
+    });
+
+    it("keeps the student solve flow touch friendly on phone and tablet shells", () => {
+        const css = readProjectFile("src/app/globals.css");
+        const solvePage = readProjectFile("src/app/solve/[id]/page.tsx");
+        const pwaMobileE2e = readProjectFile("e2e/pwa-mobile.spec.ts");
+
+        expect(solvePage).toContain("<ThemeToggle />");
+        expect(css).toContain(".solve-brand");
+        expect(css).toContain("width: 2.75rem !important");
+        expect(css).toContain(".solve-teacher-toggle");
+        expect(css).toContain("min-height: 44px");
+        expect(css).toContain(".solve-tab-button");
+        expect(css).toContain(".solve-pdf-button");
+        expect(css).toContain(".solve-submit-button");
+        expect(css).toContain(".solve-omr-rail-button");
+        expect(css).toContain("width: 44px");
+        expect(css).toContain(".solve-omr-scroll .q-bubble");
+        expect(css).toContain("height: 44px");
+        expect(pwaMobileE2e).toContain("lets students answer and submit an exam in the phone and tablet app shell");
+        expect(pwaMobileE2e).toContain("omr_exam_mobile-qa-exam");
+        expect(pwaMobileE2e).toContain("omr_solve_panel_mobile-qa-exam_mobile-qa-student");
+        expect(pwaMobileE2e).toContain("문제 4번 보기 3");
+        expect(pwaMobileE2e).toContain("score: 100");
+    });
+
     it("shows a recoverable student-facing error when a solve link cannot load an exam", () => {
         const solvePage = readProjectFile("src/app/solve/[id]/page.tsx");
 

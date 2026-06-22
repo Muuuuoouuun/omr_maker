@@ -1,0 +1,18 @@
+[
+  { "device": "iphone-se", "cssWidth": 375, "cssHeight": 667, "pixelRatio": 2, "orientation": "portrait" },
+  { "device": "iphone-x", "cssWidth": 375, "cssHeight": 812, "pixelRatio": 3, "orientation": "portrait" },
+  { "device": "iphone-12", "cssWidth": 390, "cssHeight": 844, "pixelRatio": 3, "orientation": "portrait" },
+  { "device": "iphone-14-pro", "cssWidth": 393, "cssHeight": 852, "pixelRatio": 3, "orientation": "portrait" },
+  { "device": "iphone-11", "cssWidth": 414, "cssHeight": 896, "pixelRatio": 2, "orientation": "portrait" },
+  { "device": "iphone-xs-max", "cssWidth": 414, "cssHeight": 896, "pixelRatio": 3, "orientation": "portrait" },
+  { "device": "iphone-13-pro-max", "cssWidth": 428, "cssHeight": 926, "pixelRatio": 3, "orientation": "portrait" },
+  { "device": "iphone-15-plus", "cssWidth": 430, "cssHeight": 932, "pixelRatio": 3, "orientation": "portrait" },
+  { "device": "ipad-classic", "cssWidth": 768, "cssHeight": 1024, "pixelRatio": 2, "orientation": "portrait" },
+  { "device": "ipad-classic", "cssWidth": 768, "cssHeight": 1024, "pixelRatio": 2, "orientation": "landscape" },
+  { "device": "ipad-10", "cssWidth": 810, "cssHeight": 1080, "pixelRatio": 2, "orientation": "portrait" },
+  { "device": "ipad-10", "cssWidth": 810, "cssHeight": 1080, "pixelRatio": 2, "orientation": "landscape" },
+  { "device": "ipad-pro-11", "cssWidth": 834, "cssHeight": 1194, "pixelRatio": 2, "orientation": "portrait" },
+  { "device": "ipad-pro-11", "cssWidth": 834, "cssHeight": 1194, "pixelRatio": 2, "orientation": "landscape" },
+  { "device": "ipad-pro-13", "cssWidth": 1024, "cssHeight": 1366, "pixelRatio": 2, "orientation": "portrait" },
+  { "device": "ipad-pro-13", "cssWidth": 1024, "cssHeight": 1366, "pixelRatio": 2, "orientation": "landscape" }
+]

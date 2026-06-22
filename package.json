@@ -10,7 +10,13 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:ui": "vitest --ui",
-    "test:e2e": "playwright test"
+    "test:e2e": "playwright test",
+    "test:e2e:ios-webkit": "PLAYWRIGHT_ENABLE_WEBKIT=1 playwright test --project=mobile-ios-webkit-pwa --project=tablet-ios-webkit-pwa --project=tablet-ios-webkit-landscape-pwa",
+    "pwa:proof": "node scripts/pwa-proof-verify.mjs",
+    "pwa:icons": "node scripts/generate-pwa-icons.mjs",
+    "pwa:startup": "node scripts/generate-pwa-startup-images.mjs",
+    "pwa:smoke": "node scripts/pwa-prod-smoke.mjs",
+    "test:pwa:prod": "npm run build && npm run pwa:smoke"
   },
   "dependencies": {
     "@google/generative-ai": "^0.24.1",

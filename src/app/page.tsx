@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect } from "react";
+import Image from "next/image";
 import { useRouter } from "next/navigation";
 import ThemeToggle from "@/components/ThemeToggle";
 import { toast } from "@/components/Toast";
@@ -372,7 +373,7 @@ export default function Home() {
   };
 
   return (
-    <div className="layout-main center-content" style={{ position: "relative" }}>
+    <div className="layout-main center-content home-page" data-home-role={role} style={{ position: "relative" }}>
       {/* Animated background orbs */}
       <div className="orb orb-primary" />
       <div className="orb orb-secondary" />
@@ -384,13 +385,29 @@ export default function Home() {
       </div>
 
       <div
-        className="container animate-fade-in"
+        className="container animate-fade-in home-container"
         style={{ maxWidth: "960px", position: "relative", zIndex: 1, padding: "3rem 1.5rem" }}
       >
         {/* ── Hero ───────────────────────────── */}
-        <div style={{ textAlign: "center", marginBottom: "4rem" }}>
+        <div className="home-hero" style={{ textAlign: "center", marginBottom: "4rem" }}>
+          <Image
+            src="/logo.png"
+            alt=""
+            width={112}
+            height={112}
+            priority
+            className="stagger-1 animate-fade-in home-logo"
+            style={{
+              width: 112,
+              height: 112,
+              objectFit: "contain",
+              margin: "0 auto 1.25rem",
+              opacity: 0,
+              filter: "drop-shadow(0 18px 35px rgba(15, 23, 42, 0.14))",
+            }}
+          />
           <div
-            className="badge badge-primary stagger-1 animate-fade-in"
+            className="badge badge-primary stagger-2 animate-fade-in home-eyebrow"
             style={{ marginBottom: "1.75rem", opacity: 0 }}
           >
             <svg width="8" height="8" viewBox="0 0 8 8" fill="currentColor">
@@ -400,11 +417,11 @@ export default function Home() {
           </div>
 
           <h1
-            className="title-gradient stagger-2 animate-fade-in"
+            className="title-gradient stagger-3 animate-fade-in home-title"
             style={{
               fontSize: "clamp(3.2rem, 8vw, 5.5rem)",
               lineHeight: 1.04,
-              letterSpacing: "-0.045em",
+              letterSpacing: 0,
               fontWeight: 900,
               marginBottom: "1.25rem",
               opacity: 0,
@@ -414,7 +431,7 @@ export default function Home() {
           </h1>
 
           <p
-            className="stagger-3 animate-fade-in"
+            className="stagger-4 animate-fade-in home-subtitle"
             style={{
               fontSize: "1.15rem",
               color: "var(--muted)",
@@ -434,7 +451,7 @@ export default function Home() {
         {/* ── Role Selection ─────────────────── */}
         {role === "none" && (
           <div
-            className="stagger-4 animate-fade-in"
+            className="stagger-4 animate-fade-in home-role-grid"
             style={{
               display: "grid",
               gridTemplateColumns: "repeat(auto-fit, minmax(300px, 1fr))",
@@ -446,7 +463,7 @@ export default function Home() {
             <button
               type="button"
               onClick={() => setRole("student")}
-              className="glass-panel card-hover"
+              className="glass-panel card-hover home-role-card"
               style={{
                 padding: "2.75rem 2.25rem",
                 textAlign: "left",
@@ -472,7 +489,7 @@ export default function Home() {
                 }}
               />
 
-              <div className="icon-wrap icon-wrap-secondary" style={{ marginBottom: "1.5rem" }}>
+              <div className="icon-wrap icon-wrap-secondary home-role-icon" style={{ marginBottom: "1.5rem" }}>
                 <StudentIcon size={38} />
               </div>
 
@@ -482,12 +499,13 @@ export default function Home() {
                   fontWeight: 800,
                   marginBottom: "0.5rem",
                   color: "var(--foreground)",
-                  letterSpacing: "-0.02em",
+                  letterSpacing: 0,
                 }}
               >
                 학생
               </h2>
               <p
+                className="home-role-description"
                 style={{
                   color: "var(--muted)",
                   fontSize: "0.95rem",
@@ -499,6 +517,7 @@ export default function Home() {
               </p>
 
               <div
+                className="home-role-action"
                 style={{
                   display: "flex",
                   alignItems: "center",
@@ -518,7 +537,7 @@ export default function Home() {
             <button
               type="button"
               onClick={() => setRole("teacher")}
-              className="glass-panel card-hover"
+              className="glass-panel card-hover home-role-card"
               style={{
                 padding: "2.75rem 2.25rem",
                 textAlign: "left",
@@ -544,7 +563,7 @@ export default function Home() {
                 }}
               />
 
-              <div className="icon-wrap icon-wrap-primary" style={{ marginBottom: "1.5rem" }}>
+              <div className="icon-wrap icon-wrap-primary home-role-icon" style={{ marginBottom: "1.5rem" }}>
                 <TeacherIcon size={38} />
               </div>
 
@@ -554,12 +573,13 @@ export default function Home() {
                   fontWeight: 800,
                   marginBottom: "0.5rem",
                   color: "var(--foreground)",
-                  letterSpacing: "-0.02em",
+                  letterSpacing: 0,
                 }}
               >
                 교사
               </h2>
               <p
+                className="home-role-description"
                 style={{
                   color: "var(--muted)",
                   fontSize: "0.95rem",
@@ -571,6 +591,7 @@ export default function Home() {
               </p>
 
               <div
+                className="home-role-action"
                 style={{
                   display: "flex",
                   alignItems: "center",
@@ -635,7 +656,7 @@ export default function Home() {
         {/* ── Login Forms ────────────────────── */}
         {role !== "none" && (
           <div
-            className="glass-panel animate-slide-up"
+            className="glass-panel animate-slide-up home-login-card"
             style={{ maxWidth: "440px", margin: "0 auto", padding: "2.75rem 2.5rem" }}
           >
             <button
@@ -647,6 +668,9 @@ export default function Home() {
                 display: "flex",
                 alignItems: "center",
                 gap: "0.35rem",
+                minHeight: "2.75rem",
+                padding: "0.45rem 0.2rem",
+                borderRadius: "var(--radius-md)",
                 fontWeight: 600,
                 transition: "color 0.2s",
               }}
@@ -671,7 +695,7 @@ export default function Home() {
                       fontWeight: 800,
                       color: "var(--foreground)",
                       lineHeight: 1.2,
-                      letterSpacing: "-0.03em",
+                      letterSpacing: 0,
                     }}
                   >
                     환영합니다
@@ -701,6 +725,8 @@ export default function Home() {
                     placeholder="admin 또는 teacher@example.com"
                     autoFocus
                     autoComplete="username"
+                    autoCapitalize="none"
+                    spellCheck={false}
                   />
                 </div>
 
@@ -763,7 +789,7 @@ export default function Home() {
                       fontWeight: 800,
                       color: "var(--foreground)",
                       lineHeight: 1.2,
-                      letterSpacing: "-0.03em",
+                      letterSpacing: 0,
                     }}
                   >
                     학습 시작
@@ -791,6 +817,7 @@ export default function Home() {
                     onChange={(e) => setStudentName(e.target.value)}
                     placeholder="이름을 입력하세요"
                     autoFocus
+                    autoComplete="name"
                   />
                 </div>
 
@@ -816,6 +843,9 @@ export default function Home() {
                     onKeyDown={(e) => e.key === "Enter" && handleStudentLogin()}
                     placeholder="동명이인일 때 입력"
                     autoComplete="email"
+                    autoCapitalize="none"
+                    inputMode="email"
+                    spellCheck={false}
                     style={{
                       borderColor: needsStudentLookup ? "rgba(245,158,11,0.45)" : undefined,
                     }}
@@ -926,6 +956,9 @@ export default function Home() {
                       onChange={(e) => setStartCode(normalizeStartCodeInput(e.target.value))}
                       onKeyDown={(e) => e.key === "Enter" && handleStudentLogin()}
                       placeholder="6자리 코드 입력"
+                      autoComplete="one-time-code"
+                      autoCapitalize="characters"
+                      spellCheck={false}
                       maxLength={6}
                       style={{ letterSpacing: "0.25em", fontFamily: "monospace", textTransform: "uppercase" }}
                     />

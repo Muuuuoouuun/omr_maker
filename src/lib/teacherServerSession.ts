@@ -22,6 +22,25 @@ export function resolveTeacherSessionSecret(env: Env = process.env): string | nu
     return env.NODE_ENV === "production" ? null : "dev-teacher-session-secret";
 }
 
+export function shouldUseSecureTeacherSessionCookie(
+    hostHeader: string | null | undefined,
+    env: Env = process.env,
+): boolean {
+    if (env.NODE_ENV !== "production") return false;
+
+    const host = clean(hostHeader).toLowerCase().split(",")[0]?.trim() || "";
+    if (!host) return true;
+
+    const hostname = host.startsWith("[")
+        ? host.slice(1, host.indexOf("]"))
+        : host.split(":")[0];
+
+    return hostname !== "localhost"
+        && hostname !== "127.0.0.1"
+        && hostname !== "::1"
+        && !hostname.endsWith(".localhost");
+}
+
 function base64UrlEncode(value: string): string {
     return Buffer.from(value, "utf8").toString("base64url");
 }

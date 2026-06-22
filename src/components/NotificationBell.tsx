@@ -248,7 +248,7 @@ export default function NotificationBell() {
                 onClick={() => setOpen(prev => !prev)}
                 aria-label={unreadCount > 0 ? `알림 (읽지 않음 ${unreadCount}개)` : '알림 받기'}
                 style={{
-                    width: 36, height: 36, display: 'flex', alignItems: 'center', justifyContent: 'center',
+                    width: 44, height: 44, display: 'flex', alignItems: 'center', justifyContent: 'center',
                     borderRadius: 'var(--radius-full)', background: 'var(--background)',
                     border: '1px solid var(--border)', color: 'var(--foreground)',
                     position: 'relative', transition: 'var(--transition-base)', flexShrink: 0
@@ -312,14 +312,14 @@ export default function NotificationBell() {
                                 {unreadCount > 0 && (
                                     <button
                                         onClick={markAllRead}
-                                        style={{ fontSize: '0.75rem', color: 'var(--primary)', fontWeight: 600 }}
+                                        style={{ minHeight: 44, padding: '0 0.6rem', fontSize: '0.75rem', color: 'var(--primary)', fontWeight: 600 }}
                                     >
                                         모두 읽음
                                     </button>
                                 )}
                                 <button
                                     onClick={() => setClearConfirmOpen(true)}
-                                    style={{ fontSize: '0.75rem', color: 'var(--muted)', fontWeight: 500 }}
+                                    style={{ minHeight: 44, padding: '0 0.6rem', fontSize: '0.75rem', color: 'var(--muted)', fontWeight: 500 }}
                                 >
                                     모두 삭제
                                 </button>
@@ -347,14 +347,15 @@ export default function NotificationBell() {
                             <div style={{ display: 'flex', gap: '0.45rem', flexShrink: 0 }}>
                                 <button
                                     onClick={() => setClearConfirmOpen(false)}
-                                    style={{ fontSize: '0.75rem', color: 'var(--muted)', fontWeight: 700 }}
+                                    style={{ minHeight: 44, padding: '0 0.6rem', fontSize: '0.75rem', color: 'var(--muted)', fontWeight: 700 }}
                                 >
                                     취소
                                 </button>
                                 <button
                                     onClick={clearAll}
                                     style={{
-                                        padding: '0.35rem 0.6rem',
+                                        minHeight: 44,
+                                        padding: '0 0.7rem',
                                         borderRadius: 'var(--radius-md)',
                                         background: 'var(--error)',
                                         color: 'white',

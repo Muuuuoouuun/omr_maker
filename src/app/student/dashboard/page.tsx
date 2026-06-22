@@ -267,7 +267,16 @@ export default function StudentDashboard() {
                         </span>
                         <button
                             onClick={handleLogout}
-                            style={{ fontSize: '0.9rem', color: 'var(--muted)', cursor: 'pointer', transition: 'color 0.2s', fontWeight: 500 }}
+                            style={{
+                                minHeight: '2.75rem',
+                                padding: '0.45rem 0.2rem',
+                                borderRadius: 'var(--radius-md)',
+                                fontSize: '0.9rem',
+                                color: 'var(--muted)',
+                                cursor: 'pointer',
+                                transition: 'color 0.2s',
+                                fontWeight: 500,
+                            }}
                         >
                             로그아웃
                         </button>

@@ -1,7 +1,6 @@
 import { deleteStoredData } from "@/utils/blobStore";
 import { canonicalQuestionIdFor } from "@/lib/questionBank";
 import {
-    DEFAULT_WORKSPACE_ORGANIZATION_ID,
     DEFAULT_WORKSPACE_ORGANIZATION_NAME,
     readActiveWorkspaceContext,
     workspaceBootstrapRows,
@@ -217,8 +216,12 @@ function activePersistenceContext(): WorkspaceContext {
     return readActiveWorkspaceContext();
 }
 
-function shouldFilterRemoteByOrganization(context: WorkspaceContext): boolean {
-    return context.organizationId !== DEFAULT_WORKSPACE_ORGANIZATION_ID;
+function shouldFilterRemoteByOrganization(): boolean {
+    // Always scope Supabase queries by organization_id — even for the DEFAULT
+    // workspace — so multiple teachers sharing a Supabase project can never
+    // read each other's data. DEFAULT users stored with organization_id='default'
+    // are still correctly isolated from teacher-specific workspaces.
+    return true;
 }
 
 function examWithPersistenceContext(exam: Exam, context = activePersistenceContext()): Exam {
@@ -373,8 +376,13 @@ export function examQuestionRowsForExam(
 }
 
 export function stripHeavyAttemptPayload(attempt: Attempt): Attempt {
-    if (!attempt.drawings) return attempt;
-    return { ...attempt, drawings: undefined };
+    let stripped: Attempt = attempt.drawings ? { ...attempt, drawings: undefined } : attempt;
+    // If handwriting was not successfully archived, clear the IndexedDB strokesRef
+    // so localStorage never holds a pointer to data that may not exist.
+    if (stripped.handwriting && stripped.handwriting.status !== 'saved' && stripped.handwriting.strokesRef) {
+        stripped = { ...stripped, handwriting: { ...stripped.handwriting, strokesRef: undefined } };
+    }
+    return stripped;
 }
 
 export function attemptToSupabaseRow(attempt: Attempt, context?: WorkspaceContext | null): SupabaseAttemptRow {
@@ -420,13 +428,17 @@ export function attemptFromSupabaseRow(row: SupabaseAttemptRow | { payload: Atte
         const organizationId = scopedValue(row.organization_id);
         const classId = scopedValue(row.class_id);
         const assignmentId = scopedValue(row.assignment_id);
-        const studentProfileId = scopedValue(row.student_profile_id);
+        // Prefer the row's explicit column, fall back to the payload's studentProfileId,
+        // then to studentId so analytics joins never lose the profile link.
+        const studentProfileId = scopedValue(row.student_profile_id)
+            || scopedValue(attempt.studentProfileId)
+            || scopedValue(attempt.studentId);
         return {
             ...attempt,
             ...(organizationId ? { organizationId } : {}),
             ...(classId && classId !== attempt.groupId ? { classId } : {}),
             ...(assignmentId ? { assignmentId } : {}),
-            ...(studentProfileId && studentProfileId !== attempt.studentId ? { studentProfileId } : {}),
+            ...(studentProfileId ? { studentProfileId } : {}),
         };
     }
     return attempt;
@@ -1106,7 +1118,7 @@ async function fetchRemoteExams(): Promise<Exam[]> {
     if (!client) return [];
     const context = activePersistenceContext();
     const query = client.from("omr_exams").select("*");
-    const scopedQuery = shouldFilterRemoteByOrganization(context)
+    const scopedQuery = shouldFilterRemoteByOrganization()
         ? query.eq("organization_id", context.organizationId)
         : query;
 
@@ -1129,7 +1141,7 @@ async function fetchRemoteAttempts(): Promise<Attempt[]> {
     if (!client) return [];
     const context = activePersistenceContext();
     const query = client.from("omr_attempts").select("*");
-    const scopedQuery = shouldFilterRemoteByOrganization(context)
+    const scopedQuery = shouldFilterRemoteByOrganization()
         ? query.eq("organization_id", context.organizationId)
         : query;
 

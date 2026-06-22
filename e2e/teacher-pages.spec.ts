@@ -1,16 +1,53 @@
 import { test, expect, type Page } from "@playwright/test";
+import { mintTeacherToken } from "../src/lib/teacherAuth";
+import { createSignedTeacherSessionCookie, TEACHER_SERVER_SESSION_COOKIE } from "../src/lib/teacherServerSession";
+import { createTeacherSession, LEGACY_TEACHER_TOKEN_KEY, TEACHER_SESSION_KEY } from "../src/lib/teacherSession";
 
-// Each test starts with a clean localStorage so mocks are deterministic.
-async function clearStorage(page: Page) {
+const TEACHER_IDENTITY = {
+    teacherId: "admin",
+    email: "admin@example.com",
+    displayName: "Demo Admin",
+};
+
+// Each test starts with clean storage and a valid teacher session so mocks are deterministic.
+async function authenticateTeacher(page: Page) {
+    const token = mintTeacherToken();
+    const session = createTeacherSession(token, Date.now(), TEACHER_IDENTITY);
+    const signedCookie = createSignedTeacherSessionCookie(token, TEACHER_IDENTITY);
+
+    if (!signedCookie) {
+        throw new Error("Failed to create teacher session cookie for e2e test");
+    }
+
+    await page.context().clearCookies();
+    await page.context().addCookies([{
+        name: TEACHER_SERVER_SESSION_COOKIE,
+        value: signedCookie,
+        url: "http://localhost:3003",
+        httpOnly: true,
+        sameSite: "Lax",
+        secure: false,
+    }]);
+
     await page.addInitScript(() => {
         try { window.localStorage.clear(); } catch {}
         try { window.sessionStorage.clear(); } catch {}
+    });
+    await page.addInitScript(({ session, sessionKey, legacyTokenKey }) => {
+        try {
+            window.sessionStorage.setItem(sessionKey, JSON.stringify(session));
+            window.sessionStorage.setItem(legacyTokenKey, session.token);
+        } catch {}
+    }, {
+        legacyTokenKey: LEGACY_TEACHER_TOKEN_KEY,
+        session,
+        sessionKey: TEACHER_SESSION_KEY,
     });
 }
 
 test.describe("Teacher dashboard", () => {
     test.beforeEach(async ({ page }) => {
-        await clearStorage(page);
+        await authenticateTeacher(page);
     });
 
     test("loads and shows Quick Action tiles", async ({ page }) => {
@@ -27,23 +64,23 @@ test.describe("Teacher dashboard", () => {
         await page.goto("/teacher/dashboard");
         await page.getByRole("link", { name: /Live Results/ }).click();
         await expect(page).toHaveURL(/\/teacher\/live$/);
-        await expect(page.getByRole("heading", { name: "실시간 결과" })).toBeVisible();
+        await expect(page.getByRole("heading", { name: "응시 결과 확인" })).toBeVisible();
     });
 });
 
 test.describe("Live Results page", () => {
     test.beforeEach(async ({ page }) => {
-        await clearStorage(page);
+        await authenticateTeacher(page);
     });
 
     test("renders timer, stat tiles, students grid, heatmap", async ({ page }) => {
         await page.goto("/teacher/live");
         await expect(page.getByText("REMAINING TIME")).toBeVisible();
         // Stat labels
-        for (const label of ["제출 완료", "응시 중", "미응시", "실시간 평균"]) {
+        for (const label of ["제출 완료", "응시 중", "미응시", "제출 평균"]) {
             await expect(page.getByText(label, { exact: true }).first()).toBeVisible();
         }
-        await expect(page.getByRole("heading", { name: "학생별 실시간 현황" })).toBeVisible();
+        await expect(page.getByRole("heading", { name: "학생별 제출 현황" })).toBeVisible();
         await expect(page.getByRole("heading", { name: "문항별 정답률" })).toBeVisible();
     });
 
@@ -58,7 +95,7 @@ test.describe("Live Results page", () => {
 
 test.describe("Manage Users page", () => {
     test.beforeEach(async ({ page }) => {
-        await clearStorage(page);
+        await authenticateTeacher(page);
     });
 
     test("renders tabs and student table with mock data", async ({ page }) => {
@@ -69,11 +106,10 @@ test.describe("Manage Users page", () => {
         await expect.poll(() => rows.count(), { timeout: 5000 }).toBeGreaterThan(0);
     });
 
-    test("bulk selection banner appears after checking boxes", async ({ page }) => {
+    test("demo roster keeps bulk selection locked", async ({ page }) => {
         await page.goto("/teacher/users");
         const firstBox = page.locator('tbody input[type="checkbox"]').first();
-        await firstBox.check();
-        await expect(page.getByText(/\d+명 선택됨/)).toBeVisible();
+        await expect(firstBox).toBeDisabled();
     });
 
     test("switching to groups tab shows group cards", async ({ page }) => {
@@ -85,7 +121,7 @@ test.describe("Manage Users page", () => {
 
 test.describe("Settings page", () => {
     test.beforeEach(async ({ page }) => {
-        await clearStorage(page);
+        await authenticateTeacher(page);
     });
 
     test("sidebar + profile section renders", async ({ page }) => {
@@ -99,7 +135,7 @@ test.describe("Settings page", () => {
     test("switching section updates panel", async ({ page }) => {
         await page.goto("/teacher/settings");
         await page.getByRole("button", { name: "알림", exact: true }).click();
-        await expect(page.getByText("언제, 어떤 방식으로 알림을 받을지 설정하세요.")).toBeVisible();
+        await expect(page.getByText("카카오 우선 채널을 기준으로 알림 대상을 관리합니다.")).toBeVisible();
     });
 
     test("backup card shows export/import/reset buttons", async ({ page }) => {
@@ -112,7 +148,7 @@ test.describe("Settings page", () => {
 
 test.describe("Billing page", () => {
     test.beforeEach(async ({ page }) => {
-        await clearStorage(page);
+        await authenticateTeacher(page);
     });
 
     test("shows current plan hero + usage + plan grid + invoices", async ({ page }) => {
@@ -121,7 +157,7 @@ test.describe("Billing page", () => {
         await expect(page.getByText("CURRENT PLAN")).toBeVisible();
         await expect(page.getByRole("heading", { name: "이달 사용량" })).toBeVisible();
         await expect(page.getByRole("heading", { name: "플랜 비교" })).toBeVisible();
-        await expect(page.getByRole("heading", { name: "결제 내역" })).toBeVisible();
+        await expect(page.getByRole("heading", { name: "결제/플랜 기록" })).toBeVisible();
     });
 
     test("monthly/yearly toggle changes prices", async ({ page }) => {
@@ -135,7 +171,7 @@ test.describe("Billing page", () => {
 
 test.describe("Global Search", () => {
     test.beforeEach(async ({ page }) => {
-        await clearStorage(page);
+        await authenticateTeacher(page);
     });
 
     // Search lives inside TeacherHeader, which is rendered on the 4 subpages

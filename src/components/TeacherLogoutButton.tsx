@@ -9,7 +9,8 @@ interface TeacherLogoutButtonProps {
 }
 
 export default function TeacherLogoutButton({ size = "normal" }: TeacherLogoutButtonProps) {
-    const dimension = size === "small" ? 34 : 36;
+    const dimension = 44;
+    const iconSize = size === "small" ? 15 : 16;
 
     const handleLogout = () => {
         clearTeacherSession();
@@ -36,7 +37,7 @@ export default function TeacherLogoutButton({ size = "normal" }: TeacherLogoutBu
                 flexShrink: 0,
             }}
         >
-            <LogOut size={size === "small" ? 14 : 15} />
+            <LogOut size={iconSize} />
         </button>
     );
 }
