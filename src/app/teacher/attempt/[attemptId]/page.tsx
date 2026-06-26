@@ -534,7 +534,7 @@ export default function TeacherAttemptPage() {
                                             checked={feedbackPolicy.allowAnnotatedPdfDownload}
                                             onChange={(event) => updateFeedbackPolicy({ allowAnnotatedPdfDownload: event.target.checked })}
                                         />
-                                        첨삭 PDF 다운로드 허용
+                                        첨삭/필기 파일 다운로드 허용
                                     </label>
 
                                     <label style={{ display: 'grid', gap: '0.35rem', fontSize: '0.78rem', fontWeight: 800, color: '#475569' }}>

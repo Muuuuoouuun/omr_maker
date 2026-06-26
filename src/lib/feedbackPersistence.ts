@@ -62,6 +62,7 @@ type SupabaseClientLike = {
         select(columns?: string): SupabaseSelectQuery;
         upsert(row: unknown): Promise<SupabaseQueryResult<unknown>>;
     };
+    rpc(functionName: string, args?: Record<string, unknown>): Promise<SupabaseQueryResult<unknown>>;
 };
 
 let supabaseClientPromise: Promise<SupabaseClientLike | null> | null = null;
@@ -568,6 +569,19 @@ async function upsertRemoteFeedback(feedback: AttemptFeedback, markupDrawings?: 
     if (error) throw new Error(error.message || "Failed to save feedback to Supabase");
 }
 
+async function markRemoteFeedbackOpened(feedbackId: string, openedAt: string): Promise<AttemptFeedback | null> {
+    const client = await getAvailableSupabaseClient();
+    if (!client) return null;
+
+    const { data, error } = await client.rpc("omr_mark_feedback_opened", {
+        target_feedback_id: feedbackId,
+        opened_at: openedAt,
+    });
+    if (error) throw new Error(error.message || "Failed to mark feedback as opened in Supabase");
+    if (!data) return null;
+    return hydrateRemoteFeedbackRow(data as SupabaseAttemptFeedbackRow);
+}
+
 export function readLocalAttemptFeedback(storage: Pick<Storage, "getItem"> | null = getBrowserStorage()): AttemptFeedback[] {
     if (!storage) return [];
     return readJsonArray(storage.getItem(FEEDBACK_KEY))
@@ -750,7 +764,11 @@ export async function markFeedbackOpened(feedbackId: string): Promise<Persistenc
     if (!isSupabaseConfigured()) return { localSaved, remoteSaved: false };
 
     try {
-        await upsertRemoteFeedback(next);
+        const remote = await markRemoteFeedbackOpened(feedbackId, now);
+        if (!remote) {
+            return { localSaved, remoteSaved: false, remoteError: "Returned feedback not found in Supabase" };
+        }
+        saveLocalAttemptFeedback(remote);
         return { localSaved, remoteSaved: true };
     } catch (error) {
         return { localSaved, remoteSaved: false, remoteError: errorMessage(error) };
@@ -787,6 +805,13 @@ export function canDownloadReturnedFeedback(feedback: AttemptFeedback | null | u
     return Date.parse(feedback.downloadPolicy.expiresAt) >= now.getTime();
 }
 
+export function canDownloadReturnedMarkup(feedback: AttemptFeedback | null | undefined, now = new Date()): boolean {
+    if (!feedback || feedback.status !== "returned") return false;
+    if (!feedback.downloadPolicy.allowAnnotatedPdfDownload) return false;
+    if (!feedback.downloadPolicy.expiresAt) return true;
+    return Date.parse(feedback.downloadPolicy.expiresAt) >= now.getTime();
+}
+
 export async function createReturnedFeedbackDownloadUrl(feedbackId: string): Promise<{ url?: string; error?: string }> {
     const feedback = readLocalAttemptFeedback().find(item => item.id === feedbackId);
     if (!feedback || !canDownloadReturnedFeedback(feedback)) return { error: "Download is not allowed for this feedback" };
@@ -808,6 +833,20 @@ export function buildFeedbackDownloadText(feedback: AttemptFeedback): string {
         "",
         comments,
     ].join("\n").trim();
+}
+
+export function buildFeedbackMarkupDownloadJson(feedback: AttemptFeedback, drawings: PdfDrawings): string {
+    return JSON.stringify({
+        schemaVersion: 1,
+        kind: "omr_returned_feedback_markup",
+        feedbackId: feedback.id,
+        attemptId: feedback.attemptId,
+        examId: feedback.examId,
+        returnedAt: feedback.returnedAt || null,
+        summary: feedback.summary || "",
+        questionComments: feedback.questionComments.filter(comment => comment.visibility === "student_visible"),
+        drawings,
+    }, null, 2);
 }
 
 export async function loadFeedbackMarkupDrawings(feedback: AttemptFeedback | null | undefined): Promise<PdfDrawings | null> {

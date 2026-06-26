@@ -297,6 +297,8 @@ describe("Supabase schema contract", () => {
         expectIndex(schema, "omr_attempt_feedback_attempt_idx");
         expectIndex(schema, "omr_attempt_feedback_student_unread_idx");
         expectIndex(schema, "omr_attempt_feedback_org_status_idx");
+        expect(schema).toContain("create or replace function public.omr_mark_feedback_opened");
+        expect(schema).toContain("notification_status = 'sent'");
     });
 
     it("keeps the production RLS handoff separate from alpha public policies", () => {
@@ -328,6 +330,8 @@ describe("Supabase schema contract", () => {
         expect(productionRls).toContain("create or replace function public.omr_is_org_member");
         expect(productionRls).toContain("create or replace function public.omr_has_org_role");
         expect(productionRls).toContain("create or replace function public.omr_can_read_assignment");
+        expect(productionRls).toContain("create or replace function public.omr_mark_feedback_opened");
+        expect(productionRls).toContain("grant execute on function public.omr_mark_feedback_opened(text, timestamptz) to authenticated");
         expect(productionRls).toContain("auth.uid()");
         expect(productionRls).toContain("to authenticated");
         expect(productionRls).toContain("revoke all on all tables in schema public from anon");
@@ -339,6 +343,8 @@ describe("Supabase schema contract", () => {
 
         expect(productionRls).toContain('drop policy if exists "OMR organizations are publicly writable"');
         expect(productionRls).toContain('drop policy if exists "OMR attempts are publicly writable"');
+        expect(productionRls).toContain('create policy "prod attempt feedback update by staff"');
+        expect(productionRls).not.toContain('create policy "prod attempt feedback update by staff or returned student"');
         expect(productionRls).not.toMatch(/using\s*\(\s*true\s*\)/i);
         expect(productionRls).not.toMatch(/with check\s*\(\s*true\s*\)/i);
     });

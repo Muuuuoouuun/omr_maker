@@ -1,8 +1,19 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Attempt } from "@/types/omr";
+
+const supabaseMock = vi.hoisted(() => ({
+    createClient: vi.fn(),
+}));
+
+vi.mock("@supabase/supabase-js", () => ({
+    createClient: supabaseMock.createClient,
+}));
+
 import {
     DEFAULT_FEEDBACK_DOWNLOAD_POLICY,
+    buildFeedbackMarkupDownloadJson,
     canDownloadReturnedFeedback,
+    canDownloadReturnedMarkup,
     createAttemptFeedbackDraft,
     feedbackFromSupabaseRow,
     feedbackToSupabaseRow,
@@ -59,6 +70,7 @@ beforeEach(() => {
     vi.stubEnv("NEXT_PUBLIC_SUPABASE_URL", "");
     vi.stubEnv("NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY", "");
     vi.stubEnv("NEXT_PUBLIC_SUPABASE_ANON_KEY", "");
+    supabaseMock.createClient.mockReset();
 });
 
 afterEach(() => {
@@ -128,7 +140,7 @@ describe("feedback persistence", () => {
         });
     });
 
-    it("enforces local download policy and expiry", () => {
+    it("enforces local download policies and expiry", () => {
         const returned = {
             ...createAttemptFeedbackDraft(attempt, "2026-06-26T10:00:00.000Z"),
             status: "returned" as const,
@@ -136,11 +148,20 @@ describe("feedback persistence", () => {
         };
 
         expect(canDownloadReturnedFeedback(returned, new Date("2026-06-26T10:10:00.000Z"))).toBe(false);
+        expect(canDownloadReturnedMarkup(returned, new Date("2026-06-26T10:10:00.000Z"))).toBe(false);
         expect(canDownloadReturnedFeedback({
             ...returned,
             downloadPolicy: {
                 allowStudentDownload: true,
                 allowAnnotatedPdfDownload: false,
+                expiresAt: "2026-06-26T10:20:00.000Z",
+            },
+        }, new Date("2026-06-26T10:10:00.000Z"))).toBe(true);
+        expect(canDownloadReturnedMarkup({
+            ...returned,
+            downloadPolicy: {
+                allowStudentDownload: false,
+                allowAnnotatedPdfDownload: true,
                 expiresAt: "2026-06-26T10:20:00.000Z",
             },
         }, new Date("2026-06-26T10:10:00.000Z"))).toBe(true);
@@ -152,6 +173,38 @@ describe("feedback persistence", () => {
                 expiresAt: "2026-06-26T10:20:00.000Z",
             },
         }, new Date("2026-06-26T10:21:00.000Z"))).toBe(false);
+        expect(canDownloadReturnedMarkup({
+            ...returned,
+            downloadPolicy: {
+                allowStudentDownload: false,
+                allowAnnotatedPdfDownload: true,
+                expiresAt: "2026-06-26T10:20:00.000Z",
+            },
+        }, new Date("2026-06-26T10:21:00.000Z"))).toBe(false);
+    });
+
+    it("builds a student-safe markup download package", () => {
+        const feedback = {
+            ...createAttemptFeedbackDraft(attempt, "2026-06-26T10:00:00.000Z"),
+            status: "returned" as const,
+            returnedAt: "2026-06-26T10:00:00.000Z",
+            summary: "Keep the equation balanced.",
+            questionComments: [
+                { id: "visible", questionId: 1, questionNumber: 1, body: "Show units.", visibility: "student_visible" as const },
+                { id: "private", questionId: 2, questionNumber: 2, body: "Call parent.", visibility: "teacher_only" as const },
+            ],
+        };
+
+        const parsed = JSON.parse(buildFeedbackMarkupDownloadJson(feedback, { 1: ["M 0 0 L 1 1"] }));
+
+        expect(parsed).toMatchObject({
+            kind: "omr_returned_feedback_markup",
+            feedbackId: "feedback:attempt-1",
+            drawings: { 1: ["M 0 0 L 1 1"] },
+        });
+        expect(parsed.questionComments).toEqual([
+            { id: "visible", questionId: 1, questionNumber: 1, body: "Show units.", visibility: "student_visible" },
+        ]);
     });
 
     it("sanitizes comments and merges drawing layers without mutating sources", () => {
@@ -216,6 +269,72 @@ describe("feedback persistence", () => {
             status: "returned",
             summary: "Review the unit conversion.",
             delivery: expect.objectContaining({ notificationStatus: "queued" }),
+        });
+    });
+
+    it("uses the Supabase read-receipt RPC instead of remote feedback upsert when marking opened", async () => {
+        const localStorage = createStorage();
+        vi.stubGlobal("window", { localStorage });
+        vi.stubGlobal("localStorage", localStorage);
+        vi.stubEnv("NEXT_PUBLIC_SUPABASE_URL", "https://example.supabase.co");
+        vi.stubEnv("NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY", "publishable-key");
+        vi.useFakeTimers();
+
+        const returnedAt = "2026-06-26T10:00:00.000Z";
+        const openedAt = "2026-06-26T10:05:00.000Z";
+        vi.setSystemTime(new Date(openedAt));
+
+        const returnedFeedback = {
+            ...createAttemptFeedbackDraft(attempt, returnedAt),
+            status: "returned" as const,
+            returnedAt,
+            updatedAt: returnedAt,
+            delivery: {
+                notificationStatus: "queued" as const,
+                notificationChannel: "in_app" as const,
+                notifiedAt: returnedAt,
+                openCount: 0,
+            },
+        };
+        saveLocalAttemptFeedback(returnedFeedback);
+
+        const openedFeedback = {
+            ...returnedFeedback,
+            updatedAt: openedAt,
+            delivery: {
+                ...returnedFeedback.delivery,
+                notificationStatus: "sent" as const,
+                firstOpenedAt: openedAt,
+                lastOpenedAt: openedAt,
+                openCount: 1,
+            },
+        };
+        const openedRow = feedbackToSupabaseRow(openedFeedback, {
+            organizationId: "org-1",
+            organizationName: "Class",
+        });
+        const rpc = vi.fn().mockResolvedValue({ data: openedRow, error: null });
+        const from = vi.fn(() => ({
+            select: vi.fn(),
+            upsert: vi.fn(),
+        }));
+        supabaseMock.createClient.mockReturnValue({ from, rpc });
+
+        await expect(markFeedbackOpened(returnedFeedback.id)).resolves.toMatchObject({
+            localSaved: true,
+            remoteSaved: true,
+        });
+
+        expect(rpc).toHaveBeenCalledWith("omr_mark_feedback_opened", {
+            target_feedback_id: returnedFeedback.id,
+            opened_at: openedAt,
+        });
+        expect(from).not.toHaveBeenCalledWith("omr_attempt_feedback");
+        expect(loadLocalReturnedAttemptFeedback(attempt.id)?.delivery).toMatchObject({
+            notificationStatus: "sent",
+            firstOpenedAt: openedAt,
+            lastOpenedAt: openedAt,
+            openCount: 1,
         });
     });
 });

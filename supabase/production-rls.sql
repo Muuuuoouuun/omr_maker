@@ -227,6 +227,51 @@ as $$
     )
 $$;
 
+create or replace function public.omr_mark_feedback_opened(
+    target_feedback_id text,
+    opened_at timestamptz default now()
+)
+returns public.omr_attempt_feedback
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+    feedback_row public.omr_attempt_feedback;
+begin
+    update public.omr_attempt_feedback
+        set
+            notification_status = 'sent',
+            first_opened_at = coalesce(first_opened_at, opened_at),
+            last_opened_at = opened_at,
+            open_count = open_count + 1,
+            updated_at = opened_at,
+            payload = jsonb_set(
+                jsonb_set(coalesce(payload, '{}'::jsonb), '{updatedAt}', to_jsonb(opened_at), true),
+                '{delivery}',
+                coalesce(payload->'delivery', '{}'::jsonb) || jsonb_build_object(
+                    'notificationStatus', 'sent',
+                    'firstOpenedAt', coalesce(first_opened_at, opened_at),
+                    'lastOpenedAt', opened_at,
+                    'openCount', open_count + 1
+                ),
+                true
+            )
+        where id = target_feedback_id
+            and status = 'returned'
+            and (
+                public.omr_is_org_member(organization_id)
+                or (
+                    student_profile_id is not null
+                    and public.omr_is_org_student(organization_id, student_profile_id)
+                )
+            )
+        returning * into feedback_row;
+
+    return feedback_row;
+end;
+$$;
+
 revoke all on function public.omr_current_user_id() from public;
 revoke all on function public.omr_is_org_member(text) from public;
 revoke all on function public.omr_has_org_role(text, text[]) from public;
@@ -238,6 +283,7 @@ revoke all on function public.omr_can_read_assignment(text, text) from public;
 revoke all on function public.omr_can_read_exam(text, text) from public;
 revoke all on function public.omr_can_read_exam_by_id(text) from public;
 revoke all on function public.omr_can_write_exam_by_id(text) from public;
+revoke all on function public.omr_mark_feedback_opened(text, timestamptz) from public;
 
 grant execute on function public.omr_current_user_id() to authenticated;
 grant execute on function public.omr_is_org_member(text) to authenticated;
@@ -250,6 +296,7 @@ grant execute on function public.omr_can_read_assignment(text, text) to authenti
 grant execute on function public.omr_can_read_exam(text, text) to authenticated;
 grant execute on function public.omr_can_read_exam_by_id(text) to authenticated;
 grant execute on function public.omr_can_write_exam_by_id(text) to authenticated;
+grant execute on function public.omr_mark_feedback_opened(text, timestamptz) to authenticated;
 
 revoke all on schema public from anon;
 revoke all on all tables in schema public from anon;
@@ -688,26 +735,13 @@ create policy "prod attempt feedback insert by staff"
     with check ((select public.omr_has_org_role(organization_id, array['owner', 'admin', 'teacher', 'assistant'])));
 
 drop policy if exists "prod attempt feedback update by staff or returned student" on public.omr_attempt_feedback;
-create policy "prod attempt feedback update by staff or returned student"
+drop policy if exists "prod attempt feedback update by staff" on public.omr_attempt_feedback;
+create policy "prod attempt feedback update by staff"
     on public.omr_attempt_feedback
     for update
     to authenticated
-    using (
-        (select public.omr_has_org_role(organization_id, array['owner', 'admin', 'teacher', 'assistant']))
-        or (
-            status = 'returned'
-            and student_profile_id is not null
-            and (select public.omr_is_org_student(organization_id, student_profile_id))
-        )
-    )
-    with check (
-        (select public.omr_has_org_role(organization_id, array['owner', 'admin', 'teacher', 'assistant']))
-        or (
-            status = 'returned'
-            and student_profile_id is not null
-            and (select public.omr_is_org_student(organization_id, student_profile_id))
-        )
-    );
+    using ((select public.omr_has_org_role(organization_id, array['owner', 'admin', 'teacher', 'assistant'])))
+    with check ((select public.omr_has_org_role(organization_id, array['owner', 'admin', 'teacher', 'assistant'])));
 
 drop policy if exists "prod attempt feedback delete by staff" on public.omr_attempt_feedback;
 create policy "prod attempt feedback delete by staff"

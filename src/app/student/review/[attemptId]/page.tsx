@@ -19,9 +19,12 @@ import {
     summarizeAttemptBehavior,
 } from "@/lib/premiumAnalytics";
 import { buildRetakeHref } from "@/lib/retakeLinks";
+import { buildAnnotatedPdfBlob } from "@/lib/annotatedPdfExport";
 import {
     buildFeedbackDownloadText,
+    buildFeedbackMarkupDownloadJson,
     canDownloadReturnedFeedback,
+    canDownloadReturnedMarkup,
     loadFeedbackMarkupDrawings,
     loadReturnedAttemptFeedback,
     markFeedbackOpened,
@@ -57,6 +60,7 @@ export default function ReviewPage() {
     const [handwritingUnavailable, setHandwritingUnavailable] = useState(false);
     const [returnedFeedback, setReturnedFeedback] = useState<AttemptFeedback | null>(null);
     const [teacherMarkupDrawings, setTeacherMarkupDrawings] = useState<PdfDrawings | undefined>(undefined);
+    const [annotationDownloading, setAnnotationDownloading] = useState(false);
 
     useEffect(() => {
         let cancelled = false;
@@ -177,6 +181,8 @@ export default function ReviewPage() {
     const hasFeedbackMarkup = hasDrawings(teacherMarkupDrawings);
     const combinedReviewDrawings = mergePdfDrawings(restoredDrawings, teacherMarkupDrawings);
     const canDownloadFeedback = canDownloadReturnedFeedback(returnedFeedback);
+    const canDownloadMarkupFile = canDownloadReturnedMarkup(returnedFeedback) && hasDrawings(combinedReviewDrawings);
+    const canDownloadAnnotatedPdf = canDownloadMarkupFile && !!pdfFile;
     const visibleFeedbackComments = returnedFeedback?.questionComments.filter(comment => comment.visibility === "student_visible") || [];
     const retakeQuestionIds = buildRetakeQuestionIds(reviewExam, attempt);
     const weaknessGroups = buildStudentWeaknessGroups(reviewExam, attempt).slice(0, 3);
@@ -209,6 +215,33 @@ export default function ReviewPage() {
         link.click();
         document.body.removeChild(link);
         URL.revokeObjectURL(url);
+    };
+
+    const downloadFeedbackMarkup = async () => {
+        if (!returnedFeedback || !canDownloadMarkupFile) return;
+        setAnnotationDownloading(true);
+        try {
+            const blob = pdfFile
+                ? await buildAnnotatedPdfBlob(pdfFile, combinedReviewDrawings)
+                : new Blob(
+                    [buildFeedbackMarkupDownloadJson(returnedFeedback, combinedReviewDrawings)],
+                    { type: "application/json;charset=utf-8" },
+                );
+            const url = URL.createObjectURL(blob);
+            const link = document.createElement("a");
+            link.href = url;
+            link.download = pdfFile
+                ? `${attempt.examTitle || "omr"}-feedback-annotated.pdf`
+                : `${attempt.examTitle || "omr"}-feedback-markup.json`;
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
+            URL.revokeObjectURL(url);
+        } catch (error) {
+            console.error("Failed to download feedback markup", error);
+        } finally {
+            setAnnotationDownloading(false);
+        }
     };
 
     return (
@@ -330,6 +363,18 @@ export default function ReviewPage() {
                                     다운로드 제한
                                 </span>
                             )}
+                            {canDownloadMarkupFile && (
+                                <button
+                                    type="button"
+                                    onClick={() => void downloadFeedbackMarkup()}
+                                    disabled={annotationDownloading}
+                                    className="btn btn-secondary"
+                                    style={{ fontSize: '0.84rem', display: 'inline-flex', alignItems: 'center', gap: '0.4rem' }}
+                                >
+                                    <Download size={15} />
+                                    {annotationDownloading ? '생성 중' : canDownloadAnnotatedPdf ? '첨삭 PDF' : '첨삭 파일'}
+                                </button>
+                            )}
                         </div>
 
                         {returnedFeedback.summary && (
@@ -352,7 +397,7 @@ export default function ReviewPage() {
                         <div style={{ color: '#64748b', fontSize: '0.78rem', fontWeight: 700 }}>
                             {returnedFeedback.downloadPolicy.expiresAt
                                 ? `다운로드 만료: ${formatKoreanDateTime(returnedFeedback.downloadPolicy.expiresAt)}`
-                                : returnedFeedback.downloadPolicy.allowStudentDownload
+                                : returnedFeedback.downloadPolicy.allowStudentDownload || returnedFeedback.downloadPolicy.allowAnnotatedPdfDownload
                                     ? '다운로드 가능'
                                     : '교사가 다운로드를 허용하지 않았습니다.'}
                         </div>
