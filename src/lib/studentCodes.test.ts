@@ -72,6 +72,75 @@ describe("student start codes", () => {
         });
     });
 
+    it("resolves a roster profile by lookup when no class is selected", () => {
+        expect(resolveStudentIdentity({
+            name: "김학생",
+            selectedGroupId: "",
+            groups: [{ id: "class-a", name: "A반" }],
+            students: [{ id: "class-a::김학생", name: "김학생", group: "A반", email: "kim@example.edu" }],
+            studentLookup: "kim@example.edu",
+        })).toEqual({
+            studentId: "class-a::김학생",
+            legacyStudentId: "class-a::김학생",
+            groupId: "class-a",
+            groupName: "A반",
+            matchedRosterProfile: true,
+            rosterMatchCount: 1,
+            requiresStudentLookup: false,
+            lookupMatched: true,
+            lookupMismatch: false,
+        });
+    });
+
+    it("requires lookup when class is omitted and same-name roster profiles exist", () => {
+        const base = {
+            name: "김학생",
+            selectedGroupId: "",
+            groups: [
+                { id: "class-a", name: "A반" },
+                { id: "class-b", name: "B반" },
+            ],
+            students: [
+                { id: "class-a::김학생", name: "김학생", group: "A반", email: "first@example.edu" },
+                { id: "class-b::김학생", name: "김학생", group: "B반", email: "second@example.edu" },
+            ],
+        };
+
+        expect(resolveStudentIdentity(base)).toMatchObject({
+            rosterMatchCount: 2,
+            requiresStudentLookup: true,
+            lookupMatched: false,
+            lookupMismatch: false,
+        });
+        expect(resolveStudentIdentity({ ...base, studentLookup: "second@example.edu" })).toMatchObject({
+            studentId: "class-b::김학생",
+            groupId: "class-b",
+            groupName: "B반",
+            requiresStudentLookup: false,
+            lookupMatched: true,
+            lookupMismatch: false,
+        });
+    });
+
+    it("falls back to an unassigned temporary identity when no class data exists", () => {
+        expect(resolveStudentIdentity({
+            name: "신규학생",
+            selectedGroupId: "",
+            groups: [],
+            students: [],
+        })).toEqual({
+            studentId: "unassigned::신규학생",
+            legacyStudentId: "unassigned::신규학생",
+            groupId: "unassigned",
+            groupName: "미분류",
+            matchedRosterProfile: false,
+            rosterMatchCount: 0,
+            requiresStudentLookup: false,
+            lookupMatched: false,
+            lookupMismatch: false,
+        });
+    });
+
     it("prefers the roster student in the selected group's region when group names repeat", () => {
         expect(resolveStudentIdentity({
             name: "김학생",

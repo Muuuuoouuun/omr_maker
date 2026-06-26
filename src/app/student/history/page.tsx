@@ -7,6 +7,7 @@ import { attemptBelongsToSession, getSession, type StudentSession } from "@/util
 import { loadAttempts, loadExams } from "@/lib/omrPersistence";
 import { formatKoreanDateTime } from "@/lib/pure";
 import { baseAttemptsOnly, buildAttemptScoreLookup, retakeAttemptsOnly } from "@/lib/attemptScores";
+import { loadReturnedFeedbackForStudent } from "@/lib/feedbackPersistence";
 
 type PeriodFilter = "all" | "30d" | "7d";
 type SortMode = "recent" | "high" | "low";
@@ -27,6 +28,7 @@ export default function HistoryPage() {
     const [sortMode, setSortMode] = useState<SortMode>("recent");
     const [page, setPage] = useState(1);
     const [now] = useState(() => Date.now());
+    const [unreadFeedbackAttemptIds, setUnreadFeedbackAttemptIds] = useState<Set<string>>(() => new Set());
 
     useEffect(() => {
         let cancelled = false;
@@ -43,8 +45,18 @@ export default function HistoryPage() {
                 const mine = currentSession
                     ? attemptResult.items.filter(attempt => attemptBelongsToSession(attempt, currentSession))
                     : [];
+                const returnedFeedback = currentSession?.studentId
+                    ? await loadReturnedFeedbackForStudent(currentSession.studentId)
+                    : [];
+                if (cancelled) return;
                 setAttempts(mine);
                 setExams(examResult.items);
+                const myAttemptIds = new Set(mine.map(attempt => attempt.id));
+                setUnreadFeedbackAttemptIds(new Set(
+                    returnedFeedback
+                        .filter(feedback => myAttemptIds.has(feedback.attemptId) && !feedback.delivery.firstOpenedAt)
+                        .map(feedback => feedback.attemptId)
+                ));
             } catch (e) {
                 console.error("Failed to load history", e);
             }
@@ -248,6 +260,20 @@ export default function HistoryPage() {
                                             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '0.5rem', gap: '0.75rem' }}>
                                                 <h3 style={{ fontSize: '1.1rem', fontWeight: 600, color: '#0f172a' }}>{attempt.examTitle}</h3>
                                                 <div style={{ display: 'flex', gap: '0.35rem', flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+                                                    {unreadFeedbackAttemptIds.has(attempt.id) && (
+                                                        <span style={{
+                                                            padding: '0.2rem 0.6rem',
+                                                            borderRadius: '999px',
+                                                            fontSize: '0.78rem',
+                                                            fontWeight: 900,
+                                                            background: '#eef2ff',
+                                                            color: '#4f46e5',
+                                                            border: '1px solid #c7d2fe',
+                                                            whiteSpace: 'nowrap',
+                                                        }}>
+                                                            New feedback
+                                                        </span>
+                                                    )}
                                                     {attempt.retake && (
                                                         <span style={{
                                                             padding: '0.2rem 0.6rem',

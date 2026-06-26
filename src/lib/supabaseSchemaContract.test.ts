@@ -268,6 +268,37 @@ describe("Supabase schema contract", () => {
         expectIndex(schema, "omr_kakao_dispatch_logs_status_idx");
     });
 
+    it("keeps returned attempt feedback columns for markup, notifications, and read receipts", () => {
+        expectColumns(schema, "omr_attempt_feedback", [
+            "id",
+            "organization_id",
+            "attempt_id",
+            "exam_id",
+            "student_profile_id",
+            "teacher_user_id",
+            "status",
+            "summary",
+            "question_comments",
+            "markup",
+            "markup_drawings",
+            "download_policy",
+            "notification_status",
+            "notification_channel",
+            "notified_at",
+            "first_opened_at",
+            "last_opened_at",
+            "open_count",
+            "returned_at",
+            "payload",
+            "created_at",
+            "updated_at",
+        ]);
+
+        expectIndex(schema, "omr_attempt_feedback_attempt_idx");
+        expectIndex(schema, "omr_attempt_feedback_student_unread_idx");
+        expectIndex(schema, "omr_attempt_feedback_org_status_idx");
+    });
+
     it("keeps the production RLS handoff separate from alpha public policies", () => {
         const protectedTables = [
             "omr_organizations",
@@ -287,6 +318,7 @@ describe("Supabase schema contract", () => {
             "omr_attempts",
             "omr_question_results",
             "omr_assignment_submissions",
+            "omr_attempt_feedback",
             "omr_kakao_candidate_reviews",
             "omr_kakao_dispatch_logs",
             "omr_comments",

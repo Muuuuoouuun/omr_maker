@@ -50,6 +50,12 @@ describe("exam access helpers", () => {
 
         expect(evaluateExamAccess(groupOnly)).toMatchObject({ status: "login_required" });
         expect(evaluateExamAccess(groupOnly, {
+            session: { identityType: "guest", isGuest: true },
+        })).toMatchObject({ status: "login_required" });
+        expect(evaluateExamAccess(groupOnly, {
+            session: { groupId: "class-a", identityType: "guest", isGuest: true },
+        })).toMatchObject({ status: "allowed" });
+        expect(evaluateExamAccess(groupOnly, {
             session: { groupId: "class-b", identityType: "temporary" },
         })).toMatchObject({ status: "group_denied" });
         expect(evaluateExamAccess(groupOnly, {

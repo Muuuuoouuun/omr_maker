@@ -4,8 +4,8 @@ import { useEffect, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
 import dynamic from "next/dynamic";
-import { BookOpen, ChevronDown, ChevronUp, Clock, Repeat2, Target } from "lucide-react";
-import type { Attempt, Exam, PdfDrawings } from "@/types/omr";
+import { BookOpen, ChevronDown, ChevronUp, Clock, Download, Repeat2, Target } from "lucide-react";
+import type { Attempt, AttemptFeedback, Exam, PdfDrawings } from "@/types/omr";
 import { storedDataUrlToFile, loadJsonRecord } from "@/utils/blobStore";
 import { attemptBelongsToSession, getSession } from "@/utils/storage";
 import { loadAttempt, loadExam } from "@/lib/omrPersistence";
@@ -19,6 +19,14 @@ import {
     summarizeAttemptBehavior,
 } from "@/lib/premiumAnalytics";
 import { buildRetakeHref } from "@/lib/retakeLinks";
+import {
+    buildFeedbackDownloadText,
+    canDownloadReturnedFeedback,
+    loadFeedbackMarkupDrawings,
+    loadReturnedAttemptFeedback,
+    markFeedbackOpened,
+    mergePdfDrawings,
+} from "@/lib/feedbackPersistence";
 
 const PDFViewer = dynamic(() => import("@/components/PDFViewer"), { ssr: false });
 
@@ -47,6 +55,8 @@ export default function ReviewPage() {
     const [openExplanations, setOpenExplanations] = useState<Record<number, boolean>>({});
     const [accessDenied, setAccessDenied] = useState(false);
     const [handwritingUnavailable, setHandwritingUnavailable] = useState(false);
+    const [returnedFeedback, setReturnedFeedback] = useState<AttemptFeedback | null>(null);
+    const [teacherMarkupDrawings, setTeacherMarkupDrawings] = useState<PdfDrawings | undefined>(undefined);
 
     useEffect(() => {
         let cancelled = false;
@@ -61,6 +71,18 @@ export default function ReviewPage() {
                     return;
                 }
                 setAttempt(found);
+
+                const feedback = await loadReturnedAttemptFeedback(found.id);
+                if (feedback && !cancelled) {
+                    setReturnedFeedback(feedback);
+                    void markFeedbackOpened(feedback.id).then(async () => {
+                        if (cancelled) return;
+                        const refreshed = await loadReturnedAttemptFeedback(found.id);
+                        if (!cancelled && refreshed) setReturnedFeedback(refreshed);
+                    });
+                    const markup = await loadFeedbackMarkupDrawings(feedback);
+                    if (!cancelled && markup) setTeacherMarkupDrawings(markup);
+                }
 
                 const inlineDrawings = hasDrawings(found.drawings) ? found.drawings : undefined;
                 if (inlineDrawings) {
@@ -152,6 +174,10 @@ export default function ReviewPage() {
         ? reviewQuestions.filter(q => wrongQuestionIds.has(q.id))
         : reviewQuestions;
     const hasHandwriting = hasDrawings(restoredDrawings);
+    const hasFeedbackMarkup = hasDrawings(teacherMarkupDrawings);
+    const combinedReviewDrawings = mergePdfDrawings(restoredDrawings, teacherMarkupDrawings);
+    const canDownloadFeedback = canDownloadReturnedFeedback(returnedFeedback);
+    const visibleFeedbackComments = returnedFeedback?.questionComments.filter(comment => comment.visibility === "student_visible") || [];
     const retakeQuestionIds = buildRetakeQuestionIds(reviewExam, attempt);
     const weaknessGroups = buildStudentWeaknessGroups(reviewExam, attempt).slice(0, 3);
     const recommendationGroups = buildLearningRecommendations(reviewExam, [attempt], {
@@ -170,6 +196,19 @@ export default function ReviewPage() {
 
     const toggleExplanation = (qId: number) => {
         setOpenExplanations(prev => ({ ...prev, [qId]: !prev[qId] }));
+    };
+
+    const downloadFeedback = () => {
+        if (!returnedFeedback || !canDownloadFeedback) return;
+        const blob = new Blob([buildFeedbackDownloadText(returnedFeedback)], { type: "text/plain;charset=utf-8" });
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement("a");
+        link.href = url;
+        link.download = `${attempt.examTitle || "omr"}-feedback.txt`;
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+        URL.revokeObjectURL(url);
     };
 
     return (
@@ -249,6 +288,77 @@ export default function ReviewPage() {
                     </div>
                 )}
 
+                {returnedFeedback && (
+                    <section style={{
+                        background: 'white',
+                        border: '1px solid #c7d2fe',
+                        borderRadius: '12px',
+                        padding: '1.25rem',
+                        marginBottom: '1.25rem',
+                        boxShadow: '0 2px 4px rgba(79,70,229,0.08)',
+                        display: 'grid',
+                        gap: '0.9rem'
+                    }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', gap: '1rem', alignItems: 'flex-start', flexWrap: 'wrap' }}>
+                            <div>
+                                <div style={{ color: '#4f46e5', fontSize: '0.78rem', fontWeight: 900, marginBottom: '0.25rem' }}>
+                                    NEW FEEDBACK
+                                </div>
+                                <h2 style={{ fontSize: '1.05rem', fontWeight: 900, color: '#0f172a' }}>
+                                    교사 피드백
+                                </h2>
+                            </div>
+                            {canDownloadFeedback ? (
+                                <button
+                                    type="button"
+                                    onClick={downloadFeedback}
+                                    className="btn btn-secondary"
+                                    style={{ fontSize: '0.84rem', display: 'inline-flex', alignItems: 'center', gap: '0.4rem' }}
+                                >
+                                    <Download size={15} />
+                                    다운로드
+                                </button>
+                            ) : (
+                                <span style={{
+                                    color: '#64748b',
+                                    background: '#f1f5f9',
+                                    borderRadius: '999px',
+                                    padding: '0.3rem 0.7rem',
+                                    fontSize: '0.76rem',
+                                    fontWeight: 800,
+                                }}>
+                                    다운로드 제한
+                                </span>
+                            )}
+                        </div>
+
+                        {returnedFeedback.summary && (
+                            <p style={{ color: '#334155', fontSize: '0.92rem', lineHeight: 1.6, whiteSpace: 'pre-wrap' }}>
+                                {returnedFeedback.summary}
+                            </p>
+                        )}
+
+                        {visibleFeedbackComments.length > 0 && (
+                            <div style={{ display: 'grid', gap: '0.45rem' }}>
+                                {visibleFeedbackComments.map(comment => (
+                                    <div key={comment.id} style={{ padding: '0.65rem', borderRadius: '8px', background: '#eef2ff', border: '1px solid #c7d2fe' }}>
+                                        <strong style={{ color: '#312e81', marginRight: '0.4rem' }}>{comment.questionNumber}번</strong>
+                                        <span style={{ color: '#334155', fontSize: '0.86rem' }}>{comment.body}</span>
+                                    </div>
+                                ))}
+                            </div>
+                        )}
+
+                        <div style={{ color: '#64748b', fontSize: '0.78rem', fontWeight: 700 }}>
+                            {returnedFeedback.downloadPolicy.expiresAt
+                                ? `다운로드 만료: ${formatKoreanDateTime(returnedFeedback.downloadPolicy.expiresAt)}`
+                                : returnedFeedback.downloadPolicy.allowStudentDownload
+                                    ? '다운로드 가능'
+                                    : '교사가 다운로드를 허용하지 않았습니다.'}
+                        </div>
+                    </section>
+                )}
+
                 {/* Stat Row */}
                 <div style={{
                     display: 'grid',
@@ -276,7 +386,7 @@ export default function ReviewPage() {
                     )}
                 </div>
 
-                {hasHandwriting && (
+                {(hasHandwriting || hasFeedbackMarkup) && (
                     <section style={{
                         background: 'white',
                         border: '1px solid #e2e8f0',
@@ -319,7 +429,7 @@ export default function ReviewPage() {
                                     file={pdfFile}
                                     onLoadSuccess={() => { }}
                                     readOnlyDrawings={true}
-                                    drawings={restoredDrawings}
+                                    drawings={combinedReviewDrawings}
                                 />
                             ) : (
                                 <div style={{
@@ -566,6 +676,7 @@ export default function ReviewPage() {
                         const isUngraded = status === "ungraded";
                         const explanationOpen = !!openExplanations[q.id];
                         const timing = timingByQuestionId.get(q.id);
+                        const questionFeedbackComments = visibleFeedbackComments.filter(comment => comment.questionId === q.id);
                         const statusLabel = isUngraded ? "미채점" : isCorrect ? "정답" : isSkipped ? "미응답" : "오답";
 
                         return (
@@ -623,6 +734,25 @@ export default function ReviewPage() {
                                         {timing && <span style={{ fontSize: '0.75rem', padding: '2px 8px', borderRadius: '4px', background: '#fff7ed', color: '#9a3412' }}>
                                             {formatSeconds(timing.totalTimeSec)} · 방문 {timing.visitCount}회
                                         </span>}
+                                    </div>
+                                )}
+
+                                {questionFeedbackComments.length > 0 && (
+                                    <div style={{ marginTop: '1rem', display: 'grid', gap: '0.45rem' }}>
+                                        {questionFeedbackComments.map(comment => (
+                                            <div key={comment.id} style={{
+                                                padding: '0.7rem 0.8rem',
+                                                borderRadius: '8px',
+                                                border: '1px solid #c7d2fe',
+                                                background: '#eef2ff',
+                                                color: '#334155',
+                                                fontSize: '0.86rem',
+                                                lineHeight: 1.5,
+                                            }}>
+                                                <strong style={{ color: '#312e81', marginRight: '0.35rem' }}>교사 코멘트</strong>
+                                                {comment.body}
+                                            </div>
+                                        ))}
                                     </div>
                                 )}
 

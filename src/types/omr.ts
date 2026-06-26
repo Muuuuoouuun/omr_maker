@@ -101,6 +101,59 @@ export type PdfDrawings = Record<number, string[]>;
 export type IdentityType = 'guest' | 'temporary' | 'registered';
 export type PlanKey = 'free' | 'pro' | 'academy';
 export type StoredPlanKey = PlanKey | 'school';
+export type FeedbackStatus = 'draft' | 'returned' | 'archived';
+export type FeedbackNotificationStatus = 'not_queued' | 'queued' | 'sent' | 'failed';
+export type FeedbackNotificationChannel = 'in_app' | 'kakao_candidate';
+
+export interface FeedbackDownloadPolicy {
+    allowStudentDownload: boolean;
+    allowAnnotatedPdfDownload: boolean;
+    expiresAt?: string;
+    watermarkStudentName?: boolean;
+}
+
+export interface FeedbackDeliveryReceipt {
+    notificationStatus: FeedbackNotificationStatus;
+    notificationChannel: FeedbackNotificationChannel;
+    notifiedAt?: string;
+    firstOpenedAt?: string;
+    lastOpenedAt?: string;
+    openCount: number;
+}
+
+export interface QuestionFeedbackComment {
+    id: string;
+    questionId: number;
+    questionNumber: number;
+    body: string;
+    visibility: 'teacher_only' | 'student_visible';
+}
+
+export interface FeedbackMarkup {
+    schemaVersion: 1;
+    strokesRef?: StoredDataRef;
+    pageCount: number;
+    strokeCount: number;
+    storage: 'indexeddb' | 'supabase_storage';
+}
+
+export interface AttemptFeedback {
+    id: string;
+    attemptId: string;
+    examId: string;
+    organizationId?: string;
+    studentProfileId?: string;
+    teacherUserId?: string;
+    status: FeedbackStatus;
+    summary?: string;
+    questionComments: QuestionFeedbackComment[];
+    markup?: FeedbackMarkup;
+    downloadPolicy: FeedbackDownloadPolicy;
+    delivery: FeedbackDeliveryReceipt;
+    returnedAt?: string;
+    createdAt: string;
+    updatedAt: string;
+}
 
 export interface QuestionDrawingSummary {
     questionId: number;

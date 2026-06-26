@@ -290,6 +290,7 @@ describe("PWA assets", () => {
         expect(currentManifest.start_url).toBe("/");
         expect(currentManifest.scope).toBe("/");
         expect(currentManifest.display).toBe("standalone");
+        expect(currentManifest.orientation).toBe("portrait");
         expect(currentManifest.lang).toBe("ko");
         expect(currentManifest.categories).toContain("education");
         expect(currentManifest.launch_handler.client_mode).toEqual(

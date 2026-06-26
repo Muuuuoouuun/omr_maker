@@ -347,6 +347,73 @@ create table if not exists public.omr_assignment_submissions (
     updated_at timestamptz not null default now()
 );
 
+create table if not exists public.omr_attempt_feedback (
+    id text primary key,
+    organization_id text not null references public.omr_organizations(id) on delete cascade,
+    attempt_id text not null references public.omr_attempts(id) on delete cascade,
+    exam_id text not null references public.omr_exams(id) on delete cascade,
+    student_profile_id text references public.omr_student_profiles(id) on delete set null,
+    teacher_user_id text,
+    status text not null default 'draft'
+        check (status in ('draft', 'returned', 'archived')),
+    summary text,
+    question_comments jsonb not null default '[]'::jsonb,
+    markup jsonb,
+    markup_drawings jsonb,
+    download_policy jsonb not null default '{"allowStudentDownload":false,"allowAnnotatedPdfDownload":false,"watermarkStudentName":true}'::jsonb,
+    notification_status text not null default 'not_queued'
+        check (notification_status in ('not_queued', 'queued', 'sent', 'failed')),
+    notification_channel text not null default 'in_app'
+        check (notification_channel in ('in_app', 'kakao_candidate')),
+    notified_at timestamptz,
+    first_opened_at timestamptz,
+    last_opened_at timestamptz,
+    open_count integer not null default 0 check (open_count >= 0),
+    returned_at timestamptz,
+    payload jsonb not null,
+    created_at timestamptz not null default now(),
+    updated_at timestamptz not null default now(),
+    unique (attempt_id)
+);
+
+create or replace function public.omr_mark_feedback_opened(
+    target_feedback_id text,
+    opened_at timestamptz default now()
+)
+returns public.omr_attempt_feedback
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+    feedback_row public.omr_attempt_feedback;
+begin
+    update public.omr_attempt_feedback
+        set
+            notification_status = 'sent',
+            first_opened_at = coalesce(first_opened_at, opened_at),
+            last_opened_at = opened_at,
+            open_count = open_count + 1,
+            updated_at = opened_at,
+            payload = jsonb_set(
+                jsonb_set(coalesce(payload, '{}'::jsonb), '{updatedAt}', to_jsonb(opened_at), true),
+                '{delivery}',
+                coalesce(payload->'delivery', '{}'::jsonb) || jsonb_build_object(
+                    'notificationStatus', 'sent',
+                    'firstOpenedAt', coalesce(first_opened_at, opened_at),
+                    'lastOpenedAt', opened_at,
+                    'openCount', open_count + 1
+                ),
+                true
+            )
+        where id = target_feedback_id
+            and status = 'returned'
+        returning * into feedback_row;
+
+    return feedback_row;
+end;
+$$;
+
 create table if not exists public.omr_kakao_candidate_reviews (
     id text primary key,
     organization_id text references public.omr_organizations(id) on delete cascade,
@@ -785,6 +852,15 @@ create index if not exists omr_assignment_submissions_assignment_idx
 create index if not exists omr_assignment_submissions_student_idx
     on public.omr_assignment_submissions (student_profile_id, submitted_at desc);
 
+create index if not exists omr_attempt_feedback_attempt_idx
+    on public.omr_attempt_feedback (attempt_id);
+
+create index if not exists omr_attempt_feedback_student_unread_idx
+    on public.omr_attempt_feedback (student_profile_id, status, first_opened_at, updated_at desc);
+
+create index if not exists omr_attempt_feedback_org_status_idx
+    on public.omr_attempt_feedback (organization_id, status, updated_at desc);
+
 create index if not exists omr_kakao_candidate_reviews_exam_status_idx
     on public.omr_kakao_candidate_reviews (exam_id, status, updated_at desc);
 
@@ -829,6 +905,7 @@ alter table public.omr_assignment_targets enable row level security;
 alter table public.omr_attempts enable row level security;
 alter table public.omr_question_results enable row level security;
 alter table public.omr_assignment_submissions enable row level security;
+alter table public.omr_attempt_feedback enable row level security;
 alter table public.omr_kakao_candidate_reviews enable row level security;
 alter table public.omr_kakao_dispatch_logs enable row level security;
 alter table public.omr_comments enable row level security;
@@ -970,6 +1047,13 @@ create policy "OMR question results are publicly writable"
 drop policy if exists "OMR assignment submissions are publicly writable" on public.omr_assignment_submissions;
 create policy "OMR assignment submissions are publicly writable"
     on public.omr_assignment_submissions
+    for all
+    using (true)
+    with check (true);
+
+drop policy if exists "OMR attempt feedback is publicly writable" on public.omr_attempt_feedback;
+create policy "OMR attempt feedback is publicly writable"
+    on public.omr_attempt_feedback
     for all
     using (true)
     with check (true);

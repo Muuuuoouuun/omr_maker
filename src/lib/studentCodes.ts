@@ -2,6 +2,8 @@ import { studentIdFor } from "@/utils/storage";
 
 export const STUDENT_CODES_STORAGE_KEY = "omr_student_codes";
 export const START_CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+export const DEFAULT_STUDENT_GROUP_ID = "unassigned";
+export const DEFAULT_STUDENT_GROUP_NAME = "미분류";
 
 export interface StudentCodeGroupLike {
     id: string;
@@ -72,6 +74,45 @@ function studentMatchesLookup(student: StudentCodeStudentLike, lookup: string): 
     return normalizeLookup(student.id) === lookup || normalizeLookup(student.email) === lookup;
 }
 
+function scopedGroupKey(studentId: string | undefined): string {
+    const normalized = clean(studentId);
+    const separatorIndex = normalized.indexOf("::");
+    return separatorIndex > 0 ? normalized.slice(0, separatorIndex).trim() : "";
+}
+
+function studentMatchesGroup(student: StudentCodeStudentLike, group: StudentCodeGroupLike): boolean {
+    const groupId = clean(group.id);
+    const groupName = clean(group.name);
+    const groupRegion = clean(group.region);
+    const studentGroup = clean(student.group);
+    const studentRegion = clean(student.region);
+    const scopedGroup = scopedGroupKey(student.id);
+
+    if (groupId && scopedGroup === groupId) return true;
+    const sameGroup = !!groupName && (studentGroup === groupName || scopedGroup === groupName);
+    if (!sameGroup) return false;
+    if (!groupRegion) return true;
+    return !studentRegion || studentRegion === groupRegion;
+}
+
+function groupForStudentProfile(
+    student: StudentCodeStudentLike | undefined,
+    groups: StudentCodeGroupLike[],
+): StudentCodeGroupLike | undefined {
+    if (!student) return undefined;
+    const scopedGroup = scopedGroupKey(student.id);
+    const studentGroup = clean(student.group);
+    const studentRegion = clean(student.region);
+
+    return groups.find(group => clean(group.id) === scopedGroup)
+        || groups.find(group => {
+            const groupName = clean(group.name);
+            const groupRegion = clean(group.region);
+            if (!groupName || groupName !== studentGroup) return false;
+            return !groupRegion || !studentRegion || groupRegion === studentRegion;
+        });
+}
+
 export function normalizeStartCodeInput(value: string): string {
     return value.replace(/\s/g, "").trim().toUpperCase().slice(0, 6);
 }
@@ -120,18 +161,18 @@ export function writeStudentCodes(storage: Pick<Storage, "setItem">, codes: Reco
 
 export function resolveStudentIdentity(params: {
     name: string;
-    selectedGroupId: string;
+    selectedGroupId?: string;
     groups: StudentCodeGroupLike[];
     students: StudentCodeStudentLike[];
     studentLookup?: string;
 }): StudentIdentityResolution {
     const trimmedName = params.name.trim();
-    const group = params.groups.find(item => item.id === params.selectedGroupId);
-    const groupName = group?.name || "Unknown";
-    const legacyStudentId = studentIdFor(trimmedName, params.selectedGroupId);
-    const matchingProfiles = params.students.filter(student =>
-        student.name.trim() === trimmedName && (!group?.name || student.group === group.name)
-    );
+    const selectedGroupId = clean(params.selectedGroupId);
+    const group = params.groups.find(item => item.id === selectedGroupId || item.name === selectedGroupId);
+    const matchingProfiles = params.students.filter(student => {
+        if (student.name.trim() !== trimmedName) return false;
+        return group ? studentMatchesGroup(student, group) : true;
+    });
     const groupRegion = group?.region?.trim();
     const exactRegionProfiles = groupRegion
         ? matchingProfiles.filter(student => student.region?.trim() === groupRegion)
@@ -145,21 +186,32 @@ export function resolveStudentIdentity(params: {
             ? fallbackRegionProfiles
             : matchingProfiles;
     const lookup = normalizeLookup(params.studentLookup);
-    const lookupProfile = lookup ? candidateProfiles.find(student => studentMatchesLookup(student, lookup)) : undefined;
+    const lookupProfiles = lookup ? candidateProfiles.filter(student => studentMatchesLookup(student, lookup)) : [];
+    const lookupProfile = lookupProfiles.length === 1 ? lookupProfiles[0] : undefined;
     const profile = lookupProfile || candidateProfiles[0];
+    const inferredGroup = group || groupForStudentProfile(profile, params.groups);
+    const profileGroupKey = scopedGroupKey(profile?.id);
+    const profileGroupName = clean(profile?.group);
+    const resolvedGroupName = clean(inferredGroup?.name) || profileGroupName || DEFAULT_STUDENT_GROUP_NAME;
+    const resolvedGroupId = selectedGroupId
+        || clean(inferredGroup?.id)
+        || profileGroupKey
+        || profileGroupName
+        || DEFAULT_STUDENT_GROUP_ID;
+    const legacyStudentId = studentIdFor(trimmedName, resolvedGroupId);
     const studentId = profile?.id?.trim() || legacyStudentId;
     const hasLookup = !!lookup;
 
     return {
         studentId,
         legacyStudentId,
-        groupId: params.selectedGroupId,
-        groupName,
+        groupId: resolvedGroupId,
+        groupName: resolvedGroupName,
         matchedRosterProfile: !!profile?.id,
         rosterMatchCount: candidateProfiles.length,
         requiresStudentLookup: candidateProfiles.length > 1 && !lookupProfile,
         lookupMatched: !!lookupProfile,
-        lookupMismatch: hasLookup && candidateProfiles.length > 0 && !lookupProfile,
+        lookupMismatch: hasLookup && candidateProfiles.length > 0 && lookupProfiles.length === 0,
     };
 }
 

@@ -16,6 +16,9 @@ export interface PlanCatalogEntry {
     };
     entitlements: {
         handwritingArchive: boolean;
+        feedbackMarkup: boolean;
+        returnedFeedback: boolean;
+        remoteHandwritingArchive: boolean;
         advancedAnalytics: boolean;
         teachingActionCenter: boolean;
         studentGrowthReports: boolean;
@@ -41,6 +44,9 @@ const PLAN_KEY = "omr_plan";
 
 const FREE_ENTITLEMENTS: PlanCatalogEntry["entitlements"] = {
     handwritingArchive: false,
+    feedbackMarkup: false,
+    returnedFeedback: false,
+    remoteHandwritingArchive: false,
     advancedAnalytics: false,
     teachingActionCenter: false,
     studentGrowthReports: false,
@@ -63,6 +69,9 @@ const FREE_ENTITLEMENTS: PlanCatalogEntry["entitlements"] = {
 const PRO_ENTITLEMENTS: PlanCatalogEntry["entitlements"] = {
     ...FREE_ENTITLEMENTS,
     handwritingArchive: true,
+    feedbackMarkup: true,
+    returnedFeedback: true,
+    remoteHandwritingArchive: true,
     advancedAnalytics: true,
     teachingActionCenter: true,
     studentGrowthReports: true,
@@ -145,6 +154,18 @@ export const PLAN_ENTITLEMENT_COPY: Record<PlanEntitlementKey, PlanEntitlementCo
     handwritingArchive: {
         label: "필기 원본 보관",
         description: "제출 후 문항별 필기와 OMR 흔적을 장기 저장합니다.",
+    },
+    feedbackMarkup: {
+        label: "교사 첨삭 피드백",
+        description: "학생 제출 화면 위에 교사가 직접 마크업하고 피드백을 남깁니다.",
+    },
+    returnedFeedback: {
+        label: "피드백 반환/열람",
+        description: "피드백을 학생에게 반환하고 열람 상태를 확인합니다.",
+    },
+    remoteHandwritingArchive: {
+        label: "원격 필기 보관",
+        description: "다른 기기에서도 학생 필기와 교사 첨삭을 열 수 있게 보관합니다.",
     },
     advancedAnalytics: {
         label: "고급 오답 분석",

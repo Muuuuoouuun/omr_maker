@@ -758,14 +758,15 @@ async function readManifestSummary(): Promise<{ detail: string; ok: boolean; val
   try {
     const manifest = await fetch(manifestHref, { cache: "no-store" }).then(response => response.json());
     const hasStandalone = manifest.display === "standalone" || manifest.display_override?.includes("standalone");
+    const hasPortraitOrientation = manifest.orientation === "portrait";
     const hasIcons = Array.isArray(manifest.icons) && manifest.icons.some((icon: { sizes?: string }) => icon.sizes === "192x192")
       && manifest.icons.some((icon: { sizes?: string }) => icon.sizes === "512x512");
     const hasScreenshots = Array.isArray(manifest.screenshots) && manifest.screenshots.length >= 2;
 
     return {
-      detail: `${manifest.short_name || manifest.name || "앱"} · icons ${manifest.icons?.length || 0} · screenshots ${manifest.screenshots?.length || 0}`,
-      ok: hasStandalone && hasIcons && hasScreenshots,
-      value: manifest.display || "unknown",
+      detail: `${manifest.short_name || manifest.name || "앱"} · orientation ${manifest.orientation || "unknown"} · icons ${manifest.icons?.length || 0} · screenshots ${manifest.screenshots?.length || 0}`,
+      ok: hasStandalone && hasPortraitOrientation && hasIcons && hasScreenshots,
+      value: `${manifest.display || "unknown"} / ${manifest.orientation || "unknown"}`,
     };
   } catch {
     return { detail: "manifest fetch 실패", ok: false, value: manifestHref };

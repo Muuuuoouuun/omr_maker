@@ -9,8 +9,16 @@ const TEACHER_IDENTITY = {
     displayName: "Demo Admin",
 };
 
+function cookieOrigin(baseURL?: string): string {
+    try {
+        return new URL(baseURL || "http://localhost:3003").origin;
+    } catch {
+        return "http://localhost:3003";
+    }
+}
+
 // Each test starts with clean storage and a valid teacher session so mocks are deterministic.
-async function authenticateTeacher(page: Page) {
+async function authenticateTeacher(page: Page, baseURL?: string) {
     const token = mintTeacherToken();
     const session = createTeacherSession(token, Date.now(), TEACHER_IDENTITY);
     const signedCookie = createSignedTeacherSessionCookie(token, TEACHER_IDENTITY);
@@ -23,7 +31,7 @@ async function authenticateTeacher(page: Page) {
     await page.context().addCookies([{
         name: TEACHER_SERVER_SESSION_COOKIE,
         value: signedCookie,
-        url: "http://localhost:3003",
+        url: cookieOrigin(baseURL),
         httpOnly: true,
         sameSite: "Lax",
         secure: false,
@@ -46,8 +54,8 @@ async function authenticateTeacher(page: Page) {
 }
 
 test.describe("Teacher dashboard", () => {
-    test.beforeEach(async ({ page }) => {
-        await authenticateTeacher(page);
+    test.beforeEach(async ({ page, baseURL }) => {
+        await authenticateTeacher(page, baseURL);
     });
 
     test("loads and shows Quick Action tiles", async ({ page }) => {
@@ -68,9 +76,45 @@ test.describe("Teacher dashboard", () => {
     });
 });
 
+test.describe("Create page label memory", () => {
+    test.beforeEach(async ({ page, baseURL }) => {
+        await authenticateTeacher(page, baseURL);
+    });
+
+    test("remembers label presets and lets teachers hide stale candidates", async ({ page }) => {
+        await page.goto("/create");
+
+        const labelCard = page.locator(".create-label-batch-card");
+        await expect(labelCard.getByText("문항 라벨 일괄 적용")).toBeVisible();
+        await expect(labelCard.getByText(/Demo Admin 최근/)).toBeVisible();
+
+        const hideGrammar = labelCard.getByRole("button", { name: "문법 후보 숨김" });
+        await expect(hideGrammar).toBeVisible();
+        await hideGrammar.click();
+        await expect(hideGrammar).not.toBeVisible();
+
+        await labelCard.getByRole("button", { name: "복구" }).click();
+        await expect(labelCard.getByRole("button", { name: "문법 후보 숨김" })).toBeVisible();
+
+        await labelCard.getByPlaceholder("유형/라벨 예: 독해, 어법, 빈칸").fill("현대시");
+        await labelCard.getByPlaceholder("단원").fill("문학");
+        await labelCard.getByPlaceholder("세부 개념").fill("화자의 태도");
+        await labelCard.getByRole("button", { name: "범위 적용" }).click();
+        await labelCard.getByRole("button", { name: "기억" }).click();
+
+        const storedMemory = await page.evaluate(() => {
+            const key = Object.keys(window.localStorage).find(item => item.startsWith("omr_question_label_settings_v1:"));
+            return key ? window.localStorage.getItem(key) : "";
+        });
+        expect(storedMemory).toContain("현대시");
+        expect(storedMemory).toContain("문학");
+        expect(storedMemory).toContain("화자의 태도");
+    });
+});
+
 test.describe("Live Results page", () => {
-    test.beforeEach(async ({ page }) => {
-        await authenticateTeacher(page);
+    test.beforeEach(async ({ page, baseURL }) => {
+        await authenticateTeacher(page, baseURL);
     });
 
     test("renders timer, stat tiles, students grid, heatmap", async ({ page }) => {
@@ -94,8 +138,8 @@ test.describe("Live Results page", () => {
 });
 
 test.describe("Manage Users page", () => {
-    test.beforeEach(async ({ page }) => {
-        await authenticateTeacher(page);
+    test.beforeEach(async ({ page, baseURL }) => {
+        await authenticateTeacher(page, baseURL);
     });
 
     test("renders tabs and student table with mock data", async ({ page }) => {
@@ -120,8 +164,8 @@ test.describe("Manage Users page", () => {
 });
 
 test.describe("Settings page", () => {
-    test.beforeEach(async ({ page }) => {
-        await authenticateTeacher(page);
+    test.beforeEach(async ({ page, baseURL }) => {
+        await authenticateTeacher(page, baseURL);
     });
 
     test("sidebar + profile section renders", async ({ page }) => {
@@ -147,8 +191,8 @@ test.describe("Settings page", () => {
 });
 
 test.describe("Billing page", () => {
-    test.beforeEach(async ({ page }) => {
-        await authenticateTeacher(page);
+    test.beforeEach(async ({ page, baseURL }) => {
+        await authenticateTeacher(page, baseURL);
     });
 
     test("shows current plan hero + usage + plan grid + invoices", async ({ page }) => {
@@ -170,8 +214,8 @@ test.describe("Billing page", () => {
 });
 
 test.describe("Global Search", () => {
-    test.beforeEach(async ({ page }) => {
-        await authenticateTeacher(page);
+    test.beforeEach(async ({ page, baseURL }) => {
+        await authenticateTeacher(page, baseURL);
     });
 
     // Search lives inside TeacherHeader, which is rendered on the 4 subpages

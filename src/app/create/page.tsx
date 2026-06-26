@@ -11,7 +11,7 @@ import TeacherSessionChip from "@/components/TeacherSessionChip";
 import ThemeToggle from "@/components/ThemeToggle";
 import { useRouter, useSearchParams } from "next/navigation";
 import { toast } from "@/components/Toast";
-import { BrainCircuit, Crosshair, FileText, FolderOpen, Loader2, PanelRightClose, PanelRightOpen, RefreshCw, Redo2, Unlink, Undo2 } from "lucide-react";
+import { BrainCircuit, Crosshair, FileText, FolderOpen, Loader2, PanelRightClose, PanelRightOpen, RefreshCw, Redo2, RotateCcw, Save, Unlink, Undo2, X } from "lucide-react";
 
 const PDFViewer = dynamic(() => import("@/components/PDFViewer"), { ssr: false });
 import { Suspense, useState, useEffect, useRef, useCallback, useMemo } from "react";
@@ -37,8 +37,25 @@ import {
     type PdfPageTextItems,
 } from "@/lib/pdfPassageGrouping";
 import { summarizePersistenceWrite } from "@/lib/persistenceFeedback";
+import { buildExamShareUrl } from "@/lib/examLinks";
 import { buildBillingUsageSummary } from "@/lib/billingUsage";
 import { evaluatePlanLimit, getCurrentPlan, getPlanLabel, PLAN_BY_KEY } from "@/utils/plans";
+import { readActiveWorkspaceContext } from "@/lib/workspaceContext";
+import {
+    buildQuestionLabelCandidates,
+    EMPTY_QUESTION_LABEL_SETTINGS,
+    hideQuestionLabelCandidate,
+    questionLabelSettingsStorageKey,
+    questionLabelUsageValues,
+    readQuestionLabelSettings,
+    recordQuestionLabelSettingUsage,
+    restoreHiddenQuestionLabelCandidates,
+    writeQuestionLabelSettings,
+    type QuestionLabelCandidate,
+    type QuestionLabelCandidateSource,
+    type QuestionLabelSettingUsageInput,
+    type QuestionLabelSettings,
+} from "@/lib/questionLabelSettings";
 
 // ─── Autosave + history constants ────────────────────────────────────
 const DRAFT_KEY = "omr_exam_draft";
@@ -75,6 +92,31 @@ const SCHEDULE_PRESETS = [
     { key: "tomorrow-09", label: "내일 09:00" },
     { key: "tomorrow-19", label: "내일 19:00" },
 ] as const;
+
+function labelCandidateSourceLabel(source: QuestionLabelCandidateSource): string {
+    if (source === "current") return "현재";
+    if (source === "recent") return "최근";
+    return "기본";
+}
+
+function labelSettingsUsageFromQuestions(questions: Question[]): QuestionLabelSettingUsageInput {
+    return {
+        labels: questions.map(question => question.label),
+        units: questions.map(question => question.tags?.unit),
+        concepts: questions.map(question => question.tags?.concept),
+    };
+}
+
+function uniqueUsageCount(usage: QuestionLabelSettingUsageInput): number {
+    const values = [
+        ...(usage.labels || []),
+        ...(usage.units || []),
+        ...(usage.concepts || []),
+    ]
+        .map(value => typeof value === "string" ? value.trim() : "")
+        .filter(Boolean);
+    return new Set(values).size;
+}
 
 interface EditorDraft {
     title: string;
@@ -302,6 +344,9 @@ function CreateOMRPageInner() {
         concept: "",
         difficulty: "",
     });
+    const [labelSettings, setLabelSettings] = useState<QuestionLabelSettings>(EMPTY_QUESTION_LABEL_SETTINGS);
+    const [labelSettingsKey, setLabelSettingsKey] = useState("");
+    const [labelSettingsScopeLabel, setLabelSettingsScopeLabel] = useState("이 브라우저 최근");
 
     // Validation
     const [fastAnswer, setFastAnswer] = useState("");
@@ -336,14 +381,25 @@ function CreateOMRPageInner() {
         () => questions.find(q => q.id === selectedQuestionId) || null,
         [questions, selectedQuestionId],
     );
-    const knownLabels = useMemo(() => {
-        const labels = new Set<string>(DEFAULT_LABEL_PRESETS);
-        questions.forEach(q => {
-            if (q.label) labels.add(q.label);
-            if (q.tags?.concept) labels.add(q.tags.concept);
-        });
-        return Array.from(labels).slice(0, 12);
-    }, [questions]);
+    const currentLabelValues = useMemo(() => questions.flatMap(q => [q.label, q.tags?.concept]), [questions]);
+    const knownLabelCandidates = useMemo(() => buildQuestionLabelCandidates({
+        currentLabels: currentLabelValues,
+        defaultLabels: DEFAULT_LABEL_PRESETS,
+        settings: labelSettings,
+        limit: 18,
+    }), [currentLabelValues, labelSettings]);
+    const knownLabels = useMemo(
+        () => knownLabelCandidates.map(candidate => candidate.label),
+        [knownLabelCandidates],
+    );
+    const recentUnitOptions = useMemo(
+        () => questionLabelUsageValues(labelSettings.recentUnits, 8),
+        [labelSettings.recentUnits],
+    );
+    const recentConceptOptions = useMemo(
+        () => questionLabelUsageValues(labelSettings.recentConcepts, 8),
+        [labelSettings.recentConcepts],
+    );
     const hasProblemPdfForValidation = !!pdfFile || !!loadedExam?.pdfData || !!loadedExam?.pdfDataRef;
     const hasAnswerKeyPdfForValidation = !!answerKeyPdf || !!loadedExam?.answerKeyPdf || !!loadedExam?.answerKeyPdfRef;
 
@@ -458,6 +514,15 @@ function CreateOMRPageInner() {
         setStartAt("");
         setEndAt("");
     };
+
+    useEffect(() => {
+        if (typeof window === "undefined") return;
+        const context = readActiveWorkspaceContext(window.sessionStorage);
+        const storageKey = questionLabelSettingsStorageKey(context.organizationId);
+        setLabelSettingsKey(storageKey);
+        setLabelSettingsScopeLabel(context.actorLabel ? `${context.actorLabel} 최근` : "이 브라우저 최근");
+        setLabelSettings(readQuestionLabelSettings(window.localStorage, storageKey));
+    }, []);
 
     useEffect(() => {
         if (editId) {
@@ -790,6 +855,43 @@ function CreateOMRPageInner() {
         });
     };
 
+    const persistLabelSettings = useCallback((updater: (settings: QuestionLabelSettings) => QuestionLabelSettings) => {
+        setLabelSettings(prev => {
+            const next = updater(prev);
+            if (typeof window !== "undefined" && labelSettingsKey) {
+                writeQuestionLabelSettings(window.localStorage, labelSettingsKey, next);
+            }
+            return next;
+        });
+    }, [labelSettingsKey]);
+
+    const rememberLabelUsage = useCallback((usage: QuestionLabelSettingUsageInput) => {
+        if (uniqueUsageCount(usage) === 0) return;
+        persistLabelSettings(settings => recordQuestionLabelSettingUsage(settings, usage));
+    }, [persistLabelSettings]);
+
+    const rememberCurrentLabelSetup = () => {
+        const usage = labelSettingsUsageFromQuestions(questions);
+        const count = uniqueUsageCount(usage);
+        if (count === 0) {
+            toast.info("기억할 라벨 없음", "먼저 문항에 라벨, 단원, 개념 중 하나를 입력하세요.");
+            return;
+        }
+        rememberLabelUsage(usage);
+        toast.success("라벨 세팅 기억됨", `${count}개 라벨 요소를 다음 시험 후보에 반영했습니다.`);
+    };
+
+    const hideLabelPreset = (label: string) => {
+        persistLabelSettings(settings => hideQuestionLabelCandidate(settings, label));
+        toast.info("라벨 후보 숨김", `"${label}" 후보를 숨겼습니다. 이미 붙은 문항 라벨은 유지됩니다.`);
+    };
+
+    const restoreHiddenLabelPresets = () => {
+        if (labelSettings.hiddenLabels.length === 0) return;
+        persistLabelSettings(settings => restoreHiddenQuestionLabelCandidates(settings));
+        toast.success("숨김 후보 복구", "숨겨둔 기본/최근 라벨 후보를 다시 표시합니다.");
+    };
+
     const setExplanation = (explanation: string) => {
         updateSelectedQuestion(q => ({
             ...q,
@@ -799,10 +901,12 @@ function CreateOMRPageInner() {
 
     const toggleLabel = (label: string) => {
         if (selectedQuestionId === null) return;
+        const shouldRemember = selectedQuestion?.label !== label;
         setQuestions(prev => prev.map(q => {
             if (q.id !== selectedQuestionId) return q;
             return { ...q, label: label === q.label ? undefined : label };
         }));
+        if (shouldRemember) rememberLabelUsage({ labels: [label] });
     };
 
     const setLabelBatchRange = (start: number, end: number) => {
@@ -860,6 +964,7 @@ function CreateOMRPageInner() {
         }
 
         setQuestions(nextQuestions);
+        rememberLabelUsage({ labels: [label], units: [unit], concepts: [concept] });
         toast.success("문항 라벨 적용됨", `${start}~${end}번 ${applied}개 문항을 업데이트했습니다.`);
     };
 
@@ -1104,6 +1209,7 @@ function CreateOMRPageInner() {
             if (feedback.level === "info") {
                 toast.info(feedback.title, feedback.detail);
             }
+            rememberLabelUsage(labelSettingsUsageFromQuestions(questionsWithRegions));
             setLoadedExam(examData);
             setQuestions(questionsWithRegions);
             if (!editId) {
@@ -1111,7 +1217,7 @@ function CreateOMRPageInner() {
             }
             // Clear the autosave draft now that the exam is published.
             try { localStorage.removeItem(DRAFT_KEY); } catch { /* ignore */ }
-            const shareUrl = `${window.location.origin}/solve/${id}`;
+            const shareUrl = buildExamShareUrl(window.location.origin, id, accessConfig);
             toast.success("배포 준비 완료", "공유 링크가 생성되었습니다.");
             return shareUrl;
         } catch (e) {
@@ -1464,8 +1570,8 @@ function CreateOMRPageInner() {
                 <aside className="glass-panel scroll-custom create-settings-sidebar" style={{
                     width: `${sidebarWidth}px`,
                     minWidth: `${SETTINGS_SIDEBAR_MIN_WIDTH}px`,
+                    flex: isPreviewCollapsed ? `1 1 ${sidebarWidth}px` : `0 0 ${sidebarWidth}px`,
                     padding: '1.5rem',
-                    flexShrink: 0,
                     overflowY: 'auto',
                     background: 'var(--surface)',
                     borderRight: '1px solid var(--border)',
@@ -1629,6 +1735,9 @@ function CreateOMRPageInner() {
                             </div>
                         </div>
 
+                        <div className="create-section-label">
+                            <span className="step">1</span>시험 기본
+                        </div>
                         <label style={{ display: 'block', marginBottom: '0.5rem', fontSize: '0.9rem', fontWeight: 500 }}>시험 제목</label>
                         <input
                             type="text"
@@ -1676,6 +1785,10 @@ function CreateOMRPageInner() {
                     </div>
 
                     <div style={{ marginBottom: '1.5rem' }}>
+                        <div className="create-section-label">
+                            <span className="step">2</span>자동화 도구
+                            <span className="hint">PDF 기반</span>
+                        </div>
                         <button
                             className="btn btn-secondary"
                             style={{ width: '100%', marginBottom: '0.5rem', border: '1px dashed #6366f1', color: '#6366f1', background: 'rgba(99, 102, 241, 0.05)', display: 'inline-flex', alignItems: 'center', gap: '0.45rem' }}
@@ -1742,6 +1855,10 @@ function CreateOMRPageInner() {
                             </div>
                         </div>
 
+                        <div className="create-section-label">
+                            <span className="step">3</span>정답 · 라벨 입력
+                            <span className="hint">{designSummary.answered}/{questionsCount} 정답</span>
+                        </div>
                         <div style={{ marginBottom: '1rem' }}>
                             <label style={{ display: 'block', marginBottom: '0.4rem', fontSize: '0.9rem', fontWeight: 600, color: 'var(--primary)' }}>
                                 빠른 정답 입력 (연속 입력)
@@ -1824,15 +1941,16 @@ function CreateOMRPageInner() {
                                     <div className="create-question-quick-row" aria-label="선택 문항 라벨">
                                         <span>라벨</span>
                                         <div className="create-question-label-buttons">
-                                            {knownLabels.slice(0, 8).map(label => (
+                                            {knownLabelCandidates.slice(0, 8).map(candidate => (
                                                 <button
-                                                    key={label}
+                                                    key={candidate.label}
                                                     type="button"
-                                                    className={selectedQuestion.label === label ? "is-active" : ""}
-                                                    onClick={() => toggleLabel(label)}
-                                                    aria-pressed={selectedQuestion.label === label}
+                                                    className={selectedQuestion.label === candidate.label ? "is-active" : ""}
+                                                    onClick={() => toggleLabel(candidate.label)}
+                                                    aria-pressed={selectedQuestion.label === candidate.label}
+                                                    title={`${candidate.label} · ${labelCandidateSourceLabel(candidate.source)} 후보`}
                                                 >
-                                                    {label}
+                                                    {candidate.label}
                                                 </button>
                                             ))}
                                         </div>
@@ -1854,6 +1972,22 @@ function CreateOMRPageInner() {
                                     </div>
                                 </div>
                                 <span className="create-label-batch-count">{knownLabels.length}개 후보</span>
+                            </div>
+
+                            <div className="create-label-memory-strip" aria-label="최근 라벨 기억 상태">
+                                <span>{labelSettingsScopeLabel} · 최근 {labelSettings.recentLabels.length}개</span>
+                                <div className="create-label-memory-actions">
+                                    <button type="button" onClick={rememberCurrentLabelSetup} title="현재 라벨 구성을 다음에도 사용">
+                                        <Save size={13} />
+                                        기억
+                                    </button>
+                                    {labelSettings.hiddenLabels.length > 0 && (
+                                        <button type="button" onClick={restoreHiddenLabelPresets} title="숨긴 라벨 후보 복구">
+                                            <RotateCcw size={13} />
+                                            복구
+                                        </button>
+                                    )}
+                                </div>
                             </div>
 
                             <div className="create-label-batch-range">
@@ -1888,25 +2022,53 @@ function CreateOMRPageInner() {
                             />
 
                             <div className="create-label-batch-presets" aria-label="라벨 후보">
-                                {knownLabels.map(label => (
-                                    <button
-                                        key={label}
-                                        type="button"
-                                        className={labelBatch.label === label ? "is-active" : ""}
-                                        onClick={() => setLabelBatch(prev => ({ ...prev, label }))}
+                                {knownLabelCandidates.map((candidate: QuestionLabelCandidate) => (
+                                    <span
+                                        key={candidate.label}
+                                        className={`create-label-candidate-chip is-${candidate.source} ${candidate.source === "current" ? "has-no-hide" : ""}`}
                                     >
-                                        {label}
-                                    </button>
+                                        <button
+                                            type="button"
+                                            className={`create-label-candidate-main ${labelBatch.label === candidate.label ? "is-active" : ""}`}
+                                            onClick={() => setLabelBatch(prev => ({ ...prev, label: candidate.label }))}
+                                            title={`${candidate.label} · ${labelCandidateSourceLabel(candidate.source)} 후보`}
+                                        >
+                                            <span>{candidate.label}</span>
+                                            <small>{labelCandidateSourceLabel(candidate.source)}</small>
+                                        </button>
+                                        {candidate.source !== "current" && (
+                                            <button
+                                                type="button"
+                                                className="create-label-candidate-hide"
+                                                onClick={() => hideLabelPreset(candidate.label)}
+                                                aria-label={`${candidate.label} 후보 숨김`}
+                                                title={`${candidate.label} 후보 숨김`}
+                                            >
+                                                <X size={12} />
+                                            </button>
+                                        )}
+                                    </span>
                                 ))}
                             </div>
 
                             <div className="create-label-batch-grid">
+                                <datalist id="create-label-unit-options">
+                                    {recentUnitOptions.map(unit => (
+                                        <option key={unit} value={unit} />
+                                    ))}
+                                </datalist>
+                                <datalist id="create-label-concept-options">
+                                    {recentConceptOptions.map(concept => (
+                                        <option key={concept} value={concept} />
+                                    ))}
+                                </datalist>
                                 <input
                                     type="text"
                                     value={labelBatch.unit}
                                     onChange={(e) => setLabelBatch(prev => ({ ...prev, unit: e.target.value }))}
                                     placeholder="단원"
                                     className="input-field"
+                                    list={recentUnitOptions.length > 0 ? "create-label-unit-options" : undefined}
                                 />
                                 <input
                                     type="text"
@@ -1914,6 +2076,7 @@ function CreateOMRPageInner() {
                                     onChange={(e) => setLabelBatch(prev => ({ ...prev, concept: e.target.value }))}
                                     placeholder="세부 개념"
                                     className="input-field"
+                                    list={recentConceptOptions.length > 0 ? "create-label-concept-options" : undefined}
                                 />
                             </div>
 
@@ -2112,6 +2275,7 @@ function CreateOMRPageInner() {
                                                 onChange={(e) => setQuestionTag('unit', e.target.value.trim() || undefined)}
                                                 placeholder="예: 문법 > 시제"
                                                 className="input-field"
+                                                list={recentUnitOptions.length > 0 ? "create-label-unit-options" : undefined}
                                                 style={{ width: '100%', padding: '0.45rem 0.55rem', fontSize: '0.8rem', border: '1px solid var(--border)', borderRadius: '8px', background: 'var(--surface)' }}
                                             />
                                         </div>
@@ -2124,6 +2288,7 @@ function CreateOMRPageInner() {
                                                 onChange={(e) => setQuestionTag('concept', e.target.value.trim() || undefined)}
                                                 placeholder="예: 현재완료와 과거시제 구분"
                                                 className="input-field"
+                                                list={recentConceptOptions.length > 0 ? "create-label-concept-options" : undefined}
                                                 style={{ width: '100%', padding: '0.45rem 0.55rem', fontSize: '0.8rem', border: '1px solid var(--border)', borderRadius: '8px', background: 'var(--surface)' }}
                                             />
                                         </div>
@@ -2472,6 +2637,7 @@ function CreateOMRPageInner() {
                 </aside>
 
                 {/* Resizer 2 */}
+                {!isPreviewCollapsed && (
                 <div
                     className="create-resizer"
                     style={{ width: '6px', background: 'var(--border)', cursor: 'col-resize', position: 'relative', zIndex: 10 }}
@@ -2498,6 +2664,7 @@ function CreateOMRPageInner() {
                 >
                     <div style={{ width: '2px', height: '20px', background: '#aaa', position: 'absolute', top: '50%', left: '2px', transform: 'translateY(-50%)', borderRadius: '2px' }} />
                 </div>
+                )}
 
                 {/* 3. OMR Preview */}
                 <main className={`create-preview-main ${isPreviewCollapsed ? 'is-collapsed' : ''}`} style={{
@@ -2514,11 +2681,10 @@ function CreateOMRPageInner() {
                             <button
                                 type="button"
                                 onClick={() => setIsPreviewCollapsed(false)}
-                                aria-label="OMR 미리보기 펼치기"
+                                aria-label={`OMR 미리보기 펼치기 (정답 ${designSummary.answered}/${questionsCount})`}
                                 title="OMR 미리보기 펼치기"
                             >
                                 <PanelRightOpen size={18} />
-                                <span>OMR</span>
                                 <strong>{designSummary.answered}/{questionsCount}</strong>
                             </button>
                         </div>

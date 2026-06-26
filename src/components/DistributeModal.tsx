@@ -2,13 +2,16 @@
 
 import { useMemo, useState, useEffect, useRef } from 'react';
 import { QRCodeCanvas } from 'qrcode.react';
-import { Lock } from 'lucide-react';
+import { Lock, Plus, UserPlus } from 'lucide-react';
 import type { Exam } from '@/types/omr';
 import { formatRegionScopedLabel } from '@/lib/dashboardSelection';
 import type { ExamValidationSummary } from '@/lib/examValidation';
 import { isValidExamPin, normalizeExamPin } from '@/lib/examAccess';
-import { readRosterGroups, readRosterStudents, type RosterGroup, type RosterStudent } from '@/lib/rosterStorage';
+import { readRosterGroups, readRosterInvites, readRosterStudents, type RosterGroup, type RosterInvite, type RosterStudent } from '@/lib/rosterStorage';
 import { summarizeDistributionTargets } from '@/lib/distributionTargets';
+import { addRosterGroup, addRosterStudent } from '@/lib/rosterMutations';
+import { saveRosterSnapshot } from '@/lib/rosterPersistence';
+import { toast } from '@/components/Toast';
 
 type AccessConfig = NonNullable<Exam["accessConfig"]>;
 
@@ -32,6 +35,13 @@ export default function DistributeModal({ isOpen, onClose, onSaveAndShare, onAut
     const [pin, setPin] = useState("");
     const [formError, setFormError] = useState("");
     const [copyStatus, setCopyStatus] = useState("");
+    // Inline roster setup so teachers can build the exam target without leaving the share flow.
+    const [showNewGroup, setShowNewGroup] = useState(false);
+    const [newGroupName, setNewGroupName] = useState("");
+    const [newGroupRegion, setNewGroupRegion] = useState("");
+    const [studentFormGroupId, setStudentFormGroupId] = useState<string | null>(null);
+    const [newStudentName, setNewStudentName] = useState("");
+    const [newStudentEmail, setNewStudentEmail] = useState("");
     const wasOpenRef = useRef(false);
 
     useEffect(() => {
@@ -60,6 +70,12 @@ export default function DistributeModal({ isOpen, onClose, onSaveAndShare, onAut
         setPin(initialType === 'public' ? normalizeExamPin(initialAccessConfig?.pin || "") : "");
         setFormError("");
         setCopyStatus("");
+        setShowNewGroup(false);
+        setNewGroupName("");
+        setNewGroupRegion("");
+        setStudentFormGroupId(null);
+        setNewStudentName("");
+        setNewStudentEmail("");
     }, [isOpen, initialAccessConfig]);
 
     const targetSummary = useMemo(() => summarizeDistributionTargets({
@@ -136,6 +152,76 @@ export default function DistributeModal({ isOpen, onClose, onSaveAndShare, onAut
         setSelectedGroups(prev =>
             prev.includes(id) ? prev.filter(g => g !== id) : [...prev, id]
         );
+    };
+
+    // Write the full roster snapshot through (preserving invites) and reflect it locally.
+    const persistRoster = (nextStudents: RosterStudent[], nextGroups: RosterGroup[]) => {
+        setStudents(nextStudents);
+        setGroups(nextGroups);
+        let invites: RosterInvite[];
+        try {
+            invites = readRosterInvites(localStorage);
+        } catch {
+            invites = [];
+        }
+        void saveRosterSnapshot(localStorage, { students: nextStudents, groups: nextGroups, invites })
+            .then(result => {
+                if (result.remoteError) {
+                    toast.info("명단은 로컬에 저장됨", "서버 동기화는 다음 로드 때 다시 시도합니다.");
+                }
+            })
+            .catch(() => {
+                toast.error("명단 저장 실패", "브라우저 저장소 권한을 확인해주세요.");
+            });
+    };
+
+    const handleCreateGroup = () => {
+        const result = addRosterGroup(students, groups, { name: newGroupName, region: newGroupRegion });
+        if (!result.ok) {
+            if (result.reason === "duplicate" && result.group) {
+                // Same name+region already exists — just select it instead of erroring out.
+                setSelectedGroups(prev => prev.includes(result.group!.id) ? prev : [...prev, result.group!.id]);
+                setShowNewGroup(false);
+                setNewGroupName("");
+                setNewGroupRegion("");
+                toast.info("이미 있는 반", `${formatRegionScopedLabel(result.group.name, result.group.region)} 반을 대상으로 선택했습니다.`);
+                return;
+            }
+            setFormError("반 이름을 입력해주세요.");
+            return;
+        }
+        persistRoster(result.students, result.groups);
+        if (result.group) {
+            setSelectedGroups(prev => [...prev, result.group!.id]);
+            toast.success("반 추가됨", `${formatRegionScopedLabel(result.group.name, result.group.region)} 반을 만들고 대상으로 선택했습니다.`);
+        }
+        setShowNewGroup(false);
+        setNewGroupName("");
+        setNewGroupRegion("");
+        setFormError("");
+    };
+
+    const handleAddStudent = (groupId: string) => {
+        const result = addRosterStudent(students, groups, { name: newStudentName, email: newStudentEmail, groupId });
+        if (!result.ok) {
+            const message = result.reason === "invalid-email"
+                ? "올바른 이메일을 입력해주세요."
+                : result.reason === "duplicate"
+                    ? "같은 이메일 또는 학생번호가 이미 있습니다."
+                    : result.reason === "missing-name"
+                        ? "학생 이름을 입력해주세요."
+                        : "대상 반을 찾을 수 없습니다.";
+            setFormError(message);
+            return;
+        }
+        persistRoster(result.students, result.groups);
+        if (!selectedGroups.includes(groupId)) {
+            setSelectedGroups(prev => [...prev, groupId]);
+        }
+        toast.success("학생 추가됨", `${result.student?.name || "학생"}을(를) 명단에 추가했습니다.`);
+        setNewStudentName("");
+        setNewStudentEmail("");
+        setFormError("");
     };
 
     return (
@@ -266,21 +352,117 @@ export default function DistributeModal({ isOpen, onClose, onSaveAndShare, onAut
 
                             {accessType === 'group' && (
                                 <div style={{ marginBottom: '1.5rem', background: 'var(--background)', border: '1px solid var(--border)', padding: '1rem', borderRadius: '8px' }}>
-                                    <p style={{ fontSize: '0.9rem', marginBottom: '0.5rem', color: 'var(--muted)' }}>응시할 그룹 선택:</p>
-                                    {groups.length === 0 ? (
-                                        <div style={{ color: 'var(--error)', fontSize: '0.9rem', fontWeight: 700 }}>생성된 그룹이 없습니다. 그룹 메뉴에서 먼저 생성하세요.</div>
+                                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '0.5rem', marginBottom: '0.6rem' }}>
+                                        <p style={{ fontSize: '0.9rem', color: 'var(--muted)', margin: 0 }}>응시할 그룹 선택:</p>
+                                        <button
+                                            type="button"
+                                            onClick={() => { setShowNewGroup(v => !v); setFormError(""); }}
+                                            style={{ display: 'inline-flex', alignItems: 'center', gap: '0.3rem', padding: '0.3rem 0.6rem', fontSize: '0.78rem', fontWeight: 700, borderRadius: '6px', border: '1px solid var(--border)', background: 'var(--surface)', color: 'var(--foreground)', cursor: 'pointer' }}
+                                        >
+                                            <Plus size={13} /> 새 반
+                                        </button>
+                                    </div>
+
+                                    {showNewGroup && (
+                                        <div style={{ marginBottom: '0.75rem', padding: '0.75rem', borderRadius: '8px', border: '1px dashed var(--border)', background: 'var(--surface)' }}>
+                                            <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '0.5rem', flexWrap: 'wrap' }}>
+                                                <input
+                                                    aria-label="새 반 이름"
+                                                    value={newGroupName}
+                                                    onChange={e => setNewGroupName(e.target.value)}
+                                                    onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); handleCreateGroup(); } }}
+                                                    placeholder="반 이름 (예: 3학년 A반)"
+                                                    autoFocus
+                                                    style={{ flex: '2 1 140px', padding: '0.5rem 0.7rem', borderRadius: '6px', border: '1px solid var(--border)', background: 'var(--background)', color: 'var(--foreground)', fontSize: '0.85rem' }}
+                                                />
+                                                <input
+                                                    aria-label="새 반 지역"
+                                                    value={newGroupRegion}
+                                                    onChange={e => setNewGroupRegion(e.target.value)}
+                                                    onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); handleCreateGroup(); } }}
+                                                    placeholder="지역(선택)"
+                                                    style={{ flex: '1 1 90px', padding: '0.5rem 0.7rem', borderRadius: '6px', border: '1px solid var(--border)', background: 'var(--background)', color: 'var(--foreground)', fontSize: '0.85rem' }}
+                                                />
+                                            </div>
+                                            <button
+                                                type="button"
+                                                onClick={handleCreateGroup}
+                                                className="btn btn-primary"
+                                                style={{ width: '100%', padding: '0.5rem', fontSize: '0.82rem' }}
+                                            >
+                                                반 만들고 대상으로 선택
+                                            </button>
+                                        </div>
+                                    )}
+
+                                    {groups.length === 0 && !showNewGroup ? (
+                                        <div style={{ fontSize: '0.85rem', color: 'var(--muted)', lineHeight: 1.5, wordBreak: 'keep-all' }}>
+                                            아직 만든 반이 없습니다. <strong style={{ color: 'var(--foreground)' }}>새 반</strong> 버튼으로 이 화면에서 바로 반을 만들고 학생을 추가할 수 있습니다.
+                                        </div>
                                     ) : (
-                                        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', maxHeight: '150px', overflowY: 'auto' }}>
-                                            {groups.map(g => (
-                                                <label key={g.id} style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontSize: '0.9rem' }}>
-                                                    <input
-                                                        type="checkbox"
-                                                        checked={selectedGroups.includes(g.id)}
-                                                        onChange={() => toggleGroup(g.id)}
-                                                    />
-                                                    {formatRegionScopedLabel(g.name, g.region)}
-                                                </label>
-                                            ))}
+                                        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.35rem', maxHeight: '220px', overflowY: 'auto' }}>
+                                            {groups.map(g => {
+                                                const isSelected = selectedGroups.includes(g.id);
+                                                const isAddingStudent = studentFormGroupId === g.id;
+                                                return (
+                                                    <div key={g.id} style={{ borderRadius: '8px', border: isSelected ? '1px solid rgba(99,102,241,0.35)' : '1px solid transparent', background: isSelected ? 'rgba(99,102,241,0.05)' : 'transparent', padding: '0.35rem 0.45rem' }}>
+                                                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontSize: '0.9rem' }}>
+                                                            <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flex: 1, cursor: 'pointer', minWidth: 0 }}>
+                                                                <input
+                                                                    type="checkbox"
+                                                                    checked={isSelected}
+                                                                    onChange={() => toggleGroup(g.id)}
+                                                                />
+                                                                <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                                                                    {formatRegionScopedLabel(g.name, g.region)}
+                                                                </span>
+                                                                <span style={{ fontSize: '0.72rem', color: 'var(--muted)', flexShrink: 0 }}>{g.count}명</span>
+                                                            </label>
+                                                            <button
+                                                                type="button"
+                                                                onClick={() => {
+                                                                    setStudentFormGroupId(prev => prev === g.id ? null : g.id);
+                                                                    setNewStudentName("");
+                                                                    setNewStudentEmail("");
+                                                                    setFormError("");
+                                                                }}
+                                                                aria-label={`${g.name} 학생 추가`}
+                                                                style={{ display: 'inline-flex', alignItems: 'center', gap: '0.25rem', padding: '0.25rem 0.5rem', fontSize: '0.74rem', fontWeight: 700, borderRadius: '6px', border: '1px solid var(--border)', background: 'var(--surface)', color: 'var(--foreground)', cursor: 'pointer', flexShrink: 0 }}
+                                                            >
+                                                                <UserPlus size={12} /> 학생
+                                                            </button>
+                                                        </div>
+                                                        {isAddingStudent && (
+                                                            <div style={{ display: 'flex', gap: '0.4rem', marginTop: '0.45rem', flexWrap: 'wrap' }}>
+                                                                <input
+                                                                    aria-label="학생 이름"
+                                                                    value={newStudentName}
+                                                                    onChange={e => setNewStudentName(e.target.value)}
+                                                                    onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); handleAddStudent(g.id); } }}
+                                                                    placeholder="이름"
+                                                                    style={{ flex: '1 1 80px', padding: '0.45rem 0.6rem', borderRadius: '6px', border: '1px solid var(--border)', background: 'var(--background)', color: 'var(--foreground)', fontSize: '0.82rem' }}
+                                                                />
+                                                                <input
+                                                                    aria-label="학생 이메일"
+                                                                    type="email"
+                                                                    value={newStudentEmail}
+                                                                    onChange={e => setNewStudentEmail(e.target.value)}
+                                                                    onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); handleAddStudent(g.id); } }}
+                                                                    placeholder="이메일"
+                                                                    style={{ flex: '1.4 1 120px', padding: '0.45rem 0.6rem', borderRadius: '6px', border: '1px solid var(--border)', background: 'var(--background)', color: 'var(--foreground)', fontSize: '0.82rem' }}
+                                                                />
+                                                                <button
+                                                                    type="button"
+                                                                    onClick={() => handleAddStudent(g.id)}
+                                                                    style={{ padding: '0.45rem 0.7rem', fontSize: '0.78rem', fontWeight: 700, borderRadius: '6px', border: 'none', background: 'var(--primary)', color: 'white', cursor: 'pointer', flexShrink: 0 }}
+                                                                >
+                                                                    추가
+                                                                </button>
+                                                            </div>
+                                                        )}
+                                                    </div>
+                                                );
+                                            })}
                                         </div>
                                     )}
                                     {selectedGroups.length > 0 && (
@@ -358,6 +540,10 @@ export default function DistributeModal({ isOpen, onClose, onSaveAndShare, onAut
                             <div style={{ background: 'var(--background)', border: '1px solid var(--border)', padding: '0.5rem', borderRadius: '4px', fontSize: '0.8rem', wordBreak: 'break-all', color: 'var(--muted)', marginBottom: '1.25rem' }}>
                                 {shareUrl}
                             </div>
+
+                            <p style={{ fontSize: '0.82rem', color: 'var(--muted)', lineHeight: 1.55, marginBottom: '1rem', wordBreak: 'keep-all' }}>
+                                설치 앱 또는 웹 브라우저에서 열리는 응시 링크입니다. 학생 앱 로그인이 있으면 학생으로, 없으면 확인 화면에서 게스트로 입장합니다.
+                            </p>
 
                             {examId && (
                                 <a

@@ -23,6 +23,7 @@ import {
 import { loadAttempts, loadExams } from "@/lib/omrPersistence";
 import { averageResolvedAttemptPercent, baseAttemptsOnly, retakeAttemptsOnly } from "@/lib/attemptScores";
 import { evaluateExamAccess } from "@/lib/examAccess";
+import { loadReturnedFeedbackForStudent } from "@/lib/feedbackPersistence";
 
 function getTimeGreeting(): string {
     const h = new Date().getHours();
@@ -36,7 +37,7 @@ export default function StudentDashboard() {
     const router = useRouter();
     const [user, setUser] = useState<StudentSession | null>(null);
     const [todoExams, setTodoExams] = useState<Exam[]>([]);
-    const [doneExams, setDoneExams] = useState<(Exam & { attemptId: string })[]>([]);
+    const [doneExams, setDoneExams] = useState<(Exam & { attemptId: string; hasUnreadFeedback?: boolean })[]>([]);
     const [stats, setStats] = useState({
         avgScore: 0,
         completedCount: 0,
@@ -93,7 +94,17 @@ export default function StudentDashboard() {
                 : null;
 
             // 3. Categorize Exams
-            const done: (Exam & { attemptId: string })[] = [];
+            const returnedFeedback = currentUser.studentId
+                ? await loadReturnedFeedbackForStudent(currentUser.studentId)
+                : [];
+            if (cancelled) return;
+            const myAttemptIds = new Set(myBaseAttempts.map(attempt => attempt.id));
+            const unreadFeedbackAttemptIds = new Set(
+                returnedFeedback
+                    .filter(feedback => myAttemptIds.has(feedback.attemptId) && !feedback.delivery.firstOpenedAt)
+                    .map(feedback => feedback.attemptId)
+            );
+            const done: (Exam & { attemptId: string; hasUnreadFeedback?: boolean })[] = [];
             const todo: Exam[] = [];
 
             allExams.forEach(exam => {
@@ -105,7 +116,7 @@ export default function StudentDashboard() {
                 // Check if completed
                 const attempt = myBaseAttempts.find(a => a.examId === exam.id);
                 if (attempt) {
-                    done.push({ ...exam, attemptId: attempt.id });
+                    done.push({ ...exam, attemptId: attempt.id, hasUnreadFeedback: unreadFeedbackAttemptIds.has(attempt.id) });
                 } else {
                     todo.push(exam);
                 }

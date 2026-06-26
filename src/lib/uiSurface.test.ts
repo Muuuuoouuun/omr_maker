@@ -446,7 +446,9 @@ describe("service UI surface", () => {
         expect(storage).toContain("previewGuestMerge");
         expect(storage).toContain("isGuestAttemptMergeable");
         expect(homePage).toContain("게스트 기록 연결 예정");
-        expect(homePage).toContain("formatRegionScopedLabel(g.name, g.region)");
+        // Student login resolves region-scoped groups from the roster (name-based,
+        // replacing the old manual group <select>).
+        expect(homePage).toContain("buildStudentLoginGroupOptions");
         expect(homePage).toContain("recentStudentSession");
         expect(homePage).toContain("최근 학생");
         expect(homePage).toContain("handleContinueRecentStudent");

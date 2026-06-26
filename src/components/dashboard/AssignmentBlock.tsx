@@ -2,7 +2,7 @@ import Link from "next/link";
 import { Exam } from "@/types/omr";
 
 interface AssignmentBlockProps {
-  exams: Array<Exam & { attemptId?: string }>;
+  exams: Array<Exam & { attemptId?: string; hasUnreadFeedback?: boolean }>;
   type: "todo" | "done";
 }
 
@@ -206,6 +206,22 @@ export default function AssignmentBlock({ exams, type }: AssignmentBlockProps) {
                   >
                     {exam.accessConfig?.type === "group" ? "클래스" : "공개"}
                   </span>
+                  {!isTodo && exam.hasUnreadFeedback && (
+                    <span
+                      style={{
+                        color: "#4f46e5",
+                        background: "#eef2ff",
+                        border: "1px solid #c7d2fe",
+                        borderRadius: "999px",
+                        padding: "1px 7px",
+                        fontSize: "0.7rem",
+                        fontWeight: 900,
+                        whiteSpace: "nowrap",
+                      }}
+                    >
+                      New feedback
+                    </span>
+                  )}
                 </div>
               </div>
 

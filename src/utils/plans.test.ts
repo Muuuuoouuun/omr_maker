@@ -51,6 +51,9 @@ describe("plan catalog", () => {
         expect(canArchiveHandwriting("free")).toBe(false);
         expect(canArchiveHandwriting("pro")).toBe(true);
         expect(canArchiveHandwriting("academy")).toBe(true);
+        expect(hasPlanEntitlement("free", "feedbackMarkup")).toBe(false);
+        expect(hasPlanEntitlement("pro", "feedbackMarkup")).toBe(true);
+        expect(hasPlanEntitlement("academy", "returnedFeedback")).toBe(true);
         expect(hasPlanEntitlement("free", "retakeAssignments")).toBe(false);
         expect(hasPlanEntitlement("pro", "retakeAssignments")).toBe(true);
         expect(hasPlanEntitlement("academy", "organizationDashboard")).toBe(true);
@@ -60,6 +63,7 @@ describe("plan catalog", () => {
         const freeViews = getPlanEntitlementViews("free", [
             "csvExport",
             "handwritingArchive",
+            "feedbackMarkup",
             "advancedAnalytics",
             "multiTeacher",
         ]);
@@ -67,6 +71,7 @@ describe("plan catalog", () => {
         expect(freeViews).toEqual([
             expect.objectContaining({ key: "csvExport", enabled: true, unlockPlan: undefined }),
             expect.objectContaining({ key: "handwritingArchive", enabled: false, unlockPlan: "pro" }),
+            expect.objectContaining({ key: "feedbackMarkup", enabled: false, unlockPlan: "pro" }),
             expect.objectContaining({ key: "advancedAnalytics", enabled: false, unlockPlan: "pro" }),
             expect.objectContaining({ key: "multiTeacher", enabled: false, unlockPlan: "academy" }),
         ]);

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo } from "react";
 import Image from "next/image";
 import { useRouter } from "next/navigation";
 import ThemeToggle from "@/components/ThemeToggle";
@@ -8,7 +8,13 @@ import { toast } from "@/components/Toast";
 import { verifyTeacherPassword } from "@/app/actions/auth";
 import { formatRegionScopedLabel } from "@/lib/dashboardSelection";
 import { readLocalAttempts } from "@/lib/omrPersistence";
-import { readRosterGroups, readRosterStudents, type RosterGroup, type RosterStudent } from "@/lib/rosterStorage";
+import {
+  readRosterGroups,
+  readRosterStudents,
+  scopedGroupKeyForStudentId,
+  type RosterGroup,
+  type RosterStudent,
+} from "@/lib/rosterStorage";
 import { TEACHER_AUTH_DEPLOYMENT_HELP, shouldShowTeacherDeploymentHelp } from "@/lib/teacherAuthMessages";
 import {
   hasStudentStartCode,
@@ -29,6 +35,7 @@ import {
   type GuestMergePreview,
   type StudentSession,
 } from "@/utils/storage";
+import { normalizeStudentRedirectPath } from "@/lib/studentRedirect";
 import { normalizeTeacherRedirectPath, saveTeacherSessionWithIdentity } from "@/lib/teacherSession";
 
 /* ─── SVG Icons ──────────────────────────────────────── */
@@ -90,12 +97,74 @@ function cleanText(value: string | undefined): string {
   return value?.trim() || "";
 }
 
+type StudentLoginGroupOption = Pick<RosterGroup, "id" | "name" | "region">;
+
+function groupOptionKey(name: string | undefined, region?: string): string {
+  return `${cleanText(region).toLocaleLowerCase("ko-KR")}::${cleanText(name).toLocaleLowerCase("ko-KR")}`;
+}
+
+function buildStudentLoginGroupOptions(
+  groups: StudentLoginGroupOption[],
+  students: RosterStudent[],
+): StudentLoginGroupOption[] {
+  const options = new Map<string, StudentLoginGroupOption>();
+
+  for (const group of groups) {
+    const name = cleanText(group.name);
+    if (!name) continue;
+    const id = cleanText(group.id) || name;
+    const region = cleanText(group.region);
+    options.set(groupOptionKey(name, region), region ? { id, name, region } : { id, name });
+  }
+
+  for (const student of students) {
+    const name = cleanText(student.group);
+    if (!name) continue;
+    const region = cleanText(student.region);
+    const key = groupOptionKey(name, region);
+    if (options.has(key)) continue;
+    const scopedGroupId = scopedGroupKeyForStudentId(student.id);
+    const id = scopedGroupId || (region ? `${region}/${name}` : name);
+    options.set(key, region ? { id, name, region } : { id, name });
+  }
+
+  return Array.from(options.values()).sort((a, b) =>
+    formatRegionScopedLabel(a.name, a.region).localeCompare(formatRegionScopedLabel(b.name, b.region), "ko")
+  );
+}
+
+function normalizedGroupCode(value: string | undefined): string {
+  return cleanText(value).toLocaleLowerCase("ko-KR");
+}
+
+function resolveGuestGroupCode(
+  code: string,
+  groups: StudentLoginGroupOption[],
+): StudentLoginGroupOption | null {
+  const trimmedCode = cleanText(code);
+  const normalizedCode = normalizedGroupCode(trimmedCode);
+  if (!normalizedCode) return null;
+
+  const matchedGroup = groups.find(group => {
+    const candidates = [
+      group.id,
+      group.name,
+      formatRegionScopedLabel(group.name, group.region),
+      group.region ? `${group.region}/${group.name}` : "",
+    ];
+    return candidates.some(candidate => normalizedGroupCode(candidate) === normalizedCode);
+  });
+
+  if (matchedGroup) return matchedGroup;
+  return { id: trimmedCode, name: trimmedCode };
+}
+
 function resolveSessionRegion(params: {
   name: string;
   selectedGroupId: string;
   groupName: string;
   studentId: string;
-  groups: RosterGroup[];
+  groups: StudentLoginGroupOption[];
   students: RosterStudent[];
 }): Pick<StudentSession, "regionId" | "regionName"> {
   const group = params.groups.find(item => item.id === params.selectedGroupId || item.name === params.groupName);
@@ -114,8 +183,9 @@ export default function Home() {
   const [role, setRole] = useState<"none" | "teacher" | "student">("none");
   const [studentName, setStudentName] = useState("");
   const [studentLookup, setStudentLookup] = useState("");
-  const [selectedGroupId, setSelectedGroupId] = useState("");
+  const [guestGroupCode, setGuestGroupCode] = useState("");
   const [groups, setGroups] = useState<RosterGroup[]>([]);
+  const [rosterStudents, setRosterStudents] = useState<RosterStudent[]>([]);
   const [teacherIdentifier, setTeacherIdentifier] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
@@ -125,12 +195,23 @@ export default function Home() {
   const [startCode, setStartCode] = useState("");
   const [needsCode, setNeedsCode] = useState(false);
   const [needsStudentLookup, setNeedsStudentLookup] = useState(false);
+  const studentGroupOptions = useMemo(
+    () => buildStudentLoginGroupOptions(groups, rosterStudents),
+    [groups, rosterStudents],
+  );
+
+  const studentRedirectPath = () => {
+    if (typeof window === "undefined") return "/student/dashboard";
+    return normalizeStudentRedirectPath(new URLSearchParams(window.location.search).get("next"));
+  };
 
   useEffect(() => {
     try {
       // Hydrate client-only localStorage state after mount.
       // eslint-disable-next-line react-hooks/set-state-in-effect
       setGroups(readRosterGroups(localStorage));
+      const storedStudents = readRosterStudents(localStorage);
+      setRosterStudents(storedStudents);
       const restoredSession = getSession();
       setRecentStudentSession(restoredSession && !restoredSession.isGuest ? restoredSession : null);
     } catch {
@@ -145,7 +226,7 @@ export default function Home() {
 
   // Surface the start-code field proactively for returning students.
   useEffect(() => {
-    if (role !== "student" || !studentName.trim() || !selectedGroupId) {
+    if (role !== "student" || !studentName.trim()) {
       // Derived from client-only localStorage inputs.
       // eslint-disable-next-line react-hooks/set-state-in-effect
       setNeedsCode(false);
@@ -154,12 +235,11 @@ export default function Home() {
     }
     try {
       const codes = readStudentCodes(localStorage);
-      const students = readRosterStudents(localStorage);
       const identity = resolveStudentIdentity({
         name: studentName,
-        selectedGroupId,
-        groups,
-        students,
+        selectedGroupId: "",
+        groups: studentGroupOptions,
+        students: rosterStudents,
         studentLookup,
       });
       const lookupRequired = identity.requiresStudentLookup || identity.lookupMismatch;
@@ -173,7 +253,7 @@ export default function Home() {
       setNeedsCode(false);
       setNeedsStudentLookup(false);
     }
-  }, [role, studentName, studentLookup, selectedGroupId, groups]);
+  }, [role, studentName, studentLookup, studentGroupOptions, rosterStudents]);
 
   useEffect(() => {
     if (role !== "student") {
@@ -222,16 +302,18 @@ export default function Home() {
 
   const handleStudentLogin = () => {
     const trimmedName = studentName.trim();
-    if (!trimmedName || !selectedGroupId) {
-      setError("이름과 반을 모두 입력해주세요.");
+    if (!trimmedName) {
+      setError("이름을 입력해주세요.");
       setTimeout(() => setError(""), 2000);
       return;
     }
     const students = readRosterStudents(localStorage);
+    const storedGroups = readRosterGroups(localStorage);
+    const loginGroups = buildStudentLoginGroupOptions(storedGroups, students);
     const identity = resolveStudentIdentity({
       name: trimmedName,
-      selectedGroupId,
-      groups,
+      selectedGroupId: "",
+      groups: loginGroups,
       students,
       studentLookup,
     });
@@ -249,10 +331,10 @@ export default function Home() {
     }
     const regionSnapshot = resolveSessionRegion({
       name: trimmedName,
-      selectedGroupId,
+      selectedGroupId: identity.groupId,
       groupName: identity.groupName,
       studentId: identity.studentId,
-      groups,
+      groups: loginGroups,
       students,
     });
 
@@ -306,7 +388,7 @@ export default function Home() {
       name: trimmedName,
       studentId: identity.studentId,
       loginId: identity.legacyStudentId,
-      groupId: selectedGroupId,
+      groupId: identity.groupId,
       groupName: identity.groupName,
       ...regionSnapshot,
       isGuest: false,
@@ -318,7 +400,7 @@ export default function Home() {
       const mergedCount = mergeGuestAttempts(pendingGuestMerge.guestId, {
         studentId: identity.studentId,
         name: trimmedName,
-        groupId: selectedGroupId,
+        groupId: identity.groupId,
         groupName: identity.groupName,
         ...regionSnapshot,
         identityType: "temporary",
@@ -331,10 +413,10 @@ export default function Home() {
     }
 
     saveSession(session);
-    router.push("/student/dashboard");
+    router.push(studentRedirectPath());
   };
 
-  const handleGuest = () => {
+  const startGuestSession = (guestGroup?: StudentLoginGroupOption | null) => {
     const guestId = getOrCreateGuestId();
     const session: StudentSession = {
       studentId: `guest:${guestId}`,
@@ -342,17 +424,34 @@ export default function Home() {
       isGuest: true,
       identityType: "guest",
       guestId,
-      groupName: "Guest Mode",
+      groupId: guestGroup?.id,
+      groupName: guestGroup?.name || "Guest Mode",
+      ...(guestGroup?.region ? { regionId: guestGroup.region, regionName: guestGroup.region } : {}),
     };
     saveSession(session);
     localStorage.setItem("omr_guest_id", guestId);
-    router.push("/student/dashboard");
+    router.push(studentRedirectPath());
+  };
+
+  const handleGuest = () => {
+    startGuestSession();
+  };
+
+  const handleGuestWithGroupCode = () => {
+    const guestGroup = resolveGuestGroupCode(guestGroupCode, studentGroupOptions);
+    if (!guestGroup) {
+      setError("반 코드를 입력해주세요.");
+      setTimeout(() => setError(""), 2000);
+      return;
+    }
+
+    startGuestSession(guestGroup);
   };
 
   const handleContinueRecentStudent = () => {
     const restoredSession = getSession();
     if (restoredSession && !restoredSession.isGuest) {
-      router.push("/student/dashboard");
+      router.push(studentRedirectPath());
       return;
     }
     setRecentStudentSession(null);
@@ -366,7 +465,7 @@ export default function Home() {
     setTeacherIdentifier("");
     setStudentName("");
     setStudentLookup("");
-    setSelectedGroupId("");
+    setGuestGroupCode("");
     setStartCode("");
     setNeedsCode(false);
     setNeedsStudentLookup(false);
@@ -772,7 +871,7 @@ export default function Home() {
                 </div>
 
                 <button onClick={handleTeacherLogin} className="btn btn-primary" style={{ width: "100%" }}>
-                  대시보드 입장
+                  로그인
                 </button>
               </>
             ) : (
@@ -863,55 +962,11 @@ export default function Home() {
                   </p>
                 </div>
 
-                <div style={{ marginBottom: "1.75rem" }}>
-                  <label
-                    style={{
-                      display: "block",
-                      marginBottom: "0.55rem",
-                      fontSize: "0.75rem",
-                      fontWeight: 700,
-                      color: "var(--muted)",
-                      textTransform: "uppercase",
-                      letterSpacing: "0.07em",
-                    }}
-                  >
-                    반 선택
-                  </label>
-                  <select
-                    value={selectedGroupId}
-                    onChange={(e) => setSelectedGroupId(e.target.value)}
-                    className="input-field"
-                    style={{ cursor: "pointer" }}
-                  >
-                    <option value="">반을 선택하세요</option>
-                    {groups.map((g) => (
-                      <option key={g.id} value={g.id}>
-                        {formatRegionScopedLabel(g.name, g.region)}
-                      </option>
-                    ))}
-                  </select>
-                  {groups.length === 0 && (
-                    <div
-                      style={{
-                        fontSize: "0.8rem",
-                        color: "var(--error)",
-                        marginTop: "0.55rem",
-                        background: "rgba(239,68,68,0.07)",
-                        padding: "0.5rem 0.75rem",
-                        borderRadius: "var(--radius-md)",
-                        border: "1px solid rgba(239,68,68,0.18)",
-                        fontWeight: 600,
-                      }}
-                    >
-                      등록된 반이 없습니다. 선생님께 문의하세요.
-                    </div>
-                  )}
-                  {error && (
-                    <p style={{ fontSize: "0.8rem", color: "var(--error)", marginTop: "0.5rem", fontWeight: 600 }}>
-                      {error}
-                    </p>
-                  )}
-                </div>
+                {error && (
+                  <p style={{ fontSize: "0.8rem", color: "var(--error)", marginTop: "-0.35rem", marginBottom: "1.35rem", fontWeight: 600 }}>
+                    {error}
+                  </p>
+                )}
 
                 {pendingGuestPreview && (
                   <div
@@ -985,6 +1040,46 @@ export default function Home() {
                   <span>또는</span>
                 </div>
 
+                <div style={{ marginBottom: "0.75rem" }}>
+                  <label
+                    style={{
+                      display: "block",
+                      marginBottom: "0.55rem",
+                      fontSize: "0.75rem",
+                      fontWeight: 700,
+                      color: "var(--muted)",
+                      textTransform: "uppercase",
+                      letterSpacing: "0.07em",
+                    }}
+                  >
+                    반 코드
+                  </label>
+                  <input
+                    type="text"
+                    className="input-field"
+                    value={guestGroupCode}
+                    onChange={(e) => setGuestGroupCode(e.target.value)}
+                    onKeyDown={(e) => e.key === "Enter" && handleGuestWithGroupCode()}
+                    placeholder="선생님이 알려준 코드"
+                    autoCapitalize="characters"
+                    spellCheck={false}
+                  />
+                </div>
+
+                <button
+                  type="button"
+                  onClick={handleGuestWithGroupCode}
+                  className="btn btn-primary"
+                  style={{
+                    width: "100%",
+                    background: "linear-gradient(135deg, #6366f1, #14b8a6)",
+                    boxShadow: "0 4px 18px rgba(20,184,166,0.25)",
+                    marginBottom: "0.75rem",
+                  }}
+                >
+                  반 코드로 게스트 시험보기
+                </button>
+
                 <button
                   onClick={handleGuest}
                   className="btn"
@@ -996,7 +1091,7 @@ export default function Home() {
                     fontSize: "0.92rem",
                   }}
                 >
-                  게스트로 계속하기
+                  코드 없이 게스트로 계속하기
                 </button>
               </>
             )}

@@ -1578,6 +1578,42 @@ body:has(.home-page[data-home-role="teacher"]) .mobile-install-prompt {
   box-shadow: 0 12px 22px rgba(15, 23, 42, 0.05);
 }
 
+.create-section-label {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin: 0.35rem 0 0.85rem;
+  padding-top: 1.3rem;
+  border-top: 1px solid var(--border);
+  color: var(--foreground);
+  font-size: 0.78rem;
+  font-weight: 900;
+  letter-spacing: -0.01em;
+}
+
+.create-section-label .step {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  border-radius: 6px;
+  background: rgba(99, 102, 241, 0.1);
+  color: var(--primary);
+  font-size: 0.68rem;
+  font-weight: 950;
+  flex: 0 0 auto;
+}
+
+.create-section-label .hint {
+  margin-left: auto;
+  color: var(--muted);
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0;
+  white-space: nowrap;
+}
+
 .create-question-quick-card {
   margin: 0 0 1rem;
   padding: 0.85rem;
@@ -1776,6 +1812,59 @@ body:has(.home-page[data-home-role="teacher"]) .mobile-install-prompt {
   white-space: nowrap;
 }
 
+.create-label-memory-strip {
+  min-height: 34px;
+  margin: -0.18rem 0 0.62rem;
+  padding: 0.42rem 0.48rem;
+  border: 1px solid rgba(15, 118, 110, 0.16);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--surface), var(--background) 24%);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+
+.create-label-memory-strip > span {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 0.68rem;
+  font-weight: 850;
+  line-height: 1.2;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.create-label-memory-actions {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+}
+
+.create-label-memory-actions button {
+  min-height: 26px;
+  padding: 0 0.45rem;
+  border: 1px solid rgba(15, 118, 110, 0.2);
+  border-radius: 8px;
+  background: var(--surface);
+  color: #0f766e;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.24rem;
+  font-size: 0.66rem;
+  font-weight: 950;
+  line-height: 1;
+  white-space: nowrap;
+  transition: background-color 0.16s ease, border-color 0.16s ease, color 0.16s ease;
+}
+
+.create-label-memory-actions button:hover {
+  border-color: rgba(15, 118, 110, 0.34);
+  background: rgba(15, 118, 110, 0.08);
+}
+
 .create-label-batch-range,
 .create-label-batch-grid,
 .create-label-batch-actions {
@@ -1817,10 +1906,38 @@ body:has(.home-page[data-home-role="teacher"]) .mobile-install-prompt {
   margin-top: 0.5rem;
 }
 
-.create-label-batch-presets button,
-.create-label-batch-difficulty button {
+.create-label-candidate-chip {
+  max-width: 100%;
+  min-height: 30px;
+  position: relative;
+  display: inline-flex;
+  align-items: center;
   border: 1px solid var(--border);
-  border-radius: var(--radius-full);
+  border-radius: 8px;
+  background: var(--surface);
+  overflow: visible;
+  transition: border-color 0.16s ease, box-shadow 0.16s ease, transform 0.16s ease;
+}
+
+.create-label-candidate-chip.is-current {
+  border-color: rgba(99, 102, 241, 0.26);
+}
+
+.create-label-candidate-chip.is-recent {
+  border-color: rgba(15, 118, 110, 0.24);
+}
+
+.create-label-candidate-chip:hover,
+.create-label-candidate-chip:focus-within {
+  box-shadow: 0 8px 18px rgba(15, 23, 42, 0.08);
+  transform: translateY(-1px);
+  z-index: 2;
+}
+
+.create-label-batch-presets .create-label-candidate-main,
+.create-label-batch-presets .create-label-candidate-hide,
+.create-label-batch-difficulty button {
+  border: 0;
   background: var(--surface);
   color: var(--muted);
   cursor: pointer;
@@ -1831,8 +1948,84 @@ body:has(.home-page[data-home-role="teacher"]) .mobile-install-prompt {
   transition: background-color 0.16s ease, border-color 0.16s ease, color 0.16s ease;
 }
 
-.create-label-batch-presets button.is-active {
+.create-label-batch-difficulty button {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-full);
+}
+
+.create-label-batch-presets .create-label-candidate-main {
+  min-width: 0;
+  max-width: 148px;
+  min-height: 30px;
+  padding: 0 0.66rem;
+  border-radius: 8px;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+}
+
+.create-label-candidate-chip.has-no-hide .create-label-candidate-main {
+  border-radius: 8px;
+}
+
+.create-label-batch-presets .create-label-candidate-main span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.create-label-batch-presets .create-label-candidate-main small {
+  flex: 0 0 auto;
+  opacity: 0.58;
+  font-size: 0.58rem;
+  font-weight: 950;
+  line-height: 1;
+}
+
+.create-label-batch-presets .create-label-candidate-hide {
+  position: absolute;
+  top: -7px;
+  right: -7px;
+  width: 18px;
+  min-width: 18px;
+  height: 18px;
+  padding: 0;
+  border: 1px solid rgba(15, 23, 42, 0.12);
+  border-radius: 999px;
+  background: var(--surface);
+  box-shadow: 0 6px 16px rgba(15, 23, 42, 0.16);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  opacity: 0;
+  pointer-events: none;
+  transform: scale(0.82);
+  transition: opacity 0.14s ease, transform 0.14s ease, background-color 0.14s ease, color 0.14s ease;
+}
+
+.create-label-candidate-chip:hover .create-label-candidate-hide,
+.create-label-candidate-chip:focus-within .create-label-candidate-hide {
+  opacity: 1;
+  pointer-events: auto;
+  transform: scale(1);
+}
+
+.create-label-batch-presets .create-label-candidate-main:hover {
+  background: rgba(15, 118, 110, 0.08);
+  color: #0f766e;
+}
+
+.create-label-batch-presets .create-label-candidate-hide:hover {
+  background: #ef4444;
+  color: white;
+}
+
+.create-label-candidate-chip:has(.create-label-candidate-main.is-active) {
   border-color: rgba(15, 118, 110, 0.42);
+}
+
+.create-label-batch-presets .create-label-candidate-main.is-active {
   background: rgba(15, 118, 110, 0.1);
   color: #0f766e;
 }
@@ -1907,18 +2100,21 @@ body:has(.home-page[data-home-role="teacher"]) .mobile-install-prompt {
   flex: 1;
   min-height: 0;
   display: flex;
-  align-items: stretch;
-  justify-content: stretch;
-  padding: 0.45rem;
+  flex-direction: column;
+  align-items: center;
+  justify-content: flex-start;
+  padding: 0.5rem 0.4rem;
   background:
     linear-gradient(180deg, var(--surface), color-mix(in srgb, var(--surface), var(--background) 34%));
 }
 
 .create-preview-collapsed-rail button {
-  width: 100%;
+  width: 46px;
+  height: 46px;
   min-width: 0;
+  flex: 0 0 auto;
   border: 1px solid color-mix(in srgb, var(--border), transparent 10%);
-  border-radius: 8px;
+  border-radius: 10px;
   background: color-mix(in srgb, var(--surface), var(--background) 18%);
   color: var(--muted);
   cursor: pointer;
@@ -1926,7 +2122,7 @@ body:has(.home-page[data-home-role="teacher"]) .mobile-install-prompt {
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 0.45rem;
+  gap: 2px;
   transition: border-color 0.16s ease, color 0.16s ease, background-color 0.16s ease;
 }
 
@@ -1936,19 +2132,10 @@ body:has(.home-page[data-home-role="teacher"]) .mobile-install-prompt {
   background: rgba(99, 102, 241, 0.08);
 }
 
-.create-preview-collapsed-rail span {
-  writing-mode: vertical-rl;
-  text-orientation: mixed;
-  color: inherit;
-  font-size: 0.68rem;
-  font-weight: 950;
-  letter-spacing: 0;
-}
-
 .create-preview-collapsed-rail strong {
   color: var(--foreground);
-  font-size: 0.7rem;
-  font-weight: 950;
+  font-size: 0.56rem;
+  font-weight: 900;
   line-height: 1;
   white-space: nowrap;
 }
@@ -2267,14 +2454,6 @@ body:has(.home-page[data-home-role="teacher"]) .mobile-install-prompt {
 
   .create-preview-main.is-collapsed {
     min-height: 72px;
-  }
-
-  .create-preview-collapsed-rail button {
-    flex-direction: row;
-  }
-
-  .create-preview-collapsed-rail span {
-    writing-mode: horizontal-tb;
   }
 
   .create-resizer {
