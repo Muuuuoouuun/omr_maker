@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useRef, useEffect, useCallback } from 'react';
+import { useState, useRef, useEffect, useCallback, useMemo } from 'react';
 import { Document, Page, pdfjs } from 'react-pdf';
 import { DEFAULT_CHOICE_COUNT, normalizeChoiceCount, type PdfDrawings } from '@/types/omr';
 import { toast } from '@/components/Toast';
@@ -61,7 +61,7 @@ type DrawingMode = 'click' | 'pen' | 'highlighter' | 'eraser';
 type EraserType = 'pixel' | 'stroke';
 type DrawPoint = { x: number; y: number };
 
-const PEN_COLORS = ['#ef4444', '#111827', '#2563eb', '#16a34a', '#f97316', '#7c3aed'];
+const PEN_COLORS = ['#ef4444', '#111827', '#2563eb', '#16a34a'];
 const HIGHLIGHTER_COLORS = [
     'rgba(250, 204, 21, 0.38)', // yellow
     'rgba(74, 222, 128, 0.36)', // green
@@ -69,7 +69,22 @@ const HIGHLIGHTER_COLORS = [
     'rgba(96, 165, 250, 0.36)', // blue
 ];
 const HIGHLIGHTER_COLOR = HIGHLIGHTER_COLORS[0];
+// Solid (opaque) twins of the translucent highlighter colors, used for the cursor fill.
+const HIGHLIGHTER_CURSOR_COLORS = ['#facc15', '#4ade80', '#f472b6', '#60a5fa'];
 const MIN_POINT_DISTANCE = 0.0012;
+
+// Pen-shaped SVG cursor (lucide "pen" glyph) tinted with the active color,
+// wrapped in a white halo + dark outline so it stays visible on both the
+// dark PDF panel and the white page. Hotspot sits at the nib (lower-left).
+const PEN_CURSOR_PATH = 'M21.17 6.81a1 1 0 0 0-3.98-3.99L3.84 16.17a2 2 0 0 0-.5.83l-1.32 4.35a.5.5 0 0 0 .62.62l4.35-1.32a2 2 0 0 0 .83-.5z';
+function buildPenCursor(color: string): string {
+    const svg = `<svg xmlns='http://www.w3.org/2000/svg' width='26' height='26' viewBox='0 0 24 24'>`
+        + `<path d='${PEN_CURSOR_PATH}' fill='none' stroke='#ffffff' stroke-width='4' stroke-linejoin='round'/>`
+        + `<path d='${PEN_CURSOR_PATH}' fill='${color}' stroke='#0f172a' stroke-width='1.3' stroke-linejoin='round'/>`
+        + `<path d='m15.5 5.5 3 3' fill='none' stroke='#0f172a' stroke-width='1.3' stroke-linecap='round'/>`
+        + `</svg>`;
+    return `url("data:image/svg+xml,${encodeURIComponent(svg)}") 3 23, crosshair`;
+}
 
 function isPdfUploadFile(file: File): boolean {
     return file.type === 'application/pdf' || file.name.toLowerCase().endsWith('.pdf');
@@ -129,6 +144,13 @@ export default function PDFViewer({
         : drawingMode === 'highlighter'
             ? highlighterWidth
             : penWidth;
+
+    // Pen-shaped cursors tinted with the active color (rebuilt only on color change).
+    const penCursor = useMemo(() => buildPenCursor(penColor), [penColor]);
+    const highlighterCursor = useMemo(() => {
+        const idx = HIGHLIGHTER_COLORS.indexOf(highlighterColor);
+        return buildPenCursor(HIGHLIGHTER_CURSOR_COLORS[idx] ?? HIGHLIGHTER_CURSOR_COLORS[0]);
+    }, [highlighterColor]);
 
     useEffect(() => {
         if (!wrapperRef.current) return;
@@ -706,8 +728,15 @@ export default function PDFViewer({
                                     <button
                                         type="button"
                                         className={`pdf-tool-button has-color ${drawingMode === 'highlighter' ? 'active' : ''}`}
-                                        onClick={() => setDrawingMode('highlighter')}
-                                        title="형광펜"
+                                        onClick={() => {
+                                            if (drawingMode === 'highlighter') {
+                                                const idx = HIGHLIGHTER_COLORS.indexOf(highlighterColor);
+                                                setHighlighterColor(HIGHLIGHTER_COLORS[(idx + 1) % HIGHLIGHTER_COLORS.length]);
+                                            } else {
+                                                setDrawingMode('highlighter');
+                                            }
+                                        }}
+                                        title={drawingMode === 'highlighter' ? "형광펜 (다시 클릭하면 색 변경)" : "형광펜"}
                                         aria-label="형광펜"
                                     >
                                         <Highlighter size={15} />
@@ -745,22 +774,6 @@ export default function PDFViewer({
                                             title="펜 색상 직접 선택"
                                             aria-label="펜 색상 직접 선택"
                                         />
-                                    </div>
-                                )}
-
-                                {drawingMode === 'highlighter' && (
-                                    <div className="pdf-color-swatches" aria-label="형광펜 색상">
-                                        {HIGHLIGHTER_COLORS.map(color => (
-                                            <button
-                                                key={color}
-                                                type="button"
-                                                className={`pdf-color-swatch ${highlighterColor === color ? 'active' : ''}`}
-                                                onClick={() => setHighlighterColor(color)}
-                                                title="형광펜 색상"
-                                                aria-label="형광펜 색상"
-                                                style={{ background: color }}
-                                            />
-                                        ))}
                                     </div>
                                 )}
 
@@ -939,7 +952,15 @@ export default function PDFViewer({
                                             top: 0, left: 0,
                                             width: '100%', height: '100%',
                                             zIndex: 10,
-                                            cursor: canEditDrawing ? (drawingMode === 'pen' || drawingMode === 'highlighter' ? 'crosshair' : drawingMode === 'eraser' ? 'none' : 'default') : 'default',
+                                            cursor: canEditDrawing
+                                                ? drawingMode === 'pen'
+                                                    ? penCursor
+                                                    : drawingMode === 'highlighter'
+                                                        ? highlighterCursor
+                                                        : drawingMode === 'eraser'
+                                                            ? 'none'
+                                                            : 'default'
+                                                : 'default',
                                             pointerEvents: canEditDrawing ? 'auto' : 'none',
                                             touchAction: fingerDrawingEnabled ? 'none' : 'pan-x pan-y pinch-zoom'
                                         }}
