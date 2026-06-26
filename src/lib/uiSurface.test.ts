@@ -80,6 +80,10 @@ describe("service UI surface", () => {
         expect(css).toContain("grid-template-columns: minmax(0, 1fr)");
         expect(css).toContain("grid-auto-flow: row");
         expect(css).toContain(".omr-cardview.is-vertical-numbering .q-card-num");
+        expect(css).toContain("Plain question number; answered cards still change the number color.");
+        expect(css).toContain(".q-card.answered .q-card-num");
+        expect(css).toContain("border: 0;");
+        expect(css).toContain("color: var(--primary)");
         expect(css).toContain("border-color: transparent");
         expect(css).toContain("background: transparent");
     });
@@ -726,6 +730,10 @@ describe("service UI surface", () => {
         expect(omrCardView).toContain('numberingLayout?: "grid" | "vertical"');
         expect(css).toContain(".create-question-answer-buttons");
         expect(css).toContain(".create-label-batch-card");
+        expect(css).toContain(".create-label-candidate-chip:hover .create-label-candidate-hide");
+        expect(css).toContain(".create-label-candidate-chip:focus-within .create-label-candidate-hide");
+        expect(css).toContain("top: -7px");
+        expect(css).toContain("right: -7px");
         expect(css).toContain(".omr-cardview.is-vertical-numbering .omr-cardview-grid");
     });
 
