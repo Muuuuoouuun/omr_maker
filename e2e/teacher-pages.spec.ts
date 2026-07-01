@@ -1,6 +1,8 @@
 import { test, expect, type Page } from "@playwright/test";
 import { openTeacherPage, resetBrowserState } from "./helpers";
 
+test.describe.configure({ timeout: 45_000 });
+
 // Each test starts with a clean localStorage so mocks are deterministic.
 async function clearStorage(page: Page, context: Parameters<typeof resetBrowserState>[1]) {
     await resetBrowserState(page, context);

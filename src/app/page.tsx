@@ -90,6 +90,21 @@ function cleanText(value: string | undefined): string {
   return value?.trim() || "";
 }
 
+function normalizeStudentRedirectPath(value: string | null | undefined): string {
+  if (!value) return "/student/dashboard";
+  const trimmed = value.trim();
+  if (!trimmed.startsWith("/") || trimmed.startsWith("//")) return "/student/dashboard";
+  if (
+    trimmed === "/student/dashboard"
+    || trimmed === "/student/history"
+    || trimmed.startsWith("/student/review/")
+    || trimmed.startsWith("/solve/")
+  ) {
+    return trimmed;
+  }
+  return "/student/dashboard";
+}
+
 function resolveSessionRegion(params: {
   name: string;
   selectedGroupId: string;
@@ -333,7 +348,8 @@ export default function Home() {
     }
 
     saveSession(session);
-    router.push("/student/dashboard");
+    const next = normalizeStudentRedirectPath(new URLSearchParams(window.location.search).get("next"));
+    router.push(next);
   };
 
   const handleGuest = () => {
@@ -348,7 +364,8 @@ export default function Home() {
     };
     saveSession(session);
     localStorage.setItem("omr_guest_id", guestId);
-    router.push("/student/dashboard");
+    const next = normalizeStudentRedirectPath(new URLSearchParams(window.location.search).get("next"));
+    router.push(next);
   };
 
   const handleContinueRecentStudent = () => {

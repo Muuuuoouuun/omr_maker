@@ -167,6 +167,7 @@ export default function ReviewPage() {
         .filter((questionNumber): questionNumber is number => typeof questionNumber === "number")
         .sort((a, b) => a - b)
         .join(", ");
+    const allReviewQuestionIds = reviewQuestions.map(question => question.id);
 
     const toggleExplanation = (qId: number) => {
         setOpenExplanations(prev => ({ ...prev, [qId]: !prev[qId] }));
@@ -373,11 +374,11 @@ export default function ReviewPage() {
                                 <span style={{ color: '#16a34a', fontWeight: 800, fontSize: '0.86rem' }}>재시험할 오답이 없습니다</span>
                             )}
                             <Link
-                                href={`/solve/${attempt.examId}`}
+                                href={buildRetakeHref(attempt.examId, attempt.id, allReviewQuestionIds, "custom")}
                                 className="btn btn-secondary"
                                 style={{ fontSize: '0.86rem' }}
                             >
-                                전체 다시 보기
+                                전체 재시험
                             </Link>
                         </div>
                     </div>

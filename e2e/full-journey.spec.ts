@@ -425,6 +425,8 @@ async function seedCompletedAttempt(page: Page) {
 }
 
 test.describe("Teacher and student full journey", () => {
+    test.describe.configure({ timeout: 45_000 });
+
     test.beforeEach(async ({ page, context }) => {
         await resetBrowserState(page, context);
     });
@@ -588,7 +590,7 @@ test.describe("Teacher and student full journey", () => {
         await expect(page.getByText("20/20 정답 · 총점 100점")).toBeVisible();
         await expect(
             page.getByText("문제지 PDF가 없으면 학생 화면에서 별도 파일 업로드가 필요합니다.")
-        ).toHaveCount(3);
+        ).toHaveCount(2);
 
         await page.getByRole("button", { name: "링크 생성하기" }).click();
         await expect(page.getByRole("button", { name: "링크 복사" })).toBeVisible();

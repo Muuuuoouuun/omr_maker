@@ -27,22 +27,21 @@ describe("service UI surface", () => {
         expect(solvePage).toContain("scroll-custom solve-omr-scroll");
     });
 
-    it("keeps the exam creation preview in real paper and OMR answer-sheet modes", () => {
+    it("keeps the exam creation preview in one card mode without a separate print tab", () => {
         const css = readProjectFile("src/app/globals.css");
         const createPage = readProjectFile("src/app/create/page.tsx");
         const omrPreview = readProjectFile("src/components/OMRPreview.tsx");
 
-        expect(createPage).toContain("previewMode === 'paper'");
-        expect(createPage).toContain("const [showPaperAnswerKey, setShowPaperAnswerKey] = useState(false)");
-        expect(createPage).toContain("인쇄용 (A4)");
+        expect(createPage).not.toContain("previewMode");
+        expect(createPage).not.toContain("showPaperAnswerKey");
+        expect(createPage).not.toContain("인쇄용 (A4)");
+        expect(createPage).not.toContain("카드뷰");
         expect(createPage).toContain('aria-label="시험 제목"');
         expect(createPage).toContain('aria-label="빠른 정답 입력"');
-        expect(createPage).toContain("create-paper-frame-toolbar");
-        expect(createPage).toContain("A4 가로");
-        expect(createPage).toContain("번호+보기만");
-        expect(createPage).toContain('printVariant="numbersOnly"');
         expect(createPage).toContain("create-preview-context-strip");
         expect(createPage).toContain("create-preview-context-meter");
+        expect(createPage).toContain("create-print-only-sheet");
+        expect(createPage).toContain('sheetId="omr-print-sheet"');
         expect(createPage).toContain("isPreviewCollapsed");
         expect(createPage).toContain("is-preview-collapsed");
         expect(createPage).toContain("const PREVIEW_RAIL_WIDTH = 64");
@@ -51,17 +50,15 @@ describe("service UI surface", () => {
         expect(createPage).toContain("OMR 미리보기 펼치기");
         expect(createPage).toContain("선택 문항");
         expect(createPage).toContain("PDF 영역");
-        expect(css).toContain(".create-preview-scroll.paper-mode");
+        expect(css).not.toContain(".create-preview-scroll.paper-mode");
         expect(css).toContain(".create-preview-main.is-collapsed");
         expect(css).toContain(".create-workspace");
         expect(css).toContain("flex-basis 0.22s ease");
         expect(css).toContain(".create-preview-context-grid");
-        expect(css).toContain(".create-paper-frame .omr-sheet::before");
-        expect(css).toContain(".create-paper-frame .omr-sheet--numbers-only::before");
-        expect(css).toContain(".omr-sheet--numbers-only");
-        expect(css).toContain(".create-paper-frame-toolbar span");
-        expect(omrPreview).toContain("printVariant?: 'standard' | 'numbersOnly'");
-        expect(omrPreview).toContain("isNumbersOnlyPrint");
+        expect(css).toContain(".create-print-only-sheet");
+        expect(css).not.toContain(".omr-sheet--numbers-only");
+        expect(omrPreview).not.toContain("printVariant");
+        expect(omrPreview).toContain("sheetId?: string");
         expect(omrPreview).toContain("수험번호 마킹란");
         expect(omrPreview).toContain("omr-marker-tl");
         expect(omrPreview).toContain("OMR Maker - Generated Answer Sheet");

@@ -45,6 +45,7 @@ const DRAFT_KEY = "omr_exam_draft";
 const AUTOSAVE_INTERVAL_MS = 2000;
 const HISTORY_LIMIT = 20;
 const PDF_PANE_MIN_WIDTH = 200;
+const PDF_PANE_DEFAULT_WIDTH = 600;
 const SETTINGS_SIDEBAR_MIN_WIDTH = 250;
 const SETTINGS_SIDEBAR_DEFAULT_WIDTH = 320;
 const SETTINGS_SIDEBAR_COMFORT_WIDTH = 500;
@@ -319,12 +320,11 @@ function CreateOMRPageInner() {
     const [fastAnswer, setFastAnswer] = useState("");
 
     // Layout Sizing
-    const [pdfWidth, setPdfWidth] = useState(600);
+    const [pdfWidth, setPdfWidth] = useState(PDF_PANE_DEFAULT_WIDTH);
     const [sidebarWidth, setSidebarWidth] = useState(SETTINGS_SIDEBAR_DEFAULT_WIDTH);
     const [settingsZoom, setSettingsZoom] = useState(1);
-    const [previewMode, setPreviewMode] = useState<'modern' | 'paper'>('modern');
-    const [showPaperAnswerKey, setShowPaperAnswerKey] = useState(false);
     const [isPreviewCollapsed, setIsPreviewCollapsed] = useState(false);
+    const [activeResizer, setActiveResizer] = useState<'pdf' | 'sidebar' | null>(null);
     const createWorkspaceRef = useRef<HTMLDivElement>(null);
     const settingsSidebarRef = useRef<HTMLElement>(null);
 
@@ -335,9 +335,9 @@ function CreateOMRPageInner() {
         return typeof window === "undefined" ? 0 : window.innerWidth;
     }, []);
 
-    const fitSidebarWidth = useCallback((targetWidth: number, reclaimPdfSpace = false) => {
+    const fitSidebarWidth = useCallback((targetWidth: number, reclaimPdfSpace = false, workspaceWidthOverride?: number) => {
         const previewWidth = isPreviewCollapsed ? PREVIEW_RAIL_WIDTH : PREVIEW_PANE_MIN_WIDTH;
-        const workspaceWidth = getWorkspaceLayoutWidth();
+        const workspaceWidth = workspaceWidthOverride ?? getWorkspaceLayoutWidth();
         const minPdfWidth = isPreviewCollapsed ? PDF_PANE_MIN_WIDTH : PDF_PANE_EXPANDED_MIN_WIDTH;
         const sharedPaneWidth = Math.max(
             minPdfWidth + SETTINGS_SIDEBAR_MIN_WIDTH,
@@ -362,6 +362,82 @@ function CreateOMRPageInner() {
             setPdfWidth(nextPdfWidth);
         }
     }, [getWorkspaceLayoutWidth, isPreviewCollapsed, pdfWidth]);
+
+    const applyPdfWidth = useCallback((targetWidth: number, workspaceWidthOverride?: number) => {
+        const previewWidth = isPreviewCollapsed ? PREVIEW_RAIL_WIDTH : PREVIEW_PANE_MIN_WIDTH;
+        const workspaceWidth = workspaceWidthOverride ?? getWorkspaceLayoutWidth();
+        const sharedPaneWidth = Math.max(
+            PDF_PANE_MIN_WIDTH + SETTINGS_SIDEBAR_MIN_WIDTH,
+            workspaceWidth - previewWidth - DESKTOP_RESIZER_TOTAL_WIDTH
+        );
+        const minPdfWidth = isPreviewCollapsed ? PDF_PANE_MIN_WIDTH : PDF_PANE_EXPANDED_MIN_WIDTH;
+        const maxPdfWidth = Math.max(
+            minPdfWidth,
+            isPreviewCollapsed
+                ? sharedPaneWidth - SETTINGS_SIDEBAR_MIN_WIDTH
+                : workspaceWidth - sidebarWidth - previewWidth - DESKTOP_RESIZER_TOTAL_WIDTH
+        );
+        const nextPdfWidth = clampLayoutWidth(targetWidth, minPdfWidth, maxPdfWidth);
+        setPdfWidth(nextPdfWidth);
+        if (isPreviewCollapsed) {
+            setSidebarWidth(sharedPaneWidth - nextPdfWidth);
+        }
+    }, [getWorkspaceLayoutWidth, isPreviewCollapsed, sidebarWidth]);
+
+    // Shared pointer-drag lifecycle for the two panel resizers: caches the workspace
+    // width once (avoids a layout read per pointermove) and coalesces updates to one
+    // per animation frame so panel edges track the cursor smoothly instead of
+    // fighting the panels' own width/flex-basis CSS transition.
+    const beginPanelDrag = useCallback((
+        e: React.PointerEvent<HTMLDivElement>,
+        resizerId: 'pdf' | 'sidebar',
+        startWidth: number,
+        onDrag: (nextWidth: number, workspaceWidth: number) => void,
+    ) => {
+        if (e.button !== 0) return;
+        e.preventDefault();
+        const target = e.currentTarget;
+        const pointerId = e.pointerId;
+        const startX = e.clientX;
+        const workspaceWidth = getWorkspaceLayoutWidth();
+        try {
+            // Best-effort: keeps the drag tracking correctly even if the
+            // pointer momentarily leaves the 6px hit area or the browser
+            // window. Listeners below are on `document`, so the drag still
+            // works fine if capture isn't available.
+            target.setPointerCapture(pointerId);
+        } catch {
+            // no-op
+        }
+        setActiveResizer(resizerId);
+
+        let rafId = 0;
+        let latestClientX = startX;
+        const applyPending = () => {
+            rafId = 0;
+            onDrag(startWidth + (latestClientX - startX), workspaceWidth);
+        };
+        const onPointerMove = (moveEvent: PointerEvent) => {
+            latestClientX = moveEvent.clientX;
+            if (!rafId) rafId = requestAnimationFrame(applyPending);
+        };
+        const stopDragging = () => {
+            if (rafId) {
+                // A pending frame means the last pointermove hasn't been applied
+                // yet; flush it now so release doesn't drop the final position.
+                cancelAnimationFrame(rafId);
+                applyPending();
+            }
+            if (target.hasPointerCapture(pointerId)) target.releasePointerCapture(pointerId);
+            document.removeEventListener('pointermove', onPointerMove);
+            document.removeEventListener('pointerup', stopDragging);
+            document.removeEventListener('pointercancel', stopDragging);
+            setActiveResizer(null);
+        };
+        document.addEventListener('pointermove', onPointerMove);
+        document.addEventListener('pointerup', stopDragging);
+        document.addEventListener('pointercancel', stopDragging);
+    }, [getWorkspaceLayoutWidth]);
 
     const adjustSettingsZoom = useCallback((delta: number) => {
         setSettingsZoom(prev => {
@@ -1428,7 +1504,7 @@ function CreateOMRPageInner() {
                 />
             )}
 
-            <div ref={createWorkspaceRef} className={`create-workspace ${isPreviewCollapsed ? 'is-preview-collapsed' : ''}`} style={{ display: 'flex', flex: 1, height: 'calc(var(--app-viewport-height, 100dvh) - 4rem)', overflow: 'hidden' }}>
+            <div ref={createWorkspaceRef} className={`create-workspace ${isPreviewCollapsed ? 'is-preview-collapsed' : ''} ${activeResizer ? 'is-resizing' : ''}`} style={{ display: 'flex', flex: 1, height: 'calc(var(--app-viewport-height, 100dvh) - 4rem)', overflow: 'hidden' }}>
 
                 {/* 1. PDF Viewer Area */}
                 <div className="create-pdf-pane" style={{
@@ -1524,40 +1600,13 @@ function CreateOMRPageInner() {
 
                 {/* Resizer 1 */}
                 <div
-                    className="create-resizer"
+                    className={`create-resizer ${activeResizer === 'pdf' ? 'is-active' : ''}`}
                     style={{ width: '6px', background: 'var(--border)', cursor: 'col-resize', position: 'relative', zIndex: 10 }}
-                    onMouseDown={(e) => {
-                        e.preventDefault();
-                        const startX = e.clientX;
-                        const startWidth = pdfWidth;
-                        const onMouseMove = (moveEvent: MouseEvent) => {
-                            const newWidth = startWidth + (moveEvent.clientX - startX);
-                            const previewWidth = isPreviewCollapsed ? PREVIEW_RAIL_WIDTH : PREVIEW_PANE_MIN_WIDTH;
-                            const workspaceWidth = getWorkspaceLayoutWidth();
-                            const sharedPaneWidth = Math.max(
-                                PDF_PANE_MIN_WIDTH + SETTINGS_SIDEBAR_MIN_WIDTH,
-                                workspaceWidth - previewWidth - DESKTOP_RESIZER_TOTAL_WIDTH
-                            );
-                            const minPdfWidth = isPreviewCollapsed ? PDF_PANE_MIN_WIDTH : PDF_PANE_EXPANDED_MIN_WIDTH;
-                            const maxPdfWidth = Math.max(
-                                minPdfWidth,
-                                isPreviewCollapsed
-                                    ? sharedPaneWidth - SETTINGS_SIDEBAR_MIN_WIDTH
-                                    : workspaceWidth - sidebarWidth - previewWidth - DESKTOP_RESIZER_TOTAL_WIDTH
-                            );
-                            const nextPdfWidth = clampLayoutWidth(newWidth, minPdfWidth, maxPdfWidth);
-                            setPdfWidth(nextPdfWidth);
-                            if (isPreviewCollapsed) {
-                                setSidebarWidth(sharedPaneWidth - nextPdfWidth);
-                            }
-                        };
-                        const onMouseUp = () => {
-                            document.removeEventListener('mousemove', onMouseMove);
-                            document.removeEventListener('mouseup', onMouseUp);
-                        };
-                        document.addEventListener('mousemove', onMouseMove);
-                        document.addEventListener('mouseup', onMouseUp);
-                    }}
+                    onPointerDown={(e) => beginPanelDrag(e, 'pdf', pdfWidth, applyPdfWidth)}
+                    onDoubleClick={() => applyPdfWidth(PDF_PANE_DEFAULT_WIDTH)}
+                    role="separator"
+                    aria-orientation="vertical"
+                    title="드래그해서 PDF 영역 크기 조절 · 더블클릭하면 기본 크기로"
                 >
                     <div style={{ width: '2px', height: '20px', background: '#aaa', position: 'absolute', top: '50%', left: '2px', transform: 'translateY(-50%)', borderRadius: '2px' }} />
                 </div>
@@ -2611,23 +2660,13 @@ function CreateOMRPageInner() {
 
                 {/* Resizer 2 */}
                 <div
-                    className="create-resizer"
+                    className={`create-resizer ${activeResizer === 'sidebar' ? 'is-active' : ''}`}
                     style={{ width: '6px', background: 'var(--border)', cursor: 'col-resize', position: 'relative', zIndex: 10 }}
-                    onMouseDown={(e) => {
-                        e.preventDefault();
-                        const startX = e.clientX;
-                        const startWidth = sidebarWidth;
-                        const onMouseMove = (moveEvent: MouseEvent) => {
-                            const newWidth = startWidth + (moveEvent.clientX - startX);
-                            fitSidebarWidth(newWidth);
-                        };
-                        const onMouseUp = () => {
-                            document.removeEventListener('mousemove', onMouseMove);
-                            document.removeEventListener('mouseup', onMouseUp);
-                        };
-                        document.addEventListener('mousemove', onMouseMove);
-                        document.addEventListener('mouseup', onMouseUp);
-                    }}
+                    onPointerDown={(e) => beginPanelDrag(e, 'sidebar', sidebarWidth, (nextWidth, workspaceWidth) => fitSidebarWidth(nextWidth, false, workspaceWidth))}
+                    onDoubleClick={() => fitSidebarWidth(SETTINGS_SIDEBAR_DEFAULT_WIDTH, true)}
+                    role="separator"
+                    aria-orientation="vertical"
+                    title="드래그해서 설정 패널 크기 조절 · 더블클릭하면 기본 크기로"
                 >
                     <div style={{ width: '2px', height: '20px', background: '#aaa', position: 'absolute', top: '50%', left: '2px', transform: 'translateY(-50%)', borderRadius: '2px' }} />
                 </div>
@@ -2657,7 +2696,6 @@ function CreateOMRPageInner() {
                         </div>
                     ) : (
                         <>
-                    {/* Preview mode toggle */}
                     <div className="create-preview-toolbar" style={{
                         padding: '0.75rem 1.25rem',
                         borderBottom: '1px solid var(--border)',
@@ -2672,9 +2710,7 @@ function CreateOMRPageInner() {
                                 OMR 미리보기
                             </span>
                             <span className="create-preview-status">
-                                {previewMode === 'paper'
-                                    ? `A4 · ${questionsCount}문항 · ${designSummary.pdfLinked} PDF`
-                                    : `${designSummary.answered}/${questionsCount} 정답 입력`}
+                                {designSummary.answered}/{questionsCount} 정답 입력
                             </span>
                         </div>
                         <div style={{
@@ -2693,96 +2729,6 @@ function CreateOMRPageInner() {
                             >
                                 <PanelRightClose size={16} />
                             </button>
-                            {previewMode === 'paper' && (
-                                <div style={{
-                                    display: 'flex',
-                                    background: 'var(--background)',
-                                    border: '1px solid var(--border)',
-                                    borderRadius: 'var(--radius-full)',
-                                    padding: '3px',
-                                }}>
-                                    <button
-                                        type="button"
-                                        aria-pressed={!showPaperAnswerKey}
-                                        onClick={() => setShowPaperAnswerKey(false)}
-                                        style={{
-                                            padding: '0.3rem 0.75rem',
-                                            fontSize: '0.74rem',
-                                            borderRadius: 'var(--radius-full)',
-                                            border: 'none',
-                                            background: !showPaperAnswerKey ? 'var(--primary)' : 'transparent',
-                                            color: !showPaperAnswerKey ? 'white' : 'var(--muted)',
-                                            fontWeight: 800,
-                                            cursor: 'pointer',
-                                            transition: 'all 0.2s',
-                                        }}
-                                    >
-                                        빈 OMR
-                                    </button>
-                                    <button
-                                        type="button"
-                                        aria-pressed={showPaperAnswerKey}
-                                        onClick={() => setShowPaperAnswerKey(true)}
-                                        style={{
-                                            padding: '0.3rem 0.75rem',
-                                            fontSize: '0.74rem',
-                                            borderRadius: 'var(--radius-full)',
-                                            border: 'none',
-                                            background: showPaperAnswerKey ? 'var(--primary)' : 'transparent',
-                                            color: showPaperAnswerKey ? 'white' : 'var(--muted)',
-                                            fontWeight: 800,
-                                            cursor: 'pointer',
-                                            transition: 'all 0.2s',
-                                        }}
-                                    >
-                                        정답키
-                                    </button>
-                                </div>
-                            )}
-                            <div style={{
-                                display: 'flex',
-                                background: 'var(--background)',
-                                border: '1px solid var(--border)',
-                                borderRadius: 'var(--radius-full)',
-                                padding: '3px',
-                            }}>
-                            <button
-                                type="button"
-                                aria-pressed={previewMode === 'modern'}
-                                onClick={() => setPreviewMode('modern')}
-                                style={{
-                                    padding: '0.3rem 0.9rem',
-                                    fontSize: '0.78rem',
-                                    borderRadius: 'var(--radius-full)',
-                                    border: 'none',
-                                    background: previewMode === 'modern' ? 'var(--primary)' : 'transparent',
-                                    color: previewMode === 'modern' ? 'white' : 'var(--muted)',
-                                    fontWeight: 700,
-                                    cursor: 'pointer',
-                                    transition: 'all 0.2s',
-                                }}
-                            >
-                                카드뷰
-                            </button>
-                            <button
-                                type="button"
-                                aria-pressed={previewMode === 'paper'}
-                                onClick={() => setPreviewMode('paper')}
-                                style={{
-                                    padding: '0.3rem 0.9rem',
-                                    fontSize: '0.78rem',
-                                    borderRadius: 'var(--radius-full)',
-                                    border: 'none',
-                                    background: previewMode === 'paper' ? 'var(--primary)' : 'transparent',
-                                    color: previewMode === 'paper' ? 'white' : 'var(--muted)',
-                                    fontWeight: 700,
-                                    cursor: 'pointer',
-                                    transition: 'all 0.2s',
-                                }}
-                            >
-                                인쇄용 (A4)
-                            </button>
-                        </div>
                     </div>
                     </div>
 
@@ -2805,55 +2751,41 @@ function CreateOMRPageInner() {
                         </div>
                     </div>
 
-                    <div className={`scroll-custom create-preview-scroll ${previewMode === 'paper' ? 'paper-mode' : 'card-mode'}`} style={{
+                    <div className="scroll-custom create-preview-scroll card-mode" style={{
                         flex: 1,
                         overflowY: 'auto',
                         overflowX: 'auto',
-                        padding: previewMode === 'paper' ? '2rem' : '0',
+                        padding: '0',
                         display: 'flex',
-                        justifyContent: previewMode === 'paper' ? 'flex-start' : 'center',
-                        alignItems: previewMode === 'paper' ? 'flex-start' : 'stretch',
-                        background: previewMode === 'paper' ? '#e2e8f0' : 'transparent',
+                        justifyContent: 'center',
+                        alignItems: 'stretch',
+                        background: 'transparent',
                     }}>
-                        {previewMode === 'modern' ? (
-                            <div className="create-card-stage">
-                                <OMRCardView
-                                    title={title}
-                                    questions={questions}
-                                    optionsCount={defaultChoices}
-                                    mode="editor"
-                                    selectedQuestionId={selectedQuestionId}
-                                    onQuestionClick={setSelectedQuestionId}
-                                    onAnswerClick={handleOMRAnswerClick}
-                                    columns={columns}
-                                    numberingLayout="vertical"
-                                    showMeta={true}
-                                />
-                            </div>
-                        ) : (
-                            <div className="create-paper-stage">
-                                <div className="create-paper-frame">
-                                    <div className="create-paper-frame-toolbar" aria-label="인쇄 미리보기 상태">
-                                        <span>A4 가로</span>
-                                        <span>{questionsCount}문항</span>
-                                        <span>{showPaperAnswerKey ? '정답키' : '빈 OMR'} · 번호+보기만</span>
-                                    </div>
-                                    <div className="omr-print-preview-scale">
-                                        <OMRPreview
-                                            title={title}
-                                            questions={questions}
-                                            optionsCount={defaultChoices}
-                                            columns={columns}
-                                            selectedQuestionId={selectedQuestionId}
-                                            onQuestionClick={setSelectedQuestionId}
-                                            onAnswerClick={handleOMRAnswerClick}
-                                            showAnswerKey={showPaperAnswerKey}
-                                            printVariant="numbersOnly"
-                                        />
-                                    </div>
-                                </div>
-                            </div>
-                        )}
+                        <div className="create-card-stage">
+                            <OMRCardView
+                                title={title}
+                                questions={questions}
+                                optionsCount={defaultChoices}
+                                mode="editor"
+                                selectedQuestionId={selectedQuestionId}
+                                onQuestionClick={setSelectedQuestionId}
+                                onAnswerClick={handleOMRAnswerClick}
+                                columns={columns}
+                                numberingLayout="vertical"
+                                showMeta={true}
+                            />
+                        </div>
+                    </div>
+                    <div className="create-print-only-sheet" aria-hidden="true">
+                        <OMRPreview
+                            sheetId="omr-print-sheet"
+                            title={title}
+                            questions={questions}
+                            optionsCount={defaultChoices}
+                            columns={columns}
+                            mode="view"
+                            showAnswerKey={false}
+                        />
                     </div>
                         </>
                     )}

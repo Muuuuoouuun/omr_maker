@@ -16,7 +16,7 @@ interface OMRPreviewProps {
     showAnswerKey?: boolean;
     userAnswers?: Record<number, number>; // Student marked answers
     onAnswerClick?: (questionId: number, optionIndex: number) => void;
-    printVariant?: 'standard' | 'numbersOnly';
+    sheetId?: string;
 }
 
 export default function OMRPreview({
@@ -30,10 +30,8 @@ export default function OMRPreview({
     showAnswerKey = mode === 'editor',
     userAnswers = {},
     onAnswerClick,
-    printVariant = 'standard'
+    sheetId = 'omr-preview'
 }: OMRPreviewProps) {
-    const isNumbersOnlyPrint = printVariant === 'numbersOnly';
-
     // Helper to generate dummy questions if empty
     const displayQuestions = questions.length > 0
         ? questions
@@ -92,111 +90,105 @@ export default function OMRPreview({
                     })}
                 </div>
 
-                {!isNumbersOnlyPrint && (
-                    <div className="omr-meta">
-                        {q.label && (
-                            <span className="omr-chip omr-chip-label" title={q.label}>
-                                {q.label}
-                            </span>
-                        )}
-                        {q.score !== undefined && (
-                            <span className="omr-chip omr-chip-score">
-                                {q.score}점
-                            </span>
-                        )}
-                        {(q.pdfLocation || q.pdfRegion) && (
-                            <span className="omr-chip omr-chip-pdf" title={`PDF ${q.pdfLocation?.page || q.pdfRegion?.page}쪽 연결`}>
-                                PDF
-                            </span>
-                        )}
-                    </div>
-                )}
+                <div className="omr-meta">
+                    {q.label && (
+                        <span className="omr-chip omr-chip-label" title={q.label}>
+                            {q.label}
+                        </span>
+                    )}
+                    {q.score !== undefined && (
+                        <span className="omr-chip omr-chip-score">
+                            {q.score}점
+                        </span>
+                    )}
+                    {(q.pdfLocation || q.pdfRegion) && (
+                        <span className="omr-chip omr-chip-pdf" title={`PDF ${q.pdfLocation?.page || q.pdfRegion?.page}쪽 연결`}>
+                            PDF
+                        </span>
+                    )}
+                </div>
             </div>
         );
     };
 
     return (
-        <div id="omr-preview" className={`omr-sheet omr-sheet--${mode} ${isNumbersOnlyPrint ? 'omr-sheet--numbers-only' : ''}`}>
+        <div id={sheetId} className={`omr-sheet omr-sheet--${mode}`}>
             {/* OMR Markers */}
             <div className="omr-marker omr-marker-tl"></div>
             <div className="omr-marker omr-marker-tr"></div>
             <div className="omr-marker omr-marker-bl"></div>
             <div className="omr-marker omr-marker-br"></div>
 
-            {!isNumbersOnlyPrint && (
-                <>
-                    <div className="omr-header">
-                        <div className="omr-title-area">
-                            <h1 className="omr-title">{title}</h1>
-                            <p className="omr-subtitle">컴퓨터용 사인펜을 사용하여 표기하십시오.</p>
-                            <div className="omr-sheet-meta">
-                                <span>{displayQuestions.length}문항</span>
-                                <span>{effectiveOptionsCount}지선다</span>
-                                <span>{cols}단 구성</span>
-                            </div>
-                        </div>
-
-                        <div className="omr-info-grid">
-                            <div className="omr-field">
-                                <span className="omr-label">과 목</span>
-                                <div className="omr-input-box"></div>
-                            </div>
-                            <div className="omr-field">
-                                <span className="omr-label">점 수</span>
-                                <div className="omr-input-box"></div>
-                            </div>
-                            <div className="omr-field">
-                                <span className="omr-label">성 명</span>
-                                <div className="omr-input-box"></div>
-                            </div>
-                            <div className="omr-field">
-                                <span className="omr-label">학 번</span>
-                                <div className="omr-input-box"></div>
-                            </div>
-                        </div>
+            <div className="omr-header">
+                <div className="omr-title-area">
+                    <h1 className="omr-title">{title}</h1>
+                    <p className="omr-subtitle">컴퓨터용 사인펜을 사용하여 표기하십시오.</p>
+                    <div className="omr-sheet-meta">
+                        <span>{displayQuestions.length}문항</span>
+                        <span>{effectiveOptionsCount}지선다</span>
+                        <span>{cols}단 구성</span>
                     </div>
+                </div>
 
-                    <div className="omr-control-band">
-                        <div className="omr-id-marking" aria-label="수험번호 마킹란">
-                            <div className="omr-section-title">수험번호 마킹란</div>
-                            <div className="omr-id-columns">
-                                {Array.from({ length: 6 }, (_, columnIndex) => (
-                                    <div className="omr-id-column" key={columnIndex}>
-                                        <div className="omr-id-column-label">{columnIndex + 1}</div>
-                                        {Array.from({ length: 10 }, (_, digit) => (
-                                            <span className="omr-id-bubble" key={digit}>
-                                                {digit}
-                                            </span>
-                                        ))}
-                                    </div>
+                <div className="omr-info-grid">
+                    <div className="omr-field">
+                        <span className="omr-label">과 목</span>
+                        <div className="omr-input-box"></div>
+                    </div>
+                    <div className="omr-field">
+                        <span className="omr-label">점 수</span>
+                        <div className="omr-input-box"></div>
+                    </div>
+                    <div className="omr-field">
+                        <span className="omr-label">성 명</span>
+                        <div className="omr-input-box"></div>
+                    </div>
+                    <div className="omr-field">
+                        <span className="omr-label">학 번</span>
+                        <div className="omr-input-box"></div>
+                    </div>
+                </div>
+            </div>
+
+            <div className="omr-control-band">
+                <div className="omr-id-marking" aria-label="수험번호 마킹란">
+                    <div className="omr-section-title">수험번호 마킹란</div>
+                    <div className="omr-id-columns">
+                        {Array.from({ length: 6 }, (_, columnIndex) => (
+                            <div className="omr-id-column" key={columnIndex}>
+                                <div className="omr-id-column-label">{columnIndex + 1}</div>
+                                {Array.from({ length: 10 }, (_, digit) => (
+                                    <span className="omr-id-bubble" key={digit}>
+                                        {digit}
+                                    </span>
                                 ))}
                             </div>
-                        </div>
+                        ))}
+                    </div>
+                </div>
 
-                        <div className="omr-test-summary" aria-label="시험 요약">
-                            <div className="omr-section-title">검사지 정보</div>
-                            <div className="omr-summary-grid">
-                                <div className="omr-summary-card">
-                                    <span>총점</span>
-                                    <strong>{totalScoreLabel}</strong>
-                                </div>
-                                <div className="omr-summary-card">
-                                    <span>정답</span>
-                                    <strong>{answeredKeyCount}/{displayQuestions.length}</strong>
-                                </div>
-                                <div className="omr-summary-card">
-                                    <span>PDF</span>
-                                    <strong>{pdfLinkedCount}/{displayQuestions.length}</strong>
-                                </div>
-                            </div>
-                            <div className="omr-barcode-strip" aria-hidden="true" />
-                            <div className="omr-supervisor-box">
-                                <span>감독 확인</span>
-                            </div>
+                <div className="omr-test-summary" aria-label="시험 요약">
+                    <div className="omr-section-title">검사지 정보</div>
+                    <div className="omr-summary-grid">
+                        <div className="omr-summary-card">
+                            <span>총점</span>
+                            <strong>{totalScoreLabel}</strong>
+                        </div>
+                        <div className="omr-summary-card">
+                            <span>정답</span>
+                            <strong>{answeredKeyCount}/{displayQuestions.length}</strong>
+                        </div>
+                        <div className="omr-summary-card">
+                            <span>PDF</span>
+                            <strong>{pdfLinkedCount}/{displayQuestions.length}</strong>
                         </div>
                     </div>
-                </>
-            )}
+                    <div className="omr-barcode-strip" aria-hidden="true" />
+                    <div className="omr-supervisor-box">
+                        <span>감독 확인</span>
+                    </div>
+                </div>
+            </div>
 
             <div className="omr-body" style={{ '--omr-cols': cols } as React.CSSProperties}>
                 {columnQuestions.map((chunk, index) => (
@@ -209,11 +201,9 @@ export default function OMRPreview({
                 ))}
             </div>
 
-            {!isNumbersOnlyPrint && (
-                <div className="omr-footer">
-                    OMR Maker - Generated Answer Sheet
-                </div>
-            )}
+            <div className="omr-footer">
+                OMR Maker - Generated Answer Sheet
+            </div>
         </div>
     );
 }

@@ -122,7 +122,6 @@ const requiredStringsByFile: Record<string, string[]> = {
     "src/app/create/page.tsx": [
         "Smart Editor",
         "배포하기",
-        "인쇄용 (A4)",
         "OMR 미리보기 접기",
     ],
     "src/app/solve/[id]/page.tsx": [

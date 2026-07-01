@@ -38,6 +38,10 @@ type DashboardLoadOptions = {
     notifyOnError?: boolean;
 };
 
+function normalizeDashboardTab(value: string | null): TabType {
+    return value === "exam" || value === "student" || value === "overview" ? value : "overview";
+}
+
 // Wrap the inner component so useSearchParams is inside a Suspense boundary
 // (required by Next 16 to avoid deopting the whole page to client-only rendering).
 export default function TeacherDashboardPage() {
@@ -50,11 +54,9 @@ export default function TeacherDashboardPage() {
 
 function TeacherDashboard() {
     const searchParams = useSearchParams();
-    const initialTab = (searchParams.get('tab') as TabType) || 'overview';
+    const initialTab = normalizeDashboardTab(searchParams.get('tab'));
     const initialExamId = searchParams.get('examId') || undefined;
-    const [activeTab, setActiveTab] = useState<TabType>(
-        ['overview', 'exam', 'student'].includes(initialTab) ? initialTab : 'overview'
-    );
+    const [activeTab, setActiveTab] = useState<TabType>(initialTab);
     const [selectedExamIdForAnalytics, setSelectedExamIdForAnalytics] = useState<string | undefined>(initialExamId);
     const [exams, setExams] = useState<Exam[]>([]);
     const [attempts, setAttempts] = useState<Attempt[]>([]);
@@ -149,6 +151,13 @@ function TeacherDashboard() {
         void loadDashboardData({ isCancelled: () => cancelled });
         return () => { cancelled = true; };
     }, [loadDashboardData]);
+
+    useEffect(() => {
+        const nextTab = normalizeDashboardTab(searchParams.get('tab'));
+        const nextExamId = searchParams.get('examId') || undefined;
+        setActiveTab(nextTab);
+        setSelectedExamIdForAnalytics(nextExamId);
+    }, [searchParams]);
 
     const handleNavigateToExamAnalytics = (examId: string) => {
         setSelectedExamIdForAnalytics(examId);

@@ -262,6 +262,23 @@ function accessDecisionCopy(decision: ExamAccessDecision): { title: string; body
     };
 }
 
+function buildStudentLoginHref(): string {
+    if (typeof window === "undefined") return "/?role=student";
+    const next = `${window.location.pathname}${window.location.search}`;
+    return `/?role=student&next=${encodeURIComponent(next)}`;
+}
+
+function buildRetakeDraftSegment(config: RetakeConfig | null): string {
+    if (!config) return "base";
+    const questionKey = [...new Set(config.questionIds)].sort((a, b) => a - b).join("-");
+    return [
+        "retake",
+        encodeURIComponent(config.sourceAttemptId || "source"),
+        encodeURIComponent(config.mode),
+        encodeURIComponent(questionKey || "questions"),
+    ].join("_");
+}
+
 function ExamAccessBlockedDialog({
     decision,
     onExit,
@@ -728,9 +745,10 @@ export default function SolvePage() {
     }, [examData]);
 
     const draftOwnerKey = user?.studentId || user?.guestId || persistId;
-    const DRAFT_KEY = id && draftOwnerKey ? `omr_draft_${id}_${draftOwnerKey}` : "";
+    const draftRetakeSegment = buildRetakeDraftSegment(retakeConfig);
+    const DRAFT_KEY = id && draftOwnerKey ? `omr_draft_${id}_${draftOwnerKey}_${draftRetakeSegment}` : "";
     const LEGACY_DRAFT_KEY = id ? `omr_draft_${id}` : "";
-    const OMR_PANEL_KEY = id && draftOwnerKey ? `${OMR_PANEL_STORAGE_PREFIX}_${id}_${draftOwnerKey}` : "";
+    const OMR_PANEL_KEY = id && draftOwnerKey ? `${OMR_PANEL_STORAGE_PREFIX}_${id}_${draftOwnerKey}_${draftRetakeSegment}` : "";
 
     const saveDraftSnapshot = useCallback(async (draftSnapshot = latestDraftRef.current) => {
         if (typeof window === "undefined") return false;
@@ -844,20 +862,23 @@ export default function SolvePage() {
                 const validQuestionIds = rawQuestionIds.filter(questionId =>
                     parsed.questions.some(question => question.id === questionId)
                 );
+                let nextRetakeConfig: RetakeConfig | null = null;
                 if (validQuestionIds.length > 0) {
                     const mode = searchParams.get("mode") === "similar" ? "similar"
                         : searchParams.get("mode") === "custom" ? "custom"
                             : "wrong";
-                    setRetakeConfig({
+                    nextRetakeConfig = {
                         sourceAttemptId: searchParams.get("retakeFrom") || `exam:${parsed.id}`,
                         questionIds: validQuestionIds,
                         mode,
                         labels: (searchParams.get("labels") || "").split(",").filter(Boolean),
                         concepts: (searchParams.get("concepts") || "").split(",").filter(Boolean),
-                    });
+                    };
+                    setRetakeConfig(nextRetakeConfig);
                     toast.info("재시험 모드", `${validQuestionIds.length}개 문항만 다시 풉니다.`);
                     if (shouldBeginQuestionVisit) beginQuestionVisit(validQuestionIds[0]);
                 } else if (parsed.questions[0]) {
+                    setRetakeConfig(null);
                     if (shouldBeginQuestionVisit) beginQuestionVisit(parsed.questions[0].id);
                 }
 
@@ -878,9 +899,12 @@ export default function SolvePage() {
                 // Restore draft (autosave) if present
                 try {
                     const ownerKey = currentSession?.studentId || currentSession?.guestId || persistId;
-                    const scopedDraftKey = ownerKey ? `omr_draft_${id}_${ownerKey}` : "";
+                    const draftSegment = buildRetakeDraftSegment(nextRetakeConfig);
+                    const scopedDraftKey = ownerKey ? `omr_draft_${id}_${ownerKey}_${draftSegment}` : "";
+                    const legacyScopedDraftKey = ownerKey ? `omr_draft_${id}_${ownerKey}` : "";
                     const draftStr = (scopedDraftKey ? localStorage.getItem(scopedDraftKey) : null)
-                        || localStorage.getItem(`omr_draft_${id}`);
+                        || (!nextRetakeConfig && legacyScopedDraftKey ? localStorage.getItem(legacyScopedDraftKey) : null)
+                        || (!nextRetakeConfig ? localStorage.getItem(`omr_draft_${id}`) : null);
                     if (draftStr) {
                         const draft = JSON.parse(draftStr) as Partial<SolveDraft>;
                         const restoredAnswers = draft.answers && typeof draft.answers === "object" ? draft.answers : {};
@@ -1098,7 +1122,7 @@ export default function SolvePage() {
         if (accessDecision.status !== "allowed") {
             if (accessDecision.status === "login_required") {
                 toast.error("로그인 필요", "이 시험은 지정된 반 학생만 응시할 수 있습니다.");
-                router.push("/?role=student");
+                router.push(buildStudentLoginHref());
                 return;
             }
             const copy = accessDecisionCopy(accessDecision);
@@ -1368,7 +1392,9 @@ export default function SolvePage() {
             }}>
                 <ExamAccessBlockedDialog
                     decision={accessDecision}
-                    onExit={() => router.push("/?role=student")}
+                    onExit={() => router.push(
+                        accessDecision.status === "login_required" ? buildStudentLoginHref() : "/student/dashboard"
+                    )}
                 />
             </div>
         );
