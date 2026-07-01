@@ -18,8 +18,9 @@
 - Create: `src/lib/strokeGeometry.test.ts` — 위 함수 단위 테스트.
 - Create: `src/lib/drawingCursors.ts` — 펜/형광펜 커서 CSS 문자열 빌더(순수).
 - Create: `src/lib/drawingCursors.test.ts` — 인코딩/hotspot/폴백 단위 테스트.
-- Modify: `src/components/PDFViewer.tsx` — 커서 적용, `eraserMode` 상태·툴바 토글, 획 지우기 포인터 로직, 지우개 링 오버레이.
-- Modify: `src/app/globals.css` — 세그먼트 토글 스타일.
+- Modify: `src/components/PDFViewer.tsx` — 커서 적용, `eraserMode` 상태·툴바 토글(인라인 스타일), 획 지우기 포인터 로직, 지우개 링 오버레이.
+
+Note: `src/app/globals.css`는 작업 트리에 커밋되지 않은 무관한 변경(`M`)이 있어 편집을 피한다. 세그먼트 토글은 이 컴포넌트가 이미 쓰는 인라인 스타일(예: 필기 삭제 확인 다이얼로그)과 동일하게 인라인으로 스타일링한다. 대상 파일(PDFViewer.tsx + 신규 lib 2개)은 모두 클린 상태이므로 커밋이 깔끔하다.
 
 ---
 
@@ -358,11 +359,10 @@ git commit -m "feat: pen/highlighter icon cursors in PDF viewer"
 
 ---
 
-## Task 4: PDFViewer — 지우개 부분/획 토글 + CSS
+## Task 4: PDFViewer — 지우개 부분/획 토글 (인라인 스타일)
 
 **Files:**
 - Modify: `src/components/PDFViewer.tsx`
-- Modify: `src/app/globals.css`
 
 - [ ] **Step 1: Add eraserMode state**
 
@@ -372,84 +372,60 @@ After `const [eraserWidth, setEraserWidth] = useState(22);` (line 111), add:
     const [eraserMode, setEraserMode] = useState<'pixel' | 'stroke'>('stroke');
 ```
 
-- [ ] **Step 2: Render the segmented toggle in the toolbar**
+- [ ] **Step 2: Render the segmented toggle in the toolbar (inline styles)**
 
-In the toolbar, immediately AFTER the closing `</div>` of the tool group `role="toolbar"` (the group ends at line 673, `</div>` after the eraser button) and BEFORE the pen color swatches block (`{drawingMode === 'pen' && (` at line 675), insert:
+In the toolbar, immediately AFTER the closing `</div>` of the tool group `role="toolbar"` (the group ends at line 673, `</div>` after the eraser button) and BEFORE the pen color swatches block (`{drawingMode === 'pen' && (` at line 675), insert. Uses inline styles to match this component's existing inline-styled controls and to avoid editing `globals.css`:
 
 ```tsx
                                 {drawingMode === 'eraser' && (
-                                    <div className="pdf-eraser-toggle" role="group" aria-label="지우개 방식">
-                                        <button
-                                            type="button"
-                                            className={`pdf-seg-button ${eraserMode === 'pixel' ? 'active' : ''}`}
-                                            onClick={() => setEraserMode('pixel')}
-                                            aria-pressed={eraserMode === 'pixel'}
-                                            title="부분 지우기"
-                                        >
-                                            부분
-                                        </button>
-                                        <button
-                                            type="button"
-                                            className={`pdf-seg-button ${eraserMode === 'stroke' ? 'active' : ''}`}
-                                            onClick={() => setEraserMode('stroke')}
-                                            aria-pressed={eraserMode === 'stroke'}
-                                            title="획 지우기 (닿은 획 전체 삭제)"
-                                        >
-                                            획
-                                        </button>
+                                    <div
+                                        role="group"
+                                        aria-label="지우개 방식"
+                                        style={{
+                                            display: 'inline-flex',
+                                            alignItems: 'center',
+                                            height: 32,
+                                            border: '1px solid #555',
+                                            borderRadius: 8,
+                                            overflow: 'hidden',
+                                            flex: '0 0 auto',
+                                        }}
+                                    >
+                                        {(['pixel', 'stroke'] as const).map((mode, idx) => (
+                                            <button
+                                                key={mode}
+                                                type="button"
+                                                onClick={() => setEraserMode(mode)}
+                                                aria-pressed={eraserMode === mode}
+                                                title={mode === 'stroke' ? '획 지우기 (닿은 획 전체 삭제)' : '부분 지우기'}
+                                                style={{
+                                                    height: 32,
+                                                    padding: '0 0.6rem',
+                                                    fontSize: '0.72rem',
+                                                    fontWeight: 800,
+                                                    color: 'white',
+                                                    background: eraserMode === mode ? '#4f46e5' : '#222',
+                                                    border: 'none',
+                                                    borderLeft: idx === 0 ? 'none' : '1px solid #555',
+                                                    cursor: 'pointer',
+                                                }}
+                                            >
+                                                {mode === 'stroke' ? '획' : '부분'}
+                                            </button>
+                                        ))}
                                     </div>
                                 )}
 ```
 
-- [ ] **Step 3: Add CSS for the toggle**
-
-In `src/app/globals.css`, immediately after the `.pdf-tool-divider { ... }` rule (ends at line 3130), add:
-
-```css
-.pdf-eraser-toggle {
-  display: inline-flex;
-  align-items: center;
-  height: 32px;
-  border: 1px solid #555;
-  border-radius: 8px;
-  overflow: hidden;
-  flex: 0 0 auto;
-}
-
-.pdf-seg-button {
-  height: 32px;
-  padding: 0 0.6rem;
-  background: #222;
-  color: white;
-  font-size: 0.72rem;
-  font-weight: 800;
-  border: none;
-  transition: background 0.15s, color 0.15s;
-}
-
-.pdf-seg-button + .pdf-seg-button {
-  border-left: 1px solid #555;
-}
-
-.pdf-seg-button:hover {
-  background: #33373b;
-}
-
-.pdf-seg-button.active {
-  background: #4f46e5;
-  color: white;
-}
-```
-
-- [ ] **Step 4: Verify it compiles**
+- [ ] **Step 3: Verify it compiles**
 
 Run: `npx tsc --noEmit`
 Expected: no new errors. (`eraserMode`/`setEraserMode` used; stroke behavior wired in Task 5.)
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 4: Commit**
 
 ```bash
-git add src/components/PDFViewer.tsx src/app/globals.css
+git add src/components/PDFViewer.tsx
 git commit -m "feat: eraser pixel/stroke toggle UI"
 ```
 
