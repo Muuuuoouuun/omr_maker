@@ -110,6 +110,7 @@ export default function PDFViewer({
     const [penWidth, setPenWidth] = useState(2);
     const [highlighterWidth, setHighlighterWidth] = useState(12);
     const [eraserWidth, setEraserWidth] = useState(22);
+    const [eraserMode, setEraserMode] = useState<'pixel' | 'stroke'>('stroke');
     const [fingerDrawingEnabled, setFingerDrawingEnabled] = useState(false);
     const [undoStack, setUndoStack] = useState<Record<number, string[][]>>({});
     const [redoStack, setRedoStack] = useState<Record<number, string[][]>>({});
@@ -684,6 +685,45 @@ export default function PDFViewer({
                                         <Eraser size={15} />
                                     </button>
                                 </div>
+
+                                {drawingMode === 'eraser' && (
+                                    <div
+                                        role="group"
+                                        aria-label="지우개 방식"
+                                        style={{
+                                            display: 'inline-flex',
+                                            alignItems: 'center',
+                                            height: 32,
+                                            border: '1px solid #555',
+                                            borderRadius: 8,
+                                            overflow: 'hidden',
+                                            flex: '0 0 auto',
+                                        }}
+                                    >
+                                        {(['pixel', 'stroke'] as const).map((mode, idx) => (
+                                            <button
+                                                key={mode}
+                                                type="button"
+                                                onClick={() => setEraserMode(mode)}
+                                                aria-pressed={eraserMode === mode}
+                                                title={mode === 'stroke' ? '획 지우기 (닿은 획 전체 삭제)' : '부분 지우기'}
+                                                style={{
+                                                    height: 32,
+                                                    padding: '0 0.6rem',
+                                                    fontSize: '0.72rem',
+                                                    fontWeight: 800,
+                                                    color: 'white',
+                                                    background: eraserMode === mode ? '#4f46e5' : '#222',
+                                                    border: 'none',
+                                                    borderLeft: idx === 0 ? 'none' : '1px solid #555',
+                                                    cursor: 'pointer',
+                                                }}
+                                            >
+                                                {mode === 'stroke' ? '획' : '부분'}
+                                            </button>
+                                        ))}
+                                    </div>
+                                )}
 
                                 {drawingMode === 'pen' && (
                                     <div className="pdf-color-swatches" aria-label="펜 색상">
