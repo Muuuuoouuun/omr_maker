@@ -108,7 +108,7 @@
   - `strokeGeometry`: 선분 위/근처/먼 점, 끝점, 반경 경계, bbox 컷 케이스.
   - `drawingCursors`: 반환 문자열에 `%23`(색 인코딩) 포함, hotspot 좌표, 폴백 키워드 존재.
 - 회귀: 기존 `uiSurface.test.ts` 등 필기 툴바 관련 서페이스 테스트가 깨지지 않는지 확인, 필요 시 토글 버튼 반영.
-- 수동/E2E: 지우개 선택 시 토글 노출, 획 지우기 후 Cmd/Ctrl+Z로 복원되는지. (드로잉 제스처 E2E는 범위 밖, 토글 존재 정도만.)
+- E2E(Playwright, `e2e/pdf-drawing-toolbar.spec.ts`): 지우개 선택 시 `부분/획` 토글 노출·기본 `획`·토글 전환·툴 전환 시 숨김, 펜 커서가 SVG data-URI(`url(...image/svg...)`)·지우개 커서 `none`, 그리고 **획 지우기 제스처 → 획 삭제 → Cmd/Ctrl+Z 복원**을 오버레이 캔버스 픽셀 카운트로 검증(합성 포인터 이벤트 사용). 선택자는 `data-testid`(`pdf-draw-overlay`, `pdf-eraser-ring`)로 안정화.
 
 ## 7. 엣지 케이스
 
@@ -125,3 +125,10 @@
 - 지우개 마스크 획 자체의 획 지우기.
 - 압력(pressure) 기반 굵기.
 - 획 지우기 hover 시 삭제 예정 획 하이라이트(링으로 충분, 추후 개선 여지).
+
+## 9. 접근성 (Accessibility)
+
+- **포커스 표시**: 모든 필기 툴 버튼(`.pdf-tool-button`), 색상 스와치(`.pdf-color-swatch`), 그리고 `부분/획` 토글(`.pdf-seg-button`)에 `:focus-visible` 아웃라인 제공 → 키보드/스위치 사용자가 현재 포커스를 인지 가능.
+- **토글 라벨**: `부분/획` 버튼은 시각 라벨이 한 글자라 의미가 모호 → 각 버튼에 명시적 `aria-label`(`"획 지우기: 닿은 획 전체 삭제"` / `"부분 지우기"`) 부여. `role="group" aria-label="지우개 방식"` 유지, `aria-pressed`로 현재 모드 안내. (마우스 전용 `title`에만 의존하지 않음.)
+- **범위 밖(추후 개선 여지)**: 토글의 roving-tabindex/화살표 키 네비게이션(현재 Tab+Enter로 조작 가능), 툴 버튼 접근명에 역할 접미사(`'펜 도구'` 등), 터치에서 지우개 링을 pointerdown 시 즉시 노출, 스크린리더용 획 삭제 실시간 안내.
+- **성능**: 획 지우기 드래그는 시작 시 각 획을 1회만 파싱해 캐시(`eraseDragStrokesRef`) → pointermove마다 전체 재파싱 제거(밀도 높은 페이지의 잭 방지).
