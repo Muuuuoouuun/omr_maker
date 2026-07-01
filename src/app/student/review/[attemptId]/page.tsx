@@ -1,11 +1,23 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
 import dynamic from "next/dynamic";
-import { BookOpen, ChevronDown, ChevronUp, Clock, Repeat2, Target } from "lucide-react";
-import type { Attempt, Exam, PdfDrawings } from "@/types/omr";
+import {
+    BookOpen,
+    CheckCircle2,
+    ChevronDown,
+    ChevronUp,
+    Clock,
+    FileText,
+    HelpCircle,
+    MessageSquare,
+    Repeat2,
+    Send,
+    Target,
+} from "lucide-react";
+import type { Attempt, Exam, PdfDrawings, Question, QuestionResultStatus, QuestionTiming } from "@/types/omr";
 import { storedDataUrlToFile, loadJsonRecord } from "@/utils/blobStore";
 import { attemptBelongsToSession, getSession } from "@/utils/storage";
 import { loadAttempt, loadExam } from "@/lib/omrPersistence";
@@ -22,6 +34,14 @@ import { buildRetakeHref } from "@/lib/retakeLinks";
 
 const PDFViewer = dynamic(() => import("@/components/PDFViewer"), { ssr: false });
 
+interface StudentQuestionNote {
+    questionId: number;
+    questionNumber: number;
+    body: string;
+    createdAt: string;
+    status: "queued";
+}
+
 function hasDrawings(drawings?: PdfDrawings): boolean {
     return !!drawings && Object.values(drawings).some(paths => paths.length > 0);
 }
@@ -31,6 +51,230 @@ function formatSeconds(totalSec: number): string {
     const minutes = Math.floor(totalSec / 60);
     const seconds = totalSec % 60;
     return seconds > 0 ? `${minutes}분 ${seconds}초` : `${minutes}분`;
+}
+
+function studentQuestionStorageKey(attemptId: string): string {
+    return `omr_student_question_queue_${attemptId}`;
+}
+
+function isStudentQuestionNote(value: unknown): value is StudentQuestionNote {
+    return !!value
+        && typeof value === "object"
+        && !Array.isArray(value)
+        && typeof (value as StudentQuestionNote).questionId === "number"
+        && typeof (value as StudentQuestionNote).questionNumber === "number"
+        && typeof (value as StudentQuestionNote).body === "string";
+}
+
+function readStudentQuestionQueue(attemptId: string): Record<number, StudentQuestionNote> {
+    if (typeof window === "undefined") return {};
+    try {
+        const parsed = JSON.parse(localStorage.getItem(studentQuestionStorageKey(attemptId)) || "{}") as unknown;
+        if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return {};
+        return Object.entries(parsed).reduce<Record<number, StudentQuestionNote>>((acc, [key, value]) => {
+            const questionId = Number(key);
+            if (Number.isFinite(questionId) && isStudentQuestionNote(value)) acc[questionId] = value;
+            return acc;
+        }, {});
+    } catch {
+        return {};
+    }
+}
+
+function writeStudentQuestionQueue(attemptId: string, queue: Record<number, StudentQuestionNote>): void {
+    if (typeof window === "undefined") return;
+    try {
+        localStorage.setItem(studentQuestionStorageKey(attemptId), JSON.stringify(queue));
+    } catch {
+        // Local queue is a convenience MVP; failing storage should not block review.
+    }
+}
+
+function MiniStat({ label, value, color }: { label: string; value: number | string; color: string }) {
+    return (
+        <div className="student-review-mini-stat">
+            <span>{label}</span>
+            <strong style={{ color }}>{value}</strong>
+        </div>
+    );
+}
+
+function StatusChip({ status }: { status: QuestionResultStatus }) {
+    const copy = status === "correct"
+        ? { label: "정답", color: "#15803d", background: "#dcfce7", border: "#bbf7d0" }
+        : status === "wrong"
+            ? { label: "오답", color: "#dc2626", background: "#fef2f2", border: "#fecaca" }
+            : status === "unanswered"
+                ? { label: "미응답", color: "#475569", background: "#f1f5f9", border: "#e2e8f0" }
+                : { label: "미채점", color: "#64748b", background: "#f8fafc", border: "#e2e8f0" };
+
+    return (
+        <span
+            className="student-review-status-chip"
+            style={{ color: copy.color, background: copy.background, borderColor: copy.border }}
+        >
+            {copy.label}
+        </span>
+    );
+}
+
+function questionStatusLabel(status: QuestionResultStatus): string {
+    if (status === "correct") return "정답";
+    if (status === "wrong") return "오답";
+    if (status === "unanswered") return "미응답";
+    return "미채점";
+}
+
+function MetaChip({ children, tone = "neutral" }: { children: ReactNode; tone?: "neutral" | "primary" | "teal" | "amber" }) {
+    const palette = {
+        neutral: { color: "#64748b", background: "#f8fafc", border: "#e2e8f0" },
+        primary: { color: "#4f46e5", background: "#eef2ff", border: "#c7d2fe" },
+        teal: { color: "#0f766e", background: "#f0fdfa", border: "#99f6e4" },
+        amber: { color: "#9a3412", background: "#fff7ed", border: "#fed7aa" },
+    }[tone];
+
+    return (
+        <span className="student-review-meta-chip" style={{ color: palette.color, background: palette.background, borderColor: palette.border }}>
+            {children}
+        </span>
+    );
+}
+
+function QuestionCard({
+    question,
+    userAnswer,
+    correctAnswer,
+    status,
+    timing,
+    explanationOpen,
+    questionBoxOpen,
+    draft,
+    submittedQuestion,
+    retakeHref,
+    onToggleExplanation,
+    onToggleQuestionBox,
+    onDraftChange,
+    onSubmitQuestion,
+}: {
+    question: Question;
+    userAnswer?: number;
+    correctAnswer?: number;
+    status: QuestionResultStatus;
+    timing?: QuestionTiming;
+    explanationOpen: boolean;
+    questionBoxOpen: boolean;
+    draft: string;
+    submittedQuestion?: StudentQuestionNote;
+    retakeHref: string;
+    onToggleExplanation: () => void;
+    onToggleQuestionBox: () => void;
+    onDraftChange: (value: string) => void;
+    onSubmitQuestion: () => void;
+}) {
+    const isCorrect = status === "correct";
+    const isSkipped = status === "unanswered";
+    const isUngraded = status === "ungraded";
+    const hasExplanation = !!question.explanation?.trim();
+    const canSubmit = draft.trim().length > 0;
+
+    return (
+        <article className={`student-review-question-card ${status !== "correct" && status !== "ungraded" ? "is-needs-review" : ""}`}>
+            <div className="student-review-question-head">
+                <div>
+                    <h3>문항 {question.number}</h3>
+                    <div className="student-review-answer-line">
+                        <span>내 답</span>
+                        <strong className={isCorrect || isUngraded ? "" : "is-wrong"}>
+                            {isSkipped ? "(미응답)" : typeof userAnswer === "number" ? `${userAnswer}번` : "-"}
+                        </strong>
+                        {correctAnswer !== undefined && (
+                            <>
+                                <span>정답</span>
+                                <strong className="is-correct">{correctAnswer}번</strong>
+                            </>
+                        )}
+                    </div>
+                </div>
+                <StatusChip status={status} />
+            </div>
+
+            {(question.label || question.tags?.concept || question.tags?.source || timing) && (
+                <div className="student-review-meta-row">
+                    {question.label && <MetaChip>#{question.label}</MetaChip>}
+                    {question.tags?.concept && <MetaChip tone="primary">{question.tags.concept}</MetaChip>}
+                    {question.tags?.source && <MetaChip tone="teal">{question.tags.source}</MetaChip>}
+                    {timing && <MetaChip tone="amber">{formatSeconds(timing.totalTimeSec)} · 방문 {timing.visitCount}회</MetaChip>}
+                </div>
+            )}
+
+            <div className="student-review-question-actions">
+                <Link href={retakeHref} className="btn btn-secondary student-review-compact-button">
+                    <FileText size={13} />
+                    다시 풀기
+                </Link>
+                {hasExplanation ? (
+                    <button
+                        type="button"
+                        onClick={onToggleExplanation}
+                        className="student-review-link-button"
+                        aria-expanded={explanationOpen}
+                    >
+                        <BookOpen size={14} />
+                        해설
+                        {explanationOpen ? <ChevronUp size={13} /> : <ChevronDown size={13} />}
+                    </button>
+                ) : (
+                    <span className="student-review-muted-note">해설 준비 중</span>
+                )}
+                <button
+                    type="button"
+                    onClick={onToggleQuestionBox}
+                    className="student-review-link-button"
+                    aria-expanded={questionBoxOpen}
+                >
+                    <MessageSquare size={14} />
+                    질문
+                    {questionBoxOpen ? <ChevronUp size={13} /> : <ChevronDown size={13} />}
+                </button>
+            </div>
+
+            {hasExplanation && explanationOpen && (
+                <div className="student-review-explanation">
+                    {question.explanation}
+                </div>
+            )}
+
+            {(questionBoxOpen || submittedQuestion) && (
+                <div className="student-review-question-box">
+                    {submittedQuestion && (
+                        <div className="student-review-question-submitted">
+                            <CheckCircle2 size={15} />
+                            <span>{formatKoreanDateTime(submittedQuestion.createdAt)} 질문 대기</span>
+                        </div>
+                    )}
+                    <label htmlFor={`student-question-${question.id}`}>선생님께 남길 질문</label>
+                    <textarea
+                        id={`student-question-${question.id}`}
+                        value={draft}
+                        onChange={(event) => onDraftChange(event.target.value)}
+                        placeholder="어떤 부분이 헷갈렸는지 짧게 남겨두세요."
+                    />
+                    <div className="student-review-question-submit-row">
+                        <span>{draft.trim().length}/500</span>
+                        <button
+                            type="button"
+                            onClick={onSubmitQuestion}
+                            className="btn btn-primary student-review-compact-button"
+                            disabled={!canSubmit}
+                        >
+                            <Send size={13} />
+                            질문 저장
+                        </button>
+                    </div>
+                </div>
+            )}
+        </article>
+    );
 }
 
 export default function ReviewPage() {
@@ -44,7 +288,11 @@ export default function ReviewPage() {
     const [pdfFile, setPdfFile] = useState<File | null>(null);
     const [pdfLoadFailed, setPdfLoadFailed] = useState(false);
     const [filterWrong, setFilterWrong] = useState(false);
+    const [selectedQuestionId, setSelectedQuestionId] = useState<number | null>(null);
     const [openExplanations, setOpenExplanations] = useState<Record<number, boolean>>({});
+    const [openQuestionBoxes, setOpenQuestionBoxes] = useState<Record<number, boolean>>({});
+    const [questionDrafts, setQuestionDrafts] = useState<Record<number, string>>({});
+    const [studentQuestions, setStudentQuestions] = useState<Record<number, StudentQuestionNote>>({});
     const [accessDenied, setAccessDenied] = useState(false);
     const [handwritingUnavailable, setHandwritingUnavailable] = useState(false);
 
@@ -52,7 +300,6 @@ export default function ReviewPage() {
         let cancelled = false;
         const loadReview = async () => {
             if (!id || cancelled) return;
-            // Load Attempt
             const found = await loadAttempt(id);
             if (found && !cancelled) {
                 const session = getSession();
@@ -61,6 +308,7 @@ export default function ReviewPage() {
                     return;
                 }
                 setAttempt(found);
+                setStudentQuestions(readStudentQuestionQueue(found.id));
 
                 const inlineDrawings = hasDrawings(found.drawings) ? found.drawings : undefined;
                 if (inlineDrawings) {
@@ -91,7 +339,6 @@ export default function ReviewPage() {
                     setRestoredDrawings(found.drawings);
                 }
 
-                // Load Exam Data associated with this attempt
                 const parsedExam = await loadExam(found.examId);
                 if (parsedExam && !cancelled) {
                     setExam(parsedExam);
@@ -143,7 +390,6 @@ export default function ReviewPage() {
         if (result.status === "ungraded") counts.ungradedCount += 1;
         return counts;
     }, { correctCount: 0, incorrectCount: 0, unansweredCount: 0, ungradedCount: 0 });
-    const percentCorrect = scoreSummary.scorePercent;
 
     const wrongQuestionIds = new Set(questionResults
         .filter(result => result.status === "wrong" || result.status === "unanswered")
@@ -162,510 +408,329 @@ export default function ReviewPage() {
     const behaviorSummary = summarizeAttemptBehavior(attempt);
     const timingByQuestionId = new Map((attempt.questionTimings || []).map(timing => [timing.questionId, timing]));
     const questionNumberById = new Map(reviewQuestions.map(question => [question.id, question.number]));
+    const allReviewQuestionIds = reviewQuestions.map(question => question.id);
+    const explainedCount = reviewQuestions.filter(question => question.explanation?.trim()).length;
+    const queuedQuestionCount = Object.keys(studentQuestions).length;
+    const wrongAndUnansweredCount = resultCounts.incorrectCount + resultCounts.unansweredCount;
+    const resolveQuestionState = (question: Question) => {
+        const result = resultByQuestionId.get(question.id);
+        const userAnswer = result?.selectedAnswer ?? attempt.answers[question.id];
+        const correctAnswer = result?.correctAnswer ?? question.answer;
+        const status: QuestionResultStatus = result?.status
+            ?? (correctAnswer === undefined
+                ? "ungraded"
+                : userAnswer === undefined || userAnswer === null || userAnswer === 0
+                    ? "unanswered"
+                    : userAnswer === correctAnswer
+                        ? "correct"
+                        : "wrong");
+
+        return {
+            userAnswer,
+            correctAnswer,
+            status,
+            timing: timingByQuestionId.get(question.id),
+        };
+    };
+    const selectedQuestion = filteredQuestions.find(question => question.id === selectedQuestionId)
+        || filteredQuestions[0]
+        || null;
+    const selectedQuestionState = selectedQuestion ? resolveQuestionState(selectedQuestion) : null;
     const formatRetakeNumbers = (questionIds: number[]) => questionIds
         .map(questionId => questionNumberById.get(questionId))
         .filter((questionNumber): questionNumber is number => typeof questionNumber === "number")
         .sort((a, b) => a - b)
         .join(", ");
-    const allReviewQuestionIds = reviewQuestions.map(question => question.id);
 
-    const toggleExplanation = (qId: number) => {
-        setOpenExplanations(prev => ({ ...prev, [qId]: !prev[qId] }));
+    const toggleExplanation = (questionId: number) => {
+        setOpenExplanations(prev => ({ ...prev, [questionId]: !prev[questionId] }));
+    };
+
+    const toggleQuestionBox = (questionId: number) => {
+        setOpenQuestionBoxes(prev => ({ ...prev, [questionId]: !prev[questionId] }));
+    };
+
+    const updateQuestionDraft = (questionId: number, value: string) => {
+        setQuestionDrafts(prev => ({ ...prev, [questionId]: value.slice(0, 500) }));
+    };
+
+    const submitStudentQuestion = (question: Question) => {
+        const body = (questionDrafts[question.id] || "").trim();
+        if (!body) return;
+        const note: StudentQuestionNote = {
+            questionId: question.id,
+            questionNumber: question.number,
+            body,
+            createdAt: new Date().toISOString(),
+            status: "queued",
+        };
+        setStudentQuestions(prev => {
+            const next = { ...prev, [question.id]: note };
+            writeStudentQuestionQueue(attempt.id, next);
+            return next;
+        });
+        setQuestionDrafts(prev => ({ ...prev, [question.id]: "" }));
+        setOpenQuestionBoxes(prev => ({ ...prev, [question.id]: true }));
     };
 
     return (
-        <div className="layout-main" style={{ minHeight: '100vh', background: '#f8fafc' }}>
+        <div className="layout-main student-review-page">
             <header className="header" style={{ background: 'white', borderBottom: '1px solid #e2e8f0' }}>
                 <div className="container header-content">
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
-                        <button onClick={() => router.back()} style={{ border: 'none', background: 'none', fontSize: '1.2rem', cursor: 'pointer' }}>←</button>
-                        <span style={{ fontWeight: 600 }}>결과 리포트</span>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '1rem', minWidth: 0 }}>
+                        <button
+                            type="button"
+                            onClick={() => router.back()}
+                            aria-label="이전 화면으로"
+                            title="이전 화면으로"
+                            style={{ border: 'none', background: 'none', fontSize: '1rem', cursor: 'pointer' }}
+                        >
+                            ←
+                        </button>
+                        <span style={{ fontWeight: 800, whiteSpace: 'nowrap' }}>결과 리포트</span>
                     </div>
-                    <Link href="/student/history" className="btn btn-secondary" style={{ fontSize: '0.9rem', padding: '0.4rem 1rem' }}>
+                    <Link href="/student/history" className="btn btn-secondary" style={{ fontSize: '0.78rem', padding: '0.32rem 0.8rem' }}>
                         목록으로
                     </Link>
                 </div>
             </header>
 
-            <main className="container" style={{ padding: '2rem 1rem', maxWidth: '800px', margin: '0 auto' }}>
-                {/* Score Card */}
-                <div style={{ background: 'white', padding: '2rem', borderRadius: '16px', boxShadow: '0 4px 6px -1px rgba(0,0,0,0.1)', textAlign: 'center', marginBottom: '1.25rem' }}>
-                    <h1 style={{ fontSize: '1.5rem', marginBottom: '0.5rem', fontWeight: 700 }}>{attempt.examTitle}</h1>
-                    <div style={{ fontSize: '3.5rem', fontWeight: 800, color: 'var(--primary)', lineHeight: 1 }}>
-                        {percentCorrect}
-                        <span style={{ fontSize: '1.5rem', color: '#94a3b8', fontWeight: 500 }}>%</span>
-                    </div>
-                    <div style={{ fontSize: '1rem', color: '#475569', marginTop: '0.4rem', fontWeight: 600 }}>
-                        {scoreSummary.earnedScore} / {scoreSummary.totalScore} 점
-                    </div>
-                    <p style={{ color: '#64748b', marginTop: '0.5rem' }}>
-                        {formatKoreanDateTime(attempt.finishedAt)} 응시 완료
-                    </p>
-                    {attempt.handwritingArchived && (
-                        <div style={{
-                            margin: '0.9rem auto 0',
-                            display: 'inline-flex',
-                            alignItems: 'center',
-                            gap: '0.4rem',
-                            padding: '0.35rem 0.75rem',
-                            borderRadius: '999px',
-                            background: '#eef2ff',
-                            color: '#4f46e5',
-                            fontSize: '0.78rem',
-                            fontWeight: 800
-                        }}>
-                            필기 보관 {attempt.questionDrawings?.length || attempt.drawingPageCount || 0}문항
-                        </div>
-                    )}
-                    {attempt.retake && (
-                        <div style={{
-                            margin: '0.6rem auto 0',
-                            display: 'inline-flex',
-                            alignItems: 'center',
-                            gap: '0.4rem',
-                            padding: '0.35rem 0.75rem',
-                            borderRadius: '999px',
-                            background: '#f0fdfa',
-                            color: '#0f766e',
-                            fontSize: '0.78rem',
-                            fontWeight: 800
-                        }}>
-                            재시험 {attempt.retake.questionIds.length}문항
-                        </div>
-                    )}
-                </div>
-
-                {handwritingUnavailable && (
-                    <div style={{
-                        background: '#fff7ed',
-                        border: '1px solid #fed7aa',
-                        color: '#9a3412',
-                        borderRadius: '12px',
-                        padding: '0.9rem 1rem',
-                        marginBottom: '1.25rem',
-                        fontSize: '0.88rem',
-                        fontWeight: 700
-                    }}>
-                        저장된 필기 정보를 불러오지 못했습니다. 답안과 점수 기록은 정상적으로 보관되어 있습니다.
-                    </div>
-                )}
-
-                {/* Stat Row */}
-                <div style={{
-                    display: 'grid',
-                    gridTemplateColumns: `repeat(${resultCounts.ungradedCount > 0 ? 4 : 3}, 1fr)`,
-                    gap: '0.75rem',
-                    marginBottom: '1.5rem',
-                }}>
-                    <div style={{ background: 'white', padding: '1rem', borderRadius: '12px', border: '1px solid #e2e8f0', textAlign: 'center' }}>
-                        <div style={{ fontSize: '0.75rem', color: '#64748b', fontWeight: 600, marginBottom: '0.25rem' }}>정답</div>
-                        <div style={{ fontSize: '1.5rem', fontWeight: 800, color: 'var(--success, #16a34a)' }}>{resultCounts.correctCount}</div>
-                    </div>
-                    <div style={{ background: 'white', padding: '1rem', borderRadius: '12px', border: '1px solid #e2e8f0', textAlign: 'center' }}>
-                        <div style={{ fontSize: '0.75rem', color: '#64748b', fontWeight: 600, marginBottom: '0.25rem' }}>오답</div>
-                        <div style={{ fontSize: '1.5rem', fontWeight: 800, color: 'var(--error, #dc2626)' }}>{resultCounts.incorrectCount}</div>
-                    </div>
-                    <div style={{ background: 'white', padding: '1rem', borderRadius: '12px', border: '1px solid #e2e8f0', textAlign: 'center' }}>
-                        <div style={{ fontSize: '0.75rem', color: '#64748b', fontWeight: 600, marginBottom: '0.25rem' }}>미응답</div>
-                        <div style={{ fontSize: '1.5rem', fontWeight: 800, color: '#94a3b8' }}>{resultCounts.unansweredCount}</div>
-                    </div>
-                    {resultCounts.ungradedCount > 0 && (
-                        <div style={{ background: 'white', padding: '1rem', borderRadius: '12px', border: '1px solid #e2e8f0', textAlign: 'center' }}>
-                            <div style={{ fontSize: '0.75rem', color: '#64748b', fontWeight: 600, marginBottom: '0.25rem' }}>미채점</div>
-                            <div style={{ fontSize: '1.5rem', fontWeight: 800, color: '#64748b' }}>{resultCounts.ungradedCount}</div>
-                        </div>
-                    )}
-                </div>
-
-                {hasHandwriting && (
-                    <section style={{
-                        background: 'white',
-                        border: '1px solid #e2e8f0',
-                        borderRadius: '12px',
-                        overflow: 'hidden',
-                        marginBottom: '1.5rem',
-                        boxShadow: '0 2px 4px rgba(0,0,0,0.05)'
-                    }}>
-                        <div style={{
-                            padding: '1rem 1.25rem',
-                            borderBottom: '1px solid #e2e8f0',
-                            display: 'flex',
-                            alignItems: 'center',
-                            justifyContent: 'space-between',
-                            gap: '1rem'
-                        }}>
-                            <div>
-                                <h2 style={{ fontSize: '1rem', fontWeight: 700, color: '#0f172a', marginBottom: '0.2rem' }}>
-                                    풀이 필기
-                                </h2>
-                                <p style={{ fontSize: '0.82rem', color: '#64748b' }}>
-                                    제출 당시 저장된 필기를 읽기 전용으로 표시합니다.
-                                </p>
+            <main className="container animate-fade-in student-review-main">
+                <section className="student-review-shell">
+                    <aside className="student-review-sidebar">
+                        <section className="bento-card student-review-score-card">
+                            <div className="student-review-score-copy">
+                                <h1>{attempt.examTitle}</h1>
+                                <p>{formatKoreanDateTime(attempt.finishedAt)} 응시 완료</p>
                             </div>
-                            <span style={{
-                                fontSize: '0.75rem',
-                                fontWeight: 700,
-                                color: '#475569',
-                                background: '#f1f5f9',
-                                borderRadius: '999px',
-                                padding: '0.25rem 0.65rem',
-                                whiteSpace: 'nowrap'
-                            }}>
-                                읽기 전용
-                            </span>
-                        </div>
-                        <div style={{ height: '720px', background: '#525659' }}>
-                            {pdfFile ? (
-                                <PDFViewer
-                                    file={pdfFile}
-                                    onLoadSuccess={() => { }}
-                                    readOnlyDrawings={true}
-                                    drawings={restoredDrawings}
-                                />
-                            ) : (
-                                <div style={{
-                                    height: '100%',
-                                    display: 'flex',
-                                    alignItems: 'center',
-                                    justifyContent: 'center',
-                                    color: 'white',
-                                    padding: '2rem',
-                                    textAlign: 'center'
-                                }}>
-                                    {pdfLoadFailed
-                                        ? "문제 PDF를 불러오지 못했습니다. 필기 데이터는 제출 기록에 저장되어 있습니다."
-                                        : "문제 PDF를 불러오는 중입니다..."}
-                                </div>
-                            )}
-                        </div>
-                    </section>
-                )}
+                            <div className="student-review-score-row">
+                                <strong>{scoreSummary.scorePercent}<span>%</span></strong>
+                                <div>{scoreSummary.earnedScore} / {scoreSummary.totalScore}점</div>
+                            </div>
+                            <div className="student-review-pill-row">
+                                {attempt.handwritingArchived && (
+                                    <MetaChip tone="primary">필기 보관 {attempt.questionDrawings?.length || attempt.drawingPageCount || 0}문항</MetaChip>
+                                )}
+                                {attempt.retake && (
+                                    <MetaChip tone="teal">재시험 {attempt.retake.questionIds.length}문항</MetaChip>
+                                )}
+                            </div>
+                        </section>
 
-                <section style={{
-                    background: 'white',
-                    border: '1px solid #e2e8f0',
-                    borderRadius: '12px',
-                    padding: '1.25rem',
-                    marginBottom: '1.25rem',
-                    display: 'grid',
-                    gap: '1rem'
-                }}>
-                    <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: '1rem', flexWrap: 'wrap' }}>
-                        <div>
-                            <h2 style={{ fontSize: '1rem', fontWeight: 800, color: '#0f172a', display: 'flex', alignItems: 'center', gap: '0.45rem' }}>
-                                <Target size={17} color="#4f46e5" />
-                                오답 재시험
-                            </h2>
-                            <p style={{ color: '#64748b', fontSize: '0.84rem', marginTop: '0.25rem' }}>
-                                틀린 문항과 같은 유형을 묶어 다시 풀 수 있습니다.
-                            </p>
-                        </div>
-                        <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap', justifyContent: 'flex-end' }}>
-                            {retakeQuestionIds.length > 0 ? (
-                                <Link
-                                    href={buildRetakeHref(attempt.examId, attempt.id, retakeQuestionIds, "wrong")}
-                                    className="btn btn-primary"
-                                    style={{ fontSize: '0.86rem', display: 'inline-flex', alignItems: 'center', gap: '0.4rem' }}
-                                >
-                                    <Repeat2 size={15} />
-                                    오답만 재시험
+                        <section className="student-review-stat-grid" aria-label="채점 요약">
+                            <MiniStat label="정답" value={resultCounts.correctCount} color="var(--success, #16a34a)" />
+                            <MiniStat label="오답" value={resultCounts.incorrectCount} color="var(--error, #dc2626)" />
+                            <MiniStat label="미응답" value={resultCounts.unansweredCount} color="#64748b" />
+                            {resultCounts.ungradedCount > 0 && (
+                                <MiniStat label="미채점" value={resultCounts.ungradedCount} color="#64748b" />
+                            )}
+                        </section>
+
+                        <section className="bento-card student-review-side-card">
+                            <div className="student-review-section-title">
+                                <Target size={17} />
+                                <strong>오답 재시험</strong>
+                            </div>
+                            <p>오답과 같은 유형을 바로 다시 풉니다.</p>
+                            <div className="student-review-side-actions">
+                                {retakeQuestionIds.length > 0 ? (
+                                    <Link href={buildRetakeHref(attempt.examId, attempt.id, retakeQuestionIds, "wrong")} className="btn btn-primary student-review-full-button">
+                                        <Repeat2 size={15} />
+                                        오답만
+                                    </Link>
+                                ) : (
+                                    <span className="student-review-success-note">재시험할 오답이 없습니다</span>
+                                )}
+                                <Link href={buildRetakeHref(attempt.examId, attempt.id, allReviewQuestionIds, "custom")} className="btn btn-secondary student-review-full-button">
+                                    전체
                                 </Link>
-                            ) : (
-                                <span style={{ color: '#16a34a', fontWeight: 800, fontSize: '0.86rem' }}>재시험할 오답이 없습니다</span>
-                            )}
-                            <Link
-                                href={buildRetakeHref(attempt.examId, attempt.id, allReviewQuestionIds, "custom")}
-                                className="btn btn-secondary"
-                                style={{ fontSize: '0.86rem' }}
-                            >
-                                전체 재시험
-                            </Link>
-                        </div>
-                    </div>
-
-                    {recommendationGroups.length > 0 && (
-                        <div style={{
-                            display: 'grid',
-                            gap: '0.65rem',
-                            padding: '0.9rem',
-                            borderRadius: '10px',
-                            border: '1px solid #c7d2fe',
-                            background: '#eef2ff'
-                        }}>
-                            <div style={{ display: 'flex', justifyContent: 'space-between', gap: '0.75rem', flexWrap: 'wrap' }}>
-                                <div>
-                                    <div style={{ fontWeight: 900, color: '#312e81', fontSize: '0.92rem' }}>
-                                        유형 재추천 큐
-                                    </div>
-                                    <div style={{ color: '#4338ca', fontSize: '0.78rem', marginTop: '0.2rem', fontWeight: 700 }}>
-                                        이번 시험에서 틀린 유형만 묶었습니다.
-                                    </div>
-                                </div>
-                                <span style={{
-                                    color: '#4338ca',
-                                    background: 'white',
-                                    border: '1px solid #c7d2fe',
-                                    borderRadius: '999px',
-                                    padding: '0.25rem 0.6rem',
-                                    fontSize: '0.72rem',
-                                    fontWeight: 900,
-                                    height: 'fit-content'
-                                }}>
-                                    {retakeQuestionIds.length}문항 대상
-                                </span>
                             </div>
 
-                            <div style={{ display: 'grid', gap: '0.55rem' }}>
-                                {recommendationGroups.map(group => {
-                                    const retakeIds = group.retakeQuestionIds;
-                                    const retakeNumbers = formatRetakeNumbers(retakeIds);
-
-                                    return (
-                                        <div key={group.key} style={{
-                                            display: 'flex',
-                                            alignItems: 'center',
-                                            justifyContent: 'space-between',
-                                            gap: '0.75rem',
-                                            padding: '0.85rem',
-                                            borderRadius: '8px',
-                                            background: 'white',
-                                            border: '1px solid #c7d2fe'
-                                        }}>
-                                            <div style={{ minWidth: 0 }}>
-                                                <div style={{ fontWeight: 900, color: '#0f172a', fontSize: '0.9rem', lineHeight: 1.3 }}>
-                                                    {group.title}
-                                                    <span style={{ marginLeft: '0.45rem', color: '#64748b', fontSize: '0.74rem', fontWeight: 800 }}>
-                                                        {group.basis}
-                                                    </span>
-                                                </div>
-                                                <div style={{ color: '#64748b', fontSize: '0.78rem', marginTop: '0.22rem' }}>
-                                                    {retakeNumbers || group.questionNumbers.join(', ')}번 · 오답/미답 {group.wrongCount}/{group.totalCount}
-                                                </div>
-                                                <div style={{ color: '#4338ca', fontSize: '0.72rem', marginTop: '0.18rem', fontWeight: 700 }}>
-                                                    {group.reason}
-                                                </div>
-                                            </div>
+                            {recommendationGroups.length > 0 && (
+                                <div className="student-review-recommendations">
+                                    <div className="student-review-recommendation-head">
+                                        <span>유형 큐</span>
+                                        <strong>{retakeQuestionIds.length}문항</strong>
+                                    </div>
+                                    {recommendationGroups.map(group => {
+                                        const retakeIds = group.retakeQuestionIds;
+                                        const retakeNumbers = formatRetakeNumbers(retakeIds);
+                                        return (
                                             <Link
+                                                key={group.key}
                                                 href={buildRetakeHref(attempt.examId, group.sourceAttemptId, retakeIds, group.retakeMode, {
                                                     labels: group.retakeLabels,
                                                     concepts: group.retakeConcepts,
                                                 })}
-                                                className="btn btn-secondary"
-                                                style={{ fontSize: '0.78rem', padding: '0.35rem 0.7rem', whiteSpace: 'nowrap' }}
+                                                className="student-review-recommendation-row"
                                             >
-                                                유형 재시험
+                                                <span>{group.title}</span>
+                                                <small>{retakeNumbers || group.questionNumbers.join(", ")}번 · {group.wrongCount}/{group.totalCount}</small>
                                             </Link>
-                                        </div>
-                                    );
-                                })}
-                            </div>
-                        </div>
-                    )}
-
-                    {recommendationGroups.length === 0 && weaknessGroups.length > 0 && (
-                        <div style={{ display: 'grid', gap: '0.55rem' }}>
-                            {weaknessGroups.map(group => (
-                                <div key={group.key} style={{
-                                    display: 'flex',
-                                    alignItems: 'center',
-                                    justifyContent: 'space-between',
-                                    gap: '0.75rem',
-                                    padding: '0.8rem 0.9rem',
-                                    borderRadius: '8px',
-                                    background: '#f8fafc',
-                                    border: '1px solid #e2e8f0'
-                                }}>
-                                    <div style={{ minWidth: 0 }}>
-                                        <div style={{ fontWeight: 800, color: '#0f172a', fontSize: '0.9rem' }}>
-                                            {group.title}
-                                            <span style={{ marginLeft: '0.45rem', color: '#64748b', fontSize: '0.76rem', fontWeight: 700 }}>
-                                                {group.basis}
-                                            </span>
-                                        </div>
-                                        <div style={{ color: '#64748b', fontSize: '0.78rem', marginTop: '0.2rem' }}>
-                                            {group.questionNumbers.join(', ')}번 · 오답률 {group.wrongRate}%
-                                        </div>
-                                    </div>
-                                    <Link
-                                        href={buildRetakeHref(attempt.examId, attempt.id, group.questionIds, "similar", {
-                                            labels: group.labels,
-                                            concepts: group.concepts,
-                                        })}
-                                        className="btn btn-secondary"
-                                        style={{ fontSize: '0.78rem', padding: '0.35rem 0.7rem', whiteSpace: 'nowrap' }}
-                                    >
-                                        유형 재시험
-                                    </Link>
+                                        );
+                                    })}
                                 </div>
-                            ))}
-                        </div>
-                    )}
-                </section>
+                            )}
 
-                {(attempt.questionTimings?.length || behaviorSummary.focusLossCount > 0) && (
-                    <section style={{
-                        background: 'white',
-                        border: '1px solid #e2e8f0',
-                        borderRadius: '12px',
-                        padding: '1rem',
-                        marginBottom: '1.25rem',
-                    }}>
-                        <h2 style={{ fontSize: '0.96rem', fontWeight: 800, color: '#0f172a', display: 'flex', alignItems: 'center', gap: '0.4rem', marginBottom: '0.75rem' }}>
-                            <Clock size={16} color="#4f46e5" />
-                            풀이 행동 요약
-                        </h2>
-                        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '0.6rem' }}>
-                            {[
-                                { label: '추적 시간', value: formatSeconds(behaviorSummary.totalTrackedTimeSec) },
-                                { label: '평균 문항 시간', value: formatSeconds(behaviorSummary.averageTimeSec) },
-                                { label: '다시 본 문항', value: behaviorSummary.revisitedQuestionNumbers.length ? `${behaviorSummary.revisitedQuestionNumbers.join(', ')}번` : '없음' },
-                                { label: '이탈 기록', value: `${behaviorSummary.focusLossCount}회` },
-                            ].map(item => (
-                                <div key={item.label} style={{ padding: '0.75rem', borderRadius: '8px', background: '#f8fafc', border: '1px solid #e2e8f0' }}>
-                                    <div style={{ color: '#64748b', fontSize: '0.72rem', fontWeight: 700, marginBottom: '0.25rem' }}>{item.label}</div>
-                                    <div style={{ color: '#0f172a', fontSize: '0.9rem', fontWeight: 800 }}>{item.value}</div>
-                                </div>
-                            ))}
-                        </div>
-                    </section>
-                )}
-
-                {/* Filters */}
-                <div style={{ display: 'flex', gap: '1rem', marginBottom: '1.5rem', borderBottom: '1px solid #e2e8f0', paddingBottom: '1rem' }}>
-                    <button
-                        onClick={() => setFilterWrong(false)}
-                        className={`btn ${!filterWrong ? 'btn-primary' : 'btn-secondary'}`}
-                        style={{ borderRadius: '999px' }}
-                    >
-                        전체 문항 ({reviewQuestions.length})
-                    </button>
-                    <button
-                        onClick={() => setFilterWrong(true)}
-                        className={`btn ${filterWrong ? 'btn-primary' : 'btn-secondary'}`}
-                        style={{ borderRadius: '999px', background: filterWrong ? '#ef4444' : undefined, color: filterWrong ? 'white' : undefined }}
-                    >
-                        오답만 보기 ({resultCounts.incorrectCount + resultCounts.unansweredCount})
-                    </button>
-                </div>
-
-                {/* Question List */}
-                <div style={{ display: 'grid', gap: '1rem' }}>
-                    {filteredQuestions.map((q) => {
-                        const result = resultByQuestionId.get(q.id);
-                        const userAns = result?.selectedAnswer ?? attempt.answers[q.id];
-                        const correctAnswer = result?.correctAnswer ?? q.answer;
-                        const status = result?.status
-                            ?? (correctAnswer === undefined
-                                ? "ungraded"
-                                : userAns === undefined || userAns === null || userAns === 0
-                                    ? "unanswered"
-                                    : userAns === correctAnswer
-                                        ? "correct"
-                                        : "wrong");
-                        const isCorrect = status === "correct";
-                        const isSkipped = status === "unanswered";
-                        const isUngraded = status === "ungraded";
-                        const explanationOpen = !!openExplanations[q.id];
-                        const timing = timingByQuestionId.get(q.id);
-                        const statusLabel = isUngraded ? "미채점" : isCorrect ? "정답" : isSkipped ? "미응답" : "오답";
-
-                        return (
-                            <div key={q.id} style={{
-                                background: 'white', padding: '1.5rem', borderRadius: '12px',
-                                border: '1px solid', borderColor: isCorrect || isUngraded ? '#e2e8f0' : '#fecaca',
-                                position: 'relative'
-                            }}>
-                                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '1rem' }}>
-                                    <span style={{ fontWeight: 700, fontSize: '1.1rem', color: isCorrect || isUngraded ? '#0f172a' : '#ef4444' }}>
-                                        문항 {q.number}
-                                    </span>
-                                    <span style={{
-                                        fontWeight: 600, fontSize: '0.9rem',
-                                        color: isUngraded ? '#64748b' : isCorrect ? '#16a34a' : '#dc2626'
-                                    }}>
-                                        {statusLabel}
-                                    </span>
-                                </div>
-
-                                <div style={{ fontSize: '0.95rem', color: '#334155' }}>
-                                    {isCorrect ? (
-                                        <div>
-                                            <span style={{ color: '#64748b', marginRight: '0.5rem' }}>내 답:</span>
-                                            <span style={{ fontWeight: 700, color: '#0f172a' }}>{userAns}번</span>
-                                        </div>
-                                    ) : (
-                                        <div>
-                                            <span style={{ color: '#64748b', marginRight: '0.5rem' }}>내 답:</span>
-                                            <span style={{ fontWeight: 700, color: isUngraded ? '#475569' : '#ef4444' }}>
-                                                {isSkipped ? '(미응답)' : typeof userAns === "number" ? `${userAns}번` : '-'}
-                                            </span>
-                                            {correctAnswer !== undefined && (
-                                                <>
-                                                    <span style={{ color: '#94a3b8', margin: '0 0.5rem' }}>·</span>
-                                                    <span style={{ color: '#64748b', marginRight: '0.5rem' }}>정답:</span>
-                                                    <span style={{ fontWeight: 700, color: '#16a34a' }}>{correctAnswer}번</span>
-                                                </>
-                                            )}
-                                        </div>
-                                    )}
-                                </div>
-
-                                {(q.label || q.tags?.concept || q.tags?.source || timing) && (
-                                    <div style={{ marginTop: '1rem', display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
-                                        {q.label && <span style={{ fontSize: '0.75rem', padding: '2px 8px', borderRadius: '4px', background: '#f1f5f9', color: '#64748b' }}>
-                                            #{q.label}
-                                        </span>}
-                                        {q.tags?.concept && <span style={{ fontSize: '0.75rem', padding: '2px 8px', borderRadius: '4px', background: '#eef2ff', color: '#4f46e5' }}>
-                                            {q.tags.concept}
-                                        </span>}
-                                        {q.tags?.source && <span style={{ fontSize: '0.75rem', padding: '2px 8px', borderRadius: '4px', background: '#f0fdfa', color: '#0f766e' }}>
-                                            {q.tags.source}
-                                        </span>}
-                                        {timing && <span style={{ fontSize: '0.75rem', padding: '2px 8px', borderRadius: '4px', background: '#fff7ed', color: '#9a3412' }}>
-                                            {formatSeconds(timing.totalTimeSec)} · 방문 {timing.visitCount}회
-                                        </span>}
-                                    </div>
-                                )}
-
-                                {q.explanation && (
-                                    <div style={{ marginTop: '1rem', borderTop: '1px dashed #e2e8f0', paddingTop: '0.85rem' }}>
-                                        <button
-                                            type="button"
-                                            onClick={() => toggleExplanation(q.id)}
-                                            style={{
-                                                display: 'inline-flex', alignItems: 'center', gap: '0.4rem',
-                                                background: 'transparent', border: 'none', cursor: 'pointer',
-                                                padding: 0, color: 'var(--primary, #4f46e5)', fontWeight: 600,
-                                                fontSize: '0.9rem',
-                                            }}
-                                            aria-expanded={explanationOpen}
+                            {recommendationGroups.length === 0 && weaknessGroups.length > 0 && (
+                                <div className="student-review-recommendations">
+                                    {weaknessGroups.map(group => (
+                                        <Link
+                                            key={group.key}
+                                            href={buildRetakeHref(attempt.examId, attempt.id, group.questionIds, "similar", {
+                                                labels: group.labels,
+                                                concepts: group.concepts,
+                                            })}
+                                            className="student-review-recommendation-row"
                                         >
-                                            <BookOpen size={16} />
-                                            해설 보기
-                                            {explanationOpen ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
-                                        </button>
-                                        {explanationOpen && (
-                                            <div style={{
-                                                marginTop: '0.6rem', padding: '0.9rem 1rem',
-                                                background: '#f8fafc', border: '1px solid #e2e8f0',
-                                                borderRadius: '8px', color: '#334155',
-                                                fontSize: '0.9rem', lineHeight: 1.6, whiteSpace: 'pre-wrap',
-                                            }}>
-                                                {q.explanation}
+                                            <span>{group.title}</span>
+                                            <small>{group.questionNumbers.join(", ")}번 · 오답률 {group.wrongRate}%</small>
+                                        </Link>
+                                    ))}
+                                </div>
+                            )}
+                        </section>
+
+                        {(attempt.questionTimings?.length || behaviorSummary.focusLossCount > 0) && (
+                            <section className="bento-card student-review-side-card">
+                                <div className="student-review-section-title">
+                                    <Clock size={16} />
+                                    <strong>풀이 행동</strong>
+                                </div>
+                                <div className="student-review-behavior-grid">
+                                    <MiniStat label="추적" value={formatSeconds(behaviorSummary.totalTrackedTimeSec)} color="#0f172a" />
+                                    <MiniStat label="평균" value={formatSeconds(behaviorSummary.averageTimeSec)} color="#0f172a" />
+                                    <MiniStat label="재방문" value={behaviorSummary.revisitedQuestionNumbers.length ? `${behaviorSummary.revisitedQuestionNumbers.join(", ")}번` : "없음"} color="#0f172a" />
+                                    <MiniStat label="이탈" value={`${behaviorSummary.focusLossCount}회`} color="#0f172a" />
+                                </div>
+                            </section>
+                        )}
+
+                        <section className="bento-card student-review-side-card">
+                            <div className="student-review-section-title">
+                                <HelpCircle size={16} />
+                                <strong>질문/해설</strong>
+                            </div>
+                            <p>궁금한 문항은 대기 목록에 보관됩니다.</p>
+                            <div className="student-review-support-grid">
+                                <MiniStat label="해설" value={`${explainedCount}/${reviewQuestions.length}`} color="#4f46e5" />
+                                <MiniStat label="질문 대기" value={queuedQuestionCount} color="#0f766e" />
+                            </div>
+                        </section>
+                    </aside>
+
+                    <section className="student-review-content">
+                        {handwritingUnavailable && (
+                            <div className="student-review-alert">
+                                저장된 필기 정보를 불러오지 못했습니다. 답안과 점수 기록은 정상적으로 보관되어 있습니다.
+                            </div>
+                        )}
+
+                        <div className={`student-review-workbench ${!hasHandwriting ? "no-pdf" : ""}`}>
+                            {hasHandwriting && (
+                                <section className="bento-card student-review-pdf-card">
+                                    <div className="student-review-card-head">
+                                        <div>
+                                            <h2>풀이 필기</h2>
+                                            <p>제출 당시 필기와 문제지를 표시합니다.</p>
+                                        </div>
+                                        <MetaChip>읽기 전용</MetaChip>
+                                    </div>
+                                    <div className="student-review-pdf-frame">
+                                        {pdfFile ? (
+                                            <PDFViewer
+                                                file={pdfFile}
+                                                onLoadSuccess={() => { }}
+                                                readOnlyDrawings
+                                                drawings={restoredDrawings}
+                                            />
+                                        ) : (
+                                            <div className="student-review-pdf-empty">
+                                                {pdfLoadFailed
+                                                    ? "문제 PDF를 불러오지 못했습니다. 필기 데이터는 제출 기록에 저장되어 있습니다."
+                                                    : "문제 PDF를 불러오는 중입니다..."}
                                             </div>
                                         )}
                                     </div>
-                                )}
-                            </div>
-                        );
-                    })}
-                </div>
+                                </section>
+                            )}
 
-                {filterWrong && filteredQuestions.length === 0 && (
-                    <div style={{ textAlign: 'center', padding: '3rem', color: '#64748b' }}>
-                        틀린 문제가 없습니다!
-                    </div>
-                )}
+                            <section className="student-review-question-panel">
+                                <div className="student-review-question-toolbar">
+                                    <div>
+                                        <h2>문항 상세</h2>
+                                        <p>번호를 선택하고 해설/질문만 펼쳐봅니다.</p>
+                                    </div>
+                                    <div className="student-review-filter-tabs" role="group" aria-label="문항 필터">
+                                        <button
+                                            type="button"
+                                            onClick={() => setFilterWrong(false)}
+                                            className={`btn ${!filterWrong ? "btn-primary" : "btn-secondary"}`}
+                                        >
+                                            전체 {reviewQuestions.length}
+                                        </button>
+                                        <button
+                                            type="button"
+                                            onClick={() => setFilterWrong(true)}
+                                            className={`btn ${filterWrong ? "btn-primary" : "btn-secondary"}`}
+                                        >
+                                            오답 {wrongAndUnansweredCount}
+                                        </button>
+                                    </div>
+                                </div>
+
+                                <div className="student-review-question-dock">
+                                    <div className="student-review-question-map" aria-label="문항 바로가기">
+                                        {filteredQuestions.map(question => {
+                                            const { status } = resolveQuestionState(question);
+                                            const isActive = question.id === selectedQuestion?.id;
+
+                                            return (
+                                                <button
+                                                    key={question.id}
+                                                    type="button"
+                                                    onClick={() => setSelectedQuestionId(question.id)}
+                                                    className={`student-review-question-dot is-${status} ${isActive ? "is-active" : ""}`}
+                                                    aria-pressed={isActive}
+                                                    title={`문항 ${question.number} ${questionStatusLabel(status)}`}
+                                                >
+                                                    <span>{question.number}</span>
+                                                    <i aria-hidden="true" />
+                                                </button>
+                                            );
+                                        })}
+                                    </div>
+
+                                    {selectedQuestion && selectedQuestionState && (
+                                        <QuestionCard
+                                            key={selectedQuestion.id}
+                                            question={selectedQuestion}
+                                            userAnswer={selectedQuestionState.userAnswer}
+                                            correctAnswer={selectedQuestionState.correctAnswer}
+                                            status={selectedQuestionState.status}
+                                            timing={selectedQuestionState.timing}
+                                            explanationOpen={!!openExplanations[selectedQuestion.id]}
+                                            questionBoxOpen={!!openQuestionBoxes[selectedQuestion.id]}
+                                            draft={questionDrafts[selectedQuestion.id] || ""}
+                                            submittedQuestion={studentQuestions[selectedQuestion.id]}
+                                            retakeHref={buildRetakeHref(attempt.examId, attempt.id, [selectedQuestion.id], "custom")}
+                                            onToggleExplanation={() => toggleExplanation(selectedQuestion.id)}
+                                            onToggleQuestionBox={() => toggleQuestionBox(selectedQuestion.id)}
+                                            onDraftChange={(value) => updateQuestionDraft(selectedQuestion.id, value)}
+                                            onSubmitQuestion={() => submitStudentQuestion(selectedQuestion)}
+                                        />
+                                    )}
+                                </div>
+
+                                {filterWrong && filteredQuestions.length === 0 && (
+                                    <div className="student-review-empty">
+                                        틀린 문제가 없습니다!
+                                    </div>
+                                )}
+                            </section>
+                        </div>
+                    </section>
+                </section>
             </main>
         </div>
     );

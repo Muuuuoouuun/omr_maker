@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
+import { BookOpen, PenLine } from "lucide-react";
 import { Exam, Attempt } from "@/types/omr";
 import StatCard from "@/components/dashboard/StatCard";
 import { toast } from "@/components/Toast";
@@ -87,6 +88,19 @@ export default function ExamDetailPage() {
             submitCount: baseAttempts.length,
         };
     }, [attemptSummaryById, baseAttempts]);
+
+    const explanationStats = useMemo(() => {
+        if (!exam) return { written: 0, total: 0, missingNumbers: [] as number[] };
+        const missingNumbers = exam.questions
+            .filter(question => !question.explanation?.trim())
+            .map(question => question.number)
+            .sort((a, b) => a - b);
+        return {
+            written: exam.questions.length - missingNumbers.length,
+            total: exam.questions.length,
+            missingNumbers,
+        };
+    }, [exam]);
 
     const sortedAttempts = useMemo(() => {
         const arr = [...attempts];
@@ -182,6 +196,47 @@ export default function ExamDetailPage() {
                     <StatCard title="원시험 최고" value={`${stats.maxPct}%`} icon={<span>🏆</span>} color="var(--warning)" />
                     <StatCard title="재시험 제출" value={retakeAttempts.length} icon={<span>↻</span>} color="#0f766e" />
                 </div>
+
+                <section className="bento-card" style={{
+                    marginBottom: '1.25rem',
+                    padding: '1.15rem 1.25rem',
+                    display: 'grid',
+                    gridTemplateColumns: 'minmax(0, 1fr) auto',
+                    gap: '1rem',
+                    alignItems: 'center'
+                }}>
+                    <div style={{ minWidth: 0 }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.45rem', color: '#0f172a', fontWeight: 900, marginBottom: '0.35rem' }}>
+                            <BookOpen size={18} />
+                            학생 공개 해설
+                        </div>
+                        <div style={{ color: '#475569', fontSize: '0.88rem', fontWeight: 700 }}>
+                            {explanationStats.written}/{explanationStats.total}문항 작성됨
+                            {explanationStats.missingNumbers.length > 0 && (
+                                <span style={{ color: '#64748b', fontWeight: 600 }}>
+                                    {' '}· 미작성 {explanationStats.missingNumbers.slice(0, 8).join(', ')}번
+                                    {explanationStats.missingNumbers.length > 8 ? ` 외 ${explanationStats.missingNumbers.length - 8}문항` : ''}
+                                </span>
+                            )}
+                        </div>
+                        <div style={{ marginTop: '0.7rem', height: 8, borderRadius: 999, background: '#e2e8f0', overflow: 'hidden' }}>
+                            <div style={{
+                                width: `${explanationStats.total > 0 ? Math.round((explanationStats.written / explanationStats.total) * 100) : 0}%`,
+                                height: '100%',
+                                borderRadius: 999,
+                                background: 'linear-gradient(135deg, var(--primary), var(--primary-dark))'
+                            }} />
+                        </div>
+                    </div>
+                    <Link
+                        href={`/create?edit=${exam.id}`}
+                        className="btn btn-primary"
+                        style={{ fontSize: '0.85rem', padding: '0.5rem 0.95rem', display: 'inline-flex', alignItems: 'center', gap: '0.4rem', whiteSpace: 'nowrap' }}
+                    >
+                        <PenLine size={15} />
+                        해설 작성
+                    </Link>
+                </section>
 
                 {/* Students Table */}
                 <div className="bento-card" style={{ padding: '0', overflow: 'hidden' }}>

@@ -2441,11 +2441,11 @@ function CreateOMRPageInner() {
                                         </div>
 
                                         <div>
-                                            <label style={{ display: 'block', marginBottom: '0.25rem', fontSize: '0.76rem', fontWeight: 700, color: 'var(--muted)' }}>해설 메모</label>
+                                            <label style={{ display: 'block', marginBottom: '0.25rem', fontSize: '0.76rem', fontWeight: 700, color: 'var(--muted)' }}>학생 공개 해설</label>
                                             <textarea
                                                 value={selectedQuestion?.explanation || ''}
                                                 onChange={(e) => setExplanation(e.target.value)}
-                                                placeholder="학생 리뷰에 보여줄 핵심 해설 또는 수업 메모"
+                                                placeholder="시험 제출 후 학생 리뷰에 보여줄 핵심 해설"
                                                 className="input-field"
                                                 style={{ width: '100%', minHeight: '74px', resize: 'vertical', padding: '0.5rem 0.6rem', fontSize: '0.8rem', border: '1px solid var(--border)', borderRadius: '8px', background: 'var(--surface)', lineHeight: 1.5 }}
                                             />
