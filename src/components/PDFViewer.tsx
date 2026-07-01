@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useRef, useEffect, useCallback } from 'react';
+import { useState, useRef, useEffect, useCallback, useMemo } from 'react';
 import { Document, Page, pdfjs } from 'react-pdf';
 import { DEFAULT_CHOICE_COUNT, normalizeChoiceCount, type PdfDrawings } from '@/types/omr';
 import { toast } from '@/components/Toast';
@@ -17,6 +17,7 @@ import {
 } from 'lucide-react';
 import 'react-pdf/dist/Page/AnnotationLayer.css';
 import 'react-pdf/dist/Page/TextLayer.css';
+import { buildPenCursor, buildHighlighterCursor } from '@/lib/drawingCursors';
 
 // Worker setup for Next.js
 pdfjs.GlobalWorkerOptions.workerSrc = '/pdf.worker.min.mjs';
@@ -134,6 +135,18 @@ export default function PDFViewer({
         : drawingMode === 'highlighter'
             ? highlighterWidth
             : penWidth;
+
+    const penCursor = useMemo(() => buildPenCursor(penColor), [penColor]);
+    const highlighterCursor = useMemo(() => buildHighlighterCursor(), []);
+    const canvasCursor = !canEditDrawing
+        ? 'default'
+        : drawingMode === 'pen'
+            ? penCursor
+            : drawingMode === 'highlighter'
+                ? highlighterCursor
+                : drawingMode === 'eraser'
+                    ? 'none' // ring overlay draws the eraser cursor (Task 6)
+                    : 'default';
 
     useEffect(() => {
         if (!wrapperRef.current) return;
@@ -851,7 +864,7 @@ export default function PDFViewer({
                                             top: 0, left: 0,
                                             width: '100%', height: '100%',
                                             zIndex: 10,
-                                            cursor: canEditDrawing ? (drawingMode === 'pen' || drawingMode === 'highlighter' ? 'crosshair' : drawingMode === 'eraser' ? 'cell' : 'default') : 'default',
+                                            cursor: canvasCursor,
                                             pointerEvents: canEditDrawing ? 'auto' : 'none',
                                             touchAction: fingerDrawingEnabled ? 'none' : 'pan-x pan-y pinch-zoom'
                                         }}
