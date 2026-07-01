@@ -40,6 +40,22 @@ describe("studentServerSession", () => {
         expect(parseSignedStudentSessionCookie(`${payload}.deadbeef`, ENV, 2000)).toBeNull();
     });
 
+    it("rejects a same-length forged signature", () => {
+        const cookie = createSignedStudentSessionCookie(GUEST, ENV, 1000)!;
+        const [payload, sig] = cookie.split(".");
+        const forged = sig.slice(0, -1) + (sig.endsWith("A") ? "B" : "A");
+        expect(parseSignedStudentSessionCookie(`${payload}.${forged}`, ENV, 2000)).toBeNull();
+    });
+
+    it("rejects a cookie parsed with a different secret", () => {
+        const cookie = createSignedStudentSessionCookie(GUEST, ENV, 1000)!;
+        expect(parseSignedStudentSessionCookie(cookie, { STUDENT_SESSION_SECRET: "other", NODE_ENV: "test" }, 2000)).toBeNull();
+    });
+
+    it("rejects a malformed cookie string", () => {
+        expect(parseSignedStudentSessionCookie("not-a-valid-cookie", ENV, 2000)).toBeNull();
+    });
+
     it("rejects an expired session", () => {
         const now = 1_000_000;
         const cookie = createSignedStudentSessionCookie(GUEST, ENV, now)!;

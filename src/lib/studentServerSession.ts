@@ -89,6 +89,7 @@ export function parseSignedStudentSessionCookie(
 
     try {
         const parsed = JSON.parse(base64UrlDecode(payload)) as StudentServerIdentity;
+        if (parsed.kind === "guest" ? !parsed.guestId : !parsed.studentId) return null;
         return isStudentIdentityActive(parsed, now) ? parsed : null;
     } catch {
         return null;
