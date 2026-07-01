@@ -4,6 +4,7 @@ import {
     getSupabaseServerConfigFromEnv,
     type SupabaseAdminClientLike,
 } from "./supabaseServerAdmin";
+import { fetchAttemptRowsByOwner, fetchExamRowById } from "./supabaseServerAdmin";
 import { workspaceContextFromIdentity } from "./workspaceContext";
 
 function mockAdminClient(failTable?: string): { client: SupabaseAdminClientLike; writes: { table: string; op: string; row: unknown }[] } {
@@ -98,5 +99,46 @@ describe("Supabase server admin workspace bootstrap", () => {
             "omr_user_profiles",
             "omr_organization_members",
         ]);
+    });
+});
+
+function mockReadClient(rows: Record<string, unknown[]>) {
+    return {
+        from(table: string) {
+            const data = rows[table] || [];
+            const filtered: unknown[] = [...data];
+            const builder = {
+                _rows: filtered,
+                select() { return builder; },
+                eq(column: string, value: string) {
+                    builder._rows = builder._rows.filter(
+                        row => (row as Record<string, unknown>)[column] === value,
+                    );
+                    return builder;
+                },
+                async maybeSingle() { return { data: builder._rows[0] ?? null, error: null }; },
+                async order() { return { data: builder._rows, error: null }; },
+            };
+            return builder;
+        },
+    };
+}
+
+describe("Supabase server admin reads", () => {
+    it("fetches a single exam row by id", async () => {
+        const client = mockReadClient({ omr_exams: [{ id: "e1", title: "T" }, { id: "e2", title: "U" }] });
+        expect(await fetchExamRowById(client, "e2")).toEqual({ id: "e2", title: "U" });
+        expect(await fetchExamRowById(client, "missing")).toBeNull();
+    });
+
+    it("fetches attempt rows scoped to a guest owner", async () => {
+        const client = mockReadClient({
+            omr_attempts: [
+                { id: "a1", student_id: "guest:g1", exam_id: "e1" },
+                { id: "a2", student_id: "guest:g2", exam_id: "e1" },
+            ],
+        });
+        const rows = await fetchAttemptRowsByOwner(client, { studentId: "guest:g1" });
+        expect(rows.map(r => (r as { id: string }).id)).toEqual(["a1"]);
     });
 });
