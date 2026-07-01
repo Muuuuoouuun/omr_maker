@@ -106,7 +106,6 @@ export default function PDFViewer({
     const [pageRenderVersion, setPageRenderVersion] = useState(0);
 
     // Drawing State
-    const [, setIsDrawing] = useState(false);
     const [drawingMode, setDrawingMode] = useState<DrawingMode>('click');
     const [penColor, setPenColor] = useState('#ef4444'); // Default Red
     const [penWidth, setPenWidth] = useState(2);
@@ -122,6 +121,9 @@ export default function PDFViewer({
     const isDrawingRef = useRef(false);
     const activeDrawingModeRef = useRef<DrawingMode>('pen');
     const currentPathRef = useRef<DrawPoint[]>([]);
+    // Rect is captured once per stroke (pointer-down) and reused for every pointermove,
+    // so drawing never forces a synchronous layout/reflow mid-stroke.
+    const activeStrokeRectRef = useRef<DOMRect | null>(null);
     const activePointerIdRef = useRef<number | null>(null);
     const activeEraserModeRef = useRef<'pixel' | 'stroke'>('stroke');
     const strokeEraseBaselineRef = useRef<string[] | null>(null);
@@ -285,7 +287,7 @@ export default function PDFViewer({
 
     const getCanvasMetrics = () => {
         if (!canvasRef.current || !containerRef.current) return null;
-        const rect = containerRef.current.getBoundingClientRect();
+        const rect = activeStrokeRectRef.current ?? containerRef.current.getBoundingClientRect();
         const dpr = typeof window !== 'undefined' ? window.devicePixelRatio || 1 : 1;
         return { rect, dpr };
     };
@@ -517,7 +519,7 @@ export default function PDFViewer({
         if (!onDrawingsChange || !containerRef.current) return;
         const entries = eraseDragStrokesRef.current;
         if (!entries) return;
-        const rect = containerRef.current.getBoundingClientRect();
+        const rect = activeStrokeRectRef.current ?? containerRef.current.getBoundingClientRect();
         const pointerX = pos.x * rect.width;
         const pointerY = pos.y * rect.height;
         const baseRadius = eraserWidth / 2;
@@ -547,8 +549,8 @@ export default function PDFViewer({
         setActivePopupKey(null);
         e.currentTarget.setPointerCapture?.(e.pointerId);
         activePointerIdRef.current = e.pointerId;
+        activeStrokeRectRef.current = containerRef.current?.getBoundingClientRect() ?? null;
         isDrawingRef.current = true;
-        setIsDrawing(true);
         const pointerDrawingMode = drawingModeForPointer(e);
         activeDrawingModeRef.current = pointerDrawingMode;
         if (e.pointerType === 'pen' && drawingMode === 'click') setDrawingMode('pen');
@@ -615,7 +617,7 @@ export default function PDFViewer({
 
         isDrawingRef.current = false;
         activePointerIdRef.current = null;
-        setIsDrawing(false);
+        activeStrokeRectRef.current = null;
 
         if (activeDrawingModeRef.current === 'eraser' && activeEraserModeRef.current === 'stroke') {
             if (strokeEraseChangedRef.current && strokeEraseBaselineRef.current) {
@@ -666,7 +668,7 @@ export default function PDFViewer({
     const updateEraserRing = (e: React.PointerEvent<HTMLCanvasElement>) => {
         const ring = eraserRingRef.current;
         if (!ring || !containerRef.current) return;
-        const rect = containerRef.current.getBoundingClientRect();
+        const rect = activeStrokeRectRef.current ?? containerRef.current.getBoundingClientRect();
         ring.style.left = `${e.clientX - rect.left}px`;
         ring.style.top = `${e.clientY - rect.top}px`;
         ring.style.display = 'block';
@@ -687,7 +689,7 @@ export default function PDFViewer({
 
     const getPos = (e: React.PointerEvent<HTMLCanvasElement>) => {
         if (!canvasRef.current) return { x: 0, y: 0 };
-        const rect = canvasRef.current.getBoundingClientRect();
+        const rect = activeStrokeRectRef.current ?? canvasRef.current.getBoundingClientRect();
         const normalizedX = (e.clientX - rect.left) / rect.width;
         const normalizedY = (e.clientY - rect.top) / rect.height;
         return {
