@@ -40,6 +40,17 @@ export function identityAccessSession(identity: StudentServerIdentity): ExamAcce
     };
 }
 
+/** Clamp a client-supplied startedAt into a sane window ending at the server finish time. */
+function clampStartedAt(startedAtInput: string, finishedAtIso: string, exam: Exam): string {
+    const finishedMs = Date.parse(finishedAtIso);
+    const startedMs = Date.parse(startedAtInput);
+    if (!Number.isFinite(finishedMs)) return finishedAtIso;
+    if (!Number.isFinite(startedMs) || startedMs > finishedMs) return finishedAtIso;
+    const windowMs = ((exam.durationMin ?? 50) + 5) * 60 * 1000; // exam duration + 5min grace
+    const floorMs = finishedMs - windowMs;
+    return startedMs < floorMs ? new Date(floorMs).toISOString() : startedAtInput;
+}
+
 /**
  * Build a fully server-authoritative attempt: score, totalScore, questionResults are
  * computed here from the trusted exam; owner/org/identity come from the signed cookie.
@@ -66,7 +77,7 @@ export function buildServerAttempt(
         regionId: identity.regionId,
         regionName: identity.regionName,
         identityType: identity.identityType,
-        startedAt: input.startedAt,
+        startedAt: clampStartedAt(input.startedAt, finishedAtIso, exam),
         finishedAt: finishedAtIso,
         score: graded.earnedScore,
         totalScore: graded.totalScore,

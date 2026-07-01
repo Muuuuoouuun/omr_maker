@@ -40,4 +40,25 @@ describe("studentExamCore", () => {
     it("maps identity to an ExamAccessSession for evaluateExamAccess", () => {
         expect(identityAccessSession(GUEST)).toMatchObject({ isGuest: true, identityType: "guest" });
     });
+
+    it("clamps a future startedAt to the server finish time", () => {
+        const attempt = buildServerAttempt(
+            { ...INPUT, startedAt: "2999-01-01T00:00:00.000Z" },
+            EXAM, GUEST, "att-future", "2026-07-01T01:30:00.000Z",
+        );
+        expect(attempt.startedAt).toBe("2026-07-01T01:30:00.000Z");
+    });
+
+    it("floors an absurdly old startedAt to the exam window (duration + 5m grace)", () => {
+        const attempt = buildServerAttempt(
+            { ...INPUT, startedAt: "2000-01-01T00:00:00.000Z" },
+            EXAM, GUEST, "att-old", "2026-07-01T01:30:00.000Z",
+        );
+        expect(attempt.startedAt).toBe("2026-07-01T00:35:00.000Z"); // 01:30 - 55m
+    });
+
+    it("keeps a valid startedAt within the exam window unchanged", () => {
+        const attempt = buildServerAttempt(INPUT, EXAM, GUEST, "att-valid", "2026-07-01T01:30:00.000Z");
+        expect(attempt.startedAt).toBe("2026-07-01T01:00:00.000Z");
+    });
 });
