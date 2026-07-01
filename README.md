@@ -13,16 +13,22 @@ The dev server runs on [http://localhost:3003](http://localhost:3003).
 
 ## Sample Accounts
 
-Development teacher/admin login:
+Development teacher login (role `교사`). These come from `.env.local` `TEACHER_ACCOUNTS`, and each account applies its plan to the browser on login, so premium gating is differentiated per account:
 
-- Role: `교사`
-- ID: `admin`
-- Password: `admin123`
+| ID | Password | Plan | Notes |
+| --- | --- | --- | --- |
+| `admin` | `admin1234` | Academy | Full premium — every entitlement unlocked |
+| `test1` | `test1234` | Free | Free tier |
+| `test2` | `test1234` | Pro | Pro tier |
+| `test3` | `test1234` | Academy | Enterprise tier |
+
+With no `TEACHER_ACCOUNTS`/`TEACHER_PASSWORD` configured, the app falls back to `admin` / `admin123` (no bound plan → Free).
 
 In production, there is no default account. Set one of these on the server before deploying:
 
-- Single teacher: `TEACHER_LOGIN_ID`, optional `TEACHER_EMAIL`/`TEACHER_NAME`, and `TEACHER_PASSWORD`
-- Multiple teachers: `TEACHER_ACCOUNTS` as a JSON array, for example `[{"id":"teacher1","email":"teacher1@example.com","name":"Teacher 1","password":"change-me"}]`
+- Single teacher: `TEACHER_LOGIN_ID`, optional `TEACHER_EMAIL`/`TEACHER_NAME`/`TEACHER_PLAN`, and `TEACHER_PASSWORD`
+- Multiple teachers: `TEACHER_ACCOUNTS` as a JSON array, for example `[{"id":"teacher1","email":"teacher1@example.com","name":"Teacher 1","password":"change-me","plan":"pro"}]`
+- Optional per-account `plan` (`free` | `pro` | `academy`, `academy` = full premium) is applied to the browser on login; omit it to leave the browser's current plan untouched
 - Recommended for server-side route guards: `TEACHER_SESSION_SECRET`
 
 Teacher login is currently backed by server environment variables, not Supabase Auth. If a deployed build only says the credentials are invalid, check the deployment provider's environment variables and redeploy before checking Supabase.
@@ -30,9 +36,8 @@ Teacher login is currently backed by server environment variables, not Supabase 
 Student login uses the roster student number or email as the account ID, and a six-character start code as the password-like credential. Import `examples/student-roster.csv` from `/teacher/users`, then students can choose `학생` and enter one of these sample names with the matching class. Share the CSV `id` or `email` value as the student's login ID, especially when names overlap:
 
 - `김민준` / `3학년 A반` / `서울`
-- `이서연` / `3학년 A반` / `서울`
-- `박도윤` / `3학년 B반` / `서울`
-- `최예은` / `2학년 A반` / `부산`
+- `최지우` / `3학년 B반` / `서울`
+- `한지호` / `2학년 A반` / `부산`
 
 On first student login, the app issues a six-character start code. Returning students with prior attempts must enter that start code; teachers can also issue or regenerate it from `/teacher/users`.
 

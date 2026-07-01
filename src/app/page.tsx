@@ -30,6 +30,7 @@ import {
   type StudentSession,
 } from "@/utils/storage";
 import { normalizeTeacherRedirectPath, saveTeacherSessionWithIdentity } from "@/lib/teacherSession";
+import { setCurrentPlan } from "@/utils/plans";
 
 /* ─── SVG Icons ──────────────────────────────────────── */
 
@@ -223,6 +224,9 @@ export default function Home() {
           setTimeout(() => setError(""), 2000);
           return;
         }
+        // Apply the account's bound plan only when one is configured, so accounts
+        // without an explicit plan keep the browser's existing (e.g. billing) plan.
+        if (res.teacher?.plan) setCurrentPlan(res.teacher.plan);
         const next = normalizeTeacherRedirectPath(new URLSearchParams(window.location.search).get("next"));
         router.push(next);
       } else {

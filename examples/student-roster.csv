@@ -1,7 +1,13 @@
 id,name,email,group,region
-seoul-a-001,김민준,minjun.kim@example.edu,3학년 A반,서울
-seoul-a-002,이서연,seoyeon.lee@example.edu,3학년 A반,서울
-seoul-b-001,박도윤,doyun.park@example.edu,3학년 B반,서울
-busan-a-001,최예은,yeeun.choi@example.edu,2학년 A반,부산
-busan-a-002,정하준,hajun.jung@example.edu,2학년 A반,부산
-online-a-001,강지우,jiwoo.kang@example.edu,1학년 A반,온라인
+seoul-3a-01,김민준,minjun.kim@example.edu,3학년 A반,서울
+seoul-3a-02,이서연,seoyeon.lee@example.edu,3학년 A반,서울
+seoul-3a-03,박도윤,doyun.park@example.edu,3학년 A반,서울
+seoul-3a-04,정하윤,hayoon.jung@example.edu,3학년 A반,서울
+seoul-3b-01,최지우,jiwoo.choi@example.edu,3학년 B반,서울
+seoul-3b-02,강예은,yeeun.kang@example.edu,3학년 B반,서울
+seoul-3b-03,윤서준,seojun.yoon@example.edu,3학년 B반,서울
+seoul-3b-04,임하은,haeun.lim@example.edu,3학년 B반,서울
+busan-2a-01,한지호,jiho.han@example.edu,2학년 A반,부산
+busan-2a-02,오유진,yujin.oh@example.edu,2학년 A반,부산
+busan-2a-03,신동현,donghyun.shin@example.edu,2학년 A반,부산
+busan-2a-04,배수아,sua.bae@example.edu,2학년 A반,부산
