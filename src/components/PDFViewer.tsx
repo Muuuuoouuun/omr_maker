@@ -18,6 +18,7 @@ import {
 import 'react-pdf/dist/Page/AnnotationLayer.css';
 import 'react-pdf/dist/Page/TextLayer.css';
 import { buildPenCursor, buildHighlighterCursor } from '@/lib/drawingCursors';
+import { strokeHitTest } from '@/lib/strokeGeometry';
 
 // Worker setup for Next.js
 pdfjs.GlobalWorkerOptions.workerSrc = '/pdf.worker.min.mjs';
@@ -121,6 +122,10 @@ export default function PDFViewer({
     const activeDrawingModeRef = useRef<DrawingMode>('pen');
     const currentPathRef = useRef<DrawPoint[]>([]);
     const activePointerIdRef = useRef<number | null>(null);
+    const activeEraserModeRef = useRef<'pixel' | 'stroke'>('stroke');
+    const strokeEraseBaselineRef = useRef<string[] | null>(null);
+    const strokeEraseChangedRef = useRef<boolean>(false);
+    const liveStrokesRef = useRef<string[] | null>(null);
     const pendingFocusTargetRef = useRef<PdfFocusTarget | null>(null);
 
     // Floating OMR popup state - tracks active marker index (page + list index)
@@ -467,6 +472,42 @@ export default function PDFViewer({
         return true;
     };
 
+    const eraseStrokesAt = (pos: DrawPoint) => {
+        if (!onDrawingsChange || !containerRef.current) return;
+        const rect = containerRef.current.getBoundingClientRect();
+        const source = liveStrokesRef.current ?? (drawings[pageNumber] || []);
+        const pointerX = pos.x * rect.width;
+        const pointerY = pos.y * rect.height;
+        const baseRadius = eraserWidth / 2;
+
+        const kept: string[] = [];
+        let removed = false;
+        for (const pathStr of source) {
+            let hit = false;
+            try {
+                const data = JSON.parse(pathStr);
+                if (data.mode !== 'eraser' && Array.isArray(data.points) && data.points.length > 0) {
+                    const pts = (data.points as DrawPoint[]).map(p => ({
+                        x: p.x * rect.width,
+                        y: p.y * rect.height,
+                    }));
+                    const radius = baseRadius + (typeof data.width === 'number' ? data.width / 2 : 1);
+                    hit = strokeHitTest(pointerX, pointerY, pts, radius);
+                }
+            } catch {
+                hit = false;
+            }
+            if (hit) removed = true;
+            else kept.push(pathStr);
+        }
+
+        if (removed) {
+            liveStrokesRef.current = kept;
+            strokeEraseChangedRef.current = true;
+            onDrawingsChange(pageNumber, kept);
+        }
+    };
+
     const startDrawing = (e: React.PointerEvent<HTMLCanvasElement>) => {
         if (!shouldHandlePointer(e)) return;
         e.preventDefault();
@@ -478,12 +519,31 @@ export default function PDFViewer({
         const pointerDrawingMode = drawingModeForPointer(e);
         activeDrawingModeRef.current = pointerDrawingMode;
         if (e.pointerType === 'pen' && drawingMode === 'click') setDrawingMode('pen');
+
+        if (pointerDrawingMode === 'eraser' && eraserMode === 'stroke') {
+            activeEraserModeRef.current = 'stroke';
+            const baseline = drawings[pageNumber] || [];
+            strokeEraseBaselineRef.current = baseline;
+            liveStrokesRef.current = baseline;
+            strokeEraseChangedRef.current = false;
+            const pos = getPos(e);
+            currentPathRef.current = [pos];
+            eraseStrokesAt(pos);
+            return;
+        }
+
+        activeEraserModeRef.current = 'pixel';
         currentPathRef.current = [getPos(e)];
     };
 
     const draw = (e: React.PointerEvent<HTMLCanvasElement>) => {
         if (!isDrawingRef.current || activePointerIdRef.current !== e.pointerId || !canEditDrawing || !canvasRef.current) return;
         e.preventDefault();
+
+        if (activeDrawingModeRef.current === 'eraser' && activeEraserModeRef.current === 'stroke') {
+            eraseStrokesAt(getPos(e));
+            return;
+        }
 
         const pos = getPos(e);
         const path = currentPathRef.current;
@@ -523,6 +583,25 @@ export default function PDFViewer({
         isDrawingRef.current = false;
         activePointerIdRef.current = null;
         setIsDrawing(false);
+
+        if (activeDrawingModeRef.current === 'eraser' && activeEraserModeRef.current === 'stroke') {
+            if (strokeEraseChangedRef.current && strokeEraseBaselineRef.current) {
+                const baseline = strokeEraseBaselineRef.current;
+                setUndoStack(prev => ({
+                    ...prev,
+                    [pageNumber]: [...(prev[pageNumber] || []), baseline],
+                }));
+                setRedoStack(prev => ({
+                    ...prev,
+                    [pageNumber]: [],
+                }));
+            }
+            strokeEraseBaselineRef.current = null;
+            liveStrokesRef.current = null;
+            strokeEraseChangedRef.current = false;
+            currentPathRef.current = [];
+            return;
+        }
 
         const finishedPath = currentPathRef.current;
         // Save Path
