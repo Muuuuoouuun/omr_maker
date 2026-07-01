@@ -80,14 +80,14 @@ Supabase는 **라이브(다기기 동기화 실사용)**, 서버 `SUPABASE_SERVI
 
 ### `loadExamForSolving(examId, pin?): SolveLoadResult`
 - 쿠키 신원 필수(없으면 `unauthenticated`).
-- service-role로 시험 read → `evaluateExamAccess(exam, { session: cookieIdentity, pinVerified })` **서버 강제**. **PIN 처리도 이 액션에 포함**: `pin` 인자를 서버에서 `accessConfig.pin`과 대조 → 필요하나 미제공/불일치면 `pin_required` 반환, 일치하면 서명된 `omr_exam_pin_ok` 쿠키(검증한 examId 목록)를 세워 후속 load/submit이 통과. 별도 pin 액션 없음.
-- 접근 상태 반환: `allowed | pin_required | login_required | group_denied | not_started | ended | archived`.
-- `allowed`일 때 `stripExamForSolving(exam)` 반환: **모든 `question.answer` 제거, `answerKeyPdf`/`answerKeyPdfRef` 제거, `accessConfig.pin` 제거**(존재여부 불리언만). 문항 이미지·pdfRegion·배점·choices는 유지.
+- service-role로 시험 read → `evaluateExamAccess(exam, { session: cookieIdentity, pinVerified })` **서버 강제**. **PIN은 stateless**: `pin` 인자를 `verifyExamPin`(정규화 대조)으로 검증 → 미제공/불일치면 `pin_required` 반환. **구현 확정**: pin-ok 쿠키를 두지 않고 load·submit **양쪽이 각각 `pin` 인자로 재검증**한다. ⚠️ **A2 영향(최우선)**: 클라는 **submit(특히 타이머 자동제출)에도 PIN을 넘겨야** 공개+PIN 시험 제출이 막히지 않는다 — A2에서 (권장) `loadExamForSolving` 성공 시 서명 pin-ok 쿠키를 세워 submit이 PIN 없이 통과하게 개선하거나, (최소) 모든 submit 호출(자동제출 포함)에 PIN을 스레딩할 것.
+- 접근 상태 반환: `allowed | pin_required | login_required | group_denied | not_started | ended | archived`. (존재하지 않는 examId도 `ended`로 마스킹 — 열거 방지, 의도적. A2가 "종료됨" UX로 오인 않도록 주의.)
+- `allowed`일 때 `stripExamForSolving(exam)` 반환: **문항 `answer`·`explanation` 제거, `answerKeyPdf`/`answerKeyPdfRef` 제거, `accessConfig.pin` 제거**(존재여부 `hasPin` 불리언만). 문항 이미지·pdfRegion·배점·choices는 유지. (`explanation`은 리뷰 전용 서술이라 정답 노출 가능 → 풀이 payload에서 제외.)
 - (선택적 하드닝, A 필수 아님) 서명 `attemptToken`(examId+identity+issuedAt)을 함께 반환해 제출 시 재검증 — 구현 계획에서 비용 대비 판단, 기본은 미포함.
 
 ### `submitAttempt(input): SubmitResult`
 - `input = { examId, answers, timings, drawingRefs?, autoSubmitted }`. **클라가 계산한 점수·questionResults는 받지 않는다.**
-- 쿠키 신원 + 접근 재검증(load와 동일 게이트). PIN/그룹 위반 시 거부.
+- `submitAttempt(input, pin?)`: 쿠키 신원 + 접근 재검증(load와 동일 게이트, `verifyExamPin` 재검증). 접근 실패 시 **granular status**(pin_required/ended/group_denied…) 반환. 클라 `startedAt`는 서버가 `[finishedAt−(durationMin+5m), finishedAt]`로 **클램프**(음수·황당 duration 방지). 재시험(retake)은 A1 서버 경로 없음(`SubmitAttemptInput`에 retake 필드 없음 → 항상 전체 시험 채점) → A2/B에서 별도 처리, 클라 재시험 기능 회귀 주의.
 - service-role로 **full 시험** read → `gradeAttempt(exam.questions, answers)` + `buildQuestionResults(exam, attempt)` **서버 채점**.
 - `organization_id`(시험 소유 org), 소유자(`guestId`/`studentId`), `identity_type`, `student_name`을 **서버가 쿠키에서 주입**해 `omr_attempts` + `omr_question_results` upsert.
 - 반환: 채점 결과(점수·문항결과, 이때 correctAnswer 포함 OK — 제출 후이므로).
@@ -110,7 +110,7 @@ Supabase는 **라이브(다기기 동기화 실사용)**, 서버 `SUPABASE_SERVI
 시작:     loadExamForSolving(examId, pin?)   [정답 없는 시험 + 접근게이트 + PIN 서버대조]
   (pin_required면) 사용자 PIN 입력 → loadExamForSolving(examId, pin) 재호출
 풀이:     클라 로컬 draft(답안·타이밍, 정답 없음)
-제출:     submitAttempt({examId, answers, timings})  [서버 채점·소유/org 주입·저장]
+제출:     submitAttempt({examId, answers, timings}, pin?)  [PIN 재검증·서버 채점·소유/org 주입·저장]
 리뷰:     loadMyAttempt(id)                  [정답 포함 결과 OK]
 ```
 
