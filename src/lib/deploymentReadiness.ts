@@ -67,6 +67,44 @@ function sessionSecretCheck(env: Env): DeploymentReadinessCheck {
     };
 }
 
+function isFlagEnabled(value: unknown): boolean {
+    const normalized = clean(value).toLowerCase();
+    return normalized === "true" || normalized === "1" || normalized === "yes";
+}
+
+function productionRlsCheck(env: Env, supabasePublicReady: boolean): DeploymentReadinessCheck {
+    const rlsApplied = isFlagEnabled(env.OMR_PRODUCTION_RLS_APPLIED);
+    const isProduction = clean(env.NODE_ENV).toLowerCase() === "production";
+
+    if (rlsApplied) {
+        return {
+            key: "production_rls",
+            label: "실사용 RLS 전환",
+            detail: "OMR_PRODUCTION_RLS_APPLIED로 production-rls.sql 적용이 확인됐습니다. 조직 멤버십과 학생 PII 접근이 서버 정책으로 잠깁니다.",
+            tone: "ready",
+        };
+    }
+
+    // Production + remote sync but no confirmation that PII tables are locked down is the
+    // dangerous state: student email/phone/guardian_contact would sit under the open alpha
+    // RLS (schema.sql). Escalate to a hard error so real data is not stored on public policies.
+    if (isProduction && supabasePublicReady) {
+        return {
+            key: "production_rls",
+            label: "실사용 RLS 전환",
+            detail: "프로덕션에서 Supabase 원격 저장이 켜져 있는데 production-rls.sql 적용이 확인되지 않았습니다. 지금은 학생 이메일·전화·보호자 연락처가 공개 alpha RLS로 노출될 수 있습니다. production-rls.sql을 적용한 뒤 OMR_PRODUCTION_RLS_APPLIED=true를 설정하세요.",
+            tone: "error",
+        };
+    }
+
+    return {
+        key: "production_rls",
+        label: "실사용 RLS 전환",
+        detail: "실제 학생 데이터를 저장하기 전 Supabase Auth, 조직 멤버십, production-rls.sql 적용 여부를 확인하고 OMR_PRODUCTION_RLS_APPLIED=true로 표시하세요.",
+        tone: "warning",
+    };
+}
+
 export function buildDeploymentReadiness(env: Env = process.env): DeploymentReadinessSummary {
     const authConfig = inspectTeacherAuthConfig(env);
     const supabasePublicReady = publicSupabaseConfigured(env);
@@ -98,12 +136,7 @@ export function buildDeploymentReadiness(env: Env = process.env): DeploymentRead
                 : "서비스롤 키가 없으면 로그인은 가능하지만 서버 워크스페이스 bootstrap은 건너뜁니다. 키는 서버 환경변수에만 둬야 합니다.",
             tone: serviceRoleReady ? "ready" : "warning",
         },
-        {
-            key: "production_rls",
-            label: "실사용 RLS 전환",
-            detail: "실제 학생 데이터를 저장하기 전 Supabase Auth, 조직 멤버십, production-rls.sql 적용 여부를 Supabase 대시보드에서 확인해야 합니다.",
-            tone: "warning",
-        },
+        productionRlsCheck(env, supabasePublicReady),
     ];
 
     const readyCount = checks.filter(check => check.tone === "ready").length;

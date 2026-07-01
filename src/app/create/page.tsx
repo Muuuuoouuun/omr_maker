@@ -18,6 +18,7 @@ import { Suspense, useState, useEffect, useRef, useCallback, useMemo, type CSSPr
 import { DEFAULT_CHOICE_COUNT, questionChoiceCount, type Exam, type Question } from "@/types/omr";
 import type { ParsedAnswer } from "@/services/answerParser";
 import { saveFileDataUrl, storedDataUrlToFile } from "@/utils/blobStore";
+import { secureRandomId } from "@/utils/ids";
 import { validateExamDraft } from "@/lib/examValidation";
 import { buildExamServiceReadiness, type ExamServiceReadinessLevel } from "@/lib/examServiceReadiness";
 import { readStoredExamDefaults } from "@/lib/appSettings";
@@ -464,6 +465,13 @@ function CreateOMRPageInner() {
         accessConfig: loadedExam?.accessConfig,
     }), [title, validationSummary, hasProblemPdfForValidation, hasAnswerKeyPdfForValidation, loadedExam?.accessConfig]);
     const serviceReadinessTone = useMemo(() => readinessTone(serviceReadiness.level), [serviceReadiness.level]);
+    const compactReadinessItems = serviceReadiness.items.map(item => item).filter(item =>
+        item.key === "answers" || item.key === "problem_pdf" || item.key === "distribution"
+    );
+    const validationTooltip = [...validationSummary.errors, ...validationSummary.warnings]
+        .slice(0, 3)
+        .map(item => item.message)
+        .join("\n");
     const answeredPercent = questionsCount > 0
         ? Math.min(100, Math.round((designSummary.answered / questionsCount) * 100))
         : 0;
@@ -1128,7 +1136,8 @@ function CreateOMRPageInner() {
             }
 
             // Editing? Reuse the existing ID and preserve createdAt; otherwise mint a new one.
-            const id = loadedExam?.id || Date.now().toString(36);
+            // Unguessable id so shareable /solve/[id] links can't be enumerated.
+            const id = loadedExam?.id || secureRandomId();
             const createdAt = loadedExam?.createdAt || new Date().toISOString();
             let pdfData = loadedExam?.pdfData || "";
             let pdfDataRef = loadedExam?.pdfDataRef;
@@ -1281,11 +1290,16 @@ function CreateOMRPageInner() {
         const maxDigit = defaultChoices;
         const digitRegex = new RegExp(`[^1-${maxDigit}]`, 'g');
         const val = e.target.value.replace(digitRegex, '');
+        const previousLength = fastAnswer.length;
+        const shouldClearTrimmedAnswers = val.length < previousLength;
         setFastAnswer(val);
 
         setQuestions(prev => prev.map((q, i) => {
             if (i < val.length) {
                 return { ...q, answer: parseInt(val[i]) };
+            }
+            if (shouldClearTrimmedAnswers && i < previousLength && q.answer !== undefined) {
+                return { ...q, answer: undefined };
             }
             return q;
         }));
@@ -1632,130 +1646,80 @@ function CreateOMRPageInner() {
                             </div>
                         )}
 
-                        <div style={{ marginBottom: '1rem', padding: '0.85rem', background: 'var(--background)', border: '1px solid var(--border)', borderRadius: 'var(--radius-md)' }}>
-                            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '0.75rem', marginBottom: '0.65rem' }}>
-                                <div>
-                                    <div style={{ fontSize: '0.85rem', fontWeight: 800, color: 'var(--foreground)' }}>설계 체크</div>
-                                    <div style={{ fontSize: '0.72rem', color: 'var(--muted)', marginTop: '2px' }}>
-                                        배포 전 강사가 바로 확인할 핵심 상태입니다.
-                                    </div>
+                        <div className="create-design-check-compact">
+                            <div className="create-design-check-top">
+                                <div className="create-design-check-title">
+                                    <span>설계 체크</span>
                                 </div>
-                                <span style={{
-                                    fontSize: '0.7rem',
-                                    fontWeight: 800,
-                                    color: designSummary.answered === questionsCount ? 'var(--success)' : 'var(--warning)',
-                                    background: designSummary.answered === questionsCount ? 'rgba(16,185,129,0.08)' : 'rgba(245,158,11,0.1)',
-                                    padding: '3px 8px',
-                                    borderRadius: 'var(--radius-full)',
-                                    whiteSpace: 'nowrap'
-                                }}>
+                                <span
+                                    className={`create-design-check-pill ${designSummary.answered === questionsCount ? 'is-ready' : 'needs-work'}`}
+                                >
                                     {designSummary.answered}/{questionsCount} 정답
                                 </span>
                             </div>
-                            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.45rem' }}>
+
+                            <div className="create-design-metrics-mini">
                                 {[
-                                    { label: '개념 태그', value: `${designSummary.conceptTagged}/${questionsCount}` },
-                                    { label: '개념 수', value: `${designSummary.conceptCount}개` },
-                                    { label: '심화/킬러', value: `${designSummary.highDifficulty}문항` },
-                                    { label: 'PDF 연결', value: `${designSummary.pdfLinked}/${questionsCount}` },
-                                    { label: '필기 영역', value: `${designSummary.pdfRegionLinked}/${questionsCount}` },
+                                    { label: '개념', value: `${designSummary.conceptTagged}/${questionsCount}` },
+                                    { label: 'PDF', value: `${designSummary.pdfLinked}/${questionsCount}` },
+                                    { label: '필기', value: `${designSummary.pdfRegionLinked}/${questionsCount}` },
+                                    { label: '심화', value: `${designSummary.highDifficulty}` },
                                 ].map(item => (
-                                    <div key={item.label} style={{ padding: '0.55rem', background: 'var(--surface)', borderRadius: '8px', border: '1px solid var(--border)' }}>
-                                        <div style={{ fontSize: '0.68rem', color: 'var(--muted)', fontWeight: 700, marginBottom: '0.18rem' }}>{item.label}</div>
-                                        <div style={{ fontSize: '0.92rem', color: 'var(--foreground)', fontWeight: 800 }}>{item.value}</div>
+                                    <div key={item.label} className="create-design-metric-mini">
+                                        <span>{item.label}</span>
+                                        <strong>{item.value}</strong>
                                     </div>
                                 ))}
                             </div>
+
+                            <div
+                                className="create-readiness-line"
+                                style={{
+                                    '--readiness-color': serviceReadinessTone.color,
+                                    '--readiness-bg': serviceReadinessTone.background,
+                                    '--readiness-border': serviceReadinessTone.border,
+                                } as CSSProperties}
+                                title={serviceReadiness.detail}
+                            >
+                                <span className="create-readiness-dot" />
+                                <strong>운영 점검</strong>
+                                <span>{serviceReadiness.label}</span>
+                                <em>{serviceReadiness.detail}</em>
+                            </div>
+
+                            <div className="create-readiness-mini-list">
+                                {compactReadinessItems.map(item => {
+                                    const tone = readinessTone(item.status);
+                                    return (
+                                        <div
+                                            key={item.key}
+                                            className="create-readiness-mini-item"
+                                            title={item.message}
+                                            style={{
+                                                '--readiness-item-color': tone.color,
+                                            } as CSSProperties}
+                                        >
+                                            <span>{item.label}</span>
+                                            <strong>{item.value}</strong>
+                                        </div>
+                                    );
+                                })}
+                            </div>
+
                             {designSummary.totalExpectedMin > 0 && (
-                                <div style={{ marginTop: '0.55rem', fontSize: '0.74rem', color: 'var(--muted)', fontWeight: 600 }}>
-                                    문항별 예상 풀이시간 합계: 약 {designSummary.totalExpectedMin}분
+                                <div className="create-design-check-note">
+                                    예상 풀이시간 약 {designSummary.totalExpectedMin}분
                                 </div>
                             )}
-                            <div style={{
-                                marginTop: '0.75rem',
-                                padding: '0.7rem',
-                                borderRadius: '8px',
-                                background: serviceReadinessTone.background,
-                                border: `1px solid ${serviceReadinessTone.border}`,
-                            }}>
-                                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '0.75rem', marginBottom: '0.55rem' }}>
-                                    <div>
-                                        <div style={{ fontSize: '0.78rem', fontWeight: 950, color: serviceReadinessTone.color }}>
-                                            운영 점검
-                                        </div>
-                                        <div style={{ fontSize: '0.7rem', color: 'var(--muted)', fontWeight: 750, marginTop: '0.12rem', lineHeight: 1.35 }}>
-                                            {serviceReadiness.detail}
-                                        </div>
-                                    </div>
-                                    <span style={{
-                                        flexShrink: 0,
-                                        fontSize: '0.68rem',
-                                        fontWeight: 950,
-                                        color: serviceReadinessTone.color,
-                                        background: 'var(--surface)',
-                                        border: `1px solid ${serviceReadinessTone.border}`,
-                                        borderRadius: 'var(--radius-full)',
-                                        padding: '0.16rem 0.48rem',
-                                        whiteSpace: 'nowrap',
-                                    }}>
-                                        {serviceReadiness.label}
-                                    </span>
+
+                            <div
+                                className={`create-validation-line ${validationSummary.isPublishable ? 'is-ready' : 'needs-work'}`}
+                                title={validationTooltip}
+                            >
+                                <div>
+                                    <strong>{validationSummary.isPublishable ? '배포 가능' : '수정 필요'}</strong>
+                                    <span>{validationSummary.errors.length} 오류 · {validationSummary.warnings.length} 경고</span>
                                 </div>
-                                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: '0.4rem' }}>
-                                    {serviceReadiness.items.map(item => {
-                                        const tone = readinessTone(item.status);
-                                        return (
-                                            <div key={item.key} title={item.message} style={{
-                                                minWidth: 0,
-                                                padding: '0.48rem',
-                                                borderRadius: '7px',
-                                                border: `1px solid ${tone.border}`,
-                                                background: 'var(--surface)',
-                                            }}>
-                                                <div style={{ display: 'flex', justifyContent: 'space-between', gap: '0.35rem', alignItems: 'center', marginBottom: '0.1rem' }}>
-                                                    <span style={{ fontSize: '0.66rem', color: 'var(--muted)', fontWeight: 850, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                                                        {item.label}
-                                                    </span>
-                                                    <span style={{ width: 7, height: 7, borderRadius: '999px', background: tone.color, flexShrink: 0 }} />
-                                                </div>
-                                                <div style={{ fontSize: '0.78rem', color: 'var(--foreground)', fontWeight: 900, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                                                    {item.value}
-                                                </div>
-                                            </div>
-                                        );
-                                    })}
-                                </div>
-                            </div>
-                            <div style={{
-                                marginTop: '0.75rem',
-                                padding: '0.65rem',
-                                borderRadius: '8px',
-                                background: validationSummary.isPublishable ? 'rgba(16,185,129,0.08)' : 'rgba(239,68,68,0.08)',
-                                border: validationSummary.isPublishable ? '1px solid rgba(16,185,129,0.18)' : '1px solid rgba(239,68,68,0.22)',
-                            }}>
-                                <div style={{
-                                    display: 'flex',
-                                    justifyContent: 'space-between',
-                                    gap: '0.75rem',
-                                    marginBottom: validationSummary.errors.length || validationSummary.warnings.length ? '0.45rem' : 0,
-                                }}>
-                                    <span style={{ fontSize: '0.76rem', fontWeight: 900, color: validationSummary.isPublishable ? 'var(--success)' : 'var(--error)' }}>
-                                        {validationSummary.isPublishable ? '배포 가능' : '배포 전 수정 필요'}
-                                    </span>
-                                    <span style={{ fontSize: '0.72rem', fontWeight: 800, color: 'var(--muted)', whiteSpace: 'nowrap' }}>
-                                        {validationSummary.errors.length} 오류 · {validationSummary.warnings.length} 경고
-                                    </span>
-                                </div>
-                                {[...validationSummary.errors, ...validationSummary.warnings].slice(0, 3).map(item => (
-                                    <div key={item.code} style={{
-                                        fontSize: '0.72rem',
-                                        color: item.severity === 'error' ? 'var(--error)' : 'var(--warning)',
-                                        lineHeight: 1.45,
-                                        fontWeight: 700,
-                                    }}>
-                                        {item.message}
-                                    </div>
-                                ))}
                             </div>
                         </div>
 

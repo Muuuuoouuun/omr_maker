@@ -76,7 +76,22 @@ export function normalizeStartCodeInput(value: string): string {
     return value.replace(/\s/g, "").trim().toUpperCase().slice(0, 6);
 }
 
-export function generateStartCode(random = Math.random): string {
+/**
+ * Cryptographically-strong float in [0, 1). Falls back to Math.random only when the
+ * Web Crypto API is unavailable (e.g. very old runtimes), so start codes are not
+ * predictable in normal browser/server environments.
+ */
+function secureRandom(): number {
+    const cryptoObj = typeof globalThis !== "undefined" ? globalThis.crypto : undefined;
+    if (cryptoObj && typeof cryptoObj.getRandomValues === "function") {
+        const buffer = new Uint32Array(1);
+        cryptoObj.getRandomValues(buffer);
+        return buffer[0] / 0x1_0000_0000; // divide by 2^32 → [0, 1)
+    }
+    return Math.random();
+}
+
+export function generateStartCode(random: () => number = secureRandom): string {
     let out = "";
     for (let i = 0; i < 6; i++) {
         const index = Math.min(START_CODE_ALPHABET.length - 1, Math.floor(random() * START_CODE_ALPHABET.length));

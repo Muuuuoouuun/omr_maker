@@ -1,7 +1,7 @@
 import type { Attempt, Exam } from "@/types/omr";
 import type { RosterGroup, RosterStudent } from "@/lib/rosterStorage";
 import { rosterGroupMatchesStudent } from "@/lib/rosterStorage";
-import { buildClassExamWeaknessMatrix, buildLearningRecommendations } from "@/lib/premiumAnalytics";
+import { buildClassExamWeaknessMatrix, buildLearningRecommendations, formatParticipationRateLabel } from "@/lib/premiumAnalytics";
 import { buildRetakeHref } from "@/lib/retakeLinks";
 import { formatRegionScopedLabel } from "@/lib/dashboardSelection";
 import { attemptMatchesStudentProfile } from "@/utils/storage";
@@ -305,7 +305,7 @@ function classRetakeRecommendationCandidates(
             studentNames,
             groupNames,
             regionNames,
-            reason: `${groupLabel} 참여 ${row.participationRate}% · 오답 압력 ${row.wrongRate}% · ${recommendation.reason}`,
+            reason: `${groupLabel} 참여 ${formatParticipationRateLabel(row.participationRate)} · 오답 압력 ${row.wrongRate}% · ${recommendation.reason}`,
         }];
     });
 }

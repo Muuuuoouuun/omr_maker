@@ -7,7 +7,7 @@ import TeacherHeader from "@/components/TeacherHeader";
 import { Users, UserPlus, Upload, Search, MessageCircle, TrendingUp, TrendingDown, MoreVertical, Link as LinkIcon, FolderPlus, CheckCircle2, Clock, X, Trash2, Download, PenLine, Target, AlertTriangle, FileText, BarChart3, Copy, KeyRound, RefreshCw, Lock, MapPin } from "lucide-react";
 import { toast } from "@/components/Toast";
 import type { Attempt, Exam, PlanKey } from "@/types/omr";
-import { parseCsvRows, serializeCsvRows } from "@/lib/csv";
+import { decodeCsvBytes, parseCsvRows, serializeCsvRows } from "@/lib/csv";
 import { shouldUseDemoData } from "@/lib/demoData";
 import { loadAttempts, loadExams } from "@/lib/omrPersistence";
 import { loadRosterSnapshot, saveRosterSnapshot } from "@/lib/rosterPersistence";
@@ -781,7 +781,9 @@ function ManageUsersInner() {
     // ===== CSV upload =====
     const handleCsvFile = async (file: File) => {
         try {
-            const text = await file.text();
+            // Read raw bytes so legacy Korean Excel exports (CP949/EUC-KR) don't become
+            // mojibake — File.text() would force UTF-8.
+            const text = decodeCsvBytes(await file.arrayBuffer());
             const rows = parseCsvRows(text);
             if (rows.length < 2) {
                 toast.error("CSV 파싱 실패", "데이터가 없습니다.");

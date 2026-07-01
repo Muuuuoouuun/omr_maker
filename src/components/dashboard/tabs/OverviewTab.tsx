@@ -11,6 +11,7 @@ import ExamActionsMenu, { ExamActionKind } from "@/components/dashboard/ExamActi
 import { toast } from "@/components/Toast";
 import { Users, BarChart3, PlusCircle, Activity, Download } from "lucide-react";
 import { copyStoredData } from "@/utils/blobStore";
+import { secureRandomId } from "@/utils/ids";
 import { deleteExam, saveExam } from "@/lib/omrPersistence";
 import { formatKoreanDate } from "@/lib/pure";
 import { safeRatePercent } from "@/lib/scoreUtils";
@@ -119,7 +120,7 @@ export default function OverviewTab({ exams: examsProp, attempts, stats, trendDa
         }
 
         if (kind === 'duplicate') {
-            const newId = Date.now().toString(36);
+            const newId = secureRandomId();
             const pdfDataRef = await copyStoredData(target.pdfDataRef, `exam:${newId}:problemPdf`) || target.pdfDataRef;
             const answerKeyPdfRef = await copyStoredData(target.answerKeyPdfRef, `exam:${newId}:answerKeyPdf`) || target.answerKeyPdfRef;
             const copy: Exam = {
@@ -485,14 +486,12 @@ export default function OverviewTab({ exams: examsProp, attempts, stats, trendDa
                         title="Total Students"
                         value={stats.totalStudents}
                         icon={<Users size={28} color="var(--primary)" />}
-                        trend="12%"
-                        trendUp={true}
                     />
                 </div>
                 <div style={{ flex: 1, display: 'flex', width: '100%', minHeight: 0 }}>
                     <StatCard
                         title="Average Score"
-                        value={stats.avgScore.toFixed(1)}
+                        value={stats.avgScore}
                         icon={<BarChart3 size={28} color="var(--success)" />}
                         color="var(--success)"
                         trend={stats.avgScore > 80 ? 'Good' : 'Needs Focus'}

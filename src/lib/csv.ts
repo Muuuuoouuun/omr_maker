@@ -1,3 +1,25 @@
+/**
+ * Decodes raw CSV bytes to text, tolerating legacy Korean Excel exports.
+ *
+ * Excel on Korean Windows commonly saves CSV as CP949/EUC-KR rather than UTF-8.
+ * `File.text()` always assumes UTF-8, silently turning Korean names/classes into
+ * mojibake. This tries strict UTF-8 first and, when the bytes aren't valid UTF-8
+ * (the tell-tale sign of a CP949/EUC-KR file), falls back to EUC-KR.
+ */
+export function decodeCsvBytes(buffer: ArrayBuffer | Uint8Array): string {
+    const bytes = buffer instanceof Uint8Array ? buffer : new Uint8Array(buffer);
+    try {
+        return new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+    } catch {
+        try {
+            return new TextDecoder("euc-kr").decode(bytes);
+        } catch {
+            // EUC-KR unavailable in this runtime → best-effort lenient UTF-8.
+            return new TextDecoder("utf-8").decode(bytes);
+        }
+    }
+}
+
 export function parseCsvRows(text: string): string[][] {
     const rows: string[][] = [];
     let row: string[] = [];
