@@ -28,7 +28,7 @@ Supabase는 **라이브(다기기 동기화 실사용)**, 서버 `SUPABASE_SERVI
 - 게스트 격리를 서버 소유 신원으로 확립.
 
 ### 비목표(명시적 이월)
-- **서버 명단/시작코드 검증(학생 사칭 완전차단)** → 슬라이스 B.
+- **서버 명단/시작코드 검증(학생 사칭 완전차단, 서버 TOFU 코드 레지스트리 포함)** → 슬라이스 B. (A는 학생 로그인 UI에 "임시 신원" 고지만 수행.)
 - **교사 read/write 서버 이관** → 슬라이스 B.
 - **`production-rls.sql` 적용 · anon revoke · deploymentReadiness flip** → 슬라이스 C. *그 전까지 옛 publishable-키 클라 경로가 병존하므로, 구멍의 완전차단은 C에서 완결된다.* 슬라이스 A는 "서버 경로를 만들어 C를 가능케 하고, 앱 자체 경로에서의 유출·위조를 제거"하는 단계다.
 - 플랜/AI 사용량 서버강제 → 슬라이스 D.
@@ -71,6 +71,8 @@ Supabase는 **라이브(다기기 동기화 실사용)**, 서버 `SUPABASE_SERVI
 클라가 현행대로 명단/코드로 studentId 해석([`resolveStudentIdentity`](../../../src/lib/studentCodes.ts)) → `issueStudentSession(resolvedIdentity)`가 쿠키 발급.
 
 > **명시적 한계(A 범위)**: 명단·시작코드가 아직 클라(localStorage `rosterStorage`/`studentCodes`)이므로, 서버는 로그인 시점에 클라 해석 studentId를 **신뢰**한다. 즉 **로그인 시점 "다른 학생 사칭"은 A에서 완전히 막지 못한다**(서버 명단/코드 검증 = 슬라이스 B). 그러나 발급 후 모든 쓰기의 소유자·org를 서버가 쿠키 기준으로 주입하므로 **점수위조·타학생 대량조회·정답유출·PIN우회는 A에서 차단**된다. 게스트는 서버 생성 신원이라 사칭 개념 자체가 없다.
+>
+> **A의 완화 조치**: 학생 로그인 UI에 "정식 학생 인증은 준비 중(현재는 이름·반 기반 임시 신원)" 성격을 명시해 보안 오해를 줄인다. 서버 TOFU 코드 레지스트리 등 사칭 하드닝은 **B로 이월**(교사 서버 코드발급 + RLS와 함께 제대로 처리).
 
 클라의 기존 `StudentSession`(sessionStorage/localStorage)은 화면 표시·draft·legacy 병합용으로 잔존하되, **권위 있는 신원은 서버 쿠키**다.
 
@@ -148,4 +150,4 @@ Supabase는 **라이브(다기기 동기화 실사용)**, 서버 `SUPABASE_SERVI
 
 ## 12. 시퀀싱
 
-A → B(교사 서버 read/write) → **C(production-rls 적용 · anon revoke · deploymentReadiness flip)**. C는 A+B 완료 전제. A/B는 각각 독립 배포·테스트 가능하며, C가 최종 스위치.
+A → B(교사 서버 read/write) → **C(production-rls 적용 · anon revoke · deploymentReadiness flip)**. C는 A+B 완료 전제. A/B는 각각 독립 배포·테스트 가능하며, C가 최종 스위치. **실제 학생 데이터/런치 전 C 필수** — `deploymentReadiness`의 `OMR_PRODUCTION_RLS_APPLIED` 런치 게이트에 연결하고, C 전까지 "안전한 시험"으로 런치하지 않는다(A/B는 내부 마일스톤).
