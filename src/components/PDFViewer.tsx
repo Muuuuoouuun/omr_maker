@@ -133,6 +133,7 @@ export default function PDFViewer({
 
     // Canvas Ref
     const canvasRef = useRef<HTMLCanvasElement>(null);
+    const eraserRingRef = useRef<HTMLDivElement>(null);
     const containerRef = useRef<HTMLDivElement>(null);
     const wrapperRef = useRef<HTMLDivElement>(null);
     const [containerWidth, setContainerWidth] = useState<number>(0);
@@ -630,6 +631,28 @@ export default function PDFViewer({
         currentPathRef.current = [];
     };
 
+    const updateEraserRing = (e: React.PointerEvent<HTMLCanvasElement>) => {
+        const ring = eraserRingRef.current;
+        if (!ring || !containerRef.current) return;
+        const rect = containerRef.current.getBoundingClientRect();
+        ring.style.left = `${e.clientX - rect.left}px`;
+        ring.style.top = `${e.clientY - rect.top}px`;
+        ring.style.display = 'block';
+    };
+
+    const handleCanvasPointerMove = (e: React.PointerEvent<HTMLCanvasElement>) => {
+        if (canEditDrawing && drawingMode === 'eraser') updateEraserRing(e);
+        draw(e);
+    };
+
+    const handleCanvasPointerEnter = (e: React.PointerEvent<HTMLCanvasElement>) => {
+        if (canEditDrawing && drawingMode === 'eraser') updateEraserRing(e);
+    };
+
+    const handleCanvasPointerLeave = () => {
+        if (eraserRingRef.current) eraserRingRef.current.style.display = 'none';
+    };
+
     const getPos = (e: React.PointerEvent<HTMLCanvasElement>) => {
         if (!canvasRef.current) return { x: 0, y: 0 };
         const rect = canvasRef.current.getBoundingClientRect();
@@ -975,9 +998,11 @@ export default function PDFViewer({
                                     <canvas
                                         ref={canvasRef}
                                         onPointerDown={startDrawing}
-                                        onPointerMove={draw}
+                                        onPointerMove={handleCanvasPointerMove}
                                         onPointerUp={stopDrawing}
                                         onPointerCancel={stopDrawing}
+                                        onPointerEnter={handleCanvasPointerEnter}
+                                        onPointerLeave={handleCanvasPointerLeave}
                                         style={{
                                             position: 'absolute',
                                             top: 0, left: 0,
@@ -986,6 +1011,29 @@ export default function PDFViewer({
                                             cursor: canvasCursor,
                                             pointerEvents: canEditDrawing ? 'auto' : 'none',
                                             touchAction: fingerDrawingEnabled ? 'none' : 'pan-x pan-y pinch-zoom'
+                                        }}
+                                    />
+                                )}
+
+                                {canEditDrawing && drawingMode === 'eraser' && (
+                                    <div
+                                        ref={eraserRingRef}
+                                        aria-hidden="true"
+                                        style={{
+                                            position: 'absolute',
+                                            left: 0,
+                                            top: 0,
+                                            width: `${eraserWidth}px`,
+                                            height: `${eraserWidth}px`,
+                                            transform: 'translate(-50%, -50%)',
+                                            borderRadius: '50%',
+                                            border: eraserMode === 'stroke'
+                                                ? '1.5px dashed rgba(239,68,68,0.95)'
+                                                : '1.5px solid rgba(255,255,255,0.95)',
+                                            boxShadow: '0 0 0 1px rgba(0,0,0,0.45)',
+                                            pointerEvents: 'none',
+                                            zIndex: 15,
+                                            display: 'none',
                                         }}
                                     />
                                 )}
