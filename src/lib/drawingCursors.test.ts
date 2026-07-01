@@ -21,6 +21,13 @@ describe("buildPenCursor", () => {
         expect(cursor).not.toContain("<");
         expect(cursor).not.toContain(">");
     });
+
+    it("renders 7% smaller than the 32px design size", () => {
+        const cursor = buildPenCursor("#111827");
+        expect(cursor).toContain("width='29.76'");
+        expect(cursor).toContain("height='29.76'");
+        expect(cursor).not.toContain("width='32'");
+    });
 });
 
 describe("buildHighlighterCursor", () => {
@@ -29,5 +36,11 @@ describe("buildHighlighterCursor", () => {
         expect(cursor).toContain("data:image/svg+xml,");
         expect(cursor.trim().endsWith(", crosshair")).toBe(true);
         expect(cursor).not.toContain("#");
+    });
+
+    it("renders 7% smaller than the 32px design size", () => {
+        const cursor = buildHighlighterCursor();
+        expect(cursor).toContain("width='29.76'");
+        expect(cursor).not.toContain("width='32'");
     });
 });
