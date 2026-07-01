@@ -141,10 +141,10 @@ export async function fetchExamRowById(
 
 export async function fetchAttemptRowsByOwner(
     client: SupabaseAdminReadClientLike,
-    owner: { studentId?: string; guestId?: string },
+    owner: { studentId?: string },
 ): Promise<unknown[]> {
-    // Guests are stored under the student_id = "guest:<guestId>" convention.
-    const key = owner.studentId || (owner.guestId ? `guest:${owner.guestId}` : "");
+    // Callers pass the canonical student_id (guests are already normalized to "guest:<id>").
+    const key = owner.studentId || "";
     if (!key) return [];
     const { data, error } = await client.from("omr_attempts").select("*").eq("student_id", key).order("finished_at", { ascending: false });
     if (error) throw new Error(error.message || "Failed to read attempts");
