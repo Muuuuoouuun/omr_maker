@@ -1,6 +1,6 @@
 import type { Exam, Question } from "@/types/omr";
 
-export type SolvableQuestion = Omit<Question, "answer">;
+export type SolvableQuestion = Omit<Question, "answer" | "explanation">;
 
 export interface SolvableExam
     extends Omit<Exam, "questions" | "answerKeyPdf" | "answerKeyPdfRef" | "accessConfig"> {
@@ -18,8 +18,9 @@ export interface SolvableExam
  */
 export function stripExamForSolving(exam: Exam): SolvableExam {
     const solvableQuestions: SolvableQuestion[] = exam.questions.map(question => {
-        const { answer: _omitAnswer, ...rest } = question;
+        const { answer: _omitAnswer, explanation: _omitExplanation, ...rest } = question;
         void _omitAnswer;
+        void _omitExplanation;
         return rest;
     });
 

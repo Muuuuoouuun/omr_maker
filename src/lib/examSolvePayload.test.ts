@@ -35,4 +35,13 @@ describe("stripExamForSolving", () => {
         const solvable = stripExamForSolving({ ...EXAM, accessConfig: { type: "group", groupIds: ["g1"] } });
         expect(solvable.accessConfig).toEqual({ type: "group", groupIds: ["g1"], hasPin: false });
     });
+
+    it("strips the teacher explanation (it can reveal the answer)", () => {
+        const solvable = stripExamForSolving({
+            ...EXAM,
+            questions: [{ id: 1, number: 1, answer: 3, choices: 5, score: 10, explanation: "정답은 3번" }],
+        });
+        expect("explanation" in solvable.questions[0]).toBe(false);
+        expect(JSON.stringify(solvable)).not.toContain("정답은 3번");
+    });
 });
