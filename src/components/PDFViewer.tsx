@@ -5,6 +5,7 @@ import { Document, Page, pdfjs } from 'react-pdf';
 import { DEFAULT_CHOICE_COUNT, normalizeChoiceCount, type PdfDrawings } from '@/types/omr';
 import { toast } from '@/components/Toast';
 import {
+    Check,
     Eraser,
     FileText,
     Hand,
@@ -142,6 +143,26 @@ export default function PDFViewer({
         : drawingMode === 'highlighter'
             ? highlighterWidth
             : penWidth;
+    // Live nib preview: bar height reflects the pen stroke thickness (scaled for visibility).
+    const nibBarHeight = Math.max(2, Math.round(penWidth * 1.6));
+    const widthControl = drawingMode !== 'click' ? (
+        <label className="pdf-width-control" title="굵기">
+            <span>{activeStrokeWidth}px</span>
+            <input
+                type="range"
+                min={drawingMode === 'pen' ? 1 : 6}
+                max={drawingMode === 'eraser' ? 42 : drawingMode === 'highlighter' ? 24 : 8}
+                value={activeStrokeWidth}
+                onChange={(e) => {
+                    const next = Number(e.target.value);
+                    if (drawingMode === 'eraser') setEraserWidth(next);
+                    else if (drawingMode === 'highlighter') setHighlighterWidth(next);
+                    else setPenWidth(next);
+                }}
+                aria-label="필기 굵기"
+            />
+        </label>
+    ) : null;
 
     const penCursor = useMemo(() => buildPenCursor(penColor), [penColor]);
     const highlighterCursor = useMemo(() => buildHighlighterCursor(), []);
@@ -841,47 +862,40 @@ export default function PDFViewer({
                                 )}
 
                                 {drawingMode === 'pen' && (
-                                    <div className="pdf-color-swatches" aria-label="펜 색상">
-                                        {PEN_COLORS.map(color => (
-                                            <button
-                                                key={color}
-                                                type="button"
-                                                className={`pdf-color-swatch ${penColor === color ? 'active' : ''}`}
-                                                onClick={() => setPenColor(color)}
-                                                title={`펜 색상 ${color}`}
-                                                aria-label={`펜 색상 ${color}`}
-                                                style={{ background: color }}
+                                    <div className="pdf-pen-group" role="group" aria-label="펜 옵션">
+                                        <div className="pdf-color-swatches" aria-label="펜 색상">
+                                            {PEN_COLORS.map(color => (
+                                                <button
+                                                    key={color}
+                                                    type="button"
+                                                    className={`pdf-color-swatch ${penColor === color ? 'active' : ''}`}
+                                                    onClick={() => setPenColor(color)}
+                                                    title={`펜 색상 ${color}`}
+                                                    aria-label={`펜 색상 ${color}`}
+                                                    aria-pressed={penColor === color}
+                                                    style={{ background: color }}
+                                                >
+                                                    {penColor === color && <Check size={12} strokeWidth={3} aria-hidden="true" />}
+                                                </button>
+                                            ))}
+                                            <input
+                                                className="pdf-color-input"
+                                                type="color"
+                                                value={penColor}
+                                                onChange={(e) => setPenColor(e.target.value)}
+                                                title="펜 색상 직접 선택"
+                                                aria-label="펜 색상 직접 선택"
                                             />
-                                        ))}
-                                        <input
-                                            className="pdf-color-input"
-                                            type="color"
-                                            value={penColor}
-                                            onChange={(e) => setPenColor(e.target.value)}
-                                            title="펜 색상 직접 선택"
-                                            aria-label="펜 색상 직접 선택"
-                                        />
+                                        </div>
+                                        <span className="pdf-pen-group-divider" aria-hidden="true" />
+                                        <span className="pdf-nib-preview" title="펜 미리보기" aria-hidden="true">
+                                            <span className="pdf-nib-bar" style={{ background: penColor, height: `${nibBarHeight}px` }} />
+                                        </span>
+                                        {widthControl}
                                     </div>
                                 )}
 
-                                {drawingMode !== 'click' && (
-                                    <label className="pdf-width-control" title="굵기">
-                                        <span>{activeStrokeWidth}px</span>
-                                        <input
-                                            type="range"
-                                            min={drawingMode === 'pen' ? 1 : 6}
-                                            max={drawingMode === 'eraser' ? 42 : drawingMode === 'highlighter' ? 24 : 8}
-                                            value={activeStrokeWidth}
-                                            onChange={(e) => {
-                                                const next = Number(e.target.value);
-                                                if (drawingMode === 'eraser') setEraserWidth(next);
-                                                else if (drawingMode === 'highlighter') setHighlighterWidth(next);
-                                                else setPenWidth(next);
-                                            }}
-                                            aria-label="필기 굵기"
-                                        />
-                                    </label>
-                                )}
+                                {drawingMode !== 'click' && drawingMode !== 'pen' && widthControl}
 
                                 <button
                                     type="button"

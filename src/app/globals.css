@@ -3144,11 +3144,17 @@ body:has(.create-workspace.is-resizing) {
   box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.35);
   padding: 0;
   flex: 0 0 24px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: #fff;
+  transition: transform 0.12s, box-shadow 0.12s;
 }
 
 .pdf-color-swatch.active {
   border-color: white;
   box-shadow: 0 0 0 2px #6366f1;
+  transform: scale(1.08);
 }
 
 .pdf-color-input {
@@ -3183,6 +3189,49 @@ body:has(.create-workspace.is-resizing) {
 .pdf-width-control input {
   width: 72px;
   accent-color: #6366f1;
+}
+
+.pdf-pen-group {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 4px 7px;
+  border-radius: 9px;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid #4b4f55;
+  min-width: 0;
+}
+
+.pdf-pen-group .pdf-width-control {
+  flex: 0 1 108px;
+  min-width: 84px;
+  background: #1b1d1f;
+}
+
+.pdf-pen-group-divider {
+  width: 1px;
+  height: 20px;
+  background: #4b4f55;
+  flex: 0 0 1px;
+}
+
+.pdf-nib-preview {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  border-radius: 7px;
+  background: #1b1d1f;
+  border: 1px solid #555;
+  flex: 0 0 26px;
+}
+
+.pdf-nib-bar {
+  width: 16px;
+  min-height: 2px;
+  border-radius: 999px;
+  transition: height 0.12s ease;
 }
 
 .solve-omr-rail {
