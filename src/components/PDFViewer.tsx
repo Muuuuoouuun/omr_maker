@@ -11,6 +11,7 @@ import {
     Hand,
     Highlighter,
     MousePointer2,
+    Palette,
     PenLine,
     Redo2,
     Trash2,
@@ -72,7 +73,7 @@ interface PDFViewerProps {
 type DrawingMode = 'click' | 'pen' | 'highlighter' | 'eraser';
 type DrawPoint = { x: number; y: number };
 
-const PEN_COLORS = ['#ef4444', '#111827', '#2563eb', '#16a34a'];
+const PEN_COLORS = ['#111827', '#ef4444', '#2563eb', '#16a34a'];
 const HIGHLIGHTER_COLOR = 'rgba(250, 204, 21, 0.38)';
 const MIN_POINT_DISTANCE = 0.0012;
 
@@ -107,7 +108,7 @@ export default function PDFViewer({
 
     // Drawing State
     const [drawingMode, setDrawingMode] = useState<DrawingMode>('click');
-    const [penColor, setPenColor] = useState('#ef4444'); // Default Red
+    const [penColor, setPenColor] = useState('#111827'); // Default Black
     const [penWidth, setPenWidth] = useState(2);
     const [highlighterWidth, setHighlighterWidth] = useState(12);
     const [eraserWidth, setEraserWidth] = useState(22);
@@ -880,18 +881,21 @@ export default function PDFViewer({
                                                     {penColor === color && <Check size={12} strokeWidth={3} aria-hidden="true" />}
                                                 </button>
                                             ))}
-                                            <input
-                                                className="pdf-color-input"
-                                                type="color"
-                                                value={penColor}
-                                                onChange={(e) => setPenColor(e.target.value)}
-                                                title="펜 색상 직접 선택"
-                                                aria-label="펜 색상 직접 선택"
-                                            />
+                                            <label className="pdf-color-custom" title="원하는 색 선택">
+                                                <input
+                                                    type="color"
+                                                    value={penColor}
+                                                    onChange={(e) => setPenColor(e.target.value)}
+                                                    aria-label="원하는 색 직접 선택"
+                                                />
+                                                <span className="pdf-color-custom-inner" aria-hidden="true">
+                                                    <Palette size={12} strokeWidth={2.25} />
+                                                </span>
+                                            </label>
                                         </div>
                                         <span className="pdf-pen-group-divider" aria-hidden="true" />
                                         <span className="pdf-nib-preview" title="펜 미리보기" aria-hidden="true">
-                                            <span className="pdf-nib-bar" style={{ background: penColor, height: `${nibBarHeight}px` }} />
+                                            <span className="pdf-nib-bar" style={{ background: penColor, height: `${nibBarHeight}px`, boxShadow: `0 0 6px ${penColor}80` }} />
                                         </span>
                                         {widthControl}
                                     </div>

@@ -3152,9 +3152,9 @@ body:has(.create-workspace.is-resizing) {
 }
 
 .pdf-color-swatch.active {
-  border-color: white;
-  box-shadow: 0 0 0 2px #6366f1;
-  transform: scale(1.08);
+  border-color: rgba(255, 255, 255, 0.5);
+  box-shadow: 0 0 0 2px #191b1e, 0 0 0 4px #818cf8, 0 2px 8px rgba(129, 140, 248, 0.5);
+  transform: scale(1.12);
 }
 
 .pdf-color-input {
@@ -3231,7 +3231,77 @@ body:has(.create-workspace.is-resizing) {
   width: 16px;
   min-height: 2px;
   border-radius: 999px;
-  transition: height 0.12s ease;
+  transition: height 0.12s ease, box-shadow 0.12s ease;
+}
+
+.pdf-color-custom {
+  position: relative;
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  padding: 2.5px;
+  display: inline-flex;
+  flex: 0 0 28px;
+  background: conic-gradient(from 210deg, #ef4444, #f59e0b, #eab308, #22c55e, #06b6d4, #3b82f6, #8b5cf6, #ec4899, #ef4444);
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.4);
+  cursor: pointer;
+}
+
+.pdf-color-custom input {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  opacity: 0;
+  cursor: pointer;
+}
+
+.pdf-color-custom-inner {
+  flex: 1;
+  border-radius: 50%;
+  background: #191b1e;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #f3f4f6;
+  pointer-events: none;
+}
+
+.pdf-color-custom:focus-within {
+  outline: 2px solid #818cf8;
+  outline-offset: 2px;
+}
+
+.pdf-pen-group .pdf-width-control input {
+  -webkit-appearance: none;
+  appearance: none;
+  height: 5px;
+  border-radius: 3px;
+  background: linear-gradient(#3a3d42, #2a2c30);
+}
+
+.pdf-pen-group .pdf-width-control input::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 15px;
+  height: 15px;
+  border-radius: 50%;
+  background: radial-gradient(circle at 40% 35%, #fff, #c7c9ff 60%, #818cf8);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.5);
+  cursor: pointer;
+}
+
+.pdf-pen-group .pdf-width-control input::-moz-range-thumb {
+  width: 15px;
+  height: 15px;
+  border: none;
+  border-radius: 50%;
+  background: radial-gradient(circle at 40% 35%, #fff, #c7c9ff 60%, #818cf8);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.5);
+  cursor: pointer;
 }
 
 .solve-omr-rail {
