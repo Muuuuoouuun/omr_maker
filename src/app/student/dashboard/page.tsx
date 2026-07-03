@@ -24,6 +24,24 @@ import {
 import { loadAttempts, loadExams } from "@/lib/omrPersistence";
 import { averageResolvedAttemptPercent, baseAttemptsOnly, retakeAttemptsOnly } from "@/lib/attemptScores";
 import { evaluateExamAccess } from "@/lib/examAccess";
+import { listMyAssignments } from "@/app/actions/studentExam";
+import { clearStudentServerSession } from "@/app/actions/studentSession";
+import { listMyAssignmentsClient } from "@/lib/studentExamClient";
+
+/** True when this device holds an unsubmitted draft for the exam/owner pair. */
+function hasLocalDraftFor(examId: string, ownerKey: string): boolean {
+    if (typeof window === "undefined" || !ownerKey) return false;
+    try {
+        const prefix = `omr_draft_${examId}_${ownerKey}`;
+        for (let i = 0; i < window.localStorage.length; i++) {
+            const key = window.localStorage.key(i);
+            if (key && key.startsWith(prefix)) return true;
+        }
+    } catch {
+        // storage blocked — treat as no draft
+    }
+    return false;
+}
 
 function getTimeGreeting(): string {
     const h = new Date().getHours();
@@ -61,23 +79,30 @@ export default function StudentDashboard() {
             setUser(currentUser);
             setSessionState("active");
 
-            // 2. Load Data
-            const [examResult, attemptResult] = await Promise.all([
+            // 2. Load Data — own attempts come from the server boundary
+            // (ownership enforced by the signed session cookie); local list is
+            // the degraded fallback and keeps the client-side ownership filter.
+            const [examResult, myAttemptsResult] = await Promise.all([
                 loadExams(),
-                loadAttempts(),
+                listMyAssignmentsClient({
+                    server: () => listMyAssignments(),
+                    localFallback: async () => (await loadAttempts()).items,
+                }),
             ]);
             if (cancelled) return;
 
             const allExams = examResult.items;
-            const allAttempts = attemptResult.items;
             const examById = new Map(allExams.map(exam => [exam.id, exam]));
-            if (examResult.remoteError || attemptResult.remoteError) {
+            if (examResult.remoteError) {
                 toast.info(
                     "로컬 데이터 기준으로 표시 중",
                     "서버 동기화가 일부 지연되고 있어 다음 접속 때 다시 재시도합니다."
                 );
             }
-            const myAttempts = allAttempts.filter(a => attemptBelongsToSession(a, currentUser));
+            const attemptSource = myAttemptsResult.source;
+            const myAttempts = attemptSource === "server"
+                ? myAttemptsResult.attempts
+                : myAttemptsResult.attempts.filter(a => attemptBelongsToSession(a, currentUser));
             const myBaseAttempts = baseAttemptsOnly(myAttempts);
             const myRetakeAttempts = retakeAttemptsOnly(myAttempts);
             const guestIdForMerge = currentUser.isGuest ? currentUser.guestId : readStoredGuestId();
@@ -107,7 +132,13 @@ export default function StudentDashboard() {
                 const attempt = myBaseAttempts.find(a => a.examId === exam.id);
                 if (attempt) {
                     done.push({ ...exam, attemptId: attempt.id });
-                } else {
+                } else if (
+                    // Guests on the server path only see exams they actually
+                    // started (submitted or drafted on this device) — the public
+                    // exam catalog is not broadcast to anonymous identities.
+                    !(currentUser.isGuest && attemptSource === "server")
+                    || hasLocalDraftFor(exam.id, currentUser.studentId || "")
+                ) {
                     todo.push(exam);
                 }
             });
@@ -173,6 +204,8 @@ export default function StudentDashboard() {
 
     const handleLogout = () => {
         clearSession();
+        // Also drop the httpOnly server session cookie (shared-device safety).
+        clearStudentServerSession().catch(() => { /* offline — cookie expires on TTL */ });
         setUser(null);
         setTodoExams([]);
         setDoneExams([]);
@@ -263,8 +296,24 @@ export default function StudentDashboard() {
                         </span>
                     </div>
                     <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
-                        <span style={{ fontWeight: 600, fontSize: '0.95rem' }}>
-                            {user.name} <span style={{ color: 'var(--muted)', fontWeight: 400 }}>({user.groupName})</span>
+                        <span style={{ fontWeight: 600, fontSize: '0.95rem', display: 'inline-flex', alignItems: 'center', gap: '0.45rem', flexWrap: 'wrap' }}>
+                            <span>
+                                {user.name} <span style={{ color: 'var(--muted)', fontWeight: 400 }}>({user.groupName})</span>
+                            </span>
+                            {user.isGuest && user.loginId ? (
+                                <span style={{
+                                    color: 'var(--primary)',
+                                    background: 'rgba(99,102,241,0.1)',
+                                    border: '1px solid rgba(99,102,241,0.18)',
+                                    borderRadius: 'var(--radius-full)',
+                                    padding: '0.18rem 0.5rem',
+                                    fontSize: '0.74rem',
+                                    fontWeight: 800,
+                                    fontVariantNumeric: 'tabular-nums',
+                                }}>
+                                    임시 ID {user.loginId}
+                                </span>
+                            ) : null}
                         </span>
                         <button
                             onClick={handleLogout}
@@ -307,6 +356,11 @@ export default function StudentDashboard() {
                                 이름과 반으로 로그인하면 지금 기기에서 푼 게스트 기록
                                 {guestMergePreview ? ` ${guestMergePreview.mergeableCount}건` : ""}을 같은 학생 기록에 연결합니다.
                             </p>
+                            {user.loginId ? (
+                                <div style={{ marginTop: '0.45rem', color: 'var(--primary)', fontSize: '0.82rem', fontWeight: 800 }}>
+                                    현재 게스트 임시 ID: {user.loginId}
+                                </div>
+                            ) : null}
                             {guestMergePreview?.examTitles.length ? (
                                 <div style={{ marginTop: '0.45rem', color: 'var(--muted)', fontSize: '0.82rem', fontWeight: 700 }}>
                                     최근 기록: {guestMergePreview.examTitles.join(", ")}
@@ -392,7 +446,9 @@ export default function StudentDashboard() {
                         display: 'flex', flexDirection: 'column', justifyContent: 'center'
                     }}>
                         <div style={{ fontSize: '0.95rem', fontWeight: 600, opacity: 0.9, marginBottom: '0.5rem' }}>나의 원시험 평균</div>
-                        <div style={{ fontSize: '3rem', fontWeight: 800, lineHeight: 1 }}>{stats.avgScore}</div>
+                        <div style={{ fontSize: '3rem', fontWeight: 800, lineHeight: 1 }}>
+                            {stats.avgScore}<span style={{ fontSize: '1.5rem', fontWeight: 700, opacity: 0.85 }}>%</span>
+                        </div>
                         <div style={{ fontSize: '0.85rem', opacity: 0.8, marginTop: '1rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
                             상세 보기 <span>→</span>
                         </div>

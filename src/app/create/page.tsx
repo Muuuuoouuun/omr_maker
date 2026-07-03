@@ -1414,7 +1414,7 @@ function CreateOMRPageInner() {
                     <div className="create-editor-brand" style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
                         <BrandLogo compact />
                         <span className="badge badge-primary" style={{ fontSize: '0.68rem' }}>
-                            Smart Editor
+                            스마트 에디터
                         </span>
                     </div>
                     <div className="create-editor-actions scroll-custom" style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
@@ -1783,14 +1783,16 @@ function CreateOMRPageInner() {
                         />
                     </div>
 
-                    <div style={{ marginBottom: '1.5rem' }}>
-                        <label style={{ display: 'block', marginBottom: '0.5rem', fontSize: '0.9rem', fontWeight: 500 }}>문항 수: {questionsCount}</label>
-                        <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
+                    <div className="create-compact-control-row" style={{ marginBottom: '0.75rem' }}>
+                        <div className="create-compact-control-label">
+                            <span>문항 수</span>
+                        </div>
+                        <div className="create-count-buttons">
                             {[20, 25, 30, 40, 50].map(count => (
                                 <button
                                     key={count}
                                     className={`btn ${questionsCount === count ? 'btn-primary' : 'btn-secondary'}`}
-                                    style={{ flex: 1, minWidth: '60px', padding: '0.5rem' }}
+                                    style={{ padding: '0.42rem 0.2rem' }}
                                     onClick={() => handleQuestionCountChange(count)}
                                 >
                                     {count}
@@ -1799,19 +1801,21 @@ function CreateOMRPageInner() {
                         </div>
                     </div>
 
-                    <div style={{ marginBottom: '1.5rem' }}>
-                        <label style={{ display: 'block', marginBottom: '0.5rem', fontSize: '0.9rem', fontWeight: 500 }}>기본 선택지 수</label>
-                        <div style={{ display: 'flex', gap: '0.5rem' }}>
+                    <div className="create-compact-control-row" style={{ marginBottom: '0.9rem' }}>
+                        <div className="create-compact-control-label">
+                            <span>선택지 수</span>
+                        </div>
+                        <div className="create-choice-buttons">
                             <button
                                 className={`btn ${defaultChoices === 5 ? 'btn-primary' : 'btn-secondary'}`}
-                                style={{ flex: 1 }}
+                                style={{ padding: '0.5rem 0.35rem' }}
                                 onClick={() => handleDefaultChoicesChange(5)}
                             >
                                 5지선다
                             </button>
                             <button
                                 className={`btn ${defaultChoices === 4 ? 'btn-primary' : 'btn-secondary'}`}
-                                style={{ flex: 1 }}
+                                style={{ padding: '0.5rem 0.35rem' }}
                                 onClick={() => handleDefaultChoicesChange(4)}
                             >
                                 4지선다
@@ -1819,32 +1823,38 @@ function CreateOMRPageInner() {
                         </div>
                     </div>
 
-                    <div style={{ marginBottom: '1.5rem' }}>
-                        <button
-                            className="btn btn-secondary"
-                            style={{ width: '100%', marginBottom: '0.5rem', border: '1px dashed #6366f1', color: '#6366f1', background: 'rgba(99, 102, 241, 0.05)', display: 'inline-flex', alignItems: 'center', gap: '0.45rem' }}
-                            onClick={() => setIsImportModalOpen(true)}
-                        >
-                            <BrainCircuit size={17} />
-                            정답 인식 마법사 (답지 추출)
-                        </button>
+                    <div style={{ marginBottom: '1.2rem' }}>
+                        <div className="create-action-row">
+                            <button
+                                className="btn btn-secondary"
+                                aria-label="정답 인식 마법사 열기"
+                                title="정답 인식 마법사 (답지 추출)"
+                                style={{ border: '1px dashed #6366f1', color: '#6366f1', background: 'rgba(99, 102, 241, 0.05)' }}
+                                onClick={() => setIsImportModalOpen(true)}
+                            >
+                                <BrainCircuit size={17} />
+                                <span>정답 인식</span>
+                            </button>
 
-                        <button
-                            className="btn btn-secondary"
-                            style={{ width: '100%', marginBottom: '1rem', border: '1px solid #0f766e', color: '#0f766e', background: 'rgba(15, 118, 110, 0.06)', display: 'inline-flex', alignItems: 'center', gap: '0.45rem' }}
-                            onClick={handleAutoDetectLocations}
-                            disabled={isDetectingLocation || !pdfFile}
-                        >
-                            {isDetectingLocation ? <Loader2 size={17} className="animate-spin" /> : <Crosshair size={17} />}
-                            {isDetectingLocation ? "위치 찾는 중..." : "PDF 문제 위치 자동 매칭"}
-                        </button>
+                            <button
+                                className="btn btn-secondary"
+                                aria-label={isDetectingLocation ? "PDF 문제 위치 찾는 중" : "PDF 문제 위치 자동 매칭"}
+                                title="PDF 문제 위치 자동 매칭"
+                                style={{ border: '1px solid #0f766e', color: '#0f766e', background: 'rgba(15, 118, 110, 0.06)' }}
+                                onClick={handleAutoDetectLocations}
+                                disabled={isDetectingLocation || !pdfFile}
+                            >
+                                {isDetectingLocation ? <Loader2 size={17} className="animate-spin" /> : <Crosshair size={17} />}
+                                <span>{isDetectingLocation ? "위치 찾는 중" : "PDF 위치 매칭"}</span>
+                            </button>
+                        </div>
 
                         <div style={{ marginBottom: '1rem', padding: '0.85rem', borderRadius: 'var(--radius-md)', border: '1px solid var(--border)', background: 'var(--background)' }}>
                             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '0.5rem', marginBottom: '0.65rem' }}>
                                 <div>
                                     <div style={{ fontSize: '0.84rem', fontWeight: 900, color: 'var(--foreground)' }}>문항 영역 보정</div>
                                     <div style={{ fontSize: '0.72rem', color: 'var(--muted)', marginTop: '2px', lineHeight: 1.45 }}>
-                                        필기 수집과 문항 DB용 PDF 영역입니다.
+                                        필기 수집과 문항 DB용 영역입니다.
                                     </div>
                                 </div>
                                 <span style={{

@@ -63,6 +63,11 @@ function attempt(partial: Partial<Attempt>): Attempt {
         score: partial.score ?? 0,
         totalScore: partial.totalScore ?? 15,
         answers: partial.answers || {},
+        drawingsRef: partial.drawingsRef,
+        handwritingArchived: partial.handwritingArchived,
+        questionTimings: partial.questionTimings,
+        focusLossEvents: partial.focusLossEvents,
+        tabFociLostCount: partial.tabFociLostCount,
         retake: partial.retake,
         status: partial.status || "completed",
     };
@@ -84,6 +89,15 @@ describe("group profile analytics", () => {
                 groupName: "A반",
                 finishedAt: "2026-06-15T10:30:00.000Z",
                 answers: { 1: 2, 2: 4, 3: 0 },
+                handwritingArchived: true,
+                drawingsRef: { store: "indexeddb", key: "drawing-new-a" },
+                questionTimings: [
+                    { questionId: 2, questionNumber: 2, totalTimeSec: 30, visitCount: 1, revisitCount: 0, answerChangeCount: 1 },
+                    { questionId: 3, questionNumber: 3, totalTimeSec: 90, visitCount: 2, revisitCount: 1, answerChangeCount: 0 },
+                ],
+                focusLossEvents: [
+                    { at: "2026-06-15T10:20:00.000Z", questionId: 3, questionNumber: 3, count: 1, reason: "hidden" },
+                ],
             }),
             attempt({
                 id: "other-class",
@@ -102,14 +116,22 @@ describe("group profile analytics", () => {
             examCount: 1,
             activeStudentCount: 1,
             averageScore: 50,
+            averageElapsedTimeSec: 1800,
+            averageQuestionTimeSec: 60,
+            totalTrackedTimeSec: 120,
+            focusLossCount: 1,
             wrongQuestionCount: 1,
             unansweredQuestionCount: 2,
+            handwritingArchiveCount: 1,
+            handwritingArchiveRate: 50,
         });
         expect(insight.exams[0]).toMatchObject({
             examTitle: "6월 모의고사",
             attemptCount: 2,
             studentCount: 1,
             averageScore: 50,
+            averageElapsedTimeSec: 1800,
+            averageQuestionTimeSec: 60,
             topWeakness: {
                 title: "시제",
                 basis: "같은 개념",
@@ -127,6 +149,21 @@ describe("group profile analytics", () => {
             severity: "urgent",
             retakeMode: "similar",
             retakeConcepts: ["시제"],
+        });
+        expect(insight.mostMissedQuestions[0]).toMatchObject({
+            questionNumber: 3,
+            wrongCount: 2,
+            totalCount: 2,
+            wrongRate: 100,
+            averageTimeSec: 90,
+        });
+        expect(insight.tagStats.find(stat => stat.title === "문법")).toMatchObject({
+            totalCount: 4,
+            correctCount: 1,
+            wrongCount: 3,
+            unansweredCount: 2,
+            wrongRate: 75,
+            averageTimeSec: 60,
         });
         expect(insight.weaknessGroups[0].reason).toContain("선택 반");
         expect(insight.studentsNeedingAttention[0]).toMatchObject({

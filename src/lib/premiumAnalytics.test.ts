@@ -6,7 +6,9 @@ import {
     buildClassExamWeaknessMatrix,
     buildExamQuestionResultStats,
     buildLearningRecommendations,
+    buildMostMissedQuestionStats,
     buildQuestionResults,
+    buildQuestionResultTagStats,
     buildRetakeQuestionIds,
     buildStudentWeaknessGroups,
     buildStudentTypeWeaknessGroups,
@@ -651,6 +653,11 @@ describe("premium analytics", () => {
             wrongRate: 50,
             topWrongOption: { option: 1, count: 1, rate: 50 },
             averageTimeSec: 132,
+            expectedTimeSec: 90,
+            timeOverExpectedRate: 147,
+            averageVisitCount: 3,
+            revisitRate: 100,
+            answerChangeCount: 2,
             handwritingStrokeCount: 3,
             studentCount: 2,
             groupCount: 1,
@@ -661,6 +668,32 @@ describe("premium analytics", () => {
             wrongCount: 1,
             unansweredCount: 1,
             unansweredRate: 50,
+        });
+        expect(buildMostMissedQuestionStats(exam, [attempt, secondAttempt], 2).map(stat => stat.questionNumber)).toEqual([3, 2]);
+    });
+
+    it("summarizes label/tag statistics with correct, missed, and timing counts", () => {
+        const stats = buildQuestionResultTagStats(getAttemptQuestionResults(exam, attempt), "label");
+
+        expect(stats.find(stat => stat.title === "문학")).toMatchObject({
+            kind: "label",
+            basis: "같은 라벨",
+            totalCount: 2,
+            correctCount: 0,
+            wrongCount: 2,
+            unansweredCount: 1,
+            correctRate: 0,
+            wrongRate: 100,
+            averageTimeSec: 132,
+            questionNumbers: [2, 3],
+            attemptCount: 1,
+            studentCount: 1,
+        });
+        expect(stats.find(stat => stat.title === "문법")).toMatchObject({
+            correctCount: 1,
+            wrongCount: 0,
+            correctRate: 100,
+            averageTimeSec: 45,
         });
     });
 
@@ -732,13 +765,155 @@ describe("premium analytics", () => {
 
     it("summarizes time, revisit, and focus-loss signals for an attempt", () => {
         expect(summarizeAttemptBehavior(attempt)).toEqual({
+            elapsedTimeSec: 300,
             totalTrackedTimeSec: 195,
             averageTimeSec: 65,
             slowQuestionNumbers: [2],
             rushedQuestionNumbers: [4],
             revisitedQuestionNumbers: [2],
+            answerChangedQuestionNumbers: [1, 2],
             focusLossCount: 2,
             focusLossQuestionNumbers: [2, 4],
         });
+    });
+});
+
+describe("slow-but-correct (불안정 개념) recommendation signal", () => {
+    const slowExam: Exam = {
+        id: "exam-slow",
+        title: "수학 미적분",
+        createdAt: "2026-06-20T10:00:00.000Z",
+        questions: [
+            { id: 1, number: 1, answer: 1, choices: 5, score: 10, tags: { concept: "접선의 기울기", expectedTimeSec: 60 } },
+            { id: 2, number: 2, answer: 2, choices: 5, score: 10, tags: { concept: "접선의 기울기", expectedTimeSec: 60 } },
+            { id: 3, number: 3, answer: 3, choices: 5, score: 10, tags: { concept: "적분 기초", expectedTimeSec: 60 } },
+        ],
+    };
+
+    function slowAttempt(partial: Partial<Attempt>): Attempt {
+        return {
+            id: "slow-1",
+            examId: "exam-slow",
+            examTitle: "수학 미적분",
+            studentName: "김학생",
+            studentId: "s1",
+            startedAt: "2026-06-20T10:00:00.000Z",
+            finishedAt: "2026-06-20T10:40:00.000Z",
+            score: 30,
+            totalScore: 30,
+            answers: { 1: 1, 2: 2, 3: 3 },
+            status: "completed",
+            ...partial,
+        };
+    }
+
+    it("surfaces an all-correct concept when questions repeatedly blow the time budget", () => {
+        const attemptAllCorrectButSlow = slowAttempt({
+            questionTimings: [
+                { questionId: 1, questionNumber: 1, totalTimeSec: 150, visitCount: 1, revisitCount: 0, answerChangeCount: 0 },
+                { questionId: 2, questionNumber: 2, totalTimeSec: 120, visitCount: 1, revisitCount: 0, answerChangeCount: 0 },
+                { questionId: 3, questionNumber: 3, totalTimeSec: 50, visitCount: 1, revisitCount: 0, answerChangeCount: 0 },
+            ],
+        });
+
+        const recommendations = buildLearningRecommendations(slowExam, [attemptAllCorrectButSlow], {
+            scope: "attempt",
+            attempt: attemptAllCorrectButSlow,
+            kinds: ["concept"],
+            includeSlowCorrect: true,
+        });
+
+        // 접선의 기울기: 2 correct answers, both ≥ 1.5× expected → surfaces.
+        const unstable = recommendations.find(item => item.title === "접선의 기울기");
+        expect(unstable).toMatchObject({
+            wrongCount: 0,
+            slowCorrectCount: 2,
+            slowCorrectQuestionNumbers: [1, 2],
+            severity: "watch",
+        });
+        expect(unstable?.reason).toContain("불안정 개념");
+        // 적분 기초: correct and within budget → stays silent.
+        expect(recommendations.find(item => item.title === "적분 기초")).toBeUndefined();
+    });
+
+    it("keeps a single slow question silent (noise gate)", () => {
+        const oneSlow = slowAttempt({
+            questionTimings: [
+                { questionId: 1, questionNumber: 1, totalTimeSec: 150, visitCount: 1, revisitCount: 0, answerChangeCount: 0 },
+            ],
+        });
+        const recommendations = buildLearningRecommendations(slowExam, [oneSlow], {
+            scope: "attempt",
+            attempt: oneSlow,
+            kinds: ["concept"],
+            includeSlowCorrect: true,
+        });
+        expect(recommendations.find(item => item.title === "접선의 기울기")).toBeUndefined();
+    });
+
+    it("escalates severity when a miss combines with repeated slow-corrects", () => {
+        const mixed = slowAttempt({
+            answers: { 1: 1, 2: 2, 3: 5 }, // q3 wrong
+            questionTimings: [
+                { questionId: 1, questionNumber: 1, totalTimeSec: 150, visitCount: 1, revisitCount: 0, answerChangeCount: 0 },
+                { questionId: 2, questionNumber: 2, totalTimeSec: 120, visitCount: 1, revisitCount: 0, answerChangeCount: 0 },
+            ],
+        });
+        const mixedExam: Exam = {
+            ...slowExam,
+            questions: slowExam.questions.map(q => ({ ...q, tags: { ...q.tags, concept: "접선의 기울기" } })),
+        };
+        const recommendations = buildLearningRecommendations(mixedExam, [mixed], {
+            scope: "attempt",
+            attempt: mixed,
+            kinds: ["concept"],
+            includeSlowCorrect: true,
+        });
+        expect(recommendations[0]).toMatchObject({
+            title: "접선의 기울기",
+            wrongCount: 1,
+            slowCorrectCount: 2,
+            severity: "review",
+        });
+        expect(recommendations[0].reason).toContain("정답이지만 오래 걸린 문항 2건");
+    });
+
+    it("falls back to 2× the scope average when no expected time is tagged", () => {
+        // Six questions, no expectedTimeSec tags. avg = (200+200+20·4)/6 = 80
+        // → threshold 160 → only the two 200s qualify as slow-correct.
+        const noExpectationExam: Exam = {
+            id: "exam-noexp",
+            title: "무태그 시험",
+            createdAt: "2026-06-21T10:00:00.000Z",
+            questions: [1, 2, 3, 4, 5, 6].map(n => ({
+                id: n,
+                number: n,
+                answer: 1,
+                choices: 5 as const,
+                score: 5,
+                tags: { concept: n <= 2 ? "접선의 기울기" : "적분 기초" },
+            })),
+        };
+        const attemptNoExpectation = slowAttempt({
+            examId: "exam-noexp",
+            answers: { 1: 1, 2: 1, 3: 1, 4: 1, 5: 1, 6: 1 },
+            questionTimings: [1, 2, 3, 4, 5, 6].map(n => ({
+                questionId: n,
+                questionNumber: n,
+                totalTimeSec: n <= 2 ? 200 : 20,
+                visitCount: 1,
+                revisitCount: 0,
+                answerChangeCount: 0,
+            })),
+        });
+        const recommendations = buildLearningRecommendations(noExpectationExam, [attemptNoExpectation], {
+            scope: "attempt",
+            attempt: attemptNoExpectation,
+            kinds: ["concept"],
+            includeSlowCorrect: true,
+        });
+        const unstable = recommendations.find(item => item.title === "접선의 기울기");
+        expect(unstable?.slowCorrectCount).toBe(2);
+        expect(recommendations.find(item => item.title === "적분 기초")).toBeUndefined();
     });
 });

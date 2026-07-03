@@ -4,6 +4,7 @@ import "./globals.css";
 import ToastHost from "@/components/Toast";
 import PWARegister from "@/components/PWARegister";
 import MobileInstallPrompt from "@/components/MobileInstallPrompt";
+import SyncFlusher from "@/components/SyncFlusher";
 import ViewportHeightSync from "@/components/ViewportHeightSync";
 import { PWA_STARTUP_IMAGE_LINKS } from "@/lib/pwaStartupImages";
 
@@ -96,6 +97,7 @@ export default function RootLayout({
       <body className={`${geistSans.variable} ${geistMono.variable}`}>
         <ViewportHeightSync />
         <PWARegister />
+        <SyncFlusher />
         {children}
         <MobileInstallPrompt />
         <ToastHost />

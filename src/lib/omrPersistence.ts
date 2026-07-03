@@ -1407,10 +1407,71 @@ export async function saveAttempt(attempt: Attempt): Promise<PersistenceResult> 
 
     try {
         await upsertRemoteAttempt(scopedAttempt);
+        clearAttemptPendingSync(scopedAttempt.id);
         return { localSaved, remoteSaved: true };
     } catch (error) {
+        // Remember the failure so the online/visibility flush can retry it —
+        // the list-load resync never fires on the submit → single-review path.
+        queueAttemptPendingSync(scopedAttempt.id);
         return { localSaved, remoteSaved: false, remoteError: errorMessage(error) };
     }
+}
+
+const PENDING_ATTEMPT_SYNC_KEY = "omr_pending_attempt_sync";
+const PENDING_ATTEMPT_SYNC_LIMIT = 100;
+
+export function readPendingAttemptSyncIds(): string[] {
+    if (typeof window === "undefined") return [];
+    try {
+        const parsed = JSON.parse(window.localStorage.getItem(PENDING_ATTEMPT_SYNC_KEY) || "[]") as unknown;
+        return Array.isArray(parsed) ? parsed.filter((id): id is string => typeof id === "string") : [];
+    } catch {
+        return [];
+    }
+}
+
+function writePendingAttemptSyncIds(ids: string[]): void {
+    if (typeof window === "undefined") return;
+    try {
+        const deduped = [...new Set(ids)].slice(-PENDING_ATTEMPT_SYNC_LIMIT);
+        if (deduped.length === 0) window.localStorage.removeItem(PENDING_ATTEMPT_SYNC_KEY);
+        else window.localStorage.setItem(PENDING_ATTEMPT_SYNC_KEY, JSON.stringify(deduped));
+    } catch {
+        // quota — the list-load resync remains the safety net
+    }
+}
+
+export function queueAttemptPendingSync(attemptId: string): void {
+    if (!attemptId) return;
+    writePendingAttemptSyncIds([...readPendingAttemptSyncIds(), attemptId]);
+}
+
+export function clearAttemptPendingSync(attemptId: string): void {
+    const ids = readPendingAttemptSyncIds();
+    if (ids.includes(attemptId)) writePendingAttemptSyncIds(ids.filter(id => id !== attemptId));
+}
+
+/**
+ * Retry remote upserts for attempts whose last save failed remotely. Covers
+ * the common student path (submit → single review, no list load) via the
+ * online/visibilitychange hooks in SyncFlusher. Returns how many are still pending.
+ */
+export async function flushPendingAttemptSync(): Promise<number> {
+    const ids = readPendingAttemptSyncIds();
+    if (ids.length === 0 || !isSupabaseConfigured()) return ids.length;
+    const localAttempts = readLocalAttempts();
+    const remaining: string[] = [];
+    for (const id of ids) {
+        const attempt = localAttempts.find(item => item.id === id);
+        if (!attempt) continue; // deleted locally — nothing left to sync
+        try {
+            await upsertRemoteAttempt(attempt);
+        } catch {
+            remaining.push(id);
+        }
+    }
+    writePendingAttemptSyncIds(remaining);
+    return remaining.length;
 }
 
 export async function deleteExam(id: string): Promise<PersistenceResult> {

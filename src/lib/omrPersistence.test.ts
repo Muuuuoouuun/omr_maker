@@ -20,6 +20,10 @@ import {
     readLocalDeletedExamIds,
     readLocalExam,
     readLocalExams,
+    clearAttemptPendingSync,
+    flushPendingAttemptSync,
+    queueAttemptPendingSync,
+    readPendingAttemptSyncIds,
     sanitizeAttemptPayload,
     sanitizeExamPayload,
     saveLocalExam,
@@ -892,5 +896,40 @@ describe("Exam deletion", () => {
         expect(storage.getItem("omr_draft_exam-1")).toBeNull();
         expect(storage.getItem("omr_draft_exam-1_pid")).toBeNull();
         expect(storage.getItem("omr_draft_exam-2_pid")).not.toBeNull();
+    });
+});
+
+describe("Pending attempt sync registry", () => {
+    it("queues, dedupes, and clears pending attempt ids", () => {
+        const storage = createStorage();
+        vi.stubGlobal("window", { localStorage: storage });
+
+        queueAttemptPendingSync("a1");
+        queueAttemptPendingSync("a2");
+        queueAttemptPendingSync("a1");
+        expect(readPendingAttemptSyncIds()).toEqual(["a1", "a2"]);
+
+        clearAttemptPendingSync("a1");
+        expect(readPendingAttemptSyncIds()).toEqual(["a2"]);
+
+        clearAttemptPendingSync("a2");
+        expect(readPendingAttemptSyncIds()).toEqual([]);
+        expect(storage.getItem("omr_pending_attempt_sync")).toBeNull();
+    });
+
+    it("ignores malformed registry payloads", () => {
+        const storage = createStorage({ omr_pending_attempt_sync: "{not json" });
+        vi.stubGlobal("window", { localStorage: storage });
+        expect(readPendingAttemptSyncIds()).toEqual([]);
+    });
+
+    it("keeps ids pending while Supabase is unconfigured", async () => {
+        const storage = createStorage({ omr_pending_attempt_sync: JSON.stringify(["a1"]) });
+        vi.stubGlobal("window", { localStorage: storage });
+
+        const remaining = await flushPendingAttemptSync();
+
+        expect(remaining).toBe(1);
+        expect(readPendingAttemptSyncIds()).toEqual(["a1"]);
     });
 });

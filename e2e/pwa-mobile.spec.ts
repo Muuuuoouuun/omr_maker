@@ -386,7 +386,7 @@ test.describe("Mobile PWA entry", () => {
 
         await page.getByRole("button", { name: "문제 1번 보기 2" }).click();
         await expect.poll(async () => page.evaluate(() => {
-            const draft = JSON.parse(window.localStorage.getItem("omr_draft_mobile-qa-exam_mobile-qa-student") || "{}");
+            const draft = JSON.parse(window.localStorage.getItem("omr_draft_mobile-qa-exam_mobile-qa-student_base") || "{}");
             return draft.answers?.["1"];
         })).toBe(2);
 
@@ -395,7 +395,7 @@ test.describe("Mobile PWA entry", () => {
             window.dispatchEvent(new Event("pagehide"));
         });
         const backgroundDraft = await page.evaluate(() => (
-            JSON.parse(window.localStorage.getItem("omr_draft_mobile-qa-exam_mobile-qa-student") || "{}")
+            JSON.parse(window.localStorage.getItem("omr_draft_mobile-qa-exam_mobile-qa-student_base") || "{}")
         ));
         expect(backgroundDraft.answers).toMatchObject({ "1": 2, "2": 4 });
         expect(backgroundDraft.drawings).toBeUndefined();
@@ -416,7 +416,7 @@ test.describe("Mobile PWA entry", () => {
             document.dispatchEvent(new Event("visibilitychange"));
         });
         await expect.poll(async () => page.evaluate(() => {
-            const draft = JSON.parse(window.localStorage.getItem("omr_draft_mobile-qa-exam_mobile-qa-student") || "{}");
+            const draft = JSON.parse(window.localStorage.getItem("omr_draft_mobile-qa-exam_mobile-qa-student_base") || "{}");
             return draft.answers?.["3"];
         })).toBe(1);
         await page.evaluate(() => {

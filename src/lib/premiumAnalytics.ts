@@ -32,11 +32,13 @@ export interface SimilarQuestionGroup extends WeaknessGroup {
 }
 
 export interface AttemptBehaviorSummary {
+    elapsedTimeSec: number;
     totalTrackedTimeSec: number;
     averageTimeSec: number;
     slowQuestionNumbers: number[];
     rushedQuestionNumbers: number[];
     revisitedQuestionNumbers: number[];
+    answerChangedQuestionNumbers: number[];
     focusLossCount: number;
     focusLossQuestionNumbers: number[];
 }
@@ -59,6 +61,14 @@ export interface TypeWeaknessGroup {
     questionNumbers: number[];
     wrongCount: number;
     unansweredCount: number;
+    /**
+     * "불안정" signal: answered correctly but well over the time budget
+     * (1.5× the question's expectedTimeSec, or 2× the scope average when no
+     * expected time is tagged). Correct-but-slow concepts are shaky under
+     * exam pressure even when the score looks fine.
+     */
+    slowCorrectCount: number;
+    slowCorrectQuestionNumbers: number[];
     totalCount: number;
     wrongRate: number;
     attemptCount: number;
@@ -79,6 +89,13 @@ export interface LearningRecommendationOptions {
     groupKey?: string;
     kinds?: QuestionResultGroupKind[];
     includeRetakes?: boolean;
+    /**
+     * Surface "불안정 개념" — concepts answered correctly but repeatedly over
+     * the time budget (≥2 slow-corrects) even with zero wrong answers. Off by
+     * default so existing weakness consumers (profiles, kakao, regional) keep
+     * their "weakness = wrong" semantics; opt in where slow signals help.
+     */
+    includeSlowCorrect?: boolean;
     limit?: number;
 }
 
@@ -131,6 +148,7 @@ export interface ExamQuestionResultStat {
     concept?: string;
     unit?: string;
     source?: string;
+    expectedTimeSec?: number;
     score: number;
     totalCount: number;
     correctCount: number;
@@ -147,9 +165,30 @@ export interface ExamQuestionResultStat {
         rate: number;
     };
     averageTimeSec?: number;
+    timeOverExpectedRate?: number;
+    averageVisitCount?: number;
+    revisitRate: number;
+    answerChangeCount: number;
     handwritingStrokeCount: number;
     studentCount: number;
     groupCount: number;
+}
+
+export interface QuestionResultTagStat {
+    key: string;
+    kind: QuestionResultGroupKind;
+    title: string;
+    basis: string;
+    totalCount: number;
+    correctCount: number;
+    wrongCount: number;
+    unansweredCount: number;
+    correctRate: number;
+    wrongRate: number;
+    averageTimeSec?: number;
+    questionNumbers: number[];
+    attemptCount: number;
+    studentCount: number;
 }
 
 export interface AttemptScoreSummary {
@@ -168,6 +207,8 @@ interface MutableTypeGroup {
     questionNumbers: Set<number>;
     wrongCount: number;
     unansweredCount: number;
+    slowCorrectCount: number;
+    slowCorrectQuestionNumbers: Set<number>;
     totalCount: number;
     attemptIds: Set<string>;
     studentKeys: Set<string>;
@@ -179,8 +220,26 @@ interface MutableTypeGroup {
 interface MutableQuestionResultStat extends ExamQuestionResultStat {
     timeSumSec: number;
     timedCount: number;
+    visitSum: number;
+    visitTrackedCount: number;
+    revisitedCount: number;
     studentKeys: Set<string>;
     groupKeys: Set<string>;
+}
+
+interface MutableQuestionResultTagStat {
+    kind: QuestionResultGroupKind;
+    title: string;
+    basis: string;
+    totalCount: number;
+    correctCount: number;
+    wrongCount: number;
+    unansweredCount: number;
+    timeSumSec: number;
+    timedCount: number;
+    questionNumbers: Set<number>;
+    attemptIds: Set<string>;
+    studentKeys: Set<string>;
 }
 
 const BASIS_BY_KIND: Record<GroupKind, string> = {
@@ -400,6 +459,13 @@ function isWrongOrUnansweredResult(result: Pick<QuestionResult, "status" | "isWr
     return result.isWrong || result.isUnanswered || result.status === "wrong" || result.status === "unanswered";
 }
 
+export function attemptElapsedTimeSec(attempt: Pick<Attempt, "startedAt" | "finishedAt">): number {
+    const started = Date.parse(attempt.startedAt || "");
+    const finished = Date.parse(attempt.finishedAt || "");
+    if (!Number.isFinite(started) || !Number.isFinite(finished) || finished <= started) return 0;
+    return Math.round((finished - started) / 1000);
+}
+
 function resolveQuestionStatus(question: Question, selectedAnswer: number | undefined): QuestionResultStatus {
     if (question.answer === undefined || question.answer === null) return "ungraded";
     if (!isAnswered(selectedAnswer)) return "unanswered";
@@ -451,7 +517,35 @@ function resultGroupValues(result: QuestionResult, kind: QuestionResultGroupKind
     return uniqueSorted(result.mistakeTypes || []);
 }
 
-function addTypeGroupValue(groups: Map<string, MutableTypeGroup>, result: QuestionResult, kind: QuestionResultGroupKind, title: string) {
+const SLOW_CORRECT_EXPECTED_RATIO = 1.5;
+const SLOW_CORRECT_AVERAGE_RATIO = 2;
+
+/**
+ * Correct answer that took well over budget — 1.5× the tagged expectedTimeSec,
+ * or 2× the average tracked time of the result set when no expectation exists.
+ */
+function isSlowCorrectResult(result: QuestionResult, averageTimeSec: number): boolean {
+    if (!(result.status === "correct" || result.isCorrect)) return false;
+    if (typeof result.timeSec !== "number" || result.timeSec <= 0) return false;
+    if (typeof result.expectedTimeSec === "number" && result.expectedTimeSec > 0) {
+        return result.timeSec >= result.expectedTimeSec * SLOW_CORRECT_EXPECTED_RATIO;
+    }
+    return averageTimeSec > 0 && result.timeSec >= averageTimeSec * SLOW_CORRECT_AVERAGE_RATIO;
+}
+
+function averageTrackedTimeSec(results: QuestionResult[]): number {
+    const timed = results.filter(result => typeof result.timeSec === "number" && result.timeSec > 0);
+    if (timed.length === 0) return 0;
+    return timed.reduce((sum, result) => sum + (result.timeSec || 0), 0) / timed.length;
+}
+
+function addTypeGroupValue(
+    groups: Map<string, MutableTypeGroup>,
+    result: QuestionResult,
+    kind: QuestionResultGroupKind,
+    title: string,
+    slowCorrect: boolean,
+) {
     const key = groupKey(kind, title);
     const basis = RESULT_BASIS_BY_KIND[kind];
     const missed = isWrongOrUnansweredResult(result);
@@ -463,6 +557,8 @@ function addTypeGroupValue(groups: Map<string, MutableTypeGroup>, result: Questi
         questionNumbers: new Set<number>(),
         wrongCount: 0,
         unansweredCount: 0,
+        slowCorrectCount: 0,
+        slowCorrectQuestionNumbers: new Set<number>(),
         totalCount: 0,
         attemptIds: new Set<string>(),
         studentKeys: new Set<string>(),
@@ -485,6 +581,10 @@ function addTypeGroupValue(groups: Map<string, MutableTypeGroup>, result: Questi
     if (result.status === "unanswered" || result.isUnanswered) {
         existing.unansweredCount += 1;
     }
+    if (slowCorrect) {
+        existing.slowCorrectCount += 1;
+        existing.slowCorrectQuestionNumbers.add(result.questionNumber);
+    }
 
     groups.set(key, existing);
 }
@@ -504,6 +604,9 @@ function sortTypeGroups(groups: TypeWeaknessGroup[]): TypeWeaknessGroup[] {
 function recommendationSeverity(group: TypeWeaknessGroup): LearningRecommendationSeverity {
     if (group.wrongRate >= 70 || group.wrongCount >= 4) return "urgent";
     if (group.wrongRate >= 40 || group.unansweredCount > 0 || group.wrongCount >= 2) return "review";
+    // Mixed signal: an actual miss plus repeated slow-corrects means the
+    // concept is unstable, not just an isolated slip.
+    if (group.wrongCount >= 1 && group.slowCorrectCount >= 2) return "review";
     return "watch";
 }
 
@@ -513,6 +616,7 @@ function recommendationPriority(group: TypeWeaknessGroup): number {
         + group.wrongCount * 8
         + group.studentCount * 3
         + group.unansweredCount * 5
+        + group.slowCorrectCount * 4
         + group.attemptCount
     );
 }
@@ -538,7 +642,12 @@ function recommendationReason(group: TypeWeaknessGroup, scope: LearningRecommend
     const spread = scope === "attempt"
         ? ""
         : ` · 학생 ${group.studentCount}명, 제출 ${group.attemptCount}건`;
-    return `${scopeLabel[scope]}에서 ${group.basis} "${group.title}" 오답/미응답 ${group.wrongCount}/${group.totalCount}${unanswered}${spread}`;
+    if (group.wrongCount === 0 && group.slowCorrectCount > 0) {
+        // Slow-but-correct only: the score held up, the concept didn't.
+        return `${scopeLabel[scope]}에서 ${group.basis} "${group.title}"은 정답이었지만 ${group.slowCorrectCount}문항이 기준 시간을 크게 넘겼습니다(불안정 개념)${spread}`;
+    }
+    const slow = group.slowCorrectCount > 0 ? `, 정답이지만 오래 걸린 문항 ${group.slowCorrectCount}건` : "";
+    return `${scopeLabel[scope]}에서 ${group.basis} "${group.title}" 오답/미응답 ${group.wrongCount}/${group.totalCount}${unanswered}${slow}${spread}`;
 }
 
 function sortLearningRecommendations(recommendations: LearningRecommendation[]): LearningRecommendation[] {
@@ -766,11 +875,13 @@ export function collectQuestionResults(exam: Exam, attempts: Attempt[], scope: Q
 
 export function buildTypeWeaknessGroups(results: QuestionResult[], kind: QuestionResultGroupKind = "concept"): TypeWeaknessGroup[] {
     const groups = new Map<string, MutableTypeGroup>();
+    const averageTimeSec = averageTrackedTimeSec(results);
 
     for (const result of results) {
         if (result.status === "ungraded") continue;
+        const slowCorrect = isSlowCorrectResult(result, averageTimeSec);
         for (const title of resultGroupValues(result, kind)) {
-            addTypeGroupValue(groups, result, kind, title);
+            addTypeGroupValue(groups, result, kind, title, slowCorrect);
         }
     }
 
@@ -786,6 +897,8 @@ export function buildTypeWeaknessGroups(results: QuestionResult[], kind: Questio
             questionNumbers: sortedNumbers(group.questionNumbers),
             wrongCount: group.wrongCount,
             unansweredCount: group.unansweredCount,
+            slowCorrectCount: group.slowCorrectCount,
+            slowCorrectQuestionNumbers: sortedNumbers(group.slowCorrectQuestionNumbers),
             totalCount: group.totalCount,
             wrongRate: roundPercent(group.wrongCount, group.totalCount),
             attemptCount: group.attemptIds.size,
@@ -796,6 +909,74 @@ export function buildTypeWeaknessGroups(results: QuestionResult[], kind: Questio
             recommendedAction: `${group.basis} ${recommendedCount}문항 재추천`,
         };
     }));
+}
+
+export function buildQuestionResultTagStats(
+    results: QuestionResult[],
+    kind: QuestionResultGroupKind = "label",
+): QuestionResultTagStat[] {
+    const groups = new Map<string, MutableQuestionResultTagStat>();
+
+    for (const result of results) {
+        if (result.status === "ungraded") continue;
+        for (const title of resultGroupValues(result, kind)) {
+            const key = groupKey(kind, title);
+            const existing = groups.get(key) || {
+                kind,
+                title,
+                basis: RESULT_BASIS_BY_KIND[kind],
+                totalCount: 0,
+                correctCount: 0,
+                wrongCount: 0,
+                unansweredCount: 0,
+                timeSumSec: 0,
+                timedCount: 0,
+                questionNumbers: new Set<number>(),
+                attemptIds: new Set<string>(),
+                studentKeys: new Set<string>(),
+            };
+
+            existing.totalCount += 1;
+            existing.questionNumbers.add(result.questionNumber);
+            existing.attemptIds.add(result.attemptId);
+            existing.studentKeys.add(studentKeyForResult(result));
+            if (typeof result.timeSec === "number") {
+                existing.timeSumSec += Math.max(0, result.timeSec);
+                existing.timedCount += 1;
+            }
+            if (result.status === "correct" || result.isCorrect) {
+                existing.correctCount += 1;
+            } else if (result.status === "unanswered" || result.isUnanswered) {
+                existing.unansweredCount += 1;
+                existing.wrongCount += 1;
+            } else if (result.status === "wrong" || result.isWrong) {
+                existing.wrongCount += 1;
+            }
+            groups.set(key, existing);
+        }
+    }
+
+    return Array.from(groups.entries()).map(([key, group]) => ({
+        key,
+        kind: group.kind,
+        title: group.title,
+        basis: group.basis,
+        totalCount: group.totalCount,
+        correctCount: group.correctCount,
+        wrongCount: group.wrongCount,
+        unansweredCount: group.unansweredCount,
+        correctRate: roundPercent(group.correctCount, group.totalCount),
+        wrongRate: roundPercent(group.wrongCount, group.totalCount),
+        averageTimeSec: group.timedCount > 0 ? Math.round(group.timeSumSec / group.timedCount) : undefined,
+        questionNumbers: sortedNumbers(group.questionNumbers),
+        attemptCount: group.attemptIds.size,
+        studentCount: group.studentKeys.size,
+    })).sort((a, b) => {
+        if (b.wrongRate !== a.wrongRate) return b.wrongRate - a.wrongRate;
+        if (b.wrongCount !== a.wrongCount) return b.wrongCount - a.wrongCount;
+        if (b.totalCount !== a.totalCount) return b.totalCount - a.totalCount;
+        return a.title.localeCompare(b.title, "ko");
+    });
 }
 
 export function buildStudentTypeWeaknessGroups(
@@ -842,8 +1023,14 @@ export function buildLearningRecommendations(
     const seen = new Set<string>();
     const recommendations: LearningRecommendation[] = [];
 
+    const includeSlowCorrect = options.includeSlowCorrect === true;
     for (const kind of kinds) {
-        for (const group of buildTypeWeaknessGroups(results, kind).filter(item => item.wrongCount > 0)) {
+        // Wrong answers always qualify; slow-but-correct groups need at least
+        // two occurrences before they surface (one slow question is noise), and
+        // only when the caller opted in.
+        for (const group of buildTypeWeaknessGroups(results, kind).filter(item => (
+            item.wrongCount > 0 || (includeSlowCorrect && item.slowCorrectCount >= 2)
+        ))) {
             const retakeQuestionIds = group.recommendedQuestionIds.length > 0
                 ? group.recommendedQuestionIds
                 : group.questionIds;
@@ -1049,6 +1236,7 @@ export function buildExamQuestionResultStats(exam: Exam, attempts: Attempt[]): E
             concept: question.tags?.concept,
             unit: question.tags?.unit,
             source: question.tags?.source,
+            expectedTimeSec: question.tags?.expectedTimeSec,
             score: roundScore(questionWeight(question, exam.questions.length)),
             totalCount: 0,
             correctCount: 0,
@@ -1064,6 +1252,11 @@ export function buildExamQuestionResultStats(exam: Exam, attempts: Attempt[]): E
             groupCount: 0,
             timeSumSec: 0,
             timedCount: 0,
+            visitSum: 0,
+            visitTrackedCount: 0,
+            revisitedCount: 0,
+            revisitRate: 0,
+            answerChangeCount: 0,
             studentKeys: new Set<string>(),
             groupKeys: new Set<string>(),
         });
@@ -1080,6 +1273,16 @@ export function buildExamQuestionResultStats(exam: Exam, attempts: Attempt[]): E
         if (typeof result.timeSec === "number") {
             stat.timeSumSec += Math.max(0, result.timeSec);
             stat.timedCount += 1;
+        }
+        if (typeof result.visitCount === "number") {
+            stat.visitSum += Math.max(0, result.visitCount);
+            stat.visitTrackedCount += 1;
+        }
+        if ((result.revisitCount || 0) > 0 || (result.visitCount || 0) > 1) {
+            stat.revisitedCount += 1;
+        }
+        if (typeof result.answerChangeCount === "number") {
+            stat.answerChangeCount += Math.max(0, result.answerChangeCount);
         }
         if (typeof result.handwritingStrokeCount === "number") {
             stat.handwritingStrokeCount += Math.max(0, result.handwritingStrokeCount);
@@ -1114,6 +1317,7 @@ export function buildExamQuestionResultStats(exam: Exam, attempts: Attempt[]): E
             .sort((a, b) => b.count - a.count);
         const topWrongOption = wrongOptionEntries[0];
         const averageTimeSec = stat.timedCount > 0 ? Math.round(stat.timeSumSec / stat.timedCount) : undefined;
+        const averageVisitCount = stat.visitTrackedCount > 0 ? Math.round((stat.visitSum / stat.visitTrackedCount) * 10) / 10 : undefined;
 
         return {
             questionId: stat.questionId,
@@ -1122,6 +1326,7 @@ export function buildExamQuestionResultStats(exam: Exam, attempts: Attempt[]): E
             concept: stat.concept,
             unit: stat.unit,
             source: stat.source,
+            expectedTimeSec: stat.expectedTimeSec,
             score: stat.score,
             totalCount: stat.totalCount,
             correctCount: stat.correctCount,
@@ -1136,11 +1341,29 @@ export function buildExamQuestionResultStats(exam: Exam, attempts: Attempt[]): E
                 ? { ...topWrongOption, rate: roundPercent(topWrongOption.count, stat.totalCount) }
                 : undefined,
             averageTimeSec,
+            timeOverExpectedRate: averageTimeSec && stat.expectedTimeSec
+                ? roundPercent(averageTimeSec, stat.expectedTimeSec)
+                : undefined,
+            averageVisitCount,
+            revisitRate: roundPercent(stat.revisitedCount, stat.timedCount),
+            answerChangeCount: stat.answerChangeCount,
             handwritingStrokeCount: stat.handwritingStrokeCount,
             studentCount: stat.studentKeys.size,
             groupCount: stat.groupKeys.size,
         };
     }).sort((a, b) => a.questionNumber - b.questionNumber);
+}
+
+export function buildMostMissedQuestionStats(exam: Exam, attempts: Attempt[], limit = 5): ExamQuestionResultStat[] {
+    return buildExamQuestionResultStats(exam, attempts)
+        .filter(stat => stat.totalCount > 0 && stat.wrongCount > 0)
+        .sort((a, b) => {
+            if (b.wrongRate !== a.wrongRate) return b.wrongRate - a.wrongRate;
+            if (b.wrongCount !== a.wrongCount) return b.wrongCount - a.wrongCount;
+            if ((b.averageTimeSec || 0) !== (a.averageTimeSec || 0)) return (b.averageTimeSec || 0) - (a.averageTimeSec || 0);
+            return a.questionNumber - b.questionNumber;
+        })
+        .slice(0, Math.max(0, limit));
 }
 
 export function buildRetakeQuestionIds(exam: Exam, attempt: Attempt): number[] {
@@ -1246,6 +1469,7 @@ export function summarizeAttemptBehavior(attempt: Attempt): AttemptBehaviorSumma
     const focusLossEvents = attempt.focusLossEvents || [];
 
     return {
+        elapsedTimeSec: attemptElapsedTimeSec(attempt),
         totalTrackedTimeSec,
         averageTimeSec,
         slowQuestionNumbers: timings
@@ -1258,6 +1482,10 @@ export function summarizeAttemptBehavior(attempt: Attempt): AttemptBehaviorSumma
             .sort((a, b) => a - b),
         revisitedQuestionNumbers: timings
             .filter(timing => timing.revisitCount > 0 || timing.visitCount > 1)
+            .map(timing => timing.questionNumber)
+            .sort((a, b) => a - b),
+        answerChangedQuestionNumbers: timings
+            .filter(timing => timing.answerChangeCount > 0)
             .map(timing => timing.questionNumber)
             .sort((a, b) => a - b),
         focusLossCount: focusLossEvents.length || attempt.tabFociLostCount || 0,

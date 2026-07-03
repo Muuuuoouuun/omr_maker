@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { stripExamForSolving } from "./examSolvePayload";
+import { stripExamForReview, stripExamForSolving } from "./examSolvePayload";
 import type { Exam } from "@/types/omr";
 
 const EXAM: Exam = {
@@ -43,5 +43,28 @@ describe("stripExamForSolving", () => {
         });
         expect("explanation" in solvable.questions[0]).toBe(false);
         expect(JSON.stringify(solvable)).not.toContain("정답은 3번");
+    });
+});
+
+describe("stripExamForReview", () => {
+    it("keeps answers and explanations for the post-submit review", () => {
+        const reviewable = stripExamForReview({
+            ...EXAM,
+            questions: [{ id: 1, number: 1, answer: 3, choices: 5, score: 10, explanation: "정답은 3번" }],
+        });
+        expect(reviewable.questions[0]).toMatchObject({ answer: 3, explanation: "정답은 3번" });
+    });
+
+    it("still withholds the inline PIN and the answer-key PDF", () => {
+        const reviewable = stripExamForReview(EXAM);
+        expect(reviewable.answerKeyPdf).toBeUndefined();
+        expect(reviewable.answerKeyPdfRef).toBeUndefined();
+        expect(reviewable.accessConfig).toEqual({ type: "public", groupIds: undefined, hasPin: true });
+        expect(JSON.stringify(reviewable)).not.toContain("1234");
+    });
+
+    it("keeps the problem PDF payload so review can render it", () => {
+        const reviewable = stripExamForReview({ ...EXAM, pdfData: "data:application/pdf;base64,BBBB" });
+        expect(reviewable.pdfData).toBe("data:application/pdf;base64,BBBB");
     });
 });

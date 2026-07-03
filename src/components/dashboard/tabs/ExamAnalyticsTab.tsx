@@ -10,11 +10,14 @@ import {
 import { AlertTriangle, CheckCircle, BarChart2, Download, ChevronUp, ChevronDown, Database, List, Target, Users, Lightbulb, MapPin, MessageCircle } from "lucide-react";
 import { PremiumActionLink, PremiumFeatureCard } from "@/components/PremiumFeatureGate";
 import {
+    attemptElapsedTimeSec,
     buildClassExamWeaknessMatrix,
     buildExamQuestionResultStats,
     buildLearningRecommendations,
+    buildQuestionResultTagStats,
     buildRetakeQuestionIds,
     buildSimilarQuestionGroups,
+    collectQuestionResults,
     formatParticipationRateLabel,
     getAttemptQuestionResults,
     studentScopeKeyForAttempt,
@@ -37,6 +40,7 @@ import { formatRegionScopedLabel, resolveExamSelection, resolveExamSelectionInpu
 import { safeRatePercent } from "@/lib/scoreUtils";
 import { serializeCsvRows } from "@/lib/csv";
 import { buildRetakeHref } from "@/lib/retakeLinks";
+import { buildExamRetakeRecoveries, summarizeRetakeRecoveries } from "@/lib/retakeRecovery";
 import { buildKakaoNotificationCandidates, type KakaoNotificationCandidate, type KakaoNotificationCandidateKind } from "@/lib/kakaoNotificationQueue";
 import {
     buildKakaoCandidateMessagePreview,
@@ -302,6 +306,14 @@ export default function ExamAnalyticsTab({
             ? baseRetakeAttempts
             : filterAttemptsByRegion(baseRetakeAttempts, activeRegionKey, rosterStudents, rosterGroups)
     ), [activeRegionKey, baseRetakeAttempts, rosterGroups, rosterStudents]);
+    // Recovery vs the source attempt; sources are looked up in the unfiltered
+    // pool because a retake can cross the current region filter.
+    const retakeRecoverySummary = useMemo(() => {
+        if (!selectedExam || retakeAttempts.length === 0) return null;
+        return summarizeRetakeRecoveries(
+            buildExamRetakeRecoveries(selectedExam, retakeAttempts, allSelectedExamAttempts),
+        );
+    }, [allSelectedExamAttempts, retakeAttempts, selectedExam]);
     const scopedRosterStudents = useMemo(() => (
         activeRegionKey === ALL_REGION_KEY
             ? rosterStudents
@@ -320,12 +332,21 @@ export default function ExamAnalyticsTab({
         const avgScore = scores.reduce((a, b) => a + b, 0) / scores.length;
         const maxScore = Math.max(...scores);
         const minScore = Math.min(...scores);
+        const elapsedTimes = examAttempts.map(attemptElapsedTimeSec).filter(value => value > 0);
+        const avgElapsedTimeSec = elapsedTimes.length > 0
+            ? Math.round(elapsedTimes.reduce((sum, value) => sum + value, 0) / elapsedTimes.length)
+            : 0;
+        const handwritingArchiveCount = examAttempts.filter(attempt => (
+            !!attempt.handwritingArchived && !!(attempt.handwriting?.strokesRef || attempt.drawingsRef)
+        )).length;
 
         return {
             avgScore: Math.round(avgScore),
             maxScore: Math.round(maxScore),
             minScore: Math.round(minScore),
-            count: examAttempts.length
+            count: examAttempts.length,
+            avgElapsedTimeSec,
+            handwritingArchiveCount,
         };
     }, [selectedExam, examAttempts]);
 
@@ -485,7 +506,12 @@ export default function ExamAnalyticsTab({
                 unit: q.tags?.unit,
                 difficulty: q.tags?.difficulty,
                 mistakeTypes: q.tags?.mistakeTypes || [],
-                expectedTimeSec: q.tags?.expectedTimeSec,
+                expectedTimeSec: stat?.expectedTimeSec ?? q.tags?.expectedTimeSec,
+                averageTimeSec: stat?.averageTimeSec,
+                timeOverExpectedRate: stat?.timeOverExpectedRate,
+                averageVisitCount: stat?.averageVisitCount,
+                revisitRate: stat?.revisitRate ?? 0,
+                answerChangeCount: stat?.answerChangeCount ?? 0,
                 correctRate,
                 wrongRate: stat?.wrongRate ?? 0,
                 unansweredRate,
@@ -496,28 +522,6 @@ export default function ExamAnalyticsTab({
                 choices,
             };
         }).sort((a: { correctRate: number }, b: { correctRate: number }) => a.correctRate - b.correctRate); // Sort by hardest first
-    }, [selectedExam, examAttempts]);
-
-    // Calculate Label Analytics for Radar Chart
-    const labelAnalytics = useMemo(() => {
-        if (!selectedExam || examAttempts.length === 0) return [];
-
-        const labelMap: Record<string, { totalPoints: number, earnedPoints: number }> = {};
-
-        for (const attempt of examAttempts) {
-            for (const result of getAttemptQuestionResults(selectedExam, attempt)) {
-                if (!isGradableResult(result)) continue;
-                const label = result.label || '일반';
-                if (!labelMap[label]) labelMap[label] = { totalPoints: 0, earnedPoints: 0 };
-                labelMap[label].totalPoints += result.score;
-                labelMap[label].earnedPoints += result.earnedScore;
-            }
-        }
-
-        return Object.entries(labelMap).map(([label, data]) => ({
-            label,
-            correctRate: safeRatePercent(data.earnedPoints, data.totalPoints)
-        }));
     }, [selectedExam, examAttempts]);
 
     const examLabels = useMemo(() => {
@@ -641,15 +645,19 @@ export default function ExamAnalyticsTab({
     }, [conceptAnalytics, examStats, questionAnalytics, studentScores]);
 
     const examTypeWeaknessGroups = useMemo(() => {
+        // Feeds Pro-gated UI only — skip the recommendation pass when locked.
+        if (!advancedAnalyticsEnabled) return [];
         if (!selectedExam || examAttempts.length === 0) return [];
         return buildLearningRecommendations(selectedExam, examAttempts, {
             scope: "exam",
             kinds: ["concept"],
             limit: 6,
         });
-    }, [selectedExam, examAttempts]);
+    }, [advancedAnalyticsEnabled, selectedExam, examAttempts]);
 
     const classWeaknessMatrixRows = useMemo(() => {
+        // Feeds Pro-gated UI only — skip the per-class matrix when locked.
+        if (!advancedAnalyticsEnabled) return [];
         if (!selectedExam || examAttempts.length === 0) return [];
         return buildClassExamWeaknessMatrix(selectedExam, examAttempts, {
             kinds: ["concept"],
@@ -658,7 +666,7 @@ export default function ExamAnalyticsTab({
             rosterGroups: scopedRosterGroups,
             rosterStudents: scopedRosterStudents,
         });
-    }, [examAttempts, scopedRosterGroups, scopedRosterStudents, selectedExam]);
+    }, [advancedAnalyticsEnabled, examAttempts, scopedRosterGroups, scopedRosterStudents, selectedExam]);
 
     const classTypeWeaknessRows = useMemo(() => classWeaknessMatrixRows
         .flatMap(row => {
@@ -715,6 +723,21 @@ export default function ExamAnalyticsTab({
     const activeClassKey = resolveScopedSelection(classScopeOptions, selectedClassKey);
     const activeStudentKey = resolveScopedSelection(studentScopeOptions, selectedStudentKey);
 
+    const scopedLabelAnalytics = useMemo(() => {
+        if (!selectedExam || examAttempts.length === 0) return [];
+        const results = collectQuestionResults(selectedExam, examAttempts, {
+            groupKey: analysisScope === "class" ? activeClassKey : undefined,
+            studentKey: analysisScope === "student" ? activeStudentKey : undefined,
+        });
+        return buildQuestionResultTagStats(results, "label").map(stat => ({
+            label: stat.title,
+            correctRate: stat.correctRate,
+            wrongRate: stat.wrongRate,
+            totalCount: stat.totalCount,
+            averageTimeSec: stat.averageTimeSec,
+        }));
+    }, [activeClassKey, activeStudentKey, analysisScope, examAttempts, selectedExam]);
+
     const studentWeaknessByAttemptId = useMemo(() => {
         const map = new Map<string, LearningRecommendation>();
         if (!selectedExam || examAttempts.length === 0) return map;
@@ -734,6 +757,8 @@ export default function ExamAnalyticsTab({
     }, [selectedExam, examAttempts]);
 
     const scopedWeaknessGroups = useMemo(() => {
+        // Feeds the Pro-gated 분석 컷 전환 section only.
+        if (!advancedAnalyticsEnabled) return [];
         if (!selectedExam || examAttempts.length === 0) return [];
 
         if (analysisScope === "class") {
@@ -757,7 +782,7 @@ export default function ExamAnalyticsTab({
         }
 
         return examTypeWeaknessGroups.slice(0, 5);
-    }, [activeClassKey, activeStudentKey, analysisScope, examAttempts, examTypeWeaknessGroups, selectedExam]);
+    }, [activeClassKey, activeStudentKey, advancedAnalyticsEnabled, analysisScope, examAttempts, examTypeWeaknessGroups, selectedExam]);
 
     const scopedSummary = useMemo(() => {
         if (analysisScope === "class") {
@@ -788,13 +813,17 @@ export default function ExamAnalyticsTab({
     }, [analysisScope, classScopeOptions.length, studentScopeOptions.length]);
 
     const similarQuestionGroups = useMemo(() => {
+        // Feeds Pro-gated UI only — skip when locked.
+        if (!advancedAnalyticsEnabled) return [];
         if (!selectedExam || examAttempts.length === 0) return [];
         return buildSimilarQuestionGroups(selectedExam, examAttempts)
             .filter(group => group.wrongCount > 0)
             .slice(0, 6);
-    }, [selectedExam, examAttempts]);
+    }, [advancedAnalyticsEnabled, selectedExam, examAttempts]);
 
     const behaviorRows = useMemo(() => {
+        // Feeds the Pro-gated 풀이 행동 신호 section only.
+        if (!advancedAnalyticsEnabled) return [];
         return examAttempts
             .map(attempt => ({
                 attempt,
@@ -815,7 +844,7 @@ export default function ExamAnalyticsTab({
                 return b.summary.totalTrackedTimeSec - a.summary.totalTrackedTimeSec;
             })
             .slice(0, 6);
-    }, [examAttempts]);
+    }, [advancedAnalyticsEnabled, examAttempts]);
 
     const handleSort = (field: 'name' | 'score') => {
         if (sortField === field) {
@@ -1576,7 +1605,14 @@ export default function ExamAnalyticsTab({
                             { label: '최고 점수', value: `${examStats.maxScore}점`, color: 'var(--success)' },
                             { label: '최저 점수', value: `${examStats.minScore}점`, color: 'var(--warning)' },
                             { label: '응시 인원', value: `${examStats.count}명`, color: 'var(--text)' },
+                            { label: '평균 응시시간', value: formatSeconds(examStats.avgElapsedTimeSec), color: '#0ea5e9' },
+                            { label: '필기 보관', value: `${examStats.handwritingArchiveCount}건`, color: '#7c3aed' },
                             { label: '재시험 제출', value: `${retakeAttempts.length}건`, color: '#0f766e' },
+                            ...(retakeRecoverySummary?.recoveryRate !== undefined ? [{
+                                label: '재시험 회복률',
+                                value: `${retakeRecoverySummary.recoveryRate}% (${retakeRecoverySummary.recoveredCount}/${retakeRecoverySummary.targetCount})`,
+                                color: '#16a34a',
+                            }] : []),
                         ].map((stat, i) => (
                             <div key={i} className="card" style={{ padding: '1.5rem', textAlign: 'center', borderTop: `4px solid ${stat.color}` }}>
                                 <div style={{ fontSize: '0.9rem', color: 'var(--muted)', marginBottom: '0.5rem' }}>{stat.label}</div>
@@ -2274,14 +2310,14 @@ export default function ExamAnalyticsTab({
                                         카테고리별 평균 정답률 레이더
                                     </p>
                                 </div>
-                                {labelAnalytics.length > 0 && (
+                                {scopedLabelAnalytics.length > 0 && (
                                     <span className="badge badge-primary" style={{ fontSize: '0.7rem' }}>
-                                        {labelAnalytics.length}개 라벨
+                                        {scopedLabelAnalytics.length}개 라벨
                                     </span>
                                 )}
                             </div>
 
-                            {labelAnalytics.length > 0 ? (
+                            {scopedLabelAnalytics.length > 0 ? (
                                 <>
                                     <div style={{ height: '300px', width: '100%', minWidth: 0, position: 'relative' }}>
                                         <ResponsiveContainer
@@ -2291,7 +2327,7 @@ export default function ExamAnalyticsTab({
                                             minHeight={300}
                                             initialDimension={{ width: 560, height: 300 }}
                                         >
-                                            <RadarChart cx="50%" cy="50%" outerRadius="72%" data={labelAnalytics} startAngle={90} endAngle={-270}>
+                                            <RadarChart cx="50%" cy="50%" outerRadius="72%" data={scopedLabelAnalytics} startAngle={90} endAngle={-270}>
                                                 <defs>
                                                     <linearGradient id="radarGradient" x1="0" y1="0" x2="1" y2="1">
                                                         <stop offset="0%" stopColor="#4f46e5" stopOpacity={0.7} />
@@ -2364,8 +2400,8 @@ export default function ExamAnalyticsTab({
 
                                     {/* Premium Legend */}
                                     <div className="radar-legend">
-                                        {labelAnalytics.map((item, idx) => {
-                                            const hue = (idx * 360) / labelAnalytics.length;
+                                        {scopedLabelAnalytics.map((item, idx) => {
+                                            const hue = (idx * 360) / scopedLabelAnalytics.length;
                                             const dotColor = `hsl(${(hue + 230) % 360}, 75%, 60%)`;
                                             const rateColor = item.correctRate >= 80 ? 'var(--success)'
                                                 : item.correctRate >= 50 ? 'var(--primary)'
@@ -2412,6 +2448,7 @@ export default function ExamAnalyticsTab({
                                                 {q.topWrongOption && q.topWrongOption.rate > 0
                                                     ? `${q.topWrongOption.option}번 선택 쏠림 ${q.topWrongOption.rate}% · 변별도 ${q.discrimination}%`
                                                     : `미응답 ${q.unansweredRate}% · 변별도 ${q.discrimination}%`}
+                                                {q.averageTimeSec ? ` · 평균 ${formatSeconds(q.averageTimeSec)}` : ""}
                                             </div>
                                         </div>
                                         <div style={{ textAlign: 'right' }}>
@@ -2464,7 +2501,7 @@ export default function ExamAnalyticsTab({
                             세부사항: 문항별 선택률
                         </h4>
                         <div style={{ overflowX: 'auto' }}>
-                            <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left', minWidth: '600px' }}>
+                            <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left', minWidth: '820px' }}>
                                 <thead>
                                     <tr style={{ background: 'var(--surface)', color: 'var(--muted)', fontSize: '0.85rem' }}>
                                         <th style={{ padding: '0.75rem 1rem', borderRadius: 'var(--radius-md) 0 0 var(--radius-md)' }}>문항</th>
@@ -2472,6 +2509,8 @@ export default function ExamAnalyticsTab({
                                         <th style={{ padding: '0.75rem 1rem' }}>정답률</th>
                                         <th style={{ padding: '0.75rem 1rem' }}>변별도</th>
                                         <th style={{ padding: '0.75rem 1rem' }}>미응답</th>
+                                        <th style={{ padding: '0.75rem 1rem' }}>평균시간</th>
+                                        <th style={{ padding: '0.75rem 1rem' }}>재방문/변경</th>
                                         {Array.from({ length: maxChoiceCount }, (_, i) => i + 1).map(opt => (
                                             <th
                                                 key={opt}
@@ -2528,6 +2567,20 @@ export default function ExamAnalyticsTab({
                                                 </td>
                                                 <td style={{ padding: '0.75rem 1rem', fontWeight: 700, color: q.unansweredRate >= 20 ? 'var(--error)' : 'var(--muted)' }}>
                                                     {q.unansweredRate}%
+                                                </td>
+                                                <td style={{ padding: '0.75rem 1rem', color: q.timeOverExpectedRate && q.timeOverExpectedRate >= 130 ? 'var(--warning)' : 'var(--muted)', fontWeight: 800 }}>
+                                                    {q.averageTimeSec ? formatSeconds(q.averageTimeSec) : '-'}
+                                                    {q.timeOverExpectedRate ? (
+                                                        <div style={{ fontSize: '0.7rem', color: 'var(--muted)', marginTop: '0.12rem', fontWeight: 700 }}>
+                                                            기대 {q.timeOverExpectedRate}%
+                                                        </div>
+                                                    ) : null}
+                                                </td>
+                                                <td style={{ padding: '0.75rem 1rem', color: q.revisitRate >= 40 ? 'var(--primary)' : 'var(--muted)', fontWeight: 800 }}>
+                                                    {q.revisitRate}%
+                                                    <div style={{ fontSize: '0.7rem', color: 'var(--muted)', marginTop: '0.12rem', fontWeight: 700 }}>
+                                                        변경 {q.answerChangeCount}회
+                                                    </div>
                                                 </td>
                                                 {Array.from({ length: maxChoiceCount }, (_, optIdx) => {
                                                     const optNum = optIdx + 1;
@@ -2631,7 +2684,9 @@ export default function ExamAnalyticsTab({
                                                                 {topWeakness.title}
                                                             </div>
                                                             <div style={{ fontSize: '0.74rem', color: 'var(--muted)', marginTop: '0.18rem' }}>
-                                                                {topWeakness.questionNumbers.join(', ')}번 · {topWeakness.wrongRate}%
+                                                                {topWeakness.wrongCount > 0
+                                                                    ? `${topWeakness.questionNumbers.join(', ')}번 · 오답률 ${topWeakness.wrongRate}%`
+                                                                    : `${topWeakness.slowCorrectQuestionNumbers.join(', ')}번 · 시간 지연 ${topWeakness.slowCorrectCount}문항`}
                                                             </div>
                                                         </div>
                                                     ) : (

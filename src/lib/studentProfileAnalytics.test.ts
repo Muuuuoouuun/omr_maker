@@ -45,6 +45,9 @@ function attempt(partial: Partial<Attempt>): Attempt {
         handwritingArchived: partial.handwritingArchived,
         drawingPageCount: partial.drawingPageCount,
         questionDrawings: partial.questionDrawings,
+        questionTimings: partial.questionTimings,
+        focusLossEvents: partial.focusLossEvents,
+        tabFociLostCount: partial.tabFociLostCount,
         retake: partial.retake,
         status: partial.status || "completed",
     };
@@ -67,6 +70,13 @@ describe("student profile analytics", () => {
                 handwritingArchived: true,
                 drawingsRef: { store: "indexeddb", key: "drawing-new" },
                 questionDrawings: [{ questionId: 3, questionNumber: 3, page: 1, strokeCount: 12 }],
+                questionTimings: [
+                    { questionId: 2, questionNumber: 2, totalTimeSec: 30, visitCount: 1, revisitCount: 0, answerChangeCount: 1 },
+                    { questionId: 3, questionNumber: 3, totalTimeSec: 90, visitCount: 2, revisitCount: 1, answerChangeCount: 0 },
+                ],
+                focusLossEvents: [
+                    { at: "2026-06-15T10:20:00.000Z", questionId: 3, questionNumber: 3, count: 1, reason: "hidden" },
+                ],
             }),
             attempt({
                 id: "other-class",
@@ -82,6 +92,10 @@ describe("student profile analytics", () => {
         expect(insight.latestScore).toBe(67);
         expect(insight.bestScore).toBe(67);
         expect(insight.trendDelta).toBe(34);
+        expect(insight.averageElapsedTimeSec).toBe(1800);
+        expect(insight.averageQuestionTimeSec).toBe(60);
+        expect(insight.totalTrackedTimeSec).toBe(120);
+        expect(insight.focusLossCount).toBe(1);
         expect(insight.wrongQuestionCount).toBe(1);
         expect(insight.unansweredQuestionCount).toBe(2);
         expect(insight.handwritingArchiveCount).toBe(1);
@@ -91,7 +105,29 @@ describe("student profile analytics", () => {
             handwritingArchived: true,
             handwritingLabel: "1문항",
             unansweredQuestionNumbers: [3],
+            elapsedTimeSec: 1800,
+            averageQuestionTimeSec: 60,
+            slowQuestionNumbers: [3],
+            revisitedQuestionNumbers: [3],
+            answerChangedQuestionNumbers: [2],
+            focusLossCount: 1,
             isRetake: false,
+        });
+        expect(insight.mostMissedQuestions[0]).toMatchObject({
+            examTitle: "6월 모의고사",
+            questionNumber: 3,
+            wrongCount: 2,
+            totalCount: 2,
+            wrongRate: 100,
+            averageTimeSec: 90,
+        });
+        expect(insight.tagStats.find(stat => stat.title === "문법")).toMatchObject({
+            totalCount: 4,
+            correctCount: 1,
+            wrongCount: 3,
+            unansweredCount: 2,
+            wrongRate: 75,
+            averageTimeSec: 60,
         });
         expect(insight.weaknessGroups[0]).toMatchObject({
             examTitle: "6월 모의고사",

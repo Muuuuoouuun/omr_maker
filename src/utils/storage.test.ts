@@ -6,6 +6,7 @@ import {
     clearSession,
     consumePendingGuestMerge,
     getSession,
+    guestLoginIdFor,
     mergeGuestAttempts,
     previewGuestMerge,
     queueGuestMerge,
@@ -122,6 +123,30 @@ describe("student storage helpers", () => {
         expect(JSON.parse(sessionStorage.getItem(STORAGE_KEYS.STUDENT_SESSION) || "{}")).toMatchObject({
             studentId: "class-a::김학생",
         });
+    });
+
+    it("assigns a stable temporary login id to guest sessions", () => {
+        const localStorage = createStorage();
+        const sessionStorage = createStorage();
+        stubBrowserStorage(localStorage, sessionStorage);
+        const guestId = "abc123xyz";
+
+        saveSession({
+            studentId: `guest:${guestId}`,
+            name: "Guest Student",
+            isGuest: true,
+            identityType: "guest",
+            guestId,
+        });
+
+        expect(getSession()).toMatchObject({
+            studentId: `guest:${guestId}`,
+            loginId: "GUEST-ABC123",
+            guestId,
+            isGuest: true,
+            identityType: "guest",
+        });
+        expect(guestLoginIdFor(guestId)).toBe("GUEST-ABC123");
     });
 
     it("clears both active and persistent student sessions on logout", () => {

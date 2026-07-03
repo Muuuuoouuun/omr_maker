@@ -100,6 +100,14 @@ export default defineConfig({
             NEXT_PUBLIC_SUPABASE_URL: "",
             NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY: "",
             NEXT_PUBLIC_SUPABASE_ANON_KEY: "",
+            // Neutralize developer-local teacher accounts (.env.local) so the
+            // deterministic dev default (admin/admin123) that e2e helpers use
+            // always applies. Next.js keeps existing (even empty) process.env
+            // keys over .env.local values.
+            TEACHER_ACCOUNTS: "",
+            TEACHER_LOGIN_ID: "",
+            TEACHER_PASSWORD: "",
+            TEACHER_PLAN: "",
         },
     },
 });

@@ -34,7 +34,10 @@ describe("deployment readiness", () => {
             OMR_PRODUCTION_RLS_APPLIED: "true",
         });
 
-        expect(summary.label).toBe("배포 보강 권장");
+        // Missing service-role key in production with public sync is an error:
+        // the student server boundary (answer hiding, server grading) would
+        // silently degrade to client trust.
+        expect(summary.label).toBe("배포 확인 필요");
         expect(summary.credentialCount).toBe(1);
         expect(summary.checks).toContainEqual(expect.objectContaining({
             key: "teacher_credentials",
@@ -46,7 +49,25 @@ describe("deployment readiness", () => {
             tone: "warning",
             detail: expect.stringContaining("TEACHER_SESSION_SECRET"),
         }));
+        expect(summary.checks).toContainEqual(expect.objectContaining({
+            key: "supabase_service_role",
+            tone: "error",
+            detail: expect.stringContaining("SUPABASE_SERVICE_ROLE_KEY"),
+        }));
         expect(JSON.stringify(summary)).not.toContain("super-secret");
+    });
+
+    it("keeps the missing service-role key as a warning outside production", () => {
+        const summary = buildDeploymentReadiness({
+            NODE_ENV: "development",
+            NEXT_PUBLIC_SUPABASE_URL: "https://example.supabase.co",
+            NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY: "sb_publishable_public",
+        });
+
+        expect(summary.checks).toContainEqual(expect.objectContaining({
+            key: "supabase_service_role",
+            tone: "warning",
+        }));
     });
 
     it("recognizes explicit server session and service role readiness", () => {

@@ -9,11 +9,12 @@ import TrendChart from "@/components/dashboard/TrendChart";
 import ExamListBlock from "@/components/dashboard/ExamListBlock";
 import ExamActionsMenu, { ExamActionKind } from "@/components/dashboard/ExamActionsMenu";
 import { toast } from "@/components/Toast";
-import { Users, BarChart3, PlusCircle, Activity, Download } from "lucide-react";
+import { Users, BarChart3, PlusCircle, Activity, Download, MessageSquare } from "lucide-react";
 import { copyStoredData } from "@/utils/blobStore";
 import { secureRandomId } from "@/utils/ids";
 import { deleteExam, saveExam } from "@/lib/omrPersistence";
-import { formatKoreanDate } from "@/lib/pure";
+import { collectStudentQuestionInbox } from "@/lib/studentQuestions";
+import { formatKoreanDate, formatKoreanDateTime } from "@/lib/pure";
 import { safeRatePercent } from "@/lib/scoreUtils";
 import { buildExamSummaryRows, splitExamSummaryRows } from "@/lib/dashboardSummary";
 import { buildDashboardStatsCsv } from "@/lib/dashboardStatsExport";
@@ -203,6 +204,9 @@ export default function OverviewTab({ exams: examsProp, attempts, stats, trendDa
     );
     const examSummaryGroups = useMemo(() => splitExamSummaryRows(examSummaryRows), [examSummaryRows]);
 
+    const questionInbox = useMemo(() => collectStudentQuestionInbox(attempts), [attempts]);
+    const hasStudentQuestions = questionInbox.pending.length > 0 || questionInbox.answered.length > 0;
+
     const displayExams = activeTab === 'ongoing' ? examSummaryGroups.ongoing : examSummaryGroups.completed;
 
     const handleSendAlarm = (examTitle: string) => {
@@ -239,36 +243,110 @@ export default function OverviewTab({ exams: examsProp, attempts, stats, trendDa
             <div className="bento-card col-span-2" style={{ padding: '1.5rem', display: 'flex', flexDirection: 'column' }}>
                 <div style={{ marginBottom: '1.5rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                     <h3 style={{ fontSize: '1.1rem', fontWeight: 700, color: 'var(--foreground)' }}>
-                        Quick Action <span style={{ fontWeight: 400, color: 'var(--muted)', fontSize: '0.9rem' }}>Do Some Quickly</span>
+                        빠른 작업 <span style={{ fontWeight: 400, color: 'var(--muted)', fontSize: '0.9rem' }}>자주 쓰는 기능 바로가기</span>
                     </h3>
                 </div>
                 <div className="overview-quick-actions-grid" style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '1rem', flex: 1 }}>
                     <Link href="/create" style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: '0.5rem', padding: '1rem', background: 'rgba(56, 189, 248, 0.1)', borderRadius: 'var(--radius-lg)', color: '#0ea5e9', transition: 'all 0.2s' }} className="card-hover">
                         <PlusCircle size={24} />
-                        <span style={{ fontSize: '0.85rem', fontWeight: 600 }}>Create Exam</span>
+                        <span style={{ fontSize: '0.85rem', fontWeight: 600 }}>시험 제작</span>
                     </Link>
                     <Link href="/teacher/live" style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: '0.5rem', padding: '1rem', background: 'rgba(239, 68, 68, 0.1)', borderRadius: 'var(--radius-lg)', color: '#ef4444', transition: 'all 0.2s' }} className="card-hover">
                         <Activity size={24} />
-                        <span style={{ fontSize: '0.85rem', fontWeight: 600 }}>Live Results</span>
+                        <span style={{ fontSize: '0.85rem', fontWeight: 600 }}>실시간 응시</span>
                     </Link>
                     <Link href="/teacher/users" style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: '0.5rem', padding: '1rem', background: 'rgba(34, 197, 94, 0.1)', borderRadius: 'var(--radius-lg)', color: '#22c55e', transition: 'all 0.2s' }} className="card-hover">
                         <Users size={24} />
-                        <span style={{ fontSize: '0.85rem', fontWeight: 600 }}>Manage Users</span>
+                        <span style={{ fontSize: '0.85rem', fontWeight: 600 }}>학생 관리</span>
                     </Link>
                     <Link href="/teacher/dashboard?tab=exam" style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: '0.5rem', padding: '1rem', background: 'rgba(245, 158, 11, 0.1)', borderRadius: 'var(--radius-lg)', color: '#f59e0b', transition: 'all 0.2s' }} className="card-hover">
                         <BarChart3 size={24} />
-                        <span style={{ fontSize: '0.85rem', fontWeight: 600 }}>Analytics</span>
+                        <span style={{ fontSize: '0.85rem', fontWeight: 600 }}>시험 분석</span>
                     </Link>
                     <Link href="/teacher/settings" style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: '0.5rem', padding: '1rem', background: 'rgba(99, 102, 241, 0.1)', borderRadius: 'var(--radius-lg)', color: '#6366f1', transition: 'all 0.2s' }} className="card-hover">
                         <svg width="24" height="24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>
-                        <span style={{ fontSize: '0.85rem', fontWeight: 600 }}>Settings</span>
+                        <span style={{ fontSize: '0.85rem', fontWeight: 600 }}>설정</span>
                     </Link>
                     <Link href="/teacher/billing" style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: '0.5rem', padding: '1rem', background: 'rgba(168, 85, 247, 0.1)', borderRadius: 'var(--radius-lg)', color: '#a855f7', transition: 'all 0.2s' }} className="card-hover">
                         <svg width="24" height="24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="2" y="5" width="20" height="14" rx="2"></rect><line x1="2" y1="10" x2="22" y2="10"></line></svg>
-                        <span style={{ fontSize: '0.85rem', fontWeight: 600 }}>Billing</span>
+                        <span style={{ fontSize: '0.85rem', fontWeight: 600 }}>요금제</span>
                     </Link>
                 </div>
             </div>
+
+            {/* 1.5 Student question inbox — shown only when questions exist */}
+            {hasStudentQuestions && (
+                <div className="bento-card col-span-2" style={{ padding: '1.5rem', display: 'flex', flexDirection: 'column' }}>
+                    <div style={{ marginBottom: '1rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '0.75rem' }}>
+                        <h3 style={{ fontSize: '1.1rem', fontWeight: 700, color: 'var(--foreground)', display: 'inline-flex', alignItems: 'center', gap: '0.45rem' }}>
+                            <MessageSquare size={18} style={{ color: '#0f766e' }} />
+                            학생 질문
+                        </h3>
+                        <span style={{
+                            background: questionInbox.pending.length > 0 ? 'rgba(15,118,110,0.12)' : 'var(--background)',
+                            color: questionInbox.pending.length > 0 ? '#0f766e' : 'var(--muted)',
+                            padding: '0.3rem 0.6rem',
+                            borderRadius: 'var(--radius-full)',
+                            fontSize: '0.75rem',
+                            fontWeight: 700,
+                            whiteSpace: 'nowrap',
+                        }}>
+                            대기 {questionInbox.pending.length} · 답변 {questionInbox.answered.length}
+                        </span>
+                    </div>
+                    {questionInbox.pending.length === 0 ? (
+                        <div style={{ color: 'var(--muted)', fontSize: '0.88rem', padding: '0.5rem 0' }}>
+                            대기 중인 질문이 없습니다. 답변한 질문은 학생 리뷰 화면에 표시됩니다.
+                        </div>
+                    ) : (
+                        <div style={{ display: 'grid', gap: '0.55rem', flex: 1 }}>
+                            {questionInbox.pending.slice(0, 5).map(entry => (
+                                <Link
+                                    key={`${entry.attemptId}:${entry.note.questionId}`}
+                                    href={`/teacher/attempt/${entry.attemptId}`}
+                                    className="card-hover"
+                                    style={{
+                                        display: 'flex',
+                                        alignItems: 'baseline',
+                                        gap: '0.6rem',
+                                        padding: '0.65rem 0.8rem',
+                                        borderRadius: 'var(--radius-md)',
+                                        border: '1px solid var(--border)',
+                                        background: 'var(--background)',
+                                        minWidth: 0,
+                                    }}
+                                >
+                                    <span style={{ fontWeight: 800, fontSize: '0.82rem', color: 'var(--foreground)', whiteSpace: 'nowrap' }}>
+                                        {entry.studentName}
+                                    </span>
+                                    <span style={{ color: 'var(--muted)', fontSize: '0.74rem', whiteSpace: 'nowrap' }}>
+                                        {entry.examTitle} · {entry.note.questionNumber}번
+                                    </span>
+                                    <span style={{
+                                        flex: 1,
+                                        minWidth: 0,
+                                        color: 'var(--foreground)',
+                                        fontSize: '0.82rem',
+                                        overflow: 'hidden',
+                                        textOverflow: 'ellipsis',
+                                        whiteSpace: 'nowrap',
+                                    }}>
+                                        {entry.note.body}
+                                    </span>
+                                    <span style={{ color: 'var(--muted)', fontSize: '0.7rem', whiteSpace: 'nowrap' }}>
+                                        {formatKoreanDateTime(entry.note.createdAt)}
+                                    </span>
+                                </Link>
+                            ))}
+                            {questionInbox.pending.length > 5 && (
+                                <div style={{ color: 'var(--muted)', fontSize: '0.76rem', fontWeight: 700 }}>
+                                    외 {questionInbox.pending.length - 5}건 — 각 응시 상세에서 답변할 수 있습니다.
+                                </div>
+                            )}
+                        </div>
+                    )}
+                </div>
+            )}
 
             {/* 2. Score Trend */}
             <div className="bento-card col-span-2" style={{
@@ -277,8 +355,8 @@ export default function OverviewTab({ exams: examsProp, attempts, stats, trendDa
                 position: 'relative', overflow: 'hidden'
             }}>
                 <div style={{ marginBottom: '1.5rem', position: 'relative', zIndex: 1 }}>
-                    <h3 style={{ fontSize: '1.25rem', fontWeight: 700 }}>Avg. Score Trend</h3>
-                    <p style={{ opacity: 0.8, fontSize: '0.95rem' }}>Overview of last 7 exams performance</p>
+                    <h3 style={{ fontSize: '1.25rem', fontWeight: 700 }}>평균 점수 추이</h3>
+                    <p style={{ opacity: 0.8, fontSize: '0.95rem' }}>최근 7개 시험의 평균 점수 흐름</p>
                 </div>
 
                 <div style={{ position: 'absolute', top: '-20%', right: '-10%', width: '200px', height: '200px', background: 'radial-gradient(circle, rgba(255,255,255,0.2) 0%, transparent 70%)' }}></div>

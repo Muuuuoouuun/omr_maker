@@ -30,6 +30,9 @@ export default defineConfig({
         timeout: 60_000,
         env: {
             ...process.env,
+            // Neutralize developer-local account JSON — TEACHER_ACCOUNTS takes
+            // precedence over TEACHER_LOGIN_ID/TEACHER_PASSWORD when present.
+            TEACHER_ACCOUNTS: "",
             TEACHER_LOGIN_ID: "admin",
             TEACHER_NAME: "Demo Admin",
             TEACHER_PASSWORD: "admin123",

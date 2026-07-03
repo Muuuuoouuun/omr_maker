@@ -556,7 +556,7 @@ test.describe("Teacher and student full journey", () => {
         await expect(page).toHaveURL(/\/student\/review\/\d+$/);
         await expect(page.getByText("결과 리포트")).toBeVisible();
         await expect(page.getByText(TEST_EXAM_TITLE)).toBeVisible();
-        await expect(page.getByText("20 / 30 점")).toBeVisible();
+        await expect(page.getByText("20 / 30점")).toBeVisible();
 
         const storedAttempts = await page.evaluate(() => JSON.parse(window.localStorage.getItem("omr_attempts") || "[]"));
         expect(storedAttempts).toHaveLength(1);
@@ -572,14 +572,14 @@ test.describe("Teacher and student full journey", () => {
         });
 
         await loginAsTeacher(page, "/teacher/dashboard?tab=exam");
-        await expect(page.getByRole("heading", { name: "Analytics Center" })).toBeVisible();
+        await expect(page.getByRole("heading", { name: "분석 센터" })).toBeVisible();
         await expect(page.getByText("학생별 점수 및 성취도")).toBeVisible();
         await expect(page.getByRole("row", { name: new RegExp(`${TEST_STUDENT_NAME}.*20점`) })).toBeVisible();
     });
 
     test("creates an exam through the teacher UI before student submission and analytics", async ({ page }) => {
         await loginAsTeacher(page, "/create");
-        await expect(page.getByText("Smart Editor")).toBeVisible();
+        await expect(page.getByText("스마트 에디터")).toBeVisible();
 
         await page.getByLabel("시험 제목").fill(CREATED_EXAM_TITLE);
         await page.getByLabel("빠른 정답 입력").fill(CREATED_ANSWER_KEY);
@@ -640,10 +640,10 @@ test.describe("Teacher and student full journey", () => {
         await expect(page).toHaveURL(/\/student\/review\/\d+$/);
         await expect(page.getByText("결과 리포트")).toBeVisible();
         await expect(page.getByText(CREATED_EXAM_TITLE)).toBeVisible();
-        await expect(page.getByText("100 / 100 점")).toBeVisible();
+        await expect(page.getByText("100 / 100점")).toBeVisible();
 
         await loginAsTeacher(page, "/teacher/dashboard");
-        await expect(page.getByRole("heading", { name: "Analytics Center" })).toBeVisible();
+        await expect(page.getByRole("heading", { name: "분석 센터" })).toBeVisible();
         await expect(page.getByText(CREATED_EXAM_TITLE)).toBeVisible();
         await expect(page.getByRole("button", { name: "통계 CSV" })).toBeVisible();
 
@@ -654,7 +654,7 @@ test.describe("Teacher and student full journey", () => {
 
     test("covers creation entry, student submission, teacher analytics, and statistics CSV", async ({ page }) => {
         await loginAsTeacher(page, "/create");
-        await expect(page.getByText("Smart Editor")).toBeVisible();
+        await expect(page.getByText("스마트 에디터")).toBeVisible();
         await expect(page.getByRole("button", { name: "배포하기" })).toBeVisible();
 
         await seedExamAndStudent(page);
@@ -679,7 +679,7 @@ test.describe("Teacher and student full journey", () => {
         await expect(page).toHaveURL(/\/student\/review\/\d+$/);
         await expect(page.getByText("결과 리포트")).toBeVisible();
         await expect(page.getByText(TEST_EXAM_TITLE)).toBeVisible();
-        await expect(page.getByText("20 / 30 점")).toBeVisible();
+        await expect(page.getByText("20 / 30점")).toBeVisible();
 
         const storedAttempts = await page.evaluate(() => JSON.parse(window.localStorage.getItem("omr_attempts") || "[]"));
         expect(storedAttempts).toHaveLength(1);
@@ -695,7 +695,7 @@ test.describe("Teacher and student full journey", () => {
         expect(storedAttempts[0].questionResults).toHaveLength(3);
 
         await loginAsTeacher(page, "/teacher/dashboard");
-        await expect(page.getByRole("heading", { name: "Analytics Center" })).toBeVisible();
+        await expect(page.getByRole("heading", { name: "분석 센터" })).toBeVisible();
         await expect(page.getByText(TEST_EXAM_TITLE)).toBeVisible();
         await expect(page.getByRole("button", { name: "통계 CSV" })).toBeVisible();
 
@@ -759,7 +759,7 @@ test.describe("Teacher and student full journey", () => {
         await page.setViewportSize({ width: 820, height: 1180 });
 
         await loginAsTeacher(page, "/teacher/dashboard?tab=exam");
-        await expect(page.getByRole("heading", { name: "Analytics Center" })).toBeVisible();
+        await expect(page.getByRole("heading", { name: "분석 센터" })).toBeVisible();
         await expect(page.getByText("학생별 점수 및 성취도")).toBeVisible();
 
         const studentScoreRow = page.getByRole("row", { name: new RegExp(`${TEST_STUDENT_NAME}.*20점`) });
@@ -805,10 +805,10 @@ test.describe("Teacher and student full journey", () => {
         await expect(page).toHaveURL(/\/student\/review\/attempt-tablet-analytics$/);
         await expect(page.getByText("결과 리포트")).toBeVisible();
         await expect(page.getByRole("heading", { name: TEST_EXAM_TITLE })).toBeVisible();
-        await expect(page.getByText("20 / 30 점")).toBeVisible();
+        await expect(page.getByText("20 / 30점")).toBeVisible();
         await expect(page.getByText("오답 재시험")).toBeVisible();
-        await expect(page.getByRole("link", { name: "오답만 재시험" })).toBeVisible();
-        await expect(page.getByText("유형 재추천 큐")).toBeVisible();
+        await expect(page.getByRole("link", { name: "오답만" })).toBeVisible();
+        await expect(page.getByText("유형 큐")).toBeVisible();
 
         hasBodyOverflow = await page.evaluate(() => document.documentElement.scrollWidth > document.documentElement.clientWidth + 1);
         expect(hasBodyOverflow).toBe(false);

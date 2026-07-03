@@ -1927,6 +1927,18 @@ function questionNumberLabel(numbers: number[]): string {
     return numbers.length > 0 ? numbers.map(number => `${number}번`).join(", ") : "문항 없음";
 }
 
+function formatDuration(totalSec?: number): string {
+    const safeSec = Math.max(0, Math.round(totalSec || 0));
+    if (safeSec <= 0) return "기록 없음";
+    if (safeSec < 60) return `${safeSec}초`;
+    const minutes = Math.floor(safeSec / 60);
+    const seconds = safeSec % 60;
+    if (minutes < 60) return seconds > 0 ? `${minutes}분 ${seconds}초` : `${minutes}분`;
+    const hours = Math.floor(minutes / 60);
+    const restMinutes = minutes % 60;
+    return restMinutes > 0 ? `${hours}시간 ${restMinutes}분` : `${hours}시간`;
+}
+
 function weaknessRetakeHref(weakness: StudentProfileWeaknessInsight | GroupProfileWeaknessInsight): string {
     return buildRetakeHref(weakness.examId, weakness.sourceAttemptId, weakness.retakeQuestionIds, weakness.retakeMode, {
         labels: weakness.retakeLabels,
@@ -2036,6 +2048,8 @@ function GroupProfileModal({
                     <ProfileMetric label="재시험" value={`${profile.retakeAttemptCount}건`} color="#0f766e" icon={<RefreshCw size={15} />} />
                     <ProfileMetric label="응시 학생" value={`${profile.activeStudentCount}명`} color={group.color} icon={<Users size={15} />} />
                     <ProfileMetric label="오답/미응답" value={`${profile.wrongQuestionCount}/${profile.unansweredQuestionCount}`} color="#ef4444" icon={<AlertTriangle size={15} />} />
+                    <ProfileMetric label="평균 시험시간" value={formatDuration(profile.averageElapsedTimeSec)} color="#0ea5e9" icon={<Clock size={15} />} />
+                    <ProfileMetric label="필기 보관률" value={`${profile.handwritingArchiveRate}%`} color="#7c3aed" icon={<PenLine size={15} />} />
                 </div>
 
                 <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: '1rem' }}>
@@ -2062,6 +2076,8 @@ function GroupProfileModal({
                                     </div>
                                     <div style={{ color: 'var(--muted)', fontSize: '0.76rem', marginTop: '0.55rem', lineHeight: 1.6 }}>
                                         오답 {exam.wrongQuestionCount}건 · 미응답 {exam.unansweredQuestionCount}건
+                                        {exam.averageElapsedTimeSec > 0 ? ` · 평균 ${formatDuration(exam.averageElapsedTimeSec)}` : ""}
+                                        {exam.averageQuestionTimeSec > 0 ? ` · 문항 ${formatDuration(exam.averageQuestionTimeSec)}` : ""}
                                         {exam.topWeakness ? ` · 최우선 ${exam.topWeakness.title}` : ""}
                                     </div>
                                     <div style={{ marginTop: '0.7rem', display: 'flex', justifyContent: 'flex-end' }}>
@@ -2137,6 +2153,55 @@ function GroupProfileModal({
                         </div>
                     </section>
                 </div>
+
+                {(profile.mostMissedQuestions.length > 0 || profile.tagStats.length > 0) && (
+                    <section>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.45rem', marginBottom: '0.65rem' }}>
+                            <Clock size={16} color="var(--primary)" />
+                            <h4 style={{ fontSize: '0.92rem', fontWeight: 800 }}>문항/라벨 트래킹</h4>
+                        </div>
+                        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', gap: '0.75rem' }}>
+                            <div style={{ padding: '0.9rem', background: 'var(--background)', border: '1px solid var(--border)', borderRadius: 'var(--radius-md)' }}>
+                                <div style={{ fontWeight: 900, marginBottom: '0.6rem', color: 'var(--foreground)' }}>가장 많이 놓친 문항</div>
+                                {profile.mostMissedQuestions.length === 0 ? (
+                                    <div style={{ color: 'var(--muted)', fontSize: '0.82rem' }}>오답 문항이 아직 없습니다.</div>
+                                ) : (
+                                    <div style={{ display: 'grid', gap: '0.45rem' }}>
+                                        {profile.mostMissedQuestions.slice(0, 4).map(item => (
+                                            <div key={item.key} style={{ display: 'flex', justifyContent: 'space-between', gap: '0.7rem', fontSize: '0.8rem' }}>
+                                                <span style={{ color: 'var(--foreground)', fontWeight: 850 }}>
+                                                    {item.examTitle} · {item.questionNumber}번
+                                                </span>
+                                                <span style={{ color: 'var(--error)', fontWeight: 900 }}>
+                                                    {item.wrongRate}%{item.averageTimeSec ? ` · ${formatDuration(item.averageTimeSec)}` : ""}
+                                                </span>
+                                            </div>
+                                        ))}
+                                    </div>
+                                )}
+                            </div>
+                            <div style={{ padding: '0.9rem', background: 'var(--background)', border: '1px solid var(--border)', borderRadius: 'var(--radius-md)' }}>
+                                <div style={{ fontWeight: 900, marginBottom: '0.6rem', color: 'var(--foreground)' }}>라벨별 통계</div>
+                                {profile.tagStats.length === 0 ? (
+                                    <div style={{ color: 'var(--muted)', fontSize: '0.82rem' }}>라벨 데이터가 아직 없습니다.</div>
+                                ) : (
+                                    <div style={{ display: 'grid', gap: '0.45rem' }}>
+                                        {profile.tagStats.slice(0, 5).map(item => (
+                                            <div key={item.key} style={{ display: 'flex', justifyContent: 'space-between', gap: '0.7rem', fontSize: '0.8rem' }}>
+                                                <span style={{ color: 'var(--foreground)', fontWeight: 850 }}>
+                                                    {item.title} · {item.questionNumbers.slice(0, 4).join(', ')}번
+                                                </span>
+                                                <span style={{ color: item.wrongRate >= 60 ? 'var(--error)' : 'var(--muted)', fontWeight: 900 }}>
+                                                    오답 {item.wrongRate}%{item.averageTimeSec ? ` · ${formatDuration(item.averageTimeSec)}` : ""}
+                                                </span>
+                                            </div>
+                                        ))}
+                                    </div>
+                                )}
+                            </div>
+                        </div>
+                    </section>
+                )}
 
                 <section>
                     <div style={{ display: 'flex', alignItems: 'center', gap: '0.45rem', marginBottom: '0.65rem' }}>
@@ -2241,6 +2306,8 @@ function StudentProfileModal({
                     <ProfileMetric label="재시험" value={`${profile.retakeAttemptCount}회`} color="#0f766e" icon={<RefreshCw size={15} />} />
                     <ProfileMetric label="오답/미응답" value={`${profile.wrongQuestionCount}/${profile.unansweredQuestionCount}`} color="#ef4444" icon={<AlertTriangle size={15} />} />
                     <ProfileMetric label="필기 보관" value={`${profile.handwritingArchiveCount}건`} color="#7c3aed" icon={<PenLine size={15} />} />
+                    <ProfileMetric label="평균 시험시간" value={formatDuration(profile.averageElapsedTimeSec)} color="#0ea5e9" icon={<Clock size={15} />} />
+                    <ProfileMetric label="문항 평균시간" value={formatDuration(profile.averageQuestionTimeSec)} color="#f59e0b" icon={<Clock size={15} />} />
                 </div>
 
                 <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: '1rem' }}>
@@ -2273,6 +2340,17 @@ function StudentProfileModal({
                                     <div style={{ display: 'grid', gap: '0.35rem', marginTop: '0.65rem', color: 'var(--muted)', fontSize: '0.78rem' }}>
                                         <div>오답 {questionNumberLabel(attempt.wrongQuestionNumbers)}</div>
                                         <div>미응답 {questionNumberLabel(attempt.unansweredQuestionNumbers)}</div>
+                                        <div>
+                                            응시 {formatDuration(attempt.elapsedTimeSec)}
+                                            {attempt.averageQuestionTimeSec > 0 ? ` · 문항 평균 ${formatDuration(attempt.averageQuestionTimeSec)}` : ""}
+                                        </div>
+                                        {(attempt.slowQuestionNumbers.length > 0 || attempt.revisitedQuestionNumbers.length > 0 || attempt.focusLossCount > 0) && (
+                                            <div style={{ color: 'var(--primary)', fontWeight: 800 }}>
+                                                {attempt.slowQuestionNumbers.length > 0 ? `오래 머문 ${questionNumberLabel(attempt.slowQuestionNumbers)}` : ""}
+                                                {attempt.revisitedQuestionNumbers.length > 0 ? `${attempt.slowQuestionNumbers.length > 0 ? " · " : ""}재방문 ${questionNumberLabel(attempt.revisitedQuestionNumbers)}` : ""}
+                                                {attempt.focusLossCount > 0 ? `${attempt.slowQuestionNumbers.length > 0 || attempt.revisitedQuestionNumbers.length > 0 ? " · " : ""}이탈 ${attempt.focusLossCount}회` : ""}
+                                            </div>
+                                        )}
                                         {attempt.handwritingArchived && (
                                             <div style={{ color: '#7c3aed', fontWeight: 800, display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
                                                 <PenLine size={12} /> 필기 {attempt.handwritingLabel}
@@ -2352,6 +2430,55 @@ function StudentProfileModal({
                         </div>
                     </section>
                 </div>
+
+                {(profile.mostMissedQuestions.length > 0 || profile.tagStats.length > 0) && (
+                    <section>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.45rem', marginBottom: '0.65rem' }}>
+                            <Clock size={16} color="var(--primary)" />
+                            <h4 style={{ fontSize: '0.92rem', fontWeight: 800 }}>개인 문항/라벨 트래킹</h4>
+                        </div>
+                        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', gap: '0.75rem' }}>
+                            <div style={{ padding: '0.9rem', background: 'var(--background)', border: '1px solid var(--border)', borderRadius: 'var(--radius-md)' }}>
+                                <div style={{ fontWeight: 900, marginBottom: '0.6rem', color: 'var(--foreground)' }}>가장 많이 틀린 문항</div>
+                                {profile.mostMissedQuestions.length === 0 ? (
+                                    <div style={{ color: 'var(--muted)', fontSize: '0.82rem' }}>오답 문항이 아직 없습니다.</div>
+                                ) : (
+                                    <div style={{ display: 'grid', gap: '0.45rem' }}>
+                                        {profile.mostMissedQuestions.slice(0, 4).map(item => (
+                                            <div key={item.key} style={{ display: 'flex', justifyContent: 'space-between', gap: '0.7rem', fontSize: '0.8rem' }}>
+                                                <span style={{ color: 'var(--foreground)', fontWeight: 850 }}>
+                                                    {item.examTitle} · {item.questionNumber}번
+                                                </span>
+                                                <span style={{ color: 'var(--error)', fontWeight: 900 }}>
+                                                    {item.wrongRate}%{item.averageTimeSec ? ` · ${formatDuration(item.averageTimeSec)}` : ""}
+                                                </span>
+                                            </div>
+                                        ))}
+                                    </div>
+                                )}
+                            </div>
+                            <div style={{ padding: '0.9rem', background: 'var(--background)', border: '1px solid var(--border)', borderRadius: 'var(--radius-md)' }}>
+                                <div style={{ fontWeight: 900, marginBottom: '0.6rem', color: 'var(--foreground)' }}>라벨별 누적 통계</div>
+                                {profile.tagStats.length === 0 ? (
+                                    <div style={{ color: 'var(--muted)', fontSize: '0.82rem' }}>라벨 데이터가 아직 없습니다.</div>
+                                ) : (
+                                    <div style={{ display: 'grid', gap: '0.45rem' }}>
+                                        {profile.tagStats.slice(0, 5).map(item => (
+                                            <div key={item.key} style={{ display: 'flex', justifyContent: 'space-between', gap: '0.7rem', fontSize: '0.8rem' }}>
+                                                <span style={{ color: 'var(--foreground)', fontWeight: 850 }}>
+                                                    {item.title} · {item.questionNumbers.slice(0, 4).join(', ')}번
+                                                </span>
+                                                <span style={{ color: item.wrongRate >= 60 ? 'var(--error)' : 'var(--muted)', fontWeight: 900 }}>
+                                                    오답 {item.wrongRate}%{item.averageTimeSec ? ` · ${formatDuration(item.averageTimeSec)}` : ""}
+                                                </span>
+                                            </div>
+                                        ))}
+                                    </div>
+                                )}
+                            </div>
+                        </div>
+                    </section>
+                )}
             </div>
         </ModalShell>
     );

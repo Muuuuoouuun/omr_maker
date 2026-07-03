@@ -69,7 +69,7 @@ test.describe("Teacher phone and tablet app chrome", () => {
     test("keeps the dashboard header touch friendly", async ({ page }) => {
         await loginAsTeacher(page, "/teacher/dashboard");
 
-        await expect(page.getByRole("heading", { name: "Analytics Center" })).toBeVisible();
+        await expect(page.getByRole("heading", { name: "분석 센터" })).toBeVisible();
         await expectTeacherHeaderTouchFriendly(page, { hasSearch: false });
 
         await page.locator(".teacher-header").getByRole("button", { name: /알림/ }).click();

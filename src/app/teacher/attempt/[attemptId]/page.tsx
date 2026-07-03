@@ -4,12 +4,14 @@ import { useEffect, useMemo, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
 import dynamic from "next/dynamic";
-import { Download, Lock, PenLine, Repeat2, Target } from "lucide-react";
+import { Download, Lock, MessageSquare, PenLine, Repeat2, Send, Target } from "lucide-react";
 import type { Attempt, Exam, PdfDrawings, PlanKey, QuestionResult } from "@/types/omr";
 import { loadJsonRecord, storedDataUrlToFile } from "@/utils/blobStore";
 import { getCurrentPlan, getPlanLabel, hasPlanEntitlement } from "@/utils/plans";
 import { formatKoreanDateTime } from "@/lib/pure";
-import { loadAttempt, loadExam } from "@/lib/omrPersistence";
+import { loadAttempt, loadExam, saveAttempt } from "@/lib/omrPersistence";
+import { answerStudentQuestion } from "@/lib/studentQuestions";
+import { toast } from "@/components/Toast";
 import {
     buildLearningRecommendations,
     buildRetakeQuestionIds,
@@ -17,7 +19,7 @@ import {
     getAttemptQuestionResults,
     summarizeAttemptScore,
 } from "@/lib/premiumAnalytics";
-import { hasTeacherSession } from "@/lib/teacherSession";
+import { hasTeacherSession, readTeacherSession } from "@/lib/teacherSession";
 import { buildRetakeHref } from "@/lib/retakeLinks";
 
 const PDFViewer = dynamic(() => import("@/components/PDFViewer"), { ssr: false });
@@ -47,7 +49,10 @@ export default function TeacherAttemptPage() {
     const [handwritingUnavailable, setHandwritingUnavailable] = useState(false);
     const [currentPlan] = useState<PlanKey>(() => getCurrentPlan());
     const [loaded, setLoaded] = useState(false);
+    const [answerDrafts, setAnswerDrafts] = useState<Record<number, string>>({});
+    const [savingAnswerFor, setSavingAnswerFor] = useState<number | null>(null);
     const pdfExportEnabled = hasPlanEntitlement(currentPlan, "pdfExport");
+    const handwritingArchiveEnabled = hasPlanEntitlement(currentPlan, "handwritingArchive");
 
     useEffect(() => {
         let cancelled = false;
@@ -160,6 +165,58 @@ export default function TeacherAttemptPage() {
     const handwriting = attempt.handwriting;
     const questionSummaries = Object.values(handwriting?.questions || {});
     const canShowDrawings = hasDrawings(drawings);
+    const studentQuestionNotes = attempt.studentQuestions || [];
+    const pendingQuestionCount = studentQuestionNotes.filter(note => note.status !== "answered").length;
+    const answeredQuestionCount = studentQuestionNotes.length - pendingQuestionCount;
+    const handleAnswerQuestion = async (questionId: number) => {
+        const body = (answerDrafts[questionId] || "").trim();
+        if (!body) return;
+        const teacherName = readTeacherSession()?.displayName;
+        const updated = answerStudentQuestion(attempt, questionId, body, new Date().toISOString(), teacherName);
+        if (!updated) return;
+        setSavingAnswerFor(questionId);
+        try {
+            const result = await saveAttempt(updated);
+            if (!result.localSaved) throw new Error("local save failed");
+            setAttempt(updated);
+            setAnswerDrafts(prev => ({ ...prev, [questionId]: "" }));
+            if (result.remoteSaved) {
+                toast.success("답변 전송됨", "학생 리뷰 화면에서 답변을 볼 수 있습니다.");
+            } else {
+                toast.info("답변 저장됨", "서버 동기화는 다음 접속 때 재시도됩니다.");
+            }
+        } catch {
+            toast.error("답변 저장 실패", "브라우저 저장소를 확인한 뒤 다시 시도해주세요.");
+        } finally {
+            setSavingAnswerFor(null);
+        }
+    };
+    const handleDownloadHandwriting = () => {
+        if (!drawings) return;
+        const payload = {
+            schemaVersion: 1,
+            exportedAt: new Date().toISOString(),
+            attemptId: attempt.id,
+            examId: attempt.examId,
+            examTitle: attempt.examTitle,
+            studentName: attempt.studentName,
+            finishedAt: attempt.finishedAt,
+            handwriting: attempt.handwriting,
+            questionDrawings: attempt.questionDrawings || [],
+            drawings,
+        };
+        const safeTitle = attempt.examTitle.replace(/[\\/:*?"<>|]+/g, "_").slice(0, 48) || "exam";
+        const safeStudent = attempt.studentName.replace(/[\\/:*?"<>|]+/g, "_").slice(0, 32) || "student";
+        const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json;charset=utf-8" });
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement("a");
+        link.href = url;
+        link.download = `${safeTitle}_${safeStudent}_handwriting.json`;
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+        URL.revokeObjectURL(url);
+    };
 
     return (
         <div className="layout-main" style={{ minHeight: '100vh', background: '#f8fafc' }}>
@@ -320,6 +377,90 @@ export default function TeacherAttemptPage() {
                             </div>
                         )}
 
+                        {studentQuestionNotes.length > 0 && (
+                            <div className="bento-card" style={{ padding: '1.25rem' }}>
+                                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '0.75rem', marginBottom: '0.8rem' }}>
+                                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.45rem', fontWeight: 900 }}>
+                                        <MessageSquare size={17} />
+                                        학생 질문
+                                    </div>
+                                    <span style={{
+                                        fontSize: '0.72rem',
+                                        fontWeight: 800,
+                                        color: pendingQuestionCount > 0 ? '#0f766e' : '#64748b',
+                                        background: pendingQuestionCount > 0 ? '#f0fdfa' : '#f1f5f9',
+                                        borderRadius: '999px',
+                                        padding: '0.25rem 0.55rem'
+                                    }}>
+                                        대기 {pendingQuestionCount} · 답변 {answeredQuestionCount}
+                                    </span>
+                                </div>
+                                <div style={{ display: 'grid', gap: '0.65rem' }}>
+                                    {studentQuestionNotes.map(note => (
+                                        <div
+                                            key={note.questionId}
+                                            style={{
+                                                padding: '0.75rem',
+                                                borderRadius: '10px',
+                                                border: `1px solid ${note.status === "answered" ? '#bbf7d0' : '#99f6e4'}`,
+                                                background: note.status === "answered" ? '#f0fdf4' : '#f0fdfa',
+                                            }}
+                                        >
+                                            <div style={{ display: 'flex', justifyContent: 'space-between', gap: '0.5rem', marginBottom: '0.3rem' }}>
+                                                <span style={{ fontWeight: 900, fontSize: '0.84rem', color: '#0f172a' }}>{note.questionNumber}번 질문</span>
+                                                <span style={{ color: '#64748b', fontSize: '0.7rem', fontWeight: 700 }}>{formatKoreanDateTime(note.createdAt)}</span>
+                                            </div>
+                                            <div style={{ color: '#334155', fontSize: '0.82rem', lineHeight: 1.6, whiteSpace: 'pre-wrap' }}>{note.body}</div>
+                                            {note.status === "answered" && note.answer && (
+                                                <div style={{ marginTop: '0.55rem', padding: '0.6rem 0.7rem', borderRadius: '8px', background: 'white', border: '1px solid #e2e8f0' }}>
+                                                    <div style={{ color: '#16a34a', fontWeight: 800, fontSize: '0.74rem', marginBottom: '0.25rem' }}>
+                                                        내 답변 · {formatKoreanDateTime(note.answer.createdAt)}
+                                                    </div>
+                                                    <div style={{ color: '#334155', fontSize: '0.82rem', lineHeight: 1.6, whiteSpace: 'pre-wrap' }}>{note.answer.body}</div>
+                                                </div>
+                                            )}
+                                            <div style={{ marginTop: '0.55rem' }}>
+                                                <textarea
+                                                    value={answerDrafts[note.questionId] || ""}
+                                                    onChange={(event) => {
+                                                        const value = event.target.value.slice(0, 500);
+                                                        setAnswerDrafts(prev => ({ ...prev, [note.questionId]: value }));
+                                                    }}
+                                                    placeholder={note.status === "answered" ? "답변을 고치려면 새로 입력하세요." : "학생에게 보낼 답변을 입력하세요."}
+                                                    aria-label={`${note.questionNumber}번 질문 답변`}
+                                                    style={{
+                                                        width: '100%',
+                                                        minHeight: 64,
+                                                        padding: '0.55rem 0.65rem',
+                                                        borderRadius: '8px',
+                                                        border: '1px solid #e2e8f0',
+                                                        fontSize: '0.84rem',
+                                                        lineHeight: 1.55,
+                                                        resize: 'vertical',
+                                                        background: 'white',
+                                                    }}
+                                                />
+                                                <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '0.4rem' }}>
+                                                    <button
+                                                        type="button"
+                                                        className="btn btn-primary"
+                                                        disabled={!(answerDrafts[note.questionId] || "").trim() || savingAnswerFor === note.questionId}
+                                                        onClick={() => void handleAnswerQuestion(note.questionId)}
+                                                        style={{ fontSize: '0.78rem', padding: '0.4rem 0.8rem', display: 'inline-flex', alignItems: 'center', gap: '0.35rem' }}
+                                                    >
+                                                        <Send size={13} />
+                                                        {savingAnswerFor === note.questionId
+                                                            ? "저장 중..."
+                                                            : note.status === "answered" ? "답변 수정" : "답변 보내기"}
+                                                    </button>
+                                                </div>
+                                            </div>
+                                        </div>
+                                    ))}
+                                </div>
+                            </div>
+                        )}
+
                         <div className="bento-card" style={{ padding: '1.25rem' }}>
                             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '0.75rem', marginBottom: '0.75rem' }}>
                                 <div style={{ display: 'flex', alignItems: 'center', gap: '0.45rem', fontWeight: 900 }}>
@@ -359,6 +500,28 @@ export default function TeacherAttemptPage() {
                                         </span>
                                     ))}
                                 </div>
+                            )}
+                            {canShowDrawings && handwritingArchiveEnabled && (
+                                <button
+                                    type="button"
+                                    onClick={handleDownloadHandwriting}
+                                    className="btn btn-secondary"
+                                    style={{ width: '100%', marginTop: '0.9rem', fontSize: '0.82rem', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: '0.35rem' }}
+                                >
+                                    <Download size={14} />
+                                    필기 원본 파일 저장
+                                </button>
+                            )}
+                            {attempt.handwritingArchived && !handwritingArchiveEnabled && (
+                                <Link
+                                    href="/teacher/billing"
+                                    className="btn btn-secondary"
+                                    style={{ width: '100%', marginTop: '0.9rem', fontSize: '0.82rem', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: '0.35rem', color: '#64748b' }}
+                                    title="Pro 이상에서 필기 원본 파일을 저장할 수 있습니다."
+                                >
+                                    <Lock size={14} />
+                                    필기 파일 저장 Pro
+                                </Link>
                             )}
                         </div>
                     </aside>

@@ -130,11 +130,17 @@ export function buildDeploymentReadiness(env: Env = process.env): DeploymentRead
         },
         {
             key: "supabase_service_role",
-            label: "서버 워크스페이스 bootstrap",
+            label: "서버 신뢰 경계 (service role)",
             detail: serviceRoleReady
-                ? "SUPABASE_SERVICE_ROLE_KEY 또는 OMR_SUPABASE_SERVICE_ROLE_KEY가 서버에 있어 교사 로그인 때 조직·멤버·프로필을 준비할 수 있습니다."
-                : "서비스롤 키가 없으면 로그인은 가능하지만 서버 워크스페이스 bootstrap은 건너뜁니다. 키는 서버 환경변수에만 둬야 합니다.",
-            tone: serviceRoleReady ? "ready" : "warning",
+                ? "SUPABASE_SERVICE_ROLE_KEY 또는 OMR_SUPABASE_SERVICE_ROLE_KEY가 서버에 있어 학생 시험 로드(정답 미노출)·서버 채점·본인 격리 조회와 워크스페이스 bootstrap이 활성화됩니다."
+                : env.NODE_ENV === "production" && supabasePublicReady
+                    ? "서비스롤 키가 없어 학생 서버 경계(정답 은닉·서버 채점)가 전부 클라이언트 폴백으로 동작합니다. 운영 배포 전 SUPABASE_SERVICE_ROLE_KEY를 서버 환경변수에 설정하세요."
+                    : "서비스롤 키가 없으면 학생 시험 로드/채점 서버 경계와 워크스페이스 bootstrap이 로컬 폴백으로 degrade됩니다. 키는 서버 환경변수에만 둬야 합니다.",
+            tone: serviceRoleReady
+                ? "ready"
+                : env.NODE_ENV === "production" && supabasePublicReady
+                    ? "error"
+                    : "warning",
         },
         productionRlsCheck(env, supabasePublicReady),
     ];

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { attemptOwnedBy, buildServerAttempt, identityAccessSession, type SubmitAttemptInput } from "./studentExamCore";
+import { attemptOwnedBy, buildServerAttempt, identityAccessSession, resolveRetakeScope, type SubmitAttemptInput } from "./studentExamCore";
 import type { Exam } from "@/types/omr";
 import type { StudentServerIdentity } from "./studentServerSession";
 
@@ -60,5 +60,72 @@ describe("studentExamCore", () => {
     it("keeps a valid startedAt within the exam window unchanged", () => {
         const attempt = buildServerAttempt(INPUT, EXAM, GUEST, "att-valid", "2026-07-01T01:30:00.000Z");
         expect(attempt.startedAt).toBe("2026-07-01T01:00:00.000Z");
+    });
+
+    it("grades a retake over the scoped questions only", () => {
+        const retake = { sourceAttemptId: "base1", questionIds: [2], mode: "wrong" as const, createdAt: "2026-07-01T01:00:00.000Z" };
+        const attempt = buildServerAttempt(
+            { examId: "e1", answers: { 2: 2 }, startedAt: "2026-07-01T01:00:00.000Z", retake },
+            EXAM, GUEST, "att-retake", "2026-07-01T01:30:00.000Z",
+        );
+        expect(attempt.totalScore).toBe(10);          // only q2 in scope
+        expect(attempt.score).toBe(10);               // q2 correct this time
+        expect(attempt.retake).toMatchObject({ sourceAttemptId: "base1", questionIds: [2], mode: "wrong" });
+        expect(attempt.questionResults).toHaveLength(1);
+        expect(attempt.questionResults?.[0]).toMatchObject({ questionId: 2, isCorrect: true });
+    });
+
+    it("ignores retake question ids that are not on the exam", () => {
+        const scope = resolveRetakeScope(EXAM, {
+            sourceAttemptId: "base1", questionIds: [2, 999], mode: "custom", createdAt: "x",
+        });
+        expect(scope.questions.map(q => q.id)).toEqual([2]);
+        expect(scope.retake?.questionIds).toEqual([2]);
+    });
+
+    it("drops the retake only when no scoped id resolves", () => {
+        expect(resolveRetakeScope(EXAM, {
+            sourceAttemptId: "s", questionIds: [999], mode: "wrong", createdAt: "x",
+        }).retake).toBeUndefined();
+        expect(resolveRetakeScope(EXAM, undefined).questions).toHaveLength(2);
+    });
+
+    it("preserves retake metadata for a full-scope retake (grades all, still a retake)", () => {
+        const scope = resolveRetakeScope(EXAM, {
+            sourceAttemptId: "base1", questionIds: [1, 2], mode: "custom", createdAt: "x",
+        });
+        expect(scope.questions).toHaveLength(2);
+        expect(scope.retake).toMatchObject({ sourceAttemptId: "base1", questionIds: [1, 2], mode: "custom" });
+    });
+
+    it("classifies a full-scope retake attempt as a retake, not a base attempt", () => {
+        const attempt = buildServerAttempt(
+            {
+                examId: "e1",
+                answers: { 1: 3, 2: 2 },
+                startedAt: "2026-07-01T01:00:00.000Z",
+                retake: { sourceAttemptId: "base1", questionIds: [1, 2], mode: "custom", createdAt: "x" },
+            },
+            EXAM, GUEST, "att-full-retake", "2026-07-01T01:30:00.000Z",
+        );
+        expect(attempt.retake).toMatchObject({ sourceAttemptId: "base1", questionIds: [1, 2] });
+        expect(attempt.totalScore).toBe(20); // both questions graded
+    });
+
+    it("passes handwriting metadata through to the server attempt", () => {
+        const attempt = buildServerAttempt(
+            {
+                ...INPUT,
+                drawings: { 1: ["M0 0L1 1"] },
+                handwritingArchived: true,
+                handwritingPlan: "pro",
+                questionDrawings: [{ questionId: 1, questionNumber: 1, page: 1, strokeCount: 1 }],
+            },
+            EXAM, GUEST, "att-hw", "2026-07-01T01:30:00.000Z",
+        );
+        expect(attempt.drawings).toEqual({ 1: ["M0 0L1 1"] });
+        expect(attempt.handwritingArchived).toBe(true);
+        expect(attempt.handwritingPlan).toBe("pro");
+        expect(attempt.questionDrawings).toHaveLength(1);
     });
 });

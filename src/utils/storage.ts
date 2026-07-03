@@ -38,6 +38,11 @@ export function generateId(): string {
     return Math.random().toString(36).substring(2, 15) + Math.random().toString(36).substring(2, 15);
 }
 
+export function guestLoginIdFor(guestId: string): string {
+    const compact = guestId.trim().replace(/[^a-z0-9]/gi, "").slice(0, 6).toUpperCase();
+    return `GUEST-${compact || "TEMP"}`;
+}
+
 export function getOrCreateGuestId(): string {
     if (typeof window === 'undefined') return "";
     let id = localStorage.getItem(STORAGE_KEYS.GUEST_ID);
@@ -81,6 +86,7 @@ function normalizeSession(raw: Partial<StudentSession> | null): StudentSession |
         ...raw,
         studentId,
         name: raw.name,
+        loginId: raw.loginId || (isGuest && raw.guestId ? guestLoginIdFor(raw.guestId) : undefined),
         regionId: normalizeIdentityText(raw.regionId) || undefined,
         regionName: normalizeIdentityText(raw.regionName) || undefined,
         isGuest,

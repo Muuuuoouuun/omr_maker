@@ -3,8 +3,9 @@
 import { useEffect } from "react";
 import Link from "next/link";
 import { AlertTriangle, Home, RotateCcw } from "lucide-react";
+import { reportError } from "@/lib/reportError";
 
-export default function GlobalError({
+export default function RouteError({
     error,
     reset,
 }: {
@@ -12,8 +13,7 @@ export default function GlobalError({
     reset: () => void;
 }) {
     useEffect(() => {
-        // In production this is where you'd ping Sentry etc.
-        console.error("Global error boundary caught:", error);
+        reportError("route-error-boundary", error);
     }, [error]);
 
     return (

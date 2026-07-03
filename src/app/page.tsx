@@ -6,6 +6,7 @@ import BrandLogo from "@/components/BrandLogo";
 import ThemeToggle from "@/components/ThemeToggle";
 import { toast } from "@/components/Toast";
 import { verifyTeacherPassword } from "@/app/actions/auth";
+import { issueGuestSession, issueStudentSession } from "@/app/actions/studentSession";
 import { formatRegionScopedLabel } from "@/lib/dashboardSelection";
 import { readLocalAttempts } from "@/lib/omrPersistence";
 import { readRosterGroups, readRosterStudents, type RosterGroup, type RosterStudent } from "@/lib/rosterStorage";
@@ -22,6 +23,7 @@ import {
   consumePendingGuestMerge,
   getSession,
   getOrCreateGuestId,
+  guestLoginIdFor,
   mergeGuestAttempts,
   previewGuestMerge,
   readPendingGuestMerge,
@@ -239,7 +241,7 @@ export default function Home() {
     }
   };
 
-  const handleStudentLogin = () => {
+  const handleStudentLogin = async () => {
     const trimmedName = studentName.trim();
     if (!trimmedName || !selectedGroupId) {
       setError("이름과 반을 모두 입력해주세요.");
@@ -334,6 +336,20 @@ export default function Home() {
       identityType: "temporary",
     };
 
+    // Mint the server-signed student session cookie; server actions (exam load,
+    // graded submit, own-attempt reads) key off it. Degrades silently in dev.
+    try {
+      await issueStudentSession({
+        studentId: identity.studentId,
+        name: trimmedName,
+        groupId: selectedGroupId,
+        groupName: identity.groupName,
+        ...regionSnapshot,
+      });
+    } catch {
+      // Supabase/secret unavailable — local flows keep working.
+    }
+
     const pendingGuestMerge = consumePendingGuestMerge();
     if (pendingGuestMerge) {
       const mergedCount = mergeGuestAttempts(pendingGuestMerge.guestId, {
@@ -356,10 +372,20 @@ export default function Home() {
     router.push(next);
   };
 
-  const handleGuest = () => {
-    const guestId = getOrCreateGuestId();
+  const handleGuest = async () => {
+    // Server-issued guest identity (reused if a valid guest cookie exists);
+    // the device-local id is only the degraded fallback.
+    let guestId = "";
+    try {
+      const issued = await issueGuestSession();
+      if (issued.ok && issued.guestId) guestId = issued.guestId;
+    } catch {
+      // offline/dev — fall back to the device-local guest id below
+    }
+    if (!guestId) guestId = getOrCreateGuestId();
     const session: StudentSession = {
       studentId: `guest:${guestId}`,
+      loginId: guestLoginIdFor(guestId),
       name: "Guest Student",
       isGuest: true,
       identityType: "guest",
@@ -993,11 +1019,15 @@ export default function Home() {
                     width: "100%",
                     background: "linear-gradient(135deg, var(--secondary), #c026d3)",
                     boxShadow: "0 4px 18px rgba(236,72,153,0.38)",
-                    marginBottom: "0.75rem",
+                    marginBottom: "0.35rem",
                   }}
                 >
                   시험 시작하기
                 </button>
+
+                <p style={{ fontSize: "0.72rem", color: "var(--muted)", margin: "0 0 0.75rem", lineHeight: 1.45, wordBreak: "keep-all" }}>
+                  * 현재는 이름·반 기반 임시 신원입니다. 정식 학생 인증은 준비 중입니다.
+                </p>
 
                 <div className="divider-label">
                   <span>또는</span>

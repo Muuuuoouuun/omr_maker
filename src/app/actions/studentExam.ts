@@ -5,13 +5,45 @@ import { randomUUID } from "node:crypto";
 import { parseSignedStudentSessionCookie, STUDENT_SERVER_SESSION_COOKIE, type StudentServerIdentity } from "@/lib/studentServerSession";
 import { getSupabaseServerConfigFromEnv, createSupabaseAdminClient, fetchAttemptRowsByOwner, fetchExamRowById, type SupabaseAdminClientLike, type SupabaseAdminReadClientLike } from "@/lib/supabaseServerAdmin";
 import { attemptFromSupabaseRow, examFromSupabaseRow, attemptToSupabaseRow, questionResultRowsForAttempt } from "@/lib/omrPersistence";
-import { evaluateExamAccess, verifyExamPin } from "@/lib/examAccess";
-import { stripExamForSolving, type SolvableExam } from "@/lib/examSolvePayload";
+import { evaluateExamAccess, examRequiresPin, verifyExamPin } from "@/lib/examAccess";
+import {
+    buildExamPinRateLimitKey,
+    checkExamPinRateLimit,
+    recordExamPinFailure,
+    recordExamPinSuccess,
+} from "@/lib/examPinRateLimit";
+import { stripExamForReview, stripExamForSolving, type ReviewableExam, type SolvableExam } from "@/lib/examSolvePayload";
 import { attemptOwnedBy, buildServerAttempt, identityAccessSession, ownerStudentId, type SubmitAttemptInput } from "@/lib/studentExamCore";
-import type { Attempt } from "@/types/omr";
+import { upsertStudentQuestion, type StudentQuestionInput } from "@/lib/studentQuestions";
+import type { Attempt, Exam } from "@/types/omr";
 
-type Status = "ok" | "unauthenticated" | "degraded_local" | "denied" | "error";
-type AccessStatus = "pin_required" | "login_required" | "group_denied" | "not_started" | "ended" | "archived";
+type Status = "ok" | "unauthenticated" | "degraded_local" | "denied" | "not_found" | "error";
+type AccessStatus = "pin_required" | "pin_rate_limited" | "login_required" | "group_denied" | "not_started" | "ended" | "archived";
+
+/**
+ * PIN gate with brute-force protection. The PIN itself stays stateless (sent
+ * per request); failures are counted per (exam, identity) so a wrong-PIN sweep
+ * locks only the sweeping identity, not the class.
+ */
+function evaluateGatedAccess(
+    exam: Exam,
+    identity: StudentServerIdentity,
+    pin: string | undefined,
+): "allowed" | AccessStatus {
+    const pinProvided = typeof pin === "string" && pin.trim().length > 0;
+    let pinVerified: boolean;
+    if (examRequiresPin(exam) && pinProvided) {
+        const rateKeys = buildExamPinRateLimitKey(exam.id, ownerStudentId(identity));
+        if (!checkExamPinRateLimit(rateKeys).allowed) return "pin_rate_limited";
+        pinVerified = verifyExamPin(exam, pin);
+        if (pinVerified) recordExamPinSuccess(rateKeys);
+        else recordExamPinFailure(rateKeys);
+    } else {
+        pinVerified = verifyExamPin(exam, pin ?? "");
+    }
+    const access = evaluateExamAccess(exam, { session: identityAccessSession(identity), pinVerified });
+    return access.status === "allowed" ? "allowed" : access.status;
+}
 
 type AdminClient = SupabaseAdminClientLike & SupabaseAdminReadClientLike;
 
@@ -50,10 +82,12 @@ export async function loadExamForSolving(examId: string, pin?: string): Promise<
     if (!isCtx(ctx)) return ctx;
     try {
         const row = await fetchExamRowById(ctx.admin, examId);
-        if (!row) return { status: "ended" };
+        // Distinct from "ended": lets the client fall back to a locally-synced copy
+        // (offline-created exams, dev without sync). Exam ids are non-enumerable UUIDs.
+        if (!row) return { status: "not_found" };
         const exam = examFromSupabaseRow(row as Parameters<typeof examFromSupabaseRow>[0]);
-        const access = evaluateExamAccess(exam, { session: identityAccessSession(ctx.identity), pinVerified: verifyExamPin(exam, pin ?? "") });
-        if (access.status !== "allowed") return { status: access.status };
+        const access = evaluateGatedAccess(exam, ctx.identity, pin);
+        if (access !== "allowed") return { status: access };
         return { status: "ok", exam: stripExamForSolving(exam) };
     } catch (e) {
         console.error("loadExamForSolving failed", e);
@@ -66,10 +100,10 @@ export async function submitAttempt(input: SubmitAttemptInput, pin?: string): Pr
     if (!isCtx(ctx)) return ctx;
     try {
         const row = await fetchExamRowById(ctx.admin, input.examId);
-        if (!row) return { status: "error" };
+        if (!row) return { status: "not_found" };
         const exam = examFromSupabaseRow(row as Parameters<typeof examFromSupabaseRow>[0]);
-        const access = evaluateExamAccess(exam, { session: identityAccessSession(ctx.identity), pinVerified: verifyExamPin(exam, pin ?? "") });
-        if (access.status !== "allowed") return { status: access.status };
+        const access = evaluateGatedAccess(exam, ctx.identity, pin);
+        if (access !== "allowed") return { status: access };
         const attempt = buildServerAttempt(input, exam, ctx.identity, randomUUID(), new Date().toISOString());
         const attemptResult = await ctx.admin.from("omr_attempts").upsert(attemptToSupabaseRow(attempt));
         if (attemptResult.error) return { status: "error" };
@@ -105,6 +139,54 @@ export async function loadMyAttempt(attemptId: string): Promise<{ status: Status
         return match ? { status: "ok", attempt: match } : { status: "denied" };
     } catch (e) {
         console.error("loadMyAttempt failed", e);
+        return { status: "error" };
+    }
+}
+
+/**
+ * Post-submit review payload: the exam WITH answers and explanations (the
+ * student already submitted), but the inline PIN and the teacher's answer-key
+ * PDF never leave the server. Only returned to the attempt's owner.
+ */
+export async function loadExamForReview(
+    attemptId: string,
+): Promise<{ status: Status | "denied"; exam?: ReviewableExam }> {
+    const ctx = await resolveCtx();
+    if (!isCtx(ctx)) return ctx;
+    try {
+        const match = (await ownAttempts(ctx.admin, ctx.identity)).find(a => a.id === attemptId);
+        if (!match) return { status: "denied" };
+        const row = await fetchExamRowById(ctx.admin, match.examId);
+        if (!row) return { status: "not_found" };
+        const exam = examFromSupabaseRow(row as Parameters<typeof examFromSupabaseRow>[0]);
+        return { status: "ok", exam: stripExamForReview(exam) };
+    } catch (e) {
+        console.error("loadExamForReview failed", e);
+        return { status: "error" };
+    }
+}
+
+/**
+ * Leave (or replace) a per-question free-text question on the student's OWN
+ * attempt. Ownership comes from the signed session cookie; the note is merged
+ * server-side so a crafted client cannot touch anyone else's attempt.
+ */
+export async function askAttemptQuestion(
+    attemptId: string,
+    question: StudentQuestionInput,
+): Promise<{ status: Status | "denied"; attempt?: Attempt }> {
+    const ctx = await resolveCtx();
+    if (!isCtx(ctx)) return ctx;
+    try {
+        const match = (await ownAttempts(ctx.admin, ctx.identity)).find(a => a.id === attemptId);
+        if (!match) return { status: "denied" };
+        const updated = upsertStudentQuestion(match, question, new Date().toISOString());
+        if (!updated) return { status: "error" };
+        const result = await ctx.admin.from("omr_attempts").upsert(attemptToSupabaseRow(updated));
+        if (result.error) return { status: "error" };
+        return { status: "ok", attempt: updated };
+    } catch (e) {
+        console.error("askAttemptQuestion failed", e);
         return { status: "error" };
     }
 }

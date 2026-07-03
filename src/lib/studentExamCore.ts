@@ -1,4 +1,16 @@
-import type { Attempt, Exam, FocusLossEvent, QuestionTiming, StoredDataRef } from "@/types/omr";
+import type {
+    Attempt,
+    AttemptHandwriting,
+    Exam,
+    FocusLossEvent,
+    PdfDrawings,
+    Question,
+    QuestionDrawingSummary,
+    QuestionTiming,
+    RetakeMetadata,
+    StoredDataRef,
+    StoredPlanKey,
+} from "@/types/omr";
 import { gradeAttempt } from "@/types/omr";
 import { buildQuestionResults } from "@/lib/premiumAnalytics";
 import type { ExamAccessSession } from "@/lib/examAccess";
@@ -15,6 +27,47 @@ export interface SubmitAttemptInput {
     drawingsRef?: StoredDataRef;
     drawingPageCount?: number;
     drawingStrokeCount?: number;
+    /**
+     * Client-trusted, non-grading metadata. `retake` narrows the graded question
+     * scope (validated against the exam); handwriting fields ride along for the
+     * teacher review views. None of these influence score computation inputs.
+     */
+    retake?: RetakeMetadata;
+    drawings?: PdfDrawings;
+    handwriting?: AttemptHandwriting;
+    handwritingArchived?: boolean;
+    handwritingPlan?: StoredPlanKey;
+    questionDrawings?: QuestionDrawingSummary[];
+}
+
+const RETAKE_MODES: RetakeMetadata["mode"][] = ["wrong", "similar", "custom"];
+
+/**
+ * Validate a client-supplied retake scope against the trusted exam and decide
+ * the graded question set. A partial scope narrows grading to the scoped ids
+ * (grading the full list would count unscoped questions as unanswered). A
+ * full-scope retake ("전체" button) grades every question — but the retake
+ * metadata is STILL preserved so the attempt is classified as a retake and
+ * never double-counted as a base attempt. Only a scope with no resolvable
+ * question ids falls through to a plain base attempt.
+ */
+export function resolveRetakeScope(
+    exam: Exam,
+    retake: RetakeMetadata | undefined,
+): { questions: Question[]; retake?: RetakeMetadata } {
+    if (!retake) return { questions: exam.questions };
+    const examIds = new Set(exam.questions.map(q => q.id));
+    const validIds = [...new Set(retake.questionIds)].filter(id => examIds.has(id));
+    if (validIds.length === 0) return { questions: exam.questions };
+    const isFullScope = validIds.length >= exam.questions.length;
+    return {
+        questions: isFullScope ? exam.questions : exam.questions.filter(q => validIds.includes(q.id)),
+        retake: {
+            ...retake,
+            questionIds: validIds,
+            mode: RETAKE_MODES.includes(retake.mode) ? retake.mode : "custom",
+        },
+    };
 }
 
 /** Canonical owner id written to omr_attempts.student_id. Guests use the guest:<id> convention. */
@@ -63,7 +116,8 @@ export function buildServerAttempt(
     attemptId: string,
     finishedAtIso: string,
 ): Attempt {
-    const graded = gradeAttempt(exam.questions, input.answers);
+    const scope = resolveRetakeScope(exam, input.retake);
+    const graded = gradeAttempt(scope.questions, input.answers);
     const attempt: Attempt = {
         id: attemptId,
         examId: exam.id,
@@ -87,10 +141,16 @@ export function buildServerAttempt(
         tabFociLostCount: input.tabFociLostCount,
         questionTimings: input.questionTimings,
         focusLossEvents: input.focusLossEvents,
+        drawings: input.drawings,
         drawingsRef: input.drawingsRef,
+        handwriting: input.handwriting,
+        handwritingArchived: input.handwritingArchived,
+        handwritingPlan: input.handwritingPlan,
         drawingPageCount: input.drawingPageCount,
         drawingStrokeCount: input.drawingStrokeCount,
+        questionDrawings: input.questionDrawings,
+        retake: scope.retake,
     };
-    attempt.questionResults = buildQuestionResults(exam, attempt);
+    attempt.questionResults = buildQuestionResults({ ...exam, questions: scope.questions }, attempt);
     return attempt;
 }

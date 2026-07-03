@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
 import dynamic from "next/dynamic";
@@ -16,11 +16,17 @@ import {
     Repeat2,
     Send,
     Target,
+    TrendingUp,
 } from "lucide-react";
-import type { Attempt, Exam, PdfDrawings, Question, QuestionResultStatus, QuestionTiming } from "@/types/omr";
+import type { Attempt, Exam, PdfDrawings, Question, QuestionResultStatus, QuestionTiming, StudentQuestionNote } from "@/types/omr";
 import { storedDataUrlToFile, loadJsonRecord } from "@/utils/blobStore";
 import { attemptBelongsToSession, getSession } from "@/utils/storage";
-import { loadAttempt, loadExam } from "@/lib/omrPersistence";
+import { loadAttempt, loadExam, saveAttempt, saveLocalAttempt } from "@/lib/omrPersistence";
+import { askAttemptQuestion, loadExamForReview, loadMyAttempt } from "@/app/actions/studentExam";
+import { loadMyAttemptClient, loadReviewExamClient } from "@/lib/studentExamClient";
+import { studentQuestionsByQuestionId, upsertStudentQuestion } from "@/lib/studentQuestions";
+import { buildAttemptRetakeRecovery } from "@/lib/retakeRecovery";
+import { toast } from "@/components/Toast";
 import { formatKoreanDateTime } from "@/lib/pure";
 import {
     buildLearningRecommendations,
@@ -33,14 +39,6 @@ import {
 import { buildRetakeHref } from "@/lib/retakeLinks";
 
 const PDFViewer = dynamic(() => import("@/components/PDFViewer"), { ssr: false });
-
-interface StudentQuestionNote {
-    questionId: number;
-    questionNumber: number;
-    body: string;
-    createdAt: string;
-    status: "queued";
-}
 
 function hasDrawings(drawings?: PdfDrawings): boolean {
     return !!drawings && Object.values(drawings).some(paths => paths.length > 0);
@@ -81,14 +79,10 @@ function readStudentQuestionQueue(attemptId: string): Record<number, StudentQues
     }
 }
 
-function writeStudentQuestionQueue(attemptId: string, queue: Record<number, StudentQuestionNote>): void {
-    if (typeof window === "undefined") return;
-    try {
-        localStorage.setItem(studentQuestionStorageKey(attemptId), JSON.stringify(queue));
-    } catch {
-        // Local queue is a convenience MVP; failing storage should not block review.
-    }
-}
+// NOTE: the legacy per-attempt localStorage question queue is read-only now —
+// it backfills questions that predate the attempt-payload model on every load
+// (see readStudentQuestionQueue merge below). It is deliberately never cleared:
+// its notes are not migrated onto the attempt, so deleting it would lose them.
 
 function MiniStat({ label, value, color }: { label: string; value: number | string; color: string }) {
     return (
@@ -155,6 +149,7 @@ function QuestionCard({
     onToggleQuestionBox,
     onDraftChange,
     onSubmitQuestion,
+    onRequestExplanation,
 }: {
     question: Question;
     userAnswer?: number;
@@ -170,6 +165,7 @@ function QuestionCard({
     onToggleQuestionBox: () => void;
     onDraftChange: (value: string) => void;
     onSubmitQuestion: () => void;
+    onRequestExplanation: () => void;
 }) {
     const isCorrect = status === "correct";
     const isSkipped = status === "unanswered";
@@ -223,8 +219,18 @@ function QuestionCard({
                         해설
                         {explanationOpen ? <ChevronUp size={13} /> : <ChevronDown size={13} />}
                     </button>
+                ) : submittedQuestion ? (
+                    <span className="student-review-muted-note" title="이미 이 문항에 질문/요청을 남겼습니다">질문 접수됨</span>
                 ) : (
-                    <span className="student-review-muted-note">해설 준비 중</span>
+                    <button
+                        type="button"
+                        onClick={onRequestExplanation}
+                        className="student-review-link-button"
+                        title="선생님께 이 문항의 해설 작성을 요청합니다"
+                    >
+                        <HelpCircle size={14} />
+                        해설 요청
+                    </button>
                 )}
                 <button
                     type="button"
@@ -249,7 +255,55 @@ function QuestionCard({
                     {submittedQuestion && (
                         <div className="student-review-question-submitted">
                             <CheckCircle2 size={15} />
-                            <span>{formatKoreanDateTime(submittedQuestion.createdAt)} 질문 대기</span>
+                            <span>
+                                {formatKoreanDateTime(submittedQuestion.createdAt)}
+                                {submittedQuestion.status === "answered" ? " 답변 완료" : " 질문 대기"}
+                            </span>
+                        </div>
+                    )}
+                    {submittedQuestion && (
+                        <div style={{
+                            padding: '0.65rem 0.75rem',
+                            borderRadius: 'var(--radius-md)',
+                            border: '1px solid #e2e8f0',
+                            background: '#f8fafc',
+                            color: '#475569',
+                            fontSize: '0.82rem',
+                            lineHeight: 1.6,
+                            whiteSpace: 'pre-wrap',
+                            marginBottom: '0.55rem',
+                        }}>
+                            {submittedQuestion.body}
+                        </div>
+                    )}
+                    {submittedQuestion?.status === "answered" && submittedQuestion.answer && (
+                        <div style={{
+                            padding: '0.7rem 0.8rem',
+                            borderRadius: 'var(--radius-md)',
+                            border: '1px solid #99f6e4',
+                            background: '#f0fdfa',
+                            marginBottom: '0.65rem',
+                        }}>
+                            <div style={{
+                                display: 'flex',
+                                alignItems: 'center',
+                                gap: '0.35rem',
+                                color: '#0f766e',
+                                fontWeight: 800,
+                                fontSize: '0.78rem',
+                                marginBottom: '0.35rem',
+                            }}>
+                                <MessageSquare size={13} />
+                                {submittedQuestion.answer.teacherName
+                                    ? `${submittedQuestion.answer.teacherName} 선생님 답변`
+                                    : "선생님 답변"}
+                                <span style={{ color: '#64748b', fontWeight: 600 }}>
+                                    · {formatKoreanDateTime(submittedQuestion.answer.createdAt)}
+                                </span>
+                            </div>
+                            <div style={{ color: '#134e4a', fontSize: '0.85rem', lineHeight: 1.65, whiteSpace: 'pre-wrap' }}>
+                                {submittedQuestion.answer.body}
+                            </div>
                         </div>
                     )}
                     <label htmlFor={`student-question-${question.id}`}>선생님께 남길 질문</label>
@@ -293,22 +347,43 @@ export default function ReviewPage() {
     const [openQuestionBoxes, setOpenQuestionBoxes] = useState<Record<number, boolean>>({});
     const [questionDrafts, setQuestionDrafts] = useState<Record<number, string>>({});
     const [studentQuestions, setStudentQuestions] = useState<Record<number, StudentQuestionNote>>({});
+    const [sourceAttempt, setSourceAttempt] = useState<Attempt | null>(null);
     const [accessDenied, setAccessDenied] = useState(false);
     const [handwritingUnavailable, setHandwritingUnavailable] = useState(false);
+    // Latest attempt for the local Q&A merge path — reading `attempt` state
+    // directly in an async handler risks a stale closure dropping a concurrent
+    // question. A ref + a submission mutex keep local writes serialized.
+    const attemptRef = useRef<Attempt | null>(null);
+    const questionSaveInFlightRef = useRef(false);
 
     useEffect(() => {
         let cancelled = false;
         const loadReview = async () => {
             if (!id || cancelled) return;
-            const found = await loadAttempt(id);
+            // Server-first: the action returns the attempt only when the signed
+            // session cookie owns it. Device-local records fall back to the
+            // existing client-side ownership check.
+            const result = await loadMyAttemptClient(id, {
+                server: (attemptId) => loadMyAttempt(attemptId),
+                localFallback: (attemptId) => loadAttempt(attemptId),
+            });
+            const found = result.status === "ok" ? result.attempt : undefined;
             if (found && !cancelled) {
-                const session = getSession();
-                if (!session || !attemptBelongsToSession(found, session)) {
-                    setAccessDenied(true);
-                    return;
+                if (result.source === "local") {
+                    const session = getSession();
+                    if (!session || !attemptBelongsToSession(found, session)) {
+                        setAccessDenied(true);
+                        return;
+                    }
                 }
+                attemptRef.current = found;
                 setAttempt(found);
-                setStudentQuestions(readStudentQuestionQueue(found.id));
+                // Attempt-stored notes are authoritative; the legacy local queue
+                // only backfills questions never migrated onto the attempt.
+                setStudentQuestions({
+                    ...readStudentQuestionQueue(found.id),
+                    ...studentQuestionsByQuestionId(found),
+                });
 
                 const inlineDrawings = hasDrawings(found.drawings) ? found.drawings : undefined;
                 if (inlineDrawings) {
@@ -339,7 +414,13 @@ export default function ReviewPage() {
                     setRestoredDrawings(found.drawings);
                 }
 
-                const parsedExam = await loadExam(found.examId);
+                // Server-first review payload: answers/explanations included
+                // (post-submit), PIN and answer-key PDF withheld server-side.
+                const examResult = await loadReviewExamClient(found.id, {
+                    server: (attemptId) => loadExamForReview(attemptId),
+                    localFallback: () => loadExam(found.examId),
+                });
+                const parsedExam = examResult.status === "ok" ? examResult.exam ?? null : null;
                 if (parsedExam && !cancelled) {
                     setExam(parsedExam);
                     setPdfFile(null);
@@ -353,6 +434,28 @@ export default function ReviewPage() {
                             if (!cancelled) setPdfLoadFailed(true);
                         });
                 }
+
+                // Load the retake's source attempt so the recovery card can
+                // compare against it. Pseudo sources ("exam:...", "student:...")
+                // and self-references are skipped.
+                const sourceId = found.retake?.sourceAttemptId;
+                if (sourceId && !sourceId.includes(":") && sourceId !== found.id) {
+                    const sourceResult = await loadMyAttemptClient(sourceId, {
+                        server: (attemptId) => loadMyAttempt(attemptId),
+                        localFallback: (attemptId) => loadAttempt(attemptId),
+                    });
+                    if (!cancelled && sourceResult.status === "ok" && sourceResult.attempt) {
+                        const src = sourceResult.attempt;
+                        if (sourceResult.source === "server") {
+                            setSourceAttempt(src);
+                        } else {
+                            const session = getSession();
+                            if (session && attemptBelongsToSession(src, session)) setSourceAttempt(src);
+                        }
+                    }
+                }
+            } else if (!cancelled && result.status === "denied") {
+                setAccessDenied(true);
             }
         };
         void loadReview();
@@ -403,14 +506,25 @@ export default function ReviewPage() {
     const recommendationGroups = buildLearningRecommendations(reviewExam, [attempt], {
         scope: "attempt",
         attempt,
+        // Show the student their own "정답이지만 느린" unstable concepts too.
+        includeSlowCorrect: true,
         limit: 5,
     });
     const behaviorSummary = summarizeAttemptBehavior(attempt);
+    const retakeRecovery = attempt.retake && sourceAttempt
+        ? buildAttemptRetakeRecovery(exam, attempt, sourceAttempt)
+        : null;
+    // Source score over the SAME scoped question set, so the two percentages compare 1:1.
+    const sourceScoreSummary = retakeRecovery && sourceAttempt
+        ? summarizeAttemptScore(reviewExam, sourceAttempt)
+        : null;
     const timingByQuestionId = new Map((attempt.questionTimings || []).map(timing => [timing.questionId, timing]));
     const questionNumberById = new Map(reviewQuestions.map(question => [question.id, question.number]));
     const allReviewQuestionIds = reviewQuestions.map(question => question.id);
     const explainedCount = reviewQuestions.filter(question => question.explanation?.trim()).length;
-    const queuedQuestionCount = Object.keys(studentQuestions).length;
+    const allQuestionNotes = Object.values(studentQuestions);
+    const queuedQuestionCount = allQuestionNotes.filter(note => note.status !== "answered").length;
+    const answeredQuestionCount = allQuestionNotes.filter(note => note.status === "answered").length;
     const wrongAndUnansweredCount = resultCounts.incorrectCount + resultCounts.unansweredCount;
     const resolveQuestionState = (question: Question) => {
         const result = resultByQuestionId.get(question.id);
@@ -454,23 +568,65 @@ export default function ReviewPage() {
         setQuestionDrafts(prev => ({ ...prev, [questionId]: value.slice(0, 500) }));
     };
 
-    const submitStudentQuestion = (question: Question) => {
-        const body = (questionDrafts[question.id] || "").trim();
-        if (!body) return;
-        const note: StudentQuestionNote = {
-            questionId: question.id,
-            questionNumber: question.number,
-            body,
-            createdAt: new Date().toISOString(),
-            status: "queued",
-        };
-        setStudentQuestions(prev => {
-            const next = { ...prev, [question.id]: note };
-            writeStudentQuestionQueue(attempt.id, next);
-            return next;
-        });
-        setQuestionDrafts(prev => ({ ...prev, [question.id]: "" }));
-        setOpenQuestionBoxes(prev => ({ ...prev, [question.id]: true }));
+    const submitQuestionBody = async (question: Question, rawBody: string) => {
+        const body = rawBody.trim();
+        if (!body) return false;
+        // Serialize submissions: the local merge path reads-then-writes the
+        // attempt, so a second submit racing the first would build on a stale
+        // copy and drop the earlier note. One in-flight save at a time.
+        if (questionSaveInFlightRef.current) {
+            toast.info("잠시만요", "이전 질문을 저장하는 중입니다. 잠시 후 다시 시도해주세요.");
+            return false;
+        }
+        const base = attemptRef.current;
+        if (!base) return false;
+        const input = { questionId: question.id, questionNumber: question.number, body };
+        questionSaveInFlightRef.current = true;
+        try {
+            // Server-first: the action verifies ownership via the session cookie
+            // and merges the note into the attempt row server-side.
+            let updated: Attempt | null = null;
+            try {
+                const res = await askAttemptQuestion(base.id, input);
+                if (res.status === "ok" && res.attempt) updated = res.attempt;
+            } catch {
+                // offline/dev — fall back to the local attempt write below
+            }
+            if (updated) {
+                try { saveLocalAttempt(updated); } catch { /* quota — server copy is canonical */ }
+            } else {
+                // Merge onto the freshest local attempt (ref, not stale closure).
+                updated = upsertStudentQuestion(attemptRef.current || base, input, new Date().toISOString());
+                if (!updated) return false;
+                const result = await saveAttempt(updated).catch(() => null);
+                if (!result?.localSaved) {
+                    toast.error("질문 저장 실패", "브라우저 저장소를 확인한 뒤 다시 시도해주세요.");
+                    return false;
+                }
+            }
+
+            attemptRef.current = updated;
+            setAttempt(updated);
+            setStudentQuestions(prev => ({ ...prev, ...studentQuestionsByQuestionId(updated) }));
+            setOpenQuestionBoxes(prev => ({ ...prev, [question.id]: true }));
+            return true;
+        } finally {
+            questionSaveInFlightRef.current = false;
+        }
+    };
+
+    const submitStudentQuestion = async (question: Question) => {
+        const saved = await submitQuestionBody(question, questionDrafts[question.id] || "");
+        if (saved) setQuestionDrafts(prev => ({ ...prev, [question.id]: "" }));
+    };
+
+    /** One-click "please write an explanation" — reuses the Q&A channel. */
+    const requestExplanation = async (question: Question) => {
+        const saved = await submitQuestionBody(
+            question,
+            `${question.number}번 해설이 아직 없어요. 풀이 과정을 알려주세요.`,
+        );
+        if (saved) toast.success("해설 요청 전송됨", "선생님이 답변하면 이 화면에 표시됩니다.");
     };
 
     return (
@@ -526,6 +682,39 @@ export default function ReviewPage() {
                             )}
                         </section>
 
+                        {retakeRecovery && (
+                            <section className="bento-card student-review-side-card">
+                                <div className="student-review-section-title">
+                                    <TrendingUp size={16} />
+                                    <strong>재시험 회복</strong>
+                                </div>
+                                <p>
+                                    {retakeRecovery.targetCount > 0
+                                        ? `원시험에서 틀린 ${retakeRecovery.targetCount}문항 중 ${retakeRecovery.recoveredCount}문항을 이번에 맞혔어요.`
+                                        : "이번 범위에는 원시험에서 틀린 문항이 없었습니다."}
+                                </p>
+                                <div className="student-review-behavior-grid">
+                                    <MiniStat
+                                        label="회복"
+                                        value={retakeRecovery.recoveryRate !== undefined
+                                            ? `${retakeRecovery.recoveredCount}/${retakeRecovery.targetCount} (${retakeRecovery.recoveryRate}%)`
+                                            : "대상 없음"}
+                                        color="#16a34a"
+                                    />
+                                    <MiniStat
+                                        label="점수 변화"
+                                        value={sourceScoreSummary
+                                            ? `${sourceScoreSummary.scorePercent}% → ${scoreSummary.scorePercent}%`
+                                            : "-"}
+                                        color="#4f46e5"
+                                    />
+                                    {retakeRecovery.regressedCount > 0 && (
+                                        <MiniStat label="다시 틀림" value={`${retakeRecovery.regressedCount}문항`} color="#dc2626" />
+                                    )}
+                                </div>
+                            </section>
+                        )}
+
                         <section className="bento-card student-review-side-card">
                             <div className="student-review-section-title">
                                 <Target size={17} />
@@ -550,7 +739,7 @@ export default function ReviewPage() {
                                 <div className="student-review-recommendations">
                                     <div className="student-review-recommendation-head">
                                         <span>유형 큐</span>
-                                        <strong>{retakeQuestionIds.length}문항</strong>
+                                        <strong>{recommendationGroups.length}개 유형</strong>
                                     </div>
                                     {recommendationGroups.map(group => {
                                         const retakeIds = group.retakeQuestionIds;
@@ -565,7 +754,11 @@ export default function ReviewPage() {
                                                 className="student-review-recommendation-row"
                                             >
                                                 <span>{group.title}</span>
-                                                <small>{retakeNumbers || group.questionNumbers.join(", ")}번 · {group.wrongCount}/{group.totalCount}</small>
+                                                <small>
+                                                    {retakeNumbers || group.questionNumbers.join(", ")}번 · {group.wrongCount > 0
+                                                        ? `오답 ${group.wrongCount}/${group.totalCount}`
+                                                        : `시간 지연 ${group.slowCorrectCount}문항`}
+                                                </small>
                                             </Link>
                                         );
                                     })}
@@ -615,6 +808,9 @@ export default function ReviewPage() {
                             <div className="student-review-support-grid">
                                 <MiniStat label="해설" value={`${explainedCount}/${reviewQuestions.length}`} color="#4f46e5" />
                                 <MiniStat label="질문 대기" value={queuedQuestionCount} color="#0f766e" />
+                                {answeredQuestionCount > 0 && (
+                                    <MiniStat label="답변 완료" value={answeredQuestionCount} color="#4f46e5" />
+                                )}
                             </div>
                         </section>
                     </aside>
@@ -718,6 +914,7 @@ export default function ReviewPage() {
                                             onToggleQuestionBox={() => toggleQuestionBox(selectedQuestion.id)}
                                             onDraftChange={(value) => updateQuestionDraft(selectedQuestion.id, value)}
                                             onSubmitQuestion={() => submitStudentQuestion(selectedQuestion)}
+                                            onRequestExplanation={() => requestExplanation(selectedQuestion)}
                                         />
                                     )}
                                 </div>

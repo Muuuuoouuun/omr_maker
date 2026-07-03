@@ -433,8 +433,8 @@ function TeacherDashboard() {
                 {/* Welcome Section */}
                 <div style={{ margin: '3rem 0', display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end', gap: '1rem', flexWrap: 'wrap' }}>
                     <div style={{ minWidth: 0 }}>
-                        <h1 className="title-gradient" style={{ fontSize: '2.5rem', marginBottom: '0.75rem', lineHeight: 1.2 }}>
-                            Analytics Center
+                        <h1 style={{ fontSize: '2.5rem', marginBottom: '0.75rem', lineHeight: 1.2, fontWeight: 800, letterSpacing: '-0.02em', color: 'var(--foreground)' }}>
+                            분석 센터
                         </h1>
                         <p className="text-muted" style={{ fontSize: '1.1rem' }}>
                             방대한 리포트와 시험 통계를 한 번에 관리하세요.

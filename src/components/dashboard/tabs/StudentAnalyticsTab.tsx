@@ -43,6 +43,18 @@ function regionalScopeLabel(scope: RegionalLearningScope | undefined): string {
     return scope?.regionName || "전체 지역";
 }
 
+function formatSeconds(totalSec: number): string {
+    const safeSec = Math.max(0, Math.round(totalSec || 0));
+    if (safeSec <= 0) return "기록 없음";
+    if (safeSec < 60) return `${safeSec}초`;
+    const minutes = Math.floor(safeSec / 60);
+    const seconds = safeSec % 60;
+    if (minutes < 60) return seconds > 0 ? `${minutes}분 ${seconds}초` : `${minutes}분`;
+    const hours = Math.floor(minutes / 60);
+    const restMinutes = minutes % 60;
+    return restMinutes > 0 ? `${hours}시간 ${restMinutes}분` : `${hours}시간`;
+}
+
 export default function StudentAnalyticsTab({
     exams,
     attempts,
@@ -306,6 +318,7 @@ export default function StudentAnalyticsTab({
                     })
                     : "",
                 behavior,
+                elapsedTimeSec: behavior.elapsedTimeSec,
                 date: formatKoreanDate(attempt.finishedAt)
             };
         }).reverse(); // Latest at the top
@@ -770,7 +783,9 @@ export default function StudentAnalyticsTab({
                                         </td>
                                         <td style={{ padding: '1rem 0.5rem', color: 'var(--muted)', fontSize: '0.8rem', lineHeight: 1.45 }}>
                                             {detail.behavior.totalTrackedTimeSec > 0
-                                                ? `평균 ${Math.round(detail.behavior.averageTimeSec)}초`
+                                                ? `응시 ${formatSeconds(detail.elapsedTimeSec)} · 문항 평균 ${formatSeconds(detail.behavior.averageTimeSec)}`
+                                                : detail.elapsedTimeSec > 0
+                                                    ? `응시 ${formatSeconds(detail.elapsedTimeSec)}`
                                                 : '추적 없음'}
                                             {detail.behavior.revisitedQuestionNumbers.length > 0 && (
                                                 <div style={{ color: 'var(--primary)', fontWeight: 800 }}>
