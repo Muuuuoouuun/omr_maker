@@ -271,7 +271,7 @@ export default function GlobalSearch() {
                         <span><kbd style={kbdStyle}>↵</kbd> 선택</span>
                         <span><kbd style={kbdStyle}>Esc</kbd> 닫기</span>
                     </div>
-                    <span>Classin Search</span>
+                    <span>OMR Maker Search</span>
                 </div>
             </div>
         </div>

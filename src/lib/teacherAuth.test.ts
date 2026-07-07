@@ -1,9 +1,11 @@
 import { describe, expect, it } from "vitest";
 import { isTeacherToken } from "./teacherSession";
 import {
+    inspectTeacherAuthConfig,
     mintTeacherToken,
     resolveTeacherCredentials,
     resolveTeacherPassword,
+    TEACHER_AUTH_DEPLOYMENT_CONFIG_ERROR,
     TEACHER_AUTH_ERROR,
     verifyTeacherLogin,
     verifyTeacherPasswordValue,
@@ -86,6 +88,78 @@ describe("teacher auth", () => {
         expect(verifyTeacherLogin("teacher-a", "pass-b", env)).toEqual({ success: false });
     });
 
+    it("reports production deployment auth readiness without relying on Supabase", () => {
+        expect(inspectTeacherAuthConfig({
+            NODE_ENV: "production",
+            NEXT_PUBLIC_SUPABASE_URL: "https://example.supabase.co",
+        })).toMatchObject({
+            ready: false,
+            credentialCount: 0,
+            issues: [
+                expect.objectContaining({
+                    key: "missing-production-teacher-account",
+                    detail: expect.stringContaining("TEACHER_ACCOUNTS"),
+                }),
+            ],
+        });
+
+        expect(inspectTeacherAuthConfig({
+            NODE_ENV: "production",
+            TEACHER_LOGIN_ID: "director",
+            TEACHER_PASSWORD: "secret-pass",
+        })).toMatchObject({
+            ready: true,
+            credentialCount: 1,
+            issues: [],
+        });
+    });
+
+    it("flags malformed or empty multi-teacher account configuration", () => {
+        expect(inspectTeacherAuthConfig({
+            NODE_ENV: "production",
+            TEACHER_ACCOUNTS: "not-json",
+        })).toMatchObject({
+            ready: false,
+            credentialCount: 0,
+            issues: expect.arrayContaining([
+                expect.objectContaining({ key: "invalid-teacher-accounts-json" }),
+                expect.objectContaining({ key: "missing-production-teacher-account" }),
+            ]),
+        });
+
+        expect(inspectTeacherAuthConfig({
+            NODE_ENV: "production",
+            TEACHER_ACCOUNTS: JSON.stringify([{ id: "teacher-a" }]),
+        })).toMatchObject({
+            ready: false,
+            credentialCount: 0,
+            issues: expect.arrayContaining([
+                expect.objectContaining({ key: "empty-teacher-accounts" }),
+                expect.objectContaining({ key: "missing-production-teacher-account" }),
+            ]),
+        });
+    });
+
+    it("flags duplicate teacher ids or emails before they can shadow each other", () => {
+        expect(inspectTeacherAuthConfig({
+            NODE_ENV: "production",
+            TEACHER_ACCOUNTS: JSON.stringify([
+                { id: "teacher-a", email: "shared@example.com", password: "pass-a" },
+                { id: "teacher-a", email: "b@example.com", password: "pass-b" },
+                { id: "teacher-c", email: "shared@example.com", password: "pass-c" },
+            ]),
+        })).toMatchObject({
+            ready: false,
+            credentialCount: 3,
+            issues: [
+                expect.objectContaining({
+                    key: "duplicate-teacher-identifier",
+                    detail: expect.stringContaining("teacher-a"),
+                }),
+            ],
+        });
+    });
+
     it("rejects invalid password inputs without enabling production defaults", () => {
         expect(verifyTeacherPasswordValue(undefined, { NODE_ENV: "development" })).toBe(false);
         expect(verifyTeacherPasswordValue("admin123", { NODE_ENV: "production" })).toBe(false);
@@ -104,5 +178,6 @@ describe("teacher auth", () => {
 
     it("keeps a shared generic failure message", () => {
         expect(TEACHER_AUTH_ERROR).toBe("아이디 또는 비밀번호가 올바르지 않습니다.");
+        expect(TEACHER_AUTH_DEPLOYMENT_CONFIG_ERROR).toBe("배포 환경에 교사 계정이 설정되어 있지 않습니다.");
     });
 });

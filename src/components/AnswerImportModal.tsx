@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect, useId } from 'react';
-import { parseAnswerKeyPdf, ParsedAnswer } from '@/services/answerParser';
+import type { ParsedAnswer } from '@/services/answerParser';
 import { readStoredGeminiApiKey } from '@/lib/geminiApiKey';
 import type { AiAnswerRecognitionMode } from '@/lib/aiAnswerModelRouting';
 import { BrainCircuit, FileText, FolderOpen, RefreshCw, UploadCloud, X } from 'lucide-react';
@@ -59,6 +59,7 @@ export default function AnswerImportModal({ isOpen, onClose, onApply, onUploadAn
                 const { parseAnswerKeyWithGemini } = await import('@/services/answerParser');
                 results = await parseAnswerKeyWithGemini(targetFile, readStoredGeminiApiKey(), { recognitionMode });
             } else {
+                const { parseAnswerKeyPdf } = await import('@/services/answerParser');
                 results = await parseAnswerKeyPdf(targetFile);
             }
 

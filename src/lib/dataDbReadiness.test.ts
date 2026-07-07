@@ -37,7 +37,13 @@ describe("data DB readiness", () => {
             ["roster", "ready"],
             ["analytics", "ready"],
             ["deletions", "ready"],
+            ["production_rls", "warning"],
         ]);
+        expect(summary.checks).toContainEqual(expect.objectContaining({
+            key: "production_rls",
+            label: "실사용 RLS 전환 확인",
+            detail: expect.stringContaining("production-rls.sql"),
+        }));
     });
 
     it("surfaces remote errors and pending deletion tombstones", () => {
@@ -81,6 +87,7 @@ describe("data DB readiness", () => {
             expect.objectContaining({ key: "roster", tone: "warning" }),
             expect.objectContaining({ key: "analytics", tone: "ready" }),
             expect.objectContaining({ key: "deletions", tone: "warning" }),
+            expect.objectContaining({ key: "production_rls", tone: "warning" }),
         ]);
     });
 
@@ -101,6 +108,7 @@ describe("data DB readiness", () => {
             ["roster", "warning"],
             ["analytics", "neutral"],
             ["deletions", "ready"],
+            ["production_rls", "warning"],
         ]);
     });
 });

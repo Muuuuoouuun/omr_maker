@@ -1,57 +1,9 @@
 import { expect, test, type Locator, type Page } from "@playwright/test";
-import { mintTeacherToken } from "../src/lib/teacherAuth";
-import { createSignedTeacherSessionCookie, TEACHER_SERVER_SESSION_COOKIE } from "../src/lib/teacherServerSession";
-import { createTeacherSession, LEGACY_TEACHER_TOKEN_KEY, TEACHER_SESSION_KEY } from "../src/lib/teacherSession";
-
-const TEACHER_IDENTITY = {
-    teacherId: "admin",
-    email: "admin@example.com",
-    displayName: "Demo Admin",
-};
-
-function cookieOrigin(baseURL?: string): string {
-    const url = new URL(baseURL || "http://localhost:3003");
-    return `${url.protocol}//${url.host}`;
-}
+import { loginAsTeacher } from "./helpers";
 
 function isLocalBaseURL(baseURL?: string): boolean {
     const url = new URL(baseURL || "http://localhost:3003");
     return url.hostname === "localhost" || url.hostname === "127.0.0.1" || url.hostname === "::1";
-}
-
-async function authenticateTeacher(page: Page, baseURL?: string) {
-    const token = mintTeacherToken();
-    const session = createTeacherSession(token, Date.now(), TEACHER_IDENTITY);
-    const signedCookie = createSignedTeacherSessionCookie(token, TEACHER_IDENTITY);
-
-    if (!signedCookie) {
-        throw new Error("Failed to create teacher session cookie for e2e test");
-    }
-
-    await page.context().clearCookies();
-    await page.context().addCookies([{
-        name: TEACHER_SERVER_SESSION_COOKIE,
-        value: signedCookie,
-        url: cookieOrigin(baseURL),
-        httpOnly: true,
-        sameSite: "Lax",
-        secure: false,
-    }]);
-
-    await page.addInitScript(() => {
-        try { window.localStorage.clear(); } catch {}
-        try { window.sessionStorage.clear(); } catch {}
-    });
-    await page.addInitScript(({ session, sessionKey, legacyTokenKey }) => {
-        try {
-            window.sessionStorage.setItem(sessionKey, JSON.stringify(session));
-            window.sessionStorage.setItem(legacyTokenKey, session.token);
-        } catch {}
-    }, {
-        legacyTokenKey: LEGACY_TEACHER_TOKEN_KEY,
-        session,
-        sessionKey: TEACHER_SESSION_KEY,
-    });
 }
 
 async function expectNoHorizontalOverflow(page: Page) {
@@ -110,13 +62,12 @@ async function expectTeacherHeaderTouchFriendly(page: Page, options: { hasSearch
 }
 
 test.describe("Teacher phone and tablet app chrome", () => {
-    test.beforeEach(async ({ page, baseURL }) => {
-        test.skip(!isLocalBaseURL(baseURL), "Authenticated teacher mobile checks require local signed test cookies.");
-        await authenticateTeacher(page, baseURL);
+    test.beforeEach(async ({ baseURL }) => {
+        test.skip(!isLocalBaseURL(baseURL), "Authenticated teacher mobile checks require local teacher login.");
     });
 
     test("keeps the dashboard header touch friendly", async ({ page }) => {
-        await page.goto("/teacher/dashboard");
+        await loginAsTeacher(page, "/teacher/dashboard");
 
         await expect(page.getByRole("heading", { name: "Analytics Center" })).toBeVisible();
         await expectTeacherHeaderTouchFriendly(page, { hasSearch: false });
@@ -132,7 +83,7 @@ test.describe("Teacher phone and tablet app chrome", () => {
             { path: "/teacher/settings", heading: "설정" },
             { path: "/teacher/billing", heading: "결제 및 플랜" },
         ]) {
-            await page.goto(route.path);
+            await loginAsTeacher(page, route.path);
 
             await expect(page.getByRole("heading", { name: route.heading })).toBeVisible();
             await expectTeacherHeaderTouchFriendly(page, { hasSearch: true });
@@ -140,7 +91,7 @@ test.describe("Teacher phone and tablet app chrome", () => {
     });
 
     test("keeps the exam creation toolbar touch friendly", async ({ page }) => {
-        await page.goto("/create");
+        await loginAsTeacher(page, "/create");
 
         const toolbar = page.locator(".create-editor-actions");
         await expect(toolbar).toBeVisible();

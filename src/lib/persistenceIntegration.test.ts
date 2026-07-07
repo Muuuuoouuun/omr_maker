@@ -86,8 +86,9 @@ describe("persistence integration", () => {
         expect(teacherLayout).toContain("bootstrapWorkspaceWithServiceRole");
         expect(teacherLayout).toContain("workspaceContextFromTeacherSession(serverSession)");
         expect(teacherLayout).toContain("initialSession={serverSession}");
+        expect(teacherLayout).toContain("requireServerSession");
         expect(createLayout).toContain("parseSignedTeacherSessionCookie");
-        expect(createLayout).toContain("next=%2Fcreate");
+        expect(createLayout).toContain("requireServerSession");
         expect(createLayout).toContain("bootstrapWorkspaceWithServiceRole");
         expect(createLayout).toContain("workspaceContextFromTeacherSession(serverSession)");
         expect(createLayout).toContain("TeacherAuthGate");

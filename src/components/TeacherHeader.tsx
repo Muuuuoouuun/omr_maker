@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { Activity, Search } from "lucide-react";
+import BrandLogo from "./BrandLogo";
 import ThemeToggle from "./ThemeToggle";
 import GlobalSearch from "./GlobalSearch";
 import NotificationBell from "./NotificationBell";
@@ -31,7 +32,7 @@ export default function TeacherHeader({ badge = "TEACHER", badgeColor }: Teacher
             <header className="header teacher-header">
                 <div className="container header-content">
                     <div className="teacher-header-brand" style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
-                        <Link href="/" className="logo">Classin</Link>
+                        <BrandLogo />
                         <span style={{
                             fontSize: '0.75rem', fontWeight: 700,
                             background: `color-mix(in srgb, ${color}, transparent 88%)`,

@@ -2,7 +2,7 @@ import { summarizePersistenceHealth, type PersistenceHealth, type PersistenceHea
 import type { RosterTombstones } from "@/lib/rosterPersistence";
 
 export type DataDbReadinessMetricKey = "exams" | "attempts" | "roster" | "deleted_rows";
-export type DataDbReadinessCheckKey = "storage" | "roster" | "analytics" | "deletions";
+export type DataDbReadinessCheckKey = "storage" | "roster" | "analytics" | "deletions" | "production_rls";
 export type DataDbReadinessTone = "ready" | "warning" | "error" | "neutral";
 
 export interface DataDbReadinessMetric {
@@ -198,6 +198,12 @@ export function buildDataDbReadiness(input: DataDbReadinessInput): DataDbReadine
                 ? `${tombstoneCount}개 삭제/보관 표시가 원격 재동기화 대상입니다.`
                 : "삭제된 학생/반이 다시 나타나지 않도록 보관 표시가 정리되어 있습니다.",
             tone: tombstoneCount > 0 ? "warning" : "ready",
+        },
+        {
+            key: "production_rls",
+            label: "실사용 RLS 전환 확인",
+            detail: "실제 학생 데이터를 저장하기 전 Supabase Auth, 조직 멤버십, production-rls.sql 정책 적용을 확인하세요.",
+            tone: "warning",
         },
     ];
 

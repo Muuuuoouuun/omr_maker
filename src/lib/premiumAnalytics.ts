@@ -113,7 +113,8 @@ export interface ClassExamWeaknessMatrixRow {
     submittedRosterStudentCount: number;
     missingStudentCount: number;
     missingStudentNames: string[];
-    participationRate: number;
+    /** Roster-based turnout. `null` when no roster is linked (denominator unknown). */
+    participationRate: number | null;
     averageScorePercent: number;
     wrongCount: number;
     totalCount: number;
@@ -198,6 +199,11 @@ const RESULT_BASIS_BY_KIND: Record<QuestionResultGroupKind, string> = {
 
 function roundPercent(numerator: number, denominator: number): number {
     return denominator > 0 ? Math.round((numerator / denominator) * 100) : 0;
+}
+
+/** Formats a roster turnout for display: `"명단 미연결"` when unknown (null), else `"NN%"`. */
+export function formatParticipationRateLabel(rate: number | null): string {
+    return rate === null ? "명단 미연결" : `${rate}%`;
 }
 
 function roundScore(value: number): number {
@@ -1004,9 +1010,11 @@ export function buildClassExamWeaknessMatrix(
             submittedRosterStudentCount,
             missingStudentCount: missingStudents.length,
             missingStudentNames: missingStudents.map(student => student.name).slice(0, 5),
+            // Without a linked roster the denominator (enrolled students) is unknown, so
+            // turnout is genuinely uncomputable — report null instead of a misleading 100%.
             participationRate: rosterStudentCount > 0
                 ? roundPercent(submittedRosterStudentCount, rosterStudentCount)
-                : (studentKeys.size > 0 ? 100 : 0),
+                : null,
             averageScorePercent,
             wrongCount: wrongResults.length,
             totalCount: gradableResults.length,
@@ -1019,7 +1027,10 @@ export function buildClassExamWeaknessMatrix(
 
     const sortedRows = rows.sort((a, b) => {
         if (b.wrongRate !== a.wrongRate) return b.wrongRate - a.wrongRate;
-        if (a.participationRate !== b.participationRate) return a.participationRate - b.participationRate;
+        // Unknown turnout (null) sorts last for this criterion so it is not flagged as low attendance.
+        const aParticipation = a.participationRate ?? 101;
+        const bParticipation = b.participationRate ?? 101;
+        if (aParticipation !== bParticipation) return aParticipation - bParticipation;
         if (a.averageScorePercent !== b.averageScorePercent) return a.averageScorePercent - b.averageScorePercent;
         if (b.attemptCount !== a.attemptCount) return b.attemptCount - a.attemptCount;
         return a.groupName.localeCompare(b.groupName, "ko");

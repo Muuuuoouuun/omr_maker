@@ -16,6 +16,13 @@
 /test-results
 /playwright/.cache
 
+# local lint reports
+/eslint*.json
+/eslint*.log
+/lint*.json
+/lint*.txt
+/lint_*.txt
+
 # next.js
 /.next/
 /out/

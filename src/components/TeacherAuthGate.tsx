@@ -2,6 +2,7 @@
 
 import { useEffect, useState, type ReactNode } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { ShieldCheck } from "lucide-react";
 import {
     normalizeTeacherRedirectPath,
@@ -14,6 +15,7 @@ import {
 interface TeacherAuthGateProps {
     children: ReactNode;
     initialSession?: TeacherSession | null;
+    requireServerSession?: boolean;
 }
 
 const MAX_SESSION_RECHECK_DELAY_MS = 2_147_000_000;
@@ -34,7 +36,8 @@ function initialAuthStatus(initialSession: TeacherSession | null | undefined): "
     return teacherSessionRemainingMs(initialSession) > 0 ? "authenticated" : "checking";
 }
 
-export default function TeacherAuthGate({ children, initialSession = null }: TeacherAuthGateProps) {
+export default function TeacherAuthGate({ children, initialSession = null, requireServerSession = false }: TeacherAuthGateProps) {
+    const router = useRouter();
     const [authState, setAuthState] = useState<{
         status: "checking" | "authenticated" | "anonymous";
         loginHref: string;
@@ -53,6 +56,14 @@ export default function TeacherAuthGate({ children, initialSession = null }: Tea
 
         const syncAuthState = () => {
             if (cancelled) return;
+            if (requireServerSession && !initialSession) {
+                setAuthState({
+                    loginHref: buildLoginHref(),
+                    status: "anonymous",
+                });
+                clearExpiryTimer();
+                return;
+            }
             const session = readTeacherSession() || initialSession;
             const remainingMs = teacherSessionRemainingMs(session);
             if (remainingMs > 0) {
@@ -86,7 +97,12 @@ export default function TeacherAuthGate({ children, initialSession = null }: Tea
             window.removeEventListener("focus", handleFocus);
             document.removeEventListener("visibilitychange", handleVisibilityChange);
         };
-    }, [initialSession]);
+    }, [initialSession, requireServerSession]);
+
+    useEffect(() => {
+        if (authState.status !== "anonymous") return;
+        router.replace(authState.loginHref);
+    }, [authState.loginHref, authState.status, router]);
 
     if (authState.status === "checking") {
         return (

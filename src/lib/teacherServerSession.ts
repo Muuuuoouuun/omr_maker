@@ -26,6 +26,8 @@ export function shouldUseSecureTeacherSessionCookie(
     hostHeader: string | null | undefined,
     env: Env = process.env,
 ): boolean {
+    const localE2eOverride = clean(env.OMR_ALLOW_INSECURE_TEACHER_COOKIE_FOR_LOCAL_E2E).toLowerCase();
+    if (localE2eOverride === "1" || localE2eOverride === "true") return false;
     if (env.NODE_ENV !== "production") return false;
 
     const host = clean(hostHeader).toLowerCase().split(",")[0]?.trim() || "";

@@ -67,8 +67,8 @@ export default function OMRCardView({
       }, {} as Record<number, number>)
     : userAnswers;
 
-  const answeredCount = Object.keys(effectiveAnswers).filter(
-    (k) => effectiveAnswers[Number(k)] !== undefined && effectiveAnswers[Number(k)] !== null
+  const answeredCount = questions.filter(
+    (question) => effectiveAnswers[question.id] !== undefined && effectiveAnswers[question.id] !== null
   ).length;
   const totalCount = questions.length;
   const progress = totalCount > 0 ? (answeredCount / totalCount) * 100 : 0;
@@ -148,7 +148,7 @@ export default function OMRCardView({
               } ${isEditor ? "editor-card" : ""} ${handwritingSummary ? "has-handwriting" : ""}`}
               onClick={() => onQuestionClick?.(q.id)}
             >
-              <div className="q-card-num">{q.number}</div>
+              <div className="q-card-num">{q.number}.</div>
 
               <div className="q-card-bubbles">
                 {Array.from({ length: questionOptionsCount }, (_, i) => {

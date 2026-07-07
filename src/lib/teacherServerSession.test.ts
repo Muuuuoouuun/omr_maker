@@ -64,6 +64,10 @@ describe("teacher server session", () => {
         expect(shouldUseSecureTeacherSessionCookie("[::1]:3004", env)).toBe(false);
         expect(shouldUseSecureTeacherSessionCookie("omr.localhost:3004", env)).toBe(false);
         expect(shouldUseSecureTeacherSessionCookie("omr.example.com", { NODE_ENV: "development" })).toBe(false);
+        expect(shouldUseSecureTeacherSessionCookie("omr.example.com", {
+            NODE_ENV: "production",
+            OMR_ALLOW_INSECURE_TEACHER_COOKIE_FOR_LOCAL_E2E: "true",
+        })).toBe(false);
     });
 
     it("exports the stable cookie name used by server guards", () => {

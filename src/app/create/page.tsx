@@ -1,6 +1,6 @@
 "use client";
 
-import Link from "next/link";
+import BrandLogo from "@/components/BrandLogo";
 import OMRCardView from "@/components/OMRCardView";
 import OMRPreview from "@/components/OMRPreview";
 import dynamic from "next/dynamic";
@@ -11,14 +11,14 @@ import TeacherSessionChip from "@/components/TeacherSessionChip";
 import ThemeToggle from "@/components/ThemeToggle";
 import { useRouter, useSearchParams } from "next/navigation";
 import { toast } from "@/components/Toast";
-import { BrainCircuit, Crosshair, FileText, FolderOpen, Loader2, PanelRightClose, PanelRightOpen, RefreshCw, Redo2, RotateCcw, Save, Unlink, Undo2, X } from "lucide-react";
+import { ArrowUpToLine, BrainCircuit, ChevronDown, Crosshair, FileText, FolderOpen, Loader2, Maximize2, Minimize2, PanelRightClose, PanelRightOpen, RefreshCw, Redo2, RotateCcw, Save, Unlink, Undo2, X, ZoomIn, ZoomOut } from "lucide-react";
 
 const PDFViewer = dynamic(() => import("@/components/PDFViewer"), { ssr: false });
-import { Suspense, useState, useEffect, useRef, useCallback, useMemo } from "react";
-import html2canvas from "html2canvas";
+import { Suspense, useState, useEffect, useRef, useCallback, useMemo, type CSSProperties } from "react";
 import { DEFAULT_CHOICE_COUNT, questionChoiceCount, type Exam, type Question } from "@/types/omr";
-import { ParsedAnswer } from "@/services/answerParser";
+import type { ParsedAnswer } from "@/services/answerParser";
 import { saveFileDataUrl, storedDataUrlToFile } from "@/utils/blobStore";
+import { secureRandomId } from "@/utils/ids";
 import { validateExamDraft } from "@/lib/examValidation";
 import { buildExamServiceReadiness, type ExamServiceReadinessLevel } from "@/lib/examServiceReadiness";
 import { readStoredExamDefaults } from "@/lib/appSettings";
@@ -62,11 +62,23 @@ const DRAFT_KEY = "omr_exam_draft";
 const AUTOSAVE_INTERVAL_MS = 2000;
 const HISTORY_LIMIT = 20;
 const PDF_PANE_MIN_WIDTH = 200;
+const PDF_PANE_DEFAULT_WIDTH = 600;
 const SETTINGS_SIDEBAR_MIN_WIDTH = 250;
+const SETTINGS_SIDEBAR_DEFAULT_WIDTH = 320;
+const SETTINGS_SIDEBAR_COMFORT_WIDTH = 500;
 const PREVIEW_PANE_MIN_WIDTH = 260;
 const PREVIEW_RAIL_WIDTH = 64;
 const DESKTOP_RESIZER_TOTAL_WIDTH = 12;
+const PDF_PANE_EXPANDED_MIN_WIDTH = 300;
+const SETTINGS_ZOOM_MIN = 0.9;
+const SETTINGS_ZOOM_MAX = 1.18;
+const SETTINGS_ZOOM_STEP = 0.08;
 type QuestionDifficulty = NonNullable<NonNullable<Question["tags"]>["difficulty"]>;
+
+function clampLayoutWidth(value: number, min: number, max: number): number {
+    const safeMax = Math.max(min, max);
+    return Math.max(min, Math.min(value, safeMax));
+}
 
 const DIFFICULTY_OPTIONS: Array<{ value: QuestionDifficulty; label: string; tone: string }> = [
     { value: "easy", label: "기초", tone: "#10b981" },
@@ -325,6 +337,7 @@ function CreateOMRPageInner() {
     const [isImportModalOpen, setIsImportModalOpen] = useState(false);
     const [isDistributeModalOpen, setIsDistributeModalOpen] = useState(false);
     const [confirmState, setConfirmState] = useState<CreateConfirmState | null>(null);
+    const [isAdvancedDesignOpen, setIsAdvancedDesignOpen] = useState(false);
 
     // OMR Data State
     const [title, setTitle] = useState("기말고사 OMR");
@@ -352,11 +365,142 @@ function CreateOMRPageInner() {
     const [fastAnswer, setFastAnswer] = useState("");
 
     // Layout Sizing
-    const [pdfWidth, setPdfWidth] = useState(600);
-    const [sidebarWidth, setSidebarWidth] = useState(320);
-    const [previewMode, setPreviewMode] = useState<'modern' | 'paper'>('modern');
-    const [showPaperAnswerKey, setShowPaperAnswerKey] = useState(false);
+    const [pdfWidth, setPdfWidth] = useState(PDF_PANE_DEFAULT_WIDTH);
+    const [sidebarWidth, setSidebarWidth] = useState(SETTINGS_SIDEBAR_DEFAULT_WIDTH);
+    const [settingsZoom, setSettingsZoom] = useState(1);
     const [isPreviewCollapsed, setIsPreviewCollapsed] = useState(false);
+    const [activeResizer, setActiveResizer] = useState<'pdf' | 'sidebar' | null>(null);
+    const createWorkspaceRef = useRef<HTMLDivElement>(null);
+    const settingsSidebarRef = useRef<HTMLElement>(null);
+
+    const getWorkspaceLayoutWidth = useCallback(() => {
+        if (createWorkspaceRef.current) {
+            return createWorkspaceRef.current.getBoundingClientRect().width;
+        }
+        return typeof window === "undefined" ? 0 : window.innerWidth;
+    }, []);
+
+    const fitSidebarWidth = useCallback((targetWidth: number, reclaimPdfSpace = false, workspaceWidthOverride?: number) => {
+        const previewWidth = isPreviewCollapsed ? PREVIEW_RAIL_WIDTH : PREVIEW_PANE_MIN_WIDTH;
+        const workspaceWidth = workspaceWidthOverride ?? getWorkspaceLayoutWidth();
+        const minPdfWidth = isPreviewCollapsed ? PDF_PANE_MIN_WIDTH : PDF_PANE_EXPANDED_MIN_WIDTH;
+        const sharedPaneWidth = Math.max(
+            minPdfWidth + SETTINGS_SIDEBAR_MIN_WIDTH,
+            workspaceWidth - previewWidth - DESKTOP_RESIZER_TOTAL_WIDTH
+        );
+        const maxSidebarWidth = Math.max(
+            SETTINGS_SIDEBAR_MIN_WIDTH,
+            reclaimPdfSpace
+                ? sharedPaneWidth - minPdfWidth
+                : isPreviewCollapsed
+                    ? sharedPaneWidth - PDF_PANE_MIN_WIDTH
+                    : workspaceWidth - pdfWidth - previewWidth - DESKTOP_RESIZER_TOTAL_WIDTH
+        );
+        const nextSidebarWidth = clampLayoutWidth(targetWidth, SETTINGS_SIDEBAR_MIN_WIDTH, maxSidebarWidth);
+        setSidebarWidth(nextSidebarWidth);
+        if (reclaimPdfSpace || isPreviewCollapsed) {
+            const nextPdfWidth = clampLayoutWidth(
+                sharedPaneWidth - nextSidebarWidth,
+                minPdfWidth,
+                Math.max(minPdfWidth, sharedPaneWidth - SETTINGS_SIDEBAR_MIN_WIDTH)
+            );
+            setPdfWidth(nextPdfWidth);
+        }
+    }, [getWorkspaceLayoutWidth, isPreviewCollapsed, pdfWidth]);
+
+    const applyPdfWidth = useCallback((targetWidth: number, workspaceWidthOverride?: number) => {
+        const previewWidth = isPreviewCollapsed ? PREVIEW_RAIL_WIDTH : PREVIEW_PANE_MIN_WIDTH;
+        const workspaceWidth = workspaceWidthOverride ?? getWorkspaceLayoutWidth();
+        const sharedPaneWidth = Math.max(
+            PDF_PANE_MIN_WIDTH + SETTINGS_SIDEBAR_MIN_WIDTH,
+            workspaceWidth - previewWidth - DESKTOP_RESIZER_TOTAL_WIDTH
+        );
+        const minPdfWidth = isPreviewCollapsed ? PDF_PANE_MIN_WIDTH : PDF_PANE_EXPANDED_MIN_WIDTH;
+        const maxPdfWidth = Math.max(
+            minPdfWidth,
+            isPreviewCollapsed
+                ? sharedPaneWidth - SETTINGS_SIDEBAR_MIN_WIDTH
+                : workspaceWidth - sidebarWidth - previewWidth - DESKTOP_RESIZER_TOTAL_WIDTH
+        );
+        const nextPdfWidth = clampLayoutWidth(targetWidth, minPdfWidth, maxPdfWidth);
+        setPdfWidth(nextPdfWidth);
+        if (isPreviewCollapsed) {
+            setSidebarWidth(sharedPaneWidth - nextPdfWidth);
+        }
+    }, [getWorkspaceLayoutWidth, isPreviewCollapsed, sidebarWidth]);
+
+    // Shared pointer-drag lifecycle for the two panel resizers: caches the workspace
+    // width once (avoids a layout read per pointermove) and coalesces updates to one
+    // per animation frame so panel edges track the cursor smoothly instead of
+    // fighting the panels' own width/flex-basis CSS transition.
+    const beginPanelDrag = useCallback((
+        e: React.PointerEvent<HTMLDivElement>,
+        resizerId: 'pdf' | 'sidebar',
+        startWidth: number,
+        onDrag: (nextWidth: number, workspaceWidth: number) => void,
+    ) => {
+        if (e.button !== 0) return;
+        e.preventDefault();
+        const target = e.currentTarget;
+        const pointerId = e.pointerId;
+        const startX = e.clientX;
+        const workspaceWidth = getWorkspaceLayoutWidth();
+        try {
+            // Best-effort: keeps the drag tracking correctly even if the
+            // pointer momentarily leaves the 6px hit area or the browser
+            // window. Listeners below are on `document`, so the drag still
+            // works fine if capture isn't available.
+            target.setPointerCapture(pointerId);
+        } catch {
+            // no-op
+        }
+        setActiveResizer(resizerId);
+
+        let rafId = 0;
+        let latestClientX = startX;
+        const applyPending = () => {
+            rafId = 0;
+            onDrag(startWidth + (latestClientX - startX), workspaceWidth);
+        };
+        const onPointerMove = (moveEvent: PointerEvent) => {
+            latestClientX = moveEvent.clientX;
+            if (!rafId) rafId = requestAnimationFrame(applyPending);
+        };
+        const stopDragging = () => {
+            if (rafId) {
+                // A pending frame means the last pointermove hasn't been applied
+                // yet; flush it now so release doesn't drop the final position.
+                cancelAnimationFrame(rafId);
+                applyPending();
+            }
+            if (target.hasPointerCapture(pointerId)) target.releasePointerCapture(pointerId);
+            document.removeEventListener('pointermove', onPointerMove);
+            document.removeEventListener('pointerup', stopDragging);
+            document.removeEventListener('pointercancel', stopDragging);
+            setActiveResizer(null);
+        };
+        document.addEventListener('pointermove', onPointerMove);
+        document.addEventListener('pointerup', stopDragging);
+        document.addEventListener('pointercancel', stopDragging);
+    }, [getWorkspaceLayoutWidth]);
+
+    const adjustSettingsZoom = useCallback((delta: number) => {
+        setSettingsZoom(prev => {
+            const next = Math.round((prev + delta) * 100) / 100;
+            return Math.max(SETTINGS_ZOOM_MIN, Math.min(SETTINGS_ZOOM_MAX, next));
+        });
+    }, []);
+
+    const scrollSettingsToTop = useCallback(() => {
+        settingsSidebarRef.current?.scrollTo({ top: 0, behavior: "smooth" });
+    }, []);
+
+    const toggleComfortSidebarWidth = useCallback(() => {
+        const nextWidth = sidebarWidth >= SETTINGS_SIDEBAR_COMFORT_WIDTH - 24
+            ? SETTINGS_SIDEBAR_DEFAULT_WIDTH
+            : SETTINGS_SIDEBAR_COMFORT_WIDTH;
+        fitSidebarWidth(nextWidth, true);
+    }, [fitSidebarWidth, sidebarWidth]);
 
     // PDF State
     const [pdfFile, setPdfFile] = useState<File | null>(null);
@@ -399,6 +543,16 @@ function CreateOMRPageInner() {
     const recentConceptOptions = useMemo(
         () => questionLabelUsageValues(labelSettings.recentConcepts, 8),
         [labelSettings.recentConcepts],
+    );
+    const hasSelectedAdvancedDesign = Boolean(
+        selectedQuestion?.tags?.unit ||
+        selectedQuestion?.tags?.concept ||
+        selectedQuestion?.tags?.difficulty ||
+        selectedQuestion?.tags?.cognitiveLevel ||
+        selectedQuestion?.tags?.expectedTimeSec ||
+        selectedQuestion?.tags?.source ||
+        selectedQuestion?.tags?.mistakeTypes?.length ||
+        selectedQuestion?.explanation,
     );
     const hasProblemPdfForValidation = !!pdfFile || !!loadedExam?.pdfData || !!loadedExam?.pdfDataRef;
     const hasAnswerKeyPdfForValidation = !!answerKeyPdf || !!loadedExam?.answerKeyPdf || !!loadedExam?.answerKeyPdfRef;
@@ -443,6 +597,13 @@ function CreateOMRPageInner() {
         accessConfig: loadedExam?.accessConfig,
     }), [title, validationSummary, hasProblemPdfForValidation, hasAnswerKeyPdfForValidation, loadedExam?.accessConfig]);
     const serviceReadinessTone = useMemo(() => readinessTone(serviceReadiness.level), [serviceReadiness.level]);
+    const compactReadinessItems = serviceReadiness.items.map(item => item).filter(item =>
+        item.key === "answers" || item.key === "problem_pdf" || item.key === "distribution"
+    );
+    const validationTooltip = [...validationSummary.errors, ...validationSummary.warnings]
+        .slice(0, 3)
+        .map(item => item.message)
+        .join("\n");
     const answeredPercent = questionsCount > 0
         ? Math.min(100, Math.round((designSummary.answered / questionsCount) * 100))
         : 0;
@@ -1156,7 +1317,8 @@ function CreateOMRPageInner() {
             }
 
             // Editing? Reuse the existing ID and preserve createdAt; otherwise mint a new one.
-            const id = loadedExam?.id || Date.now().toString(36);
+            // Unguessable id so shareable /solve/[id] links can't be enumerated.
+            const id = loadedExam?.id || secureRandomId();
             const createdAt = loadedExam?.createdAt || new Date().toISOString();
             let pdfData = loadedExam?.pdfData || "";
             let pdfDataRef = loadedExam?.pdfDataRef;
@@ -1310,11 +1472,16 @@ function CreateOMRPageInner() {
         const maxDigit = defaultChoices;
         const digitRegex = new RegExp(`[^1-${maxDigit}]`, 'g');
         const val = e.target.value.replace(digitRegex, '');
+        const previousLength = fastAnswer.length;
+        const shouldClearTrimmedAnswers = val.length < previousLength;
         setFastAnswer(val);
 
         setQuestions(prev => prev.map((q, i) => {
             if (i < val.length) {
                 return { ...q, answer: parseInt(val[i]) };
+            }
+            if (shouldClearTrimmedAnswers && i < previousLength && q.answer !== undefined) {
+                return { ...q, answer: undefined };
             }
             return q;
         }));
@@ -1329,6 +1496,7 @@ function CreateOMRPageInner() {
 
         setIsSaving(true);
         try {
+            const { default: html2canvas } = await import("html2canvas");
             const canvas = await html2canvas(element, { scale: 2 });
             const dataUrl = canvas.toDataURL("image/png");
 
@@ -1350,9 +1518,7 @@ function CreateOMRPageInner() {
             <header className="header" style={{ flexShrink: 0 }}>
                 <div className="container header-content create-editor-header" style={{ maxWidth: '100%', padding: '0 2rem' }}>
                     <div className="create-editor-brand" style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
-                        <Link href="/" className="logo" style={{ textDecoration: 'none' }}>
-                            OMR Maker
-                        </Link>
+                        <BrandLogo compact />
                         <span className="badge badge-primary" style={{ fontSize: '0.68rem' }}>
                             Smart Editor
                         </span>
@@ -1444,13 +1610,13 @@ function CreateOMRPageInner() {
                 />
             )}
 
-            <div className={`create-workspace ${isPreviewCollapsed ? 'is-preview-collapsed' : ''}`} style={{ display: 'flex', flex: 1, height: 'calc(var(--app-viewport-height, 100dvh) - 4rem)', overflow: 'hidden' }}>
+            <div ref={createWorkspaceRef} className={`create-workspace ${isPreviewCollapsed ? 'is-preview-collapsed' : ''} ${activeResizer ? 'is-resizing' : ''}`} style={{ display: 'flex', flex: 1, height: 'calc(var(--app-viewport-height, 100dvh) - 4rem)', overflow: 'hidden' }}>
 
                 {/* 1. PDF Viewer Area */}
                 <div className="create-pdf-pane" style={{
                     width: `${pdfWidth}px`,
-                    minWidth: isPreviewCollapsed ? `${PDF_PANE_MIN_WIDTH}px` : '300px',
-                    flex: isPreviewCollapsed ? `1 1 ${pdfWidth}px` : `0 0 ${pdfWidth}px`,
+                    minWidth: isPreviewCollapsed ? `${PDF_PANE_MIN_WIDTH}px` : `${PDF_PANE_EXPANDED_MIN_WIDTH}px`,
+                    flex: `0 0 ${pdfWidth}px`,
                     borderRight: '1px solid var(--border)',
                     background: '#222',
                     position: 'relative',
@@ -1540,34 +1706,19 @@ function CreateOMRPageInner() {
 
                 {/* Resizer 1 */}
                 <div
-                    className="create-resizer"
+                    className={`create-resizer ${activeResizer === 'pdf' ? 'is-active' : ''}`}
                     style={{ width: '6px', background: 'var(--border)', cursor: 'col-resize', position: 'relative', zIndex: 10 }}
-                    onMouseDown={(e) => {
-                        e.preventDefault();
-                        const startX = e.clientX;
-                        const startWidth = pdfWidth;
-                        const onMouseMove = (moveEvent: MouseEvent) => {
-                            const newWidth = startWidth + (moveEvent.clientX - startX);
-                            const previewWidth = isPreviewCollapsed ? PREVIEW_RAIL_WIDTH : PREVIEW_PANE_MIN_WIDTH;
-                            const maxPdfWidth = Math.max(
-                                PDF_PANE_MIN_WIDTH,
-                                window.innerWidth - sidebarWidth - previewWidth - DESKTOP_RESIZER_TOTAL_WIDTH
-                            );
-                            setPdfWidth(Math.max(PDF_PANE_MIN_WIDTH, Math.min(newWidth, maxPdfWidth)));
-                        };
-                        const onMouseUp = () => {
-                            document.removeEventListener('mousemove', onMouseMove);
-                            document.removeEventListener('mouseup', onMouseUp);
-                        };
-                        document.addEventListener('mousemove', onMouseMove);
-                        document.addEventListener('mouseup', onMouseUp);
-                    }}
+                    onPointerDown={(e) => beginPanelDrag(e, 'pdf', pdfWidth, applyPdfWidth)}
+                    onDoubleClick={() => applyPdfWidth(PDF_PANE_DEFAULT_WIDTH)}
+                    role="separator"
+                    aria-orientation="vertical"
+                    title="드래그해서 PDF 영역 크기 조절 · 더블클릭하면 기본 크기로"
                 >
                     <div style={{ width: '2px', height: '20px', background: '#aaa', position: 'absolute', top: '50%', left: '2px', transform: 'translateY(-50%)', borderRadius: '2px' }} />
                 </div>
 
                 {/* 2. Settings Sidebar */}
-                <aside className="glass-panel scroll-custom create-settings-sidebar" style={{
+                <aside ref={settingsSidebarRef} className="glass-panel scroll-custom create-settings-sidebar" style={{
                     width: `${sidebarWidth}px`,
                     minWidth: `${SETTINGS_SIDEBAR_MIN_WIDTH}px`,
                     flex: isPreviewCollapsed ? `1 1 ${sidebarWidth}px` : `0 0 ${sidebarWidth}px`,
@@ -1586,14 +1737,56 @@ function CreateOMRPageInner() {
                                 {editId ? '시험 편집' : '새 시험'} · {questionsCount}문항 · {defaultChoices}지선다
                             </div>
                         </div>
-                        <span
-                            className={`create-publish-chip ${serviceReadiness.canOpenDistribution ? 'is-ready' : 'needs-work'}`}
-                            title={serviceReadiness.detail}
-                        >
-                            {serviceReadiness.canOpenDistribution ? '배포 가능' : '확인 필요'}
-                        </span>
+                        <div className="create-settings-toolbar">
+                            <button
+                                type="button"
+                                className="create-settings-tool-button"
+                                onClick={() => adjustSettingsZoom(-SETTINGS_ZOOM_STEP)}
+                                disabled={settingsZoom <= SETTINGS_ZOOM_MIN}
+                                aria-label="설정 내용 축소"
+                                title="설정 내용 축소"
+                            >
+                                <ZoomOut size={14} />
+                            </button>
+                            <span className="create-settings-zoom-value">{Math.round(settingsZoom * 100)}%</span>
+                            <button
+                                type="button"
+                                className="create-settings-tool-button"
+                                onClick={() => adjustSettingsZoom(SETTINGS_ZOOM_STEP)}
+                                disabled={settingsZoom >= SETTINGS_ZOOM_MAX}
+                                aria-label="설정 내용 확대"
+                                title="설정 내용 확대"
+                            >
+                                <ZoomIn size={14} />
+                            </button>
+                            <button
+                                type="button"
+                                className="create-settings-tool-button"
+                                onClick={scrollSettingsToTop}
+                                aria-label="설정 맨 위로 이동"
+                                title="설정 맨 위로 이동"
+                            >
+                                <ArrowUpToLine size={14} />
+                            </button>
+                            <button
+                                type="button"
+                                className="create-settings-tool-button"
+                                onClick={toggleComfortSidebarWidth}
+                                aria-label={sidebarWidth >= SETTINGS_SIDEBAR_COMFORT_WIDTH - 24 ? "설정 패널 기본 폭" : "설정 패널 넓게 보기"}
+                                title={sidebarWidth >= SETTINGS_SIDEBAR_COMFORT_WIDTH - 24 ? "설정 패널 기본 폭" : "설정 패널 넓게 보기"}
+                            >
+                                {sidebarWidth >= SETTINGS_SIDEBAR_COMFORT_WIDTH - 24 ? <Minimize2 size={14} /> : <Maximize2 size={14} />}
+                            </button>
+                            <span
+                                className={`create-publish-chip ${serviceReadiness.canOpenDistribution ? 'is-ready' : 'needs-work'}`}
+                                title={serviceReadiness.detail}
+                            >
+                                {serviceReadiness.canOpenDistribution ? '배포 가능' : '확인 필요'}
+                            </span>
+                        </div>
                     </div>
 
+                    <div className="create-settings-content" style={{ zoom: settingsZoom } as CSSProperties & { zoom: number }}>
                     <div style={{ marginBottom: '1.5rem' }}>
                         {answerKeyPdf && (
                             <div style={{ marginBottom: '1rem', padding: '0.8rem', background: 'rgba(16, 185, 129, 0.08)', borderRadius: 'var(--radius-md)', border: '1px solid rgba(16, 185, 129, 0.25)', fontSize: '0.85rem' }}>
@@ -1608,130 +1801,80 @@ function CreateOMRPageInner() {
                             </div>
                         )}
 
-                        <div style={{ marginBottom: '1rem', padding: '0.85rem', background: 'var(--background)', border: '1px solid var(--border)', borderRadius: 'var(--radius-md)' }}>
-                            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '0.75rem', marginBottom: '0.65rem' }}>
-                                <div>
-                                    <div style={{ fontSize: '0.85rem', fontWeight: 800, color: 'var(--foreground)' }}>설계 체크</div>
-                                    <div style={{ fontSize: '0.72rem', color: 'var(--muted)', marginTop: '2px' }}>
-                                        배포 전 강사가 바로 확인할 핵심 상태입니다.
-                                    </div>
+                        <div className="create-design-check-compact">
+                            <div className="create-design-check-top">
+                                <div className="create-design-check-title">
+                                    <span>설계 체크</span>
                                 </div>
-                                <span style={{
-                                    fontSize: '0.7rem',
-                                    fontWeight: 800,
-                                    color: designSummary.answered === questionsCount ? 'var(--success)' : 'var(--warning)',
-                                    background: designSummary.answered === questionsCount ? 'rgba(16,185,129,0.08)' : 'rgba(245,158,11,0.1)',
-                                    padding: '3px 8px',
-                                    borderRadius: 'var(--radius-full)',
-                                    whiteSpace: 'nowrap'
-                                }}>
+                                <span
+                                    className={`create-design-check-pill ${designSummary.answered === questionsCount ? 'is-ready' : 'needs-work'}`}
+                                >
                                     {designSummary.answered}/{questionsCount} 정답
                                 </span>
                             </div>
-                            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.45rem' }}>
+
+                            <div className="create-design-metrics-mini">
                                 {[
-                                    { label: '개념 태그', value: `${designSummary.conceptTagged}/${questionsCount}` },
-                                    { label: '개념 수', value: `${designSummary.conceptCount}개` },
-                                    { label: '심화/킬러', value: `${designSummary.highDifficulty}문항` },
-                                    { label: 'PDF 연결', value: `${designSummary.pdfLinked}/${questionsCount}` },
-                                    { label: '필기 영역', value: `${designSummary.pdfRegionLinked}/${questionsCount}` },
+                                    { label: '개념', value: `${designSummary.conceptTagged}/${questionsCount}` },
+                                    { label: 'PDF', value: `${designSummary.pdfLinked}/${questionsCount}` },
+                                    { label: '필기', value: `${designSummary.pdfRegionLinked}/${questionsCount}` },
+                                    { label: '심화', value: `${designSummary.highDifficulty}` },
                                 ].map(item => (
-                                    <div key={item.label} style={{ padding: '0.55rem', background: 'var(--surface)', borderRadius: '8px', border: '1px solid var(--border)' }}>
-                                        <div style={{ fontSize: '0.68rem', color: 'var(--muted)', fontWeight: 700, marginBottom: '0.18rem' }}>{item.label}</div>
-                                        <div style={{ fontSize: '0.92rem', color: 'var(--foreground)', fontWeight: 800 }}>{item.value}</div>
+                                    <div key={item.label} className="create-design-metric-mini">
+                                        <span>{item.label}</span>
+                                        <strong>{item.value}</strong>
                                     </div>
                                 ))}
                             </div>
+
+                            <div
+                                className="create-readiness-line"
+                                style={{
+                                    '--readiness-color': serviceReadinessTone.color,
+                                    '--readiness-bg': serviceReadinessTone.background,
+                                    '--readiness-border': serviceReadinessTone.border,
+                                } as CSSProperties}
+                                title={serviceReadiness.detail}
+                            >
+                                <span className="create-readiness-dot" />
+                                <strong>운영 점검</strong>
+                                <span>{serviceReadiness.label}</span>
+                                <em>{serviceReadiness.detail}</em>
+                            </div>
+
+                            <div className="create-readiness-mini-list">
+                                {compactReadinessItems.map(item => {
+                                    const tone = readinessTone(item.status);
+                                    return (
+                                        <div
+                                            key={item.key}
+                                            className="create-readiness-mini-item"
+                                            title={item.message}
+                                            style={{
+                                                '--readiness-item-color': tone.color,
+                                            } as CSSProperties}
+                                        >
+                                            <span>{item.label}</span>
+                                            <strong>{item.value}</strong>
+                                        </div>
+                                    );
+                                })}
+                            </div>
+
                             {designSummary.totalExpectedMin > 0 && (
-                                <div style={{ marginTop: '0.55rem', fontSize: '0.74rem', color: 'var(--muted)', fontWeight: 600 }}>
-                                    문항별 예상 풀이시간 합계: 약 {designSummary.totalExpectedMin}분
+                                <div className="create-design-check-note">
+                                    예상 풀이시간 약 {designSummary.totalExpectedMin}분
                                 </div>
                             )}
-                            <div style={{
-                                marginTop: '0.75rem',
-                                padding: '0.7rem',
-                                borderRadius: '8px',
-                                background: serviceReadinessTone.background,
-                                border: `1px solid ${serviceReadinessTone.border}`,
-                            }}>
-                                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '0.75rem', marginBottom: '0.55rem' }}>
-                                    <div>
-                                        <div style={{ fontSize: '0.78rem', fontWeight: 950, color: serviceReadinessTone.color }}>
-                                            운영 점검
-                                        </div>
-                                        <div style={{ fontSize: '0.7rem', color: 'var(--muted)', fontWeight: 750, marginTop: '0.12rem', lineHeight: 1.35 }}>
-                                            {serviceReadiness.detail}
-                                        </div>
-                                    </div>
-                                    <span style={{
-                                        flexShrink: 0,
-                                        fontSize: '0.68rem',
-                                        fontWeight: 950,
-                                        color: serviceReadinessTone.color,
-                                        background: 'var(--surface)',
-                                        border: `1px solid ${serviceReadinessTone.border}`,
-                                        borderRadius: 'var(--radius-full)',
-                                        padding: '0.16rem 0.48rem',
-                                        whiteSpace: 'nowrap',
-                                    }}>
-                                        {serviceReadiness.label}
-                                    </span>
+
+                            <div
+                                className={`create-validation-line ${validationSummary.isPublishable ? 'is-ready' : 'needs-work'}`}
+                                title={validationTooltip}
+                            >
+                                <div>
+                                    <strong>{validationSummary.isPublishable ? '배포 가능' : '수정 필요'}</strong>
+                                    <span>{validationSummary.errors.length} 오류 · {validationSummary.warnings.length} 경고</span>
                                 </div>
-                                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: '0.4rem' }}>
-                                    {serviceReadiness.items.map(item => {
-                                        const tone = readinessTone(item.status);
-                                        return (
-                                            <div key={item.key} title={item.message} style={{
-                                                minWidth: 0,
-                                                padding: '0.48rem',
-                                                borderRadius: '7px',
-                                                border: `1px solid ${tone.border}`,
-                                                background: 'var(--surface)',
-                                            }}>
-                                                <div style={{ display: 'flex', justifyContent: 'space-between', gap: '0.35rem', alignItems: 'center', marginBottom: '0.1rem' }}>
-                                                    <span style={{ fontSize: '0.66rem', color: 'var(--muted)', fontWeight: 850, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                                                        {item.label}
-                                                    </span>
-                                                    <span style={{ width: 7, height: 7, borderRadius: '999px', background: tone.color, flexShrink: 0 }} />
-                                                </div>
-                                                <div style={{ fontSize: '0.78rem', color: 'var(--foreground)', fontWeight: 900, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                                                    {item.value}
-                                                </div>
-                                            </div>
-                                        );
-                                    })}
-                                </div>
-                            </div>
-                            <div style={{
-                                marginTop: '0.75rem',
-                                padding: '0.65rem',
-                                borderRadius: '8px',
-                                background: validationSummary.isPublishable ? 'rgba(16,185,129,0.08)' : 'rgba(239,68,68,0.08)',
-                                border: validationSummary.isPublishable ? '1px solid rgba(16,185,129,0.18)' : '1px solid rgba(239,68,68,0.22)',
-                            }}>
-                                <div style={{
-                                    display: 'flex',
-                                    justifyContent: 'space-between',
-                                    gap: '0.75rem',
-                                    marginBottom: validationSummary.errors.length || validationSummary.warnings.length ? '0.45rem' : 0,
-                                }}>
-                                    <span style={{ fontSize: '0.76rem', fontWeight: 900, color: validationSummary.isPublishable ? 'var(--success)' : 'var(--error)' }}>
-                                        {validationSummary.isPublishable ? '배포 가능' : '배포 전 수정 필요'}
-                                    </span>
-                                    <span style={{ fontSize: '0.72rem', fontWeight: 800, color: 'var(--muted)', whiteSpace: 'nowrap' }}>
-                                        {validationSummary.errors.length} 오류 · {validationSummary.warnings.length} 경고
-                                    </span>
-                                </div>
-                                {[...validationSummary.errors, ...validationSummary.warnings].slice(0, 3).map(item => (
-                                    <div key={item.code} style={{
-                                        fontSize: '0.72rem',
-                                        color: item.severity === 'error' ? 'var(--error)' : 'var(--warning)',
-                                        lineHeight: 1.45,
-                                        fontWeight: 700,
-                                    }}>
-                                        {item.message}
-                                    </div>
-                                ))}
                             </div>
                         </div>
 
@@ -1741,6 +1884,7 @@ function CreateOMRPageInner() {
                         <label style={{ display: 'block', marginBottom: '0.5rem', fontSize: '0.9rem', fontWeight: 500 }}>시험 제목</label>
                         <input
                             type="text"
+                            aria-label="시험 제목"
                             value={title}
                             onChange={(e) => setTitle(e.target.value)}
                             className="input-field"
@@ -1865,6 +2009,7 @@ function CreateOMRPageInner() {
                             </label>
                             <input
                                 type="text"
+                                aria-label="빠른 정답 입력"
                                 placeholder={defaultChoices === 4 ? "예: 3124..." : "예: 31251..."}
                                 value={fastAnswer}
                                 onChange={handleFastAnswerChange}
@@ -2254,19 +2399,59 @@ function CreateOMRPageInner() {
 
                                 {/* Advanced Design Metadata */}
                                 <div style={{ marginBottom: '1rem', padding: '0.85rem', background: 'var(--background)', border: '1px solid var(--border)', borderRadius: 'var(--radius-md)' }}>
-                                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '0.5rem', marginBottom: '0.75rem' }}>
+                                    <button
+                                        type="button"
+                                        aria-expanded={isAdvancedDesignOpen}
+                                        aria-controls="advanced-design-fields"
+                                        onClick={() => setIsAdvancedDesignOpen(open => !open)}
+                                        style={{
+                                            width: '100%',
+                                            display: 'flex',
+                                            alignItems: 'center',
+                                            justifyContent: 'space-between',
+                                            gap: '0.5rem',
+                                            padding: 0,
+                                            border: 0,
+                                            background: 'transparent',
+                                            color: 'inherit',
+                                            textAlign: 'left',
+                                            cursor: 'pointer',
+                                        }}
+                                    >
                                         <div>
                                             <div style={{ fontSize: '0.85rem', fontWeight: 800, color: 'var(--foreground)' }}>전문가 설계</div>
                                             <div style={{ fontSize: '0.7rem', color: 'var(--muted)', marginTop: '2px' }}>
                                                 분석 리포트와 보충 처방에 쓰입니다.
                                             </div>
                                         </div>
-                                        <span style={{ fontSize: '0.68rem', color: 'var(--primary)', fontWeight: 800, background: 'rgba(99,102,241,0.1)', padding: '2px 7px', borderRadius: 'var(--radius-full)' }}>
-                                            선택사항
-                                        </span>
-                                    </div>
+                                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', flexShrink: 0 }}>
+                                            <span
+                                                style={{
+                                                    fontSize: '0.68rem',
+                                                    color: hasSelectedAdvancedDesign ? 'var(--success)' : 'var(--primary)',
+                                                    fontWeight: 800,
+                                                    background: hasSelectedAdvancedDesign ? 'rgba(16,185,129,0.1)' : 'rgba(99,102,241,0.1)',
+                                                    padding: '2px 7px',
+                                                    borderRadius: 'var(--radius-full)',
+                                                    whiteSpace: 'nowrap',
+                                                }}
+                                            >
+                                                {hasSelectedAdvancedDesign ? '입력됨' : '선택사항'}
+                                            </span>
+                                            <ChevronDown
+                                                size={16}
+                                                aria-hidden="true"
+                                                style={{
+                                                    color: 'var(--muted)',
+                                                    transform: isAdvancedDesignOpen ? 'rotate(180deg)' : 'rotate(0deg)',
+                                                    transition: 'transform 0.18s ease',
+                                                }}
+                                            />
+                                        </div>
+                                    </button>
 
-                                    <div style={{ display: 'grid', gap: '0.65rem' }}>
+                                    {isAdvancedDesignOpen ? (
+                                        <div id="advanced-design-fields" style={{ display: 'grid', gap: '0.65rem', marginTop: '0.75rem' }}>
                                         <div>
                                             <label style={{ display: 'block', marginBottom: '0.25rem', fontSize: '0.76rem', fontWeight: 700, color: 'var(--muted)' }}>단원</label>
                                             <input
@@ -2430,7 +2615,8 @@ function CreateOMRPageInner() {
                                                 style={{ width: '100%', minHeight: '74px', resize: 'vertical', padding: '0.5rem 0.6rem', fontSize: '0.8rem', border: '1px solid var(--border)', borderRadius: '8px', background: 'var(--surface)', lineHeight: 1.5 }}
                                             />
                                         </div>
-                                    </div>
+                                        </div>
+                                    ) : null}
                                 </div>
                                 <div style={{ marginBottom: '1rem', padding: '0.85rem', background: 'var(--background)', border: '1px solid var(--border)', borderRadius: 'var(--radius-md)' }}>
                                     <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '0.5rem', marginBottom: '0.65rem' }}>
@@ -2634,33 +2820,19 @@ function CreateOMRPageInner() {
                     <button className="btn btn-secondary" style={{ width: '100%' }} onClick={() => typeof window !== 'undefined' && window.print()}>
                         인쇄하기
                     </button>
+                    </div>
                 </aside>
 
                 {/* Resizer 2 */}
                 {!isPreviewCollapsed && (
                 <div
-                    className="create-resizer"
+                    className={`create-resizer ${activeResizer === 'sidebar' ? 'is-active' : ''}`}
                     style={{ width: '6px', background: 'var(--border)', cursor: 'col-resize', position: 'relative', zIndex: 10 }}
-                    onMouseDown={(e) => {
-                        e.preventDefault();
-                        const startX = e.clientX;
-                        const startWidth = sidebarWidth;
-                        const onMouseMove = (moveEvent: MouseEvent) => {
-                            const newWidth = startWidth + (moveEvent.clientX - startX);
-                            const previewWidth = isPreviewCollapsed ? PREVIEW_RAIL_WIDTH : PREVIEW_PANE_MIN_WIDTH;
-                            const maxSidebarWidth = Math.max(
-                                SETTINGS_SIDEBAR_MIN_WIDTH,
-                                window.innerWidth - pdfWidth - previewWidth - DESKTOP_RESIZER_TOTAL_WIDTH
-                            );
-                            setSidebarWidth(Math.max(SETTINGS_SIDEBAR_MIN_WIDTH, Math.min(newWidth, maxSidebarWidth)));
-                        };
-                        const onMouseUp = () => {
-                            document.removeEventListener('mousemove', onMouseMove);
-                            document.removeEventListener('mouseup', onMouseUp);
-                        };
-                        document.addEventListener('mousemove', onMouseMove);
-                        document.addEventListener('mouseup', onMouseUp);
-                    }}
+                    onPointerDown={(e) => beginPanelDrag(e, 'sidebar', sidebarWidth, (nextWidth, workspaceWidth) => fitSidebarWidth(nextWidth, false, workspaceWidth))}
+                    onDoubleClick={() => fitSidebarWidth(SETTINGS_SIDEBAR_DEFAULT_WIDTH, true)}
+                    role="separator"
+                    aria-orientation="vertical"
+                    title="드래그해서 설정 패널 크기 조절 · 더블클릭하면 기본 크기로"
                 >
                     <div style={{ width: '2px', height: '20px', background: '#aaa', position: 'absolute', top: '50%', left: '2px', transform: 'translateY(-50%)', borderRadius: '2px' }} />
                 </div>
@@ -2690,7 +2862,6 @@ function CreateOMRPageInner() {
                         </div>
                     ) : (
                         <>
-                    {/* Preview mode toggle */}
                     <div className="create-preview-toolbar" style={{
                         padding: '0.75rem 1.25rem',
                         borderBottom: '1px solid var(--border)',
@@ -2705,9 +2876,7 @@ function CreateOMRPageInner() {
                                 OMR 미리보기
                             </span>
                             <span className="create-preview-status">
-                                {previewMode === 'paper'
-                                    ? `A4 · ${questionsCount}문항 · ${designSummary.pdfLinked} PDF`
-                                    : `${designSummary.answered}/${questionsCount} 정답 입력`}
+                                {designSummary.answered}/{questionsCount} 정답 입력
                             </span>
                         </div>
                         <div style={{
@@ -2726,96 +2895,6 @@ function CreateOMRPageInner() {
                             >
                                 <PanelRightClose size={16} />
                             </button>
-                            {previewMode === 'paper' && (
-                                <div style={{
-                                    display: 'flex',
-                                    background: 'var(--background)',
-                                    border: '1px solid var(--border)',
-                                    borderRadius: 'var(--radius-full)',
-                                    padding: '3px',
-                                }}>
-                                    <button
-                                        type="button"
-                                        aria-pressed={!showPaperAnswerKey}
-                                        onClick={() => setShowPaperAnswerKey(false)}
-                                        style={{
-                                            padding: '0.3rem 0.75rem',
-                                            fontSize: '0.74rem',
-                                            borderRadius: 'var(--radius-full)',
-                                            border: 'none',
-                                            background: !showPaperAnswerKey ? 'var(--primary)' : 'transparent',
-                                            color: !showPaperAnswerKey ? 'white' : 'var(--muted)',
-                                            fontWeight: 800,
-                                            cursor: 'pointer',
-                                            transition: 'all 0.2s',
-                                        }}
-                                    >
-                                        빈 OMR
-                                    </button>
-                                    <button
-                                        type="button"
-                                        aria-pressed={showPaperAnswerKey}
-                                        onClick={() => setShowPaperAnswerKey(true)}
-                                        style={{
-                                            padding: '0.3rem 0.75rem',
-                                            fontSize: '0.74rem',
-                                            borderRadius: 'var(--radius-full)',
-                                            border: 'none',
-                                            background: showPaperAnswerKey ? 'var(--primary)' : 'transparent',
-                                            color: showPaperAnswerKey ? 'white' : 'var(--muted)',
-                                            fontWeight: 800,
-                                            cursor: 'pointer',
-                                            transition: 'all 0.2s',
-                                        }}
-                                    >
-                                        정답키
-                                    </button>
-                                </div>
-                            )}
-                            <div style={{
-                                display: 'flex',
-                                background: 'var(--background)',
-                                border: '1px solid var(--border)',
-                                borderRadius: 'var(--radius-full)',
-                                padding: '3px',
-                            }}>
-                            <button
-                                type="button"
-                                aria-pressed={previewMode === 'modern'}
-                                onClick={() => setPreviewMode('modern')}
-                                style={{
-                                    padding: '0.3rem 0.9rem',
-                                    fontSize: '0.78rem',
-                                    borderRadius: 'var(--radius-full)',
-                                    border: 'none',
-                                    background: previewMode === 'modern' ? 'var(--primary)' : 'transparent',
-                                    color: previewMode === 'modern' ? 'white' : 'var(--muted)',
-                                    fontWeight: 700,
-                                    cursor: 'pointer',
-                                    transition: 'all 0.2s',
-                                }}
-                            >
-                                카드뷰
-                            </button>
-                            <button
-                                type="button"
-                                aria-pressed={previewMode === 'paper'}
-                                onClick={() => setPreviewMode('paper')}
-                                style={{
-                                    padding: '0.3rem 0.9rem',
-                                    fontSize: '0.78rem',
-                                    borderRadius: 'var(--radius-full)',
-                                    border: 'none',
-                                    background: previewMode === 'paper' ? 'var(--primary)' : 'transparent',
-                                    color: previewMode === 'paper' ? 'white' : 'var(--muted)',
-                                    fontWeight: 700,
-                                    cursor: 'pointer',
-                                    transition: 'all 0.2s',
-                                }}
-                            >
-                                인쇄용 (A4)
-                            </button>
-                        </div>
                     </div>
                     </div>
 
@@ -2838,55 +2917,41 @@ function CreateOMRPageInner() {
                         </div>
                     </div>
 
-                    <div className={`scroll-custom create-preview-scroll ${previewMode === 'paper' ? 'paper-mode' : 'card-mode'}`} style={{
+                    <div className="scroll-custom create-preview-scroll card-mode" style={{
                         flex: 1,
                         overflowY: 'auto',
                         overflowX: 'auto',
-                        padding: previewMode === 'paper' ? '2rem' : '0',
+                        padding: '0',
                         display: 'flex',
-                        justifyContent: previewMode === 'paper' ? 'flex-start' : 'center',
-                        alignItems: previewMode === 'paper' ? 'flex-start' : 'stretch',
-                        background: previewMode === 'paper' ? '#e2e8f0' : 'transparent',
+                        justifyContent: 'center',
+                        alignItems: 'stretch',
+                        background: 'transparent',
                     }}>
-                        {previewMode === 'modern' ? (
-                            <div className="create-card-stage">
-                                <OMRCardView
-                                    title={title}
-                                    questions={questions}
-                                    optionsCount={defaultChoices}
-                                    mode="editor"
-                                    selectedQuestionId={selectedQuestionId}
-                                    onQuestionClick={setSelectedQuestionId}
-                                    onAnswerClick={handleOMRAnswerClick}
-                                    columns={columns}
-                                    numberingLayout="vertical"
-                                    showMeta={true}
-                                />
-                            </div>
-                        ) : (
-                            <div className="create-paper-stage">
-                                <div className="create-paper-frame">
-                                    <div className="create-paper-frame-toolbar" aria-label="인쇄 미리보기 상태">
-                                        <span>A4 가로</span>
-                                        <span>{questionsCount}문항</span>
-                                        <span>{showPaperAnswerKey ? '정답키' : '빈 OMR'} · 번호+보기만</span>
-                                    </div>
-                                    <div className="omr-print-preview-scale">
-                                        <OMRPreview
-                                            title={title}
-                                            questions={questions}
-                                            optionsCount={defaultChoices}
-                                            columns={columns}
-                                            selectedQuestionId={selectedQuestionId}
-                                            onQuestionClick={setSelectedQuestionId}
-                                            onAnswerClick={handleOMRAnswerClick}
-                                            showAnswerKey={showPaperAnswerKey}
-                                            printVariant="numbersOnly"
-                                        />
-                                    </div>
-                                </div>
-                            </div>
-                        )}
+                        <div className="create-card-stage">
+                            <OMRCardView
+                                title={title}
+                                questions={questions}
+                                optionsCount={defaultChoices}
+                                mode="editor"
+                                selectedQuestionId={selectedQuestionId}
+                                onQuestionClick={setSelectedQuestionId}
+                                onAnswerClick={handleOMRAnswerClick}
+                                columns={columns}
+                                numberingLayout="vertical"
+                                showMeta={true}
+                            />
+                        </div>
+                    </div>
+                    <div className="create-print-only-sheet" aria-hidden="true">
+                        <OMRPreview
+                            sheetId="omr-print-sheet"
+                            title={title}
+                            questions={questions}
+                            optionsCount={defaultChoices}
+                            columns={columns}
+                            mode="view"
+                            showAnswerKey={false}
+                        />
                     </div>
                         </>
                     )}

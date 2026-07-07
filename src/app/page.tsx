@@ -1,8 +1,8 @@
 "use client";
 
 import { useState, useEffect, useMemo } from "react";
-import Image from "next/image";
 import { useRouter } from "next/navigation";
+import BrandLogo from "@/components/BrandLogo";
 import ThemeToggle from "@/components/ThemeToggle";
 import { toast } from "@/components/Toast";
 import { verifyTeacherPassword } from "@/app/actions/auth";
@@ -183,6 +183,7 @@ export default function Home() {
   const [role, setRole] = useState<"none" | "teacher" | "student">("none");
   const [studentName, setStudentName] = useState("");
   const [studentLookup, setStudentLookup] = useState("");
+  const [selectedGroupId, setSelectedGroupId] = useState("");
   const [guestGroupCode, setGuestGroupCode] = useState("");
   const [groups, setGroups] = useState<RosterGroup[]>([]);
   const [rosterStudents, setRosterStudents] = useState<RosterStudent[]>([]);
@@ -237,7 +238,7 @@ export default function Home() {
       const codes = readStudentCodes(localStorage);
       const identity = resolveStudentIdentity({
         name: studentName,
-        selectedGroupId: "",
+        selectedGroupId,
         groups: studentGroupOptions,
         students: rosterStudents,
         studentLookup,
@@ -253,7 +254,7 @@ export default function Home() {
       setNeedsCode(false);
       setNeedsStudentLookup(false);
     }
-  }, [role, studentName, studentLookup, studentGroupOptions, rosterStudents]);
+  }, [role, studentName, studentLookup, selectedGroupId, studentGroupOptions, rosterStudents]);
 
   useEffect(() => {
     if (role !== "student") {
@@ -312,7 +313,7 @@ export default function Home() {
     const loginGroups = buildStudentLoginGroupOptions(storedGroups, students);
     const identity = resolveStudentIdentity({
       name: trimmedName,
-      selectedGroupId: "",
+      selectedGroupId,
       groups: loginGroups,
       students,
       studentLookup,
@@ -325,7 +326,9 @@ export default function Home() {
     }
     if (identity.requiresStudentLookup) {
       setNeedsStudentLookup(true);
-      setError("동명이인이 있습니다. 선생님이 알려준 학생번호 또는 이메일을 입력해주세요.");
+      setError(identity.rosterMatchCount > 1
+        ? "동명이인이 있습니다. 선생님이 알려준 학생번호 또는 이메일을 입력해주세요."
+        : "명단 학생은 선생님이 알려준 학생번호 또는 이메일을 입력해주세요.");
       setTimeout(() => setError(""), 3000);
       return;
     }
@@ -366,7 +369,7 @@ export default function Home() {
 
     if (codeDecision.status === "code_required") {
       setNeedsCode(true);
-      setError("이미 등록된 학생입니다. 시작 코드를 입력해주세요.");
+      setError("이미 등록된 학생입니다. 선생님이 발급한 시작 코드를 입력해주세요.");
       setTimeout(() => setError(""), 2500);
       return;
     }
@@ -465,6 +468,7 @@ export default function Home() {
     setTeacherIdentifier("");
     setStudentName("");
     setStudentLookup("");
+    setSelectedGroupId("");
     setGuestGroupCode("");
     setStartCode("");
     setNeedsCode(false);
@@ -489,22 +493,13 @@ export default function Home() {
       >
         {/* ── Hero ───────────────────────────── */}
         <div className="home-hero" style={{ textAlign: "center", marginBottom: "4rem" }}>
-          <Image
-            src="/logo.png"
-            alt=""
-            width={112}
-            height={112}
-            priority
+          <div
             className="stagger-1 animate-fade-in home-logo"
-            style={{
-              width: 112,
-              height: 112,
-              objectFit: "contain",
-              margin: "0 auto 1.25rem",
-              opacity: 0,
-              filter: "drop-shadow(0 18px 35px rgba(15, 23, 42, 0.14))",
-            }}
-          />
+            style={{ marginBottom: "1.4rem", opacity: 0 }}
+          >
+            <BrandLogo markOnly className="brand-logo--hero" priorityLabel="OMR Maker" />
+          </div>
+
           <div
             className="badge badge-primary stagger-2 animate-fade-in home-eyebrow"
             style={{ marginBottom: "1.75rem", opacity: 0 }}
@@ -550,7 +545,7 @@ export default function Home() {
         {/* ── Role Selection ─────────────────── */}
         {role === "none" && (
           <div
-            className="stagger-4 animate-fade-in home-role-grid"
+            className="stagger-5 animate-fade-in home-role-grid"
             style={{
               display: "grid",
               gridTemplateColumns: "repeat(auto-fit, minmax(300px, 1fr))",
@@ -871,7 +866,7 @@ export default function Home() {
                 </div>
 
                 <button onClick={handleTeacherLogin} className="btn btn-primary" style={{ width: "100%" }}>
-                  로그인
+                  대시보드 입장
                 </button>
               </>
             ) : (
@@ -912,6 +907,7 @@ export default function Home() {
                   <input
                     type="text"
                     className="input-field"
+                    aria-label="이름"
                     value={studentName}
                     onChange={(e) => setStudentName(e.target.value)}
                     placeholder="이름을 입력하세요"
@@ -937,10 +933,11 @@ export default function Home() {
                   <input
                     type="text"
                     className="input-field"
+                    aria-label="학생번호 또는 이메일"
                     value={studentLookup}
                     onChange={(e) => setStudentLookup(e.target.value)}
                     onKeyDown={(e) => e.key === "Enter" && handleStudentLogin()}
-                    placeholder="동명이인일 때 입력"
+                    placeholder="선생님이 알려준 학생번호 또는 이메일"
                     autoComplete="email"
                     autoCapitalize="none"
                     inputMode="email"
@@ -957,9 +954,44 @@ export default function Home() {
                     wordBreak: "keep-all",
                   }}>
                     {needsStudentLookup
-                      ? "같은 이름의 학생이 있습니다. 명단 이메일이나 선생님이 알려준 학생번호를 입력하세요."
-                      : "선택 입력입니다. 같은 이름이 있는 반에서만 확인용으로 사용합니다."}
+                      ? "명단 이메일이나 선생님이 알려준 학생번호로 본인 계정을 확인합니다."
+                      : "계정 ID처럼 사용합니다. 입력하면 같은 이름의 학생도 정확히 구분됩니다."}
                   </p>
+                </div>
+
+                <div style={{ marginBottom: "1.35rem" }}>
+                  <label
+                    style={{
+                      display: "block",
+                      marginBottom: "0.55rem",
+                      fontSize: "0.75rem",
+                      fontWeight: 700,
+                      color: "var(--muted)",
+                      textTransform: "uppercase",
+                      letterSpacing: "0.07em",
+                    }}
+                  >
+                    반 선택
+                  </label>
+                  <select
+                    aria-label="반 선택"
+                    value={selectedGroupId}
+                    onChange={(e) => setSelectedGroupId(e.target.value)}
+                    className="input-field"
+                    style={{ cursor: "pointer" }}
+                  >
+                    <option value="">반을 선택하세요</option>
+                    {studentGroupOptions.map((group) => (
+                      <option key={`${group.region || ""}:${group.id}`} value={group.id}>
+                        {formatRegionScopedLabel(group.name, group.region)}
+                      </option>
+                    ))}
+                  </select>
+                  {studentGroupOptions.length === 0 && (
+                    <p style={{ fontSize: "0.75rem", color: "var(--muted)", marginTop: "0.45rem", lineHeight: 1.45 }}>
+                      등록된 반이 없으면 아래 반 코드로 게스트 시험을 시작할 수 있습니다.
+                    </p>
+                  )}
                 </div>
 
                 {error && (
@@ -1007,6 +1039,7 @@ export default function Home() {
                     <input
                       type="text"
                       className="input-field"
+                      aria-label="시작 코드"
                       value={startCode}
                       onChange={(e) => setStartCode(normalizeStartCodeInput(e.target.value))}
                       onKeyDown={(e) => e.key === "Enter" && handleStudentLogin()}
@@ -1018,7 +1051,7 @@ export default function Home() {
                       style={{ letterSpacing: "0.25em", fontFamily: "monospace", textTransform: "uppercase" }}
                     />
                     <p style={{ fontSize: "0.75rem", color: "var(--muted)", marginTop: "0.45rem", opacity: 0.85 }}>
-                      이미 등록된 학생입니다. 처음 로그인 시 발급받은 코드를 입력해주세요.
+                      학생 계정 비밀번호처럼 쓰이는 6자리 코드입니다. 분실 시 선생님에게 재발급을 요청하세요.
                     </p>
                   </div>
                 )}

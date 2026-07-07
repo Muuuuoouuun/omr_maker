@@ -15,6 +15,7 @@ import {
     buildLearningRecommendations,
     buildRetakeQuestionIds,
     buildSimilarQuestionGroups,
+    formatParticipationRateLabel,
     getAttemptQuestionResults,
     studentScopeKeyForAttempt,
     summarizeAttemptScore,
@@ -762,7 +763,7 @@ export default function ExamAnalyticsTab({
         if (analysisScope === "class") {
             const selected = classScopeOptions.find(group => group.key === activeClassKey);
             return selected
-                ? `${selected.label} · 제출 ${selected.attemptCount}건 · 평균 ${selected.averageScoreRate}% · 참여 ${selected.participationRate}%${selected.missingStudentCount > 0 ? ` · 미응시 ${selected.missingStudentCount}명` : ""}`
+                ? `${selected.label} · 제출 ${selected.attemptCount}건 · 평균 ${selected.averageScoreRate}% · 참여 ${formatParticipationRateLabel(selected.participationRate)}${selected.missingStudentCount > 0 ? ` · 미응시 ${selected.missingStudentCount}명` : ""}`
                 : "반 정보가 있는 제출이 없습니다.";
         }
 
@@ -859,6 +860,7 @@ export default function ExamAnalyticsTab({
         document.body.appendChild(link);
         link.click();
         document.body.removeChild(link);
+        URL.revokeObjectURL(url);
     };
 
     if (exams.length === 0) {
@@ -1774,7 +1776,7 @@ export default function ExamAnalyticsTab({
                                 {classScopeOptions.length > 0 ? (
                                     classScopeOptions.map(group => (
                                         <option key={group.key} value={group.key}>
-                                            {group.label} ({group.attemptCount}건 · 참여 {group.participationRate}%)
+                                            {group.label} ({group.attemptCount}건 · 참여 {formatParticipationRateLabel(group.participationRate)})
                                         </option>
                                     ))
                                 ) : (
@@ -1936,7 +1938,7 @@ export default function ExamAnalyticsTab({
                                                                 : `${row.studentCount}명`}
                                                         </div>
                                                         <div style={{ fontSize: '0.72rem', color: 'var(--muted)', marginTop: '0.16rem' }}>
-                                                            제출 {row.attemptCount}건 · 참여 {row.participationRate}%
+                                                            제출 {row.attemptCount}건 · 참여 {formatParticipationRateLabel(row.participationRate)}
                                                         </div>
                                                         {row.missingStudentCount > 0 && (
                                                             <div style={{ fontSize: '0.7rem', color: 'var(--warning)', marginTop: '0.16rem', lineHeight: 1.35 }}>
@@ -2561,7 +2563,10 @@ export default function ExamAnalyticsTab({
                             </h3>
                         </div>
 
-                        <div style={{ overflowX: 'auto', borderRadius: 'var(--radius-lg)', border: '1px solid var(--border)' }}>
+                        <div
+                            data-testid="exam-analytics-student-table-scroll"
+                            style={{ overflowX: 'auto', borderRadius: 'var(--radius-lg)', border: '1px solid var(--border)' }}
+                        >
                             <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left', minWidth: '940px' }}>
                                 <thead style={{ background: 'var(--surface)' }}>
                                     <tr>

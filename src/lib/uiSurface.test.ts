@@ -27,20 +27,21 @@ describe("service UI surface", () => {
         expect(solvePage).toContain("scroll-custom solve-omr-scroll");
     });
 
-    it("keeps the exam creation preview in real paper and OMR answer-sheet modes", () => {
+    it("keeps the exam creation preview in one card mode without a separate print tab", () => {
         const css = readProjectFile("src/app/globals.css");
         const createPage = readProjectFile("src/app/create/page.tsx");
         const omrPreview = readProjectFile("src/components/OMRPreview.tsx");
 
-        expect(createPage).toContain("previewMode === 'paper'");
-        expect(createPage).toContain("const [showPaperAnswerKey, setShowPaperAnswerKey] = useState(false)");
-        expect(createPage).toContain("인쇄용 (A4)");
-        expect(createPage).toContain("create-paper-frame-toolbar");
-        expect(createPage).toContain("A4 가로");
-        expect(createPage).toContain("번호+보기만");
-        expect(createPage).toContain('printVariant="numbersOnly"');
+        expect(createPage).not.toContain("previewMode");
+        expect(createPage).not.toContain("showPaperAnswerKey");
+        expect(createPage).not.toContain("인쇄용 (A4)");
+        expect(createPage).not.toContain("카드뷰");
+        expect(createPage).toContain('aria-label="시험 제목"');
+        expect(createPage).toContain('aria-label="빠른 정답 입력"');
         expect(createPage).toContain("create-preview-context-strip");
         expect(createPage).toContain("create-preview-context-meter");
+        expect(createPage).toContain("create-print-only-sheet");
+        expect(createPage).toContain('sheetId="omr-print-sheet"');
         expect(createPage).toContain("isPreviewCollapsed");
         expect(createPage).toContain("is-preview-collapsed");
         expect(createPage).toContain("const PREVIEW_RAIL_WIDTH = 64");
@@ -49,17 +50,15 @@ describe("service UI surface", () => {
         expect(createPage).toContain("OMR 미리보기 펼치기");
         expect(createPage).toContain("선택 문항");
         expect(createPage).toContain("PDF 영역");
-        expect(css).toContain(".create-preview-scroll.paper-mode");
+        expect(css).not.toContain(".create-preview-scroll.paper-mode");
         expect(css).toContain(".create-preview-main.is-collapsed");
         expect(css).toContain(".create-workspace");
         expect(css).toContain("flex-basis 0.22s ease");
         expect(css).toContain(".create-preview-context-grid");
-        expect(css).toContain(".create-paper-frame .omr-sheet::before");
-        expect(css).toContain(".create-paper-frame .omr-sheet--numbers-only::before");
-        expect(css).toContain(".omr-sheet--numbers-only");
-        expect(css).toContain(".create-paper-frame-toolbar span");
-        expect(omrPreview).toContain("printVariant?: 'standard' | 'numbersOnly'");
-        expect(omrPreview).toContain("isNumbersOnlyPrint");
+        expect(css).toContain(".create-print-only-sheet");
+        expect(css).not.toContain(".omr-sheet--numbers-only");
+        expect(omrPreview).not.toContain("printVariant");
+        expect(omrPreview).toContain("sheetId?: string");
         expect(omrPreview).toContain("수험번호 마킹란");
         expect(omrPreview).toContain("omr-marker-tl");
         expect(omrPreview).toContain("OMR Maker - Generated Answer Sheet");
@@ -71,10 +70,15 @@ describe("service UI surface", () => {
 
         expect(createPage).toContain("const PREVIEW_PANE_MIN_WIDTH = 260");
         expect(createPage).toContain("const PREVIEW_RAIL_WIDTH = 64");
-        expect(createPage).toContain("isPreviewCollapsed ? `1 1 ${pdfWidth}px`");
+        expect(createPage).toContain("flex: `0 0 ${pdfWidth}px`");
+        expect(createPage).toContain("createWorkspaceRef.current.getBoundingClientRect().width");
+        expect(createPage).toContain("setSidebarWidth(sharedPaneWidth - nextPdfWidth)");
+        expect(createPage).toContain("const nextPdfWidth = clampLayoutWidth(");
+        expect(createPage).toContain("sharedPaneWidth - nextSidebarWidth");
+        expect(createPage).toContain("setPdfWidth(nextPdfWidth)");
         expect(createPage).toContain("isPreviewCollapsed ? PREVIEW_RAIL_WIDTH : PREVIEW_PANE_MIN_WIDTH");
-        expect(createPage).toContain("window.innerWidth - sidebarWidth - previewWidth");
-        expect(createPage).toContain("window.innerWidth - pdfWidth - previewWidth");
+        expect(createPage).toContain("workspaceWidth - sidebarWidth - previewWidth");
+        expect(createPage).toContain("workspaceWidth - pdfWidth - previewWidth");
         expect(css).toContain("@container (max-width: 540px)");
         expect(css).toContain(".omr-cardview.is-vertical-numbering .omr-cardview-grid");
         expect(css).toContain("grid-template-columns: minmax(0, 1fr)");
@@ -487,13 +491,26 @@ describe("service UI surface", () => {
         expect(authMessages).toContain("Supabase가 아니라");
         expect(authMessages).toContain("TEACHER_ACCOUNTS");
         expect(homePage).toContain("학생번호 또는 이메일");
+        expect(homePage).toContain("계정 ID처럼 사용합니다.");
+        expect(homePage).toContain("명단 학생은 선생님이 알려준 학생번호 또는 이메일을 입력해주세요.");
+        expect(homePage).toContain("명단 이메일이나 선생님이 알려준 학생번호로 본인 계정을 확인합니다.");
+        expect(homePage).toContain("학생 계정 비밀번호처럼 쓰이는 6자리 코드입니다.");
+        expect(homePage).toContain('aria-label="이름"');
+        expect(homePage).toContain('aria-label="학생번호 또는 이메일"');
+        expect(homePage).toContain('aria-label="반 선택"');
+        expect(homePage).toContain('aria-label="시작 코드"');
         expect(homePage).toContain("studentLookup");
         expect(homePage).toContain("needsStudentLookup");
         expect(homePage).toContain("동명이인이 있습니다");
         expect(settingsPage).toContain("buildTeacherSessionDisplay");
+        expect(settingsPage).toContain("getTeacherDeploymentReadiness");
+        expect(settingsPage).toContain("DeploymentReadinessSummary");
         expect(settingsPage).toContain("TEACHER_ACCOUNTS");
         expect(settingsPage).toContain("clearTeacherAuthSession");
         expect(settingsPage).toContain("SECURITY_POSTURE_ITEMS");
+        expect(settingsPage).toContain("배포 로그인 진단");
+        expect(settingsPage).toContain('aria-label="배포 로그인 진단 새로고침"');
+        expect(settingsPage).toContain("교사 계정 ${deploymentReadiness.credentialCount}개");
         expect(settingsPage).toContain("운영 보안 점검");
         expect(settingsPage).toContain("readySecurityItems");
         expect(settingsPage).toContain("운영 준비도");
@@ -541,6 +558,18 @@ describe("service UI surface", () => {
         expect(billingPage).toContain("토스페이먼츠");
         expect(billingPage).toContain("네이버페이");
         expect(billingPage).toContain("카카오페이");
+    });
+
+    it("keeps dashboard statistics exportable as CSV", () => {
+        const overviewTab = readProjectFile("src/components/dashboard/tabs/OverviewTab.tsx");
+        const exportHelper = readProjectFile("src/lib/dashboardStatsExport.ts");
+
+        expect(overviewTab).toContain("buildDashboardStatsCsv");
+        expect(overviewTab).toContain("통계 CSV");
+        expect(overviewTab).toContain("dashboard-stats-${new Date().toISOString().slice(0, 10)}.csv");
+        expect(exportHelper).toContain("OMR Maker 통계 내보내기");
+        expect(exportHelper).toContain("시험별 통계");
+        expect(exportHelper).toContain("serializeCsvRows");
     });
 
     it("keeps premium analytics actions gated by the current plan", () => {
@@ -624,6 +653,7 @@ describe("service UI surface", () => {
     it("keeps the dashboard overview bento grid usable on mobile", () => {
         const css = readProjectFile("src/app/globals.css");
         const overviewTab = readProjectFile("src/components/dashboard/tabs/OverviewTab.tsx");
+        const usersPage = readProjectFile("src/app/teacher/users/page.tsx");
 
         expect(overviewTab).toContain("overview-quick-actions-grid");
         expect(overviewTab).toContain("overview-exam-summary-card");
@@ -639,6 +669,12 @@ describe("service UI surface", () => {
         expect(css).toContain(".bento-grid > .bento-card");
         expect(css).toContain(".overview-quick-actions-grid");
         expect(css).toContain("repeat(2, minmax(0, 1fr)) !important");
+        expect(usersPage).toContain("teacher-users-students-grid");
+        expect(usersPage).toContain("teacher-users-table-scroll");
+        expect(usersPage).toContain("teacher-users-detail-card");
+        expect(css).toContain(".teacher-users-students-grid.has-detail");
+        expect(css).toContain(".teacher-users-table");
+        expect(css).toContain("min-width: 760px");
     });
 
     it("keeps original exam achievement separate from retake recovery in student-facing analytics", () => {
@@ -737,6 +773,27 @@ describe("service UI surface", () => {
         expect(css).toContain(".omr-cardview.is-vertical-numbering .omr-cardview-grid");
     });
 
+    it("keeps answer PDF parsing lazy until the teacher uploads an answer key", () => {
+        const createPage = readProjectFile("src/app/create/page.tsx");
+        const answerImportModal = readProjectFile("src/components/AnswerImportModal.tsx");
+
+        expect(createPage).toContain('import type { ParsedAnswer } from "@/services/answerParser"');
+        expect(createPage).not.toContain('import { ParsedAnswer } from "@/services/answerParser"');
+        expect(answerImportModal).toContain("import type { ParsedAnswer } from '@/services/answerParser'");
+        expect(answerImportModal).not.toContain("import { parseAnswerKeyPdf");
+        expect(answerImportModal).toContain("const { parseAnswerKeyPdf } = await import('@/services/answerParser')");
+        expect(answerImportModal).toContain("const { parseAnswerKeyWithGemini } = await import('@/services/answerParser')");
+    });
+
+    it("keeps image export tooling lazy until the teacher saves the preview image", () => {
+        const createPage = readProjectFile("src/app/create/page.tsx");
+
+        expect(createPage).not.toContain('import html2canvas from "html2canvas"');
+        expect(createPage).toContain('const { default: html2canvas } = await import("html2canvas")');
+        expect(createPage).toContain("이미지 저장");
+        expect(createPage).toContain("이미지 저장 완료");
+    });
+
     it("keeps tablet solving usable with a collapsible right-side quick OMR rail", () => {
         const solvePage = readProjectFile("src/app/solve/[id]/page.tsx");
         const css = readProjectFile("src/app/globals.css");
@@ -767,6 +824,12 @@ describe("service UI surface", () => {
         expect(usersPage).toContain("카카오 초대 기록");
         expect(usersPage).toContain("초대 기록 추가됨");
         expect(usersPage).toContain("시작 코드");
+        expect(usersPage).toContain("학생 계정 안내");
+        expect(usersPage).toContain("로그인 ID");
+        expect(usersPage).toContain("학생에게 이름, 반, 로그인 ID, 시작 코드를 함께 전달하세요.");
+        expect(usersPage).toContain("handleCopyStudentLoginInfo");
+        expect(usersPage).toContain("student-login-id-value");
+        expect(usersPage).toContain("student-login-start-code-value");
         expect(usersPage).toContain("handleIssueStudentStartCode");
         expect(usersPage).toContain("generateStartCode");
         expect(usersPage).toContain("disambiguateRosterStudentId");
@@ -788,6 +851,7 @@ describe("service UI surface", () => {
 
     it("keeps settings data DB readiness tied to shared storage sources", () => {
         const settingsPage = readProjectFile("src/app/teacher/settings/page.tsx");
+        const dataReadiness = readProjectFile("src/lib/dataDbReadiness.ts");
 
         expect(settingsPage).toContain("데이터 · DB");
         expect(settingsPage).toContain("DataDbSection");
@@ -799,6 +863,8 @@ describe("service UI surface", () => {
         expect(settingsPage).toContain('aria-label="데이터 DB 상태 새로고침"');
         expect(settingsPage).toContain("원격 동기화 세부 상태");
         expect(settingsPage).toContain("summary.syncSources");
+        expect(dataReadiness).toContain("실사용 RLS 전환 확인");
+        expect(dataReadiness).toContain("production-rls.sql");
         expect(settingsPage).toContain('sourceLabel: "시험"');
         expect(settingsPage).toContain('sourceLabel: "제출"');
         expect(settingsPage).toContain('sourceLabel: "명단"');

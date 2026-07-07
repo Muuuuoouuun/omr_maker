@@ -3,6 +3,8 @@ import { mintTeacherToken } from "../src/lib/teacherAuth";
 import { createSignedTeacherSessionCookie, TEACHER_SERVER_SESSION_COOKIE } from "../src/lib/teacherServerSession";
 import { createTeacherSession, LEGACY_TEACHER_TOKEN_KEY, TEACHER_SESSION_KEY } from "../src/lib/teacherSession";
 
+test.describe.configure({ timeout: 45_000 });
+
 const TEACHER_IDENTITY = {
     teacherId: "admin",
     email: "admin@example.com",
@@ -37,19 +39,76 @@ async function authenticateTeacher(page: Page, baseURL?: string) {
         secure: false,
     }]);
 
-    await page.addInitScript(() => {
+    await page.goto("/");
+    await page.evaluate(() => {
         try { window.localStorage.clear(); } catch {}
         try { window.sessionStorage.clear(); } catch {}
     });
-    await page.addInitScript(({ session, sessionKey, legacyTokenKey }) => {
+
+    const seedTeacherSession = ({ session, sessionKey, legacyTokenKey }: {
+        session: ReturnType<typeof createTeacherSession>;
+        sessionKey: string;
+        legacyTokenKey: string;
+    }) => {
         try {
             window.sessionStorage.setItem(sessionKey, JSON.stringify(session));
             window.sessionStorage.setItem(legacyTokenKey, session.token);
         } catch {}
-    }, {
+    };
+
+    await page.evaluate(seedTeacherSession, {
         legacyTokenKey: LEGACY_TEACHER_TOKEN_KEY,
         session,
         sessionKey: TEACHER_SESSION_KEY,
+    });
+    await page.addInitScript(seedTeacherSession, {
+        legacyTokenKey: LEGACY_TEACHER_TOKEN_KEY,
+        session,
+        sessionKey: TEACHER_SESSION_KEY,
+    });
+}
+
+async function seedStoredRoster(page: Page) {
+    await page.addInitScript(({ groups, students }) => {
+        window.localStorage.setItem("omr_groups", JSON.stringify(groups));
+        window.localStorage.setItem("omr_students", JSON.stringify(students));
+    }, {
+        groups: [{
+            id: "e2e-class-a",
+            name: "E2E A반",
+            region: "서울",
+            count: 2,
+            avgScore: 0,
+            color: "#4f46e5",
+        }],
+        students: [
+            {
+                id: "e2e-class-a::김학생",
+                name: "김학생",
+                email: "kim.student@example.com",
+                group: "E2E A반",
+                region: "서울",
+                avatar: "#4f46e5",
+                avgScore: 0,
+                examsTaken: 0,
+                lastActive: "기록 없음",
+                trend: "flat",
+                status: "active",
+            },
+            {
+                id: "e2e-class-a::이학생",
+                name: "이학생",
+                email: "lee.student@example.com",
+                group: "E2E A반",
+                region: "서울",
+                avatar: "#10b981",
+                avgScore: 0,
+                examsTaken: 0,
+                lastActive: "기록 없음",
+                trend: "flat",
+                status: "active",
+            },
+        ],
     });
 }
 
@@ -150,6 +209,14 @@ test.describe("Manage Users page", () => {
         await expect.poll(() => rows.count(), { timeout: 5000 }).toBeGreaterThan(0);
     });
 
+    test("bulk selection banner appears after checking boxes", async ({ page }) => {
+        await seedStoredRoster(page);
+        await page.goto("/teacher/users");
+        const firstBox = page.locator('tbody input[type="checkbox"]').first();
+        await firstBox.check();
+        await expect(page.getByText(/\d+명 선택됨/)).toBeVisible();
+    });
+
     test("demo roster keeps bulk selection locked", async ({ page }) => {
         await page.goto("/teacher/users");
         const firstBox = page.locator('tbody input[type="checkbox"]').first();
@@ -160,6 +227,72 @@ test.describe("Manage Users page", () => {
         await page.goto("/teacher/users");
         await page.getByRole("button", { name: /반 · 그룹/ }).click();
         await expect(page.getByText("새 반 만들기")).toBeVisible();
+    });
+
+    test("issued student start code gates the student portal login", async ({ page }) => {
+        await seedStoredRoster(page);
+        await page.goto("/teacher/users");
+
+        const studentRow = page.locator('tbody tr:has-text("kim.student@example.com")');
+        await expect(studentRow).toHaveCount(1);
+        await studentRow.click();
+        await expect(page.getByText("학생 상세")).toBeVisible();
+        await expect(page.getByText("학생 계정 안내")).toBeVisible();
+        await expect(page.getByTestId("student-login-id-value")).toHaveText("e2e-class-a::김학생");
+        await expect(page.getByTestId("student-login-email-value")).toHaveText("kim.student@example.com");
+        await expect(page.getByTestId("student-login-start-code-value")).toHaveText("미발급");
+        await expect(page.getByTestId("copy-student-login-credentials")).toBeVisible();
+        const studentGridColumnCount = await page.locator(".teacher-users-students-grid.has-detail").evaluate(element =>
+            window.getComputedStyle(element).gridTemplateColumns.split(/\s+/).filter(Boolean).length
+        );
+        if ((page.viewportSize()?.width || 0) <= 1024) {
+            expect(studentGridColumnCount).toBe(1);
+        } else {
+            expect(studentGridColumnCount).toBeGreaterThan(1);
+        }
+        const tableScrollMetrics = await page.locator(".teacher-users-table-scroll").evaluate(element => ({
+            clientWidth: element.clientWidth,
+            scrollWidth: element.scrollWidth,
+        }));
+        expect(tableScrollMetrics.scrollWidth).toBeGreaterThanOrEqual(tableScrollMetrics.clientWidth);
+        const hasAccountGuideBodyOverflow = await page.evaluate(() => document.documentElement.scrollWidth > document.documentElement.clientWidth + 1);
+        expect(hasAccountGuideBodyOverflow).toBe(false);
+        await expect(page.getByTestId("student-start-code-value")).toHaveText("미발급");
+
+        await page.getByTestId("issue-student-start-code").click();
+        const issuedCode = (await page.getByTestId("student-start-code-value").innerText()).trim();
+        expect(issuedCode).toMatch(/^[A-Z2-9]{6}$/);
+        await expect(page.getByTestId("student-login-start-code-value")).toHaveText(issuedCode);
+
+        const storedCodes = await page.evaluate(() => JSON.parse(window.localStorage.getItem("omr_student_codes") || "{}"));
+        expect(storedCodes["e2e-class-a::김학생"]).toBe(issuedCode);
+
+        await page.goto("/?role=student");
+        await expect(page.getByText("학생 포털")).toBeVisible();
+        await page.getByLabel("이름").fill("김학생");
+        await page.getByLabel("학생번호 또는 이메일").fill("kim.student@example.com");
+        await page.getByLabel("반 선택").selectOption("e2e-class-a");
+        await expect(page.getByLabel("시작 코드")).toBeVisible();
+
+        await page.getByRole("button", { name: "시험 시작하기" }).click();
+        await expect(page.getByText("이미 등록된 학생입니다. 선생님이 발급한 시작 코드를 입력해주세요.")).toBeVisible();
+
+        await page.getByLabel("시작 코드").fill(issuedCode);
+        await page.getByRole("button", { name: "시험 시작하기" }).click();
+        await expect(page).toHaveURL(/\/student\/dashboard$/);
+
+        const session = await page.evaluate(() => JSON.parse(window.sessionStorage.getItem("omr_student_session") || "null"));
+        expect(session).toMatchObject({
+            studentId: "e2e-class-a::김학생",
+            loginId: "e2e-class-a::김학생",
+            name: "김학생",
+            groupId: "e2e-class-a",
+            groupName: "E2E A반",
+            regionId: "서울",
+            regionName: "서울",
+            isGuest: false,
+            identityType: "temporary",
+        });
     });
 });
 
@@ -180,6 +313,15 @@ test.describe("Settings page", () => {
         await page.goto("/teacher/settings");
         await page.getByRole("button", { name: "알림", exact: true }).click();
         await expect(page.getByText("카카오 우선 채널을 기준으로 알림 대상을 관리합니다.")).toBeVisible();
+    });
+
+    test("security tab shows deployment login diagnostics", async ({ page }) => {
+        await page.goto("/teacher/settings");
+        await page.getByRole("button", { name: "보안", exact: true }).click();
+        await expect(page.getByText("배포 로그인 진단")).toBeVisible();
+        await expect(page.getByText("교사 계정 환경변수")).toBeVisible();
+        await expect(page.getByText("Supabase 클라이언트 동기화")).toBeVisible();
+        await expect(page.getByRole("button", { name: "배포 로그인 진단 새로고침" })).toBeVisible();
     });
 
     test("backup card shows export/import/reset buttons", async ({ page }) => {
@@ -220,10 +362,12 @@ test.describe("Global Search", () => {
 
     // Search lives inside TeacherHeader, which is rendered on the 4 subpages
     // (live/users/settings/billing) — not on /teacher/dashboard.
-    // Wait for the header search trigger to appear as a proxy for TeacherHeader.
-    test("search trigger opens modal and Escape closes", async ({ page }) => {
+    // Wait for the header search trigger to appear as a proxy for TeacherHeader
+    // (and therefore GlobalSearch) being fully hydrated before pressing Cmd+K.
+    test("Cmd+K opens modal and Escape closes", async ({ page }) => {
         await page.goto("/teacher/live");
-        await page.getByRole("button", { name: "빠른 검색" }).click();
+        await expect(page.getByRole("button", { name: "빠른 검색" })).toBeVisible();
+        await page.keyboard.press("ControlOrMeta+K");
         await expect(page.getByPlaceholder(/빠른 검색/)).toBeVisible();
         await page.keyboard.press("Escape");
         await expect(page.getByPlaceholder(/빠른 검색/)).not.toBeVisible();
@@ -231,7 +375,8 @@ test.describe("Global Search", () => {
 
     test("typing filters results and Enter navigates", async ({ page }) => {
         await page.goto("/teacher/live");
-        await page.getByRole("button", { name: "빠른 검색" }).click();
+        await expect(page.getByRole("button", { name: "빠른 검색" })).toBeVisible();
+        await page.keyboard.press("ControlOrMeta+K");
         await page.getByPlaceholder(/빠른 검색/).fill("결제");
         await expect(page.getByText("결제 및 플랜").first()).toBeVisible();
         await page.keyboard.press("Enter");

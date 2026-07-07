@@ -7,7 +7,7 @@ import TeacherHeader from "@/components/TeacherHeader";
 import { Users, UserPlus, Upload, Search, MessageCircle, TrendingUp, TrendingDown, MoreVertical, Link as LinkIcon, FolderPlus, CheckCircle2, Clock, X, Trash2, Download, PenLine, Target, AlertTriangle, FileText, BarChart3, Copy, KeyRound, RefreshCw, Lock, MapPin } from "lucide-react";
 import { toast } from "@/components/Toast";
 import type { Attempt, Exam, PlanKey } from "@/types/omr";
-import { parseCsvRows, serializeCsvRows } from "@/lib/csv";
+import { decodeCsvBytes, parseCsvRows, serializeCsvRows } from "@/lib/csv";
 import { shouldUseDemoData } from "@/lib/demoData";
 import { loadAttempts, loadExams } from "@/lib/omrPersistence";
 import { loadRosterSnapshot, saveRosterSnapshot } from "@/lib/rosterPersistence";
@@ -501,6 +501,25 @@ function ManageUsersInner() {
         }
     };
 
+    const handleCopyStudentLoginInfo = async () => {
+        if (!selected) return;
+        const loginInfo = [
+            "OMR Maker 학생 로그인 안내",
+            `이름: ${selected.name}`,
+            `반: ${selected.group}`,
+            `로그인 ID(학생번호): ${selected.id}`,
+            `이메일 로그인 ID: ${selected.email}`,
+            `시작 코드: ${selectedStartCode || "미발급 - 선생님에게 발급 요청"}`,
+        ].join("\n");
+
+        try {
+            await navigator.clipboard.writeText(loginInfo);
+            toast.success("학생 계정 안내 복사됨", `${selected.name} 로그인 정보를 복사했습니다.`);
+        } catch {
+            toast.error("복사 실패", "브라우저 클립보드 권한을 확인해주세요.");
+        }
+    };
+
     // ===== Student CRUD =====
     const handleAddStudent = (data: StudentFormData) => {
         const idx = students.length;
@@ -762,7 +781,9 @@ function ManageUsersInner() {
     // ===== CSV upload =====
     const handleCsvFile = async (file: File) => {
         try {
-            const text = await file.text();
+            // Read raw bytes so legacy Korean Excel exports (CP949/EUC-KR) don't become
+            // mojibake — File.text() would force UTF-8.
+            const text = decodeCsvBytes(await file.arrayBuffer());
             const rows = parseCsvRows(text);
             if (rows.length < 2) {
                 toast.error("CSV 파싱 실패", "데이터가 없습니다.");
@@ -1063,8 +1084,11 @@ function ManageUsersInner() {
                 </div>
 
                 {tab === "students" && (
-                    <div style={{ display: 'grid', gridTemplateColumns: selectedId ? '1fr 380px' : '1fr', gap: '1.25rem' }}>
-                        <div className="bento-card" style={{ padding: '1.5rem' }}>
+                    <div
+                        className={selectedId ? "teacher-users-students-grid has-detail" : "teacher-users-students-grid"}
+                        style={{ display: 'grid', gridTemplateColumns: selectedId ? 'minmax(0, 1fr) minmax(320px, 380px)' : 'minmax(0, 1fr)', gap: '1.25rem' }}
+                    >
+                        <div className="bento-card teacher-users-list-card" style={{ padding: '1.5rem' }}>
                             {/* Search */}
                             <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', marginBottom: '1rem', padding: '0.75rem 1rem', background: 'var(--background)', borderRadius: 'var(--radius-md)', border: '1px solid var(--border)', flexWrap: 'wrap' }}>
                                 <Search size={16} color="var(--muted)" />
@@ -1139,119 +1163,121 @@ function ManageUsersInner() {
                                 </div>
                             )}
 
-                            <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left' }}>
-                                <thead>
-                                    <tr style={{ color: 'var(--muted)', fontSize: '0.8rem', borderBottom: '1px solid var(--border)', fontWeight: 700, letterSpacing: '0.05em', textTransform: 'uppercase' }}>
-                                        <th style={{ padding: '0.85rem 0.5rem', width: 32 }}>
-                                            <input
-                                                type="checkbox"
-                                                aria-label="전체 학생 선택 토글"
-                                                checked={filtered.length > 0 && filtered.every(s => selectedIds.has(s.id))}
-                                                ref={el => { if (el) el.indeterminate = filtered.some(s => selectedIds.has(s.id)) && !filtered.every(s => selectedIds.has(s.id)); }}
-                                                onChange={() => toggleSelectAll(filtered.map(s => s.id))}
-                                                onClick={e => e.stopPropagation()}
-                                                disabled={isDemoRoster}
-                                                style={{ cursor: isDemoRoster ? 'not-allowed' : 'pointer', accentColor: 'var(--primary)' }}
-                                            />
-                                        </th>
-                                        <th style={{ padding: '0.85rem 0.5rem' }}>학생</th>
-                                        <th style={{ padding: '0.85rem 0.5rem' }}>반</th>
-                                        <th style={{ padding: '0.85rem 0.5rem' }}>지역</th>
-                                        <th style={{ padding: '0.85rem 0.5rem' }}>평균 점수</th>
-                                        <th style={{ padding: '0.85rem 0.5rem' }}>응시 수</th>
-                                        <th style={{ padding: '0.85rem 0.5rem' }}>최근 활동</th>
-                                        <th style={{ padding: '0.85rem 0.5rem', width: 40 }}></th>
-                                    </tr>
-                                </thead>
-                                <tbody>
-                                    {filtered.map(s => (
-                                        <tr key={s.id}
-                                            onClick={() => setSelectedId(s.id)}
-                                            style={{ borderBottom: '1px solid var(--border)', cursor: 'pointer', transition: 'background 0.2s', background: selectedIds.has(s.id) ? 'rgba(99,102,241,0.06)' : selectedId === s.id ? 'rgba(99,102,241,0.05)' : 'transparent' }}
-                                            onMouseEnter={e => e.currentTarget.style.background = 'rgba(99,102,241,0.04)'}
-                                            onMouseLeave={e => e.currentTarget.style.background = selectedIds.has(s.id) ? 'rgba(99,102,241,0.06)' : selectedId === s.id ? 'rgba(99,102,241,0.05)' : 'transparent'}
-                                        >
-                                            <td style={{ padding: '0.85rem 0.5rem' }} onClick={(e) => e.stopPropagation()}>
+                            <div className="teacher-users-table-scroll scroll-custom">
+                                <table className="teacher-users-table" style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left' }}>
+                                    <thead>
+                                        <tr style={{ color: 'var(--muted)', fontSize: '0.8rem', borderBottom: '1px solid var(--border)', fontWeight: 700, letterSpacing: '0.05em', textTransform: 'uppercase' }}>
+                                            <th style={{ padding: '0.85rem 0.5rem', width: 32 }}>
                                                 <input
                                                     type="checkbox"
-                                                    aria-label={`${s.name} 선택`}
-                                                    checked={selectedIds.has(s.id)}
-                                                    onChange={() => toggleSelect(s.id)}
+                                                    aria-label="전체 학생 선택 토글"
+                                                    checked={filtered.length > 0 && filtered.every(s => selectedIds.has(s.id))}
+                                                    ref={el => { if (el) el.indeterminate = filtered.some(s => selectedIds.has(s.id)) && !filtered.every(s => selectedIds.has(s.id)); }}
+                                                    onChange={() => toggleSelectAll(filtered.map(s => s.id))}
+                                                    onClick={e => e.stopPropagation()}
                                                     disabled={isDemoRoster}
                                                     style={{ cursor: isDemoRoster ? 'not-allowed' : 'pointer', accentColor: 'var(--primary)' }}
                                                 />
-                                            </td>
-                                            <td style={{ padding: '0.85rem 0.5rem' }}>
-                                                <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
-                                                    <div style={{ width: 34, height: 34, borderRadius: '50%', background: s.avatar, color: 'white', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '0.8rem', fontWeight: 700, flexShrink: 0 }}>{s.name.slice(1, 2)}</div>
-                                                    <div>
-                                                        <div style={{ fontSize: '0.9rem', fontWeight: 600 }}>{s.name}</div>
-                                                        <div style={{ fontSize: '0.75rem', color: 'var(--muted)' }}>{s.email}</div>
-                                                    </div>
-                                                </div>
-                                            </td>
-                                            <td style={{ padding: '0.85rem 0.5rem', fontSize: '0.85rem', color: 'var(--muted)' }}>{s.group}</td>
-                                            <td style={{ padding: '0.85rem 0.5rem', fontSize: '0.85rem', color: 'var(--muted)' }}>{rosterStudentRegionName(s, displayGroups)}</td>
-                                            <td style={{ padding: '0.85rem 0.5rem' }}>
-                                                <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
-                                                    <span style={{ fontSize: '0.95rem', fontWeight: 700, color: s.avgScore >= 80 ? 'var(--success)' : s.avgScore >= 65 ? 'var(--warning)' : 'var(--error)' }}>{s.avgScore}</span>
-                                                    {s.trend === "up" && <TrendingUp size={14} color="var(--success)" />}
-                                                    {s.trend === "down" && <TrendingDown size={14} color="var(--error)" />}
-                                                </div>
-                                            </td>
-                                            <td style={{ padding: '0.85rem 0.5rem', fontSize: '0.9rem', fontWeight: 600 }}>{s.examsTaken}회</td>
-                                            <td style={{ padding: '0.85rem 0.5rem', fontSize: '0.8rem', color: 'var(--muted)' }}>
-                                                <span style={{ display: 'inline-flex', alignItems: 'center', gap: '0.3rem' }}>
-                                                    <span style={{ width: 6, height: 6, borderRadius: '50%', background: s.status === "active" ? 'var(--success)' : 'var(--muted)' }} />
-                                                    {s.lastActive}
-                                                </span>
-                                            </td>
-                                            <td style={{ padding: '0.85rem 0.5rem', textAlign: 'right', position: 'relative' }}>
-                                                {!isDemoRoster && (
-                                                    <button
-                                                        aria-label={`${s.name} 작업 메뉴 열기`}
-                                                        onClick={(e) => {
-                                                            e.stopPropagation();
-                                                            setPopoverId(popoverId === s.id ? null : s.id);
-                                                        }}
-                                                        style={{ background: 'transparent', padding: 4, borderRadius: 6 }}
-                                                    >
-                                                        <MoreVertical size={16} color="var(--muted)" />
-                                                    </button>
-                                                )}
-                                                {popoverId === s.id && (
-                                                    <div
-                                                        onClick={(e) => e.stopPropagation()}
-                                                        style={{
-                                                            position: 'absolute', right: 8, top: '100%', zIndex: 200,
-                                                            background: 'var(--surface)', border: '1px solid var(--border)',
-                                                            borderRadius: 'var(--radius-md)', boxShadow: '0 8px 24px rgba(0,0,0,0.08)',
-                                                            minWidth: 120, overflow: 'hidden', textAlign: 'left'
-                                                        }}
-                                                    >
-                                                        <button
-                                                            onClick={() => {
-                                                                setEditingStudent(s);
-                                                                setShowStudentModal(true);
-                                                                setPopoverId(null);
-                                                            }}
-                                                            style={{ display: 'block', width: '100%', textAlign: 'left', padding: '0.6rem 0.9rem', fontSize: '0.85rem', color: 'var(--foreground)', background: 'transparent' }}
-                                                        >
-                                                            편집
-                                                        </button>
-                                                        <button
-                                                            onClick={() => handleDeleteStudent(s.id)}
-                                                            style={{ display: 'block', width: '100%', textAlign: 'left', padding: '0.6rem 0.9rem', fontSize: '0.85rem', color: 'var(--error)', background: 'transparent', borderTop: '1px solid var(--border)' }}
-                                                        >
-                                                            삭제
-                                                        </button>
-                                                    </div>
-                                                )}
-                                            </td>
+                                            </th>
+                                            <th style={{ padding: '0.85rem 0.5rem' }}>학생</th>
+                                            <th style={{ padding: '0.85rem 0.5rem' }}>반</th>
+                                            <th style={{ padding: '0.85rem 0.5rem' }}>지역</th>
+                                            <th style={{ padding: '0.85rem 0.5rem' }}>평균 점수</th>
+                                            <th style={{ padding: '0.85rem 0.5rem' }}>응시 수</th>
+                                            <th style={{ padding: '0.85rem 0.5rem' }}>최근 활동</th>
+                                            <th style={{ padding: '0.85rem 0.5rem', width: 40 }}></th>
                                         </tr>
-                                    ))}
-                                </tbody>
-                            </table>
+                                    </thead>
+                                    <tbody>
+                                        {filtered.map(s => (
+                                            <tr key={s.id}
+                                                onClick={() => setSelectedId(s.id)}
+                                                style={{ borderBottom: '1px solid var(--border)', cursor: 'pointer', transition: 'background 0.2s', background: selectedIds.has(s.id) ? 'rgba(99,102,241,0.06)' : selectedId === s.id ? 'rgba(99,102,241,0.05)' : 'transparent' }}
+                                                onMouseEnter={e => e.currentTarget.style.background = 'rgba(99,102,241,0.04)'}
+                                                onMouseLeave={e => e.currentTarget.style.background = selectedIds.has(s.id) ? 'rgba(99,102,241,0.06)' : selectedId === s.id ? 'rgba(99,102,241,0.05)' : 'transparent'}
+                                            >
+                                                <td style={{ padding: '0.85rem 0.5rem' }} onClick={(e) => e.stopPropagation()}>
+                                                    <input
+                                                        type="checkbox"
+                                                        aria-label={`${s.name} 선택`}
+                                                        checked={selectedIds.has(s.id)}
+                                                        onChange={() => toggleSelect(s.id)}
+                                                        disabled={isDemoRoster}
+                                                        style={{ cursor: isDemoRoster ? 'not-allowed' : 'pointer', accentColor: 'var(--primary)' }}
+                                                    />
+                                                </td>
+                                                <td style={{ padding: '0.85rem 0.5rem' }}>
+                                                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
+                                                        <div style={{ width: 34, height: 34, borderRadius: '50%', background: s.avatar, color: 'white', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '0.8rem', fontWeight: 700, flexShrink: 0 }}>{s.name.slice(1, 2)}</div>
+                                                        <div>
+                                                            <div style={{ fontSize: '0.9rem', fontWeight: 600 }}>{s.name}</div>
+                                                            <div style={{ fontSize: '0.75rem', color: 'var(--muted)' }}>{s.email}</div>
+                                                        </div>
+                                                    </div>
+                                                </td>
+                                                <td style={{ padding: '0.85rem 0.5rem', fontSize: '0.85rem', color: 'var(--muted)' }}>{s.group}</td>
+                                                <td style={{ padding: '0.85rem 0.5rem', fontSize: '0.85rem', color: 'var(--muted)' }}>{rosterStudentRegionName(s, displayGroups)}</td>
+                                                <td style={{ padding: '0.85rem 0.5rem' }}>
+                                                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+                                                        <span style={{ fontSize: '0.95rem', fontWeight: 700, color: s.avgScore >= 80 ? 'var(--success)' : s.avgScore >= 65 ? 'var(--warning)' : 'var(--error)' }}>{s.avgScore}</span>
+                                                        {s.trend === "up" && <TrendingUp size={14} color="var(--success)" />}
+                                                        {s.trend === "down" && <TrendingDown size={14} color="var(--error)" />}
+                                                    </div>
+                                                </td>
+                                                <td style={{ padding: '0.85rem 0.5rem', fontSize: '0.9rem', fontWeight: 600 }}>{s.examsTaken}회</td>
+                                                <td style={{ padding: '0.85rem 0.5rem', fontSize: '0.8rem', color: 'var(--muted)' }}>
+                                                    <span style={{ display: 'inline-flex', alignItems: 'center', gap: '0.3rem' }}>
+                                                        <span style={{ width: 6, height: 6, borderRadius: '50%', background: s.status === "active" ? 'var(--success)' : 'var(--muted)' }} />
+                                                        {s.lastActive}
+                                                    </span>
+                                                </td>
+                                                <td style={{ padding: '0.85rem 0.5rem', textAlign: 'right', position: 'relative' }}>
+                                                    {!isDemoRoster && (
+                                                        <button
+                                                            aria-label={`${s.name} 작업 메뉴 열기`}
+                                                            onClick={(e) => {
+                                                                e.stopPropagation();
+                                                                setPopoverId(popoverId === s.id ? null : s.id);
+                                                            }}
+                                                            style={{ background: 'transparent', padding: 4, borderRadius: 6 }}
+                                                        >
+                                                            <MoreVertical size={16} color="var(--muted)" />
+                                                        </button>
+                                                    )}
+                                                    {popoverId === s.id && (
+                                                        <div
+                                                            onClick={(e) => e.stopPropagation()}
+                                                            style={{
+                                                                position: 'absolute', right: 8, top: '100%', zIndex: 200,
+                                                                background: 'var(--surface)', border: '1px solid var(--border)',
+                                                                borderRadius: 'var(--radius-md)', boxShadow: '0 8px 24px rgba(0,0,0,0.08)',
+                                                                minWidth: 120, overflow: 'hidden', textAlign: 'left'
+                                                            }}
+                                                        >
+                                                            <button
+                                                                onClick={() => {
+                                                                    setEditingStudent(s);
+                                                                    setShowStudentModal(true);
+                                                                    setPopoverId(null);
+                                                                }}
+                                                                style={{ display: 'block', width: '100%', textAlign: 'left', padding: '0.6rem 0.9rem', fontSize: '0.85rem', color: 'var(--foreground)', background: 'transparent' }}
+                                                            >
+                                                                편집
+                                                            </button>
+                                                            <button
+                                                                onClick={() => handleDeleteStudent(s.id)}
+                                                                style={{ display: 'block', width: '100%', textAlign: 'left', padding: '0.6rem 0.9rem', fontSize: '0.85rem', color: 'var(--error)', background: 'transparent', borderTop: '1px solid var(--border)' }}
+                                                            >
+                                                                삭제
+                                                            </button>
+                                                        </div>
+                                                    )}
+                                                </td>
+                                            </tr>
+                                        ))}
+                                    </tbody>
+                                </table>
+                            </div>
                             {hydrated && filtered.length === 0 && (
                                 <div style={{ padding: '3rem 2rem', textAlign: 'center' }}>
                                     <div style={{
@@ -1298,7 +1324,7 @@ function ManageUsersInner() {
                         </div>
 
                         {selected && (
-                            <div className="bento-card" style={{ padding: '1.5rem', position: 'sticky', top: '5.5rem', alignSelf: 'flex-start', animation: 'fadeIn 0.3s both' }}>
+                            <div className="bento-card teacher-users-detail-card" style={{ padding: '1.5rem', position: 'sticky', top: '5.5rem', alignSelf: 'flex-start', animation: 'fadeIn 0.3s both' }}>
                                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '1.25rem' }}>
                                     <h3 style={{ fontSize: '1rem', fontWeight: 700 }}>학생 상세</h3>
                                     <button onClick={() => setSelectedId(null)} style={{ color: 'var(--muted)' }}>
@@ -1349,7 +1375,62 @@ function ManageUsersInner() {
                                     <MiniStat label="재시험" value={`${selectedProfile?.retakeAttemptCount ?? 0}회`} color="#0f766e" />
                                     <MiniStat label="필기 보관" value={`${selectedHandwritingCount}건`} color="#8b5cf6" />
                                 </div>
-                                <div style={{ padding: '1rem', background: 'var(--background)', borderRadius: 'var(--radius-md)', marginBottom: '1rem', border: '1px solid var(--border)' }}>
+                                <div data-testid="student-login-guide-panel" style={{ padding: '1rem', background: 'var(--background)', borderRadius: 'var(--radius-md)', marginBottom: '1rem', border: '1px solid var(--border)' }}>
+                                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '0.75rem', marginBottom: '0.75rem' }}>
+                                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', fontSize: '0.75rem', fontWeight: 800, color: 'var(--muted)', letterSpacing: '0.08em' }}>
+                                            <Lock size={13} />
+                                            학생 계정 안내
+                                        </div>
+                                        <button
+                                            type="button"
+                                            aria-label="학생 계정 안내 복사"
+                                            data-testid="copy-student-login-credentials"
+                                            onClick={handleCopyStudentLoginInfo}
+                                            style={{
+                                                padding: '0.35rem 0.55rem',
+                                                borderRadius: 'var(--radius-md)',
+                                                background: 'var(--surface)',
+                                                border: '1px solid var(--border)',
+                                                color: 'var(--foreground)',
+                                                fontSize: '0.72rem',
+                                                fontWeight: 800,
+                                                display: 'inline-flex',
+                                                alignItems: 'center',
+                                                justifyContent: 'center',
+                                                gap: '0.3rem',
+                                                whiteSpace: 'nowrap',
+                                            }}
+                                        >
+                                            <Copy size={12} />
+                                            안내 복사
+                                        </button>
+                                    </div>
+                                    <div style={{ display: 'grid', gap: '0.45rem', fontSize: '0.78rem' }}>
+                                        <div style={{ display: 'grid', gridTemplateColumns: '86px minmax(0, 1fr)', gap: '0.55rem', alignItems: 'center' }}>
+                                            <span style={{ color: 'var(--muted)', fontWeight: 750 }}>로그인 ID</span>
+                                            <code data-testid="student-login-id-value" style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', color: 'var(--foreground)', fontWeight: 850 }}>{selected.id}</code>
+                                        </div>
+                                        <div style={{ display: 'grid', gridTemplateColumns: '86px minmax(0, 1fr)', gap: '0.55rem', alignItems: 'center' }}>
+                                            <span style={{ color: 'var(--muted)', fontWeight: 750 }}>이메일 ID</span>
+                                            <code data-testid="student-login-email-value" style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', color: 'var(--foreground)', fontWeight: 850 }}>{selected.email}</code>
+                                        </div>
+                                        <div style={{ display: 'grid', gridTemplateColumns: '86px minmax(0, 1fr)', gap: '0.55rem', alignItems: 'center' }}>
+                                            <span style={{ color: 'var(--muted)', fontWeight: 750 }}>시작 코드</span>
+                                            <code data-testid="student-login-start-code-value" style={{
+                                                overflow: 'hidden',
+                                                textOverflow: 'ellipsis',
+                                                whiteSpace: 'nowrap',
+                                                color: selectedStartCode ? '#047857' : '#b45309',
+                                                fontWeight: 850,
+                                                letterSpacing: selectedStartCode ? '0.08em' : 0,
+                                            }}>{selectedStartCode || '미발급'}</code>
+                                        </div>
+                                    </div>
+                                    <p style={{ fontSize: '0.74rem', color: 'var(--muted)', lineHeight: 1.55, marginTop: '0.75rem', wordBreak: 'keep-all' }}>
+                                        학생에게 이름, 반, 로그인 ID, 시작 코드를 함께 전달하세요. 이메일도 로그인 ID로 사용할 수 있습니다.
+                                    </p>
+                                </div>
+                                <div data-testid="student-start-code-panel" style={{ padding: '1rem', background: 'var(--background)', borderRadius: 'var(--radius-md)', marginBottom: '1rem', border: '1px solid var(--border)' }}>
                                     <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '0.75rem', marginBottom: '0.7rem' }}>
                                         <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', fontSize: '0.75rem', fontWeight: 800, color: 'var(--muted)', letterSpacing: '0.08em' }}>
                                             <KeyRound size={13} />
@@ -1366,7 +1447,7 @@ function ManageUsersInner() {
                                             fontWeight: 850,
                                             fontVariantNumeric: 'tabular-nums',
                                             letterSpacing: selectedStartCode ? '0.08em' : 0,
-                                        }}>
+                                        }} data-testid="student-start-code-value">
                                             {selectedStartCode || '미발급'}
                                         </span>
                                     </div>
@@ -1376,6 +1457,8 @@ function ManageUsersInner() {
                                     <div style={{ display: 'flex', gap: '0.5rem' }}>
                                         <button
                                             type="button"
+                                            aria-label={selectedStartCode ? '학생 시작 코드 재발급' : '학생 시작 코드 발급'}
+                                            data-testid="issue-student-start-code"
                                             onClick={handleIssueStudentStartCode}
                                             disabled={isDemoRoster}
                                             style={{
@@ -1399,6 +1482,8 @@ function ManageUsersInner() {
                                         </button>
                                         <button
                                             type="button"
+                                            aria-label="학생 시작 코드 복사"
+                                            data-testid="copy-student-start-code"
                                             onClick={handleCopyStudentStartCode}
                                             disabled={!selectedStartCode}
                                             style={{

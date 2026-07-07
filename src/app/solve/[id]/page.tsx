@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState, type CSSProperties } from "react";
 import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
+import BrandLogo from "@/components/BrandLogo";
 import OMRCardView from "@/components/OMRCardView";
 import ThemeToggle from "@/components/ThemeToggle";
 import dynamic from "next/dynamic";
@@ -305,6 +306,23 @@ function accessDecisionCopy(decision: ExamAccessDecision): { title: string; body
         body: "시험 접근 설정을 확인해주세요.",
         action: "학생 홈으로",
     };
+}
+
+function buildStudentLoginHref(): string {
+    if (typeof window === "undefined") return "/?role=student";
+    const next = `${window.location.pathname}${window.location.search}`;
+    return `/?role=student&next=${encodeURIComponent(next)}`;
+}
+
+function buildRetakeDraftSegment(config: RetakeConfig | null): string {
+    if (!config) return "base";
+    const questionKey = [...new Set(config.questionIds)].sort((a, b) => a - b).join("-");
+    return [
+        "retake",
+        encodeURIComponent(config.sourceAttemptId || "source"),
+        encodeURIComponent(config.mode),
+        encodeURIComponent(questionKey || "questions"),
+    ].join("_");
 }
 
 function ExamAccessBlockedDialog({
@@ -740,6 +758,7 @@ export default function SolvePage() {
     // Navigation State
     const [currentQuestionId, setCurrentQuestionId] = useState<number | null>(null);
     const [pdfCurrentPage, setPdfCurrentPage] = useState<number | undefined>(undefined);
+    const [pdfFocusTarget, setPdfFocusTarget] = useState<{ page: number; x: number; y: number; key: number } | null>(null);
 
     // Teacher Mode State
     const [isTeacherMode, setIsTeacherMode] = useState(false);
@@ -780,6 +799,7 @@ export default function SolvePage() {
     const activeQuestionRef = useRef<{ questionId: number; startedAtMs: number } | null>(null);
     const questionTimingRef = useRef<Record<number, QuestionTimingDraft>>({});
     const focusLossEventsRef = useRef<FocusLossEvent[]>([]);
+    const pdfFocusRequestIdRef = useRef(0);
     const [hydratedOMRPanelKey, setHydratedOMRPanelKey] = useState("");
 
     // Focus Warning States (Anti-cheat)
@@ -941,9 +961,10 @@ export default function SolvePage() {
     }, [examData]);
 
     const draftOwnerKey = user?.studentId || user?.guestId || persistId;
-    const DRAFT_KEY = id && draftOwnerKey ? `omr_draft_${id}_${draftOwnerKey}` : "";
+    const draftRetakeSegment = buildRetakeDraftSegment(retakeConfig);
+    const DRAFT_KEY = id && draftOwnerKey ? `omr_draft_${id}_${draftOwnerKey}_${draftRetakeSegment}` : "";
     const LEGACY_DRAFT_KEY = id ? `omr_draft_${id}` : "";
-    const OMR_PANEL_KEY = id && draftOwnerKey ? `${OMR_PANEL_STORAGE_PREFIX}_${id}_${draftOwnerKey}` : "";
+    const OMR_PANEL_KEY = id && draftOwnerKey ? `${OMR_PANEL_STORAGE_PREFIX}_${id}_${draftOwnerKey}_${draftRetakeSegment}` : "";
 
     const saveDraftSnapshot = useCallback(async (draftSnapshot = latestDraftRef.current) => {
         if (typeof window === "undefined") return false;
@@ -1073,18 +1094,22 @@ export default function SolvePage() {
                 const validQuestionIds = rawQuestionIds.filter(questionId =>
                     parsed.questions.some(question => question.id === questionId)
                 );
+                let nextRetakeConfig: RetakeConfig | null = null;
                 if (validQuestionIds.length > 0) {
                     const mode = searchParams.get("mode") === "similar" ? "similar"
                         : searchParams.get("mode") === "custom" ? "custom"
                             : "wrong";
-                    setRetakeConfig({
+                    nextRetakeConfig = {
                         sourceAttemptId: searchParams.get("retakeFrom") || `exam:${parsed.id}`,
                         questionIds: validQuestionIds,
                         mode,
                         labels: (searchParams.get("labels") || "").split(",").filter(Boolean),
                         concepts: (searchParams.get("concepts") || "").split(",").filter(Boolean),
-                    });
+                    };
+                    setRetakeConfig(nextRetakeConfig);
                     toast.info("재시험 모드", `${validQuestionIds.length}개 문항만 다시 풉니다.`);
+                } else if (parsed.questions[0]) {
+                    setRetakeConfig(null);
                 }
 
                 // Enforce schedule window (startAt/endAt)
@@ -1104,9 +1129,12 @@ export default function SolvePage() {
                 // Restore draft (autosave) if present
                 try {
                     const ownerKey = currentSession?.studentId || currentSession?.guestId || persistId;
-                    const scopedDraftKey = ownerKey ? `omr_draft_${id}_${ownerKey}` : "";
+                    const draftSegment = buildRetakeDraftSegment(nextRetakeConfig);
+                    const scopedDraftKey = ownerKey ? `omr_draft_${id}_${ownerKey}_${draftSegment}` : "";
+                    const legacyScopedDraftKey = ownerKey ? `omr_draft_${id}_${ownerKey}` : "";
                     const draftStr = (scopedDraftKey ? localStorage.getItem(scopedDraftKey) : null)
-                        || localStorage.getItem(`omr_draft_${id}`);
+                        || (!nextRetakeConfig && legacyScopedDraftKey ? localStorage.getItem(legacyScopedDraftKey) : null)
+                        || (!nextRetakeConfig ? localStorage.getItem(`omr_draft_${id}`) : null);
                     if (draftStr) {
                         const draft = JSON.parse(draftStr) as Partial<SolveDraft>;
                         const restoredAnswers = draft.answers && typeof draft.answers === "object" ? draft.answers : {};
@@ -1269,9 +1297,27 @@ export default function SolvePage() {
     const handleQuestionClick = (qId: number) => {
         beginQuestionVisit(qId);
         if (examData) {
-            const q = examData.questions.find(q => q.id === qId);
-            const page = q?.pdfLocation?.page || q?.pdfRegion?.page;
-            if (page) setPdfCurrentPage(page);
+            const activeQuestion = getActiveExamQuestions().find(q => q.id === qId);
+            const q = activeQuestion || examData.questions.find(q => q.id === qId);
+            const focusAnchor = q?.pdfLocation
+                ? q.pdfLocation
+                : q?.pdfRegion
+                    ? {
+                        page: q.pdfRegion.page,
+                        x: q.pdfRegion.x + q.pdfRegion.width / 2,
+                        y: q.pdfRegion.y + q.pdfRegion.height / 2,
+                    }
+                    : null;
+            if (focusAnchor) {
+                setPdfCurrentPage(focusAnchor.page);
+                pdfFocusRequestIdRef.current += 1;
+                setPdfFocusTarget({
+                    page: focusAnchor.page,
+                    x: focusAnchor.x,
+                    y: focusAnchor.y,
+                    key: pdfFocusRequestIdRef.current,
+                });
+            }
         }
     };
 
@@ -1352,8 +1398,8 @@ export default function SolvePage() {
         const accessDecision = evaluateExamAccess(examData, { session: submitter, pinVerified });
         if (accessDecision.status !== "allowed") {
             if (accessDecision.status === "login_required") {
-                toast.error("로그인 필요", "학생 로그인 또는 반 코드 게스트 입장이 필요합니다.");
-                router.push("/?role=student");
+                toast.error("로그인 필요", "이 시험은 지정된 반 학생만 응시할 수 있습니다.");
+                router.push(buildStudentLoginHref());
                 return;
             }
             const copy = accessDecisionCopy(accessDecision);
@@ -1671,7 +1717,9 @@ export default function SolvePage() {
             }}>
                 <ExamAccessBlockedDialog
                     decision={accessDecision}
-                    onExit={() => router.push("/?role=student")}
+                    onExit={() => router.push(
+                        accessDecision.status === "login_required" ? buildStudentLoginHref() : "/student/dashboard"
+                    )}
                 />
             </div>
         );
@@ -1722,7 +1770,7 @@ export default function SolvePage() {
             }}>
                 <div className="container header-content solve-header-content" style={{ gap: '1rem' }}>
                     <div className="solve-title-group" style={{ display: 'flex', alignItems: 'center', gap: '1rem', minWidth: 0, flex: 1 }}>
-                        <Link href="/" className="logo solve-brand" style={{ fontSize: '1.15rem', flexShrink: 0 }}>OMR Maker</Link>
+                        <BrandLogo compact className="solve-brand" style={{ fontSize: '1rem' }} />
                         <div className="solve-divider" style={{
                             height: '22px',
                             width: '1px',
@@ -1974,6 +2022,7 @@ export default function SolvePage() {
                         drawings={drawings}
                         onDrawingsChange={handleDrawingsChange}
                         forcePage={activeTab === 'problem' ? pdfCurrentPage : undefined}
+                        focusTarget={activeTab === 'problem' ? pdfFocusTarget : null}
                         markers={(activeTab === 'problem' && examData.questions)
                             ? activeExamQuestions
                                 .filter((q: Question) => q.pdfLocation || q.pdfRegion)

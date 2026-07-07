@@ -394,7 +394,7 @@ describe("premium analytics", () => {
             averageScorePercent: 100,
             rosterStudentCount: 0,
             missingStudentCount: 0,
-            participationRate: 100,
+            participationRate: null, // no roster linked → turnout unknown (was a misleading 100%)
             wrongRate: 0,
             recommendations: [],
             retakeQuestionIds: [],

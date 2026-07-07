@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
+import BrandLogo from "@/components/BrandLogo";
 import { Exam } from "@/types/omr";
 import AssignmentBlock from "@/components/dashboard/AssignmentBlock";
 import ThemeToggle from "@/components/ThemeToggle";
@@ -198,7 +199,7 @@ export default function StudentDashboard() {
             <div className="layout-main">
                 <header className="header">
                     <div className="container header-content" style={{ gap: "1rem", flexWrap: "wrap" }}>
-                        <Link href="/" className="logo">OMR Maker</Link>
+                        <BrandLogo />
                         <div style={{ display: "flex", alignItems: "center", gap: "0.75rem" }}>
                             <Link
                                 href="/?role=student"
@@ -262,7 +263,7 @@ export default function StudentDashboard() {
             <header className="header">
                 <div className="container header-content" style={{ gap: "1rem", flexWrap: "wrap" }}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
-                        <Link href="/" className="logo">OMR Maker</Link>
+                        <BrandLogo />
                         <span style={{
                             fontSize: '0.75rem', fontWeight: 700,
                             background: 'rgba(236, 72, 153, 0.1)', color: 'var(--secondary)',

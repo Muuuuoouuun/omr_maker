@@ -354,20 +354,32 @@ export function gradeAttempt(questions: Question[], answers: Record<number, numb
     correctCount: number;
     incorrectCount: number;
     unansweredCount: number;
+    ungradedCount: number;
 } {
-    const totalScore = computeExamTotalScore(questions);
     let earned = 0;
+    let total = 0;
     let correct = 0;
     let incorrect = 0;
     let unanswered = 0;
+    let ungraded = 0;
     for (const q of questions) {
+        // Teacher left the answer key blank → the question is not gradable. Exclude it
+        // from the total so it never penalises the student, and never count it as wrong.
+        // Mirrors resolveQuestionStatus("ungraded") in premiumAnalytics so the saved score
+        // and the teacher/analytics display score agree.
+        if (q.answer === undefined || q.answer === null) {
+            ungraded++;
+            continue;
+        }
+        const weight = questionWeight(q, questions.length);
+        total += weight;
         const selected = answers[q.id];
         if (selected === undefined || selected === null || selected === 0) {
             unanswered++;
             continue;
         }
-        if (q.answer !== undefined && selected === q.answer) {
-            earned += questionWeight(q, questions.length);
+        if (selected === q.answer) {
+            earned += weight;
             correct++;
         } else {
             incorrect++;
@@ -375,9 +387,10 @@ export function gradeAttempt(questions: Question[], answers: Record<number, numb
     }
     return {
         earnedScore: Math.round(earned * 100) / 100,
-        totalScore: Math.round(totalScore * 100) / 100,
+        totalScore: Math.round(total * 100) / 100,
         correctCount: correct,
         incorrectCount: incorrect,
         unansweredCount: unanswered,
+        ungradedCount: ungraded,
     };
 }

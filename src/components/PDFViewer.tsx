@@ -17,6 +17,8 @@ import {
 } from 'lucide-react';
 import 'react-pdf/dist/Page/AnnotationLayer.css';
 import 'react-pdf/dist/Page/TextLayer.css';
+import { buildPenCursor, buildHighlighterCursor } from '@/lib/drawingCursors';
+import { strokeHitTest } from '@/lib/strokeGeometry';
 
 // Worker setup for Next.js
 pdfjs.GlobalWorkerOptions.workerSrc = '/pdf.worker.min.mjs';
@@ -43,6 +45,13 @@ interface MarkerRegion {
     height: number;
 }
 
+interface PdfFocusTarget {
+    page: number;
+    x: number;
+    y: number;
+    key?: string | number;
+}
+
 interface PDFViewerProps {
     file: File | null;
     onLoadSuccess: (numPages: number) => void;
@@ -55,10 +64,11 @@ interface PDFViewerProps {
     onDrawingsChange?: (page: number, newPaths: string[]) => void;
     // Markers Props
     markers?: MarkerData[];
+    forcePage?: number;
+    focusTarget?: PdfFocusTarget | null;
 }
 
 type DrawingMode = 'click' | 'pen' | 'highlighter' | 'eraser';
-type EraserType = 'pixel' | 'stroke';
 type DrawPoint = { x: number; y: number };
 
 const PEN_COLORS = ['#ef4444', '#111827', '#2563eb', '#16a34a'];
@@ -73,21 +83,13 @@ const HIGHLIGHTER_COLOR = HIGHLIGHTER_COLORS[0];
 const HIGHLIGHTER_CURSOR_COLORS = ['#facc15', '#4ade80', '#f472b6', '#60a5fa'];
 const MIN_POINT_DISTANCE = 0.0012;
 
-// Pen-shaped SVG cursor (lucide "pen" glyph) tinted with the active color,
-// wrapped in a white halo + dark outline so it stays visible on both the
-// dark PDF panel and the white page. Hotspot sits at the nib (lower-left).
-const PEN_CURSOR_PATH = 'M21.17 6.81a1 1 0 0 0-3.98-3.99L3.84 16.17a2 2 0 0 0-.5.83l-1.32 4.35a.5.5 0 0 0 .62.62l4.35-1.32a2 2 0 0 0 .83-.5z';
-function buildPenCursor(color: string): string {
-    const svg = `<svg xmlns='http://www.w3.org/2000/svg' width='26' height='26' viewBox='0 0 24 24'>`
-        + `<path d='${PEN_CURSOR_PATH}' fill='none' stroke='#ffffff' stroke-width='4' stroke-linejoin='round'/>`
-        + `<path d='${PEN_CURSOR_PATH}' fill='${color}' stroke='#0f172a' stroke-width='1.3' stroke-linejoin='round'/>`
-        + `<path d='m15.5 5.5 3 3' fill='none' stroke='#0f172a' stroke-width='1.3' stroke-linecap='round'/>`
-        + `</svg>`;
-    return `url("data:image/svg+xml,${encodeURIComponent(svg)}") 3 23, crosshair`;
-}
-
 function isPdfUploadFile(file: File): boolean {
     return file.type === 'application/pdf' || file.name.toLowerCase().endsWith('.pdf');
+}
+
+function formatMarkerLabel(label: string | number): string {
+    const text = String(label).trim();
+    return text.endsWith('.') ? text : `${text}.`;
 }
 
 export default function PDFViewer({
@@ -100,13 +102,15 @@ export default function PDFViewer({
     drawings = {},
     onDrawingsChange,
     markers = [],
-    forcePage
-}: PDFViewerProps & { forcePage?: number }) {
+    forcePage,
+    focusTarget,
+}: PDFViewerProps) {
     const [numPages, setNumPages] = useState<number>(0);
     const [pageNumber, setPageNumber] = useState<number>(1);
     const [inputPage, setInputPage] = useState<string>("1");
     const [scale, setScale] = useState<number>(1.0);
     const [isDragging, setIsDragging] = useState(false);
+    const [pageRenderVersion, setPageRenderVersion] = useState(0);
 
     // Drawing State
     const [, setIsDrawing] = useState(false);
@@ -116,8 +120,7 @@ export default function PDFViewer({
     const [penWidth, setPenWidth] = useState(2);
     const [highlighterWidth, setHighlighterWidth] = useState(12);
     const [eraserWidth, setEraserWidth] = useState(22);
-    const [eraserType, setEraserType] = useState<EraserType>('pixel');
-    const [eraserCursor, setEraserCursor] = useState<{ x: number; y: number } | null>(null);
+    const [eraserMode, setEraserMode] = useState<'pixel' | 'stroke'>('stroke');
     const [fingerDrawingEnabled, setFingerDrawingEnabled] = useState(false);
     const [undoStack, setUndoStack] = useState<Record<number, string[][]>>({});
     const [redoStack, setRedoStack] = useState<Record<number, string[][]>>({});
@@ -128,14 +131,18 @@ export default function PDFViewer({
     const activeDrawingModeRef = useRef<DrawingMode>('pen');
     const currentPathRef = useRef<DrawPoint[]>([]);
     const activePointerIdRef = useRef<number | null>(null);
-    // Stroke (object) eraser working state
-    const strokeEraseRef = useRef<{ snapshot: string[]; remaining: string[]; removed: boolean } | null>(null);
+    const activeEraserModeRef = useRef<'pixel' | 'stroke'>('stroke');
+    const strokeEraseBaselineRef = useRef<string[] | null>(null);
+    const strokeEraseChangedRef = useRef<boolean>(false);
+    const liveStrokesRef = useRef<string[] | null>(null);
+    const pendingFocusTargetRef = useRef<PdfFocusTarget | null>(null);
 
     // Floating OMR popup state - tracks active marker index (page + list index)
     const [activePopupKey, setActivePopupKey] = useState<string | null>(null);
 
     // Canvas Ref
     const canvasRef = useRef<HTMLCanvasElement>(null);
+    const eraserRingRef = useRef<HTMLDivElement>(null);
     const containerRef = useRef<HTMLDivElement>(null);
     const wrapperRef = useRef<HTMLDivElement>(null);
     const [containerWidth, setContainerWidth] = useState<number>(0);
@@ -145,12 +152,20 @@ export default function PDFViewer({
             ? highlighterWidth
             : penWidth;
 
-    // Pen-shaped cursors tinted with the active color (rebuilt only on color change).
     const penCursor = useMemo(() => buildPenCursor(penColor), [penColor]);
     const highlighterCursor = useMemo(() => {
         const idx = HIGHLIGHTER_COLORS.indexOf(highlighterColor);
-        return buildPenCursor(HIGHLIGHTER_CURSOR_COLORS[idx] ?? HIGHLIGHTER_CURSOR_COLORS[0]);
+        return buildHighlighterCursor(HIGHLIGHTER_CURSOR_COLORS[idx] ?? HIGHLIGHTER_CURSOR_COLORS[0]);
     }, [highlighterColor]);
+    const canvasCursor = !canEditDrawing
+        ? 'default'
+        : drawingMode === 'pen'
+            ? penCursor
+            : drawingMode === 'highlighter'
+                ? highlighterCursor
+                : drawingMode === 'eraser'
+                    ? 'none' // ring overlay draws the eraser cursor (Task 6)
+                    : 'default';
 
     useEffect(() => {
         if (!wrapperRef.current) return;
@@ -176,6 +191,46 @@ export default function PDFViewer({
             setPageNumber(forcePage);
         }
     }, [forcePage, numPages]);
+
+    useEffect(() => {
+        if (!focusTarget) return;
+        if (focusTarget.page < 1 || (numPages > 0 && focusTarget.page > numPages)) return;
+        pendingFocusTargetRef.current = focusTarget;
+        setActivePopupKey(null);
+        setPageNumber(focusTarget.page);
+    }, [focusTarget, numPages]);
+
+    useEffect(() => {
+        const target = pendingFocusTargetRef.current;
+        if (!target || target.page !== pageNumber) return;
+
+        let firstFrame = 0;
+        let secondFrame = 0;
+        firstFrame = window.requestAnimationFrame(() => {
+            secondFrame = window.requestAnimationFrame(() => {
+                const wrapper = wrapperRef.current;
+                const page = containerRef.current;
+                if (!wrapper || !page || page.offsetWidth === 0 || page.offsetHeight === 0) return;
+
+                const x = Math.min(1, Math.max(0, target.x));
+                const y = Math.min(1, Math.max(0, target.y));
+                const left = page.offsetLeft + page.offsetWidth * x - wrapper.clientWidth / 2;
+                const top = page.offsetTop + page.offsetHeight * y - wrapper.clientHeight / 2;
+
+                wrapper.scrollTo({
+                    left: Math.max(0, left),
+                    top: Math.max(0, top),
+                    behavior: 'smooth',
+                });
+                pendingFocusTargetRef.current = null;
+            });
+        });
+
+        return () => {
+            window.cancelAnimationFrame(firstFrame);
+            window.cancelAnimationFrame(secondFrame);
+        };
+    }, [pageNumber, scale, containerWidth, file, focusTarget, pageRenderVersion]);
 
     // Close popup on Escape key
     useEffect(() => {
@@ -416,41 +471,6 @@ export default function PDFViewer({
         return () => window.removeEventListener('keydown', handleKeyDown);
     }, [canEditDrawing, handleRedo, handleUndo]);
 
-    // Distance (in display px) from point P to segment AB, all in normalized coords scaled by rect.
-    const pointToSegmentPx = (
-        p: DrawPoint, a: DrawPoint, b: DrawPoint, rect: { width: number; height: number },
-    ) => {
-        const px = p.x * rect.width, py = p.y * rect.height;
-        const ax = a.x * rect.width, ay = a.y * rect.height;
-        const bx = b.x * rect.width, by = b.y * rect.height;
-        const dx = bx - ax, dy = by - ay;
-        const lenSq = dx * dx + dy * dy;
-        let t = lenSq > 0 ? ((px - ax) * dx + (py - ay) * dy) / lenSq : 0;
-        t = Math.max(0, Math.min(1, t));
-        const cx = ax + t * dx, cy = ay + t * dy;
-        return Math.hypot(px - cx, py - cy);
-    };
-
-    // Returns true if a saved path string is within the eraser hit radius of point p.
-    const isPathHit = (pathStr: string, p: DrawPoint, rect: { width: number; height: number }) => {
-        try {
-            const data = JSON.parse(pathStr);
-            const pts: DrawPoint[] = data.points;
-            if (!pts || pts.length === 0) return false;
-            const strokeW = typeof data.width === 'number' ? data.width : 2;
-            const threshold = eraserWidth / 2 + strokeW / 2;
-            if (pts.length === 1) {
-                return pointToSegmentPx(p, pts[0], pts[0], rect) <= threshold;
-            }
-            for (let i = 0; i < pts.length - 1; i++) {
-                if (pointToSegmentPx(p, pts[i], pts[i + 1], rect) <= threshold) return true;
-            }
-            return false;
-        } catch {
-            return false;
-        }
-    };
-
     const drawingModeForPointer = (e: React.PointerEvent<HTMLCanvasElement>): DrawingMode => {
         if (e.pointerType === 'pen' && drawingMode === 'click') return 'pen';
         return drawingMode;
@@ -465,16 +485,39 @@ export default function PDFViewer({
         return true;
     };
 
-    // Stroke (object) eraser: remove any saved path the pointer touches.
     const eraseStrokesAt = (pos: DrawPoint) => {
-        const session = strokeEraseRef.current;
-        if (!session || !canvasRef.current || !onDrawingsChange) return;
-        const rect = canvasRef.current.getBoundingClientRect();
-        const next = session.remaining.filter(pathStr => !isPathHit(pathStr, pos, rect));
-        if (next.length !== session.remaining.length) {
-            session.remaining = next;
-            session.removed = true;
-            onDrawingsChange(pageNumber, next);
+        if (!onDrawingsChange || !containerRef.current) return;
+        const rect = containerRef.current.getBoundingClientRect();
+        const source = liveStrokesRef.current ?? (drawings[pageNumber] || []);
+        const pointerX = pos.x * rect.width;
+        const pointerY = pos.y * rect.height;
+        const baseRadius = eraserWidth / 2;
+
+        const kept: string[] = [];
+        let removed = false;
+        for (const pathStr of source) {
+            let hit = false;
+            try {
+                const data = JSON.parse(pathStr);
+                if (data.mode !== 'eraser' && Array.isArray(data.points) && data.points.length > 0) {
+                    const pts = (data.points as DrawPoint[]).map(p => ({
+                        x: p.x * rect.width,
+                        y: p.y * rect.height,
+                    }));
+                    const radius = baseRadius + (typeof data.width === 'number' ? data.width / 2 : 1);
+                    hit = strokeHitTest(pointerX, pointerY, pts, radius);
+                }
+            } catch {
+                hit = false;
+            }
+            if (hit) removed = true;
+            else kept.push(pathStr);
+        }
+
+        if (removed) {
+            liveStrokesRef.current = kept;
+            strokeEraseChangedRef.current = true;
+            onDrawingsChange(pageNumber, kept);
         }
     };
 
@@ -490,14 +533,19 @@ export default function PDFViewer({
         activeDrawingModeRef.current = pointerDrawingMode;
         if (e.pointerType === 'pen' && drawingMode === 'click') setDrawingMode('pen');
 
-        // Stroke eraser removes whole saved paths instead of painting.
-        if (pointerDrawingMode === 'eraser' && eraserType === 'stroke') {
-            const snapshot = drawings[pageNumber] || [];
-            strokeEraseRef.current = { snapshot, remaining: snapshot, removed: false };
-            eraseStrokesAt(getPos(e));
+        if (pointerDrawingMode === 'eraser' && eraserMode === 'stroke') {
+            activeEraserModeRef.current = 'stroke';
+            const baseline = drawings[pageNumber] || [];
+            strokeEraseBaselineRef.current = baseline;
+            liveStrokesRef.current = baseline;
+            strokeEraseChangedRef.current = false;
+            const pos = getPos(e);
+            currentPathRef.current = [pos];
+            eraseStrokesAt(pos);
             return;
         }
 
+        activeEraserModeRef.current = 'pixel';
         currentPathRef.current = [getPos(e)];
     };
 
@@ -505,8 +553,7 @@ export default function PDFViewer({
         if (!isDrawingRef.current || activePointerIdRef.current !== e.pointerId || !canEditDrawing || !canvasRef.current) return;
         e.preventDefault();
 
-        // Stroke eraser: keep removing paths under the moving pointer.
-        if (strokeEraseRef.current) {
+        if (activeDrawingModeRef.current === 'eraser' && activeEraserModeRef.current === 'stroke') {
             eraseStrokesAt(getPos(e));
             return;
         }
@@ -550,17 +597,22 @@ export default function PDFViewer({
         activePointerIdRef.current = null;
         setIsDrawing(false);
 
-        // Stroke eraser: commit one undo entry for the whole erase gesture.
-        const eraseSession = strokeEraseRef.current;
-        if (eraseSession) {
-            strokeEraseRef.current = null;
-            if (eraseSession.removed) {
+        if (activeDrawingModeRef.current === 'eraser' && activeEraserModeRef.current === 'stroke') {
+            if (strokeEraseChangedRef.current && strokeEraseBaselineRef.current) {
+                const baseline = strokeEraseBaselineRef.current;
                 setUndoStack(prev => ({
                     ...prev,
-                    [pageNumber]: [...(prev[pageNumber] || []), eraseSession.snapshot]
+                    [pageNumber]: [...(prev[pageNumber] || []), baseline],
                 }));
-                setRedoStack(prev => ({ ...prev, [pageNumber]: [] }));
+                setRedoStack(prev => ({
+                    ...prev,
+                    [pageNumber]: [],
+                }));
             }
+            strokeEraseBaselineRef.current = null;
+            liveStrokesRef.current = null;
+            strokeEraseChangedRef.current = false;
+            currentPathRef.current = [];
             return;
         }
 
@@ -591,23 +643,27 @@ export default function PDFViewer({
         currentPathRef.current = [];
     };
 
-    const updateEraserCursor = (e: React.PointerEvent<HTMLCanvasElement>) => {
-        if (drawingMode !== 'eraser' || !canEditDrawing || !canvasRef.current) return;
-        const rect = canvasRef.current.getBoundingClientRect();
-        setEraserCursor({ x: e.clientX - rect.left, y: e.clientY - rect.top });
+    const updateEraserRing = (e: React.PointerEvent<HTMLCanvasElement>) => {
+        const ring = eraserRingRef.current;
+        if (!ring || !containerRef.current) return;
+        const rect = containerRef.current.getBoundingClientRect();
+        ring.style.left = `${e.clientX - rect.left}px`;
+        ring.style.top = `${e.clientY - rect.top}px`;
+        ring.style.display = 'block';
     };
 
-    const clearEraserCursor = () => setEraserCursor(null);
-
-    const handlePointerMove = (e: React.PointerEvent<HTMLCanvasElement>) => {
-        updateEraserCursor(e);
+    const handleCanvasPointerMove = (e: React.PointerEvent<HTMLCanvasElement>) => {
+        if (canEditDrawing && drawingMode === 'eraser') updateEraserRing(e);
         draw(e);
     };
 
-    // Hide eraser cursor whenever we leave eraser mode.
-    useEffect(() => {
-        if (drawingMode !== 'eraser') setEraserCursor(null);
-    }, [drawingMode]);
+    const handleCanvasPointerEnter = (e: React.PointerEvent<HTMLCanvasElement>) => {
+        if (canEditDrawing && drawingMode === 'eraser') updateEraserRing(e);
+    };
+
+    const handleCanvasPointerLeave = () => {
+        if (eraserRingRef.current) eraserRingRef.current.style.display = 'none';
+    };
 
     const getPos = (e: React.PointerEvent<HTMLCanvasElement>) => {
         if (!canvasRef.current) return { x: 0, y: 0 };
@@ -753,6 +809,45 @@ export default function PDFViewer({
                                     </button>
                                 </div>
 
+                                {drawingMode === 'eraser' && (
+                                    <div
+                                        role="group"
+                                        aria-label="지우개 방식"
+                                        style={{
+                                            display: 'inline-flex',
+                                            alignItems: 'center',
+                                            height: 32,
+                                            border: '1px solid #555',
+                                            borderRadius: 8,
+                                            overflow: 'hidden',
+                                            flex: '0 0 auto',
+                                        }}
+                                    >
+                                        {(['pixel', 'stroke'] as const).map((mode, idx) => (
+                                            <button
+                                                key={mode}
+                                                type="button"
+                                                onClick={() => setEraserMode(mode)}
+                                                aria-pressed={eraserMode === mode}
+                                                title={mode === 'stroke' ? '획 지우기 (닿은 획 전체 삭제)' : '부분 지우기'}
+                                                style={{
+                                                    height: 32,
+                                                    padding: '0 0.6rem',
+                                                    fontSize: '0.72rem',
+                                                    fontWeight: 800,
+                                                    color: 'white',
+                                                    background: eraserMode === mode ? '#4f46e5' : '#222',
+                                                    border: 'none',
+                                                    borderLeft: idx === 0 ? 'none' : '1px solid #555',
+                                                    cursor: 'pointer',
+                                                }}
+                                            >
+                                                {mode === 'stroke' ? '획' : '부분'}
+                                            </button>
+                                        ))}
+                                    </div>
+                                )}
+
                                 {drawingMode === 'pen' && (
                                     <div className="pdf-color-swatches" aria-label="펜 색상">
                                         {PEN_COLORS.map(color => (
@@ -774,31 +869,6 @@ export default function PDFViewer({
                                             title="펜 색상 직접 선택"
                                             aria-label="펜 색상 직접 선택"
                                         />
-                                    </div>
-                                )}
-
-                                {drawingMode === 'eraser' && (
-                                    <div className="pdf-tool-group" role="group" aria-label="지우개 방식">
-                                        <button
-                                            type="button"
-                                            className={`pdf-tool-button pdf-tool-button--text ${eraserType === 'pixel' ? 'active' : ''}`}
-                                            onClick={() => setEraserType('pixel')}
-                                            title="픽셀 지우개 — 닿는 부분만 지웁니다"
-                                            aria-label="픽셀 지우개"
-                                            aria-pressed={eraserType === 'pixel'}
-                                        >
-                                            픽셀
-                                        </button>
-                                        <button
-                                            type="button"
-                                            className={`pdf-tool-button pdf-tool-button--text ${eraserType === 'stroke' ? 'active' : ''}`}
-                                            onClick={() => setEraserType('stroke')}
-                                            title="획 지우개 — 닿는 획 전체를 한 번에 지웁니다"
-                                            aria-label="획 지우개"
-                                            aria-pressed={eraserType === 'stroke'}
-                                        >
-                                            획
-                                        </button>
                                     </div>
                                 )}
 
@@ -937,46 +1007,54 @@ export default function PDFViewer({
                                 onClick={handlePageClick}
                                 style={{ position: 'relative', boxShadow: '0 4px 6px -1px rgba(0, 0, 0, 0.1)' }}
                             >
-                                <Page pageNumber={pageNumber} scale={scale} width={containerWidth > 0 ? containerWidth : undefined} renderTextLayer={true} renderAnnotationLayer={true} />{/* Canvas Overlay */}
+                                <Page
+                                    pageNumber={pageNumber}
+                                    scale={scale}
+                                    width={containerWidth > 0 ? containerWidth : undefined}
+                                    renderTextLayer={true}
+                                    renderAnnotationLayer={true}
+                                    onRenderSuccess={() => setPageRenderVersion(value => value + 1)}
+                                />{/* Canvas Overlay */}
                                 {shouldRenderDrawingLayer && (
                                     <canvas
                                         ref={canvasRef}
                                         onPointerDown={startDrawing}
-                                        onPointerMove={handlePointerMove}
+                                        onPointerMove={handleCanvasPointerMove}
                                         onPointerUp={stopDrawing}
-                                        onPointerCancel={(e) => { clearEraserCursor(); stopDrawing(e); }}
-                                        onPointerEnter={updateEraserCursor}
-                                        onPointerLeave={clearEraserCursor}
+                                        onPointerCancel={stopDrawing}
+                                        onPointerEnter={handleCanvasPointerEnter}
+                                        onPointerLeave={handleCanvasPointerLeave}
                                         style={{
                                             position: 'absolute',
                                             top: 0, left: 0,
                                             width: '100%', height: '100%',
                                             zIndex: 10,
-                                            cursor: canEditDrawing
-                                                ? drawingMode === 'pen'
-                                                    ? penCursor
-                                                    : drawingMode === 'highlighter'
-                                                        ? highlighterCursor
-                                                        : drawingMode === 'eraser'
-                                                            ? 'none'
-                                                            : 'default'
-                                                : 'default',
+                                            cursor: canvasCursor,
                                             pointerEvents: canEditDrawing ? 'auto' : 'none',
                                             touchAction: fingerDrawingEnabled ? 'none' : 'pan-x pan-y pinch-zoom'
                                         }}
                                     />
                                 )}
 
-                                {/* Eraser size preview cursor */}
-                                {canEditDrawing && drawingMode === 'eraser' && eraserCursor && (
+                                {canEditDrawing && drawingMode === 'eraser' && (
                                     <div
+                                        ref={eraserRingRef}
                                         aria-hidden="true"
-                                        className={`pdf-eraser-cursor ${eraserType === 'stroke' ? 'is-stroke' : ''}`}
                                         style={{
-                                            left: eraserCursor.x,
-                                            top: eraserCursor.y,
-                                            width: eraserWidth,
-                                            height: eraserWidth,
+                                            position: 'absolute',
+                                            left: 0,
+                                            top: 0,
+                                            width: `${eraserWidth}px`,
+                                            height: `${eraserWidth}px`,
+                                            transform: 'translate(-50%, -50%)',
+                                            borderRadius: '50%',
+                                            border: eraserMode === 'stroke'
+                                                ? '1.5px dashed rgba(239,68,68,0.95)'
+                                                : '1.5px solid rgba(255,255,255,0.95)',
+                                            boxShadow: '0 0 0 1px rgba(0,0,0,0.45)',
+                                            pointerEvents: 'none',
+                                            zIndex: 15,
+                                            display: 'none',
                                         }}
                                     />
                                 )}
@@ -1039,27 +1117,27 @@ export default function PDFViewer({
                                                         }
                                                     }}
                                                     style={{
-                                                        width: '28px', height: '28px',
-                                                        background: isMarked
-                                                            ? 'linear-gradient(135deg, #4f46e5, #3730a3)'
-                                                            : markerColor,
-                                                        color: 'white',
-                                                        borderRadius: '50%',
+                                                        width: 'auto',
+                                                        minWidth: '20px',
+                                                        height: '22px',
+                                                        padding: '0 4px',
+                                                        background: 'rgba(255,255,255,0.92)',
+                                                        color: isMarked ? '#4f46e5' : markerColor,
+                                                        borderRadius: '5px',
                                                         display: 'flex', alignItems: 'center', justifyContent: 'center',
-                                                        fontWeight: 800, fontSize: '0.78rem',
+                                                        fontWeight: 900, fontSize: '0.76rem',
                                                         boxShadow: isPopupActive
-                                                            ? '0 4px 14px rgba(0,0,0,0.45), 0 0 0 3px rgba(99,102,241,0.3)'
-                                                            : '0 2px 6px rgba(0,0,0,0.3)',
-                                                        border: '2px solid white',
+                                                            ? '0 3px 12px rgba(0,0,0,0.32), 0 0 0 3px rgba(99,102,241,0.24)'
+                                                            : '0 1px 5px rgba(0,0,0,0.22)',
+                                                        border: `1px solid ${isMarked ? '#4f46e5' : markerColor}`,
                                                         cursor: 'pointer',
-                                                        padding: 0,
                                                         transition: 'transform 0.15s, box-shadow 0.15s',
-                                                        transform: isPopupActive ? 'scale(1.15)' : 'scale(1)',
+                                                        transform: isPopupActive ? 'scale(1.06)' : 'scale(1)',
                                                         fontVariantNumeric: 'tabular-nums',
                                                     }}
                                                     title={`문제 ${marker.label}번${isMarked ? ` · 현재: ${marker.currentAnswer}` : ''}`}
                                                 >
-                                                    {marker.label}
+                                                    {formatMarkerLabel(marker.label)}
                                                 </button>
 
                                                 {/* Floating OMR popup */}

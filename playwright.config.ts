@@ -41,6 +41,16 @@ export default defineConfig({
             use: { ...devices["Desktop Chrome"] },
         },
         {
+            name: "webkit",
+            testIgnore: /(?:pwa-mobile|teacher-mobile)\.spec\.ts/,
+            use: { ...devices["Desktop Safari"] },
+        },
+        {
+            name: "webkit-ipad",
+            testIgnore: /(?:pwa-mobile|teacher-mobile)\.spec\.ts/,
+            use: { ...devices["iPad Pro 11"] },
+        },
+        {
             name: "mobile-chrome-pwa",
             testMatch: /pwa-mobile\.spec\.ts/,
             use: { ...devices["Pixel 5"], browserName: "chromium" },
@@ -87,5 +97,11 @@ export default defineConfig({
         url: baseURL,
         reuseExistingServer: !process.env.CI,
         timeout: 60_000,
+        env: {
+            ...process.env,
+            NEXT_PUBLIC_SUPABASE_URL: "",
+            NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY: "",
+            NEXT_PUBLIC_SUPABASE_ANON_KEY: "",
+        },
     },
 });

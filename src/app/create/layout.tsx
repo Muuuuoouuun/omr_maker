@@ -1,6 +1,5 @@
 import type { ReactNode } from "react";
 import { cookies } from "next/headers";
-import { redirect } from "next/navigation";
 import TeacherAuthGate from "@/components/TeacherAuthGate";
 import { bootstrapWorkspaceWithServiceRole } from "@/lib/supabaseServerAdmin";
 import { parseSignedTeacherSessionCookie, TEACHER_SERVER_SESSION_COOKIE } from "@/lib/teacherServerSession";
@@ -10,7 +9,7 @@ export default async function CreateLayout({ children }: { children: ReactNode }
     const cookieStore = await cookies();
     const serverSession = parseSignedTeacherSessionCookie(cookieStore.get(TEACHER_SERVER_SESSION_COOKIE)?.value);
     if (!serverSession) {
-        redirect("/?role=teacher&next=%2Fcreate");
+        return <TeacherAuthGate initialSession={null} requireServerSession>{null}</TeacherAuthGate>;
     }
 
     const bootstrapResult = await bootstrapWorkspaceWithServiceRole(workspaceContextFromTeacherSession(serverSession));

@@ -27,7 +27,7 @@ In production, there is no default account. Set one of these on the server befor
 
 Teacher login is currently backed by server environment variables, not Supabase Auth. If a deployed build only says the credentials are invalid, check the deployment provider's environment variables and redeploy before checking Supabase.
 
-Student login uses quick entry instead of a password account. Import `examples/student-roster.csv` from `/teacher/users`, then students can choose `학생` and enter one of these sample names with the matching class. The sample CSV includes an `id` column that can be shared as the student number when names overlap:
+Student login uses the roster student number or email as the account ID, and a six-character start code as the password-like credential. Import `examples/student-roster.csv` from `/teacher/users`, then students can choose `학생` and enter one of these sample names with the matching class. Share the CSV `id` or `email` value as the student's login ID, especially when names overlap:
 
 - `김민준` / `3학년 A반` / `서울`
 - `이서연` / `3학년 A반` / `서울`
@@ -36,7 +36,7 @@ Student login uses quick entry instead of a password account. Import `examples/s
 
 On first student login, the app issues a six-character start code. Returning students with prior attempts must enter that start code; teachers can also issue or regenerate it from `/teacher/users`.
 
-If a class has same-name students, students should also enter the roster email or teacher-issued student ID in the optional `학생번호 또는 이메일` field so records do not merge into the wrong profile.
+If a class has same-name students, students must enter the roster email or teacher-issued student ID in `학생번호 또는 이메일` so records do not merge into the wrong profile.
 
 Production account, security, privacy, and usability rollout items are tracked in `docs/account-security-usability-checklist.md`.
 
@@ -51,6 +51,7 @@ npm audit
 npm test
 npm run lint
 npm run build
+npm run test:e2e:prod
 ```
 
 PWA release checks:

@@ -259,7 +259,7 @@ th { background: #f8fafc; font-size: 12px; color: #64748b; text-transform: upper
 </style></head><body>
 <div class="header">
   <div>
-    <div class="brand">Classin</div>
+    <div class="brand">OMR Maker</div>
     <div style="color: #64748b; font-size: 13px; margin-top: 4px;">OMR Maker Platform</div>
   </div>
   <div class="meta">
@@ -279,7 +279,7 @@ th { background: #f8fafc; font-size: 12px; color: #64748b; text-transform: upper
     <tr><td><strong>${amountLabel}</strong></td><td style="text-align: right;" class="total">₩${inv.amount.toLocaleString()}</td></tr>
   </tbody>
 </table>
-<div class="footer">Classin — 문의: billing@classin.app · ${statusMeta.footerNote}</div>
+<div class="footer">OMR Maker — 문의: billing@classin.app · ${statusMeta.footerNote}</div>
 </body></html>`;
         const blob = new Blob([html], { type: "text/html;charset=utf-8" });
         const url = URL.createObjectURL(blob);

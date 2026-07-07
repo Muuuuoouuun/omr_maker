@@ -1,5 +1,23 @@
 import { describe, expect, it } from "vitest";
-import { parseCsvRows, serializeCsvRows } from "./csv";
+import { decodeCsvBytes, parseCsvRows, serializeCsvRows } from "./csv";
+
+describe("decodeCsvBytes", () => {
+    it("decodes UTF-8 bytes directly", () => {
+        const bytes = new TextEncoder().encode("이름,반\n김민준,3학년 A반");
+        expect(decodeCsvBytes(bytes)).toBe("이름,반\n김민준,3학년 A반");
+    });
+
+    it("falls back to EUC-KR/CP949 when the bytes are not valid UTF-8", () => {
+        // "가" is 0xB0 0xA1 in EUC-KR — an invalid UTF-8 lead byte, so a strict
+        // UTF-8 decode fails and we must fall back to EUC-KR instead of mojibake.
+        expect(decodeCsvBytes(new Uint8Array([0xb0, 0xa1]))).toBe("가");
+    });
+
+    it("accepts an ArrayBuffer as well as a Uint8Array", () => {
+        const bytes = new TextEncoder().encode("name\nvalue");
+        expect(decodeCsvBytes(bytes.buffer)).toBe("name\nvalue");
+    });
+});
 
 describe("parseCsvRows", () => {
     it("parses basic CSV rows", () => {

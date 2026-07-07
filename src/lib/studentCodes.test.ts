@@ -53,12 +53,29 @@ describe("student start codes", () => {
         expect(JSON.parse(storage.data[STUDENT_CODES_STORAGE_KEY])).toEqual({ "class-a::김학생": "ABC123" });
     });
 
+    it("requires a student lookup before opening a roster-backed profile", () => {
+        expect(resolveStudentIdentity({
+            name: " 김학생 ",
+            selectedGroupId: "group-a",
+            groups: [{ id: "group-a", name: "A반" }],
+            students: [{ id: "student-1", name: "김학생", group: "A반" }],
+        })).toMatchObject({
+            studentId: "student-1",
+            matchedRosterProfile: true,
+            rosterMatchCount: 1,
+            requiresStudentLookup: true,
+            lookupMatched: false,
+            lookupMismatch: false,
+        });
+    });
+
     it("resolves roster profile IDs while preserving the legacy login ID", () => {
         expect(resolveStudentIdentity({
             name: " 김학생 ",
             selectedGroupId: "group-a",
             groups: [{ id: "group-a", name: "A반" }],
             students: [{ id: "student-1", name: "김학생", group: "A반" }],
+            studentLookup: "student-1",
         })).toEqual({
             studentId: "student-1",
             legacyStudentId: "group-a::김학생",
@@ -67,7 +84,7 @@ describe("student start codes", () => {
             matchedRosterProfile: true,
             rosterMatchCount: 1,
             requiresStudentLookup: false,
-            lookupMatched: false,
+            lookupMatched: true,
             lookupMismatch: false,
         });
     });
@@ -153,6 +170,7 @@ describe("student start codes", () => {
                 { id: "busan-a::김학생", name: "김학생", group: "A반", region: "부산" },
                 { id: "seoul-a::김학생", name: "김학생", group: "A반", region: "서울" },
             ],
+            studentLookup: "seoul-a::김학생",
         })).toEqual({
             studentId: "seoul-a::김학생",
             legacyStudentId: "seoul-a::김학생",
@@ -161,7 +179,7 @@ describe("student start codes", () => {
             matchedRosterProfile: true,
             rosterMatchCount: 1,
             requiresStudentLookup: false,
-            lookupMatched: false,
+            lookupMatched: true,
             lookupMismatch: false,
         });
     });
@@ -238,6 +256,37 @@ describe("student start codes", () => {
         expect(resolveStudentStartCodeLogin({ ...base, providedCode: "abc123" })).toMatchObject({
             status: "allowed",
             code: "ABC123",
+            codesChanged: false,
+        });
+    });
+
+    it("requires a teacher-issued code even before the first attempt", () => {
+        const base = {
+            studentId: "student-1",
+            codes: { "student-1": "ABC123" },
+            hasPriorAttempt: false,
+        };
+
+        expect(resolveStudentStartCodeLogin(base)).toMatchObject({
+            status: "code_required",
+            codesChanged: false,
+        });
+        expect(resolveStudentStartCodeLogin({ ...base, providedCode: "ABC123" })).toMatchObject({
+            status: "allowed",
+            code: "ABC123",
+            codesChanged: false,
+        });
+    });
+
+    it("does not auto-issue a start code when prior attempts already exist", () => {
+        expect(resolveStudentStartCodeLogin({
+            studentId: "student-1",
+            codes: {},
+            hasPriorAttempt: true,
+            generateCode: () => "ABC123",
+        })).toEqual({
+            status: "code_required",
+            codes: {},
             codesChanged: false,
         });
     });

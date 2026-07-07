@@ -1,7 +1,14 @@
 "use server";
 
 import { cookies, headers } from "next/headers";
-import { mintTeacherToken, TEACHER_AUTH_ERROR, verifyTeacherLogin, type TeacherLoginIdentity } from "@/lib/teacherAuth";
+import {
+    inspectTeacherAuthConfig,
+    mintTeacherToken,
+    TEACHER_AUTH_DEPLOYMENT_CONFIG_ERROR,
+    TEACHER_AUTH_ERROR,
+    verifyTeacherLogin,
+    type TeacherLoginIdentity,
+} from "@/lib/teacherAuth";
 import { bootstrapWorkspaceWithServiceRole } from "@/lib/supabaseServerAdmin";
 import {
     buildTeacherLoginRateLimitKeys,
@@ -16,6 +23,7 @@ import {
     TEACHER_SERVER_SESSION_COOKIE,
     TEACHER_SERVER_SESSION_MAX_AGE_SECONDS,
 } from "@/lib/teacherServerSession";
+import { buildDeploymentReadiness, type DeploymentReadinessSummary } from "@/lib/deploymentReadiness";
 import { workspaceContextFromIdentity } from "@/lib/workspaceContext";
 
 function clientFingerprintFromHeaders(headerStore: Headers): string {
@@ -33,6 +41,14 @@ export async function verifyTeacherPassword(
     identifier: string,
     password: string,
 ): Promise<{ success: boolean; token?: string; teacher?: TeacherLoginIdentity; error?: string }> {
+    const authConfig = inspectTeacherAuthConfig();
+    if (authConfig.credentialCount === 0) {
+        return {
+            success: false,
+            error: TEACHER_AUTH_DEPLOYMENT_CONFIG_ERROR,
+        };
+    }
+
     const headerStore = await headers();
     const rateLimitKeys = buildTeacherLoginRateLimitKeys(identifier, clientFingerprintFromHeaders(headerStore));
     const rateLimit = checkTeacherLoginRateLimit(rateLimitKeys);
@@ -81,4 +97,8 @@ export async function clearTeacherAuthSession(): Promise<{ success: true }> {
     const cookieStore = await cookies();
     cookieStore.delete(TEACHER_SERVER_SESSION_COOKIE);
     return { success: true };
+}
+
+export async function getTeacherDeploymentReadiness(): Promise<DeploymentReadinessSummary> {
+    return buildDeploymentReadiness();
 }
