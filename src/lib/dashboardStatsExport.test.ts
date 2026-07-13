@@ -38,6 +38,10 @@ describe("dashboard stats export", () => {
     it("builds dashboard summary, trend, and exam rows", () => {
         expect(buildDashboardStatsCsvRows(input)).toContainEqual(["평균 점수", 82.3]);
         expect(buildDashboardStatsCsvRows(input)).toContainEqual(["순서", "평균 점수"]);
+        // Distribution rows fall back to trendData [70, 82.3] when no raw scores are supplied.
+        expect(buildDashboardStatsCsvRows(input)).toContainEqual(["중앙값", 76.2]);
+        expect(buildDashboardStatsCsvRows(input)).toContainEqual(["표준편차", 6.1]);
+        expect(buildDashboardStatsCsvRows(input)).toContainEqual(["합격률(60점 이상, %)", 100]);
         expect(buildDashboardStatsCsvRows(input)).toContainEqual([
             "진행",
             "중간, 모의고사",
@@ -58,6 +62,26 @@ describe("dashboard stats export", () => {
             0,
             "Y",
         ]);
+    });
+
+    it("uses raw student scores and appends per-question stats when provided", () => {
+        const rows = buildDashboardStatsCsvRows({
+            ...input,
+            scores: [40, 60, 80, 100], // median 70, sd ~21.2, pass-rate 75
+            passThreshold: 70,
+            questionStats: [
+                { examTitle: "중간, 모의고사", questionNumber: 1, correctRate: 82, discrimination: 40 },
+                { examTitle: "중간, 모의고사", questionNumber: 2, correctRate: 35, discrimination: null },
+            ],
+        });
+
+        expect(rows).toContainEqual(["중앙값", 70]);
+        expect(rows).toContainEqual(["표준편차", 22.4]);
+        expect(rows).toContainEqual(["합격률(70점 이상, %)", 50]);
+        expect(rows).toContainEqual(["문항별 통계"]);
+        expect(rows).toContainEqual(["시험명", "문항 번호", "정답률(%)", "변별도(%)"]);
+        expect(rows).toContainEqual(["중간, 모의고사", 1, 82, 40]);
+        expect(rows).toContainEqual(["중간, 모의고사", 2, 35, "-"]);
     });
 
     it("serializes to spreadsheet-safe CSV", () => {

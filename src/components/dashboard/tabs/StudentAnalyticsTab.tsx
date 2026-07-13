@@ -421,7 +421,7 @@ export default function StudentAnalyticsTab({
                             {activeStudentLabel} 성취도 추이
                         </h3>
                         <p style={{ color: 'var(--muted)', fontSize: '0.9rem' }}>
-                            원시험 점수 추이와 전체 학생의 원시험 평균을 같이 비교합니다.
+                            원시험 점수 추이와 선택 범위 학생의 원시험 평균을 같이 비교합니다.
                         </p>
                     </div>
                     {!studentGrowthReportsEnabled && (
@@ -462,7 +462,7 @@ export default function StudentAnalyticsTab({
                                         animationDuration={1500}
                                     />
                                     <Line
-                                        name="이번 시험 전체 평균"
+                                        name="선택 범위 평균"
                                         type="monotone"
                                         dataKey="avgScore"
                                         stroke="var(--warning)"
@@ -752,6 +752,11 @@ export default function StudentAnalyticsTab({
                                         </td>
                                         <td style={{ padding: '1rem 0.5rem', fontWeight: 600 }}>
                                             {detail.rank} <span style={{ fontSize: '0.8rem', color: 'var(--muted)', fontWeight: 400 }}>/ {detail.totalStudents}명</span>
+                                            {detail.totalStudents > 0 && (
+                                                <div style={{ fontSize: '0.72rem', color: 'var(--primary)', fontWeight: 800, marginTop: '0.2rem' }}>
+                                                    상위 {Math.max(1, Math.round((detail.rank / detail.totalStudents) * 100))}%
+                                                </div>
+                                            )}
                                         </td>
                                         <td style={{ padding: '1rem 0.5rem' }}>
                                             {detail.strongPoint ?

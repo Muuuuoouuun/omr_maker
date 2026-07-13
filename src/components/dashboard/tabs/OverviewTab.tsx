@@ -17,7 +17,10 @@ import { collectStudentQuestionInbox } from "@/lib/studentQuestions";
 import { formatKoreanDate, formatKoreanDateTime } from "@/lib/pure";
 import { safeRatePercent } from "@/lib/scoreUtils";
 import { buildExamSummaryRows, splitExamSummaryRows } from "@/lib/dashboardSummary";
-import { buildDashboardStatsCsv } from "@/lib/dashboardStatsExport";
+import { buildDashboardStatsCsv, type DashboardExportQuestionStat } from "@/lib/dashboardStatsExport";
+import { buildAttemptScoreLookup } from "@/lib/attemptScores";
+import { buildExamQuestionResultStats, buildExamQuestionDiscriminations } from "@/lib/premiumAnalytics";
+import type { RosterGroup, RosterStudent } from "@/lib/rosterStorage";
 import { summarizePersistenceWrite } from "@/lib/persistenceFeedback";
 import { buildBillingUsageSummary } from "@/lib/billingUsage";
 import { evaluatePlanLimit, getCurrentPlan, getPlanLabel, PLAN_BY_KEY } from "@/utils/plans";
@@ -31,6 +34,9 @@ interface OverviewTabProps {
         activeExams: number;
     };
     trendData: number[];
+    trendLabels?: string[];
+    rosterStudents?: RosterStudent[];
+    rosterGroups?: RosterGroup[];
     onNavigateToExamAnalytics?: (examId: string) => void;
 }
 
@@ -102,7 +108,7 @@ function DeleteExamConfirmDialog({
     );
 }
 
-export default function OverviewTab({ exams: examsProp, attempts, stats, trendData, onNavigateToExamAnalytics }: OverviewTabProps) {
+export default function OverviewTab({ exams: examsProp, attempts, stats, trendData, trendLabels, rosterStudents = [], rosterGroups = [], onNavigateToExamAnalytics }: OverviewTabProps) {
     const router = useRouter();
     const [activeTab, setActiveTab] = useState<'ongoing' | 'completed'>('ongoing');
     // Local copy so action handlers (archive/delete/duplicate) can update the table
@@ -215,8 +221,8 @@ export default function OverviewTab({ exams: examsProp, attempts, stats, trendDa
     };
 
     const examSummaryRows = useMemo(
-        () => buildExamSummaryRows(exams, attempts, stats.totalStudents),
-        [exams, attempts, stats.totalStudents]
+        () => buildExamSummaryRows(exams, attempts, stats.totalStudents, { rosterStudents, rosterGroups }),
+        [exams, attempts, stats.totalStudents, rosterStudents, rosterGroups]
     );
     const examSummaryGroups = useMemo(() => splitExamSummaryRows(examSummaryRows), [examSummaryRows]);
 
@@ -240,7 +246,31 @@ export default function OverviewTab({ exams: examsProp, attempts, stats, trendDa
     };
 
     const handleExportStatsCsv = () => {
-        const csv = buildDashboardStatsCsv({ stats, trendData, examRows: examSummaryRows });
+        // Computed lazily on click so the richer distribution/per-question math never
+        // runs on every dashboard render.
+        const examById = new Map(exams.map(exam => [exam.id, exam]));
+        const scoreLookup = buildAttemptScoreLookup(attempts, examById);
+        const scores = attempts
+            .filter(attempt => !attempt.retake && attempt.status === "completed")
+            .map(attempt => scoreLookup.get(attempt.id)?.scorePercent ?? 0);
+
+        const questionStats: DashboardExportQuestionStat[] = [];
+        for (const exam of exams) {
+            const examAttempts = attempts.filter(attempt => attempt.examId === exam.id && !attempt.retake);
+            if (examAttempts.length === 0) continue;
+            const discriminations = buildExamQuestionDiscriminations(exam, examAttempts);
+            for (const stat of buildExamQuestionResultStats(exam, examAttempts)) {
+                if (stat.totalCount === 0) continue;
+                questionStats.push({
+                    examTitle: exam.title,
+                    questionNumber: stat.questionNumber,
+                    correctRate: stat.correctRate,
+                    discrimination: discriminations.get(stat.questionId) ?? null,
+                });
+            }
+        }
+
+        const csv = buildDashboardStatsCsv({ stats, trendData, examRows: examSummaryRows, scores, questionStats });
         const blob = new Blob(["\uFEFF" + csv], { type: "text/csv;charset=utf-8;" });
         const url = URL.createObjectURL(blob);
         const link = document.createElement("a");
@@ -378,7 +408,7 @@ export default function OverviewTab({ exams: examsProp, attempts, stats, trendDa
                 <div style={{ position: 'absolute', top: '-20%', right: '-10%', width: '200px', height: '200px', background: 'radial-gradient(circle, rgba(255,255,255,0.2) 0%, transparent 70%)' }}></div>
 
                 <div style={{ flex: 1, display: 'flex', alignItems: 'flex-end', width: '100%' }}>
-                    <TrendChart data={trendData} color="white" height={160} />
+                    <TrendChart data={trendData} labels={trendLabels} color="white" height={160} />
                 </div>
             </div>
 
@@ -431,7 +461,14 @@ export default function OverviewTab({ exams: examsProp, attempts, stats, trendDa
                                 display: 'flex', alignItems: 'center', gap: '0.4rem',
                                 transition: 'var(--transition-base)', border: '1px solid var(--border)'
                             }}
-                            className="hover:border-primary hover:text-primary"
+                            onMouseEnter={(e) => {
+                                e.currentTarget.style.borderColor = 'var(--primary)';
+                                e.currentTarget.style.color = 'var(--primary)';
+                            }}
+                            onMouseLeave={(e) => {
+                                e.currentTarget.style.borderColor = 'var(--border)';
+                                e.currentTarget.style.color = 'var(--foreground)';
+                            }}
                         >
                             <Download size={15} />
                             통계 CSV
@@ -491,14 +528,20 @@ export default function OverviewTab({ exams: examsProp, attempts, stats, trendDa
                                 const statusColor = isArchived ? 'var(--muted)' : participationRate === 100 ? 'var(--success)' : 'var(--accent)';
 
                                 return (
-                                    <tr key={exam.id} style={{ borderBottom: '1px solid var(--border)', transition: 'background 0.2s', opacity: isArchived ? 0.6 : 1 }} className="hover:bg-slate-50 dark:hover:bg-slate-800/50">
+                                    <tr
+                                        key={exam.id}
+                                        style={{ borderBottom: '1px solid var(--border)', transition: 'background 0.2s', opacity: isArchived ? 0.6 : 1 }}
+                                        onMouseEnter={(e) => { e.currentTarget.style.background = 'rgba(99,102,241,0.06)'; }}
+                                        onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}
+                                    >
                                         <td className="overview-exam-summary-title-cell" style={{ fontWeight: 600, fontSize: '0.95rem' }}>
                                             <button
                                                 type="button"
                                                 onClick={() => onNavigateToExamAnalytics && onNavigateToExamAnalytics(exam.id)}
                                                 aria-label={`${exam.title} 분석 보기`}
-                                                style={{ background: 'none', border: 'none', font: 'inherit', padding: 0, textAlign: 'left', color: 'inherit', cursor: 'pointer', transition: 'color 0.2s' }}
-                                                className="hover:text-primary hover:underline hover:underline-offset-4"
+                                                style={{ background: 'none', border: 'none', font: 'inherit', padding: 0, textAlign: 'left', color: 'inherit', cursor: 'pointer', transition: 'color 0.2s', textUnderlineOffset: '4px' }}
+                                                onMouseEnter={(e) => { e.currentTarget.style.color = 'var(--primary)'; e.currentTarget.style.textDecoration = 'underline'; }}
+                                                onMouseLeave={(e) => { e.currentTarget.style.color = 'inherit'; e.currentTarget.style.textDecoration = 'none'; }}
                                             >
                                                 {exam.title}
                                             </button>
@@ -557,7 +600,14 @@ export default function OverviewTab({ exams: examsProp, attempts, stats, trendDa
                                                         display: 'flex', alignItems: 'center', gap: '0.4rem', marginLeft: 'auto',
                                                         transition: 'var(--transition-base)', border: '1px solid var(--border)', whiteSpace: 'nowrap',
                                                     }}
-                                                    className="hover:border-primary hover:text-primary"
+                                                    onMouseEnter={(e) => {
+                                                        e.currentTarget.style.borderColor = 'var(--primary)';
+                                                        e.currentTarget.style.color = 'var(--primary)';
+                                                    }}
+                                                    onMouseLeave={(e) => {
+                                                        e.currentTarget.style.borderColor = 'var(--border)';
+                                                        e.currentTarget.style.color = 'var(--foreground)';
+                                                    }}
                                                 >
                                                     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="22" y1="2" x2="11" y2="13"></line><polygon points="22 2 15 22 11 13 2 9 22 2"></polygon></svg>
                                                     독려 알람

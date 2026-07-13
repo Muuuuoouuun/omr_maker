@@ -69,7 +69,14 @@ export default function ExamActionsMenu({ exam, onAction }: Props) {
                     cursor: "pointer",
                     transition: "all 0.15s",
                 }}
-                className="hover:border-primary hover:text-primary"
+                onMouseEnter={(e) => {
+                    e.currentTarget.style.borderColor = "var(--primary)";
+                    e.currentTarget.style.color = "var(--primary)";
+                }}
+                onMouseLeave={(e) => {
+                    e.currentTarget.style.borderColor = "var(--border)";
+                    e.currentTarget.style.color = "var(--muted)";
+                }}
             >
                 <MoreVertical size={16} />
             </button>

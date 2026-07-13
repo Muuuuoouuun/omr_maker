@@ -4,11 +4,13 @@ import { useEffect, useMemo, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
 import dynamic from "next/dynamic";
-import { Download, Lock, MessageSquare, PenLine, Repeat2, Send, Target } from "lucide-react";
+import { Download, ListChecks, Lock, MessageSquare, PenLine, Repeat2, Send, Target } from "lucide-react";
 import type { Attempt, Exam, PdfDrawings, PlanKey, QuestionResult } from "@/types/omr";
 import { loadJsonRecord, storedDataUrlToFile } from "@/utils/blobStore";
 import { getCurrentPlan, getPlanLabel, hasPlanEntitlement } from "@/utils/plans";
 import { formatKoreanDateTime } from "@/lib/pure";
+import { safeScorePercent } from "@/lib/scoreUtils";
+import { readActiveWorkspaceContext } from "@/lib/workspaceContext";
 import { fetchRemoteAttempt, loadAttempt, loadExam, saveAttempt } from "@/lib/omrPersistence";
 import { answerStudentQuestion } from "@/lib/studentQuestions";
 import { toast } from "@/components/Toast";
@@ -51,6 +53,10 @@ export default function TeacherAttemptPage() {
     const [loaded, setLoaded] = useState(false);
     const [answerDrafts, setAnswerDrafts] = useState<Record<number, string>>({});
     const [savingAnswerFor, setSavingAnswerFor] = useState<number | null>(null);
+    // D3: wrong-answer list expansion + full all-questions list toggles.
+    const [wrongExpanded, setWrongExpanded] = useState(false);
+    const [allQuestionsOpen, setAllQuestionsOpen] = useState(false);
+    const [allQuestionsWrongOnly, setAllQuestionsWrongOnly] = useState(false);
     const pdfExportEnabled = hasPlanEntitlement(currentPlan, "pdfExport");
     const handwritingArchiveEnabled = hasPlanEntitlement(currentPlan, "handwritingArchive");
 
@@ -66,6 +72,19 @@ export default function TeacherAttemptPage() {
             try {
                 const found = await loadAttempt(id);
                 if (!found || cancelled) {
+                    setLoaded(true);
+                    return;
+                }
+
+                // F4: loadAttempt (and its remote fetch) is not organization-scoped,
+                // so verify the attempt belongs to this teacher's active workspace
+                // before showing it. Only deny on a positive cross-workspace
+                // mismatch; legacy attempts without an organizationId are allowed so
+                // the check can't lock teachers out of pre-scoping records.
+                const activeOrganizationId = readActiveWorkspaceContext().organizationId?.trim();
+                const attemptOrganizationId = found.organizationId?.trim();
+                if (attemptOrganizationId && activeOrganizationId && attemptOrganizationId !== activeOrganizationId) {
+                    setAccessDenied(true);
                     setLoaded(true);
                     return;
                 }
@@ -150,18 +169,52 @@ export default function TeacherAttemptPage() {
             <div style={{ minHeight: '100vh', display: 'grid', placeItems: 'center', padding: '2rem', textAlign: 'center' }}>
                 <div>
                     <h1 style={{ fontSize: '1.4rem', fontWeight: 800, marginBottom: '0.5rem' }}>선생님 로그인이 필요합니다.</h1>
-                    <p style={{ color: '#64748b', marginBottom: '1rem' }}>학생 풀이 필기는 교사 권한에서만 열람할 수 있습니다.</p>
+                    <p style={{ color: 'var(--muted)', marginBottom: '1rem' }}>학생 풀이 필기는 교사 권한에서만 열람할 수 있습니다.</p>
                     <Link href="/" className="btn btn-primary">로그인으로 이동</Link>
                 </div>
             </div>
         );
     }
 
-    if (!loaded || !attempt) {
+    if (!loaded) {
         return <div style={{ padding: '2rem', textAlign: 'center' }}>Loading...</div>;
     }
 
-    const percent = analytics?.score.scorePercent ?? 0;
+    if (!attempt) {
+        // F3: loaded but no attempt (deleted, never synced, or wrong id) previously
+        // spun forever. Show a real "not found" screen instead.
+        return (
+            <div style={{ minHeight: '100vh', display: 'grid', placeItems: 'center', padding: '2rem', textAlign: 'center' }}>
+                <div>
+                    <h1 style={{ fontSize: '1.4rem', fontWeight: 800, marginBottom: '0.5rem' }}>응시 기록을 찾을 수 없습니다.</h1>
+                    <p style={{ color: 'var(--muted)', marginBottom: '1rem' }}>삭제되었거나 접근할 수 없는 기록일 수 있습니다.</p>
+                    <Link href="/teacher/dashboard" className="btn btn-primary">대시보드로 이동</Link>
+                </div>
+            </div>
+        );
+    }
+
+    // F2: when the exam payload can't be loaded, analytics is null. Fall back to
+    // the score stored on the attempt so the header percent matches the score
+    // line below instead of contradicting it with a hard 0%.
+    const examUnavailable = !exam;
+    const percent = analytics?.score.scorePercent ?? safeScorePercent(attempt.score, attempt.totalScore);
+    const storedScorePercent = safeScorePercent(attempt.score, attempt.totalScore);
+    const storedEarnedScore = Math.round((attempt.score || 0) * 100) / 100;
+    // F6: recomputed review percent vs. the score stored at submission — diverges
+    // when the answer key was edited after submission.
+    const scoreRegraded = !!analytics
+        && Number.isFinite(attempt.totalScore)
+        && attempt.totalScore > 0
+        && analytics.score.scorePercent !== storedScorePercent;
+
+    // D3/D5: full per-question list with a wrong-only toggle and per-question
+    // solve time (when timings were captured).
+    const timingByQuestionId = new Map((attempt.questionTimings || []).map(timing => [timing.questionId, timing]));
+    const allQuestionResults = analytics?.questionResults ?? [];
+    const allQuestionsToShow = allQuestionsWrongOnly
+        ? allQuestionResults.filter(result => result.status === "wrong" || result.status === "unanswered")
+        : allQuestionResults;
     const handwriting = attempt.handwriting;
     const questionSummaries = Object.values(handwriting?.questions || {});
     const canShowDrawings = hasDrawings(drawings);
@@ -177,16 +230,40 @@ export default function TeacherAttemptPage() {
         // this page loaded. saveAttempt writes the full payload last-writer-wins,
         // so replying against a stale snapshot would silently drop any question the
         // student asked after this device cached the attempt.
+        const nowIso = new Date().toISOString();
         let base = attempt;
         try {
-            const fresh = await fetchRemoteAttempt(attempt.id);
+            // Scope the fresh fetch to this teacher's workspace (F4) so a reply is
+            // never merged onto a row belonging to another workspace.
+            const fresh = await fetchRemoteAttempt(attempt.id, {
+                organizationId: readActiveWorkspaceContext().organizationId,
+            });
             if (fresh) base = fresh;
         } catch {
             // Offline or Supabase unavailable — fall back to the cached attempt.
         }
-        const updated = answerStudentQuestion(base, questionId, body, new Date().toISOString(), teacherName);
+        let updated = answerStudentQuestion(base, questionId, body, nowIso, teacherName);
+        if (!updated && base !== attempt) {
+            // F5: the fresh remote row can be missing this question note (the
+            // student asked it after this device cached, or the remote copy
+            // predates it). Union the locally-loaded note onto the fresh row so
+            // the reply attaches without dropping the fresh copy's other notes.
+            const localNote = (attempt.studentQuestions || []).find(note => note.questionId === questionId);
+            if (localNote) {
+                const mergedBase: Attempt = {
+                    ...base,
+                    studentQuestions: [
+                        ...(base.studentQuestions || []).filter(note => note.questionId !== questionId),
+                        localNote,
+                    ],
+                };
+                updated = answerStudentQuestion(mergedBase, questionId, body, nowIso, teacherName);
+            }
+        }
         if (!updated) {
+            // Never silent: tell the teacher why the reply couldn't attach.
             setSavingAnswerFor(null);
+            toast.error("답변 전송 실패", "질문을 찾지 못했습니다. 화면을 새로고침한 뒤 다시 시도해주세요.");
             return;
         }
         try {
@@ -233,14 +310,22 @@ export default function TeacherAttemptPage() {
     };
 
     return (
-        <div className="layout-main" style={{ minHeight: '100vh', background: '#f8fafc' }}>
-            <header className="header" style={{ background: 'white', borderBottom: '1px solid #e2e8f0' }}>
+        <div className="layout-main" style={{ minHeight: '100vh', background: 'var(--background)' }}>
+            <header className="header">
                 <div className="container header-content">
                     <div style={{ display: 'flex', alignItems: 'center', gap: '1rem', minWidth: 0 }}>
-                        <button onClick={() => router.back()} style={{ border: 'none', background: 'none', fontSize: '1.2rem', cursor: 'pointer' }}>←</button>
+                        <button
+                            type="button"
+                            onClick={() => router.back()}
+                            aria-label="이전 화면으로"
+                            title="이전 화면으로"
+                            style={{ border: 'none', background: 'none', fontSize: '1.2rem', cursor: 'pointer' }}
+                        >
+                            ←
+                        </button>
                         <div style={{ minWidth: 0 }}>
                             <div style={{ fontWeight: 800, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{attempt.examTitle}</div>
-                            <div style={{ fontSize: '0.78rem', color: '#64748b' }}>{attempt.studentName} · {formatKoreanDateTime(attempt.finishedAt)}</div>
+                            <div style={{ fontSize: '0.78rem', color: 'var(--muted)' }}>{attempt.studentName} · {formatKoreanDateTime(attempt.finishedAt)}</div>
                         </div>
                     </div>
                     <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap', justifyContent: 'flex-end' }}>
@@ -259,7 +344,7 @@ export default function TeacherAttemptPage() {
                                 href="/teacher/billing"
                                 title="Pro 이상에서 PDF 리포트를 출력할 수 있습니다."
                                 className="btn btn-secondary"
-                                style={{ fontSize: '0.85rem', display: 'inline-flex', alignItems: 'center', gap: '0.35rem', color: '#64748b' }}
+                                style={{ fontSize: '0.85rem', display: 'inline-flex', alignItems: 'center', gap: '0.35rem', color: 'var(--muted)' }}
                             >
                                 <Lock size={14} />
                                 PDF 리포트 Pro
@@ -273,20 +358,54 @@ export default function TeacherAttemptPage() {
             </header>
 
             <main className="container" style={{ padding: '1.5rem 1rem 2.5rem' }}>
-                <section style={{
+                {examUnavailable && (
+                    <div style={{
+                        marginBottom: '1rem',
+                        padding: '0.7rem 0.85rem',
+                        borderRadius: 'var(--radius-md)',
+                        border: '1px solid var(--warning)',
+                        background: 'color-mix(in srgb, var(--warning) 12%, transparent)',
+                        color: 'var(--warning)',
+                        fontSize: '0.82rem',
+                        fontWeight: 800,
+                    }}>
+                        시험 정보를 불러오지 못해 점수/유형 분석을 표시할 수 없습니다. 아래 점수는 제출 당시 저장된 값입니다.
+                    </div>
+                )}
+                <section className="teacher-attempt-layout" style={{
                     display: 'grid',
                     gridTemplateColumns: 'minmax(240px, 340px) minmax(0, 1fr)',
                     gap: '1rem',
                     alignItems: 'start'
                 }}>
-                    <aside style={{ display: 'grid', gap: '1rem' }}>
+                    <aside className="teacher-attempt-sidebar" style={{ display: 'grid', gap: '1rem' }}>
                         <div className="bento-card" style={{ padding: '1.25rem' }}>
-                            <div style={{ fontSize: '0.75rem', fontWeight: 800, color: '#64748b', letterSpacing: '0.08em', marginBottom: '0.6rem' }}>응시 요약</div>
+                            <div style={{ fontSize: '0.75rem', fontWeight: 800, color: 'var(--muted)', letterSpacing: '0.08em', marginBottom: '0.6rem' }}>응시 요약</div>
                             <h1 style={{ fontSize: '1.25rem', fontWeight: 900, marginBottom: '0.25rem' }}>{attempt.studentName}</h1>
                             <div style={{ fontSize: '2.6rem', fontWeight: 900, color: 'var(--primary)', lineHeight: 1, marginTop: '0.75rem' }}>{percent}%</div>
-                            <div style={{ color: '#475569', fontWeight: 700, marginTop: '0.25rem' }}>
+                            <div style={{ color: 'var(--muted)', fontWeight: 700, marginTop: '0.25rem' }}>
                                 {analytics?.score.earnedScore ?? attempt.score} / {analytics?.score.totalScore ?? attempt.totalScore}점
                             </div>
+                            {scoreRegraded && (
+                                <div
+                                    style={{
+                                        display: 'inline-flex',
+                                        alignItems: 'center',
+                                        marginTop: '0.6rem',
+                                        padding: '0.3rem 0.55rem',
+                                        borderRadius: 'var(--radius-full)',
+                                        border: '1px solid var(--warning)',
+                                        background: 'color-mix(in srgb, var(--warning) 14%, transparent)',
+                                        color: 'var(--warning)',
+                                        fontSize: '0.68rem',
+                                        fontWeight: 800,
+                                        lineHeight: 1.35,
+                                    }}
+                                    title={`제출 당시 점수는 ${storedEarnedScore}점(${storedScorePercent}%)이었습니다. 현재 정답 기준으로 다시 채점된 점수를 표시합니다.`}
+                                >
+                                    현재 정답 기준 재채점됨 · 제출 당시 {storedEarnedScore}점 ({storedScorePercent}%)
+                                </div>
+                            )}
                             {analytics && (
                                 <div style={{ display: 'grid', gridTemplateColumns: `repeat(${analytics.counts.ungradedCount > 0 ? 4 : 3}, 1fr)`, gap: '0.45rem', marginTop: '1rem' }}>
                                     <SmallStat label="정답" value={analytics.counts.correctCount} color="#16a34a" />
@@ -309,9 +428,9 @@ export default function TeacherAttemptPage() {
                                     <span style={{
                                         fontSize: '0.72rem',
                                         fontWeight: 800,
-                                        color: '#dc2626',
-                                        background: '#fef2f2',
-                                        borderRadius: '999px',
+                                        color: 'var(--error)',
+                                        background: 'color-mix(in srgb, var(--error) 12%, transparent)',
+                                        borderRadius: 'var(--radius-full)',
                                         padding: '0.25rem 0.55rem'
                                     }}>
                                         {analytics.wrongResults.length}문항
@@ -320,17 +439,23 @@ export default function TeacherAttemptPage() {
 
                                 {analytics.wrongResults.length > 0 ? (
                                     <div style={{ display: 'grid', gap: '0.55rem' }}>
-                                        {analytics.wrongResults.slice(0, 8).map(result => (
+                                        {(wrongExpanded ? analytics.wrongResults : analytics.wrongResults.slice(0, 8)).map(result => (
                                             <QuestionResultRow key={result.questionId} result={result} />
                                         ))}
                                         {analytics.wrongResults.length > 8 && (
-                                            <div style={{ color: '#64748b', fontSize: '0.78rem', fontWeight: 700 }}>
-                                                외 {analytics.wrongResults.length - 8}문항
-                                            </div>
+                                            <button
+                                                type="button"
+                                                onClick={() => setWrongExpanded(value => !value)}
+                                                className="btn btn-secondary"
+                                                style={{ width: '100%', fontSize: '0.76rem', padding: '0.4rem 0.65rem' }}
+                                                aria-expanded={wrongExpanded}
+                                            >
+                                                {wrongExpanded ? "접기" : `전체 보기 (외 ${analytics.wrongResults.length - 8}문항)`}
+                                            </button>
                                         )}
                                     </div>
                                 ) : (
-                                    <div style={{ color: '#16a34a', fontSize: '0.86rem', fontWeight: 800 }}>
+                                    <div style={{ color: 'var(--success)', fontSize: '0.86rem', fontWeight: 800 }}>
                                         오답 또는 미응답 문항이 없습니다.
                                     </div>
                                 )}
@@ -338,7 +463,7 @@ export default function TeacherAttemptPage() {
                                 {analytics.recommendations.length > 0 && (
                                     <div style={{ marginTop: '0.95rem', display: 'grid', gap: '0.5rem' }}>
                                         {analytics.recommendations.map(group => (
-                                            <div key={group.key} style={{ padding: '0.7rem', borderRadius: '8px', border: '1px solid #c7d2fe', background: '#eef2ff' }}>
+                                            <div key={group.key} style={{ padding: '0.7rem', borderRadius: 'var(--radius-sm)', border: '1px solid #c7d2fe', background: '#eef2ff' }}>
                                                 <div style={{ color: '#312e81', fontWeight: 900, fontSize: '0.84rem' }}>{group.title}</div>
                                                 <div style={{ color: '#4338ca', fontSize: '0.74rem', fontWeight: 700, marginTop: '0.15rem' }}>
                                                     {group.questionNumbers.join(', ')}번 · 오답/미답 {group.wrongCount}/{group.totalCount}
@@ -391,6 +516,65 @@ export default function TeacherAttemptPage() {
                             </div>
                         )}
 
+                        {analytics && allQuestionResults.length > 0 && (
+                            <div className="bento-card" style={{ padding: '1.25rem' }}>
+                                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '0.75rem', marginBottom: '0.8rem' }}>
+                                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.45rem', fontWeight: 900 }}>
+                                        <ListChecks size={17} />
+                                        전체 문항
+                                    </div>
+                                    <button
+                                        type="button"
+                                        onClick={() => setAllQuestionsOpen(value => !value)}
+                                        className="btn btn-secondary"
+                                        style={{ fontSize: '0.74rem', padding: '0.3rem 0.6rem' }}
+                                        aria-expanded={allQuestionsOpen}
+                                    >
+                                        {allQuestionsOpen ? "접기" : `전체 보기 (${allQuestionResults.length}문항)`}
+                                    </button>
+                                </div>
+                                {allQuestionsOpen && (
+                                    <>
+                                        <div style={{ display: 'flex', gap: '0.3rem', marginBottom: '0.7rem' }} role="group" aria-label="문항 필터">
+                                            <button
+                                                type="button"
+                                                onClick={() => setAllQuestionsWrongOnly(false)}
+                                                className={`btn ${allQuestionsWrongOnly ? "btn-secondary" : "btn-primary"}`}
+                                                style={{ flex: 1, fontSize: '0.74rem', padding: '0.32rem 0.6rem' }}
+                                                aria-pressed={!allQuestionsWrongOnly}
+                                            >
+                                                전체 {allQuestionResults.length}
+                                            </button>
+                                            <button
+                                                type="button"
+                                                onClick={() => setAllQuestionsWrongOnly(true)}
+                                                className={`btn ${allQuestionsWrongOnly ? "btn-primary" : "btn-secondary"}`}
+                                                style={{ flex: 1, fontSize: '0.74rem', padding: '0.32rem 0.6rem' }}
+                                                aria-pressed={allQuestionsWrongOnly}
+                                            >
+                                                오답 {analytics.wrongResults.length}
+                                            </button>
+                                        </div>
+                                        {allQuestionsToShow.length > 0 ? (
+                                            <div style={{ display: 'grid', gap: '0.4rem' }}>
+                                                {allQuestionsToShow.map(result => (
+                                                    <AllQuestionRow
+                                                        key={result.questionId}
+                                                        result={result}
+                                                        timeSec={timingByQuestionId.get(result.questionId)?.totalTimeSec}
+                                                    />
+                                                ))}
+                                            </div>
+                                        ) : (
+                                            <div style={{ color: 'var(--muted)', fontSize: '0.82rem', fontWeight: 700, textAlign: 'center', padding: '0.8rem' }}>
+                                                표시할 문항이 없습니다.
+                                            </div>
+                                        )}
+                                    </>
+                                )}
+                            </div>
+                        )}
+
                         {studentQuestionNotes.length > 0 && (
                             <div className="bento-card" style={{ padding: '1.25rem' }}>
                                 <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '0.75rem', marginBottom: '0.8rem' }}>
@@ -403,7 +587,7 @@ export default function TeacherAttemptPage() {
                                         fontWeight: 800,
                                         color: pendingQuestionCount > 0 ? '#0f766e' : '#64748b',
                                         background: pendingQuestionCount > 0 ? '#f0fdfa' : '#f1f5f9',
-                                        borderRadius: '999px',
+                                        borderRadius: 'var(--radius-full)',
                                         padding: '0.25rem 0.55rem'
                                     }}>
                                         대기 {pendingQuestionCount} · 답변 {answeredQuestionCount}
@@ -415,7 +599,7 @@ export default function TeacherAttemptPage() {
                                             key={note.questionId}
                                             style={{
                                                 padding: '0.75rem',
-                                                borderRadius: '10px',
+                                                borderRadius: 'var(--radius-md)',
                                                 border: `1px solid ${note.status === "answered" ? '#bbf7d0' : '#99f6e4'}`,
                                                 background: note.status === "answered" ? '#f0fdf4' : '#f0fdfa',
                                             }}
@@ -426,7 +610,7 @@ export default function TeacherAttemptPage() {
                                             </div>
                                             <div style={{ color: '#334155', fontSize: '0.82rem', lineHeight: 1.6, whiteSpace: 'pre-wrap' }}>{note.body}</div>
                                             {note.status === "answered" && note.answer && (
-                                                <div style={{ marginTop: '0.55rem', padding: '0.6rem 0.7rem', borderRadius: '8px', background: 'white', border: '1px solid #e2e8f0' }}>
+                                                <div style={{ marginTop: '0.55rem', padding: '0.6rem 0.7rem', borderRadius: 'var(--radius-sm)', background: 'white', border: '1px solid #e2e8f0' }}>
                                                     <div style={{ color: '#16a34a', fontWeight: 800, fontSize: '0.74rem', marginBottom: '0.25rem' }}>
                                                         내 답변 · {formatKoreanDateTime(note.answer.createdAt)}
                                                     </div>
@@ -446,7 +630,7 @@ export default function TeacherAttemptPage() {
                                                         width: '100%',
                                                         minHeight: 64,
                                                         padding: '0.55rem 0.65rem',
-                                                        borderRadius: '8px',
+                                                        borderRadius: 'var(--radius-sm)',
                                                         border: '1px solid #e2e8f0',
                                                         fontSize: '0.84rem',
                                                         lineHeight: 1.55,
@@ -486,13 +670,13 @@ export default function TeacherAttemptPage() {
                                     fontWeight: 800,
                                     color: attempt.handwritingArchived ? '#4f46e5' : '#92400e',
                                     background: attempt.handwritingArchived ? '#eef2ff' : '#fef3c7',
-                                    borderRadius: '999px',
+                                    borderRadius: 'var(--radius-full)',
                                     padding: '0.25rem 0.55rem'
                                 }}>
                                     {attempt.handwritingArchived ? '저장됨' : '미보관'}
                                 </span>
                             </div>
-                            <div style={{ display: 'grid', gap: '0.4rem', fontSize: '0.86rem', color: '#475569' }}>
+                            <div style={{ display: 'grid', gap: '0.4rem', fontSize: '0.86rem', color: 'var(--muted)' }}>
                                 <div>플랜: <strong>{getPlanLabel(handwriting?.plan || attempt.handwritingPlan || 'free')}</strong></div>
                                 <div>페이지: <strong>{handwriting?.summary.pageCount ?? attempt.drawingPageCount ?? 0}</strong></div>
                                 <div>획 수: <strong>{handwriting?.summary.strokeCount ?? attempt.drawingStrokeCount ?? 0}</strong></div>
@@ -507,7 +691,7 @@ export default function TeacherAttemptPage() {
                                             fontWeight: 800,
                                             color: '#5b21b6',
                                             background: '#f5f3ff',
-                                            borderRadius: '999px',
+                                            borderRadius: 'var(--radius-full)',
                                             padding: '0.25rem 0.55rem'
                                         }}>
                                             {q.questionNumber}번
@@ -530,7 +714,7 @@ export default function TeacherAttemptPage() {
                                 <Link
                                     href="/teacher/billing"
                                     className="btn btn-secondary"
-                                    style={{ width: '100%', marginTop: '0.9rem', fontSize: '0.82rem', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: '0.35rem', color: '#64748b' }}
+                                    style={{ width: '100%', marginTop: '0.9rem', fontSize: '0.82rem', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: '0.35rem', color: 'var(--muted)' }}
                                     title="Pro 이상에서 필기 원본 파일을 저장할 수 있습니다."
                                 >
                                     <Lock size={14} />
@@ -540,10 +724,10 @@ export default function TeacherAttemptPage() {
                         </div>
                     </aside>
 
-                    <section className="bento-card" style={{ padding: 0, overflow: 'hidden', minHeight: 760 }}>
+                    <section className="bento-card teacher-attempt-detail" style={{ padding: 0, overflow: 'hidden', minHeight: 760 }}>
                         <div style={{
                             padding: '1rem 1.2rem',
-                            borderBottom: '1px solid #e2e8f0',
+                            borderBottom: '1px solid var(--border)',
                             display: 'flex',
                             alignItems: 'center',
                             justifyContent: 'space-between',
@@ -551,11 +735,11 @@ export default function TeacherAttemptPage() {
                         }}>
                             <div>
                                 <h2 style={{ fontSize: '1rem', fontWeight: 900 }}>학생 풀이 필기</h2>
-                                <p style={{ fontSize: '0.82rem', color: '#64748b', marginTop: '0.15rem' }}>
+                                <p style={{ fontSize: '0.82rem', color: 'var(--muted)', marginTop: '0.15rem' }}>
                                     제출 시점의 PDF 필기 레이어를 읽기 전용으로 표시합니다.
                                 </p>
                             </div>
-                            <span style={{ fontSize: '0.75rem', fontWeight: 800, color: '#475569', background: '#f1f5f9', borderRadius: '999px', padding: '0.25rem 0.65rem' }}>
+                            <span style={{ fontSize: '0.75rem', fontWeight: 800, color: '#475569', background: '#f1f5f9', borderRadius: 'var(--radius-full)', padding: '0.25rem 0.65rem' }}>
                                 교사용
                             </span>
                         </div>
@@ -603,8 +787,8 @@ export default function TeacherAttemptPage() {
 
 function SmallStat({ label, value, color }: { label: string; value: number; color: string }) {
     return (
-        <div style={{ background: `${color}12`, border: `1px solid ${color}24`, borderRadius: 10, padding: '0.55rem', textAlign: 'center' }}>
-            <div style={{ fontSize: '0.68rem', color: '#64748b', fontWeight: 800, marginBottom: '0.15rem' }}>{label}</div>
+        <div style={{ background: `${color}12`, border: `1px solid ${color}24`, borderRadius: 'var(--radius-md)', padding: '0.55rem', textAlign: 'center' }}>
+            <div style={{ fontSize: '0.68rem', color: 'var(--muted)', fontWeight: 800, marginBottom: '0.15rem' }}>{label}</div>
             <div style={{ color, fontWeight: 900, fontSize: '1.05rem' }}>{value}</div>
         </div>
     );
@@ -615,7 +799,7 @@ function QuestionResultRow({ result }: { result: QuestionResult }) {
     const typeLabel = result.concept || result.label || result.source || '유형 미지정';
 
     return (
-        <div style={{ padding: '0.7rem', borderRadius: '8px', border: '1px solid #fee2e2', background: '#fff7f7' }}>
+        <div style={{ padding: '0.7rem', borderRadius: 'var(--radius-sm)', border: '1px solid #fee2e2', background: '#fff7f7' }}>
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '0.6rem' }}>
                 <div style={{ color: accent, fontWeight: 900, fontSize: '0.86rem' }}>{result.questionNumber}번</div>
                 <div style={{ color: '#64748b', fontSize: '0.72rem', fontWeight: 800 }}>{typeLabel}</div>
@@ -627,11 +811,56 @@ function QuestionResultRow({ result }: { result: QuestionResult }) {
             {!!result.mistakeTypes?.length && (
                 <div style={{ marginTop: '0.3rem', display: 'flex', gap: '0.3rem', flexWrap: 'wrap' }}>
                     {result.mistakeTypes.slice(0, 2).map(type => (
-                        <span key={type} style={{ color: '#7f1d1d', background: '#fee2e2', borderRadius: '999px', padding: '0.16rem 0.45rem', fontSize: '0.68rem', fontWeight: 800 }}>
+                        <span key={type} style={{ color: '#7f1d1d', background: '#fee2e2', borderRadius: 'var(--radius-full)', padding: '0.16rem 0.45rem', fontSize: '0.68rem', fontWeight: 800 }}>
                             {type}
                         </span>
                     ))}
                 </div>
+            )}
+        </div>
+    );
+}
+
+function formatQuestionTime(totalSec?: number): string {
+    if (typeof totalSec !== "number" || !Number.isFinite(totalSec) || totalSec <= 0) return "";
+    if (totalSec < 60) return `${totalSec}초`;
+    const minutes = Math.floor(totalSec / 60);
+    const seconds = totalSec % 60;
+    return seconds > 0 ? `${minutes}분 ${seconds}초` : `${minutes}분`;
+}
+
+const ALL_QUESTION_STATUS_META: Record<QuestionResult["status"], { label: string; color: string }> = {
+    correct: { label: "정답", color: "var(--success)" },
+    wrong: { label: "오답", color: "var(--error)" },
+    unanswered: { label: "미응답", color: "var(--muted)" },
+    ungraded: { label: "미채점", color: "var(--muted)" },
+};
+
+function AllQuestionRow({ result, timeSec }: { result: QuestionResult; timeSec?: number }) {
+    const statusMeta = ALL_QUESTION_STATUS_META[result.status];
+    const timeLabel = formatQuestionTime(timeSec);
+
+    return (
+        <div style={{
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            gap: '0.6rem',
+            padding: '0.5rem 0.6rem',
+            borderRadius: 'var(--radius-sm)',
+            border: '1px solid var(--border)',
+            background: 'var(--surface)',
+        }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', minWidth: 0 }}>
+                <span style={{ fontWeight: 900, fontSize: '0.82rem', minWidth: '2.4rem', flex: '0 0 auto' }}>{result.questionNumber}번</span>
+                <span style={{ color: statusMeta.color, fontWeight: 800, fontSize: '0.74rem', flex: '0 0 auto' }}>{statusMeta.label}</span>
+                <span style={{ color: 'var(--muted)', fontSize: '0.72rem', fontWeight: 700, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                    학생 {formatAnswer(result.selectedAnswer)}
+                    {result.correctAnswer !== undefined && ` · 정답 ${formatAnswer(result.correctAnswer)}`}
+                </span>
+            </div>
+            {timeLabel && (
+                <span style={{ color: 'var(--muted)', fontSize: '0.7rem', fontWeight: 800, whiteSpace: 'nowrap', flex: '0 0 auto' }}>{timeLabel}</span>
             )}
         </div>
     );

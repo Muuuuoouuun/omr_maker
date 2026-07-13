@@ -95,18 +95,31 @@ export function rosterGroupMatchesStudent(group: Pick<RosterGroup, "id" | "name"
     const groupRegion = asString(group.region);
     const studentGroup = asString(student.group);
     const studentRegion = asString(student.region);
+
+    // Student ids are scoped to the group they were created in
+    // (`${groupId}::${name}`) and never change when a student is moved to a
+    // different group — regenerating them would break studentCodeRegistry
+    // and other id-keyed references. So once a student carries an explicit
+    // group field, that field (not the id-encoded scope) is the source of
+    // truth for membership. Falling back to the id scope here as well as
+    // the name match used to double-count a moved student in both their old
+    // and new group, and made the old (now-empty) group look "not empty"
+    // forever, blocking deletion.
+    if (studentGroup) {
+        if (studentGroup !== groupName) return false;
+        if (!groupRegion) return true;
+        if (studentRegion) return studentRegion === groupRegion;
+        return false;
+    }
+
+    // Legacy/malformed records with no group field: fall back to the
+    // id-encoded scope so pre-existing data keeps matching.
     const scopedGroup = scopedGroupKeyForStudentId(student.id);
     const regionScopedGroup = rosterStudentFallbackGroupKey(groupName, groupRegion);
 
     if (groupId && scopedGroup === groupId) return true;
     if (groupRegion && scopedGroup === regionScopedGroup) return true;
-
-    const sameGroupName = !!groupName && (studentGroup === groupName || scopedGroup === groupName);
-    if (!sameGroupName) return false;
-
-    if (!groupRegion) return true;
-    if (studentRegion) return studentRegion === groupRegion;
-    return false;
+    return !!groupName && scopedGroup === groupName;
 }
 
 function finiteNumber(value: unknown, fallback = 0): number {

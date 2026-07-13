@@ -83,6 +83,8 @@ The app is a web app with PWA support:
 
 Users can open it in a browser or install it to a phone/tablet home screen from a supported browser.
 
+Windows-to-Android device development is also available through the Capacitor test shell. Run `npm run android:doctor`, then connect an emulator or USB-debugging device and use `npm run android:dev`. See [docs/mobile-app.md](docs/mobile-app.md) for the PWA/Android deployment boundary and setup steps.
+
 ## Supabase Sync
 
 Without Supabase env vars, data is saved locally in the browser. With Supabase configured, exams and attempts sync across web/PWA installs.

@@ -66,7 +66,7 @@
 /* ─── Student Review Workbench ───────────────────────── */
 .student-review-page {
   min-height: 100vh;
-  background: #f8fafc;
+  background: var(--background);
 }
 
 .student-review-main {
@@ -123,7 +123,7 @@
 }
 
 .student-review-score-copy h1 {
-  color: #0f172a;
+  color: var(--foreground);
   font-size: 1rem;
   font-weight: 900;
   line-height: 1.35;
@@ -134,7 +134,7 @@
 .student-review-side-card p,
 .student-review-card-head p,
 .student-review-question-toolbar p {
-  color: #64748b;
+  color: var(--muted);
   font-size: 0.75rem;
   line-height: 1.4;
 }
@@ -168,7 +168,7 @@
 }
 
 .student-review-score-row div {
-  color: #475569;
+  color: var(--muted);
   font-size: 0.78rem;
   font-weight: 800;
   white-space: nowrap;
@@ -191,6 +191,10 @@
   gap: 0.4rem;
 }
 
+.student-review-stat-grid {
+  align-self: start;
+}
+
 .student-review-behavior-grid,
 .student-review-support-grid {
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -199,16 +203,16 @@
 .student-review-mini-stat {
   min-width: 0;
   padding: 0.5rem 0.45rem;
-  border: 1px solid #e2e8f0;
-  border-radius: 8px;
-  background: #fff;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
   text-align: center;
 }
 
 .student-review-mini-stat span {
   display: block;
   margin-bottom: 0.16rem;
-  color: #64748b;
+  color: var(--muted);
   font-size: 0.68rem;
   font-weight: 800;
 }
@@ -240,14 +244,14 @@
 .student-review-section-title {
   align-items: center;
   justify-content: flex-start;
-  color: #0f172a;
+  color: var(--foreground);
   font-size: 0.88rem;
   font-weight: 900;
 }
 
 .btn.student-review-full-button,
 .btn.student-review-compact-button {
-  min-height: 30px;
+  min-height: 40px;
   gap: 0.28rem;
   padding: 0.32rem 0.58rem;
   font-size: 0.74rem;
@@ -269,7 +273,7 @@
 .student-review-muted-note {
   display: inline-flex;
   align-items: center;
-  min-height: 30px;
+  min-height: 40px;
   color: #16a34a;
   font-size: 0.74rem;
   font-weight: 850;
@@ -302,7 +306,7 @@
 .student-review-recommendation-row {
   padding: 0.48rem 0.55rem;
   border: 1px solid #c7d2fe;
-  border-radius: 8px;
+  border-radius: var(--radius-sm);
   background: #eef2ff;
   color: #312e81;
   align-items: flex-start;
@@ -326,7 +330,7 @@
   margin-bottom: 0.75rem;
   padding: 0.7rem 0.85rem;
   border: 1px solid #fed7aa;
-  border-radius: 10px;
+  border-radius: var(--radius-md);
   background: #fff7ed;
   color: #9a3412;
   font-size: 0.78rem;
@@ -343,12 +347,12 @@
 .student-review-card-head,
 .student-review-question-toolbar {
   padding: 0.72rem 0.85rem;
-  border-bottom: 1px solid #e2e8f0;
+  border-bottom: 1px solid var(--border);
 }
 
 .student-review-card-head h2,
 .student-review-question-toolbar h2 {
-  color: #0f172a;
+  color: var(--foreground);
   font-size: 0.92rem;
   font-weight: 950;
   line-height: 1.25;
@@ -389,7 +393,7 @@
 }
 
 .student-review-filter-tabs .btn {
-  min-height: 30px;
+  min-height: 40px;
   padding: 0.3rem 0.65rem;
   font-size: 0.74rem;
   font-weight: 850;
@@ -413,7 +417,7 @@
   gap: 0.34rem;
   padding: 0.62rem;
   border: 1px solid #e2e8f0;
-  border-radius: 10px;
+  border-radius: var(--radius-md);
   background: #fff;
   box-shadow: var(--shadow-sm);
 }
@@ -424,10 +428,10 @@
   justify-content: space-between;
   gap: 0.25rem;
   min-width: 0;
-  min-height: 30px;
+  min-height: 40px;
   padding: 0.28rem 0.42rem;
   border: 1px solid #e2e8f0;
-  border-radius: 8px;
+  border-radius: var(--radius-sm);
   background: #f8fafc;
   color: #334155;
   font-size: 0.72rem;
@@ -446,7 +450,7 @@
   flex: 0 0 auto;
   width: 0.42rem;
   height: 0.42rem;
-  border-radius: 999px;
+  border-radius: var(--radius-full);
   background: #94a3b8;
 }
 
@@ -493,7 +497,7 @@
   min-width: 0;
   padding: 0.72rem;
   border: 1px solid #e2e8f0;
-  border-radius: 10px;
+  border-radius: var(--radius-md);
   background: #fff;
   box-shadow: var(--shadow-sm);
 }
@@ -546,7 +550,7 @@
   align-items: center;
   justify-content: center;
   border: 1px solid;
-  border-radius: 999px;
+  border-radius: var(--radius-full);
   white-space: nowrap;
 }
 
@@ -574,9 +578,9 @@
   display: inline-flex;
   align-items: center;
   gap: 0.22rem;
-  min-height: 30px;
+  min-height: 40px;
   padding: 0.26rem 0.42rem;
-  border-radius: 999px;
+  border-radius: var(--radius-full);
   color: var(--primary);
   font-size: 0.74rem;
   font-weight: 850;
@@ -590,7 +594,7 @@
 .student-review-explanation,
 .student-review-question-box {
   border: 1px solid #e2e8f0;
-  border-radius: 8px;
+  border-radius: var(--radius-sm);
   background: #f8fafc;
 }
 
@@ -619,7 +623,7 @@
   min-height: 72px;
   resize: vertical;
   border: 1px solid #cbd5e1;
-  border-radius: 8px;
+  border-radius: var(--radius-sm);
   background: #fff;
   color: #0f172a;
   padding: 0.52rem 0.6rem;
@@ -706,9 +710,27 @@
   .student-review-score-card {
     grid-column: 1 / -1;
   }
+
+  .student-review-stat-grid {
+    grid-column: 1 / -1;
+  }
 }
 
 @media (max-width: 760px) {
+  .teacher-attempt-layout {
+    grid-template-columns: minmax(0, 1fr) !important;
+  }
+
+  .teacher-attempt-sidebar,
+  .teacher-attempt-detail {
+    min-width: 0;
+    width: 100%;
+  }
+
+  .teacher-attempt-detail {
+    min-height: 560px !important;
+  }
+
   .student-review-main {
     padding: 0.75rem 0.75rem 1.6rem;
   }
@@ -717,8 +739,33 @@
     padding: 0.75rem 0.75rem 1.6rem;
   }
 
+  .student-review-shell {
+    display: flex;
+    flex-direction: column;
+  }
+
   .student-review-sidebar {
-    grid-template-columns: minmax(0, 1fr);
+    display: contents;
+  }
+
+  .student-review-score-card {
+    order: 1;
+    width: 100%;
+  }
+
+  .student-review-stat-grid {
+    order: 2;
+    width: 100%;
+  }
+
+  .student-review-content {
+    order: 3;
+    width: 100%;
+  }
+
+  .student-review-side-card {
+    order: 4;
+    width: 100%;
   }
 
   .student-review-stat-grid {
@@ -750,6 +797,16 @@
     flex: 1 1 0;
   }
 
+  .student-review-page button,
+  .student-review-page .btn,
+  .student-review-filter-tabs .btn,
+  .student-review-question-dot,
+  .student-review-link-button,
+  .btn.student-review-full-button,
+  .btn.student-review-compact-button {
+    min-height: 44px;
+  }
+
   .student-review-question-map {
     grid-template-columns: repeat(4, minmax(0, 1fr));
   }
@@ -757,6 +814,34 @@
   .student-review-pdf-frame {
     height: 520px;
     min-height: 400px;
+  }
+}
+
+@media (pointer: coarse) {
+  .student-review-page button,
+  .student-review-page .btn,
+  .student-review-filter-tabs .btn,
+  .student-review-question-dot,
+  .student-review-link-button,
+  .btn.student-review-full-button,
+  .btn.student-review-compact-button {
+    min-height: 44px;
+  }
+}
+
+@media (max-width: 380px) {
+  .student-review-page .header-content {
+    gap: 0.35rem;
+  }
+
+  .student-review-page .header-content > div:first-child {
+    gap: 0.45rem !important;
+  }
+
+  .student-review-page .header .btn {
+    padding-right: 0.55rem !important;
+    padding-left: 0.55rem !important;
+    white-space: nowrap;
   }
 }
 
@@ -1888,6 +1973,26 @@ body:has(.home-page[data-home-role="teacher"]) .mobile-install-prompt {
   .mobile-install-prompt {
     display: none !important;
   }
+}
+
+/* Capacitor's Android WebView does not expose the PWA display-mode media query. */
+html[data-native-platform] .layout-main {
+  min-height: calc(100vh - var(--app-safe-area-bottom));
+  min-height: calc(100dvh - var(--app-safe-area-bottom));
+  min-height: calc(var(--app-viewport-height, 100dvh) - var(--app-safe-area-bottom));
+  padding-right: var(--app-safe-area-right);
+  padding-bottom: var(--app-safe-area-bottom);
+  padding-left: var(--app-safe-area-left);
+}
+
+html[data-native-platform] .header {
+  height: auto;
+  min-height: calc(4.5rem + var(--app-safe-area-top));
+  padding-top: var(--app-safe-area-top);
+}
+
+html[data-native-platform] .mobile-install-prompt {
+  display: none !important;
 }
 
 /* ─── OMR Sheet Styles ───────────────────────────────── */
@@ -4545,6 +4650,21 @@ body:has(.create-workspace.is-resizing) {
   height: 44px;
 }
 
+.solve-omr-scroll .q-card-num {
+  width: 44px;
+  min-width: 44px;
+  height: 44px;
+  padding: 0;
+  border-radius: 8px;
+  justify-content: center;
+  cursor: pointer;
+}
+
+.solve-omr-scroll .q-card-num:focus-visible {
+  outline: 3px solid color-mix(in srgb, var(--primary) 38%, transparent);
+  outline-offset: 2px;
+}
+
 .solve-controls .solve-teacher-toggle,
 .solve-controls .solve-tab-button,
 .solve-controls .solve-pdf-button,
@@ -4561,7 +4681,9 @@ body:has(.create-workspace.is-resizing) {
 
 .solve-brand {
   min-height: 44px;
+  min-width: 44px;
   align-items: center;
+  justify-content: center;
 }
 
 /* ─── Solve Page Mobile App Layout ───────────────────── */
@@ -4851,7 +4973,28 @@ body:has(.create-workspace.is-resizing) {
 }
 
 /* ─── Solve Page Tablet Sidebar ──────────────────────── */
-@media (min-width: 641px) and (max-width: 1180px) {
+@media (min-width: 600px) and (max-width: 1180px) {
+  .solve-autosave {
+    display: none !important;
+  }
+
+  .solve-progress {
+    padding-right: 0.65rem !important;
+    padding-left: 0.65rem !important;
+  }
+
+  .solve-progress-bar {
+    display: none;
+  }
+
+  .solve-title-group {
+    gap: 0.45rem !important;
+  }
+
+  .solve-divider {
+    display: none;
+  }
+
   .solve-teacher-toggle,
   .solve-tab-button,
   .solve-pdf-button,
@@ -4879,19 +5022,19 @@ body:has(.create-workspace.is-resizing) {
 
   .solve-omr-rail {
     display: flex !important;
-    flex: 0 0 52px !important;
-    width: 52px !important;
+    flex: 0 0 48px !important;
+    width: 48px !important;
   }
 
   .solve-omr-rail.is-collapsed {
-    flex-basis: 72px !important;
-    width: 72px !important;
+    flex-basis: 64px !important;
+    width: 64px !important;
   }
 
   .solve-omr-pane {
-    width: min(380px, 42vw) !important;
-    max-width: min(380px, 42vw) !important;
-    flex: 0 0 min(380px, 42vw) !important;
+    width: clamp(280px, 32vw, 320px) !important;
+    max-width: clamp(280px, 32vw, 320px) !important;
+    flex: 0 0 clamp(280px, 32vw, 320px) !important;
     max-height: none !important;
     border-top: 0 !important;
     border-left: 1px solid var(--border);
@@ -4908,7 +5051,7 @@ body:has(.create-workspace.is-resizing) {
   }
 
   .solve-omr-scroll .omr-cardview {
-    padding: 0.85rem;
+    padding: 0.55rem;
   }
 
   .solve-omr-scroll .omr-cardview-header {
@@ -4918,6 +5061,8 @@ body:has(.create-workspace.is-resizing) {
 
   .solve-omr-scroll .q-card {
     border-radius: 8px;
+    padding: 0.4rem;
+    gap: 0.35rem;
   }
 
   .solve-omr-scroll .q-bubble {
@@ -5227,5 +5372,76 @@ body:has(.create-workspace.is-resizing) {
     background: transparent !important;
     border-color: transparent !important;
     box-shadow: none !important;
+  }
+}
+
+/* ─── Student review report — print / save to PDF ────────────────────── */
+@media print {
+  /* The OMR answer-sheet block above pins the document to a fixed A4
+     landscape canvas and hides everything but the sheet. The review report
+     is a normal flowing document, so re-enable flow + visibility only when a
+     review page is mounted. @page is intentionally left untouched so the
+     answer-sheet print path keeps its own sizing. */
+  html:has(.student-review-page),
+  body:has(.student-review-page) {
+    width: auto !important;
+    height: auto !important;
+    overflow: visible !important;
+    background: #fff !important;
+  }
+
+  body:has(.student-review-page) * {
+    visibility: visible !important;
+  }
+
+  /* Screen-only affordances: top nav, every action button/link, the question
+     navigator dock, filter tabs, and the interactive PDF handwriting viewer. */
+  .student-review-page .header,
+  .student-review-page .student-review-question-actions,
+  .student-review-page .student-review-side-actions,
+  .student-review-page .student-review-filter-tabs,
+  .student-review-page .student-review-question-map,
+  .student-review-page .student-review-link-button,
+  .student-review-page .student-review-pdf-card,
+  .student-review-print-hide {
+    display: none !important;
+  }
+
+  .student-review-page,
+  .student-review-main {
+    background: #fff !important;
+  }
+
+  /* Simulated page margins (the shared @page uses margin:0 for the sheet). */
+  .student-review-main {
+    padding: 12mm !important;
+    max-width: none !important;
+  }
+
+  /* Drop sticky offsets and the panel scroll cap so the whole report flows. */
+  .student-review-sidebar,
+  .student-review-question-panel {
+    position: static !important;
+    max-height: none !important;
+    overflow: visible !important;
+    top: auto !important;
+  }
+
+  .student-review-shell,
+  .student-review-workbench,
+  .student-review-workbench.no-pdf {
+    display: block !important;
+    grid-template-columns: none !important;
+  }
+
+  .student-review-sidebar {
+    display: block !important;
+  }
+
+  .bento-card,
+  .student-review-question-card,
+  .student-review-side-card {
+    box-shadow: none !important;
+    break-inside: avoid;
   }
 }

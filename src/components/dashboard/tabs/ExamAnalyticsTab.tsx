@@ -23,7 +23,9 @@ import {
     studentScopeKeyForAttempt,
     summarizeAttemptScore,
     summarizeAttemptBehavior,
+    DISCRIMINATION_MIN_RESPONDENTS,
 } from "@/lib/premiumAnalytics";
+import { computeScoreDistribution } from "@/lib/scoreDistribution";
 import type { LearningRecommendation } from "@/lib/premiumAnalytics";
 import { buildQuestionBankReadiness, type QuestionBankReadinessStatus } from "@/lib/questionBank";
 import {
@@ -330,8 +332,11 @@ export default function ExamAnalyticsTab({
 
         const scores = examAttempts.map(attempt => summarizeAttemptScore(selectedExam, attempt).scorePercent);
         const avgScore = scores.reduce((a, b) => a + b, 0) / scores.length;
-        const maxScore = Math.max(...scores);
-        const minScore = Math.min(...scores);
+        // reduce instead of Math.max(...scores)/Math.min(...scores) so we never blow the
+        // call stack spreading a very large scores array.
+        const maxScore = scores.reduce((hi, value) => Math.max(hi, value), scores[0]);
+        const minScore = scores.reduce((lo, value) => Math.min(lo, value), scores[0]);
+        const distribution = computeScoreDistribution(scores);
         const elapsedTimes = examAttempts.map(attemptElapsedTimeSec).filter(value => value > 0);
         const avgElapsedTimeSec = elapsedTimes.length > 0
             ? Math.round(elapsedTimes.reduce((sum, value) => sum + value, 0) / elapsedTimes.length)
@@ -344,6 +349,9 @@ export default function ExamAnalyticsTab({
             avgScore: Math.round(avgScore),
             maxScore: Math.round(maxScore),
             minScore: Math.round(minScore),
+            medianScore: distribution.median,
+            standardDeviation: distribution.standardDeviation,
+            distributionBuckets: distribution.buckets,
             count: examAttempts.length,
             avgElapsedTimeSec,
             handwritingArchiveCount,
@@ -488,6 +496,9 @@ export default function ExamAnalyticsTab({
             const upperCorrectRate = rateForGroup(upperGroup, q.id);
             const lowerCorrectRate = rateForGroup(lowerGroup, q.id);
             const discrimination = upperCorrectRate - lowerCorrectRate;
+            // With fewer than 5 respondents the upper/lower thirds overlap, so the
+            // discrimination index is noise — flag it so the UI shows "-" and skips it.
+            const discriminationReliable = examAttempts.length >= DISCRIMINATION_MIN_RESPONDENTS;
 
             const optionRates = Object.entries(optionCounts).map(([opt, count]) => ({
                 option: parseInt(opt),
@@ -513,9 +524,12 @@ export default function ExamAnalyticsTab({
                 revisitRate: stat?.revisitRate ?? 0,
                 answerChangeCount: stat?.answerChangeCount ?? 0,
                 correctRate,
+                correctCount: stat?.correctCount ?? 0,
+                totalCount: stat?.totalCount ?? 0,
                 wrongRate: stat?.wrongRate ?? 0,
                 unansweredRate,
                 discrimination,
+                discriminationReliable,
                 topWrongOption,
                 optionRates,
                 answer: q.answer,
@@ -578,7 +592,8 @@ export default function ExamAnalyticsTab({
 
         const conceptMap: Record<string, {
             questionCount: number;
-            correctRateSum: number;
+            correctCountSum: number;
+            totalCountSum: number;
             hardCount: number;
             questionNumbers: number[];
             mistakeTypes: Set<string>;
@@ -589,14 +604,18 @@ export default function ExamAnalyticsTab({
             if (!conceptMap[concept]) {
                 conceptMap[concept] = {
                     questionCount: 0,
-                    correctRateSum: 0,
+                    correctCountSum: 0,
+                    totalCountSum: 0,
                     hardCount: 0,
                     questionNumbers: [],
                     mistakeTypes: new Set<string>(),
                 };
             }
             conceptMap[concept].questionCount++;
-            conceptMap[concept].correctRateSum += q.correctRate;
+            // Aggregate raw counts across the concept's questions so the concept correct
+            // rate is a single weighted rate, not an average of already-rounded per-question rates.
+            conceptMap[concept].correctCountSum += q.correctCount;
+            conceptMap[concept].totalCountSum += q.totalCount;
             conceptMap[concept].questionNumbers.push(q.index);
             if (q.difficulty === 'hard' || q.difficulty === 'killer') conceptMap[concept].hardCount++;
             q.mistakeTypes.forEach(type => conceptMap[concept].mistakeTypes.add(type));
@@ -606,7 +625,7 @@ export default function ExamAnalyticsTab({
             .map(([concept, data]) => ({
                 concept,
                 questionCount: data.questionCount,
-                correctRate: Math.round(data.correctRateSum / data.questionCount),
+                correctRate: safeRatePercent(data.correctCountSum, data.totalCountSum),
                 hardCount: data.hardCount,
                 questionNumbers: data.questionNumbers.sort((a, b) => a - b),
                 mistakeTypes: Array.from(data.mistakeTypes),
@@ -614,18 +633,29 @@ export default function ExamAnalyticsTab({
             .sort((a, b) => a.correctRate - b.correctRate);
     }, [selectedExam, examAttempts, questionAnalytics]);
 
+    // B4: this panel is about the HIGHEST wrong rate, so sort by wrongRate desc rather
+    // than reusing questionAnalytics' lowest-correctRate ordering (which unanswered skews).
+    const topWrongQuestions = useMemo(
+        () => [...questionAnalytics].sort((a, b) => b.wrongRate - a.wrongRate).slice(0, 3),
+        [questionAnalytics],
+    );
+
     const teachingInsights = useMemo(() => {
         if (!examStats) return null;
 
         const weakConcept = conceptAnalytics[0];
+        // Weak discrimination only counts within the 35–85% correct-rate band (outside it a
+        // low index is expected, not a defect) and only when the index is reliable (n ≥ 5).
+        const hasWeakDiscrimination = (q: typeof questionAnalytics[number]) =>
+            q.discriminationReliable && q.discrimination < 10 && q.correctRate >= 35 && q.correctRate <= 85;
         const riskyQuestions = questionAnalytics.filter(q =>
             q.correctRate < 50 ||
-            q.discrimination < 10 ||
+            hasWeakDiscrimination(q) ||
             q.unansweredRate >= 20 ||
             (q.topWrongOption?.rate || 0) >= 30
         );
         const tooEasyCount = questionAnalytics.filter(q => q.correctRate >= 90).length;
-        const weakDiscriminationCount = questionAnalytics.filter(q => q.discrimination < 10 && q.correctRate >= 35 && q.correctRate <= 85).length;
+        const weakDiscriminationCount = questionAnalytics.filter(hasWeakDiscrimination).length;
         const lowStudents = studentScores.filter(student => student.scorePercentage < 60);
         const borderlineStudents = studentScores.filter(student => student.scorePercentage >= 60 && student.scorePercentage < 80);
         const advancedStudents = studentScores.filter(student => student.scorePercentage >= 90);
@@ -1016,7 +1046,8 @@ export default function ExamAnalyticsTab({
                                             color: exam.id === selectedExamId ? 'var(--primary)' : 'var(--text)',
                                             fontWeight: exam.id === selectedExamId ? 600 : 400,
                                         }}
-                                        className="hover:bg-slate-50 dark:hover:bg-slate-800"
+                                        onMouseEnter={(e) => { e.currentTarget.style.background = 'rgba(99,102,241,0.06)'; }}
+                                        onMouseLeave={(e) => { e.currentTarget.style.background = exam.id === selectedExamId ? 'var(--surface)' : 'transparent'; }}
                                     >
                                         {exam.title}
                                     </div>
@@ -1601,9 +1632,11 @@ export default function ExamAnalyticsTab({
                     {/* Stats Summary */}
                     <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(150px, 100%), 1fr))', gap: '1rem' }}>
                         {[
-                            { label: '평균 점수', value: `${examStats.avgScore}점`, color: 'var(--primary)' },
-                            { label: '최고 점수', value: `${examStats.maxScore}점`, color: 'var(--success)' },
-                            { label: '최저 점수', value: `${examStats.minScore}점`, color: 'var(--warning)' },
+                            { label: '평균 점수', value: `${examStats.avgScore}%`, color: 'var(--primary)' },
+                            { label: '중앙값', value: `${examStats.medianScore}%`, color: '#6366f1' },
+                            { label: '표준편차', value: `${examStats.standardDeviation}`, color: '#8b5cf6' },
+                            { label: '최고 점수', value: `${examStats.maxScore}%`, color: 'var(--success)' },
+                            { label: '최저 점수', value: `${examStats.minScore}%`, color: 'var(--warning)' },
                             { label: '응시 인원', value: `${examStats.count}명`, color: 'var(--text)' },
                             { label: '평균 응시시간', value: formatSeconds(examStats.avgElapsedTimeSec), color: '#0ea5e9' },
                             { label: '필기 보관', value: `${examStats.handwritingArchiveCount}건`, color: '#7c3aed' },
@@ -1620,6 +1653,34 @@ export default function ExamAnalyticsTab({
                             </div>
                         ))}
                     </div>
+
+                    {examStats.distributionBuckets.some(bucket => bucket.count > 0) && (
+                        <div className="card" style={{ padding: '1.5rem' }}>
+                            <h3 style={{ fontSize: '1.1rem', fontWeight: 700, marginBottom: '0.35rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                                <BarChart2 size={18} color="var(--primary)" />
+                                점수 분포
+                            </h3>
+                            <p style={{ fontSize: '0.82rem', color: 'var(--muted)', marginBottom: '1.25rem' }}>
+                                10점 구간별 응시 인원 분포입니다. (중앙값 {examStats.medianScore}% · 표준편차 {examStats.standardDeviation})
+                            </p>
+                            <div style={{ height: '260px', width: '100%', minWidth: 0 }}>
+                                <ResponsiveContainer width="100%" height="100%" minWidth={0} minHeight={260} initialDimension={{ width: 720, height: 260 }}>
+                                    <BarChart data={examStats.distributionBuckets} margin={{ top: 10, right: 10, left: 0, bottom: 0 }}>
+                                        <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="var(--border)" />
+                                        <XAxis dataKey="label" tick={{ fill: 'var(--muted)', fontSize: 12 }} axisLine={false} tickLine={false} />
+                                        <YAxis allowDecimals={false} tick={{ fill: 'var(--muted)' }} axisLine={false} tickLine={false} />
+                                        <RechartsTooltip
+                                            cursor={{ fill: 'rgba(99, 102, 241, 0.05)' }}
+                                            contentStyle={{ borderRadius: '8px', border: '1px solid var(--border)', boxShadow: '0 4px 12px rgba(0,0,0,0.05)', background: 'var(--background)', color: 'var(--foreground)' }}
+                                            formatter={(value: number | string | undefined) => [`${value}명`, '응시 인원']}
+                                            labelFormatter={(label) => `${label}점`}
+                                        />
+                                        <Bar dataKey="count" fill="var(--primary)" radius={[4, 4, 0, 0]} animationDuration={1200} />
+                                    </BarChart>
+                                </ResponsiveContainer>
+                            </div>
+                        </div>
+                    )}
 
                     {teachingInsights && (
                         <div className="card" style={{ padding: '1.5rem', background: 'var(--surface)', border: '1px solid var(--border)' }}>
@@ -2317,7 +2378,9 @@ export default function ExamAnalyticsTab({
                                 )}
                             </div>
 
-                            {scopedLabelAnalytics.length > 0 ? (
+                            {/* A radar with fewer than 3 axes collapses to a line/point, so
+                                fall back to a bar-style list for 1–2 labels. */}
+                            {scopedLabelAnalytics.length >= 3 ? (
                                 <>
                                     <div style={{ height: '300px', width: '100%', minWidth: 0, position: 'relative' }}>
                                         <ResponsiveContainer
@@ -2418,6 +2481,28 @@ export default function ExamAnalyticsTab({
                                         })}
                                     </div>
                                 </>
+                            ) : scopedLabelAnalytics.length > 0 ? (
+                                <div style={{ display: 'grid', gap: '0.85rem', padding: '0.75rem 0.25rem' }}>
+                                    <div style={{ fontSize: '0.78rem', color: 'var(--muted)', fontWeight: 600 }}>
+                                        라벨이 3개 미만이라 레이더 대신 막대로 표시합니다.
+                                    </div>
+                                    {scopedLabelAnalytics.map(item => {
+                                        const rateColor = item.correctRate >= 80 ? 'var(--success)'
+                                            : item.correctRate >= 50 ? 'var(--primary)'
+                                            : 'var(--error)';
+                                        return (
+                                            <div key={item.label}>
+                                                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '0.35rem', fontSize: '0.88rem', fontWeight: 700 }}>
+                                                    <span style={{ color: 'var(--foreground)' }}>{item.label}</span>
+                                                    <span style={{ color: rateColor }}>{item.correctRate}%</span>
+                                                </div>
+                                                <div style={{ height: '10px', background: 'var(--border)', borderRadius: 'var(--radius-full)', overflow: 'hidden' }}>
+                                                    <div style={{ width: `${Math.max(0, Math.min(100, item.correctRate))}%`, height: '100%', background: rateColor, borderRadius: 'var(--radius-full)' }} />
+                                                </div>
+                                            </div>
+                                        );
+                                    })}
+                                </div>
                             ) : (
                                 <div style={{ height: '300px', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--muted)' }}>라벨이 지정된 문항이 없습니다.</div>
                             )}
@@ -2430,7 +2515,9 @@ export default function ExamAnalyticsTab({
                                 오답률이 가장 높은 문항 Top 3
                             </h3>
                             <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
-                                {questionAnalytics.slice(0, 3).map((q, i) => (
+                                {topWrongQuestions.map((q, i) => {
+                                    const discriminationText = q.discriminationReliable ? `${q.discrimination}%` : '-';
+                                    return (
                                     <div key={i} style={{
                                         padding: '1rem',
                                         borderRadius: 'var(--radius-md)',
@@ -2446,8 +2533,8 @@ export default function ExamAnalyticsTab({
                                             </div>
                                             <div style={{ fontSize: '0.85rem', color: 'var(--muted)' }}>
                                                 {q.topWrongOption && q.topWrongOption.rate > 0
-                                                    ? `${q.topWrongOption.option}번 선택 쏠림 ${q.topWrongOption.rate}% · 변별도 ${q.discrimination}%`
-                                                    : `미응답 ${q.unansweredRate}% · 변별도 ${q.discrimination}%`}
+                                                    ? `${q.topWrongOption.option}번 선택 쏠림 ${q.topWrongOption.rate}% · 변별도 ${discriminationText}`
+                                                    : `미응답 ${q.unansweredRate}% · 변별도 ${discriminationText}`}
                                                 {q.averageTimeSec ? ` · 평균 ${formatSeconds(q.averageTimeSec)}` : ""}
                                             </div>
                                         </div>
@@ -2458,8 +2545,9 @@ export default function ExamAnalyticsTab({
                                             </div>
                                         </div>
                                     </div>
-                                ))}
-                                {questionAnalytics.length === 0 && (
+                                    );
+                                })}
+                                {topWrongQuestions.length === 0 && (
                                     <div style={{ color: 'var(--muted)', height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>데이터가 없습니다.</div>
                                 )}
                             </div>
@@ -2530,13 +2618,18 @@ export default function ExamAnalyticsTab({
                                         const optMap = q.optionRates.reduce((acc: Record<number, number>, curr: { option: number; rate: number }) => { acc[curr.option] = curr.rate; return acc; }, {});
                                         const qualityLabel = q.correctRate < 50
                                             ? '보강'
-                                            : q.discrimination < 10
+                                            : (q.discriminationReliable && q.discrimination < 10)
                                                 ? '변별 점검'
                                                 : q.correctRate >= 90
                                                     ? '쉬움'
                                                     : '정상';
                                         return (
-                                            <tr key={i} style={{ borderBottom: '1px solid var(--border)' }} className="hover:bg-slate-50 dark:hover:bg-slate-800/50">
+                                            <tr
+                                                key={i}
+                                                style={{ borderBottom: '1px solid var(--border)' }}
+                                                onMouseEnter={(e) => { e.currentTarget.style.background = 'rgba(99,102,241,0.06)'; }}
+                                                onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}
+                                            >
                                                 <td style={{ padding: '0.75rem 1rem', fontWeight: 600 }}>
                                                     {q.index}번
                                                     <span style={{ fontSize: '0.75rem', color: 'var(--muted)', fontWeight: 400 }}> ({q.concept})</span>
@@ -2562,8 +2655,8 @@ export default function ExamAnalyticsTab({
                                                 <td style={{ padding: '0.75rem 1rem', fontWeight: 600, color: q.correctRate < 40 ? 'var(--error)' : 'var(--text)' }}>
                                                     {q.correctRate}%
                                                 </td>
-                                                <td style={{ padding: '0.75rem 1rem', fontWeight: 700, color: q.discrimination < 10 ? 'var(--warning)' : 'var(--muted)' }}>
-                                                    {q.discrimination}%
+                                                <td style={{ padding: '0.75rem 1rem', fontWeight: 700, color: (q.discriminationReliable && q.discrimination < 10) ? 'var(--warning)' : 'var(--muted)' }}>
+                                                    {q.discriminationReliable ? `${q.discrimination}%` : '-'}
                                                 </td>
                                                 <td style={{ padding: '0.75rem 1rem', fontWeight: 700, color: q.unansweredRate >= 20 ? 'var(--error)' : 'var(--muted)' }}>
                                                     {q.unansweredRate}%
@@ -2626,7 +2719,8 @@ export default function ExamAnalyticsTab({
                                         <th
                                             onClick={() => handleSort('name')}
                                             style={{ padding: '1rem', fontSize: '0.85rem', color: 'var(--muted)', cursor: 'pointer', transition: 'color 0.2s' }}
-                                            className="hover:text-primary"
+                                            onMouseEnter={(e) => { e.currentTarget.style.color = 'var(--primary)'; }}
+                                            onMouseLeave={(e) => { e.currentTarget.style.color = 'var(--muted)'; }}
                                         >
                                             <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
                                                 학생 이름 {sortField === 'name' ? (sortDir === 'asc' ? <ChevronUp size={14} /> : <ChevronDown size={14} />) : ''}
@@ -2635,7 +2729,8 @@ export default function ExamAnalyticsTab({
                                         <th
                                             onClick={() => handleSort('score')}
                                             style={{ padding: '1rem', fontSize: '0.85rem', color: 'var(--muted)', cursor: 'pointer', transition: 'color 0.2s' }}
-                                            className="hover:text-primary"
+                                            onMouseEnter={(e) => { e.currentTarget.style.color = 'var(--primary)'; }}
+                                            onMouseLeave={(e) => { e.currentTarget.style.color = 'var(--muted)'; }}
                                         >
                                             <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
                                                 총점 {sortField === 'score' ? (sortDir === 'asc' ? <ChevronUp size={14} /> : <ChevronDown size={14} />) : ''}
@@ -2659,7 +2754,12 @@ export default function ExamAnalyticsTab({
                                         const retakeIds = selectedExam ? buildRetakeQuestionIds(selectedExam, student.attempt) : [];
                                         const topWeakness = studentWeaknessByAttemptId.get(student.attempt.id);
                                         return (
-                                            <tr key={i} style={{ borderTop: '1px solid var(--border)' }} className="hover:bg-slate-50 dark:hover:bg-slate-800/50">
+                                            <tr
+                                                key={i}
+                                                style={{ borderTop: '1px solid var(--border)' }}
+                                                onMouseEnter={(e) => { e.currentTarget.style.background = 'rgba(99,102,241,0.06)'; }}
+                                                onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}
+                                            >
                                                 <td style={{ padding: '1rem', fontWeight: 600 }}>{student.studentName}</td>
                                                 <td style={{ padding: '1rem' }}>
                                                     <div style={{ fontWeight: 800, color: student.scorePercentage >= 80 ? 'var(--success)' : (student.scorePercentage < 50 ? 'var(--error)' : 'var(--text)') }}>
@@ -2732,7 +2832,14 @@ export default function ExamAnalyticsTab({
                                                             display: 'inline-flex', alignItems: 'center', gap: '0.4rem',
                                                             border: '1px solid var(--border)', transition: 'all 0.2s'
                                                         }}
-                                                        className="hover:border-primary hover:text-primary"
+                                                        onMouseEnter={(e) => {
+                                                            e.currentTarget.style.borderColor = 'var(--primary)';
+                                                            e.currentTarget.style.color = 'var(--primary)';
+                                                        }}
+                                                        onMouseLeave={(e) => {
+                                                            e.currentTarget.style.borderColor = 'var(--border)';
+                                                            e.currentTarget.style.color = 'var(--foreground)';
+                                                        }}
                                                     >
                                                         <Download size={14} />
                                                         정오표(CSV)

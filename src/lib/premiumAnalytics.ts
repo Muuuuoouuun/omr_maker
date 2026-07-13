@@ -1345,13 +1345,62 @@ export function buildExamQuestionResultStats(exam: Exam, attempts: Attempt[]): E
                 ? roundPercent(averageTimeSec, stat.expectedTimeSec)
                 : undefined,
             averageVisitCount,
-            revisitRate: roundPercent(stat.revisitedCount, stat.timedCount),
+            // Divide revisits by all graded responses (not only timed ones) so the rate
+            // reflects "share of responses that were revisited" and can never exceed 100%.
+            revisitRate: roundPercent(stat.revisitedCount, stat.totalCount),
             answerChangeCount: stat.answerChangeCount,
             handwritingStrokeCount: stat.handwritingStrokeCount,
             studentCount: stat.studentKeys.size,
             groupCount: stat.groupKeys.size,
         };
     }).sort((a, b) => a.questionNumber - b.questionNumber);
+}
+
+/**
+ * Minimum respondents required before the upper/lower-third discrimination index is
+ * statistically meaningful. Below this the two groups overlap (or are identical for n=1),
+ * so callers should render "-" instead of a noisy number.
+ */
+export const DISCRIMINATION_MIN_RESPONDENTS = 5;
+
+/**
+ * Per-question discrimination index (upper-third correct rate − lower-third correct rate),
+ * or null when there are too few respondents to be reliable. Matches the inline computation
+ * used by the exam analytics table so the CSV export and the UI never disagree.
+ */
+export function buildExamQuestionDiscriminations(exam: Exam, attempts: Attempt[]): Map<number, number | null> {
+    const discriminations = new Map<number, number | null>();
+    if (attempts.length < DISCRIMINATION_MIN_RESPONDENTS) {
+        for (const question of exam.questions) discriminations.set(question.id, null);
+        return discriminations;
+    }
+
+    const resultsByAttemptId = new Map(attempts.map(attempt => [
+        attempt.id,
+        new Map(getAttemptQuestionResults(exam, attempt).map(result => [result.questionId, result])),
+    ]));
+    const sortedByScore = [...attempts].sort((a, b) => (
+        summarizeAttemptScore(exam, b).scorePercent - summarizeAttemptScore(exam, a).scorePercent
+    ));
+    const splitSize = Math.max(1, Math.ceil(sortedByScore.length / 3));
+    const upperGroup = sortedByScore.slice(0, splitSize);
+    const lowerGroup = sortedByScore.slice(-splitSize);
+    const rateForGroup = (group: Attempt[], questionId: number): number => {
+        let total = 0;
+        let correct = 0;
+        for (const attempt of group) {
+            const result = resultsByAttemptId.get(attempt.id)?.get(questionId);
+            if (!result || result.status === "ungraded") continue;
+            total += 1;
+            if (result.status === "correct" || result.isCorrect) correct += 1;
+        }
+        return total > 0 ? Math.round((correct / total) * 100) : 0;
+    };
+
+    for (const question of exam.questions) {
+        discriminations.set(question.id, rateForGroup(upperGroup, question.id) - rateForGroup(lowerGroup, question.id));
+    }
+    return discriminations;
 }
 
 export function buildMostMissedQuestionStats(exam: Exam, attempts: Attempt[], limit = 5): ExamQuestionResultStat[] {

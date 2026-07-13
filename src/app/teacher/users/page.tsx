@@ -66,8 +66,17 @@ type ConfirmAction =
     | { kind: "group"; id: string; label: string; count: number };
 type StudentFormData = { name: string; email: string; group: string; groupId: string; region: string };
 type GroupFormData = { name: string; color: string; region: string };
+type PendingDeleteUndo = {
+    id: number;
+    students: RosterStudent[];
+    codeEntries: Record<string, string>;
+    label: string;
+};
+type SortKey = "name" | "avgScore" | "examsTaken" | "lastActive";
+type SortDirection = "asc" | "desc";
 
 const ALL_REGION_KEY = "__all_regions__";
+const DELETE_UNDO_WINDOW_MS = 6000;
 
 const MOCK_STUDENTS: RosterStudent[] = Array.from({ length: 24 }).map((_, i) => {
     const names = ["김민준", "이서연", "박도윤", "최예은", "정하준", "강지우", "조시우", "윤수아", "장재윤", "임유나", "한건우", "오하윤", "서지호", "신서아", "권선우", "황지민", "안윤서", "송태호", "류예준", "홍채원", "전주원", "고은서", "문이준", "양리아"];
@@ -161,6 +170,14 @@ function groupOptionLabel(group: RosterGroup): string {
     return group.region ? `${group.name} · ${group.region}` : group.name;
 }
 
+function sortAriaValue(
+    sortState: { key: SortKey; direction: SortDirection } | null,
+    key: SortKey,
+): React.AriaAttributes["aria-sort"] {
+    if (sortState?.key !== key) return "none";
+    return sortState.direction === "asc" ? "ascending" : "descending";
+}
+
 function initialStudentGroupId(student: RosterStudent | null, groups: RosterGroup[]): string {
     if (!student) return groups[0]?.id ?? "";
     return rosterGroupForStudentInput(student.group, student.region || "", groups)?.id || groups.find(group => group.name === student.group)?.id || "";
@@ -247,8 +264,13 @@ function ManageUsersInner() {
     const [copyFlash, setCopyFlash] = useState(false);
     const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
     const [selectedGroupId, setSelectedGroupId] = useState<string | null>(null);
+    const [showGroupMoveModal, setShowGroupMoveModal] = useState(false);
+    const [pendingDeleteUndo, setPendingDeleteUndo] = useState<PendingDeleteUndo | null>(null);
+    const [sortState, setSortState] = useState<{ key: SortKey; direction: SortDirection } | null>(null);
 
     const fileInputRef = useRef<HTMLInputElement | null>(null);
+    const popoverMenuRef = useRef<HTMLTableCellElement | null>(null);
+    const undoTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
     // Hydrate real roster rows from localStorage. Demo rows stay display-only so
     // they cannot be mistaken for academy data in later sessions.
@@ -323,6 +345,28 @@ function ManageUsersInner() {
 
         void loadRosterAnalytics();
         return () => { cancelled = true; };
+    }, []);
+
+    // M7: dismiss the row action popover on outside click or Escape.
+    useEffect(() => {
+        if (!popoverId) return;
+        const handlePointerDown = (event: MouseEvent) => {
+            if (popoverMenuRef.current?.contains(event.target as Node)) return;
+            setPopoverId(null);
+        };
+        const handleKeyDown = (event: KeyboardEvent) => {
+            if (event.key === "Escape") setPopoverId(null);
+        };
+        document.addEventListener("mousedown", handlePointerDown);
+        document.addEventListener("keydown", handleKeyDown);
+        return () => {
+            document.removeEventListener("mousedown", handlePointerDown);
+            document.removeEventListener("keydown", handleKeyDown);
+        };
+    }, [popoverId]);
+
+    useEffect(() => () => {
+        if (undoTimeoutRef.current) clearTimeout(undoTimeoutRef.current);
     }, []);
 
     // Write-through helpers
@@ -416,6 +460,55 @@ function ManageUsersInner() {
                 || studentRegion.toLowerCase().includes(normalizedQuery);
             return matchesRegion && matchesQuery;
         }), [activeRegionKey, query, displayStudents, displayGroups]);
+
+    // DEV-B: sortable table headers. lastActive is only stored as a
+    // formatted Korean relative-time label ("2시간 전"), so derive a real
+    // timestamp from the underlying attempts for chronological sorting.
+    const lastActiveTimestampByStudentId = useMemo(() => {
+        const map = new Map<string, number>();
+        for (const student of displayStudents) {
+            const attempts = performanceByStudentId.get(student.id)?.attempts || [];
+            let latest = 0;
+            for (const attempt of attempts) {
+                const time = Date.parse(attempt.finishedAt || attempt.startedAt || "") || 0;
+                if (time > latest) latest = time;
+            }
+            map.set(student.id, latest);
+        }
+        return map;
+    }, [displayStudents, performanceByStudentId]);
+
+    const toggleSort = (key: SortKey) => {
+        setSortState(prev => {
+            if (!prev || prev.key !== key) return { key, direction: "asc" };
+            if (prev.direction === "asc") return { key, direction: "desc" };
+            return null; // third click resets to the default (unsorted) order
+        });
+    };
+
+    const sortedFiltered = useMemo(() => {
+        if (!sortState) return filtered;
+        const { key, direction } = sortState;
+        const dir = direction === "asc" ? 1 : -1;
+        return filtered
+            .map((student, index) => ({ student, index }))
+            .sort((a, b) => {
+                let comparison = 0;
+                if (key === "name") {
+                    comparison = a.student.name.localeCompare(b.student.name, "ko");
+                } else if (key === "avgScore") {
+                    comparison = a.student.avgScore - b.student.avgScore;
+                } else if (key === "examsTaken") {
+                    comparison = a.student.examsTaken - b.student.examsTaken;
+                } else {
+                    comparison = (lastActiveTimestampByStudentId.get(a.student.id) || 0)
+                        - (lastActiveTimestampByStudentId.get(b.student.id) || 0);
+                }
+                // Stable tie-break: preserve the original (default) order.
+                return comparison !== 0 ? comparison * dir : a.index - b.index;
+            })
+            .map(item => item.student);
+    }, [filtered, sortState, lastActiveTimestampByStudentId]);
 
     const selected = displayStudents.find(s => s.id === selectedId);
     const selectedGroup = displayGroups.find(group => group.id === selectedGroupId) || null;
@@ -617,9 +710,79 @@ function ManageUsersInner() {
         setPopoverId(null);
     };
 
-    const deleteStudent = (id: string) => {
-        const next = students.filter(s => s.id !== id);
+    // Deterministic student ids ("${groupId}::${name}") mean a same-named
+    // replacement student added later would silently inherit a deleted
+    // student's leftover start code unless the registry entry is purged too.
+    const purgeStudentCodes = (ids: string[]): Record<string, string> => {
+        const idSet = new Set(ids.filter(Boolean));
+        const removedEntries: Record<string, string> = {};
+        if (idSet.size === 0) return removedEntries;
+        const nextRegistry = { ...studentCodeRegistry };
+        for (const id of idSet) {
+            if (nextRegistry[id]) {
+                removedEntries[id] = nextRegistry[id];
+                delete nextRegistry[id];
+            }
+        }
+        if (Object.keys(removedEntries).length > 0) {
+            setStudentCodeRegistry(nextRegistry);
+            writeStudentCodes(localStorage, nextRegistry);
+        }
+        return removedEntries;
+    };
+
+    const clearDeleteUndoTimer = () => {
+        if (undoTimeoutRef.current) {
+            clearTimeout(undoTimeoutRef.current);
+            undoTimeoutRef.current = null;
+        }
+    };
+
+    const scheduleDeleteUndo = (removed: RosterStudent[], codeEntries: Record<string, string>, label: string) => {
+        clearDeleteUndoTimer();
+        const undoId = Date.now();
+        setPendingDeleteUndo({ id: undoId, students: removed, codeEntries, label });
+        undoTimeoutRef.current = setTimeout(() => {
+            setPendingDeleteUndo(prev => (prev?.id === undoId ? null : prev));
+            undoTimeoutRef.current = null;
+        }, DELETE_UNDO_WINDOW_MS);
+    };
+
+    // Removes the given students and offers a short-lived undo. Re-adding the
+    // exact same ids on undo is safe against the tombstone sync mechanism in
+    // rosterPersistence: nextRosterTombstones() clears a tombstone the moment
+    // an id reappears in a saved snapshot (see "clears tombstones when the
+    // same roster row is intentionally re-added" in rosterPersistence.test.ts),
+    // so a plain persistRoster() re-add is enough — no special mutation needed.
+    const removeStudentsWithUndo = (ids: string[], label: string) => {
+        const idSet = new Set(ids);
+        const removed = students.filter(s => idSet.has(s.id));
+        if (removed.length === 0) return;
+        const next = students.filter(s => !idSet.has(s.id));
         persistRoster(next, recomputeGroups(next, groups), invites);
+        const removedCodeEntries = purgeStudentCodes(ids);
+        scheduleDeleteUndo(removed, removedCodeEntries, label);
+    };
+
+    const handleUndoDelete = () => {
+        if (!pendingDeleteUndo) return;
+        clearDeleteUndoTimer();
+        const restored = pendingDeleteUndo;
+        setPendingDeleteUndo(null);
+        const restoredIds = new Set(restored.students.map(s => s.id));
+        const merged = [...restored.students, ...students.filter(s => !restoredIds.has(s.id))];
+        persistRoster(merged, recomputeGroups(merged, groups), invites);
+        if (Object.keys(restored.codeEntries).length > 0) {
+            const nextRegistry = { ...studentCodeRegistry, ...restored.codeEntries };
+            setStudentCodeRegistry(nextRegistry);
+            writeStudentCodes(localStorage, nextRegistry);
+        }
+        toast.success("삭제 취소됨", `${restored.label} 복원했습니다.`);
+    };
+
+    const deleteStudent = (id: string) => {
+        const target = students.find(s => s.id === id);
+        removeStudentsWithUndo([id], target?.name || "학생");
         if (selectedId === id) setSelectedId(null);
         setSelectedIds(prev => {
             if (!prev.has(id)) return prev;
@@ -664,8 +827,8 @@ function ManageUsersInner() {
     };
 
     const deleteSelectedStudents = () => {
-        const next = students.filter(s => !selectedIds.has(s.id));
-        persistRoster(next, recomputeGroups(next, groups), invites);
+        const ids = [...selectedIds];
+        removeStudentsWithUndo(ids, `${ids.length}명`);
         if (selectedId && selectedIds.has(selectedId)) setSelectedId(null);
         clearSelection();
     };
@@ -707,6 +870,39 @@ function ManageUsersInner() {
         a.click();
         document.body.removeChild(a);
         URL.revokeObjectURL(url);
+    };
+
+    // ===== Bulk group move (DEV-A) =====
+    const handleBulkMoveGroup = () => {
+        if (isDemoRoster) {
+            toast.info("데모 명단은 이동하지 않음", "실제 학생을 추가하거나 CSV로 업로드하면 반 이동을 사용할 수 있습니다.");
+            return;
+        }
+        if (selectedIds.size === 0) return;
+        setShowGroupMoveModal(true);
+    };
+
+    const handleConfirmGroupMove = (targetGroupId: string) => {
+        const targetGroup = groups.find(group => group.id === targetGroupId);
+        if (!targetGroup) return;
+        const ids = selectedIds;
+        const movedCount = students.filter(s => ids.has(s.id)).length;
+        if (movedCount === 0) {
+            setShowGroupMoveModal(false);
+            return;
+        }
+        // Same semantics as handleEditStudent (M1): only the group/region
+        // fields move, the student's id stays stable. rosterGroupMatchesStudent
+        // now matches on those fields, so the old group's count drops to 0 and
+        // becomes deletable, and the new group's count picks the students up —
+        // no double-counting.
+        const next = students.map(s => (
+            ids.has(s.id) ? { ...s, group: targetGroup.name, region: targetGroup.region } : s
+        ));
+        persistRoster(next, recomputeGroups(next, groups), invites);
+        toast.success("반 이동 완료", `${movedCount}명을 ${groupOptionLabel(targetGroup)} 반으로 이동했습니다.`);
+        setShowGroupMoveModal(false);
+        clearSelection();
     };
 
     // ===== Group CRUD =====
@@ -844,11 +1040,12 @@ function ManageUsersInner() {
     const handleConfirmAction = () => {
         if (!confirmAction) return;
         if (confirmAction.kind === "student") {
+            // No toast.success here — the undo bar (rendered from
+            // pendingDeleteUndo) already communicates the delete and offers
+            // "실행 취소" for a few seconds.
             deleteStudent(confirmAction.id);
-            toast.success("학생 삭제됨", `${confirmAction.label} 학생을 목록에서 삭제했습니다.`);
         } else if (confirmAction.kind === "bulk") {
             deleteSelectedStudents();
-            toast.success("학생 삭제됨", `${confirmAction.count}명을 목록에서 삭제했습니다.`);
         } else if (confirmAction.kind === "invite") {
             persistRoster(students, groups, invites.filter(inv => inv.id !== confirmAction.id));
             toast.success("초대 취소됨", `${confirmAction.label} 초대를 취소했습니다.`);
@@ -887,6 +1084,7 @@ function ManageUsersInner() {
             let updatedCount = 0;
             let skippedCount = 0;
             let createdGroupCount = 0;
+            let conflictCount = 0;
 
             for (let i = 1; i < rows.length; i++) {
                 const cols = rows[i];
@@ -935,9 +1133,16 @@ function ManageUsersInner() {
                 }
 
                 const baseId = studentIdForRoster(name, group, nextGroups, region, currentGroup.id);
-                const id = importedId || uniqueStudentIdForRoster(baseId, emailKey, nextStudents);
                 const existingByEmailIndex = nextStudents.findIndex(student => normalizeEmail(student.email) === emailKey);
-                const existingByIdIndex = nextStudents.findIndex(student => student.id === id);
+                // An id column lets teachers re-import their own export, but a
+                // collision on id alone doesn't prove it's the same student —
+                // only treat it as an update when the email also matches (or
+                // the existing record has no email yet). Otherwise this row
+                // would silently overwrite an unrelated student's name/email/group.
+                const importedIdIndex = importedId ? nextStudents.findIndex(student => student.id === importedId) : -1;
+                const importedIdEmail = importedIdIndex >= 0 ? normalizeEmail(nextStudents[importedIdIndex].email) : "";
+                const importedIdConflicts = importedIdIndex >= 0 && !!importedIdEmail && importedIdEmail !== emailKey;
+                const existingByIdIndex = importedIdIndex >= 0 && !importedIdConflicts ? importedIdIndex : -1;
                 const existingIndex = existingByEmailIndex >= 0 ? existingByEmailIndex : existingByIdIndex;
                 if (existingIndex >= 0) {
                     nextStudents[existingIndex] = {
@@ -945,11 +1150,19 @@ function ManageUsersInner() {
                         name,
                         email,
                         group,
-                        ...(regionIdx >= 0 ? { region: regionPatch.region } : {}),
+                        // A blank region cell must not wipe a stored per-student
+                        // region override — only spread the key when the cell
+                        // actually provided a value.
+                        ...(regionIdx >= 0 && regionPatch.region ? { region: regionPatch.region } : {}),
                     };
                     updatedCount += 1;
                     continue;
                 }
+
+                if (importedIdConflicts) conflictCount += 1;
+                const id = importedId && !importedIdConflicts
+                    ? importedId
+                    : uniqueStudentIdForRoster(baseId, emailKey, nextStudents);
 
                 nextStudents.unshift({
                     id,
@@ -972,7 +1185,7 @@ function ManageUsersInner() {
                 persistRoster(nextStudents, recomputedGroups, invites);
                 toast.success(
                     "CSV 업로드 완료",
-                    `${addedCount}명 추가 · ${updatedCount}명 업데이트 · ${createdGroupCount}개 반 생성${skippedCount ? ` · ${skippedCount}행 제외` : ""}`
+                    `${addedCount}명 추가 · ${updatedCount}명 업데이트 · ${createdGroupCount}개 반 생성${skippedCount ? ` · ${skippedCount}행 제외` : ""}${conflictCount ? ` · ${conflictCount}건 id 충돌(새 학생으로 추가)` : ""}`
                 );
             } else {
                 toast.info("추가된 학생 없음", skippedCount ? `${skippedCount}개 행이 비어 있거나 형식이 맞지 않습니다.` : "새로 반영할 데이터가 없습니다.");
@@ -1231,6 +1444,14 @@ function ManageUsersInner() {
                                         }}>
                                             <Download size={13} /> CSV 내보내기
                                         </button>
+                                        <button onClick={handleBulkMoveGroup} disabled={groups.length === 0} style={{
+                                            padding: '0.4rem 0.85rem', background: 'var(--surface)', color: 'var(--foreground)',
+                                            border: '1px solid var(--border)', borderRadius: 'var(--radius-md)',
+                                            fontSize: '0.8rem', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '0.35rem',
+                                            opacity: groups.length === 0 ? 0.5 : 1, cursor: groups.length === 0 ? 'not-allowed' : 'pointer',
+                                        }}>
+                                            <FolderPlus size={13} /> 그룹 이동
+                                        </button>
                                         <button onClick={handleBulkDelete} style={{
                                             padding: '0.4rem 0.85rem', background: 'rgba(239,68,68,0.1)', color: '#ef4444',
                                             border: '1px solid rgba(239,68,68,0.25)', borderRadius: 'var(--radius-md)',
@@ -1272,17 +1493,25 @@ function ManageUsersInner() {
                                                     style={{ cursor: isDemoRoster ? 'not-allowed' : 'pointer', accentColor: 'var(--primary)' }}
                                                 />
                                             </th>
-                                            <th style={{ padding: '0.85rem 0.5rem' }}>학생</th>
+                                            <th style={{ padding: '0.85rem 0.5rem' }} aria-sort={sortAriaValue(sortState, "name")}>
+                                                <SortableHeaderButton label="학생" sortKey="name" sortState={sortState} onSort={toggleSort} />
+                                            </th>
                                             <th style={{ padding: '0.85rem 0.5rem' }}>반</th>
                                             <th style={{ padding: '0.85rem 0.5rem' }}>지역</th>
-                                            <th style={{ padding: '0.85rem 0.5rem' }}>평균 점수</th>
-                                            <th style={{ padding: '0.85rem 0.5rem' }}>응시 수</th>
-                                            <th style={{ padding: '0.85rem 0.5rem' }}>최근 활동</th>
+                                            <th style={{ padding: '0.85rem 0.5rem' }} aria-sort={sortAriaValue(sortState, "avgScore")}>
+                                                <SortableHeaderButton label="평균 점수" sortKey="avgScore" sortState={sortState} onSort={toggleSort} />
+                                            </th>
+                                            <th style={{ padding: '0.85rem 0.5rem' }} aria-sort={sortAriaValue(sortState, "examsTaken")}>
+                                                <SortableHeaderButton label="응시 수" sortKey="examsTaken" sortState={sortState} onSort={toggleSort} />
+                                            </th>
+                                            <th style={{ padding: '0.85rem 0.5rem' }} aria-sort={sortAriaValue(sortState, "lastActive")}>
+                                                <SortableHeaderButton label="최근 활동" sortKey="lastActive" sortState={sortState} onSort={toggleSort} />
+                                            </th>
                                             <th style={{ padding: '0.85rem 0.5rem', width: 40 }}></th>
                                         </tr>
                                     </thead>
                                     <tbody>
-                                        {filtered.map(s => (
+                                        {sortedFiltered.map(s => (
                                             <tr key={s.id}
                                                 onClick={() => setSelectedId(s.id)}
                                                 style={{ borderBottom: '1px solid var(--border)', cursor: 'pointer', transition: 'background 0.2s', background: selectedIds.has(s.id) ? 'rgba(99,102,241,0.06)' : selectedId === s.id ? 'rgba(99,102,241,0.05)' : 'transparent' }}
@@ -1324,7 +1553,10 @@ function ManageUsersInner() {
                                                         {s.lastActive}
                                                     </span>
                                                 </td>
-                                                <td style={{ padding: '0.85rem 0.5rem', textAlign: 'right', position: 'relative' }}>
+                                                <td
+                                                    ref={s.id === popoverId ? popoverMenuRef : undefined}
+                                                    style={{ padding: '0.85rem 0.5rem', textAlign: 'right', position: 'relative' }}
+                                                >
                                                     {!isDemoRoster && (
                                                         <button
                                                             aria-label={`${s.name} 작업 메뉴 열기`}
@@ -1420,7 +1652,7 @@ function ManageUsersInner() {
                             <div className="bento-card teacher-users-detail-card" style={{ padding: '1.5rem', position: 'sticky', top: '5.5rem', alignSelf: 'flex-start', animation: 'fadeIn 0.3s both' }}>
                                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '1.25rem' }}>
                                     <h3 style={{ fontSize: '1rem', fontWeight: 700 }}>학생 상세</h3>
-                                    <button onClick={() => setSelectedId(null)} style={{ color: 'var(--muted)' }}>
+                                    <button type="button" aria-label="학생 상세 닫기" onClick={() => setSelectedId(null)} style={{ color: 'var(--muted)' }}>
                                         <X size={18} />
                                     </button>
                                 </div>
@@ -2081,6 +2313,55 @@ function ManageUsersInner() {
                 />
             )}
 
+            {/* Group Move Modal (DEV-A) */}
+            {showGroupMoveModal && (
+                <GroupMoveModal
+                    groups={groups}
+                    count={selectedIds.size}
+                    onClose={() => setShowGroupMoveModal(false)}
+                    onConfirm={handleConfirmGroupMove}
+                />
+            )}
+
+            {/* Delete undo bar (M6) */}
+            {pendingDeleteUndo && (
+                <div
+                    role="status"
+                    aria-live="polite"
+                    style={{
+                        position: 'fixed',
+                        left: 'max(1rem, env(safe-area-inset-left))',
+                        bottom: 'max(1rem, env(safe-area-inset-bottom))',
+                        zIndex: 2001,
+                        display: 'flex', alignItems: 'center', gap: '0.85rem',
+                        padding: '0.85rem 1.1rem',
+                        background: 'var(--surface)',
+                        border: '1px solid var(--border)',
+                        borderRadius: 'var(--radius-md)',
+                        boxShadow: '0 8px 24px rgba(0,0,0,0.12)',
+                        animation: 'fadeIn 0.2s ease-out',
+                    }}
+                >
+                    <span style={{ fontSize: '0.88rem', fontWeight: 600, color: 'var(--foreground)' }}>
+                        {pendingDeleteUndo.label} 삭제됨
+                    </span>
+                    <button
+                        type="button"
+                        onClick={handleUndoDelete}
+                        style={{
+                            padding: '0.4rem 0.9rem',
+                            background: 'var(--primary)',
+                            color: 'white',
+                            borderRadius: 'var(--radius-md)',
+                            fontSize: '0.82rem',
+                            fontWeight: 700,
+                        }}
+                    >
+                        실행 취소
+                    </button>
+                </div>
+            )}
+
         </div>
     );
 }
@@ -2118,6 +2399,37 @@ function MiniRegionMetric({ label, value }: { label: string; value: string }) {
             <div style={{ fontSize: '0.65rem', color: 'var(--muted)', fontWeight: 800, marginBottom: '0.15rem' }}>{label}</div>
             <div style={{ fontSize: '0.9rem', color: 'var(--foreground)', fontWeight: 900, fontVariantNumeric: 'tabular-nums' }}>{value}</div>
         </div>
+    );
+}
+
+// DEV-B: clickable/keyboard-focusable table header that toggles asc/desc
+// sort for a column, with a small arrow indicator. Rendered inside a plain
+// <th> so it inherits the header row's text styling via `font: inherit`.
+function SortableHeaderButton({
+    label, sortKey, sortState, onSort,
+}: {
+    label: string;
+    sortKey: SortKey;
+    sortState: { key: SortKey; direction: SortDirection } | null;
+    onSort: (key: SortKey) => void;
+}) {
+    const active = sortState?.key === sortKey;
+    return (
+        <button
+            type="button"
+            onClick={() => onSort(sortKey)}
+            style={{
+                display: 'inline-flex', alignItems: 'center', gap: '0.3rem',
+                background: 'transparent', color: 'inherit', font: 'inherit',
+                letterSpacing: 'inherit', textTransform: 'inherit', cursor: 'pointer',
+                padding: 0,
+            }}
+        >
+            {label}
+            <span aria-hidden="true" style={{ fontSize: '0.65rem', opacity: active ? 1 : 0.35 }}>
+                {active ? (sortState?.direction === "asc" ? "▲" : "▼") : "↕"}
+            </span>
+        </button>
     );
 }
 
@@ -2960,6 +3272,73 @@ function GroupModal({
                         style={{ padding: '0.65rem 1.1rem', background: 'var(--primary)', color: 'white', borderRadius: 'var(--radius-md)', fontWeight: 700, fontSize: '0.85rem' }}
                     >
                         {initial ? "저장" : "만들기"}
+                    </button>
+                </div>
+            </form>
+        </ModalShell>
+    );
+}
+
+// DEV-A: bulk group reassignment picker.
+function GroupMoveModal({
+    groups, count, onClose, onConfirm,
+}: {
+    groups: RosterGroup[];
+    count: number;
+    onClose: () => void;
+    onConfirm: (groupId: string) => void;
+}) {
+    const [groupId, setGroupId] = useState(groups[0]?.id ?? "");
+    const inputStyle: React.CSSProperties = {
+        width: '100%', padding: '0.65rem 0.85rem', background: 'var(--background)',
+        border: '1px solid var(--border)', borderRadius: 'var(--radius-md)',
+        fontSize: '0.9rem', color: 'var(--foreground)', outline: 'none',
+    };
+    const labelStyle: React.CSSProperties = {
+        display: 'block', fontSize: '0.75rem', fontWeight: 700,
+        color: 'var(--muted)', letterSpacing: '0.05em',
+        textTransform: 'uppercase', marginBottom: '0.4rem',
+    };
+
+    return (
+        <ModalShell title="선택 학생 반 이동" onClose={onClose}>
+            <form
+                onSubmit={(e) => {
+                    e.preventDefault();
+                    if (!groupId) return;
+                    onConfirm(groupId);
+                }}
+            >
+                <p style={{ color: 'var(--muted)', fontSize: '0.88rem', lineHeight: 1.6, marginBottom: '1rem', wordBreak: 'keep-all' }}>
+                    선택된 <strong style={{ color: 'var(--foreground)' }}>{count}명</strong>을 옮길 반을 선택하세요. 반과 지역이 함께 이동됩니다.
+                </p>
+                <div style={{ marginBottom: '1.25rem' }}>
+                    <label style={labelStyle}>이동할 반</label>
+                    <select
+                        aria-label="이동할 반"
+                        value={groupId}
+                        onChange={e => setGroupId(e.target.value)}
+                        style={inputStyle}
+                        required
+                    >
+                        {groups.length === 0 && <option value="">이동 가능한 반이 없습니다</option>}
+                        {groups.map(g => <option key={g.id} value={g.id}>{groupOptionLabel(g)}</option>)}
+                    </select>
+                </div>
+                <div style={{ display: 'flex', gap: '0.5rem', justifyContent: 'flex-end' }}>
+                    <button
+                        type="button"
+                        onClick={onClose}
+                        style={{ padding: '0.65rem 1rem', background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 'var(--radius-md)', fontWeight: 600, fontSize: '0.85rem', color: 'var(--foreground)' }}
+                    >
+                        취소
+                    </button>
+                    <button
+                        type="submit"
+                        disabled={!groupId}
+                        style={{ padding: '0.65rem 1.1rem', background: 'var(--primary)', color: 'white', borderRadius: 'var(--radius-md)', fontWeight: 700, fontSize: '0.85rem', opacity: groupId ? 1 : 0.6 }}
+                    >
+                        이동
                     </button>
                 </div>
             </form>

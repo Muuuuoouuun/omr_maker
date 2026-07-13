@@ -148,7 +148,18 @@ export default function OMRCardView({
               } ${isEditor ? "editor-card" : ""} ${handwritingSummary ? "has-handwriting" : ""}`}
               onClick={() => onQuestionClick?.(q.id)}
             >
-              <div className="q-card-num">{q.number}.</div>
+              <button
+                type="button"
+                className="q-card-num"
+                onClick={(event) => {
+                  event.stopPropagation();
+                  onQuestionClick?.(q.id);
+                }}
+                aria-label={`${q.number}번 문항으로 이동`}
+                aria-current={isSelected ? "true" : undefined}
+              >
+                {q.number}.
+              </button>
 
               <div className="q-card-bubbles">
                 {Array.from({ length: questionOptionsCount }, (_, i) => {
@@ -171,6 +182,7 @@ export default function OMRCardView({
                   return (
                     <button
                       key={i}
+                      type="button"
                       className={bubbleClass}
                       onClick={(e) => {
                         e.stopPropagation();
@@ -180,6 +192,7 @@ export default function OMRCardView({
                       }}
                       disabled={mode === "view"}
                       aria-label={`문제 ${q.number}번 보기 ${optNum}`}
+                      aria-pressed={mode === "view" ? undefined : isMarked}
                     >
                       {optNum}
                     </button>

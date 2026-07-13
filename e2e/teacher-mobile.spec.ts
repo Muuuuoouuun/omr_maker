@@ -61,6 +61,47 @@ async function expectTeacherHeaderTouchFriendly(page: Page, options: { hasSearch
     await expectNoHorizontalOverflow(page);
 }
 
+async function seedTeacherAttemptReview(page: Page) {
+    await page.addInitScript(() => {
+        const exam = {
+            id: "teacher-mobile-review-exam",
+            title: "교사 모바일 리뷰 시험",
+            createdAt: "2026-07-13T00:00:00.000Z",
+            updatedAt: "2026-07-13T00:00:00.000Z",
+            questions: [
+                { id: 1, number: 1, answer: 2, choices: 4, score: 50, label: "개념" },
+                { id: 2, number: 2, answer: 4, choices: 4, score: 50, label: "응용" },
+            ],
+            accessConfig: { type: "public" },
+        };
+        const attempt = {
+            id: "teacher-mobile-review-attempt",
+            examId: exam.id,
+            examTitle: exam.title,
+            studentName: "모바일 학생",
+            studentId: "teacher-mobile-student",
+            studentProfileId: "teacher-mobile-student",
+            groupId: "teacher-mobile-group",
+            groupName: "모바일반",
+            startedAt: "2026-07-13T00:00:00.000Z",
+            finishedAt: "2026-07-13T00:10:00.000Z",
+            score: 50,
+            totalScore: 100,
+            answers: { 1: 2, 2: 1 },
+            status: "completed",
+            studentQuestions: [{
+                questionId: 2,
+                questionNumber: 2,
+                body: "2번 오답 근거를 알려주세요.",
+                createdAt: "2026-07-13T00:11:00.000Z",
+                status: "queued",
+            }],
+        };
+        window.localStorage.setItem(`omr_exam_${exam.id}`, JSON.stringify(exam));
+        window.localStorage.setItem("omr_attempts", JSON.stringify([attempt]));
+    });
+}
+
 test.describe("Teacher phone and tablet app chrome", () => {
     test.beforeEach(async ({ baseURL }) => {
         test.skip(!isLocalBaseURL(baseURL), "Authenticated teacher mobile checks require local teacher login.");
@@ -105,5 +146,34 @@ test.describe("Teacher phone and tablet app chrome", () => {
         await expectTouchTarget(toolbar.getByRole("button", { name: /모드로 전환/ }));
         expect(await smallTargets(page, ".create-editor-actions button, .create-editor-actions label")).toEqual([]);
         await expectNoHorizontalOverflow(page);
+    });
+
+    test("keeps the teacher attempt review readable without a collapsed detail pane", async ({ page }) => {
+        await seedTeacherAttemptReview(page);
+        await loginAsTeacher(page, "/teacher/attempt/teacher-mobile-review-attempt");
+
+        await expect(page.getByRole("heading", { name: "모바일 학생" })).toBeVisible();
+        await expect(page.getByRole("heading", { name: "학생 풀이 필기" })).toBeVisible();
+        await expect(page.getByText("2번 오답 근거를 알려주세요.")).toBeVisible();
+        await expectNoHorizontalOverflow(page);
+        await expect(page.locator(".mobile-install-prompt")).toHaveCount(0);
+
+        const layout = await page.evaluate(() => {
+            const sidebar = document.querySelector<HTMLElement>(".teacher-attempt-sidebar")?.getBoundingClientRect();
+            const detail = document.querySelector<HTMLElement>(".teacher-attempt-detail")?.getBoundingClientRect();
+            return sidebar && detail ? {
+                compact: window.matchMedia("(max-width: 760px)").matches,
+                sidebarWidth: sidebar.width,
+                detailWidth: detail.width,
+                detailTop: detail.top,
+                sidebarBottom: sidebar.bottom,
+            } : null;
+        });
+        expect(layout).not.toBeNull();
+        expect(layout!.detailWidth).toBeGreaterThanOrEqual(300);
+        expect(layout!.detailWidth).toBeGreaterThanOrEqual(layout!.sidebarWidth - 2);
+        if (layout!.compact) {
+            expect(layout!.detailTop).toBeGreaterThanOrEqual(layout!.sidebarBottom);
+        }
     });
 });

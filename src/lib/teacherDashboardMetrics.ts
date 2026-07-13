@@ -7,6 +7,8 @@ export interface TeacherDashboardMetrics {
     avgScore: number;
     activeExams: number;
     trendData: number[];
+    /** Exam titles aligned 1:1 with trendData, used as chart/tooltip labels. */
+    trendLabels: string[];
 }
 
 export interface TeacherDashboardMetricsOptions {
@@ -19,12 +21,22 @@ function timestamp(value: string | undefined): number {
     return Number.isFinite(time) ? time : 0;
 }
 
+interface ExamTrendPoint {
+    examId: string;
+    label: string;
+    sortTime: number;
+    scoreSum: number;
+    count: number;
+}
+
 export function buildTeacherDashboardMetrics(
     exams: Exam[],
     attempts: Attempt[],
     options: TeacherDashboardMetricsOptions = {},
 ): TeacherDashboardMetrics {
-    const trendLimit = options.trendLimit ?? 10;
+    // trendLimit is now the number of recent EXAMS shown in the score trend (default 7),
+    // not the number of individual attempts.
+    const trendLimit = options.trendLimit ?? 7;
     const examById = new Map(exams.map(exam => [exam.id, exam]));
     const scoreByAttemptId = buildAttemptScoreLookup(attempts, examById);
     const baseAttempts = attempts.filter(attempt => !attempt.retake);
@@ -46,15 +58,42 @@ export function buildTeacherDashboardMetrics(
     ).size;
     const totalStudents = rosterStudentCount > 0 ? rosterStudentCount : attemptStudentCount;
 
-    const trendData = [...baseAttempts]
-        .sort((a, b) => timestamp(a.finishedAt) - timestamp(b.finishedAt))
-        .map(scorePercentForAttempt)
+    // Aggregate per-exam mean scorePercent so the "평균 점수 추이" chart plots one point
+    // per exam (matching its "최근 7개 시험" label) instead of individual attempt scores.
+    const trendByExam = new Map<string, ExamTrendPoint>();
+    for (const attempt of baseAttempts) {
+        const examId = attempt.examId;
+        if (!examId) continue;
+        const exam = examById.get(examId);
+        const finished = timestamp(attempt.finishedAt);
+        const point = trendByExam.get(examId);
+        if (point) {
+            point.scoreSum += scorePercentForAttempt(attempt);
+            point.count += 1;
+            // For missing exams the exam date is unknown; track the latest activity instead.
+            if (!exam && finished > point.sortTime) point.sortTime = finished;
+        } else {
+            trendByExam.set(examId, {
+                examId,
+                label: exam?.title || attempt.examTitle || examId,
+                sortTime: exam ? timestamp(exam.createdAt) : finished,
+                scoreSum: scorePercentForAttempt(attempt),
+                count: 1,
+            });
+        }
+    }
+
+    const orderedTrend = Array.from(trendByExam.values())
+        .sort((a, b) => a.sortTime - b.sortTime)
         .slice(-trendLimit);
+    const trendData = orderedTrend.map(point => Math.round(point.scoreSum / point.count));
+    const trendLabels = orderedTrend.map(point => point.label);
 
     return {
         totalStudents,
         avgScore,
         activeExams: exams.length,
         trendData,
+        trendLabels,
     };
 }

@@ -127,7 +127,11 @@ export function formatKoreanDate(value: string): string {
 }
 
 export function formatKoreanDateTime(value: string): string {
-    if (!parseDisplayDate(value)) return value;
+    // Empty/whitespace input has no meaningful date to show — render nothing
+    // rather than an empty-looking dash. Non-empty but unparseable input
+    // (corrupt timestamp) falls back to "-" instead of leaking the raw string.
+    if (typeof value !== "string" || !value.trim()) return "";
+    if (!parseDisplayDate(value)) return "-";
 
     return koreanDateTimeFormatter
         .format(new Date(value))

@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { addRosterGroup, addRosterStudent, deleteRosterGroup, editRosterGroup } from "./rosterMutations";
+import { recomputeRosterGroupsFromStudents } from "./rosterAnalytics";
 import { scopedGroupKeyForStudentId, type RosterGroup, type RosterStudent } from "./rosterStorage";
 
 function makeGroup(overrides: Partial<RosterGroup> = {}): RosterGroup {
@@ -197,5 +198,40 @@ describe("deleteRosterGroup", () => {
         expect(result.reason).toBe("not-empty");
         expect(result.studentCount).toBe(1);
         expect(result.groups).toHaveLength(1);
+    });
+
+    it("M1 regression: a student edited into a new group is not double-counted and frees the old group for deletion", () => {
+        // Mirrors users/page.tsx handleEditStudent: the student's id keeps
+        // encoding the original group ("g-class::김학생") because ids are
+        // never regenerated on edit, but the `group` field is updated to
+        // the new group name — exactly like a teacher moving a student via
+        // the edit-student modal.
+        const groupA = makeGroup({ id: "g-class", name: "A반", region: "서울" });
+        const groupB = makeGroup({ id: "g-other", name: "B반", region: "서울" });
+        const original: RosterStudent = {
+            id: "g-class::김학생",
+            name: "김학생",
+            email: "kim@example.com",
+            group: "A반",
+            region: "서울",
+            avatar: "#4f46e5",
+            avgScore: 0,
+            examsTaken: 0,
+            lastActive: "방금 전",
+            trend: "flat",
+            status: "active",
+        };
+        const movedStudent: RosterStudent = { ...original, group: "B반" };
+
+        const recomputed = recomputeRosterGroupsFromStudents([movedStudent], [groupA, groupB]);
+
+        // (a) old group count 0 / new group count 1
+        expect(recomputed.find(g => g.id === "g-class")?.count).toBe(0);
+        expect(recomputed.find(g => g.id === "g-other")?.count).toBe(1);
+
+        // (b) old group is deletable after the move
+        const deletion = deleteRosterGroup([movedStudent], recomputed, "g-class");
+        expect(deletion.ok).toBe(true);
+        expect(deletion.groups.some(g => g.id === "g-class")).toBe(false);
     });
 });

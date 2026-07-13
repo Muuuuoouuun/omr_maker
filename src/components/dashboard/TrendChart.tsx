@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo } from "react";
+import { useId, useMemo } from "react";
 import { AreaChart, Area, ResponsiveContainer, Tooltip } from "recharts";
 
 interface TrendChartProps {
@@ -11,9 +11,14 @@ interface TrendChartProps {
 }
 
 export default function TrendChart({ data, labels, color = "#ffffff", height = 100 }: TrendChartProps) {
+    // Namespaced per-instance so two charts sharing a color don't collide on the
+    // gradient id (which previously derived only from the color).
+    const rawId = useId();
+    const gradientId = `trend-gradient-${rawId.replace(/[^a-zA-Z0-9_-]/g, "")}`;
+
     const chartData = useMemo(() => {
         return data.map((val, i) => ({
-            name: labels ? labels[i] : `Exam ${i + 1}`,
+            name: (labels && labels[i]) ? labels[i] : `Exam ${i + 1}`,
             score: val
         }));
     }, [data, labels]);
@@ -49,7 +54,7 @@ export default function TrendChart({ data, labels, color = "#ffffff", height = 1
             >
                 <AreaChart data={chartData} margin={{ top: 10, right: 10, left: 10, bottom: 0 }}>
                     <defs>
-                        <linearGradient id={`gradient_${color}`} x1="0" y1="0" x2="0" y2="1">
+                        <linearGradient id={gradientId} x1="0" y1="0" x2="0" y2="1">
                             <stop offset="5%" stopColor={color} stopOpacity={0.4} />
                             <stop offset="95%" stopColor={color} stopOpacity={0} />
                         </linearGradient>
@@ -57,19 +62,25 @@ export default function TrendChart({ data, labels, color = "#ffffff", height = 1
                     <Tooltip
                         contentStyle={{
                             borderRadius: '12px',
-                            border: 'none',
+                            border: '1px solid var(--border)',
                             boxShadow: '0 8px 30px rgba(0,0,0,0.12)',
-                            background: 'white',
-                            color: '#1e293b'
+                            background: 'var(--surface)',
+                            color: 'var(--foreground)'
                         }}
-                        itemStyle={{ color: '#4f46e5', fontWeight: 800 }}
-                        labelStyle={{ color: '#64748b', marginBottom: '4px', fontSize: '0.85rem' }}
+                        itemStyle={{ color: 'var(--primary)', fontWeight: 800 }}
+                        labelStyle={{ color: 'var(--muted)', marginBottom: '4px', fontSize: '0.85rem' }}
+                        // Show the exam title/date (from `labels`) as the tooltip heading
+                        // instead of the raw category index.
+                        labelFormatter={(_label, payload) => (
+                            payload && payload.length > 0 ? payload[0].payload.name : ''
+                        )}
+                        formatter={(value: number | string | undefined) => [`${value}점`, '평균 점수']}
                     />
                     <Area
                         type="monotone"
                         dataKey="score"
                         stroke={color}
-                        fill={`url(#gradient_${color})`}
+                        fill={`url(#${gradientId})`}
                         strokeWidth={3}
                         animationDuration={1500}
                         animationEasing="ease-out"

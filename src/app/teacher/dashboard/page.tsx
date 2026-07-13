@@ -102,6 +102,7 @@ function TeacherDashboard() {
         activeExams: 0
     });
     const [trendData, setTrendData] = useState<number[]>([]);
+    const [trendLabels, setTrendLabels] = useState<string[]>([]);
     const [dataMode, setDataMode] = useState<DashboardDataMode>("real");
     const [currentPlan] = useState<PlanKey>(() => getCurrentPlan());
     const [syncStatus, setSyncStatus] = useState<PersistenceHealth>(() => summarizePersistenceHealth([]));
@@ -171,8 +172,10 @@ function TeacherDashboard() {
         if (metrics.trendData.length === 0 && shouldSeedDemo) {
             // Development-only fallback keeps the chart visually useful on a blank local workspace.
             setTrendData([65, 78, 72, 85, 82, 90, metrics.avgScore || 80]);
+            setTrendLabels([]);
         } else {
             setTrendData(metrics.trendData);
+            setTrendLabels(metrics.trendLabels);
         }
 
         if (options.notifyOnSuccess && nextSyncStatus.kind !== "error") {
@@ -842,6 +845,9 @@ function TeacherDashboard() {
                             attempts={attempts}
                             stats={stats}
                             trendData={trendData}
+                            trendLabels={trendLabels}
+                            rosterStudents={rosterStudents}
+                            rosterGroups={rosterGroups}
                             onNavigateToExamAnalytics={handleNavigateToExamAnalytics}
                         />
                     )}

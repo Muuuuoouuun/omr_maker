@@ -177,6 +177,17 @@ describe("stable Korean date formatting", () => {
         expect(formatKoreanDate("not-a-date")).toBe("not-a-date");
         expect(formatKoreanDateTime("")).toBe("");
     });
+
+    it("guards empty and unparseable date-time input", () => {
+        // Empty/whitespace → render nothing.
+        expect(formatKoreanDateTime("")).toBe("");
+        expect(formatKoreanDateTime("   ")).toBe("");
+        // @ts-expect-error runtime guard against undefined slipping past types.
+        expect(formatKoreanDateTime(undefined)).toBe("");
+        // Non-empty but unparseable → "-" fallback, never the raw string.
+        expect(formatKoreanDateTime("not-a-date")).toBe("-");
+        expect(formatKoreanDateTime("2026-13-99T99:99:99Z")).toBe("-");
+    });
 });
 
 describe("usagePct", () => {

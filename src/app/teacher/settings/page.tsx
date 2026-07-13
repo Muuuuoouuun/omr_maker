@@ -517,6 +517,10 @@ function Toggle({ checked, onChange, label, desc }: { checked: boolean; onChange
                 {desc && <div style={{ fontSize: '0.82rem', color: 'var(--muted)', marginTop: '0.2rem' }}>{desc}</div>}
             </div>
             <button
+                type="button"
+                role="switch"
+                aria-checked={checked}
+                aria-label={label}
                 onClick={() => onChange(!checked)}
                 style={{
                     width: 44, height: 24, borderRadius: 12, position: 'relative',
@@ -760,6 +764,15 @@ function ApiSection({ value, onChange, onSave, onCancel, showKey, setShowKey }: 
     );
 }
 
+const ACCENT_COLOR_LABELS: Record<string, string> = {
+    "#4f46e5": "인디고",
+    "#ec4899": "핑크",
+    "#8b5cf6": "바이올렛",
+    "#10b981": "그린",
+    "#f59e0b": "앰버",
+    "#ef4444": "레드",
+};
+
 function ThemeSection({ value, onChange, onSave, onCancel }: SectionProps<Settings["theme"]>) {
     const modes: { key: Settings["theme"]["mode"]; label: string; preview: string }[] = [
         { key: "light", label: "라이트", preview: "linear-gradient(135deg, #f8fafc, #e2e8f0)" },
@@ -788,12 +801,26 @@ function ThemeSection({ value, onChange, onSave, onCancel }: SectionProps<Settin
                 <div style={{ display: 'flex', gap: '0.75rem' }}>
                     {accents.map(c => {
                         const selected = value.accent === c;
+                        const colorName = ACCENT_COLOR_LABELS[c] || c;
                         return (
-                            <button key={c} onClick={() => onChange({ accent: c })} style={{
-                                width: 36, height: 36, borderRadius: '50%', background: c,
-                                border: selected ? '3px solid var(--foreground)' : '3px solid transparent',
-                                boxShadow: selected ? `0 0 0 2px ${c}` : 'none'
-                            }} />
+                            <button
+                                key={c}
+                                type="button"
+                                onClick={() => onChange({ accent: c })}
+                                aria-label={`액센트 색상 ${colorName}${selected ? " (선택됨)" : ""}`}
+                                aria-pressed={selected}
+                                style={{
+                                    width: 44, height: 44, borderRadius: '50%',
+                                    display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+                                    background: 'transparent',
+                                }}
+                            >
+                                <span aria-hidden="true" style={{
+                                    width: 32, height: 32, borderRadius: '50%', background: c, display: 'block',
+                                    border: selected ? '3px solid var(--foreground)' : '3px solid transparent',
+                                    boxShadow: selected ? `0 0 0 2px ${c}` : 'none'
+                                }} />
+                            </button>
                         );
                     })}
                 </div>

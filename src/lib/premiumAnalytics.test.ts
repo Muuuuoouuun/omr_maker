@@ -4,6 +4,7 @@ import type { RosterGroup, RosterStudent } from "@/lib/rosterStorage";
 import {
     buildClassTypeWeaknessGroups,
     buildClassExamWeaknessMatrix,
+    buildExamQuestionDiscriminations,
     buildExamQuestionResultStats,
     buildLearningRecommendations,
     buildMostMissedQuestionStats,
@@ -656,7 +657,8 @@ describe("premium analytics", () => {
             expectedTimeSec: 90,
             timeOverExpectedRate: 147,
             averageVisitCount: 3,
-            revisitRate: 100,
+            // 1 of 2 graded responses was revisited (the second student had no timing).
+            revisitRate: 50,
             answerChangeCount: 2,
             handwritingStrokeCount: 3,
             studentCount: 2,
@@ -670,6 +672,65 @@ describe("premium analytics", () => {
             unansweredRate: 50,
         });
         expect(buildMostMissedQuestionStats(exam, [attempt, secondAttempt], 2).map(stat => stat.questionNumber)).toEqual([3, 2]);
+    });
+
+    it("keeps revisit rate within 100% by dividing revisits over graded responses (B3)", () => {
+        const oneQuestionExam: Exam = {
+            id: "exam-r",
+            title: "재방문",
+            createdAt: "2026-06-14T10:00:00.000Z",
+            questions: [{ id: 1, number: 1, answer: 1 }],
+        };
+        const timedRevisited: Attempt = {
+            id: "r1",
+            examId: "exam-r",
+            examTitle: "재방문",
+            studentName: "학생1",
+            studentId: "s1",
+            startedAt: "2026-06-14T10:00:00.000Z",
+            finishedAt: "2026-06-14T10:05:00.000Z",
+            score: 0,
+            totalScore: 10,
+            answers: { 1: 2 }, // wrong → graded
+            status: "completed",
+            questionTimings: [
+                { questionId: 1, questionNumber: 1, totalTimeSec: 60, visitCount: 3, revisitCount: 2, answerChangeCount: 0 },
+            ],
+        };
+        const base = buildQuestionResults(oneQuestionExam, timedRevisited).find(row => row.questionId === 1)!;
+        // Second respondent revisited the question but has no timing, so it is NOT timed.
+        const untimedRevisited: Attempt = {
+            ...timedRevisited,
+            id: "r2",
+            studentId: "s2",
+            studentName: "학생2",
+            questionTimings: [],
+            questionResults: [{ ...base, attemptId: "r2", studentId: "s2", timeSec: undefined, visitCount: 4, revisitCount: 3 }],
+        };
+
+        const stat = buildExamQuestionResultStats(oneQuestionExam, [timedRevisited, untimedRevisited]).find(s => s.questionId === 1)!;
+        // 2 graded responses, both revisited, only 1 timed. Old code did 2/1 = 200%.
+        expect(stat.totalCount).toBe(2);
+        expect(stat.revisitRate).toBe(100);
+        expect(stat.revisitRate).toBeLessThanOrEqual(100);
+    });
+
+    it("returns null discrimination for small respondent pools and a number otherwise (B5)", () => {
+        // Fewer than 5 respondents → discrimination is unreliable.
+        expect(buildExamQuestionDiscriminations(exam, [attempt]).get(2)).toBeNull();
+
+        const many: Attempt[] = Array.from({ length: 6 }, (_, i) => ({
+            ...attempt,
+            id: `disc-${i}`,
+            studentId: `disc-s${i}`,
+            // Top 2 answer q2 correctly (4), bottom answers wrong.
+            answers: i < 2 ? { 1: 2, 2: 4, 3: 1, 4: 3 } : { 1: 3, 2: 1, 3: 2, 4: 2 },
+            questionTimings: [],
+            questionDrawings: [],
+        }));
+        const discrimination = buildExamQuestionDiscriminations(exam, many).get(2);
+        expect(typeof discrimination).toBe("number");
+        expect(discrimination as number).toBeGreaterThan(0);
     });
 
     it("summarizes label/tag statistics with correct, missed, and timing counts", () => {

@@ -22,6 +22,40 @@ import {
 } from "./rosterPersistence";
 import { workspaceContextFromIdentity } from "./workspaceContext";
 
+// In-memory fake for the Supabase tables saveRosterSnapshot/loadRosterSnapshot
+// touch. Reads are served fresh from `remoteTables` on every call (mutable
+// between tests), and every upsert is recorded so the merge test below can
+// assert on exactly what got pushed back to the "server".
+const remoteTables: Record<string, Array<Record<string, unknown>>> = {
+    omr_organizations: [],
+    omr_classes: [],
+    omr_student_profiles: [],
+    omr_class_students: [],
+};
+const recordedUpserts: Array<{ table: string; rows: Array<Record<string, unknown>> }> = [];
+
+vi.mock("@supabase/supabase-js", () => ({
+    createClient: () => ({
+        from(table: string) {
+            return {
+                select() {
+                    return {
+                        eq(column: string, value: string) {
+                            const rows = (remoteTables[table] || []).filter(row => row[column] === value);
+                            return Promise.resolve({ data: rows, error: null });
+                        },
+                    };
+                },
+                upsert(row: unknown) {
+                    const rows = Array.isArray(row) ? row as Array<Record<string, unknown>> : [row as Record<string, unknown>];
+                    recordedUpserts.push({ table, rows });
+                    return Promise.resolve({ data: row, error: null });
+                },
+            };
+        },
+    }),
+}));
+
 function createStorage(initial: Record<string, string> = {}): Storage {
     const data = new Map(Object.entries(initial));
 
@@ -495,5 +529,46 @@ describe("roster persistence", () => {
             localSaved: true,
             remoteSaved: false,
         });
+    });
+
+    it("M3 regression: merges the current remote snapshot into a save instead of overwriting it (last-writer-wins)", async () => {
+        vi.stubEnv("NEXT_PUBLIC_SUPABASE_URL", "https://example.supabase.co");
+        vi.stubEnv("NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY", "public-anon-key");
+
+        // Seed the "remote" with a student/group this browser tab has never
+        // seen locally — as if another device added it after this tab's last
+        // sync. reuse the busan fixtures so the round-trip is exercised via
+        // the already-tested Supabase row shapes.
+        const remoteOnlyRows = rosterSnapshotToSupabaseRows(
+            { students: [students[1]], groups: [groups[1]], invites: [] },
+            DEFAULT_ROSTER_ORGANIZATION_ID,
+            "2026-06-16T00:00:00.000Z",
+        );
+        remoteTables.omr_classes = remoteOnlyRows.classes as unknown as Array<Record<string, unknown>>;
+        remoteTables.omr_student_profiles = remoteOnlyRows.students as unknown as Array<Record<string, unknown>>;
+        remoteTables.omr_class_students = remoteOnlyRows.enrollments as unknown as Array<Record<string, unknown>>;
+        recordedUpserts.length = 0;
+
+        const storage = createStorage();
+        const localOnlySnapshot: RosterSnapshot = { students: [students[0]], groups: [groups[0]], invites: [] };
+
+        const result = await saveRosterSnapshot(storage, localOnlySnapshot);
+
+        expect(result.remoteSaved).toBe(true);
+
+        // The remotely-added student/group must survive the save instead of
+        // being clobbered by this tab's narrower local snapshot.
+        const savedLocally = readLocalRosterSnapshot(storage);
+        expect(savedLocally.students.map(s => s.id).sort()).toEqual(
+            [students[0].id, students[1].id].sort(),
+        );
+        expect(savedLocally.groups.map(g => g.id).sort()).toEqual(
+            [groups[0].id, groups[1].id].sort(),
+        );
+
+        const studentUpsert = recordedUpserts.find(call => call.table === "omr_student_profiles");
+        expect(studentUpsert?.rows.map(row => row.id)).toEqual(
+            expect.arrayContaining([students[0].id, students[1].id]),
+        );
     });
 });

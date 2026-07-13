@@ -706,7 +706,20 @@ export async function saveRosterSnapshot(
     if (!isSupabaseConfigured()) return { localSaved, remoteSaved: false };
 
     try {
-        await upsertRemoteRosterSnapshot(snapshot);
+        // Pushing this device's in-memory snapshot straight to Supabase would
+        // be last-writer-wins: any row added/edited on another device or tab
+        // since this one last loaded would be silently dropped. Fetch the
+        // current remote state first and merge it with the local snapshot
+        // (local wins on conflicting ids) before upserting, so concurrent
+        // changes are preserved. Tombstones are applied to the remote read so
+        // an intentional local deletion isn't resurrected by a stale remote row.
+        const remoteSnapshot = applyRosterTombstonesToSnapshot(
+            await fetchRemoteRosterSnapshot(),
+            tombstones,
+        );
+        const merged = mergeRosterSnapshots(snapshot, remoteSnapshot);
+        writeLocalRosterSnapshot(storage, merged);
+        await upsertRemoteRosterSnapshot(merged);
         return { localSaved, remoteSaved: true };
     } catch (error) {
         return { localSaved, remoteSaved: false, remoteError: errorMessage(error) };

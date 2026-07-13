@@ -806,7 +806,7 @@ describe("service UI surface", () => {
         expect(css).toContain(".solve-omr-rail.is-collapsed");
         expect(css).toContain(".solve-omr-quick-card");
         expect(css).toContain(".solve-omr-quick-bubble.is-marked");
-        expect(css).toContain("@media (min-width: 641px) and (max-width: 1180px)");
+        expect(css).toContain("@media (min-width: 600px) and (max-width: 1180px)");
     });
 
     it("keeps Kakao notifications planned without implying live sending", () => {

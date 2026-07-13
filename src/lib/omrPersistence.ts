@@ -1176,15 +1176,24 @@ async function fetchRemoteAttempts(): Promise<Attempt[]> {
         .filter((attempt): attempt is Attempt => !!attempt);
 }
 
-export async function fetchRemoteAttempt(id: string): Promise<Attempt | null> {
+export async function fetchRemoteAttempt(
+    id: string,
+    options?: { organizationId?: string },
+): Promise<Attempt | null> {
     const client = await getAvailableSupabaseClient();
     if (!client) return null;
 
-    const { data, error } = await client
-        .from("omr_attempts")
-        .select("*")
-        .eq("id", id)
-        .maybeSingle();
+    // Unlike fetchRemoteAttempts (the list read), a single-id fetch has no org
+    // filter by default so the shared local-cache refresh and the student
+    // fallback path keep working across the default/teacher workspace split.
+    // When a caller knows the workspace it expects (e.g. the teacher review
+    // page merging a reply), it passes organizationId to prevent reading a
+    // row that belongs to another teacher's workspace.
+    const organizationId = scopedValue(options?.organizationId);
+    let query = client.from("omr_attempts").select("*").eq("id", id);
+    if (organizationId) query = query.eq("organization_id", organizationId);
+
+    const { data, error } = await query.maybeSingle();
 
     if (error) throw new Error(error.message || "Failed to load attempt from Supabase");
     if (!data) return null;

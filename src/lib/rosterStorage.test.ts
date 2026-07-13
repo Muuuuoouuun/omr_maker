@@ -84,6 +84,50 @@ describe("roster storage", () => {
         expect(rosterGroupMatchesStudent(busanGroup, seoulStudent)).toBe(false);
     });
 
+    it("M1 regression: a student's id-encoded original group no longer matches after the student's group field is edited", () => {
+        // Ids are scoped to the group at creation time and are never
+        // regenerated on edit (`${groupId}::${name}`), so a student edited
+        // from Group A into Group B keeps an id that still looks like it
+        // belongs to Group A. Matching must follow the `group` field only,
+        // otherwise the student is counted in both groups and Group A can
+        // never be seen as empty again.
+        const groupA = { id: "A", name: "A반", count: 0, avgScore: 0, color: "#000" };
+        const groupB = { id: "B", name: "B반", count: 0, avgScore: 0, color: "#000" };
+        const movedStudent: RosterStudent = {
+            id: "A::김학생", // id still encodes the original group A scope
+            name: "김학생",
+            email: "kim@example.com",
+            group: "B반", // but the student now belongs to group B
+            avatar: "#000",
+            avgScore: 0,
+            examsTaken: 0,
+            lastActive: "기록 없음",
+            trend: "flat",
+            status: "active",
+        };
+
+        expect(rosterGroupMatchesStudent(groupA, movedStudent)).toBe(false);
+        expect(rosterGroupMatchesStudent(groupB, movedStudent)).toBe(true);
+    });
+
+    it("M1 regression: legacy students with no group field still fall back to the id-encoded scope", () => {
+        const groupA = { id: "A", name: "A반", count: 0, avgScore: 0, color: "#000" };
+        const legacyStudent: RosterStudent = {
+            id: "A::김학생",
+            name: "김학생",
+            email: "kim@example.com",
+            group: "",
+            avatar: "#000",
+            avgScore: 0,
+            examsTaken: 0,
+            lastActive: "기록 없음",
+            trend: "flat",
+            status: "active",
+        };
+
+        expect(rosterGroupMatchesStudent(groupA, legacyStudent)).toBe(true);
+    });
+
     it("falls back when stored roster JSON is unreadable or empty", () => {
         const fallback: RosterStudent[] = [{
             id: "fallback",

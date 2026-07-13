@@ -1210,6 +1210,12 @@ export default function SolvePage() {
 
     const handleQuestionClick = (qId: number) => {
         beginQuestionVisit(qId);
+        // On responsive phone/tablet layouts, selecting a question should reveal
+        // as much of the problem sheet as possible. The persistent header toggle
+        // and tablet rail remain available to reopen the answer panel.
+        if (typeof window !== "undefined" && window.matchMedia("(max-width: 1180px)").matches) {
+            setIsOMRCollapsed(true);
+        }
         if (examData) {
             const activeQuestion = getActiveExamQuestions().find(q => q.id === qId);
             const q = activeQuestion || examData.questions.find(q => q.id === qId);
@@ -1703,7 +1709,7 @@ export default function SolvePage() {
             }}>
                 <div className="container header-content solve-header-content" style={{ gap: '1rem' }}>
                     <div className="solve-title-group" style={{ display: 'flex', alignItems: 'center', gap: '1rem', minWidth: 0, flex: 1 }}>
-                        <BrandLogo compact className="solve-brand" style={{ fontSize: '1rem' }} />
+                        <BrandLogo compact markOnly priorityLabel="OMR Maker" className="solve-brand" style={{ fontSize: '1rem' }} />
                         <div className="solve-divider" style={{
                             height: '22px',
                             width: '1px',
@@ -2056,7 +2062,7 @@ export default function SolvePage() {
                     background: 'var(--background)',
                     display: 'flex',
                     flexDirection: 'column'
-                }}>
+                }} aria-hidden={isOMRCollapsed} inert={isOMRCollapsed}>
                     <div className="solve-omr-pane-header">
                         <div className="solve-omr-pane-title">
                             <span>OMR 답안</span>

@@ -2,6 +2,15 @@ import type { ExamSummaryRow } from "./dashboardSummary";
 import { serializeCsvRows } from "./csv";
 import { formatKoreanDate } from "./pure";
 import { safeRatePercent } from "./scoreUtils";
+import { computeMedian, computePassRate, computeStandardDeviation } from "./scoreDistribution";
+
+export interface DashboardExportQuestionStat {
+    examTitle: string;
+    questionNumber: number;
+    correctRate: number;
+    /** null when there are too few respondents for a reliable discrimination index. */
+    discrimination: number | null;
+}
 
 export interface DashboardStatsExportInput {
     stats: {
@@ -11,6 +20,12 @@ export interface DashboardStatsExportInput {
     };
     trendData: number[];
     examRows: ExamSummaryRow[];
+    /** Student score percentages feeding median/SD/pass-rate; falls back to trendData. */
+    scores?: number[];
+    /** Pass threshold (score percent) for the pass-rate row. Defaults to 60. */
+    passThreshold?: number;
+    /** Optional per-question correct-rate / discrimination rows. */
+    questionStats?: DashboardExportQuestionStat[];
     exportedAt?: Date;
 }
 
@@ -22,6 +37,11 @@ function examStatusLabel(row: ExamSummaryRow): string {
 
 export function buildDashboardStatsCsvRows(input: DashboardStatsExportInput): unknown[][] {
     const exportedAt = input.exportedAt ?? new Date();
+    const passThreshold = input.passThreshold ?? 60;
+    // Prefer the raw student scores; fall back to the per-exam trend averages so the
+    // distribution rows are still populated when only summary data is available.
+    const distributionScores = input.scores && input.scores.length > 0 ? input.scores : input.trendData;
+
     const rows: unknown[][] = [
         ["OMR Maker 통계 내보내기"],
         ["내보내기 시각", exportedAt.toISOString()],
@@ -29,6 +49,9 @@ export function buildDashboardStatsCsvRows(input: DashboardStatsExportInput): un
         ["요약 통계"],
         ["전체 학생", input.stats.totalStudents],
         ["평균 점수", Number(input.stats.avgScore.toFixed(1))],
+        ["중앙값", computeMedian(distributionScores)],
+        ["표준편차", computeStandardDeviation(distributionScores)],
+        [`합격률(${passThreshold}점 이상, %)`, computePassRate(distributionScores, passThreshold)],
         ["진행 중 시험", input.stats.activeExams],
         ["전체 시험", input.examRows.length],
         [],
@@ -58,6 +81,22 @@ export function buildDashboardStatsCsvRows(input: DashboardStatsExportInput): un
             row.archived ? "Y" : "N",
         ]);
     });
+
+    if (input.questionStats && input.questionStats.length > 0) {
+        rows.push(
+            [],
+            ["문항별 통계"],
+            ["시험명", "문항 번호", "정답률(%)", "변별도(%)"],
+        );
+        input.questionStats.forEach(stat => {
+            rows.push([
+                stat.examTitle,
+                stat.questionNumber,
+                stat.correctRate,
+                stat.discrimination === null ? "-" : stat.discrimination,
+            ]);
+        });
+    }
 
     return rows;
 }
