@@ -15,6 +15,9 @@ const eslintConfig = defineConfig([
     "public/pdf.worker.min.mjs",
     "playwright-report/**",
     "test-results/**",
+    // Capacitor native shell (generated Android/Gradle project + web-dir fallback).
+    "android/**",
+    "mobile/**",
   ]),
 ]);
 

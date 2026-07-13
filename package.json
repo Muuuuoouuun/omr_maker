@@ -10,6 +10,10 @@
     "desktop:dev": "concurrently -k -s first \"npm:dev\" \"wait-on http://127.0.0.1:3003 && electron .\"",
     "desktop:pack": "npm run build && electron-builder --dir",
     "desktop:dist:win": "npm run build && electron-builder --win nsis --x64",
+    "mobile:sync": "cap sync android",
+    "mobile:open": "cap open android",
+    "mobile:apk": "cap sync android && cd android && gradlew.bat assembleDebug",
+    "mobile:apk:release": "cap sync android && cd android && gradlew.bat assembleRelease",
     "lint": "eslint",
     "test": "vitest run",
     "test:watch": "vitest",
@@ -24,6 +28,7 @@
     "test:pwa:prod": "npm run build && npm run pwa:smoke"
   },
   "dependencies": {
+    "@capacitor/core": "^8.4.1",
     "@google/generative-ai": "^0.24.1",
     "@supabase/supabase-js": "^2.108.1",
     "canvas": "^3.2.1",
@@ -38,6 +43,8 @@
     "recharts": "^3.7.0"
   },
   "devDependencies": {
+    "@capacitor/android": "^8.4.1",
+    "@capacitor/cli": "^8.4.1",
     "@next/env": "^16.2.10",
     "@playwright/test": "^1.59.1",
     "@types/node": "^20",

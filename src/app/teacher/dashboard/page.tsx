@@ -89,7 +89,6 @@ function TeacherDashboard() {
     // Deferred to post-mount to avoid SSR/CSR hydration mismatch on the ⌘/Ctrl label.
     const [isMac, setIsMac] = useState(false);
     useEffect(() => {
-        // eslint-disable-next-line react-hooks/set-state-in-effect
         setIsMac(typeof navigator !== "undefined" && /Mac|iPhone|iPad/.test(navigator.platform));
     }, []);
     const [selectedExamIdForAnalytics, setSelectedExamIdForAnalytics] = useState<string | undefined>(initialExamId);

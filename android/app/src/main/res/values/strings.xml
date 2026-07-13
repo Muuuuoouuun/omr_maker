@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">OMR Maker</string>
+    <string name="title_activity_main">OMR Maker</string>
+    <string name="package_name">com.omrmaker.app</string>
+    <string name="custom_url_scheme">com.omrmaker.app</string>
+</resources>
