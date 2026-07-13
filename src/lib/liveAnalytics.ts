@@ -35,13 +35,19 @@ function hashString(str: string): number {
 export function buildRealQuestionHeatmap(exam: Exam, attempts: Attempt[]): LiveQuestionHeatmapCell[] {
     const submittedAttempts = attempts.filter(attempt => attempt.status === "completed");
 
+    // Grade each attempt once up-front (getAttemptQuestionResults recomputes the
+    // whole-exam grading per call) and index the results by questionId, so the
+    // per-question loop below is O(Q×A) map lookups instead of O(Q²×A) re-gradings.
+    const resultsByAttempt = submittedAttempts.map(attempt =>
+        new Map(getAttemptQuestionResults(exam, attempt).map(result => [result.questionId, result]))
+    );
+
     return exam.questions.map((question, index) => {
         let correct = 0;
         let total = 0;
 
-        for (const attempt of submittedAttempts) {
-            const result = getAttemptQuestionResults(exam, attempt)
-                .find(item => item.questionId === question.id);
+        for (const results of resultsByAttempt) {
+            const result = results.get(question.id);
             if (!result || result.status === "ungraded") continue;
             total += 1;
             if (result.status === "correct") correct += 1;

@@ -172,6 +172,24 @@ function attemptsForClassRow(exam: Exam, attempts: Attempt[], rowGroupKey: strin
     });
 }
 
+/**
+ * Roster-based absentee computation for a single exam: eligible students minus
+ * those who have submitted a (non-retake) attempt. Shared by the kakao missing-
+ * exam candidate and the live monitoring page so both agree on who is missing.
+ */
+export function missingStudentsForExam(
+    exam: Exam,
+    attempts: Attempt[],
+    students: RosterStudent[],
+    groups: RosterGroup[],
+): RosterStudent[] {
+    const eligible = eligibleStudentsForExam(exam, students, groups);
+    if (eligible.length === 0) return [];
+
+    const submitted = submittedStudentIdsForExam(exam, attempts, students);
+    return eligible.filter(student => !submitted.has(student.id));
+}
+
 function missingExamCandidate(
     exam: Exam,
     attempts: Attempt[],
@@ -181,11 +199,7 @@ function missingExamCandidate(
 ): KakaoNotificationCandidate | null {
     if (exam.archived || !examHasStarted(exam, now)) return null;
 
-    const eligible = eligibleStudentsForExam(exam, students, groups);
-    if (eligible.length === 0) return null;
-
-    const submitted = submittedStudentIdsForExam(exam, attempts, students);
-    const missing = eligible.filter(student => !submitted.has(student.id));
+    const missing = missingStudentsForExam(exam, attempts, students, groups);
     if (missing.length === 0) return null;
 
     const groupNames = Array.from(new Set(missing.map(student => student.group).filter(Boolean))).sort((a, b) => a.localeCompare(b, "ko"));

@@ -1,15 +1,18 @@
 "use client";
 
-import { useState, useEffect, useMemo, useCallback } from "react";
+import { useState, useEffect, useMemo, useCallback, useRef } from "react";
 import Link from "next/link";
 import TeacherHeader from "@/components/TeacherHeader";
 import { Activity, Users, CheckCircle2, Clock, AlertTriangle, Bell, PlayCircle, PauseCircle, PlusCircle } from "lucide-react";
 import { toast } from "@/components/Toast";
 import type { Exam, Attempt } from "@/types/omr";
+import type { RosterGroup, RosterStudent } from "@/lib/rosterStorage";
 import { shouldUseDemoData } from "@/lib/demoData";
-import { loadAttempts, loadExams, saveAttempt } from "@/lib/omrPersistence";
+import { loadAttempts, loadExam, loadExams, saveAttempt, saveExam } from "@/lib/omrPersistence";
+import { readRosterGroups, readRosterStudents } from "@/lib/rosterStorage";
 import { resolveAttemptScore } from "@/lib/attemptScores";
 import { buildLiveQuestionHeatmap } from "@/lib/liveAnalytics";
+import { missingStudentsForExam } from "@/lib/kakaoNotificationQueue";
 import { forceCompleteLiveAttempt, liveAttemptsNeedingForceFinish } from "@/lib/liveControls";
 import { safeRatePercent } from "@/lib/scoreUtils";
 
@@ -44,6 +47,21 @@ const MOCK_EXAMS: LiveExam[] = [
 ];
 
 const EMPTY_LIVE_EXAM: LiveExam = { id: "", title: "", total: 0, duration: 0, questions: [] };
+
+/**
+ * Remaining seconds for the live countdown, derived from the actual exam:
+ * an end-time window (endAt) takes precedence, otherwise the duration budget.
+ * Prevents the banner from showing a hardcoded/stale value across exams.
+ */
+function liveExamTimerSeconds(exam: LiveExam, now = Date.now()): number {
+    const source = exam.sourceExam;
+    const endAtMs = source?.endAt ? Date.parse(source.endAt) : NaN;
+    if (Number.isFinite(endAtMs)) {
+        return Math.max(0, Math.floor((endAtMs - now) / 1000));
+    }
+    const minutes = source?.durationMin ?? exam.duration ?? 0;
+    return Math.max(0, Math.round(minutes * 60));
+}
 
 const AVATAR_COLORS = ["#4f46e5", "#ec4899", "#8b5cf6", "#10b981", "#f59e0b", "#0ea5e9"];
 
@@ -224,7 +242,7 @@ export default function LiveResultsPage() {
     const [attempts, setAttempts] = useState<Attempt[]>([]);
     const [selectedExamId, setSelectedExamId] = useState<string>(() => shouldUseDemoData() ? MOCK_EXAMS[0].id : "");
     const [, setTick] = useState(0);
-    const [timerSeconds, setTimerSeconds] = useState(38 * 60 + 24);
+    const [timerSeconds, setTimerSeconds] = useState(0);
     const [isPaused, setIsPaused] = useState(false);
     const [forceFinishConfirmOpen, setForceFinishConfirmOpen] = useState(false);
     // Synthetic students per exam — mutable state so they can "progress" over time
@@ -355,6 +373,17 @@ export default function LiveResultsPage() {
         return [...real, ...synthetic];
     }, [examAttempts, exam.id, exam.sourceExam, exam.total, hasExam, isDemoLive, syntheticByExam]);
 
+    // Reset the countdown from the actual exam whenever the selected exam changes,
+    // instead of counting down from a hardcoded value that never resets.
+    useEffect(() => {
+        // eslint-disable-next-line react-hooks/set-state-in-effect
+        setTimerSeconds(hasExam ? liveExamTimerSeconds(exam) : 0);
+        // Key on the primitive schedule fields, not the `exam` object: the 3s poll
+        // replaces `exams` (new object identity) every tick, and depending on `exam`
+        // would reset the countdown every 3 seconds.
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [exam.id, exam.sourceExam?.endAt, exam.sourceExam?.durationMin, exam.duration, hasExam]);
+
     useEffect(() => {
         if (!hasExam) return;
         const id = setInterval(() => {
@@ -396,10 +425,36 @@ export default function LiveResultsPage() {
     const ss = (timerSeconds % 60).toString().padStart(2, "0");
 
     // Handlers for timer-bar actions
-    const handleExtendTime = () => {
+    const handleExtendTime = async () => {
         if (!hasExam) return;
-        setTimerSeconds(s => s + 300);
-        toast.success("시간 5분 연장됨");
+        if (isDemoLive) {
+            // Demo data has no persisted exam to extend — adjust the display only.
+            setTimerSeconds(s => s + 300);
+            toast.success("시간 5분 연장됨 (데모)");
+            return;
+        }
+        // Real exams: only an end-time window can be extended so students' own
+        // timers are actually affected. Load the full stored exam (with PDF refs)
+        // rather than the stripped sourceExam so persisting doesn't drop assets.
+        const fresh = await loadExam(exam.id);
+        if (!fresh) {
+            toast.error("시험을 불러오지 못해 연장하지 못했습니다");
+            return;
+        }
+        if (!fresh.endAt) {
+            toast.error("종료 시간이 설정된 시험만 연장할 수 있습니다");
+            return;
+        }
+        const base = Math.max(Date.parse(fresh.endAt) || Date.now(), Date.now());
+        const nextEndAt = new Date(base + 5 * 60 * 1000).toISOString();
+        const result = await saveExam({ ...fresh, endAt: nextEndAt, updatedAt: new Date().toISOString() });
+        if (!result.localSaved) {
+            toast.error("연장 저장에 실패했습니다");
+            return;
+        }
+        setTimerSeconds(Math.max(0, Math.floor((base + 5 * 60 * 1000 - Date.now()) / 1000)));
+        toast.success("종료 시간이 5분 연장되었습니다");
+        void refreshFromStorage();
     };
 
     const handleForceFinish = () => {
@@ -639,7 +694,8 @@ export default function LiveResultsPage() {
                                     <button onClick={handleNotifyNotStarted} style={{
                                         background: 'rgba(239,68,68,0.1)', color: '#ef4444', padding: '0.5rem 1rem',
                                         borderRadius: 'var(--radius-full)', fontSize: '0.8rem', fontWeight: 700,
-                                        display: 'flex', alignItems: 'center', gap: '0.4rem', border: '1px solid rgba(239,68,68,0.2)'
+                                        display: 'flex', alignItems: 'center', gap: '0.4rem', border: '1px solid rgba(239,68,68,0.2)',
+                                        minHeight: '2.75rem',
                                     }}>
                                         <Bell size={14} /> 미응시자 확인
                                     </button>

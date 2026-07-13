@@ -19,6 +19,8 @@ import { safeRatePercent } from "@/lib/scoreUtils";
 import { buildExamSummaryRows, splitExamSummaryRows } from "@/lib/dashboardSummary";
 import { buildDashboardStatsCsv } from "@/lib/dashboardStatsExport";
 import { summarizePersistenceWrite } from "@/lib/persistenceFeedback";
+import { buildBillingUsageSummary } from "@/lib/billingUsage";
+import { evaluatePlanLimit, getCurrentPlan, getPlanLabel, PLAN_BY_KEY } from "@/utils/plans";
 
 interface OverviewTabProps {
     exams: Exam[];
@@ -121,6 +123,20 @@ export default function OverviewTab({ exams: examsProp, attempts, stats, trendDa
         }
 
         if (kind === 'duplicate') {
+            // Duplicating mints a brand-new exam (createdAt = now), so it must respect
+            // the same monthly creation cap the create/publish path enforces — otherwise
+            // a capped Free teacher could mint unlimited exams via 복제.
+            const plan = getCurrentPlan();
+            const usage = buildBillingUsageSummary({ exams, attempts: [], students: [], aiRecognition: 0 });
+            const limit = evaluatePlanLimit(plan, "exams", usage.examsThisMonth, 1);
+            if (!limit.allowed) {
+                const upgradeName = limit.upgradeTarget ? PLAN_BY_KEY[limit.upgradeTarget].name : "상위";
+                toast.error(
+                    "월 시험 생성 한도 도달",
+                    `${getPlanLabel(plan)} 플랜은 이번 달 시험 ${limit.limit}개까지 생성할 수 있습니다. ${upgradeName} 플랜에서 계속 생성할 수 있습니다.`
+                );
+                return;
+            }
             const newId = secureRandomId();
             const pdfDataRef = await copyStoredData(target.pdfDataRef, `exam:${newId}:problemPdf`) || target.pdfDataRef;
             const answerKeyPdfRef = await copyStoredData(target.answerKeyPdfRef, `exam:${newId}:answerKeyPdf`) || target.answerKeyPdfRef;
@@ -371,25 +387,37 @@ export default function OverviewTab({ exams: examsProp, attempts, stats, trendDa
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.5rem' }}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: '1.5rem' }}>
                         <h3 style={{ fontSize: '1.1rem', fontWeight: 700 }}>Exam Summary</h3>
-                        <div style={{ display: 'flex', gap: '1rem', fontSize: '0.9rem', color: 'var(--muted)', fontWeight: 600 }}>
-                            <span
+                        <div role="tablist" aria-label="시험 진행 상태" style={{ display: 'flex', gap: '1rem', fontSize: '0.9rem', color: 'var(--muted)', fontWeight: 600 }}>
+                            <button
+                                type="button"
+                                role="tab"
+                                aria-selected={activeTab === 'ongoing'}
                                 onClick={() => setActiveTab('ongoing')}
                                 style={{
+                                    background: 'none',
+                                    border: 'none',
+                                    font: 'inherit',
                                     cursor: 'pointer',
                                     color: activeTab === 'ongoing' ? 'var(--primary)' : 'inherit',
                                     borderBottom: activeTab === 'ongoing' ? '2px solid var(--primary)' : '2px solid transparent',
                                     paddingBottom: '0.5rem',
                                     transition: 'all 0.2s'
-                                }}>Ongoing</span>
-                            <span
+                                }}>Ongoing</button>
+                            <button
+                                type="button"
+                                role="tab"
+                                aria-selected={activeTab === 'completed'}
                                 onClick={() => setActiveTab('completed')}
                                 style={{
+                                    background: 'none',
+                                    border: 'none',
+                                    font: 'inherit',
                                     cursor: 'pointer',
                                     color: activeTab === 'completed' ? 'var(--primary)' : 'inherit',
                                     borderBottom: activeTab === 'completed' ? '2px solid var(--primary)' : '2px solid transparent',
                                     paddingBottom: '0.5rem',
                                     transition: 'all 0.2s'
-                                }}>Completed</span>
+                                }}>Completed</button>
                         </div>
                     </div>
 
@@ -465,13 +493,15 @@ export default function OverviewTab({ exams: examsProp, attempts, stats, trendDa
                                 return (
                                     <tr key={exam.id} style={{ borderBottom: '1px solid var(--border)', transition: 'background 0.2s', opacity: isArchived ? 0.6 : 1 }} className="hover:bg-slate-50 dark:hover:bg-slate-800/50">
                                         <td className="overview-exam-summary-title-cell" style={{ fontWeight: 600, fontSize: '0.95rem' }}>
-                                            <span
+                                            <button
+                                                type="button"
                                                 onClick={() => onNavigateToExamAnalytics && onNavigateToExamAnalytics(exam.id)}
-                                                style={{ cursor: 'pointer', transition: 'color 0.2s' }}
+                                                aria-label={`${exam.title} 분석 보기`}
+                                                style={{ background: 'none', border: 'none', font: 'inherit', padding: 0, textAlign: 'left', color: 'inherit', cursor: 'pointer', transition: 'color 0.2s' }}
                                                 className="hover:text-primary hover:underline hover:underline-offset-4"
                                             >
                                                 {exam.title}
-                                            </span>
+                                            </button>
                                             {isArchived && (
                                                 <span style={{
                                                     marginLeft: '0.5rem',

@@ -42,6 +42,9 @@ export default function GlobalSearch() {
     const [activeIdx, setActiveIdx] = useState(0);
     const [dynamic, setDynamic] = useState<SearchItem[]>([]);
     const inputRef = useRef<HTMLInputElement | null>(null);
+    const panelRef = useRef<HTMLDivElement | null>(null);
+    // Element that held focus before the palette opened, so we can restore it on close.
+    const triggerRef = useRef<HTMLElement | null>(null);
 
     // Keyboard: Cmd+K or Ctrl+K
     useEffect(() => {
@@ -57,6 +60,23 @@ export default function GlobalSearch() {
         return () => window.removeEventListener("keydown", onKey);
     }, [open]);
 
+    useEffect(() => {
+        const openSearch = () => setOpen(true);
+        window.addEventListener("omr:open-search", openSearch);
+        return () => window.removeEventListener("omr:open-search", openSearch);
+    }, []);
+
+    // Remember the trigger on open and restore focus to it on close, so keyboard
+    // users are not dropped back to the top of the page after the palette closes.
+    useEffect(() => {
+        if (open) {
+            triggerRef.current = (document.activeElement as HTMLElement) ?? null;
+        } else if (triggerRef.current) {
+            triggerRef.current.focus?.();
+            triggerRef.current = null;
+        }
+    }, [open]);
+
     // When opening, load dynamic items from localStorage (exams + students)
     useEffect(() => {
         if (!open) return;
@@ -69,7 +89,7 @@ export default function GlobalSearch() {
                     id: `exam-${ex.id}`,
                     title: ex.title,
                     subtitle: `${ex.questions.length}문항 · 시험`,
-                    href: `/teacher/dashboard?tab=exam`,
+                    href: `/teacher/dashboard?tab=exam&examId=${encodeURIComponent(ex.id)}`,
                     icon: <FileText size={16} />,
                     group: "exam",
                     keywords: `exam ${ex.title}`,
@@ -131,6 +151,29 @@ export default function GlobalSearch() {
         router.push(item.href);
     };
 
+    // Constrain Tab/Shift+Tab to the palette so focus never walks into the
+    // obscured page behind the overlay.
+    const onPanelKeyDown = (e: React.KeyboardEvent<HTMLDivElement>) => {
+        if (e.key !== "Tab") return;
+        const panel = panelRef.current;
+        if (!panel) return;
+        const focusables = Array.from(
+            panel.querySelectorAll<HTMLElement>('button, input, [tabindex]:not([tabindex="-1"])')
+        ).filter(el => !el.hasAttribute("disabled"));
+        if (focusables.length === 0) return;
+        const first = focusables[0];
+        const last = focusables[focusables.length - 1];
+        if (e.shiftKey) {
+            if (document.activeElement === first) {
+                e.preventDefault();
+                last.focus();
+            }
+        } else if (document.activeElement === last) {
+            e.preventDefault();
+            first.focus();
+        }
+    };
+
     const onInputKey = (e: React.KeyboardEvent<HTMLInputElement>) => {
         if (e.key === "ArrowDown") {
             e.preventDefault();
@@ -163,7 +206,9 @@ export default function GlobalSearch() {
             aria-label="빠른 검색"
         >
             <div
+                ref={panelRef}
                 onClick={(e) => e.stopPropagation()}
+                onKeyDown={onPanelKeyDown}
                 style={{
                     width: '100%', maxWidth: 560, margin: '0 1rem',
                     background: 'var(--surface)', borderRadius: 'var(--radius-xl)',
@@ -181,6 +226,10 @@ export default function GlobalSearch() {
                         onKeyDown={onInputKey}
                         placeholder="빠른 검색... (페이지, 시험, 학생, 설정)"
                         aria-label="빠른 검색 입력"
+                        role="combobox"
+                        aria-expanded={filtered.length > 0}
+                        aria-controls="global-search-listbox"
+                        aria-activedescendant={filtered[activeIdx] ? `gs-opt-${filtered[activeIdx].id}` : undefined}
                         style={{
                             flex: 1, background: 'transparent', border: 'none', outline: 'none',
                             color: 'var(--foreground)', fontSize: '1rem'
@@ -191,14 +240,14 @@ export default function GlobalSearch() {
                         aria-label="검색 닫기"
                         style={{
                             display: 'flex', alignItems: 'center', justifyContent: 'center',
-                            width: 26, height: 26, borderRadius: 6, color: 'var(--muted)'
+                            width: 44, height: 44, borderRadius: 8, color: 'var(--muted)', flexShrink: 0
                         }}>
                         <X size={16} />
                     </button>
                 </div>
 
                 {/* Results */}
-                <div style={{ maxHeight: 400, overflowY: 'auto', padding: '0.5rem' }}>
+                <div id="global-search-listbox" role="listbox" aria-label="검색 결과" style={{ maxHeight: 400, overflowY: 'auto', padding: '0.5rem' }}>
                     {filtered.length === 0 ? (
                         <div style={{ padding: '2rem', textAlign: 'center', color: 'var(--muted)', fontSize: '0.9rem' }}>
                             결과가 없습니다
@@ -223,6 +272,9 @@ export default function GlobalSearch() {
                                         return (
                                             <button
                                                 key={item.id}
+                                                id={`gs-opt-${item.id}`}
+                                                role="option"
+                                                aria-selected={isActive}
                                                 onMouseEnter={() => setActiveIdx(globalIdx)}
                                                 onClick={() => go(item)}
                                                 style={{

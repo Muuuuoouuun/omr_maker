@@ -89,7 +89,7 @@ export default function ExamListBlock({ exams }: ExamListBlockProps) {
               letterSpacing: "-0.01em",
             }}
           >
-            Recent Exams
+            최근 시험
           </h3>
           <p
             style={{
@@ -117,6 +117,7 @@ export default function ExamListBlock({ exams }: ExamListBlockProps) {
             borderRadius: "var(--radius-full)",
             transition: "all 0.2s",
             letterSpacing: "-0.01em",
+            minHeight: 44,
           }}
         >
           <PlusIcon />
@@ -278,8 +279,8 @@ export default function ExamListBlock({ exams }: ExamListBlockProps) {
                       display: "flex",
                       alignItems: "center",
                       justifyContent: "center",
-                      width: "32px",
-                      height: "32px",
+                      width: "44px",
+                      height: "44px",
                       borderRadius: "var(--radius-md)",
                       color: "var(--muted)",
                       background: "var(--background)",
@@ -327,7 +328,7 @@ export default function ExamListBlock({ exams }: ExamListBlockProps) {
           }}
         >
           <Link
-            href="/create"
+            href="/teacher/dashboard?tab=exam"
             style={{
               fontSize: "0.8rem",
               color: "var(--muted)",

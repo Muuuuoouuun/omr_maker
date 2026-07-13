@@ -23,6 +23,17 @@ interface Notification {
 
 const STORAGE_KEY = "omr_notifications";
 const DISMISSED_KEY = "omr_notifications_dismissed";
+// Auto-notification dismissals self-expire so "모두 삭제" never permanently
+// silences a category. Auto ids are content-scoped (see below), so a genuinely
+// new event produces a new id and reappears immediately regardless of this TTL;
+// the window only bounds how long an *identical* state stays hidden and prunes
+// the stored dismissal list.
+const DISMISSED_TTL_MS = 14 * 24 * 60 * 60 * 1000;
+
+interface DismissedEntry {
+    id: string;
+    at: number;
+}
 
 // Compute what auto-generated notifications SHOULD exist right now based on
 // localStorage state. Returns an empty list when nothing applies.
@@ -30,12 +41,19 @@ function computeAutoNotifications(): Notification[] {
     if (typeof window === "undefined") return [];
     const out: Notification[] = [];
 
+    // Parse the heavy localStorage blobs once and reuse them across every
+    // section below (this runs on mount and every 60s on all teacher pages).
+    let attempts: ReturnType<typeof readLocalAttempts> = [];
+    let exams: ReturnType<typeof readLocalExams> = [];
+    try { attempts = readLocalAttempts(); } catch {}
+    try { exams = readLocalExams(); } catch {}
+
     // 1) Pending invites
     try {
         const pending = readRosterInvites(localStorage).filter(invite => invite.status === "pending").length;
         if (pending > 0) {
             out.push({
-                id: "auto-invites",
+                id: `auto-invites:${pending}`,
                 source: "invites",
                 kind: "info",
                 title: "초대 수락 대기",
@@ -50,14 +68,14 @@ function computeAutoNotifications(): Notification[] {
     // 2) Attempts finished in last 24h
     try {
         const cutoff = Date.now() - 24 * 60 * 60 * 1000;
-        const recent = readLocalAttempts().filter(a => {
+        const recent = attempts.filter(a => {
             if (a.status !== "completed") return false;
             const t = new Date(a.finishedAt).getTime();
             return !Number.isNaN(t) && t >= cutoff;
         }).length;
         if (recent > 0) {
             out.push({
-                id: "auto-recent-exams",
+                id: `auto-recent-exams:${recent}`,
                 source: "recent-exams",
                 kind: "success",
                 title: "최근 시험 제출",
@@ -73,8 +91,8 @@ function computeAutoNotifications(): Notification[] {
     // no message is sent from this local UI.
     try {
         const queue = buildKakaoNotificationCandidates({
-            exams: readLocalExams(),
-            attempts: readLocalAttempts(),
+            exams,
+            attempts,
             students: readRosterStudents(localStorage),
             groups: readRosterGroups(localStorage),
             limit: 8,
@@ -86,7 +104,7 @@ function computeAutoNotifications(): Notification[] {
                 queue.retakeRecommendationCount > 0 ? `재시험 ${queue.retakeRecommendationCount}건` : "",
             ].filter(Boolean);
             out.push({
-                id: "auto-kakao-candidates",
+                id: `auto-kakao-candidates:${queue.missingExamCount}-${queue.classRetakeRecommendationCount}-${queue.retakeRecommendationCount}-${queue.targetStudentCount}`,
                 source: "kakao-candidates",
                 kind: "warning",
                 title: "카카오 발송 후보 대기",
@@ -111,7 +129,7 @@ function computeAutoNotifications(): Notification[] {
             });
             if (reminder) {
                 out.push({
-                    id: "auto-plan-renewal",
+                    id: `auto-plan-renewal:${renewal.getFullYear()}-${renewal.getMonth() + 1}`,
                     source: "plan-renewal",
                     kind: "billing",
                     title: reminder.title,
@@ -125,6 +143,29 @@ function computeAutoNotifications(): Notification[] {
     } catch {}
 
     return out;
+}
+
+// Read the non-expired dismissal entries. Legacy category-scoped string ids
+// (e.g. "auto-recent-exams") are intentionally dropped: they matched every
+// future event and permanently silenced the category, which is the bug this
+// fixes. Content-scoped ids now carry a timestamp and expire after the TTL.
+function readDismissedEntries(): DismissedEntry[] {
+    try {
+        const raw = localStorage.getItem(DISMISSED_KEY);
+        if (!raw) return [];
+        const parsed = JSON.parse(raw);
+        if (!Array.isArray(parsed)) return [];
+        const now = Date.now();
+        const entries: DismissedEntry[] = [];
+        for (const item of parsed) {
+            if (item && typeof item === "object" && typeof item.id === "string" && typeof item.at === "number") {
+                if (now - item.at < DISMISSED_TTL_MS) entries.push({ id: item.id, at: item.at });
+            }
+        }
+        return entries;
+    } catch {
+        return [];
+    }
 }
 
 const KIND_META: Record<Notification["kind"], { color: string; icon: React.ReactNode }> = {
@@ -147,7 +188,6 @@ export default function NotificationBell() {
     // injected fresh (but their unread state is preserved if we've seen them).
     const refresh = useCallback(() => {
         let persisted: Notification[] = [];
-        let dismissed: string[] = [];
         try {
             const raw = localStorage.getItem(STORAGE_KEY);
             if (raw) {
@@ -155,14 +195,7 @@ export default function NotificationBell() {
                 if (Array.isArray(parsed)) persisted = parsed as Notification[];
             }
         } catch {}
-        try {
-            const raw = localStorage.getItem(DISMISSED_KEY);
-            if (raw) {
-                const parsed = JSON.parse(raw);
-                if (Array.isArray(parsed)) dismissed = parsed as string[];
-            }
-        } catch {}
-        const dismissedSet = new Set(dismissed);
+        const dismissedSet = new Set(readDismissedEntries().map(entry => entry.id));
 
         const auto = computeAutoNotifications().filter(n => !dismissedSet.has(n.id));
 
@@ -191,7 +224,11 @@ export default function NotificationBell() {
         // eslint-disable-next-line react-hooks/set-state-in-effect
         refresh();
         setHydrated(true);
-        const id = setInterval(refresh, 60 * 1000);
+        const id = setInterval(() => {
+            // Skip the localStorage parsing work while the tab is backgrounded.
+            if (typeof document !== "undefined" && document.visibilityState === "hidden") return;
+            refresh();
+        }, 60 * 1000);
         return () => clearInterval(id);
     }, [refresh]);
 
@@ -222,19 +259,21 @@ export default function NotificationBell() {
     };
     const clearAll = () => {
         // Remember which auto-generated notifications were dismissed so they
-        // don't get re-added on the next refresh tick.
+        // don't get re-added on the next refresh tick. Dismissals are stored
+        // with a timestamp and expire (see readDismissedEntries), and the auto
+        // ids are content-scoped, so this hides only the *current* state — a
+        // new event later produces a new id and reappears.
         try {
-            const autoIds = notifications
-                .map(n => n.id)
-                .filter(id => id.startsWith("auto-"));
-            if (autoIds.length > 0) {
-                const raw = localStorage.getItem(DISMISSED_KEY);
-                let existing: string[] = [];
-                if (raw) {
-                    const parsed = JSON.parse(raw);
-                    if (Array.isArray(parsed)) existing = parsed as string[];
-                }
-                const merged = Array.from(new Set([...existing, ...autoIds]));
+            const now = Date.now();
+            const dismissedIds = new Set(
+                notifications.map(n => n.id).filter(id => id.startsWith("auto-"))
+            );
+            if (dismissedIds.size > 0) {
+                const existing = readDismissedEntries().filter(entry => !dismissedIds.has(entry.id));
+                const merged: DismissedEntry[] = [
+                    ...existing,
+                    ...[...dismissedIds].map(id => ({ id, at: now })),
+                ];
                 localStorage.setItem(DISMISSED_KEY, JSON.stringify(merged));
             }
         } catch {}

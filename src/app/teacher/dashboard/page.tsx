@@ -2,17 +2,45 @@
 
 import { Suspense, useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
-import { useSearchParams } from "next/navigation";
+import dynamic from "next/dynamic";
+import { useRouter, useSearchParams } from "next/navigation";
 import BrandLogo from "@/components/BrandLogo";
 import { Exam, Attempt, type PlanKey } from "@/types/omr";
 import OverviewTab from "@/components/dashboard/tabs/OverviewTab";
-import ExamAnalyticsTab from "@/components/dashboard/tabs/ExamAnalyticsTab";
-import StudentAnalyticsTab from "@/components/dashboard/tabs/StudentAnalyticsTab";
-import { Activity, AlertTriangle, BarChart2, CheckCircle2, CloudOff, Database, GraduationCap, LayoutDashboard, RefreshCw } from "lucide-react";
+import { Activity, AlertTriangle, BarChart2, CheckCircle2, CloudOff, Database, GraduationCap, LayoutDashboard, RefreshCw, Search } from "lucide-react";
 import ThemeToggle from "@/components/ThemeToggle";
 import TeacherLogoutButton from "@/components/TeacherLogoutButton";
 import NotificationBell from "@/components/NotificationBell";
 import TeacherSessionChip from "@/components/TeacherSessionChip";
+import GlobalSearch from "@/components/GlobalSearch";
+
+// Analytics tabs statically import recharts + thousands of lines of analytics code
+// but only render when their tab is active. Defer them so the default Overview tab
+// paints without pulling those modules into the initial route bundle. ssr:false keeps
+// them client-only (they read localStorage-derived props); the skeleton covers the
+// brief load when a deep link opens straight into ?tab=exam / ?tab=student.
+function TabSkeleton() {
+    return (
+        <div
+            aria-hidden
+            style={{
+                minHeight: 480,
+                borderRadius: 'var(--radius-lg)',
+                border: '1px solid var(--border)',
+                background: 'var(--surface)',
+            }}
+            className="animate-pulse"
+        />
+    );
+}
+const ExamAnalyticsTab = dynamic(() => import("@/components/dashboard/tabs/ExamAnalyticsTab"), {
+    ssr: false,
+    loading: () => <TabSkeleton />,
+});
+const StudentAnalyticsTab = dynamic(() => import("@/components/dashboard/tabs/StudentAnalyticsTab"), {
+    ssr: false,
+    loading: () => <TabSkeleton />,
+});
 import { toast } from "@/components/Toast";
 import { buildDemoDashboardData, shouldUseDemoData } from "@/lib/demoData";
 import { buildQuestionResultRepairPlan } from "@/lib/analyticsDataRepair";
@@ -53,10 +81,17 @@ export default function TeacherDashboardPage() {
 }
 
 function TeacherDashboard() {
+    const router = useRouter();
     const searchParams = useSearchParams();
     const initialTab = normalizeDashboardTab(searchParams.get('tab'));
     const initialExamId = searchParams.get('examId') || undefined;
     const [activeTab, setActiveTab] = useState<TabType>(initialTab);
+    // Deferred to post-mount to avoid SSR/CSR hydration mismatch on the ⌘/Ctrl label.
+    const [isMac, setIsMac] = useState(false);
+    useEffect(() => {
+        // eslint-disable-next-line react-hooks/set-state-in-effect
+        setIsMac(typeof navigator !== "undefined" && /Mac|iPhone|iPad/.test(navigator.platform));
+    }, []);
     const [selectedExamIdForAnalytics, setSelectedExamIdForAnalytics] = useState<string | undefined>(initialExamId);
     const [exams, setExams] = useState<Exam[]>([]);
     const [attempts, setAttempts] = useState<Attempt[]>([]);
@@ -159,9 +194,20 @@ function TeacherDashboard() {
         setSelectedExamIdForAnalytics(nextExamId);
     }, [searchParams]);
 
+    // Switch tabs AND mirror the selection into the URL so refresh / browser-back /
+    // copied links land on the same view. The searchParams effect above already syncs
+    // state back from the URL, so callers only need to call this once.
+    const applyTab = useCallback((tab: TabType, examId?: string) => {
+        setActiveTab(tab);
+        if (examId !== undefined) setSelectedExamIdForAnalytics(examId);
+        router.replace(
+            `/teacher/dashboard?tab=${tab}${examId ? `&examId=${encodeURIComponent(examId)}` : ''}`,
+            { scroll: false },
+        );
+    }, [router]);
+
     const handleNavigateToExamAnalytics = (examId: string) => {
-        setSelectedExamIdForAnalytics(examId);
-        setActiveTab('exam');
+        applyTab('exam', examId);
     };
 
     const handleRefreshDashboardData = async () => {
@@ -340,7 +386,7 @@ function TeacherDashboard() {
             boxShadow: '0 4px 6px rgba(0,0,0,0.02)'
         }}>
             <button
-                onClick={() => setActiveTab('overview')}
+                onClick={() => applyTab('overview')}
                 style={{
                     display: 'flex', alignItems: 'center', gap: '0.5rem',
                     padding: '0.75rem 1.5rem', borderRadius: 'var(--radius-md)',
@@ -357,7 +403,7 @@ function TeacherDashboard() {
                 대시보드 요약
             </button>
             <button
-                onClick={() => setActiveTab('exam')}
+                onClick={() => applyTab('exam', selectedExamIdForAnalytics)}
                 style={{
                     display: 'flex', alignItems: 'center', gap: '0.5rem',
                     padding: '0.75rem 1.5rem', borderRadius: 'var(--radius-md)',
@@ -374,7 +420,7 @@ function TeacherDashboard() {
                 시험 분석
             </button>
             <button
-                onClick={() => setActiveTab('student')}
+                onClick={() => applyTab('student')}
                 style={{
                     display: 'flex', alignItems: 'center', gap: '0.5rem',
                     padding: '0.75rem 1.5rem', borderRadius: 'var(--radius-md)',
@@ -409,6 +455,40 @@ function TeacherDashboard() {
                         </span>
                     </div>
                     <div className="teacher-header-actions" style={{ display: 'flex', alignItems: 'center', gap: '0.65rem' }}>
+                        {/* Search trigger — opens the global palette (also Cmd/Ctrl+K) */}
+                        <button
+                            type="button"
+                            onClick={() => window.dispatchEvent(new Event('omr:open-search'))}
+                            aria-label="빠른 검색"
+                            className="header-search-btn"
+                            style={{
+                                display: 'flex', alignItems: 'center', gap: '0.6rem',
+                                padding: '0.45rem 0.8rem',
+                                background: 'var(--background)',
+                                border: '1px solid var(--border)',
+                                borderRadius: 'var(--radius-full)',
+                                color: 'var(--muted)',
+                                fontSize: '0.82rem',
+                                transition: 'var(--transition-base)',
+                                minHeight: '2.75rem',
+                                minWidth: 160,
+                            }}
+                            onMouseEnter={(e) => {
+                                e.currentTarget.style.borderColor = 'rgba(99,102,241,0.4)';
+                                e.currentTarget.style.color = 'var(--primary)';
+                            }}
+                            onMouseLeave={(e) => {
+                                e.currentTarget.style.borderColor = 'var(--border)';
+                                e.currentTarget.style.color = 'var(--muted)';
+                            }}
+                        >
+                            <Search size={14} />
+                            <span style={{ flex: 1, textAlign: 'left' }}>검색...</span>
+                            <kbd style={{
+                                padding: '1px 6px', background: 'var(--surface)', border: '1px solid var(--border)',
+                                borderRadius: 4, fontFamily: 'var(--font-mono)', fontSize: '0.7rem', fontWeight: 600
+                            }}>{isMac ? '⌘K' : 'Ctrl K'}</kbd>
+                        </button>
                         <Link href="/teacher/live" style={{
                             display: 'inline-flex', alignItems: 'center', gap: '0.35rem',
                             fontSize: '0.82rem', fontWeight: 700,
@@ -428,6 +508,7 @@ function TeacherDashboard() {
                     </div>
                 </div>
             </header>
+            <GlobalSearch />
 
             <main className="container animate-fade-in" style={{ paddingBottom: '4rem' }}>
                 {/* Welcome Section */}
@@ -733,8 +814,8 @@ function TeacherDashboard() {
                                 key={action.key}
                                 type="button"
                                 onClick={() => {
-                                    if (action.key === "exam") setActiveTab("exam");
-                                    if (action.key === "student") setActiveTab("student");
+                                    if (action.key === "exam") applyTab("exam", selectedExamIdForAnalytics);
+                                    if (action.key === "student") applyTab("student");
                                     if (action.key === "repair") void handleRepairAnalyticsData();
                                     if (action.key === "refresh") void handleRefreshDashboardData();
                                 }}
