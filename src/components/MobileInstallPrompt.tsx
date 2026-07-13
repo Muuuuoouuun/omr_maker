@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { Capacitor } from "@capacitor/core";
 import { useCallback, useEffect, useId, useState } from "react";
 import { Activity, Download, Share2, Smartphone, X } from "lucide-react";
 import { usePathname } from "next/navigation";
@@ -57,7 +58,11 @@ function rememberPromptDismissed(): void {
 export default function MobileInstallPrompt() {
   const pathname = usePathname();
   const descriptionId = useId();
-  const isSuppressedPath = pathname === "/create" || pathname === "/pwa-check" || pathname.startsWith("/solve/");
+  const isSuppressedPath = pathname === "/create"
+    || pathname === "/pwa-check"
+    || pathname.startsWith("/solve/")
+    || pathname.startsWith("/student/review/")
+    || pathname.startsWith("/teacher/attempt/");
   const [deferredPrompt, setDeferredPrompt] = useState<BeforeInstallPromptEvent | null>(null);
   const [showIOSPrompt, setShowIOSPrompt] = useState(false);
   const [isVisible, setIsVisible] = useState(false);
@@ -72,7 +77,10 @@ export default function MobileInstallPrompt() {
     if (typeof window === "undefined") return;
 
     const canBecomeVisible = () =>
-      !isStandaloneDisplay() && !isPromptDismissed() && isMobileViewport();
+      !Capacitor.isNativePlatform()
+      && !isStandaloneDisplay()
+      && !isPromptDismissed()
+      && isMobileViewport();
 
     let capturedPrompt = false;
 

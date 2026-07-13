@@ -22,13 +22,10 @@
     }
     h1 { font-size: 20px; font-weight: 800; margin: 4px 0 0; letter-spacing: -.02em; }
     p { margin: 0; font-size: 13.5px; color: #64748b; line-height: 1.5; max-width: 30ch; }
-    .spinner {
-      width: 26px; height: 26px; border-radius: 50%;
-      border: 3px solid #e2e8f0; border-top-color: #4f46e5;
-      animation: spin .8s linear infinite;
+    code {
+      padding: 10px 13px; border-radius: 10px; background: #0f172a; color: #e2e8f0;
+      font: 700 13px/1.45 ui-monospace, SFMono-Regular, Consolas, monospace;
     }
-    @keyframes spin { to { transform: rotate(360deg); } }
-    @media (prefers-reduced-motion: reduce) { .spinner { animation-duration: 2s; } }
   </style>
 </head>
 <body>
@@ -41,12 +38,11 @@
     </svg>
   </div>
   <h1>OMR Maker</h1>
-  <div class="spinner" role="status" aria-label="불러오는 중"></div>
-  <p>앱을 불러오는 중입니다. 잠시만 기다려주세요.</p>
+  <p>Android 개발 셸이 준비되었습니다. USB 디버깅 기기를 Windows PC에 연결한 뒤 아래 명령을 실행하세요.</p>
+  <code>npm run android:dev</code>
   <!--
-    This is the Capacitor webDir fallback. In normal use the native shell loads
-    the live app from `server.url` (see capacitor.config.ts). This splash is only
-    shown briefly, or if the configured server is unreachable.
+    This checked-in page deliberately contains no remote server URL. Capacitor's
+    live-reload command supplies a temporary development URL at run time.
   -->
 </body>
 </html>

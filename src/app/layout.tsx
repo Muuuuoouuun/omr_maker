@@ -6,6 +6,7 @@ import PWARegister from "@/components/PWARegister";
 import MobileInstallPrompt from "@/components/MobileInstallPrompt";
 import SyncFlusher from "@/components/SyncFlusher";
 import ViewportHeightSync from "@/components/ViewportHeightSync";
+import NativePlatformSync from "@/components/NativePlatformSync";
 import { PWA_STARTUP_IMAGE_LINKS } from "@/lib/pwaStartupImages";
 
 const geistSans = Geist({
@@ -95,6 +96,7 @@ export default function RootLayout({
         <script dangerouslySetInnerHTML={{ __html: themeInitScript }} />
       </head>
       <body className={`${geistSans.variable} ${geistMono.variable}`}>
+        <NativePlatformSync />
         <ViewportHeightSync />
         <PWARegister />
         <SyncFlusher />

@@ -380,11 +380,54 @@ test.describe("Mobile PWA entry", () => {
         await expectTouchTarget(page.getByRole("link", { name: "OMR Maker" }));
         await expectTouchTarget(page.locator(".solve-controls .solve-collapse-button"));
         await expectTouchTarget(page.locator(".solve-controls .solve-submit-button"));
+        await expectTouchTarget(page.getByRole("button", { name: "1번 문항으로 이동" }));
         await expectTouchTarget(page.getByRole("button", { name: "문제 1번 보기 2" }));
         await expectNoHorizontalOverflow(page);
         expect(await smallTargets(page, ".solve-controls button, .solve-controls label, .solve-omr-scroll .q-bubble, .solve-omr-next-button, .solve-omr-pane-close")).toEqual([]);
+        const solveLayout = await page.evaluate(() => {
+            const body = document.querySelector<HTMLElement>(".solve-body");
+            const pane = document.querySelector<HTMLElement>("#solve-omr-pane")?.getBoundingClientRect();
+            const title = document.querySelector<HTMLElement>(".solve-title")?.getBoundingClientRect();
+            return {
+                isTablet: window.matchMedia("(min-width: 600px) and (max-width: 1180px)").matches,
+                direction: body ? getComputedStyle(body).flexDirection : null,
+                paneWidth: pane?.width ?? null,
+                titleWidth: title?.width ?? null,
+            };
+        });
+        if (solveLayout.isTablet) {
+            expect(solveLayout.direction).toBe("row");
+            expect(solveLayout.paneWidth).toBeGreaterThanOrEqual(280);
+            expect(solveLayout.paneWidth).toBeLessThanOrEqual(320);
+            expect(solveLayout.titleWidth).toBeGreaterThanOrEqual(72);
+        }
+        const solveHeaderRects = await page.evaluate(() => {
+            const brand = document.querySelector<HTMLElement>(".solve-brand")?.getBoundingClientRect();
+            const title = document.querySelector<HTMLElement>(".solve-title")?.getBoundingClientRect();
+            return brand && title ? { brandRight: brand.right, titleLeft: title.left } : null;
+        });
+        expect(solveHeaderRects).not.toBeNull();
+        expect(solveHeaderRects!.brandRight).toBeLessThanOrEqual(solveHeaderRects!.titleLeft);
+
+        await page.getByRole("button", { name: "1번 문항으로 이동" }).click();
+        const autoCollapsesAnswerSheet = await page.evaluate(() => window.matchMedia("(max-width: 1180px)").matches);
+        if (autoCollapsesAnswerSheet) {
+            await expect(page.locator("#solve-omr-pane")).toHaveClass(/is-collapsed/);
+        } else {
+            await page.locator(".solve-controls .solve-collapse-button").click();
+        }
+        await expect(page.locator("#solve-omr-pane")).toHaveAttribute("aria-hidden", "true");
+        await expect(page.locator("#solve-omr-pane")).toHaveAttribute("inert", "");
+        const reopenAnswerSheet = page.locator(".solve-controls .solve-collapse-button");
+        await expect(reopenAnswerSheet).toHaveAttribute("aria-label", "답안지 펼치기");
+        await expectTouchTarget(reopenAnswerSheet);
+        await reopenAnswerSheet.click();
+        await expect(page.locator("#solve-omr-pane")).not.toHaveClass(/is-collapsed/);
+        await expect(page.locator("#solve-omr-pane")).toHaveAttribute("aria-hidden", "false");
+        await expect(page.locator("#solve-omr-pane")).not.toHaveAttribute("inert", "");
 
         await page.getByRole("button", { name: "문제 1번 보기 2" }).click();
+        await expect(page.getByRole("button", { name: "문제 1번 보기 2" })).toHaveAttribute("aria-pressed", "true");
         await expect.poll(async () => page.evaluate(() => {
             const draft = JSON.parse(window.localStorage.getItem("omr_draft_mobile-qa-exam_mobile-qa-student_base") || "{}");
             return draft.answers?.["1"];
@@ -453,6 +496,32 @@ test.describe("Mobile PWA entry", () => {
         await expect(page.getByRole("heading", { name: "모바일 실전 시험" })).toBeVisible();
         await expect(page.getByText("100%")).toBeVisible();
         await expectNoHorizontalOverflow(page);
+        expect(await smallTargets(page, ".student-review-page button, .student-review-page .btn")).toEqual([]);
+        await expect(page.locator(".mobile-install-prompt")).toHaveCount(0);
+        const reviewFlow = await page.evaluate(() => {
+            const content = document.querySelector<HTMLElement>(".student-review-content")?.getBoundingClientRect();
+            const secondary = document.querySelector<HTMLElement>(".student-review-side-card")?.getBoundingClientRect();
+            return {
+                compactLayout: window.matchMedia("(max-width: 760px)").matches,
+                contentTop: content?.top ?? null,
+                secondaryTop: secondary?.top ?? null,
+            };
+        });
+        if (reviewFlow.compactLayout && reviewFlow.contentTop !== null && reviewFlow.secondaryTop !== null) {
+            expect(reviewFlow.contentTop).toBeLessThan(reviewFlow.secondaryTop);
+        }
+        const reviewStatSizing = await page.evaluate(() => {
+            const grid = document.querySelector<HTMLElement>(".student-review-stat-grid")?.getBoundingClientRect();
+            const card = document.querySelector<HTMLElement>(".student-review-stat-grid .student-review-mini-stat")?.getBoundingClientRect();
+            return grid && card ? {
+                shouldStayCompact: window.matchMedia("(min-width: 761px) and (max-width: 1080px)").matches,
+                gridHeight: grid.height,
+                cardHeight: card.height,
+            } : null;
+        });
+        if (reviewStatSizing?.shouldStayCompact) {
+            expect(reviewStatSizing.gridHeight).toBeLessThanOrEqual(reviewStatSizing.cardHeight + 2);
+        }
 
         const savedAttempt = await page.evaluate(() => {
             const attempts = JSON.parse(window.localStorage.getItem("omr_attempts") || "[]");

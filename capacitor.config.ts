@@ -1,30 +1,39 @@
 import type { CapacitorConfig } from "@capacitor/cli";
 
-// This app is a Next.js app with server actions and dynamic routes, so it cannot
-// be statically exported into the app bundle. Instead the native Android shell
-// loads the live app over the network (the same model as the Electron dev shell,
-// which points at the running server). Set CAP_SERVER_URL to your deployed HTTPS
-// origin for release builds; the default targets a LAN dev server for testing.
-//
-//   Production:  CAP_SERVER_URL=https://omr.example.com   (remove cleartext)
-//   LAN testing: phone + PC on the same Wi-Fi, PC running `npm start` on :3003
-const serverUrl = process.env.CAP_SERVER_URL || "http://192.168.219.141:3003";
-const isCleartext = serverUrl.startsWith("http://");
+function remoteDevelopmentServer(): CapacitorConfig["server"] | undefined {
+    const requestedUrl = process.env.CAP_SERVER_URL?.trim();
+    if (!requestedUrl) return undefined;
+
+    if (process.env.CAP_ALLOW_REMOTE_DEV !== "1") {
+        throw new Error(
+            "CAP_SERVER_URL is development-only. Set CAP_ALLOW_REMOTE_DEV=1 explicitly or use npm run android:dev.",
+        );
+    }
+
+    const url = new URL(requestedUrl);
+    if (url.protocol !== "http:" && url.protocol !== "https:") {
+        throw new Error("CAP_SERVER_URL must use http:// or https://.");
+    }
+
+    return {
+        url: url.toString().replace(/\/$/, ""),
+        cleartext: url.protocol === "http:",
+    };
+}
+
+const developmentServer = remoteDevelopmentServer();
 
 const config: CapacitorConfig = {
     appId: "com.omrmaker.app",
     appName: "OMR Maker",
-    // Fallback splash shown while the shell connects to serverUrl (see mobile/www).
+    // The checked-in bundle is a safe local waiting screen. `android:dev` uses
+    // Capacitor's temporary live-reload URL and adb reverse without committing it.
     webDir: "mobile/www",
-    server: {
-        url: serverUrl,
-        // Cleartext is only needed for http LAN testing; a production https URL
-        // does not need it and should leave it off.
-        cleartext: isCleartext,
-        androidScheme: isCleartext ? "http" : "https",
-    },
+    ...(developmentServer ? { server: developmentServer } : {}),
+    loggingBehavior: "debug",
     android: {
         backgroundColor: "#f8fafc",
+        minWebViewVersion: 60,
     },
 };
 
