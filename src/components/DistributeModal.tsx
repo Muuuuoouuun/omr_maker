@@ -9,6 +9,7 @@ import type { ExamValidationSummary } from '@/lib/examValidation';
 import { isValidExamPin, normalizeExamPin } from '@/lib/examAccess';
 import { readRosterGroups, readRosterStudents, type RosterGroup, type RosterStudent } from '@/lib/rosterStorage';
 import { summarizeDistributionTargets } from '@/lib/distributionTargets';
+import { isShareUrlReachableByStudents } from '@/lib/shareLink';
 
 type AccessConfig = NonNullable<Exam["accessConfig"]>;
 
@@ -344,6 +345,11 @@ export default function DistributeModal({ isOpen, onClose, onSaveAndShare, onAut
                         </>
                     ) : (
                         <div style={{ textAlign: 'center' }}>
+                            {!isShareUrlReachableByStudents(shareUrl) && (
+                                <div style={{ background: '#fef2f2', border: '1px solid #fecaca', color: '#b91c1c', padding: '0.75rem 1rem', borderRadius: 'var(--radius-md)', fontSize: '0.82rem', fontWeight: 700, lineHeight: 1.5, marginBottom: '1.25rem', textAlign: 'left' }}>
+                                    ⚠️ 이 링크는 이 컴퓨터에서만 열립니다. 학생들이 다른 기기에서 접속하려면 공개 주소(NEXT_PUBLIC_SHARE_BASE_URL)를 설정해야 합니다.
+                                </div>
+                            )}
                             <div style={{ marginBottom: '1.5rem' }}>
                                 <QRCodeCanvas id="qr-code-canvas" value={shareUrl} size={200} level={"H"} includeMargin={true} />
                             </div>
