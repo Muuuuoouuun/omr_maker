@@ -2,13 +2,14 @@ import { existsSync, readFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import path from "node:path";
 import vm from "node:vm";
-import { createCanvas, loadImage } from "canvas";
+import { inflateSync } from "node:zlib";
 import { describe, expect, it, vi } from "vitest";
 import manifest from "@/app/manifest";
 import { PWA_STARTUP_IMAGES } from "@/lib/pwaStartupImages";
 
 const rootDir = process.cwd();
 const publicDir = path.join(rootDir, "public");
+const PNG_SIGNATURE = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
 
 function publicPathExists(assetPath: string): boolean {
     return existsSync(path.join(publicDir, assetPath.replace(/^\//, "")));
@@ -91,22 +92,92 @@ function readImageSize(assetPath: string): { width: number; height: number } {
     throw new Error(`Unsupported image format: ${assetPath}`);
 }
 
-async function readAlphaStats(projectPath: string): Promise<{ opaquePixels: number; partialPixels: number; transparentPixels: number }> {
-    const image = await loadImage(path.join(rootDir, projectPath));
-    const canvas = createCanvas(image.width, image.height);
-    const context = canvas.getContext("2d");
-    context.clearRect(0, 0, canvas.width, canvas.height);
-    context.drawImage(image, 0, 0);
-    const { data } = context.getImageData(0, 0, canvas.width, canvas.height);
+function paethPredictor(left: number, above: number, upperLeft: number): number {
+    const estimate = left + above - upperLeft;
+    const distanceLeft = Math.abs(estimate - left);
+    const distanceAbove = Math.abs(estimate - above);
+    const distanceUpperLeft = Math.abs(estimate - upperLeft);
+
+    if (distanceLeft <= distanceAbove && distanceLeft <= distanceUpperLeft) return left;
+    if (distanceAbove <= distanceUpperLeft) return above;
+    return upperLeft;
+}
+
+function readAlphaStats(projectPath: string): { opaquePixels: number; partialPixels: number; transparentPixels: number } {
+    const buffer = readFileSync(path.join(rootDir, projectPath));
+    if (!buffer.subarray(0, PNG_SIGNATURE.length).equals(PNG_SIGNATURE)) {
+        throw new Error(`Unsupported alpha stats image format: ${projectPath}`);
+    }
+
+    let width = 0;
+    let height = 0;
+    let bitDepth = 0;
+    let colorType = 0;
+    let interlace = 0;
+    const idatParts: Buffer[] = [];
+
+    let offset = PNG_SIGNATURE.length;
+    while (offset < buffer.length) {
+        const length = buffer.readUInt32BE(offset);
+        const type = buffer.toString("ascii", offset + 4, offset + 8);
+        const dataStart = offset + 8;
+        const dataEnd = dataStart + length;
+
+        if (type === "IHDR") {
+            width = buffer.readUInt32BE(dataStart);
+            height = buffer.readUInt32BE(dataStart + 4);
+            bitDepth = buffer[dataStart + 8];
+            colorType = buffer[dataStart + 9];
+            interlace = buffer[dataStart + 12];
+        }
+        if (type === "IDAT") idatParts.push(buffer.subarray(dataStart, dataEnd));
+        if (type === "IEND") break;
+
+        offset = dataEnd + 4;
+    }
+
+    if (bitDepth !== 8 || colorType !== 6 || interlace !== 0) {
+        throw new Error(`Unsupported PNG alpha layout: ${projectPath}`);
+    }
+
+    const inflated = inflateSync(Buffer.concat(idatParts));
+    const bytesPerPixel = 4;
+    const rowByteLength = width * bytesPerPixel;
+    let inflatedOffset = 0;
+    let previousAlphaRow = new Uint8Array(width);
     let opaquePixels = 0;
     let transparentPixels = 0;
 
-    for (let index = 3; index < data.length; index += 4) {
-        if (data[index] === 0) transparentPixels += 1;
-        if (data[index] === 255) opaquePixels += 1;
+    for (let row = 0; row < height; row += 1) {
+        const filter = inflated[inflatedOffset];
+        const rowStart = inflatedOffset + 1;
+        const currentAlphaRow = new Uint8Array(width);
+
+        for (let column = 0; column < width; column += 1) {
+            const rawAlpha = inflated[rowStart + column * bytesPerPixel + 3];
+            const left = column > 0 ? currentAlphaRow[column - 1] : 0;
+            const above = previousAlphaRow[column] || 0;
+            const upperLeft = column > 0 ? previousAlphaRow[column - 1] : 0;
+            let alpha: number;
+
+            if (filter === 0) alpha = rawAlpha;
+            else if (filter === 1) alpha = rawAlpha + left;
+            else if (filter === 2) alpha = rawAlpha + above;
+            else if (filter === 3) alpha = rawAlpha + Math.floor((left + above) / 2);
+            else if (filter === 4) alpha = rawAlpha + paethPredictor(left, above, upperLeft);
+            else throw new Error(`Unsupported PNG filter ${filter} in ${projectPath}`);
+
+            alpha &= 0xff;
+            currentAlphaRow[column] = alpha;
+            if (alpha === 0) transparentPixels += 1;
+            if (alpha === 255) opaquePixels += 1;
+        }
+
+        previousAlphaRow = currentAlphaRow;
+        inflatedOffset = rowStart + rowByteLength;
     }
 
-    const totalPixels = canvas.width * canvas.height;
+    const totalPixels = width * height;
     return {
         opaquePixels,
         partialPixels: totalPixels - opaquePixels - transparentPixels,

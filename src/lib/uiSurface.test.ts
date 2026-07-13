@@ -729,15 +729,20 @@ describe("service UI surface", () => {
     it("keeps PDF question region calibration visible in exam creation", () => {
         const createPage = readProjectFile("src/app/create/page.tsx");
         const pdfViewer = readProjectFile("src/components/PDFViewer.tsx");
+        const css = readProjectFile("src/app/globals.css");
 
         expect(createPage).toContain("문항 영역 보정");
         expect(createPage).toContain("handleReinferQuestionRegions");
         expect(createPage).toContain("handleClearSelectedPdfLink");
         expect(createPage).toContain("handleClearAllPdfRegions");
         expect(createPage).toContain("region: region");
+        expect(createPage).toContain("AUTO_DETECT_TIMEOUT_MS = 90_000");
+        expect(createPage).toContain("handleStopAutoDetectLocations");
+        expect(createPage).toContain("create-auto-detect-notice");
         expect(pdfViewer).toContain("interface MarkerRegion");
         expect(pdfViewer).toContain("title={`문항 영역 ${marker.label}번`}");
         expect(pdfViewer).toContain("marker.region.width");
+        expect(css).toContain(".create-auto-detect-notice");
     });
 
     it("keeps exam PDF upload recoverable and question labeling quick in creation", () => {
@@ -749,6 +754,7 @@ describe("service UI surface", () => {
         expect(createPage).toContain('const PDF_ACCEPT = "application/pdf,.pdf"');
         expect(createPage).toContain("handleProblemPdfFile");
         expect(createPage).toContain("handleAnswerKeyPdfFile");
+        expect(createPage).toContain("<UploadCloud size={16}");
         expect(createPage).toContain("문항 빠른 세팅");
         expect(createPage).toContain("create-question-quick-card");
         expect(createPage).toContain("questionChoiceCount");
@@ -757,8 +763,11 @@ describe("service UI surface", () => {
         expect(createPage).toContain('numberingLayout="vertical"');
         expect(pdfViewer).toContain("function isPdfUploadFile(file: File): boolean");
         expect(pdfViewer).toContain("onLoadError={handleDocumentLoadError}");
+        expect(pdfViewer).toContain("pdf-upload-empty");
+        expect(pdfViewer).toContain("UploadCloud");
         expect(omrCardView).toContain('numberingLayout?: "grid" | "vertical"');
         expect(css).toContain(".create-question-answer-buttons");
+        expect(css).toContain(".pdf-upload-empty");
         expect(css).toContain(".create-label-batch-card");
         expect(css).toContain(".omr-cardview.is-vertical-numbering .omr-cardview-grid");
     });

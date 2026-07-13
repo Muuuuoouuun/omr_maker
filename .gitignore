@@ -29,6 +29,7 @@
 
 # production
 /build
+/release/
 
 # misc
 .DS_Store
@@ -39,6 +40,11 @@ npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 .pnpm-debug.log*
+eslint*.json
+eslint.log
+lint*.json
+lint*.txt
+.next-dev-*.log
 
 # env files (can opt-in for committing if needed)
 .env*

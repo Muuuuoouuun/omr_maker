@@ -127,7 +127,37 @@ test.describe("Manage Users page", () => {
     test("switching to groups tab shows group cards", async ({ page }) => {
         await openTeacherPage(page, "/teacher/users");
         await page.getByRole("button", { name: /반 · 그룹/ }).click();
-        await expect(page.getByText("새 반 만들기")).toBeVisible();
+        await expect(page.getByRole("button", { name: "새 반 만들기" }).first()).toBeVisible();
+    });
+
+    test("teacher can create, edit, and delete an empty group", async ({ page }) => {
+        await openTeacherPage(page, "/teacher/users?tab=groups");
+
+        await page.getByRole("button", { name: "새 반 만들기" }).first().click();
+        const createDialog = page.getByRole("dialog", { name: "새 반 만들기" });
+        await expect(createDialog).toBeVisible();
+        await page.getByLabel("반 이름").fill("E2E 신규반");
+        await page.getByLabel("반 지역").fill("온라인");
+        await createDialog.getByRole("button", { name: "만들기", exact: true }).click();
+
+        await expect(page.getByRole("heading", { name: "E2E 신규반" })).toBeVisible();
+        await expect(page.getByText("0명 등록 · 온라인")).toBeVisible();
+
+        await page.getByRole("button", { name: "E2E 신규반 편집" }).click();
+        const editDialog = page.getByRole("dialog", { name: "반 편집" });
+        await expect(editDialog).toBeVisible();
+        await page.getByLabel("반 이름").fill("E2E 편집반");
+        await page.getByLabel("반 지역").fill("서울");
+        await editDialog.getByRole("button", { name: "저장", exact: true }).click();
+
+        await expect(page.getByRole("heading", { name: "E2E 편집반" })).toBeVisible();
+        await expect(page.getByText("0명 등록 · 서울")).toBeVisible();
+
+        await page.getByRole("button", { name: "E2E 편집반 삭제" }).click();
+        const deleteDialog = page.getByRole("dialog", { name: "반 삭제" });
+        await expect(deleteDialog).toBeVisible();
+        await deleteDialog.getByRole("button", { name: "반 삭제" }).click();
+        await expect(page.getByRole("heading", { name: "E2E 편집반" })).not.toBeVisible();
     });
 
     test("issued student start code gates the student portal login", async ({ page }) => {

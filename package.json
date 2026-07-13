@@ -2,10 +2,14 @@
   "name": "omr-maker",
   "version": "0.1.0",
   "private": true,
+  "main": "electron/main.mjs",
   "scripts": {
     "dev": "next dev -p 3003",
     "build": "next build",
     "start": "next start",
+    "desktop:dev": "concurrently -k -s first \"npm:dev\" \"wait-on http://127.0.0.1:3003 && electron .\"",
+    "desktop:pack": "npm run build && electron-builder --dir",
+    "desktop:dist:win": "npm run build && electron-builder --win nsis --x64",
     "lint": "eslint",
     "test": "vitest run",
     "test:watch": "vitest",
@@ -25,27 +29,74 @@
     "canvas": "^3.2.1",
     "html2canvas": "^1.4.1",
     "lucide-react": "^0.575.0",
-    "next": "^16.2.9",
+    "next": "^16.2.10",
     "pdfjs-dist": "^5.4.530",
     "qrcode.react": "^4.2.0",
-    "react": "19.2.3",
-    "react-dom": "19.2.3",
+    "react": "^19.2.7",
+    "react-dom": "^19.2.7",
     "react-pdf": "^10.3.0",
     "recharts": "^3.7.0"
   },
   "devDependencies": {
+    "@next/env": "^16.2.10",
     "@playwright/test": "^1.59.1",
     "@types/node": "^20",
     "@types/react": "^19",
     "@types/react-dom": "^19",
     "@vitest/ui": "^4.1.4",
+    "concurrently": "^10.0.3",
+    "electron": "^42.5.0",
+    "electron-builder": "^26.15.3",
     "eslint": "^9",
-    "eslint-config-next": "^16.2.9",
+    "eslint-config-next": "^16.2.10",
     "typescript": "^5",
-    "vitest": "^4.1.4"
+    "vitest": "^4.1.4",
+    "wait-on": "^9.0.10"
   },
   "overrides": {
     "pdfjs-dist": "$pdfjs-dist",
     "postcss": "8.5.10"
+  },
+  "build": {
+    "appId": "com.omrmaker.desktop",
+    "productName": "OMR Maker",
+    "artifactName": "${productName}-Setup-${version}-${arch}.${ext}",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "electron/**/*",
+      ".next/**/*",
+      "public/**/*",
+      "next.config.ts",
+      "package.json",
+      "src/app/favicon.ico"
+    ],
+    "asar": true,
+    "asarUnpack": [
+      "node_modules/@img/**",
+      "node_modules/@napi-rs/**",
+      "node_modules/@next/swc-*/**",
+      "node_modules/canvas/**",
+      "node_modules/sharp/**"
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "icon": "public/icons/icon-512.png"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "OMR Maker"
+    }
   }
 }

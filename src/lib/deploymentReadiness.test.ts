@@ -44,9 +44,12 @@ describe("deployment readiness", () => {
             tone: "ready",
             detail: expect.stringContaining("Supabase가 아니라"),
         }));
+        // In production a dedicated TEACHER_SESSION_SECRET is required: the app
+        // no longer falls back to signing cookies with the teacher password, so
+        // a production env missing the secret is a hard error, not a warning.
         expect(summary.checks).toContainEqual(expect.objectContaining({
             key: "teacher_session_secret",
-            tone: "warning",
+            tone: "error",
             detail: expect.stringContaining("TEACHER_SESSION_SECRET"),
         }));
         expect(summary.checks).toContainEqual(expect.objectContaining({
