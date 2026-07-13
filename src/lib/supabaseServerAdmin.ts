@@ -15,11 +15,22 @@ export interface SupabaseMutationResult {
 
 type SupabaseMutationCall = PromiseLike<SupabaseMutationResult>;
 
+export interface SupabaseAdminReadFilter {
+    eq(column: string, value: string): SupabaseAdminReadFilter;
+    maybeSingle(): PromiseLike<{ data: unknown; error: { message?: string } | null }>;
+    order(column: string, options?: { ascending?: boolean }): PromiseLike<{ data: unknown[] | null; error: { message?: string } | null }>;
+}
+
 export interface SupabaseAdminClientLike {
     from(table: string): {
         upsert(row: unknown): SupabaseMutationCall;
         insert?(row: unknown): SupabaseMutationCall;
+        select?(columns?: string): { eq(column: string, value: string): SupabaseAdminReadFilter };
     };
+}
+
+export interface SupabaseAdminReadClientLike {
+    from(table: string): { select(columns?: string): { eq(column: string, value: string): SupabaseAdminReadFilter } };
 }
 
 export interface WorkspaceBootstrapResult {
@@ -117,4 +128,25 @@ export async function bootstrapWorkspaceWithServiceRole(
 
     const client = createSupabaseAdminClient(config);
     return bootstrapWorkspaceWithAdminClient(client, context);
+}
+
+export async function fetchExamRowById(
+    client: SupabaseAdminReadClientLike,
+    examId: string,
+): Promise<unknown | null> {
+    const { data, error } = await client.from("omr_exams").select("*").eq("id", examId).maybeSingle();
+    if (error) throw new Error(error.message || "Failed to read exam");
+    return data ?? null;
+}
+
+export async function fetchAttemptRowsByOwner(
+    client: SupabaseAdminReadClientLike,
+    owner: { studentId?: string },
+): Promise<unknown[]> {
+    // Callers pass the canonical student_id (guests are already normalized to "guest:<id>").
+    const key = owner.studentId || "";
+    if (!key) return [];
+    const { data, error } = await client.from("omr_attempts").select("*").eq("student_id", key).order("finished_at", { ascending: false });
+    if (error) throw new Error(error.message || "Failed to read attempts");
+    return data ?? [];
 }
