@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { decodeCsvBytes, parseCsvRows, serializeCsvRows } from "./csv";
+import { decodeCsvBytes, formatCsvCell, parseCsvRows, serializeCsvRows } from "./csv";
 
 describe("decodeCsvBytes", () => {
     it("decodes UTF-8 bytes directly", () => {
@@ -39,6 +39,24 @@ describe("parseCsvRows", () => {
             ["name", "email", "group"],
             ["이서연", "lee@example.com", "B반"],
         ]);
+    });
+
+    it("neutralizes spreadsheet formula injection from student-typed names", () => {
+        // Excel/Sheets evaluate cells starting with = + - @ (or a control char) as
+        // formulas, even when quoted. Prefix a single quote and force-quote them.
+        expect(formatCsvCell('=HYPERLINK("http://evil.example","click")'))
+            .toBe('"\'=HYPERLINK(""http://evil.example"",""click"")"');
+        expect(formatCsvCell("+1")).toBe('"\'+1"');
+        expect(formatCsvCell("-1")).toBe('"\'-1"');
+        expect(formatCsvCell("@cmd")).toBe('"\'@cmd"');
+        expect(formatCsvCell("\tstart")).toBe('"\'\tstart"');
+    });
+
+    it("leaves ordinary values untouched", () => {
+        expect(formatCsvCell("김민준")).toBe("김민준");
+        expect(formatCsvCell(42)).toBe("42");
+        expect(formatCsvCell("a-b")).toBe("a-b");
+        expect(formatCsvCell("")).toBe("");
     });
 
     it("serializes rows with commas, quotes, and line breaks safely", () => {

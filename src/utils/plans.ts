@@ -17,7 +17,6 @@ export interface PlanCatalogEntry {
     entitlements: {
         handwritingArchive: boolean;
         advancedAnalytics: boolean;
-        teachingActionCenter: boolean;
         studentGrowthReports: boolean;
         csvExport: boolean;
         pdfExport: boolean;
@@ -42,7 +41,6 @@ const PLAN_KEY = "omr_plan";
 const FREE_ENTITLEMENTS: PlanCatalogEntry["entitlements"] = {
     handwritingArchive: false,
     advancedAnalytics: false,
-    teachingActionCenter: false,
     studentGrowthReports: false,
     csvExport: true,
     pdfExport: false,
@@ -64,7 +62,6 @@ const PRO_ENTITLEMENTS: PlanCatalogEntry["entitlements"] = {
     ...FREE_ENTITLEMENTS,
     handwritingArchive: true,
     advancedAnalytics: true,
-    teachingActionCenter: true,
     studentGrowthReports: true,
     pdfExport: true,
     reminders: true,
@@ -149,10 +146,6 @@ export const PLAN_ENTITLEMENT_COPY: Record<PlanEntitlementKey, PlanEntitlementCo
     advancedAnalytics: {
         label: "고급 오답 분석",
         description: "학생별, 반별, 시험별 약점 유형을 비교합니다.",
-    },
-    teachingActionCenter: {
-        label: "수업 액션 센터",
-        description: "재시험, 보충, 알림 후보를 한 화면에서 정리합니다.",
     },
     studentGrowthReports: {
         label: "학생 성장 리포트",
@@ -332,11 +325,47 @@ export function evaluatePlanLimit(
     };
 }
 
+export function currentAiUsageMonth(now = new Date()): string {
+    return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
+}
+
+function writeAiUsageRecord(month: string, count: number): void {
+    if (typeof window === "undefined") return;
+    try {
+        localStorage.setItem(AI_USAGE_KEY, JSON.stringify({ month, count: Math.max(0, Math.floor(count)) }));
+    } catch {
+        // Usage counters should never block the recognition workflow.
+    }
+}
+
+/**
+ * AI recognition usage is a monthly quota (plans sell "월 100회" / "월 5,000회"),
+ * so it is stored as {month:"YYYY-MM", count} and reset when the stored month is
+ * not the current month. A bare number left by an older build is treated as the
+ * current month's usage once (backward compatible migration).
+ */
 export function readAiRecognitionUsage(): number {
     if (typeof window === "undefined") return 0;
     try {
-        const value = Number(localStorage.getItem(AI_USAGE_KEY) || "0");
-        return Number.isFinite(value) && value > 0 ? Math.floor(value) : 0;
+        const raw = localStorage.getItem(AI_USAGE_KEY);
+        if (!raw) return 0;
+        const month = currentAiUsageMonth();
+
+        const trimmed = raw.trim();
+        const legacyNumber = Number(trimmed);
+        if (trimmed !== "" && Number.isFinite(legacyNumber) && String(legacyNumber) === trimmed) {
+            const count = legacyNumber > 0 ? Math.floor(legacyNumber) : 0;
+            writeAiUsageRecord(month, count);
+            return count;
+        }
+
+        const parsed = JSON.parse(raw) as { month?: unknown; count?: unknown };
+        if (parsed.month !== month) {
+            writeAiUsageRecord(month, 0);
+            return 0;
+        }
+        const count = Number(parsed.count);
+        return Number.isFinite(count) && count > 0 ? Math.floor(count) : 0;
     } catch {
         return 0;
     }
@@ -345,10 +374,6 @@ export function readAiRecognitionUsage(): number {
 export function incrementAiRecognitionUsage(by = 1): number {
     const next = readAiRecognitionUsage() + Math.max(0, Math.floor(by));
     if (typeof window === "undefined") return next;
-    try {
-        localStorage.setItem(AI_USAGE_KEY, String(next));
-    } catch {
-        // Usage counters should never block the recognition workflow.
-    }
+    writeAiUsageRecord(currentAiUsageMonth(), next);
     return next;
 }

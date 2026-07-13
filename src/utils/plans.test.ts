@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
     PLAN_CATALOG,
     canArchiveHandwriting,
+    currentAiUsageMonth,
     evaluatePlanLimit,
     getPlanEntitlementViews,
     getPlanLabel,
@@ -91,7 +92,38 @@ describe("plan catalog", () => {
         expect(readAiRecognitionUsage()).toBe(0);
         expect(incrementAiRecognitionUsage()).toBe(1);
         expect(incrementAiRecognitionUsage(4)).toBe(5);
-        expect(localStorage.getItem("omr_ai_usage")).toBe("5");
+        expect(localStorage.getItem("omr_ai_usage")).toBe(
+            JSON.stringify({ month: currentAiUsageMonth(), count: 5 }),
+        );
+    });
+
+    it("resets the monthly AI recognition quota when the month changes", () => {
+        const localStorage = storage();
+        vi.stubGlobal("window", { localStorage });
+        vi.stubGlobal("localStorage", localStorage);
+
+        // A record from a previous month must not count toward this month.
+        localStorage.setItem("omr_ai_usage", JSON.stringify({ month: "2020-01", count: 99 }));
+        expect(readAiRecognitionUsage()).toBe(0);
+        expect(localStorage.getItem("omr_ai_usage")).toBe(
+            JSON.stringify({ month: currentAiUsageMonth(), count: 0 }),
+        );
+
+        // Same-month records are preserved.
+        localStorage.setItem("omr_ai_usage", JSON.stringify({ month: currentAiUsageMonth(), count: 7 }));
+        expect(readAiRecognitionUsage()).toBe(7);
+    });
+
+    it("migrates a legacy bare-number counter into the current month once", () => {
+        const localStorage = storage();
+        vi.stubGlobal("window", { localStorage });
+        vi.stubGlobal("localStorage", localStorage);
+
+        localStorage.setItem("omr_ai_usage", "12");
+        expect(readAiRecognitionUsage()).toBe(12);
+        expect(localStorage.getItem("omr_ai_usage")).toBe(
+            JSON.stringify({ month: currentAiUsageMonth(), count: 12 }),
+        );
     });
 
     it("evaluates plan limits before paid workflows run", () => {

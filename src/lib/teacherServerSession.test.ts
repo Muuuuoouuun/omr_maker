@@ -12,20 +12,28 @@ const TOKEN = "tkn_abc123_0123456789abcdef0123456789abcdef";
 const env = { NODE_ENV: "production", TEACHER_SESSION_SECRET: "server-secret" };
 
 describe("teacher server session", () => {
-    it("resolves an explicit session secret before credential fallbacks", () => {
+    it("resolves an explicit session secret and fails closed in production", () => {
         expect(resolveTeacherSessionSecret({
             NODE_ENV: "production",
             TEACHER_SESSION_SECRET: " session-secret ",
             TEACHER_PASSWORD: "password-secret",
         })).toBe("session-secret");
+        // Production requires a dedicated secret: it must never fall back to a
+        // credential value (password / accounts JSON) — that would let anyone
+        // who learns the password forge a session cookie.
         expect(resolveTeacherSessionSecret({
             NODE_ENV: "production",
             TEACHER_PASSWORD: "password-secret",
-        })).toBe("password-secret");
+        })).toBeNull();
         expect(resolveTeacherSessionSecret({
             NODE_ENV: "production",
             TEACHER_ACCOUNTS: "[{\"id\":\"a\"}]",
-        })).toBe("[{\"id\":\"a\"}]");
+        })).toBeNull();
+        // Non-production keeps the credential fallback for convenience.
+        expect(resolveTeacherSessionSecret({
+            NODE_ENV: "development",
+            TEACHER_PASSWORD: "password-secret",
+        })).toBe("password-secret");
         expect(resolveTeacherSessionSecret({ NODE_ENV: "development" })).toBe("dev-teacher-session-secret");
         expect(resolveTeacherSessionSecret({ NODE_ENV: "production" })).toBeNull();
     });
@@ -64,8 +72,15 @@ describe("teacher server session", () => {
         expect(shouldUseSecureTeacherSessionCookie("[::1]:3004", env)).toBe(false);
         expect(shouldUseSecureTeacherSessionCookie("omr.localhost:3004", env)).toBe(false);
         expect(shouldUseSecureTeacherSessionCookie("omr.example.com", { NODE_ENV: "development" })).toBe(false);
+        // The insecure-cookie override is ignored in production so it can never
+        // drop the Secure flag on a real production domain.
         expect(shouldUseSecureTeacherSessionCookie("omr.example.com", {
             NODE_ENV: "production",
+            OMR_ALLOW_INSECURE_TEACHER_COOKIE_FOR_LOCAL_E2E: "true",
+        })).toBe(true);
+        // Non-production still honors it (and is insecure regardless).
+        expect(shouldUseSecureTeacherSessionCookie("omr.example.com", {
+            NODE_ENV: "development",
             OMR_ALLOW_INSECURE_TEACHER_COOKIE_FOR_LOCAL_E2E: "true",
         })).toBe(false);
     });

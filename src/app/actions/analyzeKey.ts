@@ -1,7 +1,9 @@
 "use server";
 
+import { cookies } from "next/headers";
 import { GoogleGenerativeAI } from "@google/generative-ai";
 import { resolveGeminiApiKey } from "@/lib/geminiApiKey";
+import { TEACHER_SERVER_SESSION_COOKIE, parseSignedTeacherSessionCookie } from "@/lib/teacherServerSession";
 import {
     extractAnswerJsonArrayPayload,
     invalidAiJsonError,
@@ -66,11 +68,33 @@ async function generateAnswerRows(
     }
 }
 
+/** Hard server-side cap on images per call, so cost is bounded regardless of the client. */
+const MAX_ANSWER_IMAGE_PARTS = 3;
+
 export async function analyzeAnswerImages(
     imageParts: string[],
     personalApiKey?: string,
     options: AiAnswerModelRoutingOptions = {},
 ) {
+    if (!Array.isArray(imageParts) || imageParts.length === 0) {
+        throw new Error("분석할 이미지가 없습니다.");
+    }
+    const images = imageParts.slice(0, MAX_ANSWER_IMAGE_PARTS);
+
+    // Auth gate: the shared server GEMINI_API_KEY may only be spent by an
+    // authenticated teacher. This server action is a directly-invocable endpoint,
+    // so without this check anyone could burn the platform key. Callers who bring
+    // their own personal key are allowed through (they pay for their own usage).
+    const hasPersonalKey = typeof personalApiKey === "string" && personalApiKey.trim().length > 0;
+    if (!hasPersonalKey) {
+        const session = parseSignedTeacherSessionCookie(
+            (await cookies()).get(TEACHER_SERVER_SESSION_COOKIE)?.value,
+        );
+        if (!session) {
+            throw new Error("AI 정답 인식은 교사 로그인 후 이용할 수 있습니다. 설정에서 개인 API 키를 등록하거나 로그인하세요.");
+        }
+    }
+
     const apiKey = resolveGeminiApiKey(personalApiKey, process.env.GEMINI_API_KEY);
     if (!apiKey) {
         throw new Error("Gemini API key is not configured");
@@ -100,14 +124,14 @@ export async function analyzeAnswerImages(
 
         let rows: unknown[];
         try {
-            rows = await generateAnswerRows(genAI, firstModel, prompt, imageParts);
+            rows = await generateAnswerRows(genAI, firstModel, prompt, images);
         } catch (error: unknown) {
             console.warn("AI answer model failed; trying fallback model", safeAiAnswerLogMeta(error, {
-                imageCount: imageParts.length,
+                imageCount: images.length,
                 model: firstModel,
                 fallbackModel: AI_ANSWER_MODELS.fallback,
             }));
-            return await generateAnswerRows(genAI, AI_ANSWER_MODELS.fallback, prompt, imageParts);
+            return await generateAnswerRows(genAI, AI_ANSWER_MODELS.fallback, prompt, images);
         }
 
         if (firstModel === AI_ANSWER_MODELS.highAccuracy) {
@@ -117,22 +141,22 @@ export async function analyzeAnswerImages(
         const qualityReport = evaluateAnswerRowsQuality(rows);
         if (shouldUseHighAccuracyAnswerModel(options, qualityReport)) {
             try {
-                return await generateAnswerRows(genAI, AI_ANSWER_MODELS.highAccuracy, prompt, imageParts);
+                return await generateAnswerRows(genAI, AI_ANSWER_MODELS.highAccuracy, prompt, images);
             } catch (error: unknown) {
                 console.warn("High accuracy AI answer model failed; trying fallback model", safeAiAnswerLogMeta(error, {
-                    imageCount: imageParts.length,
+                    imageCount: images.length,
                     model: AI_ANSWER_MODELS.highAccuracy,
                     fallbackModel: AI_ANSWER_MODELS.fallback,
                     qualityReason: qualityReport.reason,
                 }));
-                return await generateAnswerRows(genAI, AI_ANSWER_MODELS.fallback, prompt, imageParts);
+                return await generateAnswerRows(genAI, AI_ANSWER_MODELS.fallback, prompt, images);
             }
         }
 
         return rows;
     } catch (error: unknown) {
         console.warn("AI answer analysis failed", safeAiAnswerLogMeta(error, {
-            imageCount: imageParts.length,
+            imageCount: images.length,
         }));
         throw new Error(safeAiAnswerErrorMessage(error));
     }

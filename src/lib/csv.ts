@@ -73,6 +73,13 @@ export function parseCsvRows(text: string): string[][] {
 
 export function formatCsvCell(value: unknown): string {
     const text = value === undefined || value === null ? "" : String(value);
+    // Neutralize spreadsheet formula injection: student-typed names are exported
+    // verbatim into teacher Excel/CSV files. Cells starting with =, +, -, @ or a
+    // control char (tab/CR) are evaluated as formulas by Excel/Sheets, so prefix
+    // a single quote and force-quote the cell.
+    if (/^[=+\-@\t\r]/.test(text)) {
+        return `"'${text.replace(/"/g, '""')}"`;
+    }
     return /[",\r\n]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
 }
 

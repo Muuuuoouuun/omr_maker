@@ -14,20 +14,30 @@ export function resolveTeacherSessionSecret(env: Env = process.env): string | nu
     const explicitSecret = clean(env.TEACHER_SESSION_SECRET) || clean(env.OMR_TEACHER_SESSION_SECRET);
     if (explicitSecret) return explicitSecret;
 
+    // In production a dedicated TEACHER_SESSION_SECRET is required: never sign
+    // session cookies with a credential value (the teacher password/accounts
+    // JSON). Otherwise anyone who learns the password could forge a valid
+    // session cookie, and rotating the password would silently invalidate all
+    // live sessions. Fail closed so the deployment readiness check surfaces it.
+    if (env.NODE_ENV === "production") return null;
+
     const credentialSecret = clean(env.TEACHER_PASSWORD)
         || clean(env.TEACHER_ACCOUNTS)
         || clean(env.OMR_TEACHER_ACCOUNTS);
     if (credentialSecret) return credentialSecret;
 
-    return env.NODE_ENV === "production" ? null : "dev-teacher-session-secret";
+    return "dev-teacher-session-secret";
 }
 
 export function shouldUseSecureTeacherSessionCookie(
     hostHeader: string | null | undefined,
     env: Env = process.env,
 ): boolean {
-    const localE2eOverride = clean(env.OMR_ALLOW_INSECURE_TEACHER_COOKIE_FOR_LOCAL_E2E).toLowerCase();
-    if (localE2eOverride === "1" || localE2eOverride === "true") return false;
+    // Non-production never sets the Secure flag (local http QA). The
+    // OMR_ALLOW_INSECURE_TEACHER_COOKIE_FOR_LOCAL_E2E override is honored only
+    // here — it must never drop the Secure flag in production, so the production
+    // path below ignores it entirely. Otherwise setting that env var in a
+    // production environment could issue session cookies over plain HTTP.
     if (env.NODE_ENV !== "production") return false;
 
     const host = clean(hostHeader).toLowerCase().split(",")[0]?.trim() || "";
