@@ -968,6 +968,23 @@ export function saveLocalAttempt(attempt: Attempt): boolean {
     }
 }
 
+/**
+ * Bulk-persist a fully merged attempt list in a single localStorage write.
+ * Prefer this over looping saveLocalAttempt (which re-parses, sanitizes and
+ * re-sorts the entire blob per item — O(n^2) on read paths). The caller is
+ * responsible for passing the complete set to persist; this overwrites the index.
+ */
+export function saveLocalAttempts(attempts: Attempt[]): boolean {
+    if (!hasBrowserStorage()) return false;
+    try {
+        const stripped = attempts.map(stripHeavyAttemptPayload);
+        localStorage.setItem(ATTEMPTS_KEY, JSON.stringify(sortByNewestActivity(stripped)));
+        return true;
+    } catch {
+        return false;
+    }
+}
+
 async function getSupabaseClient(): Promise<SupabaseClientLike | null> {
     const config = getSupabaseConfig();
     if (!config) return null;
@@ -1159,7 +1176,7 @@ async function fetchRemoteAttempts(): Promise<Attempt[]> {
         .filter((attempt): attempt is Attempt => !!attempt);
 }
 
-async function fetchRemoteAttempt(id: string): Promise<Attempt | null> {
+export async function fetchRemoteAttempt(id: string): Promise<Attempt | null> {
     const client = await getAvailableSupabaseClient();
     if (!client) return null;
 
@@ -1348,9 +1365,20 @@ export async function loadAttempts(): Promise<LoadResult<Attempt>> {
             : [];
         const syncResult = await syncLocalItems(syncQueue, upsertRemoteAttempt);
         const mergedItems = mergeById(localItems, remoteItems);
-        for (const attempt of mergedItems) saveLocalAttempt(attempt);
-        const questionResultSync = isSupabaseConfigured()
-            ? await syncQuestionResultsForAttempts(mergedItems)
+        saveLocalAttempts(mergedItems);
+        // syncQueue attempts already upsert their question-result rows through
+        // upsertRemoteAttempt above, so only re-sync question results for
+        // still-pending attempts that this run's attempt-row resync missed. An
+        // idle reload (nothing changed locally) therefore issues zero question
+        // -result upserts instead of re-writing every attempt's rows each call —
+        // the live page polls this every few seconds.
+        const syncedIds = new Set(syncQueue.map(item => item.id));
+        const pendingIds = new Set(readPendingAttemptSyncIds());
+        const questionResultQueue = mergedItems.filter(
+            attempt => pendingIds.has(attempt.id) && !syncedIds.has(attempt.id),
+        );
+        const questionResultSync = isSupabaseConfigured() && questionResultQueue.length > 0
+            ? await syncQuestionResultsForAttempts(questionResultQueue)
             : { failedCount: 0 };
         const remoteError = [syncResult.error, questionResultSync.error].filter(Boolean).join(" / ") || undefined;
         return {
@@ -1359,6 +1387,53 @@ export async function loadAttempts(): Promise<LoadResult<Attempt>> {
             remoteSynced: isSupabaseConfigured() ? !remoteError : undefined,
             pendingSyncCount: syncResult.failedCount + questionResultSync.failedCount,
             remoteError,
+        };
+    } catch (error) {
+        return { items: localItems, remoteLoaded: false, remoteError: errorMessage(error) };
+    }
+}
+
+/**
+ * Read-only attempt load for high-frequency pollers (e.g. the live monitor).
+ * Fetches remote rows and merges with local, but performs NO write side effects:
+ * no saveLocalAttempts, no attempt/question-result upserts. Use this for the 3s
+ * live poll so an open monitor never fans out into N Supabase writes per tick;
+ * keep the full loadAttempts() for explicit refreshes that should resync.
+ */
+export async function loadAttemptsReadonly(): Promise<LoadResult<Attempt>> {
+    const localItems = readLocalAttempts();
+    if (!isSupabaseConfigured()) {
+        return { items: localItems, remoteLoaded: false };
+    }
+    try {
+        const deletedExamIds = readLocalDeletedExamIds();
+        const remoteItems = (await fetchRemoteAttempts())
+            .filter(attempt => !deletedExamIds[attempt.examId]);
+        return {
+            items: mergeById(localItems, remoteItems),
+            remoteLoaded: true,
+        };
+    } catch (error) {
+        return { items: localItems, remoteLoaded: false, remoteError: errorMessage(error) };
+    }
+}
+
+/**
+ * Read-only exam load counterpart to loadAttemptsReadonly — merges remote exams
+ * with local without re-saving each row locally or resyncing. For pollers only.
+ */
+export async function loadExamsReadonly(): Promise<LoadResult<Exam>> {
+    const localItems = readLocalExams();
+    if (!isSupabaseConfigured()) {
+        return { items: localItems, remoteLoaded: false };
+    }
+    try {
+        const deletedExamIds = readLocalDeletedExamIds();
+        const remoteItems = (await fetchRemoteExams())
+            .filter(exam => !deletedExamIds[exam.id]);
+        return {
+            items: mergeById(localItems, remoteItems),
+            remoteLoaded: true,
         };
     } catch (error) {
         return { items: localItems, remoteLoaded: false, remoteError: errorMessage(error) };

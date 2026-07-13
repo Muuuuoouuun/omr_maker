@@ -423,11 +423,6 @@ export default function Home() {
 
   return (
     <div className="layout-main center-content home-page" data-home-role={role} style={{ position: "relative" }}>
-      {/* Animated background orbs */}
-      <div className="orb orb-primary" />
-      <div className="orb orb-secondary" />
-      <div className="orb orb-accent" />
-
       {/* Theme toggle */}
       <div style={{ position: "fixed", top: "1.25rem", right: "1.25rem", zIndex: 10 }}>
         <ThemeToggle />

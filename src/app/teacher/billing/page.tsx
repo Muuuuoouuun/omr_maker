@@ -345,8 +345,6 @@ th { background: #f8fafc; font-size: 12px; color: #64748b; text-transform: upper
 
     return (
         <div className="layout-main">
-            <div className="orb orb-secondary" />
-            <div className="orb orb-accent" />
             <TeacherHeader badge="BILLING" badgeColor="#a855f7" />
 
             <main className="container animate-fade-in" style={{ paddingBottom: '4rem', position: 'relative', zIndex: 1 }}>
@@ -356,7 +354,7 @@ th { background: #f8fafc; font-size: 12px; color: #64748b; text-transform: upper
                 </div>
 
                 {/* Current plan hero */}
-                <div className="bento-card" style={{
+                <div className="bento-card billing-current-plan-card" style={{
                     background: currentPlan.gradient, color: 'white', border: 'none',
                     padding: '2rem', marginBottom: '2rem', position: 'relative', overflow: 'hidden'
                 }}>
@@ -372,7 +370,7 @@ th { background: #f8fafc; font-size: 12px; color: #64748b; text-transform: upper
                             <h2 style={{ fontSize: '2.5rem', fontWeight: 900, letterSpacing: '-0.03em', marginBottom: '0.25rem' }}>{currentPlan.name}</h2>
                             <p style={{ fontSize: '1rem', opacity: 0.9 }}>{currentPlan.price} / 월 · 다음 사용 주기 {nextCycleDate}</p>
                         </div>
-                        <div style={{ display: 'flex', gap: '0.75rem' }}>
+                        <div className="billing-plan-actions" style={{ display: 'flex', gap: '0.75rem' }}>
                             <button onClick={handlePaymentMethodChange} title={paymentProviderReadiness.detail} style={{ padding: '0.75rem 1.25rem', background: 'rgba(255,255,255,0.2)', color: 'white', borderRadius: 'var(--radius-full)', fontWeight: 700, border: '1px solid rgba(255,255,255,0.3)', backdropFilter: 'blur(10px)', fontSize: '0.9rem' }}>결제 연동 상태</button>
                             <button
                                 disabled={!nextPlan}
@@ -385,7 +383,7 @@ th { background: #f8fafc; font-size: 12px; color: #64748b; text-transform: upper
                     </div>
 
                     {/* Payment method */}
-                    <div style={{ position: 'relative', zIndex: 1, marginTop: '1.5rem', display: 'flex', alignItems: 'center', gap: '0.75rem', padding: '0.9rem 1.1rem', background: 'rgba(255,255,255,0.15)', borderRadius: 'var(--radius-md)', backdropFilter: 'blur(10px)', width: 'fit-content', border: '1px solid rgba(255,255,255,0.2)' }}>
+                    <div className="billing-payment-status" style={{ position: 'relative', zIndex: 1, marginTop: '1.5rem', display: 'flex', alignItems: 'center', gap: '0.75rem', padding: '0.9rem 1.1rem', background: 'rgba(255,255,255,0.15)', borderRadius: 'var(--radius-md)', backdropFilter: 'blur(10px)', width: 'fit-content', border: '1px solid rgba(255,255,255,0.2)' }}>
                         <CreditCard size={18} />
                         <span style={{ fontWeight: 600, fontSize: '0.9rem' }}>실결제 미연동</span>
                         <span style={{ fontSize: '0.8rem', opacity: 0.8 }}>{paymentProviderReadiness.provider.label} · 플랜 변경은 로컬 기록으로 저장</span>
@@ -691,7 +689,7 @@ th { background: #f8fafc; font-size: 12px; color: #64748b; text-transform: upper
                             <h2 style={{ fontSize: '1.4rem', fontWeight: 700, marginBottom: '0.25rem' }}>플랜 비교</h2>
                             <p style={{ fontSize: '0.9rem', color: 'var(--muted)' }}>필요에 맞는 플랜으로 언제든 변경 가능합니다.</p>
                         </div>
-                        <div style={{ display: 'inline-flex', padding: '4px', background: 'var(--surface)', borderRadius: 'var(--radius-full)', border: '1px solid var(--border)' }}>
+                        <div className="billing-cycle-toggle" style={{ display: 'inline-flex', padding: '4px', background: 'var(--surface)', borderRadius: 'var(--radius-full)', border: '1px solid var(--border)' }}>
                             <button onClick={() => handleCycleChange(false)} style={{
                                 padding: '0.5rem 1.1rem', borderRadius: 'var(--radius-full)', fontSize: '0.85rem', fontWeight: 600,
                                 background: !yearly ? 'var(--primary)' : 'transparent',
@@ -763,7 +761,7 @@ th { background: #f8fafc; font-size: 12px; color: #64748b; text-transform: upper
                 </div>
 
                 {/* Invoices */}
-                <div className="bento-card" style={{ padding: '1.75rem' }}>
+                <div className="bento-card billing-invoices-card" style={{ padding: '1.75rem' }}>
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.25rem' }}>
                         <div>
                             <h2 style={{ fontSize: '1.2rem', fontWeight: 700 }}>결제/플랜 기록</h2>
@@ -789,55 +787,57 @@ th { background: #f8fafc; font-size: 12px; color: #64748b; text-transform: upper
                             <Download size={14} /> 전체 다운로드
                         </button>
                     </div>
-                    <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left' }}>
-                        <thead>
-                            <tr style={{ color: 'var(--muted)', fontSize: '0.8rem', borderBottom: '1px solid var(--border)', fontWeight: 700, letterSpacing: '0.05em', textTransform: 'uppercase' }}>
-                                <th style={{ padding: '0.85rem 0.5rem' }}>기록 ID</th>
-                                <th style={{ padding: '0.85rem 0.5rem' }}>설명</th>
-                                <th style={{ padding: '0.85rem 0.5rem' }}>날짜</th>
-                                <th style={{ padding: '0.85rem 0.5rem' }}>금액</th>
-                                <th style={{ padding: '0.85rem 0.5rem' }}>상태</th>
-                                <th style={{ padding: '0.85rem 0.5rem', textAlign: 'right' }}>다운로드</th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                            {allInvoices.map(inv => {
-                                const statusMeta = billingStatusMeta(inv.status);
-                                return (
-                                    <tr key={inv.id} style={{ borderBottom: '1px solid var(--border)' }}>
-                                        <td style={{ padding: '1rem 0.5rem', fontSize: '0.85rem', fontFamily: 'var(--font-mono)', fontWeight: 600 }}>{inv.id}</td>
-                                        <td style={{ padding: '1rem 0.5rem', fontSize: '0.9rem' }}>{inv.desc}</td>
-                                        <td style={{ padding: '1rem 0.5rem', fontSize: '0.85rem', color: 'var(--muted)' }}>{inv.date}</td>
-                                        <td style={{ padding: '1rem 0.5rem', fontSize: '0.9rem', fontWeight: 700 }}>₩{inv.amount.toLocaleString()}</td>
-                                        <td style={{ padding: '1rem 0.5rem' }}>
-                                            <span style={{ background: statusMeta.background, color: statusMeta.color, padding: '0.25rem 0.65rem', borderRadius: 'var(--radius-full)', fontSize: '0.72rem', fontWeight: 700 }}>
-                                                {statusMeta.label}
-                                            </span>
-                                        </td>
-                                        <td style={{ padding: '1rem 0.5rem', textAlign: 'right' }}>
-                                            <button
-                                                onClick={() => downloadInvoice(inv)}
-                                                title={`${statusMeta.receiptTitle} 다운로드`}
-                                                aria-label={`${inv.id} ${statusMeta.receiptTitle} 다운로드`}
-                                                style={{ color: 'var(--primary)', fontSize: '0.85rem', fontWeight: 600, display: 'inline-flex', alignItems: 'center', gap: '0.3rem', padding: '0.3rem 0.5rem', borderRadius: 'var(--radius-sm)' }}
-                                                onMouseEnter={e => e.currentTarget.style.background = 'rgba(99,102,241,0.08)'}
-                                                onMouseLeave={e => e.currentTarget.style.background = 'transparent'}
-                                            >
-                                                <Receipt size={14} />
-                                            </button>
+                    <div className="billing-table-scroll">
+                        <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left' }}>
+                            <thead>
+                                <tr style={{ color: 'var(--muted)', fontSize: '0.8rem', borderBottom: '1px solid var(--border)', fontWeight: 700, letterSpacing: '0.05em', textTransform: 'uppercase' }}>
+                                    <th style={{ padding: '0.85rem 0.5rem' }}>기록 ID</th>
+                                    <th style={{ padding: '0.85rem 0.5rem' }}>설명</th>
+                                    <th style={{ padding: '0.85rem 0.5rem' }}>날짜</th>
+                                    <th style={{ padding: '0.85rem 0.5rem' }}>금액</th>
+                                    <th style={{ padding: '0.85rem 0.5rem' }}>상태</th>
+                                    <th style={{ padding: '0.85rem 0.5rem', textAlign: 'right' }}>다운로드</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {allInvoices.map(inv => {
+                                    const statusMeta = billingStatusMeta(inv.status);
+                                    return (
+                                        <tr key={inv.id} style={{ borderBottom: '1px solid var(--border)' }}>
+                                            <td style={{ padding: '1rem 0.5rem', fontSize: '0.85rem', fontFamily: 'var(--font-mono)', fontWeight: 600 }}>{inv.id}</td>
+                                            <td style={{ padding: '1rem 0.5rem', fontSize: '0.9rem' }}>{inv.desc}</td>
+                                            <td style={{ padding: '1rem 0.5rem', fontSize: '0.85rem', color: 'var(--muted)' }}>{inv.date}</td>
+                                            <td style={{ padding: '1rem 0.5rem', fontSize: '0.9rem', fontWeight: 700 }}>₩{inv.amount.toLocaleString()}</td>
+                                            <td style={{ padding: '1rem 0.5rem' }}>
+                                                <span style={{ background: statusMeta.background, color: statusMeta.color, padding: '0.25rem 0.65rem', borderRadius: 'var(--radius-full)', fontSize: '0.72rem', fontWeight: 700 }}>
+                                                    {statusMeta.label}
+                                                </span>
+                                            </td>
+                                            <td style={{ padding: '1rem 0.5rem', textAlign: 'right' }}>
+                                                <button
+                                                    onClick={() => downloadInvoice(inv)}
+                                                    title={`${statusMeta.receiptTitle} 다운로드`}
+                                                    aria-label={`${inv.id} ${statusMeta.receiptTitle} 다운로드`}
+                                                    style={{ color: 'var(--primary)', fontSize: '0.85rem', fontWeight: 600, display: 'inline-flex', alignItems: 'center', gap: '0.3rem', padding: '0.3rem 0.5rem', borderRadius: 'var(--radius-sm)' }}
+                                                    onMouseEnter={e => e.currentTarget.style.background = 'rgba(99,102,241,0.08)'}
+                                                    onMouseLeave={e => e.currentTarget.style.background = 'transparent'}
+                                                >
+                                                    <Receipt size={14} />
+                                                </button>
+                                            </td>
+                                        </tr>
+                                    );
+                                })}
+                                {allInvoices.length === 0 && (
+                                    <tr>
+                                        <td colSpan={6} style={{ padding: '2.5rem 0.5rem', textAlign: 'center', color: 'var(--muted)', fontSize: '0.9rem' }}>
+                                            아직 결제/플랜 기록이 없습니다.
                                         </td>
                                     </tr>
-                                );
-                            })}
-                            {allInvoices.length === 0 && (
-                                <tr>
-                                    <td colSpan={6} style={{ padding: '2.5rem 0.5rem', textAlign: 'center', color: 'var(--muted)', fontSize: '0.9rem' }}>
-                                        아직 결제/플랜 기록이 없습니다.
-                                    </td>
-                                </tr>
-                            )}
-                        </tbody>
-                    </table>
+                                )}
+                            </tbody>
+                        </table>
+                    </div>
                 </div>
             </main>
 

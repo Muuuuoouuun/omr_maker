@@ -9,7 +9,7 @@ import type { Attempt, Exam, PdfDrawings, PlanKey, QuestionResult } from "@/type
 import { loadJsonRecord, storedDataUrlToFile } from "@/utils/blobStore";
 import { getCurrentPlan, getPlanLabel, hasPlanEntitlement } from "@/utils/plans";
 import { formatKoreanDateTime } from "@/lib/pure";
-import { loadAttempt, loadExam, saveAttempt } from "@/lib/omrPersistence";
+import { fetchRemoteAttempt, loadAttempt, loadExam, saveAttempt } from "@/lib/omrPersistence";
 import { answerStudentQuestion } from "@/lib/studentQuestions";
 import { toast } from "@/components/Toast";
 import {
@@ -172,9 +172,23 @@ export default function TeacherAttemptPage() {
         const body = (answerDrafts[questionId] || "").trim();
         if (!body) return;
         const teacherName = readTeacherSession()?.displayName;
-        const updated = answerStudentQuestion(attempt, questionId, body, new Date().toISOString(), teacherName);
-        if (!updated) return;
         setSavingAnswerFor(questionId);
+        // Merge the reply onto the freshest server row, not the local-first cache
+        // this page loaded. saveAttempt writes the full payload last-writer-wins,
+        // so replying against a stale snapshot would silently drop any question the
+        // student asked after this device cached the attempt.
+        let base = attempt;
+        try {
+            const fresh = await fetchRemoteAttempt(attempt.id);
+            if (fresh) base = fresh;
+        } catch {
+            // Offline or Supabase unavailable — fall back to the cached attempt.
+        }
+        const updated = answerStudentQuestion(base, questionId, body, new Date().toISOString(), teacherName);
+        if (!updated) {
+            setSavingAnswerFor(null);
+            return;
+        }
         try {
             const result = await saveAttempt(updated);
             if (!result.localSaved) throw new Error("local save failed");

@@ -16,6 +16,7 @@ import {
     Redo2,
     Trash2,
     Undo2,
+    UploadCloud,
 } from 'lucide-react';
 import 'react-pdf/dist/Page/AnnotationLayer.css';
 import 'react-pdf/dist/Page/TextLayer.css';
@@ -775,7 +776,8 @@ export default function PDFViewer({
 
             {/* PDF Toolbar */}
             <div className="pdf-viewer-toolbar" style={{ padding: '0.5rem 1rem', background: '#323639', color: 'white', display: 'flex', alignItems: 'center', justifyContent: 'space-between', fontSize: '0.9rem', borderBottom: '1px solid #000' }}>
-                <div className="pdf-viewer-file" style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
+                <div className="pdf-viewer-file" style={{ display: 'flex', alignItems: 'center', gap: '0.55rem', minWidth: 0 }}>
+                    <FileText size={15} aria-hidden="true" style={{ color: file ? '#cbd5e1' : '#94a3b8', flexShrink: 0 }} />
                     <span className="pdf-viewer-file-name" style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '200px' }}>{file ? file.name : 'PDF 없음'}</span>
                 </div>
 
@@ -1200,10 +1202,16 @@ export default function PDFViewer({
                             </div>
                         </Document>
                     ) : (
-                        <div onClick={() => document.getElementById('pdf-upload-input')?.click()} style={{ color: '#aaa', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '100%', width: '100%', cursor: 'pointer', border: '2px dashed #666', margin: '1rem', borderRadius: '1rem' }}>
-                            <FileText size={48} style={{ marginBottom: '1rem' }} />
-                            <p style={{ fontWeight: 600 }}>PDF 업로드</p>
-                            <p style={{ fontSize: '0.8rem', opacity: 0.7 }}>클릭하거나 파일을 드래그하세요</p>
+                        <div
+                            className="pdf-upload-empty"
+                            onClick={() => document.getElementById('pdf-upload-input')?.click()}
+                        >
+                            <div className="pdf-upload-empty-icon">
+                                <UploadCloud size={30} aria-hidden="true" />
+                            </div>
+                            <p>PDF 업로드</p>
+                            <span>클릭하거나 파일을 드래그하세요</span>
+                            <strong>문제지 · 정답지 PDF</strong>
                         </div>
                     )}
                 </div>

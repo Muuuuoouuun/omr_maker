@@ -11,15 +11,34 @@ import TeacherSessionChip from "@/components/TeacherSessionChip";
 import ThemeToggle from "@/components/ThemeToggle";
 import { useRouter, useSearchParams } from "next/navigation";
 import { toast } from "@/components/Toast";
-import { ArrowUpToLine, BrainCircuit, ChevronDown, Crosshair, FileText, FolderOpen, Loader2, Maximize2, Minimize2, PanelRightClose, PanelRightOpen, RefreshCw, Redo2, Unlink, Undo2, ZoomIn, ZoomOut } from "lucide-react";
+import { ArrowUpToLine, BrainCircuit, ChevronDown, Crosshair, FileText, FolderOpen, Loader2, Maximize2, Minimize2, PanelRightClose, PanelRightOpen, RefreshCw, Redo2, Unlink, Undo2, UploadCloud, ZoomIn, ZoomOut } from "lucide-react";
 
-const PDFViewer = dynamic(() => import("@/components/PDFViewer"), { ssr: false });
+function PdfViewerLoading() {
+    return (
+        <div className="pdf-viewer-scroll scroll-custom" style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', background: '#525659' }}>
+            <div className="pdf-upload-empty pdf-upload-empty--loading" aria-live="polite">
+                <div className="pdf-upload-empty-icon">
+                    <UploadCloud size={30} aria-hidden="true" />
+                </div>
+                <p>PDF 뷰어 준비 중</p>
+                <span>문제지나 답지를 업로드하면 이 영역에서 바로 확인합니다.</span>
+                <strong>문제지 · 답지 PDF</strong>
+            </div>
+        </div>
+    );
+}
+
+const PDFViewer = dynamic(() => import("@/components/PDFViewer"), {
+    ssr: false,
+    loading: PdfViewerLoading,
+});
 import { Suspense, useState, useEffect, useRef, useCallback, useMemo, type CSSProperties } from "react";
 import { DEFAULT_CHOICE_COUNT, questionChoiceCount, type Exam, type Question } from "@/types/omr";
 import type { ParsedAnswer } from "@/services/answerParser";
 import { saveFileDataUrl, storedDataUrlToFile } from "@/utils/blobStore";
 import { secureRandomId } from "@/utils/ids";
 import { validateExamDraft } from "@/lib/examValidation";
+import { buildSolveShareUrl, isShareUrlReachableByStudents } from "@/lib/shareLink";
 import { buildExamServiceReadiness, type ExamServiceReadinessLevel } from "@/lib/examServiceReadiness";
 import { readStoredExamDefaults } from "@/lib/appSettings";
 import { loadExam, loadExams, saveExam } from "@/lib/omrPersistence";
@@ -56,6 +75,7 @@ const PDF_PANE_EXPANDED_MIN_WIDTH = 300;
 const SETTINGS_ZOOM_MIN = 0.9;
 const SETTINGS_ZOOM_MAX = 1.18;
 const SETTINGS_ZOOM_STEP = 0.08;
+const AUTO_DETECT_TIMEOUT_MS = 90_000;
 type QuestionDifficulty = NonNullable<NonNullable<Question["tags"]>["difficulty"]>;
 
 function clampLayoutWidth(value: number, min: number, max: number): number {
@@ -462,6 +482,7 @@ function CreateOMRPageInner() {
     const [answerKeyPdf, setAnswerKeyPdf] = useState<File | null>(null); // Teacher reference answer key
     const [activeViewTab, setActiveViewTab] = useState<'problem' | 'answer'>('problem');
     const [isDetectingLocation, setIsDetectingLocation] = useState(false);
+    const autoDetectRunRef = useRef<{ cancelled: boolean; timeoutId: ReturnType<typeof setTimeout> | null } | null>(null);
 
     // Schedule fields
     const [durationMin, setDurationMin] = useState<number | "">(50);
@@ -1074,19 +1095,50 @@ function CreateOMRPageInner() {
         setQuestions(prev => prev.map(q => ({ ...q, choices: next })));
     };
 
+    const handleStopAutoDetectLocations = useCallback((showToast = true) => {
+        const current = autoDetectRunRef.current;
+        if (!current || current.cancelled) return;
+        current.cancelled = true;
+        if (current.timeoutId) {
+            clearTimeout(current.timeoutId);
+            current.timeoutId = null;
+        }
+        setIsDetectingLocation(false);
+        if (showToast) {
+            toast.info("자동 매칭 중단", "문제지 위치 자동 매칭을 멈췄습니다.");
+        }
+    }, []);
+
+    useEffect(() => {
+        return () => handleStopAutoDetectLocations(false);
+    }, [handleStopAutoDetectLocations]);
+
     const handleAutoDetectLocations = async () => {
         if (!pdfFile) {
             toast.info("문제지 필요", "먼저 문제지 PDF를 왼쪽 상단에서 업로드해주세요.");
             return;
         }
+        const run = { cancelled: false, timeoutId: null as ReturnType<typeof setTimeout> | null };
+        autoDetectRunRef.current = run;
+        run.timeoutId = setTimeout(() => {
+            if (autoDetectRunRef.current === run && !run.cancelled) {
+                run.cancelled = true;
+                setIsDetectingLocation(false);
+                toast.info("자동 매칭 시간 초과", "90초가 지나 자동 매칭을 멈췄습니다. PDF가 너무 크면 문항 위치를 몇 개만 직접 찍은 뒤 다시 계산하세요.");
+            }
+        }, AUTO_DETECT_TIMEOUT_MS);
+
         setIsDetectingLocation(true);
         try {
             const pdfjsLib = await import('pdfjs-dist');
+            if (run.cancelled) return;
             if (typeof window !== 'undefined' && !pdfjsLib.GlobalWorkerOptions.workerSrc) {
                 pdfjsLib.GlobalWorkerOptions.workerSrc = '/pdf.worker.min.mjs';
             }
             const arrayBuffer = await pdfFile.arrayBuffer();
+            if (run.cancelled) return;
             const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
+            if (run.cancelled) return;
 
             const newQuestions = [...questions];
             let mappedCount = 0;
@@ -1096,9 +1148,12 @@ function CreateOMRPageInner() {
             const pdfTextPages: PdfPageTextItems[] = [];
 
             for (let i = 1; i <= pdf.numPages; i++) {
+                if (run.cancelled) return;
                 const page = await pdf.getPage(i);
+                if (run.cancelled) return;
                 const viewport = page.getViewport({ scale: 1.0 });
                 const textContent = await page.getTextContent();
+                if (run.cancelled) return;
 
                 const items: PdfTextLocatorItem[] = textContent.items
                     .map((rawItem): PdfTextLocatorItem | null => {
@@ -1134,6 +1189,7 @@ function CreateOMRPageInner() {
                 }
             }
 
+            if (run.cancelled) return;
             for (const [qNum, best] of bestLocations.entries()) {
                 const qIndex = newQuestions.findIndex(q => q.number === qNum);
                 if (qIndex === -1) continue;
@@ -1150,6 +1206,7 @@ function CreateOMRPageInner() {
                 }
             }
 
+            if (run.cancelled) return;
             const passageGroups = selectPassageGroupsForQuestions(
                 detectPassageGroupsFromPdfText(pdfTextPages, expectedQuestionNumbers),
                 newQuestions,
@@ -1164,9 +1221,15 @@ function CreateOMRPageInner() {
             toast.success("위치 자동 매칭 완료", `총 ${pdf.numPages}페이지에서 새로 ${mappedCount}개, 갱신 ${updatedCount}개 문항의 위치와 영역${passageMessage}를 찾았습니다.`);
         } catch (e) {
             console.error(e);
-            toast.error("자동 매칭 실패", "위치 자동 매칭 중 오류가 발생했습니다.");
+            if (!run.cancelled) {
+                toast.error("자동 매칭 실패", "위치 자동 매칭 중 오류가 발생했습니다.");
+            }
         } finally {
-            setIsDetectingLocation(false);
+            if (autoDetectRunRef.current === run) {
+                if (run.timeoutId) clearTimeout(run.timeoutId);
+                autoDetectRunRef.current = null;
+                setIsDetectingLocation(false);
+            }
         }
     };
 
@@ -1273,8 +1336,16 @@ function CreateOMRPageInner() {
             }
             // Clear the autosave draft now that the exam is published.
             try { localStorage.removeItem(DRAFT_KEY); } catch { /* ignore */ }
-            const shareUrl = `${window.location.origin}/solve/${id}`;
-            toast.success("배포 준비 완료", "공유 링크가 생성되었습니다.");
+            const shareUrl = buildSolveShareUrl(id);
+            if (!isShareUrlReachableByStudents(shareUrl)) {
+                // Desktop/loopback origin: students on other devices cannot open it.
+                toast.info(
+                    "배포 준비 완료",
+                    "이 링크는 이 컴퓨터에서만 열립니다. 학생 배포에는 공개 주소(NEXT_PUBLIC_SHARE_BASE_URL) 설정이 필요합니다.",
+                );
+            } else {
+                toast.success("배포 준비 완료", "공유 링크가 생성되었습니다.");
+            }
             return shareUrl;
         } catch (e) {
             console.error(e);
@@ -1439,10 +1510,12 @@ function CreateOMRPageInner() {
                             <Redo2 size={16} />
                         </button>
                         <label className="btn btn-secondary" style={{ cursor: 'pointer', padding: '0.55rem 1rem', fontSize: '0.85rem' }}>
+                            <UploadCloud size={16} />
                             문제지 업로드
                             <input id="pdf-upload-input" type="file" accept={PDF_ACCEPT} onChange={handleFileChange} style={{ display: 'none' }} />
                         </label>
                         <label className="btn btn-secondary" style={{ cursor: 'pointer', padding: '0.55rem 1rem', fontSize: '0.85rem' }}>
+                            <UploadCloud size={16} />
                             답지 업로드
                             <input type="file" accept={PDF_ACCEPT} onChange={(e) => {
                                 handleAnswerKeyPdfFile(e.currentTarget.files?.[0]);
@@ -1848,6 +1921,22 @@ function CreateOMRPageInner() {
                                 <span>{isDetectingLocation ? "위치 찾는 중" : "PDF 위치 매칭"}</span>
                             </button>
                         </div>
+
+                        {isDetectingLocation && (
+                            <div className="create-auto-detect-notice" role="status" aria-live="polite">
+                                <div>
+                                    <strong>PDF 위치를 찾는 중</strong>
+                                    <span>큰 문제지는 최대 90초까지 걸릴 수 있습니다.</span>
+                                </div>
+                                <button
+                                    type="button"
+                                    className="btn btn-secondary"
+                                    onClick={() => handleStopAutoDetectLocations()}
+                                >
+                                    중단
+                                </button>
+                            </div>
+                        )}
 
                         <div style={{ marginBottom: '1rem', padding: '0.85rem', borderRadius: 'var(--radius-md)', border: '1px solid var(--border)', background: 'var(--background)' }}>
                             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '0.5rem', marginBottom: '0.65rem' }}>

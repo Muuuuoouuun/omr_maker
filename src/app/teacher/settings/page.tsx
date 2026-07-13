@@ -376,8 +376,6 @@ export default function SettingsPage() {
 
     return (
         <div className="layout-main">
-            <div className="orb orb-primary" />
-            <div className="orb orb-accent" />
             <TeacherHeader badge="SETTINGS" badgeColor="#6366f1" />
 
             <main className="container animate-fade-in" style={{ paddingBottom: '4rem', position: 'relative', zIndex: 1 }}>

@@ -4,12 +4,15 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 import { ArrowLeft, FileQuestion } from "lucide-react";
 
-type Role = "teacher" | "student" | "unknown";
+type Role = "teacher" | "student" | "admin" | "unknown";
 
 function detectRole(): Role {
     if (typeof window === "undefined") return "unknown";
     try {
-        const teacherRaw = localStorage.getItem("omr_teacher_session");
+        if (window.location.pathname.startsWith("/admin")) return "admin";
+        const teacherRaw =
+            sessionStorage.getItem("omr_teacher_session") ||
+            localStorage.getItem("omr_teacher_session");
         if (teacherRaw) {
             const parsed = JSON.parse(teacherRaw);
             if (parsed?.role === "teacher" && parsed?.expiresAt > Date.now()) return "teacher";
@@ -30,6 +33,7 @@ function detectRole(): Role {
 const HOME_BY_ROLE: Record<Role, { href: string; label: string }> = {
     teacher: { href: "/teacher/dashboard", label: "대시보드로 돌아가기" },
     student: { href: "/student/dashboard", label: "내 대시보드로 돌아가기" },
+    admin: { href: "/teacher/users", label: "사용자 관리로 이동" },
     unknown: { href: "/", label: "홈으로 돌아가기" },
 };
 
@@ -66,10 +70,12 @@ export default function NotFound() {
                     404
                 </h1>
                 <h2 style={{ fontSize: '1.2rem', fontWeight: 700, marginBottom: '0.5rem' }}>
-                    페이지를 찾을 수 없습니다
+                    {role === "admin" ? "관리자 기능은 교사 포털에서 관리합니다" : "페이지를 찾을 수 없습니다"}
                 </h2>
                 <p style={{ color: 'var(--muted)', fontSize: '0.95rem', marginBottom: '2rem' }}>
-                    요청하신 페이지가 삭제되었거나 주소가 변경되었을 수 있습니다.
+                    {role === "admin"
+                        ? "현재 별도 /admin 주소는 없고, 사용자 관리·설정·결제/플랜 운영은 교사 포털 안에서 열 수 있습니다."
+                        : "요청하신 페이지가 삭제되었거나 주소가 변경되었을 수 있습니다."}
                 </p>
                 <Link
                     href={href}

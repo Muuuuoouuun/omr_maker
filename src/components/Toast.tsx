@@ -106,7 +106,16 @@ export default function ToastHost() {
                         <button
                             onClick={() => remove(t.id)}
                             aria-label="알림 닫기"
-                            style={{ color: 'var(--muted)', padding: 4, flexShrink: 0 }}
+                            style={{
+                                color: 'var(--muted)',
+                                width: 44,
+                                height: 44,
+                                display: 'inline-flex',
+                                alignItems: 'center',
+                                justifyContent: 'center',
+                                flexShrink: 0,
+                                borderRadius: 'var(--radius-md)',
+                            }}
                         >
                             <X size={14} />
                         </button>

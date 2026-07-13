@@ -32,6 +32,7 @@ import {
     type RosterInvite,
     type RosterStudent,
 } from "@/lib/rosterStorage";
+import { addRosterGroup, deleteRosterGroup, editRosterGroup } from "@/lib/rosterMutations";
 import {
     buildStudentProfileInsight,
     type StudentProfileInsight,
@@ -60,7 +61,8 @@ type RosterDataMode = "real" | "demo";
 type ConfirmAction =
     | { kind: "student"; id: string; label: string }
     | { kind: "bulk"; count: number }
-    | { kind: "invite"; id: string; label: string };
+    | { kind: "invite"; id: string; label: string }
+    | { kind: "group"; id: string; label: string; count: number };
 type StudentFormData = { name: string; email: string; group: string; groupId: string; region: string };
 type GroupFormData = { name: string; color: string; region: string };
 
@@ -208,6 +210,10 @@ function ManageUsersInner() {
         return "students";
     })();
     const [tab, setTab] = useState<TabType>(initialTab);
+    useEffect(() => {
+        // Keep deep links like /teacher/users?tab=groups on the requested workflow.
+        setTab(initialTab);
+    }, [initialTab]);
     const [query, setQuery] = useState("");
     const [selectedRegionKey, setSelectedRegionKey] = useState(ALL_REGION_KEY);
     const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -228,6 +234,8 @@ function ManageUsersInner() {
     const [showStudentModal, setShowStudentModal] = useState(false);
     const [editingStudent, setEditingStudent] = useState<RosterStudent | null>(null);
     const [showGroupModal, setShowGroupModal] = useState(false);
+    const [editingGroup, setEditingGroup] = useState<RosterGroup | null>(null);
+    const [studentModalDefaultGroupId, setStudentModalDefaultGroupId] = useState<string | undefined>(undefined);
     const [showGroupProfileModal, setShowGroupProfileModal] = useState(false);
     const [showInviteModal, setShowInviteModal] = useState(false);
     const [showMessageModal, setShowMessageModal] = useState(false);
@@ -700,17 +708,85 @@ function ManageUsersInner() {
     };
 
     // ===== Group CRUD =====
-    const handleAddGroup = (data: GroupFormData) => {
-        const newGroup: RosterGroup = {
-            id: `g-${Date.now()}`,
-            name: data.name,
-            ...optionalRegion(data.region),
-            color: data.color,
-            count: 0,
-            avgScore: 0,
-        };
-        const next = recomputeGroups(students, [...groups, newGroup]);
-        persistRoster(students, next, invites);
+    const handleAddStudentToGroup = (group: RosterGroup) => {
+        if (isDemoRoster) {
+            toast.info("데모 반에는 학생을 추가하지 않음", "실제 반을 만들면 바로 학생을 추가할 수 있습니다.");
+            return;
+        }
+        setEditingStudent(null);
+        setStudentModalDefaultGroupId(group.id);
+        setShowStudentModal(true);
+    };
+
+    const handleOpenEditGroup = (group: RosterGroup) => {
+        if (isDemoRoster) {
+            toast.info("데모 반은 편집하지 않음", "실제 반을 만들면 이름, 지역, 색상을 수정할 수 있습니다.");
+            return;
+        }
+        setEditingGroup(group);
+        setShowGroupModal(true);
+    };
+
+    const handleSaveGroup = (data: GroupFormData): boolean => {
+        if (isDemoRoster && editingGroup) {
+            toast.info("데모 반은 저장하지 않음", "새 반을 만들면 실제 명단으로 전환됩니다.");
+            return false;
+        }
+
+        if (editingGroup) {
+            const result = editRosterGroup(students, groups, editingGroup.id, data);
+            if (!result.ok) {
+                const message = result.reason === "duplicate"
+                    ? "같은 지역에 같은 이름의 반이 이미 있습니다."
+                    : result.reason === "missing-group"
+                        ? "수정할 반을 찾지 못했습니다."
+                        : "반 이름을 입력해주세요.";
+                toast.error("반 편집 실패", message);
+                return false;
+            }
+            persistRoster(result.students, result.groups, invites);
+            toast.success("반 정보 저장됨", `${result.group?.name || data.name} 반 정보를 업데이트했습니다.`);
+            return true;
+        }
+
+        const sourceStudents = isDemoRoster ? [] : students;
+        const sourceGroups = isDemoRoster ? [] : groups;
+        const result = addRosterGroup(sourceStudents, sourceGroups, data);
+        if (!result.ok) {
+            const message = result.reason === "duplicate"
+                ? "같은 지역에 같은 이름의 반이 이미 있습니다."
+                : "반 이름을 입력해주세요.";
+            toast.error("반 생성 실패", message);
+            return false;
+        }
+        persistRoster(result.students, result.groups, invites);
+        toast.success("반 생성됨", `${result.group?.name || data.name} 반을 추가했습니다.`);
+        return true;
+    };
+
+    const handleDeleteGroup = (group: RosterGroup) => {
+        if (isDemoRoster) {
+            toast.info("데모 반은 삭제하지 않음", "실제 반을 만들면 학생이 없는 반을 삭제할 수 있습니다.");
+            return;
+        }
+        setConfirmAction({ kind: "group", id: group.id, label: group.name, count: group.count });
+    };
+
+    const deleteGroup = (id: string): boolean => {
+        const result = deleteRosterGroup(students, groups, id);
+        if (!result.ok) {
+            const message = result.reason === "not-empty"
+                ? `학생 ${result.studentCount ?? 0}명이 있어 삭제할 수 없습니다. 학생을 다른 반으로 옮기거나 삭제한 뒤 다시 시도하세요.`
+                : "삭제할 반을 찾지 못했습니다.";
+            toast.error("반 삭제 실패", message);
+            return false;
+        }
+        persistRoster(result.students, result.groups, invites);
+        if (selectedGroupId === id) {
+            setSelectedGroupId(null);
+            setShowGroupProfileModal(false);
+        }
+        return true;
     };
 
     // ===== Invite actions =====
@@ -771,9 +847,11 @@ function ManageUsersInner() {
         } else if (confirmAction.kind === "bulk") {
             deleteSelectedStudents();
             toast.success("학생 삭제됨", `${confirmAction.count}명을 목록에서 삭제했습니다.`);
-        } else {
+        } else if (confirmAction.kind === "invite") {
             persistRoster(students, groups, invites.filter(inv => inv.id !== confirmAction.id));
             toast.success("초대 취소됨", `${confirmAction.label} 초대를 취소했습니다.`);
+        } else if (deleteGroup(confirmAction.id)) {
+            toast.success("반 삭제됨", `${confirmAction.label} 반을 삭제했습니다.`);
         }
         setConfirmAction(null);
     };
@@ -939,16 +1017,29 @@ function ManageUsersInner() {
                             }} className="card-hover">
                             <Upload size={16} /> CSV 업로드
                         </button>
-                        <button
-                            onClick={() => { setEditingStudent(null); setShowStudentModal(true); }}
-                            style={{
-                                padding: '0.75rem 1.5rem', background: 'linear-gradient(135deg, #22c55e, #10b981)',
-                                color: 'white', borderRadius: 'var(--radius-full)', fontWeight: 600,
-                                display: 'flex', alignItems: 'center', gap: '0.5rem',
-                                boxShadow: '0 4px 12px rgba(34,197,94,0.3)'
-                            }}>
-                            <UserPlus size={16} /> 학생 추가
-                        </button>
+                        {tab === "groups" ? (
+                            <button
+                                onClick={() => { setEditingGroup(null); setShowGroupModal(true); }}
+                                style={{
+                                    padding: '0.75rem 1.5rem', background: 'var(--primary)',
+                                    color: 'white', borderRadius: 'var(--radius-full)', fontWeight: 700,
+                                    display: 'flex', alignItems: 'center', gap: '0.5rem',
+                                    boxShadow: '0 4px 12px rgba(79,70,229,0.28)'
+                                }}>
+                                <FolderPlus size={16} /> 새 반 만들기
+                            </button>
+                        ) : (
+                            <button
+                                onClick={() => { setEditingStudent(null); setStudentModalDefaultGroupId(undefined); setShowStudentModal(true); }}
+                                style={{
+                                    padding: '0.75rem 1.5rem', background: 'linear-gradient(135deg, #22c55e, #10b981)',
+                                    color: 'white', borderRadius: 'var(--radius-full)', fontWeight: 600,
+                                    display: 'flex', alignItems: 'center', gap: '0.5rem',
+                                    boxShadow: '0 4px 12px rgba(34,197,94,0.3)'
+                                }}>
+                                <UserPlus size={16} /> 학생 추가
+                            </button>
+                        )}
                     </div>
                 </div>
 
@@ -1603,74 +1694,201 @@ function ManageUsersInner() {
                     <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(260px, 1fr))', gap: '1.25rem' }}>
                         {displayGroups.map(g => {
                             const groupRegion = regionNameForGroup(g, displayStudents);
-                            const content = (
-                                <>
-                                    <div style={{
-                                        width: 46, height: 46, borderRadius: 'var(--radius-md)',
-                                        background: `color-mix(in srgb, ${g.color}, transparent 88%)`, color: g.color,
-                                        display: 'flex', alignItems: 'center', justifyContent: 'center', marginBottom: '1rem'
-                                    }}>
-                                        <Users size={22} />
-                                    </div>
-                                    <h3 style={{ fontSize: '1.05rem', fontWeight: 700, marginBottom: '0.25rem' }}>{g.name}</h3>
-                                    <p style={{ fontSize: '0.85rem', color: 'var(--muted)', marginBottom: '1.25rem' }}>{g.count}명 등록 · {groupRegion}</p>
-                                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '0.75rem' }}>
-                                        <span style={{ fontSize: '0.75rem', color: 'var(--muted)', fontWeight: 700, letterSpacing: '0.05em' }}>AVG</span>
-                                        <span style={{ fontSize: '1.4rem', fontWeight: 800, color: g.color }}>{g.avgScore}점</span>
-                                    </div>
-                                    {!advancedAnalyticsEnabled && (
-                                        <div style={{
-                                            marginTop: '0.85rem',
-                                            display: 'inline-flex',
-                                            alignItems: 'center',
-                                            gap: '0.3rem',
-                                            color: 'var(--muted)',
-                                            fontSize: '0.76rem',
-                                            fontWeight: 900,
-                                        }}>
-                                            <Lock size={13} />
-                                            반별 리포트 Pro
+                            return (
+                                <article
+                                    key={g.id}
+                                    className="bento-card card-hover"
+                                    style={{
+                                        padding: '1.5rem',
+                                        textAlign: 'left',
+                                        color: 'var(--foreground)',
+                                        minHeight: 220,
+                                        display: 'flex',
+                                        flexDirection: 'column',
+                                        gap: '1rem',
+                                    }}
+                                >
+                                    <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: '0.9rem' }}>
+                                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.85rem', minWidth: 0 }}>
+                                            <div style={{
+                                                width: 46, height: 46, borderRadius: 'var(--radius-md)',
+                                                background: `color-mix(in srgb, ${g.color}, transparent 88%)`, color: g.color,
+                                                display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0
+                                            }}>
+                                                <Users size={22} />
+                                            </div>
+                                            <div style={{ minWidth: 0 }}>
+                                                <h3 style={{
+                                                    fontSize: '1.05rem',
+                                                    fontWeight: 800,
+                                                    lineHeight: 1.25,
+                                                    marginBottom: '0.25rem',
+                                                    overflow: 'hidden',
+                                                    display: '-webkit-box',
+                                                    WebkitLineClamp: 2,
+                                                    WebkitBoxOrient: 'vertical',
+                                                }}>{g.name}</h3>
+                                                <p style={{ fontSize: '0.83rem', color: 'var(--muted)' }}>{g.count}명 등록 · {groupRegion}</p>
+                                            </div>
                                         </div>
-                                    )}
-                                </>
-                            );
+                                        <button
+                                            type="button"
+                                            aria-label={`${g.name} 편집`}
+                                            onClick={() => handleOpenEditGroup(g)}
+                                            disabled={isDemoRoster}
+                                            title={isDemoRoster ? "데모 반은 편집할 수 없습니다." : "반 정보 편집"}
+                                            style={{
+                                                width: 44,
+                                                height: 44,
+                                                display: 'inline-flex',
+                                                alignItems: 'center',
+                                                justifyContent: 'center',
+                                                borderRadius: 'var(--radius-md)',
+                                                background: 'var(--background)',
+                                                border: '1px solid var(--border)',
+                                                color: isDemoRoster ? 'var(--muted)' : 'var(--foreground)',
+                                                opacity: isDemoRoster ? 0.55 : 1,
+                                                flexShrink: 0,
+                                            }}
+                                        >
+                                            <PenLine size={16} />
+                                        </button>
+                                    </div>
 
-                            return advancedAnalyticsEnabled ? (
-                                <button
-                                    key={g.id}
-                                    type="button"
-                                    onClick={() => handleOpenGroupProfile(g.id)}
-                                    className="bento-card card-hover"
-                                    style={{
-                                        padding: '1.5rem',
-                                        cursor: 'pointer',
-                                        textAlign: 'left',
-                                        color: 'var(--foreground)',
-                                        minHeight: 160,
-                                    }}
-                                >
-                                    {content}
-                                </button>
-                            ) : (
-                                <NextLink
-                                    key={g.id}
-                                    href="/teacher/billing"
-                                    title="Pro 이상에서 반별 분석 리포트를 열 수 있습니다."
-                                    className="bento-card card-hover"
-                                    style={{
-                                        padding: '1.5rem',
-                                        cursor: 'pointer',
-                                        textAlign: 'left',
-                                        color: 'var(--foreground)',
-                                        minHeight: 160,
-                                    }}
-                                >
-                                    {content}
-                                </NextLink>
+                                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: '0.6rem' }}>
+                                        <MiniStat label="학생" value={`${g.count}명`} color={g.color} />
+                                        <MiniStat label="평균" value={`${g.avgScore}점`} color={g.color} />
+                                    </div>
+
+                                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: '0.5rem', marginTop: 'auto' }}>
+                                        <button
+                                            type="button"
+                                            aria-label={`${g.name} 학생 보기`}
+                                            onClick={() => {
+                                                setSelectedRegionKey(g.region ? regionKeyFor(g.region) : ALL_REGION_KEY);
+                                                setQuery(g.name);
+                                                setTab("students");
+                                            }}
+                                            style={{
+                                                minHeight: 44,
+                                                padding: '0.55rem 0.65rem',
+                                                borderRadius: 'var(--radius-md)',
+                                                background: 'var(--surface)',
+                                                border: '1px solid var(--border)',
+                                                color: 'var(--foreground)',
+                                                fontSize: '0.78rem',
+                                                fontWeight: 800,
+                                                display: 'inline-flex',
+                                                alignItems: 'center',
+                                                justifyContent: 'center',
+                                                gap: '0.35rem',
+                                            }}
+                                        >
+                                            <Search size={13} />
+                                            학생 보기
+                                        </button>
+                                        <button
+                                            type="button"
+                                            aria-label={`${g.name} 학생 추가`}
+                                            onClick={() => handleAddStudentToGroup(g)}
+                                            disabled={isDemoRoster}
+                                            style={{
+                                                minHeight: 44,
+                                                padding: '0.55rem 0.65rem',
+                                                borderRadius: 'var(--radius-md)',
+                                                background: 'var(--primary)',
+                                                color: 'white',
+                                                fontSize: '0.78rem',
+                                                fontWeight: 800,
+                                                display: 'inline-flex',
+                                                alignItems: 'center',
+                                                justifyContent: 'center',
+                                                gap: '0.35rem',
+                                                opacity: isDemoRoster ? 0.55 : 1,
+                                            }}
+                                        >
+                                            <UserPlus size={13} />
+                                            학생 추가
+                                        </button>
+                                        {advancedAnalyticsEnabled ? (
+                                            <button
+                                                type="button"
+                                                aria-label={`${g.name} 분석 열기`}
+                                                onClick={() => handleOpenGroupProfile(g.id)}
+                                                style={{
+                                                    minHeight: 44,
+                                                    padding: '0.55rem 0.65rem',
+                                                    borderRadius: 'var(--radius-md)',
+                                                    background: `color-mix(in srgb, ${g.color}, transparent 88%)`,
+                                                    color: g.color,
+                                                    fontSize: '0.78rem',
+                                                    fontWeight: 900,
+                                                    display: 'inline-flex',
+                                                    alignItems: 'center',
+                                                    justifyContent: 'center',
+                                                    gap: '0.35rem',
+                                                }}
+                                            >
+                                                <BarChart3 size={13} />
+                                                분석
+                                            </button>
+                                        ) : (
+                                            <NextLink
+                                                href="/teacher/billing"
+                                                aria-label={`${g.name} 반별 리포트 Pro 보기`}
+                                                title="Pro 이상에서 반별 분석 리포트를 열 수 있습니다."
+                                                style={{
+                                                    minHeight: 44,
+                                                    padding: '0.55rem 0.65rem',
+                                                    borderRadius: 'var(--radius-md)',
+                                                    background: 'var(--surface)',
+                                                    border: '1px solid var(--border)',
+                                                    color: 'var(--muted)',
+                                                    fontSize: '0.78rem',
+                                                    fontWeight: 900,
+                                                    display: 'inline-flex',
+                                                    alignItems: 'center',
+                                                    justifyContent: 'center',
+                                                    gap: '0.35rem',
+                                                }}
+                                            >
+                                                <Lock size={13} />
+                                                리포트 Pro
+                                            </NextLink>
+                                        )}
+                                        <button
+                                            type="button"
+                                            aria-label={`${g.name} 삭제`}
+                                            onClick={() => handleDeleteGroup(g)}
+                                            disabled={isDemoRoster}
+                                            style={{
+                                                minHeight: 44,
+                                                padding: '0.55rem 0.65rem',
+                                                borderRadius: 'var(--radius-md)',
+                                                background: 'rgba(239,68,68,0.08)',
+                                                border: '1px solid rgba(239,68,68,0.2)',
+                                                color: '#ef4444',
+                                                fontSize: '0.78rem',
+                                                fontWeight: 900,
+                                                display: 'inline-flex',
+                                                alignItems: 'center',
+                                                justifyContent: 'center',
+                                                gap: '0.35rem',
+                                                opacity: isDemoRoster ? 0.55 : 1,
+                                            }}
+                                        >
+                                            <Trash2 size={13} />
+                                            삭제
+                                        </button>
+                                    </div>
+                                </article>
                             );
                         })}
                         <button
-                            onClick={() => setShowGroupModal(true)}
+                            onClick={() => {
+                                setEditingGroup(null);
+                                setShowGroupModal(true);
+                            }}
                             className="bento-card card-hover"
                             style={{
                                 padding: '1.5rem', cursor: 'pointer', display: 'flex',
@@ -1778,7 +1996,8 @@ function ManageUsersInner() {
                 <StudentModal
                     groups={rosterGroups}
                     initial={editingStudent}
-                    onClose={() => { setShowStudentModal(false); setEditingStudent(null); }}
+                    defaultGroupId={studentModalDefaultGroupId}
+                    onClose={() => { setShowStudentModal(false); setEditingStudent(null); setStudentModalDefaultGroupId(undefined); }}
                     onSubmit={(data) => {
                         if (editingStudent) {
                             handleEditStudent(editingStudent.id, data);
@@ -1787,6 +2006,7 @@ function ManageUsersInner() {
                         }
                         setShowStudentModal(false);
                         setEditingStudent(null);
+                        setStudentModalDefaultGroupId(undefined);
                     }}
                 />
             )}
@@ -1794,10 +2014,16 @@ function ManageUsersInner() {
             {/* Group Modal */}
             {showGroupModal && (
                 <GroupModal
-                    onClose={() => setShowGroupModal(false)}
-                    onSubmit={(data) => {
-                        handleAddGroup(data);
+                    initial={editingGroup}
+                    onClose={() => {
                         setShowGroupModal(false);
+                        setEditingGroup(null);
+                    }}
+                    onSubmit={(data) => {
+                        if (handleSaveGroup(data)) {
+                            setShowGroupModal(false);
+                            setEditingGroup(null);
+                        }
                     }}
                 />
             )}
@@ -2503,18 +2729,36 @@ function ModalShell({
         >
             <div
                 onClick={(e) => e.stopPropagation()}
+                role="dialog"
+                aria-modal="true"
+                aria-label={title}
                 className="bento-card"
                 style={{
                     width: '100%', maxWidth, padding: '1.5rem',
                     maxHeight: 'calc(100vh - 2rem)',
                     overflowY: 'auto',
-                    background: 'var(--surface)', borderRadius: 'var(--radius-lg)',
-                    boxShadow: '0 20px 40px rgba(0,0,0,0.15)'
+                    background: 'var(--modal-surface)', borderRadius: 'var(--radius-lg)',
+                    boxShadow: '0 24px 64px rgba(15,23,42,0.28), 0 0 0 1px color-mix(in srgb, var(--border), transparent 18%)',
+                    backdropFilter: 'none',
+                    WebkitBackdropFilter: 'none',
                 }}
             >
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.25rem' }}>
                     <h3 style={{ fontSize: '1.1rem', fontWeight: 700 }}>{title}</h3>
-                    <button onClick={onClose} style={{ color: 'var(--muted)' }}>
+                    <button
+                        type="button"
+                        aria-label="모달 닫기"
+                        onClick={onClose}
+                        style={{
+                            width: 44,
+                            height: 44,
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                            color: 'var(--muted)',
+                            borderRadius: 'var(--radius-md)',
+                        }}
+                    >
                         <X size={18} />
                     </button>
                 </div>
@@ -2525,14 +2769,15 @@ function ModalShell({
 }
 
 function StudentModal({
-    groups, initial, onClose, onSubmit,
+    groups, initial, defaultGroupId, onClose, onSubmit,
 }: {
     groups: RosterGroup[];
     initial: RosterStudent | null;
+    defaultGroupId?: string;
     onClose: () => void;
     onSubmit: (data: StudentFormData) => void;
 }) {
-    const initialGroupIdValue = initialStudentGroupId(initial, groups);
+    const initialGroupIdValue = initial ? initialStudentGroupId(initial, groups) : (groups.some(group => group.id === defaultGroupId) ? defaultGroupId || "" : groups[0]?.id ?? "");
     const initialGroup = groups.find(item => item.id === initialGroupIdValue);
     const [name, setName] = useState(initial?.name ?? "");
     const [email, setEmail] = useState(initial?.email ?? "");
@@ -2568,15 +2813,16 @@ function StudentModal({
             >
                 <div style={{ marginBottom: '1rem' }}>
                     <label style={labelStyle}>이름</label>
-                    <input value={name} onChange={e => setName(e.target.value)} style={inputStyle} required />
+                    <input aria-label="학생 이름" value={name} onChange={e => setName(e.target.value)} style={inputStyle} required />
                 </div>
                 <div style={{ marginBottom: '1rem' }}>
                     <label style={labelStyle}>이메일</label>
-                    <input type="email" value={email} onChange={e => setEmail(e.target.value)} style={inputStyle} required />
+                    <input aria-label="학생 이메일" type="email" value={email} onChange={e => setEmail(e.target.value)} style={inputStyle} required />
                 </div>
                 <div style={{ marginBottom: '1.25rem' }}>
                     <label style={labelStyle}>반</label>
                     <select
+                        aria-label="소속 반"
                         value={groupId}
                         onChange={e => {
                             const nextGroup = groups.find(item => item.id === e.target.value);
@@ -2595,6 +2841,7 @@ function StudentModal({
                 <div style={{ marginBottom: '1.25rem' }}>
                     <label style={labelStyle}>지역</label>
                     <input
+                        aria-label="학생 지역"
                         value={region}
                         onChange={e => setRegion(e.target.value)}
                         style={inputStyle}
@@ -2622,14 +2869,15 @@ function StudentModal({
 }
 
 function GroupModal({
-    onClose, onSubmit,
+    initial, onClose, onSubmit,
 }: {
+    initial?: RosterGroup | null;
     onClose: () => void;
     onSubmit: (data: GroupFormData) => void;
 }) {
-    const [name, setName] = useState("");
-    const [region, setRegion] = useState("");
-    const [color, setColor] = useState(GROUP_COLORS[0]);
+    const [name, setName] = useState(initial?.name ?? "");
+    const [region, setRegion] = useState(initial?.region ?? "");
+    const [color, setColor] = useState(initial?.color ?? GROUP_COLORS[0]);
 
     const inputStyle: React.CSSProperties = {
         width: '100%', padding: '0.65rem 0.85rem', background: 'var(--background)',
@@ -2643,7 +2891,7 @@ function GroupModal({
     };
 
     return (
-        <ModalShell title="새 반 만들기" onClose={onClose}>
+        <ModalShell title={initial ? "반 편집" : "새 반 만들기"} onClose={onClose}>
             <form
                 onSubmit={(e) => {
                     e.preventDefault();
@@ -2653,11 +2901,19 @@ function GroupModal({
             >
                 <div style={{ marginBottom: '1rem' }}>
                     <label style={labelStyle}>이름</label>
-                    <input value={name} onChange={e => setName(e.target.value)} style={inputStyle} required />
+                    <input
+                        aria-label="반 이름"
+                        value={name}
+                        onChange={e => setName(e.target.value)}
+                        style={inputStyle}
+                        autoFocus
+                        required
+                    />
                 </div>
                 <div style={{ marginBottom: '1rem' }}>
                     <label style={labelStyle}>지역</label>
                     <input
+                        aria-label="반 지역"
                         value={region}
                         onChange={e => setRegion(e.target.value)}
                         style={inputStyle}
@@ -2672,9 +2928,9 @@ function GroupModal({
                                 key={c}
                                 type="button"
                                 onClick={() => setColor(c)}
-                                aria-label={c}
+                                aria-label={`색상 ${c}`}
                                 style={{
-                                    width: 32, height: 32, borderRadius: '50%', background: c,
+                                    width: 44, height: 44, borderRadius: '50%', background: c,
                                     border: color === c ? '3px solid var(--foreground)' : '3px solid transparent',
                                     cursor: 'pointer', transition: 'transform 0.15s',
                                     transform: color === c ? 'scale(1.1)' : 'scale(1)',
@@ -2695,7 +2951,7 @@ function GroupModal({
                         type="submit"
                         style={{ padding: '0.65rem 1.1rem', background: 'var(--primary)', color: 'white', borderRadius: 'var(--radius-md)', fontWeight: 700, fontSize: '0.85rem' }}
                     >
-                        만들기
+                        {initial ? "저장" : "만들기"}
                     </button>
                 </div>
             </form>
@@ -2837,10 +3093,16 @@ function ConfirmModal({
                 body: `선택된 ${action.count}명을 삭제합니다. 목록과 반 통계에서 바로 제외됩니다.`,
                 confirm: "삭제",
             }
+            : action.kind === "invite"
+                ? {
+                    title: "초대 취소",
+                    body: `${action.label} 초대를 취소합니다. 취소된 초대는 목록에서 제거됩니다.`,
+                    confirm: "초대 취소",
+                }
             : {
-                title: "초대 취소",
-                body: `${action.label} 초대를 취소합니다. 취소된 초대는 목록에서 제거됩니다.`,
-                confirm: "초대 취소",
+                title: "반 삭제",
+                body: `${action.label} 반을 삭제합니다. 학생이 남아 있으면 삭제되지 않습니다.`,
+                confirm: "반 삭제",
             };
 
     return (

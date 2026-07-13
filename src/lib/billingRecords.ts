@@ -31,7 +31,13 @@ export interface LocalPlanCycleReminder {
     daysUntil: number;
 }
 
-function isoDate(value: Date): string {
+/**
+ * Formats a Date as YYYY-MM-DD in local time. Callers that render dates for the
+ * Korean audience must use this instead of `Date.toISOString().slice(0,10)`,
+ * which converts to UTC and renders the previous day within 9 hours of midnight
+ * (KST is UTC+9).
+ */
+export function isoDate(value: Date): string {
     const yyyy = value.getFullYear();
     const mm = String(value.getMonth() + 1).padStart(2, "0");
     const dd = String(value.getDate()).padStart(2, "0");
