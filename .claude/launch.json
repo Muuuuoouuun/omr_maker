@@ -6,6 +6,12 @@
       "runtimeExecutable": "npm",
       "runtimeArgs": ["run", "dev"],
       "port": 3003
+    },
+    {
+      "name": "omr-dev-https",
+      "runtimeExecutable": "npx",
+      "runtimeArgs": ["next", "dev", "--experimental-https", "-p", "3003"],
+      "port": 3003
     }
   ]
 }
