@@ -94,10 +94,12 @@ export function normalizeAnswerValue(value: unknown): number | null {
     const numeric = trimmed.match(/[1-5](?=\s*번|\s*$|[^0-9])/);
     if (numeric) return Number(numeric[0]);
 
-    for (const token of Object.keys(ANSWER_MAP)) {
-        if (trimmed.toUpperCase().includes(token.toUpperCase())) {
-            return ANSWER_MAP[token];
-        }
+    // Last resort: only map an isolated single answer token (optionally with a
+    // trailing "번"). A substring scan would coerce placeholders like "N/A",
+    // "unknown answer", or "가답안 참조" into a confident numeric answer.
+    const stripped = trimmed.replace(/\s*번$/, "").trim();
+    if (stripped.length === 1) {
+        return ANSWER_MAP[stripped.toUpperCase()] ?? ANSWER_MAP[stripped] ?? null;
     }
 
     return null;
@@ -136,11 +138,15 @@ function addCandidate(
 
 export function extractAnswersFromText(text: string): ParsedAnswer[] {
     const candidates = new Map<number, ParsedAnswer>();
-    const answerToken = String.raw`([A-Ea-e①-⑤가나다라마ㄱㄴㄷㄹㅁ]|[1-5]\s*번?)`;
+    // The digit alternative is guarded with a negative lookahead so a decimal
+    // fragment ("2.5점" → "5") or a two-digit run is not read as an answer.
+    const answerToken = String.raw`([A-Ea-e①-⑤가나다라마ㄱㄴㄷㄹㅁ]|[1-5](?:\s*번)?(?![0-9.점%]))`;
 
     const patterns: Array<{ regex: RegExp; confidence: number }> = [
         {
-            regex: new RegExp(String.raw`(?:^|[^\d])(\d{1,3})\s*[\.\)\]\:：\-]\s*${answerToken}`, "g"),
+            // (?!\d*\.\d) rejects a question number that is really the integer part
+            // of a decimal score ("각 2.5점", "배점 1.5") whose "." is the separator.
+            regex: new RegExp(String.raw`(?:^|[^\d])(\d{1,3})(?!\d*\.\d)\s*[\.\)\]\:：\-]\s*${answerToken}`, "g"),
             confidence: 0.95,
         },
         {

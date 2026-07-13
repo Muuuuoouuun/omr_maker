@@ -28,6 +28,7 @@ import {
     type SolveAccessStatus,
 } from "@/lib/studentExamClient";
 import type { SubmitAttemptInput } from "@/lib/studentExamCore";
+import { remainingSecondsWithinWindow } from "@/lib/studentExamCore";
 import { summarizePersistenceWrite } from "@/lib/persistenceFeedback";
 
 const PDFViewer = dynamic(() => import("@/components/PDFViewer"), { ssr: false });
@@ -847,8 +848,7 @@ export default function SolvePage() {
         setHydratedOMRPanelKey("");
         const stored = window.localStorage.getItem(OMR_PANEL_KEY);
         const hasStoredPreference = stored === "collapsed" || stored === "expanded";
-        const tabletQuery = window.matchMedia("(min-width: 641px) and (max-width: 1180px)");
-        setIsOMRCollapsed(hasStoredPreference ? stored === "collapsed" : tabletQuery.matches);
+        setIsOMRCollapsed(hasStoredPreference ? stored === "collapsed" : false);
         setHydratedOMRPanelKey(OMR_PANEL_KEY);
     }, [OMR_PANEL_KEY]);
 
@@ -924,9 +924,11 @@ export default function SolvePage() {
                     toast.error("응시 기간 종료", "이 시험의 응시 가능 기간이 지났습니다.");
                 }
 
-                // Initialize timer from duration
+                // Initialize timer from duration, clamped to the schedule end so a
+                // student entering near endAt isn't shown a full-duration countdown
+                // that outlives the window (which strands answers at the boundary).
                 if (parsed.durationMin && typeof parsed.durationMin === "number") {
-                    setTimeRemaining(parsed.durationMin * 60);
+                    setTimeRemaining(remainingSecondsWithinWindow(parsed.durationMin * 60, parsed.endAt, now));
                 }
 
                 // Restore draft (autosave) if present
@@ -960,11 +962,16 @@ export default function SolvePage() {
                         if (recovery.lost) {
                             toast.error("필기 복구 실패", "저장된 필기를 불러오지 못했습니다. 답안과 진행 상태는 그대로 유지됩니다.");
                         }
-                        const restoredTimeRemaining = typeof draft.timeRemaining === "number"
+                        const rawRestoredTimeRemaining = typeof draft.timeRemaining === "number"
                             ? draft.timeRemaining
                             : typeof parsed.durationMin === "number"
                                 ? parsed.durationMin * 60
                                 : null;
+                        // Clamp the restored (possibly paused/edited) timer to the
+                        // schedule window so reopening a draft after endAt yields 0.
+                        const restoredTimeRemaining = rawRestoredTimeRemaining === null
+                            ? null
+                            : remainingSecondsWithinWindow(rawRestoredTimeRemaining, parsed.endAt, now);
                         const restoredStartedAt = typeof draft.startedAt === "string" ? draft.startedAt : new Date().toISOString();
                         if (typeof draft.timeRemaining === "number") {
                             setTimeRemaining(restoredTimeRemaining);
@@ -1536,6 +1543,12 @@ export default function SolvePage() {
             setIsTeacherAuthing(false);
         }
     };
+
+    useEffect(() => {
+        if (!examData || !solveAllowed || currentQuestionId !== null) return;
+        const firstQuestionId = retakeConfig?.questionIds[0] || examData.questions[0]?.id;
+        if (firstQuestionId) beginQuestionVisit(firstQuestionId);
+    }, [beginQuestionVisit, currentQuestionId, examData, retakeConfig, solveAllowed]);
 
     if (!examData && loadError) {
         return <SolveLoadErrorCard error={loadError} />;

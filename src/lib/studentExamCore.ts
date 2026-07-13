@@ -93,6 +93,24 @@ export function identityAccessSession(identity: StudentServerIdentity): ExamAcce
     };
 }
 
+/**
+ * Remaining seconds for a student's countdown, never exceeding the schedule
+ * window. A student who opens the exam N minutes before endAt must not get a
+ * full-duration timer that would run past the window and strand their answers.
+ * Returns the duration unchanged when the exam has no endAt.
+ */
+export function remainingSecondsWithinWindow(
+    durationSeconds: number,
+    endAt: string | undefined,
+    now: number = Date.now(),
+): number {
+    const safeDuration = Number.isFinite(durationSeconds) ? Math.max(0, Math.floor(durationSeconds)) : 0;
+    const endAtMs = endAt ? Date.parse(endAt) : NaN;
+    if (!Number.isFinite(endAtMs)) return safeDuration;
+    const untilEnd = Math.floor((endAtMs - now) / 1000);
+    return Math.max(0, Math.min(safeDuration, untilEnd));
+}
+
 /** Clamp a client-supplied startedAt into a sane window ending at the server finish time. */
 function clampStartedAt(startedAtInput: string, finishedAtIso: string, exam: Exam): string {
     const finishedMs = Date.parse(finishedAtIso);

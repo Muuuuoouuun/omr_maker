@@ -32,6 +32,25 @@ describe("answer parser normalization", () => {
         expect(parsed).toHaveLength(2);
     });
 
+    it("does not read per-question decimal scores as answers", () => {
+        // "각 2.5점" must not become question 2 → answer 5; "배점 1.5" not Q1 → 5.
+        const parsed = extractAnswersFromText("각 2.5점 배점 1.5 출제일 2026.1 1. ③ 2. ④");
+
+        expect(parsed.find(item => item.questionNum === 1)?.answer).toBe(3);
+        expect(parsed.find(item => item.questionNum === 2)?.answer).toBe(4);
+        // The decimal fragments never produced spurious question rows.
+        expect(parsed.map(item => item.questionNum)).toEqual([1, 2]);
+    });
+
+    it("rejects placeholder strings that merely contain a letter token", () => {
+        expect(normalizeAnswerValue("N/A")).toBeNull();
+        expect(normalizeAnswerValue("unknown answer")).toBeNull();
+        expect(normalizeAnswerValue("가답안 참조")).toBeNull();
+        // A genuine isolated token (optionally with 번) still maps.
+        expect(normalizeAnswerValue("A번")).toBe(1);
+        expect(normalizeAnswerValue("다")).toBe(3);
+    });
+
     it("normalizes Gemini rows with alternate keys and string answers", () => {
         const rows = normalizeGeminiAnswerRows([
             { id: "1", answer: "B", score: "2.5" },

@@ -21,14 +21,28 @@ type Status = "ok" | "unauthenticated" | "degraded_local" | "denied" | "not_foun
 type AccessStatus = "pin_required" | "pin_rate_limited" | "login_required" | "group_denied" | "not_started" | "ended" | "archived";
 
 /**
+ * Grace window (ms) after endAt during which an in-flight submission is still
+ * accepted. A student who started before the window closed and whose auto-submit
+ * fires right at the boundary would otherwise have the attempt dropped and their
+ * answers stranded in the device-local draft. Mirrors the +5min clampStartedAt
+ * grace already applied when persisting startedAt.
+ */
+const SUBMIT_ENDAT_GRACE_MS = 2 * 60 * 1000;
+
+/**
  * PIN gate with brute-force protection. The PIN itself stays stateless (sent
  * per request); failures are counted per (exam, identity) so a wrong-PIN sweep
  * locks only the sweeping identity, not the class.
+ *
+ * `graceMs` (submit path only) relaxes the endAt boundary so a boundary
+ * auto-submit is stored instead of rejected. It never relaxes archived,
+ * not_started, group, or PIN gating — those statuses are returned as-is.
  */
 function evaluateGatedAccess(
     exam: Exam,
     identity: StudentServerIdentity,
     pin: string | undefined,
+    options: { graceMs?: number } = {},
 ): "allowed" | AccessStatus {
     const pinProvided = typeof pin === "string" && pin.trim().length > 0;
     let pinVerified: boolean;
@@ -41,8 +55,16 @@ function evaluateGatedAccess(
     } else {
         pinVerified = verifyExamPin(exam, pin ?? "");
     }
-    const access = evaluateExamAccess(exam, { session: identityAccessSession(identity), pinVerified });
-    return access.status === "allowed" ? "allowed" : access.status;
+    const accessContext = { session: identityAccessSession(identity), pinVerified };
+    const access = evaluateExamAccess(exam, accessContext);
+    if (access.status === "allowed") return "allowed";
+    // Only the endAt boundary is relaxed, and only within the grace window:
+    // re-evaluate with a rewound clock so the other gates still apply.
+    if (access.status === "ended" && options.graceMs) {
+        const graced = evaluateExamAccess(exam, { ...accessContext, now: Date.now() - options.graceMs });
+        if (graced.status === "allowed") return "allowed";
+    }
+    return access.status;
 }
 
 type AdminClient = SupabaseAdminClientLike & SupabaseAdminReadClientLike;
@@ -102,7 +124,7 @@ export async function submitAttempt(input: SubmitAttemptInput, pin?: string): Pr
         const row = await fetchExamRowById(ctx.admin, input.examId);
         if (!row) return { status: "not_found" };
         const exam = examFromSupabaseRow(row as Parameters<typeof examFromSupabaseRow>[0]);
-        const access = evaluateGatedAccess(exam, ctx.identity, pin);
+        const access = evaluateGatedAccess(exam, ctx.identity, pin, { graceMs: SUBMIT_ENDAT_GRACE_MS });
         if (access !== "allowed") return { status: access };
         const attempt = buildServerAttempt(input, exam, ctx.identity, randomUUID(), new Date().toISOString());
         const attemptResult = await ctx.admin.from("omr_attempts").upsert(attemptToSupabaseRow(attempt));

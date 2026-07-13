@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { attemptOwnedBy, buildServerAttempt, identityAccessSession, resolveRetakeScope, type SubmitAttemptInput } from "./studentExamCore";
+import { attemptOwnedBy, buildServerAttempt, identityAccessSession, remainingSecondsWithinWindow, resolveRetakeScope, type SubmitAttemptInput } from "./studentExamCore";
 import type { Exam } from "@/types/omr";
 import type { StudentServerIdentity } from "./studentServerSession";
 
@@ -15,6 +15,35 @@ const GUEST: StudentServerIdentity = {
     issuedAt: 0, expiresAt: 9e15,
 };
 const INPUT: SubmitAttemptInput = { examId: "e1", answers: { 1: 3, 2: 4 }, startedAt: "2026-07-01T01:00:00.000Z" };
+
+describe("remainingSecondsWithinWindow", () => {
+    const NOW = Date.parse("2026-07-01T01:00:00.000Z");
+
+    it("returns the full duration when there is no endAt", () => {
+        expect(remainingSecondsWithinWindow(3000, undefined, NOW)).toBe(3000);
+    });
+
+    it("clamps to the time left until endAt when that is smaller than the duration", () => {
+        // endAt is 5 minutes away but the duration budget is 50 minutes
+        const endAt = new Date(NOW + 5 * 60 * 1000).toISOString();
+        expect(remainingSecondsWithinWindow(50 * 60, endAt, NOW)).toBe(5 * 60);
+    });
+
+    it("keeps the duration when endAt is further away than the duration", () => {
+        const endAt = new Date(NOW + 90 * 60 * 1000).toISOString();
+        expect(remainingSecondsWithinWindow(50 * 60, endAt, NOW)).toBe(50 * 60);
+    });
+
+    it("returns 0 when endAt has already passed", () => {
+        const endAt = new Date(NOW - 60 * 1000).toISOString();
+        expect(remainingSecondsWithinWindow(50 * 60, endAt, NOW)).toBe(0);
+    });
+
+    it("never returns a negative or fractional value", () => {
+        expect(remainingSecondsWithinWindow(-10, undefined, NOW)).toBe(0);
+        expect(remainingSecondsWithinWindow(120.9, undefined, NOW)).toBe(120);
+    });
+});
 
 describe("studentExamCore", () => {
     it("server-grades and injects owner/org, ignoring any client score", () => {
