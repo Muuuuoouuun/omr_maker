@@ -1177,13 +1177,23 @@ export default function SolvePage() {
         const nowMs = Date.now();
         beginQuestionVisit(qId, nowMs);
         const previousAnswers = studentAnswersRef.current;
-        if (previousAnswers[qId] !== optionIndex) {
+        // Clicking the already-selected option clears it, so a mis-tap can be
+        // returned to 미응답 (unanswered) — blank must stay distinct from wrong
+        // for review, retake targeting and teacher analytics.
+        const isUnmark = previousAnswers[qId] === optionIndex;
+        if (previousAnswers[qId] !== optionIndex || isUnmark) {
             const timing = ensureQuestionTiming(qId, nowMs);
             timing.answerChangeCount += 1;
             timing.lastAnsweredAt = new Date(nowMs).toISOString();
         }
 
-        const nextAnswers = { ...previousAnswers, [qId]: optionIndex };
+        let nextAnswers: Record<number, number>;
+        if (isUnmark) {
+            nextAnswers = { ...previousAnswers };
+            delete nextAnswers[qId];
+        } else {
+            nextAnswers = { ...previousAnswers, [qId]: optionIndex };
+        }
         const nextDraft: SolveDraft = {
             answers: nextAnswers,
             drawings: compactDrawings(drawings),

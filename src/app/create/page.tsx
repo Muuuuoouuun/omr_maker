@@ -154,11 +154,22 @@ function CreateConfirmDialog({
     state,
     onCancel,
     onConfirm,
+    onDismiss,
 }: {
     state: CreateConfirmState;
     onCancel: () => void;
     onConfirm: () => void;
+    onDismiss: () => void;
 }) {
+    // Backdrop / Escape must never be the destructive path (esp. deleting a
+    // recovered draft): they resolve to the safe, non-destructive action.
+    useEffect(() => {
+        const onKey = (e: KeyboardEvent) => {
+            if (e.key === "Escape") onDismiss();
+        };
+        window.addEventListener("keydown", onKey);
+        return () => window.removeEventListener("keydown", onKey);
+    }, [onDismiss]);
     const copy = (() => {
         if (state.kind === "restoreDraft") {
             return {
@@ -199,7 +210,7 @@ function CreateConfirmDialog({
     return (
         <div
             role="presentation"
-            onClick={onCancel}
+            onClick={onDismiss}
             style={{
                 position: 'fixed',
                 inset: 0,
@@ -784,13 +795,21 @@ function CreateOMRPageInner() {
             lastSnapshotRef.current = snapshotCurrent();
             return;
         }
+        // Don't record history until the editor is actually ready: mount-time
+        // default/question hydration would otherwise push an empty-question
+        // snapshot, so a Ctrl+Z with no user edits wipes the sheet. Keep the
+        // baseline current during hydration but push nothing.
+        if (!initialDefaultsReady || questions.length === 0) {
+            lastSnapshotRef.current = snapshotCurrent();
+            return;
+        }
         if (lastSnapshotRef.current) {
             historyRef.current.push(lastSnapshotRef.current);
             if (historyRef.current.length > HISTORY_LIMIT) historyRef.current.shift();
             redoRef.current = []; // new edit clears redo stack
         }
         lastSnapshotRef.current = snapshotCurrent();
-    }, [title, questionsCount, columns, questions, defaultChoices, durationMin, startAt, endAt, snapshotCurrent]);
+    }, [title, questionsCount, columns, questions, defaultChoices, durationMin, startAt, endAt, snapshotCurrent, initialDefaultsReady]);
 
     const applySnapshot = useCallback((snap: HistorySnapshot) => {
         suppressHistoryRef.current = true;
@@ -1400,6 +1419,19 @@ function CreateOMRPageInner() {
         setConfirmState(null);
     };
 
+    // Non-destructive resolution for backdrop click / Escape. For a recovered
+    // draft the safe choice is to preserve the work by restoring it (the
+    // explicit "초안 삭제" button remains the only path that discards); for the
+    // other prompts closing simply keeps the current editor state unchanged.
+    const handleConfirmDismiss = () => {
+        if (!confirmState) return;
+        if (confirmState.kind === "restoreDraft") {
+            handleConfirmAccept();
+            return;
+        }
+        setConfirmState(null);
+    };
+
     const handleConfirmAccept = () => {
         if (!confirmState) return;
         if (confirmState.kind === "restoreDraft") {
@@ -1574,6 +1606,7 @@ function CreateOMRPageInner() {
                     state={confirmState}
                     onCancel={handleConfirmCancel}
                     onConfirm={handleConfirmAccept}
+                    onDismiss={handleConfirmDismiss}
                 />
             )}
 

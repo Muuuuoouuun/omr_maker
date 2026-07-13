@@ -142,6 +142,10 @@ export default function Home() {
   // Anti-spoof: require a start-code for returning students.
   const [startCode, setStartCode] = useState("");
   const [needsCode, setNeedsCode] = useState(false);
+  // A newly issued start code acts as the student's password on their next
+  // login, so it must be shown persistently (not a 3s toast) until acknowledged.
+  const [issuedCodeModal, setIssuedCodeModal] = useState<{ code: string; next: string } | null>(null);
+  const [copiedIssuedCode, setCopiedIssuedCode] = useState(false);
   const [needsStudentLookup, setNeedsStudentLookup] = useState(false);
 
   useEffect(() => {
@@ -318,13 +322,6 @@ export default function Home() {
       return;
     }
 
-    if (codeDecision.status === "new_code_issued") {
-      toast.success(
-        "시작 코드 발급",
-        `다음 로그인 시 이 코드를 입력하세요: ${codeDecision.code}`
-      );
-    }
-
     const session: StudentSession = {
       name: trimmedName,
       studentId: identity.studentId,
@@ -369,6 +366,13 @@ export default function Home() {
 
     saveSession(session);
     const next = normalizeStudentRedirectPath(new URLSearchParams(window.location.search).get("next"));
+    // A freshly issued start code is required for the student's next login, so
+    // hold navigation and show it persistently until the student acknowledges.
+    if (codeDecision.status === "new_code_issued") {
+      setCopiedIssuedCode(false);
+      setIssuedCodeModal({ code: codeDecision.code, next });
+      return;
+    }
     router.push(next);
   };
 
@@ -408,6 +412,22 @@ export default function Home() {
     toast.info("최근 학생 정보 없음", "이름과 반으로 다시 로그인해주세요.");
   };
 
+  const handleCopyIssuedCode = async () => {
+    if (!issuedCodeModal) return;
+    try {
+      await navigator.clipboard.writeText(issuedCodeModal.code);
+      setCopiedIssuedCode(true);
+    } catch {
+      setCopiedIssuedCode(false);
+    }
+  };
+
+  const handleAcknowledgeIssuedCode = () => {
+    const next = issuedCodeModal?.next;
+    setIssuedCodeModal(null);
+    if (next) router.push(next);
+  };
+
   const handleBack = () => {
     setRole("none");
     setError("");
@@ -427,6 +447,66 @@ export default function Home() {
       <div style={{ position: "fixed", top: "1.25rem", right: "1.25rem", zIndex: 10 }}>
         <ThemeToggle />
       </div>
+
+      {/* Persistent start-code hand-off: the code is the student's next-login
+          password, so it must survive navigation and require acknowledgement. */}
+      {issuedCodeModal && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="issued-code-title"
+          style={{
+            position: "fixed",
+            inset: 0,
+            zIndex: 50,
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            padding: "1.5rem",
+            background: "rgba(0,0,0,0.55)",
+          }}
+        >
+          <div className="card" style={{ maxWidth: "26rem", width: "100%", padding: "1.75rem", textAlign: "center" }}>
+            <h2 id="issued-code-title" style={{ margin: 0, fontSize: "1.15rem", fontWeight: 700 }}>
+              시작 코드가 발급되었습니다
+            </h2>
+            <p style={{ margin: "0.6rem 0 1.1rem", opacity: 0.85, fontSize: "0.92rem", lineHeight: 1.5 }}>
+              다음에 다시 로그인할 때 이 코드가 필요합니다. 잊지 않도록 지금 저장하거나 적어두세요.
+            </p>
+            <div
+              style={{
+                fontSize: "1.9rem",
+                fontWeight: 800,
+                letterSpacing: "0.35em",
+                padding: "0.9rem 0",
+                borderRadius: "0.75rem",
+                background: "var(--surface-2, rgba(127,127,127,0.12))",
+                userSelect: "all",
+              }}
+            >
+              {issuedCodeModal.code}
+            </div>
+            <div style={{ display: "flex", gap: "0.6rem", marginTop: "1.25rem" }}>
+              <button
+                type="button"
+                className="btn btn-secondary"
+                onClick={handleCopyIssuedCode}
+                style={{ flex: 1 }}
+              >
+                {copiedIssuedCode ? "복사됨 ✓" : "코드 복사"}
+              </button>
+              <button
+                type="button"
+                className="btn btn-primary"
+                onClick={handleAcknowledgeIssuedCode}
+                style={{ flex: 1 }}
+              >
+                저장했어요, 계속
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       <div
         className="container animate-fade-in home-container"
