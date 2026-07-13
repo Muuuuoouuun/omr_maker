@@ -10,9 +10,11 @@ import { shouldUseDemoData } from "@/lib/demoData";
 import { loadAttempts, loadExams } from "@/lib/omrPersistence";
 import {
     buildBillingPlanHealth,
+    buildBillingUsageLimitViews,
     buildBillingUsageSummary,
     type BillingLimitStatus,
     type BillingPlanHealthLevel,
+    type BillingUsageLimitView,
     type BillingUsageSummary,
 } from "@/lib/billingUsage";
 import { billingStatusMeta, createLocalPlanChangeInvoice, type BillingInvoice } from "@/lib/billingRecords";
@@ -23,7 +25,7 @@ import {
 } from "@/lib/paymentProvider";
 import { readRosterStudents } from "@/lib/rosterStorage";
 import { formatPaymentProviderRoadmap } from "@/lib/serviceRoadmap";
-import { PLAN_BY_KEY, PLAN_CATALOG, getPlanEntitlementViews, normalizePlan, readAiRecognitionUsage, setCurrentPlan, type PlanEntitlementKey } from "@/utils/plans";
+import { PLAN_BY_KEY, PLAN_CATALOG, getPlanEntitlementViews, normalizePlan, readAiRecognitionUsage, setCurrentPlan, type PlanEntitlementKey, type PlanEntitlementView } from "@/utils/plans";
 
 const PLAN_ICONS: Record<PlanKey, React.ReactNode> = {
     free: <Sparkles size={22} />,
@@ -49,6 +51,37 @@ const BILLING_ENTITLEMENT_KEYS = [
     "multiTeacher",
     "organizationDashboard",
 ] satisfies readonly PlanEntitlementKey[];
+
+export interface PlanChangeImpact {
+    isDowngrade: boolean;
+    limitWarnings: BillingUsageLimitView[];
+    lockedEntitlements: PlanEntitlementView[];
+}
+
+/**
+ * Computes what a plan change would restrict. For a downgrade (target cheaper than
+ * current) it returns the limits that would be blocked/near under the target plan
+ * given current usage, plus the entitlements that are currently available but lost.
+ * Upgrades and same-price changes report no restrictions.
+ */
+export function buildPlanChangeImpact(
+    currentKey: PlanKey,
+    targetKey: PlanKey,
+    usage: BillingUsageSummary,
+    entitlementKeys: readonly PlanEntitlementKey[],
+): PlanChangeImpact {
+    const currentEntry = PLAN_BY_KEY[currentKey];
+    const targetEntry = PLAN_BY_KEY[targetKey];
+    const isDowngrade = targetEntry.priceNum < currentEntry.priceNum;
+    if (!isDowngrade) {
+        return { isDowngrade: false, limitWarnings: [], lockedEntitlements: [] };
+    }
+    const limitWarnings = buildBillingUsageLimitViews(targetKey, usage)
+        .filter(view => view.status === "blocked" || view.status === "near");
+    const lockedEntitlements = getPlanEntitlementViews(targetKey, entitlementKeys)
+        .filter(view => !view.enabled && currentEntry.entitlements[view.key]);
+    return { isDowngrade: true, limitWarnings, lockedEntitlements };
+}
 
 const PLAN_HEALTH_META: Record<BillingPlanHealthLevel, { label: string; color: string; background: string }> = {
     ready: { label: "서비스 가능", color: "#047857", background: "#d1fae5" },
@@ -852,7 +885,12 @@ th { background: #f8fafc; font-size: 12px; color: #64748b; text-transform: upper
                 // Price preview is inclusive of VAT. Without a payment provider this only records a local plan change.
                 const subtotal = Math.round(basePrice / 1.1);
                 const vat = basePrice - subtotal;
-                const actionLabel = upgradePlan.priceNum > currentPlan.priceNum ? "업그레이드" : "플랜 변경";
+                const planImpact = buildPlanChangeImpact(current, upgradeTarget, usage, BILLING_ENTITLEMENT_KEYS);
+                const actionLabel = upgradePlan.priceNum > currentPlan.priceNum
+                    ? "업그레이드"
+                    : planImpact.isDowngrade
+                        ? "다운그레이드"
+                        : "플랜 변경";
                 return (
                     <div
                         role="dialog"
@@ -898,6 +936,38 @@ th { background: #f8fafc; font-size: 12px; color: #64748b; text-transform: upper
                                 </ul>
                             </div>
 
+                            {planImpact.isDowngrade && (planImpact.limitWarnings.length > 0 || planImpact.lockedEntitlements.length > 0) && (
+                                <div style={{
+                                    padding: '0.9rem 1rem',
+                                    background: '#fffbeb',
+                                    border: '1px solid #fde68a',
+                                    borderRadius: 'var(--radius-md)',
+                                    marginBottom: '1rem'
+                                }}>
+                                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', marginBottom: '0.5rem', color: '#92400e' }}>
+                                        <AlertCircle size={16} />
+                                        <strong style={{ fontSize: '0.88rem' }}>다운그레이드 시 제한되는 항목</strong>
+                                    </div>
+                                    <ul style={{ listStyle: 'none', padding: 0, margin: 0, display: 'grid', gap: '0.35rem' }}>
+                                        {planImpact.limitWarnings.map(view => (
+                                            <li key={view.metric} style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', fontSize: '0.8rem', color: '#7c2d12' }}>
+                                                <Lock size={12} style={{ flexShrink: 0 }} />
+                                                <span>{view.label} {formatLimit(view.used)}/{formatLimit(view.limit)} · {view.status === "blocked" ? "한도 초과" : "한도 임박"}</span>
+                                            </li>
+                                        ))}
+                                        {planImpact.lockedEntitlements.map(view => (
+                                            <li key={view.key} style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', fontSize: '0.8rem', color: '#7c2d12' }}>
+                                                <Lock size={12} style={{ flexShrink: 0 }} />
+                                                <span>{view.label} 잠금</span>
+                                            </li>
+                                        ))}
+                                    </ul>
+                                    <p style={{ fontSize: '0.74rem', color: '#92400e', marginTop: '0.5rem', lineHeight: 1.45, wordBreak: 'keep-all' }}>
+                                        기존 데이터는 삭제되지 않지만, 한도를 초과한 항목과 잠긴 기능은 다시 업그레이드하기 전까지 사용할 수 없습니다.
+                                    </p>
+                                </div>
+                            )}
+
                             <div style={{ padding: '0.85rem 1rem', background: 'var(--background)', borderRadius: 'var(--radius-md)', marginBottom: '1rem', fontSize: '0.88rem' }}>
                                 <div style={{ display: 'flex', justifyContent: 'space-between', padding: '0.25rem 0' }}>
                                     <span style={{ color: 'var(--muted)' }}>소계</span>
@@ -942,7 +1012,9 @@ th { background: #f8fafc; font-size: 12px; color: #64748b; text-transform: upper
                                         cursor: paymentProviderReadiness.canRecordLocalPlanChange ? 'pointer' : 'not-allowed',
                                     }}
                                 >
-                                    {paymentProviderReadiness.canRecordLocalPlanChange ? "로컬 플랜 변경 기록" : "provider 설정 필요"}
+                                    {paymentProviderReadiness.canRecordLocalPlanChange
+                                        ? (planImpact.isDowngrade ? "다운그레이드 확정" : "로컬 플랜 변경 기록")
+                                        : "provider 설정 필요"}
                                 </button>
                             </div>
                         </div>

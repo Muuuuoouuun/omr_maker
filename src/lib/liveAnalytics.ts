@@ -32,6 +32,41 @@ function hashString(str: string): number {
     return Math.abs(h);
 }
 
+/** Stable identity key for collapsing repeat submissions from the same student. */
+function liveAttemptIdentityKey(attempt: Attempt): string {
+    return attempt.studentProfileId
+        || attempt.studentId
+        || attempt.guestId
+        || attempt.studentName
+        || attempt.id;
+}
+
+/** Recency for picking the latest attempt per student. Falls back to start time. */
+function liveAttemptRecency(attempt: Attempt): number {
+    return (Date.parse(attempt.finishedAt || "") || 0)
+        || (Date.parse(attempt.startedAt || "") || 0);
+}
+
+/**
+ * Collapse the raw attempt list for a single exam into one row per student:
+ * excludes premium retakes (which only cover a question subset and would skew
+ * per-question denominators) and keeps the latest attempt per student identity
+ * so repeat submissions never double-count on the live cards, count tiles, or
+ * question heatmap. Mirrors the retake skip in kakaoNotificationQueue.
+ */
+export function dedupeLiveAttempts(attempts: Attempt[]): Attempt[] {
+    const latestByStudent = new Map<string, Attempt>();
+    for (const attempt of attempts) {
+        if (!attempt || attempt.retake) continue;
+        const key = liveAttemptIdentityKey(attempt);
+        const existing = latestByStudent.get(key);
+        if (!existing || liveAttemptRecency(attempt) >= liveAttemptRecency(existing)) {
+            latestByStudent.set(key, attempt);
+        }
+    }
+    return Array.from(latestByStudent.values());
+}
+
 export function buildRealQuestionHeatmap(exam: Exam, attempts: Attempt[]): LiveQuestionHeatmapCell[] {
     const submittedAttempts = attempts.filter(attempt => attempt.status === "completed");
 

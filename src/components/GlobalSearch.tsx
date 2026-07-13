@@ -35,6 +35,13 @@ const GROUP_LABELS: Record<SearchItem["group"], string> = {
     setting: "설정",
 };
 
+// The results list renders grouped in this fixed order. The flat `filtered`
+// array must follow the same order so keyboard activeIdx / aria-activedescendant
+// reference the exact item the highlight shows (settings items are static and
+// would otherwise sort before dynamic exam/student results, desyncing the two).
+const GROUP_ORDER: SearchItem["group"][] = ["page", "exam", "student", "setting"];
+const groupRank = (group: SearchItem["group"]) => GROUP_ORDER.indexOf(group);
+
 export default function GlobalSearch() {
     const router = useRouter();
     const [open, setOpen] = useState(false);
@@ -120,13 +127,19 @@ export default function GlobalSearch() {
 
     const all = useMemo(() => [...STATIC_ITEMS, ...dynamic], [dynamic]);
     const filtered = useMemo(() => {
-        if (!query.trim()) return all.slice(0, 20);
-        const q = query.toLowerCase();
-        return all
-            .filter(item =>
-                item.title.toLowerCase().includes(q) ||
-                (item.subtitle?.toLowerCase().includes(q) ?? false) ||
-                item.keywords.toLowerCase().includes(q))
+        const base = !query.trim()
+            ? all
+            : (() => {
+                const q = query.toLowerCase();
+                return all.filter(item =>
+                    item.title.toLowerCase().includes(q) ||
+                    (item.subtitle?.toLowerCase().includes(q) ?? false) ||
+                    item.keywords.toLowerCase().includes(q));
+            })();
+        // Stable sort into the grouped render order so the flat index used by
+        // keyboard nav / aria-activedescendant matches the visible highlight.
+        return [...base]
+            .sort((a, b) => groupRank(a.group) - groupRank(b.group))
             .slice(0, 20);
     }, [query, all]);
 

@@ -51,6 +51,7 @@ import {
     type RegionalLearningScope,
 } from "@/lib/regionalAnalytics";
 import { buildRetakeHref } from "@/lib/retakeLinks";
+import { PremiumActionLink } from "@/components/PremiumFeatureGate";
 import { findStudentStartCode, generateStartCode, readStudentCodes, writeStudentCodes } from "@/lib/studentCodes";
 import { getCurrentPlan, hasPlanEntitlement } from "@/utils/plans";
 import { studentIdFor } from "@/utils/storage";
@@ -229,6 +230,7 @@ function ManageUsersInner() {
     const [hydrated, setHydrated] = useState(false);
     const studentGrowthReportsEnabled = hasPlanEntitlement(currentPlan, "studentGrowthReports");
     const advancedAnalyticsEnabled = hasPlanEntitlement(currentPlan, "advancedAnalytics");
+    const retakeAssignmentsEnabled = hasPlanEntitlement(currentPlan, "retakeAssignments");
 
     // UI state for modals/popovers
     const [showStudentModal, setShowStudentModal] = useState(false);
@@ -2034,6 +2036,7 @@ function ManageUsersInner() {
                     group={selectedGroup}
                     profile={selectedGroupProfile}
                     onClose={() => setShowGroupProfileModal(false)}
+                    retakeAssignmentsEnabled={retakeAssignmentsEnabled}
                 />
             )}
 
@@ -2065,6 +2068,7 @@ function ManageUsersInner() {
                     student={selected}
                     profile={selectedProfile}
                     onClose={() => setShowProfileModal(false)}
+                    retakeAssignmentsEnabled={retakeAssignmentsEnabled}
                 />
             )}
 
@@ -2190,11 +2194,13 @@ function ProfileMetric({ label, value, icon, color }: { label: string; value: st
     );
 }
 
-function WeaknessRetakeLink({ weakness }: { weakness: StudentProfileWeaknessInsight | GroupProfileWeaknessInsight }) {
+function WeaknessRetakeLink({ weakness, enabled }: { weakness: StudentProfileWeaknessInsight | GroupProfileWeaknessInsight; enabled: boolean }) {
     if (weakness.retakeQuestionIds.length === 0) return null;
     return (
-        <NextLink
+        <PremiumActionLink
+            enabled={enabled}
             href={weaknessRetakeHref(weakness)}
+            lockedTitle="Pro 이상에서 약점 유형 재시험 링크를 만들 수 있습니다."
             style={{
                 display: 'inline-flex',
                 alignItems: 'center',
@@ -2211,16 +2217,17 @@ function WeaknessRetakeLink({ weakness }: { weakness: StudentProfileWeaknessInsi
             }}
         >
             재추천 {weakness.retakeQuestionIds.length}문항
-        </NextLink>
+        </PremiumActionLink>
     );
 }
 
 function GroupProfileModal({
-    group, profile, onClose,
+    group, profile, onClose, retakeAssignmentsEnabled,
 }: {
     group: RosterGroup;
     profile: GroupProfileInsight;
     onClose: () => void;
+    retakeAssignmentsEnabled: boolean;
 }) {
     return (
         <ModalShell title={`${group.name} 반 분석`} onClose={onClose} maxWidth={940}>
@@ -2372,7 +2379,7 @@ function GroupProfileModal({
                                         <div style={{ color: 'var(--primary)', fontSize: '0.76rem', fontWeight: 850 }}>
                                             {weakness.recommendedAction}
                                         </div>
-                                        <WeaknessRetakeLink weakness={weakness} />
+                                        <WeaknessRetakeLink weakness={weakness} enabled={retakeAssignmentsEnabled} />
                                     </div>
                                 </div>
                             ))}
@@ -2466,11 +2473,12 @@ function GroupProfileModal({
 }
 
 function StudentProfileModal({
-    student, profile, onClose,
+    student, profile, onClose, retakeAssignmentsEnabled,
 }: {
     student: RosterStudent;
     profile: StudentProfileInsight;
     onClose: () => void;
+    retakeAssignmentsEnabled: boolean;
 }) {
     const trendColor = profile.trendDelta >= 0 ? "var(--success)" : "var(--error)";
     const trendLabel = profile.trendDelta === 0
@@ -2649,7 +2657,7 @@ function StudentProfileModal({
                                         <div style={{ color: 'var(--primary)', fontSize: '0.76rem', fontWeight: 850 }}>
                                             {group.recommendedAction}
                                         </div>
-                                        <WeaknessRetakeLink weakness={group} />
+                                        <WeaknessRetakeLink weakness={group} enabled={retakeAssignmentsEnabled} />
                                     </div>
                                 </div>
                             ))}

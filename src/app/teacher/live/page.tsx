@@ -1,18 +1,15 @@
 "use client";
 
-import { useState, useEffect, useMemo, useCallback, useRef } from "react";
+import { useState, useEffect, useMemo, useCallback } from "react";
 import Link from "next/link";
 import TeacherHeader from "@/components/TeacherHeader";
 import { Activity, Users, CheckCircle2, Clock, AlertTriangle, Bell, PlayCircle, PauseCircle, PlusCircle } from "lucide-react";
 import { toast } from "@/components/Toast";
 import type { Exam, Attempt } from "@/types/omr";
-import type { RosterGroup, RosterStudent } from "@/lib/rosterStorage";
 import { shouldUseDemoData } from "@/lib/demoData";
 import { loadAttempts, loadExam, loadExams, saveAttempt, saveExam } from "@/lib/omrPersistence";
-import { readRosterGroups, readRosterStudents } from "@/lib/rosterStorage";
 import { resolveAttemptScore } from "@/lib/attemptScores";
-import { buildLiveQuestionHeatmap } from "@/lib/liveAnalytics";
-import { missingStudentsForExam } from "@/lib/kakaoNotificationQueue";
+import { buildLiveQuestionHeatmap, dedupeLiveAttempts } from "@/lib/liveAnalytics";
 import { forceCompleteLiveAttempt, liveAttemptsNeedingForceFinish } from "@/lib/liveControls";
 import { safeRatePercent } from "@/lib/scoreUtils";
 
@@ -307,19 +304,24 @@ export default function LiveResultsPage() {
         [attempts, exam.id, hasExam]
     );
 
+    // Retake-free, one-row-per-student view of the exam's attempts. Used for the
+    // live cards, count tiles, and question heatmap so a student who resubmits or
+    // takes a wrong-answer retake isn't double-counted (raw examAttempts is kept
+    // for force-finish, which must still target every in-progress attempt).
+    const liveAttempts = useMemo(() => dedupeLiveAttempts(examAttempts), [examAttempts]);
+
     // Initialize synthetic students for this exam if not yet seeded
     useEffect(() => {
         if (!hasExam || !isDemoLive) return;
         // Seed derived display-only data once the selected exam is known.
-        // eslint-disable-next-line react-hooks/set-state-in-effect
         setSyntheticByExam(prev => {
             if (prev[exam.id]) return prev;
-            const real = examAttempts.map(a => attemptToStudent(a, exam.total, exam.sourceExam));
+            const real = liveAttempts.map(a => attemptToStudent(a, exam.total, exam.sourceExam));
             const needed = Math.max(MIN_STUDENT_CARDS - real.length, 0);
             if (needed === 0) return prev;
             return { ...prev, [exam.id]: genSyntheticStudents(needed, exam.total || 20, real.length) };
         });
-    }, [exam.id, exam.sourceExam, exam.total, examAttempts, hasExam, isDemoLive]);
+    }, [exam.id, exam.sourceExam, exam.total, liveAttempts, hasExam, isDemoLive]);
 
     // Advance synthetic students every 3s when not paused — makes "Live" feel live
     useEffect(() => {
@@ -367,16 +369,15 @@ export default function LiveResultsPage() {
     const students = useMemo<LiveStudent[]>(() => {
         if (!hasExam) return [];
         const totalQ = exam.total;
-        const real = examAttempts.map(a => attemptToStudent(a, totalQ, exam.sourceExam));
+        const real = liveAttempts.map(a => attemptToStudent(a, totalQ, exam.sourceExam));
         if (!isDemoLive || real.length >= MIN_STUDENT_CARDS) return real;
         const synthetic = syntheticByExam[exam.id] ?? [];
         return [...real, ...synthetic];
-    }, [examAttempts, exam.id, exam.sourceExam, exam.total, hasExam, isDemoLive, syntheticByExam]);
+    }, [liveAttempts, exam.id, exam.sourceExam, exam.total, hasExam, isDemoLive, syntheticByExam]);
 
     // Reset the countdown from the actual exam whenever the selected exam changes,
     // instead of counting down from a hardcoded value that never resets.
     useEffect(() => {
-        // eslint-disable-next-line react-hooks/set-state-in-effect
         setTimerSeconds(hasExam ? liveExamTimerSeconds(exam) : 0);
         // Key on the primitive schedule fields, not the `exam` object: the 3s poll
         // replaces `exams` (new object identity) every tick, and depending on `exam`
@@ -413,11 +414,11 @@ export default function LiveResultsPage() {
             sourceExam: exam.sourceExam,
             questions: exam.questions ?? [],
             totalQuestionCount: exam.total || 20,
-            submittedAttempts: examAttempts,
+            submittedAttempts: liveAttempts,
             submittedDisplayCount: students.filter(s => s.status === "submitted").length,
             allowSynthetic: isDemoLive,
         });
-    }, [examAttempts, exam.questions, exam.total, exam.id, exam.sourceExam, isDemoLive, students]);
+    }, [liveAttempts, exam.questions, exam.total, exam.id, exam.sourceExam, isDemoLive, students]);
     const hasHeatmapData = heatmap.some(h => h.total > 0);
     const weakHeatmapCells = heatmap.filter(h => h.total > 0 && safeRatePercent(h.correct, h.total) < 45);
 

@@ -23,8 +23,10 @@ import 'react-pdf/dist/Page/TextLayer.css';
 import { buildPenCursor, buildHighlighterCursor } from '@/lib/drawingCursors';
 import { strokeHitTest } from '@/lib/strokeGeometry';
 
-// Worker setup for Next.js
-pdfjs.GlobalWorkerOptions.workerSrc = '/pdf.worker.min.mjs';
+// Worker setup for Next.js — version the URL so a pdfjs-dist upgrade is a cache
+// miss (avoids the "API version X does not match Worker version Y" hard-fail for
+// returning PWA users still holding the old cache-first worker).
+pdfjs.GlobalWorkerOptions.workerSrc = `/pdf.worker.min.mjs?v=${pdfjs.version}`;
 
 interface MarkerData {
     page: number;
@@ -1046,7 +1048,7 @@ export default function PDFViewer({
                                             zIndex: 10,
                                             cursor: canvasCursor,
                                             pointerEvents: canEditDrawing ? 'auto' : 'none',
-                                            touchAction: fingerDrawingEnabled ? 'none' : 'pan-x pan-y pinch-zoom'
+                                            touchAction: fingerDrawingEnabled && drawingMode !== 'click' ? 'none' : 'pan-x pan-y pinch-zoom'
                                         }}
                                     />
                                 )}

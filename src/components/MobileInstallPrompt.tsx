@@ -62,18 +62,28 @@ export default function MobileInstallPrompt() {
   const [showIOSPrompt, setShowIOSPrompt] = useState(false);
   const [isVisible, setIsVisible] = useState(false);
 
+  // Register the install listeners unconditionally on mount. Chrome fires
+  // beforeinstallprompt once shortly after load, so if a student lands directly
+  // on a suppressed path (e.g. /solve/[id]) we must still capture the deferred
+  // prompt — otherwise the event is lost for the whole session. Suppression and
+  // the eligibility checks (standalone / dismissed / viewport) only gate whether
+  // the banner becomes visible; render already re-applies isSuppressedPath.
   useEffect(() => {
     if (typeof window === "undefined") return;
-    if (isSuppressedPath) return;
-    if (isStandaloneDisplay()) return;
-    if (isPromptDismissed()) return;
-    if (!isMobileViewport()) return;
+
+    const canBecomeVisible = () =>
+      !isStandaloneDisplay() && !isPromptDismissed() && isMobileViewport();
+
+    let capturedPrompt = false;
 
     const handleBeforeInstallPrompt = (event: Event) => {
       event.preventDefault();
       const installEvent = event as BeforeInstallPromptEvent;
+      capturedPrompt = true;
       setDeferredPrompt(installEvent);
-      window.setTimeout(() => setIsVisible(true), 900);
+      if (canBecomeVisible()) {
+        window.setTimeout(() => setIsVisible(true), 900);
+      }
     };
 
     const handleAppInstalled = () => {
@@ -87,7 +97,7 @@ export default function MobileInstallPrompt() {
     window.addEventListener("appinstalled", handleAppInstalled);
 
     const iosTimer = window.setTimeout(() => {
-      if (!deferredPrompt && isIOSDevice() && !isStandaloneDisplay()) {
+      if (!capturedPrompt && isIOSDevice() && canBecomeVisible()) {
         setShowIOSPrompt(true);
         setIsVisible(true);
       }
@@ -98,7 +108,7 @@ export default function MobileInstallPrompt() {
       window.removeEventListener("beforeinstallprompt", handleBeforeInstallPrompt);
       window.removeEventListener("appinstalled", handleAppInstalled);
     };
-  }, [deferredPrompt, isSuppressedPath]);
+  }, []);
 
   const dismiss = useCallback(() => {
     rememberPromptDismissed();

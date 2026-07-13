@@ -276,6 +276,28 @@ function safeSetLocal(key: string, value: string): boolean {
     }
 }
 
+// New exams autosave to the legacy shared key; editing an existing exam gets a
+// per-exam key so refining a published exam can't clobber (or be clobbered by)
+// the new-exam draft, and each exam's recovery is isolated.
+export function examDraftStorageKey(editId: string | null | undefined): string {
+    return editId ? `${DRAFT_KEY}_${editId}` : DRAFT_KEY;
+}
+
+// A stored edit-mode draft is only worth offering for restore when it captured
+// edits made AFTER the last save (strictly newer than the exam's updatedAt);
+// otherwise it just mirrors what already loaded.
+export function isEditDraftNewerThanExam(
+    draftSavedAt: string | undefined,
+    examUpdatedAt: string | undefined,
+): boolean {
+    if (!draftSavedAt) return false;
+    const draftTime = Date.parse(draftSavedAt);
+    if (Number.isNaN(draftTime)) return false;
+    const parsedExamTime = examUpdatedAt ? Date.parse(examUpdatedAt) : 0;
+    const examTime = Number.isNaN(parsedExamTime) ? 0 : parsedExamTime;
+    return draftTime > examTime;
+}
+
 function splitTagInput(value: string): string[] {
     return value
         .split(",")
@@ -321,6 +343,7 @@ function CreateOMRPageInner() {
     const searchParams = useSearchParams();
     const router = useRouter();
     const editId = searchParams?.get('edit') || null;
+    const draftStorageKey = examDraftStorageKey(editId);
     // UI State
     const [isSaving, setIsSaving] = useState(false);
     const [isImportModalOpen, setIsImportModalOpen] = useState(false);
@@ -604,6 +627,7 @@ function CreateOMRPageInner() {
     const suppressHistoryRef = useRef(false);
     const hasHydratedRef = useRef(false);
     const draftPromptedRef = useRef(false);
+    const editDraftPromptedRef = useRef(false);
     const lastSnapshotRef = useRef<HistorySnapshot | null>(null);
 
     // Helpers to convert ISO <-> datetime-local ("YYYY-MM-DDTHH:mm")
@@ -620,6 +644,29 @@ function CreateOMRPageInner() {
         if (isNaN(d.getTime())) return undefined;
         return d.toISOString();
     };
+
+    // Signatures of the round-trippable editor fields, used to tell whether the
+    // edit-mode editor has diverged from the last saved exam. Keeping edit-mode
+    // autosave/restore gated on real changes avoids re-persisting the loaded
+    // snapshot as a spurious "newer" draft.
+    const currentEditorSignature = useMemo(() => JSON.stringify({
+        title,
+        questions,
+        durationMin: typeof durationMin === "number" ? durationMin : "",
+        startAt,
+        endAt,
+    }), [title, questions, durationMin, startAt, endAt]);
+    const loadedExamSignature = useMemo(() => {
+        if (!loadedExam) return null;
+        return JSON.stringify({
+            title: loadedExam.title ?? "",
+            questions: loadedExam.questions ?? [],
+            durationMin: typeof loadedExam.durationMin === "number" ? loadedExam.durationMin : "",
+            startAt: isoToLocalInput(loadedExam.startAt),
+            endAt: isoToLocalInput(loadedExam.endAt),
+        });
+    }, [loadedExam]);
+    const isEditDirty = Boolean(editId && loadedExam && loadedExamSignature !== currentEditorSignature);
     const durationValue = typeof durationMin === 'number' && durationMin > 0 ? durationMin : 50;
     const setDurationAndSyncEnd = (minutes: number) => {
         const safeMinutes = Math.max(1, Math.floor(minutes));
@@ -750,7 +797,7 @@ function CreateOMRPageInner() {
         if (editId) return; // Skip draft prompt while editing an existing exam
         draftPromptedRef.current = true;
 
-        const raw = localStorage.getItem(DRAFT_KEY);
+        const raw = localStorage.getItem(draftStorageKey);
         if (!raw) return;
         let draft: EditorDraft | null = null;
         try { draft = JSON.parse(raw) as EditorDraft; } catch { return; }
@@ -758,7 +805,38 @@ function CreateOMRPageInner() {
 
         toast.info("이전 작업 복원 가능", "저장된 임시 초안이 있습니다.");
         setConfirmState({ kind: "restoreDraft", draft });
-    }, [editId]);
+    }, [editId, draftStorageKey]);
+
+    // ─── Draft restore in edit mode (per-exam, only when newer than saved) ───
+    // Runs once the saved exam has hydrated so we can compare the draft's
+    // savedAt against the exam's updatedAt and skip a draft that just mirrors
+    // what already loaded.
+    useEffect(() => {
+        if (!editId) return;
+        if (!loadedExam) return;
+        if (typeof window === "undefined") return;
+        if (editDraftPromptedRef.current) return;
+        editDraftPromptedRef.current = true;
+
+        const raw = localStorage.getItem(draftStorageKey);
+        if (!raw) return;
+        let draft: EditorDraft | null = null;
+        try { draft = JSON.parse(raw) as EditorDraft; } catch { return; }
+        if (!draft || !Array.isArray(draft.questions)) return;
+        if (!isEditDraftNewerThanExam(draft.savedAt, loadedExam.updatedAt)) return;
+
+        const draftSignature = JSON.stringify({
+            title: draft.title ?? "",
+            questions: draft.questions ?? [],
+            durationMin: typeof draft.durationMin === "number" ? draft.durationMin : "",
+            startAt: draft.startAt ?? "",
+            endAt: draft.endAt ?? "",
+        });
+        if (draftSignature === loadedExamSignature) return;
+
+        toast.info("이전 편집 복원 가능", "저장 이후 편집하던 임시 초안이 있습니다.");
+        setConfirmState({ kind: "restoreDraft", draft });
+    }, [editId, loadedExam, draftStorageKey, loadedExamSignature]);
 
     // Mark hydration so autosave doesn't fire with defaults before restore runs
     useEffect(() => {
@@ -768,19 +846,36 @@ function CreateOMRPageInner() {
     // ─── Autosave draft every 2s when editor state changes ───────────
     useEffect(() => {
         if (!hasHydratedRef.current) return;
-        if (editId) return; // editing flow uses its own save path
         if (confirmState?.kind === "restoreDraft") return;
         if (!initialDefaultsReady || autosaveIntervalMs <= 0) return;
+        // Edit mode: wait for the existing exam to hydrate, then only autosave
+        // once the editor actually diverges from the saved exam. Persisting the
+        // untouched loaded snapshot would re-surface it as a "newer" draft and
+        // spuriously prompt for restore on the next visit.
+        if (editId && (!loadedExam || !isEditDirty)) return;
         const handle = setTimeout(() => {
             const draft: EditorDraft = {
                 title, questionsCount, columns, questions,
                 defaultChoices, durationMin, startAt, endAt,
                 savedAt: new Date().toISOString(),
             };
-            safeSetLocal(DRAFT_KEY, JSON.stringify(draft));
+            safeSetLocal(draftStorageKey, JSON.stringify(draft));
         }, autosaveIntervalMs);
         return () => clearTimeout(handle);
-    }, [autosaveIntervalMs, editId, confirmState, initialDefaultsReady, title, questionsCount, columns, questions, defaultChoices, durationMin, startAt, endAt]);
+    }, [autosaveIntervalMs, editId, loadedExam, isEditDirty, draftStorageKey, confirmState, initialDefaultsReady, title, questionsCount, columns, questions, defaultChoices, durationMin, startAt, endAt]);
+
+    // ─── Warn before leaving edit mode with unsaved changes ──────────
+    // Autosave recovers from a crash, but the 2s debounce leaves a window where
+    // a deliberate tab close/refresh loses the most recent edits; guard it.
+    useEffect(() => {
+        if (!isEditDirty) return;
+        const onBeforeUnload = (e: BeforeUnloadEvent) => {
+            e.preventDefault();
+            e.returnValue = "";
+        };
+        window.addEventListener("beforeunload", onBeforeUnload);
+        return () => window.removeEventListener("beforeunload", onBeforeUnload);
+    }, [isEditDirty]);
 
     // ─── History snapshotting (push PREVIOUS state onto undo stack) ──
     const snapshotCurrent = useCallback((): HistorySnapshot => ({
@@ -1353,8 +1448,12 @@ function CreateOMRPageInner() {
             if (!editId) {
                 router.replace(`/create?edit=${id}`, { scroll: false });
             }
-            // Clear the autosave draft now that the exam is published.
-            try { localStorage.removeItem(DRAFT_KEY); } catch { /* ignore */ }
+            // Clear the autosave draft now that the exam is published. On the
+            // first publish of a new exam editId is still null, so this clears
+            // the new-exam draft; subsequent edit-mode saves clear the per-exam
+            // key. The reload of loadedExam below resets isEditDirty to false so
+            // autosave won't immediately rewrite the draft.
+            try { localStorage.removeItem(draftStorageKey); } catch { /* ignore */ }
             const shareUrl = buildSolveShareUrl(id);
             if (!isShareUrlReachableByStudents(shareUrl)) {
                 // Desktop/loopback origin: students on other devices cannot open it.
@@ -1410,7 +1509,7 @@ function CreateOMRPageInner() {
     const handleConfirmCancel = () => {
         if (!confirmState) return;
         if (confirmState.kind === "restoreDraft") {
-            try { localStorage.removeItem(DRAFT_KEY); } catch { /* ignore */ }
+            try { localStorage.removeItem(draftStorageKey); } catch { /* ignore */ }
             toast.info("초안 삭제", "임시 저장된 초안을 삭제했습니다.");
         } else if (confirmState.kind === "expandImportedAnswers") {
             applyImportedAnswers(confirmState.answers);
