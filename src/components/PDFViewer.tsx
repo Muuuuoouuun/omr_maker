@@ -130,11 +130,17 @@ export default function PDFViewer({
     const isDrawingRef = useRef(false);
     const activeDrawingModeRef = useRef<DrawingMode>('pen');
     const currentPathRef = useRef<DrawPoint[]>([]);
+    // Rect is captured once per stroke (pointer-down) and reused for every pointermove,
+    // so drawing never forces a synchronous layout/reflow mid-stroke.
+    const activeStrokeRectRef = useRef<DOMRect | null>(null);
     const activePointerIdRef = useRef<number | null>(null);
     const activeEraserModeRef = useRef<'pixel' | 'stroke'>('stroke');
     const strokeEraseBaselineRef = useRef<string[] | null>(null);
     const strokeEraseChangedRef = useRef<boolean>(false);
-    const liveStrokesRef = useRef<string[] | null>(null);
+    // Stroke-erase parse cache: each stored path is parsed once at pointer-down
+    // (entries with pts === null are eraser masks / unparseable JSON and are never
+    // removed), so a stroke-erase drag never re-parses the page's path JSON per move.
+    const eraseDragStrokesRef = useRef<Array<{ raw: string; pts: DrawPoint[] | null; halfWidth: number }> | null>(null);
     const pendingFocusTargetRef = useRef<PdfFocusTarget | null>(null);
 
     // Floating OMR popup state - tracks active marker index (page + list index)
@@ -485,39 +491,50 @@ export default function PDFViewer({
         return true;
     };
 
+    // Parse each stored path once at the start of a stroke-erase drag. Entries with
+    // pts === null (eraser masks or unparseable JSON) are never removed by stroke-erase.
+    const buildEraseCache = (paths: string[]): Array<{ raw: string; pts: DrawPoint[] | null; halfWidth: number }> =>
+        paths.map(raw => {
+            try {
+                const data = JSON.parse(raw);
+                if (data.mode !== 'eraser' && Array.isArray(data.points) && data.points.length > 0) {
+                    return {
+                        raw,
+                        pts: data.points as DrawPoint[],
+                        halfWidth: typeof data.width === 'number' ? data.width / 2 : 1,
+                    };
+                }
+            } catch {
+                // fall through to a non-hittable entry
+            }
+            return { raw, pts: null, halfWidth: 0 };
+        });
+
     const eraseStrokesAt = (pos: DrawPoint) => {
         if (!onDrawingsChange || !containerRef.current) return;
-        const rect = containerRef.current.getBoundingClientRect();
-        const source = liveStrokesRef.current ?? (drawings[pageNumber] || []);
+        const entries = eraseDragStrokesRef.current;
+        if (!entries) return;
+        const rect = activeStrokeRectRef.current ?? containerRef.current.getBoundingClientRect();
         const pointerX = pos.x * rect.width;
         const pointerY = pos.y * rect.height;
         const baseRadius = eraserWidth / 2;
 
-        const kept: string[] = [];
+        const kept: Array<{ raw: string; pts: DrawPoint[] | null; halfWidth: number }> = [];
         let removed = false;
-        for (const pathStr of source) {
+        for (const entry of entries) {
             let hit = false;
-            try {
-                const data = JSON.parse(pathStr);
-                if (data.mode !== 'eraser' && Array.isArray(data.points) && data.points.length > 0) {
-                    const pts = (data.points as DrawPoint[]).map(p => ({
-                        x: p.x * rect.width,
-                        y: p.y * rect.height,
-                    }));
-                    const radius = baseRadius + (typeof data.width === 'number' ? data.width / 2 : 1);
-                    hit = strokeHitTest(pointerX, pointerY, pts, radius);
-                }
-            } catch {
-                hit = false;
+            if (entry.pts) {
+                const pxPts = entry.pts.map(p => ({ x: p.x * rect.width, y: p.y * rect.height }));
+                hit = strokeHitTest(pointerX, pointerY, pxPts, baseRadius + entry.halfWidth);
             }
             if (hit) removed = true;
-            else kept.push(pathStr);
+            else kept.push(entry);
         }
 
         if (removed) {
-            liveStrokesRef.current = kept;
+            eraseDragStrokesRef.current = kept;
             strokeEraseChangedRef.current = true;
-            onDrawingsChange(pageNumber, kept);
+            onDrawingsChange(pageNumber, kept.map(e => e.raw));
         }
     };
 
@@ -527,6 +544,7 @@ export default function PDFViewer({
         setActivePopupKey(null);
         e.currentTarget.setPointerCapture?.(e.pointerId);
         activePointerIdRef.current = e.pointerId;
+        activeStrokeRectRef.current = containerRef.current?.getBoundingClientRect() ?? null;
         isDrawingRef.current = true;
         setIsDrawing(true);
         const pointerDrawingMode = drawingModeForPointer(e);
@@ -537,7 +555,7 @@ export default function PDFViewer({
             activeEraserModeRef.current = 'stroke';
             const baseline = drawings[pageNumber] || [];
             strokeEraseBaselineRef.current = baseline;
-            liveStrokesRef.current = baseline;
+            eraseDragStrokesRef.current = buildEraseCache(baseline);
             strokeEraseChangedRef.current = false;
             const pos = getPos(e);
             currentPathRef.current = [pos];
@@ -595,6 +613,7 @@ export default function PDFViewer({
 
         isDrawingRef.current = false;
         activePointerIdRef.current = null;
+        activeStrokeRectRef.current = null;
         setIsDrawing(false);
 
         if (activeDrawingModeRef.current === 'eraser' && activeEraserModeRef.current === 'stroke') {
@@ -610,7 +629,7 @@ export default function PDFViewer({
                 }));
             }
             strokeEraseBaselineRef.current = null;
-            liveStrokesRef.current = null;
+            eraseDragStrokesRef.current = null;
             strokeEraseChangedRef.current = false;
             currentPathRef.current = [];
             return;
@@ -646,7 +665,7 @@ export default function PDFViewer({
     const updateEraserRing = (e: React.PointerEvent<HTMLCanvasElement>) => {
         const ring = eraserRingRef.current;
         if (!ring || !containerRef.current) return;
-        const rect = containerRef.current.getBoundingClientRect();
+        const rect = activeStrokeRectRef.current ?? containerRef.current.getBoundingClientRect();
         ring.style.left = `${e.clientX - rect.left}px`;
         ring.style.top = `${e.clientY - rect.top}px`;
         ring.style.display = 'block';
@@ -667,7 +686,7 @@ export default function PDFViewer({
 
     const getPos = (e: React.PointerEvent<HTMLCanvasElement>) => {
         if (!canvasRef.current) return { x: 0, y: 0 };
-        const rect = canvasRef.current.getBoundingClientRect();
+        const rect = activeStrokeRectRef.current ?? canvasRef.current.getBoundingClientRect();
         const normalizedX = (e.clientX - rect.left) / rect.width;
         const normalizedY = (e.clientY - rect.top) / rect.height;
         return {
@@ -829,6 +848,7 @@ export default function PDFViewer({
                                                 type="button"
                                                 onClick={() => setEraserMode(mode)}
                                                 aria-pressed={eraserMode === mode}
+                                                aria-label={mode === 'stroke' ? '획 지우기: 닿은 획 전체 삭제' : '부분 지우기'}
                                                 title={mode === 'stroke' ? '획 지우기 (닿은 획 전체 삭제)' : '부분 지우기'}
                                                 style={{
                                                     height: 32,
@@ -1018,6 +1038,7 @@ export default function PDFViewer({
                                 {shouldRenderDrawingLayer && (
                                     <canvas
                                         ref={canvasRef}
+                                        data-testid="pdf-draw-overlay"
                                         onPointerDown={startDrawing}
                                         onPointerMove={handleCanvasPointerMove}
                                         onPointerUp={stopDrawing}
@@ -1039,6 +1060,7 @@ export default function PDFViewer({
                                 {canEditDrawing && drawingMode === 'eraser' && (
                                     <div
                                         ref={eraserRingRef}
+                                        data-testid="pdf-eraser-ring"
                                         aria-hidden="true"
                                         style={{
                                             position: 'absolute',
