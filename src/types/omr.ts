@@ -326,6 +326,12 @@ export interface Attempt {
     /** Guest provenance after a merge into a canonical student profile. */
     mergedFromGuestId?: string;
     mergedAt?: string;
+    /**
+     * Client-generated idempotency key for the submit that produced this attempt.
+     * A retried submit reuses the same key so the server collapses it onto the
+     * same row instead of double-recording. Persisted for the DB unique constraint.
+     */
+    idempotencyKey?: string;
 }
 
 export interface Group {

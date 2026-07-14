@@ -82,6 +82,7 @@ export interface SupabaseAttemptRow {
     retake_question_ids: number[];
     merged_from_guest_id: string | null;
     merged_at: string | null;
+    idempotency_key: string | null;
     payload: Attempt;
     started_at: string;
     finished_at: string;
@@ -415,6 +416,7 @@ export function attemptToSupabaseRow(attempt: Attempt, context?: WorkspaceContex
         retake_question_ids: numberArray(attempt.retake?.questionIds),
         merged_from_guest_id: attempt.mergedFromGuestId || null,
         merged_at: attempt.mergedAt || null,
+        idempotency_key: scopedValue(attempt.idempotencyKey),
         payload: stripHeavyAttemptPayload(attempt),
         started_at: attempt.startedAt,
         finished_at: attempt.finishedAt,

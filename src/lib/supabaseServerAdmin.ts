@@ -130,23 +130,47 @@ export async function bootstrapWorkspaceWithServiceRole(
     return bootstrapWorkspaceWithAdminClient(client, context);
 }
 
+function cleanScope(value: unknown): string {
+    return typeof value === "string" ? value.trim() : "";
+}
+
+/**
+ * Read a single exam by id. When `organizationId` is supplied the query is also
+ * scoped to that organization, so a roster-verified student in org A can never
+ * read org B's exam by guessing/replaying its id (cross-org isolation). Public-
+ * link guests pass no org and are gated downstream by evaluateExamAccess.
+ */
 export async function fetchExamRowById(
     client: SupabaseAdminReadClientLike,
     examId: string,
+    options: { organizationId?: string } = {},
 ): Promise<unknown | null> {
-    const { data, error } = await client.from("omr_exams").select("*").eq("id", examId).maybeSingle();
+    const org = cleanScope(options.organizationId);
+    let query = client.from("omr_exams").select("*").eq("id", examId);
+    if (org) query = query.eq("organization_id", org);
+    const { data, error } = await query.maybeSingle();
     if (error) throw new Error(error.message || "Failed to read exam");
     return data ?? null;
 }
 
+/**
+ * Read a student's own attempts. Scoped by student_id AND — when present —
+ * organization_id. The org filter is what isolates two organizations that both
+ * happen to have the same deterministic student_id (e.g. "grp1::김철수"): without
+ * it, one org's attempts would leak into the other's dashboard/review. Guest ids
+ * are globally-unique UUIDs, so guest reads can safely omit the org filter.
+ */
 export async function fetchAttemptRowsByOwner(
     client: SupabaseAdminReadClientLike,
-    owner: { studentId?: string },
+    owner: { studentId?: string; organizationId?: string },
 ): Promise<unknown[]> {
     // Callers pass the canonical student_id (guests are already normalized to "guest:<id>").
-    const key = owner.studentId || "";
+    const key = cleanScope(owner.studentId);
     if (!key) return [];
-    const { data, error } = await client.from("omr_attempts").select("*").eq("student_id", key).order("finished_at", { ascending: false });
+    const org = cleanScope(owner.organizationId);
+    let query = client.from("omr_attempts").select("*").eq("student_id", key);
+    if (org) query = query.eq("organization_id", org);
+    const { data, error } = await query.order("finished_at", { ascending: false });
     if (error) throw new Error(error.message || "Failed to read attempts");
     return data ?? [];
 }

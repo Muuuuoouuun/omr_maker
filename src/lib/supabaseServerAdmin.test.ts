@@ -131,6 +131,18 @@ describe("Supabase server admin reads", () => {
         expect(await fetchExamRowById(client, "missing")).toBeNull();
     });
 
+    it("scopes an exam read to the organization when one is supplied (cross-org isolation)", async () => {
+        const client = mockReadClient({
+            omr_exams: [
+                { id: "e1", title: "A", organization_id: "org_a" },
+                { id: "e1", title: "B", organization_id: "org_b" },
+            ],
+        });
+        expect(await fetchExamRowById(client, "e1", { organizationId: "org_a" })).toMatchObject({ title: "A" });
+        // Same exam id in another org is invisible to org_a.
+        expect(await fetchExamRowById(client, "e1", { organizationId: "org_c" })).toBeNull();
+    });
+
     it("fetches attempt rows scoped to a guest owner", async () => {
         const client = mockReadClient({
             omr_attempts: [
@@ -140,5 +152,19 @@ describe("Supabase server admin reads", () => {
         });
         const rows = await fetchAttemptRowsByOwner(client, { studentId: "guest:g1" });
         expect(rows.map(r => (r as { id: string }).id)).toEqual(["a1"]);
+    });
+
+    it("isolates same student_id across organizations when an org scope is given", async () => {
+        const client = mockReadClient({
+            omr_attempts: [
+                { id: "a1", student_id: "grp1::김철수", organization_id: "org_a", exam_id: "e1" },
+                { id: "a2", student_id: "grp1::김철수", organization_id: "org_b", exam_id: "e2" },
+            ],
+        });
+        const rows = await fetchAttemptRowsByOwner(client, { studentId: "grp1::김철수", organizationId: "org_a" });
+        expect(rows.map(r => (r as { id: string }).id)).toEqual(["a1"]);
+        // Without an org scope (guest-style), the deterministic id would leak both orgs' rows.
+        const unscoped = await fetchAttemptRowsByOwner(client, { studentId: "grp1::김철수" });
+        expect(unscoped.map(r => (r as { id: string }).id)).toEqual(["a1", "a2"]);
     });
 });

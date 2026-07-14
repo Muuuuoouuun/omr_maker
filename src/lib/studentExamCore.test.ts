@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { attemptOwnedBy, buildServerAttempt, identityAccessSession, remainingSecondsWithinWindow, resolveRetakeScope, type SubmitAttemptInput } from "./studentExamCore";
+import { attemptOwnedBy, attemptOwnerScope, buildServerAttempt, identityAccessSession, remainingSecondsWithinWindow, resolveAttemptId, resolveRetakeScope, serverStudentProfileId, type SubmitAttemptInput } from "./studentExamCore";
 import type { Exam } from "@/types/omr";
 import type { StudentServerIdentity } from "./studentServerSession";
 
@@ -139,6 +139,58 @@ describe("studentExamCore", () => {
         );
         expect(attempt.retake).toMatchObject({ sourceAttemptId: "base1", questionIds: [1, 2] });
         expect(attempt.totalScore).toBe(20); // both questions graded
+    });
+
+    const ROSTER_STUDENT: StudentServerIdentity = {
+        kind: "student", studentId: "sp_123", name: "김철수", identityType: "temporary",
+        organizationId: "org_a", studentProfileId: "sp_123", groupId: "grp1", groupName: "1반",
+        issuedAt: 0, expiresAt: 9e15,
+    };
+    const QUICK_STUDENT: StudentServerIdentity = {
+        kind: "student", studentId: "grp1::김철수", name: "김철수", identityType: "temporary",
+        organizationId: "org_a", groupId: "grp1", groupName: "1반",
+        issuedAt: 0, expiresAt: 9e15,
+    };
+
+    it("serverStudentProfileId returns null for guests and unmatched quick-entry, real id for roster matches", () => {
+        expect(serverStudentProfileId(GUEST)).toBeNull();
+        expect(serverStudentProfileId(QUICK_STUDENT)).toBeNull();
+        expect(serverStudentProfileId(ROSTER_STUDENT)).toBe("sp_123");
+    });
+
+    it("attemptOwnerScope scopes students by org but leaves guests cross-org", () => {
+        expect(attemptOwnerScope(GUEST)).toEqual({ studentId: "guest:g1" });
+        expect(attemptOwnerScope(ROSTER_STUDENT)).toEqual({ studentId: "sp_123", organizationId: "org_a" });
+        expect(attemptOwnerScope(QUICK_STUDENT)).toEqual({ studentId: "grp1::김철수", organizationId: "org_a" });
+    });
+
+    it("buildServerAttempt writes a real profile id only for roster matches (FK-safe)", () => {
+        const roster = buildServerAttempt(INPUT, EXAM, ROSTER_STUDENT, "att-r", "2026-07-01T01:30:00.000Z");
+        expect(roster.studentProfileId).toBe("sp_123");
+        const quick = buildServerAttempt(INPUT, EXAM, QUICK_STUDENT, "att-q", "2026-07-01T01:30:00.000Z");
+        expect(quick.studentProfileId).toBeUndefined();
+        const guest = buildServerAttempt(INPUT, EXAM, GUEST, "att-g", "2026-07-01T01:30:00.000Z");
+        expect(guest.studentProfileId).toBeUndefined();
+    });
+
+    it("resolveAttemptId is deterministic per idempotency key and falls back to the random id", () => {
+        const withKey = { examId: "e1", idempotencyKey: "k-abc" };
+        const id1 = resolveAttemptId(withKey, GUEST, "random-1");
+        const id2 = resolveAttemptId(withKey, GUEST, "random-2");
+        expect(id1).toBe(id2);                                   // retry collapses to one id
+        expect(id1).not.toBe("random-1");
+        expect(id1.startsWith("att_")).toBe(true);
+        // different key or different owner → different id
+        expect(resolveAttemptId({ examId: "e1", idempotencyKey: "k-def" }, GUEST, "r")).not.toBe(id1);
+        expect(resolveAttemptId(withKey, ROSTER_STUDENT, "r")).not.toBe(id1);
+        // no key → caller's fallback id (back-compat)
+        expect(resolveAttemptId({ examId: "e1" }, GUEST, "random-3")).toBe("random-3");
+    });
+
+    it("buildServerAttempt records the idempotency key on the attempt", () => {
+        const attempt = buildServerAttempt({ ...INPUT, idempotencyKey: "k-1" }, EXAM, GUEST, "att-i", "2026-07-01T01:30:00.000Z");
+        expect(attempt.idempotencyKey).toBe("k-1");
+        expect(buildServerAttempt(INPUT, EXAM, GUEST, "att-n", "2026-07-01T01:30:00.000Z").idempotencyKey).toBeUndefined();
     });
 
     it("passes handwriting metadata through to the server attempt", () => {
