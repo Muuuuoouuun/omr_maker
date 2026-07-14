@@ -856,7 +856,7 @@ describe("service UI surface", () => {
         expect(settingsPage).toContain("데이터 · DB");
         expect(settingsPage).toContain("DataDbSection");
         expect(settingsPage).toContain("buildDataDbReadiness");
-        expect(settingsPage).toContain("loadExams()");
+        expect(settingsPage).toContain("loadTeacherExams()");
         expect(settingsPage).toContain("loadAttempts()");
         expect(settingsPage).toContain("loadRosterSnapshot(window.localStorage)");
         expect(settingsPage).toContain("readRosterTombstones(window.localStorage)");

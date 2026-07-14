@@ -16,7 +16,8 @@ import TeacherSessionChip from "@/components/TeacherSessionChip";
 import { toast } from "@/components/Toast";
 import { buildDemoDashboardData, shouldUseDemoData } from "@/lib/demoData";
 import { buildQuestionResultRepairPlan } from "@/lib/analyticsDataRepair";
-import { loadAttempts, loadExams, saveAttempt } from "@/lib/omrPersistence";
+import { loadAttempts, saveAttempt } from "@/lib/omrPersistence";
+import { loadTeacherExams } from "@/lib/teacherExamClient";
 import { summarizeAnalyticsDataHealth, summarizePersistenceHealth, type PersistenceHealth } from "@/lib/persistenceHealth";
 import { loadRosterSnapshot } from "@/lib/rosterPersistence";
 import { collectStudentQuestionInbox } from "@/lib/studentQuestions";
@@ -97,7 +98,7 @@ function TeacherDashboard() {
 
     const loadDashboardData = useCallback(async (options: DashboardLoadOptions = {}) => {
         const [examResult, attemptResult, rosterResult] = await Promise.all([
-            loadExams(),
+            loadTeacherExams(),
             loadAttempts(),
             loadRosterSnapshot(localStorage),
         ]);

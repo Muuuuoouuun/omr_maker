@@ -12,7 +12,7 @@ import { toast } from "@/components/Toast";
 import { Users, BarChart3, PlusCircle, Activity, Download } from "lucide-react";
 import { copyStoredData } from "@/utils/blobStore";
 import { secureRandomId } from "@/utils/ids";
-import { deleteExam, saveExam } from "@/lib/omrPersistence";
+import { deleteTeacherExam, saveTeacherExam } from "@/lib/teacherExamClient";
 import { formatKoreanDate } from "@/lib/pure";
 import { safeRatePercent } from "@/lib/scoreUtils";
 import { buildExamSummaryRows, splitExamSummaryRows } from "@/lib/dashboardSummary";
@@ -134,7 +134,7 @@ export default function OverviewTab({ exams: examsProp, attempts, stats, trendDa
                 archived: false,
             };
             try {
-                const result = await saveExam(copy);
+                const result = await saveTeacherExam(copy);
                 const feedback = summarizePersistenceWrite(result, {
                     target: "시험",
                     action: "복제",
@@ -155,7 +155,7 @@ export default function OverviewTab({ exams: examsProp, attempts, stats, trendDa
             const nextArchived = !target.archived;
             const updated: Exam = { ...target, archived: nextArchived, updatedAt: new Date().toISOString() };
             try {
-                const result = await saveExam(updated);
+                const result = await saveTeacherExam(updated);
                 const feedback = summarizePersistenceWrite(result, {
                     target: "시험",
                     action: nextArchived ? "보관" : "보관 해제",
@@ -182,7 +182,7 @@ export default function OverviewTab({ exams: examsProp, attempts, stats, trendDa
         const target = deleteTarget;
         setDeleteTarget(null);
         try {
-            const result = await deleteExam(target.id);
+            const result = await deleteTeacherExam(target.id);
             const feedback = summarizePersistenceWrite(result, {
                 target: "시험",
                 action: "삭제",

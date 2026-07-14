@@ -9,7 +9,8 @@ import { SETTINGS_STORAGE_KEY, maskGeminiApiKey } from "@/lib/geminiApiKey";
 import { DEFAULT_SETTINGS, mergeSettings, readStoredSettings, type AppSettings } from "@/lib/appSettings";
 import { buildDataDbReadiness, type DataDbReadinessSummary, type DataDbReadinessTone } from "@/lib/dataDbReadiness";
 import type { DeploymentReadinessSummary, DeploymentReadinessTone } from "@/lib/deploymentReadiness";
-import { loadAttempts, loadExams } from "@/lib/omrPersistence";
+import { loadAttempts } from "@/lib/omrPersistence";
+import { loadTeacherExams } from "@/lib/teacherExamClient";
 import { loadRosterSnapshot, readRosterTombstones } from "@/lib/rosterPersistence";
 import { PRIMARY_NOTIFICATION_CHANNEL } from "@/lib/serviceRoadmap";
 import {
@@ -313,7 +314,7 @@ export default function SettingsPage() {
         setIsCheckingDataDb(true);
         try {
             const [examResult, attemptResult, rosterResult] = await Promise.all([
-                loadExams(),
+                loadTeacherExams(),
                 loadAttempts(),
                 loadRosterSnapshot(window.localStorage),
             ]);

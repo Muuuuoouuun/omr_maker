@@ -7,7 +7,8 @@ import { formatLimit, usagePct } from "@/lib/pure";
 import { toast } from "@/components/Toast";
 import type { PlanKey } from "@/types/omr";
 import { shouldUseDemoData } from "@/lib/demoData";
-import { loadAttempts, loadExams } from "@/lib/omrPersistence";
+import { loadAttempts } from "@/lib/omrPersistence";
+import { loadTeacherExams } from "@/lib/teacherExamClient";
 import {
     buildBillingPlanHealth,
     buildBillingUsageSummary,
@@ -133,7 +134,7 @@ export default function BillingPage() {
         let cancelled = false;
         const hydrateUsage = async () => {
             const [examResult, attemptResult] = await Promise.all([
-                loadExams(),
+                loadTeacherExams(),
                 loadAttempts(),
             ]);
             if (cancelled) return;

@@ -9,7 +9,8 @@ import { toast } from "@/components/Toast";
 import type { Attempt, Exam, PlanKey } from "@/types/omr";
 import { decodeCsvBytes, parseCsvRows, serializeCsvRows } from "@/lib/csv";
 import { shouldUseDemoData } from "@/lib/demoData";
-import { loadAttempts, loadExams } from "@/lib/omrPersistence";
+import { loadAttempts } from "@/lib/omrPersistence";
+import { loadTeacherExams } from "@/lib/teacherExamClient";
 import { loadRosterSnapshot, saveRosterSnapshot } from "@/lib/rosterPersistence";
 import { resolveAttemptScore } from "@/lib/attemptScores";
 import {
@@ -298,7 +299,7 @@ function ManageUsersInner() {
         const loadRosterAnalytics = async () => {
             const [attemptResult, examResult] = await Promise.all([
                 loadAttempts(),
-                loadExams(),
+                loadTeacherExams(),
             ]);
             if (cancelled) return;
             setAllAttempts(attemptResult.items);

@@ -16,19 +16,25 @@ describe("persistence integration", () => {
     });
 
     it("primary read screens use the shared persistence layer", () => {
+        // Teacher exam reads/writes go through the server-first teacher layer
+        // (teacherExamClient, B1); attempt/roster reads still use omrPersistence
+        // until those blocks migrate. Student screens keep the local omrPersistence
+        // path as their offline fallback under the student server boundary.
         const screens = [
-            { file: "src/app/teacher/dashboard/page.tsx", functions: ["loadExams", "loadAttempts"] },
-            { file: "src/app/student/dashboard/page.tsx", functions: ["loadExams", "loadAttempts"] },
-            { file: "src/app/student/history/page.tsx", functions: ["loadAttempts"] },
-            { file: "src/app/student/review/[attemptId]/page.tsx", functions: ["loadAttempt", "loadExam"] },
-            { file: "src/app/teacher/exam/[id]/page.tsx", functions: ["loadExam", "loadAttempts"] },
-            { file: "src/app/teacher/attempt/[attemptId]/page.tsx", functions: ["loadAttempt", "loadExam"] },
-            { file: "src/app/teacher/live/page.tsx", functions: ["loadExams", "loadAttempts"] },
+            { file: "src/app/teacher/dashboard/page.tsx", imports: ["@/lib/omrPersistence", "@/lib/teacherExamClient"], functions: ["loadTeacherExams", "loadAttempts"] },
+            { file: "src/app/student/dashboard/page.tsx", imports: ["@/lib/omrPersistence"], functions: ["loadExams", "loadAttempts"] },
+            { file: "src/app/student/history/page.tsx", imports: ["@/lib/omrPersistence"], functions: ["loadAttempts"] },
+            { file: "src/app/student/review/[attemptId]/page.tsx", imports: ["@/lib/omrPersistence"], functions: ["loadAttempt", "loadExam"] },
+            { file: "src/app/teacher/exam/[id]/page.tsx", imports: ["@/lib/omrPersistence", "@/lib/teacherExamClient"], functions: ["loadTeacherExam", "loadAttempts"] },
+            { file: "src/app/teacher/attempt/[attemptId]/page.tsx", imports: ["@/lib/omrPersistence"], functions: ["loadAttempt", "loadExam"] },
+            { file: "src/app/teacher/live/page.tsx", imports: ["@/lib/omrPersistence", "@/lib/teacherExamClient"], functions: ["loadTeacherExams", "loadAttempts"] },
         ];
 
         for (const screen of screens) {
             const source = readProjectFile(screen.file);
-            expect(source, screen.file).toContain("@/lib/omrPersistence");
+            for (const importPath of screen.imports) {
+                expect(source, `${screen.file} should import ${importPath}`).toContain(importPath);
+            }
             for (const fn of screen.functions) {
                 expect(source, `${screen.file} should use ${fn}`).toContain(fn);
             }
@@ -58,10 +64,11 @@ describe("persistence integration", () => {
         const source = readProjectFile("src/app/teacher/settings/page.tsx");
 
         expect(source).toContain("@/lib/omrPersistence");
+        expect(source).toContain("@/lib/teacherExamClient");
         expect(source).toContain("@/lib/rosterPersistence");
         expect(source).toContain("@/lib/dataDbReadiness");
         expect(source).toContain("Promise.all");
-        expect(source).toContain("loadExams()");
+        expect(source).toContain("loadTeacherExams()");
         expect(source).toContain("loadAttempts()");
         expect(source).toContain("loadRosterSnapshot(window.localStorage)");
         expect(source).toContain("readRosterTombstones(window.localStorage)");

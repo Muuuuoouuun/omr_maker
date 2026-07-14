@@ -22,7 +22,7 @@ import { secureRandomId } from "@/utils/ids";
 import { validateExamDraft } from "@/lib/examValidation";
 import { buildExamServiceReadiness, type ExamServiceReadinessLevel } from "@/lib/examServiceReadiness";
 import { readStoredExamDefaults } from "@/lib/appSettings";
-import { loadExam, loadExams, saveExam } from "@/lib/omrPersistence";
+import { loadTeacherExam, loadTeacherExams, saveTeacherExam } from "@/lib/teacherExamClient";
 import { attachInferredQuestionPdfRegions } from "@/lib/handwritingAnalytics";
 import {
     detectQuestionLocationsFromText,
@@ -713,7 +713,7 @@ function CreateOMRPageInner() {
         let cancelled = false;
         const loadExistingExam = async () => {
             try {
-                const parsed = await loadExam(editId);
+                const parsed = await loadTeacherExam(editId);
                 if (cancelled) return;
                 if (!parsed) {
                     toast.error('시험을 찾을 수 없습니다', editId);
@@ -1298,7 +1298,7 @@ function CreateOMRPageInner() {
 
             if (!editId) {
                 const plan = getCurrentPlan();
-                const examResult = await loadExams();
+                const examResult = await loadTeacherExams();
                 const usage = buildBillingUsageSummary({
                     exams: examResult.items,
                     attempts: [],
@@ -1358,7 +1358,7 @@ function CreateOMRPageInner() {
                 archived: loadedExam?.archived || false,
             };
 
-            const result = await saveExam(examData);
+            const result = await saveTeacherExam(examData);
             const feedback = summarizePersistenceWrite(result, {
                 target: "시험",
                 action: "저장",

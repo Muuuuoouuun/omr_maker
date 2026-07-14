@@ -7,7 +7,8 @@ import { Activity, Users, CheckCircle2, Clock, AlertTriangle, Bell, PlayCircle, 
 import { toast } from "@/components/Toast";
 import type { Exam, Attempt } from "@/types/omr";
 import { shouldUseDemoData } from "@/lib/demoData";
-import { loadAttempts, loadExams, saveAttempt } from "@/lib/omrPersistence";
+import { loadAttempts, saveAttempt } from "@/lib/omrPersistence";
+import { loadTeacherExams } from "@/lib/teacherExamClient";
 import { resolveAttemptScore } from "@/lib/attemptScores";
 import { buildLiveQuestionHeatmap } from "@/lib/liveAnalytics";
 import { forceCompleteLiveAttempt, liveAttemptsNeedingForceFinish } from "@/lib/liveControls";
@@ -232,7 +233,7 @@ export default function LiveResultsPage() {
 
     const refreshFromStorage = useCallback(async () => {
         const [examResult, attemptResult] = await Promise.all([
-            loadExams(),
+            loadTeacherExams(),
             loadAttempts(),
         ]);
         const liveData = resolveLiveExamData(examResult.items);
@@ -251,7 +252,7 @@ export default function LiveResultsPage() {
         let cancelled = false;
         const loadInitial = async () => {
             const [examResult, attemptResult] = await Promise.all([
-                loadExams(),
+                loadTeacherExams(),
                 loadAttempts(),
             ]);
             if (cancelled) return;

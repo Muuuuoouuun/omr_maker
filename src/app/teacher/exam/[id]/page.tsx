@@ -6,7 +6,8 @@ import Link from "next/link";
 import { Exam, Attempt } from "@/types/omr";
 import StatCard from "@/components/dashboard/StatCard";
 import { toast } from "@/components/Toast";
-import { loadAttempts, loadExam } from "@/lib/omrPersistence";
+import { loadAttempts } from "@/lib/omrPersistence";
+import { loadTeacherExam } from "@/lib/teacherExamClient";
 import { formatKoreanDateTime } from "@/lib/pure";
 import { resolveAttemptScore, type ResolvedAttemptScore } from "@/lib/attemptScores";
 import { serializeCsvRows } from "@/lib/csv";
@@ -39,7 +40,7 @@ export default function ExamDetailPage() {
         let cancelled = false;
         const loadDetail = async () => {
             const [loadedExam, loadedAttempts] = await Promise.all([
-                loadExam(id),
+                loadTeacherExam(id),
                 loadAttempts(),
             ]);
             if (cancelled) return;
