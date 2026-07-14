@@ -61,6 +61,7 @@ export default function TeacherSessionChip({ compact = false }: TeacherSessionCh
                 color: tone.color,
                 background: tone.background,
                 border: `1px solid ${tone.border}`,
+                lineHeight: 1.35,
             }}
         >
             <Icon size={compact ? 13 : 14} aria-hidden="true" />

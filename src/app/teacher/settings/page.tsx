@@ -25,6 +25,15 @@ const STORAGE_KEY = SETTINGS_STORAGE_KEY;
 const THEME_KEY = "omr_theme";
 type Settings = AppSettings;
 
+const ACCENT_PALETTES: Record<string, { light: string; dark: string }> = {
+    "#4f46e5": { light: "#818cf8", dark: "#3730a3" },
+    "#ec4899": { light: "#f472b6", dark: "#be185d" },
+    "#8b5cf6": { light: "#a78bfa", dark: "#6d28d9" },
+    "#10b981": { light: "#34d399", dark: "#047857" },
+    "#f59e0b": { light: "#fbbf24", dark: "#b45309" },
+    "#ef4444": { light: "#f87171", dark: "#b91c1c" },
+};
+
 function loadPersisted(): Settings {
     return readStoredSettings();
 }
@@ -42,6 +51,13 @@ function applyTheme(theme: Settings["theme"]) {
     root.setAttribute("data-density", theme.density);
     root.setAttribute("data-motion", theme.motion ? "on" : "off");
     root.style.setProperty("--primary", theme.accent);
+    const accentPalette = ACCENT_PALETTES[theme.accent] || ACCENT_PALETTES[DEFAULT_SETTINGS.theme.accent];
+    root.style.setProperty("--primary-light", accentPalette.light);
+    root.style.setProperty("--primary-dark", accentPalette.dark);
+}
+
+function persistThemeMode(theme: Settings["theme"]) {
+    if (typeof window === "undefined") return;
     try {
         window.localStorage.setItem(THEME_KEY, theme.mode);
     } catch {
@@ -99,6 +115,113 @@ const SECURITY_POSTURE_ITEMS = [
         label: "운영 전환 대기",
         detail: "실사용 전에는 Supabase Auth, 조직 멤버십, production-rls.sql 정책으로 계정 권한을 이관해야 합니다.",
         tone: "warning",
+    },
+] as const;
+
+const SECURITY_INTEGRATION_ITEMS = [
+    {
+        key: "two-factor",
+        label: "2단계 인증",
+        detail: "현재 미지원입니다. Supabase Auth 또는 별도 OTP provider 연동 후 실제 로그인 단계에 적용됩니다.",
+    },
+    {
+        key: "login-alerts",
+        label: "새 기기 로그인 알림",
+        detail: "현재 미지원입니다. 기기 식별과 카카오·푸시 알림 provider가 연결된 뒤 제공됩니다.",
+    },
+] as const;
+
+type CapabilityStatusItem = {
+    key: string;
+    label: string;
+    detail: string;
+    tone: "ready" | "warning";
+    statusLabel: string;
+};
+
+const NOTIFICATION_STATUS_ITEMS: readonly CapabilityStatusItem[] = [
+    {
+        key: "candidate-queue",
+        label: "앱 내 카카오 발송 후보",
+        detail: "미응시·재시험 후보를 실제 시험과 학생 명단으로 계산해 알림 센터와 분석 화면에 표시합니다.",
+        tone: "ready",
+        statusLabel: "후보 계산 사용 중",
+    },
+    {
+        key: "kakao-delivery",
+        label: "카카오 실제 발송",
+        detail: "현재는 후보 검토와 대기 기록까지만 지원합니다. 카카오 메시지 provider가 연결되기 전에는 실제 메시지를 보내지 않습니다.",
+        tone: "warning",
+        statusLabel: "연동 전",
+    },
+    {
+        key: "browser-push",
+        label: "브라우저 푸시",
+        detail: "푸시 구독과 서비스 워커 발송 서버가 연결되지 않아 아직 사용할 수 없습니다.",
+        tone: "warning",
+        statusLabel: "미지원",
+    },
+    {
+        key: "scheduled-notifications",
+        label: "주간 자동 리포트·정숙 시간",
+        detail: "예약 작업과 발송 provider가 연결된 뒤 제공됩니다. 현재 저장된 이전 설정은 실제 발송 일정에 영향을 주지 않습니다.",
+        tone: "warning",
+        statusLabel: "미지원",
+    },
+] as const;
+
+const PROFILE_STATUS_ITEMS: readonly CapabilityStatusItem[] = [
+    {
+        key: "server-account",
+        label: "로그인 계정과 권한",
+        detail: "교사 로그인 ID와 접근 권한은 브라우저 설정이 아니라 서버 계정과 서명 세션에서 관리합니다.",
+        tone: "ready",
+        statusLabel: "서버 관리",
+    },
+    {
+        key: "teacher-profile",
+        label: "이름·소속·담당 과목",
+        detail: "현재는 교사 프로필 DB가 연결되지 않아 이 브라우저에서 변경해도 다른 화면이나 학생 화면에 반영되지 않습니다.",
+        tone: "warning",
+        statusLabel: "편집 미지원",
+    },
+    {
+        key: "profile-visibility",
+        label: "프로필 이미지·공개 범위",
+        detail: "이미지 저장소와 학생 공개 프로필 정책이 연결된 뒤 제공됩니다.",
+        tone: "warning",
+        statusLabel: "연동 전",
+    },
+] as const;
+
+const GRADING_STATUS_ITEMS: readonly CapabilityStatusItem[] = [
+    {
+        key: "multiple-choice-grading",
+        label: "객관식 자동 채점",
+        detail: "서버 시험은 정답을 학생 브라우저에 노출하지 않고 제출 후 서버에서 채점합니다. 로컬 시험은 기기 안에서 동일 규칙으로 채점합니다.",
+        tone: "ready",
+        statusLabel: "사용 중",
+    },
+    {
+        key: "question-score-sum",
+        label: "문항별 배점 합산",
+        detail: "정답으로 판정된 문항의 배점을 합산하고 오답과 미응답은 0점으로 처리합니다.",
+        tone: "ready",
+        statusLabel: "사용 중",
+    },
+    {
+        key: "negative-partial-score",
+        label: "오답 감점·부분 점수",
+        detail: "현재 채점 모델에는 감점과 서술형 부분 점수 규칙이 없습니다. 시험별 채점 정책이 연결되기 전에는 변경할 수 없습니다.",
+        tone: "warning",
+        statusLabel: "미지원",
+    },
+    {
+        key: "release-rounding",
+        label: "성적 공개 시점·반올림 규칙",
+        detail: "현재는 제출 후 결과를 바로 보여주며 계산된 점수를 그대로 표시합니다. 공개 예약과 별도 반올림 정책은 아직 지원하지 않습니다.",
+        tone: "warning",
+        statusLabel: "고정 동작",
     },
 ] as const;
 
@@ -167,7 +290,7 @@ function ResetSettingsConfirmDialog({
                     설정 초기화
                 </h2>
                 <p style={{ color: 'var(--muted)', lineHeight: 1.7, fontSize: '0.95rem', wordBreak: 'keep-all', marginBottom: '1.25rem' }}>
-                    프로필, 알림, 시험 기본값, 채점, 테마, 보안 설정을 기본값으로 되돌립니다. API 키도 저장된 기본 상태로 초기화됩니다.
+                    시험 기본값, 테마, API 키를 포함해 이 브라우저에 저장된 설정을 기본 상태로 되돌립니다.
                 </p>
                 <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.5rem' }}>
                     <button
@@ -247,6 +370,7 @@ export default function SettingsPage() {
         if (typeof window !== "undefined") {
             try {
                 window.localStorage.setItem(STORAGE_KEY, JSON.stringify(next));
+                if (key === "theme") persistThemeMode(next.theme);
             } catch {
                 // ignore quota errors
             }
@@ -270,6 +394,7 @@ export default function SettingsPage() {
             // ignore
         }
         applyTheme(DEFAULT_SETTINGS.theme);
+        persistThemeMode(DEFAULT_SETTINGS.theme);
         setResetConfirmOpen(false);
         toast.success("초기화 완료", "모든 설정을 기본값으로 되돌렸습니다.");
     }, []);
@@ -302,6 +427,7 @@ export default function SettingsPage() {
                 // ignore quota errors
             }
             applyTheme(merged.theme);
+            persistThemeMode(merged.theme);
             toast.success("설정 가져오기 완료", "백업 파일을 성공적으로 불러왔습니다.");
         } catch {
             toast.error("가져오기 실패", "JSON 파일 형식을 확인해주세요.");
@@ -408,19 +534,15 @@ export default function SettingsPage() {
 
                     {/* Content */}
                     <section>
-                        {section === "profile" && <ProfileSection value={draft.profile} onChange={v => updateSection("profile", v)} onSave={() => saveSection("profile")} onCancel={() => cancelSection("profile")} />}
-                        {section === "notifications" && <NotificationsSection value={draft.notifications} onChange={v => updateSection("notifications", v)} onSave={() => saveSection("notifications")} onCancel={() => cancelSection("notifications")} />}
+                        {section === "profile" && <ProfileSection />}
+                        {section === "notifications" && <NotificationsSection />}
                         {section === "exam-defaults" && <ExamDefaultsSection value={draft.examDefaults} onChange={v => updateSection("examDefaults", v)} onSave={() => saveSection("examDefaults")} onCancel={() => cancelSection("examDefaults")} />}
-                        {section === "grading" && <GradingSection value={draft.grading} onChange={v => updateSection("grading", v)} onSave={() => saveSection("grading")} onCancel={() => cancelSection("grading")} />}
+                        {section === "grading" && <GradingSection />}
                         {section === "api" && <ApiSection value={draft.api} onChange={v => updateSection("api", v)} onSave={() => saveSection("api")} onCancel={() => cancelSection("api")} showKey={showKey} setShowKey={setShowKey} />}
                         {section === "theme" && <ThemeSection value={draft.theme} onChange={v => updateSection("theme", v)} onSave={() => saveSection("theme")} onCancel={() => cancelSection("theme")} />}
                         {section === "data" && <DataDbSection summary={dataReadiness} isChecking={isCheckingDataDb} onRefresh={() => refreshDataDbReadiness(true)} />}
                         {section === "security" && (
                             <SecuritySection
-                                value={draft.security}
-                                onChange={v => updateSection("security", v)}
-                                onSave={() => saveSection("security")}
-                                onCancel={() => cancelSection("security")}
                                 deploymentReadiness={deploymentReadiness}
                                 isCheckingDeployment={isCheckingDeployment}
                                 onRefreshDeployment={() => refreshDeploymentReadiness(true)}
@@ -476,7 +598,8 @@ export default function SettingsPage() {
 
             <style>{`
                 @media (max-width: 768px) {
-                    .settings-grid { grid-template-columns: 1fr !important; }
+                    .settings-grid { grid-template-columns: minmax(0, 1fr) !important; }
+                    .settings-grid > * { min-width: 0; }
                 }
             `}</style>
             {resetConfirmOpen && (
@@ -586,48 +709,62 @@ type SectionProps<T> = {
     onCancel: () => void;
 };
 
-function ProfileSection({ value, onChange, onSave, onCancel }: SectionProps<Settings["profile"]>) {
+function ProfileSection() {
     return (
-        <Card title="프로필" desc="공개적으로 보여질 정보를 관리하세요.">
-            <div style={{ display: 'flex', alignItems: 'center', gap: '1.25rem', marginBottom: '1.5rem', padding: '1.25rem', background: 'var(--background)', borderRadius: 'var(--radius-md)' }}>
-                <div style={{ width: 72, height: 72, borderRadius: '50%', background: 'linear-gradient(135deg, #4f46e5, #8b5cf6)', color: 'white', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '1.8rem', fontWeight: 800 }}>{(value.name || "?").slice(0, 1)}</div>
-                <div style={{ flex: 1 }}>
-                    <div style={{ fontSize: '1.05rem', fontWeight: 700 }}>{value.name}</div>
-                    <div style={{ fontSize: '0.85rem', color: 'var(--muted)' }}>{value.email}</div>
-                </div>
-                <button style={{ padding: '0.6rem 1.1rem', background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 'var(--radius-md)', fontSize: '0.85rem', fontWeight: 600 }}>이미지 변경</button>
-            </div>
-
-            <Field label="이름"><input className="input-field" value={value.name} onChange={e => onChange({ name: e.target.value })} /></Field>
-            <Field label="이메일" hint="로그인에 사용됩니다. 카카오 알림 연락처는 학생/초대 관리에서 별도로 연결합니다."><input className="input-field" value={value.email} onChange={e => onChange({ email: e.target.value })} /></Field>
-            <Field label="소속"><input className="input-field" value={value.school} onChange={e => onChange({ school: e.target.value })} /></Field>
-            <Field label="담당 과목"><input className="input-field" value={value.subject} onChange={e => onChange({ subject: e.target.value })} /></Field>
-
-            <Toggle checked={value.publicProfile} onChange={v => onChange({ publicProfile: v })} label="공개 프로필" desc="학생들이 내 이름과 소속을 볼 수 있습니다." />
-
-            <SaveBar onCancel={onCancel} onSave={onSave} />
+        <Card title="프로필 상태" desc="서버 계정과 공개 프로필 기능의 현재 연결 상태를 보여줍니다.">
+            <CapabilityStatusList items={PROFILE_STATUS_ITEMS} />
+            <p style={{ marginTop: '1rem', color: 'var(--muted)', fontSize: '0.78rem', lineHeight: 1.6, wordBreak: 'keep-all' }}>
+                실제 교사 계정 정보는 보안 탭의 배포 로그인 진단에서 확인할 수 있습니다. 작동하지 않는 로컬 프로필 편집은 제공하지 않습니다.
+            </p>
         </Card>
     );
 }
 
-function NotificationsSection({ value, onChange, onSave, onCancel }: SectionProps<Settings["notifications"]>) {
+function CapabilityStatusList({ items }: { items: readonly CapabilityStatusItem[] }) {
     return (
-        <Card title="알림" desc={`${PRIMARY_NOTIFICATION_CHANNEL.label} 우선 채널을 기준으로 알림 대상을 관리합니다.`}>
-            <Toggle checked={value.email} onChange={v => onChange({ email: v })} label="카카오 알림 준비" desc="초대, 미응시 독려, 결과 안내의 1차 발송 채널" />
-            <Toggle checked={value.push} onChange={v => onChange({ push: v })} label="브라우저 푸시" desc="실시간 시험 현황 알림" />
-            <Toggle checked={value.weekly} onChange={v => onChange({ weekly: v })} label="주간 리포트" desc="매주 월요일 오전 9시, 지난 주 요약" />
-            <Toggle checked={value.autoRemind} onChange={v => onChange({ autoRemind: v })} label="미응시 학생 독려 후보" desc="시험 시작 24시간 전 카카오 발송 대상 후보를 표시" />
+        <div style={{ display: 'grid', gap: '0.65rem' }}>
+            {items.map(item => {
+                const ready = item.tone === "ready";
+                const color = ready ? "var(--success)" : "var(--warning)";
+                const border = ready ? "rgba(16,185,129,0.24)" : "rgba(245,158,11,0.24)";
+                const background = ready ? "rgba(16,185,129,0.07)" : "rgba(245,158,11,0.08)";
+                return (
+                    <div
+                        key={item.key}
+                        style={{
+                            display: 'flex', alignItems: 'flex-start', gap: '0.7rem',
+                            padding: '0.9rem 0.95rem', borderRadius: 'var(--radius-md)',
+                            border: `1px solid ${border}`, background,
+                        }}
+                    >
+                        {ready
+                            ? <CheckCircle size={16} color={color} style={{ flexShrink: 0, marginTop: 2 }} />
+                            : <AlertTriangle size={16} color={color} style={{ flexShrink: 0, marginTop: 2 }} />}
+                        <span style={{ minWidth: 0 }}>
+                            <span style={{ display: 'flex', alignItems: 'center', gap: '0.45rem', flexWrap: 'wrap', marginBottom: '0.2rem' }}>
+                                <strong style={{ fontSize: '0.86rem' }}>{item.label}</strong>
+                                <span style={{ padding: '0.13rem 0.42rem', borderRadius: 'var(--radius-full)', color, background, fontSize: '0.68rem', fontWeight: 900 }}>
+                                    {item.statusLabel}
+                                </span>
+                            </span>
+                            <span style={{ display: 'block', color: 'var(--muted)', fontSize: '0.78rem', lineHeight: 1.55, wordBreak: 'keep-all' }}>
+                                {item.detail}
+                            </span>
+                        </span>
+                    </div>
+                );
+            })}
+        </div>
+    );
+}
 
-            <div style={{ marginTop: '1.5rem', padding: '1rem', background: 'rgba(99,102,241,0.05)', borderRadius: 'var(--radius-md)', border: '1px solid rgba(99,102,241,0.15)' }}>
-                <div style={{ fontSize: '0.8rem', fontWeight: 700, color: 'var(--primary)', marginBottom: '0.5rem' }}>알림 정숙 시간</div>
-                <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'center' }}>
-                    <input type="time" className="input-field" value={value.quietStart} onChange={e => onChange({ quietStart: e.target.value })} style={{ width: 140 }} />
-                    <span style={{ color: 'var(--muted)' }}>~</span>
-                    <input type="time" className="input-field" value={value.quietEnd} onChange={e => onChange({ quietEnd: e.target.value })} style={{ width: 140 }} />
-                </div>
-            </div>
-
-            <SaveBar onCancel={onCancel} onSave={onSave} />
+function NotificationsSection() {
+    return (
+        <Card title="알림 상태" desc={`${PRIMARY_NOTIFICATION_CHANNEL.label} 후보 계산과 실제 발송 연동 상태를 구분해 보여줍니다.`}>
+            <CapabilityStatusList items={NOTIFICATION_STATUS_ITEMS} />
+            <p style={{ marginTop: '1rem', color: 'var(--muted)', fontSize: '0.78rem', lineHeight: 1.6, wordBreak: 'keep-all' }}>
+                이 화면은 현재 기능 상태를 안내합니다. 발송 provider가 연결되기 전에는 실제 전송 설정을 활성화할 수 없습니다.
+            </p>
         </Card>
     );
 }
@@ -659,22 +796,13 @@ function ExamDefaultsSection({ value, onChange, onSave, onCancel }: SectionProps
     );
 }
 
-function GradingSection({ value, onChange, onSave, onCancel }: SectionProps<Settings["grading"]>) {
+function GradingSection() {
     return (
-        <Card title="채점 규칙" desc="점수 계산 방식을 설정하세요.">
-            <Toggle checked={value.negative} onChange={v => onChange({ negative: v })} label="오답 감점 허용" desc="오답 시 문항 배점의 일부를 감점합니다." />
-            <Toggle checked={value.partial} onChange={v => onChange({ partial: v })} label="부분 점수 허용" desc="서술형 문항에서 부분 점수를 부여합니다." />
-            <Toggle checked={value.autoRelease} onChange={v => onChange({ autoRelease: v })} label="제출 즉시 성적 공개" desc="학생에게 제출 직후 점수를 보여줍니다." />
-
-            <Field label="반올림 방식">
-                <select className="input-field" value={value.rounding} onChange={e => onChange({ rounding: e.target.value as Settings["grading"]["rounding"] })}>
-                    <option value="half">반올림 (소수점 0.5)</option>
-                    <option value="up">올림</option>
-                    <option value="down">버림</option>
-                    <option value="none">그대로 표시</option>
-                </select>
-            </Field>
-            <SaveBar onCancel={onCancel} onSave={onSave} />
+        <Card title="채점 방식" desc="현재 점수 계산 규칙과 아직 지원하지 않는 정책을 구분해 보여줍니다.">
+            <CapabilityStatusList items={GRADING_STATUS_ITEMS} />
+            <p style={{ marginTop: '1rem', color: 'var(--muted)', fontSize: '0.78rem', lineHeight: 1.6, wordBreak: 'keep-all' }}>
+                채점 기준은 시험별 문항 정답과 배점에서 결정됩니다. 이 화면에서 저장하더라도 실제 점수 계산이 바뀌지 않는 항목은 제공하지 않습니다.
+            </p>
         </Card>
     );
 }
@@ -826,22 +954,7 @@ function ThemeSection({ value, onChange, onSave, onCancel }: SectionProps<Settin
                 </div>
             </Field>
 
-            <Field label="밀도">
-                <div style={{ display: 'flex', gap: '0.5rem' }}>
-                    {(["comfortable", "compact"] as const).map(d => (
-                        <button key={d} onClick={() => onChange({ density: d })} style={{
-                            flex: 1, padding: '0.7rem', borderRadius: 'var(--radius-md)',
-                            border: value.density === d ? '2px solid var(--primary)' : '1px solid var(--border)',
-                            background: value.density === d ? 'rgba(99,102,241,0.05)' : 'var(--surface)',
-                            fontWeight: 600, fontSize: '0.85rem', color: value.density === d ? 'var(--primary)' : 'var(--foreground)'
-                        }}>
-                            {d === "comfortable" ? "편안하게" : "촘촘하게"}
-                        </button>
-                    ))}
-                </div>
-            </Field>
-
-            <Toggle checked={value.motion} onChange={v => onChange({ motion: v })} label="모션 효과" desc="카드 호버, 애니메이션 사용" />
+            <Toggle checked={value.motion} onChange={v => onChange({ motion: v })} label="모션 효과" desc="화면 전환, 카드 호버, 애니메이션 사용" />
 
             <SaveBar onCancel={onCancel} onSave={onSave} />
         </Card>
@@ -1065,14 +1178,10 @@ function DataDbSection({
 }
 
 function SecuritySection({
-    value,
-    onChange,
-    onSave,
-    onCancel,
     deploymentReadiness,
     isCheckingDeployment,
     onRefreshDeployment,
-}: SectionProps<Settings["security"]> & {
+}: {
     deploymentReadiness: DeploymentReadinessSummary;
     isCheckingDeployment: boolean;
     onRefreshDeployment: () => void;
@@ -1128,8 +1237,34 @@ function SecuritySection({
                 </div>
             </Field>
 
-            <Toggle checked={value.twoFactor} onChange={v => onChange({ twoFactor: v })} label="2단계 인증" desc="로그인 시 앱에서 추가 코드 입력" />
-            <Toggle checked={value.loginAlerts} onChange={v => onChange({ loginAlerts: v })} label="로그인 알림" desc="새 기기 로그인 시 알림 후보 기록" />
+            <Field label="추가 보안 기능">
+                <div style={{ display: 'grid', gap: '0.65rem' }}>
+                    {SECURITY_INTEGRATION_ITEMS.map(item => (
+                        <div
+                            key={item.key}
+                            style={{
+                                display: 'flex', alignItems: 'flex-start', gap: '0.65rem',
+                                padding: '0.85rem 0.95rem', borderRadius: 'var(--radius-md)',
+                                border: '1px solid rgba(245,158,11,0.24)',
+                                background: 'rgba(245,158,11,0.08)',
+                            }}
+                        >
+                            <AlertTriangle size={15} color="var(--warning)" style={{ flexShrink: 0, marginTop: 2 }} />
+                            <span style={{ minWidth: 0 }}>
+                                <span style={{ display: 'flex', alignItems: 'center', gap: '0.45rem', flexWrap: 'wrap', marginBottom: '0.18rem' }}>
+                                    <strong style={{ fontSize: '0.86rem' }}>{item.label}</strong>
+                                    <span style={{ padding: '0.13rem 0.42rem', borderRadius: 'var(--radius-full)', color: 'var(--warning)', background: 'rgba(245,158,11,0.12)', fontSize: '0.68rem', fontWeight: 900 }}>
+                                        연동 전
+                                    </span>
+                                </span>
+                                <span style={{ display: 'block', color: 'var(--muted)', fontSize: '0.78rem', lineHeight: 1.55, wordBreak: 'keep-all' }}>
+                                    {item.detail}
+                                </span>
+                            </span>
+                        </div>
+                    ))}
+                </div>
+            </Field>
 
             <Field label="배포 로그인 진단">
                 <div style={{
@@ -1326,7 +1461,6 @@ function SecuritySection({
                     </button>
                 </div>
             </Field>
-            <SaveBar onCancel={onCancel} onSave={onSave} />
         </Card>
     );
 }

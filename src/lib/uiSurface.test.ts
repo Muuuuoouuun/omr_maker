@@ -151,6 +151,7 @@ describe("service UI surface", () => {
 
     it("keeps decorative motion off on mobile, installed app, and reduced-motion surfaces", () => {
         const css = readProjectFile("src/app/globals.css");
+        const layout = readProjectFile("src/app/layout.tsx");
 
         expect(css).toContain("@media (max-width: 920px)");
         expect(css).toContain("(hover: none) and (pointer: coarse)");
@@ -159,6 +160,11 @@ describe("service UI surface", () => {
         expect(css).toContain('html[data-motion="off"] .orb');
         expect(css).toContain("will-change: auto");
         expect(css).toContain("scroll-behavior: auto !important");
+        expect(css).toContain("animation-duration: 0.01ms !important");
+        expect(css).toContain("transition-duration: 0.01ms !important");
+        expect(layout).toContain("localStorage.getItem('omr_settings')");
+        expect(layout).toContain("root.setAttribute('data-motion', appTheme.motion === false ? 'off' : 'on')");
+        expect(layout).toContain("root.style.setProperty('--primary-dark', palette[1])");
     });
 
     it("keeps the app install prompt reachable on touch tablets", () => {
@@ -502,6 +508,11 @@ describe("service UI surface", () => {
         expect(settingsPage).toContain("TEACHER_ACCOUNTS");
         expect(settingsPage).toContain("clearTeacherAuthSession");
         expect(settingsPage).toContain("SECURITY_POSTURE_ITEMS");
+        expect(settingsPage).toContain("SECURITY_INTEGRATION_ITEMS");
+        expect(settingsPage).toContain("현재 미지원입니다.");
+        expect(settingsPage).toContain("연동 전");
+        expect(settingsPage).not.toContain('<Toggle checked={value.twoFactor}');
+        expect(settingsPage).not.toContain('<Toggle checked={value.loginAlerts}');
         expect(settingsPage).toContain("배포 로그인 진단");
         expect(settingsPage).toContain('aria-label="배포 로그인 진단 새로고침"');
         expect(settingsPage).toContain("교사 계정 ${deploymentReadiness.credentialCount}개");
@@ -516,6 +527,10 @@ describe("service UI surface", () => {
         expect(css).toContain(".teacher-session-chip");
         expect(css).toContain(".teacher-session-chip-prefix");
         expect(nextConfig).toContain('allowedDevOrigins: ["127.0.0.1"]');
+        expect(nextConfig).toContain('poweredByHeader: false');
+        expect(nextConfig).toContain('Permissions-Policy');
+        expect(nextConfig).toContain('camera=(), microphone=(), geolocation=(), payment=(), usb=()');
+        expect(nextConfig).toContain('Strict-Transport-Security');
     });
 
     it("keeps billing local-plan changes clear until real payment integration exists", () => {
@@ -793,7 +808,7 @@ describe("service UI surface", () => {
         expect(createPage).toContain("이미지 저장 완료");
     });
 
-    it("keeps tablet solving usable with a collapsible right-side quick OMR rail", () => {
+    it("keeps tablet and desktop solving on a compact floating OMR rail", () => {
         const solvePage = readProjectFile("src/app/solve/[id]/page.tsx");
         const css = readProjectFile("src/app/globals.css");
 
@@ -803,10 +818,29 @@ describe("service UI surface", () => {
         expect(solvePage).toContain("solve-omr-quick-bubble");
         expect(solvePage).toContain("nextQuickTarget");
         expect(solvePage).toContain("solve-omr-quick-handwriting");
+        expect(solvePage).toContain('window.matchMedia("(min-width: 600px)").matches');
+        expect(solvePage).toContain("setIsOMRCollapsed(true)");
         expect(css).toContain(".solve-omr-rail.is-collapsed");
         expect(css).toContain(".solve-omr-quick-card");
         expect(css).toContain(".solve-omr-quick-bubble.is-marked");
         expect(css).toContain("@media (min-width: 600px) and (max-width: 1180px)");
+        expect(css).toContain("--solve-omr-pane-backdrop: blur(18px) saturate(140%)");
+        expect(css).toContain("width: clamp(280px, 32vw, 320px) !important");
+        expect(css).toContain("transform: translateX(calc(100% + 1.5rem))");
+        expect(css).toContain("@media (min-width: 1181px)");
+        expect(css).toContain("width: clamp(300px, 28vw, 380px) !important");
+        expect(css).toContain("transform: translateX(calc(100% + 2rem))");
+    });
+
+    it("keeps review correct, wrong, and unanswered summary cards compact", () => {
+        const css = readProjectFile("src/app/globals.css");
+        const reviewPage = readProjectFile("src/app/student/review/[attemptId]/page.tsx");
+        const pwaMobileE2e = readProjectFile("e2e/pwa-mobile.spec.ts");
+
+        expect(reviewPage).toContain('className="student-review-stat-grid"');
+        expect(css).toContain(".student-review-stat-grid {\n  align-self: start;");
+        expect(pwaMobileE2e).toContain("reviewStatSizing.gridHeight");
+        expect(pwaMobileE2e).toContain("reviewStatSizing.cardHeight + 2");
     });
 
     it("keeps Kakao notifications planned without implying live sending", () => {
@@ -815,8 +849,12 @@ describe("service UI surface", () => {
         const usersPage = readProjectFile("src/app/teacher/users/page.tsx");
         const notificationBell = readProjectFile("src/components/NotificationBell.tsx");
 
-        expect(settingsPage).toContain("카카오 알림 준비");
-        expect(settingsPage).toContain("카카오 발송 대상 후보");
+        expect(settingsPage).toContain("NOTIFICATION_STATUS_ITEMS");
+        expect(settingsPage).toContain("앱 내 카카오 발송 후보");
+        expect(settingsPage).toContain("카카오 실제 발송");
+        expect(settingsPage).toContain("실제 전송 설정을 활성화할 수 없습니다");
+        expect(settingsPage).not.toContain('<Toggle checked={value.email}');
+        expect(settingsPage).not.toContain('<Toggle checked={value.push}');
         expect(overviewTab).toContain("카카오 알림 연동 전");
         expect(overviewTab).not.toContain("전송했습니다");
         expect(overviewTab).not.toContain("알람 발송 완료");
@@ -846,6 +884,44 @@ describe("service UI surface", () => {
         expect(usersPage).not.toContain("초대 발송됨");
         expect(usersPage).not.toContain("이메일로 초대");
         expect(usersPage).not.toContain("메시지 전송됨");
+    });
+
+    it("shows the real grading behavior without non-functional policy controls", () => {
+        const settingsPage = readProjectFile("src/app/teacher/settings/page.tsx");
+
+        expect(settingsPage).toContain("GRADING_STATUS_ITEMS");
+        expect(settingsPage).toContain("객관식 자동 채점");
+        expect(settingsPage).toContain("문항별 배점 합산");
+        expect(settingsPage).toContain("오답 감점·부분 점수");
+        expect(settingsPage).toContain("실제 점수 계산이 바뀌지 않는 항목은 제공하지 않습니다");
+        expect(settingsPage).not.toContain('<Toggle checked={value.negative}');
+        expect(settingsPage).not.toContain('<Toggle checked={value.partial}');
+        expect(settingsPage).not.toContain('<Toggle checked={value.autoRelease}');
+    });
+
+    it("does not present browser-only profile values as a live teacher profile", () => {
+        const settingsPage = readProjectFile("src/app/teacher/settings/page.tsx");
+
+        expect(settingsPage).toContain("PROFILE_STATUS_ITEMS");
+        expect(settingsPage).toContain("로그인 계정과 권한");
+        expect(settingsPage).toContain("이름·소속·담당 과목");
+        expect(settingsPage).toContain("작동하지 않는 로컬 프로필 편집은 제공하지 않습니다");
+        expect(settingsPage).not.toContain('label="공개 프로필"');
+        expect(settingsPage).not.toContain("이미지 변경</button>");
+    });
+
+    it("previews theme edits without persisting them before save", () => {
+        const settingsPage = readProjectFile("src/app/teacher/settings/page.tsx");
+        const applyThemeSource = settingsPage.slice(
+            settingsPage.indexOf("function applyTheme"),
+            settingsPage.indexOf("function persistThemeMode"),
+        );
+
+        expect(applyThemeSource).not.toContain("localStorage.setItem");
+        expect(settingsPage).toContain('if (key === "theme") persistThemeMode(next.theme)');
+        expect(settingsPage).toContain("persistThemeMode(DEFAULT_SETTINGS.theme)");
+        expect(settingsPage).toContain("persistThemeMode(merged.theme)");
+        expect(settingsPage).not.toContain('<Field label="밀도">');
     });
 
     it("keeps settings data DB readiness tied to shared storage sources", () => {
