@@ -970,6 +970,27 @@ export function saveLocalAttempt(attempt: Attempt): boolean {
     }
 }
 
+/**
+ * Persist a fully merged attempt set against whatever is currently on disk,
+ * rather than overwriting the index with an in-memory snapshot. `loadAttempts`
+ * reads local attempts once at the top, then awaits remote fetch + resync; any
+ * attempt written during that window (e.g. the solve page autosaving, or a
+ * concurrent submit) would be clobbered by a bare `setItem(mergedItems)`. Merging
+ * against the freshly re-read store — newest activity wins per id — keeps those
+ * in-flight writes instead of losing them during the flush.
+ */
+export function saveLocalAttemptsMerged(attempts: Attempt[]): Attempt[] {
+    if (!hasBrowserStorage()) return attempts;
+    try {
+        const merged = mergeById(readLocalAttempts(), attempts);
+        const stripped = merged.map(stripHeavyAttemptPayload);
+        localStorage.setItem(ATTEMPTS_KEY, JSON.stringify(sortByNewestActivity(stripped)));
+        return merged;
+    } catch {
+        return attempts;
+    }
+}
+
 async function getSupabaseClient(): Promise<SupabaseClientLike | null> {
     const config = getSupabaseConfig();
     if (!config) return null;
@@ -1350,13 +1371,15 @@ export async function loadAttempts(): Promise<LoadResult<Attempt>> {
             : [];
         const syncResult = await syncLocalItems(syncQueue, upsertRemoteAttempt);
         const mergedItems = mergeById(localItems, remoteItems);
-        for (const attempt of mergedItems) saveLocalAttempt(attempt);
+        // Storage-merge against the current store so attempts written while the
+        // remote fetch/resync above was in flight are not clobbered by this persist.
+        const persistedItems = saveLocalAttemptsMerged(mergedItems);
         const questionResultSync = isSupabaseConfigured()
             ? await syncQuestionResultsForAttempts(mergedItems)
             : { failedCount: 0 };
         const remoteError = [syncResult.error, questionResultSync.error].filter(Boolean).join(" / ") || undefined;
         return {
-            items: mergedItems,
+            items: persistedItems,
             remoteLoaded: isSupabaseConfigured(),
             remoteSynced: isSupabaseConfigured() ? !remoteError : undefined,
             pendingSyncCount: syncResult.failedCount + questionResultSync.failedCount,

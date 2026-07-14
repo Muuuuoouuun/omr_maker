@@ -24,6 +24,7 @@ import {
     sanitizeExamPayload,
     saveLocalExam,
     saveLocalAttempt,
+    saveLocalAttemptsMerged,
     sortByNewestActivity,
     storedDataRefsForExamDeletion,
     stripHeavyAttemptPayload,
@@ -636,6 +637,40 @@ describe("Supabase persistence mapping", () => {
         expect(saved).toBe(true);
         expect(readLocalAttempts()[0]?.drawings).toBeUndefined();
         expect(localStorage.getItem("omr_attempts") || "").not.toContain("points");
+    });
+
+    it("storage-merges the persisted set so attempts written during a flush are not lost", () => {
+        // The merged snapshot loadAttempts computed at the top of the flush.
+        const flushSnapshot: Attempt = { ...attempt, id: "attempt-1" };
+        // Simulate the store as it stands when the flush finally persists: a brand
+        // new attempt appeared, and the existing one was updated (newer finishedAt),
+        // both after loadAttempts had already read its stale snapshot.
+        const liveNew: Attempt = {
+            ...attempt,
+            id: "attempt-live",
+            finishedAt: "2026-06-14T10:00:00.000Z",
+        };
+        const liveUpdate: Attempt = {
+            ...attempt,
+            id: "attempt-1",
+            score: 42,
+            finishedAt: "2026-06-14T09:45:00.000Z",
+        };
+        const localStorage = createStorage({
+            "omr_attempts": JSON.stringify([liveNew, liveUpdate]),
+        });
+        vi.stubGlobal("window", { localStorage });
+        vi.stubGlobal("localStorage", localStorage);
+
+        const persisted = saveLocalAttemptsMerged([flushSnapshot]);
+        const byId = new Map(persisted.map(item => [item.id, item]));
+
+        // The concurrently added attempt survives instead of being clobbered.
+        expect(byId.has("attempt-live")).toBe(true);
+        // The newer in-flight update wins over the stale flush snapshot.
+        expect(byId.get("attempt-1")?.score).toBe(42);
+        // And the store on disk reflects the same merged set.
+        expect(readLocalAttempts().map(item => item.id).sort()).toEqual(["attempt-1", "attempt-live"]);
     });
 
     it("skips corrupt local exam and attempt rows instead of crashing read screens", () => {
