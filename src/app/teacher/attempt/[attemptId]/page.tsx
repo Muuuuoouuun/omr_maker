@@ -10,6 +10,7 @@ import { loadJsonRecord, storedDataUrlToFile } from "@/utils/blobStore";
 import { getCurrentPlan, getPlanLabel, hasPlanEntitlement } from "@/utils/plans";
 import { formatKoreanDateTime } from "@/lib/pure";
 import { loadAttempt, loadExam } from "@/lib/omrPersistence";
+import { readActiveWorkspaceContext } from "@/lib/workspaceContext";
 import {
     buildLearningRecommendations,
     buildRetakeQuestionIds,
@@ -96,6 +97,20 @@ export default function TeacherAttemptPage() {
             try {
                 const found = await loadAttempt(id);
                 if (!found || cancelled) {
+                    setLoaded(true);
+                    return;
+                }
+
+                // loadAttempt (and its remote fetch) is not organization-scoped, so
+                // verify the attempt belongs to this teacher's active workspace
+                // before showing it. Server-submitted attempts (step 3) always carry
+                // the exam's organizationId. Only deny on a positive cross-workspace
+                // mismatch; legacy attempts without an organizationId are allowed so
+                // the check can't lock teachers out of pre-scoping records.
+                const activeOrganizationId = readActiveWorkspaceContext().organizationId?.trim();
+                const attemptOrganizationId = found.organizationId?.trim();
+                if (attemptOrganizationId && activeOrganizationId && attemptOrganizationId !== activeOrganizationId) {
+                    setAccessDenied(true);
                     setLoaded(true);
                     return;
                 }
