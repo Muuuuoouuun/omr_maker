@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useMemo, useRef } from "react";
+import { useState, useEffect, useMemo, useRef, type MouseEvent } from "react";
 import { useRouter } from "next/navigation";
 import BrandLogo from "@/components/BrandLogo";
 import ThemeToggle from "@/components/ThemeToggle";
@@ -653,12 +653,37 @@ export default function Home() {
     setNeedsStudentLookup(false);
   };
 
+  const handleHomeNavigation = (event: MouseEvent<HTMLAnchorElement>) => {
+    event.preventDefault();
+    handleBack();
+    setWorkspaceId("");
+    setStudentDirectoryStatus("local");
+    setStudentLoginPending(false);
+    try {
+      setGroups(readRosterGroups(localStorage));
+      setRosterStudents(readRosterStudents(localStorage));
+    } catch {
+      setGroups([]);
+      setRosterStudents([]);
+    }
+    router.replace("/");
+  };
+
   return (
     <div className="layout-main center-content home-page" data-home-role={role} style={{ position: "relative" }}>
       {/* Theme toggle */}
       <div style={{ position: "fixed", top: "1.25rem", right: "1.25rem", zIndex: 10 }}>
         <ThemeToggle />
       </div>
+
+      {role !== "none" && (
+        <BrandLogo
+          markOnly
+          className="home-role-home-link"
+          priorityLabel="역할 선택 홈으로"
+          onClick={handleHomeNavigation}
+        />
+      )}
 
       {/* Persistent start-code hand-off: the code is the student's next-login
           password, so it must survive navigation and require acknowledgement. */}
@@ -730,32 +755,37 @@ export default function Home() {
             className="stagger-1 animate-fade-in home-logo"
             style={{ marginBottom: "1.4rem", opacity: 0 }}
           >
-            <BrandLogo markOnly className="brand-logo--hero" priorityLabel="OMR Maker" />
-          </div>
-
-          <div
-            className="badge badge-primary stagger-2 animate-fade-in home-eyebrow"
-            style={{ marginBottom: "1.75rem", opacity: 0 }}
-          >
-            <svg width="8" height="8" viewBox="0 0 8 8" fill="currentColor">
-              <circle cx="4" cy="4" r="4" />
-            </svg>
-            Smart Evaluation Platform
+            <BrandLogo
+              markOnly
+              className="brand-logo--hero"
+              priorityLabel="역할 선택 홈으로"
+              onClick={handleHomeNavigation}
+            />
           </div>
 
           <h1
-            className="title-gradient stagger-3 animate-fade-in home-title"
+            className="title-gradient stagger-2 animate-fade-in home-title"
             style={{
               fontSize: "clamp(3.2rem, 8vw, 5.5rem)",
               lineHeight: 1.04,
               letterSpacing: 0,
               fontWeight: 900,
-              marginBottom: "1.25rem",
+              marginBottom: "1rem",
               opacity: 0,
             }}
           >
             OMR Maker
           </h1>
+
+          <div
+            className="badge badge-primary stagger-3 animate-fade-in home-eyebrow"
+            style={{ marginBottom: "1.15rem", opacity: 0 }}
+          >
+            <svg width="8" height="8" viewBox="0 0 8 8" fill="currentColor" aria-hidden="true">
+              <circle cx="4" cy="4" r="4" />
+            </svg>
+            Smart Evaluation Platform
+          </div>
 
           <p
             className="stagger-4 animate-fade-in home-subtitle"

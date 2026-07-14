@@ -325,6 +325,9 @@ describe("service UI surface", () => {
         const css = readProjectFile("src/app/globals.css");
 
         expect(homePage).toContain("역할 선택으로");
+        expect(homePage).toContain('priorityLabel="역할 선택 홈으로"');
+        expect(homePage).toContain('className="home-role-home-link"');
+        expect(homePage).toContain('router.replace("/")');
         expect(homePage).toContain('minHeight: "2.75rem"');
         expect(homePage).toContain('borderRadius: "var(--radius-md)"');
         expect(studentDashboard).toContain("로그아웃");
@@ -333,6 +336,9 @@ describe("service UI surface", () => {
         expect(css).toContain("display: inline-flex");
         expect(css).toContain("align-items: center");
         expect(css).toContain("min-height: 2.75rem");
+        expect(css).toContain(".home-logo");
+        expect(css).toContain("margin-inline: auto");
+        expect(css).toContain(".home-role-home-link");
     });
 
     it("keeps teacher app chrome controls comfortable on touch devices", () => {

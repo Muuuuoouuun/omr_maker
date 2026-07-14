@@ -1,6 +1,6 @@
 import Link from "next/link";
 import Image from "next/image";
-import type { CSSProperties } from "react";
+import type { CSSProperties, MouseEventHandler } from "react";
 
 type BrandLogoProps = {
     href?: string;
@@ -10,6 +10,7 @@ type BrandLogoProps = {
     markOnly?: boolean;
     priorityLabel?: string;
     style?: CSSProperties;
+    onClick?: MouseEventHandler<HTMLAnchorElement>;
 };
 
 export function BrandMark({ className = "" }: { className?: string }) {
@@ -35,6 +36,7 @@ export default function BrandLogo({
     markOnly = false,
     priorityLabel,
     style,
+    onClick,
 }: BrandLogoProps) {
     const classes = [
         "logo",
@@ -53,7 +55,7 @@ export default function BrandLogo({
     );
 
     return (
-        <Link href={href} className={classes} style={style} aria-label={priorityLabel || label}>
+        <Link href={href} className={classes} style={style} aria-label={priorityLabel || label} onClick={onClick}>
             {content}
         </Link>
     );

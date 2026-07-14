@@ -345,10 +345,27 @@ test.describe("Mobile PWA entry", () => {
         await expectTouchTarget(page.locator('button[aria-label$="모드로 전환"]'));
         await expectTouchTarget(page.getByRole("button", { name: /학생.*시작하기/ }));
         await expectTouchTarget(page.getByRole("button", { name: /교사.*대시보드/ }));
+        const centeredBrand = await page.locator(".home-logo").evaluate(element => {
+            const rect = element.getBoundingClientRect();
+            return {
+                center: rect.left + rect.width / 2,
+                viewportCenter: window.innerWidth / 2,
+            };
+        });
+        expect(Math.abs(centeredBrand.center - centeredBrand.viewportCenter)).toBeLessThanOrEqual(1);
         await expectNoHorizontalOverflow(page);
 
         await page.getByRole("button", { name: /학생.*시작하기/ }).click();
 
+        await expect(page.getByRole("heading", { name: "학습 시작" })).toBeVisible();
+        const homeLink = page.getByRole("link", { name: "역할 선택 홈으로" });
+        await expectTouchTarget(homeLink);
+        await homeLink.click();
+        await expect(page).toHaveURL(/\/$/);
+        await expect(page.locator(".home-page")).toHaveAttribute("data-home-role", "none");
+        await expect(page.getByRole("button", { name: /학생.*시작하기/ })).toBeVisible();
+
+        await page.getByRole("button", { name: /학생.*시작하기/ }).click();
         await expect(page.getByRole("heading", { name: "학습 시작" })).toBeVisible();
         await page.getByPlaceholder("이름을 입력하세요").fill("모바일학생");
         await expect(page.getByPlaceholder("이름을 입력하세요")).toHaveValue("모바일학생");
