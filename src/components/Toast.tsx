@@ -5,12 +5,19 @@ import { CheckCircle2, AlertCircle, Info, X } from "lucide-react";
 
 export type ToastKind = "success" | "error" | "info";
 
+/** Optional inline action button (e.g. "실행 취소") shown before the close button. */
+interface ToastActionSpec {
+    label: string;
+    onAction: () => void;
+}
+
 interface ToastMessage {
     id: number;
     kind: ToastKind;
     title: string;
     description?: string;
     duration: number;
+    action?: ToastActionSpec;
 }
 
 // Singleton event-bus: any component can call `showToast(...)` without context.
@@ -19,8 +26,14 @@ const listeners = new Set<Listener>();
 const pendingMessages: ToastMessage[] = [];
 let nextId = 1;
 
-export function showToast(kind: ToastKind, title: string, description?: string, duration = 3000) {
-    const msg: ToastMessage = { id: nextId++, kind, title, description, duration };
+export function showToast(
+    kind: ToastKind,
+    title: string,
+    description?: string,
+    duration = 3000,
+    action?: ToastActionSpec,
+) {
+    const msg: ToastMessage = { id: nextId++, kind, title, description, duration, action };
     if (listeners.size === 0) {
         pendingMessages.push(msg);
         return;
@@ -28,10 +41,28 @@ export function showToast(kind: ToastKind, title: string, description?: string, 
     listeners.forEach(l => l(msg));
 }
 
+/** Options for a toast that carries an inline action button. */
+export interface ToastActionOptions {
+    actionLabel: string;
+    onAction: () => void;
+    /** How long the toast (and its action) stays available. Defaults to 6s. */
+    durationMs?: number;
+}
+
 export const toast = {
     success: (title: string, description?: string) => showToast("success", title, description),
     error: (title: string, description?: string) => showToast("error", title, description, 4500),
     info: (title: string, description?: string) => showToast("info", title, description),
+    /**
+     * A toast with an inline action button. Used e.g. for undo-delete: the
+     * button runs `onAction` and immediately dismisses the toast. The window
+     * defaults to 6s so it matches typical undo affordances.
+     */
+    action: (kind: ToastKind, title: string, description: string | undefined, options: ToastActionOptions) =>
+        showToast(kind, title, description, options.durationMs ?? 6000, {
+            label: options.actionLabel,
+            onAction: options.onAction,
+        }),
 };
 
 const KIND: Record<ToastKind, { color: string; bg: string; icon: React.ReactNode }> = {
@@ -103,6 +134,28 @@ export default function ToastHost() {
                                 <div style={{ fontSize: '0.82rem', color: 'var(--muted)', marginTop: '0.2rem', lineHeight: 1.45, overflowWrap: 'anywhere' }}>{t.description}</div>
                             )}
                         </div>
+                        {t.action && (
+                            <button
+                                onClick={() => {
+                                    t.action?.onAction();
+                                    remove(t.id);
+                                }}
+                                style={{
+                                    flexShrink: 0,
+                                    alignSelf: 'center',
+                                    minHeight: 44,
+                                    padding: '0 0.85rem',
+                                    background: 'var(--primary)',
+                                    color: 'white',
+                                    borderRadius: 'var(--radius-md)',
+                                    fontSize: '0.82rem',
+                                    fontWeight: 700,
+                                    whiteSpace: 'nowrap',
+                                }}
+                            >
+                                {t.action.label}
+                            </button>
+                        )}
                         <button
                             onClick={() => remove(t.id)}
                             aria-label="알림 닫기"

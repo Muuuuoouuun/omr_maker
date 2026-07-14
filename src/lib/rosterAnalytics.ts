@@ -38,15 +38,23 @@ function trendFromScores(scoresNewestFirst: number[]): RosterStudent["trend"] {
     return "flat";
 }
 
-export function buildRosterStudentPerformance(
+function normalizedIdentity(value: string | undefined): string {
+    return value?.trim() || "";
+}
+
+function scopedStudentName(value: string | undefined): string {
+    const normalized = normalizedIdentity(value);
+    const separatorIndex = normalized.indexOf("::");
+    return separatorIndex > 0 ? normalized.slice(separatorIndex + 2).trim() : "";
+}
+
+function performanceFromMatchedAttempts(
     student: RosterStudent,
-    attempts: Attempt[],
+    matched: Attempt[],
     examById: Map<string, Exam>,
-    now = Date.now(),
+    now: number,
 ): RosterStudentPerformance {
-    const matchedAttempts = attempts
-        .filter(attempt => attemptMatchesStudentProfile(attempt, student))
-        .sort((a, b) => activityTime(b) - activityTime(a));
+    const matchedAttempts = [...matched].sort((a, b) => activityTime(b) - activityTime(a));
     const baseAttempts = baseAttemptsOnly(matchedAttempts);
 
     if (matchedAttempts.length === 0) {
@@ -79,15 +87,73 @@ export function buildRosterStudentPerformance(
     };
 }
 
+export function buildRosterStudentPerformance(
+    student: RosterStudent,
+    attempts: Attempt[],
+    examById: Map<string, Exam>,
+    now = Date.now(),
+): RosterStudentPerformance {
+    const matchedAttempts = attempts
+        .filter(attempt => attemptMatchesStudentProfile(attempt, student));
+    return performanceFromMatchedAttempts(student, matchedAttempts, examById, now);
+}
+
 export function buildRosterPerformanceMap(
     students: RosterStudent[],
     attempts: Attempt[],
     examById: Map<string, Exam>,
     now = Date.now(),
 ): Map<string, RosterStudentPerformance> {
-    return new Map(students.map(student => [
-        student.id,
-        buildRosterStudentPerformance(student, attempts, examById, now),
+    // Index the roster once, then test each attempt only against plausible
+    // id/name candidates. The former student.map(attempts.filter(...)) path
+    // performed a full students × attempts scan on every roster render.
+    const studentsById = new Map<string, RosterStudent>();
+    for (const student of students) studentsById.set(student.id, student);
+
+    const studentIdsByNormalizedId = new Map<string, Set<string>>();
+    const studentIdsByName = new Map<string, Set<string>>();
+    for (const student of studentsById.values()) {
+        const normalizedId = normalizedIdentity(student.id);
+        if (normalizedId) {
+            const ids = studentIdsByNormalizedId.get(normalizedId) || new Set<string>();
+            ids.add(student.id);
+            studentIdsByNormalizedId.set(normalizedId, ids);
+        }
+        const name = normalizedIdentity(student.name);
+        if (!name) continue;
+        const ids = studentIdsByName.get(name) || new Set<string>();
+        ids.add(student.id);
+        studentIdsByName.set(name, ids);
+    }
+
+    const attemptsByStudentId = new Map<string, Attempt[]>();
+    for (const id of studentsById.keys()) attemptsByStudentId.set(id, []);
+
+    for (const attempt of attempts) {
+        const candidateIds = new Set<string>();
+        const exactId = normalizedIdentity(attempt.studentId);
+        for (const id of studentIdsByNormalizedId.get(exactId) || []) candidateIds.add(id);
+
+        const candidateNames = new Set([
+            normalizedIdentity(attempt.studentName),
+            scopedStudentName(attempt.studentId),
+        ]);
+        for (const name of candidateNames) {
+            if (!name) continue;
+            for (const id of studentIdsByName.get(name) || []) candidateIds.add(id);
+        }
+
+        for (const id of candidateIds) {
+            const student = studentsById.get(id);
+            if (student && attemptMatchesStudentProfile(attempt, student)) {
+                attemptsByStudentId.get(id)?.push(attempt);
+            }
+        }
+    }
+
+    return new Map(Array.from(studentsById, ([id, student]) => [
+        id,
+        performanceFromMatchedAttempts(student, attemptsByStudentId.get(id) || [], examById, now),
     ]));
 }
 
@@ -113,8 +179,39 @@ export function recomputeRosterGroupsFromStudents(
     students: RosterStudent[],
     groups: RosterGroup[],
 ): RosterGroup[] {
+    const studentsByGroupName = new Map<string, RosterStudent[]>();
+    const studentsByGroupScope = new Map<string, RosterStudent[]>();
+    const legacyStudents: RosterStudent[] = [];
+
+    for (const student of students) {
+        const groupName = student.group.trim();
+        if (!groupName) {
+            legacyStudents.push(student);
+            continue;
+        }
+
+        const byName = studentsByGroupName.get(groupName) || [];
+        byName.push(student);
+        studentsByGroupName.set(groupName, byName);
+
+        const region = student.region?.trim() || "";
+        if (region) {
+            const scopeKey = `${groupName}\u0000${region}`;
+            const byScope = studentsByGroupScope.get(scopeKey) || [];
+            byScope.push(student);
+            studentsByGroupScope.set(scopeKey, byScope);
+        }
+    }
+
     return groups.map(group => {
-        const inGroup = students.filter(student => rosterGroupMatchesStudent(group, student));
+        const groupName = group.name.trim();
+        const groupRegion = group.region?.trim() || "";
+        const indexed = groupRegion
+            ? studentsByGroupScope.get(`${groupName}\u0000${groupRegion}`) || []
+            : studentsByGroupName.get(groupName) || [];
+        const inGroup = legacyStudents.length === 0
+            ? indexed
+            : [...indexed, ...legacyStudents.filter(student => rosterGroupMatchesStudent(group, student))];
         const scoredStudents = inGroup.filter(student => student.examsTaken > 0);
         const avgScore = scoredStudents.length > 0
             ? Math.round(scoredStudents.reduce((sum, student) => sum + student.avgScore, 0) / scoredStudents.length)

@@ -3,6 +3,7 @@ import type { Attempt, Exam } from "@/types/omr";
 import type { RosterGroup, RosterStudent } from "@/lib/rosterStorage";
 import {
     applyRosterPerformance,
+    buildRosterPerformanceMap,
     buildRosterStudentPerformance,
     recomputeRosterGroupsFromStudents,
 } from "./rosterAnalytics";
@@ -95,6 +96,52 @@ describe("roster analytics", () => {
         });
     });
 
+    it("indexes attempts without changing exact-id or legacy name/group matching", () => {
+        const now = Date.parse("2026-06-15T12:00:00.000Z");
+        const regionalStudents: RosterStudent[] = [
+            { ...student, id: "g-seoul::김학생", region: "서울" },
+            { ...student, id: "g-busan::김학생", email: "busan@example.com", region: "부산" },
+            { ...student, id: " g-seoul::이학생 ", name: "이학생", email: "lee@example.com", region: "서울" },
+        ];
+        const attempts: Attempt[] = [
+            attempt("exact", { 1: 1, 2: 2 }, "2026-06-15T10:00:00.000Z", {
+                studentId: regionalStudents[0].id,
+                studentName: "과거이름",
+                regionName: "부산",
+            }),
+            attempt("legacy-busan", { 1: 1, 2: 1 }, "2026-06-14T10:00:00.000Z", {
+                studentId: undefined,
+                studentName: "김학생",
+                groupName: "A반",
+                regionName: "부산",
+            }),
+            attempt("scoped-name", { 1: 1, 2: 2 }, "2026-06-13T10:00:00.000Z", {
+                studentId: "g-seoul::이학생",
+                studentName: "과거이름",
+                groupName: "다른반",
+                regionName: "서울",
+            }),
+            attempt("legacy-scoped-name", { 1: 1, 2: 1 }, "2026-06-13T09:00:00.000Z", {
+                studentId: "legacy-group::이학생",
+                studentName: undefined,
+                groupName: "A반",
+                regionName: "서울",
+            }),
+            attempt("unrelated", { 1: 1, 2: 2 }, "2026-06-12T10:00:00.000Z", {
+                studentId: "other::박학생",
+                studentName: "박학생",
+            }),
+        ];
+        const examById = new Map([[exam.id, exam]]);
+
+        const indexed = buildRosterPerformanceMap(regionalStudents, attempts, examById, now);
+        for (const profile of regionalStudents) {
+            expect(indexed.get(profile.id)).toEqual(
+                buildRosterStudentPerformance(profile, attempts, examById, now),
+            );
+        }
+    });
+
     it("applies performance and recomputes group averages from students with attempts", () => {
         const performance = new Map([
             [student.id, { avgScore: 75, examsTaken: 2, lastActive: "방금 전", trend: "up" as const, status: "active" as const, attempts: [] }],
@@ -122,6 +169,34 @@ describe("roster analytics", () => {
         expect(recomputeRosterGroupsFromStudents(regionalStudents, groups)).toEqual([
             expect.objectContaining({ id: "g-seoul", count: 1, avgScore: 80 }),
             expect.objectContaining({ id: "g-busan", count: 1, avgScore: 60 }),
+        ]);
+    });
+
+    it("keeps legacy id-scoped students while indexing modern group membership", () => {
+        const legacyStudent: RosterStudent = {
+            ...student,
+            id: "legacy-group::구학생",
+            name: "구학생",
+            group: "",
+            avgScore: 90,
+            examsTaken: 1,
+        };
+        const modernStudent: RosterStudent = {
+            ...student,
+            id: "modern::신학생",
+            name: "신학생",
+            group: "현대반",
+            avgScore: 70,
+            examsTaken: 1,
+        };
+        const groups: RosterGroup[] = [
+            { id: "legacy-group", name: "구반", count: 0, avgScore: 0, color: "#000" },
+            { id: "modern-group", name: "현대반", count: 0, avgScore: 0, color: "#111" },
+        ];
+
+        expect(recomputeRosterGroupsFromStudents([legacyStudent, modernStudent], groups)).toEqual([
+            expect.objectContaining({ id: "legacy-group", count: 1, avgScore: 90 }),
+            expect.objectContaining({ id: "modern-group", count: 1, avgScore: 70 }),
         ]);
     });
 });

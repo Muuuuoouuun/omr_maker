@@ -1,6 +1,6 @@
 "use client";
 
-import { Suspense, useState, useMemo, useEffect, useRef } from "react";
+import { Suspense, useState, useMemo, useEffect, useRef, useDeferredValue } from "react";
 import { useSearchParams } from "next/navigation";
 import NextLink from "next/link";
 import TeacherHeader from "@/components/TeacherHeader";
@@ -33,6 +33,11 @@ import {
     type RosterStudent,
 } from "@/lib/rosterStorage";
 import { addRosterGroup, deleteRosterGroup, editRosterGroup } from "@/lib/rosterMutations";
+import {
+    buildRosterCsvImportPlan,
+    type RosterCsvFieldChange,
+    type RosterCsvImportPlan,
+} from "@/lib/rosterCsvImport";
 import {
     buildStudentProfileInsight,
     type StudentProfileInsight,
@@ -233,6 +238,7 @@ function ManageUsersInner() {
         setTab(initialTab);
     }, [initialTab]);
     const [query, setQuery] = useState("");
+    const deferredQuery = useDeferredValue(query);
     const [selectedRegionKey, setSelectedRegionKey] = useState(ALL_REGION_KEY);
     const [selectedId, setSelectedId] = useState<string | null>(null);
 
@@ -267,10 +273,17 @@ function ManageUsersInner() {
     const [showGroupMoveModal, setShowGroupMoveModal] = useState(false);
     const [pendingDeleteUndo, setPendingDeleteUndo] = useState<PendingDeleteUndo | null>(null);
     const [sortState, setSortState] = useState<{ key: SortKey; direction: SortDirection } | null>(null);
+    const [csvPreview, setCsvPreview] = useState<RosterCsvImportPlan | null>(null);
+    // T2: windowed pagination for the (potentially large) filtered roster.
+    const [pageSize, setPageSize] = useState<number | "all">(50);
+    const [page, setPage] = useState(1);
 
     const fileInputRef = useRef<HTMLInputElement | null>(null);
     const popoverMenuRef = useRef<HTMLTableCellElement | null>(null);
     const undoTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+    // Latest-ref indirection so a fired undo toast always runs the freshest
+    // handler (which reads current state) instead of a stale closure.
+    const undoDeleteRef = useRef<() => void>(() => {});
 
     // Hydrate real roster rows from localStorage. Demo rows stay display-only so
     // they cannot be mistaken for academy data in later sessions.
@@ -448,18 +461,18 @@ function ManageUsersInner() {
             groupNames: [],
         });
 
+    const normalizedQuery = deferredQuery.trim().toLowerCase();
     const filtered = useMemo(() =>
         displayStudents.filter(s => {
             const studentRegion = rosterStudentRegionName(s, displayGroups);
             const matchesRegion = activeRegionKey === ALL_REGION_KEY || regionKeyFor(studentRegion) === activeRegionKey;
-            const normalizedQuery = query.trim().toLowerCase();
             const matchesQuery = !normalizedQuery
                 || s.name.toLowerCase().includes(normalizedQuery)
                 || s.email.toLowerCase().includes(normalizedQuery)
                 || s.group.toLowerCase().includes(normalizedQuery)
                 || studentRegion.toLowerCase().includes(normalizedQuery);
             return matchesRegion && matchesQuery;
-        }), [activeRegionKey, query, displayStudents, displayGroups]);
+        }), [activeRegionKey, normalizedQuery, displayStudents, displayGroups]);
 
     // DEV-B: sortable table headers. lastActive is only stored as a
     // formatted Korean relative-time label ("2시간 전"), so derive a real
@@ -509,6 +522,23 @@ function ManageUsersInner() {
             })
             .map(item => item.student);
     }, [filtered, sortState, lastActiveTimestampByStudentId]);
+
+    // T2: windowed pagination. Selection (selectedIds) intentionally spans the
+    // whole filtered set, not just the visible page, so paging never drops a
+    // selection. "전체 선택" toggles the entire filtered set (see the header
+    // checkbox + labeled control below).
+    const totalRows = sortedFiltered.length;
+    const pageCount = pageSize === "all" ? 1 : Math.max(1, Math.ceil(totalRows / pageSize));
+    const clampedPage = Math.min(page, pageCount);
+    const pageStart = pageSize === "all" ? 0 : (clampedPage - 1) * pageSize;
+    const pageEnd = pageSize === "all" ? totalRows : Math.min(pageStart + pageSize, totalRows);
+    const pagedStudents = pageSize === "all" ? sortedFiltered : sortedFiltered.slice(pageStart, pageEnd);
+
+    // Reset to the first page whenever the filtered set or window size changes,
+    // so the pager never strands the teacher on an out-of-range page.
+    useEffect(() => {
+        setPage(1);
+    }, [deferredQuery, activeRegionKey, pageSize]);
 
     const selected = displayStudents.find(s => s.id === selectedId);
     const selectedGroup = displayGroups.find(group => group.id === selectedGroupId) || null;
@@ -746,6 +776,15 @@ function ManageUsersInner() {
             setPendingDeleteUndo(prev => (prev?.id === undoId ? null : prev));
             undoTimeoutRef.current = null;
         }, DELETE_UNDO_WINDOW_MS);
+        // T3: the delete + undo affordance now lives in the toast host (the
+        // bespoke fixed bar was removed). The action runs the latest undo
+        // handler via a ref so it reads current roster state, and its window
+        // matches the pendingDeleteUndo timer above.
+        toast.action("info", `${label} 삭제됨`, undefined, {
+            actionLabel: "실행 취소",
+            onAction: () => undoDeleteRef.current(),
+            durationMs: DELETE_UNDO_WINDOW_MS,
+        });
     };
 
     // Removes the given students and offers a short-lived undo. Re-adding the
@@ -779,6 +818,12 @@ function ManageUsersInner() {
         }
         toast.success("삭제 취소됨", `${restored.label} 복원했습니다.`);
     };
+
+    // Keep the ref pointed at the freshest undo handler so the undo toast's
+    // action never runs against stale roster state.
+    useEffect(() => {
+        undoDeleteRef.current = handleUndoDelete;
+    });
 
     const deleteStudent = (id: string) => {
         const target = students.find(s => s.id === id);
@@ -882,7 +927,7 @@ function ManageUsersInner() {
         setShowGroupMoveModal(true);
     };
 
-    const handleConfirmGroupMove = (targetGroupId: string) => {
+    const handleConfirmGroupMove = (targetGroupId: string, applyRegion: boolean) => {
         const targetGroup = groups.find(group => group.id === targetGroupId);
         if (!targetGroup) return;
         const ids = selectedIds;
@@ -896,11 +941,21 @@ function ManageUsersInner() {
         // now matches on those fields, so the old group's count drops to 0 and
         // becomes deletable, and the new group's count picks the students up —
         // no double-counting.
+        //
+        // T4: `applyRegion` (checkbox, default ON) controls whether the target
+        // group's region overwrites each student's region. When OFF, we leave
+        // the student's existing per-student region override untouched so a bulk
+        // reclass doesn't silently wipe campus/branch overrides.
         const next = students.map(s => (
-            ids.has(s.id) ? { ...s, group: targetGroup.name, region: targetGroup.region } : s
+            ids.has(s.id)
+                ? { ...s, group: targetGroup.name, ...(applyRegion ? { region: targetGroup.region } : {}) }
+                : s
         ));
         persistRoster(next, recomputeGroups(next, groups), invites);
-        toast.success("반 이동 완료", `${movedCount}명을 ${groupOptionLabel(targetGroup)} 반으로 이동했습니다.`);
+        toast.success(
+            "반 이동 완료",
+            `${movedCount}명을 ${groupOptionLabel(targetGroup)} 반으로 이동했습니다.${applyRegion ? "" : " 각 학생의 지역은 유지했습니다."}`,
+        );
         setShowGroupMoveModal(false);
         clearSelection();
     };
@@ -1040,8 +1095,8 @@ function ManageUsersInner() {
     const handleConfirmAction = () => {
         if (!confirmAction) return;
         if (confirmAction.kind === "student") {
-            // No toast.success here — the undo bar (rendered from
-            // pendingDeleteUndo) already communicates the delete and offers
+            // No toast.success here — the undo toast (fired from
+            // scheduleDeleteUndo) already communicates the delete and offers
             // "실행 취소" for a few seconds.
             deleteStudent(confirmAction.id);
         } else if (confirmAction.kind === "bulk") {
@@ -1055,144 +1110,52 @@ function ManageUsersInner() {
         setConfirmAction(null);
     };
 
-    // ===== CSV upload =====
+    // ===== CSV upload (T1/T5): parse → dry-run preview → confirm to commit =====
     const handleCsvFile = async (file: File) => {
         try {
             // Read raw bytes so legacy Korean Excel exports (CP949/EUC-KR) don't become
             // mojibake — File.text() would force UTF-8.
             const text = decodeCsvBytes(await file.arrayBuffer());
             const rows = parseCsvRows(text);
-            if (rows.length < 2) {
-                toast.error("CSV 파싱 실패", "데이터가 없습니다.");
+            const plan = buildRosterCsvImportPlan(rows, students, groups);
+            if (!plan.ok) {
+                if (plan.error === "header") {
+                    toast.error("헤더 형식 오류", "첫 줄은 name,email,group 이어야 합니다. region/campus/branch는 선택입니다.");
+                } else {
+                    toast.error("CSV 파싱 실패", "데이터가 없습니다.");
+                }
                 return;
             }
-            const header = rows[0].map(h => h.trim().toLowerCase());
-            const idIdx = header.indexOf("id");
-            const nameIdx = header.indexOf("name");
-            const emailIdx = header.indexOf("email");
-            const groupIdx = header.indexOf("group");
-            const regionIdx = header.findIndex(item => ["region", "campus", "branch", "지역", "지점", "캠퍼스"].includes(item));
-            if (nameIdx === -1 || emailIdx === -1 || groupIdx === -1) {
-                toast.error("헤더 형식 오류", "첫 줄은 name,email,group 이어야 합니다. region/campus/branch는 선택입니다.");
-                return;
-            }
-
-            let nextGroups = [...groups];
-            const groupByScope = new Map(nextGroups.map(group => [rosterGroupScopeKey(group.name, group.region), group]));
-            const nextStudents = [...students];
-            let addedCount = 0;
-            let updatedCount = 0;
-            let skippedCount = 0;
-            let createdGroupCount = 0;
-            let conflictCount = 0;
-
-            for (let i = 1; i < rows.length; i++) {
-                const cols = rows[i];
-                const importedId = idIdx >= 0 ? (cols[idIdx] || "").trim() : "";
-                const name = (cols[nameIdx] || "").trim();
-                const email = (cols[emailIdx] || "").trim();
-                const group = (cols[groupIdx] || "").trim();
-                const region = regionIdx >= 0 ? (cols[regionIdx] || "").trim() : "";
-                const regionPatch = optionalRegion(region);
-                const emailKey = normalizeEmail(email || "");
-                if (!name || !email || !group || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(emailKey)) {
-                    skippedCount += 1;
-                    continue;
-                }
-
-                const groupScopeKey = rosterGroupScopeKey(group, region);
-                let currentGroup = groupByScope.get(groupScopeKey)
-                    || nextGroups.find(item => item.name === group && !item.region?.trim());
-
-                if (!currentGroup) {
-                    const newGroup: RosterGroup = {
-                        id: `g-${Date.now()}-${i}`,
-                        name: group,
-                        ...regionPatch,
-                        count: 0,
-                        avgScore: 0,
-                        color: nextGroupColor(nextGroups.length),
-                    };
-                    nextGroups = [...nextGroups, newGroup];
-                    groupByScope.set(groupScopeKey, newGroup);
-                    currentGroup = newGroup;
-                    createdGroupCount += 1;
-                } else if (regionPatch.region && currentGroup) {
-                    if (!currentGroup.region) {
-                        const currentGroupId = currentGroup.id;
-                        const updatedGroup = { ...currentGroup, region: regionPatch.region };
-                        nextGroups = nextGroups.map(item => item.id === currentGroupId ? updatedGroup : item);
-                        groupByScope.delete(rosterGroupScopeKey(currentGroup.name, currentGroup.region));
-                        groupByScope.set(groupScopeKey, updatedGroup);
-                        currentGroup = updatedGroup;
-                    }
-                }
-                if (!currentGroup) {
-                    skippedCount += 1;
-                    continue;
-                }
-
-                const baseId = studentIdForRoster(name, group, nextGroups, region, currentGroup.id);
-                const existingByEmailIndex = nextStudents.findIndex(student => normalizeEmail(student.email) === emailKey);
-                // An id column lets teachers re-import their own export, but a
-                // collision on id alone doesn't prove it's the same student —
-                // only treat it as an update when the email also matches (or
-                // the existing record has no email yet). Otherwise this row
-                // would silently overwrite an unrelated student's name/email/group.
-                const importedIdIndex = importedId ? nextStudents.findIndex(student => student.id === importedId) : -1;
-                const importedIdEmail = importedIdIndex >= 0 ? normalizeEmail(nextStudents[importedIdIndex].email) : "";
-                const importedIdConflicts = importedIdIndex >= 0 && !!importedIdEmail && importedIdEmail !== emailKey;
-                const existingByIdIndex = importedIdIndex >= 0 && !importedIdConflicts ? importedIdIndex : -1;
-                const existingIndex = existingByEmailIndex >= 0 ? existingByEmailIndex : existingByIdIndex;
-                if (existingIndex >= 0) {
-                    nextStudents[existingIndex] = {
-                        ...nextStudents[existingIndex],
-                        name,
-                        email,
-                        group,
-                        // A blank region cell must not wipe a stored per-student
-                        // region override — only spread the key when the cell
-                        // actually provided a value.
-                        ...(regionIdx >= 0 && regionPatch.region ? { region: regionPatch.region } : {}),
-                    };
-                    updatedCount += 1;
-                    continue;
-                }
-
-                if (importedIdConflicts) conflictCount += 1;
-                const id = importedId && !importedIdConflicts
-                    ? importedId
-                    : uniqueStudentIdForRoster(baseId, emailKey, nextStudents);
-
-                nextStudents.unshift({
-                    id,
-                    name,
-                    email,
-                    group,
-                    ...regionPatch,
-                    avatar: AVATAR_COLORS[(nextStudents.length + addedCount) % AVATAR_COLORS.length],
-                    avgScore: 0,
-                    examsTaken: 0,
-                    lastActive: "방금 전",
-                    trend: "flat",
-                    status: "active",
-                });
-                addedCount += 1;
-            }
-
-            if (addedCount > 0 || updatedCount > 0 || createdGroupCount > 0) {
-                const recomputedGroups = recomputeGroups(nextStudents, nextGroups);
-                persistRoster(nextStudents, recomputedGroups, invites);
-                toast.success(
-                    "CSV 업로드 완료",
-                    `${addedCount}명 추가 · ${updatedCount}명 업데이트 · ${createdGroupCount}개 반 생성${skippedCount ? ` · ${skippedCount}행 제외` : ""}${conflictCount ? ` · ${conflictCount}건 id 충돌(새 학생으로 추가)` : ""}`
-                );
-            } else {
-                toast.info("추가된 학생 없음", skippedCount ? `${skippedCount}개 행이 비어 있거나 형식이 맞지 않습니다.` : "새로 반영할 데이터가 없습니다.");
-            }
+            // Show the dry-run preview; nothing is committed until the teacher confirms.
+            setCsvPreview(plan);
         } catch {
             toast.error("CSV 파싱 실패", "파일 형식을 확인해주세요 (name,email,group,region).");
         }
+    };
+
+    const handleConfirmCsvImport = () => {
+        if (!csvPreview) return;
+        const plan = csvPreview;
+        setCsvPreview(null);
+        if (!plan.hasChanges) {
+            toast.info(
+                "추가된 학생 없음",
+                plan.skips.length
+                    ? `${plan.skips.length}개 행이 비어 있거나 형식이 맞지 않습니다.`
+                    : "새로 반영할 데이터가 없습니다.",
+            );
+            return;
+        }
+        const recomputedGroups = recomputeGroups(plan.nextStudents, plan.nextGroups);
+        persistRoster(plan.nextStudents, recomputedGroups, invites);
+        const addedTotal = plan.adds.length + plan.conflicts.length;
+        const updatedTotal = plan.updates.filter(update => update.changes.length > 0).length;
+        toast.success(
+            "CSV 가져오기 완료",
+            `${addedTotal}명 추가 · ${updatedTotal}명 업데이트 · ${plan.createdGroups.length}개 반 생성`
+            + `${plan.skips.length ? ` · ${plan.skips.length}행 제외` : ""}`
+            + `${plan.conflicts.length ? ` · ${plan.conflicts.length}건 id 충돌(새 학생으로 추가)` : ""}`,
+        );
     };
 
     return (
@@ -1435,8 +1398,18 @@ function ManageUsersInner() {
                                 }}>
                                     <span style={{ fontSize: '0.85rem', fontWeight: 600, color: 'var(--primary)' }}>
                                         <strong>{selectedIds.size}명</strong> 선택됨
+                                        <span style={{ fontWeight: 500, color: 'var(--muted)' }}> · 모든 페이지 포함 (필터 전체 {filtered.length}명 중)</span>
                                     </span>
-                                    <div style={{ display: 'flex', gap: '0.5rem' }}>
+                                    <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+                                        {filtered.length > 0 && !filtered.every(s => selectedIds.has(s.id)) && (
+                                            <button onClick={() => setSelectedIds(new Set(filtered.map(s => s.id)))} style={{
+                                                padding: '0.4rem 0.85rem', background: 'var(--surface)', color: 'var(--primary)',
+                                                border: '1px solid rgba(99,102,241,0.35)', borderRadius: 'var(--radius-md)',
+                                                fontSize: '0.8rem', fontWeight: 700, display: 'flex', alignItems: 'center', gap: '0.35rem'
+                                            }}>
+                                                <CheckCircle2 size={13} /> 필터 전체 {filtered.length}명 선택
+                                            </button>
+                                        )}
                                         <button onClick={handleExportCsv} style={{
                                             padding: '0.4rem 0.85rem', background: 'var(--surface)', color: 'var(--foreground)',
                                             border: '1px solid var(--border)', borderRadius: 'var(--radius-md)',
@@ -1484,7 +1457,8 @@ function ManageUsersInner() {
                                             <th style={{ padding: '0.85rem 0.5rem', width: 32 }}>
                                                 <input
                                                     type="checkbox"
-                                                    aria-label="전체 학생 선택 토글"
+                                                    aria-label={`필터된 전체 ${filtered.length}명 선택`}
+                                                    title={`필터된 전체 ${filtered.length}명 선택 (모든 페이지 포함)`}
                                                     checked={filtered.length > 0 && filtered.every(s => selectedIds.has(s.id))}
                                                     ref={el => { if (el) el.indeterminate = filtered.some(s => selectedIds.has(s.id)) && !filtered.every(s => selectedIds.has(s.id)); }}
                                                     onChange={() => toggleSelectAll(filtered.map(s => s.id))}
@@ -1511,7 +1485,7 @@ function ManageUsersInner() {
                                         </tr>
                                     </thead>
                                     <tbody>
-                                        {sortedFiltered.map(s => (
+                                        {pagedStudents.map(s => (
                                             <tr key={s.id}
                                                 onClick={() => setSelectedId(s.id)}
                                                 style={{ borderBottom: '1px solid var(--border)', cursor: 'pointer', transition: 'background 0.2s', background: selectedIds.has(s.id) ? 'rgba(99,102,241,0.06)' : selectedId === s.id ? 'rgba(99,102,241,0.05)' : 'transparent' }}
@@ -1603,6 +1577,73 @@ function ManageUsersInner() {
                                     </tbody>
                                 </table>
                             </div>
+
+                            {/* T2: pager — range readout, page-size selector, prev/next */}
+                            {totalRows > 0 && (
+                                <div style={{
+                                    display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                                    gap: '0.75rem', flexWrap: 'wrap', marginTop: '1rem',
+                                    paddingTop: '1rem', borderTop: '1px solid var(--border)',
+                                }}>
+                                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', flexWrap: 'wrap' }}>
+                                        <span style={{ fontSize: '0.82rem', color: 'var(--muted)', fontWeight: 600, fontVariantNumeric: 'tabular-nums' }}>
+                                            {pageStart + 1}–{pageEnd} / 전체 {totalRows}명
+                                        </span>
+                                        <label style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', fontSize: '0.8rem', color: 'var(--muted)' }}>
+                                            페이지당
+                                            <select
+                                                aria-label="페이지당 표시 수"
+                                                value={pageSize === "all" ? "all" : String(pageSize)}
+                                                onChange={e => setPageSize(e.target.value === "all" ? "all" : Number(e.target.value))}
+                                                style={{
+                                                    padding: '0.35rem 0.55rem', background: 'var(--surface)',
+                                                    border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)',
+                                                    color: 'var(--foreground)', fontSize: '0.8rem', fontWeight: 700,
+                                                }}
+                                            >
+                                                <option value="50">50</option>
+                                                <option value="100">100</option>
+                                                <option value="all">전체</option>
+                                            </select>
+                                        </label>
+                                    </div>
+                                    {pageSize !== "all" && pageCount > 1 && (
+                                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                                            <button
+                                                type="button"
+                                                aria-label="이전 페이지"
+                                                onClick={() => setPage(p => Math.max(1, p - 1))}
+                                                disabled={clampedPage <= 1}
+                                                style={{
+                                                    minWidth: 44, minHeight: 44, display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+                                                    background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 'var(--radius-md)',
+                                                    color: 'var(--foreground)', fontSize: '0.85rem', fontWeight: 700,
+                                                    opacity: clampedPage <= 1 ? 0.45 : 1, cursor: clampedPage <= 1 ? 'not-allowed' : 'pointer',
+                                                }}
+                                            >
+                                                이전
+                                            </button>
+                                            <span style={{ fontSize: '0.82rem', color: 'var(--muted)', fontWeight: 700, fontVariantNumeric: 'tabular-nums', minWidth: 68, textAlign: 'center' }}>
+                                                {clampedPage} / {pageCount}
+                                            </span>
+                                            <button
+                                                type="button"
+                                                aria-label="다음 페이지"
+                                                onClick={() => setPage(p => Math.min(pageCount, p + 1))}
+                                                disabled={clampedPage >= pageCount}
+                                                style={{
+                                                    minWidth: 44, minHeight: 44, display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+                                                    background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 'var(--radius-md)',
+                                                    color: 'var(--foreground)', fontSize: '0.85rem', fontWeight: 700,
+                                                    opacity: clampedPage >= pageCount ? 0.45 : 1, cursor: clampedPage >= pageCount ? 'not-allowed' : 'pointer',
+                                                }}
+                                            >
+                                                다음
+                                            </button>
+                                        </div>
+                                    )}
+                                </div>
+                            )}
                             {hydrated && filtered.length === 0 && (
                                 <div style={{ padding: '3rem 2rem', textAlign: 'center' }}>
                                     <div style={{
@@ -2313,54 +2354,30 @@ function ManageUsersInner() {
                 />
             )}
 
-            {/* Group Move Modal (DEV-A) */}
+            {/* Group Move Modal (DEV-A / T4) */}
             {showGroupMoveModal && (
                 <GroupMoveModal
                     groups={groups}
                     count={selectedIds.size}
+                    selectedRegions={displayStudents.filter(s => selectedIds.has(s.id)).map(s => rosterStudentRegionName(s, displayGroups))}
                     onClose={() => setShowGroupMoveModal(false)}
                     onConfirm={handleConfirmGroupMove}
                 />
             )}
 
-            {/* Delete undo bar (M6) */}
-            {pendingDeleteUndo && (
-                <div
-                    role="status"
-                    aria-live="polite"
-                    style={{
-                        position: 'fixed',
-                        left: 'max(1rem, env(safe-area-inset-left))',
-                        bottom: 'max(1rem, env(safe-area-inset-bottom))',
-                        zIndex: 2001,
-                        display: 'flex', alignItems: 'center', gap: '0.85rem',
-                        padding: '0.85rem 1.1rem',
-                        background: 'var(--surface)',
-                        border: '1px solid var(--border)',
-                        borderRadius: 'var(--radius-md)',
-                        boxShadow: '0 8px 24px rgba(0,0,0,0.12)',
-                        animation: 'fadeIn 0.2s ease-out',
-                    }}
-                >
-                    <span style={{ fontSize: '0.88rem', fontWeight: 600, color: 'var(--foreground)' }}>
-                        {pendingDeleteUndo.label} 삭제됨
-                    </span>
-                    <button
-                        type="button"
-                        onClick={handleUndoDelete}
-                        style={{
-                            padding: '0.4rem 0.9rem',
-                            background: 'var(--primary)',
-                            color: 'white',
-                            borderRadius: 'var(--radius-md)',
-                            fontSize: '0.82rem',
-                            fontWeight: 700,
-                        }}
-                    >
-                        실행 취소
-                    </button>
-                </div>
+            {/* CSV import preview (T1/T5): dry-run before committing */}
+            {csvPreview && (
+                <CsvImportPreviewModal
+                    plan={csvPreview}
+                    onClose={() => setCsvPreview(null)}
+                    onConfirm={handleConfirmCsvImport}
+                />
             )}
+
+            {/* T3: the delete/undo affordance now lives in the toast host
+                (ToastHost renders the "실행 취소" action button), so the
+                bespoke fixed undo bar was removed. pendingDeleteUndo still
+                drives the 6s restore window + the toast's action handler. */}
 
         </div>
     );
@@ -3281,14 +3298,19 @@ function GroupModal({
 
 // DEV-A: bulk group reassignment picker.
 function GroupMoveModal({
-    groups, count, onClose, onConfirm,
+    groups, count, selectedRegions, onClose, onConfirm,
 }: {
     groups: RosterGroup[];
     count: number;
+    /** Effective region of each selected student, for the override-impact note. */
+    selectedRegions: string[];
     onClose: () => void;
-    onConfirm: (groupId: string) => void;
+    onConfirm: (groupId: string, applyRegion: boolean) => void;
 }) {
     const [groupId, setGroupId] = useState(groups[0]?.id ?? "");
+    // T4: default ON keeps the previous behavior (region follows the class),
+    // but the teacher can turn it off to preserve each student's region override.
+    const [applyRegion, setApplyRegion] = useState(true);
     const inputStyle: React.CSSProperties = {
         width: '100%', padding: '0.65rem 0.85rem', background: 'var(--background)',
         border: '1px solid var(--border)', borderRadius: 'var(--radius-md)',
@@ -3300,19 +3322,24 @@ function GroupMoveModal({
         textTransform: 'uppercase', marginBottom: '0.4rem',
     };
 
+    const targetGroup = groups.find(g => g.id === groupId);
+    const targetRegion = targetGroup?.region?.trim() || DEFAULT_REGION_NAME;
+    const differingCount = selectedRegions.filter(region => region !== targetRegion).length;
+
     return (
         <ModalShell title="선택 학생 반 이동" onClose={onClose}>
             <form
                 onSubmit={(e) => {
                     e.preventDefault();
                     if (!groupId) return;
-                    onConfirm(groupId);
+                    onConfirm(groupId, applyRegion);
                 }}
             >
                 <p style={{ color: 'var(--muted)', fontSize: '0.88rem', lineHeight: 1.6, marginBottom: '1rem', wordBreak: 'keep-all' }}>
-                    선택된 <strong style={{ color: 'var(--foreground)' }}>{count}명</strong>을 옮길 반을 선택하세요. 반과 지역이 함께 이동됩니다.
+                    선택된 <strong style={{ color: 'var(--foreground)' }}>{count}명</strong>을 옮길 반을 선택하세요.
+                    {applyRegion ? " 반과 지역이 함께 이동됩니다." : " 반만 이동하고 각 학생의 지역은 유지됩니다."}
                 </p>
-                <div style={{ marginBottom: '1.25rem' }}>
+                <div style={{ marginBottom: '1rem' }}>
                     <label style={labelStyle}>이동할 반</label>
                     <select
                         aria-label="이동할 반"
@@ -3325,6 +3352,46 @@ function GroupMoveModal({
                         {groups.map(g => <option key={g.id} value={g.id}>{groupOptionLabel(g)}</option>)}
                     </select>
                 </div>
+
+                <label
+                    style={{
+                        display: 'flex', alignItems: 'flex-start', gap: '0.6rem',
+                        padding: '0.6rem 0.7rem', marginBottom: '0.75rem',
+                        borderRadius: 'var(--radius-md)', border: '1px solid var(--border)',
+                        background: 'var(--background)', cursor: 'pointer', minHeight: 44,
+                    }}
+                >
+                    <input
+                        type="checkbox"
+                        aria-label="지역도 이동한 반 기준으로 변경"
+                        checked={applyRegion}
+                        onChange={e => setApplyRegion(e.target.checked)}
+                        style={{ marginTop: 3, accentColor: 'var(--primary)', cursor: 'pointer', flexShrink: 0 }}
+                    />
+                    <span style={{ fontSize: '0.85rem', color: 'var(--foreground)', lineHeight: 1.5, wordBreak: 'keep-all' }}>
+                        <span style={{ fontWeight: 700 }}>지역도 이동한 반 기준으로 변경</span>
+                        <span style={{ display: 'block', fontSize: '0.78rem', color: 'var(--muted)', marginTop: '0.15rem' }}>
+                            체크 해제 시 각 학생의 기존 지역을 그대로 유지합니다.
+                        </span>
+                    </span>
+                </label>
+
+                {differingCount > 0 && (
+                    <p style={{
+                        fontSize: '0.8rem', lineHeight: 1.55, wordBreak: 'keep-all',
+                        color: applyRegion ? 'var(--warning)' : 'var(--muted)',
+                        background: applyRegion ? 'rgba(245,158,11,0.09)' : 'var(--background)',
+                        border: `1px solid ${applyRegion ? 'rgba(245,158,11,0.28)' : 'var(--border)'}`,
+                        borderRadius: 'var(--radius-md)', padding: '0.6rem 0.7rem', marginBottom: '1.25rem',
+                    }}>
+                        선택한 학생 중 <strong>{differingCount}명</strong>의 현재 지역이 이동할 반의 지역(<strong>{targetRegion}</strong>)과 다릅니다.
+                        {applyRegion
+                            ? " 확정하면 해당 학생의 지역이 덮어써집니다."
+                            : " 체크가 해제되어 이 학생들의 지역은 변경되지 않습니다."}
+                    </p>
+                )}
+                {differingCount === 0 && <div style={{ marginBottom: '1.25rem' }} />}
+
                 <div style={{ display: 'flex', gap: '0.5rem', justifyContent: 'flex-end' }}>
                     <button
                         type="button"
@@ -3345,6 +3412,195 @@ function GroupMoveModal({
         </ModalShell>
     );
 }
+
+// T1/T5: dry-run preview of a CSV import. Shows counts + a per-row disposition
+// (add / update with field diffs / id-collision conflict / skip with reason)
+// and only commits when the teacher presses 가져오기 확정.
+const CSV_PREVIEW_ROW_CAP = 100;
+
+const CSV_FIELD_LABEL: Record<RosterCsvFieldChange["field"], string> = {
+    name: "이름",
+    email: "이메일",
+    group: "반",
+    region: "지역",
+};
+
+function CsvDispositionBadge({ color, bg, label }: { color: string; bg: string; label: string }) {
+    return (
+        <span style={{
+            display: 'inline-block', flexShrink: 0, padding: '0.1rem 0.5rem',
+            borderRadius: 'var(--radius-full)', fontSize: '0.72rem', fontWeight: 800,
+            color, background: bg, whiteSpace: 'nowrap',
+        }}>
+            {label}
+        </span>
+    );
+}
+
+function CsvPreviewSection({
+    title, count, color, bg, children,
+}: {
+    title: string;
+    count: number;
+    color: string;
+    bg: string;
+    children: React.ReactNode;
+}) {
+    if (count === 0) return null;
+    return (
+        <div style={{ marginBottom: '1rem' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.5rem' }}>
+                <CsvDispositionBadge color={color} bg={bg} label={title} />
+                <span style={{ fontSize: '0.82rem', fontWeight: 800, color: 'var(--foreground)' }}>{count}건</span>
+            </div>
+            <div style={{
+                display: 'flex', flexDirection: 'column', gap: '0.35rem',
+                maxHeight: 200, overflowY: 'auto',
+                border: '1px solid var(--border)', borderRadius: 'var(--radius-md)',
+                padding: '0.5rem 0.6rem', background: 'var(--background)',
+            }}>
+                {children}
+            </div>
+        </div>
+    );
+}
+
+function CsvImportPreviewModal({
+    plan, onClose, onConfirm,
+}: {
+    plan: RosterCsvImportPlan;
+    onClose: () => void;
+    onConfirm: () => void;
+}) {
+    const addedTotal = plan.adds.length + plan.conflicts.length;
+    const changedUpdates = plan.updates.filter(update => update.changes.length > 0);
+    const unchangedCount = plan.updates.length - changedUpdates.length;
+    const rowStyle: React.CSSProperties = {
+        fontSize: '0.8rem', color: 'var(--foreground)', lineHeight: 1.5,
+        display: 'flex', alignItems: 'flex-start', gap: '0.5rem', wordBreak: 'keep-all',
+    };
+    const lineStyle: React.CSSProperties = {
+        flexShrink: 0, color: 'var(--muted)', fontVariantNumeric: 'tabular-nums', fontWeight: 700, minWidth: 34,
+    };
+    const moreNote = (shown: number, total: number) => (
+        total > shown
+            ? <div style={{ fontSize: '0.75rem', color: 'var(--muted)', fontWeight: 600, paddingTop: '0.15rem' }}>…외 {total - shown}건 더</div>
+            : null
+    );
+
+    return (
+        <ModalShell title="CSV 가져오기 미리보기" onClose={onClose} maxWidth={640}>
+            <p style={{ color: 'var(--muted)', fontSize: '0.86rem', lineHeight: 1.6, marginBottom: '1rem', wordBreak: 'keep-all' }}>
+                아래 내용은 아직 저장되지 않았습니다. 확인 후 <strong style={{ color: 'var(--foreground)' }}>가져오기 확정</strong>을 누르면 반영됩니다.
+            </p>
+
+            <div style={{
+                display: 'flex', flexWrap: 'wrap', gap: '0.5rem', marginBottom: '1.25rem',
+            }}>
+                <CsvDispositionBadge color="var(--success)" bg="rgba(16,185,129,0.1)" label={`추가 ${addedTotal}`} />
+                <CsvDispositionBadge color="var(--primary)" bg="rgba(99,102,241,0.1)" label={`업데이트 ${changedUpdates.length}`} />
+                {unchangedCount > 0 && (
+                    <CsvDispositionBadge color="var(--muted)" bg="var(--background)" label={`변경 없음 ${unchangedCount}`} />
+                )}
+                {plan.conflicts.length > 0 && (
+                    <CsvDispositionBadge color="var(--warning)" bg="rgba(245,158,11,0.12)" label={`id 충돌 ${plan.conflicts.length}`} />
+                )}
+                {plan.createdGroups.length > 0 && (
+                    <CsvDispositionBadge color="var(--foreground)" bg="var(--background)" label={`새 반 ${plan.createdGroups.length}`} />
+                )}
+                {plan.skips.length > 0 && (
+                    <CsvDispositionBadge color="var(--error)" bg="rgba(239,68,68,0.1)" label={`제외 ${plan.skips.length}`} />
+                )}
+            </div>
+
+            <CsvPreviewSection title="추가" count={plan.adds.length} color="var(--success)" bg="rgba(16,185,129,0.1)">
+                {plan.adds.slice(0, CSV_PREVIEW_ROW_CAP).map(row => (
+                    <div key={`add-${row.line}`} style={rowStyle}>
+                        <span style={lineStyle}>#{row.line}</span>
+                        <span><strong>{row.name}</strong> · {row.email} · {row.group}{row.region ? ` · ${row.region}` : ""}</span>
+                    </div>
+                ))}
+                {moreNote(CSV_PREVIEW_ROW_CAP, plan.adds.length)}
+            </CsvPreviewSection>
+
+            <CsvPreviewSection title="업데이트" count={changedUpdates.length} color="var(--primary)" bg="rgba(99,102,241,0.1)">
+                {changedUpdates.slice(0, CSV_PREVIEW_ROW_CAP).map(row => (
+                    <div key={`upd-${row.line}`} style={rowStyle}>
+                        <span style={lineStyle}>#{row.line}</span>
+                        <span>
+                            <strong>{row.name}</strong> · {row.email}
+                            <span style={{ color: 'var(--muted)' }}> ({row.matchedBy === "email" ? "이메일 일치" : "id 일치"})</span>
+                            <span style={{ display: 'block', color: 'var(--muted)', fontSize: '0.75rem' }}>
+                                {row.changes.map(change => (
+                                    <span key={change.field} style={{ display: 'block' }}>
+                                        {CSV_FIELD_LABEL[change.field]}: {change.from || "—"} → <strong style={{ color: 'var(--foreground)' }}>{change.to || "—"}</strong>
+                                    </span>
+                                ))}
+                            </span>
+                        </span>
+                    </div>
+                ))}
+                {moreNote(CSV_PREVIEW_ROW_CAP, changedUpdates.length)}
+            </CsvPreviewSection>
+
+            <CsvPreviewSection title="id 충돌 (새 학생으로 추가)" count={plan.conflicts.length} color="var(--warning)" bg="rgba(245,158,11,0.12)">
+                {plan.conflicts.slice(0, CSV_PREVIEW_ROW_CAP).map(row => (
+                    <div key={`cft-${row.line}`} style={rowStyle}>
+                        <span style={lineStyle}>#{row.line}</span>
+                        <span>
+                            <strong>{row.name}</strong> · {row.email} · {row.group}
+                            <span style={{ display: 'block', color: 'var(--muted)', fontSize: '0.75rem' }}>
+                                id <code>{row.importedId}</code>가 기존 학생({row.existingName} · {row.existingEmail})과 겹쳐 새 학생으로 추가됩니다.
+                            </span>
+                        </span>
+                    </div>
+                ))}
+                {moreNote(CSV_PREVIEW_ROW_CAP, plan.conflicts.length)}
+            </CsvPreviewSection>
+
+            <CsvPreviewSection title="제외" count={plan.skips.length} color="var(--error)" bg="rgba(239,68,68,0.1)">
+                {plan.skips.slice(0, CSV_PREVIEW_ROW_CAP).map(row => (
+                    <div key={`skp-${row.line}`} style={rowStyle}>
+                        <span style={lineStyle}>#{row.line}</span>
+                        <span>
+                            {row.name || row.email || row.group
+                                ? <>{row.name || "(이름 없음)"} · {row.email || "(이메일 없음)"} · {row.group || "(반 없음)"}</>
+                                : <span style={{ color: 'var(--muted)' }}>빈 행</span>}
+                            <span style={{ display: 'block', color: 'var(--error)', fontSize: '0.75rem' }}>
+                                {row.reason === "missing-fields" ? "필수 항목 누락 (이름/이메일/반)" : "이메일 형식 오류"}
+                            </span>
+                        </span>
+                    </div>
+                ))}
+                {moreNote(CSV_PREVIEW_ROW_CAP, plan.skips.length)}
+            </CsvPreviewSection>
+
+            <div style={{ display: 'flex', gap: '0.5rem', justifyContent: 'flex-end', marginTop: '1.25rem' }}>
+                <button
+                    type="button"
+                    onClick={onClose}
+                    style={{ minHeight: 44, padding: '0.65rem 1rem', background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 'var(--radius-md)', fontWeight: 600, fontSize: '0.85rem', color: 'var(--foreground)' }}
+                >
+                    취소
+                </button>
+                <button
+                    type="button"
+                    onClick={onConfirm}
+                    disabled={!plan.hasChanges}
+                    title={plan.hasChanges ? undefined : "반영할 변경 사항이 없습니다."}
+                    style={{
+                        minHeight: 44, padding: '0.65rem 1.1rem', background: 'var(--primary)', color: 'white',
+                        borderRadius: 'var(--radius-md)', fontWeight: 700, fontSize: '0.85rem',
+                        opacity: plan.hasChanges ? 1 : 0.5, cursor: plan.hasChanges ? 'pointer' : 'not-allowed',
+                    }}
+                >
+                    가져오기 확정
+                </button>
+            </div>
+        </ModalShell>
+    );
+}
+
 
 function InviteModal({
     onClose, onSubmit,
