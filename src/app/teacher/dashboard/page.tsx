@@ -5,7 +5,7 @@ import Link from "next/link";
 import dynamic from "next/dynamic";
 import { useRouter, useSearchParams } from "next/navigation";
 import BrandLogo from "@/components/BrandLogo";
-import { Exam, Attempt, type PlanKey } from "@/types/omr";
+import { Exam, Attempt } from "@/types/omr";
 import OverviewTab from "@/components/dashboard/tabs/OverviewTab";
 import { Activity, AlertTriangle, BarChart2, CheckCircle2, CloudOff, Database, GraduationCap, LayoutDashboard, RefreshCw, Search } from "lucide-react";
 import ThemeToggle from "@/components/ThemeToggle";
@@ -50,7 +50,7 @@ import { summarizeAnalyticsDataHealth, summarizePersistenceHealth, type Persiste
 import { loadRosterSnapshot } from "@/lib/rosterPersistence";
 import type { RosterGroup, RosterStudent } from "@/lib/rosterStorage";
 import { buildTeacherDashboardMetrics } from "@/lib/teacherDashboardMetrics";
-import { getCurrentPlan } from "@/utils/plans";
+import { useServerPlan } from "@/lib/useServerPlan";
 
 type TabType = 'overview' | 'exam' | 'student';
 type DashboardDataMode = "real" | "demo";
@@ -105,7 +105,7 @@ function TeacherDashboard() {
     const [trendData, setTrendData] = useState<number[]>([]);
     const [trendLabels, setTrendLabels] = useState<string[]>([]);
     const [dataMode, setDataMode] = useState<DashboardDataMode>("real");
-    const [currentPlan] = useState<PlanKey>(() => getCurrentPlan());
+    const { plan: currentPlan } = useServerPlan();
     const [syncStatus, setSyncStatus] = useState<PersistenceHealth>(() => summarizePersistenceHealth([]));
     const [isRefreshingDashboardData, setIsRefreshingDashboardData] = useState(false);
     const [isRepairingAnalyticsData, setIsRepairingAnalyticsData] = useState(false);

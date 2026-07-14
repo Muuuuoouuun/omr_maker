@@ -247,6 +247,29 @@ describe("Supabase persistence mapping", () => {
         expect(attemptFromSupabaseRow(row)).toEqual({ ...attempt, studentProfileId: row.student_profile_id });
     });
 
+    it("preserves teacher sub-question review status in indexed payload roundtrips", () => {
+        const reviewedAttempt: Attempt = {
+            ...attempt,
+            subQuestionAnswers: {
+                1: {
+                    reason: {
+                        schemaVersion: 1,
+                        body: "본문 근거",
+                        reviewStatus: "reviewed",
+                        reviewedAt: "2026-07-01T02:00:00.000Z",
+                        reviewedBy: "김선생",
+                    },
+                },
+            },
+        };
+        const row = attemptToSupabaseRow(reviewedAttempt);
+        expect(row.payload.subQuestionAnswers?.[1].reason.reviewStatus).toBe("reviewed");
+        expect(attemptFromSupabaseRow(row).subQuestionAnswers?.[1].reason).toMatchObject({
+            reviewStatus: "reviewed",
+            reviewedBy: "김선생",
+        });
+    });
+
     it("scopes attempt and question-result rows to the exam or active workspace", () => {
         const context = workspaceContextFromIdentity({
             teacherId: "teacher-a",

@@ -16,6 +16,8 @@ import { attemptOwnedBy, buildServerAttempt, identityAccessSession, ownerStudent
 import { upsertStudentQuestion, type StudentQuestionInput } from "@/lib/studentQuestions";
 import { attemptIdForStudentSubmission } from "@/lib/studentSubmissionId";
 import type { Attempt, Exam } from "@/types/omr";
+import type { PlanKey } from "@/types/omr";
+import { hasPlanEntitlement, normalizePlan } from "@/utils/plans";
 
 type Status = "ok" | "unauthenticated" | "degraded_local" | "denied" | "not_found" | "error";
 type AccessStatus = "pin_required" | "pin_rate_limited" | "login_required" | "group_denied" | "not_started" | "ended" | "archived";
@@ -74,6 +76,29 @@ interface ResolvedCtx {
     admin: AdminClient;
 }
 
+async function examOwnerPremium(
+    admin: AdminClient,
+    exam: Exam,
+    cache?: Map<string, Promise<{ plan: PlanKey; handwritingArchive: boolean }>>,
+): Promise<{ plan: PlanKey; handwritingArchive: boolean }> {
+    if (!exam.organizationId) return { plan: "free", handwritingArchive: false };
+    const read = async () => {
+        const { data, error } = await (admin as SupabaseAdminReadClientLike).from("omr_organizations")
+            .select("plan")
+            .eq("id", exam.organizationId!)
+            .maybeSingle();
+        if (error || !data) return { plan: "free" as const, handwritingArchive: false };
+        const plan = normalizePlan((data as { plan?: unknown }).plan) || "free";
+        return { plan, handwritingArchive: hasPlanEntitlement(plan, "handwritingArchive") };
+    };
+    if (!cache) return read();
+    const existing = cache.get(exam.organizationId);
+    if (existing) return existing;
+    const pending = read();
+    cache.set(exam.organizationId, pending);
+    return pending;
+}
+
 async function resolveCtx(): Promise<ResolvedCtx | { status: "unauthenticated" | "degraded_local" }> {
     const cookieStore = await cookies();
     const identity = parseSignedStudentSessionCookie(cookieStore.get(STUDENT_SERVER_SESSION_COOKIE)?.value);
@@ -110,7 +135,8 @@ export async function loadExamForSolving(examId: string, pin?: string): Promise<
         const exam = examFromSupabaseRow(row as Parameters<typeof examFromSupabaseRow>[0]);
         const access = evaluateGatedAccess(exam, ctx.identity, pin);
         if (access !== "allowed") return { status: access };
-        return { status: "ok", exam: stripExamForSolving(exam) };
+        const premium = await examOwnerPremium(ctx.admin, exam);
+        return { status: "ok", exam: stripExamForSolving(exam, { handwritingArchive: premium.handwritingArchive }) };
     } catch (e) {
         console.error("loadExamForSolving failed", e);
         return { status: "error" };
@@ -139,7 +165,11 @@ export async function submitAttempt(input: SubmitAttemptInput, pin?: string): Pr
         const exam = examFromSupabaseRow(row as Parameters<typeof examFromSupabaseRow>[0]);
         const access = evaluateGatedAccess(exam, ctx.identity, pin, { graceMs: SUBMIT_ENDAT_GRACE_MS });
         if (access !== "allowed") return { status: access };
-        const attempt = buildServerAttempt(input, exam, ctx.identity, attemptId, new Date().toISOString());
+        const premium = await examOwnerPremium(ctx.admin, exam);
+        const attempt = buildServerAttempt(input, exam, ctx.identity, attemptId, new Date().toISOString(), {
+            handwritingArchive: premium.handwritingArchive,
+            handwritingPlan: premium.plan,
+        });
         const attemptResult = await ctx.admin.from("omr_attempts").upsert(attemptToSupabaseRow(attempt));
         if (attemptResult.error) return { status: "error" };
         // question-results upsert is idempotent (keyed by attempt id); a client retry reconciles a partial write.
@@ -165,15 +195,18 @@ export async function listMyAssignments(): Promise<{ status: Status; attempts?: 
                 ? fetchExamRowsByOrganization(ctx.admin, ctx.identity.organizationId)
                 : Promise.resolve([]),
         ]);
-        const exams = examRows.flatMap(row => {
+        const premiumByOrganization = new Map<string, Promise<{ plan: PlanKey; handwritingArchive: boolean }>>();
+        const exams = (await Promise.all(examRows.map(async row => {
             try {
                 const exam = examFromSupabaseRow(row as Parameters<typeof examFromSupabaseRow>[0]);
                 const access = evaluateGatedAccess(exam, ctx.identity, undefined);
-                return access === "allowed" || access === "pin_required" ? [stripExamForSolving(exam)] : [];
+                if (access !== "allowed" && access !== "pin_required") return [];
+                const premium = await examOwnerPremium(ctx.admin, exam, premiumByOrganization);
+                return [stripExamForSolving(exam, { handwritingArchive: premium.handwritingArchive })];
             } catch {
                 return [];
             }
-        });
+        }))).flat();
         return { status: "ok", attempts, exams };
     } catch (e) {
         console.error("listMyAssignments failed", e);

@@ -32,6 +32,24 @@ export interface LocalPlanCycleReminder {
 }
 
 /**
+ * Legacy/demo browser data may contain rows marked as paid. Never surface those
+ * as real payment history until a live checkout has produced verifiable live
+ * provider metadata.
+ */
+export function filterBillingRecordsForDisplay(
+    records: readonly BillingInvoice[],
+    canStartLiveCheckout: boolean,
+): BillingInvoice[] {
+    return records.filter(record => {
+        if (record.status === "local_record") return true;
+        return canStartLiveCheckout
+            && record.paymentProviderMode === "live"
+            && !!record.paymentProviderKey
+            && !!record.checkoutId;
+    });
+}
+
+/**
  * Formats a Date as YYYY-MM-DD in local time. Callers that render dates for the
  * Korean audience must use this instead of `Date.toISOString().slice(0,10)`,
  * which converts to UTC and renders the previous day within 9 hours of midnight

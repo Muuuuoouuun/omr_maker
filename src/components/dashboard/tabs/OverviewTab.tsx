@@ -22,8 +22,11 @@ import { buildAttemptScoreLookup } from "@/lib/attemptScores";
 import { buildExamQuestionResultStats, buildExamQuestionPointBiserial } from "@/lib/premiumAnalytics";
 import type { RosterGroup, RosterStudent } from "@/lib/rosterStorage";
 import { summarizePersistenceWrite } from "@/lib/persistenceFeedback";
-import { buildBillingUsageSummary } from "@/lib/billingUsage";
-import { evaluatePlanLimit, getCurrentPlan, getPlanLabel, PLAN_BY_KEY } from "@/utils/plans";
+import {
+    authorizeAdvancedQuestionDesign,
+    authorizeExamCreation,
+    releaseExamCreationAuthorization,
+} from "@/app/actions/premiumAccess";
 
 interface OverviewTabProps {
     exams: Exam[];
@@ -132,34 +135,28 @@ export default function OverviewTab({ exams: examsProp, attempts, stats, trendDa
         }
 
         if (kind === 'duplicate') {
-            // Duplicating mints a brand-new exam (createdAt = now), so it must respect
-            // the same monthly creation cap the create/publish path enforces — otherwise
-            // a capped Free teacher could mint unlimited exams via 복제.
-            const plan = getCurrentPlan();
-            const usage = buildBillingUsageSummary({ exams, attempts: [], students: [], aiRecognition: 0 });
-            const limit = evaluatePlanLimit(plan, "exams", usage.examsThisMonth, 1);
-            if (!limit.allowed) {
-                const upgradeName = limit.upgradeTarget ? PLAN_BY_KEY[limit.upgradeTarget].name : "상위";
-                toast.error(
-                    "월 시험 생성 한도 도달",
-                    `${getPlanLabel(plan)} 플랜은 이번 달 시험 ${limit.limit}개까지 생성할 수 있습니다. ${upgradeName} 플랜에서 계속 생성할 수 있습니다.`
-                );
-                return;
-            }
             const newId = secureRandomId();
-            const pdfDataRef = await copyStoredData(target.pdfDataRef, `exam:${newId}:problemPdf`) || target.pdfDataRef;
-            const answerKeyPdfRef = await copyStoredData(target.answerKeyPdfRef, `exam:${newId}:answerKeyPdf`) || target.answerKeyPdfRef;
-            const copy: Exam = {
-                ...target,
-                id: newId,
-                pdfDataRef,
-                answerKeyPdfRef,
-                title: target.title + ' (복사본)',
-                createdAt: new Date().toISOString(),
-                updatedAt: new Date().toISOString(),
-                archived: false,
-            };
+            let reserved = false;
             try {
+                if (target.questions.some(question => (question.subQuestions?.length || 0) > 0)) {
+                    const entitlement = await authorizeAdvancedQuestionDesign();
+                    if (!entitlement.ok) throw new Error(entitlement.error || "하위 질문 복제는 Pro 기능입니다.");
+                }
+                const authorization = await authorizeExamCreation(newId);
+                if (!authorization.ok) throw new Error(authorization.error || "월 시험 생성 한도에 도달했습니다.");
+                reserved = true;
+                const pdfDataRef = await copyStoredData(target.pdfDataRef, `exam:${newId}:problemPdf`) || target.pdfDataRef;
+                const answerKeyPdfRef = await copyStoredData(target.answerKeyPdfRef, `exam:${newId}:answerKeyPdf`) || target.answerKeyPdfRef;
+                const copy: Exam = {
+                    ...target,
+                    id: newId,
+                    pdfDataRef,
+                    answerKeyPdfRef,
+                    title: target.title + ' (복사본)',
+                    createdAt: new Date().toISOString(),
+                    updatedAt: new Date().toISOString(),
+                    archived: false,
+                };
                 const result = await saveExam(copy);
                 const feedback = summarizePersistenceWrite(result, {
                     target: "시험",
@@ -168,11 +165,13 @@ export default function OverviewTab({ exams: examsProp, attempts, stats, trendDa
                     failureDetail: "브라우저 저장소 용량 또는 Supabase 동기화 상태를 확인해주세요.",
                 });
                 if (!feedback.ok) throw new Error(feedback.detail);
+                reserved = false;
                 setExams(prev => [copy, ...prev]);
                 toast.success('시험 복제됨', `"${target.title}"의 복사본을 만들었습니다.`);
                 if (feedback.level === "info") toast.info(feedback.title, feedback.detail);
-            } catch {
-                toast.error('복제 실패', 'localStorage 용량이 부족할 수 있습니다.');
+            } catch (error) {
+                if (reserved) await releaseExamCreationAuthorization(newId);
+                toast.error('복제 실패', error instanceof Error ? error.message : '저장 공간 또는 서버 플랜을 확인해주세요.');
             }
             return;
         }

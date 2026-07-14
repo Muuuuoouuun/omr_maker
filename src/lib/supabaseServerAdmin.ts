@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { createClient } from "@supabase/supabase-js";
 import { workspaceBootstrapRows, type WorkspaceContext } from "@/lib/workspaceContext";
+import { normalizePlan } from "@/utils/plans";
 
 type Env = Record<string, string | undefined>;
 
@@ -70,7 +71,19 @@ export async function bootstrapWorkspaceWithAdminClient(
 ): Promise<WorkspaceBootstrapResult> {
     const rows = workspaceBootstrapRows(context, now);
 
-    const organizationResult = await client.from("omr_organizations").upsert(rows.organization);
+    const organizationTable = client.from("omr_organizations");
+    let organizationRow = rows.organization;
+    // Login bootstrap must never downgrade a paid organization back to the
+    // workspace default (`free`). Preserve the server-owned plan when the row
+    // already exists; local/browser plan state is intentionally irrelevant.
+    if (organizationTable.select) {
+        const existing = await organizationTable.select("plan").eq("id", rows.organization.id).maybeSingle();
+        if (!existing.error && existing.data) {
+            const existingPlan = normalizePlan((existing.data as { plan?: unknown }).plan);
+            if (existingPlan) organizationRow = { ...organizationRow, plan: existingPlan };
+        }
+    }
+    const organizationResult = await organizationTable.upsert(organizationRow);
     if (organizationResult.error) {
         return { ok: false, error: errorMessage(organizationResult.error, "Failed to bootstrap organization") };
     }

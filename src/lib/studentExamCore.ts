@@ -10,17 +10,20 @@ import type {
     RetakeMetadata,
     StoredDataRef,
     StoredPlanKey,
+    SubQuestionAnswers,
 } from "@/types/omr";
 import { gradeAttempt } from "@/types/omr";
 import { buildQuestionResults } from "@/lib/premiumAnalytics";
 import type { ExamAccessSession } from "@/lib/examAccess";
 import type { StudentServerIdentity } from "@/lib/studentServerSession";
+import { findMissingRequiredSubQuestions, sanitizeSubQuestionAnswersForQuestions } from "@/lib/subQuestions";
 
 export interface SubmitAttemptInput {
     examId: string;
     /** Stable per draft so network retries resolve to one server attempt. */
     submissionId: string;
     answers: Record<number, number>;
+    subQuestionAnswers?: SubQuestionAnswers;
     startedAt: string;
     autoSubmitted?: boolean;
     questionTimings?: QuestionTiming[];
@@ -135,9 +138,15 @@ export function buildServerAttempt(
     identity: StudentServerIdentity,
     attemptId: string,
     finishedAtIso: string,
+    premium: { handwritingArchive?: boolean; handwritingPlan?: StoredPlanKey } = {},
 ): Attempt {
     const scope = resolveRetakeScope(exam, input.retake);
     const graded = gradeAttempt(scope.questions, input.answers);
+    const subQuestionAnswers = sanitizeSubQuestionAnswersForQuestions(scope.questions, input.subQuestionAnswers, finishedAtIso);
+    const missingRequiredSubQuestions = findMissingRequiredSubQuestions(scope.questions, subQuestionAnswers);
+    if (!input.autoSubmitted && missingRequiredSubQuestions.length > 0) {
+        throw new Error("REQUIRED_SUB_QUESTIONS_MISSING");
+    }
     const attempt: Attempt = {
         id: attemptId,
         examId: exam.id,
@@ -156,19 +165,25 @@ export function buildServerAttempt(
         score: graded.earnedScore,
         totalScore: graded.totalScore,
         answers: input.answers,
+        subQuestionAnswers: Object.keys(subQuestionAnswers).length > 0 ? subQuestionAnswers : undefined,
+        missingRequiredSubQuestions: input.autoSubmitted && missingRequiredSubQuestions.length > 0
+            ? missingRequiredSubQuestions
+            : undefined,
         status: "completed",
         autoSubmitted: input.autoSubmitted,
         tabFociLostCount: input.tabFociLostCount,
         questionTimings: input.questionTimings,
         focusLossEvents: input.focusLossEvents,
-        drawings: input.drawings,
-        drawingsRef: input.drawingsRef,
-        handwriting: input.handwriting,
-        handwritingArchived: input.handwritingArchived,
-        handwritingPlan: input.handwritingPlan,
-        drawingPageCount: input.drawingPageCount,
-        drawingStrokeCount: input.drawingStrokeCount,
-        questionDrawings: input.questionDrawings,
+        // Handwriting is a paid storage capability of the exam owner's server
+        // plan. Every client-provided plan/archive flag is ignored.
+        drawings: premium.handwritingArchive ? input.drawings : undefined,
+        drawingsRef: premium.handwritingArchive ? input.drawingsRef : undefined,
+        handwriting: premium.handwritingArchive ? input.handwriting : undefined,
+        handwritingArchived: !!premium.handwritingArchive && !!(input.drawingsRef || input.drawings),
+        handwritingPlan: premium.handwritingArchive ? premium.handwritingPlan : "free",
+        drawingPageCount: premium.handwritingArchive ? input.drawingPageCount : undefined,
+        drawingStrokeCount: premium.handwritingArchive ? input.drawingStrokeCount : undefined,
+        questionDrawings: premium.handwritingArchive ? input.questionDrawings : undefined,
         retake: scope.retake,
     };
     attempt.questionResults = buildQuestionResults({ ...exam, questions: scope.questions }, attempt);

@@ -410,7 +410,7 @@ export default function StudentAnalyticsTab({
             {(!retakeAssignmentsEnabled || !remindersEnabled) && (
                 <PremiumFeatureCard
                     title="학생별 액션 잠금"
-                    description="Free에서는 점수 추이와 응시 기록을 확인하고, Pro 이상에서 유형 재시험 링크와 카카오 알림 대기 관리를 사용할 수 있습니다."
+                    description="Free에서는 점수 추이와 응시 기록을 확인하고, Pro 이상에서 유형 재시험 링크와 카카오 발송 후보·큐 관리를 사용할 수 있습니다. 실제 메시지 발송은 아직 지원하지 않습니다."
                     badge="Pro"
                     style={{ marginTop: '-0.25rem' }}
                 />
@@ -589,12 +589,12 @@ export default function StudentAnalyticsTab({
                                                     className="card-hover"
                                                 >
                                                     <Bell size={13} style={{ verticalAlign: '-2px', marginRight: '0.25rem' }} />
-                                                    {queued ? '대기 등록됨' : '알림 대기'}
+                                                    {queued ? '큐 등록됨' : '후보 큐 등록'}
                                                 </button>
                                             ) : (
                                                 <Link
                                                     href="/teacher/billing"
-                                                    title="Pro 이상에서 카카오 알림 대기 관리를 사용할 수 있습니다."
+                                                    title="Pro 이상에서 카카오 발송 후보·큐를 관리할 수 있습니다. 실제 메시지는 발송하지 않습니다."
                                                     style={{
                                                         display: 'inline-flex',
                                                         alignItems: 'center',

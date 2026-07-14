@@ -114,7 +114,7 @@ function resultStatusLabel(result?: QuestionResult): string {
 type AnalysisScope = "exam" | "class" | "student";
 const ALL_REGION_KEY = "__all_regions__";
 const KAKAO_REVIEW_STATUS_OPTIONS: Array<{ status: KakaoCandidateReviewStatus; label: string }> = [
-    { status: "ready", label: "발송 준비" },
+    { status: "ready", label: "후보 준비" },
     { status: "hold", label: "보류" },
     { status: "excluded", label: "제외" },
 ];
@@ -162,7 +162,7 @@ function kakaoCandidateKindColor(kind: KakaoNotificationCandidateKind): string {
 }
 
 function kakaoReviewStatusLabel(status: KakaoCandidateReviewStatus | "unreviewed"): string {
-    if (status === "ready") return "발송 준비";
+    if (status === "ready") return "후보 준비";
     if (status === "hold") return "보류";
     if (status === "excluded") return "제외";
     return "검토 대기";
@@ -176,12 +176,12 @@ function kakaoReviewStatusColor(status: KakaoCandidateReviewStatus | "unreviewed
 }
 
 function kakaoDispatchStatusLabel(status: KakaoDispatchLog["status"] | undefined): string {
-    if (status === "queued") return "발송 대기 기록됨";
-    if (status === "sent") return "발송 완료 기록";
-    if (status === "failed") return "발송 실패 기록";
-    if (status === "cancelled") return "발송 취소 기록";
-    if (status === "skipped") return "발송 제외 기록";
-    return "대기 기록 없음";
+    if (status === "queued") return "큐 대기 기록됨";
+    if (status === "sent") return "시뮬레이션 완료 기록";
+    if (status === "failed") return "시뮬레이션 실패 기록";
+    if (status === "cancelled") return "시뮬레이션 취소 기록";
+    if (status === "skipped") return "후보 제외 기록";
+    return "큐 기록 없음";
 }
 
 function kakaoDispatchStatusColor(status: KakaoDispatchLog["status"] | undefined): string {
@@ -1273,7 +1273,7 @@ export default function ExamAnalyticsTab({
                         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(160px, 100%), 1fr))', gap: '0.55rem', marginBottom: '1rem' }}>
                             {[
                                 { label: "검토 대기", value: kakaoReviewSummary.unreviewed, status: "unreviewed" as const },
-                                { label: "발송 준비", value: kakaoReviewSummary.ready, status: "ready" as const },
+                                { label: "후보 준비", value: kakaoReviewSummary.ready, status: "ready" as const },
                                 { label: "보류", value: kakaoReviewSummary.hold, status: "hold" as const },
                                 { label: "제외", value: kakaoReviewSummary.excluded, status: "excluded" as const },
                             ].map(item => (
@@ -1297,10 +1297,10 @@ export default function ExamAnalyticsTab({
                     {kakaoDispatchSummary && (
                         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(180px, 100%), 1fr))', gap: '0.55rem', marginBottom: '1rem' }}>
                             {[
-                                { label: "발송 대기 기록", value: kakaoDispatchSummary.queued, color: 'var(--primary)' },
-                                { label: "발송 완료 기록", value: kakaoDispatchSummary.sent, color: 'var(--success)' },
-                                { label: "발송 실패 기록", value: kakaoDispatchSummary.failed, color: 'var(--error)' },
-                                { label: "발송 취소 기록", value: kakaoDispatchSummary.cancelled, color: 'var(--warning)' },
+                                { label: "큐 대기 기록", value: kakaoDispatchSummary.queued, color: 'var(--primary)' },
+                                { label: "시뮬레이션 완료 기록", value: kakaoDispatchSummary.sent, color: 'var(--success)' },
+                                { label: "시뮬레이션 실패 기록", value: kakaoDispatchSummary.failed, color: 'var(--error)' },
+                                { label: "시뮬레이션 취소 기록", value: kakaoDispatchSummary.cancelled, color: 'var(--warning)' },
                             ].map(item => (
                                 <div key={item.label} style={{
                                     display: 'flex',
@@ -1451,7 +1451,7 @@ export default function ExamAnalyticsTab({
                                             enabled={remindersEnabled}
                                             href={candidate.href}
                                             className="btn btn-secondary"
-                                            lockedTitle="Pro 이상에서 카카오 후보를 검토하고 발송 준비할 수 있습니다."
+                                            lockedTitle="Pro 이상에서 카카오 후보를 검토하고 큐 대기 기록을 관리할 수 있습니다. 실제 메시지는 발송하지 않습니다."
                                             style={{ fontSize: '0.74rem', padding: '0.38rem 0.68rem', whiteSpace: 'nowrap', justifySelf: 'end', textAlign: 'center' }}
                                         >
                                             후보 검토
@@ -1462,7 +1462,7 @@ export default function ExamAnalyticsTab({
                                             className="btn btn-secondary"
                                             disabled={!canQueueDispatch}
                                             onClick={() => queueKakaoDispatch(candidate)}
-                                            title={!kakaoProviderReadiness.canQueueDispatch ? kakaoProviderReadiness.detail : reviewStatus === "ready" ? "발송 대기 로그를 남깁니다." : "발송 준비 상태에서 대기 기록을 남길 수 있습니다."}
+                                            title={!kakaoProviderReadiness.canQueueDispatch ? kakaoProviderReadiness.detail : reviewStatus === "ready" ? "실제 발송 없이 큐 대기 로그를 남깁니다." : "후보 준비 상태에서 큐 대기 기록을 남길 수 있습니다."}
                                             style={{
                                                 fontSize: '0.74rem',
                                                 padding: '0.38rem 0.68rem',
@@ -1471,7 +1471,7 @@ export default function ExamAnalyticsTab({
                                                 whiteSpace: 'nowrap',
                                             }}
                                         >
-                                            발송 대기 기록
+                                            큐 대기 기록
                                         </button>
                                         {latestDispatch && (
                                             <div style={{ display: 'flex', gap: '0.35rem', flexWrap: 'wrap', justifyContent: 'flex-end' }}>

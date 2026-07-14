@@ -19,6 +19,250 @@ create table if not exists public.omr_organizations (
     updated_at timestamptz not null default now()
 );
 
+-- Server-owned aggregate usage and idempotency ledger for paid-plan limits.
+-- These tables intentionally have no public/anon RLS policy. Only trusted
+-- service-role server actions may read or mutate them.
+create table if not exists public.omr_plan_usage (
+    organization_id text not null references public.omr_organizations(id) on delete cascade,
+    metric text not null check (metric in ('exams', 'students', 'aiRecognition')),
+    period_start date not null,
+    used integer not null default 0 check (used >= 0),
+    updated_at timestamptz not null default now(),
+    primary key (organization_id, metric, period_start)
+);
+
+create table if not exists public.omr_plan_usage_reservations (
+    organization_id text not null references public.omr_organizations(id) on delete cascade,
+    metric text not null check (metric in ('exams', 'students', 'aiRecognition')),
+    period_start date not null,
+    resource_key text not null,
+    amount integer not null default 1 check (amount > 0),
+    created_at timestamptz not null default now(),
+    primary key (organization_id, metric, period_start, resource_key)
+);
+
+-- Atomically raises the observed floor, checks the limit, and records a
+-- resource-key reservation. A short row lock prevents concurrent requests from
+-- both spending the same final quota slot; retries with the same resource key
+-- are idempotent.
+create or replace function public.omr_reserve_plan_usage(
+    p_organization_id text,
+    p_metric text,
+    p_period_start date,
+    p_resource_key text,
+    p_amount integer,
+    p_observed_used integer,
+    p_limit integer
+)
+returns table(allowed boolean, used integer, idempotent boolean)
+language plpgsql
+security invoker
+set search_path = ''
+as $$
+declare
+    v_used integer;
+begin
+    if p_organization_id is null or btrim(p_organization_id) = ''
+        or p_resource_key is null or btrim(p_resource_key) = ''
+        or p_metric not in ('exams', 'aiRecognition')
+        or p_amount is null or p_amount <= 0
+        or p_observed_used is null or p_observed_used < 0
+        or p_limit is null or p_limit < 0 then
+        raise exception 'invalid plan usage reservation';
+    end if;
+
+    insert into public.omr_plan_usage (organization_id, metric, period_start, used, updated_at)
+    values (p_organization_id, p_metric, p_period_start, p_observed_used, now())
+    on conflict (organization_id, metric, period_start)
+    do update set
+        used = greatest(public.omr_plan_usage.used, excluded.used),
+        updated_at = now();
+
+    select usage.used into v_used
+    from public.omr_plan_usage usage
+    where usage.organization_id = p_organization_id
+        and usage.metric = p_metric
+        and usage.period_start = p_period_start
+    for update;
+
+    if exists (
+        select 1
+        from public.omr_plan_usage_reservations reservation
+        where reservation.organization_id = p_organization_id
+            and reservation.metric = p_metric
+            and reservation.period_start = p_period_start
+            and reservation.resource_key = p_resource_key
+    ) then
+        return query select true, v_used, true;
+        return;
+    end if;
+
+    if v_used + p_amount > p_limit then
+        return query select false, v_used, false;
+        return;
+    end if;
+
+    insert into public.omr_plan_usage_reservations (
+        organization_id, metric, period_start, resource_key, amount
+    ) values (
+        p_organization_id, p_metric, p_period_start, p_resource_key, p_amount
+    );
+
+    update public.omr_plan_usage usage
+    set used = usage.used + p_amount,
+        updated_at = now()
+    where usage.organization_id = p_organization_id
+        and usage.metric = p_metric
+        and usage.period_start = p_period_start
+    returning usage.used into v_used;
+
+    return query select true, v_used, false;
+end;
+$$;
+
+-- Roster saves submit stable student ids instead of a client-computed count.
+-- The exact reservation set is synchronized under the same aggregate row lock,
+-- allowing deletions to release capacity without a separate race-prone call.
+create or replace function public.omr_sync_student_plan_usage(
+    p_organization_id text,
+    p_resource_keys text[],
+    p_observed_used integer,
+    p_limit integer
+)
+returns table(allowed boolean, used integer)
+language plpgsql
+security invoker
+set search_path = ''
+as $$
+declare
+    v_period_start date := date '1970-01-01';
+    v_requested integer;
+begin
+    if p_organization_id is null or btrim(p_organization_id) = ''
+        or p_resource_keys is null
+        or p_observed_used is null or p_observed_used < 0
+        or p_limit is null or p_limit < 0 then
+        raise exception 'invalid student usage synchronization';
+    end if;
+
+    select count(*)::integer into v_requested
+    from (
+        select distinct btrim(resource_key) as resource_key
+        from unnest(p_resource_keys) resource_key
+        where btrim(resource_key) <> ''
+    ) requested;
+
+    if v_requested > p_limit then
+        return query select false, greatest(v_requested, p_observed_used);
+        return;
+    end if;
+
+    insert into public.omr_plan_usage (organization_id, metric, period_start, used, updated_at)
+    values (p_organization_id, 'students', v_period_start, 0, now())
+    on conflict (organization_id, metric, period_start) do nothing;
+
+    perform usage.used
+    from public.omr_plan_usage usage
+    where usage.organization_id = p_organization_id
+        and usage.metric = 'students'
+        and usage.period_start = v_period_start
+    for update;
+
+    delete from public.omr_plan_usage_reservations reservation
+    where reservation.organization_id = p_organization_id
+        and reservation.metric = 'students'
+        and reservation.period_start = v_period_start
+        and not (reservation.resource_key = any(p_resource_keys));
+
+    insert into public.omr_plan_usage_reservations (
+        organization_id, metric, period_start, resource_key, amount
+    )
+    select p_organization_id, 'students', v_period_start, requested.resource_key, 1
+    from (
+        select distinct btrim(resource_key) as resource_key
+        from unnest(p_resource_keys) resource_key
+        where btrim(resource_key) <> ''
+    ) requested
+    on conflict (organization_id, metric, period_start, resource_key) do nothing;
+
+    update public.omr_plan_usage usage
+    set used = v_requested,
+        updated_at = now()
+    where usage.organization_id = p_organization_id
+        and usage.metric = 'students'
+        and usage.period_start = v_period_start;
+
+    return query select true, v_requested;
+end;
+$$;
+
+-- Compensating operation for a reservation whose downstream exam save or AI
+-- provider call failed. It is idempotent: an already-released key changes
+-- nothing and reports released=false.
+create or replace function public.omr_release_plan_usage(
+    p_organization_id text,
+    p_metric text,
+    p_period_start date,
+    p_resource_key text
+)
+returns table(released boolean, used integer)
+language plpgsql
+security invoker
+set search_path = ''
+as $$
+declare
+    v_amount integer;
+    v_used integer;
+begin
+    if p_organization_id is null or btrim(p_organization_id) = ''
+        or p_resource_key is null or btrim(p_resource_key) = ''
+        or p_metric not in ('exams', 'aiRecognition') then
+        raise exception 'invalid plan usage release';
+    end if;
+
+    perform usage.used
+    from public.omr_plan_usage usage
+    where usage.organization_id = p_organization_id
+        and usage.metric = p_metric
+        and usage.period_start = p_period_start
+    for update;
+
+    delete from public.omr_plan_usage_reservations reservation
+    where reservation.organization_id = p_organization_id
+        and reservation.metric = p_metric
+        and reservation.period_start = p_period_start
+        and reservation.resource_key = p_resource_key
+    returning reservation.amount into v_amount;
+
+    if v_amount is null then
+        select coalesce(usage.used, 0) into v_used
+        from public.omr_plan_usage usage
+        where usage.organization_id = p_organization_id
+            and usage.metric = p_metric
+            and usage.period_start = p_period_start;
+        return query select false, coalesce(v_used, 0);
+        return;
+    end if;
+
+    update public.omr_plan_usage usage
+    set used = greatest(0, usage.used - v_amount),
+        updated_at = now()
+    where usage.organization_id = p_organization_id
+        and usage.metric = p_metric
+        and usage.period_start = p_period_start
+    returning usage.used into v_used;
+
+    return query select true, coalesce(v_used, 0);
+end;
+$$;
+
+revoke all on function public.omr_reserve_plan_usage(text, text, date, text, integer, integer, integer) from public, anon, authenticated;
+revoke all on function public.omr_sync_student_plan_usage(text, text[], integer, integer) from public, anon, authenticated;
+revoke all on function public.omr_release_plan_usage(text, text, date, text) from public, anon, authenticated;
+grant execute on function public.omr_reserve_plan_usage(text, text, date, text, integer, integer, integer) to service_role;
+grant execute on function public.omr_sync_student_plan_usage(text, text[], integer, integer) to service_role;
+grant execute on function public.omr_release_plan_usage(text, text, date, text) to service_role;
+
 create table if not exists public.omr_user_profiles (
     user_id text primary key,
     email text,
@@ -813,6 +1057,8 @@ create index if not exists omr_audit_logs_organization_id_idx
     on public.omr_audit_logs (organization_id, created_at desc);
 
 alter table public.omr_organizations enable row level security;
+alter table public.omr_plan_usage enable row level security;
+alter table public.omr_plan_usage_reservations enable row level security;
 alter table public.omr_user_profiles enable row level security;
 alter table public.omr_organization_members enable row level security;
 alter table public.omr_teacher_profiles enable row level security;

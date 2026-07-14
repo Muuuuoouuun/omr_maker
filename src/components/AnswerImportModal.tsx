@@ -6,12 +6,7 @@ import { readStoredGeminiApiKey } from '@/lib/geminiApiKey';
 import type { AiAnswerRecognitionMode } from '@/lib/aiAnswerModelRouting';
 import { BrainCircuit, FileText, FolderOpen, RefreshCw, UploadCloud, X } from 'lucide-react';
 import {
-    evaluatePlanLimit,
-    getCurrentPlan,
-    getPlanLabel,
     incrementAiRecognitionUsage,
-    PLAN_BY_KEY,
-    readAiRecognitionUsage,
 } from '@/utils/plans';
 
 interface AnswerImportModalProps {
@@ -49,14 +44,9 @@ export default function AnswerImportModal({ isOpen, onClose, onApply, onUploadAn
         try {
             let results;
             if (isAiMode) {
-                const plan = getCurrentPlan();
-                const limit = evaluatePlanLimit(plan, "aiRecognition", readAiRecognitionUsage(), 1);
-                if (!limit.allowed) {
-                    const upgradeName = limit.upgradeTarget ? PLAN_BY_KEY[limit.upgradeTarget].name : "상위";
-                    setError(`${getPlanLabel(plan)} 플랜의 AI 정답 인식 한도(${limit.limit}회)를 모두 사용했습니다. ${upgradeName} 플랜에서 계속 사용할 수 있습니다.`);
-                    return;
-                }
                 const { parseAnswerKeyWithGemini } = await import('@/services/answerParser');
+                // Shared-key quota is enforced atomically by the server action.
+                // A personal key is the teacher's own cost and bypasses platform quota.
                 results = await parseAnswerKeyWithGemini(targetFile, readStoredGeminiApiKey(), { recognitionMode });
             } else {
                 const { parseAnswerKeyPdf } = await import('@/services/answerParser');

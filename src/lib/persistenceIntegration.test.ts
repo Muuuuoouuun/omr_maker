@@ -172,7 +172,7 @@ describe("persistence integration", () => {
 
         expect(action).toContain("fetchExamRowsByOrganization");
         expect(action).toContain("ctx.identity.organizationId");
-        expect(action).toContain("stripExamForSolving(exam)");
+        expect(action).toContain("stripExamForSolving(exam");
         expect(dashboard).toContain('myAttemptsResult.source === "server"');
         expect(dashboard).toContain("myAttemptsResult.exams || []");
         expect(dashboard).not.toContain("loadExams()");

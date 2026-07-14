@@ -1,6 +1,7 @@
 import { questionChoiceCount, questionWeight } from "@/types/omr";
 import type { Exam, Question } from "@/types/omr";
 import { isValidExamPin } from "@/lib/examAccess";
+import { estimateSubQuestionSeconds, MAX_SUB_QUESTIONS_PER_QUESTION, MAX_SUB_QUESTION_LENGTH } from "@/lib/subQuestions";
 
 export type ExamValidationSeverity = "error" | "warning";
 
@@ -106,6 +107,26 @@ export function validateExamDraft(input: ExamValidationInput): ExamValidationSum
         errors.push(issue("error", "invalid_scores", "배점은 0보다 큰 숫자여야 합니다.", invalidScoreIds));
     }
 
+    const invalidSubQuestionIds = questions.filter(question => (question.subQuestions || []).some(subQuestion => (
+        !subQuestion.id?.trim()
+        || !subQuestion.prompt?.trim()
+        || (subQuestion.maxLength !== undefined && (!Number.isInteger(subQuestion.maxLength) || subQuestion.maxLength < 1 || subQuestion.maxLength > MAX_SUB_QUESTION_LENGTH))
+    ))).map(question => question.id);
+    if (invalidSubQuestionIds.length > 0) {
+        errors.push(issue("error", "invalid_sub_questions", "하위 질문 문구와 최대 글자 수(1~500자)를 확인해 주세요.", invalidSubQuestionIds));
+    }
+    const tooManySubQuestionIds = questions.filter(question => (question.subQuestions?.length || 0) > MAX_SUB_QUESTIONS_PER_QUESTION).map(question => question.id);
+    if (tooManySubQuestionIds.length > 0) {
+        errors.push(issue("error", "too_many_sub_questions", "하위 질문은 문항당 최대 2개까지 사용할 수 있습니다.", tooManySubQuestionIds));
+    }
+    const duplicateSubQuestionIds = questions.filter(question => {
+        const ids = (question.subQuestions || []).map(subQuestion => subQuestion.id);
+        return ids.some((id, index) => ids.indexOf(id) !== index);
+    }).map(question => question.id);
+    if (duplicateSubQuestionIds.length > 0) {
+        errors.push(issue("error", "duplicate_sub_question_ids", "한 문항 안의 하위 질문 ID가 중복되었습니다. 질문을 삭제한 뒤 다시 추가해 주세요.", duplicateSubQuestionIds));
+    }
+
     if (input.durationMin !== "" && input.durationMin !== undefined) {
         if (!Number.isFinite(input.durationMin) || input.durationMin <= 0) {
             errors.push(issue("error", "invalid_duration", "시험 시간은 1분 이상이어야 합니다."));
@@ -176,6 +197,11 @@ export function validateExamDraft(input: ExamValidationInput): ExamValidationSum
     }
     if (totalQuestions > 0 && totalScore <= 0) {
         warnings.push(issue("warning", "score_total_zero", "총점이 0점입니다. 배점을 확인해 주세요."));
+    }
+    const subQuestionQuestionCount = questions.filter(question => (question.subQuestions?.length || 0) > 0).length;
+    if (totalQuestions > 0 && subQuestionQuestionCount / totalQuestions > 0.3) {
+        const estimatedMinutes = Math.max(1, Math.ceil(estimateSubQuestionSeconds(questions) / 60));
+        warnings.push(issue("warning", "sub_questions_time_load", `하위 질문이 전체 문항의 30%를 넘습니다. 예상 응시 시간이 약 ${estimatedMinutes}분 늘어날 수 있습니다.`));
     }
 
     return {

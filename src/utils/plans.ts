@@ -17,6 +17,7 @@ export interface PlanCatalogEntry {
     entitlements: {
         handwritingArchive: boolean;
         advancedAnalytics: boolean;
+        advancedQuestionDesign: boolean;
         studentGrowthReports: boolean;
         csvExport: boolean;
         pdfExport: boolean;
@@ -41,6 +42,7 @@ const PLAN_KEY = "omr_plan";
 const FREE_ENTITLEMENTS: PlanCatalogEntry["entitlements"] = {
     handwritingArchive: false,
     advancedAnalytics: false,
+    advancedQuestionDesign: false,
     studentGrowthReports: false,
     csvExport: true,
     pdfExport: false,
@@ -62,6 +64,7 @@ const PRO_ENTITLEMENTS: PlanCatalogEntry["entitlements"] = {
     ...FREE_ENTITLEMENTS,
     handwritingArchive: true,
     advancedAnalytics: true,
+    advancedQuestionDesign: true,
     studentGrowthReports: true,
     pdfExport: true,
     reminders: true,
@@ -146,6 +149,10 @@ export const PLAN_ENTITLEMENT_COPY: Record<PlanEntitlementKey, PlanEntitlementCo
     advancedAnalytics: {
         label: "고급 오답 분석",
         description: "학생별, 반별, 시험별 약점 유형을 비교합니다.",
+    },
+    advancedQuestionDesign: {
+        label: "고급 문항 구성",
+        description: "객관식 문항 아래에 사고 확인용 하위 질문을 설계합니다.",
     },
     studentGrowthReports: {
         label: "학생 성장 리포트",

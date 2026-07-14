@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { billingStatusMeta, createLocalPlanChangeInvoice, createLocalPlanCycleReminder } from "./billingRecords";
+import { billingStatusMeta, createLocalPlanChangeInvoice, createLocalPlanCycleReminder, filterBillingRecordsForDisplay } from "./billingRecords";
 
 describe("billing records", () => {
     it("labels local plan changes as records, not paid invoices", () => {
@@ -79,5 +79,41 @@ describe("billing records", () => {
             checkoutId: "checkout:toss:LOCAL-2026-06-0007",
         });
         expect(invoice.status).not.toBe("paid");
+    });
+
+    it("hides legacy paid demo rows while live checkout is unavailable", () => {
+        const localRecord = createLocalPlanChangeInvoice({
+            planName: "Pro",
+            amount: 19000,
+            yearly: false,
+            sequence: 1,
+        });
+        const fakePaid = {
+            ...localRecord,
+            id: "INV-DEMO",
+            status: "paid" as const,
+        };
+
+        expect(filterBillingRecordsForDisplay([fakePaid, localRecord], false)).toEqual([localRecord]);
+    });
+
+    it("only shows paid rows backed by live provider metadata after checkout is enabled", () => {
+        const base = createLocalPlanChangeInvoice({
+            planName: "Pro",
+            amount: 19000,
+            yearly: false,
+            sequence: 1,
+        });
+        const verifiedPaid = {
+            ...base,
+            id: "PAY-LIVE",
+            status: "paid" as const,
+            paymentProviderMode: "live" as const,
+            paymentProviderKey: "toss" as const,
+            checkoutId: "checkout:toss:PAY-LIVE",
+        };
+        const unverifiedPaid = { ...verifiedPaid, id: "PAY-NO-CHECKOUT", checkoutId: undefined };
+
+        expect(filterBillingRecordsForDisplay([unverifiedPaid, verifiedPaid], true)).toEqual([verifiedPaid]);
     });
 });

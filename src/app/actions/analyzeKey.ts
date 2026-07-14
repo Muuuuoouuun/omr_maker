@@ -1,9 +1,11 @@
 "use server";
 
+import { randomUUID } from "node:crypto";
 import { cookies } from "next/headers";
 import { GoogleGenerativeAI } from "@google/generative-ai";
 import { resolveGeminiApiKey } from "@/lib/geminiApiKey";
 import { TEACHER_SERVER_SESSION_COOKIE, parseSignedTeacherSessionCookie } from "@/lib/teacherServerSession";
+import { authorizeSharedAiRecognition, releaseSharedAiRecognition } from "@/app/actions/premiumAccess";
 import {
     extractAnswerJsonArrayPayload,
     invalidAiJsonError,
@@ -80,12 +82,17 @@ export async function analyzeAnswerImages(
         throw new Error("분석할 이미지가 없습니다.");
     }
     const images = imageParts.slice(0, MAX_ANSWER_IMAGE_PARTS);
+    const apiKey = resolveGeminiApiKey(personalApiKey, process.env.GEMINI_API_KEY);
+    if (!apiKey) {
+        throw new Error("Gemini API key is not configured");
+    }
 
     // Auth gate: the shared server GEMINI_API_KEY may only be spent by an
     // authenticated teacher. This server action is a directly-invocable endpoint,
     // so without this check anyone could burn the platform key. Callers who bring
     // their own personal key are allowed through (they pay for their own usage).
     const hasPersonalKey = typeof personalApiKey === "string" && personalApiKey.trim().length > 0;
+    let sharedAiRequestId: string | null = null;
     if (!hasPersonalKey) {
         const session = parseSignedTeacherSessionCookie(
             (await cookies()).get(TEACHER_SERVER_SESSION_COOKIE)?.value,
@@ -93,15 +100,16 @@ export async function analyzeAnswerImages(
         if (!session) {
             throw new Error("AI 정답 인식은 교사 로그인 후 이용할 수 있습니다. 설정에서 개인 API 키를 등록하거나 로그인하세요.");
         }
+        sharedAiRequestId = randomUUID();
+        const authorization = await authorizeSharedAiRecognition(sharedAiRequestId);
+        if (!authorization.ok) {
+            throw new Error(authorization.error || "AI 정답 인식 사용량을 확인할 수 없습니다.");
+        }
     }
 
-    const apiKey = resolveGeminiApiKey(personalApiKey, process.env.GEMINI_API_KEY);
-    if (!apiKey) {
-        throw new Error("Gemini API key is not configured");
-    }
-
-    const genAI = new GoogleGenerativeAI(apiKey);
-    const prompt = `
+    try {
+        const genAI = new GoogleGenerativeAI(apiKey);
+        const prompt = `
     You are an expert OMR answer key extractor. 
     Analyze the following images which contain an answer key for an exam.
     Extract the Question Number, the Correct Answer, and the Score (Point Value) if it exists.
@@ -115,9 +123,7 @@ export async function analyzeAnswerImages(
     6. Ensure the score is a number. If a score/point value is not visible for a question, omit the "score" key or set it to null.
     7. Include "confidence" as a number from 0 to 1 for each row. If uncertain, use a value below 0.65 instead of guessing.
     8. Before returning, self-check for skipped question numbers, duplicate question numbers, and invalid answers.
-    `;
-
-    try {
+        `;
         const firstModel = options.recognitionMode === "rerecognition"
             ? AI_ANSWER_MODELS.highAccuracy
             : AI_ANSWER_MODELS.default;
@@ -155,6 +161,15 @@ export async function analyzeAnswerImages(
 
         return rows;
     } catch (error: unknown) {
+        if (sharedAiRequestId) {
+            const release = await releaseSharedAiRecognition(sharedAiRequestId);
+            if (!release.ok) {
+                console.warn("AI plan reservation release failed", {
+                    requestId: sharedAiRequestId,
+                    error: release.error,
+                });
+            }
+        }
         console.warn("AI answer analysis failed", safeAiAnswerLogMeta(error, {
             imageCount: images.length,
         }));

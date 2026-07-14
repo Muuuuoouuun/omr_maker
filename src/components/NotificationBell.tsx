@@ -5,9 +5,7 @@ import Link from "next/link";
 import { Bell, CheckCircle2, CreditCard, MessageCircle, Users, Clock } from "lucide-react";
 import { readLocalAttempts, readLocalExams } from "@/lib/omrPersistence";
 import { readRosterGroups, readRosterInvites, readRosterStudents } from "@/lib/rosterStorage";
-import { createLocalPlanCycleReminder } from "@/lib/billingRecords";
 import { buildKakaoNotificationCandidates } from "@/lib/kakaoNotificationQueue";
-import { getPlanLabel, normalizePlan } from "@/utils/plans";
 
 interface Notification {
     id: string;
@@ -116,32 +114,6 @@ function computeAutoNotifications(): Notification[] {
         }
     } catch {}
 
-    // 4) Plan renewal within 7 days
-    try {
-        const plan = normalizePlan(localStorage.getItem("omr_plan"));
-        if (plan === "pro" || plan === "academy") {
-            const now = new Date();
-            const renewal = new Date(now.getFullYear(), now.getMonth() + 1, 1);
-            const reminder = createLocalPlanCycleReminder({
-                planName: getPlanLabel(plan),
-                now,
-                cycleDate: renewal,
-            });
-            if (reminder) {
-                out.push({
-                    id: `auto-plan-renewal:${renewal.getFullYear()}-${renewal.getMonth() + 1}`,
-                    source: "plan-renewal",
-                    kind: "billing",
-                    title: reminder.title,
-                    message: reminder.message,
-                    time: reminder.time,
-                    unread: true,
-                    href: "/teacher/billing",
-                });
-            }
-        }
-    } catch {}
-
     return out;
 }
 
@@ -172,6 +144,8 @@ const KIND_META: Record<Notification["kind"], { color: string; icon: React.React
     info: { color: "#4f46e5", icon: <Users size={16} /> },
     success: { color: "#10b981", icon: <CheckCircle2 size={16} /> },
     warning: { color: "#f59e0b", icon: <MessageCircle size={16} /> },
+    // Legacy local records remain renderable, but no renewal notice is created
+    // until a real subscription provider owns the billing schedule.
     billing: { color: "#a855f7", icon: <CreditCard size={16} /> },
 };
 

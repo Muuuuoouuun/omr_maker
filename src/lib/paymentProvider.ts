@@ -111,13 +111,13 @@ export function getPaymentProviderReadiness(env: Env = process.env): PaymentProv
     return {
         provider,
         mode,
-        status: "ready",
-        label: `${provider.label} 공개키 확인`,
-        detail: "공개 결제 식별자는 확인되었습니다. 실제 결제 호출은 서버 어댑터 연결 후 활성화합니다.",
+        status: "blocked",
+        label: `${provider.label} checkout 서버 연동 필요`,
+        detail: "공개 결제 식별자만 확인했습니다. 서버 checkout, webhook 검증, 결제 취소 연동 전에는 결제나 플랜 변경을 시작하지 않습니다.",
         publicKeyPresent,
-        canRecordLocalPlanChange: true,
+        canRecordLocalPlanChange: false,
         canStartLiveCheckout: false,
-        missing: [],
+        missing: ["server checkout adapter", "webhook verification"],
     };
 }
 
@@ -133,7 +133,7 @@ export function getPaymentProviderRolloutReadiness(env: Env = process.env): Paym
             publicKeyPresent,
             missing: publicKeyPresent ? [] : [provider.publicEnvKey],
             label: publicKeyPresent
-                ? (active ? "연결 대상 · 공개키 확인" : "공개키 확인")
+                ? (active ? "연결 대상 · 공개키 확인 · checkout 미연동" : "공개키 확인 · checkout 미연동")
                 : (active ? "연결 대상 · 공개키 필요" : "공개키 필요"),
         };
     });

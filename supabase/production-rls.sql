@@ -12,6 +12,19 @@
 
 begin;
 
+-- Paid-plan usage is server-owned. No browser role receives table access or
+-- function execution; trusted server actions use the service-role key.
+alter table public.omr_plan_usage enable row level security;
+alter table public.omr_plan_usage_reservations enable row level security;
+revoke all on table public.omr_plan_usage from anon, authenticated;
+revoke all on table public.omr_plan_usage_reservations from anon, authenticated;
+revoke all on function public.omr_reserve_plan_usage(text, text, date, text, integer, integer, integer) from public, anon, authenticated;
+revoke all on function public.omr_sync_student_plan_usage(text, text[], integer, integer) from public, anon, authenticated;
+revoke all on function public.omr_release_plan_usage(text, text, date, text) from public, anon, authenticated;
+grant execute on function public.omr_reserve_plan_usage(text, text, date, text, integer, integer, integer) to service_role;
+grant execute on function public.omr_sync_student_plan_usage(text, text[], integer, integer) to service_role;
+grant execute on function public.omr_release_plan_usage(text, text, date, text) to service_role;
+
 create or replace function public.omr_current_user_id()
 returns text
 language sql
@@ -305,6 +318,8 @@ alter table public.omr_comments enable row level security;
 alter table public.omr_audit_logs enable row level security;
 
 alter table public.omr_organizations force row level security;
+alter table public.omr_plan_usage force row level security;
+alter table public.omr_plan_usage_reservations force row level security;
 alter table public.omr_user_profiles force row level security;
 alter table public.omr_organization_members force row level security;
 alter table public.omr_teacher_profiles force row level security;

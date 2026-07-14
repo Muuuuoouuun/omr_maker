@@ -171,4 +171,44 @@ describe("exam validation", () => {
             questionIds: [1],
         }));
     });
+
+    it("validates sub-question shape and warns with an estimated time load", () => {
+        const summary = validateExamDraft({
+            title: "심화 응답 시험",
+            questions: validQuestions.map((question, index) => ({
+                ...question,
+                subQuestions: index === 0 ? [{
+                    schemaVersion: 1 as const,
+                    id: 'reason',
+                    prompt: '근거를 쓰세요.',
+                    kind: 'free_text' as const,
+                    maxLength: 300,
+                }] : undefined,
+            })),
+            hasProblemPdf: true,
+        });
+        expect(summary.isPublishable).toBe(true);
+        expect(summary.warnings).toContainEqual(expect.objectContaining({ code: 'sub_questions_time_load' }));
+
+        const invalid = validateExamDraft({
+            title: '잘못된 하위 질문',
+            questions: [{ ...validQuestions[0], subQuestions: [{
+                schemaVersion: 1,
+                id: 'bad',
+                prompt: '',
+                kind: 'free_text',
+                maxLength: 501,
+            }] }],
+        });
+        expect(invalid.errors).toContainEqual(expect.objectContaining({ code: 'invalid_sub_questions' }));
+
+        const duplicate = validateExamDraft({
+            title: '중복 하위 질문',
+            questions: [{ ...validQuestions[0], subQuestions: [
+                { schemaVersion: 1, id: 'same', prompt: '첫 질문', kind: 'free_text' },
+                { schemaVersion: 1, id: 'same', prompt: '둘째 질문', kind: 'free_text' },
+            ] }],
+        });
+        expect(duplicate.errors).toContainEqual(expect.objectContaining({ code: 'duplicate_sub_question_ids' }));
+    });
 });

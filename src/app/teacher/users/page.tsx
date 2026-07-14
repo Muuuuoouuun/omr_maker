@@ -6,11 +6,12 @@ import NextLink from "next/link";
 import TeacherHeader from "@/components/TeacherHeader";
 import { Users, UserPlus, Upload, Search, MessageCircle, TrendingUp, TrendingDown, MoreVertical, Link as LinkIcon, FolderPlus, CheckCircle2, Clock, X, Trash2, Download, PenLine, Target, AlertTriangle, FileText, BarChart3, Copy, KeyRound, RefreshCw, Lock, MapPin } from "lucide-react";
 import { toast } from "@/components/Toast";
-import type { Attempt, Exam, PlanKey } from "@/types/omr";
+import type { Attempt, Exam } from "@/types/omr";
 import { decodeCsvBytes, parseCsvRows, serializeCsvRows } from "@/lib/csv";
 import { shouldUseDemoData } from "@/lib/demoData";
 import { loadAttempts, loadExams } from "@/lib/omrPersistence";
 import { loadRosterSnapshot, saveRosterSnapshot } from "@/lib/rosterPersistence";
+import { authorizeRosterStudentSet } from "@/app/actions/premiumAccess";
 import { resolveAttemptScore } from "@/lib/attemptScores";
 import {
     applyRosterPerformance,
@@ -60,7 +61,8 @@ import {
 import { buildRetakeHref } from "@/lib/retakeLinks";
 import { PremiumActionLink } from "@/components/PremiumFeatureGate";
 import { findStudentStartCode, generateStartCode, readStudentCodes, writeStudentCodes } from "@/lib/studentCodes";
-import { getCurrentPlan, hasPlanEntitlement } from "@/utils/plans";
+import { hasPlanEntitlement } from "@/utils/plans";
+import { useServerPlan } from "@/lib/useServerPlan";
 import { studentIdFor } from "@/utils/storage";
 import { syncStudentAccessCodes } from "@/app/actions/studentSession";
 import { readActiveWorkspaceContext } from "@/lib/workspaceContext";
@@ -258,7 +260,8 @@ function ManageUsersInner() {
     const [studentCodeRegistry, setStudentCodeRegistry] = useState<Record<string, string>>({});
     const [workspaceId, setWorkspaceId] = useState("");
     const [issuingStudentCode, setIssuingStudentCode] = useState(false);
-    const [currentPlan] = useState<PlanKey>(() => getCurrentPlan());
+    const rosterPlanSyncRef = useRef<Promise<void>>(Promise.resolve());
+    const { plan: currentPlan } = useServerPlan();
     const [hydrated, setHydrated] = useState(false);
     const studentGrowthReportsEnabled = hasPlanEntitlement(currentPlan, "studentGrowthReports");
     const advancedAnalyticsEnabled = hasPlanEntitlement(currentPlan, "advancedAnalytics");
@@ -403,6 +406,14 @@ function ManageUsersInner() {
         if (undoTimeoutRef.current) clearTimeout(undoTimeoutRef.current);
     }, []);
 
+    const queueRosterPlanSync = (nextStudents: RosterStudent[]) => {
+        const run = rosterPlanSyncRef.current.then(() => (
+            authorizeRosterStudentSet(nextStudents.map(student => student.id))
+        ));
+        rosterPlanSyncRef.current = run.then(() => undefined, () => undefined);
+        return run;
+    };
+
     // Write-through helpers
     const persistRoster = (nextStudents: RosterStudent[], nextGroups: RosterGroup[], nextInvites: RosterInvite[]) => {
         setRosterDataMode("real");
@@ -428,6 +439,21 @@ function ManageUsersInner() {
                 );
             }
         });
+        // Keep the server-owned reservation set in sync after reductions and
+        // same-size edits. Growth paths await the same action before persisting.
+        void queueRosterPlanSync(nextStudents).then(result => {
+            if (!result.ok) console.warn("Roster plan usage synchronization failed", result.error);
+        });
+    };
+
+    const authorizeRosterMutation = async (nextStudents: RosterStudent[]): Promise<boolean> => {
+        const authorization = await queueRosterPlanSync(nextStudents);
+        if (authorization.ok) return true;
+        toast.error(
+            authorization.quota?.allowed === false ? "학생 등록 한도 도달" : "서버 플랜 확인 필요",
+            authorization.error || "서버에서 플랜과 학생 사용량을 확인한 뒤 다시 시도해주세요.",
+        );
+        return false;
     };
 
     // Recompute group stats from current students
@@ -695,7 +721,7 @@ function ManageUsersInner() {
     };
 
     // ===== Student CRUD =====
-    const handleAddStudent = (data: StudentFormData) => {
+    const handleAddStudent = async (data: StudentFormData) => {
         const idx = students.length;
         const selectedGroup = groups.find(group => group.id === data.groupId);
         const resolvedRegion = data.region.trim() || selectedGroup?.region || "";
@@ -739,6 +765,7 @@ function ManageUsersInner() {
             status: "active",
         };
         const next = [newStudent, ...students];
+        if (!await authorizeRosterMutation(next)) return;
         persistRoster(next, recomputeGroups(next, baseGroups), invites);
     };
 
@@ -844,13 +871,17 @@ function ManageUsersInner() {
         scheduleDeleteUndo(removed, removedCodeEntries, label);
     };
 
-    const handleUndoDelete = () => {
+    const handleUndoDelete = async () => {
         if (!pendingDeleteUndo) return;
         clearDeleteUndoTimer();
         const restored = pendingDeleteUndo;
         setPendingDeleteUndo(null);
         const restoredIds = new Set(restored.students.map(s => s.id));
         const merged = [...restored.students, ...students.filter(s => !restoredIds.has(s.id))];
+        if (!await authorizeRosterMutation(merged)) {
+            setPendingDeleteUndo(restored);
+            return;
+        }
         persistRoster(merged, recomputeGroups(merged, groups), invites);
         if (Object.keys(restored.codeEntries).length > 0) {
             const nextRegistry = { ...studentCodeRegistry, ...restored.codeEntries };
@@ -1175,7 +1206,7 @@ function ManageUsersInner() {
         }
     };
 
-    const handleConfirmCsvImport = (dispositions: Record<number, RosterCsvConflictDisposition>) => {
+    const handleConfirmCsvImport = async (dispositions: Record<number, RosterCsvConflictDisposition>) => {
         if (!csvPreview) return;
         const plan = csvPreview;
         setCsvPreview(null);
@@ -1192,6 +1223,10 @@ function ManageUsersInner() {
             return;
         }
         const recomputedGroups = recomputeGroups(resolution.nextStudents, plan.nextGroups);
+        if (!await authorizeRosterMutation(resolution.nextStudents)) {
+            setCsvPreview(plan);
+            return;
+        }
         persistRoster(resolution.nextStudents, recomputedGroups, invites);
         const addedTotal = plan.adds.length + resolution.addedCount;
         const updatedTotal = plan.updates.filter(update => update.changes.length > 0).length + resolution.overwrittenCount;

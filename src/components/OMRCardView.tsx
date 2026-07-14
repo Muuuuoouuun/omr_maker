@@ -212,7 +212,7 @@ export default function OMRCardView({
               )}
 
               {/* Meta indicators (editor mode) */}
-              {showMeta && (q.label || q.tags?.concept || q.tags?.difficulty || q.score !== undefined || q.pdfLocation || q.pdfRegion) && (
+              {showMeta && (q.label || q.tags?.concept || q.tags?.difficulty || q.score !== undefined || q.pdfLocation || q.pdfRegion || q.subQuestions?.length) && (
                 <div className="q-card-meta">
                   {q.label && (
                     <span className="q-meta-chip q-meta-label">{q.label}</span>
@@ -230,6 +230,14 @@ export default function OMRCardView({
                     <span className="q-meta-chip q-meta-pdf" title={`PDF ${q.pdfLocation?.page || q.pdfRegion?.page}p 연결됨`}>
                       <LinkIcon />
                     </span>
+                  )}
+                  {!!q.subQuestions?.length && (
+                    <span className="q-meta-chip q-meta-label" title="객관식 아래 사고 확인 질문">
+                      하위 {q.subQuestions.length}
+                    </span>
+                  )}
+                  {q.subQuestions?.some(subQuestion => subQuestion.required) && (
+                    <span className="q-meta-chip q-meta-score">필수</span>
                   )}
                 </div>
               )}

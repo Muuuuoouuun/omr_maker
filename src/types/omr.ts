@@ -17,6 +17,44 @@ export interface QuestionPdfRegion {
     height: number;
 }
 
+export type QuestionSubQuestionKind = 'free_text';
+export type QuestionSubQuestionTemplateId = 'choice_reason' | 'evidence' | 'solution_process' | 'context_detail' | 'custom';
+
+/** Teacher-authored prompt attached to a parent OMR question. It never affects scoring. */
+export interface QuestionSubQuestion {
+    schemaVersion: 1;
+    /** Stable inside the parent question and used as the persisted answer key. */
+    id: string;
+    prompt: string;
+    kind: QuestionSubQuestionKind;
+    templateId?: QuestionSubQuestionTemplateId;
+    /** Optional by default. Manual submission is blocked only when explicitly true. */
+    required?: boolean;
+    maxLength?: number;
+    /** Teacher-only guide. Student solve/review payload projections must remove it. */
+    answerGuide?: string;
+    /** Teacher-only authoring note, separate from the student-facing prompt. */
+    teacherNote?: string;
+}
+
+export type SubQuestionReviewStatus = 'needs_review' | 'reviewed';
+
+export interface SubQuestionAnswer {
+    schemaVersion: 1;
+    body: string;
+    answeredAt?: string;
+    reviewStatus: SubQuestionReviewStatus;
+    reviewedAt?: string;
+    reviewedBy?: string;
+}
+
+export type SubQuestionAnswers = Record<number, Record<string, SubQuestionAnswer>>;
+
+export interface MissingRequiredSubQuestion {
+    questionId: number;
+    subQuestionId: string;
+}
+
 export interface Question {
     id: number;
     number: number;
@@ -49,6 +87,8 @@ export interface Question {
     pdfRegion?: QuestionPdfRegion;
     /** Optional cropped question image asset for future premium question-bank storage. */
     imageAssetRef?: StoredDataRef;
+    /** Optional thought-process prompts. Maximum two; normalized on persistence. */
+    subQuestions?: QuestionSubQuestion[];
 }
 
 export function normalizeChoiceCount(value: unknown, fallback: 4 | 5 = DEFAULT_CHOICE_COUNT): 4 | 5 {
@@ -259,6 +299,10 @@ export interface Attempt {
     score: number;
     totalScore: number;
     answers: Record<number, number>; // qId -> selected option
+    /** Free-text responses keyed by parent question id, then stable sub-question id. */
+    subQuestionAnswers?: SubQuestionAnswers;
+    /** Required prompts left blank only when a timer auto-submitted the attempt. */
+    missingRequiredSubQuestions?: MissingRequiredSubQuestion[];
     /** Student handwriting captured from the PDF drawing layer. */
     drawings?: PdfDrawings;
     /** External drawings reference in IndexedDB to bypass localStorage limits. */

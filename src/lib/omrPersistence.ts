@@ -7,6 +7,7 @@ import {
     type WorkspaceContext,
 } from "@/lib/workspaceContext";
 import { questionChoiceCount, type Attempt, type Exam, type QuestionResult, type QuestionResultStatus, type StoredDataRef } from "@/types/omr";
+import { MAX_SUB_QUESTION_LENGTH, normalizeQuestionSubQuestions } from "@/lib/subQuestions";
 
 type Env = Record<string, string | undefined>;
 
@@ -633,6 +634,10 @@ function arrayLength(value: unknown): number {
     return Array.isArray(value) ? value.length : 0;
 }
 
+function recordLength(value: unknown): number {
+    return isRecord(value) ? Object.keys(value).length : 0;
+}
+
 function preserveAttemptAnalytics(candidate: Attempt, current: Attempt): Attempt {
     return {
         ...candidate,
@@ -645,6 +650,12 @@ function preserveAttemptAnalytics(candidate: Attempt, current: Attempt): Attempt
         drawingPageCount: candidate.drawingPageCount ?? current.drawingPageCount,
         drawingStrokeCount: candidate.drawingStrokeCount ?? current.drawingStrokeCount,
         drawingsRef: candidate.drawingsRef || current.drawingsRef,
+        subQuestionAnswers: recordLength(candidate.subQuestionAnswers) > 0
+            ? candidate.subQuestionAnswers
+            : current.subQuestionAnswers,
+        missingRequiredSubQuestions: arrayLength(candidate.missingRequiredSubQuestions) > 0
+            ? candidate.missingRequiredSubQuestions
+            : current.missingRequiredSubQuestions,
     };
 }
 
@@ -727,6 +738,7 @@ function sanitizeQuestions(value: unknown): Exam["questions"] {
             const id = numberValue(question.id);
             if (id === undefined) return null;
             const number = numberValue(question.number) || index + 1;
+            const subQuestions = normalizeQuestionSubQuestions(question.subQuestions, id);
             return {
                 ...question,
                 id,
@@ -734,6 +746,7 @@ function sanitizeQuestions(value: unknown): Exam["questions"] {
                 answer: numberValue(question.answer),
                 choices: question.choices === 4 || question.choices === 5 ? question.choices : undefined,
                 score: numberValue(question.score),
+                ...(subQuestions.length > 0 ? { subQuestions } : {}),
             } as Exam["questions"][number];
         })
         .filter((question): question is Exam["questions"][number] => !!question);
@@ -781,6 +794,37 @@ export function sanitizeAttemptPayload(value: unknown): Attempt | null {
     const questionTimings = Array.isArray(value.questionTimings) ? value.questionTimings : undefined;
     const questionDrawings = Array.isArray(value.questionDrawings) ? value.questionDrawings : undefined;
 
+    const rawSubQuestionAnswers = isRecord(value.subQuestionAnswers) ? value.subQuestionAnswers : {};
+    const subQuestionAnswers: Attempt["subQuestionAnswers"] = {};
+    for (const [questionId, answers] of Object.entries(rawSubQuestionAnswers)) {
+        const numericQuestionId = Number(questionId);
+        if (!Number.isFinite(numericQuestionId) || !isRecord(answers)) continue;
+        const safeAnswers: NonNullable<Attempt["subQuestionAnswers"]>[number] = {};
+        for (const [subQuestionId, candidate] of Object.entries(answers)) {
+            if (!isRecord(candidate)) continue;
+            const body = stringValue(candidate.body)?.slice(0, MAX_SUB_QUESTION_LENGTH);
+            if (!body) continue;
+            const reviewed = candidate.reviewStatus === "reviewed";
+            safeAnswers[subQuestionId.slice(0, 100)] = {
+                schemaVersion: 1,
+                body,
+                answeredAt: stringValue(candidate.answeredAt),
+                reviewStatus: reviewed ? "reviewed" : "needs_review",
+                reviewedAt: reviewed ? stringValue(candidate.reviewedAt) : undefined,
+                reviewedBy: reviewed ? stringValue(candidate.reviewedBy) : undefined,
+            };
+        }
+        if (Object.keys(safeAnswers).length > 0) subQuestionAnswers[numericQuestionId] = safeAnswers;
+    }
+    const missingRequiredSubQuestions = Array.isArray(value.missingRequiredSubQuestions)
+        ? value.missingRequiredSubQuestions.flatMap(candidate => {
+            if (!isRecord(candidate)) return [];
+            const questionId = numberValue(candidate.questionId);
+            const subQuestionId = stringValue(candidate.subQuestionId)?.slice(0, 100);
+            return questionId !== undefined && subQuestionId ? [{ questionId, subQuestionId }] : [];
+        })
+        : [];
+
     return {
         ...(value as Partial<Attempt>),
         id,
@@ -792,6 +836,8 @@ export function sanitizeAttemptPayload(value: unknown): Attempt | null {
         score: numberValue(value.score) || 0,
         totalScore: numberValue(value.totalScore) || 0,
         answers: sanitizeAnswers(value.answers),
+        subQuestionAnswers: Object.keys(subQuestionAnswers).length > 0 ? subQuestionAnswers : undefined,
+        missingRequiredSubQuestions: missingRequiredSubQuestions.length > 0 ? missingRequiredSubQuestions : undefined,
         questionResults,
         questionTimings,
         questionDrawings,

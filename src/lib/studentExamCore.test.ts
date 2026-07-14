@@ -147,7 +147,7 @@ describe("studentExamCore", () => {
         expect(attempt.totalScore).toBe(20); // both questions graded
     });
 
-    it("passes handwriting metadata through to the server attempt", () => {
+    it("passes handwriting metadata only with a server-authorized capability", () => {
         const attempt = buildServerAttempt(
             {
                 ...INPUT,
@@ -157,10 +157,46 @@ describe("studentExamCore", () => {
                 questionDrawings: [{ questionId: 1, questionNumber: 1, page: 1, strokeCount: 1 }],
             },
             EXAM, GUEST, "att-hw", "2026-07-01T01:30:00.000Z",
+            { handwritingArchive: true, handwritingPlan: "pro" },
         );
         expect(attempt.drawings).toEqual({ 1: ["M0 0L1 1"] });
         expect(attempt.handwritingArchived).toBe(true);
         expect(attempt.handwritingPlan).toBe("pro");
         expect(attempt.questionDrawings).toHaveLength(1);
+
+        const stripped = buildServerAttempt(
+            {
+                ...INPUT,
+                drawings: { 1: ["M0 0L1 1"] },
+                handwritingArchived: true,
+                handwritingPlan: "academy",
+            },
+            EXAM, GUEST, "att-hw-free", "2026-07-01T01:30:00.000Z",
+        );
+        expect(stripped.drawings).toBeUndefined();
+        expect(stripped.handwritingArchived).toBe(false);
+        expect(stripped.handwritingPlan).toBe("free");
+    });
+
+    it("rejects missing required sub-answers manually and records gaps only for timer submission", () => {
+        const exam: Exam = {
+            ...EXAM,
+            questions: [{
+                ...EXAM.questions[0],
+                subQuestions: [{ schemaVersion: 1, id: 'reason', prompt: '근거를 쓰세요.', kind: 'free_text', required: true, maxLength: 20 }],
+            }],
+        };
+        expect(() => buildServerAttempt(INPUT, exam, GUEST, 'att-manual-missing', '2026-07-01T01:30:00.000Z'))
+            .toThrow('REQUIRED_SUB_QUESTIONS_MISSING');
+
+        const auto = buildServerAttempt({ ...INPUT, autoSubmitted: true }, exam, GUEST, 'att-auto-missing', '2026-07-01T01:30:00.000Z');
+        expect(auto.missingRequiredSubQuestions).toEqual([{ questionId: 1, subQuestionId: 'reason' }]);
+
+        const completed = buildServerAttempt({
+            ...INPUT,
+            subQuestionAnswers: { 1: { reason: { schemaVersion: 1, body: '본문 근거', reviewStatus: 'reviewed' } } },
+        }, exam, GUEST, 'att-sub-complete', '2026-07-01T01:30:00.000Z');
+        expect(completed.missingRequiredSubQuestions).toBeUndefined();
+        expect(completed.subQuestionAnswers?.[1].reason).toMatchObject({ body: '본문 근거', reviewStatus: 'needs_review' });
     });
 });

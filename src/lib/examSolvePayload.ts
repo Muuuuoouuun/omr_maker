@@ -1,6 +1,9 @@
-import type { Exam, Question } from "@/types/omr";
+import type { Exam, Question, QuestionSubQuestion } from "@/types/omr";
 
-export type SolvableQuestion = Omit<Question, "answer" | "explanation">;
+export type StudentSubQuestion = Omit<QuestionSubQuestion, "answerGuide" | "teacherNote">;
+export type SolvableQuestion = Omit<Question, "answer" | "explanation" | "subQuestions"> & {
+    subQuestions?: StudentSubQuestion[];
+};
 
 export interface SolvableExam
     extends Omit<Exam, "questions" | "answerKeyPdf" | "answerKeyPdfRef" | "accessConfig"> {
@@ -10,6 +13,10 @@ export interface SolvableExam
     /** Always absent on the solve payload — never sent to the client. */
     answerKeyPdfRef?: undefined;
     accessConfig?: { type: "public" | "group"; groupIds?: string[]; hasPin: boolean };
+    /** Server-derived capabilities for this exam's organization. */
+    premiumCapabilities: {
+        handwritingArchive: boolean;
+    };
 }
 
 export interface ReviewableExam extends Omit<Exam, "answerKeyPdf" | "answerKeyPdfRef" | "accessConfig"> {
@@ -19,23 +26,40 @@ export interface ReviewableExam extends Omit<Exam, "answerKeyPdf" | "answerKeyPd
     accessConfig?: { type: "public" | "group"; groupIds?: string[]; hasPin: boolean };
 }
 
+/** Remove teacher-only nested fields while otherwise preserving an exam payload. */
+export function stripTeacherOnlySubQuestionFields(exam: Exam): Exam {
+    return {
+        ...exam,
+        questions: exam.questions.map(question => ({
+            ...question,
+            subQuestions: question.subQuestions?.map(({ answerGuide: _guide, teacherNote: _note, ...subQuestion }) => {
+                void _guide;
+                void _note;
+                return subQuestion;
+            }),
+        })),
+    };
+}
+
 /**
  * Server-side projection for the POST-SUBMIT review: correct answers and
  * explanations are intentionally kept (the student already submitted), but the
  * inline PIN and the teacher's answer-key PDF never leave the server.
  */
 export function stripExamForReview(exam: Exam): ReviewableExam {
+    const studentSafeExam = stripTeacherOnlySubQuestionFields(exam);
     const {
         answerKeyPdf: _omitPdf,
         answerKeyPdfRef: _omitPdfRef,
         accessConfig,
         ...rest
-    } = exam;
+    } = studentSafeExam;
     void _omitPdf;
     void _omitPdfRef;
 
     return {
         ...rest,
+        questions: rest.questions,
         accessConfig: accessConfig
             ? { type: accessConfig.type, groupIds: accessConfig.groupIds, hasPin: !!accessConfig.pin }
             : undefined,
@@ -46,12 +70,22 @@ export function stripExamForReview(exam: Exam): ReviewableExam {
  * Server-side projection of an exam that is safe to ship to the solving client:
  * no correct answers, no answer-key PDF, no inline PIN (only a hasPin flag).
  */
-export function stripExamForSolving(exam: Exam): SolvableExam {
+export function stripExamForSolving(
+    exam: Exam,
+    premiumCapabilities: SolvableExam["premiumCapabilities"] = { handwritingArchive: false },
+): SolvableExam {
     const solvableQuestions: SolvableQuestion[] = exam.questions.map(question => {
-        const { answer: _omitAnswer, explanation: _omitExplanation, ...rest } = question;
+        const { answer: _omitAnswer, explanation: _omitExplanation, subQuestions, ...rest } = question;
         void _omitAnswer;
         void _omitExplanation;
-        return rest;
+        return {
+            ...rest,
+            subQuestions: subQuestions?.map(({ answerGuide: _guide, teacherNote: _note, ...subQuestion }) => {
+                void _guide;
+                void _note;
+                return subQuestion;
+            }),
+        };
     });
 
     const {
@@ -68,6 +102,7 @@ export function stripExamForSolving(exam: Exam): SolvableExam {
     return {
         ...rest,
         questions: solvableQuestions,
+        premiumCapabilities,
         accessConfig: accessConfig
             ? { type: accessConfig.type, groupIds: accessConfig.groupIds, hasPin: !!accessConfig.pin }
             : undefined,

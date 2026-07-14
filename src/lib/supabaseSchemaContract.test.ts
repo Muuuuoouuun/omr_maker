@@ -81,6 +81,30 @@ describe("Supabase schema contract", () => {
         expectIndex(schema, "omr_class_students_student_idx");
     });
 
+    it("keeps paid-plan counters server-owned and concurrency-safe", () => {
+        expectColumns(schema, "omr_plan_usage", [
+            "organization_id",
+            "metric",
+            "period_start",
+            "used",
+            "updated_at",
+        ]);
+        expectColumns(schema, "omr_plan_usage_reservations", [
+            "organization_id",
+            "metric",
+            "period_start",
+            "resource_key",
+            "amount",
+            "created_at",
+        ]);
+        expect(schema).toContain("create or replace function public.omr_reserve_plan_usage");
+        expect(schema).toContain("create or replace function public.omr_release_plan_usage");
+        expect(schema).toContain("create or replace function public.omr_sync_student_plan_usage");
+        expect(schema).toContain("for update;");
+        expect(schema).toContain("to service_role;");
+        expect(productionRls).toContain("revoke all on table public.omr_plan_usage from anon, authenticated");
+    });
+
     it("keeps remote exam/question columns aligned with persistence row mapping", () => {
         expectColumns(schema, "omr_exams", [
             "id",
@@ -271,6 +295,8 @@ describe("Supabase schema contract", () => {
     it("keeps the production RLS handoff separate from alpha public policies", () => {
         const protectedTables = [
             "omr_organizations",
+            "omr_plan_usage",
+            "omr_plan_usage_reservations",
             "omr_user_profiles",
             "omr_organization_members",
             "omr_teacher_profiles",

@@ -1,12 +1,12 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
+import { getServerPlanSnapshot, type ServerPlanSnapshot } from "@/app/actions/premiumAccess";
 import TeacherHeader from "@/components/TeacherHeader";
-import { CreditCard, Check, Zap, Crown, Building, Download, Receipt, Sparkles, TrendingUp, AlertCircle, X, Lock } from "lucide-react";
+import { CreditCard, Check, Zap, Crown, Building, Download, Sparkles, TrendingUp, AlertCircle, X, Lock, Clock3 } from "lucide-react";
 import { formatLimit, usagePct } from "@/lib/pure";
 import { toast } from "@/components/Toast";
 import type { PlanKey } from "@/types/omr";
-import { shouldUseDemoData } from "@/lib/demoData";
 import { loadAttempts, loadExams } from "@/lib/omrPersistence";
 import {
     buildBillingPlanHealth,
@@ -17,7 +17,7 @@ import {
     type BillingUsageLimitView,
     type BillingUsageSummary,
 } from "@/lib/billingUsage";
-import { billingStatusMeta, createLocalPlanChangeInvoice, type BillingInvoice } from "@/lib/billingRecords";
+import { billingStatusMeta, createLocalPlanChangeInvoice, filterBillingRecordsForDisplay, type BillingInvoice } from "@/lib/billingRecords";
 import {
     getPaymentProviderReadiness,
     getPaymentProviderRolloutReadiness,
@@ -25,7 +25,13 @@ import {
 } from "@/lib/paymentProvider";
 import { readRosterStudents } from "@/lib/rosterStorage";
 import { formatPaymentProviderRoadmap } from "@/lib/serviceRoadmap";
-import { PLAN_BY_KEY, PLAN_CATALOG, getPlanEntitlementViews, normalizePlan, readAiRecognitionUsage, setCurrentPlan, type PlanEntitlementKey, type PlanEntitlementView } from "@/utils/plans";
+import {
+    BILLING_PLAN_FEATURES,
+    buildBillingFeatureView,
+    type BillingFeatureStatus,
+    type PremiumDeliveryStatus,
+} from "@/lib/premiumFeatureReadiness";
+import { PLAN_BY_KEY, PLAN_CATALOG, getPlanEntitlementViews, readAiRecognitionUsage, type PlanEntitlementKey, type PlanEntitlementView } from "@/utils/plans";
 
 const PLAN_ICONS: Record<PlanKey, React.ReactNode> = {
     free: <Sparkles size={22} />,
@@ -33,23 +39,34 @@ const PLAN_ICONS: Record<PlanKey, React.ReactNode> = {
     academy: <Building size={22} />,
 };
 
-const MOCK_INVOICES: BillingInvoice[] = [
-    { id: "INV-2026-04", date: "2026-04-01", amount: 19000, status: "paid", desc: "Pro 플랜 · 2026년 4월" },
-    { id: "INV-2026-03", date: "2026-03-01", amount: 19000, status: "paid", desc: "Pro 플랜 · 2026년 3월" },
-    { id: "INV-2026-02", date: "2026-02-01", amount: 19000, status: "paid", desc: "Pro 플랜 · 2026년 2월" },
-    { id: "INV-2026-01", date: "2026-01-01", amount: 19000, status: "paid", desc: "Pro 플랜 · 2026년 1월" },
-    { id: "INV-2025-12", date: "2025-12-01", amount: 0, status: "paid", desc: "Free 플랜 · 2025년 12월" },
-];
-
 const BILLING_ENTITLEMENT_KEYS = [
     "handwritingArchive",
     "advancedAnalytics",
+    "advancedQuestionDesign",
     "retakeAssignments",
     "studentGrowthReports",
     "pdfExport",
     "reminders",
     "multiTeacher",
     "organizationDashboard",
+    "rolesAndPermissions",
+    "sso",
+    "apiAccess",
+    "customDomain",
+    "auditLogs",
+    "retentionControls",
+    "prioritySupport",
+    "dedicatedSupport",
+] satisfies readonly PlanEntitlementKey[];
+
+const PLAN_HEALTH_ENTITLEMENT_KEYS = [
+    "handwritingArchive",
+    "advancedAnalytics",
+    "advancedQuestionDesign",
+    "retakeAssignments",
+    "studentGrowthReports",
+    "pdfExport",
+    "reminders",
 ] satisfies readonly PlanEntitlementKey[];
 
 export interface PlanChangeImpact {
@@ -96,6 +113,19 @@ const LIMIT_STATUS_META: Record<BillingLimitStatus, { label: string; color: stri
     unlimited: { label: "무제한", color: "#0369a1", background: "#e0f2fe" },
 };
 
+const FEATURE_STATUS_META: Record<BillingFeatureStatus, { label: string; color: string; background: string }> = {
+    available: { label: "사용 가능", color: "#047857", background: "#d1fae5" },
+    partial: { label: "부분 제공", color: "#92400e", background: "#fef3c7" },
+    planned: { label: "준비 중", color: "#475569", background: "#e2e8f0" },
+    locked: { label: "잠김", color: "#92400e", background: "#fef3c7" },
+};
+
+const PLAN_FEATURE_STATUS_META: Record<PremiumDeliveryStatus, { label: string; color: string; background: string }> = {
+    available: { label: "제공", color: "#047857", background: "#d1fae5" },
+    partial: { label: "부분 제공", color: "#92400e", background: "#fef3c7" },
+    planned: { label: "준비 중", color: "#475569", background: "#e2e8f0" },
+};
+
 function paymentProviderStatusColor(status: PaymentProviderReadinessStatus): string {
     if (status === "ready") return "#047857";
     if (status === "simulation") return "#4f46e5";
@@ -107,18 +137,6 @@ function paymentProviderModeLabel(mode: BillingInvoice["paymentProviderMode"]): 
     if (mode === "live") return "Live 준비";
     if (mode === "disabled") return "비활성";
     return "시뮬레이션";
-}
-
-function readInitialPlan(): PlanKey {
-    if (typeof window === "undefined") return "free";
-    try {
-        const rawPlan = localStorage.getItem("omr_plan");
-        const parsedPlan = normalizePlan(rawPlan);
-        if (parsedPlan && rawPlan === "school") localStorage.setItem("omr_plan", parsedPlan);
-        return parsedPlan || "free";
-    } catch {
-        return "free";
-    }
 }
 
 function readInitialBillingCycle(): boolean {
@@ -143,8 +161,12 @@ function readInitialInvoices(): BillingInvoice[] {
 }
 
 export default function BillingPage() {
-    const [current, setCurrent] = useState<PlanKey>(() => readInitialPlan());
-    const [yearly, setYearly] = useState(() => readInitialBillingCycle());
+    const [current, setCurrent] = useState<PlanKey>("free");
+    const [serverPlanSnapshot, setServerPlanSnapshot] = useState<ServerPlanSnapshot | null>(null);
+    const [serverPlanLoading, setServerPlanLoading] = useState(true);
+    // Keep the server render deterministic; browser-only preferences hydrate
+    // after mount so stored records cannot cause a React hydration mismatch.
+    const [yearly, setYearly] = useState(false);
     const [usage, setUsage] = useState<BillingUsageSummary>({
         examsThisMonth: 0,
         students: 0,
@@ -154,22 +176,36 @@ export default function BillingPage() {
         handwritingQuestionCount: 0,
         handwritingStrokeCount: 0,
     });
-    const [userInvoices, setUserInvoices] = useState<BillingInvoice[]>(() => readInitialInvoices());
+    const [userInvoices, setUserInvoices] = useState<BillingInvoice[]>([]);
     const [upgradeTarget, setUpgradeTarget] = useState<PlanKey | null>(null);
     const invoiceSeqRef = useRef(0);
     const paymentProviderReadiness = useMemo(() => getPaymentProviderReadiness(), []);
     const paymentProviderRolloutReadiness = useMemo(() => getPaymentProviderRolloutReadiness(), []);
 
     useEffect(() => {
+        const animationFrame = window.requestAnimationFrame(() => {
+            setYearly(readInitialBillingCycle());
+            setUserInvoices(readInitialInvoices());
+        });
+
+        return () => window.cancelAnimationFrame(animationFrame);
+    }, []);
+
+    useEffect(() => {
         if (typeof window === "undefined") return;
 
         let cancelled = false;
         const hydrateUsage = async () => {
-            const [examResult, attemptResult] = await Promise.all([
+            const [examResult, attemptResult, planSnapshot] = await Promise.all([
                 loadExams(),
                 loadAttempts(),
+                getServerPlanSnapshot().catch(() => null),
             ]);
             if (cancelled) return;
+
+            setServerPlanSnapshot(planSnapshot);
+            setServerPlanLoading(false);
+            setCurrent(planSnapshot?.authoritative ? planSnapshot.plan : "free");
 
             let students = readRosterStudents(localStorage);
             if (students.length === 0) {
@@ -192,14 +228,27 @@ export default function BillingPage() {
                 }));
             }
 
-            setUsage(buildBillingUsageSummary({
+            const localUsage = buildBillingUsageSummary({
                 exams: examResult.items,
                 attempts: attemptResult.items,
                 students,
                 aiRecognition: readAiRecognitionUsage(),
-            }));
+            });
+            setUsage(planSnapshot?.authoritative && planSnapshot.usage
+                ? {
+                    ...localUsage,
+                    examsThisMonth: planSnapshot.usage.exams,
+                    students: planSnapshot.usage.students,
+                    aiRecognition: planSnapshot.usage.aiRecognition,
+                }
+                : localUsage);
 
-            if (examResult.remoteError || attemptResult.remoteError) {
+            if (!planSnapshot?.authoritative) {
+                toast.info(
+                    "서버 플랜 확인 불가",
+                    "로컬 플랜을 권한 근거로 사용하지 않습니다. 플랜 표시와 프리미엄 변경은 Free 안전 기본값으로 제한됩니다."
+                );
+            } else if (examResult.remoteError || attemptResult.remoteError) {
                 toast.info(
                     "로컬 사용량 기준으로 표시 중",
                     "서버 동기화가 일부 지연되어 현재 기기 데이터로 사용량을 계산했습니다."
@@ -212,35 +261,62 @@ export default function BillingPage() {
         return () => { cancelled = true; };
     }, []);
 
-    // Merge user-generated invoices with development-only historical demo data, newest first.
+    // Paid rows remain hidden until a real live checkout can verify provider metadata.
     const allInvoices = useMemo<BillingInvoice[]>(() => {
-        const historicalInvoices = shouldUseDemoData() ? MOCK_INVOICES : [];
-        return [...userInvoices, ...historicalInvoices].sort((a, b) => {
+        return filterBillingRecordsForDisplay(userInvoices, paymentProviderReadiness.canStartLiveCheckout).sort((a, b) => {
             const ta = new Date(a.date).getTime() || 0;
             const tb = new Date(b.date).getTime() || 0;
             return tb - ta;
         });
-    }, [userInvoices]);
+    }, [paymentProviderReadiness.canStartLiveCheckout, userInvoices]);
 
     const currentPlan = PLAN_BY_KEY[current];
+    const planAuthorityMeta = serverPlanLoading
+        ? {
+            label: "서버 플랜 확인 중",
+            detail: "기능 권한과 월 사용량의 서버 기준을 확인하고 있습니다.",
+            color: "#475569",
+            background: "#f1f5f9",
+        }
+        : serverPlanSnapshot?.authoritative
+            ? serverPlanSnapshot.source === "dev-simulation"
+                ? {
+                    label: "개발 플랜 시뮬레이션",
+                    detail: "개발 환경의 서버 시뮬레이션 값입니다. 실제 구독이나 결제 상태가 아닙니다.",
+                    color: "#92400e",
+                    background: "#fef3c7",
+                }
+                : {
+                    label: "서버 플랜 확인됨",
+                    detail: "현재 플랜과 시험·학생·AI 월 사용량을 서버 기준으로 표시합니다.",
+                    color: "#047857",
+                    background: "#d1fae5",
+                }
+            : {
+                label: "권한 확인 불가 · Free 안전 모드",
+                detail: serverPlanSnapshot?.error || "서버 플랜을 확인하지 못해 로컬 저장값 대신 Free 안전 기본값을 적용했습니다.",
+                color: "#b91c1c",
+                background: "#fee2e2",
+            };
     const nextPlan = current === "free"
         ? PLAN_BY_KEY.pro
-        : current === "pro"
-            ? PLAN_BY_KEY.academy
-            : null;
+        : null;
     const currentEntitlements = useMemo(
-        () => getPlanEntitlementViews(current, BILLING_ENTITLEMENT_KEYS),
+        () => getPlanEntitlementViews(current, BILLING_ENTITLEMENT_KEYS).map(buildBillingFeatureView),
         [current]
     );
+    const enabledPlannedFeatureCount = currentEntitlements.filter(entitlement => entitlement.enabled && entitlement.status === "planned").length;
     const planHealth = useMemo(
         () => buildBillingPlanHealth({
             plan: current,
             usage,
-            entitlementKeys: BILLING_ENTITLEMENT_KEYS,
+            entitlementKeys: PLAN_HEALTH_ENTITLEMENT_KEYS,
         }),
         [current, usage]
     );
-    const planHealthMeta = PLAN_HEALTH_META[planHealth.level];
+    const planHealthMeta = enabledPlannedFeatureCount > 0 && planHealth.level === "ready"
+        ? { label: "일부 준비 중", color: "#92400e", background: "#fef3c7" }
+        : PLAN_HEALTH_META[planHealth.level];
     const healthUpgradePlan = planHealth.level !== "ready" && planHealth.upgradeTarget && planHealth.upgradeTarget !== current
         ? PLAN_BY_KEY[planHealth.upgradeTarget]
         : null;
@@ -267,7 +343,7 @@ export default function BillingPage() {
 
     const downloadInvoice = (inv: BillingInvoice) => {
         const statusMeta = billingStatusMeta(inv.status);
-        const amountLabel = inv.status === "paid" ? "총 결제 금액" : "기록 금액";
+        const amountLabel = inv.status === "paid" ? "총 결제 금액" : "플랜 표시 가격";
         const providerRow = inv.paymentProviderLabel
             ? `<tr><td style="color: #64748b;">결제 provider</td><td style="text-align: right; color: #64748b;">${inv.paymentProviderLabel} · ${paymentProviderModeLabel(inv.paymentProviderMode)}</td></tr>`
             : "";
@@ -327,7 +403,7 @@ th { background: #f8fafc; font-size: 12px; color: #64748b; text-transform: upper
 
     const downloadAllInvoices = () => {
         if (allInvoices.length === 0) {
-            toast.info("다운로드할 결제/플랜 기록 없음");
+            toast.info("다운로드할 로컬 플랜 변경 기록 없음");
             return;
         }
         allInvoices.forEach((inv, i) => {
@@ -365,14 +441,12 @@ th { background: #f8fafc; font-size: 12px; color: #64748b; text-transform: upper
             paymentProviderLabel: paymentProviderReadiness.provider.label,
             paymentProviderMode: paymentProviderReadiness.mode,
         });
-        setCurrent(upgradeTarget);
         const nextInvoices = [newInvoice, ...userInvoices];
         setUserInvoices(nextInvoices);
         if (typeof window !== "undefined") {
-            setCurrentPlan(upgradeTarget);
             try { localStorage.setItem("omr_plan_invoices", JSON.stringify(nextInvoices)); } catch {}
         }
-        toast.success("플랜 변경 기록됨", `${upgradePlan.name} 플랜이 이 브라우저에 적용되었습니다.`);
+        toast.success("플랜 변경 미리보기 기록됨", `${upgradePlan.name} 요청을 로컬 기록에 남겼습니다. 서버 플랜과 기능 권한은 변경되지 않았습니다.`);
         setUpgradeTarget(null);
     };
 
@@ -396,7 +470,7 @@ th { background: #f8fafc; font-size: 12px; color: #64748b; text-transform: upper
                         <div>
                             <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.75rem' }}>
                                 <span style={{ fontSize: '0.75rem', fontWeight: 700, background: 'rgba(255,255,255,0.2)', padding: '4px 10px', borderRadius: 'var(--radius-full)', letterSpacing: '0.08em' }}>
-                                    CURRENT PLAN
+                                    {serverPlanSnapshot?.authoritative && serverPlanSnapshot.source === "supabase" ? "SERVER PLAN" : serverPlanSnapshot?.source === "dev-simulation" ? "SIMULATED PLAN" : "SAFE DEFAULT"}
                                 </span>
                                 {PLAN_ICONS[currentPlan.key]}
                             </div>
@@ -419,7 +493,29 @@ th { background: #f8fafc; font-size: 12px; color: #64748b; text-transform: upper
                     <div className="billing-payment-status" style={{ position: 'relative', zIndex: 1, marginTop: '1.5rem', display: 'flex', alignItems: 'center', gap: '0.75rem', padding: '0.9rem 1.1rem', background: 'rgba(255,255,255,0.15)', borderRadius: 'var(--radius-md)', backdropFilter: 'blur(10px)', width: 'fit-content', border: '1px solid rgba(255,255,255,0.2)' }}>
                         <CreditCard size={18} />
                         <span style={{ fontWeight: 600, fontSize: '0.9rem' }}>실결제 미연동</span>
-                        <span style={{ fontSize: '0.8rem', opacity: 0.8 }}>{paymentProviderReadiness.provider.label} · 플랜 변경은 로컬 기록으로 저장</span>
+                        <span style={{ fontSize: '0.8rem', opacity: 0.8 }}>{paymentProviderReadiness.provider.label} · 플랜 변경 미리보기만 로컬 기록으로 저장</span>
+                    </div>
+                </div>
+
+                <div
+                    className="bento-card"
+                    aria-live="polite"
+                    style={{
+                        padding: '1rem 1.15rem',
+                        marginBottom: '1rem',
+                        display: 'flex',
+                        alignItems: 'flex-start',
+                        gap: '0.7rem',
+                        border: `1px solid ${planAuthorityMeta.color}33`,
+                        background: planAuthorityMeta.background,
+                    }}
+                >
+                    {serverPlanSnapshot?.authoritative && serverPlanSnapshot.source === "supabase"
+                        ? <Check size={18} color={planAuthorityMeta.color} style={{ flexShrink: 0, marginTop: 1 }} />
+                        : <AlertCircle size={18} color={planAuthorityMeta.color} style={{ flexShrink: 0, marginTop: 1 }} />}
+                    <div>
+                        <div style={{ color: planAuthorityMeta.color, fontSize: '0.86rem', fontWeight: 900 }}>{planAuthorityMeta.label}</div>
+                        <div style={{ color: planAuthorityMeta.color, opacity: 0.9, fontSize: '0.76rem', fontWeight: 700, lineHeight: 1.5, marginTop: '0.15rem' }}>{planAuthorityMeta.detail}</div>
                     </div>
                 </div>
 
@@ -439,7 +535,7 @@ th { background: #f8fafc; font-size: 12px; color: #64748b; text-transform: upper
                             결제 연동 예정
                         </div>
                         <p style={{ fontSize: '0.9rem', color: 'var(--muted)', lineHeight: 1.55, wordBreak: 'keep-all' }}>
-                            토스페이먼츠, 네이버페이, 카카오페이 순서로 운영 결제를 붙입니다. 지금 화면의 플랜 변경은 실제 과금 없이 이 브라우저의 로컬 기록만 바꿉니다.
+                            토스페이먼츠, 네이버페이, 카카오페이 순서로 운영 결제를 붙입니다. 지금 화면에서는 실제 과금이나 서버 권한 변경 없이 플랜 변경 미리보기 기록만 남깁니다.
                         </p>
                     </div>
                     <div style={{ display: 'grid', gap: '0.65rem', minWidth: 'min(360px, 100%)' }}>
@@ -514,7 +610,9 @@ th { background: #f8fafc; font-size: 12px; color: #64748b; text-transform: upper
                                 </span>
                             </div>
                             <p style={{ fontSize: '0.88rem', color: 'var(--muted)', lineHeight: 1.55, wordBreak: 'keep-all' }}>
-                                {planHealth.title} · {planHealth.description}
+                                {enabledPlannedFeatureCount > 0 && planHealth.level === "ready"
+                                    ? `핵심 기능 운영 가능 · 현재 플랜에 표시된 ${enabledPlannedFeatureCount}개 기능은 아직 준비 중입니다.`
+                                    : `${planHealth.title} · ${planHealth.description}`}
                             </p>
                         </div>
                         {healthUpgradePlan && (
@@ -581,29 +679,37 @@ th { background: #f8fafc; font-size: 12px; color: #64748b; text-transform: upper
                             padding: '0.9rem',
                             border: '1px solid var(--border)',
                             borderRadius: 'var(--radius-md)',
-                            background: planHealth.lockedEntitlements.length > 0 ? '#fffbeb' : 'var(--background)'
+                            background: planHealth.lockedEntitlements.length > 0 || enabledPlannedFeatureCount > 0 ? '#fffbeb' : 'var(--background)'
                         }}>
                             <div style={{ display: 'flex', justifyContent: 'space-between', gap: '0.5rem', alignItems: 'center', marginBottom: '0.4rem' }}>
-                                <span style={{ fontSize: '0.78rem', fontWeight: 800, color: 'var(--muted)' }}>잠긴 프리미엄 기능</span>
+                                <span style={{ fontSize: '0.78rem', fontWeight: 800, color: 'var(--muted)' }}>
+                                    {planHealth.lockedEntitlements.length > 0 ? '잠긴 프리미엄 기능' : '준비 중인 기능'}
+                                </span>
                                 <span style={{
                                     padding: '0.18rem 0.45rem',
                                     borderRadius: 'var(--radius-full)',
-                                    background: planHealth.lockedEntitlements.length > 0 ? '#fef3c7' : '#d1fae5',
-                                    color: planHealth.lockedEntitlements.length > 0 ? '#92400e' : '#047857',
+                                    background: planHealth.lockedEntitlements.length > 0 || enabledPlannedFeatureCount > 0 ? '#fef3c7' : '#d1fae5',
+                                    color: planHealth.lockedEntitlements.length > 0 || enabledPlannedFeatureCount > 0 ? '#92400e' : '#047857',
                                     fontSize: '0.65rem',
                                     fontWeight: 900,
                                     whiteSpace: 'nowrap'
                                 }}>
-                                    {planHealth.lockedEntitlements.length > 0 ? `${planHealth.lockedEntitlements.length}개 잠금` : '모두 사용'}
+                                    {planHealth.lockedEntitlements.length > 0
+                                        ? `${planHealth.lockedEntitlements.length}개 잠금`
+                                        : enabledPlannedFeatureCount > 0
+                                            ? `${enabledPlannedFeatureCount}개 준비 중`
+                                            : '모두 제공'}
                                 </span>
                             </div>
                             <div style={{ fontSize: '1.25rem', fontWeight: 900, marginBottom: '0.2rem' }}>
-                                {planHealth.lockedEntitlements.length}개
+                                {planHealth.lockedEntitlements.length || enabledPlannedFeatureCount}개
                             </div>
                             <div style={{ fontSize: '0.75rem', color: 'var(--muted)', fontWeight: 700, lineHeight: 1.45, wordBreak: 'keep-all' }}>
                                 {planHealth.lockedEntitlements.length > 0
                                     ? planHealth.lockedEntitlementSummary
-                                    : "현재 플랜에서 주요 프리미엄 기능 사용 가능"}
+                                    : enabledPlannedFeatureCount > 0
+                                        ? "플랜에 포함될 예정이지만 아직 사용할 수 없는 기능입니다."
+                                        : "현재 플랜의 주요 프리미엄 기능을 바로 사용할 수 있습니다."}
                             </div>
                         </div>
                     </div>
@@ -660,9 +766,7 @@ th { background: #f8fafc; font-size: 12px; color: #64748b; text-transform: upper
 
                     <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: '0.75rem' }}>
                         {currentEntitlements.map(entitlement => {
-                            const unlockLabel = entitlement.unlockPlan
-                                ? `${PLAN_BY_KEY[entitlement.unlockPlan].name} 필요`
-                                : "준비 중";
+                            const statusMeta = FEATURE_STATUS_META[entitlement.status];
                             return (
                                 <div
                                     key={entitlement.key}
@@ -673,7 +777,7 @@ th { background: #f8fafc; font-size: 12px; color: #64748b; text-transform: upper
                                         padding: '0.85rem',
                                         border: '1px solid var(--border)',
                                         borderRadius: 'var(--radius-md)',
-                                        background: entitlement.enabled ? 'var(--surface)' : 'var(--background)',
+                                        background: entitlement.status === 'available' ? 'var(--surface)' : 'var(--background)',
                                         minHeight: 92
                                     }}
                                 >
@@ -685,28 +789,34 @@ th { background: #f8fafc; font-size: 12px; color: #64748b; text-transform: upper
                                         alignItems: 'center',
                                         justifyContent: 'center',
                                         flexShrink: 0,
-                                        background: entitlement.enabled ? 'rgba(16,185,129,0.12)' : 'rgba(100,116,139,0.12)',
-                                        color: entitlement.enabled ? '#059669' : 'var(--muted)'
+                                        background: statusMeta.background,
+                                        color: statusMeta.color
                                     }}>
-                                        {entitlement.enabled ? <Check size={16} /> : <Lock size={15} />}
+                                        {entitlement.status === 'available'
+                                            ? <Check size={16} />
+                                            : entitlement.status === 'planned'
+                                                ? <Clock3 size={15} />
+                                                : entitlement.status === 'partial'
+                                                    ? <AlertCircle size={15} />
+                                                    : <Lock size={15} />}
                                     </div>
                                     <div style={{ minWidth: 0, flex: 1 }}>
                                         <div style={{ display: 'flex', justifyContent: 'space-between', gap: '0.6rem', alignItems: 'center', marginBottom: '0.25rem' }}>
-                                            <strong style={{ fontSize: '0.9rem' }}>{entitlement.label}</strong>
+                                            <strong style={{ fontSize: '0.9rem' }}>{entitlement.displayLabel}</strong>
                                             <span style={{
                                                 flexShrink: 0,
                                                 fontSize: '0.68rem',
                                                 fontWeight: 800,
                                                 padding: '0.18rem 0.45rem',
                                                 borderRadius: 'var(--radius-full)',
-                                                color: entitlement.enabled ? '#047857' : '#92400e',
-                                                background: entitlement.enabled ? '#d1fae5' : '#fef3c7',
+                                                color: statusMeta.color,
+                                                background: statusMeta.background,
                                             }}>
-                                                {entitlement.enabled ? '사용 가능' : unlockLabel}
+                                                {entitlement.statusLabel}
                                             </span>
                                         </div>
                                         <p style={{ fontSize: '0.78rem', color: 'var(--muted)', lineHeight: 1.45, wordBreak: 'keep-all' }}>
-                                            {entitlement.description}
+                                            {entitlement.displayDescription}
                                         </p>
                                     </div>
                                 </div>
@@ -741,6 +851,7 @@ th { background: #f8fafc; font-size: 12px; color: #64748b; text-transform: upper
                         {PLAN_CATALOG.map(p => {
                             const isCurrent = p.key === current;
                             const isPro = p.key === "pro";
+                            const academyUnavailable = p.key === "academy";
                             const price = yearly ? Math.round(p.priceNum * 12 * 0.8) : p.priceNum;
                             return (
                                 <div key={p.key} className="bento-card card-hover" style={{
@@ -758,34 +869,56 @@ th { background: #f8fafc; font-size: 12px; color: #64748b; text-transform: upper
                                     </div>
                                     <h3 style={{ fontSize: '1.4rem', fontWeight: 800, marginBottom: '0.25rem' }}>{p.name}</h3>
                                     <div style={{ display: 'flex', alignItems: 'baseline', gap: '0.3rem', marginBottom: '1.25rem' }}>
-                                        <span style={{ fontSize: '2rem', fontWeight: 900, color: 'var(--foreground)', letterSpacing: '-0.03em' }}>
-                                            ₩{price.toLocaleString()}
-                                        </span>
-                                        <span style={{ fontSize: '0.9rem', color: 'var(--muted)', fontWeight: 500 }}>/ {yearly ? "년" : "월"}</span>
+                                        {academyUnavailable ? (
+                                            <span style={{ fontSize: '1.25rem', fontWeight: 900, color: '#475569' }}>조직 기능 준비 중</span>
+                                        ) : (
+                                            <>
+                                                <span style={{ fontSize: '2rem', fontWeight: 900, color: 'var(--foreground)', letterSpacing: '-0.03em' }}>
+                                                    ₩{price.toLocaleString()}
+                                                </span>
+                                                <span style={{ fontSize: '0.9rem', color: 'var(--muted)', fontWeight: 500 }}>/ {yearly ? "년" : "월"}</span>
+                                            </>
+                                        )}
                                     </div>
 
                                     <ul style={{ listStyle: 'none', padding: 0, marginBottom: '1.5rem' }}>
-                                        {p.features.map(f => (
-                                            <li key={f} style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', padding: '0.4rem 0', fontSize: '0.88rem' }}>
-                                                <Check size={15} color={p.color} style={{ flexShrink: 0 }} />
-                                                <span>{f}</span>
-                                            </li>
-                                        ))}
+                                        {BILLING_PLAN_FEATURES[p.key].map(feature => {
+                                            const featureMeta = PLAN_FEATURE_STATUS_META[feature.status];
+                                            return (
+                                                <li key={feature.label} style={{ display: 'flex', alignItems: 'flex-start', gap: '0.5rem', padding: '0.4rem 0', fontSize: '0.88rem' }}>
+                                                    {feature.status === "available"
+                                                        ? <Check size={15} color={featureMeta.color} style={{ flexShrink: 0, marginTop: 2 }} />
+                                                        : feature.status === "partial"
+                                                            ? <AlertCircle size={15} color={featureMeta.color} style={{ flexShrink: 0, marginTop: 2 }} />
+                                                            : <Clock3 size={15} color={featureMeta.color} style={{ flexShrink: 0, marginTop: 2 }} />}
+                                                    <span style={{ minWidth: 0, flex: 1 }}>
+                                                        <span>{feature.label}</span>
+                                                        {feature.detail && (
+                                                            <small style={{ display: 'block', marginTop: '0.1rem', color: 'var(--muted)', fontSize: '0.7rem', lineHeight: 1.4 }}>{feature.detail}</small>
+                                                        )}
+                                                    </span>
+                                                    <span style={{ flexShrink: 0, padding: '0.12rem 0.38rem', borderRadius: 'var(--radius-full)', background: featureMeta.background, color: featureMeta.color, fontSize: '0.62rem', fontWeight: 900 }}>
+                                                        {featureMeta.label}
+                                                    </span>
+                                                </li>
+                                            );
+                                        })}
                                     </ul>
 
                                     <button
-                                        disabled={isCurrent}
+                                        disabled={isCurrent || academyUnavailable}
                                         onClick={() => handlePlanChange(p.key)}
+                                        title={academyUnavailable ? "조직 관리 기능이 실제 제공되기 전에는 Academy로 변경할 수 없습니다." : undefined}
                                         style={{
                                             width: '100%', padding: '0.85rem', borderRadius: 'var(--radius-md)',
-                                            background: isCurrent ? 'var(--background)' : isPro ? p.gradient : 'var(--surface)',
-                                            color: isCurrent ? 'var(--muted)' : isPro ? 'white' : 'var(--foreground)',
+                                            background: isCurrent || academyUnavailable ? 'var(--background)' : isPro ? p.gradient : 'var(--surface)',
+                                            color: isCurrent || academyUnavailable ? 'var(--muted)' : isPro ? 'white' : 'var(--foreground)',
                                             border: isCurrent || isPro ? 'none' : '1px solid var(--border)',
-                                            fontWeight: 700, fontSize: '0.9rem', cursor: isCurrent ? 'default' : 'pointer',
+                                            fontWeight: 700, fontSize: '0.9rem', cursor: isCurrent || academyUnavailable ? 'not-allowed' : 'pointer',
                                             boxShadow: isPro && !isCurrent ? `0 4px 14px ${p.color}44` : 'none'
                                         }}
                                     >
-                                        {isCurrent ? '현재 플랜' : p.key === "free" ? '다운그레이드' : '업그레이드'}
+                                        {isCurrent ? '현재 플랜' : academyUnavailable ? 'Academy 준비 중' : p.key === "free" ? '다운그레이드' : '업그레이드'}
                                     </button>
                                 </div>
                             );
@@ -797,8 +930,8 @@ th { background: #f8fafc; font-size: 12px; color: #64748b; text-transform: upper
                 <div className="bento-card billing-invoices-card" style={{ padding: '1.75rem' }}>
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.25rem' }}>
                         <div>
-                            <h2 style={{ fontSize: '1.2rem', fontWeight: 700 }}>결제/플랜 기록</h2>
-                            <p style={{ fontSize: '0.85rem', color: 'var(--muted)' }}>실결제 연동 후 영수증과 현재 로컬 플랜 변경 기록</p>
+                            <h2 style={{ fontSize: '1.2rem', fontWeight: 700 }}>로컬 플랜 변경 기록</h2>
+                            <p style={{ fontSize: '0.85rem', color: 'var(--muted)' }}>이 브라우저에 저장된 변경 내역입니다. 결제 완료 내역이나 영수증이 아닙니다.</p>
                         </div>
                         <button
                             onClick={downloadAllInvoices}
@@ -817,7 +950,7 @@ th { background: #f8fafc; font-size: 12px; color: #64748b; text-transform: upper
                                 cursor: allInvoices.length === 0 ? 'not-allowed' : 'pointer',
                             }}
                         >
-                            <Download size={14} /> 전체 다운로드
+                            <Download size={14} /> 전체 기록 다운로드
                         </button>
                     </div>
                     <div className="billing-table-scroll">
@@ -827,7 +960,7 @@ th { background: #f8fafc; font-size: 12px; color: #64748b; text-transform: upper
                                     <th style={{ padding: '0.85rem 0.5rem' }}>기록 ID</th>
                                     <th style={{ padding: '0.85rem 0.5rem' }}>설명</th>
                                     <th style={{ padding: '0.85rem 0.5rem' }}>날짜</th>
-                                    <th style={{ padding: '0.85rem 0.5rem' }}>금액</th>
+                                    <th style={{ padding: '0.85rem 0.5rem' }}>표시 가격</th>
                                     <th style={{ padding: '0.85rem 0.5rem' }}>상태</th>
                                     <th style={{ padding: '0.85rem 0.5rem', textAlign: 'right' }}>다운로드</th>
                                 </tr>
@@ -855,7 +988,7 @@ th { background: #f8fafc; font-size: 12px; color: #64748b; text-transform: upper
                                                     onMouseEnter={e => e.currentTarget.style.background = 'rgba(99,102,241,0.08)'}
                                                     onMouseLeave={e => e.currentTarget.style.background = 'transparent'}
                                                 >
-                                                    <Receipt size={14} />
+                                                    <Download size={14} />
                                                 </button>
                                             </td>
                                         </tr>
@@ -864,7 +997,7 @@ th { background: #f8fafc; font-size: 12px; color: #64748b; text-transform: upper
                                 {allInvoices.length === 0 && (
                                     <tr>
                                         <td colSpan={6} style={{ padding: '2.5rem 0.5rem', textAlign: 'center', color: 'var(--muted)', fontSize: '0.9rem' }}>
-                                            아직 결제/플랜 기록이 없습니다.
+                                            아직 로컬 플랜 변경 기록이 없습니다.
                                         </td>
                                     </tr>
                                 )}
@@ -882,9 +1015,6 @@ th { background: #f8fafc; font-size: 12px; color: #64748b; text-transform: upper
 
             {upgradeTarget && upgradePlan && (() => {
                 const basePrice = yearly ? Math.round(upgradePlan.priceNum * 12 * 0.8) : upgradePlan.priceNum;
-                // Price preview is inclusive of VAT. Without a payment provider this only records a local plan change.
-                const subtotal = Math.round(basePrice / 1.1);
-                const vat = basePrice - subtotal;
                 const planImpact = buildPlanChangeImpact(current, upgradeTarget, usage, BILLING_ENTITLEMENT_KEYS);
                 const actionLabel = upgradePlan.priceNum > currentPlan.priceNum
                     ? "업그레이드"
@@ -927,12 +1057,19 @@ th { background: #f8fafc; font-size: 12px; color: #64748b; text-transform: upper
                                     <span style={{ fontSize: '0.95rem', fontWeight: 800, color: 'var(--foreground)' }}>{upgradePlan.name} · {yearly ? "연간" : "월간"}</span>
                                 </div>
                                 <ul style={{ listStyle: 'none', padding: 0, margin: 0 }}>
-                                    {upgradePlan.features.slice(0, 5).map(f => (
-                                        <li key={f} style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', fontSize: '0.82rem', padding: '0.2rem 0' }}>
-                                            <Check size={13} color={upgradePlan.color} style={{ flexShrink: 0 }} />
-                                            <span>{f}</span>
-                                        </li>
-                                    ))}
+                                    {BILLING_PLAN_FEATURES[upgradePlan.key].slice(0, 5).map(feature => {
+                                        const featureMeta = PLAN_FEATURE_STATUS_META[feature.status];
+                                        return (
+                                            <li key={feature.label} style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', fontSize: '0.82rem', padding: '0.2rem 0' }}>
+                                                {feature.status === "available"
+                                                    ? <Check size={13} color={featureMeta.color} style={{ flexShrink: 0 }} />
+                                                    : feature.status === "partial"
+                                                        ? <AlertCircle size={13} color={featureMeta.color} style={{ flexShrink: 0 }} />
+                                                        : <Clock3 size={13} color={featureMeta.color} style={{ flexShrink: 0 }} />}
+                                                <span>{feature.label} · {featureMeta.label}</span>
+                                            </li>
+                                        );
+                                    })}
                                 </ul>
                             </div>
 
@@ -970,19 +1107,14 @@ th { background: #f8fafc; font-size: 12px; color: #64748b; text-transform: upper
 
                             <div style={{ padding: '0.85rem 1rem', background: 'var(--background)', borderRadius: 'var(--radius-md)', marginBottom: '1rem', fontSize: '0.88rem' }}>
                                 <div style={{ display: 'flex', justifyContent: 'space-between', padding: '0.25rem 0' }}>
-                                    <span style={{ color: 'var(--muted)' }}>소계</span>
-                                    <span style={{ fontWeight: 600 }}>₩{subtotal.toLocaleString()}</span>
+                                    <span style={{ color: 'var(--muted)' }}>플랜 표시 가격</span>
+                                    <span style={{ fontWeight: 600 }}>₩{basePrice.toLocaleString()} / {yearly ? "년" : "월"}</span>
                                 </div>
-                                <div style={{ display: 'flex', justifyContent: 'space-between', padding: '0.25rem 0', borderBottom: '1px dashed var(--border)' }}>
-                                    <span style={{ color: 'var(--muted)' }}>부가세 (10%)</span>
-                                    <span style={{ fontWeight: 600 }}>₩{vat.toLocaleString()}</span>
+                                <div style={{ display: 'flex', justifyContent: 'space-between', padding: '0.5rem 0 0', borderTop: '1px dashed var(--border)', marginTop: '0.25rem', fontSize: '0.95rem' }}>
+                                    <span style={{ fontWeight: 700 }}>이번 변경에서 결제되는 금액</span>
+                                    <span style={{ fontWeight: 900, color: '#047857' }}>₩0</span>
                                 </div>
-                                <div style={{ display: 'flex', justifyContent: 'space-between', padding: '0.5rem 0 0', fontSize: '0.95rem' }}>
-                                    <span style={{ fontWeight: 700 }}>예상 요금</span>
-                                    <span style={{ fontWeight: 900, color: upgradePlan.color }}>
-                                        ₩{basePrice.toLocaleString()} / {yearly ? "년" : "월"}
-                                    </span>
-                                </div>
+                                <p style={{ marginTop: '0.45rem', color: 'var(--muted)', fontSize: '0.74rem', lineHeight: 1.45 }}>실결제와 구독은 시작되지 않으며 현재 브라우저의 플랜 표시만 바뀝니다.</p>
                             </div>
 
                             <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', padding: '0.7rem 0.85rem', background: 'var(--background)', border: `1px solid ${paymentProviderStatusColor(paymentProviderReadiness.status)}44`, borderRadius: 'var(--radius-md)', marginBottom: '1.25rem' }}>

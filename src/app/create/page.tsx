@@ -33,7 +33,7 @@ const PDFViewer = dynamic(() => import("@/components/PDFViewer"), {
     loading: PdfViewerLoading,
 });
 import { Suspense, useState, useEffect, useRef, useCallback, useMemo, type CSSProperties } from "react";
-import { DEFAULT_CHOICE_COUNT, questionChoiceCount, type Exam, type Question } from "@/types/omr";
+import { DEFAULT_CHOICE_COUNT, questionChoiceCount, type Exam, type Question, type QuestionSubQuestion, type QuestionSubQuestionTemplateId } from "@/types/omr";
 import type { ParsedAnswer } from "@/services/answerParser";
 import { saveFileDataUrl, storedDataUrlToFile } from "@/utils/blobStore";
 import { secureRandomId } from "@/utils/ids";
@@ -41,7 +41,7 @@ import { validateExamDraft } from "@/lib/examValidation";
 import { buildSolveShareUrl, isShareUrlReachableByStudents } from "@/lib/shareLink";
 import { buildExamServiceReadiness, type ExamServiceReadinessLevel } from "@/lib/examServiceReadiness";
 import { readStoredExamDefaults } from "@/lib/appSettings";
-import { loadExam, loadExams, saveExam } from "@/lib/omrPersistence";
+import { loadExam, saveExam } from "@/lib/omrPersistence";
 import { attachInferredQuestionPdfRegions } from "@/lib/handwritingAnalytics";
 import {
     detectQuestionLocationsFromText,
@@ -56,8 +56,17 @@ import {
     type PdfPageTextItems,
 } from "@/lib/pdfPassageGrouping";
 import { summarizePersistenceWrite } from "@/lib/persistenceFeedback";
-import { buildBillingUsageSummary } from "@/lib/billingUsage";
-import { evaluatePlanLimit, getCurrentPlan, getPlanLabel, PLAN_BY_KEY } from "@/utils/plans";
+import { authorizeAdvancedQuestionDesign, authorizeExamCreation, releaseExamCreationAuthorization } from "@/app/actions/premiumAccess";
+import { hasPlanEntitlement } from "@/utils/plans";
+import { useServerPlan } from "@/lib/useServerPlan";
+import {
+    addSubQuestionToTargets,
+    createSubQuestion,
+    estimateSubQuestionSeconds,
+    MAX_SUB_QUESTIONS_PER_QUESTION,
+    normalizeSubQuestionMaxLength,
+    SUB_QUESTION_TEMPLATES,
+} from "@/lib/subQuestions";
 
 // ─── Autosave + history constants ────────────────────────────────────
 const DRAFT_KEY = "omr_exam_draft";
@@ -139,6 +148,8 @@ interface LabelBatchState {
     concept: string;
     difficulty: QuestionDifficulty | "";
 }
+
+type SubQuestionBatchTarget = 'all' | 'range' | 'specific';
 
 type CreateConfirmState =
     | { kind: "restoreDraft"; draft: EditorDraft }
@@ -350,6 +361,12 @@ function CreateOMRPageInner() {
     const [isDistributeModalOpen, setIsDistributeModalOpen] = useState(false);
     const [confirmState, setConfirmState] = useState<CreateConfirmState | null>(null);
     const [isAdvancedDesignOpen, setIsAdvancedDesignOpen] = useState(false);
+    const [isSubQuestionOpen, setIsSubQuestionOpen] = useState(false);
+    const [bulkSubQuestionId, setBulkSubQuestionId] = useState<string | null>(null);
+    const [subQuestionBatchTarget, setSubQuestionBatchTarget] = useState<SubQuestionBatchTarget>('all');
+    const [subQuestionBatchRange, setSubQuestionBatchRange] = useState({ start: 1, end: 20 });
+    const [subQuestionSpecific, setSubQuestionSpecific] = useState('');
+    const { plan: currentPlan } = useServerPlan();
 
     // OMR Data State
     const [title, setTitle] = useState("기말고사 OMR");
@@ -535,6 +552,9 @@ function CreateOMRPageInner() {
         () => questions.find(q => q.id === selectedQuestionId) || null,
         [questions, selectedQuestionId],
     );
+    const advancedQuestionDesignEnabled = hasPlanEntitlement(currentPlan, 'advancedQuestionDesign');
+    const selectedSubQuestions = selectedQuestion?.subQuestions || [];
+    const subQuestionEstimatedMinutes = Math.max(0, Math.ceil(estimateSubQuestionSeconds(questions) / 60));
     const hasSelectedAdvancedDesign = Boolean(
         selectedQuestion?.tags?.unit ||
         selectedQuestion?.tags?.concept ||
@@ -1093,6 +1113,67 @@ function CreateOMRPageInner() {
         }));
     };
 
+    const addSelectedSubQuestion = (templateId: QuestionSubQuestionTemplateId) => {
+        if (!advancedQuestionDesignEnabled) {
+            toast.info('Pro 기능', '하위 질문 설계는 Pro 또는 Academy 플랜에서 사용할 수 있습니다.');
+            return;
+        }
+        if (!selectedQuestion || selectedSubQuestions.length >= MAX_SUB_QUESTIONS_PER_QUESTION) {
+            toast.info('하위 질문 제한', '문항당 최대 2개까지 추가할 수 있습니다.');
+            return;
+        }
+        updateSelectedQuestion(question => ({
+            ...question,
+            subQuestions: [...(question.subQuestions || []), createSubQuestion(question.id, templateId)],
+        }));
+        setIsSubQuestionOpen(true);
+    };
+
+    const updateSelectedSubQuestion = (id: string, patch: Partial<QuestionSubQuestion>) => {
+        updateSelectedQuestion(question => ({
+            ...question,
+            subQuestions: question.subQuestions?.map(subQuestion => subQuestion.id === id
+                ? { ...subQuestion, ...patch, maxLength: normalizeSubQuestionMaxLength(patch.maxLength ?? subQuestion.maxLength) }
+                : subQuestion),
+        }));
+    };
+
+    const removeSelectedSubQuestion = (id: string) => {
+        updateSelectedQuestion(question => {
+            const next = (question.subQuestions || []).filter(subQuestion => subQuestion.id !== id);
+            return { ...question, subQuestions: next.length > 0 ? next : undefined };
+        });
+        setBulkSubQuestionId(current => current === id ? null : current);
+    };
+
+    const applySubQuestionBatch = () => {
+        const source = selectedSubQuestions.find(subQuestion => subQuestion.id === bulkSubQuestionId);
+        if (!source) return;
+        let targetIds: number[] = [];
+        if (subQuestionBatchTarget === 'all') targetIds = questions.map(question => question.id);
+        if (subQuestionBatchTarget === 'range') {
+            const start = Math.min(subQuestionBatchRange.start, subQuestionBatchRange.end);
+            const end = Math.max(subQuestionBatchRange.start, subQuestionBatchRange.end);
+            targetIds = questions.filter(question => question.number >= start && question.number <= end).map(question => question.id);
+        }
+        if (subQuestionBatchTarget === 'specific') {
+            const numbers = new Set(subQuestionSpecific.split(',').map(value => Number(value.trim())).filter(Number.isFinite));
+            targetIds = questions.filter(question => numbers.has(question.number)).map(question => question.id);
+        }
+        if (targetIds.length === 0) {
+            toast.info('적용 대상 없음', '범위 또는 문항 번호를 확인해 주세요.');
+            return;
+        }
+        const result = addSubQuestionToTargets(questions, new Set(targetIds), source);
+        setQuestions(result.questions);
+        setBulkSubQuestionId(null);
+        const affectedRatio = result.questions.filter(question => (question.subQuestions?.length || 0) > 0).length / Math.max(1, result.questions.length);
+        const timeWarning = affectedRatio > 0.3
+            ? ` · 전체의 ${Math.round(affectedRatio * 100)}%, 예상 ${Math.max(1, Math.ceil(estimateSubQuestionSeconds(result.questions) / 60))}분 추가`
+            : '';
+        toast.success('하위 질문 일괄 적용', `적용 ${result.applied} · 중복 ${result.duplicateSkipped} · 상한 ${result.limitSkipped}${timeWarning}`);
+    };
+
     const toggleLabel = (label: string) => {
         if (selectedQuestionId === null) return;
         setQuestions(prev => prev.map(q => {
@@ -1348,6 +1429,7 @@ function CreateOMRPageInner() {
     };
 
     const handleShareConfig = async (accessConfig: NonNullable<Exam["accessConfig"]>) => {
+        let reservedExamId: string | null = null;
         try {
             const validation = validateExamDraft({
                 title,
@@ -1368,29 +1450,20 @@ function CreateOMRPageInner() {
                 return "";
             }
 
-            if (!editId) {
-                const plan = getCurrentPlan();
-                const examResult = await loadExams();
-                const usage = buildBillingUsageSummary({
-                    exams: examResult.items,
-                    attempts: [],
-                    students: [],
-                    aiRecognition: 0,
-                });
-                const limit = evaluatePlanLimit(plan, "exams", usage.examsThisMonth, 1);
-                if (!limit.allowed) {
-                    const upgradeName = limit.upgradeTarget ? PLAN_BY_KEY[limit.upgradeTarget].name : "상위";
-                    toast.error(
-                        "월 시험 생성 한도 도달",
-                        `${getPlanLabel(plan)} 플랜은 이번 달 시험 ${limit.limit}개까지 생성할 수 있습니다. ${upgradeName} 플랜에서 계속 생성할 수 있습니다.`
-                    );
-                    return "";
-                }
-            }
-
             // Editing? Reuse the existing ID and preserve createdAt; otherwise mint a new one.
             // Unguessable id so shareable /solve/[id] links can't be enumerated.
             const id = loadedExam?.id || secureRandomId();
+            if (!editId) {
+                const authorization = await authorizeExamCreation(id);
+                if (!authorization.ok) {
+                    toast.error(
+                        authorization.quota?.allowed === false ? "월 시험 생성 한도 도달" : "서버 플랜 확인 필요",
+                        authorization.error || "서버에서 플랜과 사용량을 확인한 뒤 다시 시도해주세요.",
+                    );
+                    return "";
+                }
+                reservedExamId = id;
+            }
             const createdAt = loadedExam?.createdAt || new Date().toISOString();
             let pdfData = loadedExam?.pdfData || "";
             let pdfDataRef = loadedExam?.pdfDataRef;
@@ -1411,6 +1484,24 @@ function CreateOMRPageInner() {
 
             // Fill only missing regions so teacher-tuned regions survive every re-share.
             const questionsWithRegions = attachInferredQuestionPdfRegions(questions, { overwriteExisting: false });
+
+            // Fail closed before persistence: an edit can add premium prompts
+            // without consuming a new-exam quota, so entitlement is checked on
+            // every save that contains them.
+            if (questionsWithRegions.some(question => (question.subQuestions?.length || 0) > 0)) {
+                const entitlement = await authorizeAdvancedQuestionDesign();
+                if (!entitlement.ok) {
+                    if (reservedExamId) {
+                        await releaseExamCreationAuthorization(reservedExamId);
+                        reservedExamId = null;
+                    }
+                    toast.error(
+                        entitlement.access.authoritative ? "Pro 기능" : "서버 플랜 확인 필요",
+                        entitlement.error || "하위 질문을 저장하려면 서버에서 Pro 이상 플랜이 확인되어야 합니다.",
+                    );
+                    return "";
+                }
+            }
 
             const examData: Exam = {
                 ...(loadedExam || {}),
@@ -1437,9 +1528,16 @@ function CreateOMRPageInner() {
                 failureTitle: "배포 저장 실패",
             });
             if (!feedback.ok) {
+                if (reservedExamId) {
+                    await releaseExamCreationAuthorization(reservedExamId);
+                    reservedExamId = null;
+                }
                 toast.error(feedback.title, feedback.detail);
                 return "";
             }
+
+            // The quota reservation now represents a successfully-created exam.
+            reservedExamId = null;
             if (feedback.level === "info") {
                 toast.info(feedback.title, feedback.detail);
             }
@@ -1466,6 +1564,10 @@ function CreateOMRPageInner() {
             }
             return shareUrl;
         } catch (e) {
+            if (reservedExamId) {
+                const release = await releaseExamCreationAuthorization(reservedExamId);
+                if (!release.ok) console.warn("Exam plan reservation release failed", release.error);
+            }
             console.error(e);
             toast.error("배포 저장 실패", "파일 저장 공간 또는 브라우저 권한을 확인해주세요.");
             return "";
@@ -2463,6 +2565,107 @@ function CreateOMRPageInner() {
                                             추가
                                         </button>
                                     </div>
+                                </div>
+
+                                {/* Student thought-process prompts */}
+                                <div style={{ marginBottom: '1rem', padding: '0.85rem', background: 'var(--background)', border: '1px solid var(--border)', borderRadius: 'var(--radius-md)' }}>
+                                    <button
+                                        type="button"
+                                        aria-expanded={isSubQuestionOpen}
+                                        aria-controls="sub-question-fields"
+                                        onClick={() => setIsSubQuestionOpen(open => !open)}
+                                        style={{ width: '100%', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '0.5rem', padding: 0, border: 0, background: 'transparent', color: 'inherit', textAlign: 'left', cursor: 'pointer' }}
+                                    >
+                                        <div>
+                                            <div style={{ fontSize: '0.85rem', fontWeight: 900 }}>고급 문항 구성</div>
+                                            <div style={{ fontSize: '0.7rem', color: 'var(--muted)', marginTop: 2 }}>객관식 답안 아래에 사고 확인 질문을 붙입니다.</div>
+                                        </div>
+                                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
+                                            {!advancedQuestionDesignEnabled ? (
+                                                <span className="q-meta-chip q-meta-score">Pro 잠금</span>
+                                            ) : (
+                                                <span className="q-meta-chip q-meta-label">하위 {selectedSubQuestions.length} · 예상 +{subQuestionEstimatedMinutes}분</span>
+                                            )}
+                                            <ChevronDown size={15} style={{ transform: isSubQuestionOpen ? 'rotate(180deg)' : undefined }} />
+                                        </div>
+                                    </button>
+
+                                    {isSubQuestionOpen && (
+                                        <div id="sub-question-fields" style={{ display: 'grid', gap: '0.65rem', marginTop: '0.75rem' }}>
+                                            {!advancedQuestionDesignEnabled ? (
+                                                <div style={{ padding: '0.75rem', borderRadius: 8, background: 'rgba(99,102,241,0.08)', color: 'var(--muted)', fontSize: '0.78rem', lineHeight: 1.55 }}>
+                                                    Free에서는 설계를 미리 볼 수 있습니다. Pro부터 하위 질문 생성·심화 응답 수집·검토를 사용할 수 있습니다.
+                                                    <button type="button" className="btn btn-primary" onClick={() => router.push('/teacher/billing')} style={{ width: '100%', marginTop: '0.6rem', fontSize: '0.75rem' }}>플랜 확인</button>
+                                                </div>
+                                            ) : (
+                                                <>
+                                                    {selectedSubQuestions.length < MAX_SUB_QUESTIONS_PER_QUESTION && (
+                                                        <div>
+                                                            <div style={{ fontSize: '0.72rem', color: 'var(--muted)', fontWeight: 800, marginBottom: '0.35rem' }}>템플릿으로 추가</div>
+                                                            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.35rem' }}>
+                                                                {SUB_QUESTION_TEMPLATES.map(template => (
+                                                                    <button key={template.id} type="button" className="btn btn-secondary" onClick={() => addSelectedSubQuestion(template.id)} style={{ padding: '0.3rem 0.5rem', fontSize: '0.7rem' }}>{template.label}</button>
+                                                                ))}
+                                                                <button type="button" className="btn btn-secondary" onClick={() => addSelectedSubQuestion('custom')} style={{ padding: '0.3rem 0.5rem', fontSize: '0.7rem' }}>직접 만들기</button>
+                                                            </div>
+                                                        </div>
+                                                    )}
+
+                                                    {selectedSubQuestions.length === 0 && (
+                                                        <div style={{ fontSize: '0.75rem', color: 'var(--muted)' }}>현재 문항은 객관식만 사용 중입니다. 필수는 기본으로 꺼져 있습니다.</div>
+                                                    )}
+
+                                                    {selectedSubQuestions.map((subQuestion, index) => (
+                                                        <div key={subQuestion.id} style={{ display: 'grid', gap: '0.45rem', padding: '0.65rem', border: '1px solid var(--border)', borderRadius: 8, background: 'var(--surface)' }}>
+                                                            <div style={{ display: 'flex', justifyContent: 'space-between', gap: '0.5rem', alignItems: 'center' }}>
+                                                                <strong style={{ fontSize: '0.75rem' }}>{selectedQuestion?.number}-{String.fromCharCode(65 + index)} · {subQuestion.required ? '필수' : '선택'} · {subQuestion.maxLength || 300}자</strong>
+                                                                <button type="button" onClick={() => removeSelectedSubQuestion(subQuestion.id)} style={{ border: 0, background: 'transparent', color: 'var(--error)', cursor: 'pointer', fontSize: '0.7rem', fontWeight: 800 }}>삭제</button>
+                                                            </div>
+                                                            <textarea
+                                                                aria-label={`${selectedQuestion?.number}번 하위 질문 문구`}
+                                                                value={subQuestion.prompt}
+                                                                maxLength={500}
+                                                                onChange={event => updateSelectedSubQuestion(subQuestion.id, { prompt: event.target.value })}
+                                                                placeholder="학생에게 보여줄 질문"
+                                                                className="input-field"
+                                                                style={{ width: '100%', minHeight: 58, resize: 'vertical', padding: '0.45rem 0.55rem', fontSize: '0.78rem' }}
+                                                            />
+                                                            <div style={{ display: 'grid', gridTemplateColumns: '1fr 90px', gap: '0.45rem', alignItems: 'end' }}>
+                                                                <label style={{ display: 'flex', gap: '0.35rem', alignItems: 'center', fontSize: '0.72rem', color: 'var(--muted)', fontWeight: 800 }}>
+                                                                    <input type="checkbox" checked={!!subQuestion.required} onChange={event => updateSelectedSubQuestion(subQuestion.id, { required: event.target.checked || undefined })} /> 필수 응답
+                                                                </label>
+                                                                <label style={{ fontSize: '0.68rem', color: 'var(--muted)' }}>최대 글자
+                                                                    <input type="number" min={1} max={500} value={subQuestion.maxLength || 300} onChange={event => updateSelectedSubQuestion(subQuestion.id, { maxLength: Number(event.target.value) })} className="input-field" style={{ width: '100%', padding: '0.3rem 0.4rem', marginTop: 2 }} />
+                                                                </label>
+                                                            </div>
+                                                            <input value={subQuestion.answerGuide || ''} onChange={event => updateSelectedSubQuestion(subQuestion.id, { answerGuide: event.target.value || undefined })} placeholder="교사용 답안 가이드 (학생에게 비공개)" className="input-field" style={{ width: '100%', padding: '0.4rem 0.5rem', fontSize: '0.72rem' }} />
+                                                            <input value={subQuestion.teacherNote || ''} onChange={event => updateSelectedSubQuestion(subQuestion.id, { teacherNote: event.target.value || undefined })} placeholder="교사 메모 (학생에게 비공개)" className="input-field" style={{ width: '100%', padding: '0.4rem 0.5rem', fontSize: '0.72rem' }} />
+                                                            <button type="button" className="btn btn-secondary" onClick={() => setBulkSubQuestionId(current => current === subQuestion.id ? null : subQuestion.id)} style={{ fontSize: '0.72rem', padding: '0.35rem 0.55rem' }} aria-expanded={bulkSubQuestionId === subQuestion.id}>이 설정 일괄 적용</button>
+
+                                                            {bulkSubQuestionId === subQuestion.id && (
+                                                                <div style={{ display: 'grid', gap: '0.45rem', padding: '0.55rem', background: 'var(--background)', borderRadius: 7 }}>
+                                                                    <div style={{ display: 'flex', gap: '0.3rem' }}>
+                                                                        {(['all', 'range', 'specific'] as const).map(target => (
+                                                                            <button key={target} type="button" className={`btn ${subQuestionBatchTarget === target ? 'btn-primary' : 'btn-secondary'}`} onClick={() => setSubQuestionBatchTarget(target)} style={{ flex: 1, fontSize: '0.68rem', padding: '0.3rem' }}>{target === 'all' ? '전체' : target === 'range' ? '범위' : '특정'}</button>
+                                                                        ))}
+                                                                    </div>
+                                                                    {subQuestionBatchTarget === 'range' && (
+                                                                        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.4rem' }}>
+                                                                            <input aria-label="일괄 적용 시작 문항" type="number" min={1} max={questionsCount} value={subQuestionBatchRange.start} onChange={event => setSubQuestionBatchRange(value => ({ ...value, start: Number(event.target.value) }))} className="input-field" />
+                                                                            <input aria-label="일괄 적용 끝 문항" type="number" min={1} max={questionsCount} value={subQuestionBatchRange.end} onChange={event => setSubQuestionBatchRange(value => ({ ...value, end: Number(event.target.value) }))} className="input-field" />
+                                                                        </div>
+                                                                    )}
+                                                                    {subQuestionBatchTarget === 'specific' && <input value={subQuestionSpecific} onChange={event => setSubQuestionSpecific(event.target.value)} placeholder="예: 1,3,7,12" className="input-field" />}
+                                                                    <div style={{ fontSize: '0.68rem', color: 'var(--muted)' }}>기존 설정은 덮어쓰지 않으며, 중복과 문항당 2개 상한은 자동으로 건너뜁니다.</div>
+                                                                    <button type="button" className="btn btn-primary" onClick={applySubQuestionBatch} style={{ fontSize: '0.72rem', padding: '0.35rem' }}>추가 적용</button>
+                                                                </div>
+                                                            )}
+                                                        </div>
+                                                    ))}
+                                                </>
+                                            )}
+                                        </div>
+                                    )}
                                 </div>
 
                                 {/* Advanced Design Metadata */}

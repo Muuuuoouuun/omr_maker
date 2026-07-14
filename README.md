@@ -13,11 +13,11 @@ The dev server runs on [http://localhost:3003](http://localhost:3003).
 
 ## Sample Accounts
 
-Development teacher login (role `교사`). These come from `.env.local` `TEACHER_ACCOUNTS`, and each account applies its plan to the browser on login, so premium gating is differentiated per account:
+Development teacher login (role `교사`). Configure accounts with `.env.local` `TEACHER_ACCOUNTS`. The table below is an example seed, not an account set guaranteed to exist in every checkout:
 
 | ID | Password | Plan | Notes |
 | --- | --- | --- | --- |
-| `admin` | `admin1234` | Academy | Full premium — every entitlement unlocked |
+| `admin` | `admin1234` | Academy | Academy catalog example; unfinished organization features remain unavailable |
 | `test1` | `test1234` | Free | Free tier |
 | `test2` | `test1234` | Pro | Pro tier |
 | `test3` | `test1234` | Academy | Enterprise tier |
@@ -28,7 +28,9 @@ In production, there is no default account. Set one of these on the server befor
 
 - Single teacher: `TEACHER_LOGIN_ID`, optional `TEACHER_EMAIL`/`TEACHER_NAME`/`TEACHER_PLAN`, and `TEACHER_PASSWORD`
 - Multiple teachers: `TEACHER_ACCOUNTS` as a JSON array, for example `[{"id":"teacher1","email":"teacher1@example.com","name":"Teacher 1","password":"change-me","plan":"pro"}]`
-- Optional per-account `plan` (`free` | `pro` | `academy`, `academy` = full premium) is applied to the browser on login; omit it to leave the browser's current plan untouched
+- `omr_organizations.plan` is the authoritative plan when Supabase service-role access is configured. Browser `omr_plan` values are display caches only and never authorize paid mutations.
+- Without a server plan store, paid mutations fail closed. Local development may opt into the process-local simulator with `OMR_PLAN_DEV_SIMULATION=1` and `OMR_DEV_PLAN=free|pro|academy`; this override is ignored in production.
+- Academy is a catalog tier, not a promise that every listed organization feature is implemented. Billing readiness labels are the source of truth for unavailable/partial features.
 - Recommended for server-side route guards: `TEACHER_SESSION_SECRET`
 
 Teacher login is currently backed by server environment variables, not Supabase Auth. If a deployed build only says the credentials are invalid, check the deployment provider's environment variables and redeploy before checking Supabase.
@@ -104,8 +106,8 @@ SUPABASE_SERVICE_ROLE_KEY=server_only_service_role_key_for_workspace_bootstrap
 
 See `supabase/README.md` for details, the current RLS warning, and the production RLS handoff.
 
-The alpha schema includes organization, member, class, exam, attempt, and audit-log tables. Current saves use an interim teacher-scoped `teacher_<hash>` organization id when a teacher session is active. `SUPABASE_SERVICE_ROLE_KEY` is optional and server-only; when set, teacher login bootstraps the matching workspace/member/profile rows from the server. Current `schema.sql` RLS policies are open only for alpha/local testing; configure Supabase Auth, fill real `organization_id`/membership rows, and apply `supabase/production-rls.sql` before storing real student data.
+The alpha schema includes organization, member, class, exam, attempt, plan-usage, and audit-log tables. Current saves use an interim teacher-scoped `teacher_<hash>` organization id when a teacher session is active. `SUPABASE_SERVICE_ROLE_KEY` is required for authoritative plan lookup and atomic quota reservation; when set, teacher login also bootstraps the matching workspace/member/profile rows from the server. Current `schema.sql` business-data RLS policies are open only for alpha/local testing (plan-usage tables remain server-only); configure Supabase Auth, fill real `organization_id`/membership rows, and apply `supabase/production-rls.sql` before storing real student data.
 
 ## Answer-Key Recognition
 
-Answer PDFs can be parsed with PDF text extraction or Gemini image recognition. Recognition usage is counted locally as `omr_ai_usage` and shown on the billing page as AI answer-key recognition usage.
+Answer PDFs can be parsed with PDF text extraction or Gemini image recognition. Shared platform-key recognition consumes an atomic server-side monthly quota after signed-teacher authentication; failed provider calls release the reservation. A teacher-supplied personal API key is billed to that teacher and is deliberately excluded from the platform quota. The browser `omr_ai_usage` value is UX telemetry only.

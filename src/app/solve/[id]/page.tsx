@@ -16,7 +16,7 @@ import { loadExamForSolving, submitAttempt } from "@/app/actions/studentExam";
 import { issueGuestSession, validateStudentSession } from "@/app/actions/studentSession";
 import { saveTeacherSessionWithIdentity } from "@/lib/teacherSession";
 import { getOrCreateGuestId, getSession, guestLoginIdFor, saveSession, type StudentSession } from "@/utils/storage";
-import { canArchiveHandwriting, getCurrentPlan, getPlanLabel } from "@/utils/plans";
+import { canArchiveHandwriting, getPlanLabel } from "@/utils/plans";
 import { loadExam as loadPersistedExam, readLocalExam, saveAttempt, saveLocalAttempt } from "@/lib/omrPersistence";
 import { buildQuestionResults } from "@/lib/premiumAnalytics";
 import { summarizeQuestionDrawings } from "@/lib/handwritingAnalytics";
@@ -29,7 +29,9 @@ import {
 } from "@/lib/studentExamClient";
 import type { SubmitAttemptInput } from "@/lib/studentExamCore";
 import { remainingSecondsWithinWindow } from "@/lib/studentExamCore";
+import { findMissingRequiredSubQuestions, requiredSubQuestionProgress, sanitizeSubQuestionAnswersForQuestions } from "@/lib/subQuestions";
 import { summarizePersistenceWrite } from "@/lib/persistenceFeedback";
+import { stripTeacherOnlySubQuestionFields, type SolvableExam } from "@/lib/examSolvePayload";
 
 const PDFViewer = dynamic(() => import("@/components/PDFViewer"), { ssr: false });
 import { DEFAULT_CHOICE_COUNT, gradeAttempt, questionChoiceCount } from "@/types/omr";
@@ -43,6 +45,7 @@ import type {
     QuestionTiming,
     RetakeMetadata,
     StoredDataRef,
+    SubQuestionAnswers,
 } from "@/types/omr";
 
 const AUTOSAVE_INTERVAL_MS = 3000;
@@ -50,6 +53,7 @@ const OMR_PANEL_STORAGE_PREFIX = "omr_solve_panel";
 
 interface SolveDraft {
     answers: Record<number, number>;
+    subQuestionAnswers?: SubQuestionAnswers;
     /** Legacy inline drawings. New drafts store large handwriting payloads in IndexedDB. */
     drawings?: PdfDrawings;
     drawingsRef?: StoredDataRef;
@@ -643,6 +647,7 @@ export default function SolvePage() {
     const [solveStatus, setSolveStatus] = useState<SolveAccessStatus | "loading">("loading");
     const [loadError, setLoadError] = useState<SolveLoadError | null>(null);
     const [studentAnswers, setStudentAnswers] = useState<Record<number, number>>({});
+    const [subQuestionAnswers, setSubQuestionAnswers] = useState<SubQuestionAnswers>({});
     const [drawings, setDrawings] = useState<PdfDrawings>({});
     const [pdfFile, setPdfFile] = useState<File | null>(null);
     const [currentPlan, setCurrentPlan] = useState<PlanKey>("free");
@@ -684,6 +689,7 @@ export default function SolvePage() {
     const submittedRef = useRef(false);
     const submissionIdRef = useRef("");
     const studentAnswersRef = useRef<Record<number, number>>({});
+    const subQuestionAnswersRef = useRef<SubQuestionAnswers>({});
     const latestDraftRef = useRef<SolveDraft | null>(null);
     const autosaveErrorShownRef = useRef(false);
     const examQuestionsRef = useRef<Question[]>([]);
@@ -880,6 +886,7 @@ export default function SolvePage() {
         const draftDrawings = compactDrawings(draftSnapshot.drawings || {});
         const lightweightDraft: SolveDraft = {
             answers: draftSnapshot.answers,
+            subQuestionAnswers: draftSnapshot.subQuestionAnswers,
             drawingsRef: draftSnapshot.drawingsRef,
             timeRemaining: draftSnapshot.timeRemaining,
             startedAt: draftSnapshot.startedAt,
@@ -953,8 +960,12 @@ export default function SolvePage() {
      * until the PIN passes, so PIN-gated exams fully initialize on PIN success).
      */
     const applyLoadedExam = useCallback(
-        async (parsed: Exam, source: ExamSource, session: StudentSession | null, pinAlreadyVerified = false) => {
+        async (parsed: Exam & Partial<Pick<SolvableExam, "premiumCapabilities">>, source: ExamSource, session: StudentSession | null, pinAlreadyVerified = false) => {
             try {
+                // Server payloads carry an organization-plan capability. Local
+                // fallback has no trusted plan source and therefore stays Free.
+                setCurrentPlan(source === "server" && parsed.premiumCapabilities?.handwritingArchive ? "pro" : "free");
+                parsed = stripTeacherOnlySubQuestionFields(parsed);
                 setLoadError(null);
                 examQuestionsRef.current = parsed.questions;
                 setExamData(parsed);
@@ -1033,10 +1044,15 @@ export default function SolvePage() {
                     if (draftStr) {
                         const draft = JSON.parse(draftStr) as Partial<SolveDraft>;
                         const restoredAnswers = draft.answers && typeof draft.answers === "object" ? draft.answers : {};
+                        const restoredSubQuestionAnswers = draft.subQuestionAnswers && typeof draft.subQuestionAnswers === "object"
+                            ? draft.subQuestionAnswers
+                            : {};
                         if (Object.keys(restoredAnswers).length > 0) {
                             studentAnswersRef.current = restoredAnswers;
                             setStudentAnswers(restoredAnswers);
                         }
+                        subQuestionAnswersRef.current = restoredSubQuestionAnswers;
+                        setSubQuestionAnswers(restoredSubQuestionAnswers);
                         let loadedDrawings: unknown = null;
                         if (draft.drawingsRef) {
                             try {
@@ -1075,6 +1091,7 @@ export default function SolvePage() {
                         }
                         latestDraftRef.current = {
                             answers: restoredAnswers,
+                            subQuestionAnswers: restoredSubQuestionAnswers,
                             drawings: recovery.drawings || {},
                             drawingsRef: draft.drawingsRef,
                             timeRemaining: restoredTimeRemaining,
@@ -1105,8 +1122,6 @@ export default function SolvePage() {
     );
 
     useEffect(() => {
-        setCurrentPlan(getCurrentPlan());
-
         const currentSession = getSession();
         if (currentSession) setUser(currentSession);
 
@@ -1224,9 +1239,11 @@ export default function SolvePage() {
 
     useEffect(() => {
         studentAnswersRef.current = studentAnswers;
+        subQuestionAnswersRef.current = subQuestionAnswers;
         if (!submissionIdRef.current) submissionIdRef.current = createSubmissionId();
         latestDraftRef.current = {
             answers: studentAnswers,
+            subQuestionAnswers,
             drawings: compactDrawings(drawings),
             drawingsRef: latestDraftRef.current?.drawingsRef,
             timeRemaining,
@@ -1234,7 +1251,7 @@ export default function SolvePage() {
             submissionId: submissionIdRef.current,
             savedAt: new Date().toISOString(),
         };
-    }, [studentAnswers, drawings, timeRemaining, startedAt]);
+    }, [studentAnswers, subQuestionAnswers, drawings, timeRemaining, startedAt]);
 
     // Autosave draft every 3s. Keep this interval independent from the ticking timer.
     useEffect(() => {
@@ -1263,13 +1280,13 @@ export default function SolvePage() {
     useEffect(() => {
         const onBeforeUnload = (e: BeforeUnloadEvent) => {
             if (submittedRef.current) return;
-            if (Object.keys(studentAnswers).length === 0 && !hasDrawings(drawings)) return;
+            if (Object.keys(studentAnswers).length === 0 && Object.keys(subQuestionAnswers).length === 0 && !hasDrawings(drawings)) return;
             e.preventDefault();
             e.returnValue = "";
         };
         window.addEventListener("beforeunload", onBeforeUnload);
         return () => window.removeEventListener("beforeunload", onBeforeUnload);
-    }, [studentAnswers, drawings]);
+    }, [studentAnswers, subQuestionAnswers, drawings]);
 
     const handleAnswerClick = (qId: number, optionIndex: number) => {
         const nowMs = Date.now();
@@ -1294,6 +1311,7 @@ export default function SolvePage() {
         }
         const nextDraft: SolveDraft = {
             answers: nextAnswers,
+            subQuestionAnswers: subQuestionAnswersRef.current,
             drawings: compactDrawings(drawings),
             drawingsRef: latestDraftRef.current?.drawingsRef,
             timeRemaining,
@@ -1308,14 +1326,36 @@ export default function SolvePage() {
         void saveDraftSnapshot(nextDraft);
     };
 
+    const handleSubQuestionAnswer = (questionId: number, subQuestionId: string, body: string, maxLength: number) => {
+        const trimmedToLimit = body.slice(0, maxLength);
+        const current = subQuestionAnswersRef.current;
+        const questionAnswers = { ...(current[questionId] || {}) };
+        if (trimmedToLimit.trim()) {
+            questionAnswers[subQuestionId] = {
+                schemaVersion: 1,
+                body: trimmedToLimit,
+                answeredAt: new Date().toISOString(),
+                reviewStatus: 'needs_review',
+            };
+        } else {
+            delete questionAnswers[subQuestionId];
+        }
+        const next = { ...current };
+        if (Object.keys(questionAnswers).length > 0) next[questionId] = questionAnswers;
+        else delete next[questionId];
+        subQuestionAnswersRef.current = next;
+        setSubQuestionAnswers(next);
+    };
+
     const handleQuestionClick = (qId: number) => {
         beginQuestionVisit(qId);
-        // Selecting a question returns focus to the problem sheet. The header
-        // toggle and floating rail remain available to reopen the answer panel.
-        setIsOMRCollapsed(true);
         if (examData) {
             const activeQuestion = getActiveExamQuestions().find(q => q.id === qId);
             const q = activeQuestion || examData.questions.find(q => q.id === qId);
+            // Keep the answer pane open when this question asks for a written
+            // response; plain OMR questions still return focus to the PDF.
+            setIsOMRCollapsed(true);
+            if (q?.subQuestions?.length) setIsOMRCollapsed(false);
             const focusAnchor = q?.pdfLocation
                 ? q.pdfLocation
                 : q?.pdfRegion
@@ -1452,6 +1492,7 @@ export default function SolvePage() {
             examId: id,
             submissionId,
             answers: studentAnswers,
+            subQuestionAnswers,
             startedAt,
             autoSubmitted,
             tabFociLostCount,
@@ -1475,6 +1516,10 @@ export default function SolvePage() {
         // Never used for a server-sourced session (its payload has no answers).
         const buildLocalGradedAttempt = async (input: SubmitAttemptInput): Promise<Attempt | null> => {
             const graded = gradeAttempt(activeExamQuestions, input.answers);
+            const finishedAt = new Date().toISOString();
+            const safeSubQuestionAnswers = sanitizeSubQuestionAnswersForQuestions(activeExamQuestions, input.subQuestionAnswers, finishedAt);
+            const missingRequired = findMissingRequiredSubQuestions(activeExamQuestions, safeSubQuestionAnswers);
+            if (!input.autoSubmitted && missingRequired.length > 0) return null;
             const attemptData: Attempt = {
                 id: attemptId,
                 examId: id,
@@ -1488,10 +1533,12 @@ export default function SolvePage() {
                 identityType: activeSubmitter.identityType || (activeSubmitter.isGuest ? 'guest' : 'temporary'),
                 guestId: activeSubmitter.guestId,
                 startedAt: input.startedAt,
-                finishedAt: new Date().toISOString(),
+                finishedAt,
                 score: graded.earnedScore,
                 totalScore: graded.totalScore,
                 answers: input.answers,
+                subQuestionAnswers: Object.keys(safeSubQuestionAnswers).length > 0 ? safeSubQuestionAnswers : undefined,
+                missingRequiredSubQuestions: input.autoSubmitted && missingRequired.length > 0 ? missingRequired : undefined,
                 drawings: input.drawings,
                 drawingsRef: input.drawingsRef,
                 handwriting: input.handwriting,
@@ -1576,6 +1623,14 @@ export default function SolvePage() {
     const handleSubmit = () => {
         if (!examData) return;
         const activeExamQuestions = getActiveExamQuestions();
+        const missingRequired = findMissingRequiredSubQuestions(activeExamQuestions, subQuestionAnswers);
+        if (missingRequired.length > 0) {
+            const first = activeExamQuestions.find(question => question.id === missingRequired[0].questionId);
+            if (first) beginQuestionVisit(first.id);
+            setIsOMRCollapsed(false);
+            toast.error('필수 심화 응답 확인', `${first?.number || ''}번 문항부터 필수 하위 질문 ${missingRequired.length}개를 작성해 주세요.`);
+            return;
+        }
         const totalQ = activeExamQuestions.length;
         const answeredCount = activeExamQuestions.filter(q => {
             const answer = studentAnswers[q.id];
@@ -1784,6 +1839,7 @@ export default function SolvePage() {
         ? `${activeQuestionDrawingCount}문항 · ${activeDrawingStrokeCount}획`
         : `${activeDrawingStrokeCount}획`;
     const currentQuestion = activeExamQuestions.find(q => q.id === currentQuestionId) || null;
+    const requiredSubProgress = requiredSubQuestionProgress(activeExamQuestions, subQuestionAnswers);
     const quickAnswerQuestion = currentQuestion || nextUnansweredQuestion || activeExamQuestions[0] || null;
     const quickAnswerChoiceCount = quickAnswerQuestion
         ? questionChoiceCount(quickAnswerQuestion, DEFAULT_CHOICE_COUNT)
@@ -1888,6 +1944,11 @@ export default function SolvePage() {
                         }}>
                             {answeredCount}/{totalQuestions}
                         </span>
+                        {requiredSubProgress.total > 0 && (
+                            <span style={{ fontSize: '0.72rem', fontWeight: 800, color: requiredSubProgress.completed === requiredSubProgress.total ? 'var(--success)' : 'var(--warning)', whiteSpace: 'nowrap' }}>
+                                필수 심화 {requiredSubProgress.completed}/{requiredSubProgress.total}
+                            </span>
+                        )}
                     </div>
 
                     {/* Autosave indicator */}
@@ -2210,6 +2271,32 @@ export default function SolvePage() {
                         </div>
                     </div>
                     <div style={{ flex: 1, overflowY: 'auto' }} className="scroll-custom solve-omr-scroll">
+                        {currentQuestion?.subQuestions?.length ? (
+                            <section aria-label={`${currentQuestion.number}번 심화 응답`} style={{ margin: '0.75rem', padding: '0.75rem', border: '1px solid var(--border)', borderRadius: 'var(--radius-md)', background: 'var(--surface)', display: 'grid', gap: '0.7rem' }}>
+                                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '0.5rem' }}>
+                                    <strong style={{ fontSize: '0.82rem' }}>{currentQuestion.number}번 심화 응답</strong>
+                                    <span style={{ fontSize: '0.68rem', color: 'var(--muted)' }}>점수에는 반영되지 않습니다</span>
+                                </div>
+                                {currentQuestion.subQuestions.map((subQuestion, index) => {
+                                    const maxLength = subQuestion.maxLength || 300;
+                                    const value = subQuestionAnswers[currentQuestion.id]?.[subQuestion.id]?.body || '';
+                                    return (
+                                        <label key={subQuestion.id} style={{ display: 'grid', gap: '0.3rem', fontSize: '0.76rem', fontWeight: 800 }}>
+                                            <span>{String.fromCharCode(65 + index)}. {subQuestion.prompt} {subQuestion.required && <em style={{ color: 'var(--error)', fontStyle: 'normal' }}>(필수)</em>}</span>
+                                            <textarea
+                                                value={value}
+                                                maxLength={maxLength}
+                                                onChange={event => handleSubQuestionAnswer(currentQuestion.id, subQuestion.id, event.target.value, maxLength)}
+                                                placeholder="생각이나 근거를 짧게 적어주세요."
+                                                className="input-field"
+                                                style={{ minHeight: 72, resize: 'vertical', padding: '0.55rem', fontSize: '0.8rem', lineHeight: 1.5 }}
+                                            />
+                                            <span style={{ justifySelf: 'end', color: 'var(--muted)', fontSize: '0.66rem', fontWeight: 600 }}>{value.length}/{maxLength}</span>
+                                        </label>
+                                    );
+                                })}
+                            </section>
+                        ) : null}
                         <OMRCardView
                             title={examData.title}
                             questions={activeExamQuestions}

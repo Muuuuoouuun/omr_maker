@@ -63,6 +63,57 @@
   --app-keyboard-inset-bottom: 0px;
 }
 
+/* ─── Teacher attempt summary — print / save to PDF ──────────────────── */
+@media print {
+  html:has(.teacher-attempt-page),
+  body:has(.teacher-attempt-page) {
+    width: auto !important;
+    height: auto !important;
+    overflow: visible !important;
+    background: #fff !important;
+  }
+
+  body:has(.teacher-attempt-page) * {
+    visibility: visible !important;
+  }
+
+  .teacher-attempt-print-hide,
+  .teacher-attempt-page .teacher-attempt-detail,
+  .teacher-attempt-page button,
+  .teacher-attempt-page textarea,
+  .teacher-attempt-page a.btn {
+    display: none !important;
+  }
+
+  .teacher-attempt-page,
+  .teacher-attempt-main {
+    background: #fff !important;
+  }
+
+  .teacher-attempt-main {
+    padding: 12mm !important;
+    max-width: none !important;
+  }
+
+  .teacher-attempt-layout {
+    display: block !important;
+  }
+
+  .teacher-attempt-sidebar {
+    display: grid !important;
+    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+    align-items: start !important;
+    gap: 8mm !important;
+  }
+
+  .teacher-attempt-page .bento-card {
+    box-shadow: none !important;
+    break-inside: avoid;
+    border: 1px solid #cbd5e1 !important;
+    background: #fff !important;
+  }
+}
+
 /* ─── Student Review Workbench ───────────────────────── */
 .student-review-page {
   min-height: 100vh;

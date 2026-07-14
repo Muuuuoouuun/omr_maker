@@ -25,6 +25,7 @@ import { attemptBelongsToSession, getSession } from "@/utils/storage";
 import { loadAttempt, loadExam, saveAttempt, saveLocalAttempt } from "@/lib/omrPersistence";
 import { askAttemptQuestion, loadExamForReview, loadMyAttempt } from "@/app/actions/studentExam";
 import { loadMyAttemptClient, loadReviewExamClient } from "@/lib/studentExamClient";
+import { stripTeacherOnlySubQuestionFields } from "@/lib/examSolvePayload";
 import { studentQuestionsByQuestionId, upsertStudentQuestion } from "@/lib/studentQuestions";
 import { buildAttemptRetakeRecovery } from "@/lib/retakeRecovery";
 import { toast } from "@/components/Toast";
@@ -163,6 +164,7 @@ function QuestionCard({
     questionBoxOpen,
     draft,
     submittedQuestion,
+    subQuestionAnswers,
     retakeHref,
     onToggleExplanation,
     onToggleQuestionBox,
@@ -179,6 +181,7 @@ function QuestionCard({
     questionBoxOpen: boolean;
     draft: string;
     submittedQuestion?: StudentQuestionNote;
+    subQuestionAnswers?: NonNullable<Attempt["subQuestionAnswers"]>[number];
     retakeHref: string;
     onToggleExplanation: () => void;
     onToggleQuestionBox: () => void;
@@ -266,6 +269,25 @@ function QuestionCard({
             {hasExplanation && explanationOpen && (
                 <div className="student-review-explanation">
                     {question.explanation}
+                </div>
+            )}
+
+            {!!question.subQuestions?.length && (
+                <div style={{ marginTop: '0.75rem', padding: '0.75rem', borderRadius: 'var(--radius-md)', border: '1px solid var(--border)', background: 'var(--background)', display: 'grid', gap: '0.6rem' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', gap: '0.5rem', alignItems: 'center' }}>
+                        <strong style={{ fontSize: '0.8rem' }}>내 심화 응답</strong>
+                        <span style={{ fontSize: '0.68rem', color: 'var(--muted)' }}>점수 미반영</span>
+                    </div>
+                    {question.subQuestions.map((subQuestion, index) => {
+                        const answer = subQuestionAnswers?.[subQuestion.id];
+                        return (
+                            <div key={subQuestion.id} style={{ display: 'grid', gap: '0.25rem' }}>
+                                <span style={{ color: 'var(--muted)', fontSize: '0.72rem', fontWeight: 800 }}>{String.fromCharCode(65 + index)}. {subQuestion.prompt}</span>
+                                <div style={{ whiteSpace: 'pre-wrap', fontSize: '0.82rem', lineHeight: 1.55, color: answer ? 'var(--foreground)' : 'var(--muted)' }}>{answer?.body || '작성하지 않음'}</div>
+                                {answer?.reviewStatus === 'reviewed' && <span style={{ color: 'var(--success)', fontSize: '0.66rem', fontWeight: 800 }}>선생님 검토 완료</span>}
+                            </div>
+                        );
+                    })}
                 </div>
             )}
 
@@ -472,7 +494,10 @@ export default function ReviewPage() {
                 // (post-submit), PIN and answer-key PDF withheld server-side.
                 const examResult = await loadReviewExamClient(found.id, {
                     server: (attemptId) => loadExamForReview(attemptId),
-                    localFallback: () => loadExam(found.examId),
+                    localFallback: async () => {
+                        const localExam = await loadExam(found.examId);
+                        return localExam ? stripTeacherOnlySubQuestionFields(localExam) : null;
+                    },
                 });
                 const parsedExam = examResult.status === "ok" ? examResult.exam ?? null : null;
                 if (parsedExam && !cancelled) {
@@ -1053,6 +1078,7 @@ export default function ReviewPage() {
                                             questionBoxOpen={!!openQuestionBoxes[selectedQuestion.id]}
                                             draft={questionDrafts[selectedQuestion.id] || ""}
                                             submittedQuestion={studentQuestions[selectedQuestion.id]}
+                                            subQuestionAnswers={attempt.subQuestionAnswers?.[selectedQuestion.id]}
                                             retakeHref={buildRetakeHref(attempt.examId, attempt.id, [selectedQuestion.id], "custom")}
                                             onToggleExplanation={() => toggleExplanation(selectedQuestion.id)}
                                             onToggleQuestionBox={() => toggleQuestionBox(selectedQuestion.id)}

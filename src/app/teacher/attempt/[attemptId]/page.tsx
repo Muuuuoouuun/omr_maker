@@ -5,9 +5,10 @@ import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
 import dynamic from "next/dynamic";
 import { Download, ListChecks, Lock, MessageSquare, PenLine, Repeat2, Send, Target } from "lucide-react";
-import type { Attempt, Exam, PdfDrawings, PlanKey, QuestionResult } from "@/types/omr";
+import type { Attempt, Exam, PdfDrawings, QuestionResult } from "@/types/omr";
 import { loadJsonRecord, storedDataUrlToFile } from "@/utils/blobStore";
-import { getCurrentPlan, getPlanLabel, hasPlanEntitlement } from "@/utils/plans";
+import { getPlanLabel, hasPlanEntitlement } from "@/utils/plans";
+import { useServerPlan } from "@/lib/useServerPlan";
 import { formatKoreanDateTime } from "@/lib/pure";
 import { safeScorePercent } from "@/lib/scoreUtils";
 import { readActiveWorkspaceContext } from "@/lib/workspaceContext";
@@ -24,6 +25,7 @@ import {
 import { hasTeacherSession, readTeacherSession } from "@/lib/teacherSession";
 import { buildRetakeHref } from "@/lib/retakeLinks";
 import ThemeToggle from "@/components/ThemeToggle";
+import { summarizePersistenceWrite } from "@/lib/persistenceFeedback";
 
 const PDFViewer = dynamic(() => import("@/components/PDFViewer"), { ssr: false });
 
@@ -50,7 +52,7 @@ export default function TeacherAttemptPage() {
     const [pdfFile, setPdfFile] = useState<File | null>(null);
     const [accessDenied, setAccessDenied] = useState(false);
     const [handwritingUnavailable, setHandwritingUnavailable] = useState(false);
-    const [currentPlan] = useState<PlanKey>(() => getCurrentPlan());
+    const { plan: currentPlan } = useServerPlan();
     const [loaded, setLoaded] = useState(false);
     const [answerDrafts, setAnswerDrafts] = useState<Record<number, string>>({});
     const [savingAnswerFor, setSavingAnswerFor] = useState<number | null>(null);
@@ -58,6 +60,8 @@ export default function TeacherAttemptPage() {
     const [wrongExpanded, setWrongExpanded] = useState(false);
     const [allQuestionsOpen, setAllQuestionsOpen] = useState(false);
     const [allQuestionsWrongOnly, setAllQuestionsWrongOnly] = useState(false);
+    const [subQuestionFilter, setSubQuestionFilter] = useState<'needs_review' | 'all'>('needs_review');
+    const [savingSubQuestionKey, setSavingSubQuestionKey] = useState<string | null>(null);
     const pdfExportEnabled = hasPlanEntitlement(currentPlan, "pdfExport");
     const handwritingArchiveEnabled = hasPlanEntitlement(currentPlan, "handwritingArchive");
 
@@ -222,6 +226,49 @@ export default function TeacherAttemptPage() {
     const studentQuestionNotes = attempt.studentQuestions || [];
     const pendingQuestionCount = studentQuestionNotes.filter(note => note.status !== "answered").length;
     const answeredQuestionCount = studentQuestionNotes.length - pendingQuestionCount;
+    const subQuestionRows = (exam?.questions || []).flatMap(question => (question.subQuestions || []).map(subQuestion => ({
+        question,
+        subQuestion,
+        answer: attempt.subQuestionAnswers?.[question.id]?.[subQuestion.id],
+    })));
+    const answeredSubQuestionRows = subQuestionRows.filter(row => !!row.answer?.body);
+    const pendingSubQuestionCount = answeredSubQuestionRows.filter(row => row.answer?.reviewStatus !== 'reviewed').length;
+    const visibleSubQuestionRows = subQuestionFilter === 'needs_review'
+        ? answeredSubQuestionRows.filter(row => row.answer?.reviewStatus !== 'reviewed')
+        : subQuestionRows;
+
+    const setSubQuestionReviewed = async (questionId: number, subQuestionId: string, reviewed: boolean) => {
+        const currentAnswer = attempt.subQuestionAnswers?.[questionId]?.[subQuestionId];
+        if (!currentAnswer) return;
+        const key = `${questionId}:${subQuestionId}`;
+        setSavingSubQuestionKey(key);
+        const next: Attempt = {
+            ...attempt,
+            subQuestionAnswers: {
+                ...(attempt.subQuestionAnswers || {}),
+                [questionId]: {
+                    ...(attempt.subQuestionAnswers?.[questionId] || {}),
+                    [subQuestionId]: {
+                        ...currentAnswer,
+                        reviewStatus: reviewed ? 'reviewed' : 'needs_review',
+                        reviewedAt: reviewed ? new Date().toISOString() : undefined,
+                        reviewedBy: reviewed ? readTeacherSession()?.displayName : undefined,
+                    },
+                },
+            },
+        };
+        try {
+            const result = await saveAttempt(next);
+            const feedback = summarizePersistenceWrite(result, { target: '심화 응답 검토 상태', action: '저장' });
+            if (!feedback.ok) throw new Error(feedback.detail);
+            setAttempt(next);
+            if (feedback.level === 'info') toast.info(feedback.title, feedback.detail);
+        } catch {
+            toast.error('검토 상태 저장 실패', '네트워크 상태를 확인하고 다시 시도해 주세요.');
+        } finally {
+            setSavingSubQuestionKey(null);
+        }
+    };
     const handleAnswerQuestion = async (questionId: number) => {
         const body = (answerDrafts[questionId] || "").trim();
         if (!body) return;
@@ -311,8 +358,8 @@ export default function TeacherAttemptPage() {
     };
 
     return (
-        <div className="layout-main" style={{ minHeight: '100vh', background: 'var(--background)' }}>
-            <header className="header">
+        <div className="layout-main teacher-attempt-page" style={{ minHeight: '100vh', background: 'var(--background)' }}>
+            <header className="header teacher-attempt-print-hide">
                 <div className="container header-content">
                     <div style={{ display: 'flex', alignItems: 'center', gap: '1rem', minWidth: 0 }}>
                         <button
@@ -334,21 +381,23 @@ export default function TeacherAttemptPage() {
                             <button
                                 type="button"
                                 onClick={() => window.print()}
+                                title="현재 결과 요약을 브라우저 인쇄 창에서 인쇄하거나 PDF로 저장합니다."
+                                aria-label="현재 결과 요약 인쇄 또는 PDF 저장"
                                 className="btn btn-secondary"
                                 style={{ fontSize: '0.85rem', display: 'inline-flex', alignItems: 'center', gap: '0.35rem' }}
                             >
                                 <Download size={14} />
-                                PDF 리포트
+                                인쇄 / PDF 저장
                             </button>
                         ) : (
                             <Link
                                 href="/teacher/billing"
-                                title="Pro 이상에서 PDF 리포트를 출력할 수 있습니다."
+                                title="Pro 이상에서 현재 결과 요약을 인쇄하거나 PDF로 저장할 수 있습니다."
                                 className="btn btn-secondary"
                                 style={{ fontSize: '0.85rem', display: 'inline-flex', alignItems: 'center', gap: '0.35rem', color: 'var(--muted)' }}
                             >
                                 <Lock size={14} />
-                                PDF 리포트 Pro
+                                인쇄/PDF 저장 Pro
                             </Link>
                         )}
                         <Link href={`/teacher/exam/${attempt.examId}`} className="btn btn-secondary" style={{ fontSize: '0.85rem' }}>
@@ -359,7 +408,7 @@ export default function TeacherAttemptPage() {
                 </div>
             </header>
 
-            <main className="container" style={{ padding: '1.5rem 1rem 2.5rem' }}>
+            <main className="container teacher-attempt-main" style={{ padding: '1.5rem 1rem 2.5rem' }}>
                 {examUnavailable && (
                     <div style={{
                         marginBottom: '1rem',
@@ -419,6 +468,43 @@ export default function TeacherAttemptPage() {
                                 </div>
                             )}
                         </div>
+
+                        {subQuestionRows.length > 0 && (
+                            <div className="bento-card" style={{ padding: '1.25rem' }}>
+                                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '0.75rem', marginBottom: '0.8rem' }}>
+                                    <div>
+                                        <div style={{ fontWeight: 900 }}>심화 응답 검토</div>
+                                        <div style={{ fontSize: '0.72rem', color: 'var(--muted)', marginTop: 2 }}>응답 {answeredSubQuestionRows.length}/{subQuestionRows.length} · 검토 필요 {pendingSubQuestionCount}</div>
+                                    </div>
+                                    <div style={{ display: 'flex', gap: '0.3rem' }} role="group" aria-label="심화 응답 필터">
+                                        <button type="button" className={`btn ${subQuestionFilter === 'needs_review' ? 'btn-primary' : 'btn-secondary'}`} onClick={() => setSubQuestionFilter('needs_review')} style={{ fontSize: '0.68rem', padding: '0.3rem 0.45rem' }}>검토 필요</button>
+                                        <button type="button" className={`btn ${subQuestionFilter === 'all' ? 'btn-primary' : 'btn-secondary'}`} onClick={() => setSubQuestionFilter('all')} style={{ fontSize: '0.68rem', padding: '0.3rem 0.45rem' }}>전체</button>
+                                    </div>
+                                </div>
+                                {visibleSubQuestionRows.length > 0 ? (
+                                    <div style={{ display: 'grid', gap: '0.55rem' }}>
+                                        {visibleSubQuestionRows.map(({ question, subQuestion, answer }) => {
+                                            const key = `${question.id}:${subQuestion.id}`;
+                                            return (
+                                                <div key={key} style={{ padding: '0.7rem', border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)', background: 'var(--background)' }}>
+                                                    <div style={{ display: 'flex', justifyContent: 'space-between', gap: '0.5rem', alignItems: 'start' }}>
+                                                        <strong style={{ fontSize: '0.78rem' }}>{question.number}번 · {subQuestion.prompt}</strong>
+                                                        <span style={{ color: answer?.reviewStatus === 'reviewed' ? 'var(--success)' : answer ? 'var(--warning)' : 'var(--muted)', fontSize: '0.68rem', fontWeight: 900, whiteSpace: 'nowrap' }}>{answer?.reviewStatus === 'reviewed' ? '검토 완료' : answer ? '검토 필요' : '미응답'}</span>
+                                                    </div>
+                                                    <div style={{ marginTop: '0.45rem', whiteSpace: 'pre-wrap', fontSize: '0.8rem', lineHeight: 1.55, color: answer ? 'var(--foreground)' : 'var(--muted)' }}>{answer?.body || '작성된 응답이 없습니다.'}</div>
+                                                    {subQuestion.answerGuide && <div style={{ marginTop: '0.4rem', paddingTop: '0.4rem', borderTop: '1px dashed var(--border)', fontSize: '0.7rem', color: 'var(--muted)' }}>교사용 가이드: {subQuestion.answerGuide}</div>}
+                                                    {answer && (
+                                                        <button type="button" className="btn btn-secondary" disabled={savingSubQuestionKey === key} onClick={() => void setSubQuestionReviewed(question.id, subQuestion.id, answer.reviewStatus !== 'reviewed')} style={{ width: '100%', marginTop: '0.5rem', fontSize: '0.7rem', padding: '0.32rem' }}>{answer.reviewStatus === 'reviewed' ? '검토 필요로 되돌리기' : '검토 완료'}</button>
+                                                    )}
+                                                </div>
+                                            );
+                                        })}
+                                    </div>
+                                ) : (
+                                    <div style={{ color: 'var(--success)', fontSize: '0.8rem', fontWeight: 800 }}>검토가 필요한 심화 응답이 없습니다.</div>
+                                )}
+                            </div>
+                        )}
 
                         {analytics && (
                             <div className="bento-card" style={{ padding: '1.25rem' }}>

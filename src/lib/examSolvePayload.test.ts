@@ -44,6 +44,23 @@ describe("stripExamForSolving", () => {
         expect("explanation" in solvable.questions[0]).toBe(false);
         expect(JSON.stringify(solvable)).not.toContain("정답은 3번");
     });
+
+    it("strips teacher-only sub-question guidance from solve payload", () => {
+        const solvable = stripExamForSolving({
+            ...EXAM,
+            questions: [{ id: 1, number: 1, answer: 3, subQuestions: [{
+                schemaVersion: 1,
+                id: "reason",
+                prompt: "왜 골랐나요?",
+                kind: "free_text",
+                answerGuide: "정답 근거",
+                teacherNote: "교사용 메모",
+            }] }],
+        });
+        expect(solvable.questions[0].subQuestions?.[0]).toMatchObject({ prompt: "왜 골랐나요?" });
+        expect(JSON.stringify(solvable)).not.toContain("정답 근거");
+        expect(JSON.stringify(solvable)).not.toContain("교사용 메모");
+    });
 });
 
 describe("stripExamForReview", () => {
@@ -66,5 +83,20 @@ describe("stripExamForReview", () => {
     it("keeps the problem PDF payload so review can render it", () => {
         const reviewable = stripExamForReview({ ...EXAM, pdfData: "data:application/pdf;base64,BBBB" });
         expect(reviewable.pdfData).toBe("data:application/pdf;base64,BBBB");
+    });
+
+    it("keeps student prompts but strips teacher-only guidance from review payload", () => {
+        const reviewable = stripExamForReview({
+            ...EXAM,
+            questions: [{ id: 1, number: 1, answer: 3, subQuestions: [{
+                schemaVersion: 1,
+                id: "reason",
+                prompt: "왜 골랐나요?",
+                kind: "free_text",
+                answerGuide: "정답 근거",
+            }] }],
+        });
+        expect(reviewable.questions[0].subQuestions?.[0].prompt).toBe("왜 골랐나요?");
+        expect(JSON.stringify(reviewable)).not.toContain("정답 근거");
     });
 });

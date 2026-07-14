@@ -34,14 +34,14 @@ describe("payment provider readiness", () => {
                 active: false,
                 publicKeyPresent: true,
                 missing: [],
-                label: "공개키 확인",
+                label: "공개키 확인 · checkout 미연동",
             }),
             expect.objectContaining({
                 provider: expect.objectContaining({ key: "naver", label: "네이버페이" }),
                 active: true,
                 publicKeyPresent: true,
                 missing: [],
-                label: "연결 대상 · 공개키 확인",
+                label: "연결 대상 · 공개키 확인 · checkout 미연동",
             }),
             expect.objectContaining({
                 provider: expect.objectContaining({ key: "kakao", label: "카카오페이" }),
@@ -68,7 +68,7 @@ describe("payment provider readiness", () => {
         });
     });
 
-    it("reports live readiness without pretending the server checkout adapter exists", () => {
+    it("blocks live mode until the server checkout adapter and webhook exist", () => {
         expect(getPaymentProviderReadiness({
             NEXT_PUBLIC_PAYMENT_PROVIDER_MODE: "live",
             NEXT_PUBLIC_PAYMENT_PROVIDER: "kakao",
@@ -76,12 +76,12 @@ describe("payment provider readiness", () => {
         })).toMatchObject({
             provider: { key: "kakao", label: "카카오페이" },
             mode: "live",
-            status: "ready",
-            label: "카카오페이 공개키 확인",
+            status: "blocked",
+            label: "카카오페이 checkout 서버 연동 필요",
             publicKeyPresent: true,
-            canRecordLocalPlanChange: true,
+            canRecordLocalPlanChange: false,
             canStartLiveCheckout: false,
-            missing: [],
+            missing: ["server checkout adapter", "webhook verification"],
         });
     });
 
