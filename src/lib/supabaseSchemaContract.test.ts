@@ -151,6 +151,7 @@ describe("Supabase schema contract", () => {
             "retake_question_ids",
             "merged_from_guest_id",
             "merged_at",
+            "idempotency_key",
             "payload",
             "started_at",
             "finished_at",
@@ -159,6 +160,26 @@ describe("Supabase schema contract", () => {
         expectIndex(schema, "omr_attempts_exam_region_idx");
         expectIndex(schema, "omr_attempts_student_profile_idx");
         expectIndex(schema, "omr_attempts_retake_idx");
+        // Submit idempotency: a client key maps to exactly one attempt row.
+        expectIndex(schema, "omr_attempts_idempotency_key_uidx");
+    });
+
+    it("provides the atomic submit and rate-limit RPCs the student server boundary relies on", () => {
+        expectColumns(schema, "omr_rate_limits", ["key", "count", "first_at", "updated_at"]);
+        for (const fn of [
+            "omr_submit_attempt",
+            "omr_rate_limit_hit",
+            "omr_rate_limit_peek",
+            "omr_rate_limit_reset",
+        ]) {
+            expect(schema, `${fn} function`).toMatch(
+                new RegExp(`create or replace function public\\.${fn}\\s*\\(`, "i"),
+            );
+        }
+        // The atomic submit must upsert (not blindly insert) so a retry cannot duplicate.
+        expect(schema).toMatch(/insert into public\.omr_attempts[\s\S]*?on conflict \(id\) do update/i);
+        // The counter increment must be a single on-conflict statement (atomic).
+        expect(schema).toMatch(/insert into public\.omr_rate_limits[\s\S]*?on conflict \(key\) do update/i);
     });
 
     it("keeps question result fact columns and indexes for wrong-question/type analytics", () => {

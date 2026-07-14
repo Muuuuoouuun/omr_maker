@@ -263,6 +263,7 @@ create table if not exists public.omr_attempts (
     retake_question_ids integer[] not null default '{}'::integer[],
     merged_from_guest_id text,
     merged_at timestamptz,
+    idempotency_key text,
     payload jsonb not null,
     started_at timestamptz not null,
     finished_at timestamptz not null
@@ -523,7 +524,8 @@ alter table public.omr_attempts
     add column if not exists retake_mode text,
     add column if not exists retake_question_ids integer[] not null default '{}'::integer[],
     add column if not exists merged_from_guest_id text,
-    add column if not exists merged_at timestamptz;
+    add column if not exists merged_at timestamptz,
+    add column if not exists idempotency_key text;
 
 alter table public.omr_question_results
     add column if not exists organization_id text,
@@ -792,6 +794,12 @@ create index if not exists omr_attempts_identity_idx
 create index if not exists omr_attempts_retake_idx
     on public.omr_attempts (exam_id, retake_mode, retake_source_attempt_id);
 
+-- Submit idempotency: a client idempotency key maps to exactly one attempt row.
+-- A retried/double submit reusing the key can never create a second attempt.
+create unique index if not exists omr_attempts_idempotency_key_uidx
+    on public.omr_attempts (idempotency_key)
+    where idempotency_key is not null;
+
 create index if not exists omr_exam_questions_exam_idx
     on public.omr_exam_questions (exam_id, question_number);
 
@@ -887,6 +895,156 @@ create index if not exists omr_comments_entity_idx
 
 create index if not exists omr_audit_logs_organization_id_idx
     on public.omr_audit_logs (organization_id, created_at desc);
+
+-- Atomic, cross-instance rate-limit counters (exam PIN brute-force guard).
+-- Replaces the previous per-process in-memory map. Only the trusted server /
+-- service role touches this table; no public policy is granted (see below).
+create table if not exists public.omr_rate_limits (
+    key text primary key,
+    count integer not null default 0,
+    first_at bigint not null,
+    updated_at timestamptz not null default now()
+);
+
+-- Atomic increment inside a rolling window. The `insert … on conflict do update`
+-- takes a row lock, so two concurrent hits can never both read the pre-increment
+-- count. When the window has elapsed the counter resets to 1 for a fresh window.
+create or replace function public.omr_rate_limit_hit(
+    p_key text,
+    p_window_ms bigint,
+    p_now bigint
+)
+returns jsonb
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+    result_count integer;
+    result_first bigint;
+begin
+    insert into public.omr_rate_limits (key, count, first_at, updated_at)
+        values (p_key, 1, p_now, now())
+    on conflict (key) do update set
+        count = case
+            when p_now - public.omr_rate_limits.first_at >= p_window_ms then 1
+            else public.omr_rate_limits.count + 1
+        end,
+        first_at = case
+            when p_now - public.omr_rate_limits.first_at >= p_window_ms then p_now
+            else public.omr_rate_limits.first_at
+        end,
+        updated_at = now()
+    returning count, first_at into result_count, result_first;
+
+    return jsonb_build_object('count', result_count, 'first_at', result_first);
+end;
+$$;
+
+create or replace function public.omr_rate_limit_peek(
+    p_key text,
+    p_window_ms bigint,
+    p_now bigint
+)
+returns jsonb
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+    row_state public.omr_rate_limits;
+begin
+    select * into row_state from public.omr_rate_limits where key = p_key;
+    if row_state.key is null then
+        return null;
+    end if;
+    if p_now - row_state.first_at >= p_window_ms then
+        return null;
+    end if;
+    return jsonb_build_object('count', row_state.count, 'first_at', row_state.first_at);
+end;
+$$;
+
+create or replace function public.omr_rate_limit_reset(p_key text)
+returns void
+language plpgsql
+security definer
+set search_path = ''
+as $$
+begin
+    delete from public.omr_rate_limits where key = p_key;
+end;
+$$;
+
+-- Atomic student submit: upsert the attempt and its question-result rows in ONE
+-- transaction (a plpgsql function body is a single implicit transaction) so a
+-- failure never leaves an attempt without its question results, or vice versa.
+-- Keyed on the attempt id (deterministic per idempotency key) and the
+-- (attempt_id, question_id) unique constraint, so a retry reconciles a partial
+-- write instead of duplicating rows.
+create or replace function public.omr_submit_attempt(
+    p_attempt jsonb,
+    p_results jsonb default '[]'::jsonb
+)
+returns public.omr_attempts
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+    attempt_row public.omr_attempts;
+begin
+    insert into public.omr_attempts
+    select * from jsonb_populate_record(null::public.omr_attempts, p_attempt)
+    on conflict (id) do update set
+        organization_id = excluded.organization_id,
+        class_id = excluded.class_id,
+        assignment_id = excluded.assignment_id,
+        student_profile_id = excluded.student_profile_id,
+        exam_id = excluded.exam_id,
+        student_name = excluded.student_name,
+        student_id = excluded.student_id,
+        group_id = excluded.group_id,
+        group_name = excluded.group_name,
+        region_id = excluded.region_id,
+        region_name = excluded.region_name,
+        identity_type = excluded.identity_type,
+        status = excluded.status,
+        score = excluded.score,
+        total_score = excluded.total_score,
+        score_percent = excluded.score_percent,
+        retake_source_attempt_id = excluded.retake_source_attempt_id,
+        retake_mode = excluded.retake_mode,
+        retake_question_ids = excluded.retake_question_ids,
+        merged_from_guest_id = excluded.merged_from_guest_id,
+        merged_at = excluded.merged_at,
+        idempotency_key = excluded.idempotency_key,
+        payload = excluded.payload,
+        started_at = excluded.started_at,
+        finished_at = excluded.finished_at
+    returning * into attempt_row;
+
+    if p_results is not null and jsonb_array_length(p_results) > 0 then
+        insert into public.omr_question_results
+        select * from jsonb_populate_recordset(null::public.omr_question_results, p_results)
+        on conflict (attempt_id, question_id) do update set
+            selected_answer = excluded.selected_answer,
+            correct_answer = excluded.correct_answer,
+            status = excluded.status,
+            is_correct = excluded.is_correct,
+            is_wrong = excluded.is_wrong,
+            is_unanswered = excluded.is_unanswered,
+            score = excluded.score,
+            earned_score = excluded.earned_score,
+            payload = excluded.payload,
+            updated_at = excluded.updated_at;
+    end if;
+
+    return attempt_row;
+end;
+$$;
+
+alter table public.omr_rate_limits enable row level security;
 
 alter table public.omr_organizations enable row level security;
 alter table public.omr_user_profiles enable row level security;

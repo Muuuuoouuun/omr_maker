@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { attemptOwnedBy, attemptOwnerScope, buildServerAttempt, identityAccessSession, remainingSecondsWithinWindow, resolveAttemptId, resolveRetakeScope, serverStudentProfileId, type SubmitAttemptInput } from "./studentExamCore";
+import { attemptOwnedBy, attemptOwnerScope, buildServerAttempt, identityAccessSession, remainingSecondsWithinWindow, resolveAttemptId, resolveRetakeScope, scopedIdempotencyKey, serverStudentProfileId, type SubmitAttemptInput } from "./studentExamCore";
 import type { Exam } from "@/types/omr";
 import type { StudentServerIdentity } from "./studentServerSession";
 
@@ -185,6 +185,15 @@ describe("studentExamCore", () => {
         expect(resolveAttemptId(withKey, ROSTER_STUDENT, "r")).not.toBe(id1);
         // no key → caller's fallback id (back-compat)
         expect(resolveAttemptId({ examId: "e1" }, GUEST, "random-3")).toBe("random-3");
+    });
+
+    it("scopedIdempotencyKey scopes by exam+owner so two owners never collide on one raw key", () => {
+        const a = scopedIdempotencyKey({ examId: "e1", idempotencyKey: "dup" }, GUEST);
+        const b = scopedIdempotencyKey({ examId: "e1", idempotencyKey: "dup" }, ROSTER_STUDENT);
+        expect(a).toBe("e1:guest:g1:dup");
+        expect(b).toBe("e1:sp_123:dup");
+        expect(a).not.toBe(b);
+        expect(scopedIdempotencyKey({ examId: "e1" }, GUEST)).toBeNull();
     });
 
     it("buildServerAttempt records the idempotency key on the attempt", () => {
