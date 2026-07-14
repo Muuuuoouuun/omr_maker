@@ -25,6 +25,24 @@ import { loadAttempts, loadExams } from "@/lib/omrPersistence";
 import { averageResolvedAttemptPercent, baseAttemptsOnly, retakeAttemptsOnly } from "@/lib/attemptScores";
 import { evaluateExamAccess } from "@/lib/examAccess";
 import { loadReturnedFeedbackForStudent } from "@/lib/feedbackPersistence";
+import { listMyAssignments } from "@/app/actions/studentExam";
+import { clearStudentServerSession } from "@/app/actions/studentSession";
+import { listMyAssignmentsClient } from "@/lib/studentExamClient";
+
+/** True when this device holds an unsubmitted draft for the exam/owner pair. */
+function hasLocalDraftFor(examId: string, ownerKey: string): boolean {
+    if (typeof window === "undefined" || !ownerKey) return false;
+    try {
+        const prefix = `omr_draft_${examId}_${ownerKey}`;
+        for (let i = 0; i < window.localStorage.length; i++) {
+            const key = window.localStorage.key(i);
+            if (key && key.startsWith(prefix)) return true;
+        }
+    } catch {
+        // storage blocked — treat as no draft
+    }
+    return false;
+}
 
 function getTimeGreeting(): string {
     const h = new Date().getHours();
@@ -47,6 +65,12 @@ export default function StudentDashboard() {
     const [sessionState, setSessionState] = useState<"checking" | "active" | "missing">("checking");
     const [guestMergePreview, setGuestMergePreview] = useState<GuestMergePreview | null>(null);
     const [refreshKey, setRefreshKey] = useState(0);
+    /**
+     * Explicit server "denied" (fail-closed production without the service role):
+     * a hard stop — the dashboard must not silently fall back to the on-device
+     * attempt/exam copies (설계 §8).
+     */
+    const [serverAccessDenied, setServerAccessDenied] = useState(false);
 
     useEffect(() => {
         let cancelled = false;
@@ -62,23 +86,36 @@ export default function StudentDashboard() {
             setUser(currentUser);
             setSessionState("active");
 
-            // 2. Load Data
-            const [examResult, attemptResult] = await Promise.all([
+            // 2. Load Data — own attempts come from the server boundary
+            // (ownership enforced by the signed session cookie); the local list is
+            // the degraded fallback and keeps the client-side ownership filter.
+            const [examResult, myAttemptsResult] = await Promise.all([
                 loadExams(),
-                loadAttempts(),
+                listMyAssignmentsClient({
+                    server: () => listMyAssignments(),
+                    localFallback: async () => (await loadAttempts()).items,
+                }),
             ]);
             if (cancelled) return;
 
+            if (myAttemptsResult.status === "denied") {
+                setServerAccessDenied(true);
+                return;
+            }
+            setServerAccessDenied(false);
+
             const allExams = examResult.items;
-            const allAttempts = attemptResult.items;
             const examById = new Map(allExams.map(exam => [exam.id, exam]));
-            if (examResult.remoteError || attemptResult.remoteError) {
+            if (examResult.remoteError) {
                 toast.info(
                     "로컬 데이터 기준으로 표시 중",
                     "서버 동기화가 일부 지연되고 있어 다음 접속 때 다시 재시도합니다."
                 );
             }
-            const myAttempts = allAttempts.filter(a => attemptBelongsToSession(a, currentUser));
+            const attemptSource = myAttemptsResult.source;
+            const myAttempts = attemptSource === "server"
+                ? myAttemptsResult.attempts
+                : myAttemptsResult.attempts.filter(a => attemptBelongsToSession(a, currentUser));
             const myBaseAttempts = baseAttemptsOnly(myAttempts);
             const myRetakeAttempts = retakeAttemptsOnly(myAttempts);
             const guestIdForMerge = currentUser.isGuest ? currentUser.guestId : readStoredGuestId();
@@ -118,7 +155,13 @@ export default function StudentDashboard() {
                 const attempt = myBaseAttempts.find(a => a.examId === exam.id);
                 if (attempt) {
                     done.push({ ...exam, attemptId: attempt.id, hasUnreadFeedback: unreadFeedbackAttemptIds.has(attempt.id) });
-                } else {
+                } else if (
+                    // Guests on the server path only see exams they actually
+                    // started (submitted or drafted on this device) — the public
+                    // exam catalog is not broadcast to anonymous identities.
+                    !(currentUser.isGuest && attemptSource === "server")
+                    || hasLocalDraftFor(exam.id, currentUser.studentId || "")
+                ) {
                     todo.push(exam);
                 }
             });
@@ -184,6 +227,8 @@ export default function StudentDashboard() {
 
     const handleLogout = () => {
         clearSession();
+        // Also drop the httpOnly server session cookie (shared-device safety).
+        clearStudentServerSession().catch(() => { /* offline — cookie expires on TTL */ });
         setUser(null);
         setTodoExams([]);
         setDoneExams([]);
@@ -192,6 +237,33 @@ export default function StudentDashboard() {
         setSessionState("missing");
         toast.info("로그아웃됨", "다시 시험을 보려면 학생 로그인이 필요합니다.");
     };
+
+    if (serverAccessDenied) {
+        return (
+            <div className="layout-main">
+                <header className="header">
+                    <div className="container header-content" style={{ gap: "1rem", flexWrap: "wrap" }}>
+                        <BrandLogo />
+                        <ThemeToggle />
+                    </div>
+                </header>
+                <main className="container animate-fade-in" style={{ padding: "4rem 1rem", maxWidth: 760 }}>
+                    <section className="bento-card" role="alert" style={{ alignItems: "flex-start", gap: "1rem", padding: "2rem", minHeight: 0 }}>
+                        <h1 style={{ fontSize: "1.45rem", fontWeight: 800 }}>
+                            학생 기록을 불러올 수 없습니다
+                        </h1>
+                        <p className="text-muted" style={{ lineHeight: 1.7, wordBreak: "keep-all" }}>
+                            서버 보안 설정 문제로 시험·응시 기록 제공이 중단된 상태입니다.
+                            이 상태에서는 기기에 저장된 사본도 표시하지 않습니다. 선생님 또는 관리자에게 문의해주세요.
+                        </p>
+                        <button type="button" className="btn btn-primary" onClick={() => setRefreshKey(key => key + 1)}>
+                            다시 시도
+                        </button>
+                    </section>
+                </main>
+            </div>
+        );
+    }
 
     if (!user) {
         const checking = sessionState === "checking";
