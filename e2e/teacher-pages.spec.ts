@@ -117,19 +117,19 @@ test.describe("Teacher dashboard", () => {
         await authenticateTeacher(page, baseURL);
     });
 
-    test("loads and shows Quick Action tiles", async ({ page }) => {
+    test("loads and shows quick action tiles", async ({ page }) => {
         await page.goto("/teacher/dashboard");
-        await expect(page.getByRole("heading", { name: "Analytics Center" })).toBeVisible();
-        await expect(page.getByText("Quick Action", { exact: false })).toBeVisible();
-        // 6 Quick Action tiles
-        for (const label of ["Create Exam", "Live Results", "Manage Users", "Analytics", "Settings", "Billing"]) {
+        await expect(page.getByRole("heading", { name: "분석 센터" })).toBeVisible();
+        await expect(page.getByText("빠른 작업", { exact: false })).toBeVisible();
+        // 6 quick action tiles
+        for (const label of ["시험 출제", "실시간 결과", "학생 관리", "시험 분석", "설정", "결제 관리"]) {
             await expect(page.getByText(label, { exact: true }).first()).toBeVisible();
         }
     });
 
-    test("Quick Action Live Results navigates to /teacher/live", async ({ page }) => {
+    test("quick action live results navigates to /teacher/live", async ({ page }) => {
         await page.goto("/teacher/dashboard");
-        await page.getByRole("link", { name: /Live Results/ }).click();
+        await page.getByRole("link", { name: "실시간 결과" }).click();
         await expect(page).toHaveURL(/\/teacher\/live$/);
         await expect(page.getByRole("heading", { name: "응시 결과 확인" })).toBeVisible();
     });

@@ -5,7 +5,7 @@ import Link from "next/link";
 import BrandLogo from "@/components/BrandLogo";
 import { Attempt, Exam } from "@/types/omr";
 import { attemptBelongsToSession, getSession, type StudentSession } from "@/utils/storage";
-import { loadAttempts, loadExams } from "@/lib/omrPersistence";
+import { loadAttemptsForStudent, loadExams } from "@/lib/omrPersistence";
 import { formatKoreanDateTime } from "@/lib/pure";
 import { baseAttemptsOnly, buildAttemptScoreLookup, retakeAttemptsOnly } from "@/lib/attemptScores";
 import { loadReturnedFeedbackForStudent } from "@/lib/feedbackPersistence";
@@ -39,7 +39,9 @@ export default function HistoryPage() {
             setSession(currentSession);
             try {
                 const [attemptResult, examResult] = await Promise.all([
-                    loadAttempts(),
+                    currentSession
+                        ? loadAttemptsForStudent(currentSession)
+                        : Promise.resolve({ items: [], remoteLoaded: false }),
                     loadExams(),
                 ]);
                 if (cancelled) return;

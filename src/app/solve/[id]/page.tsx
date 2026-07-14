@@ -792,7 +792,13 @@ export default function SolvePage() {
     const [pinError, setPinError] = useState("");
     const submittedRef = useRef(false);
     const studentAnswersRef = useRef<Record<number, number>>({});
-    const latestDraftRef = useRef<SolveDraft | null>(null);
+    const latestDraftRef = useRef<SolveDraft>({
+        answers: studentAnswers,
+        drawings: {},
+        timeRemaining,
+        startedAt,
+        savedAt: new Date().toISOString(),
+    });
     const autosaveErrorShownRef = useRef(false);
     const examQuestionsRef = useRef<Question[]>([]);
     const currentQuestionIdRef = useRef<number | null>(null);
@@ -1183,10 +1189,11 @@ export default function SolvePage() {
                     // ignore bad draft
                 }
 
-                const problemPdf = await storedDataUrlToFile("problem.pdf", parsed.pdfData, parsed.pdfDataRef);
+                const [problemPdf, answerPdf] = await Promise.all([
+                    storedDataUrlToFile("problem.pdf", parsed.pdfData, parsed.pdfDataRef),
+                    storedDataUrlToFile("answer_key.pdf", parsed.answerKeyPdf, parsed.answerKeyPdfRef),
+                ]);
                 if (problemPdf) setPdfFile(problemPdf);
-
-                const answerPdf = await storedDataUrlToFile("answer_key.pdf", parsed.answerKeyPdf, parsed.answerKeyPdfRef);
                 if (answerPdf) setAnswerFile(answerPdf);
             } catch {
                 setLoadError({
@@ -1224,14 +1231,35 @@ export default function SolvePage() {
     useEffect(() => {
         studentAnswersRef.current = studentAnswers;
         latestDraftRef.current = {
+            ...latestDraftRef.current,
             answers: studentAnswers,
+            savedAt: new Date().toISOString(),
+        };
+    }, [studentAnswers]);
+
+    useEffect(() => {
+        latestDraftRef.current = {
+            ...latestDraftRef.current,
             drawings: compactDrawings(drawings),
-            drawingsRef: latestDraftRef.current?.drawingsRef,
+            savedAt: new Date().toISOString(),
+        };
+    }, [drawings]);
+
+    useEffect(() => {
+        latestDraftRef.current = {
+            ...latestDraftRef.current,
             timeRemaining,
+            savedAt: new Date().toISOString(),
+        };
+    }, [timeRemaining]);
+
+    useEffect(() => {
+        latestDraftRef.current = {
+            ...latestDraftRef.current,
             startedAt,
             savedAt: new Date().toISOString(),
         };
-    }, [studentAnswers, drawings, timeRemaining, startedAt]);
+    }, [startedAt]);
 
     // Autosave draft every 3s. Keep this interval independent from the ticking timer.
     useEffect(() => {
@@ -1282,8 +1310,8 @@ export default function SolvePage() {
         const nextAnswers = { ...previousAnswers, [qId]: optionIndex };
         const nextDraft: SolveDraft = {
             answers: nextAnswers,
-            drawings: compactDrawings(drawings),
-            drawingsRef: latestDraftRef.current?.drawingsRef,
+            drawings: latestDraftRef.current.drawings,
+            drawingsRef: latestDraftRef.current.drawingsRef,
             timeRemaining,
             startedAt,
             savedAt: new Date().toISOString(),
@@ -1897,11 +1925,12 @@ export default function SolvePage() {
                         }}>
                             <input
                                 type="checkbox"
+                                aria-label="선생님 모드"
                                 checked={isTeacherMode}
                                 onChange={(e) => toggleTeacherMode(e.target.checked)}
                                 style={{ margin: 0 }}
                             />
-                            선생님 모드
+                            <span className="solve-teacher-toggle-label">선생님 모드</span>
                         </label>
 
                         {isTeacherMode ? (

@@ -8,7 +8,7 @@ import { BookOpen, ChevronDown, ChevronUp, Clock, Download, Repeat2, Target } fr
 import type { Attempt, AttemptFeedback, Exam, PdfDrawings } from "@/types/omr";
 import { storedDataUrlToFile, loadJsonRecord } from "@/utils/blobStore";
 import { attemptBelongsToSession, getSession } from "@/utils/storage";
-import { loadAttempt, loadExam } from "@/lib/omrPersistence";
+import { loadAttemptForStudent, loadExam } from "@/lib/omrPersistence";
 import { formatKoreanDateTime } from "@/lib/pure";
 import {
     buildLearningRecommendations,
@@ -26,8 +26,8 @@ import {
     canDownloadReturnedFeedback,
     canDownloadReturnedMarkup,
     loadFeedbackMarkupDrawings,
-    loadReturnedAttemptFeedback,
-    markFeedbackOpened,
+    loadReturnedAttemptFeedbackForStudent,
+    markFeedbackOpenedForStudent,
     mergePdfDrawings,
 } from "@/lib/feedbackPersistence";
 
@@ -66,22 +66,27 @@ export default function ReviewPage() {
         let cancelled = false;
         const loadReview = async () => {
             if (!id || cancelled) return;
+            const session = getSession();
+            if (!session) {
+                setAccessDenied(true);
+                return;
+            }
+
             // Load Attempt
-            const found = await loadAttempt(id);
+            const found = await loadAttemptForStudent(id, session);
             if (found && !cancelled) {
-                const session = getSession();
-                if (!session || !attemptBelongsToSession(found, session)) {
+                if (!attemptBelongsToSession(found, session)) {
                     setAccessDenied(true);
                     return;
                 }
                 setAttempt(found);
 
-                const feedback = await loadReturnedAttemptFeedback(found.id);
+                const feedback = await loadReturnedAttemptFeedbackForStudent(found.id, session.studentId);
                 if (feedback && !cancelled) {
                     setReturnedFeedback(feedback);
-                    void markFeedbackOpened(feedback.id).then(async () => {
+                    void markFeedbackOpenedForStudent(feedback.id, session.studentId).then(async () => {
                         if (cancelled) return;
-                        const refreshed = await loadReturnedAttemptFeedback(found.id);
+                        const refreshed = await loadReturnedAttemptFeedbackForStudent(found.id, session.studentId);
                         if (!cancelled && refreshed) setReturnedFeedback(refreshed);
                     });
                     const markup = await loadFeedbackMarkupDrawings(feedback);
@@ -132,6 +137,8 @@ export default function ReviewPage() {
                             if (!cancelled) setPdfLoadFailed(true);
                         });
                 }
+            } else if (!cancelled) {
+                setAccessDenied(true);
             }
         };
         void loadReview();

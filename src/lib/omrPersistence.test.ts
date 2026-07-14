@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Attempt, Exam } from "@/types/omr";
 import {
+    attemptMatchesStudentScope,
     attemptFromSupabaseRow,
     attemptToSupabaseRow,
     attemptsWithQuestionResults,
@@ -23,10 +24,13 @@ import {
     sanitizeAttemptPayload,
     sanitizeExamPayload,
     saveLocalExam,
+    saveLocalExams,
     saveLocalAttempt,
+    saveLocalAttempts,
     sortByNewestActivity,
     storedDataRefsForExamDeletion,
     stripHeavyAttemptPayload,
+    syncLocalItems,
 } from "./omrPersistence";
 import { createTeacherSession } from "./teacherSession";
 import { stableWorkspaceHash, workspaceContextFromIdentity } from "./workspaceContext";
@@ -89,6 +93,25 @@ describe("Supabase persistence mapping", () => {
         answers: { 1: 3 },
         status: "completed",
     };
+
+    it("matches student-scoped attempts without trusting unrelated browser workspace state", () => {
+        expect(attemptMatchesStudentScope(
+            { ...attempt, studentProfileId: "student-profile-1" },
+            { studentId: "student-profile-1", name: "Kim", groupId: "class-a" },
+        )).toBe(true);
+        expect(attemptMatchesStudentScope(
+            { ...attempt, studentProfileId: "student-profile-1" },
+            { studentId: "student-profile-2", name: "Kim", groupId: "class-a" },
+        )).toBe(false);
+        expect(attemptMatchesStudentScope(
+            { ...attempt, studentId: "guest:abc", guestId: "abc", identityType: "guest" },
+            { studentId: "guest:abc", guestId: "abc", isGuest: true, identityType: "guest" },
+        )).toBe(true);
+        expect(attemptMatchesStudentScope(
+            { ...attempt, studentId: "guest:abc", guestId: "abc", identityType: "guest" },
+            { studentId: "guest:other", guestId: "other", isGuest: true, identityType: "guest" },
+        )).toBe(false);
+    });
 
     it("stores exams as indexed rows with the full exam payload", () => {
         const row = examToSupabaseRow(exam);
@@ -638,6 +661,78 @@ describe("Supabase persistence mapping", () => {
         expect(localStorage.getItem("omr_attempts") || "").not.toContain("points");
     });
 
+    it("bulk-saves attempts with one index write while preserving unrelated attempts and stripping drawings", () => {
+        const unrelatedAttempt = { ...attempt, id: "attempt-unrelated", studentName: "Lee" };
+        const localStorage = createStorage({
+            omr_attempts: JSON.stringify([unrelatedAttempt]),
+        });
+        const setItemSpy = vi.spyOn(localStorage, "setItem");
+        vi.stubGlobal("window", { localStorage });
+        vi.stubGlobal("localStorage", localStorage);
+
+        const saved = saveLocalAttempts([
+            {
+                ...attempt,
+                drawings: {
+                    1: [JSON.stringify({ points: [{ x: 0.1, y: 0.2 }] })],
+                },
+            },
+            { ...attempt, id: "attempt-2", finishedAt: "2026-06-15T09:30:00.000Z" },
+        ]);
+
+        expect(saved).toBe(true);
+        expect(setItemSpy).toHaveBeenCalledTimes(1);
+        expect(readLocalAttempts().map(item => item.id)).toEqual([
+            "attempt-2",
+            "attempt-unrelated",
+            "attempt-1",
+        ]);
+        expect(localStorage.getItem("omr_attempts") || "").not.toContain("points");
+    });
+
+    it("bulk-saves exams and rewrites deletion markers at most once", () => {
+        const secondExam = { ...exam, id: "exam-2", title: "Second exam" };
+        const localStorage = createStorage({
+            omr_deleted_exam_ids: JSON.stringify({
+                "exam-1": "2026-06-15T00:00:00.000Z",
+                "exam-2": "2026-06-15T00:00:00.000Z",
+                "exam-3": "2026-06-15T00:00:00.000Z",
+            }),
+        });
+        const setItemSpy = vi.spyOn(localStorage, "setItem");
+        vi.stubGlobal("window", { localStorage });
+        vi.stubGlobal("localStorage", localStorage);
+
+        expect(saveLocalExams([exam, secondExam])).toBe(true);
+        expect(setItemSpy.mock.calls.filter(([key]) => key === "omr_deleted_exam_ids")).toHaveLength(1);
+        expect(readLocalExams().map(item => item.id)).toEqual(["exam-1", "exam-2"]);
+        expect(readLocalDeletedExamIds()).toEqual({ "exam-3": "2026-06-15T00:00:00.000Z" });
+    });
+
+    it("syncs with bounded concurrency and preserves failure reporting order", async () => {
+        const items: Exam[] = Array.from({ length: 8 }, (_, index) => ({
+            ...exam,
+            id: `exam-${index}`,
+        }));
+        const failingIds = new Set(["exam-1", "exam-4", "exam-6"]);
+        let activeCount = 0;
+        let maxActiveCount = 0;
+
+        const result = await syncLocalItems(items, async item => {
+            activeCount += 1;
+            maxActiveCount = Math.max(maxActiveCount, activeCount);
+            await Promise.resolve();
+            activeCount -= 1;
+            if (failingIds.has(item.id)) throw new Error("network unavailable");
+        });
+
+        expect(maxActiveCount).toBe(4);
+        expect(result).toEqual({
+            failedCount: 3,
+            error: "원격 재동기화 실패: exam-1: network unavailable; exam-4: network unavailable; exam-6: network unavailable",
+        });
+    });
+
     it("skips corrupt local exam and attempt rows instead of crashing read screens", () => {
         const localStorage = createStorage({
             "omr_exam_valid": JSON.stringify(exam),
@@ -771,6 +866,47 @@ describe("Supabase config", () => {
         expect(getSupabaseConfigFromEnv({
             NEXT_PUBLIC_SUPABASE_URL: " https://wqhiajvisirxdjivhmlt.supabase.co ",
             NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY: " sb_publishable_abc ",
+        })).toEqual({
+            url: "https://wqhiajvisirxdjivhmlt.supabase.co",
+            publishableKey: "sb_publishable_abc",
+        });
+    });
+
+    it("keeps browser Supabase sync disabled in production until production RLS is confirmed", () => {
+        expect(getSupabaseConfigFromEnv({
+            NODE_ENV: "production",
+            NEXT_PUBLIC_SUPABASE_URL: "https://wqhiajvisirxdjivhmlt.supabase.co",
+            NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY: "sb_publishable_abc",
+        })).toBeNull();
+
+        expect(getSupabaseConfigFromEnv({
+            NODE_ENV: "production",
+            NEXT_PUBLIC_SUPABASE_URL: "https://wqhiajvisirxdjivhmlt.supabase.co",
+            NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY: "sb_publishable_abc",
+            OMR_PRODUCTION_RLS_APPLIED: "false",
+        })).toBeNull();
+    });
+
+    it.each(["true", "1", "yes"])(
+        "allows production browser Supabase sync when OMR_PRODUCTION_RLS_APPLIED=%s",
+        flag => {
+            expect(getSupabaseConfigFromEnv({
+                NODE_ENV: "production",
+                NEXT_PUBLIC_SUPABASE_URL: "https://wqhiajvisirxdjivhmlt.supabase.co",
+                NEXT_PUBLIC_SUPABASE_ANON_KEY: "anon-public-key",
+                OMR_PRODUCTION_RLS_APPLIED: flag,
+            })).toEqual({
+                url: "https://wqhiajvisirxdjivhmlt.supabase.co",
+                publishableKey: "anon-public-key",
+            });
+        },
+    );
+
+    it("does not require the production RLS attestation outside production", () => {
+        expect(getSupabaseConfigFromEnv({
+            NODE_ENV: "development",
+            NEXT_PUBLIC_SUPABASE_URL: "https://wqhiajvisirxdjivhmlt.supabase.co",
+            NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY: "sb_publishable_abc",
         })).toEqual({
             url: "https://wqhiajvisirxdjivhmlt.supabase.co",
             publishableKey: "sb_publishable_abc",

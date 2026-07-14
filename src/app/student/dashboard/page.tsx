@@ -21,7 +21,7 @@ import {
     type GuestMergePreview,
     type StudentSession,
 } from "@/utils/storage";
-import { loadAttempts, loadExams } from "@/lib/omrPersistence";
+import { loadAttemptsForStudent, loadExams } from "@/lib/omrPersistence";
 import { averageResolvedAttemptPercent, baseAttemptsOnly, retakeAttemptsOnly } from "@/lib/attemptScores";
 import { evaluateExamAccess } from "@/lib/examAccess";
 import { loadReturnedFeedbackForStudent } from "@/lib/feedbackPersistence";
@@ -65,7 +65,7 @@ export default function StudentDashboard() {
             // 2. Load Data
             const [examResult, attemptResult] = await Promise.all([
                 loadExams(),
-                loadAttempts(),
+                loadAttemptsForStudent(currentUser),
             ]);
             if (cancelled) return;
 

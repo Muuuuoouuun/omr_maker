@@ -1,5 +1,12 @@
+import { pbkdf2Sync } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import { buildDeploymentReadiness } from "./deploymentReadiness";
+
+function teacherPasswordHash(password: string, saltHex = "00112233445566778899aabbccddeeff"): string {
+    const iterations = 1_000;
+    const hashHex = pbkdf2Sync(password, Buffer.from(saltHex, "hex"), iterations, 32, "sha256").toString("hex");
+    return `pbkdf2-sha256:${iterations}:${saltHex}:${hashHex}`;
+}
 
 describe("deployment readiness", () => {
     it("flags production teacher login when no server credentials exist", () => {
@@ -38,8 +45,8 @@ describe("deployment readiness", () => {
         expect(summary.credentialCount).toBe(1);
         expect(summary.checks).toContainEqual(expect.objectContaining({
             key: "teacher_credentials",
-            tone: "ready",
-            detail: expect.stringContaining("Supabase가 아니라"),
+            tone: "warning",
+            detail: expect.stringContaining("passwordHash"),
         }));
         expect(summary.checks).toContainEqual(expect.objectContaining({
             key: "teacher_session_secret",
@@ -52,7 +59,7 @@ describe("deployment readiness", () => {
     it("recognizes explicit server session and service role readiness", () => {
         const summary = buildDeploymentReadiness({
             NODE_ENV: "production",
-            TEACHER_ACCOUNTS: JSON.stringify([{ id: "teacher-a", email: "a@example.com", password: "pass-a" }]),
+            TEACHER_ACCOUNTS: JSON.stringify([{ id: "teacher-a", email: "a@example.com", passwordHash: teacherPasswordHash("pass-a") }]),
             TEACHER_SESSION_SECRET: "session-secret",
             NEXT_PUBLIC_SUPABASE_URL: "https://example.supabase.co",
             NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY: "sb_publishable_public",

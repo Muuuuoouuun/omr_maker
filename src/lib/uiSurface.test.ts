@@ -40,6 +40,10 @@ describe("service UI surface", () => {
         expect(createPage).toContain('aria-label="빠른 정답 입력"');
         expect(createPage).toContain("create-preview-context-strip");
         expect(createPage).toContain("create-preview-context-meter");
+        expect(createPage).toContain("create-mobile-panel-nav");
+        expect(createPage).toContain("mobile-panel-${mobileWorkspacePanel}");
+        expect(createPage).toContain('role="tablist"');
+        expect(createPage).toContain('aria-controls="create-settings-panel"');
         expect(createPage).toContain("create-print-only-sheet");
         expect(createPage).toContain('sheetId="omr-print-sheet"');
         expect(createPage).toContain("isPreviewCollapsed");
@@ -53,6 +57,8 @@ describe("service UI surface", () => {
         expect(css).not.toContain(".create-preview-scroll.paper-mode");
         expect(css).toContain(".create-preview-main.is-collapsed");
         expect(css).toContain(".create-workspace");
+        expect(css).toContain(".create-workspace.mobile-panel-settings .create-settings-sidebar");
+        expect(css).toContain(".create-workspace.mobile-panel-preview .create-preview-main");
         expect(css).toContain("flex-basis 0.22s ease");
         expect(css).toContain(".create-preview-context-grid");
         expect(css).toContain(".create-print-only-sheet");
@@ -131,6 +137,8 @@ describe("service UI surface", () => {
         expect(solvePage).toContain("const activeQuestionDrawings = summarizeQuestionDrawings(activeExamQuestions, drawings)");
         expect(solvePage).toContain("questionDrawings={activeQuestionDrawings}");
         expect(solvePage).toContain("solve-omr-pane-handwriting");
+        expect(solvePage).toContain("solve-teacher-toggle-label");
+        expect(solvePage).toContain('aria-label="선생님 모드"');
         expect(omrCardView).toContain("questionDrawings?: QuestionDrawingSummary[]");
         expect(omrCardView).toContain("q-handwriting-chip");
         expect(omrCardView).toContain("has-handwriting");
@@ -420,7 +428,9 @@ describe("service UI surface", () => {
 
         expect(solvePage).toContain("<ThemeToggle />");
         expect(css).toContain(".solve-brand");
+        expect(css).toContain(".solve-brand .brand-logo__text");
         expect(css).toContain("width: 2.75rem !important");
+        expect(css).toContain("gap: 0 !important");
         expect(css).toContain(".solve-teacher-toggle");
         expect(css).toContain("min-height: 44px");
         expect(css).toContain(".solve-tab-button");
@@ -522,6 +532,48 @@ describe("service UI surface", () => {
         expect(css).toContain(".teacher-session-chip");
         expect(css).toContain(".teacher-session-chip-prefix");
         expect(nextConfig).toContain('allowedDevOrigins: ["127.0.0.1"]');
+        expect(nextConfig).toContain('key: "Strict-Transport-Security", value: "max-age=31536000"');
+        expect(nextConfig).toContain('key: "Cross-Origin-Opener-Policy", value: "same-origin"');
+        expect(nextConfig).toContain('key: "Cross-Origin-Resource-Policy", value: "same-origin"');
+        expect(nextConfig).toContain('key: "X-Content-Type-Options", value: "nosniff"');
+        expect(nextConfig).toContain('key: "Referrer-Policy", value: "strict-origin-when-cross-origin"');
+        expect(nextConfig).toContain('key: "X-Frame-Options", value: "DENY"');
+        expect(nextConfig).toContain('key: "Permissions-Policy", value: "camera=(), microphone=(), geolocation=(), payment=()"');
+    });
+
+    it("keeps the teacher dashboard localized, keyboard reachable, and mobile-table friendly", () => {
+        const css = readProjectFile("src/app/globals.css");
+        const dashboard = readProjectFile("src/app/teacher/dashboard/page.tsx");
+        const overview = readProjectFile("src/components/dashboard/tabs/OverviewTab.tsx");
+        const examList = readProjectFile("src/components/dashboard/ExamListBlock.tsx");
+        const trendChart = readProjectFile("src/components/dashboard/TrendChart.tsx");
+
+        expect(css).toContain(':where(a, button, input, select, textarea, [role="button"], [tabindex]):focus-visible');
+        expect(css).toContain("animation-duration: 0.01ms !important");
+        expect(css).toContain(".dashboard-welcome-status");
+        expect(css).toContain(".overview-table-hint");
+        expect(css).toContain(".overview-exam-summary-table td:first-child");
+        expect(css).toContain("position: sticky");
+
+        expect(dashboard).toContain("분석 센터");
+        expect(dashboard).toContain('className="dashboard-welcome"');
+        expect(dashboard).toContain('className="dashboard-welcome-status"');
+        expect(dashboard).toContain("width: 44");
+        expect(dashboard).toContain("height: 44");
+
+        expect(overview).toContain('role="tablist"');
+        expect(overview).toContain("aria-selected={activeTab === 'ongoing'}");
+        expect(overview).toContain('role="region" aria-label="시험 요약 표, 좌우 스크롤 가능" tabIndex={0}');
+        expect(overview).toContain('<caption className="sr-only">');
+        expect(overview).toContain('<th scope="col">시험명</th>');
+        expect(overview).toContain('className="overview-exam-title-button"');
+        expect(overview).not.toContain("Quick Action");
+        expect(overview).not.toContain("Avg. Score Trend");
+
+        expect(examList).toContain("최근 시험");
+        expect(examList).toContain('aria-label={`${exam.title} 시험 상세 보기`}');
+        expect(trendChart).toContain('role="img"');
+        expect(trendChart).toContain("최신 점수");
     });
 
     it("keeps billing local-plan changes clear until real payment integration exists", () => {

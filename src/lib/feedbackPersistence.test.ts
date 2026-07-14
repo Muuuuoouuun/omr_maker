@@ -24,6 +24,7 @@ import {
     returnAttemptFeedback,
     saveLocalAttemptFeedback,
     sanitizeAttemptFeedbackPayload,
+    studentVisibleAttemptFeedback,
 } from "./feedbackPersistence";
 
 function createStorage(initial: Record<string, string> = {}): Storage {
@@ -97,6 +98,36 @@ describe("feedback persistence", () => {
                 openCount: 0,
             },
         });
+    });
+
+    it("strips teacher-only comments from student-visible returned feedback", () => {
+        const returned = {
+            ...createAttemptFeedbackDraft(attempt, "2026-06-26T10:00:00.000Z"),
+            status: "returned" as const,
+            returnedAt: "2026-06-26T10:00:00.000Z",
+            questionComments: [
+                {
+                    id: "comment-visible",
+                    questionId: 1,
+                    questionNumber: 1,
+                    body: "학생에게 보이는 코멘트",
+                    visibility: "student_visible" as const,
+                },
+                {
+                    id: "comment-teacher",
+                    questionId: 1,
+                    questionNumber: 1,
+                    body: "교사용 메모",
+                    visibility: "teacher_only" as const,
+                },
+            ],
+        };
+
+        expect(studentVisibleAttemptFeedback(returned, "student-1")?.questionComments).toEqual([
+            expect.objectContaining({ id: "comment-visible" }),
+        ]);
+        expect(studentVisibleAttemptFeedback(returned, "student-2")).toBeNull();
+        expect(studentVisibleAttemptFeedback({ ...returned, status: "draft" })).toBeNull();
     });
 
     it("saves, returns, and marks feedback as opened", async () => {

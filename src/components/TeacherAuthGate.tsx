@@ -64,7 +64,7 @@ export default function TeacherAuthGate({ children, initialSession = null, requi
                 clearExpiryTimer();
                 return;
             }
-            const session = readTeacherSession() || initialSession;
+            const session = initialSession || readTeacherSession();
             const remainingMs = teacherSessionRemainingMs(session);
             if (remainingMs > 0) {
                 saveTeacherSessionSnapshot(session);

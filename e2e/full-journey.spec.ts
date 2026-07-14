@@ -1,6 +1,6 @@
 import { readFile } from "node:fs/promises";
 import { test, expect, type Page } from "@playwright/test";
-import { loginAsTeacher, resetBrowserState } from "./helpers";
+import { continueSolveEntryIfPresent, loginAsTeacher, resetBrowserState } from "./helpers";
 import { parseCsvRows } from "../src/lib/csv";
 
 const TEST_EXAM_ID = "e2e-korean-integrated-exam";
@@ -178,6 +178,7 @@ async function requireStartCodeForSeedStudent(page: Page) {
 }
 
 async function ensureAnswerPaneVisible(page: Page) {
+    await continueSolveEntryIfPresent(page);
     const expandButton = page.getByRole("button", { name: "답안지 펼치기", exact: true });
     if (await expandButton.isVisible().catch(() => false)) {
         await expandButton.click();
@@ -572,7 +573,7 @@ test.describe("Teacher and student full journey", () => {
         });
 
         await loginAsTeacher(page, "/teacher/dashboard?tab=exam");
-        await expect(page.getByRole("heading", { name: "Analytics Center" })).toBeVisible();
+        await expect(page.getByRole("heading", { name: "분석 센터" })).toBeVisible();
         await expect(page.getByText("학생별 점수 및 성취도")).toBeVisible();
         await expect(page.getByRole("row", { name: new RegExp(`${TEST_STUDENT_NAME}.*20점`) })).toBeVisible();
     });
@@ -643,7 +644,7 @@ test.describe("Teacher and student full journey", () => {
         await expect(page.getByText("100 / 100 점")).toBeVisible();
 
         await loginAsTeacher(page, "/teacher/dashboard");
-        await expect(page.getByRole("heading", { name: "Analytics Center" })).toBeVisible();
+        await expect(page.getByRole("heading", { name: "분석 센터" })).toBeVisible();
         await expect(page.getByText(CREATED_EXAM_TITLE)).toBeVisible();
         await expect(page.getByRole("button", { name: "통계 CSV" })).toBeVisible();
 
@@ -695,7 +696,7 @@ test.describe("Teacher and student full journey", () => {
         expect(storedAttempts[0].questionResults).toHaveLength(3);
 
         await loginAsTeacher(page, "/teacher/dashboard");
-        await expect(page.getByRole("heading", { name: "Analytics Center" })).toBeVisible();
+        await expect(page.getByRole("heading", { name: "분석 센터" })).toBeVisible();
         await expect(page.getByText(TEST_EXAM_TITLE)).toBeVisible();
         await expect(page.getByRole("button", { name: "통계 CSV" })).toBeVisible();
 
@@ -744,6 +745,7 @@ test.describe("Teacher and student full journey", () => {
         await seedExamAndStudent(page);
         await page.setViewportSize({ width: 820, height: 1180 });
         await page.goto(`/solve/${TEST_EXAM_ID}`);
+        await continueSolveEntryIfPresent(page);
 
         await expect(page.getByRole("button", { name: "답안지 펼치기 · 0/3 · 미답 3개" })).toBeVisible();
         await page.getByRole("button", { name: "1번 보기 2", exact: true }).click();
@@ -759,7 +761,7 @@ test.describe("Teacher and student full journey", () => {
         await page.setViewportSize({ width: 820, height: 1180 });
 
         await loginAsTeacher(page, "/teacher/dashboard?tab=exam");
-        await expect(page.getByRole("heading", { name: "Analytics Center" })).toBeVisible();
+        await expect(page.getByRole("heading", { name: "분석 센터" })).toBeVisible();
         await expect(page.getByText("학생별 점수 및 성취도")).toBeVisible();
 
         const studentScoreRow = page.getByRole("row", { name: new RegExp(`${TEST_STUDENT_NAME}.*20점`) });

@@ -9,6 +9,24 @@ export async function resetBrowserState(page: Page, context: BrowserContext) {
     });
 }
 
+export async function continueSolveEntryIfPresent(page: Page) {
+    await page.waitForFunction(() => (
+        document.body.innerText.includes("시험 입장 확인")
+        || !!document.querySelector(".solve-body")
+    ), null, { timeout: 5_000 }).catch(() => {});
+
+    const entryDialog = page.getByRole("dialog", { name: "시험 입장 확인" });
+    if (!(await entryDialog.isVisible().catch(() => false))) return;
+
+    const studentButton = entryDialog.getByRole("button", { name: "학생으로 시험 보기" });
+    if (await studentButton.isVisible().catch(() => false)) {
+        await studentButton.click();
+    } else {
+        await entryDialog.getByRole("button", { name: "게스트로 시험 보기" }).click();
+    }
+    await expect(entryDialog).toBeHidden({ timeout: 10_000 });
+}
+
 function escapeRegExp(value: string): string {
     return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }

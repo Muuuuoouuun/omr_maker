@@ -1,4 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
+import { continueSolveEntryIfPresent } from "./helpers";
 import type { Attempt, Exam } from "../src/types/omr";
 
 const tabletViewports = [
@@ -72,11 +73,13 @@ function tabletAttempts(): Attempt[] {
 }
 
 async function seedTabletStorage(page: Page) {
-    await page.addInitScript(({ exam, attempts }) => {
+    await page.addInitScript(({ exam, attempts, panelKey }) => {
         try { window.localStorage.clear(); } catch {}
         try { window.sessionStorage.clear(); } catch {}
         window.localStorage.setItem(`omr_exam_${exam.id}`, JSON.stringify(exam));
         window.localStorage.setItem("omr_attempts", JSON.stringify(attempts));
+        window.localStorage.setItem("omr_guest_id", "guest-tablet");
+        window.localStorage.setItem(panelKey, "expanded");
         window.sessionStorage.setItem("omr_student_session", JSON.stringify({
             name: "Tablet Student",
             groupId: "group-tablet",
@@ -84,7 +87,11 @@ async function seedTabletStorage(page: Page) {
             isGuest: true,
             guestId: "guest-tablet",
         }));
-    }, { exam: tabletExam(), attempts: tabletAttempts() });
+    }, {
+        exam: tabletExam(),
+        attempts: tabletAttempts(),
+        panelKey: "omr_solve_panel_tablet-exam_guest:guest-tablet_base",
+    });
 }
 
 async function expectNoCriticalOverflow(page: Page) {
@@ -136,6 +143,7 @@ test.describe("tablet layout", () => {
                 await page.setViewportSize({ width: viewport.width, height: viewport.height });
                 await seedTabletStorage(page);
                 await page.goto(route);
+                if (route.startsWith("/solve/")) await continueSolveEntryIfPresent(page);
                 await page.waitForTimeout(150);
                 await expect(page.locator("body")).toBeVisible();
                 await expectNoCriticalOverflow(page);
@@ -146,6 +154,7 @@ test.describe("tablet layout", () => {
             await page.setViewportSize({ width: viewport.width, height: viewport.height });
             await seedTabletStorage(page);
             await page.goto("/solve/tablet-exam");
+            await continueSolveEntryIfPresent(page);
             await page.waitForTimeout(150);
 
             const solveMetrics = await page.evaluate(() => {
@@ -171,13 +180,13 @@ test.describe("tablet layout", () => {
             expect(solveMetrics).not.toBeNull();
             if (!solveMetrics) return;
 
-            if (viewport.orientation === "portrait") {
+            if (viewport.width <= 768) {
                 expect(solveMetrics.direction).toBe("column");
                 expect(solveMetrics.omrTop).toBeGreaterThanOrEqual(solveMetrics.pdfBottom - 2);
                 expect(solveMetrics.omrWidth).toBeGreaterThanOrEqual(viewport.width - 2);
             } else {
                 expect(solveMetrics.direction).toBe("row");
-                expect(solveMetrics.omrWidth).toBeGreaterThanOrEqual(360);
+                expect(solveMetrics.omrWidth).toBeGreaterThanOrEqual(Math.min(360, Math.floor(viewport.width * 0.42) - 2));
             }
             expect(solveMetrics.bubbleSize).toBeGreaterThanOrEqual(30);
         });

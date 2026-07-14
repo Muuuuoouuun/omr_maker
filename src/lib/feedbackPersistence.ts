@@ -407,6 +407,20 @@ export function feedbackFromSupabaseRow(row: SupabaseAttemptFeedbackRow | { payl
     };
 }
 
+export function studentVisibleAttemptFeedback(
+    feedback: AttemptFeedback | null | undefined,
+    studentProfileId?: string,
+): AttemptFeedback | null {
+    if (!feedback || feedback.status !== "returned") return null;
+    const normalizedStudentId = scopedValue(studentProfileId);
+    if (normalizedStudentId && feedback.studentProfileId !== normalizedStudentId) return null;
+
+    return {
+        ...feedback,
+        questionComments: feedback.questionComments.filter(comment => comment.visibility === "student_visible"),
+    };
+}
+
 async function getSupabaseClient(): Promise<SupabaseClientLike | null> {
     const config = getSupabaseConfig();
     if (!config) return null;
@@ -535,6 +549,29 @@ async function fetchRemoteFeedbackByAttemptId(attemptId: string): Promise<Attemp
         .maybeSingle();
 
     if (error) throw new Error(error.message || "Failed to load feedback from Supabase");
+    if (!data) return null;
+    return hydrateRemoteFeedbackRow(data as SupabaseAttemptFeedbackRow);
+}
+
+async function fetchRemoteReturnedFeedbackByAttemptIdForStudent(
+    attemptId: string,
+    studentProfileId: string,
+): Promise<AttemptFeedback | null> {
+    const normalizedStudentId = scopedValue(studentProfileId);
+    if (!normalizedStudentId) return null;
+
+    const client = await getAvailableSupabaseClient();
+    if (!client) return null;
+
+    const { data, error } = await client
+        .from("omr_attempt_feedback")
+        .select("*")
+        .eq("attempt_id", attemptId)
+        .eq("student_profile_id", normalizedStudentId)
+        .eq("status", "returned")
+        .maybeSingle();
+
+    if (error) throw new Error(error.message || "Failed to load returned feedback from Supabase");
     if (!data) return null;
     return hydrateRemoteFeedbackRow(data as SupabaseAttemptFeedbackRow);
 }
@@ -671,16 +708,42 @@ export async function loadReturnedAttemptFeedback(attemptId: string): Promise<At
     }
 }
 
+export async function loadReturnedAttemptFeedbackForStudent(
+    attemptId: string,
+    studentProfileId: string,
+): Promise<AttemptFeedback | null> {
+    const normalizedStudentId = scopedValue(studentProfileId);
+    if (!normalizedStudentId) return null;
+
+    const local = studentVisibleAttemptFeedback(loadLocalReturnedAttemptFeedback(attemptId), normalizedStudentId);
+    if (!isSupabaseConfigured()) return local;
+
+    try {
+        const remote = studentVisibleAttemptFeedback(
+            await fetchRemoteReturnedFeedbackByAttemptIdForStudent(attemptId, normalizedStudentId),
+            normalizedStudentId,
+        );
+        if (remote) saveLocalAttemptFeedback(remote);
+        return newestFeedback(local, remote);
+    } catch (error) {
+        console.warn("Failed to load remote returned feedback", error);
+        return local;
+    }
+}
+
 export async function loadReturnedFeedbackForStudent(studentProfileId: string): Promise<AttemptFeedback[]> {
     const normalizedStudentId = scopedValue(studentProfileId);
     if (!normalizedStudentId) return [];
 
     const local = readLocalAttemptFeedback()
-        .filter(feedback => feedback.status === "returned" && feedback.studentProfileId === normalizedStudentId);
+        .map(feedback => studentVisibleAttemptFeedback(feedback, normalizedStudentId))
+        .filter((feedback): feedback is AttemptFeedback => !!feedback);
     if (!isSupabaseConfigured()) return local;
 
     try {
-        const remote = await fetchRemoteReturnedFeedbackForStudent(normalizedStudentId);
+        const remote = (await fetchRemoteReturnedFeedbackForStudent(normalizedStudentId))
+            .map(feedback => studentVisibleAttemptFeedback(feedback, normalizedStudentId))
+            .filter((feedback): feedback is AttemptFeedback => !!feedback);
         for (const feedback of remote) saveLocalAttemptFeedback(feedback);
         return mergeFeedbackItems(local, remote);
     } catch (error) {
@@ -765,6 +828,56 @@ export async function markFeedbackOpened(feedbackId: string): Promise<Persistenc
 
     try {
         const remote = await markRemoteFeedbackOpened(feedbackId, now);
+        if (!remote) {
+            return { localSaved, remoteSaved: false, remoteError: "Returned feedback not found in Supabase" };
+        }
+        saveLocalAttemptFeedback(remote);
+        return { localSaved, remoteSaved: true };
+    } catch (error) {
+        return { localSaved, remoteSaved: false, remoteError: errorMessage(error) };
+    }
+}
+
+export async function markFeedbackOpenedForStudent(
+    feedbackId: string,
+    studentProfileId: string,
+): Promise<PersistenceResult> {
+    const normalizedStudentId = scopedValue(studentProfileId);
+    if (!normalizedStudentId) {
+        return { localSaved: false, remoteSaved: false, remoteError: "Returned feedback not found" };
+    }
+
+    const current = studentVisibleAttemptFeedback(
+        readLocalAttemptFeedback().find(feedback => feedback.id === feedbackId),
+        normalizedStudentId,
+    );
+    if (!current) {
+        return { localSaved: false, remoteSaved: false, remoteError: "Returned feedback not found" };
+    }
+
+    const now = new Date().toISOString();
+    const delivery = normalizeFeedbackDelivery(current.delivery);
+    const next = studentVisibleAttemptFeedback({
+        ...current,
+        updatedAt: now,
+        delivery: {
+            ...delivery,
+            notificationStatus: "sent",
+            firstOpenedAt: delivery.firstOpenedAt || now,
+            lastOpenedAt: now,
+            openCount: delivery.openCount + 1,
+        },
+    }, normalizedStudentId);
+    if (!next) return { localSaved: false, remoteSaved: false, remoteError: "Returned feedback not found" };
+
+    const localSaved = saveLocalAttemptFeedback(next);
+    if (!isSupabaseConfigured()) return { localSaved, remoteSaved: false };
+
+    try {
+        const remote = studentVisibleAttemptFeedback(
+            await markRemoteFeedbackOpened(feedbackId, now),
+            normalizedStudentId,
+        );
         if (!remote) {
             return { localSaved, remoteSaved: false, remoteError: "Returned feedback not found in Supabase" };
         }

@@ -4,16 +4,16 @@ import BrandLogo from "@/components/BrandLogo";
 import OMRCardView from "@/components/OMRCardView";
 import OMRPreview from "@/components/OMRPreview";
 import dynamic from "next/dynamic";
-import AnswerImportModal from "@/components/AnswerImportModal";
-import DistributeModal from "@/components/DistributeModal";
 import TeacherLogoutButton from "@/components/TeacherLogoutButton";
 import TeacherSessionChip from "@/components/TeacherSessionChip";
 import ThemeToggle from "@/components/ThemeToggle";
 import { useRouter, useSearchParams } from "next/navigation";
 import { toast } from "@/components/Toast";
-import { ArrowUpToLine, BrainCircuit, ChevronDown, Crosshair, FileText, FolderOpen, Loader2, Maximize2, Minimize2, PanelRightClose, PanelRightOpen, RefreshCw, Redo2, RotateCcw, Save, Unlink, Undo2, X, ZoomIn, ZoomOut } from "lucide-react";
+import { ArrowUpToLine, BrainCircuit, ChevronDown, Crosshair, Eye, FileText, FolderOpen, Loader2, Maximize2, Minimize2, PanelRightClose, PanelRightOpen, RefreshCw, Redo2, RotateCcw, Save, Settings2, Unlink, Undo2, X, ZoomIn, ZoomOut } from "lucide-react";
 
 const PDFViewer = dynamic(() => import("@/components/PDFViewer"), { ssr: false });
+const AnswerImportModal = dynamic(() => import("@/components/AnswerImportModal"), { ssr: false });
+const DistributeModal = dynamic(() => import("@/components/DistributeModal"), { ssr: false });
 import { Suspense, useState, useEffect, useRef, useCallback, useMemo, type CSSProperties } from "react";
 import { DEFAULT_CHOICE_COUNT, questionChoiceCount, type Exam, type Question } from "@/types/omr";
 import type { ParsedAnswer } from "@/services/answerParser";
@@ -74,6 +74,16 @@ const SETTINGS_ZOOM_MIN = 0.9;
 const SETTINGS_ZOOM_MAX = 1.18;
 const SETTINGS_ZOOM_STEP = 0.08;
 type QuestionDifficulty = NonNullable<NonNullable<Question["tags"]>["difficulty"]>;
+type CreateWorkspacePanel = 'pdf' | 'settings' | 'preview';
+
+function buildDefaultQuestions(count: number, choices: 4 | 5, score: number): Question[] {
+    return Array.from({ length: count }, (_, index) => ({
+        id: index + 1,
+        number: index + 1,
+        choices,
+        score,
+    }));
+}
 
 function clampLayoutWidth(value: number, min: number, max: number): number {
     const safeMax = Math.max(min, max);
@@ -320,9 +330,34 @@ function readinessTone(level: ExamServiceReadinessLevel): { color: string; backg
     return { color: "var(--error)", background: "rgba(239,68,68,0.08)", border: "rgba(239,68,68,0.22)" };
 }
 
+function CreateEditorLoadingShell() {
+    return (
+        <div
+            aria-busy="true"
+            aria-label="시험 편집기를 불러오는 중"
+            style={{
+                minHeight: 'var(--app-viewport-height, 100dvh)',
+                background: 'var(--background)',
+                display: 'grid',
+                gridTemplateRows: '72px 1fr',
+            }}
+        >
+            <div style={{ borderBottom: '1px solid var(--border)', padding: '1rem 1.5rem', display: 'flex', alignItems: 'center', gap: '1rem' }}>
+                <div className="animate-pulse" style={{ width: 160, height: 36, borderRadius: 'var(--radius-full)', background: 'rgba(148,163,184,0.18)' }} />
+                <div className="animate-pulse" style={{ marginLeft: 'auto', width: 220, height: 40, borderRadius: 'var(--radius-full)', background: 'rgba(148,163,184,0.18)' }} />
+            </div>
+            <div style={{ padding: '1rem', display: 'grid', gridTemplateColumns: 'minmax(240px, 0.8fr) minmax(0, 1.7fr)', gap: '1rem' }}>
+                <div className="animate-pulse" style={{ borderRadius: 'var(--radius-lg)', background: 'rgba(148,163,184,0.14)' }} />
+                <div className="animate-pulse" style={{ borderRadius: 'var(--radius-lg)', background: 'rgba(148,163,184,0.1)' }} />
+            </div>
+            <span className="sr-only" role="status" aria-live="polite">시험 편집기를 준비하고 있습니다.</span>
+        </div>
+    );
+}
+
 export default function CreateOMRPage() {
     return (
-        <Suspense fallback={<div style={{ minHeight: 'var(--app-viewport-height, 100dvh)', background: 'var(--background)' }} />}>
+        <Suspense fallback={<CreateEditorLoadingShell />}>
             <CreateOMRPageInner />
         </Suspense>
     );
@@ -343,8 +378,8 @@ function CreateOMRPageInner() {
     const [title, setTitle] = useState("기말고사 OMR");
     const [questionsCount, setQuestionsCount] = useState(20);
     const [columns, setColumns] = useState(2);
-    const [questions, setQuestions] = useState<Question[]>([]);
-    const [initialDefaultsReady, setInitialDefaultsReady] = useState(!!editId);
+    const [questions, setQuestions] = useState<Question[]>(() => buildDefaultQuestions(20, DEFAULT_CHOICE_COUNT, 5));
+    const [initialDefaultsReady, setInitialDefaultsReady] = useState(false);
 
     // Interaction State
     const [selectedQuestionId, setSelectedQuestionId] = useState<number | null>(null);
@@ -369,6 +404,7 @@ function CreateOMRPageInner() {
     const [sidebarWidth, setSidebarWidth] = useState(SETTINGS_SIDEBAR_DEFAULT_WIDTH);
     const [settingsZoom, setSettingsZoom] = useState(1);
     const [isPreviewCollapsed, setIsPreviewCollapsed] = useState(false);
+    const [mobileWorkspacePanel, setMobileWorkspacePanel] = useState<CreateWorkspacePanel>('pdf');
     const [activeResizer, setActiveResizer] = useState<'pdf' | 'sidebar' | null>(null);
     const createWorkspaceRef = useRef<HTMLDivElement>(null);
     const settingsSidebarRef = useRef<HTMLElement>(null);
@@ -686,16 +722,14 @@ function CreateOMRPageInner() {
     }, []);
 
     useEffect(() => {
-        if (editId) {
-            setInitialDefaultsReady(true);
-            return;
-        }
+        if (editId) return;
         const defaults = readStoredExamDefaults();
         setQuestionsCount(defaults.questions);
         setDurationMin(defaults.duration);
         setDefaultChoices(defaults.choices);
         setDefaultScorePerQuestion(defaults.scorePerQ);
         setAutosaveIntervalMs(defaults.autosaveSec > 0 ? defaults.autosaveSec * 1000 : 0);
+        setQuestions(buildDefaultQuestions(defaults.questions, defaults.choices, defaults.scorePerQ));
         setInitialDefaultsReady(true);
     }, [editId]);
 
@@ -728,6 +762,7 @@ function CreateOMRPageInner() {
                 if (typeof parsed.durationMin === 'number') setDurationMin(parsed.durationMin);
                 if (parsed.startAt) setStartAt(isoToLocalInput(parsed.startAt));
                 if (parsed.endAt) setEndAt(isoToLocalInput(parsed.endAt));
+                setInitialDefaultsReady(true);
                 storedDataUrlToFile("problem.pdf", parsed.pdfData, parsed.pdfDataRef)
                     .then(file => {
                         if (!cancelled && file) setPdfFile(file);
@@ -1515,7 +1550,7 @@ function CreateOMRPageInner() {
 
     return (
         <div className="layout-main" style={{ background: 'var(--background)', height: 'var(--app-viewport-height, 100dvh)', overflow: 'hidden' }}>
-            <header className="header" style={{ flexShrink: 0 }}>
+            <header className="header create-editor-shell-header" style={{ flexShrink: 0 }}>
                 <div className="container header-content create-editor-header" style={{ maxWidth: '100%', padding: '0 2rem' }}>
                     <div className="create-editor-brand" style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
                         <BrandLogo compact />
@@ -1523,7 +1558,7 @@ function CreateOMRPageInner() {
                             Smart Editor
                         </span>
                     </div>
-                    <div className="create-editor-actions scroll-custom" style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
+                    <div className="create-editor-actions scroll-custom" role="toolbar" aria-label="출제 도구 모음" style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
                         <button
                             type="button"
                             onClick={undo}
@@ -1583,24 +1618,28 @@ function CreateOMRPageInner() {
                 </div>
             </header>
 
-            <AnswerImportModal
-                isOpen={isImportModalOpen}
-                onClose={() => setIsImportModalOpen(false)}
-                onApply={handleAnswerImport}
-                onUploadAnswerPdf={(file) => {
-                    handleAnswerKeyPdfFile(file);
-                }}
-            />
+            {isImportModalOpen && (
+                <AnswerImportModal
+                    isOpen
+                    onClose={() => setIsImportModalOpen(false)}
+                    onApply={handleAnswerImport}
+                    onUploadAnswerPdf={(file) => {
+                        handleAnswerKeyPdfFile(file);
+                    }}
+                />
+            )}
 
-            <DistributeModal
-                isOpen={isDistributeModalOpen}
-                onClose={() => setIsDistributeModalOpen(false)}
-                onSaveAndShare={handleShareConfig}
-                onAutoMatchRegions={handleAutoMatchMissingRegions}
-                validationSummary={validationSummary}
-                initialAccessConfig={loadedExam?.accessConfig}
-                examId={loadedExam?.id}
-            />
+            {isDistributeModalOpen && (
+                <DistributeModal
+                    isOpen
+                    onClose={() => setIsDistributeModalOpen(false)}
+                    onSaveAndShare={handleShareConfig}
+                    onAutoMatchRegions={handleAutoMatchMissingRegions}
+                    validationSummary={validationSummary}
+                    initialAccessConfig={loadedExam?.accessConfig}
+                    examId={loadedExam?.id}
+                />
+            )}
 
             {confirmState && (
                 <CreateConfirmDialog
@@ -1610,10 +1649,55 @@ function CreateOMRPageInner() {
                 />
             )}
 
-            <div ref={createWorkspaceRef} className={`create-workspace ${isPreviewCollapsed ? 'is-preview-collapsed' : ''} ${activeResizer ? 'is-resizing' : ''}`} style={{ display: 'flex', flex: 1, height: 'calc(var(--app-viewport-height, 100dvh) - 4rem)', overflow: 'hidden' }}>
+            <div
+                ref={createWorkspaceRef}
+                className={`create-workspace mobile-panel-${mobileWorkspacePanel} ${isPreviewCollapsed ? 'is-preview-collapsed' : ''} ${activeResizer ? 'is-resizing' : ''}`}
+                style={{ display: 'flex', flex: 1, height: 'calc(var(--app-viewport-height, 100dvh) - 4rem)', overflow: 'hidden' }}
+            >
+                <div className="create-mobile-panel-nav" role="tablist" aria-label="출제 작업 화면">
+                    <button
+                        type="button"
+                        role="tab"
+                        aria-selected={mobileWorkspacePanel === 'pdf'}
+                        aria-controls="create-pdf-panel"
+                        className={mobileWorkspacePanel === 'pdf' ? 'is-active' : ''}
+                        onClick={() => setMobileWorkspacePanel('pdf')}
+                    >
+                        <FileText size={17} aria-hidden="true" />
+                        <span>문제지</span>
+                        <small>{pdfFile ? '연결됨' : '업로드'}</small>
+                    </button>
+                    <button
+                        type="button"
+                        role="tab"
+                        aria-selected={mobileWorkspacePanel === 'settings'}
+                        aria-controls="create-settings-panel"
+                        className={mobileWorkspacePanel === 'settings' ? 'is-active' : ''}
+                        onClick={() => setMobileWorkspacePanel('settings')}
+                    >
+                        <Settings2 size={17} aria-hidden="true" />
+                        <span>설정</span>
+                        <small>{designSummary.answered}/{questionsCount} 정답</small>
+                    </button>
+                    <button
+                        type="button"
+                        role="tab"
+                        aria-selected={mobileWorkspacePanel === 'preview'}
+                        aria-controls="create-preview-panel"
+                        className={mobileWorkspacePanel === 'preview' ? 'is-active' : ''}
+                        onClick={() => {
+                            setIsPreviewCollapsed(false);
+                            setMobileWorkspacePanel('preview');
+                        }}
+                    >
+                        <Eye size={17} aria-hidden="true" />
+                        <span>미리보기</span>
+                        <small>{serviceReadiness.label}</small>
+                    </button>
+                </div>
 
                 {/* 1. PDF Viewer Area */}
-                <div className="create-pdf-pane" style={{
+                <div id="create-pdf-panel" className="create-pdf-pane" style={{
                     width: `${pdfWidth}px`,
                     minWidth: isPreviewCollapsed ? `${PDF_PANE_MIN_WIDTH}px` : `${PDF_PANE_EXPANDED_MIN_WIDTH}px`,
                     flex: `0 0 ${pdfWidth}px`,
@@ -1718,7 +1802,7 @@ function CreateOMRPageInner() {
                 </div>
 
                 {/* 2. Settings Sidebar */}
-                <aside ref={settingsSidebarRef} className="glass-panel scroll-custom create-settings-sidebar" style={{
+                <aside id="create-settings-panel" ref={settingsSidebarRef} className="glass-panel scroll-custom create-settings-sidebar" style={{
                     width: `${sidebarWidth}px`,
                     minWidth: `${SETTINGS_SIDEBAR_MIN_WIDTH}px`,
                     flex: isPreviewCollapsed ? `1 1 ${sidebarWidth}px` : `0 0 ${sidebarWidth}px`,
@@ -2839,7 +2923,7 @@ function CreateOMRPageInner() {
                 )}
 
                 {/* 3. OMR Preview */}
-                <main className={`create-preview-main ${isPreviewCollapsed ? 'is-collapsed' : ''}`} style={{
+                <main id="create-preview-panel" className={`create-preview-main ${isPreviewCollapsed ? 'is-collapsed' : ''}`} style={{
                     flex: isPreviewCollapsed ? `0 0 ${PREVIEW_RAIL_WIDTH}px` : 1,
                     width: isPreviewCollapsed ? `${PREVIEW_RAIL_WIDTH}px` : undefined,
                     display: 'flex',

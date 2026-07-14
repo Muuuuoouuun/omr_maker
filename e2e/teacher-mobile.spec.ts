@@ -69,7 +69,7 @@ test.describe("Teacher phone and tablet app chrome", () => {
     test("keeps the dashboard header touch friendly", async ({ page }) => {
         await loginAsTeacher(page, "/teacher/dashboard");
 
-        await expect(page.getByRole("heading", { name: "Analytics Center" })).toBeVisible();
+        await expect(page.getByRole("heading", { name: "분석 센터" })).toBeVisible();
         await expectTeacherHeaderTouchFriendly(page, { hasSearch: false });
 
         await page.locator(".teacher-header").getByRole("button", { name: /알림/ }).click();
@@ -104,6 +104,19 @@ test.describe("Teacher phone and tablet app chrome", () => {
         await expectTouchTarget(toolbar.getByRole("button", { name: "교사 로그아웃" }));
         await expectTouchTarget(toolbar.getByRole("button", { name: /모드로 전환/ }));
         expect(await smallTargets(page, ".create-editor-actions button, .create-editor-actions label")).toEqual([]);
+
+        const workspaceTabs = page.getByRole("tablist", { name: "출제 작업 화면" });
+        const pdfTab = workspaceTabs.getByRole("tab", { name: /문제지/ });
+        const settingsTab = workspaceTabs.getByRole("tab", { name: /설정/ });
+        const previewTab = workspaceTabs.getByRole("tab", { name: /미리보기/ });
+        await expect(pdfTab).toHaveAttribute("aria-selected", "true");
+        await settingsTab.click();
+        await expect(settingsTab).toHaveAttribute("aria-selected", "true");
+        await expect(page.locator("#create-settings-panel")).toBeVisible();
+        await previewTab.click();
+        await expect(previewTab).toHaveAttribute("aria-selected", "true");
+        await expect(page.locator("#create-preview-panel")).toBeVisible();
+        expect(await smallTargets(page, ".create-mobile-panel-nav button")).toEqual([]);
         await expectNoHorizontalOverflow(page);
     });
 });

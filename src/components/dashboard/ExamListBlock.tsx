@@ -89,7 +89,7 @@ export default function ExamListBlock({ exams }: ExamListBlockProps) {
               letterSpacing: "-0.01em",
             }}
           >
-            Recent Exams
+            최근 시험
           </h3>
           <p
             style={{
@@ -274,12 +274,13 @@ export default function ExamListBlock({ exams }: ExamListBlockProps) {
 
                   <Link
                     href={`/teacher/exam/${exam.id}`}
+                    aria-label={`${exam.title} 시험 상세 보기`}
                     style={{
                       display: "flex",
                       alignItems: "center",
                       justifyContent: "center",
-                      width: "32px",
-                      height: "32px",
+                      width: "44px",
+                      height: "44px",
                       borderRadius: "var(--radius-md)",
                       color: "var(--muted)",
                       background: "var(--background)",

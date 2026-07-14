@@ -150,7 +150,7 @@ const requiredStringsByFile: Record<string, string[]> = {
         "필기 보관",
     ],
     "src/app/teacher/dashboard/page.tsx": [
-        "Analytics Center",
+        "분석 센터",
         "시험 분석",
         "학생 성취도",
         "데모 데이터 모드",
@@ -163,7 +163,9 @@ const requiredStringsByFile: Record<string, string[]> = {
         "학생에게 이름, 반, 로그인 ID, 시작 코드를 함께 전달하세요.",
     ],
     "src/components/dashboard/tabs/OverviewTab.tsx": [
-        "Quick Action",
+        "빠른 작업",
+        "평균 점수 추이",
+        "시험 요약",
         "통계 CSV",
         "통계 CSV 생성됨",
         "대시보드 요약과 시험별 통계를 내보냈습니다.",

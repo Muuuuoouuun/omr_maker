@@ -2,14 +2,15 @@
 
 import { useState, useMemo, useEffect } from "react";
 import Link from "next/link";
+import dynamic from "next/dynamic";
 import { useRouter } from "next/navigation";
 import { Exam, Attempt } from "@/types/omr";
 import StatCard from "@/components/dashboard/StatCard";
-import TrendChart from "@/components/dashboard/TrendChart";
+import { TrendChartSkeleton } from "@/components/dashboard/DashboardLoadingSkeleton";
 import ExamListBlock from "@/components/dashboard/ExamListBlock";
 import ExamActionsMenu, { ExamActionKind } from "@/components/dashboard/ExamActionsMenu";
 import { toast } from "@/components/Toast";
-import { Users, BarChart3, PlusCircle, Activity, Download } from "lucide-react";
+import { Users, BarChart3, PlusCircle, Activity, Bell, CreditCard, Download, Settings } from "lucide-react";
 import { copyStoredData } from "@/utils/blobStore";
 import { secureRandomId } from "@/utils/ids";
 import { deleteExam, saveExam } from "@/lib/omrPersistence";
@@ -18,6 +19,11 @@ import { safeRatePercent } from "@/lib/scoreUtils";
 import { buildExamSummaryRows, splitExamSummaryRows } from "@/lib/dashboardSummary";
 import { buildDashboardStatsCsv } from "@/lib/dashboardStatsExport";
 import { summarizePersistenceWrite } from "@/lib/persistenceFeedback";
+
+const TrendChart = dynamic(
+    () => import("@/components/dashboard/TrendChart"),
+    { loading: () => <TrendChartSkeleton height={160} /> },
+);
 
 interface OverviewTabProps {
     exams: Exam[];
@@ -235,37 +241,37 @@ export default function OverviewTab({ exams: examsProp, attempts, stats, trendDa
 
     return (
         <div className="bento-grid fade-in-up">
-            {/* 1. Quick Actions (New Section from UI image) */}
+            {/* 1. 자주 쓰는 빠른 작업 */}
             <div className="bento-card col-span-2" style={{ padding: '1.5rem', display: 'flex', flexDirection: 'column' }}>
                 <div style={{ marginBottom: '1.5rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                     <h3 style={{ fontSize: '1.1rem', fontWeight: 700, color: 'var(--foreground)' }}>
-                        Quick Action <span style={{ fontWeight: 400, color: 'var(--muted)', fontSize: '0.9rem' }}>Do Some Quickly</span>
+                        빠른 작업 <span style={{ fontWeight: 500, color: 'var(--muted)', fontSize: '0.86rem' }}>자주 쓰는 기능</span>
                     </h3>
                 </div>
                 <div className="overview-quick-actions-grid" style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '1rem', flex: 1 }}>
                     <Link href="/create" style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: '0.5rem', padding: '1rem', background: 'rgba(56, 189, 248, 0.1)', borderRadius: 'var(--radius-lg)', color: '#0ea5e9', transition: 'all 0.2s' }} className="card-hover">
                         <PlusCircle size={24} />
-                        <span style={{ fontSize: '0.85rem', fontWeight: 600 }}>Create Exam</span>
+                        <span style={{ fontSize: '0.85rem', fontWeight: 600 }}>시험 출제</span>
                     </Link>
                     <Link href="/teacher/live" style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: '0.5rem', padding: '1rem', background: 'rgba(239, 68, 68, 0.1)', borderRadius: 'var(--radius-lg)', color: '#ef4444', transition: 'all 0.2s' }} className="card-hover">
                         <Activity size={24} />
-                        <span style={{ fontSize: '0.85rem', fontWeight: 600 }}>Live Results</span>
+                        <span style={{ fontSize: '0.85rem', fontWeight: 600 }}>실시간 결과</span>
                     </Link>
                     <Link href="/teacher/users" style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: '0.5rem', padding: '1rem', background: 'rgba(34, 197, 94, 0.1)', borderRadius: 'var(--radius-lg)', color: '#22c55e', transition: 'all 0.2s' }} className="card-hover">
                         <Users size={24} />
-                        <span style={{ fontSize: '0.85rem', fontWeight: 600 }}>Manage Users</span>
+                        <span style={{ fontSize: '0.85rem', fontWeight: 600 }}>학생 관리</span>
                     </Link>
                     <Link href="/teacher/dashboard?tab=exam" style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: '0.5rem', padding: '1rem', background: 'rgba(245, 158, 11, 0.1)', borderRadius: 'var(--radius-lg)', color: '#f59e0b', transition: 'all 0.2s' }} className="card-hover">
                         <BarChart3 size={24} />
-                        <span style={{ fontSize: '0.85rem', fontWeight: 600 }}>Analytics</span>
+                        <span style={{ fontSize: '0.85rem', fontWeight: 600 }}>시험 분석</span>
                     </Link>
                     <Link href="/teacher/settings" style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: '0.5rem', padding: '1rem', background: 'rgba(99, 102, 241, 0.1)', borderRadius: 'var(--radius-lg)', color: '#6366f1', transition: 'all 0.2s' }} className="card-hover">
-                        <svg width="24" height="24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>
-                        <span style={{ fontSize: '0.85rem', fontWeight: 600 }}>Settings</span>
+                        <Settings size={24} />
+                        <span style={{ fontSize: '0.85rem', fontWeight: 600 }}>설정</span>
                     </Link>
                     <Link href="/teacher/billing" style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: '0.5rem', padding: '1rem', background: 'rgba(168, 85, 247, 0.1)', borderRadius: 'var(--radius-lg)', color: '#a855f7', transition: 'all 0.2s' }} className="card-hover">
-                        <svg width="24" height="24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="2" y="5" width="20" height="14" rx="2"></rect><line x1="2" y1="10" x2="22" y2="10"></line></svg>
-                        <span style={{ fontSize: '0.85rem', fontWeight: 600 }}>Billing</span>
+                        <CreditCard size={24} />
+                        <span style={{ fontSize: '0.85rem', fontWeight: 600 }}>결제 관리</span>
                     </Link>
                 </div>
             </div>
@@ -277,8 +283,8 @@ export default function OverviewTab({ exams: examsProp, attempts, stats, trendDa
                 position: 'relative', overflow: 'hidden'
             }}>
                 <div style={{ marginBottom: '1.5rem', position: 'relative', zIndex: 1 }}>
-                    <h3 style={{ fontSize: '1.25rem', fontWeight: 700 }}>Avg. Score Trend</h3>
-                    <p style={{ opacity: 0.8, fontSize: '0.95rem' }}>Overview of last 7 exams performance</p>
+                    <h3 style={{ fontSize: '1.25rem', fontWeight: 700 }}>평균 점수 추이</h3>
+                    <p style={{ opacity: 0.8, fontSize: '0.95rem' }}>최근 7개 시험의 성취도 흐름</p>
                 </div>
 
                 <div style={{ position: 'absolute', top: '-20%', right: '-10%', width: '200px', height: '200px', background: 'radial-gradient(circle, rgba(255,255,255,0.2) 0%, transparent 70%)' }}></div>
@@ -290,28 +296,24 @@ export default function OverviewTab({ exams: examsProp, attempts, stats, trendDa
 
             {/* 3. Project Summary (Currently Ongoing / Completed Exams) */}
             <div className="bento-card overview-exam-summary-card" style={{ gridColumn: 'span 4', overflow: 'hidden' }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.5rem' }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '1.5rem' }}>
-                        <h3 style={{ fontSize: '1.1rem', fontWeight: 700 }}>Exam Summary</h3>
-                        <div style={{ display: 'flex', gap: '1rem', fontSize: '0.9rem', color: 'var(--muted)', fontWeight: 600 }}>
-                            <span
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '1rem', marginBottom: '1.5rem', flexWrap: 'wrap' }}>
+                    <div className="overview-summary-heading">
+                        <h3 style={{ fontSize: '1.1rem', fontWeight: 700 }}>시험 요약</h3>
+                        <div className="overview-section-tabs" role="tablist" aria-label="시험 상태">
+                            <button
+                                type="button"
+                                role="tab"
+                                aria-selected={activeTab === 'ongoing'}
                                 onClick={() => setActiveTab('ongoing')}
-                                style={{
-                                    cursor: 'pointer',
-                                    color: activeTab === 'ongoing' ? 'var(--primary)' : 'inherit',
-                                    borderBottom: activeTab === 'ongoing' ? '2px solid var(--primary)' : '2px solid transparent',
-                                    paddingBottom: '0.5rem',
-                                    transition: 'all 0.2s'
-                                }}>Ongoing</span>
-                            <span
+                                className="overview-section-tab"
+                            >진행 중</button>
+                            <button
+                                type="button"
+                                role="tab"
+                                aria-selected={activeTab === 'completed'}
                                 onClick={() => setActiveTab('completed')}
-                                style={{
-                                    cursor: 'pointer',
-                                    color: activeTab === 'completed' ? 'var(--primary)' : 'inherit',
-                                    borderBottom: activeTab === 'completed' ? '2px solid var(--primary)' : '2px solid transparent',
-                                    paddingBottom: '0.5rem',
-                                    transition: 'all 0.2s'
-                                }}>Completed</span>
+                                className="overview-section-tab"
+                            >완료·보관</button>
                         </div>
                     </div>
 
@@ -343,15 +345,17 @@ export default function OverviewTab({ exams: examsProp, attempts, stats, trendDa
                             }}
                             className="card-hover"
                         >
-                            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"></path><path d="M13.73 21a2 2 0 0 1-3.46 0"></path></svg>
+                            <Bell size={16} />
                             미응시자 전체 알람 발송
                         </button>
                         )}
                     </div>
                 </div>
 
-                <div className="overview-exam-summary-scroll">
+                <p className="overview-table-hint" aria-hidden="true">↔ 시험명을 고정한 채 좌우로 밀어 세부 항목을 확인하세요.</p>
+                <div className="overview-exam-summary-scroll scroll-custom" role="region" aria-label="시험 요약 표, 좌우 스크롤 가능" tabIndex={0}>
                     <table className="overview-exam-summary-table">
+                        <caption className="sr-only">시험별 생성일, 참여율, 응시 인원, 재시험, 상태 및 작업</caption>
                         <colgroup>
                             <col style={{ width: '220px' }} />
                             <col style={{ width: '115px' }} />
@@ -364,14 +368,14 @@ export default function OverviewTab({ exams: examsProp, attempts, stats, trendDa
                         </colgroup>
                         <thead>
                             <tr style={{ color: 'var(--muted)', fontSize: '0.85rem', borderBottom: '1px solid var(--border)' }}>
-                                <th>Exam Title</th>
-                                <th>Created At</th>
-                                <th>Progress (Participation)</th>
-                                <th>Participants / Total</th>
-                                <th>Retakes</th>
-                                <th>Status</th>
-                                {activeTab === 'ongoing' && <th style={{ textAlign: 'right' }}>Action</th>}
-                                <th style={{ textAlign: 'right' }}>작업</th>
+                                <th scope="col">시험명</th>
+                                <th scope="col">생성일</th>
+                                <th scope="col">참여율</th>
+                                <th scope="col">응시 / 전체</th>
+                                <th scope="col">재시험</th>
+                                <th scope="col">상태</th>
+                                {activeTab === 'ongoing' && <th scope="col" style={{ textAlign: 'right' }}>알림</th>}
+                                <th scope="col" style={{ textAlign: 'right' }}>작업</th>
                             </tr>
                         </thead>
                         <tbody>
@@ -380,20 +384,20 @@ export default function OverviewTab({ exams: examsProp, attempts, stats, trendDa
 
                                 const targetColor = participationRate > 70 ? 'var(--success)' : (participationRate > 30 ? 'var(--warning)' : 'var(--error)');
                                 const isArchived = exam.archived;
-                                const statusText = isArchived ? 'Archived' : participationRate === 100 ? 'Completed' : 'In Progress';
+                                const statusText = isArchived ? '보관됨' : participationRate === 100 ? '완료' : '진행 중';
                                 const statusBg = isArchived ? 'rgba(100,116,139,0.12)' : participationRate === 100 ? 'rgba(16, 185, 129, 0.1)' : 'rgba(139, 92, 246, 0.1)';
                                 const statusColor = isArchived ? 'var(--muted)' : participationRate === 100 ? 'var(--success)' : 'var(--accent)';
 
                                 return (
                                     <tr key={exam.id} style={{ borderBottom: '1px solid var(--border)', transition: 'background 0.2s', opacity: isArchived ? 0.6 : 1 }} className="hover:bg-slate-50 dark:hover:bg-slate-800/50">
                                         <td className="overview-exam-summary-title-cell" style={{ fontWeight: 600, fontSize: '0.95rem' }}>
-                                            <span
+                                            <button
+                                                type="button"
                                                 onClick={() => onNavigateToExamAnalytics && onNavigateToExamAnalytics(exam.id)}
-                                                style={{ cursor: 'pointer', transition: 'color 0.2s' }}
-                                                className="hover:text-primary hover:underline hover:underline-offset-4"
+                                                className="overview-exam-title-button"
                                             >
                                                 {exam.title}
-                                            </span>
+                                            </button>
                                             {isArchived && (
                                                 <span style={{
                                                     marginLeft: '0.5rem',
@@ -451,7 +455,7 @@ export default function OverviewTab({ exams: examsProp, attempts, stats, trendDa
                                                     }}
                                                     className="hover:border-primary hover:text-primary"
                                                 >
-                                                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="22" y1="2" x2="11" y2="13"></line><polygon points="22 2 15 22 11 13 2 9 22 2"></polygon></svg>
+                                                    <Bell size={14} />
                                                     독려 알람
                                                 </button>
                                             </td>
@@ -483,18 +487,18 @@ export default function OverviewTab({ exams: examsProp, attempts, stats, trendDa
             <div className="overview-stats-stack" style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem', gridColumn: 'span 1', height: '100%' }}>
                 <div style={{ flex: 1, display: 'flex', width: '100%', minHeight: 0 }}>
                     <StatCard
-                        title="Total Students"
+                        title="전체 학생"
                         value={stats.totalStudents}
                         icon={<Users size={28} color="var(--primary)" />}
                     />
                 </div>
                 <div style={{ flex: 1, display: 'flex', width: '100%', minHeight: 0 }}>
                     <StatCard
-                        title="Average Score"
+                        title="평균 점수"
                         value={stats.avgScore}
                         icon={<BarChart3 size={28} color="var(--success)" />}
                         color="var(--success)"
-                        trend={stats.avgScore > 80 ? 'Good' : 'Needs Focus'}
+                        trend={stats.avgScore > 80 ? '양호' : '점검 필요'}
                         trendUp={stats.avgScore > 80}
                     />
                 </div>
