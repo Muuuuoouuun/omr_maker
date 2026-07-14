@@ -9,6 +9,8 @@ import type { Attempt, AttemptFeedback, Exam, PdfDrawings } from "@/types/omr";
 import { storedDataUrlToFile, loadJsonRecord } from "@/utils/blobStore";
 import { attemptBelongsToSession, getSession } from "@/utils/storage";
 import { loadAttempt, loadExam } from "@/lib/omrPersistence";
+import { loadExamForReview, loadMyAttempt } from "@/app/actions/studentExam";
+import { loadMyAttemptClient, loadReviewExamClient } from "@/lib/studentExamClient";
 import { formatKoreanDateTime } from "@/lib/pure";
 import {
     buildLearningRecommendations,
@@ -57,6 +59,8 @@ export default function ReviewPage() {
     const [filterWrong, setFilterWrong] = useState(false);
     const [openExplanations, setOpenExplanations] = useState<Record<number, boolean>>({});
     const [accessDenied, setAccessDenied] = useState(false);
+    const [loadError, setLoadError] = useState(false);
+    const [reloadKey, setReloadKey] = useState(0);
     const [handwritingUnavailable, setHandwritingUnavailable] = useState(false);
     const [returnedFeedback, setReturnedFeedback] = useState<AttemptFeedback | null>(null);
     const [teacherMarkupDrawings, setTeacherMarkupDrawings] = useState<PdfDrawings | undefined>(undefined);
@@ -66,13 +70,24 @@ export default function ReviewPage() {
         let cancelled = false;
         const loadReview = async () => {
             if (!id || cancelled) return;
-            // Load Attempt
-            const found = await loadAttempt(id);
+            // Reset the error flag so a retry starts clean.
+            setLoadError(false);
+            // Server-first: the action returns the attempt only when the signed
+            // session cookie owns it. Device-local records fall back to the
+            // existing client-side ownership check; an explicit server "denied"
+            // is a hard stop and never reads the local copy.
+            const result = await loadMyAttemptClient(id, {
+                server: (attemptId) => loadMyAttempt(attemptId),
+                localFallback: (attemptId) => loadAttempt(attemptId),
+            });
+            const found = result.status === "ok" ? result.attempt : undefined;
             if (found && !cancelled) {
-                const session = getSession();
-                if (!session || !attemptBelongsToSession(found, session)) {
-                    setAccessDenied(true);
-                    return;
+                if (result.source === "local") {
+                    const session = getSession();
+                    if (!session || !attemptBelongsToSession(found, session)) {
+                        setAccessDenied(true);
+                        return;
+                    }
                 }
                 setAttempt(found);
 
@@ -117,8 +132,19 @@ export default function ReviewPage() {
                     setRestoredDrawings(found.drawings);
                 }
 
-                // Load Exam Data associated with this attempt
-                const parsedExam = await loadExam(found.examId);
+                // Server-first review payload: answers/explanations included
+                // (post-submit), PIN and answer-key PDF withheld server-side. The
+                // local exam copy backs degraded/offline setups only — an explicit
+                // "denied" must not be satisfied from the on-device answer key.
+                const examResult = await loadReviewExamClient(found.id, {
+                    server: (attemptId) => loadExamForReview(attemptId),
+                    localFallback: () => loadExam(found.examId),
+                });
+                if (examResult.status === "denied" && !cancelled) {
+                    setAccessDenied(true);
+                    return;
+                }
+                const parsedExam = examResult.status === "ok" ? examResult.exam ?? null : null;
                 if (parsedExam && !cancelled) {
                     setExam(parsedExam);
                     setPdfFile(null);
@@ -131,12 +157,22 @@ export default function ReviewPage() {
                         .catch(() => {
                             if (!cancelled) setPdfLoadFailed(true);
                         });
+                } else if (!cancelled) {
+                    // Attempt loaded but the review exam payload didn't — the page
+                    // can't render a result without it. Surface a retryable error
+                    // instead of hanging on the loading spinner forever.
+                    setLoadError(true);
                 }
+            } else if (!cancelled) {
+                // No attempt: distinguish an ownership denial from a load
+                // failure so the student sees the right screen (and a retry).
+                if (result.status === "denied") setAccessDenied(true);
+                else setLoadError(true);
             }
         };
         void loadReview();
         return () => { cancelled = true; };
-    }, [id]);
+    }, [id, reloadKey]);
 
     if (accessDenied) {
         return (
@@ -144,6 +180,25 @@ export default function ReviewPage() {
                 <h2>접근할 수 없는 기록입니다.</h2>
                 <p style={{ color: '#64748b', marginTop: '0.5rem' }}>현재 로그인한 학생의 응시 기록만 볼 수 있습니다.</p>
                 <Link href="/" className="btn btn-primary" style={{ marginTop: '1rem', display: 'inline-flex' }}>홈으로 돌아가기</Link>
+            </div>
+        );
+    }
+
+    if (loadError) {
+        return (
+            <div style={{ padding: '2rem', textAlign: 'center' }}>
+                <h2>결과를 불러오지 못했습니다.</h2>
+                <p style={{ color: '#64748b', marginTop: '0.5rem' }}>네트워크 상태를 확인한 뒤 다시 시도해주세요.</p>
+                <div style={{ display: 'inline-flex', gap: '0.5rem', marginTop: '1rem', flexWrap: 'wrap', justifyContent: 'center' }}>
+                    <button
+                        type="button"
+                        onClick={() => setReloadKey(key => key + 1)}
+                        className="btn btn-primary"
+                    >
+                        다시 시도
+                    </button>
+                    <Link href="/student/history" className="btn btn-secondary">목록으로</Link>
+                </div>
             </div>
         );
     }
