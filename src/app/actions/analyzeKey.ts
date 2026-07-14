@@ -1,6 +1,7 @@
 "use server";
 
 import { GoogleGenerativeAI } from "@google/generative-ai";
+import { cookies, headers } from "next/headers";
 import { resolveGeminiApiKey } from "@/lib/geminiApiKey";
 import {
     extractAnswerJsonArrayPayload,
@@ -16,6 +17,22 @@ import {
     shouldUseHighAccuracyAnswerModel,
     type AiAnswerModelRoutingOptions,
 } from "@/lib/aiAnswerModelRouting";
+import {
+    authorizeTeacherAiActionRequest,
+} from "@/lib/aiActionSecurity";
+import { TEACHER_SERVER_SESSION_COOKIE } from "@/lib/teacherServerSession";
+
+async function requireTeacherAiAccess(): Promise<void> {
+    const headerStore = await headers();
+    const cookieStore = await cookies();
+    const authorization = authorizeTeacherAiActionRequest(
+        headerStore,
+        cookieStore.get(TEACHER_SERVER_SESSION_COOKIE)?.value,
+    );
+    if (!authorization.allowed) {
+        throw new Error(authorization.error);
+    }
+}
 
 function buildAnswerImageParts(imageParts: ValidatedAnswerImagePart[]) {
     return imageParts.map(img => {
@@ -72,6 +89,7 @@ export async function analyzeAnswerImages(
     let validatedImageParts: ValidatedAnswerImagePart[] = [];
 
     try {
+        await requireTeacherAiAccess();
         validatedImageParts = validateAnswerImageParts(imageParts);
 
         const apiKey = resolveGeminiApiKey(personalApiKey, process.env.GEMINI_API_KEY);

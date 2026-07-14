@@ -16,16 +16,10 @@ import {
     type RosterInvite,
     type RosterStudent,
 } from "@/lib/rosterStorage";
-import { getSupabaseConfigFromEnv, isSupabaseConfigured, type SupabaseConfig } from "@/lib/omrPersistence";
 import {
     DEFAULT_WORKSPACE_ORGANIZATION_ID,
     DEFAULT_WORKSPACE_ORGANIZATION_NAME,
-    readActiveWorkspaceContext,
-    workspaceBootstrapRows,
-    type WorkspaceContext,
 } from "@/lib/workspaceContext";
-
-type Env = Record<string, string | undefined>;
 
 export const DEFAULT_ROSTER_ORGANIZATION_ID = DEFAULT_WORKSPACE_ORGANIZATION_ID;
 export const ROSTER_TOMBSTONE_STORAGE_KEY = "omr_roster_tombstones";
@@ -90,20 +84,6 @@ export interface SupabaseRosterClassStudentRow {
     enrollment_status: "active" | "inactive" | "transferred" | "completed";
 }
 
-interface SupabaseQueryResult<T> {
-    data: T | null;
-    error: { message?: string } | null;
-}
-
-type SupabaseClientLike = {
-    from(table: string): {
-        select(columns?: string): {
-            eq(column: string, value: string): Promise<SupabaseQueryResult<unknown[]>>;
-        };
-        upsert(row: unknown): Promise<SupabaseQueryResult<unknown>>;
-    };
-};
-
 interface SupabaseRosterRows {
     organization: SupabaseOrganizationRow;
     classes: SupabaseRosterClassRow[];
@@ -115,46 +95,6 @@ interface SupabaseRemoteRosterRows {
     classes: SupabaseRosterClassRow[];
     students: SupabaseRosterStudentProfileRow[];
     enrollments: SupabaseRosterClassStudentRow[];
-}
-
-let supabaseClientPromise: Promise<SupabaseClientLike | null> | null = null;
-
-function getSupabaseConfig(env: Env = process.env): SupabaseConfig | null {
-    return getSupabaseConfigFromEnv(env);
-}
-
-async function getSupabaseClient(): Promise<SupabaseClientLike | null> {
-    const config = getSupabaseConfig();
-    if (!config) return null;
-    if (supabaseClientPromise) return supabaseClientPromise;
-
-    supabaseClientPromise = import("@supabase/supabase-js")
-        .then((supabaseModule: unknown) => {
-            const { createClient } = supabaseModule as {
-                createClient: (url: string, key: string, options: unknown) => SupabaseClientLike;
-            };
-
-            return createClient(config.url, config.publishableKey, {
-                auth: {
-                    persistSession: false,
-                    autoRefreshToken: false,
-                },
-            });
-        })
-        .catch(error => {
-            console.warn("Supabase client unavailable for roster sync", error);
-            return null;
-        });
-
-    return supabaseClientPromise;
-}
-
-function errorMessage(error: unknown): string {
-    if (error instanceof Error) return error.message;
-    if (error && typeof error === "object" && "message" in error) {
-        return String((error as { message?: unknown }).message || "Unknown Supabase error");
-    }
-    return "Unknown Supabase error";
 }
 
 function clean(value: unknown): string {
@@ -170,58 +110,6 @@ function metadata(value: unknown): Record<string, unknown> {
     return value && typeof value === "object" && !Array.isArray(value)
         ? value as Record<string, unknown>
         : {};
-}
-
-function activeRosterOrganizationId(): string {
-    return readActiveWorkspaceContext().organizationId;
-}
-
-function activeRosterOrganizationName(organizationId: string): string {
-    const context = readActiveWorkspaceContext();
-    return context.organizationId === organizationId
-        ? context.organizationName
-        : DEFAULT_ROSTER_ORGANIZATION_NAME;
-}
-
-function workspaceContextForRosterOrganization(organizationId: string): WorkspaceContext {
-    const context = readActiveWorkspaceContext();
-    if (context.organizationId === organizationId) return context;
-    return {
-        organizationId,
-        organizationName: DEFAULT_ROSTER_ORGANIZATION_NAME,
-    };
-}
-
-async function upsertRemoteWorkspaceBootstrap(
-    client: SupabaseClientLike,
-    context: WorkspaceContext,
-): Promise<void> {
-    const rows = workspaceBootstrapRows(context);
-    const organizationResult = await client.from("omr_organizations").upsert(rows.organization);
-    if (organizationResult.error) {
-        throw new Error(organizationResult.error.message || "Failed to bootstrap roster organization in Supabase");
-    }
-
-    if (rows.userProfile) {
-        const userResult = await client.from("omr_user_profiles").upsert(rows.userProfile);
-        if (userResult.error) {
-            throw new Error(userResult.error.message || "Failed to bootstrap roster user profile in Supabase");
-        }
-    }
-
-    if (rows.member) {
-        const memberResult = await client.from("omr_organization_members").upsert(rows.member);
-        if (memberResult.error) {
-            throw new Error(memberResult.error.message || "Failed to bootstrap roster organization member in Supabase");
-        }
-    }
-
-    if (rows.teacherProfile) {
-        const teacherResult = await client.from("omr_teacher_profiles").upsert(rows.teacherProfile);
-        if (teacherResult.error) {
-            throw new Error(teacherResult.error.message || "Failed to bootstrap roster teacher profile in Supabase");
-        }
-    }
 }
 
 function parseJson(value: string | null | undefined): unknown {
@@ -538,120 +426,10 @@ export function applyRosterTombstonesToSnapshot(
     return { ...snapshot, students, groups };
 }
 
-function mergeById<T extends { id: string }>(localItems: T[], remoteItems: T[]): T[] {
-    const items = new Map(remoteItems.map(item => [item.id, item]));
-    for (const item of localItems) items.set(item.id, item);
-    return Array.from(items.values());
-}
-
-function mergeRosterSnapshots(localSnapshot: RosterSnapshot, remoteSnapshot: RosterSnapshot): RosterSnapshot {
-    return {
-        students: mergeById(localSnapshot.students, remoteSnapshot.students),
-        groups: mergeById(localSnapshot.groups, remoteSnapshot.groups),
-        invites: localSnapshot.invites,
-    };
-}
-
-async function fetchRemoteRosterSnapshot(
-    organizationId = activeRosterOrganizationId(),
-): Promise<RosterSnapshot> {
-    const client = await getSupabaseClient();
-    if (!client && isSupabaseConfigured()) throw new Error("Supabase client unavailable");
-    if (!client) return { students: [], groups: [], invites: [] };
-
-    const [classResult, studentResult, enrollmentResult] = await Promise.all([
-        client.from("omr_classes").select("*").eq("organization_id", organizationId),
-        client.from("omr_student_profiles").select("*").eq("organization_id", organizationId),
-        client.from("omr_class_students").select("*").eq("organization_id", organizationId),
-    ]);
-
-    if (classResult.error) throw new Error(classResult.error.message || "Failed to load roster classes from Supabase");
-    if (studentResult.error) throw new Error(studentResult.error.message || "Failed to load roster students from Supabase");
-    if (enrollmentResult.error) throw new Error(enrollmentResult.error.message || "Failed to load roster enrollments from Supabase");
-
-    const groups = (classResult.data || [])
-        .map((row, index) => rosterGroupFromSupabaseRow(row as SupabaseRosterClassRow, index))
-        .filter((group): group is RosterGroup => !!group)
-        .sort((a, b) => `${a.region || ""}:${a.name}`.localeCompare(`${b.region || ""}:${b.name}`, "ko"));
-    const enrollmentByStudentId = new Map<string, SupabaseRosterClassStudentRow>();
-    for (const row of (enrollmentResult.data || []).map(row => row as SupabaseRosterClassStudentRow)) {
-        const current = enrollmentByStudentId.get(row.student_profile_id);
-        if (!current || row.enrollment_status === "active") {
-            enrollmentByStudentId.set(row.student_profile_id, row);
-        }
-    }
-    const students = (studentResult.data || [])
-        .map((row, index) => rosterStudentFromSupabaseRow(
-            row as SupabaseRosterStudentProfileRow,
-            groups,
-            enrollmentByStudentId.get((row as SupabaseRosterStudentProfileRow).id),
-            index,
-        ))
-        .filter((student): student is RosterStudent => !!student)
-        .sort((a, b) => a.name.localeCompare(b.name, "ko"));
-
-    return { students, groups, invites: [] };
-}
-
-async function fetchRemoteRosterRows(
-    client: SupabaseClientLike,
-    organizationId = activeRosterOrganizationId(),
-): Promise<SupabaseRemoteRosterRows> {
-    const [classResult, studentResult, enrollmentResult] = await Promise.all([
-        client.from("omr_classes").select("*").eq("organization_id", organizationId),
-        client.from("omr_student_profiles").select("*").eq("organization_id", organizationId),
-        client.from("omr_class_students").select("*").eq("organization_id", organizationId),
-    ]);
-
-    if (classResult.error) throw new Error(classResult.error.message || "Failed to load roster classes from Supabase");
-    if (studentResult.error) throw new Error(studentResult.error.message || "Failed to load roster students from Supabase");
-    if (enrollmentResult.error) throw new Error(enrollmentResult.error.message || "Failed to load roster enrollments from Supabase");
-
-    return {
-        classes: (classResult.data || []).map(row => row as SupabaseRosterClassRow),
-        students: (studentResult.data || []).map(row => row as SupabaseRosterStudentProfileRow),
-        enrollments: (enrollmentResult.data || []).map(row => row as SupabaseRosterClassStudentRow),
-    };
-}
-
-async function upsertRemoteRosterSnapshot(
-    snapshot: RosterSnapshot,
-    organizationId = activeRosterOrganizationId(),
-): Promise<void> {
-    const client = await getSupabaseClient();
-    if (!client && isSupabaseConfigured()) throw new Error("Supabase client unavailable");
-    if (!client) return;
-
-    const workspaceContext = workspaceContextForRosterOrganization(organizationId);
-    const remoteRows = await fetchRemoteRosterRows(client, organizationId);
-    const rows = rosterSnapshotToSupabaseRows(
-        snapshot,
-        organizationId,
-        undefined,
-        workspaceContext.organizationName || activeRosterOrganizationName(organizationId),
-    );
-    const staleRows = staleRosterRowsForSnapshot(snapshot, remoteRows, organizationId);
-    await upsertRemoteWorkspaceBootstrap(client, workspaceContext);
-
-    const classRows = [...rows.classes, ...staleRows.classes];
-    if (classRows.length > 0) {
-        const classResult = await client.from("omr_classes").upsert(classRows);
-        if (classResult.error) throw new Error(classResult.error.message || "Failed to save roster classes to Supabase");
-    }
-
-    const studentRows = [...rows.students, ...staleRows.students];
-    if (studentRows.length > 0) {
-        const studentResult = await client.from("omr_student_profiles").upsert(studentRows);
-        if (studentResult.error) throw new Error(studentResult.error.message || "Failed to save roster students to Supabase");
-    }
-
-    const enrollmentRows = [...rows.enrollments, ...staleRows.enrollments];
-    if (enrollmentRows.length > 0) {
-        const enrollmentResult = await client.from("omr_class_students").upsert(enrollmentRows);
-        if (enrollmentResult.error) throw new Error(enrollmentResult.error.message || "Failed to save roster enrollments to Supabase");
-    }
-}
-
+/**
+ * @deprecated Teacher UI must use teacherRosterClient. This local-only helper remains
+ * for offline utilities and tests, and never opens a browser Supabase connection.
+ */
 export async function loadRosterSnapshot(
     storage: Pick<Storage, "getItem" | "setItem">,
 ): Promise<RosterLoadResult> {
@@ -661,36 +439,10 @@ export async function loadRosterSnapshot(
         invites: parseStoredRosterInvites(storage.getItem(ROSTER_STORAGE_KEYS.invites)),
     };
 
-    if (!isSupabaseConfigured()) {
-        return { ...localSnapshot, remoteLoaded: false };
-    }
-
-    try {
-        const tombstones = readRosterTombstones(storage);
-        const remoteSnapshot = applyRosterTombstonesToSnapshot(
-            await fetchRemoteRosterSnapshot(),
-            tombstones,
-        );
-        const merged = mergeRosterSnapshots(localSnapshot, remoteSnapshot);
-        writeLocalRosterSnapshot(storage, merged);
-        await upsertRemoteRosterSnapshot(merged);
-        return {
-            ...merged,
-            remoteLoaded: true,
-            remoteSynced: true,
-            pendingSyncCount: 0,
-        };
-    } catch (error) {
-        return {
-            ...localSnapshot,
-            remoteLoaded: false,
-            remoteSynced: false,
-            pendingSyncCount: localSnapshot.students.length + localSnapshot.groups.length,
-            remoteError: errorMessage(error),
-        };
-    }
+    return { ...localSnapshot, remoteLoaded: false };
 }
 
+/** @deprecated Teacher UI must use teacherRosterClient. */
 export async function saveRosterSnapshot(
     storage: Pick<Storage, "getItem" | "setItem">,
     snapshot: RosterSnapshot,
@@ -703,12 +455,5 @@ export async function saveRosterSnapshot(
     );
     const localSaved = writeLocalRosterSnapshot(storage, snapshot);
     writeRosterTombstones(storage, tombstones);
-    if (!isSupabaseConfigured()) return { localSaved, remoteSaved: false };
-
-    try {
-        await upsertRemoteRosterSnapshot(snapshot);
-        return { localSaved, remoteSaved: true };
-    } catch (error) {
-        return { localSaved, remoteSaved: false, remoteError: errorMessage(error) };
-    }
+    return { localSaved, remoteSaved: false };
 }

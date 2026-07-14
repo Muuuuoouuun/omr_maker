@@ -554,11 +554,12 @@ create policy "prod materials write by staff"
     with check ((select public.omr_has_org_role(organization_id, array['owner', 'admin', 'teacher', 'assistant'])));
 
 drop policy if exists "prod exams read by members or assigned students" on public.omr_exams;
-create policy "prod exams read by members or assigned students"
+drop policy if exists "prod exams read by staff" on public.omr_exams;
+create policy "prod exams read by staff"
     on public.omr_exams
     for select
     to authenticated
-    using ((select public.omr_can_read_exam(organization_id, id)));
+    using ((select public.omr_has_org_role(organization_id, array['owner', 'admin', 'teacher', 'assistant', 'viewer'])));
 
 drop policy if exists "prod exams write by staff" on public.omr_exams;
 create policy "prod exams write by staff"
@@ -569,14 +570,12 @@ create policy "prod exams write by staff"
     with check ((select public.omr_has_org_role(organization_id, array['owner', 'admin', 'teacher', 'assistant'])));
 
 drop policy if exists "prod exam questions read with exam" on public.omr_exam_questions;
-create policy "prod exam questions read with exam"
+drop policy if exists "prod exam questions read by staff" on public.omr_exam_questions;
+create policy "prod exam questions read by staff"
     on public.omr_exam_questions
     for select
     to authenticated
-    using (
-        (organization_id is not null and (select public.omr_can_read_exam(organization_id, exam_id)))
-        or (organization_id is null and (select public.omr_can_read_exam_by_id(exam_id)))
-    );
+    using ((select public.omr_has_org_role(organization_id, array['owner', 'admin', 'teacher', 'assistant', 'viewer'])));
 
 drop policy if exists "prod exam questions write with exam" on public.omr_exam_questions;
 create policy "prod exam questions write with exam"
@@ -652,18 +651,13 @@ create policy "prod attempts read by staff or self"
     );
 
 drop policy if exists "prod attempts write by staff or self" on public.omr_attempts;
-create policy "prod attempts write by staff or self"
+drop policy if exists "prod attempts write by staff" on public.omr_attempts;
+create policy "prod attempts write by staff"
     on public.omr_attempts
     for all
     to authenticated
-    using (
-        (select public.omr_has_org_role(organization_id, array['owner', 'admin', 'teacher', 'assistant']))
-        or (select public.omr_is_org_student(organization_id, student_profile_id))
-    )
-    with check (
-        (select public.omr_has_org_role(organization_id, array['owner', 'admin', 'teacher', 'assistant']))
-        or (select public.omr_is_org_student(organization_id, student_profile_id))
-    );
+    using ((select public.omr_has_org_role(organization_id, array['owner', 'admin', 'teacher', 'assistant'])))
+    with check ((select public.omr_has_org_role(organization_id, array['owner', 'admin', 'teacher', 'assistant'])));
 
 drop policy if exists "prod question results read by staff or self" on public.omr_question_results;
 create policy "prod question results read by staff or self"
@@ -676,18 +670,13 @@ create policy "prod question results read by staff or self"
     );
 
 drop policy if exists "prod question results write by staff or self" on public.omr_question_results;
-create policy "prod question results write by staff or self"
+drop policy if exists "prod question results write by staff" on public.omr_question_results;
+create policy "prod question results write by staff"
     on public.omr_question_results
     for all
     to authenticated
-    using (
-        (select public.omr_has_org_role(organization_id, array['owner', 'admin', 'teacher', 'assistant']))
-        or (select public.omr_is_org_student(organization_id, student_profile_id))
-    )
-    with check (
-        (select public.omr_has_org_role(organization_id, array['owner', 'admin', 'teacher', 'assistant']))
-        or (select public.omr_is_org_student(organization_id, student_profile_id))
-    );
+    using ((select public.omr_has_org_role(organization_id, array['owner', 'admin', 'teacher', 'assistant'])))
+    with check ((select public.omr_has_org_role(organization_id, array['owner', 'admin', 'teacher', 'assistant'])));
 
 drop policy if exists "prod assignment submissions read by staff or self" on public.omr_assignment_submissions;
 create policy "prod assignment submissions read by staff or self"

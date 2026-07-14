@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useEffect, useRef } from "react";
+import React, { useEffect, useId, useRef } from "react";
 import { PenLine } from "lucide-react";
 import { DEFAULT_CHOICE_COUNT, normalizeChoiceCount, questionChoiceCount, type Question, type QuestionDrawingSummary } from "@/types/omr";
 import { getCardViewGridMetrics } from "@/lib/pure";
@@ -58,6 +58,7 @@ export default function OMRCardView({
 }: OMRCardViewProps) {
   const isEditor = mode === "editor";
   const fallbackChoiceCount = normalizeChoiceCount(optionsCount);
+  const cardViewId = useId();
 
   // In editor mode, "answers" to show as marked are the correct answers stored in the questions themselves
   const effectiveAnswers: Record<number, number> = isEditor
@@ -120,7 +121,15 @@ export default function OMRCardView({
           </div>
         </div>
 
-        <div className="omr-cardview-progress">
+        <div
+          className="omr-cardview-progress"
+          role="progressbar"
+          aria-label="답안 작성 진행률"
+          aria-valuemin={0}
+          aria-valuemax={totalCount}
+          aria-valuenow={answeredCount}
+          aria-valuetext={`${totalCount}문항 중 ${answeredCount}문항 답안 작성`}
+        >
           <div
             className="omr-cardview-progress-fill"
             style={{ width: `${progress}%` }}
@@ -136,6 +145,8 @@ export default function OMRCardView({
           const isAnswered = answered !== undefined && answered !== null;
           const questionOptionsCount = questionChoiceCount(q, fallbackChoiceCount);
           const handwritingSummary = handwritingByQuestionId.get(q.id);
+          const questionGroupId = `${cardViewId}-question-${q.id}`;
+          const questionStatus = isAnswered ? `${answered}번 선택됨` : "미응답";
 
           return (
             <div
@@ -147,8 +158,30 @@ export default function OMRCardView({
                 isSelected ? "selected" : ""
               } ${isEditor ? "editor-card" : ""} ${handwritingSummary ? "has-handwriting" : ""}`}
               onClick={() => onQuestionClick?.(q.id)}
+              role="radiogroup"
+              aria-labelledby={questionGroupId}
+              aria-describedby={`${questionGroupId}-status`}
             >
-              <div className="q-card-num">{q.number}.</div>
+              {onQuestionClick ? (
+                <button
+                  id={questionGroupId}
+                  type="button"
+                  className="q-card-num q-card-select-button"
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    onQuestionClick(q.id);
+                  }}
+                  aria-label={isEditor ? `문제 ${q.number}번 편집` : `문제 ${q.number}번으로 이동`}
+                  aria-pressed={isSelected}
+                >
+                  {q.number}.
+                </button>
+              ) : (
+                <span id={questionGroupId} className="q-card-num">{q.number}.</span>
+              )}
+              <span id={`${questionGroupId}-status`} className="sr-only">
+                {questionStatus}
+              </span>
 
               <div className="q-card-bubbles">
                 {Array.from({ length: questionOptionsCount }, (_, i) => {
@@ -171,6 +204,7 @@ export default function OMRCardView({
                   return (
                     <button
                       key={i}
+                      type="button"
                       className={bubbleClass}
                       onClick={(e) => {
                         e.stopPropagation();
@@ -178,7 +212,35 @@ export default function OMRCardView({
                           onAnswerClick(q.id, optNum);
                         }
                       }}
+                      onKeyDown={(event) => {
+                        const navigationKeys = ["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown", "Home", "End"];
+                        if (!navigationKeys.includes(event.key)) return;
+
+                        const radios = Array.from(
+                          event.currentTarget.parentElement?.querySelectorAll<HTMLButtonElement>('[role="radio"]') ?? []
+                        );
+                        const currentIndex = radios.indexOf(event.currentTarget);
+                        if (currentIndex < 0 || radios.length === 0) return;
+
+                        event.preventDefault();
+                        const lastIndex = radios.length - 1;
+                        const nextIndex = event.key === "Home"
+                          ? 0
+                          : event.key === "End"
+                            ? lastIndex
+                            : event.key === "ArrowLeft" || event.key === "ArrowUp"
+                              ? (currentIndex - 1 + radios.length) % radios.length
+                              : (currentIndex + 1) % radios.length;
+                        const nextRadio = radios[nextIndex];
+                        nextRadio?.focus();
+                        if ((mode === "solve" || mode === "editor") && onAnswerClick) {
+                          nextRadio?.click();
+                        }
+                      }}
                       disabled={mode === "view"}
+                      role="radio"
+                      tabIndex={isMarked || (!isAnswered && i === 0) ? 0 : -1}
+                      aria-checked={isMarked}
                       aria-label={`문제 ${q.number}번 보기 ${optNum}`}
                     >
                       {optNum}

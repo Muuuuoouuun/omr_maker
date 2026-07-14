@@ -19,6 +19,21 @@ const webKitPwaProjects = enableWebKitPwa ? [
         testMatch: /pwa-mobile\.spec\.ts/,
         use: { ...devices["iPad Pro 11 landscape"], browserName: "webkit" as const },
     },
+    {
+        name: "mobile-ios-webkit-teacher",
+        testMatch: /teacher-mobile\.spec\.ts/,
+        use: { ...devices["iPhone 13"], browserName: "webkit" as const },
+    },
+    {
+        name: "tablet-ios-webkit-teacher",
+        testMatch: /teacher-mobile\.spec\.ts/,
+        use: { ...devices["iPad Pro 11"], browserName: "webkit" as const },
+    },
+    {
+        name: "tablet-ios-webkit-landscape-teacher",
+        testMatch: /teacher-mobile\.spec\.ts/,
+        use: { ...devices["iPad Pro 11 landscape"], browserName: "webkit" as const },
+    },
 ] : [];
 
 export default defineConfig({
@@ -99,9 +114,24 @@ export default defineConfig({
         timeout: 60_000,
         env: {
             ...process.env,
+            TEACHER_ACCOUNTS: JSON.stringify([{
+                id: "admin",
+                email: "admin@example.com",
+                name: "E2E Admin",
+                password: "admin123",
+            }]),
+            OMR_TEACHER_ACCOUNTS: "",
+            TEACHER_LOGIN_ID: "admin",
+            TEACHER_PASSWORD: "admin123",
+            TEACHER_PASSWORD_HASH: "",
             NEXT_PUBLIC_SUPABASE_URL: "",
             NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY: "",
             NEXT_PUBLIC_SUPABASE_ANON_KEY: "",
+            SUPABASE_URL: "",
+            SUPABASE_SERVICE_ROLE_KEY: "",
+            OMR_SUPABASE_SERVICE_ROLE_KEY: "",
+            STUDENT_ATTEMPT_SECRET: "",
+            OMR_STUDENT_ATTEMPT_SECRET: "",
         },
     },
 });

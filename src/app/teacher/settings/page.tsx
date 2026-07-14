@@ -9,8 +9,10 @@ import { SETTINGS_STORAGE_KEY, maskGeminiApiKey } from "@/lib/geminiApiKey";
 import { DEFAULT_SETTINGS, mergeSettings, readStoredSettings, type AppSettings } from "@/lib/appSettings";
 import { buildDataDbReadiness, type DataDbReadinessSummary, type DataDbReadinessTone } from "@/lib/dataDbReadiness";
 import type { DeploymentReadinessSummary, DeploymentReadinessTone } from "@/lib/deploymentReadiness";
-import { loadAttempts, loadExams } from "@/lib/omrPersistence";
-import { loadRosterSnapshot, readRosterTombstones } from "@/lib/rosterPersistence";
+import { loadTeacherAttempts } from "@/lib/teacherAttemptClient";
+import { loadTeacherExams } from "@/lib/teacherExamClient";
+import { readRosterTombstones } from "@/lib/rosterPersistence";
+import { loadTeacherRosterSnapshot } from "@/lib/teacherRosterClient";
 import { PRIMARY_NOTIFICATION_CHANNEL } from "@/lib/serviceRoadmap";
 import {
     buildTeacherSessionDisplay,
@@ -313,9 +315,9 @@ export default function SettingsPage() {
         setIsCheckingDataDb(true);
         try {
             const [examResult, attemptResult, rosterResult] = await Promise.all([
-                loadExams(),
-                loadAttempts(),
-                loadRosterSnapshot(window.localStorage),
+                loadTeacherExams(),
+                loadTeacherAttempts(),
+                loadTeacherRosterSnapshot(window.localStorage),
             ]);
             const summary = buildDataDbReadiness({
                 syncSources: [

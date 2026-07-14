@@ -57,7 +57,11 @@ function rememberPromptDismissed(): void {
 export default function MobileInstallPrompt() {
   const pathname = usePathname();
   const descriptionId = useId();
-  const isSuppressedPath = pathname === "/create" || pathname === "/pwa-check" || pathname.startsWith("/solve/");
+  const isSuppressedPath = pathname === "/create"
+    || pathname === "/pwa-check"
+    || pathname.startsWith("/solve/")
+    || pathname.startsWith("/student/")
+    || pathname.startsWith("/teacher/");
   const [deferredPrompt, setDeferredPrompt] = useState<BeforeInstallPromptEvent | null>(null);
   const [showIOSPrompt, setShowIOSPrompt] = useState(false);
   const [isVisible, setIsVisible] = useState(false);

@@ -1,11 +1,12 @@
 "use client";
 
-import { useState, useEffect, useMemo } from "react";
+import { useState, useEffect, useMemo, useRef } from "react";
 import { useRouter } from "next/navigation";
 import BrandLogo from "@/components/BrandLogo";
 import ThemeToggle from "@/components/ThemeToggle";
 import { toast } from "@/components/Toast";
 import { verifyTeacherPassword } from "@/app/actions/auth";
+import { loginStudentWithStartCode } from "@/app/actions/studentAuth";
 import { formatRegionScopedLabel } from "@/lib/dashboardSelection";
 import { readLocalAttempts } from "@/lib/omrPersistence";
 import {
@@ -190,6 +191,7 @@ export default function Home() {
   const [teacherIdentifier, setTeacherIdentifier] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
+  const studentNameInputRef = useRef<HTMLInputElement>(null);
   const [pendingGuestPreview, setPendingGuestPreview] = useState<GuestMergePreview | null>(null);
   const [recentStudentSession, setRecentStudentSession] = useState<StudentSession | null>(null);
   // Anti-spoof: require a start-code for returning students.
@@ -301,10 +303,11 @@ export default function Home() {
     }
   };
 
-  const handleStudentLogin = () => {
+  const handleStudentLogin = async () => {
     const trimmedName = studentName.trim();
     if (!trimmedName) {
       setError("이름을 입력해주세요.");
+      studentNameInputRef.current?.focus();
       setTimeout(() => setError(""), 2000);
       return;
     }
@@ -360,53 +363,89 @@ export default function Home() {
       hasPriorAttempt,
       providedCode: startCode,
     });
+    const normalizedProvidedCode = normalizeStartCodeInput(startCode);
+    const locallyResolvedCode = ("code" in codeDecision ? codeDecision.code : "") || "";
 
-    if (codeDecision.codesChanged && !writeStudentCodes(localStorage, codeDecision.codes)) {
-      setError("시작 코드 저장에 실패했습니다. 브라우저 저장소를 확인해주세요.");
-      setTimeout(() => setError(""), 2500);
-      return;
-    }
-
-    if (codeDecision.status === "code_required") {
+    if (codeDecision.status === "code_required" && !normalizedProvidedCode) {
       setNeedsCode(true);
       setError("이미 등록된 학생입니다. 선생님이 발급한 시작 코드를 입력해주세요.");
       setTimeout(() => setError(""), 2500);
       return;
     }
 
-    if (codeDecision.status === "code_mismatch") {
-      setError("시작 코드가 일치하지 않습니다.");
-      setTimeout(() => setError(""), 2500);
+    const credentialStudentId = identity.matchedRosterProfile
+      ? identity.studentId
+      : studentLookup.trim() || identity.studentId;
+    const credentialGroupId = selectedGroupId.trim()
+      || (identity.matchedRosterProfile ? identity.groupId : "");
+
+    const serverLogin = await loginStudentWithStartCode({
+      studentId: credentialStudentId,
+      startCode: normalizedProvidedCode || locallyResolvedCode,
+      ...(credentialGroupId ? { groupId: credentialGroupId } : {}),
+    });
+    if (!serverLogin.success && serverLogin.status !== "local_only") {
+      const message = serverLogin.status === "credential_not_configured"
+        ? "서버 시작 코드가 아직 발급되지 않았습니다. 선생님에게 시작 코드 발급을 요청해주세요."
+        : serverLogin.status === "invalid_credentials"
+          ? "학생번호, 반 또는 시작 코드가 서버 명단과 일치하지 않습니다."
+          : "학생 인증 서버에 연결할 수 없습니다. 잠시 후 다시 시도해주세요.";
+      setError(message);
+      setTimeout(() => setError(""), 3500);
       return;
     }
 
-    if (codeDecision.status === "new_code_issued") {
+    if (!serverLogin.success) {
+      if (codeDecision.status === "code_required") {
+        setNeedsCode(true);
+        setError("이미 등록된 학생입니다. 선생님이 발급한 시작 코드를 입력해주세요.");
+        setTimeout(() => setError(""), 2500);
+        return;
+      }
+      if (codeDecision.status === "code_mismatch") {
+        setError("시작 코드가 일치하지 않습니다.");
+        setTimeout(() => setError(""), 2500);
+        return;
+      }
+      if (codeDecision.codesChanged && !writeStudentCodes(localStorage, codeDecision.codes)) {
+        setError("시작 코드 저장에 실패했습니다. 브라우저 저장소를 확인해주세요.");
+        setTimeout(() => setError(""), 2500);
+        return;
+      }
+    }
+
+    if (codeDecision.status === "new_code_issued" && !serverLogin.success) {
       toast.success(
         "시작 코드 발급",
         `다음 로그인 시 이 코드를 입력하세요: ${codeDecision.code}`
       );
     }
 
+    const verifiedStudent = serverLogin.success ? serverLogin.student : null;
+    const verifiedGroupId = verifiedStudent?.groupId || identity.groupId;
+    const verifiedName = verifiedStudent?.studentName || trimmedName;
+    const verifiedStudentId = verifiedStudent?.studentId || identity.studentId;
+
     const session: StudentSession = {
-      name: trimmedName,
-      studentId: identity.studentId,
+      name: verifiedName,
+      studentId: verifiedStudentId,
       loginId: identity.legacyStudentId,
-      groupId: identity.groupId,
+      groupId: verifiedGroupId,
       groupName: identity.groupName,
       ...regionSnapshot,
       isGuest: false,
-      identityType: "temporary",
+      identityType: verifiedStudent?.identityType || "temporary",
     };
 
     const pendingGuestMerge = consumePendingGuestMerge();
     if (pendingGuestMerge) {
       const mergedCount = mergeGuestAttempts(pendingGuestMerge.guestId, {
-        studentId: identity.studentId,
-        name: trimmedName,
-        groupId: identity.groupId,
+        studentId: verifiedStudentId,
+        name: verifiedName,
+        groupId: verifiedGroupId,
         groupName: identity.groupName,
         ...regionSnapshot,
-        identityType: "temporary",
+        identityType: verifiedStudent?.identityType || "temporary",
       });
       if (mergedCount > 0) {
         toast.success("게스트 기록 연결됨", `${mergedCount}개의 시험 기록을 학생 기록으로 저장했습니다.`);
@@ -796,8 +835,17 @@ export default function Home() {
                   </h2>
                 </div>
 
+                <form
+                  aria-label="교사 로그인"
+                  noValidate
+                  onSubmit={(event) => {
+                    event.preventDefault();
+                    void handleTeacherLogin();
+                  }}
+                >
                 <div style={{ marginBottom: "1.05rem" }}>
                   <label
+                    htmlFor="teacher-identifier"
                     style={{
                       display: "block",
                       marginBottom: "0.55rem",
@@ -811,21 +859,24 @@ export default function Home() {
                     아이디 또는 이메일
                   </label>
                   <input
+                    id="teacher-identifier"
                     type="text"
                     className="input-field"
                     value={teacherIdentifier}
                     onChange={(e) => setTeacherIdentifier(e.target.value)}
-                    onKeyDown={(e) => e.key === "Enter" && handleTeacherLogin()}
                     placeholder="admin 또는 teacher@example.com"
                     autoFocus
                     autoComplete="username"
                     autoCapitalize="none"
                     spellCheck={false}
+                    aria-invalid={Boolean(error)}
+                    aria-describedby="teacher-login-feedback"
                   />
                 </div>
 
                 <div style={{ marginBottom: "1.75rem" }}>
                   <label
+                    htmlFor="teacher-password"
                     style={{
                       display: "block",
                       marginBottom: "0.55rem",
@@ -839,17 +890,24 @@ export default function Home() {
                     비밀번호
                   </label>
                   <input
+                    id="teacher-password"
                     type="password"
                     className="input-field"
                     value={password}
                     onChange={(e) => setPassword(e.target.value)}
-                    onKeyDown={(e) => e.key === "Enter" && handleTeacherLogin()}
                     placeholder="비밀번호 입력"
                     autoComplete="current-password"
+                    aria-invalid={Boolean(error)}
+                    aria-describedby="teacher-login-feedback"
                   />
-                  {error ? (
-                    <div style={{ marginTop: "0.5rem", display: "grid", gap: "0.35rem" }}>
-                      <p style={{ fontSize: "0.8rem", color: "var(--error)", fontWeight: 600 }}>
+                  <div
+                    id="teacher-login-feedback"
+                    aria-live="polite"
+                    style={{ marginTop: "0.5rem", display: "grid", gap: "0.35rem" }}
+                  >
+                    {error ? (
+                      <>
+                      <p role="alert" style={{ fontSize: "0.8rem", color: "var(--error)", fontWeight: 600 }}>
                         {error}
                       </p>
                       {shouldShowTeacherDeploymentHelp(error) && (
@@ -857,17 +915,19 @@ export default function Home() {
                           {TEACHER_AUTH_DEPLOYMENT_HELP}
                         </p>
                       )}
-                    </div>
-                  ) : (
-                    <p style={{ fontSize: "0.8rem", color: "var(--muted)", marginTop: "0.5rem", opacity: 0.75 }}>
+                      </>
+                    ) : (
+                    <p style={{ fontSize: "0.8rem", color: "var(--muted)", opacity: 0.75 }}>
                       교사용 계정 정보를 입력하세요.
                     </p>
-                  )}
+                    )}
+                  </div>
                 </div>
 
-                <button onClick={handleTeacherLogin} className="btn btn-primary" style={{ width: "100%" }}>
+                <button type="submit" className="btn btn-primary" style={{ width: "100%" }}>
                   대시보드 입장
                 </button>
+                </form>
               </>
             ) : (
               <>
@@ -905,15 +965,28 @@ export default function Home() {
                     이름
                   </label>
                   <input
+                    ref={studentNameInputRef}
+                    id="student-name"
                     type="text"
                     className="input-field"
                     aria-label="이름"
+                    aria-invalid={error === "이름을 입력해주세요."}
+                    aria-describedby={error === "이름을 입력해주세요." ? "student-name-error" : undefined}
                     value={studentName}
                     onChange={(e) => setStudentName(e.target.value)}
                     placeholder="이름을 입력하세요"
                     autoFocus
                     autoComplete="name"
                   />
+                  {error === "이름을 입력해주세요." && (
+                    <p
+                      id="student-name-error"
+                      role="alert"
+                      style={{ fontSize: "0.8rem", color: "var(--error)", marginTop: "0.45rem", fontWeight: 700 }}
+                    >
+                      {error}
+                    </p>
+                  )}
                 </div>
 
                 <div style={{ marginBottom: "1.1rem" }}>
@@ -973,20 +1046,33 @@ export default function Home() {
                   >
                     반 선택
                   </label>
-                  <select
-                    aria-label="반 선택"
-                    value={selectedGroupId}
-                    onChange={(e) => setSelectedGroupId(e.target.value)}
-                    className="input-field"
-                    style={{ cursor: "pointer" }}
-                  >
-                    <option value="">반을 선택하세요</option>
-                    {studentGroupOptions.map((group) => (
-                      <option key={`${group.region || ""}:${group.id}`} value={group.id}>
-                        {formatRegionScopedLabel(group.name, group.region)}
-                      </option>
-                    ))}
-                  </select>
+                  {studentGroupOptions.length > 0 ? (
+                    <select
+                      aria-label="반 선택"
+                      value={selectedGroupId}
+                      onChange={(e) => setSelectedGroupId(e.target.value)}
+                      className="input-field"
+                      style={{ cursor: "pointer" }}
+                    >
+                      <option value="">반을 선택하세요</option>
+                      {studentGroupOptions.map((group) => (
+                        <option key={`${group.region || ""}:${group.id}`} value={group.id}>
+                          {formatRegionScopedLabel(group.name, group.region)}
+                        </option>
+                      ))}
+                    </select>
+                  ) : (
+                    <input
+                      type="text"
+                      className="input-field"
+                      aria-label="반 코드"
+                      value={selectedGroupId}
+                      onChange={(e) => setSelectedGroupId(e.target.value.trim())}
+                      placeholder="선생님이 알려준 반 코드"
+                      autoCapitalize="none"
+                      spellCheck={false}
+                    />
+                  )}
                   {studentGroupOptions.length === 0 && (
                     <p style={{ fontSize: "0.75rem", color: "var(--muted)", marginTop: "0.45rem", lineHeight: 1.45 }}>
                       등록된 반이 없으면 아래 반 코드로 게스트 시험을 시작할 수 있습니다.
@@ -994,8 +1080,8 @@ export default function Home() {
                   )}
                 </div>
 
-                {error && (
-                  <p style={{ fontSize: "0.8rem", color: "var(--error)", marginTop: "-0.35rem", marginBottom: "1.35rem", fontWeight: 600 }}>
+                {error && error !== "이름을 입력해주세요." && (
+                  <p role="alert" style={{ fontSize: "0.8rem", color: "var(--error)", marginTop: "-0.35rem", marginBottom: "1.35rem", fontWeight: 600 }}>
                     {error}
                   </p>
                 )}
@@ -1021,7 +1107,7 @@ export default function Home() {
                   </div>
                 )}
 
-                {needsCode && (
+                {(
                   <div style={{ marginBottom: "1.75rem" }}>
                     <label
                       style={{
@@ -1029,7 +1115,7 @@ export default function Home() {
                         marginBottom: "0.55rem",
                         fontSize: "0.75rem",
                         fontWeight: 700,
-                        color: "var(--muted)",
+                        color: needsCode ? "var(--warning)" : "var(--muted)",
                         textTransform: "uppercase",
                         letterSpacing: "0.07em",
                       }}

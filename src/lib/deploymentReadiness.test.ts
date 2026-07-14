@@ -31,7 +31,7 @@ describe("deployment readiness", () => {
         }));
     });
 
-    it("reports a runnable but not fully hardened env without exposing secret values", () => {
+    it("fails closed when production has browser sync but no server grading gateway", () => {
         const summary = buildDeploymentReadiness({
             NODE_ENV: "production",
             TEACHER_LOGIN_ID: "director",
@@ -41,7 +41,7 @@ describe("deployment readiness", () => {
             OMR_PRODUCTION_RLS_APPLIED: "true",
         });
 
-        expect(summary.label).toBe("배포 보강 권장");
+        expect(summary.label).toBe("배포 확인 필요");
         expect(summary.credentialCount).toBe(1);
         expect(summary.checks).toContainEqual(expect.objectContaining({
             key: "teacher_credentials",
@@ -53,6 +53,14 @@ describe("deployment readiness", () => {
             tone: "warning",
             detail: expect.stringContaining("TEACHER_SESSION_SECRET"),
         }));
+        expect(summary.checks).toContainEqual(expect.objectContaining({
+            key: "student_attempt_secret",
+            tone: "error",
+        }));
+        expect(summary.checks).toContainEqual(expect.objectContaining({
+            key: "supabase_service_role",
+            tone: "error",
+        }));
         expect(JSON.stringify(summary)).not.toContain("super-secret");
     });
 
@@ -61,14 +69,33 @@ describe("deployment readiness", () => {
             NODE_ENV: "production",
             TEACHER_ACCOUNTS: JSON.stringify([{ id: "teacher-a", email: "a@example.com", passwordHash: teacherPasswordHash("pass-a") }]),
             TEACHER_SESSION_SECRET: "session-secret",
+            STUDENT_ATTEMPT_SECRET: "student-attempt-secret",
             NEXT_PUBLIC_SUPABASE_URL: "https://example.supabase.co",
             NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY: "sb_publishable_public",
             SUPABASE_SERVICE_ROLE_KEY: "service-role",
             OMR_PRODUCTION_RLS_APPLIED: "true",
+        }, {
+            ready: true,
+            version: "202607140013",
+            attemptRpc: true,
+            teacherExamRpc: true,
+            teacherAttemptRpc: true,
+            teacherRosterRpc: true,
+            handwritingRpc: true,
+            examsForceRls: true,
+            attemptsForceRls: true,
+            questionResultsForceRls: true,
+            studentCredentialsForceRls: true,
+            remoteAssetsForceRls: true,
+            rosterInvitesForceRls: true,
         });
 
         expect(summary.checks).toContainEqual(expect.objectContaining({
             key: "teacher_session_secret",
+            tone: "ready",
+        }));
+        expect(summary.checks).toContainEqual(expect.objectContaining({
+            key: "student_attempt_secret",
             tone: "ready",
         }));
         expect(summary.checks).toContainEqual(expect.objectContaining({
@@ -80,6 +107,25 @@ describe("deployment readiness", () => {
             tone: "ready",
         }));
         expect(summary.readyCount).toBe(5);
+    });
+
+    it("does not accept a production RLS flag without a live DB probe", () => {
+        const summary = buildDeploymentReadiness({
+            NODE_ENV: "production",
+            TEACHER_ACCOUNTS: JSON.stringify([{ id: "teacher-a", email: "a@example.com", passwordHash: teacherPasswordHash("pass-a") }]),
+            TEACHER_SESSION_SECRET: "session-secret",
+            STUDENT_ATTEMPT_SECRET: "student-attempt-secret",
+            SUPABASE_URL: "https://example.supabase.co",
+            SUPABASE_SERVICE_ROLE_KEY: "service-role",
+            OMR_PRODUCTION_RLS_APPLIED: "true",
+        });
+
+        expect(summary.label).toBe("배포 확인 필요");
+        expect(summary.checks).toContainEqual(expect.objectContaining({
+            key: "production_rls",
+            tone: "error",
+            detail: expect.stringContaining("실제 DB"),
+        }));
     });
 
     it("escalates to an error when production sync is on but production RLS is not confirmed", () => {

@@ -116,6 +116,21 @@ describe("service UI surface", () => {
         expect(distributeModal).toContain("그룹 배포 대상 요약");
         expect(distributeModal).toContain("명단 기준 대상");
         expect(distributeModal).toContain("미응시/카카오 후보 산정");
+        expect(distributeModal).toContain('role="dialog"');
+        expect(distributeModal).toContain('aria-modal="true"');
+        expect(distributeModal).toContain("aria-labelledby={dialogTitleId}");
+        expect(distributeModal).toContain("event.key === 'Escape'");
+        expect(distributeModal).toContain("previouslyFocusedRef.current?.focus()");
+    });
+
+    it("keeps teacher result sorting keyboard accessible and exposes sort state", () => {
+        const examDetail = readProjectFile("src/app/teacher/exam/[id]/page.tsx");
+        expect(examDetail).toContain('aria-sort={sortAria("name")}');
+        expect(examDetail).toContain('aria-sort={sortAria("percent")}');
+        expect(examDetail).toContain('aria-sort={sortAria("finishedAt")}');
+        expect(examDetail).toContain('type="button"');
+        expect(examDetail).toContain('sortableHeader("name", "학생")');
+        expect(examDetail).not.toContain('<h3 style={{ fontSize: \'1.1rem\', fontWeight: 700 }}>Student Results</h3>');
     });
 
     it("keeps tablet handwriting usable with stylus-first input and finger scrolling", () => {
@@ -144,6 +159,25 @@ describe("service UI surface", () => {
         expect(omrCardView).toContain("has-handwriting");
         expect(css).toContain(".q-handwriting-chip");
         expect(css).toContain(".solve-omr-pane-handwriting");
+    });
+
+    it("exposes OMR answers as keyboard-operable radio groups", () => {
+        const omrCardView = readProjectFile("src/components/OMRCardView.tsx");
+        const homePage = readProjectFile("src/app/page.tsx");
+
+        expect(omrCardView).toContain('role="radiogroup"');
+        expect(omrCardView).toContain('role="radio"');
+        expect(omrCardView).toContain("aria-checked={isMarked}");
+        expect(omrCardView).toContain("tabIndex={isMarked || (!isAnswered && i === 0) ? 0 : -1}");
+        expect(omrCardView).toContain('event.key === "ArrowLeft"');
+        expect(omrCardView).toContain('event.key === "Home"');
+        expect(omrCardView).toContain('role="progressbar"');
+        expect(omrCardView).toContain("aria-valuenow={answeredCount}");
+        expect(omrCardView).toContain("q-card-select-button");
+        expect(homePage).toContain('aria-label="교사 로그인"');
+        expect(homePage).toContain('htmlFor="teacher-identifier"');
+        expect(homePage).toContain('htmlFor="teacher-password"');
+        expect(homePage).toContain('id="teacher-login-feedback"');
     });
 
     it("keeps toast notifications inside mobile safe areas", () => {
@@ -323,7 +357,12 @@ describe("service UI surface", () => {
         expect(playwrightConfig).toContain("mobile-ios-webkit-pwa");
         expect(playwrightConfig).toContain("tablet-ios-webkit-pwa");
         expect(playwrightConfig).toContain("tablet-ios-webkit-landscape-pwa");
+        expect(playwrightConfig).toContain("mobile-ios-webkit-teacher");
+        expect(playwrightConfig).toContain("tablet-ios-webkit-teacher");
+        expect(playwrightConfig).toContain("tablet-ios-webkit-landscape-teacher");
         expect(teacherMobileE2e).toContain("expectTeacherHeaderTouchFriendly");
+        expect(teacherMobileE2e).toContain("exposes a labeled, error-connected teacher login form");
+        expect(teacherMobileE2e).toContain("문제 1번 편집");
         expect(teacherMobileE2e).toContain(".create-editor-actions button, .create-editor-actions label");
     });
 
@@ -541,6 +580,14 @@ describe("service UI surface", () => {
         expect(nextConfig).toContain('key: "Permissions-Policy", value: "camera=(), microphone=(), geolocation=(), payment=()"');
     });
 
+    it("protects server-funded AI answer analysis with origin, teacher session, and rate limits", () => {
+        const analyzeAction = readProjectFile("src/app/actions/analyzeKey.ts");
+        expect(analyzeAction).toContain("TEACHER_SERVER_SESSION_COOKIE");
+        expect(analyzeAction).toContain("authorizeTeacherAiActionRequest");
+        expect(analyzeAction.indexOf("await requireTeacherAiAccess()"))
+            .toBeLessThan(analyzeAction.indexOf("validateAnswerImageParts(imageParts)"));
+    });
+
     it("keeps the teacher dashboard localized, keyboard reachable, and mobile-table friendly", () => {
         const css = readProjectFile("src/app/globals.css");
         const dashboard = readProjectFile("src/app/teacher/dashboard/page.tsx");
@@ -634,7 +681,7 @@ describe("service UI surface", () => {
 
         expect(dashboardPage).toContain("getCurrentPlan");
         expect(examAnalyticsTab).toContain("resolveExamSelectionInputValue");
-        expect(dashboardPage).toContain("loadRosterSnapshot(localStorage)");
+        expect(dashboardPage).toContain("loadTeacherRosterSnapshot(localStorage)");
         expect(dashboardPage).toContain("summarizePersistenceHealth([examResult, attemptResult, rosterResult])");
         expect(dashboardPage).toContain("rosterStudents: shouldSeedDemo ? undefined : loadedRosterStudents");
         expect(dashboardPage).toContain("dashboardAnalysisActions");
@@ -765,7 +812,7 @@ describe("service UI surface", () => {
         expect(createPage).toContain("운영 점검");
         expect(createPage).toContain("serviceReadiness.canOpenDistribution");
         expect(createPage).toContain("serviceReadiness.items.map");
-        expect(createPage).toContain("setLoadedExam(examData)");
+        expect(createPage).toContain("setLoadedExam(persistedExam)");
         expect(createPage).toContain("setQuestions(questionsWithRegions)");
         expect(createPage).toContain("router.replace(`/create?edit=${id}`");
         expect(readiness).toContain("저장 기준");
@@ -908,9 +955,9 @@ describe("service UI surface", () => {
         expect(settingsPage).toContain("데이터 · DB");
         expect(settingsPage).toContain("DataDbSection");
         expect(settingsPage).toContain("buildDataDbReadiness");
-        expect(settingsPage).toContain("loadExams()");
-        expect(settingsPage).toContain("loadAttempts()");
-        expect(settingsPage).toContain("loadRosterSnapshot(window.localStorage)");
+        expect(settingsPage).toContain("loadTeacherExams()");
+        expect(settingsPage).toContain("loadTeacherAttempts()");
+        expect(settingsPage).toContain("loadTeacherRosterSnapshot(window.localStorage)");
         expect(settingsPage).toContain("readRosterTombstones(window.localStorage)");
         expect(settingsPage).toContain('aria-label="데이터 DB 상태 새로고침"');
         expect(settingsPage).toContain("원격 동기화 세부 상태");
@@ -958,9 +1005,9 @@ describe("service UI surface", () => {
         expect(usersPage).toContain("function isLegacyDemoRosterSnapshot");
         expect(usersPage).toContain("localStorage.removeItem(key)");
         expect(usersPage).toContain("const storedStudents = readRosterStudents(localStorage)");
-        expect(usersPage).toContain("loadRosterSnapshot(localStorage)");
+        expect(usersPage).toContain("loadTeacherRosterSnapshot(localStorage)");
         expect(usersPage).toContain("const nextStudents = useDemoRoster ? [] : rosterResult.students");
-        expect(usersPage).toContain("saveRosterSnapshot(localStorage");
+        expect(usersPage).toContain("saveTeacherRosterSnapshot(localStorage");
         expect(usersPage).toContain("데모 명단 모드");
         expect(usersPage).toContain('aria-label="데모 명단 안내"');
         expect(usersPage).toContain("const rosterStudents = isDemoRoster ? MOCK_STUDENTS : students");
@@ -984,7 +1031,7 @@ describe("service UI surface", () => {
         expect(livePage).toContain('return { exams: loaded, mode: "real" }');
         expect(livePage).toContain("const isDemoLive = liveDataMode === \"demo\"");
         expect(livePage).toContain("allowSynthetic: isDemoLive");
-        expect(livePage).toContain("saveAttempt(attempt)");
+        expect(livePage).toContain("saveTeacherAttempt(attempt)");
         expect(livePage).toContain("forceCompleteLiveAttempt");
         expect(livePage).toContain("카카오 알림 연동 전");
         expect(livePage).toContain("데모 실시간 모드");

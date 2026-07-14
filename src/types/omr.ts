@@ -1,8 +1,12 @@
 export const DEFAULT_CHOICE_COUNT = 5;
 
 export interface StoredDataRef {
-    store: 'indexeddb';
+    store: 'indexeddb' | 'remote';
     key: string;
+    organizationId?: string;
+    kind?: 'problem_pdf' | 'answer_key_pdf' | 'attempt_handwriting';
+    examId?: string;
+    attemptId?: string;
     name?: string;
     mimeType?: string;
     size?: number;

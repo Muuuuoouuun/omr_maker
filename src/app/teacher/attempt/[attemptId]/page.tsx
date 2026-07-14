@@ -7,9 +7,11 @@ import dynamic from "next/dynamic";
 import { Download, Lock, PenLine, Repeat2, Send, Target } from "lucide-react";
 import type { Attempt, AttemptFeedback, Exam, FeedbackDownloadPolicy, PdfDrawings, PlanKey, QuestionResult } from "@/types/omr";
 import { loadJsonRecord, storedDataUrlToFile } from "@/utils/blobStore";
+import { getTeacherRemoteAssetUrl } from "@/app/actions/remoteAssets";
 import { getCurrentPlan, getPlanLabel, hasPlanEntitlement } from "@/utils/plans";
 import { formatKoreanDateTime } from "@/lib/pure";
-import { loadAttempt, loadExam } from "@/lib/omrPersistence";
+import { loadTeacherAttempt as loadTeacherAttemptRecord } from "@/lib/teacherAttemptClient";
+import { loadTeacherExam } from "@/lib/teacherExamClient";
 import {
     buildLearningRecommendations,
     buildRetakeQuestionIds,
@@ -22,12 +24,14 @@ import { buildRetakeHref } from "@/lib/retakeLinks";
 import {
     DEFAULT_FEEDBACK_DOWNLOAD_POLICY,
     createAttemptFeedbackDraft,
-    loadAttemptFeedback,
     loadFeedbackMarkupDrawings,
     mergePdfDrawings,
-    returnAttemptFeedback,
-    saveAttemptFeedbackDraft,
 } from "@/lib/feedbackPersistence";
+import {
+    loadTeacherAttemptFeedback,
+    returnTeacherAttemptFeedback,
+    saveTeacherAttemptFeedbackDraft,
+} from "@/lib/teacherFeedbackClient";
 
 const PDFViewer = dynamic(() => import("@/components/PDFViewer"), { ssr: false });
 
@@ -94,7 +98,7 @@ export default function TeacherAttemptPage() {
             }
 
             try {
-                const found = await loadAttempt(id);
+                const found = await loadTeacherAttemptRecord(id);
                 if (!found || cancelled) {
                     setLoaded(true);
                     return;
@@ -102,7 +106,7 @@ export default function TeacherAttemptPage() {
 
                 setAttempt(found);
 
-                const existingFeedback = await loadAttemptFeedback(found.id);
+                const existingFeedback = await loadTeacherAttemptFeedback(found.id);
                 if (!cancelled) {
                     const nextFeedback = existingFeedback || createAttemptFeedbackDraft(found);
                     setFeedback(nextFeedback);
@@ -112,10 +116,14 @@ export default function TeacherAttemptPage() {
                     if (!cancelled && markupDrawings) setTeacherMarkupDrawings(markupDrawings);
                 }
 
-                const parsedExam = await loadExam(found.examId);
+                const parsedExam = await loadTeacherExam(found.examId);
                 if (parsedExam) {
                     setExam(parsedExam);
-                    storedDataUrlToFile("problem.pdf", parsedExam.pdfData, parsedExam.pdfDataRef)
+                    const pdfData = parsedExam.pdfDataRef?.store === "remote"
+                        ? await getTeacherRemoteAssetUrl(parsedExam.pdfDataRef)
+                            .then(result => result.status === "signed" ? result.signedUrl : undefined)
+                        : parsedExam.pdfData;
+                    storedDataUrlToFile("problem.pdf", pdfData, parsedExam.pdfDataRef)
                         .then(file => {
                             if (!cancelled && file) setPdfFile(file);
                         })
@@ -129,7 +137,15 @@ export default function TeacherAttemptPage() {
 
                 const drawingsRef = found.handwriting?.strokesRef || found.drawingsRef;
                 if (found.handwritingArchived && drawingsRef) {
-                    loadJsonRecord<PdfDrawings>(drawingsRef)
+                    const drawingsPromise = drawingsRef.store === "remote"
+                        ? getTeacherRemoteAssetUrl(drawingsRef).then(async result => {
+                            if (result.status !== "signed") return null;
+                            const response = await fetch(result.signedUrl, { cache: "no-store" });
+                            if (!response.ok) return null;
+                            return response.json() as Promise<PdfDrawings>;
+                        })
+                        : loadJsonRecord<PdfDrawings>(drawingsRef);
+                    drawingsPromise
                         .then(restored => {
                             if (cancelled) return;
                             if (restored) setDrawings(restored);
@@ -210,20 +226,20 @@ export default function TeacherAttemptPage() {
         };
 
         try {
-            const saveResult = await saveAttemptFeedbackDraft(nextFeedback, teacherMarkupDrawings);
-            if (!saveResult.localSaved) {
-                setFeedbackNotice("피드백을 저장하지 못했습니다. 브라우저 저장 공간을 확인해주세요.");
+            const saveResult = await saveTeacherAttemptFeedbackDraft(nextFeedback, teacherMarkupDrawings);
+            if (!saveResult.localSaved && !saveResult.remoteSaved) {
+                setFeedbackNotice(saveResult.remoteError || "피드백을 저장하지 못했습니다.");
                 return;
             }
 
-            let latest = await loadAttemptFeedback(attempt.id);
+            let latest = await loadTeacherAttemptFeedback(attempt.id);
             if (returnAfterSave && latest) {
-                const returnResult = await returnAttemptFeedback(latest.id);
-                if (!returnResult.localSaved) {
-                    setFeedbackNotice("초안은 저장됐지만 학생에게 반환하지 못했습니다.");
+                const returnResult = await returnTeacherAttemptFeedback(latest.id);
+                if (!returnResult.localSaved && !returnResult.remoteSaved) {
+                    setFeedbackNotice(returnResult.remoteError || "초안은 저장됐지만 학생에게 반환하지 못했습니다.");
                     return;
                 }
-                latest = await loadAttemptFeedback(attempt.id);
+                latest = await loadTeacherAttemptFeedback(attempt.id);
             }
 
             if (latest) {

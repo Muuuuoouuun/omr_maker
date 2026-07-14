@@ -26,6 +26,7 @@ import {
 import { isSameOriginServerActionRequest, SERVER_ACTION_ORIGIN_ERROR } from "@/lib/serverActionSecurity";
 import { buildDeploymentReadiness, type DeploymentReadinessSummary } from "@/lib/deploymentReadiness";
 import { workspaceContextFromIdentity } from "@/lib/workspaceContext";
+import { probeSupabaseDeploymentWithServiceRole } from "@/lib/supabaseReadinessProbe";
 
 function clientFingerprintFromHeaders(headerStore: Headers): string {
     const forwardedFor = headerStore.get("x-forwarded-for")?.split(",")[0]?.trim();
@@ -113,5 +114,6 @@ export async function clearTeacherAuthSession(): Promise<{ success: true }> {
 }
 
 export async function getTeacherDeploymentReadiness(): Promise<DeploymentReadinessSummary> {
-    return buildDeploymentReadiness();
+    const databaseProbe = await probeSupabaseDeploymentWithServiceRole();
+    return buildDeploymentReadiness(process.env, databaseProbe);
 }

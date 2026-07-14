@@ -79,6 +79,27 @@ create table if not exists public.omr_student_profiles (
     updated_at timestamptz not null default now()
 );
 
+create unique index if not exists omr_student_profiles_org_id_uidx
+    on public.omr_student_profiles (organization_id, id);
+
+create table if not exists public.omr_student_start_credentials (
+    organization_id text not null,
+    student_profile_id text not null,
+    start_code_hash text not null,
+    updated_at timestamptz not null default now(),
+    primary key (organization_id, student_profile_id),
+    foreign key (organization_id, student_profile_id)
+        references public.omr_student_profiles(organization_id, id)
+        on delete cascade
+);
+
+comment on table public.omr_student_start_credentials is
+    'Server-only PBKDF2 student start-code hashes. Access is restricted to service-role server actions.';
+
+alter table public.omr_student_start_credentials enable row level security;
+alter table public.omr_student_start_credentials force row level security;
+revoke all on public.omr_student_start_credentials from anon, authenticated;
+
 create table if not exists public.omr_classes (
     id text primary key,
     organization_id text references public.omr_organizations(id) on delete cascade,
@@ -95,6 +116,21 @@ create table if not exists public.omr_classes (
     created_at timestamptz not null default now(),
     updated_at timestamptz not null default now()
 );
+
+create table if not exists public.omr_roster_invites (
+    organization_id text not null references public.omr_organizations(id) on delete cascade,
+    id text not null,
+    email text not null,
+    sent_at text not null,
+    status text not null default 'pending'
+        check (status in ('pending', 'accepted', 'expired')),
+    updated_at timestamptz not null default now(),
+    primary key (organization_id, id)
+);
+
+alter table public.omr_roster_invites enable row level security;
+alter table public.omr_roster_invites force row level security;
+revoke all on public.omr_roster_invites from anon, authenticated;
 
 create table if not exists public.omr_class_teachers (
     class_id text not null references public.omr_classes(id) on delete cascade,
@@ -239,6 +275,7 @@ create table if not exists public.omr_assignment_targets (
 
 create table if not exists public.omr_attempts (
     id text primary key,
+    ticket_id text,
     organization_id text,
     class_id text,
     assignment_id text,
@@ -508,6 +545,7 @@ alter table public.omr_exams
     add column if not exists created_by_user_id text;
 
 alter table public.omr_attempts
+    add column if not exists ticket_id text,
     add column if not exists organization_id text,
     add column if not exists class_id text,
     add column if not exists assignment_id text,
@@ -758,6 +796,10 @@ create index if not exists omr_assignment_targets_assignment_idx
 
 create index if not exists omr_attempts_exam_id_idx
     on public.omr_attempts (exam_id);
+
+create unique index if not exists omr_attempts_ticket_id_unique_idx
+    on public.omr_attempts (ticket_id)
+    where ticket_id is not null;
 
 create index if not exists omr_attempts_organization_id_idx
     on public.omr_attempts (organization_id);

@@ -9,6 +9,12 @@ import TeacherSessionChip from "@/components/TeacherSessionChip";
 import ThemeToggle from "@/components/ThemeToggle";
 import { useRouter, useSearchParams } from "next/navigation";
 import { toast } from "@/components/Toast";
+import { getTeacherRemoteAssetUrl, uploadTeacherExamAsset } from "@/app/actions/remoteAssets";
+import {
+    listTeacherCanonicalExams,
+    loadTeacherCanonicalExam,
+    saveTeacherCanonicalExam,
+} from "@/app/actions/teacherExam";
 import { ArrowUpToLine, BrainCircuit, ChevronDown, Crosshair, Eye, FileText, FolderOpen, Loader2, Maximize2, Minimize2, PanelRightClose, PanelRightOpen, RefreshCw, Redo2, RotateCcw, Save, Settings2, Unlink, Undo2, X, ZoomIn, ZoomOut } from "lucide-react";
 
 const PDFViewer = dynamic(() => import("@/components/PDFViewer"), { ssr: false });
@@ -22,7 +28,7 @@ import { secureRandomId } from "@/utils/ids";
 import { validateExamDraft } from "@/lib/examValidation";
 import { buildExamServiceReadiness, type ExamServiceReadinessLevel } from "@/lib/examServiceReadiness";
 import { readStoredExamDefaults } from "@/lib/appSettings";
-import { loadExam, loadExams, saveExam } from "@/lib/omrPersistence";
+import { loadExam, loadExams, saveExam, saveLocalExam } from "@/lib/omrPersistence";
 import { attachInferredQuestionPdfRegions } from "@/lib/handwritingAnalytics";
 import {
     detectQuestionLocationsFromText,
@@ -747,10 +753,18 @@ function CreateOMRPageInner() {
         let cancelled = false;
         const loadExistingExam = async () => {
             try {
-                const parsed = await loadExam(editId);
+                const serverExam = await loadTeacherCanonicalExam(editId);
+                const parsed = serverExam.status === "loaded"
+                    ? serverExam.exam
+                    : serverExam.status === "local_only"
+                        ? await loadExam(editId)
+                        : null;
                 if (cancelled) return;
                 if (!parsed) {
-                    toast.error('시험을 찾을 수 없습니다', editId);
+                    toast.error(
+                        serverExam.status === "service_unavailable" ? '시험 서버 연결 실패' : '시험을 찾을 수 없습니다',
+                        serverExam.status === "service_unavailable" ? '네트워크를 확인한 뒤 다시 시도해주세요.' : editId,
+                    );
                     return;
                 }
                 setLoadedExam(parsed);
@@ -763,14 +777,30 @@ function CreateOMRPageInner() {
                 if (parsed.startAt) setStartAt(isoToLocalInput(parsed.startAt));
                 if (parsed.endAt) setEndAt(isoToLocalInput(parsed.endAt));
                 setInitialDefaultsReady(true);
-                storedDataUrlToFile("problem.pdf", parsed.pdfData, parsed.pdfDataRef)
+                const problemAsset = parsed.pdfDataRef?.store === "remote"
+                    ? await getTeacherRemoteAssetUrl(parsed.pdfDataRef)
+                    : null;
+                const problemData = problemAsset?.status === "signed" ? problemAsset.signedUrl : parsed.pdfData;
+                storedDataUrlToFile(
+                    "problem.pdf",
+                    problemData,
+                    parsed.pdfDataRef?.store === "remote" ? undefined : parsed.pdfDataRef,
+                )
                     .then(file => {
                         if (!cancelled && file) setPdfFile(file);
                     })
                     .catch(() => {
                         if (!cancelled) toast.error('문제지 PDF 불러오기 실패');
                     });
-                storedDataUrlToFile("answer_key.pdf", parsed.answerKeyPdf, parsed.answerKeyPdfRef)
+                const answerAsset = parsed.answerKeyPdfRef?.store === "remote"
+                    ? await getTeacherRemoteAssetUrl(parsed.answerKeyPdfRef)
+                    : null;
+                const answerData = answerAsset?.status === "signed" ? answerAsset.signedUrl : parsed.answerKeyPdf;
+                storedDataUrlToFile(
+                    "answer_key.pdf",
+                    answerData,
+                    parsed.answerKeyPdfRef?.store === "remote" ? undefined : parsed.answerKeyPdfRef,
+                )
                     .then(file => {
                         if (!cancelled && file) setAnswerKeyPdf(file);
                     })
@@ -1333,7 +1363,16 @@ function CreateOMRPageInner() {
 
             if (!editId) {
                 const plan = getCurrentPlan();
-                const examResult = await loadExams();
+                const serverExams = await listTeacherCanonicalExams();
+                const examResult = serverExams.status === "loaded"
+                    ? { items: serverExams.exams }
+                    : serverExams.status === "local_only"
+                        ? await loadExams()
+                        : null;
+                if (!examResult) {
+                    toast.error("시험 사용량 확인 실패", "서버 시험 목록을 불러온 뒤 다시 시도해주세요.");
+                    return "";
+                }
                 const usage = buildBillingUsageSummary({
                     exams: examResult.items,
                     attempts: [],
@@ -1361,15 +1400,41 @@ function CreateOMRPageInner() {
             let answerKeyPdfRef = loadedExam?.answerKeyPdfRef;
 
             if (pdfFile) {
-                const stored = await saveFileDataUrl(`exam:${id}:problemPdf`, pdfFile);
-                pdfData = stored.inlineDataUrl || "";
-                pdfDataRef = stored.ref;
+                const formData = new FormData();
+                formData.set("file", pdfFile);
+                formData.set("kind", "problem_pdf");
+                formData.set("examId", id);
+                const remote = await uploadTeacherExamAsset(formData);
+                if (remote.status === "uploaded") {
+                    pdfData = "";
+                    pdfDataRef = remote.ref;
+                } else if (remote.status === "local_only") {
+                    const stored = await saveFileDataUrl(`exam:${id}:problemPdf`, pdfFile);
+                    pdfData = stored.inlineDataUrl || "";
+                    pdfDataRef = stored.ref;
+                } else {
+                    toast.error("문제지 업로드 실패", remote.error || "비공개 원격 저장소에 문제지를 보관하지 못했습니다.");
+                    return "";
+                }
             }
 
             if (answerKeyPdf) {
-                const stored = await saveFileDataUrl(`exam:${id}:answerKeyPdf`, answerKeyPdf);
-                answerKeyData = stored.inlineDataUrl || "";
-                answerKeyPdfRef = stored.ref;
+                const formData = new FormData();
+                formData.set("file", answerKeyPdf);
+                formData.set("kind", "answer_key_pdf");
+                formData.set("examId", id);
+                const remote = await uploadTeacherExamAsset(formData);
+                if (remote.status === "uploaded") {
+                    answerKeyData = "";
+                    answerKeyPdfRef = remote.ref;
+                } else if (remote.status === "local_only") {
+                    const stored = await saveFileDataUrl(`exam:${id}:answerKeyPdf`, answerKeyPdf);
+                    answerKeyData = stored.inlineDataUrl || "";
+                    answerKeyPdfRef = stored.ref;
+                } else {
+                    toast.error("답지 업로드 실패", remote.error || "비공개 원격 저장소에 답지를 보관하지 못했습니다.");
+                    return "";
+                }
             }
 
             // Fill only missing regions so teacher-tuned regions survive every re-share.
@@ -1393,7 +1458,19 @@ function CreateOMRPageInner() {
                 archived: loadedExam?.archived || false,
             };
 
-            const result = await saveExam(examData);
+            const serverSave = await saveTeacherCanonicalExam(examData);
+            if (serverSave.status === "unauthorized") {
+                toast.error("교사 인증 필요", "교사로 다시 로그인한 뒤 시험을 저장해주세요.");
+                return "";
+            }
+            if (serverSave.status === "invalid_exam" || serverSave.status === "service_unavailable") {
+                toast.error("배포 저장 실패", serverSave.error || "서버 시험 저장소에 시험을 보관하지 못했습니다.");
+                return "";
+            }
+            const persistedExam = serverSave.status === "saved" ? serverSave.exam : examData;
+            const result = serverSave.status === "saved"
+                ? { localSaved: saveLocalExam(persistedExam), remoteSaved: true }
+                : await saveExam(persistedExam);
             const feedback = summarizePersistenceWrite(result, {
                 target: "시험",
                 action: "저장",
@@ -1407,7 +1484,7 @@ function CreateOMRPageInner() {
                 toast.info(feedback.title, feedback.detail);
             }
             rememberLabelUsage(labelSettingsUsageFromQuestions(questionsWithRegions));
-            setLoadedExam(examData);
+            setLoadedExam(persistedExam);
             setQuestions(questionsWithRegions);
             if (!editId) {
                 router.replace(`/create?edit=${id}`, { scroll: false });

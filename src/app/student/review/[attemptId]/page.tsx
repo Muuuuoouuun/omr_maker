@@ -8,7 +8,7 @@ import { BookOpen, ChevronDown, ChevronUp, Clock, Download, Repeat2, Target } fr
 import type { Attempt, AttemptFeedback, Exam, PdfDrawings } from "@/types/omr";
 import { storedDataUrlToFile, loadJsonRecord } from "@/utils/blobStore";
 import { attemptBelongsToSession, getSession } from "@/utils/storage";
-import { loadAttemptForStudent, loadExam } from "@/lib/omrPersistence";
+import { loadStudentOfficialAttempt } from "@/lib/studentAttemptClient";
 import { formatKoreanDateTime } from "@/lib/pure";
 import {
     buildLearningRecommendations,
@@ -26,10 +26,12 @@ import {
     canDownloadReturnedFeedback,
     canDownloadReturnedMarkup,
     loadFeedbackMarkupDrawings,
-    loadReturnedAttemptFeedbackForStudent,
-    markFeedbackOpenedForStudent,
     mergePdfDrawings,
 } from "@/lib/feedbackPersistence";
+import {
+    loadStudentReturnedFeedbackForAttempt,
+    markStudentFeedbackOpened,
+} from "@/lib/studentFeedbackClient";
 
 const PDFViewer = dynamic(() => import("@/components/PDFViewer"), { ssr: false });
 
@@ -61,32 +63,37 @@ export default function ReviewPage() {
     const [returnedFeedback, setReturnedFeedback] = useState<AttemptFeedback | null>(null);
     const [teacherMarkupDrawings, setTeacherMarkupDrawings] = useState<PdfDrawings | undefined>(undefined);
     const [annotationDownloading, setAnnotationDownloading] = useState(false);
+    const [loading, setLoading] = useState(true);
+    const [loadFailed, setLoadFailed] = useState(false);
+    const [retryKey, setRetryKey] = useState(0);
 
     useEffect(() => {
         let cancelled = false;
         const loadReview = async () => {
             if (!id || cancelled) return;
-            const session = getSession();
-            if (!session) {
-                setAccessDenied(true);
-                return;
-            }
+            try {
+                const session = getSession();
+                if (!session) {
+                    setAccessDenied(true);
+                    return;
+                }
 
-            // Load Attempt
-            const found = await loadAttemptForStudent(id, session);
-            if (found && !cancelled) {
+                // Load Attempt
+                const officialDetail = await loadStudentOfficialAttempt(id, session);
+                if (officialDetail && !cancelled) {
+                const found = officialDetail.attempt;
                 if (!attemptBelongsToSession(found, session)) {
                     setAccessDenied(true);
                     return;
                 }
                 setAttempt(found);
 
-                const feedback = await loadReturnedAttemptFeedbackForStudent(found.id, session.studentId);
+                const feedback = await loadStudentReturnedFeedbackForAttempt(found.id, session.studentId);
                 if (feedback && !cancelled) {
                     setReturnedFeedback(feedback);
-                    void markFeedbackOpenedForStudent(feedback.id, session.studentId).then(async () => {
+                    void markStudentFeedbackOpened(feedback.id, session.studentId).then(async () => {
                         if (cancelled) return;
-                        const refreshed = await loadReturnedAttemptFeedbackForStudent(found.id, session.studentId);
+                        const refreshed = await loadStudentReturnedFeedbackForAttempt(found.id, session.studentId);
                         if (!cancelled && refreshed) setReturnedFeedback(refreshed);
                     });
                     const markup = await loadFeedbackMarkupDrawings(feedback);
@@ -123,8 +130,8 @@ export default function ReviewPage() {
                 }
 
                 // Load Exam Data associated with this attempt
-                const parsedExam = await loadExam(found.examId);
-                if (parsedExam && !cancelled) {
+                const parsedExam = officialDetail.exam;
+                if (!cancelled) {
                     setExam(parsedExam);
                     setPdfFile(null);
                     setPdfLoadFailed(false);
@@ -137,13 +144,19 @@ export default function ReviewPage() {
                             if (!cancelled) setPdfLoadFailed(true);
                         });
                 }
-            } else if (!cancelled) {
-                setAccessDenied(true);
+                } else if (!cancelled) {
+                    setLoadFailed(true);
+                }
+            } catch (error) {
+                console.error("Failed to load review", error);
+                if (!cancelled) setLoadFailed(true);
+            } finally {
+                if (!cancelled) setLoading(false);
             }
         };
         void loadReview();
         return () => { cancelled = true; };
-    }, [id]);
+    }, [id, retryKey]);
 
     if (accessDenied) {
         return (
@@ -155,8 +168,31 @@ export default function ReviewPage() {
         );
     }
 
-    if (!attempt || !exam) {
-        return <div style={{ padding: '2rem', textAlign: 'center' }}>Loading...</div>;
+    if (loading) {
+        return <div role="status" aria-live="polite" style={{ padding: '3rem 1rem', textAlign: 'center', color: 'var(--muted)' }}>결과 리포트를 불러오는 중입니다.</div>;
+    }
+
+    if (loadFailed || !attempt || !exam) {
+        return (
+            <div role="alert" style={{ padding: '3rem 1rem', textAlign: 'center', color: 'var(--foreground)' }}>
+                <h2>결과 리포트를 불러오지 못했습니다.</h2>
+                <p style={{ color: 'var(--muted)', marginTop: '0.5rem' }}>네트워크와 로그인 상태를 확인한 뒤 다시 시도해주세요.</p>
+                <div style={{ display: 'flex', justifyContent: 'center', gap: '0.75rem', marginTop: '1.25rem', flexWrap: 'wrap' }}>
+                    <button
+                        type="button"
+                        className="btn btn-primary"
+                        onClick={() => {
+                            setLoadFailed(false);
+                            setLoading(true);
+                            setRetryKey(key => key + 1);
+                        }}
+                    >
+                        다시 시도
+                    </button>
+                    <Link href="/student/history" className="btn btn-secondary">기록 목록</Link>
+                </div>
+            </div>
+        );
     }
 
     const reviewQuestionIds = attempt.retake?.questionIds?.length
@@ -253,11 +289,18 @@ export default function ReviewPage() {
     };
 
     return (
-        <div className="layout-main" style={{ minHeight: '100vh', background: '#f8fafc' }}>
-            <header className="header" style={{ background: 'white', borderBottom: '1px solid #e2e8f0' }}>
+        <div className="layout-main" style={{ minHeight: '100vh', background: 'var(--background)' }}>
+            <header className="header" style={{ background: 'var(--surface)', borderBottom: '1px solid var(--border)' }}>
                 <div className="container header-content">
                     <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
-                        <button onClick={() => router.back()} style={{ border: 'none', background: 'none', fontSize: '1.2rem', cursor: 'pointer' }}>←</button>
+                        <button
+                            type="button"
+                            onClick={() => router.back()}
+                            aria-label="결과 기록으로 돌아가기"
+                            style={{ border: 'none', background: 'none', fontSize: '1.2rem', cursor: 'pointer', minWidth: '44px', minHeight: '44px' }}
+                        >
+                            ←
+                        </button>
                         <span style={{ fontWeight: 600 }}>결과 리포트</span>
                     </div>
                     <Link href="/student/history" className="btn btn-secondary" style={{ fontSize: '0.9rem', padding: '0.4rem 1rem' }}>
@@ -343,7 +386,7 @@ export default function ReviewPage() {
                         <div style={{ display: 'flex', justifyContent: 'space-between', gap: '1rem', alignItems: 'flex-start', flexWrap: 'wrap' }}>
                             <div>
                                 <div style={{ color: '#4f46e5', fontSize: '0.78rem', fontWeight: 900, marginBottom: '0.25rem' }}>
-                                    NEW FEEDBACK
+                                    새 피드백
                                 </div>
                                 <h2 style={{ fontSize: '1.05rem', fontWeight: 900, color: '#0f172a' }}>
                                     교사 피드백
@@ -817,7 +860,7 @@ export default function ReviewPage() {
                                             style={{
                                                 display: 'inline-flex', alignItems: 'center', gap: '0.4rem',
                                                 background: 'transparent', border: 'none', cursor: 'pointer',
-                                                padding: 0, color: 'var(--primary, #4f46e5)', fontWeight: 600,
+                                                padding: '0.5rem 0', minHeight: '44px', color: 'var(--primary, #4f46e5)', fontWeight: 600,
                                                 fontSize: '0.9rem',
                                             }}
                                             aria-expanded={explanationOpen}

@@ -24,6 +24,11 @@
   --success: #10b981;
   --error: #ef4444;
   --warning: #f59e0b;
+  --text-primary: #4338ca;
+  --text-secondary: #be185d;
+  --text-success: #047857;
+  --text-error: #b91c1c;
+  --text-warning: #92400e;
 
   /* Radius */
   --radius-sm: 0.5rem;
@@ -72,6 +77,11 @@
   --foreground: #f1f5f9;
   --muted: #94a3b8;
   --border: #1e293b;
+  --text-primary: #c7d2fe;
+  --text-secondary: #f9a8d4;
+  --text-success: #6ee7b7;
+  --text-error: #fca5a5;
+  --text-warning: #fde68a;
 
   --shadow-glass: 0 8px 32px 0 rgba(0, 0, 0, 0.5);
   --shadow-glow: 0 0 20px rgba(99, 102, 241, 0.2);
@@ -344,6 +354,7 @@ html[data-motion="off"] .orb {
   transition: var(--transition-base);
   position: relative;
   overflow: hidden;
+  min-height: 2.75rem;
 }
 
 .btn:active {
@@ -611,19 +622,19 @@ html[data-motion="off"] .orb {
 
 .badge-primary {
   background: rgba(99, 102, 241, 0.1);
-  color: var(--primary);
+  color: var(--text-primary);
   border: 1px solid rgba(99, 102, 241, 0.2);
 }
 
 .badge-secondary {
   background: rgba(236, 72, 153, 0.1);
-  color: var(--secondary);
+  color: var(--text-secondary);
   border: 1px solid rgba(236, 72, 153, 0.2);
 }
 
 .badge-success {
   background: rgba(16, 185, 129, 0.1);
-  color: var(--success);
+  color: var(--text-success);
   border: 1px solid rgba(16, 185, 129, 0.2);
 }
 
@@ -639,17 +650,17 @@ html[data-motion="off"] .orb {
 
 .icon-wrap-primary {
   background: rgba(99, 102, 241, 0.1);
-  color: var(--primary);
+  color: var(--text-primary);
 }
 
 .icon-wrap-secondary {
   background: rgba(236, 72, 153, 0.1);
-  color: var(--secondary);
+  color: var(--text-secondary);
 }
 
 .icon-wrap-success {
   background: rgba(16, 185, 129, 0.1);
-  color: var(--success);
+  color: var(--text-success);
 }
 
 /* ─── Divider with label ─────────────────────────────── */
@@ -1030,6 +1041,7 @@ html[data-motion="off"] .orb {
   line-height: 1;
   letter-spacing: 0;
   text-decoration: none;
+  min-height: 2.75rem;
 }
 
 .brand-logo__mark {
@@ -1946,12 +1958,12 @@ body:has(.create-workspace.is-resizing) {
 }
 
 .create-design-check-pill.is-ready {
-  color: var(--success);
+  color: var(--text-success);
   background: rgba(16, 185, 129, 0.08);
 }
 
 .create-design-check-pill.needs-work {
-  color: var(--warning);
+  color: var(--text-warning);
   background: rgba(245, 158, 11, 0.1);
 }
 
@@ -2104,12 +2116,12 @@ body:has(.create-workspace.is-resizing) {
 }
 
 .create-validation-line.is-ready strong {
-  color: var(--success);
+  color: var(--text-success);
 }
 
 .create-validation-line.needs-work strong,
 .create-validation-line .is-error {
-  color: var(--error);
+  color: var(--text-error);
 }
 
 .create-question-quick-card {
@@ -3315,6 +3327,19 @@ body:has(.create-workspace.is-resizing) {
   flex-shrink: 0;
 }
 
+.q-card-select-button {
+  min-width: 44px;
+  min-height: 44px;
+  margin: -0.3rem 0 -0.3rem -0.3rem;
+  padding: 0.3rem;
+  cursor: pointer;
+}
+
+.q-card-select-button:hover,
+.q-card-select-button:focus-visible {
+  color: var(--primary);
+}
+
 .omr-cardview.is-vertical-numbering .q-card-num {
   width: auto;
   height: auto;
@@ -3324,6 +3349,11 @@ body:has(.create-workspace.is-resizing) {
   background: transparent;
   box-shadow: none;
   color: var(--foreground);
+}
+
+.omr-cardview.is-vertical-numbering .q-card-select-button {
+  min-width: 44px;
+  min-height: 44px;
 }
 
 .q-card-bubbles {
@@ -3351,7 +3381,7 @@ body:has(.create-workspace.is-resizing) {
 
 .q-bubble:hover {
   border-color: var(--primary);
-  color: var(--primary);
+  color: var(--text-primary);
   transform: scale(1.08);
 }
 
@@ -3365,13 +3395,13 @@ body:has(.create-workspace.is-resizing) {
 .q-bubble.correct {
   background: rgba(16, 185, 129, 0.1);
   border-color: var(--success);
-  color: var(--success);
+  color: var(--text-success);
 }
 
 .q-bubble.wrong {
   background: rgba(239, 68, 68, 0.1);
   border-color: var(--error);
-  color: var(--error);
+  color: var(--text-error);
   text-decoration: line-through;
 }
 
@@ -3399,7 +3429,7 @@ body:has(.create-workspace.is-resizing) {
 .q-card.editor-card .q-bubble.marked {
   background: rgba(239, 68, 68, 0.1);
   border-color: var(--error);
-  color: var(--error);
+  color: var(--text-error);
   box-shadow: 0 0 0 2px rgba(239, 68, 68, 0.2);
 }
 
@@ -3436,17 +3466,17 @@ body:has(.create-workspace.is-resizing) {
 
 .q-meta-label {
   background: rgba(99, 102, 241, 0.1);
-  color: var(--primary);
+  color: var(--text-primary);
 }
 
 .q-meta-score {
   background: rgba(236, 72, 153, 0.1);
-  color: var(--secondary);
+  color: var(--text-secondary);
 }
 
 .q-meta-pdf {
   background: rgba(16, 185, 129, 0.1);
-  color: var(--success);
+  color: var(--text-success);
   padding: 2px 5px;
 }
 

@@ -149,6 +149,7 @@ export interface SupabaseQuestionResultRow {
     answered_at: string | null;
     finished_at: string;
     payload: QuestionResult;
+    created_at: string;
     updated_at: string;
 }
 
@@ -633,6 +634,7 @@ export function questionResultToSupabaseRow(
         answered_at: nullableString(result.answeredAt),
         finished_at: finishedAt,
         payload,
+        created_at: finishedAt,
         updated_at: updatedAt,
     };
 }
@@ -901,7 +903,7 @@ export function readLocalExams(): Exam[] {
 
 function isStoredDataRef(value: unknown): value is StoredDataRef {
     return isRecord(value)
-        && value.store === "indexeddb"
+        && (value.store === "indexeddb" || value.store === "remote")
         && typeof value.key === "string"
         && value.key.trim().length > 0;
 }

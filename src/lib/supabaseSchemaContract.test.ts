@@ -12,6 +12,26 @@ function readProductionRls(): string {
     return readFileSync(path.join(rootDir, "supabase/production-rls.sql"), "utf8");
 }
 
+function readStudentAttemptGatewayMigration(): string {
+    return readFileSync(path.join(rootDir, "supabase/migrations/202607140003_student_attempt_gateway.sql"), "utf8");
+}
+
+function readServiceReadinessMigration(): string {
+    return readFileSync(path.join(rootDir, "supabase/migrations/202607140013_service_readiness_probe_v2.sql"), "utf8");
+}
+
+function readTeacherExamGatewayMigration(): string {
+    return readFileSync(path.join(rootDir, "supabase/migrations/202607140007_teacher_exam_gateway.sql"), "utf8");
+}
+
+function readAttemptHandwritingGatewayMigration(): string {
+    return readFileSync(path.join(rootDir, "supabase/migrations/202607140009_attempt_handwriting_gateway.sql"), "utf8");
+}
+
+function readTeacherAttemptMutationMigration(): string {
+    return readFileSync(path.join(rootDir, "supabase/migrations/202607140012_teacher_attempt_mutation.sql"), "utf8");
+}
+
 function columnExists(schema: string, table: string, column: string): boolean {
     const createPattern = new RegExp(`create table if not exists public\\.${table}\\s*\\(([\\s\\S]*?)\\n\\);`, "i");
     const createMatch = schema.match(createPattern);
@@ -33,6 +53,11 @@ function expectIndex(schema: string, indexName: string) {
 describe("Supabase schema contract", () => {
     const schema = readSchema();
     const productionRls = readProductionRls();
+    const studentAttemptGateway = readStudentAttemptGatewayMigration();
+    const serviceReadiness = readServiceReadinessMigration();
+    const teacherExamGateway = readTeacherExamGatewayMigration();
+    const attemptHandwritingGateway = readAttemptHandwritingGatewayMigration();
+    const teacherAttemptMutation = readTeacherAttemptMutationMigration();
 
     it("keeps roster columns and indexes aligned with teacher user management sync", () => {
         expectColumns(schema, "omr_organizations", [
@@ -347,5 +372,60 @@ describe("Supabase schema contract", () => {
         expect(productionRls).not.toContain('create policy "prod attempt feedback update by staff or returned student"');
         expect(productionRls).not.toMatch(/using\s*\(\s*true\s*\)/i);
         expect(productionRls).not.toMatch(/with check\s*\(\s*true\s*\)/i);
+    });
+
+    it("keeps canonical answers staff-only and student submissions behind an atomic service-role RPC", () => {
+        expect(productionRls).toContain('create policy "prod exams read by staff"');
+        expect(productionRls).toContain('create policy "prod exam questions read by staff"');
+        expect(productionRls).toContain('create policy "prod attempts write by staff"');
+        expect(productionRls).toContain('create policy "prod question results write by staff"');
+        expect(productionRls).not.toContain('create policy "prod exams read by members or assigned students"');
+        expect(productionRls).not.toContain('create policy "prod attempts write by staff or self"');
+
+        expectColumns(schema, "omr_attempts", ["ticket_id"]);
+        expectIndex(schema, "omr_attempts_ticket_id_unique_idx");
+        expect(studentAttemptGateway).toContain("create or replace function public.omr_submit_attempt_v1");
+        expect(studentAttemptGateway).toContain("security definer");
+        expect(studentAttemptGateway).toContain("on conflict (ticket_id)");
+        expect(studentAttemptGateway).toContain("grant execute on function public.omr_submit_attempt_v1(text, jsonb, jsonb) to service_role");
+        expect(studentAttemptGateway).toContain("revoke all on function public.omr_submit_attempt_v1(text, jsonb, jsonb) from authenticated");
+    });
+
+    it("requires a service-role-only live DB readiness probe", () => {
+        expect(serviceReadiness).toContain("omr_service_readiness_v1");
+        expect(serviceReadiness).toContain("relforcerowsecurity");
+        expect(serviceReadiness).toContain("omr_submit_attempt_v1(text,jsonb,jsonb)");
+        expect(serviceReadiness).toContain("omr_teacher_update_attempt_v1(text,jsonb,jsonb)");
+        expect(serviceReadiness).toContain("omr_save_roster_v1(text,jsonb,jsonb,jsonb,jsonb)");
+        expect(serviceReadiness).toContain("omr_roster_invites");
+        expect(serviceReadiness).toContain("revoke all on function public.omr_service_readiness_v1() from anon");
+        expect(serviceReadiness).toContain("grant execute on function public.omr_service_readiness_v1() to service_role");
+    });
+
+    it("updates canonical teacher attempt repairs atomically and only through the service role", () => {
+        expect(teacherAttemptMutation).toContain("create or replace function public.omr_teacher_update_attempt_v1");
+        expect(teacherAttemptMutation).toContain("attempt is outside teacher organization");
+        expect(teacherAttemptMutation).toContain("attempt exam is immutable");
+        expect(teacherAttemptMutation).toContain("question result scope mismatch");
+        expect(teacherAttemptMutation).toContain("revoke all on function public.omr_teacher_update_attempt_v1(text, jsonb, jsonb) from authenticated");
+        expect(teacherAttemptMutation).toContain("grant execute on function public.omr_teacher_update_attempt_v1(text, jsonb, jsonb) to service_role");
+    });
+
+    it("keeps canonical teacher exam and question replacement atomic and service-role-only", () => {
+        expect(teacherExamGateway).toContain("create or replace function public.omr_save_exam_v1");
+        expect(teacherExamGateway).toContain("security definer");
+        expect(teacherExamGateway).toContain("exam question scope mismatch");
+        expect(teacherExamGateway).toContain("delete from public.omr_exam_questions");
+        expect(teacherExamGateway).toContain("revoke all on function public.omr_save_exam_v1(jsonb, jsonb) from authenticated");
+        expect(teacherExamGateway).toContain("grant execute on function public.omr_save_exam_v1(jsonb, jsonb) to service_role");
+    });
+
+    it("attaches remote handwriting only through a scoped service-role RPC", () => {
+        expect(attemptHandwritingGateway).toContain("omr_attach_attempt_handwriting_v1");
+        expect(attemptHandwritingGateway).toContain("asset.organization_id = v_attempt.organization_id");
+        expect(attemptHandwritingGateway).toContain("asset.attempt_id = v_attempt.id");
+        expect(attemptHandwritingGateway).toContain("asset.kind = 'attempt_handwriting'");
+        expect(attemptHandwritingGateway).toContain("revoke all on function public.omr_attach_attempt_handwriting_v1(text, text, jsonb) from authenticated");
+        expect(attemptHandwritingGateway).toContain("grant execute on function public.omr_attach_attempt_handwriting_v1(text, text, jsonb) to service_role");
     });
 });

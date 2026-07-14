@@ -13,12 +13,11 @@ import { toast } from "@/components/Toast";
 import { Users, BarChart3, PlusCircle, Activity, Bell, CreditCard, Download, Settings } from "lucide-react";
 import { copyStoredData } from "@/utils/blobStore";
 import { secureRandomId } from "@/utils/ids";
-import { deleteExam, saveExam } from "@/lib/omrPersistence";
+import { deleteTeacherExamMutation, saveTeacherExamMutation } from "@/lib/teacherExamClient";
 import { formatKoreanDate } from "@/lib/pure";
 import { safeRatePercent } from "@/lib/scoreUtils";
 import { buildExamSummaryRows, splitExamSummaryRows } from "@/lib/dashboardSummary";
 import { buildDashboardStatsCsv } from "@/lib/dashboardStatsExport";
-import { summarizePersistenceWrite } from "@/lib/persistenceFeedback";
 
 const TrendChart = dynamic(
     () => import("@/components/dashboard/TrendChart"),
@@ -140,19 +139,12 @@ export default function OverviewTab({ exams: examsProp, attempts, stats, trendDa
                 archived: false,
             };
             try {
-                const result = await saveExam(copy);
-                const feedback = summarizePersistenceWrite(result, {
-                    target: "시험",
-                    action: "복제",
-                    failureTitle: "복제 실패",
-                    failureDetail: "브라우저 저장소 용량 또는 Supabase 동기화 상태를 확인해주세요.",
-                });
-                if (!feedback.ok) throw new Error(feedback.detail);
+                const result = await saveTeacherExamMutation(copy);
+                if (!result.ok) throw new Error(result.error);
                 setExams(prev => [copy, ...prev]);
                 toast.success('시험 복제됨', `"${target.title}"의 복사본을 만들었습니다.`);
-                if (feedback.level === "info") toast.info(feedback.title, feedback.detail);
-            } catch {
-                toast.error('복제 실패', 'localStorage 용량이 부족할 수 있습니다.');
+            } catch (error) {
+                toast.error('복제 실패', error instanceof Error ? error.message : '시험 서버에 저장하지 못했습니다.');
             }
             return;
         }
@@ -161,18 +153,12 @@ export default function OverviewTab({ exams: examsProp, attempts, stats, trendDa
             const nextArchived = !target.archived;
             const updated: Exam = { ...target, archived: nextArchived, updatedAt: new Date().toISOString() };
             try {
-                const result = await saveExam(updated);
-                const feedback = summarizePersistenceWrite(result, {
-                    target: "시험",
-                    action: nextArchived ? "보관" : "보관 해제",
-                    failureTitle: "보관 처리 실패",
-                });
-                if (!feedback.ok) throw new Error(feedback.detail);
+                const result = await saveTeacherExamMutation(updated);
+                if (!result.ok) throw new Error(result.error);
                 setExams(prev => prev.map(e => e.id === examId ? updated : e));
                 toast.success(nextArchived ? '시험 보관됨' : '보관 해제됨', target.title);
-                if (feedback.level === "info") toast.info(feedback.title, feedback.detail);
-            } catch {
-                toast.error('보관 처리 실패');
+            } catch (error) {
+                toast.error('보관 처리 실패', error instanceof Error ? error.message : '시험 서버에 저장하지 못했습니다.');
             }
             return;
         }
@@ -188,18 +174,12 @@ export default function OverviewTab({ exams: examsProp, attempts, stats, trendDa
         const target = deleteTarget;
         setDeleteTarget(null);
         try {
-            const result = await deleteExam(target.id);
-            const feedback = summarizePersistenceWrite(result, {
-                target: "시험",
-                action: "삭제",
-                failureTitle: "삭제 실패",
-            });
-            if (!feedback.ok) throw new Error(feedback.detail);
+            const result = await deleteTeacherExamMutation(target.id);
+            if (!result.ok) throw new Error(result.error);
             setExams(prev => prev.filter(e => e.id !== target.id));
             toast.success('시험 삭제됨', target.title);
-            if (feedback.level === "info") toast.info(feedback.title, feedback.detail);
-        } catch {
-            toast.error('삭제 실패');
+        } catch (error) {
+            toast.error('삭제 실패', error instanceof Error ? error.message : '시험 서버에서 삭제하지 못했습니다.');
         }
     };
 

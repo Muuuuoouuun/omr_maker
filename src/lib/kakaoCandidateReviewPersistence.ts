@@ -1,13 +1,15 @@
 import type { KakaoNotificationCandidate } from "@/lib/kakaoNotificationQueue";
+import { saveTeacherKakaoDispatch, saveTeacherKakaoReview } from "@/app/actions/kakaoReview";
 import {
     buildKakaoCandidateMessagePreview,
+    KAKAO_CANDIDATE_REVIEW_STORAGE_KEY,
+    readKakaoCandidateReviews,
     setKakaoCandidateReview,
     type KakaoCandidateReviewMap,
     type KakaoCandidateReviewRecord,
     type KakaoCandidateReviewStatus,
 } from "@/lib/kakaoCandidateReview";
 
-type Env = Record<string, string | undefined>;
 
 export interface KakaoCandidateReviewPersistenceResult {
     localSaved: boolean;
@@ -100,50 +102,6 @@ export interface SupabaseKakaoDispatchLogRow {
     sent_at: string | null;
 }
 
-interface SupabaseConfig {
-    url: string;
-    publishableKey: string;
-}
-
-interface SupabaseQueryResult<T> {
-    data: T | null;
-    error: { message?: string } | null;
-}
-
-type SupabaseClientLike = {
-    from(table: string): {
-        upsert(row: unknown): Promise<SupabaseQueryResult<unknown>>;
-    };
-};
-
-let supabaseClientPromise: Promise<SupabaseClientLike | null> | null = null;
-
-function getSupabaseConfigFromEnv(env: Env): SupabaseConfig | null {
-    const url = env.NEXT_PUBLIC_SUPABASE_URL?.trim();
-    const publishableKey = (
-        env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY ||
-        env.NEXT_PUBLIC_SUPABASE_ANON_KEY
-    )?.trim();
-
-    if (!url || !publishableKey) return null;
-    return { url, publishableKey };
-}
-
-function getSupabaseConfig(): SupabaseConfig | null {
-    return getSupabaseConfigFromEnv(process.env);
-}
-
-function isSupabaseConfigured(): boolean {
-    return !!getSupabaseConfig();
-}
-
-function errorMessage(error: unknown): string {
-    if (error instanceof Error) return error.message;
-    if (error && typeof error === "object" && "message" in error) {
-        return String((error as { message?: unknown }).message || "Unknown Supabase error");
-    }
-    return "Unknown Supabase error";
-}
 
 function isRecord(value: unknown): value is Record<string, unknown> {
     return !!value && typeof value === "object" && !Array.isArray(value);
@@ -194,31 +152,6 @@ function normalizeDispatchLog(value: unknown): KakaoDispatchLog | null {
     };
 }
 
-async function getSupabaseClient(): Promise<SupabaseClientLike | null> {
-    const config = getSupabaseConfig();
-    if (!config) return null;
-    if (supabaseClientPromise) return supabaseClientPromise;
-
-    supabaseClientPromise = import("@supabase/supabase-js")
-        .then((supabaseModule: unknown) => {
-            const { createClient } = supabaseModule as {
-                createClient: (url: string, key: string, options: unknown) => SupabaseClientLike;
-            };
-
-            return createClient(config.url, config.publishableKey, {
-                auth: {
-                    persistSession: false,
-                    autoRefreshToken: false,
-                },
-            });
-        })
-        .catch(error => {
-            console.warn("Supabase client unavailable for Kakao candidate reviews", error);
-            return null;
-        });
-
-    return supabaseClientPromise;
-}
 
 export function kakaoCandidateReviewToSupabaseRow(
     record: KakaoCandidateReviewRecord,
@@ -426,19 +359,12 @@ export async function syncKakaoCandidateReviewRecord(
     record: KakaoCandidateReviewRecord,
     candidate: KakaoNotificationCandidate,
 ): Promise<{ remoteSaved: boolean; remoteError?: string }> {
-    if (!isSupabaseConfigured()) return { remoteSaved: false };
-
-    try {
-        const client = await getSupabaseClient();
-        if (!client) throw new Error("Supabase client unavailable");
-        const { error } = await client
-            .from("omr_kakao_candidate_reviews")
-            .upsert(kakaoCandidateReviewToSupabaseRow(record, candidate));
-        if (error) throw new Error(error.message || "Failed to save Kakao candidate review to Supabase");
-        return { remoteSaved: true };
-    } catch (error) {
-        return { remoteSaved: false, remoteError: errorMessage(error) };
-    }
+    const result = await saveTeacherKakaoReview(kakaoCandidateReviewToSupabaseRow(record, candidate) as unknown as Record<string, unknown>);
+    return result.status === "saved"
+        ? { remoteSaved: true }
+        : result.status === "local_only"
+            ? { remoteSaved: false }
+            : { remoteSaved: false, remoteError: result.error || "Kakao review server unavailable" };
 }
 
 export async function syncKakaoDispatchLog(
@@ -446,19 +372,12 @@ export async function syncKakaoDispatchLog(
     record: KakaoCandidateReviewRecord,
     candidate: KakaoNotificationCandidate,
 ): Promise<{ remoteSaved: boolean; remoteError?: string }> {
-    if (!isSupabaseConfigured()) return { remoteSaved: false };
-
-    try {
-        const client = await getSupabaseClient();
-        if (!client) throw new Error("Supabase client unavailable");
-        const { error } = await client
-            .from("omr_kakao_dispatch_logs")
-            .upsert(kakaoDispatchLogToSupabaseRow(log, record, candidate));
-        if (error) throw new Error(error.message || "Failed to save Kakao dispatch log to Supabase");
-        return { remoteSaved: true };
-    } catch (error) {
-        return { remoteSaved: false, remoteError: errorMessage(error) };
-    }
+    const result = await saveTeacherKakaoDispatch(kakaoDispatchLogToSupabaseRow(log, record, candidate) as unknown as Record<string, unknown>);
+    return result.status === "saved"
+        ? { remoteSaved: true }
+        : result.status === "local_only"
+            ? { remoteSaved: false }
+            : { remoteSaved: false, remoteError: result.error || "Kakao dispatch server unavailable" };
 }
 
 export async function saveKakaoCandidateReview(
@@ -467,9 +386,14 @@ export async function saveKakaoCandidateReview(
     status: KakaoCandidateReviewStatus,
     now = new Date(),
 ): Promise<KakaoCandidateReviewPersistenceResult> {
+    const previousRaw = storage.getItem(KAKAO_CANDIDATE_REVIEW_STORAGE_KEY);
     const reviews = setKakaoCandidateReview(storage, candidate, status, now);
     const record = reviews[candidate.id];
     const remote = await syncKakaoCandidateReviewRecord(record, candidate);
+    if (remote.remoteError) {
+        storage.setItem(KAKAO_CANDIDATE_REVIEW_STORAGE_KEY, previousRaw || "{}");
+        return { localSaved: false, remoteSaved: false, remoteError: remote.remoteError, reviews: readKakaoCandidateReviews(storage), record };
+    }
 
     return {
         localSaved: true,
@@ -492,10 +416,15 @@ export async function queueKakaoDispatchSimulation(
     log: KakaoDispatchLog;
     remoteError?: string;
 }> {
+    const previousRaw = storage.getItem(KAKAO_DISPATCH_LOG_STORAGE_KEY);
     const log = createKakaoDispatchLog(record, candidate, "queued", now);
     const logs = [log, ...readKakaoDispatchLogs(storage)].sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt));
     writeKakaoDispatchLogs(storage, logs);
     const remote = await syncKakaoDispatchLog(log, record, candidate);
+    if (remote.remoteError) {
+        storage.setItem(KAKAO_DISPATCH_LOG_STORAGE_KEY, previousRaw || "[]");
+        return { localSaved: false, remoteSaved: false, remoteError: remote.remoteError, logs: readKakaoDispatchLogs(storage), log };
+    }
 
     return {
         localSaved: true,

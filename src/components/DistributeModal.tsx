@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState, useEffect, useRef } from 'react';
+import { useMemo, useState, useEffect, useId, useRef } from 'react';
 import { QRCodeCanvas } from 'qrcode.react';
 import { Lock, Plus, UserPlus } from 'lucide-react';
 import type { Exam } from '@/types/omr';
@@ -10,7 +10,7 @@ import { isValidExamPin, normalizeExamPin } from '@/lib/examAccess';
 import { readRosterGroups, readRosterInvites, readRosterStudents, type RosterGroup, type RosterInvite, type RosterStudent } from '@/lib/rosterStorage';
 import { summarizeDistributionTargets } from '@/lib/distributionTargets';
 import { addRosterGroup, addRosterStudent } from '@/lib/rosterMutations';
-import { saveRosterSnapshot } from '@/lib/rosterPersistence';
+import { saveTeacherRosterSnapshot } from '@/lib/teacherRosterClient';
 import { toast } from '@/components/Toast';
 
 type AccessConfig = NonNullable<Exam["accessConfig"]>;
@@ -43,6 +43,15 @@ export default function DistributeModal({ isOpen, onClose, onSaveAndShare, onAut
     const [newStudentName, setNewStudentName] = useState("");
     const [newStudentEmail, setNewStudentEmail] = useState("");
     const wasOpenRef = useRef(false);
+    const dialogRef = useRef<HTMLDivElement>(null);
+    const closeButtonRef = useRef<HTMLButtonElement>(null);
+    const previouslyFocusedRef = useRef<HTMLElement | null>(null);
+    const onCloseRef = useRef(onClose);
+    const dialogTitleId = useId();
+
+    useEffect(() => {
+        onCloseRef.current = onClose;
+    }, [onClose]);
 
     useEffect(() => {
         if (!isOpen) {
@@ -77,6 +86,49 @@ export default function DistributeModal({ isOpen, onClose, onSaveAndShare, onAut
         setNewStudentName("");
         setNewStudentEmail("");
     }, [isOpen, initialAccessConfig]);
+
+    useEffect(() => {
+        if (!isOpen) return;
+        previouslyFocusedRef.current = document.activeElement instanceof HTMLElement
+            ? document.activeElement
+            : null;
+        const focusTimer = window.setTimeout(() => closeButtonRef.current?.focus(), 0);
+
+        const handleKeyDown = (event: KeyboardEvent) => {
+            if (event.key === 'Escape') {
+                event.preventDefault();
+                onCloseRef.current();
+                return;
+            }
+            if (event.key !== 'Tab') return;
+
+            const focusable = Array.from(dialogRef.current?.querySelectorAll<HTMLElement>(
+                'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
+            ) || []).filter(element => !element.hasAttribute('hidden'));
+            if (focusable.length === 0) {
+                event.preventDefault();
+                dialogRef.current?.focus();
+                return;
+            }
+
+            const first = focusable[0];
+            const last = focusable[focusable.length - 1];
+            if (event.shiftKey && document.activeElement === first) {
+                event.preventDefault();
+                last.focus();
+            } else if (!event.shiftKey && document.activeElement === last) {
+                event.preventDefault();
+                first.focus();
+            }
+        };
+
+        document.addEventListener('keydown', handleKeyDown);
+        return () => {
+            window.clearTimeout(focusTimer);
+            document.removeEventListener('keydown', handleKeyDown);
+            previouslyFocusedRef.current?.focus();
+        };
+    }, [isOpen]);
 
     const targetSummary = useMemo(() => summarizeDistributionTargets({
         selectedGroupIds: selectedGroups,
@@ -156,6 +208,8 @@ export default function DistributeModal({ isOpen, onClose, onSaveAndShare, onAut
 
     // Write the full roster snapshot through (preserving invites) and reflect it locally.
     const persistRoster = (nextStudents: RosterStudent[], nextGroups: RosterGroup[]) => {
+        const previousStudents = students;
+        const previousGroups = groups;
         setStudents(nextStudents);
         setGroups(nextGroups);
         let invites: RosterInvite[];
@@ -164,10 +218,12 @@ export default function DistributeModal({ isOpen, onClose, onSaveAndShare, onAut
         } catch {
             invites = [];
         }
-        void saveRosterSnapshot(localStorage, { students: nextStudents, groups: nextGroups, invites })
+        void saveTeacherRosterSnapshot(localStorage, { students: nextStudents, groups: nextGroups, invites })
             .then(result => {
-                if (result.remoteError) {
-                    toast.info("명단은 로컬에 저장됨", "서버 동기화는 다음 로드 때 다시 시도합니다.");
+                if (result.remoteError && !result.localSaved) {
+                    setStudents(previousStudents);
+                    setGroups(previousGroups);
+                    toast.error("명단 저장 실패", "서버에 저장되지 않아 방금 변경을 되돌렸습니다.");
                 }
             })
             .catch(() => {
@@ -225,13 +281,24 @@ export default function DistributeModal({ isOpen, onClose, onSaveAndShare, onAut
     };
 
     return (
-        <div style={{
+        <div
+            role="presentation"
+            onMouseDown={(event) => {
+                if (event.target === event.currentTarget) onClose();
+            }}
+            style={{
             position: 'fixed', inset: 0,
             background: 'rgba(0,0,0,0.5)',
             display: 'flex', alignItems: 'center', justifyContent: 'center',
             zIndex: 1000
         }}>
-            <div style={{
+            <div
+                ref={dialogRef}
+                role="dialog"
+                aria-modal="true"
+                aria-labelledby={dialogTitleId}
+                tabIndex={-1}
+                style={{
                 background: 'var(--surface)',
                 color: 'var(--foreground)',
                 width: '500px',
@@ -242,8 +309,24 @@ export default function DistributeModal({ isOpen, onClose, onSaveAndShare, onAut
                 boxShadow: '0 24px 60px rgba(0,0,0,0.22)'
             }}>
                 <header style={{ padding: '1.5rem', borderBottom: '1px solid var(--border)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                    <h2 style={{ fontSize: '1.25rem', fontWeight: 600 }}>시험 배포하기</h2>
-                    <button onClick={onClose} aria-label="닫기" style={{ border: 'none', background: 'none', color: 'var(--muted)', fontSize: '1.5rem', cursor: 'pointer' }}>&times;</button>
+                    <h2 id={dialogTitleId} style={{ fontSize: '1.25rem', fontWeight: 600 }}>시험 배포하기</h2>
+                    <button
+                        ref={closeButtonRef}
+                        type="button"
+                        onClick={onClose}
+                        aria-label="닫기"
+                        style={{
+                            border: 'none',
+                            background: 'none',
+                            color: 'var(--muted)',
+                            fontSize: '1.5rem',
+                            cursor: 'pointer',
+                            width: 44,
+                            height: 44,
+                        }}
+                    >
+                        &times;
+                    </button>
                 </header>
 
                 <div style={{ padding: '2rem' }}>

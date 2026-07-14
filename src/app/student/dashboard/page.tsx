@@ -9,6 +9,7 @@ import AssignmentBlock from "@/components/dashboard/AssignmentBlock";
 import ThemeToggle from "@/components/ThemeToggle";
 import { toast } from "@/components/Toast";
 import { Award, LogIn, Sparkles } from "lucide-react";
+import { logoutStudentServerSession } from "@/app/actions/studentAuth";
 
 import {
     attemptBelongsToSession,
@@ -21,10 +22,14 @@ import {
     type GuestMergePreview,
     type StudentSession,
 } from "@/utils/storage";
-import { loadAttemptsForStudent, loadExams } from "@/lib/omrPersistence";
+import { loadExams } from "@/lib/omrPersistence";
+import {
+    loadStudentOfficialAttempts,
+    safeExamStubFromStudentAttempt,
+} from "@/lib/studentAttemptClient";
 import { averageResolvedAttemptPercent, baseAttemptsOnly, retakeAttemptsOnly } from "@/lib/attemptScores";
 import { evaluateExamAccess } from "@/lib/examAccess";
-import { loadReturnedFeedbackForStudent } from "@/lib/feedbackPersistence";
+import { loadStudentReturnedFeedbackWithDevFallback } from "@/lib/studentFeedbackClient";
 
 function getTimeGreeting(): string {
     const h = new Date().getHours();
@@ -65,17 +70,32 @@ export default function StudentDashboard() {
             // 2. Load Data
             const [examResult, attemptResult] = await Promise.all([
                 loadExams(),
-                loadAttemptsForStudent(currentUser),
+                loadStudentOfficialAttempts(currentUser),
             ]);
             if (cancelled) return;
 
-            const allExams = examResult.items;
             const allAttempts = attemptResult.items;
+            const officialAttemptExamIds = attemptResult.remoteLoaded
+                ? new Set(allAttempts.map(attempt => attempt.examId))
+                : new Set<string>();
+            const allExams = examResult.items.filter(exam => !officialAttemptExamIds.has(exam.id));
+            const knownExamIds = new Set(allExams.map(exam => exam.id));
+            allAttempts.forEach(attempt => {
+                if (!knownExamIds.has(attempt.examId)) {
+                    allExams.push(safeExamStubFromStudentAttempt(attempt));
+                    knownExamIds.add(attempt.examId);
+                }
+            });
             const examById = new Map(allExams.map(exam => [exam.id, exam]));
-            if (examResult.remoteError || attemptResult.remoteError) {
+            if (attemptResult.remoteError) {
+                toast.error(
+                    "공식 제출 기록을 불러오지 못했습니다",
+                    "학생 로그인을 다시 확인하거나 잠시 후 재시도해주세요. 운영 환경에서는 로컬 기록으로 대체하지 않습니다."
+                );
+            } else if (examResult.remoteError) {
                 toast.info(
                     "로컬 데이터 기준으로 표시 중",
-                    "서버 동기화가 일부 지연되고 있어 다음 접속 때 다시 재시도합니다."
+                    "배정 시험 동기화가 일부 지연되고 있어 다음 접속 때 다시 재시도합니다."
                 );
             }
             const myAttempts = allAttempts.filter(a => attemptBelongsToSession(a, currentUser));
@@ -96,7 +116,7 @@ export default function StudentDashboard() {
 
             // 3. Categorize Exams
             const returnedFeedback = currentUser.studentId
-                ? await loadReturnedFeedbackForStudent(currentUser.studentId)
+                ? await loadStudentReturnedFeedbackWithDevFallback(currentUser.studentId)
                 : [];
             if (cancelled) return;
             const myAttemptIds = new Set(myBaseAttempts.map(attempt => attempt.id));
@@ -182,15 +202,19 @@ export default function StudentDashboard() {
         setGuestMergePreview(null);
     };
 
-    const handleLogout = () => {
-        clearSession();
-        setUser(null);
-        setTodoExams([]);
-        setDoneExams([]);
-        setStats({ avgScore: 0, completedCount: 0, retakeCount: 0 });
-        setGuestMergePreview(null);
-        setSessionState("missing");
-        toast.info("로그아웃됨", "다시 시험을 보려면 학생 로그인이 필요합니다.");
+    const handleLogout = async () => {
+        try {
+            await logoutStudentServerSession();
+        } finally {
+            clearSession();
+            setUser(null);
+            setTodoExams([]);
+            setDoneExams([]);
+            setStats({ avgScore: 0, completedCount: 0, retakeCount: 0 });
+            setGuestMergePreview(null);
+            setSessionState("missing");
+            toast.info("로그아웃됨", "다시 시험을 보려면 학생 로그인이 필요합니다.");
+        }
     };
 
     if (!user) {

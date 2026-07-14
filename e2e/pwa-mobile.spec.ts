@@ -397,17 +397,32 @@ test.describe("Mobile PWA entry", () => {
         await expectTouchTarget(page.getByRole("link", { name: "OMR Maker" }));
         await expectTouchTarget(page.locator(".solve-controls .solve-collapse-button"));
         await expectTouchTarget(page.locator(".solve-controls .solve-submit-button"));
-        await expectTouchTarget(page.getByRole("button", { name: "문제 1번 보기 2" }));
+        const firstQuestionGroup = page.getByRole("radiogroup", { name: /문제 1번/ });
+        const firstAnswer = firstQuestionGroup.getByRole("radio", { name: "문제 1번 보기 2" });
+        await expect(firstQuestionGroup).toContainText("미응답");
+        await expectTouchTarget(firstAnswer);
+        await expect(firstAnswer).toHaveAttribute("aria-checked", "false");
+        await expect(firstQuestionGroup.getByRole("radio", { name: "문제 1번 보기 1" })).toHaveAttribute("tabindex", "0");
+        await expect(firstAnswer).toHaveAttribute("tabindex", "-1");
         await expectNoHorizontalOverflow(page);
         expect(await smallTargets(page, ".solve-controls button, .solve-controls label, .solve-omr-scroll .q-bubble, .solve-omr-next-button, .solve-omr-pane-close")).toEqual([]);
 
-        await page.getByRole("button", { name: "문제 1번 보기 2" }).click();
+        await firstAnswer.click();
+        await expect(firstAnswer).toHaveAttribute("aria-checked", "true");
+        await expect(firstAnswer).toHaveAttribute("tabindex", "0");
+        await expect(firstQuestionGroup.getByRole("radio", { name: "문제 1번 보기 1" })).toHaveAttribute("tabindex", "-1");
+        await firstQuestionGroup.getByRole("radio", { name: "문제 1번 보기 2" }).press("ArrowRight");
+        await expect(firstQuestionGroup.getByRole("radio", { name: "문제 1번 보기 3" })).toHaveAttribute("aria-checked", "true");
+        await expect(firstQuestionGroup.getByRole("radio", { name: "문제 1번 보기 3" })).toHaveAttribute("tabindex", "0");
+        await expect(firstAnswer).toHaveAttribute("tabindex", "-1");
+        await firstQuestionGroup.getByRole("radio", { name: "문제 1번 보기 3" }).press("ArrowLeft");
+        await expect(firstAnswer).toHaveAttribute("aria-checked", "true");
         await expect.poll(async () => page.evaluate((draftKey) => {
             const draft = JSON.parse(window.localStorage.getItem(draftKey) || "{}");
             return draft.answers?.["1"];
         }, MOBILE_SOLVE_DRAFT_KEY)).toBe(2);
 
-        await page.getByRole("button", { name: "문제 2번 보기 4" }).click();
+        await page.getByRole("radio", { name: "문제 2번 보기 4" }).click();
         await page.evaluate(() => {
             window.dispatchEvent(new Event("pagehide"));
         });
@@ -420,12 +435,12 @@ test.describe("Mobile PWA entry", () => {
         await page.reload();
         await continueSolveEntryAsStudentIfPresent(page);
         await expect(page.locator(".solve-omr-scroll .omr-cardview-title").getByText("모바일 실전 시험")).toBeVisible();
-        await expect(page.getByRole("button", { name: "문제 1번 보기 2" })).toHaveClass(/marked/);
-        await expect(page.getByRole("button", { name: "문제 2번 보기 4" })).toHaveClass(/marked/);
+        await expect(page.getByRole("radio", { name: "문제 1번 보기 2" })).toHaveClass(/marked/);
+        await expect(page.getByRole("radio", { name: "문제 2번 보기 4" })).toHaveClass(/marked/);
         await expect(page.locator(".solve-progress")).toContainText("2/4");
         await expectNoHorizontalOverflow(page);
 
-        await page.getByRole("button", { name: "문제 3번 보기 1" }).click();
+        await page.getByRole("radio", { name: "문제 3번 보기 1" }).click();
         await page.evaluate(() => {
             Object.defineProperty(document, "visibilityState", {
                 configurable: true,
@@ -452,7 +467,7 @@ test.describe("Mobile PWA entry", () => {
         await returnToExamButton.click();
         await expect(focusWarning).toBeHidden();
 
-        await page.getByRole("button", { name: "문제 4번 보기 3" }).click();
+        await page.getByRole("radio", { name: "문제 4번 보기 3" }).click();
 
         await expect(page.locator(".solve-progress")).toContainText("4/4");
         await expectNoHorizontalOverflow(page);

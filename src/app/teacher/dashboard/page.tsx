@@ -16,9 +16,12 @@ import TeacherSessionChip from "@/components/TeacherSessionChip";
 import { toast } from "@/components/Toast";
 import { buildDemoDashboardData, shouldUseDemoData } from "@/lib/demoData";
 import { buildQuestionResultRepairPlan } from "@/lib/analyticsDataRepair";
-import { loadAttempts, loadExams, readLocalAttempts, readLocalExams, saveAttempt } from "@/lib/omrPersistence";
+import { readLocalAttempts, readLocalExams } from "@/lib/omrPersistence";
+import { loadTeacherAttempts, saveTeacherAttempt } from "@/lib/teacherAttemptClient";
+import { loadTeacherExams } from "@/lib/teacherExamClient";
 import { summarizeAnalyticsDataHealth, summarizePersistenceHealth, type PersistenceHealth } from "@/lib/persistenceHealth";
-import { loadRosterSnapshot, readLocalRosterSnapshot } from "@/lib/rosterPersistence";
+import { readLocalRosterSnapshot } from "@/lib/rosterPersistence";
+import { loadTeacherRosterSnapshot } from "@/lib/teacherRosterClient";
 import type { RosterGroup, RosterStudent } from "@/lib/rosterStorage";
 import { buildTeacherDashboardMetrics } from "@/lib/teacherDashboardMetrics";
 import { getCurrentPlan } from "@/utils/plans";
@@ -144,9 +147,9 @@ function TeacherDashboard() {
 
     const loadDashboardData = useCallback(async (options: DashboardLoadOptions = {}) => {
         const [examResult, attemptResult, rosterResult] = await Promise.all([
-            loadExams(),
-            loadAttempts(),
-            loadRosterSnapshot(localStorage),
+            loadTeacherExams(),
+            loadTeacherAttempts(),
+            loadTeacherRosterSnapshot(localStorage),
         ]);
         if (options.isCancelled?.()) return;
 
@@ -230,7 +233,7 @@ function TeacherDashboard() {
             const repairedAttempts: Attempt[] = [];
             let failedCount = 0;
             for (const item of questionResultRepairPlan.items) {
-                const result = await saveAttempt(item.repairedAttempt);
+                const result = await saveTeacherAttempt(item.repairedAttempt);
                 if (result.localSaved || result.remoteSaved) {
                     repairedAttempts.push(item.repairedAttempt);
                 } else {

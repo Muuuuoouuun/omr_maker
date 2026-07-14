@@ -16,7 +16,7 @@ const nextConfig = {
   allowedDevOrigins: ["127.0.0.1"],
   experimental: {
     serverActions: {
-      bodySizeLimit: '10mb', // 전송 용량을 10MB로 확대
+      bodySizeLimit: '52mb', // 비공개 Storage에 전달할 최대 50MB PDF + multipart 여유
     },
   },
   async headers() {
