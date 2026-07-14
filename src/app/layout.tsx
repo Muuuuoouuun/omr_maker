@@ -71,16 +71,46 @@ export const viewport: Viewport = {
 const themeInitScript = `
 (function() {
   try {
+    var settings = {};
+    try {
+      var rawSettings = localStorage.getItem('omr_settings');
+      settings = rawSettings ? JSON.parse(rawSettings) : {};
+    } catch (settingsError) {
+      settings = {};
+    }
+    var appTheme = settings && settings.theme && typeof settings.theme === 'object' ? settings.theme : {};
     var saved = localStorage.getItem('omr_theme');
+    if (saved !== 'dark' && saved !== 'light' && saved !== 'auto') {
+      saved = appTheme.mode;
+    }
     var theme = 'light';
     if (saved === 'dark' || saved === 'light') {
       theme = saved;
     } else if (saved === 'auto') {
       theme = (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches) ? 'dark' : 'light';
     }
-    document.documentElement.setAttribute('data-theme', theme);
+    var root = document.documentElement;
+    root.setAttribute('data-theme', theme);
+    root.setAttribute('data-motion', appTheme.motion === false ? 'off' : 'on');
+
+    var accentPalettes = {
+      '#4f46e5': ['#818cf8', '#3730a3'],
+      '#ec4899': ['#f472b6', '#be185d'],
+      '#8b5cf6': ['#a78bfa', '#6d28d9'],
+      '#10b981': ['#34d399', '#047857'],
+      '#f59e0b': ['#fbbf24', '#b45309'],
+      '#ef4444': ['#f87171', '#b91c1c']
+    };
+    var accent = typeof appTheme.accent === 'string' ? appTheme.accent.toLowerCase() : '';
+    var palette = accentPalettes[accent];
+    if (palette) {
+      root.style.setProperty('--primary', accent);
+      root.style.setProperty('--primary-light', palette[0]);
+      root.style.setProperty('--primary-dark', palette[1]);
+    }
   } catch (e) {
     document.documentElement.setAttribute('data-theme', 'light');
+    document.documentElement.setAttribute('data-motion', 'on');
   }
 })();
 `;

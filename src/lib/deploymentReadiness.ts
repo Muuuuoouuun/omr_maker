@@ -1,5 +1,6 @@
 import { inspectTeacherAuthConfig } from "./teacherAuth";
 import { resolveTeacherSessionSecret } from "./teacherServerSession";
+import { resolveStudentSessionSecret } from "./studentServerSession";
 import { getSupabaseServerConfigFromEnv } from "./supabaseServerAdmin";
 
 type Env = Record<string, string | undefined>;
@@ -67,6 +68,36 @@ function sessionSecretCheck(env: Env): DeploymentReadinessCheck {
     };
 }
 
+function studentSessionSecretCheck(env: Env): DeploymentReadinessCheck {
+    const explicitSecret = clean(env.STUDENT_SESSION_SECRET) || clean(env.OMR_STUDENT_SESSION_SECRET);
+    const resolvedSecret = resolveStudentSessionSecret(env);
+
+    if (explicitSecret) {
+        return {
+            key: "student_session_secret",
+            label: "학생 세션 secret",
+            detail: "STUDENT_SESSION_SECRET 또는 OMR_STUDENT_SESSION_SECRET이 설정되어 학생·게스트 본인 확인 쿠키를 서명합니다.",
+            tone: "ready",
+        };
+    }
+
+    if (resolvedSecret) {
+        return {
+            key: "student_session_secret",
+            label: "학생 세션 secret",
+            detail: "개발용 학생 세션 secret을 사용 중입니다. 운영 배포에서는 별도 STUDENT_SESSION_SECRET을 설정해야 합니다.",
+            tone: "warning",
+        };
+    }
+
+    return {
+        key: "student_session_secret",
+        label: "학생 세션 secret",
+        detail: "학생·게스트 서버 세션을 서명할 secret이 없습니다. 운영 배포에는 STUDENT_SESSION_SECRET을 설정하세요.",
+        tone: "error",
+    };
+}
+
 function isFlagEnabled(value: unknown): boolean {
     const normalized = clean(value).toLowerCase();
     return normalized === "true" || normalized === "1" || normalized === "yes";
@@ -120,6 +151,7 @@ export function buildDeploymentReadiness(env: Env = process.env): DeploymentRead
             tone: authConfig.ready ? "ready" : "error",
         },
         sessionSecretCheck(env),
+        studentSessionSecretCheck(env),
         {
             key: "supabase_public_sync",
             label: "Supabase 클라이언트 동기화",

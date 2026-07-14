@@ -22,6 +22,10 @@ describe("deployment readiness", () => {
             key: "teacher_session_secret",
             tone: "error",
         }));
+        expect(summary.checks).toContainEqual(expect.objectContaining({
+            key: "student_session_secret",
+            tone: "error",
+        }));
     });
 
     it("reports a runnable but not fully hardened env without exposing secret values", () => {
@@ -53,6 +57,11 @@ describe("deployment readiness", () => {
             detail: expect.stringContaining("TEACHER_SESSION_SECRET"),
         }));
         expect(summary.checks).toContainEqual(expect.objectContaining({
+            key: "student_session_secret",
+            tone: "error",
+            detail: expect.stringContaining("STUDENT_SESSION_SECRET"),
+        }));
+        expect(summary.checks).toContainEqual(expect.objectContaining({
             key: "supabase_service_role",
             tone: "error",
             detail: expect.stringContaining("SUPABASE_SERVICE_ROLE_KEY"),
@@ -71,6 +80,10 @@ describe("deployment readiness", () => {
             key: "supabase_service_role",
             tone: "warning",
         }));
+        expect(summary.checks).toContainEqual(expect.objectContaining({
+            key: "student_session_secret",
+            tone: "warning",
+        }));
     });
 
     it("recognizes explicit server session and service role readiness", () => {
@@ -78,6 +91,7 @@ describe("deployment readiness", () => {
             NODE_ENV: "production",
             TEACHER_ACCOUNTS: JSON.stringify([{ id: "teacher-a", email: "a@example.com", password: "pass-a" }]),
             TEACHER_SESSION_SECRET: "session-secret",
+            STUDENT_SESSION_SECRET: "student-session-secret",
             NEXT_PUBLIC_SUPABASE_URL: "https://example.supabase.co",
             NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY: "sb_publishable_public",
             SUPABASE_SERVICE_ROLE_KEY: "service-role",
@@ -93,10 +107,14 @@ describe("deployment readiness", () => {
             tone: "ready",
         }));
         expect(summary.checks).toContainEqual(expect.objectContaining({
+            key: "student_session_secret",
+            tone: "ready",
+        }));
+        expect(summary.checks).toContainEqual(expect.objectContaining({
             key: "production_rls",
             tone: "ready",
         }));
-        expect(summary.readyCount).toBe(5);
+        expect(summary.readyCount).toBe(6);
     });
 
     it("escalates to an error when production sync is on but production RLS is not confirmed", () => {
