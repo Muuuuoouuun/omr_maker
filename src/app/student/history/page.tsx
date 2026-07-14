@@ -5,9 +5,14 @@ import Link from "next/link";
 import BrandLogo from "@/components/BrandLogo";
 import { Attempt, Exam } from "@/types/omr";
 import { attemptBelongsToSession, getSession, type StudentSession } from "@/utils/storage";
-import { loadAttempts, loadExams } from "@/lib/omrPersistence";
+import { loadExams } from "@/lib/omrPersistence";
+import {
+    loadStudentOfficialAttempts,
+    safeExamStubFromStudentAttempt,
+} from "@/lib/studentAttemptClient";
 import { formatKoreanDateTime } from "@/lib/pure";
 import { baseAttemptsOnly, buildAttemptScoreLookup, retakeAttemptsOnly } from "@/lib/attemptScores";
+import { loadStudentReturnedFeedbackWithDevFallback } from "@/lib/studentFeedbackClient";
 
 type PeriodFilter = "all" | "30d" | "7d";
 type SortMode = "recent" | "high" | "low";
@@ -28,31 +33,60 @@ export default function HistoryPage() {
     const [sortMode, setSortMode] = useState<SortMode>("recent");
     const [page, setPage] = useState(1);
     const [now] = useState(() => Date.now());
+    const [unreadFeedbackAttemptIds, setUnreadFeedbackAttemptIds] = useState<Set<string>>(() => new Set());
+    const [loadState, setLoadState] = useState<"loading" | "ready" | "error">("loading");
+    const [retryKey, setRetryKey] = useState(0);
 
     useEffect(() => {
         let cancelled = false;
         const loadHistory = async () => {
             if (cancelled) return;
+            setLoadState("loading");
             const currentSession = getSession();
             setSession(currentSession);
             try {
                 const [attemptResult, examResult] = await Promise.all([
-                    loadAttempts(),
+                    currentSession
+                        ? loadStudentOfficialAttempts(currentSession)
+                        : Promise.resolve({ items: [], remoteLoaded: false }),
                     loadExams(),
                 ]);
                 if (cancelled) return;
                 const mine = currentSession
                     ? attemptResult.items.filter(attempt => attemptBelongsToSession(attempt, currentSession))
                     : [];
+                const returnedFeedback = currentSession?.studentId
+                    ? await loadStudentReturnedFeedbackWithDevFallback(currentSession.studentId)
+                    : [];
+                if (cancelled) return;
+                const officialAttemptExamIds = attemptResult.remoteLoaded
+                    ? new Set(mine.map(attempt => attempt.examId))
+                    : new Set<string>();
+                const safeExams = examResult.items.filter(exam => !officialAttemptExamIds.has(exam.id));
+                const knownExamIds = new Set(safeExams.map(exam => exam.id));
+                mine.forEach(attempt => {
+                    if (!knownExamIds.has(attempt.examId)) {
+                        safeExams.push(safeExamStubFromStudentAttempt(attempt));
+                        knownExamIds.add(attempt.examId);
+                    }
+                });
                 setAttempts(mine);
-                setExams(examResult.items);
+                setExams(safeExams);
+                const myAttemptIds = new Set(mine.map(attempt => attempt.id));
+                setUnreadFeedbackAttemptIds(new Set(
+                    returnedFeedback
+                        .filter(feedback => myAttemptIds.has(feedback.attemptId) && !feedback.delivery.firstOpenedAt)
+                        .map(feedback => feedback.attemptId)
+                ));
+                setLoadState("ready");
             } catch (e) {
                 console.error("Failed to load history", e);
+                if (!cancelled) setLoadState("error");
             }
         };
         void loadHistory();
         return () => { cancelled = true; };
-    }, []);
+    }, [retryKey]);
 
     const examById = useMemo(() => (
         new Map(exams.map(exam => [exam.id, exam]))
@@ -116,8 +150,8 @@ export default function HistoryPage() {
     const pageItems = visibleAttempts.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
 
     return (
-        <div className="layout-main" style={{ minHeight: '100vh', background: '#f8fafc' }}>
-            <header className="header" style={{ background: 'white', borderBottom: '1px solid #e2e8f0' }}>
+        <div className="layout-main" style={{ minHeight: '100vh', background: 'var(--background)' }}>
+            <header className="header" style={{ background: 'var(--surface)', borderBottom: '1px solid var(--border)' }}>
                 <div className="container header-content">
                     <BrandLogo />
                     <nav>
@@ -129,12 +163,24 @@ export default function HistoryPage() {
             </header>
 
             <main className="container" style={{ padding: '2rem 1rem' }}>
-                <h1 style={{ fontSize: '1.8rem', fontWeight: 700, marginBottom: '1.5rem', color: '#1e293b' }}>
+                <h1 style={{ fontSize: '1.8rem', fontWeight: 700, marginBottom: '1.5rem', color: 'var(--foreground)' }}>
                     내 시험 기록
                 </h1>
 
-                {attempts.length === 0 ? (
-                    <div style={{ textAlign: 'center', padding: '4rem', color: '#64748b', background: 'white', borderRadius: '12px', boxShadow: '0 4px 6px -1px rgba(0,0,0,0.1)' }}>
+                {loadState === "loading" ? (
+                    <div role="status" aria-live="polite" style={{ textAlign: 'center', padding: '4rem 1rem', color: 'var(--muted)' }}>
+                        시험 기록을 불러오는 중입니다.
+                    </div>
+                ) : loadState === "error" ? (
+                    <div role="alert" style={{ textAlign: 'center', padding: '3rem 1rem', color: 'var(--foreground)', background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: '12px' }}>
+                        <p style={{ fontSize: '1.05rem', fontWeight: 800 }}>시험 기록을 불러오지 못했습니다.</p>
+                        <p style={{ color: 'var(--muted)', marginTop: '0.5rem' }}>네트워크와 로그인 상태를 확인한 뒤 다시 시도해주세요.</p>
+                        <button type="button" className="btn btn-primary" onClick={() => setRetryKey(key => key + 1)} style={{ marginTop: '1.25rem' }}>
+                            다시 시도
+                        </button>
+                    </div>
+                ) : attempts.length === 0 ? (
+                    <div style={{ textAlign: 'center', padding: '4rem 1rem', color: 'var(--muted)', background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: '12px', boxShadow: 'var(--shadow-sm)' }}>
                         <p style={{ fontSize: '1.2rem' }}>
                             {session ? "아직 응시한 시험이 없습니다." : "로그인이 필요합니다."}
                         </p>
@@ -185,13 +231,14 @@ export default function HistoryPage() {
                             alignItems: 'center', marginBottom: '1rem',
                         }}>
                             <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                                <label style={{ fontSize: '0.8rem', fontWeight: 600, color: '#64748b' }}>기간</label>
+                                <label htmlFor="history-period" style={{ fontSize: '0.8rem', fontWeight: 600, color: '#64748b' }}>기간</label>
                                 <select
+                                    id="history-period"
                                     value={period}
                                     onChange={(e) => setPeriod(e.target.value as PeriodFilter)}
                                     style={{
                                         padding: '0.4rem 0.6rem', borderRadius: '8px',
-                                        border: '1px solid #e2e8f0', fontSize: '0.85rem', background: 'white',
+                                        border: '1px solid #e2e8f0', fontSize: '0.85rem', background: 'white', minHeight: '44px',
                                     }}
                                 >
                                     <option value="all">전체</option>
@@ -200,13 +247,14 @@ export default function HistoryPage() {
                                 </select>
                             </div>
                             <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                                <label style={{ fontSize: '0.8rem', fontWeight: 600, color: '#64748b' }}>정렬</label>
+                                <label htmlFor="history-sort" style={{ fontSize: '0.8rem', fontWeight: 600, color: '#64748b' }}>정렬</label>
                                 <select
+                                    id="history-sort"
                                     value={sortMode}
                                     onChange={(e) => setSortMode(e.target.value as SortMode)}
                                     style={{
                                         padding: '0.4rem 0.6rem', borderRadius: '8px',
-                                        border: '1px solid #e2e8f0', fontSize: '0.85rem', background: 'white',
+                                        border: '1px solid #e2e8f0', fontSize: '0.85rem', background: 'white', minHeight: '44px',
                                     }}
                                 >
                                     <option value="recent">최신순</option>
@@ -249,6 +297,20 @@ export default function HistoryPage() {
                                             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '0.5rem', gap: '0.75rem' }}>
                                                 <h3 style={{ fontSize: '1.1rem', fontWeight: 600, color: '#0f172a' }}>{attempt.examTitle}</h3>
                                                 <div style={{ display: 'flex', gap: '0.35rem', flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+                                                    {unreadFeedbackAttemptIds.has(attempt.id) && (
+                                                        <span style={{
+                                                            padding: '0.2rem 0.6rem',
+                                                            borderRadius: '999px',
+                                                            fontSize: '0.78rem',
+                                                            fontWeight: 900,
+                                                            background: '#eef2ff',
+                                                            color: '#4f46e5',
+                                                            border: '1px solid #c7d2fe',
+                                                            whiteSpace: 'nowrap',
+                                                        }}>
+                                                            새 피드백
+                                                        </span>
+                                                    )}
                                                     {attempt.retake && (
                                                         <span style={{
                                                             padding: '0.2rem 0.6rem',

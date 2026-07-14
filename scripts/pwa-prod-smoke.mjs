@@ -7,7 +7,9 @@ const port = Number(process.env.PWA_SMOKE_PORT || 3004);
 const externalBaseUrl = process.env.PWA_SMOKE_BASE_URL?.replace(/\/$/, "");
 const baseUrl = externalBaseUrl || `http://localhost:${port}`;
 const ownsServer = !externalBaseUrl;
-const expectedCachePrefix = "omr-maker-v14";
+const expectedCachePrefix = "omr-maker-v15";
+const mobileSolveDraftKey = "omr_draft_mobile-pwa-smoke-exam_mobile-pwa-smoke-student_base";
+const mobileSolvePanelKey = "omr_solve_panel_mobile-pwa-smoke-exam_mobile-pwa-smoke-student_base";
 const requiredHttpResources = [
     { contentType: "text/html", pathname: "/pwa-check" },
     { contentType: "application/manifest+json", pathname: "/manifest.webmanifest" },
@@ -249,7 +251,7 @@ async function collectCacheState(page) {
 }
 
 async function seedOfflineSolveExam(page) {
-    await page.evaluate(() => {
+    await page.evaluate(({ panelKey }) => {
         const exam = {
             id: "mobile-pwa-smoke-exam",
             title: "모바일 오프라인 시험",
@@ -275,8 +277,21 @@ async function seedOfflineSolveExam(page) {
         localStorage.setItem("omr_exam_mobile-pwa-smoke-exam", JSON.stringify(exam));
         localStorage.setItem("omr_student_session_backup", sessionPayload);
         sessionStorage.setItem("omr_student_session", sessionPayload);
-        localStorage.setItem("omr_solve_panel_mobile-pwa-smoke-exam_mobile-pwa-smoke-student", "expanded");
-    });
+        localStorage.setItem(panelKey, "expanded");
+    }, { panelKey: mobileSolvePanelKey });
+}
+
+async function continueSolveEntryAsStudentIfPresent(page) {
+    await page.waitForFunction(() => (
+        document.body.innerText.includes("시험 입장 확인")
+        || !!document.querySelector(".solve-body")
+    ), null, { timeout: 5_000 }).catch(() => {});
+
+    const entryDialog = page.getByRole("dialog", { name: "시험 입장 확인" });
+    if (await entryDialog.isVisible().catch(() => false)) {
+        await entryDialog.getByRole("button", { name: "학생으로 시험 보기" }).click();
+        await entryDialog.waitFor({ state: "hidden", timeout: 10_000 });
+    }
 }
 
 async function collectChromiumInstallabilityState(context, page) {
@@ -466,19 +481,20 @@ async function runSmoke() {
 
         await seedOfflineSolveExam(page);
         await page.goto("/solve/mobile-pwa-smoke-exam", { waitUntil: "networkidle" });
+        await continueSolveEntryAsStudentIfPresent(page);
         await page.locator(".solve-omr-scroll .omr-cardview-title").getByText("모바일 오프라인 시험").waitFor({ state: "visible", timeout: 10_000 });
         await page.getByRole("button", { name: "문제 1번 보기 2" }).click();
-        await page.waitForFunction(() => {
-            const draft = JSON.parse(localStorage.getItem("omr_draft_mobile-pwa-smoke-exam_mobile-pwa-smoke-student") || "{}");
+        await page.waitForFunction((draftKey) => {
+            const draft = JSON.parse(localStorage.getItem(draftKey) || "{}");
             return draft.answers?.["1"] === 2;
-        }, null, { timeout: 10_000 });
-        const onlineSolveState = await page.evaluate(() => ({
-            draftAnswer: JSON.parse(localStorage.getItem("omr_draft_mobile-pwa-smoke-exam_mobile-pwa-smoke-student") || "{}").answers?.["1"],
+        }, mobileSolveDraftKey, { timeout: 10_000 });
+        const onlineSolveState = await page.evaluate((draftKey) => ({
+            draftAnswer: JSON.parse(localStorage.getItem(draftKey) || "{}").answers?.["1"],
             hasHorizontalOverflow: document.documentElement.scrollWidth > document.documentElement.clientWidth,
             markedAnswers: [...document.querySelectorAll(".q-bubble.marked")].map(item => item.getAttribute("aria-label")),
             title: document.querySelector(".solve-omr-scroll .omr-cardview-title")?.textContent || "",
             url: window.location.href,
-        }));
+        }), mobileSolveDraftKey);
         assert(onlineSolveState.title.includes("모바일 오프라인 시험"), "Online mobile solve route did not render", onlineSolveState);
         assert(onlineSolveState.draftAnswer === 2, "Online mobile solve draft was not saved before offline test", onlineSolveState);
         assert(onlineSolveState.markedAnswers.includes("문제 1번 보기 2"), "Online mobile solve answer mark is missing", onlineSolveState);
@@ -540,6 +556,7 @@ async function runSmoke() {
         assert(offlineDeviceCheckState.proofVerifier.includes("자동 저장") && offlineDeviceCheckState.proofVerifier.includes("입력 지우기"), "Offline PWA proof verifier must persist and clear collected reports", offlineDeviceCheckState);
 
         await page.goto("/solve/mobile-pwa-smoke-exam", { waitUntil: "domcontentloaded", timeout: 15_000 });
+        await continueSolveEntryAsStudentIfPresent(page);
         await page.locator(".solve-omr-scroll .omr-cardview-title").getByText("모바일 오프라인 시험").waitFor({ state: "visible", timeout: 10_000 });
         const offlineSolveState = await page.evaluate(() => ({
             hasHorizontalOverflow: document.documentElement.scrollWidth > document.documentElement.clientWidth,

@@ -64,13 +64,16 @@ export function evaluateExamAccess(
     const config = exam.accessConfig;
     if (config?.type === "group") {
         const session = context.session;
-        if (!session || session.isGuest || session.identityType === "guest") {
+        if (!session) {
             return { status: "login_required" };
         }
         const allowedGroups = config.groupIds || [];
         if (allowedGroups.length === 0) return { status: "group_denied" };
         if (session.groupId && allowedGroups.includes(session.groupId)) return { status: "allowed" };
         if (session.groupName && allowedGroups.includes(session.groupName)) return { status: "allowed" };
+        if (session.isGuest || session.identityType === "guest") {
+            return session.groupId || session.groupName ? { status: "group_denied" } : { status: "login_required" };
+        }
         return { status: "group_denied" };
     }
 

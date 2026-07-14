@@ -17,18 +17,17 @@ describe("persistence integration", () => {
 
     it("primary read screens use the shared persistence layer", () => {
         const screens = [
-            { file: "src/app/teacher/dashboard/page.tsx", functions: ["loadExams", "loadAttempts"] },
-            { file: "src/app/student/dashboard/page.tsx", functions: ["readLocalExams", "readLocalAttempts"] },
-            { file: "src/app/student/history/page.tsx", functions: ["loadAttempts"] },
-            { file: "src/app/student/review/[attemptId]/page.tsx", functions: ["loadAttempt", "loadExam"] },
-            { file: "src/app/teacher/exam/[id]/page.tsx", functions: ["loadExam", "loadAttempts"] },
-            { file: "src/app/teacher/attempt/[attemptId]/page.tsx", functions: ["loadAttempt", "loadExam"] },
-            { file: "src/app/teacher/live/page.tsx", functions: ["loadExams", "loadAttempts"] },
+            { file: "src/app/teacher/dashboard/page.tsx", functions: ["loadTeacherExams", "loadTeacherAttempts"] },
+            { file: "src/app/student/dashboard/page.tsx", functions: ["listMyAssignmentsClient", "listMyAssignments"] },
+            { file: "src/app/student/history/page.tsx", functions: ["loadStudentOfficialAttempts", "loadExams"] },
+            { file: "src/app/student/review/[attemptId]/page.tsx", functions: ["loadMyAttemptClient", "loadReviewExamClient"] },
+            { file: "src/app/teacher/exam/[id]/page.tsx", functions: ["loadTeacherExam", "loadTeacherAttempts"] },
+            { file: "src/app/teacher/attempt/[attemptId]/page.tsx", functions: ["loadTeacherAttemptRecord", "loadTeacherExam"] },
+            { file: "src/app/teacher/live/page.tsx", functions: ["loadTeacherExams", "loadTeacherAttempts"] },
         ];
 
         for (const screen of screens) {
             const source = readProjectFile(screen.file);
-            expect(source, screen.file).toContain("@/lib/omrPersistence");
             for (const fn of screen.functions) {
                 expect(source, `${screen.file} should use ${fn}`).toContain(fn);
             }
@@ -38,17 +37,17 @@ describe("persistence integration", () => {
     it("teacher user management uses the roster persistence layer instead of local-only writes", () => {
         const source = readProjectFile("src/app/teacher/users/page.tsx");
 
-        expect(source).toContain("@/lib/rosterPersistence");
-        expect(source).toContain("loadRosterSnapshot");
-        expect(source).toContain("saveRosterSnapshot");
+        expect(source).toContain("@/lib/teacherRosterClient");
+        expect(source).toContain("loadTeacherRosterSnapshot");
+        expect(source).toContain("saveTeacherRosterSnapshot");
         expect(source).toContain("persistRoster(");
     });
 
     it("teacher analytics loads roster data through the shared roster persistence layer", () => {
         const source = readProjectFile("src/app/teacher/dashboard/page.tsx");
 
-        expect(source).toContain("@/lib/rosterPersistence");
-        expect(source).toContain("loadRosterSnapshot(localStorage)");
+        expect(source).toContain("@/lib/teacherRosterClient");
+        expect(source).toContain("loadTeacherRosterSnapshot(localStorage)");
         expect(source).toContain("summarizePersistenceHealth([examResult, attemptResult, rosterResult])");
         expect(source).not.toContain("readRosterStudents(localStorage)");
         expect(source).not.toContain("readRosterGroups(localStorage)");
@@ -57,13 +56,13 @@ describe("persistence integration", () => {
     it("teacher settings checks exam, attempt, roster, and deletion persistence together", () => {
         const source = readProjectFile("src/app/teacher/settings/page.tsx");
 
-        expect(source).toContain("@/lib/omrPersistence");
         expect(source).toContain("@/lib/rosterPersistence");
+        expect(source).toContain("@/lib/teacherRosterClient");
         expect(source).toContain("@/lib/dataDbReadiness");
         expect(source).toContain("Promise.all");
-        expect(source).toContain("loadExams()");
-        expect(source).toContain("loadAttempts()");
-        expect(source).toContain("loadRosterSnapshot(window.localStorage)");
+        expect(source).toContain("loadTeacherExams()");
+        expect(source).toContain("loadTeacherAttempts()");
+        expect(source).toContain("loadTeacherRosterSnapshot(window.localStorage)");
         expect(source).toContain("readRosterTombstones(window.localStorage)");
         expect(source).toContain('sourceKey: "exams"');
         expect(source).toContain('sourceLabel: "시험"');
@@ -292,7 +291,8 @@ describe("persistence integration", () => {
     it("threads active workspace context into Supabase persistence rows", () => {
         const workspaceContext = readProjectFile("src/lib/workspaceContext.ts");
         const persistence = readProjectFile("src/lib/omrPersistence.ts");
-        const rosterPersistence = readProjectFile("src/lib/rosterPersistence.ts");
+        const rosterGateway = readProjectFile("src/lib/teacherRosterGateway.ts");
+        const rosterAction = readProjectFile("src/app/actions/teacherRoster.ts");
         const docs = readProjectFile("docs/account-security-usability-checklist.md");
 
         expect(workspaceContext).toContain("workspaceContextFromIdentity");
@@ -305,9 +305,9 @@ describe("persistence integration", () => {
         expect(persistence).toContain("organization_id: scopedValue(exam.organizationId) || contextOrganizationId(context)");
         expect(persistence).toContain("created_by_user_id: scopedValue(exam.createdByUserId) || contextActorUserId(context)");
         expect(persistence).toContain("questionResultRowsForAttempt(scopedAttempt, undefined, context)");
-        expect(rosterPersistence).toContain("activeRosterOrganizationId");
-        expect(rosterPersistence).toContain("readActiveWorkspaceContext");
-        expect(rosterPersistence).toContain("workspaceBootstrapRows(context)");
+        expect(rosterGateway).toContain("context.organizationId");
+        expect(rosterGateway).toContain("organization_id");
+        expect(rosterAction).toContain("workspaceContextFromTeacherSession(session)");
         expect(docs).toContain("interim `teacher_<hash>` organization/user scope");
         expect(docs).toContain("bootstrap matching organization, user profile, organization member, and teacher profile rows");
     });

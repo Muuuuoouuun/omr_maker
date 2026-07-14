@@ -7,7 +7,8 @@ import { BookOpen, PenLine } from "lucide-react";
 import { Exam, Attempt } from "@/types/omr";
 import StatCard from "@/components/dashboard/StatCard";
 import { toast } from "@/components/Toast";
-import { loadAttempts, loadExam } from "@/lib/omrPersistence";
+import { loadTeacherAttempts } from "@/lib/teacherAttemptClient";
+import { loadTeacherExam } from "@/lib/teacherExamClient";
 import { formatKoreanDateTime } from "@/lib/pure";
 import { resolveAttemptScore, type ResolvedAttemptScore } from "@/lib/attemptScores";
 import { serializeCsvRows } from "@/lib/csv";
@@ -40,8 +41,8 @@ export default function ExamDetailPage() {
         let cancelled = false;
         const loadDetail = async () => {
             const [loadedExam, loadedAttempts] = await Promise.all([
-                loadExam(id),
-                loadAttempts(),
+                loadTeacherExam(id),
+                loadTeacherAttempts(),
             ]);
             if (cancelled) return;
             if (loadedExam) setExam(loadedExam);
@@ -176,6 +177,32 @@ export default function ExamDetailPage() {
         return sortDir === "asc" ? " ↑" : " ↓";
     };
 
+    const sortAria = (key: SortKey): "none" | "ascending" | "descending" => {
+        if (sortKey !== key) return "none";
+        return sortDir === "asc" ? "ascending" : "descending";
+    };
+
+    const sortableHeader = (key: SortKey, label: string) => (
+        <button
+            type="button"
+            onClick={() => handleSort(key)}
+            style={{
+                minHeight: 44,
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: '0.25rem',
+                border: 0,
+                background: 'transparent',
+                color: 'inherit',
+                font: 'inherit',
+                fontWeight: 700,
+                cursor: 'pointer',
+            }}
+        >
+            {label}<span aria-hidden="true">{sortIndicator(key)}</span>
+        </button>
+    );
+
     return (
         <div className="layout-main" style={{ background: '#f8fafc', minHeight: '100vh' }}>
             <header className="header" style={{ borderBottom: '1px solid var(--border)' }}>
@@ -244,7 +271,7 @@ export default function ExamDetailPage() {
                         padding: '1.25rem 1.5rem', borderBottom: '1px solid var(--border)',
                         display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '1rem',
                     }}>
-                        <h3 style={{ fontSize: '1.1rem', fontWeight: 700 }}>Student Results</h3>
+                        <h3 style={{ fontSize: '1.1rem', fontWeight: 700 }}>학생 결과</h3>
                         <button
                             onClick={handleExportCSV}
                             className="btn btn-secondary"
@@ -260,26 +287,26 @@ export default function ExamDetailPage() {
                             <thead style={{ background: '#f8fafc', borderBottom: '1px solid var(--border)' }}>
                                 <tr>
                                     <th
-                                        onClick={() => handleSort("name")}
-                                        style={{ padding: '1rem', textAlign: 'left', color: 'var(--muted)', cursor: 'pointer', userSelect: 'none' }}
+                                        aria-sort={sortAria("name")}
+                                        style={{ padding: '0.35rem 1rem', textAlign: 'left', color: 'var(--muted)' }}
                                     >
-                                        Student{sortIndicator("name")}
+                                        {sortableHeader("name", "학생")}
                                     </th>
                                     <th
-                                        onClick={() => handleSort("percent")}
-                                        style={{ padding: '1rem', textAlign: 'left', color: 'var(--muted)', cursor: 'pointer', userSelect: 'none' }}
+                                        aria-sort={sortAria("percent")}
+                                        style={{ padding: '0.35rem 1rem', textAlign: 'left', color: 'var(--muted)' }}
                                     >
-                                        Score{sortIndicator("percent")}
+                                        {sortableHeader("percent", "점수")}
                                     </th>
                                     <th
-                                        onClick={() => handleSort("finishedAt")}
-                                        style={{ padding: '1rem', textAlign: 'left', color: 'var(--muted)', cursor: 'pointer', userSelect: 'none' }}
+                                        aria-sort={sortAria("finishedAt")}
+                                        style={{ padding: '0.35rem 1rem', textAlign: 'left', color: 'var(--muted)' }}
                                     >
-                                        Time{sortIndicator("finishedAt")}
+                                        {sortableHeader("finishedAt", "제출 시각")}
                                     </th>
-                                    <th style={{ padding: '1rem', textAlign: 'left', color: 'var(--muted)' }}>Status</th>
+                                    <th style={{ padding: '1rem', textAlign: 'left', color: 'var(--muted)' }}>상태</th>
                                     <th style={{ padding: '1rem', textAlign: 'left', color: 'var(--muted)' }}>집중도/이탈</th>
-                                    <th style={{ padding: '1rem', textAlign: 'right', color: 'var(--muted)' }}>Action</th>
+                                    <th style={{ padding: '1rem', textAlign: 'right', color: 'var(--muted)' }}>작업</th>
                                 </tr>
                             </thead>
                             <tbody>

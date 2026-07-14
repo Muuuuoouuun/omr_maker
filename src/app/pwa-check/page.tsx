@@ -66,7 +66,7 @@ const VIEWPORT_OFFSET_TOP_VAR = "--app-visual-viewport-offset-top";
 const VIEWPORT_OFFSET_LEFT_VAR = "--app-visual-viewport-offset-left";
 const VIEWPORT_SCALE_VAR = "--app-visual-viewport-scale";
 const KEYBOARD_INSET_BOTTOM_VAR = "--app-keyboard-inset-bottom";
-const EXPECTED_OFFLINE_CACHE_PREFIX = "omr-maker-v14";
+const EXPECTED_OFFLINE_CACHE_PREFIX = "omr-maker-v15";
 const OFFLINE_CACHE_REQUIRED_PATHS = ["/", "/pwa-check", "/offline.html", "/logo.png"];
 const DUAL_PROOF_HEADER = "OMR Maker PWA dual device proof";
 const PROOF_INPUT_STORAGE_KEY = "omr_pwa_device_proof_inputs_v1";
@@ -758,14 +758,15 @@ async function readManifestSummary(): Promise<{ detail: string; ok: boolean; val
   try {
     const manifest = await fetch(manifestHref, { cache: "no-store" }).then(response => response.json());
     const hasStandalone = manifest.display === "standalone" || manifest.display_override?.includes("standalone");
+    const hasPortraitOrientation = manifest.orientation === "portrait";
     const hasIcons = Array.isArray(manifest.icons) && manifest.icons.some((icon: { sizes?: string }) => icon.sizes === "192x192")
       && manifest.icons.some((icon: { sizes?: string }) => icon.sizes === "512x512");
     const hasScreenshots = Array.isArray(manifest.screenshots) && manifest.screenshots.length >= 2;
 
     return {
-      detail: `${manifest.short_name || manifest.name || "앱"} · icons ${manifest.icons?.length || 0} · screenshots ${manifest.screenshots?.length || 0}`,
-      ok: hasStandalone && hasIcons && hasScreenshots,
-      value: manifest.display || "unknown",
+      detail: `${manifest.short_name || manifest.name || "앱"} · orientation ${manifest.orientation || "unknown"} · icons ${manifest.icons?.length || 0} · screenshots ${manifest.screenshots?.length || 0}`,
+      ok: hasStandalone && hasPortraitOrientation && hasIcons && hasScreenshots,
+      value: `${manifest.display || "unknown"} / ${manifest.orientation || "unknown"}`,
     };
   } catch {
     return { detail: "manifest fetch 실패", ok: false, value: manifestHref };

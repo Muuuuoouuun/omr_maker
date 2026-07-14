@@ -240,6 +240,51 @@ as $$
     )
 $$;
 
+create or replace function public.omr_mark_feedback_opened(
+    target_feedback_id text,
+    opened_at timestamptz default now()
+)
+returns public.omr_attempt_feedback
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+    feedback_row public.omr_attempt_feedback;
+begin
+    update public.omr_attempt_feedback
+        set
+            notification_status = 'sent',
+            first_opened_at = coalesce(first_opened_at, opened_at),
+            last_opened_at = opened_at,
+            open_count = open_count + 1,
+            updated_at = opened_at,
+            payload = jsonb_set(
+                jsonb_set(coalesce(payload, '{}'::jsonb), '{updatedAt}', to_jsonb(opened_at), true),
+                '{delivery}',
+                coalesce(payload->'delivery', '{}'::jsonb) || jsonb_build_object(
+                    'notificationStatus', 'sent',
+                    'firstOpenedAt', coalesce(first_opened_at, opened_at),
+                    'lastOpenedAt', opened_at,
+                    'openCount', open_count + 1
+                ),
+                true
+            )
+        where id = target_feedback_id
+            and status = 'returned'
+            and (
+                public.omr_is_org_member(organization_id)
+                or (
+                    student_profile_id is not null
+                    and public.omr_is_org_student(organization_id, student_profile_id)
+                )
+            )
+        returning * into feedback_row;
+
+    return feedback_row;
+end;
+$$;
+
 revoke all on function public.omr_current_user_id() from public;
 revoke all on function public.omr_is_org_member(text) from public;
 revoke all on function public.omr_has_org_role(text, text[]) from public;
@@ -251,6 +296,7 @@ revoke all on function public.omr_can_read_assignment(text, text) from public;
 revoke all on function public.omr_can_read_exam(text, text) from public;
 revoke all on function public.omr_can_read_exam_by_id(text) from public;
 revoke all on function public.omr_can_write_exam_by_id(text) from public;
+revoke all on function public.omr_mark_feedback_opened(text, timestamptz) from public;
 
 grant execute on function public.omr_current_user_id() to authenticated;
 grant execute on function public.omr_is_org_member(text) to authenticated;
@@ -263,6 +309,7 @@ grant execute on function public.omr_can_read_assignment(text, text) to authenti
 grant execute on function public.omr_can_read_exam(text, text) to authenticated;
 grant execute on function public.omr_can_read_exam_by_id(text) to authenticated;
 grant execute on function public.omr_can_write_exam_by_id(text) to authenticated;
+grant execute on function public.omr_mark_feedback_opened(text, timestamptz) to authenticated;
 
 revoke all on schema public from anon;
 revoke all on all tables in schema public from anon;
@@ -288,6 +335,7 @@ grant select, insert, update, delete on
     public.omr_attempts,
     public.omr_question_results,
     public.omr_assignment_submissions,
+    public.omr_attempt_feedback,
     public.omr_kakao_candidate_reviews,
     public.omr_kakao_dispatch_logs,
     public.omr_comments
@@ -312,6 +360,7 @@ alter table public.omr_assignment_targets enable row level security;
 alter table public.omr_attempts enable row level security;
 alter table public.omr_question_results enable row level security;
 alter table public.omr_assignment_submissions enable row level security;
+alter table public.omr_attempt_feedback enable row level security;
 alter table public.omr_kakao_candidate_reviews enable row level security;
 alter table public.omr_kakao_dispatch_logs enable row level security;
 alter table public.omr_comments enable row level security;
@@ -336,6 +385,7 @@ alter table public.omr_assignment_targets force row level security;
 alter table public.omr_attempts force row level security;
 alter table public.omr_question_results force row level security;
 alter table public.omr_assignment_submissions force row level security;
+alter table public.omr_attempt_feedback force row level security;
 alter table public.omr_kakao_candidate_reviews force row level security;
 alter table public.omr_kakao_dispatch_logs force row level security;
 alter table public.omr_comments force row level security;
@@ -361,6 +411,7 @@ drop policy if exists "OMR attempts are publicly writable" on public.omr_attempt
 drop policy if exists "OMR question results are publicly readable" on public.omr_question_results;
 drop policy if exists "OMR question results are publicly writable" on public.omr_question_results;
 drop policy if exists "OMR assignment submissions are publicly writable" on public.omr_assignment_submissions;
+drop policy if exists "OMR attempt feedback is publicly writable" on public.omr_attempt_feedback;
 drop policy if exists "OMR Kakao candidate reviews are publicly writable" on public.omr_kakao_candidate_reviews;
 drop policy if exists "OMR Kakao dispatch logs are publicly writable" on public.omr_kakao_dispatch_logs;
 drop policy if exists "OMR comments are publicly writable" on public.omr_comments;
@@ -518,11 +569,12 @@ create policy "prod materials write by staff"
     with check ((select public.omr_has_org_role(organization_id, array['owner', 'admin', 'teacher', 'assistant'])));
 
 drop policy if exists "prod exams read by members or assigned students" on public.omr_exams;
-create policy "prod exams read by members or assigned students"
+drop policy if exists "prod exams read by staff" on public.omr_exams;
+create policy "prod exams read by staff"
     on public.omr_exams
     for select
     to authenticated
-    using ((select public.omr_can_read_exam(organization_id, id)));
+    using ((select public.omr_has_org_role(organization_id, array['owner', 'admin', 'teacher', 'assistant', 'viewer'])));
 
 drop policy if exists "prod exams write by staff" on public.omr_exams;
 create policy "prod exams write by staff"
@@ -533,14 +585,12 @@ create policy "prod exams write by staff"
     with check ((select public.omr_has_org_role(organization_id, array['owner', 'admin', 'teacher', 'assistant'])));
 
 drop policy if exists "prod exam questions read with exam" on public.omr_exam_questions;
-create policy "prod exam questions read with exam"
+drop policy if exists "prod exam questions read by staff" on public.omr_exam_questions;
+create policy "prod exam questions read by staff"
     on public.omr_exam_questions
     for select
     to authenticated
-    using (
-        (organization_id is not null and (select public.omr_can_read_exam(organization_id, exam_id)))
-        or (organization_id is null and (select public.omr_can_read_exam_by_id(exam_id)))
-    );
+    using ((select public.omr_has_org_role(organization_id, array['owner', 'admin', 'teacher', 'assistant', 'viewer'])));
 
 drop policy if exists "prod exam questions write with exam" on public.omr_exam_questions;
 create policy "prod exam questions write with exam"
@@ -616,18 +666,13 @@ create policy "prod attempts read by staff or self"
     );
 
 drop policy if exists "prod attempts write by staff or self" on public.omr_attempts;
-create policy "prod attempts write by staff or self"
+drop policy if exists "prod attempts write by staff" on public.omr_attempts;
+create policy "prod attempts write by staff"
     on public.omr_attempts
     for all
     to authenticated
-    using (
-        (select public.omr_has_org_role(organization_id, array['owner', 'admin', 'teacher', 'assistant']))
-        or (select public.omr_is_org_student(organization_id, student_profile_id))
-    )
-    with check (
-        (select public.omr_has_org_role(organization_id, array['owner', 'admin', 'teacher', 'assistant']))
-        or (select public.omr_is_org_student(organization_id, student_profile_id))
-    );
+    using ((select public.omr_has_org_role(organization_id, array['owner', 'admin', 'teacher', 'assistant'])))
+    with check ((select public.omr_has_org_role(organization_id, array['owner', 'admin', 'teacher', 'assistant'])));
 
 drop policy if exists "prod question results read by staff or self" on public.omr_question_results;
 create policy "prod question results read by staff or self"
@@ -640,18 +685,13 @@ create policy "prod question results read by staff or self"
     );
 
 drop policy if exists "prod question results write by staff or self" on public.omr_question_results;
-create policy "prod question results write by staff or self"
+drop policy if exists "prod question results write by staff" on public.omr_question_results;
+create policy "prod question results write by staff"
     on public.omr_question_results
     for all
     to authenticated
-    using (
-        (select public.omr_has_org_role(organization_id, array['owner', 'admin', 'teacher', 'assistant']))
-        or (select public.omr_is_org_student(organization_id, student_profile_id))
-    )
-    with check (
-        (select public.omr_has_org_role(organization_id, array['owner', 'admin', 'teacher', 'assistant']))
-        or (select public.omr_is_org_student(organization_id, student_profile_id))
-    );
+    using ((select public.omr_has_org_role(organization_id, array['owner', 'admin', 'teacher', 'assistant'])))
+    with check ((select public.omr_has_org_role(organization_id, array['owner', 'admin', 'teacher', 'assistant'])));
 
 drop policy if exists "prod assignment submissions read by staff or self" on public.omr_assignment_submissions;
 create policy "prod assignment submissions read by staff or self"
@@ -663,19 +703,54 @@ create policy "prod assignment submissions read by staff or self"
         or (select public.omr_is_org_student(organization_id, student_profile_id))
     );
 
+-- Scores, grading state, attempt links, and feedback are canonical server/staff
+-- fields. Students submit attempts through the service-role gateway and may
+-- read their normalized submission, but cannot mutate the gradebook row.
 drop policy if exists "prod assignment submissions write by staff or self" on public.omr_assignment_submissions;
-create policy "prod assignment submissions write by staff or self"
+drop policy if exists "prod assignment submissions write by staff" on public.omr_assignment_submissions;
+create policy "prod assignment submissions write by staff"
     on public.omr_assignment_submissions
     for all
     to authenticated
+    using ((select public.omr_has_org_role(organization_id, array['owner', 'admin', 'teacher', 'assistant'])))
+    with check ((select public.omr_has_org_role(organization_id, array['owner', 'admin', 'teacher', 'assistant'])));
+
+drop policy if exists "prod attempt feedback read by staff or returned student" on public.omr_attempt_feedback;
+create policy "prod attempt feedback read by staff or returned student"
+    on public.omr_attempt_feedback
+    for select
+    to authenticated
     using (
-        (select public.omr_has_org_role(organization_id, array['owner', 'admin', 'teacher', 'assistant']))
-        or (select public.omr_is_org_student(organization_id, student_profile_id))
-    )
-    with check (
-        (select public.omr_has_org_role(organization_id, array['owner', 'admin', 'teacher', 'assistant']))
-        or (select public.omr_is_org_student(organization_id, student_profile_id))
+        (select public.omr_is_org_member(organization_id))
+        or (
+            status = 'returned'
+            and student_profile_id is not null
+            and (select public.omr_is_org_student(organization_id, student_profile_id))
+        )
     );
+
+drop policy if exists "prod attempt feedback insert by staff" on public.omr_attempt_feedback;
+create policy "prod attempt feedback insert by staff"
+    on public.omr_attempt_feedback
+    for insert
+    to authenticated
+    with check ((select public.omr_has_org_role(organization_id, array['owner', 'admin', 'teacher', 'assistant'])));
+
+drop policy if exists "prod attempt feedback update by staff or returned student" on public.omr_attempt_feedback;
+drop policy if exists "prod attempt feedback update by staff" on public.omr_attempt_feedback;
+create policy "prod attempt feedback update by staff"
+    on public.omr_attempt_feedback
+    for update
+    to authenticated
+    using ((select public.omr_has_org_role(organization_id, array['owner', 'admin', 'teacher', 'assistant'])))
+    with check ((select public.omr_has_org_role(organization_id, array['owner', 'admin', 'teacher', 'assistant'])));
+
+drop policy if exists "prod attempt feedback delete by staff" on public.omr_attempt_feedback;
+create policy "prod attempt feedback delete by staff"
+    on public.omr_attempt_feedback
+    for delete
+    to authenticated
+    using ((select public.omr_has_org_role(organization_id, array['owner', 'admin', 'teacher', 'assistant'])));
 
 drop policy if exists "prod kakao reviews read by staff" on public.omr_kakao_candidate_reviews;
 create policy "prod kakao reviews read by staff"

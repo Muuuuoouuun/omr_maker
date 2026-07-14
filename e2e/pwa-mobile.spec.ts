@@ -1,6 +1,8 @@
 import { expect, test, type Locator, type Page } from "@playwright/test";
 
 const VALID_PROOF_EPOCH = Date.now();
+const MOBILE_SOLVE_DRAFT_KEY = "omr_draft_mobile-qa-exam_mobile-qa-student_base";
+const MOBILE_SOLVE_PANEL_KEY = "omr_solve_panel_mobile-qa-exam_mobile-qa-student_base";
 
 async function clearStorage(page: Page) {
     await page.addInitScript(() => {
@@ -77,6 +79,20 @@ async function expectTouchTarget(locator: Locator) {
     expect(box).not.toBeNull();
     expect(Math.round(box?.width || 0)).toBeGreaterThanOrEqual(44);
     expect(Math.round(box?.height || 0)).toBeGreaterThanOrEqual(44);
+}
+
+async function continueSolveEntryAsStudentIfPresent(page: Page) {
+    await page.waitForFunction(() => (
+        document.body.innerText.includes("시험 입장 확인")
+        || !!document.querySelector(".solve-body")
+    ), null, { timeout: 5_000 }).catch(() => {});
+
+    const entryDialog = page.getByRole("dialog", { name: "시험 입장 확인" });
+    if (await entryDialog.isVisible().catch(() => false)) {
+        await expectTouchTarget(entryDialog.getByRole("button", { name: "학생으로 시험 보기" }));
+        await entryDialog.getByRole("button", { name: "학생으로 시험 보기" }).click();
+        await expect(entryDialog).toBeHidden();
+    }
 }
 
 function isLocalAppUrl(urlValue: string): boolean {
@@ -208,7 +224,7 @@ function validInstalledProofReport(platform: "android" | "ios" = "android"): str
         "- display-mode=pass:standalone (홈 화면 아이콘 실행 상태)",
         `- launch-proof=pass:확인됨 (${displayEvidence})`,
         "- service-worker=pass:제어 중 (script=https://omr-maker-eight.vercel.app/sw.js · controller=yes · active=activated · waiting=none · installing=none)",
-        "- offline-cache=pass:준비 (caches=omr-maker-v14-shell, omr-maker-v14-runtime · required=/, /pwa-check, /offline.html, /logo.png · expected=omr-maker-v14-shell · missingCaches=none · missing=none)",
+        "- offline-cache=pass:준비 (caches=omr-maker-v15-shell, omr-maker-v15-runtime · required=/, /pwa-check, /offline.html, /logo.png · expected=omr-maker-v15-shell · missingCaches=none · missing=none)",
         "- manifest=pass:standalone (OMR Maker · icons 12 · screenshots 2)",
         "- viewport=pass:cover (width=device-width, initial-scale=1, viewport-fit=cover)",
         "- viewport-height=pass:동기화 (css=727px · visual=727px · inner=727px · delta=0px)",
@@ -242,7 +258,7 @@ async function seedStudentSession(page: Page) {
 }
 
 async function seedMobileSolveExam(page: Page) {
-    await page.addInitScript(() => {
+    await page.addInitScript(({ panelKey }) => {
         const exam = {
             id: "mobile-qa-exam",
             title: "모바일 실전 시험",
@@ -271,9 +287,9 @@ async function seedMobileSolveExam(page: Page) {
             window.localStorage.setItem("omr_exam_mobile-qa-exam", JSON.stringify(exam));
             window.localStorage.setItem("omr_student_session_backup", sessionPayload);
             window.sessionStorage.setItem("omr_student_session", sessionPayload);
-            window.localStorage.setItem("omr_solve_panel_mobile-qa-exam_mobile-qa-student", "expanded");
+            window.localStorage.setItem(panelKey, "expanded");
         } catch {}
-    });
+    }, { panelKey: MOBILE_SOLVE_PANEL_KEY });
 }
 
 test.describe("Mobile PWA entry", () => {
@@ -375,6 +391,7 @@ test.describe("Mobile PWA entry", () => {
         await seedMobileSolveExam(page);
 
         await page.goto("/solve/mobile-qa-exam");
+        await continueSolveEntryAsStudentIfPresent(page);
 
         const startsWithFloatingRail = await page.evaluate(() => window.matchMedia("(min-width: 600px)").matches);
         if (startsWithFloatingRail) {
@@ -390,7 +407,13 @@ test.describe("Mobile PWA entry", () => {
         await expectTouchTarget(page.locator(".solve-controls .solve-collapse-button"));
         await expectTouchTarget(page.locator(".solve-controls .solve-submit-button"));
         await expectTouchTarget(page.getByRole("button", { name: "1번 문항으로 이동" }));
-        await expectTouchTarget(page.getByRole("button", { name: "문제 1번 보기 2" }));
+        const firstQuestionGroup = page.getByRole("radiogroup", { name: /문제 1번/ });
+        const firstAnswer = firstQuestionGroup.getByRole("radio", { name: "문제 1번 보기 2" });
+        await expect(firstQuestionGroup).toContainText("미응답");
+        await expectTouchTarget(firstAnswer);
+        await expect(firstAnswer).toHaveAttribute("aria-checked", "false");
+        await expect(firstQuestionGroup.getByRole("radio", { name: "문제 1번 보기 1" })).toHaveAttribute("tabindex", "0");
+        await expect(firstAnswer).toHaveAttribute("tabindex", "-1");
         await expectNoHorizontalOverflow(page);
         expect(await smallTargets(page, ".solve-controls button, .solve-controls label, .solve-omr-scroll .q-bubble, .solve-omr-next-button, .solve-omr-pane-close")).toEqual([]);
         const solveLayout = await page.evaluate(() => {
@@ -462,31 +485,40 @@ test.describe("Mobile PWA entry", () => {
         await expect(page.locator("#solve-omr-pane")).toHaveAttribute("aria-hidden", "false");
         await expect(page.locator("#solve-omr-pane")).not.toHaveAttribute("inert", "");
 
-        await page.getByRole("button", { name: "문제 1번 보기 2" }).click();
-        await expect(page.getByRole("button", { name: "문제 1번 보기 2" })).toHaveAttribute("aria-pressed", "true");
-        await expect.poll(async () => page.evaluate(() => {
-            const draft = JSON.parse(window.localStorage.getItem("omr_draft_mobile-qa-exam_mobile-qa-student_base") || "{}");
+        await firstAnswer.click();
+        await expect(firstAnswer).toHaveAttribute("aria-checked", "true");
+        await expect(firstAnswer).toHaveAttribute("tabindex", "0");
+        await expect(firstQuestionGroup.getByRole("radio", { name: "문제 1번 보기 1" })).toHaveAttribute("tabindex", "-1");
+        await firstQuestionGroup.getByRole("radio", { name: "문제 1번 보기 2" }).press("ArrowRight");
+        await expect(firstQuestionGroup.getByRole("radio", { name: "문제 1번 보기 3" })).toHaveAttribute("aria-checked", "true");
+        await expect(firstQuestionGroup.getByRole("radio", { name: "문제 1번 보기 3" })).toHaveAttribute("tabindex", "0");
+        await expect(firstAnswer).toHaveAttribute("tabindex", "-1");
+        await firstQuestionGroup.getByRole("radio", { name: "문제 1번 보기 3" }).press("ArrowLeft");
+        await expect(firstAnswer).toHaveAttribute("aria-checked", "true");
+        await expect.poll(async () => page.evaluate((draftKey) => {
+            const draft = JSON.parse(window.localStorage.getItem(draftKey) || "{}");
             return draft.answers?.["1"];
-        })).toBe(2);
+        }, MOBILE_SOLVE_DRAFT_KEY)).toBe(2);
 
-        await page.getByRole("button", { name: "문제 2번 보기 4" }).click();
+        await page.getByRole("radio", { name: "문제 2번 보기 4" }).click();
         await page.evaluate(() => {
             window.dispatchEvent(new Event("pagehide"));
         });
-        const backgroundDraft = await page.evaluate(() => (
-            JSON.parse(window.localStorage.getItem("omr_draft_mobile-qa-exam_mobile-qa-student_base") || "{}")
-        ));
+        const backgroundDraft = await page.evaluate((draftKey) => (
+            JSON.parse(window.localStorage.getItem(draftKey) || "{}")
+        ), MOBILE_SOLVE_DRAFT_KEY);
         expect(backgroundDraft.answers).toMatchObject({ "1": 2, "2": 4 });
         expect(backgroundDraft.drawings).toBeUndefined();
 
         await page.reload();
+        await continueSolveEntryAsStudentIfPresent(page);
         await expect(page.locator(".solve-omr-scroll .omr-cardview-title").getByText("모바일 실전 시험")).toBeVisible();
-        await expect(page.getByRole("button", { name: "문제 1번 보기 2" })).toHaveClass(/marked/);
-        await expect(page.getByRole("button", { name: "문제 2번 보기 4" })).toHaveClass(/marked/);
+        await expect(page.getByRole("radio", { name: "문제 1번 보기 2" })).toHaveClass(/marked/);
+        await expect(page.getByRole("radio", { name: "문제 2번 보기 4" })).toHaveClass(/marked/);
         await expect(page.locator(".solve-progress")).toContainText("2/4");
         await expectNoHorizontalOverflow(page);
 
-        await page.getByRole("button", { name: "문제 3번 보기 1" }).click();
+        await page.getByRole("radio", { name: "문제 3번 보기 1" }).click();
         await page.evaluate(() => {
             Object.defineProperty(document, "visibilityState", {
                 configurable: true,
@@ -494,10 +526,10 @@ test.describe("Mobile PWA entry", () => {
             });
             document.dispatchEvent(new Event("visibilitychange"));
         });
-        await expect.poll(async () => page.evaluate(() => {
-            const draft = JSON.parse(window.localStorage.getItem("omr_draft_mobile-qa-exam_mobile-qa-student_base") || "{}");
+        await expect.poll(async () => page.evaluate((draftKey) => {
+            const draft = JSON.parse(window.localStorage.getItem(draftKey) || "{}");
             return draft.answers?.["3"];
-        })).toBe(1);
+        }, MOBILE_SOLVE_DRAFT_KEY)).toBe(1);
         await page.evaluate(() => {
             Object.defineProperty(document, "visibilityState", {
                 configurable: true,
@@ -513,7 +545,7 @@ test.describe("Mobile PWA entry", () => {
         await returnToExamButton.click();
         await expect(focusWarning).toBeHidden();
 
-        await page.getByRole("button", { name: "문제 4번 보기 3" }).click();
+        await page.getByRole("radio", { name: "문제 4번 보기 3" }).click();
 
         await expect(page.locator(".solve-progress")).toContainText("4/4");
         await expectNoHorizontalOverflow(page);

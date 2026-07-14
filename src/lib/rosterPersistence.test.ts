@@ -1,4 +1,6 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { RosterGroup, RosterInvite, RosterStudent } from "@/lib/rosterStorage";
 import {
     applyRosterTombstonesToSnapshot,
@@ -24,66 +26,9 @@ import {
 } from "./rosterPersistence";
 import { workspaceContextFromIdentity } from "./workspaceContext";
 
-// In-memory fake for the Supabase tables saveRosterSnapshot/loadRosterSnapshot
-// touch. Reads are served fresh from `remoteTables` on every call (mutable
-// between tests), and every upsert is recorded so the merge test below can
-// assert on exactly what got pushed back to the "server".
-const remoteTables: Record<string, Array<Record<string, unknown>>> = {
-    omr_organizations: [],
-    omr_classes: [],
-    omr_student_profiles: [],
-    omr_class_students: [],
-};
-const recordedUpserts: Array<{ table: string; rows: Array<Record<string, unknown>> }> = [];
-
-// Primary keys used to make the fake `upsert()` below actually persist into
-// `remoteTables` (matching real Supabase upsert-by-primary-key semantics)
-// instead of only recording the call. This lets multi-step tests simulate a
-// second device reading the state a first device just wrote (e.g. "device A
-// deletes X, then device B independently edits X").
-const TABLE_PRIMARY_KEYS: Record<string, string[]> = {
-    omr_organizations: ["id"],
-    omr_user_profiles: ["user_id"],
-    omr_organization_members: ["organization_id", "user_id"],
-    omr_teacher_profiles: ["organization_id", "user_id"],
-    omr_classes: ["id"],
-    omr_student_profiles: ["id"],
-    omr_class_students: ["class_id", "student_profile_id"],
-};
-
-function rowKey(table: string, row: Record<string, unknown>): string {
-    const keys = TABLE_PRIMARY_KEYS[table] || ["id"];
-    return keys.map(key => String(row[key])).join("::");
+function projectSource(relativePath: string): string {
+    return readFileSync(join(process.cwd(), relativePath), "utf8");
 }
-
-vi.mock("@supabase/supabase-js", () => ({
-    createClient: () => ({
-        from(table: string) {
-            return {
-                select() {
-                    return {
-                        eq(column: string, value: string) {
-                            const rows = (remoteTables[table] || []).filter(row => row[column] === value);
-                            return Promise.resolve({ data: rows, error: null });
-                        },
-                    };
-                },
-                upsert(row: unknown) {
-                    const rows = Array.isArray(row) ? row as Array<Record<string, unknown>> : [row as Record<string, unknown>];
-                    recordedUpserts.push({ table, rows });
-                    const existing = remoteTables[table] || (remoteTables[table] = []);
-                    for (const nextRow of rows) {
-                        const key = rowKey(table, nextRow);
-                        const index = existing.findIndex(current => rowKey(table, current) === key);
-                        if (index >= 0) existing[index] = { ...existing[index], ...nextRow };
-                        else existing.push(nextRow);
-                    }
-                    return Promise.resolve({ data: row, error: null });
-                },
-            };
-        },
-    }),
-}));
 
 function createStorage(initial: Record<string, string> = {}): Storage {
     const data = new Map(Object.entries(initial));
@@ -560,297 +505,44 @@ describe("roster persistence", () => {
         });
     });
 
-    it("M3 regression: merges the current remote snapshot into a save instead of overwriting it (last-writer-wins)", async () => {
+    it("keeps legacy snapshot helpers local even when browser Supabase variables exist", async () => {
         vi.stubEnv("NEXT_PUBLIC_SUPABASE_URL", "https://example.supabase.co");
         vi.stubEnv("NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY", "public-anon-key");
+        const storage = createStorage({
+            omr_students: JSON.stringify(students),
+            omr_groups: JSON.stringify(groups),
+            omr_invites: JSON.stringify(invites),
+        });
 
-        // Seed the "remote" with a student/group this browser tab has never
-        // seen locally — as if another device added it after this tab's last
-        // sync. reuse the busan fixtures so the round-trip is exercised via
-        // the already-tested Supabase row shapes.
-        const remoteOnlyRows = rosterSnapshotToSupabaseRows(
-            { students: [students[1]], groups: [groups[1]], invites: [] },
-            DEFAULT_ROSTER_ORGANIZATION_ID,
-            "2026-06-16T00:00:00.000Z",
-        );
-        remoteTables.omr_classes = remoteOnlyRows.classes as unknown as Array<Record<string, unknown>>;
-        remoteTables.omr_student_profiles = remoteOnlyRows.students as unknown as Array<Record<string, unknown>>;
-        remoteTables.omr_class_students = remoteOnlyRows.enrollments as unknown as Array<Record<string, unknown>>;
-        recordedUpserts.length = 0;
+        await expect(loadRosterSnapshot(storage)).resolves.toMatchObject({
+            students,
+            groups,
+            invites,
+            remoteLoaded: false,
+        });
+        await expect(saveRosterSnapshot(storage, { students, groups, invites })).resolves.toEqual({
+            localSaved: true,
+            remoteSaved: false,
+        });
 
-        const storage = createStorage();
-        const localOnlySnapshot: RosterSnapshot = { students: [students[0]], groups: [groups[0]], invites: [] };
-
-        const result = await saveRosterSnapshot(storage, localOnlySnapshot);
-
-        expect(result.remoteSaved).toBe(true);
-
-        // The remotely-added student/group must survive the save instead of
-        // being clobbered by this tab's narrower local snapshot.
-        const savedLocally = readLocalRosterSnapshot(storage);
-        expect(savedLocally.students.map(s => s.id).sort()).toEqual(
-            [students[0].id, students[1].id].sort(),
-        );
-        expect(savedLocally.groups.map(g => g.id).sort()).toEqual(
-            [groups[0].id, groups[1].id].sort(),
-        );
-
-        expect(remoteTables.omr_student_profiles.map(row => row.id)).toEqual(
-            expect.arrayContaining([students[0].id, students[1].id]),
-        );
+        const persistence = projectSource("src/lib/rosterPersistence.ts");
+        expect(persistence).not.toContain("NEXT_PUBLIC_SUPABASE");
+        expect(persistence).not.toContain('import("@supabase/supabase-js")');
     });
 
-    function seedRemoteRosterBaseline(snapshot: RosterSnapshot, updatedAt = "2026-06-16T00:00:00.000Z"): void {
-        const rows = rosterSnapshotToSupabaseRows(snapshot, DEFAULT_ROSTER_ORGANIZATION_ID, updatedAt);
-        remoteTables.omr_classes = rows.classes as unknown as Array<Record<string, unknown>>;
-        remoteTables.omr_student_profiles = rows.students as unknown as Array<Record<string, unknown>>;
-        remoteTables.omr_class_students = rows.enrollments as unknown as Array<Record<string, unknown>>;
-        recordedUpserts.length = 0;
-    }
+    it("routes canonical remote roster reads and writes through the authenticated server gateway", () => {
+        const client = projectSource("src/lib/teacherRosterClient.ts");
+        const action = projectSource("src/app/actions/teacherRoster.ts");
+        const migration = projectSource("supabase/migrations/202607140011_teacher_roster_gateway.sql");
 
-    describe("concurrent roster edits across devices (T2)", () => {
-        beforeEach(() => {
-            vi.stubEnv("NEXT_PUBLIC_SUPABASE_URL", "https://example.supabase.co");
-            vi.stubEnv("NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY", "public-anon-key");
-        });
-
-        it("keeps additions from two devices that each add a different student", async () => {
-            const baseline: RosterSnapshot = { students: [students[0]], groups: [groups[0]], invites: [] };
-            seedRemoteRosterBaseline(baseline);
-
-            // Device 1 starts from the baseline and adds students[1] (a different group/region).
-            const deviceOne = createStorage();
-            writeLocalRosterSnapshot(deviceOne, baseline);
-            const resultOne = await saveRosterSnapshot(deviceOne, {
-                students: [students[0], students[1]],
-                groups: [groups[0], groups[1]],
-                invites: [],
-            });
-            expect(resultOne.remoteSaved).toBe(true);
-
-            // Device 2 independently starts from the SAME original baseline
-            // (never saw device 1's addition) and adds a third, different student.
-            const newStudent: RosterStudent = {
-                id: "seoul-a::박학생",
-                name: "박학생",
-                email: "park@example.com",
-                group: "A반",
-                region: "서울",
-                avatar: "#000000",
-                avgScore: 60,
-                examsTaken: 1,
-                lastActive: "오늘",
-                trend: "flat",
-                status: "active",
-            };
-            const deviceTwo = createStorage();
-            writeLocalRosterSnapshot(deviceTwo, baseline);
-            const resultTwo = await saveRosterSnapshot(deviceTwo, {
-                students: [students[0], newStudent],
-                groups: [groups[0]],
-                invites: [],
-            });
-            expect(resultTwo.remoteSaved).toBe(true);
-
-            // Both additions must survive — neither device's add should clobber the other's.
-            const finalLocal = readLocalRosterSnapshot(deviceTwo);
-            expect(finalLocal.students.map(s => s.id).sort()).toEqual(
-                [students[0].id, students[1].id, newStudent.id].sort(),
-            );
-        });
-
-        it("is last-writer-wins at the row level when two devices edit the same student concurrently (documented limitation)", async () => {
-            const baseline: RosterSnapshot = { students: [students[0]], groups: [groups[0]], invites: [] };
-            seedRemoteRosterBaseline(baseline);
-
-            const deviceA = createStorage();
-            writeLocalRosterSnapshot(deviceA, baseline);
-            const renamedByA: RosterStudent = { ...students[0], name: "김학생(A)" };
-            await saveRosterSnapshot(deviceA, { students: [renamedByA], groups: [groups[0]], invites: [] });
-
-            // Device B started from the same original baseline (before A's save
-            // landed) and edits a DIFFERENT field.
-            const deviceB = createStorage();
-            writeLocalRosterSnapshot(deviceB, baseline);
-            const rescoredByB: RosterStudent = { ...students[0], avgScore: 99 };
-            const resultB = await saveRosterSnapshot(deviceB, { students: [rescoredByB], groups: [groups[0]], invites: [] });
-
-            expect(resultB.remoteSaved).toBe(true);
-            const finalLocal = readLocalRosterSnapshot(deviceB).students.find(s => s.id === students[0].id);
-            // B's whole row wins on save: B's own change is present, but A's
-            // rename — which never made it into B's local snapshot — is lost.
-            // This is expected row-granularity last-writer-wins, not a bug: true
-            // field-level conflict resolution needs per-row optimistic
-            // concurrency (updated_at column), which is out of scope without a
-            // schema change — see the draft migration under supabase/drafts/.
-            expect(finalLocal?.avgScore).toBe(99);
-            expect(finalLocal?.name).toBe(students[0].name);
-        });
-
-        it("keeps a local edit when the same student was deleted remotely by another device (edit-vs-delete race)", async () => {
-            const baseline: RosterSnapshot = {
-                students: [students[0], students[1]],
-                groups: [groups[0], groups[1]],
-                invites: [],
-            };
-            seedRemoteRosterBaseline(baseline);
-
-            // Device A deletes students[1] and saves — this withdraws it remotely.
-            const deviceA = createStorage();
-            writeLocalRosterSnapshot(deviceA, baseline);
-            const resultA = await saveRosterSnapshot(deviceA, {
-                students: [students[0]],
-                groups: [groups[0], groups[1]],
-                invites: [],
-            });
-            expect(resultA.remoteSaved).toBe(true);
-            expect(remoteTables.omr_student_profiles.find(row => row.id === students[1].id)?.status).toBe("withdrawn");
-
-            // Device B, unaware of the deletion, independently EDITS students[1]
-            // starting from the same original baseline.
-            const deviceB = createStorage();
-            writeLocalRosterSnapshot(deviceB, baseline);
-            const editedByB: RosterStudent = { ...students[1], avgScore: 95 };
-            const resultB = await saveRosterSnapshot(deviceB, {
-                students: [students[0], editedByB],
-                groups: [groups[0], groups[1]],
-                invites: [],
-            });
-
-            expect(resultB.remoteSaved).toBe(true);
-            // The edit wins: B's change is preserved rather than silently dropped
-            // just because another device deleted the row first.
-            const finalLocal = readLocalRosterSnapshot(deviceB);
-            expect(finalLocal.students.find(s => s.id === students[1].id)?.avgScore).toBe(95);
-            // The remote row is revived as a consequence — B never saw the
-            // deletion, so from B's perspective it never intentionally deleted it.
-            expect(remoteTables.omr_student_profiles.find(row => row.id === students[1].id)?.status).not.toBe("withdrawn");
-        });
-
-        it("does NOT resurrect a student deleted by another device when this device made no edit to it (stale cache)", async () => {
-            const baseline: RosterSnapshot = {
-                students: [students[0], students[1]],
-                groups: [groups[0], groups[1]],
-                invites: [],
-            };
-            seedRemoteRosterBaseline(baseline);
-
-            const deviceA = createStorage();
-            writeLocalRosterSnapshot(deviceA, baseline);
-            await saveRosterSnapshot(deviceA, { students: [students[0]], groups: [groups[0], groups[1]], invites: [] });
-            expect(remoteTables.omr_student_profiles.find(row => row.id === students[1].id)?.status).toBe("withdrawn");
-
-            // Device B still has the pre-deletion baseline cached locally and
-            // saves an UNRELATED edit, never touching students[1] at all.
-            const deviceB = createStorage();
-            writeLocalRosterSnapshot(deviceB, baseline);
-            const unrelatedEdit: RosterStudent = { ...students[0], avgScore: 77 };
-            const resultB = await saveRosterSnapshot(deviceB, {
-                students: [unrelatedEdit, students[1]],
-                groups: [groups[0], groups[1]],
-                invites: [],
-            });
-
-            expect(resultB.remoteSaved).toBe(true);
-            const finalLocal = readLocalRosterSnapshot(deviceB);
-            // students[1] is NOT resurrected: B's copy was identical to its own
-            // last-synced baseline, so the remote deletion wins instead.
-            expect(finalLocal.students.find(s => s.id === students[1].id)).toBeUndefined();
-            expect(remoteTables.omr_student_profiles.find(row => row.id === students[1].id)?.status).toBe("withdrawn");
-            // B adopts a local tombstone too, so it stops re-offering the row on future saves.
-            expect(readRosterTombstones(deviceB).students[students[1].id]).toEqual(expect.any(String));
-            // The unrelated edit to students[0] still went through.
-            expect(finalLocal.students.find(s => s.id === students[0].id)?.avgScore).toBe(77);
-        });
-
-        it("loadRosterSnapshot does not resurrect a remotely-deleted student purely from a stale local cache", async () => {
-            const baseline: RosterSnapshot = {
-                students: [students[0], students[1]],
-                groups: [groups[0], groups[1]],
-                invites: [],
-            };
-            seedRemoteRosterBaseline(baseline);
-
-            const deviceA = createStorage();
-            writeLocalRosterSnapshot(deviceA, baseline);
-            await saveRosterSnapshot(deviceA, { students: [students[0]], groups: [groups[0], groups[1]], invites: [] });
-            expect(remoteTables.omr_student_profiles.find(row => row.id === students[1].id)?.status).toBe("withdrawn");
-
-            // Device B never edits anything — it just opens the roster page.
-            const deviceB = createStorage();
-            writeLocalRosterSnapshot(deviceB, baseline);
-            const loaded = await loadRosterSnapshot(deviceB);
-
-            expect(loaded.remoteLoaded).toBe(true);
-            expect(loaded.students.find(s => s.id === students[1].id)).toBeUndefined();
-            expect(remoteTables.omr_student_profiles.find(row => row.id === students[1].id)?.status).toBe("withdrawn");
-        });
-
-        it("only upserts roster rows that actually changed vs remote, not the whole snapshot, on a no-op save", async () => {
-            const snapshot: RosterSnapshot = { students: [students[0]], groups: [groups[0]], invites: [] };
-            seedRemoteRosterBaseline(snapshot);
-
-            const storage = createStorage();
-            writeLocalRosterSnapshot(storage, snapshot);
-            recordedUpserts.length = 0;
-
-            // Save the IDENTICAL snapshot again (e.g. a no-op autosave tick).
-            const result = await saveRosterSnapshot(storage, snapshot);
-
-            expect(result.remoteSaved).toBe(true);
-            const rosterUpserts = recordedUpserts.filter(call =>
-                call.table === "omr_classes"
-                || call.table === "omr_student_profiles"
-                || call.table === "omr_class_students");
-            expect(rosterUpserts).toEqual([]);
-        });
-
-        it("upserts only the row that changed when one student among several is edited", async () => {
-            const snapshot: RosterSnapshot = { students, groups, invites: [] };
-            seedRemoteRosterBaseline(snapshot);
-
-            const storage = createStorage();
-            writeLocalRosterSnapshot(storage, snapshot);
-            recordedUpserts.length = 0;
-
-            const edited: RosterStudent = { ...students[0], avgScore: 88 };
-            await saveRosterSnapshot(storage, { students: [edited, students[1]], groups, invites: [] });
-
-            const studentUpsert = recordedUpserts.find(call => call.table === "omr_student_profiles");
-            expect(studentUpsert?.rows.map(row => row.id)).toEqual([edited.id]);
-        });
-
-        it("preserves server-managed student access-code metadata during roster edits", async () => {
-            const snapshot: RosterSnapshot = { students: [students[0]], groups: [groups[0]], invites: [] };
-            seedRemoteRosterBaseline(snapshot);
-            const remoteStudent = remoteTables.omr_student_profiles[0];
-            remoteStudent.metadata = {
-                ...(remoteStudent.metadata as Record<string, unknown>),
-                studentAccessCode: {
-                    version: 1,
-                    hash: "a".repeat(64),
-                    updatedAt: "2026-06-16T01:00:00.000Z",
-                },
-            };
-
-            const storage = createStorage();
-            writeLocalRosterSnapshot(storage, snapshot);
-            recordedUpserts.length = 0;
-
-            await saveRosterSnapshot(storage, {
-                ...snapshot,
-                students: [{ ...students[0], avgScore: 91 }],
-            });
-
-            const studentUpsert = recordedUpserts.find(call => call.table === "omr_student_profiles");
-            expect(studentUpsert?.rows[0].metadata).toMatchObject({
-                avgScore: 91,
-                studentAccessCode: {
-                    version: 1,
-                    hash: "a".repeat(64),
-                },
-            });
-        });
+        expect(client).toContain("loadTeacherCanonicalRoster");
+        expect(client).toContain("saveTeacherCanonicalRoster");
+        expect(action).toContain("TEACHER_SERVER_SESSION_COOKIE");
+        expect(action).toContain("isSameOriginServerActionRequest");
+        expect(action).toContain("createSupabaseAdminClient");
+        expect(migration).toContain("omr_save_roster_v1");
+        expect(migration).toContain("grant execute on function public.omr_save_roster_v1");
+        expect(migration).toContain("to service_role");
     });
 
     describe("reconcileRemoteDeletions", () => {

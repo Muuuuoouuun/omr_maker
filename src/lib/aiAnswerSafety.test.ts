@@ -1,9 +1,11 @@
 import { describe, expect, it } from "vitest";
 import {
+    AI_ANSWER_IMAGE_LIMITS,
     extractAnswerJsonArrayPayload,
     invalidAiJsonError,
     safeAiAnswerErrorMessage,
     safeAiAnswerLogMeta,
+    validateAnswerImageParts,
 } from "./aiAnswerSafety";
 
 describe("AI answer safety", () => {
@@ -33,5 +35,41 @@ describe("AI answer safety", () => {
             messageLength: rawResponse.length,
         });
         expect(JSON.stringify(meta)).not.toContain("정답 1번");
+    });
+
+    it("normalizes valid answer image parts before provider calls", () => {
+        expect(validateAnswerImageParts(["data:image/jpg;base64, Zm9v\n"])).toEqual([
+            { data: "Zm9v", mimeType: "image/jpeg" },
+        ]);
+        expect(validateAnswerImageParts(["YmFy"])).toEqual([
+            { data: "YmFy", mimeType: "image/jpeg" },
+        ]);
+    });
+
+    it("rejects invalid or excessive answer image inputs with safe messages", () => {
+        const invalidInputs: unknown[] = [
+            [],
+            new Array(AI_ANSWER_IMAGE_LIMITS.maxImages + 1).fill("data:image/jpeg;base64,Zm9v"),
+            ["data:text/html;base64,PHNjcmlwdD4="],
+            ["data:image/jpeg,Zm9v"],
+            ["data:image/jpeg;base64,not base64!"],
+            ["data:image/png;base64," + "A".repeat(AI_ANSWER_IMAGE_LIMITS.maxSingleBase64Chars + 1)],
+        ];
+
+        for (const input of invalidInputs) {
+            let error: unknown;
+            try {
+                validateAnswerImageParts(input);
+            } catch (caught) {
+                error = caught;
+            }
+
+            expect(error).toBeInstanceOf(Error);
+            expect(safeAiAnswerErrorMessage(error)).toBe("정답 이미지 형식 또는 용량을 확인해주세요.");
+            expect(safeAiAnswerLogMeta(error)).toMatchObject({
+                category: "invalid_image_input",
+                errorName: "AIAnswerInputError",
+            });
+        }
     });
 });

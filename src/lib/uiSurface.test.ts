@@ -40,6 +40,10 @@ describe("service UI surface", () => {
         expect(createPage).toContain('aria-label="빠른 정답 입력"');
         expect(createPage).toContain("create-preview-context-strip");
         expect(createPage).toContain("create-preview-context-meter");
+        expect(createPage).toContain("create-mobile-panel-nav");
+        expect(createPage).toContain("mobile-panel-${mobileWorkspacePanel}");
+        expect(createPage).toContain('role="tablist"');
+        expect(createPage).toContain('aria-controls="create-settings-panel"');
         expect(createPage).toContain("create-print-only-sheet");
         expect(createPage).toContain('sheetId="omr-print-sheet"');
         expect(createPage).toContain("isPreviewCollapsed");
@@ -53,6 +57,8 @@ describe("service UI surface", () => {
         expect(css).not.toContain(".create-preview-scroll.paper-mode");
         expect(css).toContain(".create-preview-main.is-collapsed");
         expect(css).toContain(".create-workspace");
+        expect(css).toContain(".create-workspace.mobile-panel-settings .create-settings-sidebar");
+        expect(css).toContain(".create-workspace.mobile-panel-preview .create-preview-main");
         expect(css).toContain("flex-basis 0.22s ease");
         expect(css).toContain(".create-preview-context-grid");
         expect(css).toContain(".create-print-only-sheet");
@@ -84,6 +90,10 @@ describe("service UI surface", () => {
         expect(css).toContain("grid-template-columns: minmax(0, 1fr)");
         expect(css).toContain("grid-auto-flow: row");
         expect(css).toContain(".omr-cardview.is-vertical-numbering .q-card-num");
+        expect(css).toContain("Plain question number; answered cards still change the number color.");
+        expect(css).toContain(".q-card.answered .q-card-num");
+        expect(css).toContain("border: 0;");
+        expect(css).toContain("color: var(--primary)");
         expect(css).toContain("border-color: transparent");
         expect(css).toContain("background: transparent");
     });
@@ -106,6 +116,21 @@ describe("service UI surface", () => {
         expect(distributeModal).toContain("그룹 배포 대상 요약");
         expect(distributeModal).toContain("명단 기준 대상");
         expect(distributeModal).toContain("미응시/카카오 후보 산정");
+        expect(distributeModal).toContain('role="dialog"');
+        expect(distributeModal).toContain('aria-modal="true"');
+        expect(distributeModal).toContain("aria-labelledby={dialogTitleId}");
+        expect(distributeModal).toContain("event.key === 'Escape'");
+        expect(distributeModal).toContain("previouslyFocusedRef.current?.focus()");
+    });
+
+    it("keeps teacher result sorting keyboard accessible and exposes sort state", () => {
+        const examDetail = readProjectFile("src/app/teacher/exam/[id]/page.tsx");
+        expect(examDetail).toContain('aria-sort={sortAria("name")}');
+        expect(examDetail).toContain('aria-sort={sortAria("percent")}');
+        expect(examDetail).toContain('aria-sort={sortAria("finishedAt")}');
+        expect(examDetail).toContain('type="button"');
+        expect(examDetail).toContain('sortableHeader("name", "학생")');
+        expect(examDetail).not.toContain('<h3 style={{ fontSize: \'1.1rem\', fontWeight: 700 }}>Student Results</h3>');
     });
 
     it("keeps tablet handwriting usable with stylus-first input and finger scrolling", () => {
@@ -127,11 +152,32 @@ describe("service UI surface", () => {
         expect(solvePage).toContain("const activeQuestionDrawings = summarizeQuestionDrawings(activeExamQuestions, drawings)");
         expect(solvePage).toContain("questionDrawings={activeQuestionDrawings}");
         expect(solvePage).toContain("solve-omr-pane-handwriting");
+        expect(solvePage).toContain("solve-teacher-toggle-label");
+        expect(solvePage).toContain('aria-label="선생님 모드"');
         expect(omrCardView).toContain("questionDrawings?: QuestionDrawingSummary[]");
         expect(omrCardView).toContain("q-handwriting-chip");
         expect(omrCardView).toContain("has-handwriting");
         expect(css).toContain(".q-handwriting-chip");
         expect(css).toContain(".solve-omr-pane-handwriting");
+    });
+
+    it("exposes OMR answers as keyboard-operable radio groups", () => {
+        const omrCardView = readProjectFile("src/components/OMRCardView.tsx");
+        const homePage = readProjectFile("src/app/page.tsx");
+
+        expect(omrCardView).toContain('role="radiogroup"');
+        expect(omrCardView).toContain('role="radio"');
+        expect(omrCardView).toContain("aria-checked={isMarked}");
+        expect(omrCardView).toContain("tabIndex={isMarked || (!isAnswered && i === 0) ? 0 : -1}");
+        expect(omrCardView).toContain('event.key === "ArrowLeft"');
+        expect(omrCardView).toContain('event.key === "Home"');
+        expect(omrCardView).toContain('role="progressbar"');
+        expect(omrCardView).toContain("aria-valuenow={answeredCount}");
+        expect(omrCardView).toContain("q-card-select-button");
+        expect(homePage).toContain('aria-label="교사 로그인"');
+        expect(homePage).toContain('htmlFor="teacher-identifier"');
+        expect(homePage).toContain('htmlFor="teacher-password"');
+        expect(homePage).toContain('id="teacher-login-feedback"');
     });
 
     it("keeps toast notifications inside mobile safe areas", () => {
@@ -317,7 +363,12 @@ describe("service UI surface", () => {
         expect(playwrightConfig).toContain("mobile-ios-webkit-pwa");
         expect(playwrightConfig).toContain("tablet-ios-webkit-pwa");
         expect(playwrightConfig).toContain("tablet-ios-webkit-landscape-pwa");
+        expect(playwrightConfig).toContain("mobile-ios-webkit-teacher");
+        expect(playwrightConfig).toContain("tablet-ios-webkit-teacher");
+        expect(playwrightConfig).toContain("tablet-ios-webkit-landscape-teacher");
         expect(teacherMobileE2e).toContain("expectTeacherHeaderTouchFriendly");
+        expect(teacherMobileE2e).toContain("exposes a labeled, error-connected teacher login form");
+        expect(teacherMobileE2e).toContain("문제 1번 편집");
         expect(teacherMobileE2e).toContain(".create-editor-actions button, .create-editor-actions label");
     });
 
@@ -422,7 +473,9 @@ describe("service UI surface", () => {
 
         expect(solvePage).toContain("<ThemeToggle />");
         expect(css).toContain(".solve-brand");
+        expect(css).toContain(".solve-brand .brand-logo__text");
         expect(css).toContain("width: 2.75rem !important");
+        expect(css).toContain("gap: 0 !important");
         expect(css).toContain(".solve-teacher-toggle");
         expect(css).toContain("min-height: 44px");
         expect(css).toContain(".solve-tab-button");
@@ -456,7 +509,9 @@ describe("service UI surface", () => {
         expect(storage).toContain("previewGuestMerge");
         expect(storage).toContain("isGuestAttemptMergeable");
         expect(homePage).toContain("게스트 기록 연결 예정");
-        expect(homePage).toContain("formatRegionScopedLabel(g.name, g.region)");
+        // Student login resolves region-scoped groups from the roster (name-based,
+        // replacing the old manual group <select>).
+        expect(homePage).toContain("buildStudentLoginGroupOptions");
         expect(homePage).toContain("recentStudentSession");
         expect(homePage).toContain("최근 학생");
         expect(homePage).toContain("handleContinueRecentStudent");
@@ -531,6 +586,56 @@ describe("service UI surface", () => {
         expect(nextConfig).toContain('Permissions-Policy');
         expect(nextConfig).toContain('camera=(), microphone=(), geolocation=(), payment=(), usb=()');
         expect(nextConfig).toContain('Strict-Transport-Security');
+        expect(nextConfig).toContain('key: "Strict-Transport-Security", value: "max-age=31536000"');
+        expect(nextConfig).toContain('key: "Cross-Origin-Opener-Policy", value: "same-origin"');
+        expect(nextConfig).toContain('key: "Cross-Origin-Resource-Policy", value: "same-origin"');
+        expect(nextConfig).toContain('key: "X-Content-Type-Options", value: "nosniff"');
+        expect(nextConfig).toContain('key: "Referrer-Policy", value: "strict-origin-when-cross-origin"');
+        expect(nextConfig).toContain('key: "X-Frame-Options", value: "DENY"');
+        expect(nextConfig).toContain('key: "Permissions-Policy", value: "camera=(), microphone=(), geolocation=(), payment=()"');
+    });
+
+    it("protects server-funded AI answer analysis with origin, teacher session, and rate limits", () => {
+        const analyzeAction = readProjectFile("src/app/actions/analyzeKey.ts");
+        expect(analyzeAction).toContain("TEACHER_SERVER_SESSION_COOKIE");
+        expect(analyzeAction).toContain("authorizeTeacherAiActionRequest");
+        expect(analyzeAction.indexOf("await requireTeacherAiAccess()"))
+            .toBeLessThan(analyzeAction.indexOf("validateAnswerImageParts(imageParts)"));
+    });
+
+    it("keeps the teacher dashboard localized, keyboard reachable, and mobile-table friendly", () => {
+        const css = readProjectFile("src/app/globals.css");
+        const dashboard = readProjectFile("src/app/teacher/dashboard/page.tsx");
+        const overview = readProjectFile("src/components/dashboard/tabs/OverviewTab.tsx");
+        const examList = readProjectFile("src/components/dashboard/ExamListBlock.tsx");
+        const trendChart = readProjectFile("src/components/dashboard/TrendChart.tsx");
+
+        expect(css).toContain(':where(a, button, input, select, textarea, [role="button"], [tabindex]):focus-visible');
+        expect(css).toContain("animation-duration: 0.01ms !important");
+        expect(css).toContain(".dashboard-welcome-status");
+        expect(css).toContain(".overview-table-hint");
+        expect(css).toContain(".overview-exam-summary-table td:first-child");
+        expect(css).toContain("position: sticky");
+
+        expect(dashboard).toContain("분석 센터");
+        expect(dashboard).toContain('className="dashboard-welcome"');
+        expect(dashboard).toContain('className="dashboard-welcome-status"');
+        expect(dashboard).toContain("width: 44");
+        expect(dashboard).toContain("height: 44");
+
+        expect(overview).toContain('role="tablist"');
+        expect(overview).toContain("aria-selected={activeTab === 'ongoing'}");
+        expect(overview).toContain('role="region" aria-label="시험 요약 표, 좌우 스크롤 가능" tabIndex={0}');
+        expect(overview).toContain('<caption className="sr-only">');
+        expect(overview).toContain('<th scope="col">시험명</th>');
+        expect(overview).toContain('aria-label={`${exam.title} 분석 보기`}');
+        expect(overview).not.toContain("Quick Action");
+        expect(overview).not.toContain("Avg. Score Trend");
+
+        expect(examList).toContain("최근 시험");
+        expect(examList).toContain('aria-label={`${exam.title} 시험 상세 보기`}');
+        expect(trendChart).toContain('role="img"');
+        expect(trendChart).toContain("최신 점수");
     });
 
     it("keeps billing local-plan changes clear until real payment integration exists", () => {
@@ -606,7 +711,7 @@ describe("service UI surface", () => {
 
         expect(dashboardPage).toContain("useServerPlan");
         expect(examAnalyticsTab).toContain("resolveExamSelectionInputValue");
-        expect(dashboardPage).toContain("loadRosterSnapshot(localStorage)");
+        expect(dashboardPage).toContain("loadTeacherRosterSnapshot(localStorage)");
         expect(dashboardPage).toContain("summarizePersistenceHealth([examResult, attemptResult, rosterResult])");
         expect(dashboardPage).toContain("rosterStudents: shouldSeedDemo ? undefined : loadedRosterStudents");
         expect(dashboardPage).toContain("dashboardAnalysisActions");
@@ -634,7 +739,7 @@ describe("service UI surface", () => {
         expect(examAnalyticsTab).toContain("참여율");
         expect(examAnalyticsTab).toContain("미응시");
         expect(examAnalyticsTab).toContain("buildKakaoNotificationCandidates");
-        expect(examAnalyticsTab).toContain("setKakaoCandidateReview");
+        expect(examAnalyticsTab).toContain("saveKakaoCandidateReview");
         expect(examAnalyticsTab).toContain("summarizeKakaoCandidateReviews");
         expect(examAnalyticsTab).toContain("queueKakaoDispatchSimulation");
         expect(examAnalyticsTab).toContain("summarizeKakaoDispatchLogs");
@@ -738,7 +843,7 @@ describe("service UI surface", () => {
         expect(createPage).toContain("운영 점검");
         expect(createPage).toContain("serviceReadiness.canOpenDistribution");
         expect(createPage).toContain("serviceReadiness.items.map");
-        expect(createPage).toContain("setLoadedExam(examData)");
+        expect(createPage).toContain("setLoadedExam(persistedExam)");
         expect(createPage).toContain("setQuestions(questionsWithRegions)");
         expect(createPage).toContain("router.replace(`/create?edit=${id}`");
         expect(readiness).toContain("저장 기준");
@@ -800,6 +905,10 @@ describe("service UI surface", () => {
         expect(css).toContain(".create-question-answer-buttons");
         expect(css).toContain(".pdf-upload-empty");
         expect(css).toContain(".create-label-batch-card");
+        expect(css).toContain(".create-label-candidate-chip:hover .create-label-candidate-hide");
+        expect(css).toContain(".create-label-candidate-chip:focus-within .create-label-candidate-hide");
+        expect(css).toContain("top: -7px");
+        expect(css).toContain("right: -7px");
         expect(css).toContain(".omr-cardview.is-vertical-numbering .omr-cardview-grid");
     });
 
@@ -947,9 +1056,9 @@ describe("service UI surface", () => {
         expect(settingsPage).toContain("데이터 · DB");
         expect(settingsPage).toContain("DataDbSection");
         expect(settingsPage).toContain("buildDataDbReadiness");
-        expect(settingsPage).toContain("loadExams()");
-        expect(settingsPage).toContain("loadAttempts()");
-        expect(settingsPage).toContain("loadRosterSnapshot(window.localStorage)");
+        expect(settingsPage).toContain("loadTeacherExams()");
+        expect(settingsPage).toContain("loadTeacherAttempts()");
+        expect(settingsPage).toContain("loadTeacherRosterSnapshot(window.localStorage)");
         expect(settingsPage).toContain("readRosterTombstones(window.localStorage)");
         expect(settingsPage).toContain('aria-label="데이터 DB 상태 새로고침"');
         expect(settingsPage).toContain("원격 동기화 세부 상태");
@@ -997,9 +1106,9 @@ describe("service UI surface", () => {
         expect(usersPage).toContain("function isLegacyDemoRosterSnapshot");
         expect(usersPage).toContain("localStorage.removeItem(key)");
         expect(usersPage).toContain("const storedStudents = readRosterStudents(localStorage)");
-        expect(usersPage).toContain("loadRosterSnapshot(localStorage)");
+        expect(usersPage).toContain("loadTeacherRosterSnapshot(localStorage)");
         expect(usersPage).toContain("const nextStudents = useDemoRoster ? [] : rosterResult.students");
-        expect(usersPage).toContain("saveRosterSnapshot(localStorage");
+        expect(usersPage).toContain("saveTeacherRosterSnapshot(localStorage");
         expect(usersPage).toContain("데모 명단 모드");
         expect(usersPage).toContain('aria-label="데모 명단 안내"');
         expect(usersPage).toContain("const rosterStudents = isDemoRoster ? MOCK_STUDENTS : students");
@@ -1023,7 +1132,7 @@ describe("service UI surface", () => {
         expect(livePage).toContain('return { exams: loaded, mode: "real" }');
         expect(livePage).toContain("const isDemoLive = liveDataMode === \"demo\"");
         expect(livePage).toContain("allowSynthetic: isDemoLive");
-        expect(livePage).toContain("saveAttempt(attempt)");
+        expect(livePage).toContain("saveTeacherAttempt(attempt)");
         expect(livePage).toContain("forceCompleteLiveAttempt");
         expect(livePage).toContain("카카오 알림 연동 전");
         expect(livePage).toContain("데모 실시간 모드");

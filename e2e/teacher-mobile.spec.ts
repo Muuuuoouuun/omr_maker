@@ -102,9 +102,24 @@ async function seedTeacherAttemptReview(page: Page) {
     });
 }
 
-test.describe("Teacher phone and tablet app chrome", () => {
+test.describe("Teacher phone and tablet app surfaces", () => {
     test.beforeEach(async ({ baseURL }) => {
         test.skip(!isLocalBaseURL(baseURL), "Authenticated teacher mobile checks require local teacher login.");
+    });
+
+    test("exposes a labeled, error-connected teacher login form", async ({ page }) => {
+        await page.goto("/?role=teacher");
+
+        const loginForm = page.getByRole("form", { name: "교사 로그인" });
+        const identifier = loginForm.getByLabel("아이디 또는 이메일");
+        const password = loginForm.getByLabel("비밀번호");
+        await expect(identifier).toHaveAttribute("autocomplete", "username");
+        await expect(password).toHaveAttribute("autocomplete", "current-password");
+        await loginForm.getByRole("button", { name: "대시보드 입장" }).click();
+        await expect(loginForm.getByRole("alert")).toContainText("아이디와 비밀번호를 모두 입력해주세요.");
+        await expect(identifier).toHaveAttribute("aria-invalid", "true");
+        await expect(password).toHaveAttribute("aria-invalid", "true");
+        await expectNoHorizontalOverflow(page);
     });
 
     test("keeps the dashboard header touch friendly", async ({ page }) => {
@@ -145,6 +160,45 @@ test.describe("Teacher phone and tablet app chrome", () => {
         await expectTouchTarget(toolbar.getByRole("button", { name: "교사 로그아웃" }));
         await expectTouchTarget(toolbar.getByRole("button", { name: /모드로 전환/ }));
         expect(await smallTargets(page, ".create-editor-actions button, .create-editor-actions label")).toEqual([]);
+
+        const workspaceTabs = page.getByRole("tablist", { name: "출제 작업 화면" });
+        if ((await workspaceTabs.count()) > 0) {
+            const pdfTab = workspaceTabs.getByRole("tab", { name: /문제지/ });
+            const settingsTab = workspaceTabs.getByRole("tab", { name: /설정/ });
+            const previewTab = workspaceTabs.getByRole("tab", { name: /미리보기/ });
+            await expect(pdfTab).toHaveAttribute("aria-selected", "true");
+            await settingsTab.click();
+            await expect(settingsTab).toHaveAttribute("aria-selected", "true");
+            await expect(page.locator("#create-settings-panel")).toBeVisible();
+            await previewTab.click();
+            await expect(previewTab).toHaveAttribute("aria-selected", "true");
+            await expect(page.locator("#create-preview-panel")).toBeVisible();
+            expect(await smallTargets(page, ".create-mobile-panel-nav button")).toEqual([]);
+        } else {
+            await expect(page.locator("#create-pdf-panel")).toBeVisible();
+            await expect(page.locator("#create-settings-panel")).toBeVisible();
+            await expect(page.locator("#create-preview-panel")).toBeVisible();
+        }
+
+        const firstQuestionEdit = page.getByRole("button", { name: "문제 1번 편집" });
+        await expectTouchTarget(firstQuestionEdit);
+        await firstQuestionEdit.press("Enter");
+        await expect(firstQuestionEdit).toHaveAttribute("aria-pressed", "true");
+
+        if ((await workspaceTabs.count()) > 0) {
+            await workspaceTabs.getByRole("tab", { name: /설정/ }).click();
+        }
+        await page.getByLabel("시험 제목").fill("모바일 배포 접근성 시험");
+        await page.getByLabel("빠른 정답 입력").fill("1".repeat(20));
+        const distributeButton = toolbar.getByRole("button", { name: "배포하기" });
+        await distributeButton.focus();
+        await distributeButton.press("Enter");
+        const distributeDialog = page.getByRole("dialog", { name: "시험 배포하기" });
+        await expect(distributeDialog).toBeVisible();
+        await expect(distributeDialog.getByRole("button", { name: "닫기" })).toBeFocused();
+        await page.keyboard.press("Escape");
+        await expect(distributeDialog).toBeHidden();
+        await expect(distributeButton).toBeFocused();
         await expectNoHorizontalOverflow(page);
     });
 

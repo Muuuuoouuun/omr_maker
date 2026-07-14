@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo, useRef } from "react";
 import { useRouter } from "next/navigation";
 import BrandLogo from "@/components/BrandLogo";
 import ThemeToggle from "@/components/ThemeToggle";
@@ -14,7 +14,13 @@ import {
 } from "@/app/actions/studentSession";
 import { formatRegionScopedLabel } from "@/lib/dashboardSelection";
 import { readLocalAttempts, syncMergedGuestAttempts } from "@/lib/omrPersistence";
-import { readRosterGroups, readRosterStudents, type RosterGroup, type RosterStudent } from "@/lib/rosterStorage";
+import {
+  readRosterGroups,
+  readRosterStudents,
+  scopedGroupKeyForStudentId,
+  type RosterGroup,
+  type RosterStudent,
+} from "@/lib/rosterStorage";
 import { TEACHER_AUTH_DEPLOYMENT_HELP, shouldShowTeacherDeploymentHelp } from "@/lib/teacherAuthMessages";
 import {
   hasStudentStartCode,
@@ -36,6 +42,7 @@ import {
   type GuestMergePreview,
   type StudentSession,
 } from "@/utils/storage";
+import { normalizeStudentRedirectPath } from "@/lib/studentRedirect";
 import { normalizeTeacherRedirectPath, saveTeacherSessionWithIdentity } from "@/lib/teacherSession";
 import { setCurrentPlan } from "@/utils/plans";
 
@@ -98,19 +105,66 @@ function cleanText(value: string | undefined): string {
   return value?.trim() || "";
 }
 
-function normalizeStudentRedirectPath(value: string | null | undefined): string {
-  if (!value) return "/student/dashboard";
-  const trimmed = value.trim();
-  if (!trimmed.startsWith("/") || trimmed.startsWith("//")) return "/student/dashboard";
-  if (
-    trimmed === "/student/dashboard"
-    || trimmed === "/student/history"
-    || trimmed.startsWith("/student/review/")
-    || trimmed.startsWith("/solve/")
-  ) {
-    return trimmed;
+type StudentLoginGroupOption = Pick<RosterGroup, "id" | "name" | "region">;
+
+function groupOptionKey(name: string | undefined, region?: string): string {
+  return `${cleanText(region).toLocaleLowerCase("ko-KR")}::${cleanText(name).toLocaleLowerCase("ko-KR")}`;
+}
+
+function buildStudentLoginGroupOptions(
+  groups: StudentLoginGroupOption[],
+  students: RosterStudent[],
+): StudentLoginGroupOption[] {
+  const options = new Map<string, StudentLoginGroupOption>();
+
+  for (const group of groups) {
+    const name = cleanText(group.name);
+    if (!name) continue;
+    const id = cleanText(group.id) || name;
+    const region = cleanText(group.region);
+    options.set(groupOptionKey(name, region), region ? { id, name, region } : { id, name });
   }
-  return "/student/dashboard";
+
+  for (const student of students) {
+    const name = cleanText(student.group);
+    if (!name) continue;
+    const region = cleanText(student.region);
+    const key = groupOptionKey(name, region);
+    if (options.has(key)) continue;
+    const scopedGroupId = scopedGroupKeyForStudentId(student.id);
+    const id = scopedGroupId || (region ? `${region}/${name}` : name);
+    options.set(key, region ? { id, name, region } : { id, name });
+  }
+
+  return Array.from(options.values()).sort((a, b) =>
+    formatRegionScopedLabel(a.name, a.region).localeCompare(formatRegionScopedLabel(b.name, b.region), "ko")
+  );
+}
+
+function normalizedGroupCode(value: string | undefined): string {
+  return cleanText(value).toLocaleLowerCase("ko-KR");
+}
+
+function resolveGuestGroupCode(
+  code: string,
+  groups: StudentLoginGroupOption[],
+): StudentLoginGroupOption | null {
+  const trimmedCode = cleanText(code);
+  const normalizedCode = normalizedGroupCode(trimmedCode);
+  if (!normalizedCode) return null;
+
+  const matchedGroup = groups.find(group => {
+    const candidates = [
+      group.id,
+      group.name,
+      formatRegionScopedLabel(group.name, group.region),
+      group.region ? `${group.region}/${group.name}` : "",
+    ];
+    return candidates.some(candidate => normalizedGroupCode(candidate) === normalizedCode);
+  });
+
+  if (matchedGroup) return matchedGroup;
+  return { id: trimmedCode, name: trimmedCode };
 }
 
 function resolveSessionRegion(params: {
@@ -118,7 +172,7 @@ function resolveSessionRegion(params: {
   selectedGroupId: string;
   groupName: string;
   studentId: string;
-  groups: RosterGroup[];
+  groups: StudentLoginGroupOption[];
   students: RosterStudent[];
 }): Pick<StudentSession, "regionId" | "regionName"> {
   const group = params.groups.find(item => item.id === params.selectedGroupId || item.name === params.groupName);
@@ -147,10 +201,13 @@ export default function Home() {
   const [studentName, setStudentName] = useState("");
   const [studentLookup, setStudentLookup] = useState("");
   const [selectedGroupId, setSelectedGroupId] = useState("");
+  const [guestGroupCode, setGuestGroupCode] = useState("");
   const [groups, setGroups] = useState<RosterGroup[]>([]);
+  const [rosterStudents, setRosterStudents] = useState<RosterStudent[]>([]);
   const [teacherIdentifier, setTeacherIdentifier] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
+  const studentNameInputRef = useRef<HTMLInputElement>(null);
   const [pendingGuestPreview, setPendingGuestPreview] = useState<GuestMergePreview | null>(null);
   const [recentStudentSession, setRecentStudentSession] = useState<StudentSession | null>(null);
   // Anti-spoof: require a start-code for returning students.
@@ -164,7 +221,16 @@ export default function Home() {
   const [workspaceId, setWorkspaceId] = useState("");
   const [studentDirectoryStatus, setStudentDirectoryStatus] = useState<"local" | "loading" | "remote" | "degraded_local" | "error">("local");
   const [studentLoginPending, setStudentLoginPending] = useState(false);
+  const studentGroupOptions = useMemo(
+    () => buildStudentLoginGroupOptions(groups, rosterStudents),
+    [groups, rosterStudents],
+  );
   const requiresServerStudentVerification = !!workspaceId && studentDirectoryStatus !== "degraded_local";
+
+  const studentRedirectPath = () => {
+    if (typeof window === "undefined") return "/student/dashboard";
+    return normalizeStudentRedirectPath(new URLSearchParams(window.location.search).get("next"));
+  };
 
   useEffect(() => {
     let cancelled = false;
@@ -173,6 +239,7 @@ export default function Home() {
       // Hydrate client-only localStorage state after mount.
       localGroups = readRosterGroups(localStorage);
       setGroups(localGroups);
+      setRosterStudents(readRosterStudents(localStorage));
       const restoredSession = getSession();
       setRecentStudentSession(restoredSession && !restoredSession.isGuest ? restoredSession : null);
     } catch {
@@ -223,7 +290,7 @@ export default function Home() {
 
   // Surface the start-code field proactively for returning students.
   useEffect(() => {
-    if (role !== "student" || !studentName.trim() || !selectedGroupId) {
+    if (role !== "student" || !studentName.trim()) {
       // Derived from client-only localStorage inputs.
       setNeedsCode(false);
       setNeedsStudentLookup(false);
@@ -236,12 +303,11 @@ export default function Home() {
     }
     try {
       const codes = readStudentCodes(localStorage);
-      const students = readRosterStudents(localStorage);
       const identity = resolveStudentIdentity({
         name: studentName,
         selectedGroupId,
-        groups,
-        students,
+        groups: studentGroupOptions,
+        students: rosterStudents,
         studentLookup,
       });
       const lookupRequired = identity.requiresStudentLookup || identity.lookupMismatch;
@@ -255,7 +321,7 @@ export default function Home() {
       setNeedsCode(false);
       setNeedsStudentLookup(false);
     }
-  }, [role, studentName, studentLookup, selectedGroupId, groups, requiresServerStudentVerification]);
+  }, [role, studentName, studentLookup, selectedGroupId, studentGroupOptions, rosterStudents, requiresServerStudentVerification]);
 
   useEffect(() => {
     if (role !== "student") {
@@ -343,8 +409,14 @@ export default function Home() {
     if (studentLoginPending) return;
     const trimmedName = studentName.trim();
     const next = normalizeStudentRedirectPath(new URLSearchParams(window.location.search).get("next"));
-    if (!trimmedName || !selectedGroupId) {
-      setError("이름과 반을 모두 입력해주세요.");
+    if (!trimmedName) {
+      setError("이름을 입력해주세요.");
+      studentNameInputRef.current?.focus();
+      setTimeout(() => setError(""), 2000);
+      return;
+    }
+    if (!selectedGroupId) {
+      setError("반을 선택해주세요.");
       setTimeout(() => setError(""), 2000);
       return;
     }
@@ -398,10 +470,12 @@ export default function Home() {
     }
 
     const students = readRosterStudents(localStorage);
+    const storedGroups = readRosterGroups(localStorage);
+    const loginGroups = buildStudentLoginGroupOptions(storedGroups, students);
     const identity = resolveStudentIdentity({
       name: trimmedName,
       selectedGroupId,
-      groups,
+      groups: loginGroups,
       students,
       studentLookup,
     });
@@ -421,10 +495,10 @@ export default function Home() {
     }
     const regionSnapshot = resolveSessionRegion({
       name: trimmedName,
-      selectedGroupId,
+      selectedGroupId: identity.groupId,
       groupName: identity.groupName,
       studentId: identity.studentId,
-      groups,
+      groups: loginGroups,
       students,
     });
     const codes = readStudentCodes(localStorage);
@@ -497,7 +571,7 @@ export default function Home() {
     }
   };
 
-  const handleGuest = async () => {
+  const startGuestSession = async (guestGroup?: StudentLoginGroupOption | null) => {
     // Server-issued guest identity (reused if a valid guest cookie exists);
     // the device-local id is only the degraded fallback.
     let guestId = "";
@@ -515,18 +589,34 @@ export default function Home() {
       isGuest: true,
       identityType: "guest",
       guestId,
-      groupName: "Guest Mode",
+      groupId: guestGroup?.id,
+      groupName: guestGroup?.name || "Guest Mode",
+      ...(guestGroup?.region ? { regionId: guestGroup.region, regionName: guestGroup.region } : {}),
     };
     saveSession(session);
     localStorage.setItem("omr_guest_id", guestId);
-    const next = normalizeStudentRedirectPath(new URLSearchParams(window.location.search).get("next"));
-    router.push(next);
+    router.push(studentRedirectPath());
+  };
+
+  const handleGuest = () => {
+    void startGuestSession();
+  };
+
+  const handleGuestWithGroupCode = () => {
+    const guestGroup = resolveGuestGroupCode(guestGroupCode, studentGroupOptions);
+    if (!guestGroup) {
+      setError("반 코드를 입력해주세요.");
+      setTimeout(() => setError(""), 2000);
+      return;
+    }
+
+    void startGuestSession(guestGroup);
   };
 
   const handleContinueRecentStudent = () => {
     const restoredSession = getSession();
     if (restoredSession && !restoredSession.isGuest) {
-      router.push("/student/dashboard");
+      router.push(studentRedirectPath());
       return;
     }
     setRecentStudentSession(null);
@@ -557,6 +647,7 @@ export default function Home() {
     setStudentName("");
     setStudentLookup("");
     setSelectedGroupId("");
+    setGuestGroupCode("");
     setStartCode("");
     setNeedsCode(false);
     setNeedsStudentLookup(false);
@@ -938,8 +1029,17 @@ export default function Home() {
                   </h2>
                 </div>
 
+                <form
+                  aria-label="교사 로그인"
+                  noValidate
+                  onSubmit={(event) => {
+                    event.preventDefault();
+                    void handleTeacherLogin();
+                  }}
+                >
                 <div style={{ marginBottom: "1.05rem" }}>
                   <label
+                    htmlFor="teacher-identifier"
                     style={{
                       display: "block",
                       marginBottom: "0.55rem",
@@ -953,21 +1053,24 @@ export default function Home() {
                     아이디 또는 이메일
                   </label>
                   <input
+                    id="teacher-identifier"
                     type="text"
                     className="input-field"
                     value={teacherIdentifier}
                     onChange={(e) => setTeacherIdentifier(e.target.value)}
-                    onKeyDown={(e) => e.key === "Enter" && handleTeacherLogin()}
                     placeholder="admin 또는 teacher@example.com"
                     autoFocus
                     autoComplete="username"
                     autoCapitalize="none"
                     spellCheck={false}
+                    aria-invalid={Boolean(error)}
+                    aria-describedby="teacher-login-feedback"
                   />
                 </div>
 
                 <div style={{ marginBottom: "1.75rem" }}>
                   <label
+                    htmlFor="teacher-password"
                     style={{
                       display: "block",
                       marginBottom: "0.55rem",
@@ -981,17 +1084,24 @@ export default function Home() {
                     비밀번호
                   </label>
                   <input
+                    id="teacher-password"
                     type="password"
                     className="input-field"
                     value={password}
                     onChange={(e) => setPassword(e.target.value)}
-                    onKeyDown={(e) => e.key === "Enter" && handleTeacherLogin()}
                     placeholder="비밀번호 입력"
                     autoComplete="current-password"
+                    aria-invalid={Boolean(error)}
+                    aria-describedby="teacher-login-feedback"
                   />
-                  {error ? (
-                    <div style={{ marginTop: "0.5rem", display: "grid", gap: "0.35rem" }}>
-                      <p style={{ fontSize: "0.8rem", color: "var(--error)", fontWeight: 600 }}>
+                  <div
+                    id="teacher-login-feedback"
+                    aria-live="polite"
+                    style={{ marginTop: "0.5rem", display: "grid", gap: "0.35rem" }}
+                  >
+                    {error ? (
+                      <>
+                      <p role="alert" style={{ fontSize: "0.8rem", color: "var(--error)", fontWeight: 600 }}>
                         {error}
                       </p>
                       {shouldShowTeacherDeploymentHelp(error) && (
@@ -999,17 +1109,19 @@ export default function Home() {
                           {TEACHER_AUTH_DEPLOYMENT_HELP}
                         </p>
                       )}
-                    </div>
-                  ) : (
-                    <p style={{ fontSize: "0.8rem", color: "var(--muted)", marginTop: "0.5rem", opacity: 0.75 }}>
+                      </>
+                    ) : (
+                    <p style={{ fontSize: "0.8rem", color: "var(--muted)", opacity: 0.75 }}>
                       교사용 계정 정보를 입력하세요.
                     </p>
-                  )}
+                    )}
+                  </div>
                 </div>
 
-                <button onClick={handleTeacherLogin} className="btn btn-primary" style={{ width: "100%" }}>
+                <button type="submit" className="btn btn-primary" style={{ width: "100%" }}>
                   대시보드 입장
                 </button>
+                </form>
               </>
             ) : (
               <>
@@ -1047,15 +1159,28 @@ export default function Home() {
                     이름
                   </label>
                   <input
+                    ref={studentNameInputRef}
+                    id="student-name"
                     type="text"
                     className="input-field"
                     aria-label="이름"
+                    aria-invalid={error === "이름을 입력해주세요."}
+                    aria-describedby={error === "이름을 입력해주세요." ? "student-name-error" : undefined}
                     value={studentName}
                     onChange={(e) => setStudentName(e.target.value)}
                     placeholder="이름을 입력하세요"
                     autoFocus
                     autoComplete="name"
                   />
+                  {error === "이름을 입력해주세요." && (
+                    <p
+                      id="student-name-error"
+                      role="alert"
+                      style={{ fontSize: "0.8rem", color: "var(--error)", marginTop: "0.45rem", fontWeight: 700 }}
+                    >
+                      {error}
+                    </p>
+                  )}
                 </div>
 
                 <div style={{ marginBottom: "1.1rem" }}>
@@ -1101,7 +1226,7 @@ export default function Home() {
                   </p>
                 </div>
 
-                <div style={{ marginBottom: "1.75rem" }}>
+                <div style={{ marginBottom: "1.35rem" }}>
                   <label
                     style={{
                       display: "block",
@@ -1115,46 +1240,45 @@ export default function Home() {
                   >
                     반 선택
                   </label>
-                  <select
-                    aria-label="반 선택"
-                    value={selectedGroupId}
-                    onChange={(e) => setSelectedGroupId(e.target.value)}
-                    className="input-field"
-                    style={{ cursor: "pointer" }}
-                  >
-                    <option value="">반을 선택하세요</option>
-                    {groups.map((g) => (
-                      <option key={g.id} value={g.id}>
-                        {formatRegionScopedLabel(g.name, g.region)}
-                      </option>
-                    ))}
-                  </select>
-                  {groups.length === 0 && (
-                    <div
-                      style={{
-                        fontSize: "0.8rem",
-                        color: "var(--error)",
-                        marginTop: "0.55rem",
-                        background: "rgba(239,68,68,0.07)",
-                        padding: "0.5rem 0.75rem",
-                        borderRadius: "var(--radius-md)",
-                        border: "1px solid rgba(239,68,68,0.18)",
-                        fontWeight: 600,
-                      }}
+                  {studentGroupOptions.length > 0 ? (
+                    <select
+                      aria-label="반 선택"
+                      value={selectedGroupId}
+                      onChange={(e) => setSelectedGroupId(e.target.value)}
+                      className="input-field"
+                      style={{ cursor: "pointer" }}
                     >
-                      {studentDirectoryStatus === "loading"
-                        ? "반 목록을 불러오는 중입니다."
-                        : studentDirectoryStatus === "error"
-                          ? "학생 명단 연결에 실패했습니다. 선생님에게 새 초대 링크를 요청해주세요."
-                          : "등록된 반이 없습니다. 선생님께 문의하세요."}
-                    </div>
+                      <option value="">반을 선택하세요</option>
+                      {studentGroupOptions.map((group) => (
+                        <option key={`${group.region || ""}:${group.id}`} value={group.id}>
+                          {formatRegionScopedLabel(group.name, group.region)}
+                        </option>
+                      ))}
+                    </select>
+                  ) : (
+                    <input
+                      type="text"
+                      className="input-field"
+                      aria-label="반 코드"
+                      value={selectedGroupId}
+                      onChange={(e) => setSelectedGroupId(e.target.value.trim())}
+                      placeholder="선생님이 알려준 반 코드"
+                      autoCapitalize="none"
+                      spellCheck={false}
+                    />
                   )}
-                  {error && (
-                    <p style={{ fontSize: "0.8rem", color: "var(--error)", marginTop: "0.5rem", fontWeight: 600 }}>
-                      {error}
+                  {studentGroupOptions.length === 0 && (
+                    <p style={{ fontSize: "0.75rem", color: "var(--muted)", marginTop: "0.45rem", lineHeight: 1.45 }}>
+                      등록된 반이 없으면 아래 반 코드로 게스트 시험을 시작할 수 있습니다.
                     </p>
                   )}
                 </div>
+
+                {error && error !== "이름을 입력해주세요." && (
+                  <p role="alert" style={{ fontSize: "0.8rem", color: "var(--error)", marginTop: "-0.35rem", marginBottom: "1.35rem", fontWeight: 600 }}>
+                    {error}
+                  </p>
+                )}
 
                 {pendingGuestPreview && (
                   <div
@@ -1185,7 +1309,7 @@ export default function Home() {
                         marginBottom: "0.55rem",
                         fontSize: "0.75rem",
                         fontWeight: 700,
-                        color: "var(--muted)",
+                        color: needsCode ? "var(--warning)" : "var(--muted)",
                         textTransform: "uppercase",
                         letterSpacing: "0.07em",
                       }}
@@ -1236,6 +1360,46 @@ export default function Home() {
                   <span>또는</span>
                 </div>
 
+                <div style={{ marginBottom: "0.75rem" }}>
+                  <label
+                    style={{
+                      display: "block",
+                      marginBottom: "0.55rem",
+                      fontSize: "0.75rem",
+                      fontWeight: 700,
+                      color: "var(--muted)",
+                      textTransform: "uppercase",
+                      letterSpacing: "0.07em",
+                    }}
+                  >
+                    반 코드
+                  </label>
+                  <input
+                    type="text"
+                    className="input-field"
+                    value={guestGroupCode}
+                    onChange={(e) => setGuestGroupCode(e.target.value)}
+                    onKeyDown={(e) => e.key === "Enter" && handleGuestWithGroupCode()}
+                    placeholder="선생님이 알려준 코드"
+                    autoCapitalize="characters"
+                    spellCheck={false}
+                  />
+                </div>
+
+                <button
+                  type="button"
+                  onClick={handleGuestWithGroupCode}
+                  className="btn btn-primary"
+                  style={{
+                    width: "100%",
+                    background: "linear-gradient(135deg, #6366f1, #14b8a6)",
+                    boxShadow: "0 4px 18px rgba(20,184,166,0.25)",
+                    marginBottom: "0.75rem",
+                  }}
+                >
+                  반 코드로 게스트 시험보기
+                </button>
+
                 <button
                   onClick={handleGuest}
                   className="btn"
@@ -1247,7 +1411,7 @@ export default function Home() {
                     fontSize: "0.92rem",
                   }}
                 >
-                  게스트로 계속하기
+                  코드 없이 게스트로 계속하기
                 </button>
               </>
             )}

@@ -771,7 +771,12 @@ export function getAttemptQuestionResults(exam: Exam, attempt: Attempt): Questio
         const storedResult = storedByQuestionId.get(baseResult.questionId);
         if (!storedResult) return baseResult;
 
-        const status = baseResult.status;
+        // Student-safe exam DTOs intentionally omit the answer key (and may omit
+        // teacher-only scoring metadata). In that case the stored server result is
+        // the only authoritative grading source. Full teacher exams still derive
+        // from the current canonical answer key to repair stale historical rows.
+        const useStoredGrading = typeof baseResult.correctAnswer !== "number";
+        const status = useStoredGrading ? storedResult.status : baseResult.status;
 
         return {
             ...storedResult,
@@ -791,9 +796,9 @@ export function getAttemptQuestionResults(exam: Exam, attempt: Attempt): Questio
             questionNumber: baseResult.questionNumber,
             canonicalQuestionId: baseResult.canonicalQuestionId,
             label: baseResult.label,
-            score: baseResult.score,
-            earnedScore: baseResult.earnedScore,
-            selectedAnswer: baseResult.selectedAnswer,
+            score: useStoredGrading ? storedResult.score : baseResult.score,
+            earnedScore: useStoredGrading ? storedResult.earnedScore : baseResult.earnedScore,
+            selectedAnswer: useStoredGrading ? storedResult.selectedAnswer : baseResult.selectedAnswer,
             correctAnswer: baseResult.correctAnswer,
             status,
             isCorrect: status === "correct",

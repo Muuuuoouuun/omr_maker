@@ -1,6 +1,6 @@
 import { readFile } from "node:fs/promises";
 import { test, expect, type Page } from "@playwright/test";
-import { loginAsTeacher, resetBrowserState } from "./helpers";
+import { continueSolveEntryIfPresent, loginAsTeacher, resetBrowserState } from "./helpers";
 import { parseCsvRows } from "../src/lib/csv";
 
 const TEST_EXAM_ID = "e2e-korean-integrated-exam";
@@ -178,6 +178,7 @@ async function requireStartCodeForSeedStudent(page: Page) {
 }
 
 async function ensureAnswerPaneVisible(page: Page) {
+    await continueSolveEntryIfPresent(page);
     const expandButton = page.getByRole("button", { name: "답안지 펼치기", exact: true });
     if (await expandButton.isVisible().catch(() => false)) {
         await expandButton.click();
@@ -543,9 +544,9 @@ test.describe("Teacher and student full journey", () => {
         await expect(page).toHaveURL(new RegExp(`/solve/${TEST_EXAM_ID}$`));
         await ensureAnswerPaneVisible(page);
 
-        await page.getByRole("button", { name: "문제 1번 보기 2" }).click();
-        await page.getByRole("button", { name: "문제 2번 보기 3" }).click();
-        await page.getByRole("button", { name: "문제 3번 보기 1" }).click();
+        await page.getByRole("radio", { name: "문제 1번 보기 2" }).click();
+        await page.getByRole("radio", { name: "문제 2번 보기 3" }).click();
+        await page.getByRole("radio", { name: "문제 3번 보기 1" }).click();
         await expect(page.getByText("모든 문제 표기 완료")).toBeVisible();
 
         await page.locator(".solve-submit-button").click();
@@ -583,7 +584,9 @@ test.describe("Teacher and student full journey", () => {
 
         await page.getByLabel("시험 제목").fill(CREATED_EXAM_TITLE);
         await page.getByLabel("빠른 정답 입력").fill(CREATED_ANSWER_KEY);
-        await expect(page.getByText("20/20 정답", { exact: true })).toBeVisible();
+        await expect(
+            page.locator("#create-settings-panel .create-design-check-pill", { hasText: "20/20 정답" })
+        ).toBeVisible();
 
         await page.getByRole("button", { name: "배포하기" }).click();
         await expect(page.getByRole("heading", { name: "시험 배포하기" })).toBeVisible();
@@ -628,7 +631,7 @@ test.describe("Teacher and student full journey", () => {
         await ensureAnswerPaneVisible(page);
 
         for (const [index, answer] of [...CREATED_ANSWER_KEY].entries()) {
-            await page.getByRole("button", { name: `문제 ${index + 1}번 보기 ${answer}` }).click();
+            await page.getByRole("radio", { name: `문제 ${index + 1}번 보기 ${answer}` }).click();
         }
         await expect(page.getByText("모든 문제 표기 완료")).toBeVisible();
 
@@ -666,9 +669,9 @@ test.describe("Teacher and student full journey", () => {
         await expect(page).toHaveURL(new RegExp(`/solve/${TEST_EXAM_ID}$`));
         await ensureAnswerPaneVisible(page);
 
-        await page.getByRole("button", { name: "문제 1번 보기 2" }).click();
-        await page.getByRole("button", { name: "문제 2번 보기 3" }).click();
-        await page.getByRole("button", { name: "문제 3번 보기 1" }).click();
+        await page.getByRole("radio", { name: "문제 1번 보기 2" }).click();
+        await page.getByRole("radio", { name: "문제 2번 보기 3" }).click();
+        await page.getByRole("radio", { name: "문제 3번 보기 1" }).click();
         await expect(page.getByText("모든 문제 표기 완료")).toBeVisible();
 
         await page.locator(".solve-submit-button").click();
@@ -744,6 +747,7 @@ test.describe("Teacher and student full journey", () => {
         await seedExamAndStudent(page);
         await page.setViewportSize({ width: 820, height: 1180 });
         await page.goto(`/solve/${TEST_EXAM_ID}`);
+        await continueSolveEntryIfPresent(page);
 
         const openRail = page.getByRole("button", { name: "답안지 펼치기 · 0/3 · 미답 3개" });
         await expect(openRail).toBeVisible();

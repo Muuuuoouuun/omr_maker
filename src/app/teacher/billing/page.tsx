@@ -7,7 +7,8 @@ import { CreditCard, Check, Zap, Crown, Building, Download, Sparkles, TrendingUp
 import { formatLimit, usagePct } from "@/lib/pure";
 import { toast } from "@/components/Toast";
 import type { PlanKey } from "@/types/omr";
-import { loadAttempts, loadExams } from "@/lib/omrPersistence";
+import { loadTeacherAttempts } from "@/lib/teacherAttemptClient";
+import { loadTeacherExams } from "@/lib/teacherExamClient";
 import {
     buildBillingPlanHealth,
     buildBillingUsageLimitViews,
@@ -197,8 +198,8 @@ export default function BillingPage() {
         let cancelled = false;
         const hydrateUsage = async () => {
             const [examResult, attemptResult, planSnapshot] = await Promise.all([
-                loadExams(),
-                loadAttempts(),
+                loadTeacherExams(),
+                loadTeacherAttempts(),
                 getServerPlanSnapshot().catch(() => null),
             ]);
             if (cancelled) return;

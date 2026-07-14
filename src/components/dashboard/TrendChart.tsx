@@ -43,8 +43,40 @@ export default function TrendChart({ data, labels, color = "#ffffff", height = 1
         );
     }
 
+    if (data.length === 1) {
+        return (
+            <div
+                role="status"
+                aria-label={`최근 시험 평균 점수 ${data[0]}점. 비교할 시험이 쌓이면 추이가 표시됩니다.`}
+                style={{
+                    width: '100%',
+                    minWidth: 0,
+                    height,
+                    display: 'grid',
+                    placeItems: 'center',
+                    color,
+                    textAlign: 'center',
+                }}
+            >
+                <div>
+                    <strong style={{ display: 'block', fontSize: '2.25rem', lineHeight: 1, fontVariantNumeric: 'tabular-nums' }}>
+                        {data[0]}점
+                    </strong>
+                    <span style={{ display: 'block', marginTop: '0.65rem', fontSize: '0.82rem', fontWeight: 700, opacity: 0.78 }}>
+                        비교할 시험이 쌓이면 추이를 표시합니다
+                    </span>
+                </div>
+            </div>
+        );
+    }
+
     return (
-        <div style={{ width: '100%', minWidth: 0, height }}>
+        <div
+            style={{ width: '100%', minWidth: 0, height }}
+            role="img"
+            tabIndex={0}
+            aria-label={`최근 ${data.length}개 시험 평균 점수 추이. 최신 점수 ${data[data.length - 1]}점.`}
+        >
             <ResponsiveContainer
                 width="100%"
                 height="100%"

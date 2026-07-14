@@ -77,7 +77,14 @@ type DrawingMode = 'click' | 'pen' | 'highlighter' | 'eraser';
 type DrawPoint = { x: number; y: number };
 
 const PEN_COLORS = ['#111827', '#ef4444', '#2563eb', '#16a34a'];
-const HIGHLIGHTER_COLOR = 'rgba(250, 204, 21, 0.38)';
+const HIGHLIGHTER_COLORS = [
+    'rgba(250, 204, 21, 0.38)',
+    'rgba(74, 222, 128, 0.36)',
+    'rgba(244, 114, 182, 0.36)',
+    'rgba(96, 165, 250, 0.36)',
+];
+const HIGHLIGHTER_COLOR = HIGHLIGHTER_COLORS[0];
+const HIGHLIGHTER_CURSOR_COLORS = ['#facc15', '#4ade80', '#f472b6', '#60a5fa'];
 const MIN_POINT_DISTANCE = 0.0012;
 
 function isPdfUploadFile(file: File): boolean {
@@ -112,6 +119,7 @@ export default function PDFViewer({
     // Drawing State
     const [drawingMode, setDrawingMode] = useState<DrawingMode>('click');
     const [penColor, setPenColor] = useState('#111827'); // Default Black
+    const [highlighterColor, setHighlighterColor] = useState(HIGHLIGHTER_COLORS[0]);
     const [penWidth, setPenWidth] = useState(2);
     const [highlighterWidth, setHighlighterWidth] = useState(12);
     const [eraserWidth, setEraserWidth] = useState(22);
@@ -171,7 +179,10 @@ export default function PDFViewer({
     ) : null;
 
     const penCursor = useMemo(() => buildPenCursor(penColor), [penColor]);
-    const highlighterCursor = useMemo(() => buildHighlighterCursor(), []);
+    const highlighterCursor = useMemo(() => {
+        const idx = HIGHLIGHTER_COLORS.indexOf(highlighterColor);
+        return buildHighlighterCursor(HIGHLIGHTER_CURSOR_COLORS[idx] ?? HIGHLIGHTER_CURSOR_COLORS[0]);
+    }, [highlighterColor]);
     const canvasCursor = !canEditDrawing
         ? 'default'
         : drawingMode === 'pen'
@@ -366,7 +377,7 @@ export default function PDFViewer({
     }, [applyStrokeStyle]);
 
     const getDrawingColor = (mode: DrawingMode) => {
-        if (mode === 'highlighter') return HIGHLIGHTER_COLOR;
+        if (mode === 'highlighter') return highlighterColor;
         if (mode === 'eraser') return 'rgba(0,0,0,1)';
         return penColor;
     };
@@ -414,22 +425,22 @@ export default function PDFViewer({
         if (!canEditDrawing || !onDrawingsChange) return;
         const pageUndo = undoStack[pageNumber] || [];
         if (pageUndo.length === 0) return; // nothing to undo
-        
+
         const previousState = pageUndo[pageUndo.length - 1];
         const newUndo = pageUndo.slice(0, -1);
-        
+
         // Push current state to redo stack
         const currentState = drawings[pageNumber] || [];
         setRedoStack(prev => ({
             ...prev,
             [pageNumber]: [...(prev[pageNumber] || []), currentState]
         }));
-        
+
         setUndoStack(prev => ({
             ...prev,
             [pageNumber]: newUndo
         }));
-        
+
         onDrawingsChange(pageNumber, previousState);
     }, [canEditDrawing, drawings, onDrawingsChange, pageNumber, undoStack]);
 
@@ -437,22 +448,22 @@ export default function PDFViewer({
         if (!canEditDrawing || !onDrawingsChange) return;
         const pageRedo = redoStack[pageNumber] || [];
         if (pageRedo.length === 0) return; // nothing to redo
-        
+
         const nextState = pageRedo[pageRedo.length - 1];
         const newRedo = pageRedo.slice(0, -1);
-        
+
         // Push current state to undo stack
         const currentState = drawings[pageNumber] || [];
         setUndoStack(prev => ({
             ...prev,
             [pageNumber]: [...(prev[pageNumber] || []), currentState]
         }));
-        
+
         setRedoStack(prev => ({
             ...prev,
             [pageNumber]: newRedo
         }));
-        
+
         onDrawingsChange(pageNumber, nextState);
     }, [canEditDrawing, drawings, onDrawingsChange, pageNumber, redoStack]);
 
@@ -460,7 +471,7 @@ export default function PDFViewer({
     useEffect(() => {
         const handleKeyDown = (e: KeyboardEvent) => {
             if (!canEditDrawing) return;
-            
+
             // Do not capture if editing an input
             if (document.activeElement?.tagName === 'INPUT' || document.activeElement?.tagName === 'TEXTAREA') {
                 return;
@@ -800,21 +811,30 @@ export default function PDFViewer({
                                     </button>
                                     <button
                                         type="button"
-                                        className={`pdf-tool-button ${drawingMode === 'pen' ? 'active' : ''}`}
+                                        className={`pdf-tool-button has-color ${drawingMode === 'pen' ? 'active' : ''}`}
                                         onClick={() => setDrawingMode('pen')}
                                         title="펜"
                                         aria-label="펜"
                                     >
                                         <PenLine size={15} />
+                                        <span className="pdf-tool-color-dot" style={{ background: penColor }} />
                                     </button>
                                     <button
                                         type="button"
-                                        className={`pdf-tool-button ${drawingMode === 'highlighter' ? 'active' : ''}`}
-                                        onClick={() => setDrawingMode('highlighter')}
-                                        title="형광펜"
+                                        className={`pdf-tool-button has-color ${drawingMode === 'highlighter' ? 'active' : ''}`}
+                                        onClick={() => {
+                                            if (drawingMode === 'highlighter') {
+                                                const idx = HIGHLIGHTER_COLORS.indexOf(highlighterColor);
+                                                setHighlighterColor(HIGHLIGHTER_COLORS[(idx + 1) % HIGHLIGHTER_COLORS.length]);
+                                            } else {
+                                                setDrawingMode('highlighter');
+                                            }
+                                        }}
+                                        title={drawingMode === 'highlighter' ? "형광펜 (다시 클릭하면 색 변경)" : "형광펜"}
                                         aria-label="형광펜"
                                     >
                                         <Highlighter size={15} />
+                                        <span className="pdf-tool-color-dot" style={{ background: highlighterColor }} />
                                     </button>
                                     <button
                                         type="button"

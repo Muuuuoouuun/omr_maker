@@ -39,7 +39,7 @@ export default function manifest(): OmrManifest {
     launch_handler: {
       client_mode: ["navigate-existing", "auto"],
     },
-    orientation: "any",
+    orientation: "portrait",
     background_color: "#f8fafc",
     theme_color: "#f8fafc",
     categories: ["education", "productivity"],

@@ -1,3 +1,4 @@
+import { pbkdf2Sync } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import { isTeacherToken } from "./teacherSession";
 import {
@@ -11,11 +12,18 @@ import {
     verifyTeacherPasswordValue,
 } from "./teacherAuth";
 
+function teacherPasswordHash(password: string, saltHex = "00112233445566778899aabbccddeeff"): string {
+    const iterations = 1_000;
+    const hashHex = pbkdf2Sync(password, Buffer.from(saltHex, "hex"), iterations, 32, "sha256").toString("hex");
+    return `pbkdf2-sha256:${iterations}:${saltHex}:${hashHex}`;
+}
+
 describe("teacher auth", () => {
     it("uses the demo password outside production only when no env password is configured", () => {
         expect(resolveTeacherPassword({ NODE_ENV: "development", TEACHER_PASSWORD: undefined })).toBe("admin123");
         expect(resolveTeacherPassword({ NODE_ENV: "test", TEACHER_PASSWORD: undefined })).toBe("admin123");
         expect(resolveTeacherPassword({ NODE_ENV: "production", TEACHER_PASSWORD: undefined })).toBeNull();
+        expect(resolveTeacherPassword({ NODE_ENV: "development", TEACHER_PASSWORD_HASH: teacherPasswordHash("dev-secret") })).toBeNull();
         expect(resolveTeacherCredentials({ NODE_ENV: "development" })).toEqual([{
             id: "admin",
             email: "admin@example.com",
@@ -47,6 +55,44 @@ describe("teacher auth", () => {
             NODE_ENV: "production",
             TEACHER_PASSWORD: "secret-pass",
         })).toBe(false);
+    });
+
+    it("supports a hashed single-teacher password without treating the hash as plaintext", () => {
+        const passwordHash = teacherPasswordHash("secret-pass");
+        const env = {
+            NODE_ENV: "production",
+            TEACHER_LOGIN_ID: "director",
+            TEACHER_EMAIL: "Director@School.test",
+            TEACHER_NAME: "김선생",
+            TEACHER_PASSWORD_HASH: ` ${passwordHash} `,
+        };
+
+        expect(resolveTeacherPassword(env)).toBeNull();
+        expect(resolveTeacherCredentials(env)).toEqual([{
+            id: "director",
+            email: "director@school.test",
+            name: "김선생",
+            passwordHash,
+        }]);
+        expect(verifyTeacherPasswordValue("secret-pass", env)).toBe(true);
+        expect(verifyTeacherPasswordValue("wrong", env)).toBe(false);
+        expect(verifyTeacherLogin("director", "secret-pass", env)).toMatchObject({
+            success: true,
+            teacher: { teacherId: "director" },
+        });
+        expect(verifyTeacherLogin("director", "wrong", env)).toEqual({ success: false });
+    });
+
+    it("supports OMR_TEACHER_PASSWORD_HASH for single-teacher env config", () => {
+        const env = {
+            NODE_ENV: "production",
+            OMR_TEACHER_PASSWORD_HASH: teacherPasswordHash("omr-secret", "11112222333344445555666677778888"),
+        };
+
+        expect(verifyTeacherLogin("admin", "omr-secret", env)).toMatchObject({
+            success: true,
+            teacher: { teacherId: "admin" },
+        });
     });
 
     it("verifies teacher id or email without revealing which side failed", () => {
@@ -141,6 +187,30 @@ describe("teacher auth", () => {
         });
     });
 
+    it("supports passwordHash and password_hash in multi-teacher JSON env", () => {
+        const env = {
+            NODE_ENV: "production",
+            TEACHER_ACCOUNTS: JSON.stringify([
+                { id: "teacher-a", email: "a@example.com", name: "A Teacher", passwordHash: teacherPasswordHash("pass-a") },
+                { id: "teacher-b", email: "b@example.com", name: "B Teacher", password_hash: teacherPasswordHash("pass-b", "abcdefabcdefabcdefabcdefabcdefab") },
+            ]),
+        };
+
+        expect(resolveTeacherCredentials(env).map(item => ({ id: item.id, hasHash: !!item.passwordHash, hasPassword: !!item.password }))).toEqual([
+            { id: "teacher-a", hasHash: true, hasPassword: false },
+            { id: "teacher-b", hasHash: true, hasPassword: false },
+        ]);
+        expect(verifyTeacherLogin("teacher-a", "pass-a", env)).toMatchObject({
+            success: true,
+            teacher: { teacherId: "teacher-a" },
+        });
+        expect(verifyTeacherLogin("b@example.com", "pass-b", env)).toMatchObject({
+            success: true,
+            teacher: { teacherId: "teacher-b" },
+        });
+        expect(verifyTeacherLogin("teacher-a", "pass-b", env)).toEqual({ success: false });
+    });
+
     it("reports production deployment auth readiness without relying on Supabase", () => {
         expect(inspectTeacherAuthConfig({
             NODE_ENV: "production",
@@ -164,6 +234,20 @@ describe("teacher auth", () => {
             ready: true,
             credentialCount: 1,
             issues: [],
+            warnings: [
+                expect.objectContaining({ key: "plaintext-production-teacher-password" }),
+            ],
+        });
+
+        expect(inspectTeacherAuthConfig({
+            NODE_ENV: "production",
+            TEACHER_LOGIN_ID: "director",
+            TEACHER_PASSWORD_HASH: teacherPasswordHash("secret-pass"),
+        })).toMatchObject({
+            ready: true,
+            credentialCount: 1,
+            issues: [],
+            warnings: [],
         });
     });
 
@@ -188,6 +272,33 @@ describe("teacher auth", () => {
             credentialCount: 0,
             issues: expect.arrayContaining([
                 expect.objectContaining({ key: "empty-teacher-accounts" }),
+                expect.objectContaining({ key: "missing-production-teacher-account" }),
+            ]),
+        });
+    });
+
+    it("flags malformed teacher password hashes before they can look deployable", () => {
+        expect(inspectTeacherAuthConfig({
+            NODE_ENV: "production",
+            TEACHER_PASSWORD_HASH: "pbkdf2-sha256:not-a-number:salt:hash",
+        })).toMatchObject({
+            ready: false,
+            credentialCount: 0,
+            issues: expect.arrayContaining([
+                expect.objectContaining({ key: "invalid-teacher-password-hash" }),
+                expect.objectContaining({ key: "missing-production-teacher-account" }),
+            ]),
+        });
+
+        expect(inspectTeacherAuthConfig({
+            NODE_ENV: "production",
+            TEACHER_ACCOUNTS: JSON.stringify([{ id: "teacher-a", passwordHash: "bcrypt:abc" }]),
+        })).toMatchObject({
+            ready: false,
+            credentialCount: 0,
+            issues: expect.arrayContaining([
+                expect.objectContaining({ key: "empty-teacher-accounts" }),
+                expect.objectContaining({ key: "invalid-teacher-password-hash" }),
                 expect.objectContaining({ key: "missing-production-teacher-account" }),
             ]),
         });

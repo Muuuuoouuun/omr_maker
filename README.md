@@ -45,6 +45,8 @@ On first student login, the app issues a six-character start code. Returning stu
 
 If a class has same-name students, students must enter the roster email or teacher-issued student ID in `학생번호 또는 이메일` so records do not merge into the wrong profile.
 
+For deployment smoke testing with one administrator and one roster-backed student, see `docs/deployment-test-accounts.md` and import `examples/deployment-test-roster.csv`.
+
 Production account, security, privacy, and usability rollout items are tracked in `docs/account-security-usability-checklist.md`.
 
 ## Product Direction

@@ -29,6 +29,7 @@ import { listMyAssignments } from "@/app/actions/studentExam";
 import { clearStudentServerSession } from "@/app/actions/studentSession";
 import { listMyAssignmentsClient } from "@/lib/studentExamClient";
 import type { SolvableExam } from "@/lib/examSolvePayload";
+import { loadStudentReturnedFeedbackWithDevFallback } from "@/lib/studentFeedbackClient";
 
 /** True when this device holds an unsubmitted draft for the exam/owner pair. */
 function hasLocalDraftFor(examId: string, ownerKey: string): boolean {
@@ -57,7 +58,7 @@ export default function StudentDashboard() {
     const router = useRouter();
     const [user, setUser] = useState<StudentSession | null>(null);
     const [todoExams, setTodoExams] = useState<Array<Exam | SolvableExam>>([]);
-    const [doneExams, setDoneExams] = useState<Array<(Exam | SolvableExam) & { attemptId: string }>>([]);
+    const [doneExams, setDoneExams] = useState<Array<(Exam | SolvableExam) & { attemptId: string; hasUnreadFeedback?: boolean }>>([]);
     const [stats, setStats] = useState({
         avgScore: 0,
         completedCount: 0,
@@ -125,6 +126,15 @@ export default function StudentDashboard() {
 
             const myBaseAttempts = baseAttemptsOnly(myAttempts);
             const myRetakeAttempts = retakeAttemptsOnly(myAttempts);
+            const returnedFeedback = currentUser.isGuest
+                ? []
+                : await loadStudentReturnedFeedbackWithDevFallback(currentUser.studentId);
+            if (cancelled) return;
+            const unreadFeedbackAttemptIds = new Set(
+                returnedFeedback
+                    .filter(feedback => !feedback.delivery.firstOpenedAt)
+                    .map(feedback => feedback.attemptId),
+            );
             const guestIdForMerge = currentUser.isGuest ? currentUser.guestId : readStoredGuestId();
             const mergePreview = guestIdForMerge
                 ? previewGuestMerge(guestIdForMerge, currentUser.isGuest ? undefined : {
@@ -139,7 +149,7 @@ export default function StudentDashboard() {
                 : null;
 
             // 3. Categorize Exams
-            const done: Array<(Exam | SolvableExam) & { attemptId: string }> = [];
+            const done: Array<(Exam | SolvableExam) & { attemptId: string; hasUnreadFeedback?: boolean }> = [];
             const todo: Array<Exam | SolvableExam> = [];
 
             allExams.forEach(exam => {
@@ -153,7 +163,11 @@ export default function StudentDashboard() {
                 // Check if completed
                 const attempt = myBaseAttempts.find(a => a.examId === exam.id);
                 if (attempt) {
-                    done.push({ ...exam, attemptId: attempt.id });
+                    done.push({
+                        ...exam,
+                        attemptId: attempt.id,
+                        hasUnreadFeedback: unreadFeedbackAttemptIds.has(attempt.id),
+                    });
                 } else if (
                     // Guests on the server path only see exams they actually
                     // started (submitted or drafted on this device) — the public

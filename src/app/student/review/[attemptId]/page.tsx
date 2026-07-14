@@ -10,6 +10,7 @@ import {
     ChevronDown,
     ChevronUp,
     Clock,
+    Download,
     FileText,
     HelpCircle,
     MessageSquare,
@@ -19,7 +20,7 @@ import {
     Target,
     TrendingUp,
 } from "lucide-react";
-import type { Attempt, Exam, PdfDrawings, Question, QuestionResultStatus, QuestionTiming, StudentQuestionNote } from "@/types/omr";
+import type { Attempt, AttemptFeedback, Exam, PdfDrawings, Question, QuestionResultStatus, QuestionTiming, StudentQuestionNote } from "@/types/omr";
 import { storedDataUrlToFile, loadJsonRecord } from "@/utils/blobStore";
 import { attemptBelongsToSession, getSession } from "@/utils/storage";
 import { loadAttempt, loadExam, saveAttempt, saveLocalAttempt } from "@/lib/omrPersistence";
@@ -41,6 +42,19 @@ import {
     summarizeAttemptBehavior,
 } from "@/lib/premiumAnalytics";
 import { buildRetakeHref } from "@/lib/retakeLinks";
+import { buildAnnotatedPdfBlob } from "@/lib/annotatedPdfExport";
+import {
+    buildFeedbackDownloadText,
+    buildFeedbackMarkupDownloadJson,
+    canDownloadReturnedFeedback,
+    canDownloadReturnedMarkup,
+    loadFeedbackMarkupDrawings,
+    mergePdfDrawings,
+} from "@/lib/feedbackPersistence";
+import {
+    loadStudentReturnedFeedbackForAttempt,
+    markStudentFeedbackOpened,
+} from "@/lib/studentFeedbackClient";
 
 const PDFViewer = dynamic(() => import("@/components/PDFViewer"), { ssr: false });
 
@@ -393,6 +407,9 @@ export default function ReviewPage() {
     const [loadError, setLoadError] = useState(false);
     const [reloadKey, setReloadKey] = useState(0);
     const [handwritingUnavailable, setHandwritingUnavailable] = useState(false);
+    const [returnedFeedback, setReturnedFeedback] = useState<AttemptFeedback | null>(null);
+    const [teacherMarkupDrawings, setTeacherMarkupDrawings] = useState<PdfDrawings | undefined>(undefined);
+    const [annotationDownloading, setAnnotationDownloading] = useState(false);
     // Latest attempt for the local Q&A merge path — reading `attempt` state
     // directly in an async handler risks a stale closure dropping a concurrent
     // question. A ref + a submission mutex keep local writes serialized.
@@ -445,8 +462,8 @@ export default function ReviewPage() {
             });
             const found = result.status === "ok" ? result.attempt : undefined;
             if (found && !cancelled) {
+                const session = getSession();
                 if (result.source === "local") {
-                    const session = getSession();
                     if (!session || !attemptBelongsToSession(found, session)) {
                         setAccessDenied(true);
                         return;
@@ -460,6 +477,24 @@ export default function ReviewPage() {
                     ...readStudentQuestionQueue(found.id),
                     ...studentQuestionsByQuestionId(found),
                 });
+
+                if (session?.studentId) {
+                    try {
+                        const feedback = await loadStudentReturnedFeedbackForAttempt(found.id, session.studentId);
+                        if (feedback && !cancelled) {
+                            setReturnedFeedback(feedback);
+                            const markup = await loadFeedbackMarkupDrawings(feedback);
+                            if (!cancelled && markup) setTeacherMarkupDrawings(markup);
+                            void markStudentFeedbackOpened(feedback.id, session.studentId).then(async () => {
+                                if (cancelled) return;
+                                const refreshed = await loadStudentReturnedFeedbackForAttempt(found.id, session.studentId);
+                                if (!cancelled && refreshed) setReturnedFeedback(refreshed);
+                            });
+                        }
+                    } catch {
+                        // Feedback is supplemental; keep the official result available.
+                    }
+                }
 
                 const inlineDrawings = hasDrawings(found.drawings) ? found.drawings : undefined;
                 if (inlineDrawings) {
@@ -579,7 +614,7 @@ export default function ReviewPage() {
     }
 
     if (!attempt || !exam) {
-        return <div style={{ padding: '2rem', textAlign: 'center' }}>Loading...</div>;
+        return <div role="status" aria-live="polite" style={{ padding: '2rem', textAlign: 'center', color: 'var(--muted)' }}>결과 리포트를 불러오는 중입니다.</div>;
     }
 
     const reviewQuestionIds = attempt.retake?.questionIds?.length
@@ -616,6 +651,12 @@ export default function ReviewPage() {
         ? reviewQuestions.filter(q => wrongQuestionIds.has(q.id))
         : reviewQuestions;
     const hasHandwriting = hasDrawings(restoredDrawings);
+    const hasFeedbackMarkup = hasDrawings(teacherMarkupDrawings);
+    const combinedReviewDrawings = mergePdfDrawings(restoredDrawings, teacherMarkupDrawings);
+    const canDownloadFeedback = canDownloadReturnedFeedback(returnedFeedback);
+    const canDownloadMarkupFile = canDownloadReturnedMarkup(returnedFeedback) && hasDrawings(combinedReviewDrawings);
+    const canDownloadAnnotatedPdf = canDownloadMarkupFile && !!pdfFile;
+    const visibleFeedbackComments = returnedFeedback?.questionComments.filter(comment => comment.visibility === "student_visible") || [];
     const retakeQuestionIds = buildRetakeQuestionIds(reviewExam, attempt);
     const weaknessGroups = buildStudentWeaknessGroups(reviewExam, attempt).slice(0, 3);
     const recommendationGroups = buildLearningRecommendations(reviewExam, [attempt], {
@@ -762,6 +803,46 @@ export default function ReviewPage() {
         if (saved) toast.success("해설 요청 전송됨", "선생님이 답변하면 이 화면에 표시됩니다.");
     };
 
+    const downloadFeedback = () => {
+        if (!returnedFeedback || !canDownloadFeedback) return;
+        const blob = new Blob([buildFeedbackDownloadText(returnedFeedback)], { type: "text/plain;charset=utf-8" });
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement("a");
+        link.href = url;
+        link.download = `${attempt.examTitle || "omr"}-feedback.txt`;
+        document.body.appendChild(link);
+        link.click();
+        link.remove();
+        URL.revokeObjectURL(url);
+    };
+
+    const downloadFeedbackMarkup = async () => {
+        if (!returnedFeedback || !canDownloadMarkupFile) return;
+        setAnnotationDownloading(true);
+        try {
+            const blob = pdfFile
+                ? await buildAnnotatedPdfBlob(pdfFile, combinedReviewDrawings)
+                : new Blob(
+                    [buildFeedbackMarkupDownloadJson(returnedFeedback, combinedReviewDrawings)],
+                    { type: "application/json;charset=utf-8" },
+                );
+            const url = URL.createObjectURL(blob);
+            const link = document.createElement("a");
+            link.href = url;
+            link.download = pdfFile
+                ? `${attempt.examTitle || "omr"}-feedback-annotated.pdf`
+                : `${attempt.examTitle || "omr"}-feedback-markup.json`;
+            document.body.appendChild(link);
+            link.click();
+            link.remove();
+            URL.revokeObjectURL(url);
+        } catch (error) {
+            console.error("Failed to download feedback markup", error);
+        } finally {
+            setAnnotationDownloading(false);
+        }
+    };
+
     return (
         <div className="layout-main student-review-page">
             <header className="header">
@@ -770,9 +851,9 @@ export default function ReviewPage() {
                         <button
                             type="button"
                             onClick={() => router.back()}
-                            aria-label="이전 화면으로"
-                            title="이전 화면으로"
-                            style={{ border: 'none', background: 'none', fontSize: '1rem', cursor: 'pointer' }}
+                            aria-label="결과 기록으로 돌아가기"
+                            title="결과 기록으로 돌아가기"
+                            style={{ border: 'none', background: 'none', fontSize: '1rem', cursor: 'pointer', minWidth: '44px', minHeight: '44px' }}
                         >
                             ←
                         </button>
@@ -840,6 +921,69 @@ export default function ReviewPage() {
                                 )}
                             </div>
                         </section>
+
+                        {returnedFeedback && (
+                            <section className="bento-card student-review-side-card" aria-labelledby="student-feedback-title">
+                                <div className="student-review-card-head">
+                                    <div>
+                                        <div className="student-review-section-title">
+                                            <MessageSquare size={17} />
+                                            <strong id="student-feedback-title">교사 피드백</strong>
+                                        </div>
+                                        {returnedFeedback.summary && (
+                                            <p style={{ whiteSpace: "pre-wrap" }}>{returnedFeedback.summary}</p>
+                                        )}
+                                    </div>
+                                    <MetaChip tone="primary">새 피드백</MetaChip>
+                                </div>
+
+                                {visibleFeedbackComments.length > 0 && (
+                                    <div style={{ display: "grid", gap: "0.45rem" }}>
+                                        {visibleFeedbackComments.map((comment) => (
+                                            <div
+                                                key={comment.id}
+                                                style={{
+                                                    padding: "0.65rem",
+                                                    borderRadius: "var(--radius-md)",
+                                                    background: "var(--surface-elevated)",
+                                                    border: "1px solid var(--border)",
+                                                    lineHeight: 1.55,
+                                                }}
+                                            >
+                                                <strong style={{ marginRight: "0.4rem" }}>{comment.questionNumber}번</strong>
+                                                <span>{comment.body}</span>
+                                            </div>
+                                        ))}
+                                    </div>
+                                )}
+
+                                <div className="student-review-side-actions">
+                                    {canDownloadFeedback ? (
+                                        <button
+                                            type="button"
+                                            onClick={downloadFeedback}
+                                            className="btn btn-secondary student-review-full-button"
+                                        >
+                                            <FileText size={15} />
+                                            피드백 저장
+                                        </button>
+                                    ) : (
+                                        <span className="student-review-success-note">다운로드 제한</span>
+                                    )}
+                                    {canDownloadMarkupFile && (
+                                        <button
+                                            type="button"
+                                            onClick={() => void downloadFeedbackMarkup()}
+                                            disabled={annotationDownloading}
+                                            className="btn btn-secondary student-review-full-button"
+                                        >
+                                            <Download size={15} />
+                                            {annotationDownloading ? "생성 중" : canDownloadAnnotatedPdf ? "첨삭 PDF 저장" : "첨삭 파일 저장"}
+                                        </button>
+                                    )}
+                                </div>
+                            </section>
+                        )}
 
                         <section className="student-review-stat-grid" aria-label="채점 요약">
                             <MiniStat label="정답" value={resultCounts.correctCount} color="var(--success)" />
@@ -996,9 +1140,9 @@ export default function ReviewPage() {
                                     <div className="student-review-card-head">
                                         <div>
                                             <h2>풀이 필기</h2>
-                                            <p>제출 당시 필기와 문제지를 표시합니다.</p>
+                                            <p>{hasFeedbackMarkup ? "제출 당시 필기와 교사 첨삭을 함께 표시합니다." : "제출 당시 필기와 문제지를 표시합니다."}</p>
                                         </div>
-                                        <MetaChip>읽기 전용</MetaChip>
+                                        <MetaChip>{hasFeedbackMarkup ? "교사 첨삭 포함" : "읽기 전용"}</MetaChip>
                                     </div>
                                     <div className="student-review-pdf-frame">
                                         {pdfFile ? (
@@ -1006,7 +1150,7 @@ export default function ReviewPage() {
                                                 file={pdfFile}
                                                 onLoadSuccess={() => { }}
                                                 readOnlyDrawings
-                                                drawings={restoredDrawings}
+                                                drawings={combinedReviewDrawings}
                                             />
                                         ) : (
                                             <div className="student-review-pdf-empty">

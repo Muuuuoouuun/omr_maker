@@ -5,14 +5,16 @@ import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
 import dynamic from "next/dynamic";
 import { Download, ListChecks, Lock, MessageSquare, PenLine, Repeat2, Send, Target } from "lucide-react";
-import type { Attempt, Exam, PdfDrawings, QuestionResult } from "@/types/omr";
+import type { Attempt, AttemptFeedback, Exam, FeedbackDownloadPolicy, PdfDrawings, QuestionResult } from "@/types/omr";
 import { loadJsonRecord, storedDataUrlToFile } from "@/utils/blobStore";
+import { getTeacherRemoteAssetUrl } from "@/app/actions/remoteAssets";
 import { getPlanLabel, hasPlanEntitlement } from "@/utils/plans";
 import { useServerPlan } from "@/lib/useServerPlan";
 import { formatKoreanDateTime } from "@/lib/pure";
 import { safeScorePercent } from "@/lib/scoreUtils";
 import { readActiveWorkspaceContext } from "@/lib/workspaceContext";
-import { fetchRemoteAttempt, loadAttempt, loadExam, saveAttempt } from "@/lib/omrPersistence";
+import { loadTeacherAttempt as loadTeacherAttemptRecord, saveTeacherAttempt } from "@/lib/teacherAttemptClient";
+import { loadTeacherExam } from "@/lib/teacherExamClient";
 import { answerStudentQuestion } from "@/lib/studentQuestions";
 import { toast } from "@/components/Toast";
 import {
@@ -25,7 +27,17 @@ import {
 import { hasTeacherSession, readTeacherSession } from "@/lib/teacherSession";
 import { buildRetakeHref } from "@/lib/retakeLinks";
 import ThemeToggle from "@/components/ThemeToggle";
-import { summarizePersistenceWrite } from "@/lib/persistenceFeedback";
+import {
+    DEFAULT_FEEDBACK_DOWNLOAD_POLICY,
+    createAttemptFeedbackDraft,
+    loadFeedbackMarkupDrawings,
+    mergePdfDrawings,
+} from "@/lib/feedbackPersistence";
+import {
+    loadTeacherAttemptFeedback,
+    returnTeacherAttemptFeedback,
+    saveTeacherAttemptFeedbackDraft,
+} from "@/lib/teacherFeedbackClient";
 
 const PDFViewer = dynamic(() => import("@/components/PDFViewer"), { ssr: false });
 
@@ -41,6 +53,24 @@ function formatAnswer(answer?: number): string {
     return typeof answer === "number" && answer > 0 ? `${answer}번` : "미응답";
 }
 
+function dateTimeLocalValue(iso?: string): string {
+    if (!iso) return "";
+    const date = new Date(iso);
+    if (Number.isNaN(date.getTime())) return "";
+    const offsetMs = date.getTimezoneOffset() * 60_000;
+    return new Date(date.getTime() - offsetMs).toISOString().slice(0, 16);
+}
+
+function dateTimeLocalToIso(value: string): string | undefined {
+    if (!value) return undefined;
+    const date = new Date(value);
+    return Number.isNaN(date.getTime()) ? undefined : date.toISOString();
+}
+
+function formatFeedbackDate(iso?: string): string {
+    return iso ? formatKoreanDateTime(iso) : "-";
+}
+
 export default function TeacherAttemptPage() {
     const params = useParams();
     const router = useRouter();
@@ -53,6 +83,13 @@ export default function TeacherAttemptPage() {
     const [accessDenied, setAccessDenied] = useState(false);
     const [handwritingUnavailable, setHandwritingUnavailable] = useState(false);
     const { plan: currentPlan } = useServerPlan();
+    const [feedback, setFeedback] = useState<AttemptFeedback | null>(null);
+    const [feedbackSummary, setFeedbackSummary] = useState("");
+    const [feedbackPolicy, setFeedbackPolicy] = useState<FeedbackDownloadPolicy>(DEFAULT_FEEDBACK_DOWNLOAD_POLICY);
+    const [teacherMarkupDrawings, setTeacherMarkupDrawings] = useState<PdfDrawings>({});
+    const [feedbackViewMode, setFeedbackViewMode] = useState<"student" | "markup" | "combined">("student");
+    const [feedbackNotice, setFeedbackNotice] = useState("");
+    const [feedbackSaving, setFeedbackSaving] = useState(false);
     const [loaded, setLoaded] = useState(false);
     const [answerDrafts, setAnswerDrafts] = useState<Record<number, string>>({});
     const [savingAnswerFor, setSavingAnswerFor] = useState<number | null>(null);
@@ -64,6 +101,7 @@ export default function TeacherAttemptPage() {
     const [savingSubQuestionKey, setSavingSubQuestionKey] = useState<string | null>(null);
     const pdfExportEnabled = hasPlanEntitlement(currentPlan, "pdfExport");
     const handwritingArchiveEnabled = hasPlanEntitlement(currentPlan, "handwritingArchive");
+    const feedbackEnabled = hasPlanEntitlement(currentPlan, "feedbackMarkup");
 
     useEffect(() => {
         let cancelled = false;
@@ -75,17 +113,15 @@ export default function TeacherAttemptPage() {
             }
 
             try {
-                const found = await loadAttempt(id);
+                const found = await loadTeacherAttemptRecord(id);
                 if (!found || cancelled) {
                     setLoaded(true);
                     return;
                 }
 
-                // F4: loadAttempt (and its remote fetch) is not organization-scoped,
-                // so verify the attempt belongs to this teacher's active workspace
-                // before showing it. Only deny on a positive cross-workspace
-                // mismatch; legacy attempts without an organizationId are allowed so
-                // the check can't lock teachers out of pre-scoping records.
+                // Keep a client-side defense in depth on top of the canonical,
+                // organization-scoped teacher gateway. Legacy rows without an
+                // organizationId remain readable during migration.
                 const activeOrganizationId = readActiveWorkspaceContext().organizationId?.trim();
                 const attemptOrganizationId = found.organizationId?.trim();
                 if (attemptOrganizationId && activeOrganizationId && attemptOrganizationId !== activeOrganizationId) {
@@ -96,10 +132,24 @@ export default function TeacherAttemptPage() {
 
                 setAttempt(found);
 
-                const parsedExam = await loadExam(found.examId);
+                const existingFeedback = await loadTeacherAttemptFeedback(found.id);
+                if (!cancelled) {
+                    const nextFeedback = existingFeedback || createAttemptFeedbackDraft(found);
+                    setFeedback(nextFeedback);
+                    setFeedbackSummary(nextFeedback.summary || "");
+                    setFeedbackPolicy(nextFeedback.downloadPolicy);
+                    const markupDrawings = await loadFeedbackMarkupDrawings(nextFeedback);
+                    if (!cancelled && markupDrawings) setTeacherMarkupDrawings(markupDrawings);
+                }
+
+                const parsedExam = await loadTeacherExam(found.examId);
                 if (parsedExam) {
                     setExam(parsedExam);
-                    storedDataUrlToFile("problem.pdf", parsedExam.pdfData, parsedExam.pdfDataRef)
+                    const pdfData = parsedExam.pdfDataRef?.store === "remote"
+                        ? await getTeacherRemoteAssetUrl(parsedExam.pdfDataRef)
+                            .then(result => result.status === "signed" ? result.signedUrl : undefined)
+                        : parsedExam.pdfData;
+                    storedDataUrlToFile("problem.pdf", pdfData, parsedExam.pdfDataRef)
                         .then(file => {
                             if (!cancelled && file) setPdfFile(file);
                         })
@@ -113,7 +163,15 @@ export default function TeacherAttemptPage() {
 
                 const drawingsRef = found.handwriting?.strokesRef || found.drawingsRef;
                 if (found.handwritingArchived && drawingsRef) {
-                    loadJsonRecord<PdfDrawings>(drawingsRef)
+                    const drawingsPromise = drawingsRef.store === "remote"
+                        ? getTeacherRemoteAssetUrl(drawingsRef).then(async result => {
+                            if (result.status !== "signed") return null;
+                            const response = await fetch(result.signedUrl, { cache: "no-store" });
+                            if (!response.ok) return null;
+                            return response.json() as Promise<PdfDrawings>;
+                        })
+                        : loadJsonRecord<PdfDrawings>(drawingsRef);
+                    drawingsPromise
                         .then(restored => {
                             if (cancelled) return;
                             if (restored) setDrawings(restored);
@@ -168,6 +226,60 @@ export default function TeacherAttemptPage() {
             recommendations,
         };
     }, [attempt, exam]);
+
+    const mergedReviewDrawings = useMemo(
+        () => mergePdfDrawings(drawings, teacherMarkupDrawings),
+        [drawings, teacherMarkupDrawings],
+    );
+
+    const handleTeacherMarkupChange = (page: number, newPaths: string[]) => {
+        setTeacherMarkupDrawings(prev => ({ ...prev, [page]: newPaths }));
+    };
+
+    const updateFeedbackPolicy = (patch: Partial<FeedbackDownloadPolicy>) => {
+        setFeedbackPolicy(prev => ({ ...prev, ...patch }));
+    };
+
+    const saveFeedback = async (returnAfterSave = false) => {
+        if (!attempt || !feedbackEnabled) return;
+        setFeedbackSaving(true);
+        setFeedbackNotice("");
+        const base = feedback || createAttemptFeedbackDraft(attempt);
+        const nextFeedback: AttemptFeedback = {
+            ...base,
+            summary: feedbackSummary.trim() || undefined,
+            downloadPolicy: feedbackPolicy,
+        };
+
+        try {
+            const saveResult = await saveTeacherAttemptFeedbackDraft(nextFeedback, teacherMarkupDrawings);
+            if (!saveResult.localSaved && !saveResult.remoteSaved) {
+                setFeedbackNotice(saveResult.remoteError || "피드백을 저장하지 못했습니다.");
+                return;
+            }
+
+            let latest = await loadTeacherAttemptFeedback(attempt.id);
+            if (returnAfterSave && latest) {
+                const returnResult = await returnTeacherAttemptFeedback(latest.id);
+                if (!returnResult.localSaved && !returnResult.remoteSaved) {
+                    setFeedbackNotice(returnResult.remoteError || "초안은 저장됐지만 학생에게 반환하지 못했습니다.");
+                    return;
+                }
+                latest = await loadTeacherAttemptFeedback(attempt.id);
+            }
+
+            if (latest) {
+                setFeedback(latest);
+                setFeedbackSummary(latest.summary || "");
+                setFeedbackPolicy(latest.downloadPolicy);
+            }
+            setFeedbackNotice(returnAfterSave ? "학생에게 피드백을 반환했습니다." : "피드백 초안을 저장했습니다.");
+        } catch {
+            setFeedbackNotice("피드백 저장 중 오류가 발생했습니다.");
+        } finally {
+            setFeedbackSaving(false);
+        }
+    };
 
     if (accessDenied) {
         return (
@@ -236,6 +348,15 @@ export default function TeacherAttemptPage() {
     const visibleSubQuestionRows = subQuestionFilter === 'needs_review'
         ? answeredSubQuestionRows.filter(row => row.answer?.reviewStatus !== 'reviewed')
         : subQuestionRows;
+    const hasTeacherMarkup = hasDrawings(teacherMarkupDrawings);
+    const activeReviewDrawings = feedbackViewMode === "student"
+        ? drawings
+        : feedbackViewMode === "markup"
+            ? teacherMarkupDrawings
+            : mergedReviewDrawings;
+    const canEditFeedbackMarkup = feedbackEnabled && feedbackViewMode === "markup";
+    const canShowReviewPdf = !!pdfFile && (canEditFeedbackMarkup || canShowDrawings || hasTeacherMarkup);
+    const feedbackReturned = feedback?.status === "returned";
 
     const setSubQuestionReviewed = async (questionId: number, subQuestionId: string, reviewed: boolean) => {
         const currentAnswer = attempt.subQuestionAnswers?.[questionId]?.[subQuestionId];
@@ -258,11 +379,12 @@ export default function TeacherAttemptPage() {
             },
         };
         try {
-            const result = await saveAttempt(next);
-            const feedback = summarizePersistenceWrite(result, { target: '심화 응답 검토 상태', action: '저장' });
-            if (!feedback.ok) throw new Error(feedback.detail);
+            const result = await saveTeacherAttempt(next);
+            if (!result.localSaved && !result.remoteSaved) {
+                throw new Error(result.remoteError || '심화 응답 검토 상태를 저장하지 못했습니다.');
+            }
             setAttempt(next);
-            if (feedback.level === 'info') toast.info(feedback.title, feedback.detail);
+            if (!result.remoteSaved) toast.info('로컬 저장됨', '개발 모드에서 이 기기에 검토 상태를 저장했습니다.');
         } catch {
             toast.error('검토 상태 저장 실패', '네트워크 상태를 확인하고 다시 시도해 주세요.');
         } finally {
@@ -275,17 +397,14 @@ export default function TeacherAttemptPage() {
         const teacherName = readTeacherSession()?.displayName;
         setSavingAnswerFor(questionId);
         // Merge the reply onto the freshest server row, not the local-first cache
-        // this page loaded. saveAttempt writes the full payload last-writer-wins,
+        // this page loaded. The canonical mutation writes the full payload last-writer-wins,
         // so replying against a stale snapshot would silently drop any question the
         // student asked after this device cached the attempt.
         const nowIso = new Date().toISOString();
         let base = attempt;
         try {
-            // Scope the fresh fetch to this teacher's workspace (F4) so a reply is
-            // never merged onto a row belonging to another workspace.
-            const fresh = await fetchRemoteAttempt(attempt.id, {
-                organizationId: readActiveWorkspaceContext().organizationId,
-            });
+            // The server gateway scopes this fresh fetch to the signed-in teacher's workspace.
+            const fresh = await loadTeacherAttemptRecord(attempt.id);
             if (fresh) base = fresh;
         } catch {
             // Offline or Supabase unavailable — fall back to the cached attempt.
@@ -315,8 +434,10 @@ export default function TeacherAttemptPage() {
             return;
         }
         try {
-            const result = await saveAttempt(updated);
-            if (!result.localSaved) throw new Error("local save failed");
+            const result = await saveTeacherAttempt(updated);
+            if (!result.localSaved && !result.remoteSaved) {
+                throw new Error(result.remoteError || "attempt save failed");
+            }
             setAttempt(updated);
             setAnswerDrafts(prev => ({ ...prev, [questionId]: "" }));
             if (result.remoteSaved) {
@@ -810,6 +931,134 @@ export default function TeacherAttemptPage() {
                                 </Link>
                             )}
                         </div>
+
+                        <div className="bento-card" style={{ padding: '1.25rem' }}>
+                            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '0.75rem', marginBottom: '0.75rem' }}>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: '0.45rem', fontWeight: 900 }}>
+                                    <Send size={17} />
+                                    교사 피드백
+                                </div>
+                                <span style={{
+                                    fontSize: '0.72rem',
+                                    fontWeight: 800,
+                                    color: feedbackReturned ? '#0f766e' : feedbackEnabled ? '#4f46e5' : '#92400e',
+                                    background: feedbackReturned ? '#ccfbf1' : feedbackEnabled ? '#eef2ff' : '#fef3c7',
+                                    borderRadius: '999px',
+                                    padding: '0.25rem 0.55rem'
+                                }}>
+                                    {feedbackReturned ? '반환됨' : feedbackEnabled ? '초안' : 'Pro'}
+                                </span>
+                            </div>
+
+                            {!feedbackEnabled ? (
+                                <div style={{ display: 'grid', gap: '0.75rem' }}>
+                                    <p style={{ color: '#64748b', fontSize: '0.86rem', lineHeight: 1.5 }}>
+                                        교사 첨삭, 학생 반환, 열람 확인은 Pro 이상에서 사용할 수 있습니다.
+                                    </p>
+                                    <Link href="/teacher/billing" className="btn btn-primary" style={{ fontSize: '0.85rem', justifyContent: 'center' }}>
+                                        플랜 보기
+                                    </Link>
+                                </div>
+                            ) : (
+                                <div style={{ display: 'grid', gap: '0.75rem' }}>
+                                    <label style={{ display: 'grid', gap: '0.35rem', fontSize: '0.78rem', fontWeight: 800, color: '#475569' }}>
+                                        전체 피드백
+                                        <textarea
+                                            value={feedbackSummary}
+                                            onChange={(event) => setFeedbackSummary(event.target.value)}
+                                            placeholder="학생에게 전달할 핵심 피드백을 적어주세요."
+                                            rows={4}
+                                            style={{
+                                                width: '100%',
+                                                resize: 'vertical',
+                                                border: '1px solid #cbd5e1',
+                                                borderRadius: 8,
+                                                padding: '0.65rem',
+                                                font: 'inherit',
+                                                color: '#0f172a',
+                                                background: 'white',
+                                            }}
+                                        />
+                                    </label>
+
+                                    <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', color: '#475569', fontSize: '0.82rem', fontWeight: 800 }}>
+                                        <input
+                                            type="checkbox"
+                                            checked={feedbackPolicy.allowStudentDownload}
+                                            onChange={(event) => updateFeedbackPolicy({ allowStudentDownload: event.target.checked })}
+                                        />
+                                        학생 다운로드 허용
+                                    </label>
+
+                                    <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', color: '#475569', fontSize: '0.82rem', fontWeight: 800 }}>
+                                        <input
+                                            type="checkbox"
+                                            checked={feedbackPolicy.allowAnnotatedPdfDownload}
+                                            onChange={(event) => updateFeedbackPolicy({ allowAnnotatedPdfDownload: event.target.checked })}
+                                        />
+                                        첨삭/필기 파일 다운로드 허용
+                                    </label>
+
+                                    <label style={{ display: 'grid', gap: '0.35rem', fontSize: '0.78rem', fontWeight: 800, color: '#475569' }}>
+                                        다운로드 만료일
+                                        <input
+                                            type="datetime-local"
+                                            value={dateTimeLocalValue(feedbackPolicy.expiresAt)}
+                                            onChange={(event) => updateFeedbackPolicy({ expiresAt: dateTimeLocalToIso(event.target.value) })}
+                                            style={{
+                                                width: '100%',
+                                                border: '1px solid #cbd5e1',
+                                                borderRadius: 8,
+                                                padding: '0.55rem',
+                                                font: 'inherit',
+                                            }}
+                                        />
+                                    </label>
+
+                                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.5rem' }}>
+                                        <button
+                                            type="button"
+                                            className="btn btn-secondary"
+                                            disabled={feedbackSaving}
+                                            onClick={() => void saveFeedback(false)}
+                                            style={{ fontSize: '0.82rem', justifyContent: 'center' }}
+                                        >
+                                            초안 저장
+                                        </button>
+                                        <button
+                                            type="button"
+                                            className="btn btn-primary"
+                                            disabled={feedbackSaving}
+                                            onClick={() => void saveFeedback(true)}
+                                            style={{ fontSize: '0.82rem', justifyContent: 'center' }}
+                                        >
+                                            학생에게 반환
+                                        </button>
+                                    </div>
+
+                                    {feedbackNotice && (
+                                        <div style={{
+                                            padding: '0.65rem',
+                                            borderRadius: 8,
+                                            background: '#f8fafc',
+                                            border: '1px solid #e2e8f0',
+                                            color: '#334155',
+                                            fontSize: '0.78rem',
+                                            fontWeight: 800,
+                                        }}>
+                                            {feedbackNotice}
+                                        </div>
+                                    )}
+
+                                    <div style={{ display: 'grid', gap: '0.35rem', fontSize: '0.78rem', color: '#475569', borderTop: '1px solid #e2e8f0', paddingTop: '0.75rem' }}>
+                                        <div>알림: <strong>{feedback?.delivery.notificationStatus === 'queued' ? '대기' : feedback?.delivery.notificationStatus === 'sent' ? '노출됨' : '-'}</strong></div>
+                                        <div>최초 열람: <strong>{formatFeedbackDate(feedback?.delivery.firstOpenedAt)}</strong></div>
+                                        <div>마지막 열람: <strong>{formatFeedbackDate(feedback?.delivery.lastOpenedAt)}</strong></div>
+                                        <div>열람 횟수: <strong>{feedback?.delivery.openCount ?? 0}</strong></div>
+                                    </div>
+                                </div>
+                            )}
+                        </div>
                     </aside>
 
                     <section className="bento-card teacher-attempt-detail" style={{ padding: 0, overflow: 'hidden', minHeight: 760 }}>
@@ -827,18 +1076,46 @@ export default function TeacherAttemptPage() {
                                     제출 시점의 PDF 필기 레이어를 읽기 전용으로 표시합니다.
                                 </p>
                             </div>
-                            <span style={{ fontSize: '0.75rem', fontWeight: 800, color: '#475569', background: '#f1f5f9', borderRadius: 'var(--radius-full)', padding: '0.25rem 0.65rem' }}>
-                                교사용
-                            </span>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+                                {([
+                                    ["student", "학생 필기"],
+                                    ["markup", "교사 첨삭"],
+                                    ["combined", "합쳐 보기"],
+                                ] as const).map(([mode, label]) => (
+                                    <button
+                                        key={mode}
+                                        type="button"
+                                        onClick={() => setFeedbackViewMode(mode)}
+                                        aria-pressed={feedbackViewMode === mode}
+                                        style={{
+                                            border: '1px solid var(--border)',
+                                            borderRadius: 'var(--radius-full)',
+                                            padding: '0.32rem 0.7rem',
+                                            fontSize: '0.76rem',
+                                            fontWeight: 900,
+                                            cursor: 'pointer',
+                                            color: feedbackViewMode === mode ? 'white' : 'var(--muted)',
+                                            background: feedbackViewMode === mode ? 'var(--primary)' : 'var(--surface)',
+                                        }}
+                                    >
+                                        {label}
+                                    </button>
+                                ))}
+                                <span style={{ fontSize: '0.75rem', fontWeight: 800, color: 'var(--muted)', background: 'var(--background)', borderRadius: 'var(--radius-full)', padding: '0.25rem 0.65rem' }}>
+                                    교사용
+                                </span>
+                            </div>
                         </div>
 
                         <div style={{ height: 720, background: '#525659' }}>
-                            {canShowDrawings && pdfFile ? (
+                            {canShowReviewPdf ? (
                                 <PDFViewer
                                     file={pdfFile}
                                     onLoadSuccess={() => { }}
-                                    readOnlyDrawings
-                                    drawings={drawings}
+                                    enableDrawing={canEditFeedbackMarkup}
+                                    readOnlyDrawings={!canEditFeedbackMarkup}
+                                    drawings={activeReviewDrawings}
+                                    onDrawingsChange={canEditFeedbackMarkup ? handleTeacherMarkupChange : undefined}
                                 />
                             ) : (
                                 <div style={{

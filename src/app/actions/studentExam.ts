@@ -99,16 +99,21 @@ async function examOwnerPremium(
     return pending;
 }
 
-async function resolveCtx(): Promise<ResolvedCtx | { status: "unauthenticated" | "degraded_local" }> {
+async function resolveCtx(): Promise<ResolvedCtx | { status: "unauthenticated" | "degraded_local" | "error" }> {
+    const config = getSupabaseServerConfigFromEnv();
+    // Development/offline builds may legitimately run from device-local data
+    // without a server cookie. Production must never silently downgrade the
+    // canonical grading boundary when its database gateway is missing.
+    if (!config) {
+        return { status: process.env.NODE_ENV === "production" ? "error" : "degraded_local" };
+    }
     const cookieStore = await cookies();
     const identity = parseSignedStudentSessionCookie(cookieStore.get(STUDENT_SERVER_SESSION_COOKIE)?.value);
     if (!identity) return { status: "unauthenticated" };
-    const config = getSupabaseServerConfigFromEnv();
-    if (!config) return { status: "degraded_local" };
     return { identity, admin: createSupabaseAdminClient(config) as unknown as AdminClient };
 }
 
-function isCtx(value: ResolvedCtx | { status: "unauthenticated" | "degraded_local" }): value is ResolvedCtx {
+function isCtx(value: ResolvedCtx | { status: "unauthenticated" | "degraded_local" | "error" }): value is ResolvedCtx {
     return "identity" in value;
 }
 

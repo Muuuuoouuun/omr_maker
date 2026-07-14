@@ -1,7 +1,7 @@
 import { test, expect, type Page } from "@playwright/test";
 import { readFileSync } from "node:fs";
 import path from "node:path";
-import { resetBrowserState } from "./helpers";
+import { continueSolveEntryIfPresent, resetBrowserState } from "./helpers";
 
 const EXAM_ID = "e2e-drawing-toolbar-exam";
 const GROUP_ID = "e2e-drawing-group";
@@ -76,6 +76,7 @@ test.describe("PDF drawing toolbar + eraser 부분/획 toggle", () => {
         await resetBrowserState(page, context);
         await seedExamWithPdf(page, pdfDataUrl());
         await page.goto(`/solve/${EXAM_ID}`);
+        await continueSolveEntryIfPresent(page);
         // The drawing toolbar (incl. eraser) appears as soon as pdfFile is set
         // (before the PDF paints), so the eraser button is visible right away.
         await expect(page.getByLabel("지우개")).toBeVisible({ timeout: 20000 });

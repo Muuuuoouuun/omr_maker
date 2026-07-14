@@ -10,9 +10,10 @@ describe("premium mutation authorization order", () => {
     it("authorizes outgoing subquestions before any exam persistence", () => {
         const createPage = source("src/app/create/page.tsx");
         const entitlement = createPage.indexOf("await authorizeAdvancedQuestionDesign()");
-        const save = createPage.indexOf("await saveExam(examData)");
+        const save = createPage.indexOf("await saveTeacherCanonicalExam(examData)");
         expect(entitlement).toBeGreaterThan(-1);
         expect(save).toBeGreaterThan(entitlement);
+        expect(createPage).toContain('from "@/app/actions/teacherExam"');
     });
 
     it("checks every outgoing edit that retains paid subquestions", () => {
@@ -32,4 +33,3 @@ describe("premium mutation authorization order", () => {
         expect(aiAction.lastIndexOf("catch (error: unknown)")).toBeLessThan(release);
     });
 });
-

@@ -13,41 +13,29 @@ import TeacherLogoutButton from "@/components/TeacherLogoutButton";
 import NotificationBell from "@/components/NotificationBell";
 import TeacherSessionChip from "@/components/TeacherSessionChip";
 import GlobalSearch from "@/components/GlobalSearch";
+import { AnalyticsTabSkeleton, DashboardPageSkeleton } from "@/components/dashboard/DashboardLoadingSkeleton";
 
 // Analytics tabs statically import recharts + thousands of lines of analytics code
-// but only render when their tab is active. Defer them so the default Overview tab
-// paints without pulling those modules into the initial route bundle. ssr:false keeps
-// them client-only (they read localStorage-derived props); the skeleton covers the
-// brief load when a deep link opens straight into ?tab=exam / ?tab=student.
-function TabSkeleton() {
-    return (
-        <div
-            aria-hidden
-            style={{
-                minHeight: 480,
-                borderRadius: 'var(--radius-lg)',
-                border: '1px solid var(--border)',
-                background: 'var(--surface)',
-            }}
-            className="animate-pulse"
-        />
-    );
-}
+// but only render when their tab is active. Defer them so the default overview paints
+// without pulling those modules into the initial route bundle.
 const ExamAnalyticsTab = dynamic(() => import("@/components/dashboard/tabs/ExamAnalyticsTab"), {
     ssr: false,
-    loading: () => <TabSkeleton />,
+    loading: () => <AnalyticsTabSkeleton />,
 });
 const StudentAnalyticsTab = dynamic(() => import("@/components/dashboard/tabs/StudentAnalyticsTab"), {
     ssr: false,
-    loading: () => <TabSkeleton />,
+    loading: () => <AnalyticsTabSkeleton />,
 });
 import { toast } from "@/components/Toast";
 import { createDashboardRevalidationGate, isTeacherDashboardStorageKey } from "@/components/dashboard/dashboardRevalidation";
 import { buildDemoDashboardData, shouldUseDemoData } from "@/lib/demoData";
 import { buildQuestionResultRepairPlan } from "@/lib/analyticsDataRepair";
-import { loadAttempts, loadExams, saveAttempt } from "@/lib/omrPersistence";
+import { readLocalAttempts, readLocalExams } from "@/lib/omrPersistence";
+import { loadTeacherAttempts, saveTeacherAttempt } from "@/lib/teacherAttemptClient";
+import { loadTeacherExams } from "@/lib/teacherExamClient";
 import { summarizeAnalyticsDataHealth, summarizePersistenceHealth, type PersistenceHealth } from "@/lib/persistenceHealth";
-import { loadRosterSnapshot } from "@/lib/rosterPersistence";
+import { readLocalRosterSnapshot } from "@/lib/rosterPersistence";
+import { loadTeacherRosterSnapshot } from "@/lib/teacherRosterClient";
 import type { RosterGroup, RosterStudent } from "@/lib/rosterStorage";
 import { buildTeacherDashboardMetrics } from "@/lib/teacherDashboardMetrics";
 import { useServerPlan } from "@/lib/useServerPlan";
@@ -66,6 +54,13 @@ type DashboardLoadOptions = {
     notifyOnSuccess?: boolean;
     notifyOnError?: boolean;
 };
+type DashboardSnapshot = {
+    exams: Exam[];
+    attempts: Attempt[];
+    rosterStudents: RosterStudent[];
+    rosterGroups: RosterGroup[];
+    allowDemoData?: boolean;
+};
 
 function normalizeDashboardTab(value: string | null): TabType {
     return value === "exam" || value === "student" || value === "overview" ? value : "overview";
@@ -75,7 +70,7 @@ function normalizeDashboardTab(value: string | null): TabType {
 // (required by Next 16 to avoid deopting the whole page to client-only rendering).
 export default function TeacherDashboardPage() {
     return (
-        <Suspense fallback={<div style={{ minHeight: '100vh' }} />}>
+        <Suspense fallback={<DashboardPageSkeleton />}>
             <TeacherDashboard />
         </Suspense>
     );
@@ -122,30 +117,19 @@ function TeacherDashboard() {
         [attempts, dataMode, exams],
     );
 
-    const loadDashboardData = useCallback(async (options: DashboardLoadOptions = {}) => {
-        const [examResult, attemptResult, rosterResult] = await Promise.all([
-            loadExams(),
-            loadAttempts(),
-            loadRosterSnapshot(localStorage),
-        ]);
-        if (options.isCancelled?.()) return;
+    const applyDashboardSnapshot = useCallback((snapshot: DashboardSnapshot) => {
+        const loadedExams = [...snapshot.exams];
+        const loadedAttempts = [...snapshot.attempts];
+        const loadedRosterStudents = [...snapshot.rosterStudents];
+        const loadedRosterGroups = [...snapshot.rosterGroups];
 
-        const loadedExams = [...examResult.items];
-        const loadedAttempts = [...attemptResult.items];
-        const loadedRosterStudents = [...rosterResult.students];
-        const loadedRosterGroups = [...rosterResult.groups];
-        const nextSyncStatus = summarizePersistenceHealth([examResult, attemptResult, rosterResult]);
-        setSyncStatus(nextSyncStatus);
-        if (nextSyncStatus.kind === "error" && options.notifyOnError !== false) {
-            toast.info(
-                "로컬 데이터 기준으로 표시 중",
-                "Supabase 동기화가 일부 지연되고 있어 시험·제출·명단은 다음 로드 때 다시 재시도합니다."
-            );
-        }
-
-        // Seed demo data only when the DB is completely empty AND only in development.
-        // Prevents the "[예시]" mock exams from appearing in production.
-        const shouldSeedDemo = shouldUseDemoData() && loadedExams.length === 0 && loadedAttempts.length === 0;
+        // Demo data is only considered after the background refresh confirms that
+        // both local and remote stores are empty. This avoids flashing examples over
+        // a real remote workspace while its network request is still in flight.
+        const shouldSeedDemo = snapshot.allowDemoData === true
+            && shouldUseDemoData()
+            && loadedExams.length === 0
+            && loadedAttempts.length === 0;
         if (shouldSeedDemo) {
             const demo = buildDemoDashboardData();
             loadedExams.push(...demo.exams);
@@ -153,7 +137,6 @@ function TeacherDashboard() {
         }
         setDataMode(shouldSeedDemo ? "demo" : "real");
 
-        // Sort exams by date
         loadedExams.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
         setExams(loadedExams);
         setAttempts(loadedAttempts);
@@ -163,32 +146,68 @@ function TeacherDashboard() {
         const metrics = buildTeacherDashboardMetrics(loadedExams, loadedAttempts, {
             rosterStudents: shouldSeedDemo ? undefined : loadedRosterStudents,
         });
-
         setStats({
             totalStudents: metrics.totalStudents,
             avgScore: metrics.avgScore,
-            activeExams: metrics.activeExams
+            activeExams: metrics.activeExams,
         });
+        setTrendData(metrics.trendData.length === 0 && shouldSeedDemo
+            ? [65, 78, 72, 85, 82, 90, metrics.avgScore || 80]
+            : metrics.trendData);
+        setTrendLabels(metrics.trendData.length === 0 && shouldSeedDemo ? [] : metrics.trendLabels);
+    }, []);
 
-        if (metrics.trendData.length === 0 && shouldSeedDemo) {
-            // Development-only fallback keeps the chart visually useful on a blank local workspace.
-            setTrendData([65, 78, 72, 85, 82, 90, metrics.avgScore || 80]);
-            setTrendLabels([]);
-        } else {
-            setTrendData(metrics.trendData);
-            setTrendLabels(metrics.trendLabels);
+    const loadDashboardData = useCallback(async (options: DashboardLoadOptions = {}) => {
+        const [examResult, attemptResult, rosterResult] = await Promise.all([
+            loadTeacherExams(),
+            loadTeacherAttempts(),
+            loadTeacherRosterSnapshot(localStorage),
+        ]);
+        if (options.isCancelled?.()) return;
+
+        const nextSyncStatus = summarizePersistenceHealth([examResult, attemptResult, rosterResult]);
+        setSyncStatus(nextSyncStatus);
+        if (nextSyncStatus.kind === "error" && options.notifyOnError !== false) {
+            toast.info(
+                "로컬 데이터 기준으로 표시 중",
+                "Supabase 동기화가 일부 지연되고 있어 시험·제출·명단은 다음 로드 때 다시 재시도합니다."
+            );
         }
+
+        applyDashboardSnapshot({
+            exams: examResult.items,
+            attempts: attemptResult.items,
+            rosterStudents: rosterResult.students,
+            rosterGroups: rosterResult.groups,
+            allowDemoData: true,
+        });
 
         if (options.notifyOnSuccess && nextSyncStatus.kind !== "error") {
             toast.success("동기화 확인 완료", nextSyncStatus.detail);
         }
-    }, []);
+    }, [applyDashboardSnapshot]);
 
     useEffect(() => {
         let cancelled = false;
-        void loadDashboardData({ isCancelled: () => cancelled });
-        return () => { cancelled = true; };
-    }, [loadDashboardData]);
+
+        // Render the last local snapshot synchronously on mount so the dashboard is
+        // useful without waiting for Supabase reconciliation. The existing loader
+        // then refreshes and replaces it with the merged source of truth.
+        const localRoster = readLocalRosterSnapshot(localStorage);
+        applyDashboardSnapshot({
+            exams: readLocalExams(),
+            attempts: readLocalAttempts(),
+            rosterStudents: localRoster.students,
+            rosterGroups: localRoster.groups,
+        });
+        const refreshTimer = window.setTimeout(() => {
+            void loadDashboardData({ isCancelled: () => cancelled });
+        }, 0);
+        return () => {
+            cancelled = true;
+            window.clearTimeout(refreshTimer);
+        };
+    }, [applyDashboardSnapshot, loadDashboardData]);
 
     // Cross-tab / refocus revalidation: another tab submitting an attempt, saving
     // an exam, or editing the roster fires a "storage" event here; returning to a
@@ -282,7 +301,7 @@ function TeacherDashboard() {
             const repairedAttempts: Attempt[] = [];
             let failedCount = 0;
             for (const item of questionResultRepairPlan.items) {
-                const result = await saveAttempt(item.repairedAttempt);
+                const result = await saveTeacherAttempt(item.repairedAttempt);
                 if (result.localSaved || result.remoteSaved) {
                     repairedAttempts.push(item.repairedAttempt);
                 } else {
@@ -499,7 +518,7 @@ function TeacherDashboard() {
                             padding: '4px 10px', borderRadius: 'var(--radius-full)',
                             border: '1px solid rgba(99, 102, 241, 0.2)'
                         }}>
-                            TEACHER
+                            교사
                         </span>
                     </div>
                     <div className="teacher-header-actions" style={{ display: 'flex', alignItems: 'center', gap: '0.65rem' }}>
@@ -547,7 +566,7 @@ function TeacherDashboard() {
                             minHeight: '2.75rem',
                         }} className="nav-link-live" aria-label="실시간 모니터링">
                             <Activity size={14} />
-                            <span>Live</span>
+                            <span>실시간</span>
                         </Link>
                         <TeacherSessionChip />
                         <NotificationBell />
@@ -558,18 +577,18 @@ function TeacherDashboard() {
             </header>
             <GlobalSearch />
 
-            <main className="container animate-fade-in" style={{ paddingBottom: '4rem' }}>
+            <main className="container dashboard-main animate-fade-in">
                 {/* Welcome Section */}
-                <div style={{ margin: '3rem 0', display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end', gap: '1rem', flexWrap: 'wrap' }}>
+                <div className="dashboard-welcome">
                     <div style={{ minWidth: 0 }}>
                         <h1 style={{ fontSize: '2.5rem', marginBottom: '0.75rem', lineHeight: 1.2, fontWeight: 800, letterSpacing: '-0.02em', color: 'var(--foreground)' }}>
                             분석 센터
                         </h1>
                         <p className="text-muted" style={{ fontSize: '1.1rem' }}>
-                            방대한 리포트와 시험 통계를 한 번에 관리하세요.
+                            시험 현황과 학생 성취도를 한눈에 확인하고 다음 조치를 시작하세요.
                         </p>
                     </div>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+                    <div className="dashboard-welcome-status">
                         <div
                             aria-label="데이터 동기화 상태"
                             title={syncStatus.error || syncStatus.detail}
@@ -601,8 +620,8 @@ function TeacherDashboard() {
                                 aria-label="동기화 다시 확인"
                                 title="로컬과 Supabase 데이터를 다시 확인합니다"
                                 style={{
-                                    width: 28,
-                                    height: 28,
+                                    width: 44,
+                                    height: 44,
                                     borderRadius: 'var(--radius-full)',
                                     border: `1px solid ${syncTone.border}`,
                                     background: 'var(--surface)',

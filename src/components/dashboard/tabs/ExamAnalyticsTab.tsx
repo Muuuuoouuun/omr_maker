@@ -48,7 +48,6 @@ import { buildKakaoNotificationCandidates, type KakaoNotificationCandidate, type
 import {
     buildKakaoCandidateMessagePreview,
     readKakaoCandidateReviews,
-    setKakaoCandidateReview,
     summarizeKakaoCandidateReviews,
     type KakaoCandidateReviewMap,
     type KakaoCandidateReviewStatus,
@@ -57,10 +56,11 @@ import {
     queueKakaoDispatchSimulation,
     readKakaoDispatchLogs,
     summarizeKakaoDispatchLogs,
-    syncKakaoCandidateReviewRecord,
+    saveKakaoCandidateReview,
     type KakaoDispatchLog,
     syncKakaoDispatchLog,
     updateKakaoDispatchLogStatus,
+    writeKakaoDispatchLogs,
 } from "@/lib/kakaoCandidateReviewPersistence";
 import { getKakaoProviderReadiness, type KakaoProviderReadinessStatus } from "@/lib/kakaoProvider";
 import { hasPlanEntitlement } from "@/utils/plans";
@@ -408,17 +408,12 @@ export default function ExamAnalyticsTab({
         return summarizeKakaoDispatchLogs(kakaoDispatchLogs, kakaoCandidateSummary.candidates.map(candidate => candidate.id));
     }, [kakaoCandidateSummary, kakaoDispatchLogs]);
 
-    const updateKakaoReviewStatus = (candidate: KakaoNotificationCandidate, status: KakaoCandidateReviewStatus) => {
+    const updateKakaoReviewStatus = async (candidate: KakaoNotificationCandidate, status: KakaoCandidateReviewStatus) => {
         if (!remindersEnabled) return;
         try {
-            const next = setKakaoCandidateReview(localStorage, candidate, status);
-            setKakaoReviews(next);
-            const record = next[candidate.id];
-            void syncKakaoCandidateReviewRecord(record, candidate).then(result => {
-                if (result.remoteError) {
-                    console.warn("Kakao candidate review remote sync failed", result.remoteError);
-                }
-            });
+            const result = await saveKakaoCandidateReview(localStorage, candidate, status);
+            if (!result.localSaved && result.remoteError) throw new Error(result.remoteError);
+            setKakaoReviews(result.reviews);
         } catch {
             setKakaoReviews(prev => prev);
         }
@@ -444,6 +439,7 @@ export default function ExamAnalyticsTab({
         if (!remindersEnabled || !kakaoProviderReadiness.canMarkOutcomes || !log) return;
         const record = kakaoReviews[candidate.id];
         if (!record) return;
+        const previousLogs = kakaoDispatchLogs;
         const result = updateKakaoDispatchLogStatus(localStorage, log.id, status, {
             providerMessageId: status === "sent" ? `simulation:${log.id}` : undefined,
             errorMessage: status === "failed" ? "provider 연동 전 수동 실패 기록" : undefined,
@@ -452,7 +448,8 @@ export default function ExamAnalyticsTab({
         setKakaoDispatchLogs(result.logs);
         void syncKakaoDispatchLog(result.log, record, candidate).then(syncResult => {
             if (syncResult.remoteError) {
-                console.warn("Kakao dispatch status remote sync failed", syncResult.remoteError);
+                writeKakaoDispatchLogs(localStorage, previousLogs);
+                setKakaoDispatchLogs(previousLogs);
             }
         });
     };

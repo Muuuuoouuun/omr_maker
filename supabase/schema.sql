@@ -323,6 +323,27 @@ create table if not exists public.omr_student_profiles (
     updated_at timestamptz not null default now()
 );
 
+create unique index if not exists omr_student_profiles_org_id_uidx
+    on public.omr_student_profiles (organization_id, id);
+
+create table if not exists public.omr_student_start_credentials (
+    organization_id text not null,
+    student_profile_id text not null,
+    start_code_hash text not null,
+    updated_at timestamptz not null default now(),
+    primary key (organization_id, student_profile_id),
+    foreign key (organization_id, student_profile_id)
+        references public.omr_student_profiles(organization_id, id)
+        on delete cascade
+);
+
+comment on table public.omr_student_start_credentials is
+    'Server-only PBKDF2 student start-code hashes. Access is restricted to service-role server actions.';
+
+alter table public.omr_student_start_credentials enable row level security;
+alter table public.omr_student_start_credentials force row level security;
+revoke all on public.omr_student_start_credentials from anon, authenticated;
+
 create table if not exists public.omr_classes (
     id text primary key,
     organization_id text references public.omr_organizations(id) on delete cascade,
@@ -339,6 +360,21 @@ create table if not exists public.omr_classes (
     created_at timestamptz not null default now(),
     updated_at timestamptz not null default now()
 );
+
+create table if not exists public.omr_roster_invites (
+    organization_id text not null references public.omr_organizations(id) on delete cascade,
+    id text not null,
+    email text not null,
+    sent_at text not null,
+    status text not null default 'pending'
+        check (status in ('pending', 'accepted', 'expired')),
+    updated_at timestamptz not null default now(),
+    primary key (organization_id, id)
+);
+
+alter table public.omr_roster_invites enable row level security;
+alter table public.omr_roster_invites force row level security;
+revoke all on public.omr_roster_invites from anon, authenticated;
 
 create table if not exists public.omr_class_teachers (
     class_id text not null references public.omr_classes(id) on delete cascade,
@@ -483,6 +519,7 @@ create table if not exists public.omr_assignment_targets (
 
 create table if not exists public.omr_attempts (
     id text primary key,
+    ticket_id text,
     organization_id text,
     class_id text,
     assignment_id text,
@@ -591,6 +628,73 @@ create table if not exists public.omr_assignment_submissions (
     updated_at timestamptz not null default now()
 );
 
+create table if not exists public.omr_attempt_feedback (
+    id text primary key,
+    organization_id text not null references public.omr_organizations(id) on delete cascade,
+    attempt_id text not null references public.omr_attempts(id) on delete cascade,
+    exam_id text not null references public.omr_exams(id) on delete cascade,
+    student_profile_id text references public.omr_student_profiles(id) on delete set null,
+    teacher_user_id text,
+    status text not null default 'draft'
+        check (status in ('draft', 'returned', 'archived')),
+    summary text,
+    question_comments jsonb not null default '[]'::jsonb,
+    markup jsonb,
+    markup_drawings jsonb,
+    download_policy jsonb not null default '{"allowStudentDownload":false,"allowAnnotatedPdfDownload":false,"watermarkStudentName":true}'::jsonb,
+    notification_status text not null default 'not_queued'
+        check (notification_status in ('not_queued', 'queued', 'sent', 'failed')),
+    notification_channel text not null default 'in_app'
+        check (notification_channel in ('in_app', 'kakao_candidate')),
+    notified_at timestamptz,
+    first_opened_at timestamptz,
+    last_opened_at timestamptz,
+    open_count integer not null default 0 check (open_count >= 0),
+    returned_at timestamptz,
+    payload jsonb not null,
+    created_at timestamptz not null default now(),
+    updated_at timestamptz not null default now(),
+    unique (attempt_id)
+);
+
+create or replace function public.omr_mark_feedback_opened(
+    target_feedback_id text,
+    opened_at timestamptz default now()
+)
+returns public.omr_attempt_feedback
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+    feedback_row public.omr_attempt_feedback;
+begin
+    update public.omr_attempt_feedback
+        set
+            notification_status = 'sent',
+            first_opened_at = coalesce(first_opened_at, opened_at),
+            last_opened_at = opened_at,
+            open_count = open_count + 1,
+            updated_at = opened_at,
+            payload = jsonb_set(
+                jsonb_set(coalesce(payload, '{}'::jsonb), '{updatedAt}', to_jsonb(opened_at), true),
+                '{delivery}',
+                coalesce(payload->'delivery', '{}'::jsonb) || jsonb_build_object(
+                    'notificationStatus', 'sent',
+                    'firstOpenedAt', coalesce(first_opened_at, opened_at),
+                    'lastOpenedAt', opened_at,
+                    'openCount', open_count + 1
+                ),
+                true
+            )
+        where id = target_feedback_id
+            and status = 'returned'
+        returning * into feedback_row;
+
+    return feedback_row;
+end;
+$$;
+
 create table if not exists public.omr_kakao_candidate_reviews (
     id text primary key,
     organization_id text references public.omr_organizations(id) on delete cascade,
@@ -685,6 +789,7 @@ alter table public.omr_exams
     add column if not exists created_by_user_id text;
 
 alter table public.omr_attempts
+    add column if not exists ticket_id text,
     add column if not exists organization_id text,
     add column if not exists class_id text,
     add column if not exists assignment_id text,
@@ -936,6 +1041,10 @@ create index if not exists omr_assignment_targets_assignment_idx
 create index if not exists omr_attempts_exam_id_idx
     on public.omr_attempts (exam_id);
 
+create unique index if not exists omr_attempts_ticket_id_unique_idx
+    on public.omr_attempts (ticket_id)
+    where ticket_id is not null;
+
 create index if not exists omr_attempts_organization_id_idx
     on public.omr_attempts (organization_id);
 
@@ -1029,6 +1138,15 @@ create index if not exists omr_assignment_submissions_assignment_idx
 create index if not exists omr_assignment_submissions_student_idx
     on public.omr_assignment_submissions (student_profile_id, submitted_at desc);
 
+create index if not exists omr_attempt_feedback_attempt_idx
+    on public.omr_attempt_feedback (attempt_id);
+
+create index if not exists omr_attempt_feedback_student_unread_idx
+    on public.omr_attempt_feedback (student_profile_id, status, first_opened_at, updated_at desc);
+
+create index if not exists omr_attempt_feedback_org_status_idx
+    on public.omr_attempt_feedback (organization_id, status, updated_at desc);
+
 create index if not exists omr_kakao_candidate_reviews_exam_status_idx
     on public.omr_kakao_candidate_reviews (exam_id, status, updated_at desc);
 
@@ -1075,6 +1193,7 @@ alter table public.omr_assignment_targets enable row level security;
 alter table public.omr_attempts enable row level security;
 alter table public.omr_question_results enable row level security;
 alter table public.omr_assignment_submissions enable row level security;
+alter table public.omr_attempt_feedback enable row level security;
 alter table public.omr_kakao_candidate_reviews enable row level security;
 alter table public.omr_kakao_dispatch_logs enable row level security;
 alter table public.omr_comments enable row level security;
@@ -1216,6 +1335,13 @@ create policy "OMR question results are publicly writable"
 drop policy if exists "OMR assignment submissions are publicly writable" on public.omr_assignment_submissions;
 create policy "OMR assignment submissions are publicly writable"
     on public.omr_assignment_submissions
+    for all
+    using (true)
+    with check (true);
+
+drop policy if exists "OMR attempt feedback is publicly writable" on public.omr_attempt_feedback;
+create policy "OMR attempt feedback is publicly writable"
+    on public.omr_attempt_feedback
     for all
     using (true)
     with check (true);

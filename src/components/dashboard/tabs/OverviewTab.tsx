@@ -2,17 +2,18 @@
 
 import { useState, useMemo, useEffect } from "react";
 import Link from "next/link";
+import dynamic from "next/dynamic";
 import { useRouter } from "next/navigation";
 import { Exam, Attempt } from "@/types/omr";
 import StatCard from "@/components/dashboard/StatCard";
-import TrendChart from "@/components/dashboard/TrendChart";
+import { TrendChartSkeleton } from "@/components/dashboard/DashboardLoadingSkeleton";
 import ExamListBlock from "@/components/dashboard/ExamListBlock";
 import ExamActionsMenu, { ExamActionKind } from "@/components/dashboard/ExamActionsMenu";
 import { toast } from "@/components/Toast";
-import { Users, BarChart3, PlusCircle, Activity, Download, MessageSquare } from "lucide-react";
+import { Users, BarChart3, PlusCircle, Activity, Bell, Download, MessageSquare } from "lucide-react";
 import { copyStoredData } from "@/utils/blobStore";
 import { secureRandomId } from "@/utils/ids";
-import { deleteExam, saveExam } from "@/lib/omrPersistence";
+import { deleteTeacherExamMutation, saveTeacherExamMutation } from "@/lib/teacherExamClient";
 import { collectStudentQuestionInbox } from "@/lib/studentQuestions";
 import { formatKoreanDate, formatKoreanDateTime } from "@/lib/pure";
 import { safeRatePercent } from "@/lib/scoreUtils";
@@ -21,12 +22,16 @@ import { buildDashboardStatsCsv, type DashboardExportQuestionStat } from "@/lib/
 import { buildAttemptScoreLookup } from "@/lib/attemptScores";
 import { buildExamQuestionResultStats, buildExamQuestionPointBiserial } from "@/lib/premiumAnalytics";
 import type { RosterGroup, RosterStudent } from "@/lib/rosterStorage";
-import { summarizePersistenceWrite } from "@/lib/persistenceFeedback";
 import {
     authorizeAdvancedQuestionDesign,
     authorizeExamCreation,
     releaseExamCreationAuthorization,
 } from "@/app/actions/premiumAccess";
+
+const TrendChart = dynamic(
+    () => import("@/components/dashboard/TrendChart"),
+    { loading: () => <TrendChartSkeleton height={160} /> },
+);
 
 interface OverviewTabProps {
     exams: Exam[];
@@ -157,18 +162,14 @@ export default function OverviewTab({ exams: examsProp, attempts, stats, trendDa
                     updatedAt: new Date().toISOString(),
                     archived: false,
                 };
-                const result = await saveExam(copy);
-                const feedback = summarizePersistenceWrite(result, {
-                    target: "시험",
-                    action: "복제",
-                    failureTitle: "복제 실패",
-                    failureDetail: "브라우저 저장소 용량 또는 Supabase 동기화 상태를 확인해주세요.",
-                });
-                if (!feedback.ok) throw new Error(feedback.detail);
+                const result = await saveTeacherExamMutation(copy);
+                if (!result.ok) throw new Error(result.error || "시험 서버에 저장하지 못했습니다.");
                 reserved = false;
                 setExams(prev => [copy, ...prev]);
                 toast.success('시험 복제됨', `"${target.title}"의 복사본을 만들었습니다.`);
-                if (feedback.level === "info") toast.info(feedback.title, feedback.detail);
+                if (result.localOnly) {
+                    toast.info('개발 모드 로컬 저장', '복사본을 이 기기에 저장했습니다.');
+                }
             } catch (error) {
                 if (reserved) await releaseExamCreationAuthorization(newId);
                 toast.error('복제 실패', error instanceof Error ? error.message : '저장 공간 또는 서버 플랜을 확인해주세요.');
@@ -180,18 +181,12 @@ export default function OverviewTab({ exams: examsProp, attempts, stats, trendDa
             const nextArchived = !target.archived;
             const updated: Exam = { ...target, archived: nextArchived, updatedAt: new Date().toISOString() };
             try {
-                const result = await saveExam(updated);
-                const feedback = summarizePersistenceWrite(result, {
-                    target: "시험",
-                    action: nextArchived ? "보관" : "보관 해제",
-                    failureTitle: "보관 처리 실패",
-                });
-                if (!feedback.ok) throw new Error(feedback.detail);
+                const result = await saveTeacherExamMutation(updated);
+                if (!result.ok) throw new Error(result.error);
                 setExams(prev => prev.map(e => e.id === examId ? updated : e));
                 toast.success(nextArchived ? '시험 보관됨' : '보관 해제됨', target.title);
-                if (feedback.level === "info") toast.info(feedback.title, feedback.detail);
-            } catch {
-                toast.error('보관 처리 실패');
+            } catch (error) {
+                toast.error('보관 처리 실패', error instanceof Error ? error.message : '시험 서버에 저장하지 못했습니다.');
             }
             return;
         }
@@ -207,18 +202,12 @@ export default function OverviewTab({ exams: examsProp, attempts, stats, trendDa
         const target = deleteTarget;
         setDeleteTarget(null);
         try {
-            const result = await deleteExam(target.id);
-            const feedback = summarizePersistenceWrite(result, {
-                target: "시험",
-                action: "삭제",
-                failureTitle: "삭제 실패",
-            });
-            if (!feedback.ok) throw new Error(feedback.detail);
+            const result = await deleteTeacherExamMutation(target.id);
+            if (!result.ok) throw new Error(result.error);
             setExams(prev => prev.filter(e => e.id !== target.id));
             toast.success('시험 삭제됨', target.title);
-            if (feedback.level === "info") toast.info(feedback.title, feedback.detail);
-        } catch {
-            toast.error('삭제 실패');
+        } catch (error) {
+            toast.error('삭제 실패', error instanceof Error ? error.message : '시험 서버에서 삭제하지 못했습니다.');
         }
     };
 
@@ -306,7 +295,7 @@ export default function OverviewTab({ exams: examsProp, attempts, stats, trendDa
 
     return (
         <div className="bento-grid fade-in-up">
-            {/* 1. Quick Actions (New Section from UI image) */}
+            {/* 1. 자주 쓰는 빠른 작업 */}
             <div className="bento-card col-span-2" style={{ padding: '1.5rem', display: 'flex', flexDirection: 'column' }}>
                 <div style={{ marginBottom: '1.5rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                     <h3 style={{ fontSize: '1.1rem', fontWeight: 700, color: 'var(--foreground)' }}>
@@ -511,15 +500,17 @@ export default function OverviewTab({ exams: examsProp, attempts, stats, trendDa
                             }}
                             className="card-hover"
                         >
-                            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"></path><path d="M13.73 21a2 2 0 0 1-3.46 0"></path></svg>
+                            <Bell size={16} />
                             미응시자 전체 알람 발송
                         </button>
                         )}
                     </div>
                 </div>
 
-                <div className="overview-exam-summary-scroll">
+                <p className="overview-table-hint" aria-hidden="true">↔ 시험명을 고정한 채 좌우로 밀어 세부 항목을 확인하세요.</p>
+                <div className="overview-exam-summary-scroll scroll-custom" role="region" aria-label="시험 요약 표, 좌우 스크롤 가능" tabIndex={0}>
                     <table className="overview-exam-summary-table">
+                        <caption className="sr-only">시험별 생성일, 참여율, 응시 인원, 재시험, 상태 및 작업</caption>
                         <colgroup>
                             <col style={{ width: '220px' }} />
                             <col style={{ width: '115px' }} />
@@ -532,14 +523,14 @@ export default function OverviewTab({ exams: examsProp, attempts, stats, trendDa
                         </colgroup>
                         <thead>
                             <tr style={{ color: 'var(--muted)', fontSize: '0.85rem', borderBottom: '1px solid var(--border)' }}>
-                                <th>Exam Title</th>
-                                <th>Created At</th>
-                                <th>Progress (Participation)</th>
-                                <th>Participants / Total</th>
-                                <th>Retakes</th>
-                                <th>Status</th>
-                                {activeTab === 'ongoing' && <th style={{ textAlign: 'right' }}>Action</th>}
-                                <th style={{ textAlign: 'right' }}>작업</th>
+                                <th scope="col">시험명</th>
+                                <th scope="col">생성일</th>
+                                <th scope="col">참여율</th>
+                                <th scope="col">응시 / 전체</th>
+                                <th scope="col">재시험</th>
+                                <th scope="col">상태</th>
+                                {activeTab === 'ongoing' && <th scope="col" style={{ textAlign: 'right' }}>알림</th>}
+                                <th scope="col" style={{ textAlign: 'right' }}>작업</th>
                             </tr>
                         </thead>
                         <tbody>
@@ -548,7 +539,7 @@ export default function OverviewTab({ exams: examsProp, attempts, stats, trendDa
 
                                 const targetColor = participationRate > 70 ? 'var(--success)' : (participationRate > 30 ? 'var(--warning)' : 'var(--error)');
                                 const isArchived = exam.archived;
-                                const statusText = isArchived ? 'Archived' : participationRate === 100 ? 'Completed' : 'In Progress';
+                                const statusText = isArchived ? '보관됨' : participationRate === 100 ? '완료' : '진행 중';
                                 const statusBg = isArchived ? 'rgba(100,116,139,0.12)' : participationRate === 100 ? 'rgba(16, 185, 129, 0.1)' : 'rgba(139, 92, 246, 0.1)';
                                 const statusColor = isArchived ? 'var(--muted)' : participationRate === 100 ? 'var(--success)' : 'var(--accent)';
 
@@ -634,7 +625,7 @@ export default function OverviewTab({ exams: examsProp, attempts, stats, trendDa
                                                         e.currentTarget.style.color = 'var(--foreground)';
                                                     }}
                                                 >
-                                                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="22" y1="2" x2="11" y2="13"></line><polygon points="22 2 15 22 11 13 2 9 22 2"></polygon></svg>
+                                                    <Bell size={14} />
                                                     독려 알람
                                                 </button>
                                             </td>
@@ -666,18 +657,18 @@ export default function OverviewTab({ exams: examsProp, attempts, stats, trendDa
             <div className="overview-stats-stack" style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem', gridColumn: 'span 1', height: '100%' }}>
                 <div style={{ flex: 1, display: 'flex', width: '100%', minHeight: 0 }}>
                     <StatCard
-                        title="Total Students"
+                        title="전체 학생"
                         value={stats.totalStudents}
                         icon={<Users size={28} color="var(--primary)" />}
                     />
                 </div>
                 <div style={{ flex: 1, display: 'flex', width: '100%', minHeight: 0 }}>
                     <StatCard
-                        title="Average Score"
+                        title="평균 점수"
                         value={stats.avgScore}
                         icon={<BarChart3 size={28} color="var(--success)" />}
                         color="var(--success)"
-                        trend={stats.avgScore > 80 ? 'Good' : 'Needs Focus'}
+                        trend={stats.avgScore > 80 ? '양호' : '점검 필요'}
                         trendUp={stats.avgScore > 80}
                     />
                 </div>

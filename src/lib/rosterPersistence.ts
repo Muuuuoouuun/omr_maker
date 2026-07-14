@@ -16,16 +16,10 @@ import {
     type RosterInvite,
     type RosterStudent,
 } from "@/lib/rosterStorage";
-import { getSupabaseConfigFromEnv, isSupabaseConfigured, type SupabaseConfig } from "@/lib/omrPersistence";
 import {
     DEFAULT_WORKSPACE_ORGANIZATION_ID,
     DEFAULT_WORKSPACE_ORGANIZATION_NAME,
-    readActiveWorkspaceContext,
-    workspaceBootstrapRows,
-    type WorkspaceContext,
 } from "@/lib/workspaceContext";
-
-type Env = Record<string, string | undefined>;
 
 export const DEFAULT_ROSTER_ORGANIZATION_ID = DEFAULT_WORKSPACE_ORGANIZATION_ID;
 export const ROSTER_TOMBSTONE_STORAGE_KEY = "omr_roster_tombstones";
@@ -36,7 +30,6 @@ export interface RosterSnapshot {
     groups: RosterGroup[];
     invites: RosterInvite[];
 }
-
 export interface RosterPersistenceResult {
     localSaved: boolean;
     remoteSaved: boolean;
@@ -90,20 +83,6 @@ export interface SupabaseRosterClassStudentRow {
     enrollment_status: "active" | "inactive" | "transferred" | "completed";
 }
 
-interface SupabaseQueryResult<T> {
-    data: T | null;
-    error: { message?: string } | null;
-}
-
-type SupabaseClientLike = {
-    from(table: string): {
-        select(columns?: string): {
-            eq(column: string, value: string): Promise<SupabaseQueryResult<unknown[]>>;
-        };
-        upsert(row: unknown): Promise<SupabaseQueryResult<unknown>>;
-    };
-};
-
 interface SupabaseRosterRows {
     organization: SupabaseOrganizationRow;
     classes: SupabaseRosterClassRow[];
@@ -115,46 +94,6 @@ export interface SupabaseRemoteRosterRows {
     classes: SupabaseRosterClassRow[];
     students: SupabaseRosterStudentProfileRow[];
     enrollments: SupabaseRosterClassStudentRow[];
-}
-
-let supabaseClientPromise: Promise<SupabaseClientLike | null> | null = null;
-
-function getSupabaseConfig(env: Env = process.env): SupabaseConfig | null {
-    return getSupabaseConfigFromEnv(env);
-}
-
-async function getSupabaseClient(): Promise<SupabaseClientLike | null> {
-    const config = getSupabaseConfig();
-    if (!config) return null;
-    if (supabaseClientPromise) return supabaseClientPromise;
-
-    supabaseClientPromise = import("@supabase/supabase-js")
-        .then((supabaseModule: unknown) => {
-            const { createClient } = supabaseModule as {
-                createClient: (url: string, key: string, options: unknown) => SupabaseClientLike;
-            };
-
-            return createClient(config.url, config.publishableKey, {
-                auth: {
-                    persistSession: false,
-                    autoRefreshToken: false,
-                },
-            });
-        })
-        .catch(error => {
-            console.warn("Supabase client unavailable for roster sync", error);
-            return null;
-        });
-
-    return supabaseClientPromise;
-}
-
-function errorMessage(error: unknown): string {
-    if (error instanceof Error) return error.message;
-    if (error && typeof error === "object" && "message" in error) {
-        return String((error as { message?: unknown }).message || "Unknown Supabase error");
-    }
-    return "Unknown Supabase error";
 }
 
 function clean(value: unknown): string {
@@ -172,9 +111,6 @@ function metadata(value: unknown): Record<string, unknown> {
         : {};
 }
 
-/** Deterministic JSON stringify (object keys sorted) so structurally-equal
- * values compare equal regardless of property insertion order — used to diff
- * a locally-built row against a previously-fetched remote row. */
 function stableStringify(value: unknown): string {
     if (Array.isArray(value)) return `[${value.map(stableStringify).join(",")}]`;
     if (value && typeof value === "object") {
@@ -186,90 +122,6 @@ function stableStringify(value: unknown): string {
 
 function deepEqualJson(a: unknown, b: unknown): boolean {
     return stableStringify(a) === stableStringify(b);
-}
-
-function omitUpdatedAt<T extends object>(row: T): Omit<T, "updated_at"> {
-    const rest = { ...row } as T & { updated_at?: unknown };
-    delete rest.updated_at;
-    return rest as Omit<T, "updated_at">;
-}
-
-/** True when `nextRow` carries no observable change over `remoteRow` (ignoring
- * `updated_at`, which is always refreshed to "now" and would otherwise make
- * every row look "changed" on every save). A missing `remoteRow` always counts
- * as changed (it's a new row). */
-function rosterRowUnchanged(
-    nextRow: object,
-    remoteRow: object | undefined,
-): boolean {
-    if (!remoteRow) return false;
-    return deepEqualJson(omitUpdatedAt(nextRow), omitUpdatedAt(remoteRow));
-}
-
-function preserveRemoteStudentMetadata(
-    nextRow: SupabaseRosterStudentProfileRow,
-    remoteRow: SupabaseRosterStudentProfileRow | undefined,
-): SupabaseRosterStudentProfileRow {
-    if (!remoteRow) return nextRow;
-    return {
-        ...nextRow,
-        metadata: {
-            ...metadata(remoteRow.metadata),
-            ...metadata(nextRow.metadata),
-        },
-    };
-}
-
-function activeRosterOrganizationId(): string {
-    return readActiveWorkspaceContext().organizationId;
-}
-
-function activeRosterOrganizationName(organizationId: string): string {
-    const context = readActiveWorkspaceContext();
-    return context.organizationId === organizationId
-        ? context.organizationName
-        : DEFAULT_ROSTER_ORGANIZATION_NAME;
-}
-
-function workspaceContextForRosterOrganization(organizationId: string): WorkspaceContext {
-    const context = readActiveWorkspaceContext();
-    if (context.organizationId === organizationId) return context;
-    return {
-        organizationId,
-        organizationName: DEFAULT_ROSTER_ORGANIZATION_NAME,
-    };
-}
-
-async function upsertRemoteWorkspaceBootstrap(
-    client: SupabaseClientLike,
-    context: WorkspaceContext,
-): Promise<void> {
-    const rows = workspaceBootstrapRows(context);
-    const organizationResult = await client.from("omr_organizations").upsert(rows.organization);
-    if (organizationResult.error) {
-        throw new Error(organizationResult.error.message || "Failed to bootstrap roster organization in Supabase");
-    }
-
-    if (rows.userProfile) {
-        const userResult = await client.from("omr_user_profiles").upsert(rows.userProfile);
-        if (userResult.error) {
-            throw new Error(userResult.error.message || "Failed to bootstrap roster user profile in Supabase");
-        }
-    }
-
-    if (rows.member) {
-        const memberResult = await client.from("omr_organization_members").upsert(rows.member);
-        if (memberResult.error) {
-            throw new Error(memberResult.error.message || "Failed to bootstrap roster organization member in Supabase");
-        }
-    }
-
-    if (rows.teacherProfile) {
-        const teacherResult = await client.from("omr_teacher_profiles").upsert(rows.teacherProfile);
-        if (teacherResult.error) {
-            throw new Error(teacherResult.error.message || "Failed to bootstrap roster teacher profile in Supabase");
-        }
-    }
 }
 
 function parseJson(value: string | null | undefined): unknown {
@@ -586,44 +438,10 @@ export function applyRosterTombstonesToSnapshot(
     return { ...snapshot, students, groups };
 }
 
-function mergeById<T extends { id: string }>(localItems: T[], remoteItems: T[]): T[] {
-    const items = new Map(remoteItems.map(item => [item.id, item]));
-    for (const item of localItems) items.set(item.id, item);
-    return Array.from(items.values());
-}
-
-function mergeRosterSnapshots(localSnapshot: RosterSnapshot, remoteSnapshot: RosterSnapshot): RosterSnapshot {
-    return {
-        students: mergeById(localSnapshot.students, remoteSnapshot.students),
-        groups: mergeById(localSnapshot.groups, remoteSnapshot.groups),
-        invites: localSnapshot.invites,
-    };
-}
-
 /**
- * mergeRosterSnapshots is local-wins-by-presence: any id still present in the
- * snapshot passed as `snapshot` survives, regardless of what remote says.
- * That is correct when this device intentionally edited a row, but it means a
- * row another device deleted (remote status "withdrawn"/"archived") gets
- * silently resurrected the moment this device's stale local cache is merged
- * back in — even without this device touching that row at all (e.g. just
- * opening the roster page, or saving an unrelated edit).
- *
- * This reconciles that: for every id this device's snapshot still carries
- * that remote now reports as withdrawn/archived, compare the row against
- * `previousSnapshot` (this device's own last-synced baseline, e.g. what
- * `loadRosterSnapshot`/`saveRosterSnapshot` last wrote to local storage):
- *   - Unchanged since last sync (no local edit) -> this is just a stale
- *     cached copy. Respect the remote deletion: drop it and adopt a local
- *     tombstone so this device stops re-offering it on every future save.
- *   - Changed since last sync (genuine edit-vs-delete race) -> keep the
- *     local edit. Silently discarding a teacher's edit is worse than
- *     resurrecting a row someone else just deleted; the teacher can delete
- *     it again if that was truly intended.
- *
- * For loadRosterSnapshot (no separate edit-intent input), callers pass the
- * same snapshot as both `snapshot` and `previousSnapshot` so every remotely
- * -withdrawn row is treated as unchanged and the deletion always wins.
+ * Reconcile an already-fetched remote snapshot without opening a browser database
+ * connection. The server roster gateway owns all network reads and writes; this pure
+ * helper remains useful for cache migration and conflict tests.
  */
 export function reconcileRemoteDeletions(
     snapshot: RosterSnapshot,
@@ -639,24 +457,20 @@ export function reconcileRemoteDeletions(
     const archivedGroupIds = new Set(
         remoteRows.classes.filter(row => row.status === "archived").map(row => row.id),
     );
-
     const droppedStudentIds = new Set<string>();
     const droppedGroupIds = new Set<string>();
 
     const students = snapshot.students.filter(student => {
         if (!withdrawnStudentIds.has(student.id)) return true;
         const priorLocal = previousStudentsById.get(student.id);
-        const editedSinceSync = !priorLocal || !deepEqualJson(priorLocal, student);
-        if (editedSinceSync) return true;
+        if (!priorLocal || !deepEqualJson(priorLocal, student)) return true;
         droppedStudentIds.add(student.id);
         return false;
     });
-
     const groups = snapshot.groups.filter(group => {
         if (!archivedGroupIds.has(group.id)) return true;
         const priorLocal = previousGroupsById.get(group.id);
-        const editedSinceSync = !priorLocal || !deepEqualJson(priorLocal, group);
-        if (editedSinceSync) return true;
+        if (!priorLocal || !deepEqualJson(priorLocal, group)) return true;
         droppedGroupIds.add(group.id);
         return false;
     });
@@ -670,117 +484,15 @@ export function reconcileRemoteDeletions(
         students: { ...tombstones.students },
         groups: { ...tombstones.groups },
     };
-    for (const id of droppedStudentIds) nextTombstones.students[id] = nextTombstones.students[id] || deletedAt;
-    for (const id of droppedGroupIds) nextTombstones.groups[id] = nextTombstones.groups[id] || deletedAt;
-
+    for (const id of droppedStudentIds) nextTombstones.students[id] ||= deletedAt;
+    for (const id of droppedGroupIds) nextTombstones.groups[id] ||= deletedAt;
     return { snapshot: { ...snapshot, students, groups }, tombstones: nextTombstones };
 }
 
-function rosterSnapshotFromRemoteRows(rows: SupabaseRemoteRosterRows): RosterSnapshot {
-    const groups = rows.classes
-        .map((row, index) => rosterGroupFromSupabaseRow(row, index))
-        .filter((group): group is RosterGroup => !!group)
-        .sort((a, b) => `${a.region || ""}:${a.name}`.localeCompare(`${b.region || ""}:${b.name}`, "ko"));
-    const enrollmentByStudentId = new Map<string, SupabaseRosterClassStudentRow>();
-    for (const row of rows.enrollments) {
-        const current = enrollmentByStudentId.get(row.student_profile_id);
-        if (!current || row.enrollment_status === "active") {
-            enrollmentByStudentId.set(row.student_profile_id, row);
-        }
-    }
-    const students = rows.students
-        .map((row, index) => rosterStudentFromSupabaseRow(row, groups, enrollmentByStudentId.get(row.id), index))
-        .filter((student): student is RosterStudent => !!student)
-        .sort((a, b) => a.name.localeCompare(b.name, "ko"));
-
-    return { students, groups, invites: [] };
-}
-
-async function fetchRemoteRosterRows(
-    client: SupabaseClientLike,
-    organizationId = activeRosterOrganizationId(),
-): Promise<SupabaseRemoteRosterRows> {
-    const [classResult, studentResult, enrollmentResult] = await Promise.all([
-        client.from("omr_classes").select("*").eq("organization_id", organizationId),
-        client.from("omr_student_profiles").select("*").eq("organization_id", organizationId),
-        client.from("omr_class_students").select("*").eq("organization_id", organizationId),
-    ]);
-
-    if (classResult.error) throw new Error(classResult.error.message || "Failed to load roster classes from Supabase");
-    if (studentResult.error) throw new Error(studentResult.error.message || "Failed to load roster students from Supabase");
-    if (enrollmentResult.error) throw new Error(enrollmentResult.error.message || "Failed to load roster enrollments from Supabase");
-
-    return {
-        classes: (classResult.data || []).map(row => row as SupabaseRosterClassRow),
-        students: (studentResult.data || []).map(row => row as SupabaseRosterStudentProfileRow),
-        enrollments: (enrollmentResult.data || []).map(row => row as SupabaseRosterClassStudentRow),
-    };
-}
-
-async function upsertRemoteRosterSnapshot(
-    snapshot: RosterSnapshot,
-    organizationId = activeRosterOrganizationId(),
-    // Callers that already fetched remote rows for the pre-save merge (see
-    // saveRosterSnapshot/loadRosterSnapshot) pass them through instead of
-    // triggering a second round-trip — that halves the query count per save
-    // and, more importantly, narrows the window between "read remote" and
-    // "write remote" in which a concurrent save from another device/tab could
-    // be clobbered.
-    remoteRows?: SupabaseRemoteRosterRows,
-): Promise<void> {
-    const client = await getSupabaseClient();
-    if (!client && isSupabaseConfigured()) throw new Error("Supabase client unavailable");
-    if (!client) return;
-
-    const workspaceContext = workspaceContextForRosterOrganization(organizationId);
-    const remote = remoteRows ?? await fetchRemoteRosterRows(client, organizationId);
-    const rows = rosterSnapshotToSupabaseRows(
-        snapshot,
-        organizationId,
-        undefined,
-        workspaceContext.organizationName || activeRosterOrganizationName(organizationId),
-    );
-    const staleRows = staleRosterRowsForSnapshot(snapshot, remote, organizationId);
-    await upsertRemoteWorkspaceBootstrap(client, workspaceContext);
-
-    // Only push rows whose content actually differs from what we just read
-    // from remote (ignoring updated_at). staleRows are always a real status
-    // change (archived/withdrawn/inactive), so they don't need this filter —
-    // only the "still active" rows built fresh from `snapshot` do, since most
-    // of a full roster snapshot is typically unchanged between saves. Writing
-    // fewer rows means fewer rows this save could stomp if another device's
-    // write to one of those same ids landed in the gap between our read and
-    // our write.
-    const remoteClassesById = new Map(remote.classes.map(row => [row.id, row]));
-    const remoteStudentsById = new Map(remote.students.map(row => [row.id, row]));
-    const remoteEnrollmentsById = new Map(remote.enrollments.map(row => [enrollmentKey(row), row]));
-
-    const changedClassRows = rows.classes.filter(row => !rosterRowUnchanged(row, remoteClassesById.get(row.id)));
-    const mergedStudentRows = rows.students.map(row => preserveRemoteStudentMetadata(row, remoteStudentsById.get(row.id)));
-    const changedStudentRows = mergedStudentRows.filter(row => !rosterRowUnchanged(row, remoteStudentsById.get(row.id)));
-    const changedEnrollmentRows = rows.enrollments.filter(
-        row => !rosterRowUnchanged(row, remoteEnrollmentsById.get(enrollmentKey(row))),
-    );
-
-    const classRows = [...changedClassRows, ...staleRows.classes];
-    if (classRows.length > 0) {
-        const classResult = await client.from("omr_classes").upsert(classRows);
-        if (classResult.error) throw new Error(classResult.error.message || "Failed to save roster classes to Supabase");
-    }
-
-    const studentRows = [...changedStudentRows, ...staleRows.students];
-    if (studentRows.length > 0) {
-        const studentResult = await client.from("omr_student_profiles").upsert(studentRows);
-        if (studentResult.error) throw new Error(studentResult.error.message || "Failed to save roster students to Supabase");
-    }
-
-    const enrollmentRows = [...changedEnrollmentRows, ...staleRows.enrollments];
-    if (enrollmentRows.length > 0) {
-        const enrollmentResult = await client.from("omr_class_students").upsert(enrollmentRows);
-        if (enrollmentResult.error) throw new Error(enrollmentResult.error.message || "Failed to save roster enrollments to Supabase");
-    }
-}
-
+/**
+ * @deprecated Teacher UI must use teacherRosterClient. This local-only helper remains
+ * for offline utilities and tests, and never opens a browser Supabase connection.
+ */
 export async function loadRosterSnapshot(
     storage: Pick<Storage, "getItem" | "setItem">,
 ): Promise<RosterLoadResult> {
@@ -790,50 +502,10 @@ export async function loadRosterSnapshot(
         invites: parseStoredRosterInvites(storage.getItem(ROSTER_STORAGE_KEYS.invites)),
     };
 
-    if (!isSupabaseConfigured()) {
-        return { ...localSnapshot, remoteLoaded: false };
-    }
-
-    try {
-        const organizationId = activeRosterOrganizationId();
-        const client = await getSupabaseClient();
-        if (!client) throw new Error("Supabase client unavailable");
-        const remoteRows = await fetchRemoteRosterRows(client, organizationId);
-
-        // A plain load carries no local edit intent — there is only one
-        // snapshot, not a "before" and "after" — so any row this device still
-        // has cached that another device has since deleted remotely should
-        // never be resurrected just by opening the page. Passing localSnapshot
-        // as both arguments makes reconcileRemoteDeletions treat every row as
-        // unedited, so a remote withdrawal/archive always wins here.
-        const tombstones = readRosterTombstones(storage);
-        const reconciled = reconcileRemoteDeletions(localSnapshot, localSnapshot, remoteRows, tombstones);
-        if (reconciled.tombstones !== tombstones) writeRosterTombstones(storage, reconciled.tombstones);
-
-        const remoteSnapshot = applyRosterTombstonesToSnapshot(
-            rosterSnapshotFromRemoteRows(remoteRows),
-            reconciled.tombstones,
-        );
-        const merged = mergeRosterSnapshots(reconciled.snapshot, remoteSnapshot);
-        writeLocalRosterSnapshot(storage, merged);
-        await upsertRemoteRosterSnapshot(merged, organizationId, remoteRows);
-        return {
-            ...merged,
-            remoteLoaded: true,
-            remoteSynced: true,
-            pendingSyncCount: 0,
-        };
-    } catch (error) {
-        return {
-            ...localSnapshot,
-            remoteLoaded: false,
-            remoteSynced: false,
-            pendingSyncCount: localSnapshot.students.length + localSnapshot.groups.length,
-            remoteError: errorMessage(error),
-        };
-    }
+    return { ...localSnapshot, remoteLoaded: false };
 }
 
+/** @deprecated Teacher UI must use teacherRosterClient. */
 export async function saveRosterSnapshot(
     storage: Pick<Storage, "getItem" | "setItem">,
     snapshot: RosterSnapshot,
@@ -846,40 +518,5 @@ export async function saveRosterSnapshot(
     );
     const localSaved = writeLocalRosterSnapshot(storage, snapshot);
     writeRosterTombstones(storage, tombstones);
-    if (!isSupabaseConfigured()) return { localSaved, remoteSaved: false };
-
-    try {
-        // Pushing this device's in-memory snapshot straight to Supabase would
-        // be last-writer-wins: any row added/edited on another device or tab
-        // since this one last loaded would be silently dropped. Fetch the
-        // current remote state once (reused below both for the merge and for
-        // the upsert diff, instead of two independent round-trips) and merge
-        // it with the local snapshot (local wins on conflicting ids) before
-        // upserting, so concurrent changes are preserved. Tombstones are
-        // applied to the remote read so an intentional local deletion isn't
-        // resurrected by a stale remote row.
-        const organizationId = activeRosterOrganizationId();
-        const client = await getSupabaseClient();
-        if (!client) throw new Error("Supabase client unavailable");
-        const remoteRows = await fetchRemoteRosterRows(client, organizationId);
-
-        // Another device/tab may have deleted a row this device still has
-        // cached locally. If this device did not edit that row since its own
-        // last sync, respect the remote deletion instead of resurrecting it
-        // purely because a stale local copy still lists it. If this device DID
-        // edit the row, keep the edit — see reconcileRemoteDeletions.
-        const reconciled = reconcileRemoteDeletions(snapshot, previousSnapshot, remoteRows, tombstones);
-        if (reconciled.tombstones !== tombstones) writeRosterTombstones(storage, reconciled.tombstones);
-
-        const remoteSnapshot = applyRosterTombstonesToSnapshot(
-            rosterSnapshotFromRemoteRows(remoteRows),
-            reconciled.tombstones,
-        );
-        const merged = mergeRosterSnapshots(reconciled.snapshot, remoteSnapshot);
-        writeLocalRosterSnapshot(storage, merged);
-        await upsertRemoteRosterSnapshot(merged, organizationId, remoteRows);
-        return { localSaved, remoteSaved: true };
-    } catch (error) {
-        return { localSaved, remoteSaved: false, remoteError: errorMessage(error) };
-    }
+    return { localSaved, remoteSaved: false };
 }

@@ -32,6 +32,21 @@ export interface BillingPlanFeature {
  */
 export const PREMIUM_FEATURE_READINESS: Record<PlanEntitlementKey, PremiumFeatureReadiness> = {
     handwritingArchive: { status: "available" },
+    feedbackMarkup: {
+        status: "available",
+        label: "교사 첨삭",
+        description: "응시 결과에 문항별 코멘트와 필기 첨삭을 저장해 학생에게 돌려보냅니다.",
+    },
+    returnedFeedback: {
+        status: "available",
+        label: "학생 피드백 확인",
+        description: "학생이 반환된 피드백과 첨삭을 확인하고 허용된 파일을 내려받을 수 있습니다.",
+    },
+    remoteHandwritingArchive: {
+        status: "available",
+        label: "서버 필기 보관",
+        description: "학생 필기 원본을 비공개 원격 저장소에 보관하고 권한이 확인된 사용자에게만 제공합니다.",
+    },
     advancedAnalytics: { status: "available" },
     advancedQuestionDesign: { status: "available" },
     studentGrowthReports: { status: "available" },
@@ -129,6 +144,8 @@ export const BILLING_PLAN_FEATURES: Record<PlanKey, readonly BillingPlanFeature[
         { label: "AI 정답 인식 월 5,000회", status: "available", detail: "서버 플랜·월 사용량 기준" },
         { label: "하위 질문 · 심화 응답", status: "available", detail: "객관식 아래 자유 응답 설계" },
         { label: "필기 원본 보관", status: "available" },
+        { label: "교사 첨삭 · 학생 피드백", status: "available" },
+        { label: "비공개 서버 필기 보관", status: "available" },
         { label: "고급 오답·성장 분석", status: "available" },
         { label: "인쇄 · PDF 저장", status: "partial", detail: "브라우저 인쇄 방식" },
         { label: "카카오 발송 후보 · 큐", status: "partial", detail: "실제 발송 미연동" },

@@ -61,8 +61,8 @@ export default function MobileInstallPrompt() {
   const isSuppressedPath = pathname === "/create"
     || pathname === "/pwa-check"
     || pathname.startsWith("/solve/")
-    || pathname.startsWith("/student/review/")
-    || pathname.startsWith("/teacher/attempt/");
+    || pathname.startsWith("/student/")
+    || pathname.startsWith("/teacher/");
   const [deferredPrompt, setDeferredPrompt] = useState<BeforeInstallPromptEvent | null>(null);
   const [showIOSPrompt, setShowIOSPrompt] = useState(false);
   const [isVisible, setIsVisible] = useState(false);

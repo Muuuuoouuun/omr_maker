@@ -275,6 +275,7 @@ export default function ExamListBlock({ exams }: ExamListBlockProps) {
 
                   <Link
                     href={`/teacher/exam/${exam.id}`}
+                    aria-label={`${exam.title} 시험 상세 보기`}
                     style={{
                       display: "flex",
                       alignItems: "center",

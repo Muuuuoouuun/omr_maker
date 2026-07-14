@@ -2,6 +2,8 @@ import { inspectTeacherAuthConfig } from "./teacherAuth";
 import { resolveTeacherSessionSecret } from "./teacherServerSession";
 import { resolveStudentSessionSecret } from "./studentServerSession";
 import { getSupabaseServerConfigFromEnv } from "./supabaseServerAdmin";
+import { resolveStudentAttemptSecret } from "./studentAttemptTicket";
+import type { SupabaseDeploymentProbe } from "./supabaseReadinessProbe";
 
 type Env = Record<string, string | undefined>;
 
@@ -103,16 +105,31 @@ function isFlagEnabled(value: unknown): boolean {
     return normalized === "true" || normalized === "1" || normalized === "yes";
 }
 
-function productionRlsCheck(env: Env, supabasePublicReady: boolean): DeploymentReadinessCheck {
+function productionRlsCheck(
+    env: Env,
+    supabasePublicReady: boolean,
+    databaseProbe?: SupabaseDeploymentProbe | null,
+): DeploymentReadinessCheck {
     const rlsApplied = isFlagEnabled(env.OMR_PRODUCTION_RLS_APPLIED);
     const isProduction = clean(env.NODE_ENV).toLowerCase() === "production";
 
-    if (rlsApplied) {
+    if (rlsApplied && databaseProbe?.ready) {
         return {
             key: "production_rls",
             label: "실사용 RLS 전환",
-            detail: "OMR_PRODUCTION_RLS_APPLIED로 production-rls.sql 적용이 확인됐습니다. 조직 멤버십과 학생 PII 접근이 서버 정책으로 잠깁니다.",
+            detail: `실제 DB probe${databaseProbe.version ? ` ${databaseProbe.version}` : ""}에서 제출 RPC와 핵심 테이블 FORCE RLS 적용을 확인했습니다.`,
             tone: "ready",
+        };
+    }
+
+    if (isProduction && rlsApplied && !databaseProbe?.ready) {
+        return {
+            key: "production_rls",
+            label: "실사용 RLS 전환",
+            detail: databaseProbe?.error
+                ? `환경변수는 적용됨으로 표시하지만 실제 DB probe가 실패했습니다: ${databaseProbe.error}`
+                : "OMR_PRODUCTION_RLS_APPLIED는 설정됐지만 실제 DB의 RPC·FORCE RLS 상태가 확인되지 않았습니다.",
+            tone: "error",
         };
     }
 
@@ -136,45 +153,69 @@ function productionRlsCheck(env: Env, supabasePublicReady: boolean): DeploymentR
     };
 }
 
-export function buildDeploymentReadiness(env: Env = process.env): DeploymentReadinessSummary {
+function studentAttemptSecretCheck(env: Env): DeploymentReadinessCheck {
+    const explicitSecret = clean(env.STUDENT_ATTEMPT_SECRET) || clean(env.OMR_STUDENT_ATTEMPT_SECRET);
+    if (explicitSecret) {
+        return {
+            key: "student_attempt_secret",
+            label: "학생 응시 티켓 secret",
+            detail: "학생 응시 티켓을 별도 서버 secret으로 서명해 시험·조직·학생·허용 문항 변조를 차단합니다.",
+            tone: "ready",
+        };
+    }
+    return {
+        key: "student_attempt_secret",
+        label: "학생 응시 티켓 secret",
+        detail: resolveStudentAttemptSecret(env)
+            ? "개발 기본 secret은 로컬 연습에만 사용할 수 있습니다. 운영에는 STUDENT_ATTEMPT_SECRET을 별도로 설정하세요."
+            : "운영 서버 채점에는 STUDENT_ATTEMPT_SECRET 또는 OMR_STUDENT_ATTEMPT_SECRET이 필요합니다.",
+        tone: clean(env.NODE_ENV).toLowerCase() === "production" ? "error" : "warning",
+    };
+}
+
+export function buildDeploymentReadiness(
+    env: Env = process.env,
+    databaseProbe?: SupabaseDeploymentProbe | null,
+): DeploymentReadinessSummary {
     const authConfig = inspectTeacherAuthConfig(env);
     const supabasePublicReady = publicSupabaseConfigured(env);
     const serviceRoleReady = !!getSupabaseServerConfigFromEnv(env);
+    const isProduction = clean(env.NODE_ENV).toLowerCase() === "production";
+    const teacherCredentialsTone: DeploymentReadinessTone = !authConfig.ready
+        ? "error"
+        : authConfig.warnings.length > 0
+            ? "warning"
+            : "ready";
 
     const checks: DeploymentReadinessCheck[] = [
         {
             key: "teacher_credentials",
             label: "교사 계정 환경변수",
             detail: authConfig.ready
-                ? `${authConfig.credentialCount}개 교사 계정이 서버 환경변수에서 인식됩니다. 로그인 판별은 Supabase가 아니라 이 값으로 수행됩니다.`
-                : describeIssues(authConfig.issues) || "운영 배포에는 TEACHER_ACCOUNTS 또는 TEACHER_LOGIN_ID/TEACHER_PASSWORD가 필요합니다.",
-            tone: authConfig.ready ? "ready" : "error",
+                ? `${authConfig.credentialCount}개 교사 계정이 서버 환경변수에서 인식됩니다. 로그인 판별은 Supabase가 아니라 이 값으로 수행됩니다.${authConfig.warnings.length > 0 ? ` ${describeIssues(authConfig.warnings)}` : ""}`
+                : describeIssues(authConfig.issues) || "운영 배포에는 TEACHER_ACCOUNTS 또는 TEACHER_LOGIN_ID/TEACHER_PASSWORD_HASH가 필요합니다.",
+            tone: teacherCredentialsTone,
         },
         sessionSecretCheck(env),
         studentSessionSecretCheck(env),
+        studentAttemptSecretCheck(env),
         {
             key: "supabase_public_sync",
             label: "Supabase 클라이언트 동기화",
             detail: supabasePublicReady
-                ? "NEXT_PUBLIC_SUPABASE_URL과 publishable/anon key가 있어 시험·제출·명단 원격 동기화가 활성화됩니다."
-                : "Supabase public env가 없으면 브라우저 로컬 저장으로만 동작합니다. 배포 공유 데이터가 필요하면 NEXT_PUBLIC_SUPABASE_URL과 publishable key를 설정하세요.",
+                ? "NEXT_PUBLIC_SUPABASE_URL과 publishable/anon key가 있어 허용된 공개 동기화 기능을 사용할 수 있습니다. 교사·학생 공식 데이터는 서버 게이트웨이를 경유합니다."
+                : "공개 Supabase 환경변수가 없어 브라우저 동기화는 비활성입니다. 운영 공식 데이터는 서버 게이트웨이 설정으로 별도 확인합니다.",
             tone: supabasePublicReady ? "ready" : "warning",
         },
         {
             key: "supabase_service_role",
-            label: "서버 신뢰 경계 (service role)",
+            label: "Supabase 서버 게이트웨이",
             detail: serviceRoleReady
-                ? "SUPABASE_SERVICE_ROLE_KEY 또는 OMR_SUPABASE_SERVICE_ROLE_KEY가 서버에 있어 학생 시험 로드(정답 미노출)·서버 채점·본인 격리 조회와 워크스페이스 bootstrap이 활성화됩니다."
-                : env.NODE_ENV === "production" && supabasePublicReady
-                    ? "서비스롤 키가 없어 학생 서버 경계(정답 은닉·서버 채점)가 전부 클라이언트 폴백으로 동작합니다. 운영 배포 전 SUPABASE_SERVICE_ROLE_KEY를 서버 환경변수에 설정하세요."
-                    : "서비스롤 키가 없으면 학생 시험 로드/채점 서버 경계와 워크스페이스 bootstrap이 로컬 폴백으로 degrade됩니다. 키는 서버 환경변수에만 둬야 합니다.",
-            tone: serviceRoleReady
-                ? "ready"
-                : env.NODE_ENV === "production" && supabasePublicReady
-                    ? "error"
-                    : "warning",
+                ? "서비스롤 키가 서버에 있어 정답 제거 시험 제공, 공식 채점, 본인 격리 조회와 원자적 저장 RPC를 실행할 수 있습니다."
+                : "서비스롤 키가 없으면 안전한 원격 시험·서버 채점 게이트웨이가 비활성입니다. SUPABASE_SERVICE_ROLE_KEY는 서버 환경변수에만 설정하세요.",
+            tone: serviceRoleReady ? "ready" : isProduction ? "error" : "warning",
         },
-        productionRlsCheck(env, supabasePublicReady),
+        productionRlsCheck(env, supabasePublicReady || serviceRoleReady, databaseProbe),
     ];
 
     const readyCount = checks.filter(check => check.tone === "ready").length;
@@ -184,10 +225,10 @@ export function buildDeploymentReadiness(env: Env = process.env): DeploymentRead
     return {
         label: hasError ? "배포 확인 필요" : hasWarning ? "배포 보강 권장" : "배포 준비됨",
         detail: hasError
-            ? "교사 계정 또는 서버 세션 설정을 먼저 고쳐야 합니다."
+            ? "교사 계정, 서버 세션, 학생 티켓, Supabase 서버 게이트웨이 설정을 먼저 고쳐야 합니다."
             : hasWarning
                 ? "핵심 흐름은 실행 가능하지만 운영 데이터 전에는 남은 보안/DB 항목을 확인하세요."
-                : "교사 계정, 세션, Supabase 동기화 항목이 모두 준비됐습니다.",
+                : "교사 계정, 서버 세션, 학생 응시 티켓, 공개 동기화, 서버 게이트웨이와 RLS가 모두 준비됐습니다.",
         credentialCount: authConfig.credentialCount,
         readyCount,
         totalCount: checks.length,

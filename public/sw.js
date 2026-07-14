@@ -1,4 +1,4 @@
-const CACHE_VERSION = "omr-maker-v14";
+const CACHE_VERSION = "omr-maker-v15";
 const APP_SHELL_CACHE = `${CACHE_VERSION}-shell`;
 const RUNTIME_CACHE = `${CACHE_VERSION}-runtime`;
 const CACHE_FIRST_PATHS = new Set([
@@ -22,7 +22,6 @@ const APP_SHELL = [
   "/favicon.ico",
   "/icon.png",
   "/logo.png",
-  "/pdf.worker.min.mjs",
   "/apple-touch-icon.png",
   "/browserconfig.xml",
   "/screenshots/omr-mobile-home.jpg",
@@ -147,8 +146,8 @@ self.addEventListener("fetch", event => {
   ) {
     event.respondWith(
       caches.match(request).then(async cached => {
-        const refresh = fetch(request).then(response => {
-          rememberRuntimeResponse(request, response);
+        const refresh = fetch(request).then(async response => {
+          await rememberRuntimeResponse(request, response);
           return response;
         });
 

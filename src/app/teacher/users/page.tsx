@@ -9,8 +9,10 @@ import { toast } from "@/components/Toast";
 import type { Attempt, Exam } from "@/types/omr";
 import { decodeCsvBytes, parseCsvRows, serializeCsvRows } from "@/lib/csv";
 import { shouldUseDemoData } from "@/lib/demoData";
-import { loadAttempts, loadExams } from "@/lib/omrPersistence";
-import { loadRosterSnapshot, saveRosterSnapshot } from "@/lib/rosterPersistence";
+import { loadTeacherAttempts } from "@/lib/teacherAttemptClient";
+import { loadTeacherExams } from "@/lib/teacherExamClient";
+import { loadTeacherRosterSnapshot, saveTeacherRosterSnapshot } from "@/lib/teacherRosterClient";
+import { issueStudentStartCodeCredential } from "@/app/actions/studentAuth";
 import { authorizeRosterStudentSet } from "@/app/actions/premiumAccess";
 import { resolveAttemptScore } from "@/lib/attemptScores";
 import {
@@ -261,6 +263,7 @@ function ManageUsersInner() {
     const [workspaceId, setWorkspaceId] = useState("");
     const [issuingStudentCode, setIssuingStudentCode] = useState(false);
     const rosterPlanSyncRef = useRef<Promise<void>>(Promise.resolve());
+    const rosterMutationVersionRef = useRef(0);
     const { plan: currentPlan } = useServerPlan();
     const [hydrated, setHydrated] = useState(false);
     const studentGrowthReportsEnabled = hasPlanEntitlement(currentPlan, "studentGrowthReports");
@@ -315,7 +318,7 @@ function ManageUsersInner() {
                     Object.values(ROSTER_STORAGE_KEYS).forEach(key => localStorage.removeItem(key));
                 }
 
-                const rosterResult = await loadRosterSnapshot(localStorage);
+                const rosterResult = await loadTeacherRosterSnapshot(localStorage);
                 if (cancelled) return;
                 const hasRosterRows = rosterResult.students.length > 0
                     || rosterResult.groups.length > 0
@@ -366,8 +369,8 @@ function ManageUsersInner() {
         let cancelled = false;
         const loadRosterAnalytics = async () => {
             const [attemptResult, examResult] = await Promise.all([
-                loadAttempts(),
-                loadExams(),
+                loadTeacherAttempts(),
+                loadTeacherExams(),
             ]);
             if (cancelled) return;
             setAllAttempts(attemptResult.items);
@@ -416,6 +419,8 @@ function ManageUsersInner() {
 
     // Write-through helpers
     const persistRoster = (nextStudents: RosterStudent[], nextGroups: RosterGroup[], nextInvites: RosterInvite[]) => {
+        const mutationVersion = ++rosterMutationVersionRef.current;
+        const previousSnapshot = { students, groups, invites };
         setRosterDataMode("real");
         setStudents(nextStudents);
         setGroups(nextGroups);
@@ -427,15 +432,18 @@ function ManageUsersInner() {
             return filteredIds.length === prev.size ? prev : new Set(filteredIds);
         });
         setSelectedGroupId(prev => nextGroups.some(group => group.id === prev) ? prev : null);
-        void saveRosterSnapshot(localStorage, {
+        void saveTeacherRosterSnapshot(localStorage, {
             students: nextStudents,
             groups: nextGroups,
             invites: nextInvites,
         }).then(result => {
-            if (result.remoteError) {
-                toast.info(
-                    "명단은 로컬에 저장됨",
-                    "Supabase 명단 동기화는 다음 로드 때 다시 시도합니다."
+            if (result.remoteError && !result.localSaved && mutationVersion === rosterMutationVersionRef.current) {
+                setStudents(previousSnapshot.students);
+                setGroups(previousSnapshot.groups);
+                setInvites(previousSnapshot.invites);
+                toast.error(
+                    "명단 저장 실패",
+                    "서버에 저장되지 않아 방금 변경을 되돌렸습니다. 연결 상태를 확인한 뒤 다시 시도해주세요."
                 );
             }
         });
@@ -589,6 +597,9 @@ function ManageUsersInner() {
 
     const selected = displayStudents.find(s => s.id === selectedId);
     const selectedGroup = displayGroups.find(group => group.id === selectedGroupId) || null;
+    const selectedStudentGroup = selected
+        ? displayGroups.find(group => group.name === selected.group && (!selected.region || group.region === selected.region))
+        : null;
     const selectedLegacyStudentId = selected ? studentIdForRoster(selected.name, selected.group, rosterGroups) : "";
     const selectedStartCode = selected ? findStudentStartCode(studentCodeRegistry, selected.id, selectedLegacyStudentId) : "";
 
@@ -653,15 +664,19 @@ function ManageUsersInner() {
         }
         if (issuingStudentCode) return;
         setIssuingStudentCode(true);
-        const nextCode = generateStartCode();
-        const nextRegistry = { ...studentCodeRegistry, [selected.id]: nextCode };
-        if (!writeStudentCodes(localStorage, nextRegistry)) {
-            toast.error("코드 저장 실패", "브라우저 저장소를 확인한 뒤 다시 시도해주세요.");
-            setIssuingStudentCode(false);
-            return;
-        }
-        setStudentCodeRegistry(nextRegistry);
         try {
+            const nextCode = generateStartCode();
+            const serverResult = await issueStudentStartCodeCredential(selected.id, nextCode);
+            if (!serverResult.success && !serverResult.skipped) {
+                toast.error("코드 발급 실패", serverResult.error || "학생 시작 코드를 서버에 저장하지 못했습니다.");
+                return;
+            }
+            const nextRegistry = { ...studentCodeRegistry, [selected.id]: nextCode };
+            if (!writeStudentCodes(localStorage, nextRegistry)) {
+                toast.error("코드 저장 실패", "브라우저 저장소를 확인한 뒤 다시 시도해주세요.");
+                return;
+            }
+            setStudentCodeRegistry(nextRegistry);
             const result = await syncStudentAccessCodes([{ studentId: selected.id, code: nextCode }]);
             if (result.status === "error" || result.status === "unauthenticated" || result.missingCount) {
                 toast.info(
@@ -707,6 +722,7 @@ function ManageUsersInner() {
             "OMR Maker 학생 로그인 안내",
             `이름: ${selected.name}`,
             `반: ${selected.group}`,
+            `반 코드: ${selectedStudentGroup?.id || selected.group}`,
             `로그인 ID(학생번호): ${selected.id}`,
             `이메일 로그인 ID: ${selected.email}`,
             `시작 코드: ${selectedStartCode || "미발급 - 선생님에게 발급 요청"}`,
@@ -1155,7 +1171,7 @@ function ManageUsersInner() {
             return false;
         }
         const newInvite: RosterInvite = {
-            id: `i-${Date.now()}`,
+            id: `i-${crypto.randomUUID()}`,
             email: trimmed,
             sentAt: "방금 전",
             status: "pending",

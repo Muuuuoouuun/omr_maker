@@ -27,8 +27,10 @@ import {
     TEACHER_SERVER_SESSION_COOKIE,
     TEACHER_SERVER_SESSION_MAX_AGE_SECONDS,
 } from "@/lib/teacherServerSession";
+import { isSameOriginServerActionRequest, SERVER_ACTION_ORIGIN_ERROR } from "@/lib/serverActionSecurity";
 import { buildDeploymentReadiness, type DeploymentReadinessSummary } from "@/lib/deploymentReadiness";
 import { workspaceContextFromIdentity } from "@/lib/workspaceContext";
+import { probeSupabaseDeploymentWithServiceRole } from "@/lib/supabaseReadinessProbe";
 
 function clientFingerprintFromHeaders(headerStore: Headers): string {
     const forwardedFor = headerStore.get("x-forwarded-for")?.split(",")[0]?.trim();
@@ -54,6 +56,13 @@ export async function verifyTeacherPassword(
     }
 
     const headerStore = await headers();
+    if (!isSameOriginServerActionRequest(headerStore)) {
+        return {
+            success: false,
+            error: SERVER_ACTION_ORIGIN_ERROR,
+        };
+    }
+
     const rateLimitKeys = buildTeacherLoginRateLimitKeys(identifier, clientFingerprintFromHeaders(headerStore));
     const rateLimit = checkTeacherLoginRateLimit(rateLimitKeys);
     if (!rateLimit.allowed) {
@@ -112,11 +121,17 @@ export async function verifyTeacherPassword(
 }
 
 export async function clearTeacherAuthSession(): Promise<{ success: true }> {
+    const headerStore = await headers();
+    if (!isSameOriginServerActionRequest(headerStore)) {
+        return { success: true };
+    }
+
     const cookieStore = await cookies();
     cookieStore.delete(TEACHER_SERVER_SESSION_COOKIE);
     return { success: true };
 }
 
 export async function getTeacherDeploymentReadiness(): Promise<DeploymentReadinessSummary> {
-    return buildDeploymentReadiness();
+    const databaseProbe = await probeSupabaseDeploymentWithServiceRole();
+    return buildDeploymentReadiness(process.env, databaseProbe);
 }

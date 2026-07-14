@@ -164,9 +164,8 @@ const requiredStringsByFile: Record<string, string[]> = {
     ],
     "src/components/dashboard/tabs/OverviewTab.tsx": [
         "빠른 작업",
-        "시험 제작",
-        "실시간 응시",
         "평균 점수 추이",
+        "시험 요약",
         "통계 CSV",
         "통계 CSV 생성됨",
         "대시보드 요약과 시험별 통계를 내보냈습니다.",

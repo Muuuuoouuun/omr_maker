@@ -66,7 +66,6 @@ export interface DeleteRosterGroupResult {
     group?: RosterGroup;
     studentCount?: number;
 }
-
 export interface RosterGroupDraft {
     name: string;
     region?: string;

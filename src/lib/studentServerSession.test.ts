@@ -3,6 +3,8 @@ import {
     createSignedStudentSessionCookie,
     parseSignedStudentSessionCookie,
     resolveStudentSessionSecret,
+    shouldUseSecureStudentSessionCookie,
+    STUDENT_SERVER_SESSION_MAX_AGE_SECONDS,
     type StudentIdentityInput,
 } from "./studentServerSession";
 
@@ -12,59 +14,65 @@ const STUDENT: StudentIdentityInput = {
     organizationId: "teacher_abc", groupId: "grp1", groupName: "1반", identityType: "temporary",
 };
 const ENV = { STUDENT_SESSION_SECRET: "test-secret", NODE_ENV: "test" } as Record<string, string>;
+const productionEnv = { NODE_ENV: "production", STUDENT_SESSION_SECRET: "student-session-test-secret" };
+const registeredIdentity = {
+    organizationId: "org-1",
+    studentId: "student-1",
+    studentName: "김학생",
+    identityType: "registered" as const,
+    groupId: "class-a",
+    groupName: "A반",
+};
 
 describe("studentServerSession", () => {
-    it("resolves the dedicated secret, falls back only outside production", () => {
+    it("resolves the dedicated secret, the attempt-secret fallback, and fails closed in production", () => {
         expect(resolveStudentSessionSecret({ STUDENT_SESSION_SECRET: " s " })).toBe("s");
+        expect(resolveStudentSessionSecret({ STUDENT_ATTEMPT_SECRET: " attempt " })).toBe("attempt");
         expect(resolveStudentSessionSecret({ NODE_ENV: "development" })).toBe("dev-student-session-secret");
         expect(resolveStudentSessionSecret({ NODE_ENV: "production" })).toBeNull();
     });
 
-    it("round-trips a guest identity", () => {
+    it("round-trips guest, temporary, and registered identities", () => {
         const now = 1_000_000;
-        const cookie = createSignedStudentSessionCookie(GUEST, ENV, now)!;
-        const parsed = parseSignedStudentSessionCookie(cookie, ENV, now + 1000);
-        expect(parsed).toMatchObject({ kind: "guest", guestId: "g-123", identityType: "guest" });
+        expect(parseSignedStudentSessionCookie(
+            createSignedStudentSessionCookie(GUEST, ENV, now),
+            ENV,
+            now + 1_000,
+        )).toMatchObject({ kind: "guest", guestId: "g-123", identityType: "guest" });
+        expect(parseSignedStudentSessionCookie(
+            createSignedStudentSessionCookie(STUDENT, ENV, now),
+            ENV,
+            now + 1_000,
+        )).toMatchObject({ kind: "student", studentId: "grp1::김철수", organizationId: "teacher_abc" });
+        expect(parseSignedStudentSessionCookie(
+            createSignedStudentSessionCookie(registeredIdentity, productionEnv, now),
+            productionEnv,
+            now + 1_000,
+        )).toMatchObject(registeredIdentity);
     });
 
-    it("round-trips a student identity", () => {
-        const now = 1_000_000;
-        const cookie = createSignedStudentSessionCookie(STUDENT, ENV, now)!;
-        const parsed = parseSignedStudentSessionCookie(cookie, ENV, now + 1000);
-        expect(parsed).toMatchObject({
-            kind: "student",
-            studentId: "grp1::김철수",
-            organizationId: "teacher_abc",
-            groupId: "grp1",
-        });
+    it("rejects tampering, wrong secrets, malformed cookies, future sessions, and expiry", () => {
+        const cookie = createSignedStudentSessionCookie(GUEST, ENV, 1_000)!;
+        const [payload, signature] = cookie.split(".");
+        const forged = signature.slice(0, -1) + (signature.endsWith("A") ? "B" : "A");
+
+        expect(parseSignedStudentSessionCookie(`${payload}.deadbeef`, ENV, 2_000)).toBeNull();
+        expect(parseSignedStudentSessionCookie(`${payload}.${forged}`, ENV, 2_000)).toBeNull();
+        expect(parseSignedStudentSessionCookie(cookie, { ...ENV, STUDENT_SESSION_SECRET: "wrong" }, 2_000)).toBeNull();
+        expect(parseSignedStudentSessionCookie("not-a-valid-cookie", ENV, 2_000)).toBeNull();
+        expect(parseSignedStudentSessionCookie(
+            cookie,
+            ENV,
+            1_000 + STUDENT_SERVER_SESSION_MAX_AGE_SECONDS * 1_000 + 1,
+        )).toBeNull();
+
+        const futureCookie = createSignedStudentSessionCookie(registeredIdentity, productionEnv, 100_000)!;
+        expect(parseSignedStudentSessionCookie(futureCookie, productionEnv, 1_000)).toBeNull();
     });
 
-    it("rejects a tampered signature", () => {
-        const cookie = createSignedStudentSessionCookie(GUEST, ENV, 1000)!;
-        const [payload] = cookie.split(".");
-        expect(parseSignedStudentSessionCookie(`${payload}.deadbeef`, ENV, 2000)).toBeNull();
-    });
-
-    it("rejects a same-length forged signature", () => {
-        const cookie = createSignedStudentSessionCookie(GUEST, ENV, 1000)!;
-        const [payload, sig] = cookie.split(".");
-        const forged = sig.slice(0, -1) + (sig.endsWith("A") ? "B" : "A");
-        expect(parseSignedStudentSessionCookie(`${payload}.${forged}`, ENV, 2000)).toBeNull();
-    });
-
-    it("rejects a cookie parsed with a different secret", () => {
-        const cookie = createSignedStudentSessionCookie(GUEST, ENV, 1000)!;
-        expect(parseSignedStudentSessionCookie(cookie, { STUDENT_SESSION_SECRET: "other", NODE_ENV: "test" }, 2000)).toBeNull();
-    });
-
-    it("rejects a malformed cookie string", () => {
-        expect(parseSignedStudentSessionCookie("not-a-valid-cookie", ENV, 2000)).toBeNull();
-    });
-
-    it("rejects an expired session", () => {
-        const now = 1_000_000;
-        const cookie = createSignedStudentSessionCookie(GUEST, ENV, now)!;
-        const past = now + 31 * 24 * 60 * 60 * 1000; // > 30d TTL
-        expect(parseSignedStudentSessionCookie(cookie, ENV, past)).toBeNull();
+    it("fails closed without an explicit production secret and uses secure cookies off localhost", () => {
+        expect(createSignedStudentSessionCookie(registeredIdentity, { NODE_ENV: "production" }, 1_000)).toBeNull();
+        expect(shouldUseSecureStudentSessionCookie("omr.example.com", productionEnv)).toBe(true);
+        expect(shouldUseSecureStudentSessionCookie("localhost:3003", productionEnv)).toBe(false);
     });
 });

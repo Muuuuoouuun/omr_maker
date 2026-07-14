@@ -12,6 +12,34 @@ function readProductionRls(): string {
     return readFileSync(path.join(rootDir, "supabase/production-rls.sql"), "utf8");
 }
 
+function readStudentAttemptGatewayMigration(): string {
+    return readFileSync(path.join(rootDir, "supabase/migrations/202607140003_student_attempt_gateway.sql"), "utf8");
+}
+
+function readServiceReadinessMigration(): string {
+    return readFileSync(path.join(rootDir, "supabase/migrations/202607140017_service_readiness_probe_v3.sql"), "utf8");
+}
+
+function readTeacherExamGatewayMigration(): string {
+    return readFileSync(path.join(rootDir, "supabase/migrations/202607140007_teacher_exam_gateway.sql"), "utf8");
+}
+
+function readAttemptHandwritingGatewayMigration(): string {
+    return readFileSync(path.join(rootDir, "supabase/migrations/202607140009_attempt_handwriting_gateway.sql"), "utf8");
+}
+
+function readTeacherAttemptMutationMigration(): string {
+    return readFileSync(path.join(rootDir, "supabase/migrations/202607140012_teacher_attempt_mutation.sql"), "utf8");
+}
+
+function readTeacherExamDeleteMigration(): string {
+    return readFileSync(path.join(rootDir, "supabase/migrations/202607140014_teacher_exam_delete.sql"), "utf8");
+}
+
+function readFeedbackGatewayMigration(): string {
+    return readFileSync(path.join(rootDir, "supabase/migrations/202607140016_feedback_gateway.sql"), "utf8");
+}
+
 function columnExists(schema: string, table: string, column: string): boolean {
     const createPattern = new RegExp(`create table if not exists public\\.${table}\\s*\\(([\\s\\S]*?)\\n\\);`, "i");
     const createMatch = schema.match(createPattern);
@@ -33,6 +61,13 @@ function expectIndex(schema: string, indexName: string) {
 describe("Supabase schema contract", () => {
     const schema = readSchema();
     const productionRls = readProductionRls();
+    const studentAttemptGateway = readStudentAttemptGatewayMigration();
+    const serviceReadiness = readServiceReadinessMigration();
+    const teacherExamGateway = readTeacherExamGatewayMigration();
+    const attemptHandwritingGateway = readAttemptHandwritingGatewayMigration();
+    const teacherAttemptMutation = readTeacherAttemptMutationMigration();
+    const teacherExamDelete = readTeacherExamDeleteMigration();
+    const feedbackGateway = readFeedbackGatewayMigration();
 
     it("keeps roster columns and indexes aligned with teacher user management sync", () => {
         expectColumns(schema, "omr_organizations", [
@@ -292,6 +327,39 @@ describe("Supabase schema contract", () => {
         expectIndex(schema, "omr_kakao_dispatch_logs_status_idx");
     });
 
+    it("keeps returned attempt feedback columns for markup, notifications, and read receipts", () => {
+        expectColumns(schema, "omr_attempt_feedback", [
+            "id",
+            "organization_id",
+            "attempt_id",
+            "exam_id",
+            "student_profile_id",
+            "teacher_user_id",
+            "status",
+            "summary",
+            "question_comments",
+            "markup",
+            "markup_drawings",
+            "download_policy",
+            "notification_status",
+            "notification_channel",
+            "notified_at",
+            "first_opened_at",
+            "last_opened_at",
+            "open_count",
+            "returned_at",
+            "payload",
+            "created_at",
+            "updated_at",
+        ]);
+
+        expectIndex(schema, "omr_attempt_feedback_attempt_idx");
+        expectIndex(schema, "omr_attempt_feedback_student_unread_idx");
+        expectIndex(schema, "omr_attempt_feedback_org_status_idx");
+        expect(schema).toContain("create or replace function public.omr_mark_feedback_opened");
+        expect(schema).toContain("notification_status = 'sent'");
+    });
+
     it("keeps the production RLS handoff separate from alpha public policies", () => {
         const protectedTables = [
             "omr_organizations",
@@ -313,6 +381,7 @@ describe("Supabase schema contract", () => {
             "omr_attempts",
             "omr_question_results",
             "omr_assignment_submissions",
+            "omr_attempt_feedback",
             "omr_kakao_candidate_reviews",
             "omr_kakao_dispatch_logs",
             "omr_comments",
@@ -322,6 +391,8 @@ describe("Supabase schema contract", () => {
         expect(productionRls).toContain("create or replace function public.omr_is_org_member");
         expect(productionRls).toContain("create or replace function public.omr_has_org_role");
         expect(productionRls).toContain("create or replace function public.omr_can_read_assignment");
+        expect(productionRls).toContain("create or replace function public.omr_mark_feedback_opened");
+        expect(productionRls).toContain("grant execute on function public.omr_mark_feedback_opened(text, timestamptz) to authenticated");
         expect(productionRls).toContain("auth.uid()");
         expect(productionRls).toContain("to authenticated");
         expect(productionRls).toContain("revoke all on all tables in schema public from anon");
@@ -333,7 +404,85 @@ describe("Supabase schema contract", () => {
 
         expect(productionRls).toContain('drop policy if exists "OMR organizations are publicly writable"');
         expect(productionRls).toContain('drop policy if exists "OMR attempts are publicly writable"');
+        expect(productionRls).toContain('create policy "prod attempt feedback update by staff"');
+        expect(productionRls).not.toContain('create policy "prod attempt feedback update by staff or returned student"');
         expect(productionRls).not.toMatch(/using\s*\(\s*true\s*\)/i);
         expect(productionRls).not.toMatch(/with check\s*\(\s*true\s*\)/i);
+    });
+
+    it("keeps canonical answers staff-only and student submissions behind an atomic service-role RPC", () => {
+        expect(productionRls).toContain('create policy "prod exams read by staff"');
+        expect(productionRls).toContain('create policy "prod exam questions read by staff"');
+        expect(productionRls).toContain('create policy "prod attempts write by staff"');
+        expect(productionRls).toContain('create policy "prod question results write by staff"');
+        expect(productionRls).not.toContain('create policy "prod exams read by members or assigned students"');
+        expect(productionRls).not.toContain('create policy "prod attempts write by staff or self"');
+
+        expectColumns(schema, "omr_attempts", ["ticket_id"]);
+        expectIndex(schema, "omr_attempts_ticket_id_unique_idx");
+        expect(studentAttemptGateway).toContain("create or replace function public.omr_submit_attempt_v1");
+        expect(studentAttemptGateway).toContain("security definer");
+        expect(studentAttemptGateway).toContain("on conflict (ticket_id)");
+        expect(studentAttemptGateway).toContain("grant execute on function public.omr_submit_attempt_v1(text, jsonb, jsonb) to service_role");
+        expect(studentAttemptGateway).toContain("revoke all on function public.omr_submit_attempt_v1(text, jsonb, jsonb) from authenticated");
+    });
+
+    it("requires a service-role-only live DB readiness probe", () => {
+        expect(serviceReadiness).toContain("omr_service_readiness_v1");
+        expect(serviceReadiness).toContain("relforcerowsecurity");
+        expect(serviceReadiness).toContain("omr_submit_attempt_v1(text,jsonb,jsonb)");
+        expect(serviceReadiness).toContain("omr_delete_exam_v1(text,text)");
+        expect(serviceReadiness).toContain("omr_teacher_update_attempt_v1(text,jsonb,jsonb)");
+        expect(serviceReadiness).toContain("omr_save_roster_v1(text,jsonb,jsonb,jsonb,jsonb)");
+        expect(serviceReadiness).toContain("omr_save_feedback_v1(text,jsonb)");
+        expect(serviceReadiness).toContain("omr_return_feedback_v1(text,text,timestamptz)");
+        expect(serviceReadiness).toContain("omr_mark_feedback_opened_v2(text,text,text,timestamptz)");
+        expect(serviceReadiness).toContain("omr_roster_invites");
+        expect(serviceReadiness).toContain("omr_attempt_feedback");
+        expect(serviceReadiness).toContain("'version', '202607140017'");
+        expect(serviceReadiness).toContain("revoke all on function public.omr_service_readiness_v1() from anon");
+        expect(serviceReadiness).toContain("revoke all on function public.omr_service_readiness_v1() from authenticated");
+        expect(serviceReadiness).toContain("grant execute on function public.omr_service_readiness_v1() to service_role");
+    });
+
+    it("keeps exam deletion and feedback mutations off browser roles", () => {
+        expect(teacherExamDelete).toContain("revoke all on function public.omr_delete_exam_v1(text, text) from public, anon, authenticated");
+        expect(teacherExamDelete).toContain("grant execute on function public.omr_delete_exam_v1(text, text) to service_role");
+
+        for (const signature of [
+            "public.omr_save_feedback_v1(text, jsonb)",
+            "public.omr_return_feedback_v1(text, text, timestamptz)",
+            "public.omr_mark_feedback_opened_v2(text, text, text, timestamptz)",
+        ]) {
+            expect(feedbackGateway).toContain(`revoke all on function ${signature} from public, anon, authenticated`);
+            expect(feedbackGateway).toContain(`grant execute on function ${signature} to service_role`);
+        }
+    });
+
+    it("updates canonical teacher attempt repairs atomically and only through the service role", () => {
+        expect(teacherAttemptMutation).toContain("create or replace function public.omr_teacher_update_attempt_v1");
+        expect(teacherAttemptMutation).toContain("attempt is outside teacher organization");
+        expect(teacherAttemptMutation).toContain("attempt exam is immutable");
+        expect(teacherAttemptMutation).toContain("question result scope mismatch");
+        expect(teacherAttemptMutation).toContain("revoke all on function public.omr_teacher_update_attempt_v1(text, jsonb, jsonb) from authenticated");
+        expect(teacherAttemptMutation).toContain("grant execute on function public.omr_teacher_update_attempt_v1(text, jsonb, jsonb) to service_role");
+    });
+
+    it("keeps canonical teacher exam and question replacement atomic and service-role-only", () => {
+        expect(teacherExamGateway).toContain("create or replace function public.omr_save_exam_v1");
+        expect(teacherExamGateway).toContain("security definer");
+        expect(teacherExamGateway).toContain("exam question scope mismatch");
+        expect(teacherExamGateway).toContain("delete from public.omr_exam_questions");
+        expect(teacherExamGateway).toContain("revoke all on function public.omr_save_exam_v1(jsonb, jsonb) from authenticated");
+        expect(teacherExamGateway).toContain("grant execute on function public.omr_save_exam_v1(jsonb, jsonb) to service_role");
+    });
+
+    it("attaches remote handwriting only through a scoped service-role RPC", () => {
+        expect(attemptHandwritingGateway).toContain("omr_attach_attempt_handwriting_v1");
+        expect(attemptHandwritingGateway).toContain("asset.organization_id = v_attempt.organization_id");
+        expect(attemptHandwritingGateway).toContain("asset.attempt_id = v_attempt.id");
+        expect(attemptHandwritingGateway).toContain("asset.kind = 'attempt_handwriting'");
+        expect(attemptHandwritingGateway).toContain("revoke all on function public.omr_attach_attempt_handwriting_v1(text, text, jsonb) from authenticated");
+        expect(attemptHandwritingGateway).toContain("grant execute on function public.omr_attach_attempt_handwriting_v1(text, text, jsonb) to service_role");
     });
 });

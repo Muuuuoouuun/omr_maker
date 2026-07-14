@@ -16,6 +16,17 @@ export interface SupabaseConfig {
     publishableKey: string;
 }
 
+export interface StudentAttemptScope {
+    studentId: string;
+    name?: string;
+    groupId?: string;
+    groupName?: string;
+    guestId?: string;
+    isGuest?: boolean;
+    identityType?: string;
+    loginId?: string;
+}
+
 export interface SupabaseExamRow {
     id: string;
     organization_id?: string | null;
@@ -139,6 +150,7 @@ export interface SupabaseQuestionResultRow {
     answered_at: string | null;
     finished_at: string;
     payload: QuestionResult;
+    created_at: string;
     updated_at: string;
 }
 
@@ -188,11 +200,17 @@ const EXAM_PREFIX = EXAM_STORAGE_KEY_PREFIX;
 const ATTEMPTS_KEY = ATTEMPTS_STORAGE_KEY;
 const DELETED_EXAMS_KEY = DELETED_EXAMS_STORAGE_KEY;
 const SOLVE_DRAFT_PREFIX = SOLVE_DRAFT_STORAGE_KEY_PREFIX;
+const REMOTE_SYNC_CONCURRENCY = 4;
 
 let supabaseClientPromise: Promise<SupabaseClientLike | null> | null = null;
 
 function clean(value: unknown): string {
     return typeof value === "string" ? value.trim() : "";
+}
+
+function isProductionRlsApplied(value: unknown): boolean {
+    const normalized = clean(value).toLowerCase();
+    return normalized === "true" || normalized === "1" || normalized === "yes";
 }
 
 function scopedValue(value: unknown): string | null {
@@ -266,6 +284,31 @@ function attemptWithPersistenceContext(attempt: Attempt, context = contextForAtt
     };
 }
 
+function normalizeScopeText(value: unknown): string {
+    return typeof value === "string" ? value.trim() : "";
+}
+
+export function attemptMatchesStudentScope(attempt: Attempt, scope: StudentAttemptScope): boolean {
+    if (scope.isGuest || scope.identityType === "guest") {
+        return !!scope.guestId && attempt.guestId === scope.guestId;
+    }
+
+    const scopeStudentId = normalizeScopeText(scope.studentId);
+    if (attempt.studentProfileId && attempt.studentProfileId === scopeStudentId) return true;
+    if (attempt.studentId && attempt.studentId === scopeStudentId) return true;
+    if (scope.loginId && attempt.studentId === scope.loginId) return true;
+
+    if (!attempt.studentId && attempt.studentName === scope.name) {
+        const scopeHasGroup = !!(scope.groupId || scope.groupName);
+        const attemptHasGroup = !!(attempt.groupId || attempt.groupName);
+        if (!scopeHasGroup && !attemptHasGroup) return true;
+        if (!scopeHasGroup || !attemptHasGroup) return false;
+        return attempt.groupId === scope.groupId || attempt.groupName === scope.groupName;
+    }
+
+    return false;
+}
+
 export function getSupabaseConfigFromEnv(env: Env): SupabaseConfig | null {
     const url = env.NEXT_PUBLIC_SUPABASE_URL?.trim();
     const publishableKey = (
@@ -274,6 +317,12 @@ export function getSupabaseConfigFromEnv(env: Env): SupabaseConfig | null {
     )?.trim();
 
     if (!url || !publishableKey) return null;
+    if (
+        clean(env.NODE_ENV).toLowerCase() === "production" &&
+        !isProductionRlsApplied(env.OMR_PRODUCTION_RLS_APPLIED)
+    ) {
+        return null;
+    }
     return { url, publishableKey };
 }
 
@@ -593,6 +642,7 @@ export function questionResultToSupabaseRow(
         answered_at: nullableString(result.answeredAt),
         finished_at: finishedAt,
         payload,
+        created_at: finishedAt,
         updated_at: updatedAt,
     };
 }
@@ -906,7 +956,7 @@ export function readLocalExams(): Exam[] {
 
 function isStoredDataRef(value: unknown): value is StoredDataRef {
     return isRecord(value)
-        && value.store === "indexeddb"
+        && (value.store === "indexeddb" || value.store === "remote")
         && typeof value.key === "string"
         && value.key.trim().length > 0;
 }
@@ -972,10 +1022,25 @@ async function deleteStoredDataRefs(refs: StoredDataRef[]): Promise<void> {
 }
 
 export function saveLocalExam(exam: Exam): boolean {
+    return saveLocalExams([exam]);
+}
+
+export function saveLocalExams(exams: Exam[]): boolean {
     if (!hasBrowserStorage()) return false;
+    if (exams.length === 0) return true;
     try {
-        clearLocalExamDeleted(exam.id);
-        localStorage.setItem(`${EXAM_PREFIX}${exam.id}`, JSON.stringify(exam));
+        const deletedExamIds = readLocalDeletedExamIds();
+        let deletionIndexChanged = false;
+
+        for (const exam of exams) {
+            localStorage.setItem(`${EXAM_PREFIX}${exam.id}`, JSON.stringify(exam));
+            if (deletedExamIds[exam.id]) {
+                delete deletedExamIds[exam.id];
+                deletionIndexChanged = true;
+            }
+        }
+
+        if (deletionIndexChanged) writeLocalDeletedExamIds(deletedExamIds);
         return true;
     } catch {
         return false;
@@ -1008,30 +1073,20 @@ export function readLocalAttempts(): Attempt[] {
 }
 
 export function saveLocalAttempt(attempt: Attempt): boolean {
-    if (!hasBrowserStorage()) return false;
-    try {
-        const localAttempt = stripHeavyAttemptPayload(attempt);
-        const attempts = readLocalAttempts();
-        const next = attempts.filter(item => item.id !== attempt.id);
-        next.push(localAttempt);
-        localStorage.setItem(ATTEMPTS_KEY, JSON.stringify(sortByNewestActivity(next)));
-        return true;
-    } catch {
-        return false;
-    }
+    return saveLocalAttempts([attempt]);
 }
 
-/**
- * Bulk-persist a fully merged attempt list in a single localStorage write.
- * Prefer this over looping saveLocalAttempt (which re-parses, sanitizes and
- * re-sorts the entire blob per item — O(n^2) on read paths). The caller is
- * responsible for passing the complete set to persist; this overwrites the index.
- */
+/** Merge a batch into the local attempt index with one read and one write. */
 export function saveLocalAttempts(attempts: Attempt[]): boolean {
     if (!hasBrowserStorage()) return false;
+    if (attempts.length === 0) return true;
     try {
-        const stripped = attempts.map(stripHeavyAttemptPayload);
-        localStorage.setItem(ATTEMPTS_KEY, JSON.stringify(sortByNewestActivity(stripped)));
+        const nextById = new Map(readLocalAttempts().map(attempt => [attempt.id, attempt]));
+        for (const attempt of attempts) {
+            nextById.set(attempt.id, stripHeavyAttemptPayload(attempt));
+        }
+        const next = sortByNewestActivity([...nextById.values()]);
+        localStorage.setItem(ATTEMPTS_KEY, JSON.stringify(next));
         return true;
     } catch {
         return false;
@@ -1123,24 +1178,38 @@ export function itemsNeedingRemoteSync<T extends { id: string } & (Exam | Attemp
     });
 }
 
-async function syncLocalItems<T extends { id: string } & (Exam | Attempt)>(
+export async function syncLocalItems<T extends { id: string } & (Exam | Attempt)>(
     items: T[],
     syncOne: (item: T) => Promise<void>,
+    concurrency = REMOTE_SYNC_CONCURRENCY,
 ): Promise<{ failedCount: number; error?: string }> {
-    const failures: string[] = [];
+    const failures: Array<string | undefined> = new Array(items.length);
+    const normalizedConcurrency = Number.isFinite(concurrency)
+        ? Math.max(1, Math.floor(concurrency))
+        : REMOTE_SYNC_CONCURRENCY;
+    const workerCount = Math.min(items.length, normalizedConcurrency);
+    let nextIndex = 0;
 
-    for (const item of items) {
-        try {
-            await syncOne(item);
-        } catch (error) {
-            failures.push(`${item.id}: ${errorMessage(error)}`);
+    const runWorker = async () => {
+        while (nextIndex < items.length) {
+            const index = nextIndex;
+            nextIndex += 1;
+            const item = items[index];
+            try {
+                await syncOne(item);
+            } catch (error) {
+                failures[index] = `${item.id}: ${errorMessage(error)}`;
+            }
         }
-    }
+    };
 
-    if (failures.length === 0) return { failedCount: 0 };
+    await Promise.all(Array.from({ length: workerCount }, () => runWorker()));
+
+    const failureMessages = failures.filter((failure): failure is string => !!failure);
+    if (failureMessages.length === 0) return { failedCount: 0 };
     return {
-        failedCount: failures.length,
-        error: `원격 재동기화 실패: ${failures.slice(0, 3).join("; ")}`,
+        failedCount: failureMessages.length,
+        error: `원격 재동기화 실패: ${failureMessages.slice(0, 3).join("; ")}`,
     };
 }
 
@@ -1229,6 +1298,31 @@ async function fetchRemoteAttempts(): Promise<Attempt[]> {
         .filter((attempt): attempt is Attempt => !!attempt);
 }
 
+async function fetchRemoteAttemptsForStudent(studentProfileId: string): Promise<Attempt[]> {
+    const normalizedStudentId = scopedValue(studentProfileId);
+    if (!normalizedStudentId) return [];
+
+    const client = await getAvailableSupabaseClient();
+    if (!client) return [];
+
+    const { data, error } = await client
+        .from("omr_attempts")
+        .select("*")
+        .eq("student_profile_id", normalizedStudentId)
+        .order("finished_at", { ascending: false });
+
+    if (error) throw new Error(error.message || "Failed to load student attempts from Supabase");
+    return (data || [])
+        .map(row => {
+            try {
+                return attemptFromSupabaseRow(row as SupabaseAttemptRow);
+            } catch {
+                return null;
+            }
+        })
+        .filter((attempt): attempt is Attempt => !!attempt);
+}
+
 export async function fetchRemoteAttempt(
     id: string,
     options?: { organizationId?: string },
@@ -1249,6 +1343,29 @@ export async function fetchRemoteAttempt(
     const { data, error } = await query.maybeSingle();
 
     if (error) throw new Error(error.message || "Failed to load attempt from Supabase");
+    if (!data) return null;
+    try {
+        return attemptFromSupabaseRow(data as SupabaseAttemptRow);
+    } catch {
+        return null;
+    }
+}
+
+async function fetchRemoteAttemptForStudent(id: string, studentProfileId: string): Promise<Attempt | null> {
+    const normalizedStudentId = scopedValue(studentProfileId);
+    if (!normalizedStudentId) return null;
+
+    const client = await getAvailableSupabaseClient();
+    if (!client) return null;
+
+    const { data, error } = await client
+        .from("omr_attempts")
+        .select("*")
+        .eq("id", id)
+        .eq("student_profile_id", normalizedStudentId)
+        .maybeSingle();
+
+    if (error) throw new Error(error.message || "Failed to load student attempt from Supabase");
     if (!data) return null;
     try {
         return attemptFromSupabaseRow(data as SupabaseAttemptRow);
@@ -1402,7 +1519,7 @@ export async function loadExams(): Promise<LoadResult<Exam>> {
             ? itemsNeedingRemoteSync(localItems, remoteItems)
             : [];
         const syncResult = await syncLocalItems(syncQueue, upsertRemoteExam);
-        for (const exam of remoteItems) saveLocalExam(exam);
+        saveLocalExams(remoteItems);
         const remoteError = [deletedRetry.error, syncResult.error].filter(Boolean).join(" / ") || undefined;
         return {
             items: mergeById(localItems, remoteItems),
@@ -1502,6 +1619,33 @@ export async function loadExamsReadonly(): Promise<LoadResult<Exam>> {
     }
 }
 
+export async function loadAttemptsForStudent(scope: StudentAttemptScope): Promise<LoadResult<Attempt>> {
+    const localItems = readLocalAttempts()
+        .filter(attempt => attemptMatchesStudentScope(attempt, scope))
+        .filter(attempt => !isExamLocallyDeleted(attempt.examId));
+
+    if (!isSupabaseConfigured()) {
+        return { items: localItems, remoteLoaded: false };
+    }
+
+    try {
+        const remoteItems = (await fetchRemoteAttemptsForStudent(scope.studentId))
+            .filter(attempt => !isExamLocallyDeleted(attempt.examId))
+            .filter(attempt => attemptMatchesStudentScope(attempt, scope));
+        const mergedItems = mergeById(localItems, remoteItems)
+            .filter(attempt => attemptMatchesStudentScope(attempt, scope));
+        saveLocalAttempts(mergedItems);
+        return {
+            items: mergedItems,
+            remoteLoaded: true,
+            remoteSynced: true,
+            pendingSyncCount: 0,
+        };
+    } catch (error) {
+        return { items: localItems, remoteLoaded: false, remoteError: errorMessage(error) };
+    }
+}
+
 export async function loadAttempt(id: string): Promise<Attempt | null> {
     const localAttempt = readLocalAttempts().find(attempt => attempt.id === id) || null;
     if (localAttempt?.examId && isExamLocallyDeleted(localAttempt.examId)) return null;
@@ -1518,6 +1662,28 @@ export async function loadAttempt(id: string): Promise<Attempt | null> {
         }
     } catch (error) {
         console.warn("Falling back to local attempt", error);
+    }
+    return localAttempt;
+}
+
+export async function loadAttemptForStudent(id: string, scope: StudentAttemptScope): Promise<Attempt | null> {
+    const localAttempt = readLocalAttempts()
+        .find(attempt => attempt.id === id && attemptMatchesStudentScope(attempt, scope)) || null;
+    if (localAttempt?.examId && isExamLocallyDeleted(localAttempt.examId)) return null;
+    if (localAttempt) return localAttempt;
+
+    try {
+        const remoteAttempt = await fetchRemoteAttemptForStudent(id, scope.studentId);
+        if (
+            remoteAttempt &&
+            !isExamLocallyDeleted(remoteAttempt.examId) &&
+            attemptMatchesStudentScope(remoteAttempt, scope)
+        ) {
+            saveLocalAttempt(remoteAttempt);
+            return remoteAttempt;
+        }
+    } catch (error) {
+        console.warn("Falling back to local student attempt", error);
     }
     return localAttempt;
 }

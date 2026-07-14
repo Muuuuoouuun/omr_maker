@@ -35,10 +35,10 @@ export function buildPenCursor(color: string): string {
  * CSS `cursor` value showing a highlighter glyph, hotspot at the tip.
  * Rendered at 93% of the 32px design. Falls back to `crosshair`.
  */
-export function buildHighlighterCursor(): string {
+export function buildHighlighterCursor(color = "rgba(250,204,21,0.95)"): string {
     const svg =
         `<svg xmlns='http://www.w3.org/2000/svg' width='${CURSOR_DIM}' height='${CURSOR_DIM}' viewBox='0 0 32 32'>` +
-        `<path d='M23 4 L28 9 L14 23 L8 23 L8 17 Z' fill='rgba(250,204,21,0.95)' stroke='white' stroke-width='1.5' stroke-linejoin='round'/>` +
+        `<path d='M23 4 L28 9 L14 23 L8 23 L8 17 Z' fill='${color}' stroke='white' stroke-width='1.5' stroke-linejoin='round'/>` +
         `</svg>`;
     return `url("data:image/svg+xml,${encodeSvg(svg)}") ${hotspot(8, 23)}, crosshair`;
 }

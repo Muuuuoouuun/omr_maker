@@ -4,14 +4,14 @@ import BrandLogo from "@/components/BrandLogo";
 import OMRCardView from "@/components/OMRCardView";
 import OMRPreview from "@/components/OMRPreview";
 import dynamic from "next/dynamic";
-import AnswerImportModal from "@/components/AnswerImportModal";
-import DistributeModal from "@/components/DistributeModal";
 import TeacherLogoutButton from "@/components/TeacherLogoutButton";
 import TeacherSessionChip from "@/components/TeacherSessionChip";
 import ThemeToggle from "@/components/ThemeToggle";
 import { useRouter, useSearchParams } from "next/navigation";
 import { toast } from "@/components/Toast";
-import { ArrowUpToLine, BrainCircuit, ChevronDown, Crosshair, FileText, FolderOpen, Loader2, Maximize2, Minimize2, PanelRightClose, PanelRightOpen, RefreshCw, Redo2, Unlink, Undo2, UploadCloud, ZoomIn, ZoomOut } from "lucide-react";
+import { getTeacherRemoteAssetUrl, uploadTeacherExamAsset } from "@/app/actions/remoteAssets";
+import { loadTeacherCanonicalExam, saveTeacherCanonicalExam } from "@/app/actions/teacherExam";
+import { ArrowUpToLine, BrainCircuit, ChevronDown, Crosshair, Eye, FileText, FolderOpen, Loader2, Maximize2, Minimize2, PanelRightClose, PanelRightOpen, RefreshCw, Redo2, RotateCcw, Save, Settings2, Unlink, Undo2, UploadCloud, X, ZoomIn, ZoomOut } from "lucide-react";
 
 function PdfViewerLoading() {
     return (
@@ -32,6 +32,8 @@ const PDFViewer = dynamic(() => import("@/components/PDFViewer"), {
     ssr: false,
     loading: PdfViewerLoading,
 });
+const AnswerImportModal = dynamic(() => import("@/components/AnswerImportModal"), { ssr: false });
+const DistributeModal = dynamic(() => import("@/components/DistributeModal"), { ssr: false });
 import { Suspense, useState, useEffect, useRef, useCallback, useMemo, type CSSProperties } from "react";
 import { DEFAULT_CHOICE_COUNT, questionChoiceCount, type Exam, type Question, type QuestionSubQuestion, type QuestionSubQuestionTemplateId } from "@/types/omr";
 import type { ParsedAnswer } from "@/services/answerParser";
@@ -41,7 +43,7 @@ import { validateExamDraft } from "@/lib/examValidation";
 import { buildSolveShareUrl, isShareUrlReachableByStudents } from "@/lib/shareLink";
 import { buildExamServiceReadiness, type ExamServiceReadinessLevel } from "@/lib/examServiceReadiness";
 import { readStoredExamDefaults } from "@/lib/appSettings";
-import { loadExam, saveExam } from "@/lib/omrPersistence";
+import { loadExam, saveExam, saveLocalExam } from "@/lib/omrPersistence";
 import { attachInferredQuestionPdfRegions } from "@/lib/handwritingAnalytics";
 import {
     detectQuestionLocationsFromText,
@@ -59,6 +61,22 @@ import { summarizePersistenceWrite } from "@/lib/persistenceFeedback";
 import { authorizeAdvancedQuestionDesign, authorizeExamCreation, releaseExamCreationAuthorization } from "@/app/actions/premiumAccess";
 import { hasPlanEntitlement } from "@/utils/plans";
 import { useServerPlan } from "@/lib/useServerPlan";
+import { readActiveWorkspaceContext } from "@/lib/workspaceContext";
+import {
+    buildQuestionLabelCandidates,
+    EMPTY_QUESTION_LABEL_SETTINGS,
+    hideQuestionLabelCandidate,
+    questionLabelSettingsStorageKey,
+    questionLabelUsageValues,
+    readQuestionLabelSettings,
+    recordQuestionLabelSettingUsage,
+    restoreHiddenQuestionLabelCandidates,
+    writeQuestionLabelSettings,
+    type QuestionLabelCandidate,
+    type QuestionLabelCandidateSource,
+    type QuestionLabelSettingUsageInput,
+    type QuestionLabelSettings,
+} from "@/lib/questionLabelSettings";
 import {
     addSubQuestionToTargets,
     createSubQuestion,
@@ -86,6 +104,16 @@ const SETTINGS_ZOOM_MAX = 1.18;
 const SETTINGS_ZOOM_STEP = 0.08;
 const AUTO_DETECT_TIMEOUT_MS = 90_000;
 type QuestionDifficulty = NonNullable<NonNullable<Question["tags"]>["difficulty"]>;
+type CreateWorkspacePanel = 'pdf' | 'settings' | 'preview';
+
+function buildDefaultQuestions(count: number, choices: 4 | 5, score: number): Question[] {
+    return Array.from({ length: count }, (_, index) => ({
+        id: index + 1,
+        number: index + 1,
+        choices,
+        score,
+    }));
+}
 
 function clampLayoutWidth(value: number, min: number, max: number): number {
     const safeMax = Math.max(min, max);
@@ -116,6 +144,31 @@ const SCHEDULE_PRESETS = [
     { key: "tomorrow-09", label: "내일 09:00" },
     { key: "tomorrow-19", label: "내일 19:00" },
 ] as const;
+
+function labelCandidateSourceLabel(source: QuestionLabelCandidateSource): string {
+    if (source === "current") return "현재";
+    if (source === "recent") return "최근";
+    return "기본";
+}
+
+function labelSettingsUsageFromQuestions(questions: Question[]): QuestionLabelSettingUsageInput {
+    return {
+        labels: questions.map(question => question.label),
+        units: questions.map(question => question.tags?.unit),
+        concepts: questions.map(question => question.tags?.concept),
+    };
+}
+
+function uniqueUsageCount(usage: QuestionLabelSettingUsageInput): number {
+    const values = [
+        ...(usage.labels || []),
+        ...(usage.units || []),
+        ...(usage.concepts || []),
+    ]
+        .map(value => typeof value === "string" ? value.trim() : "")
+        .filter(Boolean);
+    return new Set(values).size;
+}
 
 interface EditorDraft {
     title: string;
@@ -342,9 +395,34 @@ function readinessTone(level: ExamServiceReadinessLevel): { color: string; backg
     return { color: "var(--error)", background: "rgba(239,68,68,0.08)", border: "rgba(239,68,68,0.22)" };
 }
 
+function CreateEditorLoadingShell() {
+    return (
+        <div
+            aria-busy="true"
+            aria-label="시험 편집기를 불러오는 중"
+            style={{
+                minHeight: 'var(--app-viewport-height, 100dvh)',
+                background: 'var(--background)',
+                display: 'grid',
+                gridTemplateRows: '72px 1fr',
+            }}
+        >
+            <div style={{ borderBottom: '1px solid var(--border)', padding: '1rem 1.5rem', display: 'flex', alignItems: 'center', gap: '1rem' }}>
+                <div className="animate-pulse" style={{ width: 160, height: 36, borderRadius: 'var(--radius-full)', background: 'rgba(148,163,184,0.18)' }} />
+                <div className="animate-pulse" style={{ marginLeft: 'auto', width: 220, height: 40, borderRadius: 'var(--radius-full)', background: 'rgba(148,163,184,0.18)' }} />
+            </div>
+            <div style={{ padding: '1rem', display: 'grid', gridTemplateColumns: 'minmax(240px, 0.8fr) minmax(0, 1.7fr)', gap: '1rem' }}>
+                <div className="animate-pulse" style={{ borderRadius: 'var(--radius-lg)', background: 'rgba(148,163,184,0.14)' }} />
+                <div className="animate-pulse" style={{ borderRadius: 'var(--radius-lg)', background: 'rgba(148,163,184,0.1)' }} />
+            </div>
+            <span className="sr-only" role="status" aria-live="polite">시험 편집기를 준비하고 있습니다.</span>
+        </div>
+    );
+}
+
 export default function CreateOMRPage() {
     return (
-        <Suspense fallback={<div style={{ minHeight: 'var(--app-viewport-height, 100dvh)', background: 'var(--background)' }} />}>
+        <Suspense fallback={<CreateEditorLoadingShell />}>
             <CreateOMRPageInner />
         </Suspense>
     );
@@ -372,8 +450,8 @@ function CreateOMRPageInner() {
     const [title, setTitle] = useState("기말고사 OMR");
     const [questionsCount, setQuestionsCount] = useState(20);
     const [columns, setColumns] = useState(2);
-    const [questions, setQuestions] = useState<Question[]>([]);
-    const [initialDefaultsReady, setInitialDefaultsReady] = useState(!!editId);
+    const [questions, setQuestions] = useState<Question[]>(() => buildDefaultQuestions(20, DEFAULT_CHOICE_COUNT, 5));
+    const [initialDefaultsReady, setInitialDefaultsReady] = useState(false);
 
     // Interaction State
     const [selectedQuestionId, setSelectedQuestionId] = useState<number | null>(null);
@@ -386,6 +464,9 @@ function CreateOMRPageInner() {
         concept: "",
         difficulty: "",
     });
+    const [labelSettings, setLabelSettings] = useState<QuestionLabelSettings>(EMPTY_QUESTION_LABEL_SETTINGS);
+    const [labelSettingsKey, setLabelSettingsKey] = useState("");
+    const [labelSettingsScopeLabel, setLabelSettingsScopeLabel] = useState("이 브라우저 최근");
 
     // Validation
     const [fastAnswer, setFastAnswer] = useState("");
@@ -395,6 +476,7 @@ function CreateOMRPageInner() {
     const [sidebarWidth, setSidebarWidth] = useState(SETTINGS_SIDEBAR_DEFAULT_WIDTH);
     const [settingsZoom, setSettingsZoom] = useState(1);
     const [isPreviewCollapsed, setIsPreviewCollapsed] = useState(false);
+    const [mobileWorkspacePanel, setMobileWorkspacePanel] = useState<CreateWorkspacePanel>('pdf');
     const [activeResizer, setActiveResizer] = useState<'pdf' | 'sidebar' | null>(null);
     const createWorkspaceRef = useRef<HTMLDivElement>(null);
     const settingsSidebarRef = useRef<HTMLElement>(null);
@@ -552,6 +634,28 @@ function CreateOMRPageInner() {
         () => questions.find(q => q.id === selectedQuestionId) || null,
         [questions, selectedQuestionId],
     );
+    const currentLabelValues = useMemo(
+        () => questions.flatMap(q => [q.label, q.tags?.concept]),
+        [questions],
+    );
+    const knownLabelCandidates = useMemo(() => buildQuestionLabelCandidates({
+        currentLabels: currentLabelValues,
+        defaultLabels: DEFAULT_LABEL_PRESETS,
+        settings: labelSettings,
+        limit: 18,
+    }), [currentLabelValues, labelSettings]);
+    const knownLabels = useMemo(
+        () => knownLabelCandidates.map(candidate => candidate.label),
+        [knownLabelCandidates],
+    );
+    const recentUnitOptions = useMemo(
+        () => questionLabelUsageValues(labelSettings.recentUnits, 8),
+        [labelSettings.recentUnits],
+    );
+    const recentConceptOptions = useMemo(
+        () => questionLabelUsageValues(labelSettings.recentConcepts, 8),
+        [labelSettings.recentConcepts],
+    );
     const advancedQuestionDesignEnabled = hasPlanEntitlement(currentPlan, 'advancedQuestionDesign');
     const selectedSubQuestions = selectedQuestion?.subQuestions || [];
     const subQuestionEstimatedMinutes = Math.max(0, Math.ceil(estimateSubQuestionSeconds(questions) / 60));
@@ -565,14 +669,6 @@ function CreateOMRPageInner() {
         selectedQuestion?.tags?.mistakeTypes?.length ||
         selectedQuestion?.explanation,
     );
-    const knownLabels = useMemo(() => {
-        const labels = new Set<string>(DEFAULT_LABEL_PRESETS);
-        questions.forEach(q => {
-            if (q.label) labels.add(q.label);
-            if (q.tags?.concept) labels.add(q.tags.concept);
-        });
-        return Array.from(labels).slice(0, 12);
-    }, [questions]);
     const hasProblemPdfForValidation = !!pdfFile || !!loadedExam?.pdfData || !!loadedExam?.pdfDataRef;
     const hasAnswerKeyPdfForValidation = !!answerKeyPdf || !!loadedExam?.answerKeyPdf || !!loadedExam?.answerKeyPdfRef;
 
@@ -720,16 +816,23 @@ function CreateOMRPageInner() {
     };
 
     useEffect(() => {
-        if (editId) {
-            setInitialDefaultsReady(true);
-            return;
-        }
+        if (typeof window === "undefined") return;
+        const context = readActiveWorkspaceContext(window.sessionStorage);
+        const storageKey = questionLabelSettingsStorageKey(context.organizationId);
+        setLabelSettingsKey(storageKey);
+        setLabelSettingsScopeLabel(context.actorLabel ? `${context.actorLabel} 최근` : "이 브라우저 최근");
+        setLabelSettings(readQuestionLabelSettings(window.localStorage, storageKey));
+    }, []);
+
+    useEffect(() => {
+        if (editId) return;
         const defaults = readStoredExamDefaults();
         setQuestionsCount(defaults.questions);
         setDurationMin(defaults.duration);
         setDefaultChoices(defaults.choices);
         setDefaultScorePerQuestion(defaults.scorePerQ);
         setAutosaveIntervalMs(defaults.autosaveSec > 0 ? defaults.autosaveSec * 1000 : 0);
+        setQuestions(buildDefaultQuestions(defaults.questions, defaults.choices, defaults.scorePerQ));
         setInitialDefaultsReady(true);
     }, [editId]);
 
@@ -747,10 +850,18 @@ function CreateOMRPageInner() {
         let cancelled = false;
         const loadExistingExam = async () => {
             try {
-                const parsed = await loadExam(editId);
+                const serverExam = await loadTeacherCanonicalExam(editId);
+                const parsed = serverExam.status === "loaded"
+                    ? serverExam.exam
+                    : serverExam.status === "local_only"
+                        ? await loadExam(editId)
+                        : null;
                 if (cancelled) return;
                 if (!parsed) {
-                    toast.error('시험을 찾을 수 없습니다', editId);
+                    toast.error(
+                        serverExam.status === "service_unavailable" ? '시험 서버 연결 실패' : '시험을 찾을 수 없습니다',
+                        serverExam.status === "service_unavailable" ? '네트워크를 확인한 뒤 다시 시도해주세요.' : editId,
+                    );
                     return;
                 }
                 setLoadedExam(parsed);
@@ -762,14 +873,31 @@ function CreateOMRPageInner() {
                 if (typeof parsed.durationMin === 'number') setDurationMin(parsed.durationMin);
                 if (parsed.startAt) setStartAt(isoToLocalInput(parsed.startAt));
                 if (parsed.endAt) setEndAt(isoToLocalInput(parsed.endAt));
-                storedDataUrlToFile("problem.pdf", parsed.pdfData, parsed.pdfDataRef)
+                setInitialDefaultsReady(true);
+                const problemAsset = parsed.pdfDataRef?.store === "remote"
+                    ? await getTeacherRemoteAssetUrl(parsed.pdfDataRef)
+                    : null;
+                const problemData = problemAsset?.status === "signed" ? problemAsset.signedUrl : parsed.pdfData;
+                storedDataUrlToFile(
+                    "problem.pdf",
+                    problemData,
+                    parsed.pdfDataRef?.store === "remote" ? undefined : parsed.pdfDataRef,
+                )
                     .then(file => {
                         if (!cancelled && file) setPdfFile(file);
                     })
                     .catch(() => {
                         if (!cancelled) toast.error('문제지 PDF 불러오기 실패');
                     });
-                storedDataUrlToFile("answer_key.pdf", parsed.answerKeyPdf, parsed.answerKeyPdfRef)
+                const answerAsset = parsed.answerKeyPdfRef?.store === "remote"
+                    ? await getTeacherRemoteAssetUrl(parsed.answerKeyPdfRef)
+                    : null;
+                const answerData = answerAsset?.status === "signed" ? answerAsset.signedUrl : parsed.answerKeyPdf;
+                storedDataUrlToFile(
+                    "answer_key.pdf",
+                    answerData,
+                    parsed.answerKeyPdfRef?.store === "remote" ? undefined : parsed.answerKeyPdfRef,
+                )
                     .then(file => {
                         if (!cancelled && file) setAnswerKeyPdf(file);
                     })
@@ -1106,6 +1234,43 @@ function CreateOMRPageInner() {
         });
     };
 
+    const persistLabelSettings = useCallback((updater: (settings: QuestionLabelSettings) => QuestionLabelSettings) => {
+        setLabelSettings(prev => {
+            const next = updater(prev);
+            if (typeof window !== "undefined" && labelSettingsKey) {
+                writeQuestionLabelSettings(window.localStorage, labelSettingsKey, next);
+            }
+            return next;
+        });
+    }, [labelSettingsKey]);
+
+    const rememberLabelUsage = useCallback((usage: QuestionLabelSettingUsageInput) => {
+        if (uniqueUsageCount(usage) === 0) return;
+        persistLabelSettings(settings => recordQuestionLabelSettingUsage(settings, usage));
+    }, [persistLabelSettings]);
+
+    const rememberCurrentLabelSetup = () => {
+        const usage = labelSettingsUsageFromQuestions(questions);
+        const count = uniqueUsageCount(usage);
+        if (count === 0) {
+            toast.info("기억할 라벨 없음", "먼저 문항에 라벨, 단원, 개념 중 하나를 입력하세요.");
+            return;
+        }
+        rememberLabelUsage(usage);
+        toast.success("라벨 세팅 기억됨", `${count}개 라벨 요소를 다음 시험 후보에 반영했습니다.`);
+    };
+
+    const hideLabelPreset = (label: string) => {
+        persistLabelSettings(settings => hideQuestionLabelCandidate(settings, label));
+        toast.info("라벨 후보 숨김", `"${label}" 후보를 숨겼습니다. 이미 붙은 문항 라벨은 유지됩니다.`);
+    };
+
+    const restoreHiddenLabelPresets = () => {
+        if (labelSettings.hiddenLabels.length === 0) return;
+        persistLabelSettings(settings => restoreHiddenQuestionLabelCandidates(settings));
+        toast.success("숨김 후보 복구", "숨겨둔 기본/최근 라벨 후보를 다시 표시합니다.");
+    };
+
     const setExplanation = (explanation: string) => {
         updateSelectedQuestion(q => ({
             ...q,
@@ -1176,10 +1341,12 @@ function CreateOMRPageInner() {
 
     const toggleLabel = (label: string) => {
         if (selectedQuestionId === null) return;
+        const shouldRemember = selectedQuestion?.label !== label;
         setQuestions(prev => prev.map(q => {
             if (q.id !== selectedQuestionId) return q;
             return { ...q, label: label === q.label ? undefined : label };
         }));
+        if (shouldRemember) rememberLabelUsage({ labels: [label] });
     };
 
     const setLabelBatchRange = (start: number, end: number) => {
@@ -1237,6 +1404,7 @@ function CreateOMRPageInner() {
         }
 
         setQuestions(nextQuestions);
+        rememberLabelUsage({ labels: [label], units: [unit], concepts: [concept] });
         toast.success("문항 라벨 적용됨", `${start}~${end}번 ${applied}개 문항을 업데이트했습니다.`);
     };
 
@@ -1471,15 +1639,41 @@ function CreateOMRPageInner() {
             let answerKeyPdfRef = loadedExam?.answerKeyPdfRef;
 
             if (pdfFile) {
-                const stored = await saveFileDataUrl(`exam:${id}:problemPdf`, pdfFile);
-                pdfData = stored.inlineDataUrl || "";
-                pdfDataRef = stored.ref;
+                const formData = new FormData();
+                formData.set("file", pdfFile);
+                formData.set("kind", "problem_pdf");
+                formData.set("examId", id);
+                const remote = await uploadTeacherExamAsset(formData);
+                if (remote.status === "uploaded") {
+                    pdfData = "";
+                    pdfDataRef = remote.ref;
+                } else if (remote.status === "local_only") {
+                    const stored = await saveFileDataUrl(`exam:${id}:problemPdf`, pdfFile);
+                    pdfData = stored.inlineDataUrl || "";
+                    pdfDataRef = stored.ref;
+                } else {
+                    toast.error("문제지 업로드 실패", remote.error || "비공개 원격 저장소에 문제지를 보관하지 못했습니다.");
+                    return "";
+                }
             }
 
             if (answerKeyPdf) {
-                const stored = await saveFileDataUrl(`exam:${id}:answerKeyPdf`, answerKeyPdf);
-                answerKeyData = stored.inlineDataUrl || "";
-                answerKeyPdfRef = stored.ref;
+                const formData = new FormData();
+                formData.set("file", answerKeyPdf);
+                formData.set("kind", "answer_key_pdf");
+                formData.set("examId", id);
+                const remote = await uploadTeacherExamAsset(formData);
+                if (remote.status === "uploaded") {
+                    answerKeyData = "";
+                    answerKeyPdfRef = remote.ref;
+                } else if (remote.status === "local_only") {
+                    const stored = await saveFileDataUrl(`exam:${id}:answerKeyPdf`, answerKeyPdf);
+                    answerKeyData = stored.inlineDataUrl || "";
+                    answerKeyPdfRef = stored.ref;
+                } else {
+                    toast.error("답지 업로드 실패", remote.error || "비공개 원격 저장소에 답지를 보관하지 못했습니다.");
+                    return "";
+                }
             }
 
             // Fill only missing regions so teacher-tuned regions survive every re-share.
@@ -1521,7 +1715,19 @@ function CreateOMRPageInner() {
                 archived: loadedExam?.archived || false,
             };
 
-            const result = await saveExam(examData);
+            const serverSave = await saveTeacherCanonicalExam(examData);
+            if (serverSave.status === "unauthorized") {
+                toast.error("교사 인증 필요", "교사로 다시 로그인한 뒤 시험을 저장해주세요.");
+                return "";
+            }
+            if (serverSave.status === "invalid_exam" || serverSave.status === "service_unavailable") {
+                toast.error("배포 저장 실패", serverSave.error || "서버 시험 저장소에 시험을 보관하지 못했습니다.");
+                return "";
+            }
+            const persistedExam = serverSave.status === "saved" ? serverSave.exam : examData;
+            const result = serverSave.status === "saved"
+                ? { localSaved: saveLocalExam(persistedExam), remoteSaved: true }
+                : await saveExam(persistedExam);
             const feedback = summarizePersistenceWrite(result, {
                 target: "시험",
                 action: "저장",
@@ -1541,7 +1747,8 @@ function CreateOMRPageInner() {
             if (feedback.level === "info") {
                 toast.info(feedback.title, feedback.detail);
             }
-            setLoadedExam(examData);
+            rememberLabelUsage(labelSettingsUsageFromQuestions(questionsWithRegions));
+            setLoadedExam(persistedExam);
             setQuestions(questionsWithRegions);
             if (!editId) {
                 router.replace(`/create?edit=${id}`, { scroll: false });
@@ -1713,7 +1920,7 @@ function CreateOMRPageInner() {
 
     return (
         <div className="layout-main" style={{ background: 'var(--background)', height: 'var(--app-viewport-height, 100dvh)', overflow: 'hidden' }}>
-            <header className="header" style={{ flexShrink: 0 }}>
+            <header className="header create-editor-shell-header" style={{ flexShrink: 0 }}>
                 <div className="container header-content create-editor-header" style={{ maxWidth: '100%', padding: '0 2rem' }}>
                     <div className="create-editor-brand" style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
                         <BrandLogo compact />
@@ -1721,7 +1928,7 @@ function CreateOMRPageInner() {
                             스마트 에디터
                         </span>
                     </div>
-                    <div className="create-editor-actions scroll-custom" style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
+                    <div className="create-editor-actions scroll-custom" role="toolbar" aria-label="출제 도구 모음" style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
                         <button
                             type="button"
                             onClick={undo}
@@ -1783,24 +1990,28 @@ function CreateOMRPageInner() {
                 </div>
             </header>
 
-            <AnswerImportModal
-                isOpen={isImportModalOpen}
-                onClose={() => setIsImportModalOpen(false)}
-                onApply={handleAnswerImport}
-                onUploadAnswerPdf={(file) => {
-                    handleAnswerKeyPdfFile(file);
-                }}
-            />
+            {isImportModalOpen && (
+                <AnswerImportModal
+                    isOpen
+                    onClose={() => setIsImportModalOpen(false)}
+                    onApply={handleAnswerImport}
+                    onUploadAnswerPdf={(file) => {
+                        handleAnswerKeyPdfFile(file);
+                    }}
+                />
+            )}
 
-            <DistributeModal
-                isOpen={isDistributeModalOpen}
-                onClose={() => setIsDistributeModalOpen(false)}
-                onSaveAndShare={handleShareConfig}
-                onAutoMatchRegions={handleAutoMatchMissingRegions}
-                validationSummary={validationSummary}
-                initialAccessConfig={loadedExam?.accessConfig}
-                examId={loadedExam?.id}
-            />
+            {isDistributeModalOpen && (
+                <DistributeModal
+                    isOpen
+                    onClose={() => setIsDistributeModalOpen(false)}
+                    onSaveAndShare={handleShareConfig}
+                    onAutoMatchRegions={handleAutoMatchMissingRegions}
+                    validationSummary={validationSummary}
+                    initialAccessConfig={loadedExam?.accessConfig}
+                    examId={loadedExam?.id}
+                />
+            )}
 
             {confirmState && (
                 <CreateConfirmDialog
@@ -1811,10 +2022,55 @@ function CreateOMRPageInner() {
                 />
             )}
 
-            <div ref={createWorkspaceRef} className={`create-workspace ${isPreviewCollapsed ? 'is-preview-collapsed' : ''} ${activeResizer ? 'is-resizing' : ''}`} style={{ display: 'flex', flex: 1, height: 'calc(var(--app-viewport-height, 100dvh) - 4rem)', overflow: 'hidden' }}>
+            <div
+                ref={createWorkspaceRef}
+                className={`create-workspace mobile-panel-${mobileWorkspacePanel} ${isPreviewCollapsed ? 'is-preview-collapsed' : ''} ${activeResizer ? 'is-resizing' : ''}`}
+                style={{ display: 'flex', flex: 1, height: 'calc(var(--app-viewport-height, 100dvh) - 4rem)', overflow: 'hidden' }}
+            >
+                <div className="create-mobile-panel-nav" role="tablist" aria-label="출제 작업 화면">
+                    <button
+                        type="button"
+                        role="tab"
+                        aria-selected={mobileWorkspacePanel === 'pdf'}
+                        aria-controls="create-pdf-panel"
+                        className={mobileWorkspacePanel === 'pdf' ? 'is-active' : ''}
+                        onClick={() => setMobileWorkspacePanel('pdf')}
+                    >
+                        <FileText size={17} aria-hidden="true" />
+                        <span>문제지</span>
+                        <small>{pdfFile ? '연결됨' : '업로드'}</small>
+                    </button>
+                    <button
+                        type="button"
+                        role="tab"
+                        aria-selected={mobileWorkspacePanel === 'settings'}
+                        aria-controls="create-settings-panel"
+                        className={mobileWorkspacePanel === 'settings' ? 'is-active' : ''}
+                        onClick={() => setMobileWorkspacePanel('settings')}
+                    >
+                        <Settings2 size={17} aria-hidden="true" />
+                        <span>설정</span>
+                        <small>{designSummary.answered}/{questionsCount} 정답</small>
+                    </button>
+                    <button
+                        type="button"
+                        role="tab"
+                        aria-selected={mobileWorkspacePanel === 'preview'}
+                        aria-controls="create-preview-panel"
+                        className={mobileWorkspacePanel === 'preview' ? 'is-active' : ''}
+                        onClick={() => {
+                            setIsPreviewCollapsed(false);
+                            setMobileWorkspacePanel('preview');
+                        }}
+                    >
+                        <Eye size={17} aria-hidden="true" />
+                        <span>미리보기</span>
+                        <small>{serviceReadiness.label}</small>
+                    </button>
+                </div>
 
                 {/* 1. PDF Viewer Area */}
-                <div className="create-pdf-pane" style={{
+                <div id="create-pdf-panel" className="create-pdf-pane" style={{
                     width: `${pdfWidth}px`,
                     minWidth: isPreviewCollapsed ? `${PDF_PANE_MIN_WIDTH}px` : `${PDF_PANE_EXPANDED_MIN_WIDTH}px`,
                     flex: `0 0 ${pdfWidth}px`,
@@ -1919,11 +2175,11 @@ function CreateOMRPageInner() {
                 </div>
 
                 {/* 2. Settings Sidebar */}
-                <aside ref={settingsSidebarRef} className="glass-panel scroll-custom create-settings-sidebar" style={{
+                <aside id="create-settings-panel" ref={settingsSidebarRef} className="glass-panel scroll-custom create-settings-sidebar" style={{
                     width: `${sidebarWidth}px`,
                     minWidth: `${SETTINGS_SIDEBAR_MIN_WIDTH}px`,
-                    padding: '1.5rem',
                     flex: isPreviewCollapsed ? `1 1 ${sidebarWidth}px` : `0 0 ${sidebarWidth}px`,
+                    padding: '1.5rem',
                     overflowY: 'auto',
                     background: 'var(--surface)',
                     borderRight: '1px solid var(--border)',
@@ -2079,6 +2335,9 @@ function CreateOMRPageInner() {
                             </div>
                         </div>
 
+                        <div className="create-section-label">
+                            <span className="step">1</span>시험 기본
+                        </div>
                         <label style={{ display: 'block', marginBottom: '0.5rem', fontSize: '0.9rem', fontWeight: 500 }}>시험 제목</label>
                         <input
                             type="text"
@@ -2219,6 +2478,10 @@ function CreateOMRPageInner() {
                             </div>
                         </div>
 
+                        <div className="create-section-label">
+                            <span className="step">3</span>정답 · 라벨 입력
+                            <span className="hint">{designSummary.answered}/{questionsCount} 정답</span>
+                        </div>
                         <div style={{ marginBottom: '1rem' }}>
                             <label style={{ display: 'block', marginBottom: '0.4rem', fontSize: '0.9rem', fontWeight: 600, color: 'var(--primary)' }}>
                                 빠른 정답 입력 (연속 입력)
@@ -2302,15 +2565,16 @@ function CreateOMRPageInner() {
                                     <div className="create-question-quick-row" aria-label="선택 문항 라벨">
                                         <span>라벨</span>
                                         <div className="create-question-label-buttons">
-                                            {knownLabels.slice(0, 8).map(label => (
+                                            {knownLabelCandidates.slice(0, 8).map(candidate => (
                                                 <button
-                                                    key={label}
+                                                    key={candidate.label}
                                                     type="button"
-                                                    className={selectedQuestion.label === label ? "is-active" : ""}
-                                                    onClick={() => toggleLabel(label)}
-                                                    aria-pressed={selectedQuestion.label === label}
+                                                    className={selectedQuestion.label === candidate.label ? "is-active" : ""}
+                                                    onClick={() => toggleLabel(candidate.label)}
+                                                    aria-pressed={selectedQuestion.label === candidate.label}
+                                                    title={`${candidate.label} · ${labelCandidateSourceLabel(candidate.source)} 후보`}
                                                 >
-                                                    {label}
+                                                    {candidate.label}
                                                 </button>
                                             ))}
                                         </div>
@@ -2332,6 +2596,22 @@ function CreateOMRPageInner() {
                                     </div>
                                 </div>
                                 <span className="create-label-batch-count">{knownLabels.length}개 후보</span>
+                            </div>
+
+                            <div className="create-label-memory-strip" aria-label="최근 라벨 기억 상태">
+                                <span>{labelSettingsScopeLabel} · 최근 {labelSettings.recentLabels.length}개</span>
+                                <div className="create-label-memory-actions">
+                                    <button type="button" onClick={rememberCurrentLabelSetup} title="현재 라벨 구성을 다음에도 사용">
+                                        <Save size={13} />
+                                        기억
+                                    </button>
+                                    {labelSettings.hiddenLabels.length > 0 && (
+                                        <button type="button" onClick={restoreHiddenLabelPresets} title="숨긴 라벨 후보 복구">
+                                            <RotateCcw size={13} />
+                                            복구
+                                        </button>
+                                    )}
+                                </div>
                             </div>
 
                             <div className="create-label-batch-range">
@@ -2366,25 +2646,53 @@ function CreateOMRPageInner() {
                             />
 
                             <div className="create-label-batch-presets" aria-label="라벨 후보">
-                                {knownLabels.map(label => (
-                                    <button
-                                        key={label}
-                                        type="button"
-                                        className={labelBatch.label === label ? "is-active" : ""}
-                                        onClick={() => setLabelBatch(prev => ({ ...prev, label }))}
+                                {knownLabelCandidates.map((candidate: QuestionLabelCandidate) => (
+                                    <span
+                                        key={candidate.label}
+                                        className={`create-label-candidate-chip is-${candidate.source} ${candidate.source === "current" ? "has-no-hide" : ""}`}
                                     >
-                                        {label}
-                                    </button>
+                                        <button
+                                            type="button"
+                                            className={`create-label-candidate-main ${labelBatch.label === candidate.label ? "is-active" : ""}`}
+                                            onClick={() => setLabelBatch(prev => ({ ...prev, label: candidate.label }))}
+                                            title={`${candidate.label} · ${labelCandidateSourceLabel(candidate.source)} 후보`}
+                                        >
+                                            <span>{candidate.label}</span>
+                                            <small>{labelCandidateSourceLabel(candidate.source)}</small>
+                                        </button>
+                                        {candidate.source !== "current" && (
+                                            <button
+                                                type="button"
+                                                className="create-label-candidate-hide"
+                                                onClick={() => hideLabelPreset(candidate.label)}
+                                                aria-label={`${candidate.label} 후보 숨김`}
+                                                title={`${candidate.label} 후보 숨김`}
+                                            >
+                                                <X size={12} />
+                                            </button>
+                                        )}
+                                    </span>
                                 ))}
                             </div>
 
                             <div className="create-label-batch-grid">
+                                <datalist id="create-label-unit-options">
+                                    {recentUnitOptions.map(unit => (
+                                        <option key={unit} value={unit} />
+                                    ))}
+                                </datalist>
+                                <datalist id="create-label-concept-options">
+                                    {recentConceptOptions.map(concept => (
+                                        <option key={concept} value={concept} />
+                                    ))}
+                                </datalist>
                                 <input
                                     type="text"
                                     value={labelBatch.unit}
                                     onChange={(e) => setLabelBatch(prev => ({ ...prev, unit: e.target.value }))}
                                     placeholder="단원"
                                     className="input-field"
+                                    list={recentUnitOptions.length > 0 ? "create-label-unit-options" : undefined}
                                 />
                                 <input
                                     type="text"
@@ -2392,6 +2700,7 @@ function CreateOMRPageInner() {
                                     onChange={(e) => setLabelBatch(prev => ({ ...prev, concept: e.target.value }))}
                                     placeholder="세부 개념"
                                     className="input-field"
+                                    list={recentConceptOptions.length > 0 ? "create-label-concept-options" : undefined}
                                 />
                             </div>
 
@@ -2731,6 +3040,7 @@ function CreateOMRPageInner() {
                                                 onChange={(e) => setQuestionTag('unit', e.target.value.trim() || undefined)}
                                                 placeholder="예: 문법 > 시제"
                                                 className="input-field"
+                                                list={recentUnitOptions.length > 0 ? "create-label-unit-options" : undefined}
                                                 style={{ width: '100%', padding: '0.45rem 0.55rem', fontSize: '0.8rem', border: '1px solid var(--border)', borderRadius: '8px', background: 'var(--surface)' }}
                                             />
                                         </div>
@@ -2743,6 +3053,7 @@ function CreateOMRPageInner() {
                                                 onChange={(e) => setQuestionTag('concept', e.target.value.trim() || undefined)}
                                                 placeholder="예: 현재완료와 과거시제 구분"
                                                 className="input-field"
+                                                list={recentConceptOptions.length > 0 ? "create-label-concept-options" : undefined}
                                                 style={{ width: '100%', padding: '0.45rem 0.55rem', fontSize: '0.8rem', border: '1px solid var(--border)', borderRadius: '8px', background: 'var(--surface)' }}
                                             />
                                         </div>
@@ -3093,6 +3404,7 @@ function CreateOMRPageInner() {
                 </aside>
 
                 {/* Resizer 2 */}
+                {!isPreviewCollapsed && (
                 <div
                     className={`create-resizer ${activeResizer === 'sidebar' ? 'is-active' : ''}`}
                     style={{ width: '6px', background: 'var(--border)', cursor: 'col-resize', position: 'relative', zIndex: 10 }}
@@ -3104,9 +3416,10 @@ function CreateOMRPageInner() {
                 >
                     <div style={{ width: '2px', height: '20px', background: '#aaa', position: 'absolute', top: '50%', left: '2px', transform: 'translateY(-50%)', borderRadius: '2px' }} />
                 </div>
+                )}
 
                 {/* 3. OMR Preview */}
-                <main className={`create-preview-main ${isPreviewCollapsed ? 'is-collapsed' : ''}`} style={{
+                <main id="create-preview-panel" className={`create-preview-main ${isPreviewCollapsed ? 'is-collapsed' : ''}`} style={{
                     flex: isPreviewCollapsed ? `0 0 ${PREVIEW_RAIL_WIDTH}px` : 1,
                     width: isPreviewCollapsed ? `${PREVIEW_RAIL_WIDTH}px` : undefined,
                     display: 'flex',
@@ -3120,11 +3433,10 @@ function CreateOMRPageInner() {
                             <button
                                 type="button"
                                 onClick={() => setIsPreviewCollapsed(false)}
-                                aria-label="OMR 미리보기 펼치기"
+                                aria-label={`OMR 미리보기 펼치기 (정답 ${designSummary.answered}/${questionsCount})`}
                                 title="OMR 미리보기 펼치기"
                             >
                                 <PanelRightOpen size={18} />
-                                <span>OMR</span>
                                 <strong>{designSummary.answered}/{questionsCount}</strong>
                             </button>
                         </div>

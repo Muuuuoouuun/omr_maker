@@ -7,7 +7,8 @@ import { Activity, Users, CheckCircle2, Clock, AlertTriangle, Bell, PlayCircle, 
 import { toast } from "@/components/Toast";
 import type { Exam, Attempt } from "@/types/omr";
 import { shouldUseDemoData } from "@/lib/demoData";
-import { loadAttempts, loadExam, loadExams, saveAttempt, saveExam } from "@/lib/omrPersistence";
+import { loadTeacherAttempts, saveTeacherAttempt } from "@/lib/teacherAttemptClient";
+import { loadTeacherExam, loadTeacherExams, saveTeacherExamMutation } from "@/lib/teacherExamClient";
 import { resolveAttemptScore } from "@/lib/attemptScores";
 import { buildLiveQuestionHeatmap, dedupeLiveAttempts } from "@/lib/liveAnalytics";
 import { forceCompleteLiveAttempt, liveAttemptsNeedingForceFinish } from "@/lib/liveControls";
@@ -247,8 +248,8 @@ export default function LiveResultsPage() {
 
     const refreshFromStorage = useCallback(async () => {
         const [examResult, attemptResult] = await Promise.all([
-            loadExams(),
-            loadAttempts(),
+            loadTeacherExams(),
+            loadTeacherAttempts(),
         ]);
         const liveData = resolveLiveExamData(examResult.items);
         setExams(liveData.exams);
@@ -266,8 +267,8 @@ export default function LiveResultsPage() {
         let cancelled = false;
         const loadInitial = async () => {
             const [examResult, attemptResult] = await Promise.all([
-                loadExams(),
-                loadAttempts(),
+                loadTeacherExams(),
+                loadTeacherAttempts(),
             ]);
             if (cancelled) return;
             const liveData = resolveLiveExamData(examResult.items);
@@ -437,7 +438,7 @@ export default function LiveResultsPage() {
         // Real exams: only an end-time window can be extended so students' own
         // timers are actually affected. Load the full stored exam (with PDF refs)
         // rather than the stripped sourceExam so persisting doesn't drop assets.
-        const fresh = await loadExam(exam.id);
+        const fresh = await loadTeacherExam(exam.id);
         if (!fresh) {
             toast.error("시험을 불러오지 못해 연장하지 못했습니다");
             return;
@@ -448,9 +449,9 @@ export default function LiveResultsPage() {
         }
         const base = Math.max(Date.parse(fresh.endAt) || Date.now(), Date.now());
         const nextEndAt = new Date(base + 5 * 60 * 1000).toISOString();
-        const result = await saveExam({ ...fresh, endAt: nextEndAt, updatedAt: new Date().toISOString() });
-        if (!result.localSaved) {
-            toast.error("연장 저장에 실패했습니다");
+        const result = await saveTeacherExamMutation({ ...fresh, endAt: nextEndAt, updatedAt: new Date().toISOString() });
+        if (!result.ok) {
+            toast.error("연장 저장에 실패했습니다", result.error || "시험 서버에 변경을 저장하지 못했습니다.");
             return;
         }
         setTimerSeconds(Math.max(0, Math.floor((base + 5 * 60 * 1000 - Date.now()) / 1000)));
@@ -482,7 +483,7 @@ export default function LiveResultsPage() {
             const completedById = new Map(completedAttempts.map(attempt => [attempt.id, attempt]));
             setAttempts(prev => prev.map(attempt => completedById.get(attempt.id) ?? attempt));
 
-            const results = await Promise.all(completedAttempts.map(attempt => saveAttempt(attempt)));
+            const results = await Promise.all(completedAttempts.map(attempt => saveTeacherAttempt(attempt)));
             const failedLocalCount = results.filter(result => !result.localSaved).length;
             const remoteIssueCount = results.filter(result => result.remoteError).length;
 

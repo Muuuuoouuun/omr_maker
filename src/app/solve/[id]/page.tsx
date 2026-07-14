@@ -13,11 +13,13 @@ import { storedDataUrlToFile, saveJsonRecord, loadJsonRecord } from "@/utils/blo
 import { resolveDraftDrawings } from "@/lib/draftRecovery";
 import { verifyTeacherPassword } from "@/app/actions/auth";
 import { loadExamForSolving, submitAttempt } from "@/app/actions/studentExam";
+import { openStudentExam, previewStudentExam, submitStudentAttempt } from "@/app/actions/studentAttempt";
+import { uploadStudentAttemptHandwriting } from "@/app/actions/remoteAssets";
 import { issueGuestSession, validateStudentSession } from "@/app/actions/studentSession";
 import { saveTeacherSessionWithIdentity } from "@/lib/teacherSession";
 import { getOrCreateGuestId, getSession, guestLoginIdFor, saveSession, type StudentSession } from "@/utils/storage";
 import { canArchiveHandwriting, getPlanLabel } from "@/utils/plans";
-import { loadExam as loadPersistedExam, readLocalExam, saveAttempt, saveLocalAttempt } from "@/lib/omrPersistence";
+import { loadExam as loadPersistedExam, readLocalExam, saveAttempt, saveLocalAttempt, saveLocalExam } from "@/lib/omrPersistence";
 import { buildQuestionResults } from "@/lib/premiumAnalytics";
 import { summarizeQuestionDrawings } from "@/lib/handwritingAnalytics";
 import { evaluateExamAccess, examRequiresPin, normalizeExamPin, verifyExamPin, type ExamAccessDecision } from "@/lib/examAccess";
@@ -32,6 +34,9 @@ import { remainingSecondsWithinWindow } from "@/lib/studentExamCore";
 import { findMissingRequiredSubQuestions, requiredSubQuestionProgress, sanitizeSubQuestionAnswersForQuestions } from "@/lib/subQuestions";
 import { summarizePersistenceWrite } from "@/lib/persistenceFeedback";
 import { stripTeacherOnlySubQuestionFields, type SolvableExam } from "@/lib/examSolvePayload";
+import { SOLVE_CLASS_CODE_PARAM } from "@/lib/examLinks";
+import { clientExamFromStudentExamPreview, clientExamFromStudentSolveExam } from "@/lib/studentExamContract";
+import { localResultCacheFromServerReceipt } from "@/lib/studentAttemptReceipt";
 
 const PDFViewer = dynamic(() => import("@/components/PDFViewer"), { ssr: false });
 import { DEFAULT_CHOICE_COUNT, gradeAttempt, questionChoiceCount } from "@/types/omr";
@@ -96,6 +101,11 @@ type RetakeConfig = Omit<RetakeMetadata, "createdAt">;
 interface SubmitConfirmState {
     unanswered: number;
     total: number;
+}
+
+interface ExamGuestEntryGroup {
+    groupId?: string;
+    groupName?: string;
 }
 
 interface SolveLoadError {
@@ -247,6 +257,46 @@ const dialogButtonBase: CSSProperties = {
     fontSize: '0.9rem',
 };
 
+function cleanEntryText(value: string | undefined): string {
+    return value?.trim() || "";
+}
+
+function normalizeEntryCode(value: string | undefined): string {
+    return cleanEntryText(value).toLocaleLowerCase("ko-KR");
+}
+
+function allowedExamGroupIds(exam: Pick<Exam, "accessConfig"> | null | undefined): string[] {
+    if (exam?.accessConfig?.type !== "group") return [];
+    return (exam.accessConfig.groupIds || []).map(cleanEntryText).filter(Boolean);
+}
+
+function resolveExamGuestGroup(
+    exam: Pick<Exam, "accessConfig"> | null | undefined,
+    requestedCode: string,
+    allowSingleGroupFallback: boolean,
+): ExamGuestEntryGroup | null {
+    const allowedGroups = allowedExamGroupIds(exam);
+    if (allowedGroups.length === 0) return null;
+
+    const normalizedCode = normalizeEntryCode(requestedCode);
+    if (normalizedCode) {
+        const matchedGroupId = allowedGroups.find(groupId => normalizeEntryCode(groupId) === normalizedCode);
+        if (matchedGroupId) return { groupId: matchedGroupId, groupName: matchedGroupId };
+        return null;
+    }
+
+    if (allowSingleGroupFallback && allowedGroups.length === 1) {
+        return { groupId: allowedGroups[0], groupName: allowedGroups[0] };
+    }
+    return null;
+}
+
+function entryIdentityLabel(session: StudentSession | null): string {
+    if (!session) return "";
+    const scope = [session.regionName, session.groupName || session.groupId].filter(Boolean).join(" ");
+    return scope ? `${session.name} · ${scope}` : session.name;
+}
+
 function ExamPinDialog({
     examTitle,
     value,
@@ -335,14 +385,14 @@ function accessDecisionCopy(decision: ExamAccessDecision): { title: string; body
     if (decision.status === "login_required") {
         return {
             title: "학생 로그인이 필요합니다",
-            body: "이 시험은 지정된 반 학생만 응시할 수 있습니다. 학생 홈에서 이름과 반을 선택한 뒤 다시 열어주세요.",
+            body: "이 시험은 지정된 반 학생만 응시할 수 있습니다. 학생 홈에서 로그인하거나 반 코드로 게스트 입장한 뒤 다시 열어주세요.",
             action: "학생 로그인",
         };
     }
     if (decision.status === "group_denied") {
         return {
             title: "응시 대상 반이 아닙니다",
-            body: "현재 학생 계정은 이 시험의 배포 대상 반에 포함되어 있지 않습니다. 반 선택이 잘못됐다면 학생 홈에서 다시 로그인하세요.",
+            body: "현재 학생 정보 또는 반 코드가 이 시험의 배포 대상 반과 일치하지 않습니다. 학생 홈에서 다시 확인해주세요.",
             action: "학생 홈으로",
         };
     }
@@ -401,6 +451,169 @@ function ExamAccessBlockedDialog({
             >
                 {copy.action}
             </button>
+        </SolveDialogShell>
+    );
+}
+
+function ExamEntryConfirmDialog({
+    examTitle,
+    user,
+    canUseStudent,
+    guestName,
+    groupCode,
+    needsGroupCode,
+    suggestedGroupName,
+    error,
+    studentLoginHref,
+    onGuestNameChange,
+    onGroupCodeChange,
+    onContinueStudent,
+    onContinueGuest,
+    onExit,
+}: {
+    examTitle: string;
+    user: StudentSession | null;
+    canUseStudent: boolean;
+    guestName: string;
+    groupCode: string;
+    needsGroupCode: boolean;
+    suggestedGroupName: string;
+    error: string;
+    studentLoginHref: string;
+    onGuestNameChange: (value: string) => void;
+    onGroupCodeChange: (value: string) => void;
+    onContinueStudent: () => void;
+    onContinueGuest: () => void;
+    onExit: () => void;
+}) {
+    const studentLabel = entryIdentityLabel(user);
+    const showStudentPanel = !!user && !user.isGuest;
+    return (
+        <SolveDialogShell title="시험 입장 확인" onClose={onExit}>
+            <div style={{ display: 'grid', gap: '1rem' }}>
+                <div style={{
+                    padding: '0.9rem 1rem',
+                    borderRadius: 'var(--radius-md)',
+                    border: '1px solid var(--border)',
+                    background: 'var(--background)',
+                }}>
+                    <div style={{ fontSize: '0.78rem', fontWeight: 850, color: 'var(--muted)', marginBottom: '0.35rem' }}>
+                        공유 링크
+                    </div>
+                    <div style={{ fontSize: '1rem', fontWeight: 850, lineHeight: 1.45, wordBreak: 'keep-all' }}>
+                        {examTitle}
+                    </div>
+                    {suggestedGroupName && (
+                        <div style={{ marginTop: '0.35rem', fontSize: '0.8rem', color: 'var(--primary)', fontWeight: 800 }}>
+                            반 코드: {suggestedGroupName}
+                        </div>
+                    )}
+                </div>
+
+                {showStudentPanel && (
+                    <div style={{
+                        padding: '0.9rem 1rem',
+                        borderRadius: 'var(--radius-md)',
+                        border: canUseStudent ? '1px solid rgba(16,185,129,0.28)' : '1px solid rgba(245,158,11,0.28)',
+                        background: canUseStudent ? 'rgba(16,185,129,0.08)' : 'rgba(245,158,11,0.1)',
+                    }}>
+                        <div style={{ fontSize: '0.78rem', fontWeight: 850, color: canUseStudent ? 'var(--success)' : 'var(--warning)', marginBottom: '0.25rem' }}>
+                            현재 앱 로그인
+                        </div>
+                        <div style={{ fontSize: '0.95rem', fontWeight: 850, color: 'var(--foreground)', wordBreak: 'keep-all' }}>
+                            {studentLabel}
+                        </div>
+                        {!canUseStudent && (
+                            <p style={{ marginTop: '0.45rem', fontSize: '0.78rem', color: 'var(--muted)', lineHeight: 1.5, wordBreak: 'keep-all' }}>
+                                로그인된 학생 정보가 이 시험의 대상 반과 맞지 않습니다. 학생 홈에서 다시 로그인하거나 게스트로 입장하세요.
+                            </p>
+                        )}
+                    </div>
+                )}
+
+                <div style={{ display: 'grid', gap: '0.75rem' }}>
+                    {!showStudentPanel && (
+                        <p style={{ color: 'var(--muted)', fontSize: '0.9rem', lineHeight: 1.6, wordBreak: 'keep-all' }}>
+                            앱에 학생 로그인이 되어 있으면 학생 기록으로 응시할 수 있습니다. 로그인하지 않은 기기에서는 게스트 기록으로 저장됩니다.
+                        </p>
+                    )}
+                    {needsGroupCode && (
+                        <label style={{ display: 'grid', gap: '0.45rem' }}>
+                            <span style={{ fontSize: '0.78rem', fontWeight: 850, color: 'var(--muted)' }}>반 코드</span>
+                            <input
+                                value={groupCode}
+                                onChange={(event) => onGroupCodeChange(event.target.value)}
+                                onKeyDown={(event) => {
+                                    if (event.key === 'Enter') onContinueGuest();
+                                }}
+                                placeholder="선생님이 알려준 코드"
+                                autoCapitalize="characters"
+                                spellCheck={false}
+                                style={{
+                                    width: '100%',
+                                    padding: '0.8rem 0.95rem',
+                                    borderRadius: 'var(--radius-md)',
+                                    border: '1px solid var(--border)',
+                                    background: 'var(--background)',
+                                    color: 'var(--foreground)',
+                                    fontSize: '1rem',
+                                }}
+                            />
+                        </label>
+                    )}
+                    <label style={{ display: 'grid', gap: '0.45rem' }}>
+                        <span style={{ fontSize: '0.78rem', fontWeight: 850, color: 'var(--muted)' }}>게스트 이름</span>
+                        <input
+                            value={guestName}
+                            onChange={(event) => onGuestNameChange(event.target.value)}
+                            onKeyDown={(event) => {
+                                if (event.key === 'Enter') onContinueGuest();
+                            }}
+                            placeholder="미입력 시 Guest Student"
+                            autoComplete="name"
+                            style={{
+                                width: '100%',
+                                padding: '0.8rem 0.95rem',
+                                borderRadius: 'var(--radius-md)',
+                                border: '1px solid var(--border)',
+                                background: 'var(--background)',
+                                color: 'var(--foreground)',
+                                fontSize: '1rem',
+                            }}
+                        />
+                    </label>
+                    {error && (
+                        <div role="alert" style={{ color: 'var(--error)', fontSize: '0.82rem', fontWeight: 800, lineHeight: 1.45 }}>
+                            {error}
+                        </div>
+                    )}
+                </div>
+
+                <div style={{ display: 'grid', gap: '0.55rem' }}>
+                    {canUseStudent && (
+                        <button type="button" className="btn btn-primary" onClick={onContinueStudent} style={{ width: '100%', justifyContent: 'center' }}>
+                            학생으로 시험 보기
+                        </button>
+                    )}
+                    <button
+                        type="button"
+                        className={canUseStudent ? "btn btn-secondary" : "btn btn-primary"}
+                        onClick={onContinueGuest}
+                        style={{ width: '100%', justifyContent: 'center' }}
+                    >
+                        게스트로 시험 보기
+                    </button>
+                    <Link href={studentLoginHref} className="btn" style={{
+                        width: '100%',
+                        justifyContent: 'center',
+                        background: 'transparent',
+                        border: '1px solid var(--border)',
+                        color: 'var(--muted)',
+                    }}>
+                        학생 로그인으로 보기
+                    </Link>
+                </div>
+            </div>
         </SolveDialogShell>
     );
 }
@@ -675,6 +888,15 @@ export default function SolvePage() {
     const [submitConfirm, setSubmitConfirm] = useState<SubmitConfirmState | null>(null);
     const [guestSubmitPending, setGuestSubmitPending] = useState<{ autoSubmitted: boolean } | null>(null);
     const [guestName, setGuestName] = useState("");
+    const [entryConfirmed, setEntryConfirmed] = useState(false);
+    const [secureRemoteMode, setSecureRemoteMode] = useState(false);
+    const [secureAttemptTicket, setSecureAttemptTicket] = useState("");
+    const [secureRequiresPin, setSecureRequiresPin] = useState(false);
+    const [entryGuestName, setEntryGuestName] = useState("");
+    const [entryGroupCode, setEntryGroupCode] = useState("");
+    const [entryError, setEntryError] = useState("");
+    const [linkClassCode, setLinkClassCode] = useState("");
+    const [currentSolvePath, setCurrentSolvePath] = useState("");
 
     // Timer + autosave State
     const [startedAt, setStartedAt] = useState(() => new Date().toISOString());
@@ -699,7 +921,13 @@ export default function SolvePage() {
     const focusLossEventsRef = useRef<FocusLossEvent[]>([]);
     const pdfFocusRequestIdRef = useRef(0);
     const [hydratedOMRPanelKey, setHydratedOMRPanelKey] = useState("");
-    
+
+    const interactionAllowed = !!examData && entryConfirmed && (
+        secureRemoteMode
+            ? !secureRequiresPin || pinVerified
+            : evaluateExamAccess(examData, { session: user, pinVerified }).status === "allowed"
+    );
+
     // Focus Warning States (Anti-cheat)
     const [tabFociLostCount, setTabFociLostCount] = useState(0);
     const [showFocusWarning, setShowFocusWarning] = useState(false);
@@ -795,13 +1023,15 @@ export default function SolvePage() {
      * Local exams: live client evaluation, so schedule windows (startAt/endAt)
      * keep being enforced mid-session exactly as before.
      */
-    const solveAccess: SolveAccessStatus | "loading" = (examSource === "local" && examData)
+    const solveAccess: SolveAccessStatus | "loading" = secureRemoteMode && examData && secureRequiresPin && !pinVerified
+        ? "pin_required"
+        : (examSource === "local" && examData)
         ? (() => {
             const decision = evaluateExamAccess(examData, { session: user, pinVerified });
             return decision.status === "allowed" ? "ok" : decision.status;
         })()
         : solveStatus;
-    const solveAllowed = solveAccess === "ok";
+    const solveAllowed = solveAccess === "ok" && interactionAllowed;
 
     // Anti-cheat Window Focus/Visibility Monitoring
     useEffect(() => {
@@ -970,14 +1200,11 @@ export default function SolvePage() {
                 examQuestionsRef.current = parsed.questions;
                 setExamData(parsed);
                 setExamSource(source);
-                let shouldBeginQuestionVisit = true;
                 if (source === "local") {
                     // pinAlreadyVerified: the PIN dialog just passed for this local
                     // exam, so don't reset pinVerified back to false and re-gate it.
                     const requiresPin = examRequiresPin(parsed);
                     const effectivePinVerified = pinAlreadyVerified || !requiresPin;
-                    const initialAccess = evaluateExamAccess(parsed, { session, pinVerified: effectivePinVerified });
-                    shouldBeginQuestionVisit = initialAccess.status === "allowed";
                     setPinVerified(effectivePinVerified);
                 } else {
                     // The server only hands out the payload once access (incl. PIN) passed.
@@ -986,16 +1213,18 @@ export default function SolvePage() {
                 }
                 setPinInput("");
                 setPinError("");
-                if (!shouldBeginQuestionVisit) setCurrentQuestionId(null);
+                currentQuestionIdRef.current = null;
+                activeQuestionRef.current = null;
+                setCurrentQuestionId(null);
 
                 const searchParams = new URLSearchParams(window.location.search);
                 const rawQuestionIds = (searchParams.get("questions") || "")
                     .split(",")
                     .map(value => Number(value.trim()))
                     .filter(value => Number.isFinite(value));
-                const validQuestionIds = rawQuestionIds.filter(questionId =>
-                    parsed.questions.some(question => question.id === questionId)
-                );
+                const validQuestionIds = source === "server"
+                    ? [...new Set(rawQuestionIds.filter(questionId => Number.isInteger(questionId) && questionId > 0))]
+                    : rawQuestionIds.filter(questionId => parsed.questions.some(question => question.id === questionId));
                 let nextRetakeConfig: RetakeConfig | null = null;
                 if (validQuestionIds.length > 0) {
                     const mode = searchParams.get("mode") === "similar" ? "similar"
@@ -1010,10 +1239,8 @@ export default function SolvePage() {
                     };
                     setRetakeConfig(nextRetakeConfig);
                     toast.info("재시험 모드", `${validQuestionIds.length}개 문항만 다시 풉니다.`);
-                    if (shouldBeginQuestionVisit) beginQuestionVisit(validQuestionIds[0]);
                 } else if (parsed.questions[0]) {
                     setRetakeConfig(null);
-                    if (shouldBeginQuestionVisit) beginQuestionVisit(parsed.questions[0].id);
                 }
 
                 // Enforce schedule window (startAt/endAt)
@@ -1105,10 +1332,13 @@ export default function SolvePage() {
                     // ignore bad draft
                 }
 
-                const problemPdf = await storedDataUrlToFile("problem.pdf", parsed.pdfData, parsed.pdfDataRef);
+                const [problemPdf, answerPdf] = await Promise.all([
+                    storedDataUrlToFile("problem.pdf", parsed.pdfData, parsed.pdfDataRef),
+                    source === "server"
+                        ? Promise.resolve(null)
+                        : storedDataUrlToFile("answer_key.pdf", parsed.answerKeyPdf, parsed.answerKeyPdfRef),
+                ]);
                 if (problemPdf) setPdfFile(problemPdf);
-
-                const answerPdf = await storedDataUrlToFile("answer_key.pdf", parsed.answerKeyPdf, parsed.answerKeyPdfRef);
                 if (answerPdf) setAnswerFile(answerPdf);
             } catch {
                 setLoadError({
@@ -1118,12 +1348,30 @@ export default function SolvePage() {
                 toast.error("시험 데이터 로드 실패", "저장된 PDF 또는 시험 설정을 읽지 못했습니다.");
             }
         },
-        [beginQuestionVisit, id, persistId],
+        [id, persistId],
     );
 
     useEffect(() => {
         const currentSession = getSession();
         if (currentSession) setUser(currentSession);
+        const currentSearch = typeof window !== "undefined" ? window.location.search : "";
+        const currentPath = typeof window !== "undefined" ? `${window.location.pathname}${currentSearch}` : "";
+        const currentParams = new URLSearchParams(currentSearch);
+        setCurrentSolvePath(currentPath);
+        setLinkClassCode(
+            currentParams.get(SOLVE_CLASS_CODE_PARAM)
+            || currentParams.get("group")
+            || currentParams.get("groupId")
+            || currentParams.get("class")
+            || ""
+        );
+        setEntryGroupCode("");
+        setEntryGuestName("");
+        setEntryError("");
+        setEntryConfirmed(false);
+        setSecureRemoteMode(false);
+        setSecureAttemptTicket("");
+        setSecureRequiresPin(false);
 
         const hydrateExam = async () => {
             if (!id) return;
@@ -1151,7 +1399,7 @@ export default function SolvePage() {
                         localStorage.setItem("omr_guest_id", issued.guestId);
                         session = guestSession;
                     }
-                } else if (session.studentId) {
+                } else if (session.studentId && session.workspaceId) {
                     const validated = await validateStudentSession();
                     if (!validated.ok) {
                         const query = new URLSearchParams({
@@ -1181,6 +1429,30 @@ export default function SolvePage() {
                 // Local-blocked states (PIN, schedule window) re-derive live from examData.
                 await applyLoadedExam(res.exam as Exam, res.source, session);
                 return;
+            }
+
+            // Compatibility gateway for deployments that still expose the
+            // ticket-based student attempt RPC. The signed student-session path
+            // above remains authoritative; this branch is only reached when it
+            // cannot return an exam payload.
+            if (res.status === "not_found" || res.status === "error" || res.status === "unauthenticated") {
+                const remotePreview = await previewStudentExam(id);
+                if (remotePreview.status === "available") {
+                    const previewExam = clientExamFromStudentExamPreview(remotePreview.exam);
+                    if (previewExam.questions.some(question => (question.subQuestions?.length || 0) > 0)) {
+                        setLoadError({
+                            title: "학생 로그인을 다시 확인해주세요",
+                            body: "심화 응답이 있는 시험은 학생 서버 세션으로 입장해야 합니다. 처음 화면에서 다시 로그인해주세요.",
+                        });
+                        return;
+                    }
+                    setSecureRemoteMode(true);
+                    setSecureRequiresPin(remotePreview.exam.access.requiresPin);
+                    setSecureAttemptTicket("");
+                    await applyLoadedExam(previewExam as Exam, "server", session);
+                    setPinVerified(!remotePreview.exam.access.requiresPin);
+                    return;
+                }
             }
             if (res.status === "pin_required" || res.status === "pin_rate_limited") {
                 setExamSource(res.source);
@@ -1386,7 +1658,10 @@ export default function SolvePage() {
         setIsOMRCollapsed(prev => !prev);
     }, []);
 
-    const createGuestSubmitter = useCallback(async (name: string): Promise<StudentSession> => {
+    const createGuestSubmitter = useCallback(async (
+        name: string,
+        group?: ExamGuestEntryGroup | null,
+    ): Promise<StudentSession> => {
         // Server-issued guest identity: reuses a valid guest cookie (keeping the
         // guestId stable) and refreshes its display name. Device-local id only
         // as the offline/dev fallback.
@@ -1405,13 +1680,120 @@ export default function SolvePage() {
             isGuest: true,
             identityType: 'guest',
             guestId,
-            groupName: 'Guest',
+            groupId: group?.groupId,
+            groupName: group?.groupName || 'Guest',
         };
         saveSession(submitter);
         setUser(submitter);
         localStorage.setItem("omr_guest_id", guestId);
         return submitter;
     }, []);
+
+    const beginConfirmedEntry = useCallback(() => {
+        if (!examData) return;
+        setEntryError("");
+        setEntryConfirmed(true);
+        if (!hasResumed) {
+            setStartedAt(new Date().toISOString());
+        }
+        const firstQuestionId = retakeConfig?.questionIds[0] || examData.questions[0]?.id;
+        if (firstQuestionId) beginQuestionVisit(firstQuestionId);
+    }, [beginQuestionVisit, examData, hasResumed, retakeConfig]);
+
+    const beginSecureEntry = async (submitter: StudentSession) => {
+        if (!examData) return false;
+        const result = await openStudentExam({
+            examId: examData.id,
+            pin: pinInput,
+            questionIds: retakeConfig?.questionIds,
+            student: {
+                studentId: submitter.studentId || submitter.guestId || persistId,
+                studentName: submitter.name,
+                identityType: submitter.identityType || (submitter.isGuest ? "guest" : "temporary"),
+                groupId: submitter.groupId,
+                groupName: submitter.groupName,
+                guestId: submitter.guestId,
+            },
+        });
+        if (result.status !== "allowed") {
+            if (result.status === "pin_required") {
+                setPinVerified(false);
+                setPinError("PIN이 일치하지 않습니다.");
+            } else {
+                const message = result.status === "group_denied"
+                    ? "현재 학생 또는 반 정보가 이 시험의 배포 대상과 일치하지 않습니다."
+                    : result.status === "login_required"
+                        ? "학생 로그인이 필요합니다."
+                        : result.status === "invalid_questions"
+                            ? "재시험 링크의 문항 범위가 올바르지 않습니다. 선생님에게 새 링크를 요청해주세요."
+                        : result.status === "not_started"
+                            ? "아직 응시 시작 전입니다."
+                            : result.status === "ended"
+                                ? "응시 기간이 종료되었습니다."
+                                : result.status === "archived"
+                                    ? "보관된 시험은 응시할 수 없습니다."
+                                    : "시험 서버에 연결하지 못했습니다. 잠시 후 다시 시도해주세요.";
+                setEntryError(message);
+            }
+            return false;
+        }
+
+        const safeExam = clientExamFromStudentSolveExam(result.exam);
+        setExamData(safeExam);
+        examQuestionsRef.current = safeExam.questions;
+        saveLocalExam(safeExam);
+        setSecureAttemptTicket(result.ticket);
+        setSecureRequiresPin(result.exam.access.requiresPin);
+        setPinVerified(true);
+        setEntryError("");
+        beginConfirmedEntry();
+        return true;
+    };
+
+    const continueEntryAsStudent = async () => {
+        if (!examData || !user || user.isGuest) return;
+        if (secureRemoteMode) {
+            await beginSecureEntry(user);
+            return;
+        }
+        const decision = evaluateExamAccess(examData, { session: user, pinVerified });
+        if (decision.status !== "allowed") {
+            setEntryError("현재 학생 정보가 이 시험의 대상과 맞지 않습니다. 학생 홈에서 다시 로그인하거나 게스트로 입장하세요.");
+            return;
+        }
+        beginConfirmedEntry();
+    };
+
+    const continueEntryAsGuest = async () => {
+        if (!examData) return;
+        const isGroupExam = examData.accessConfig?.type === "group";
+        const requestedGroupCode = entryGroupCode || linkClassCode;
+        const guestGroup = isGroupExam
+            ? secureRemoteMode
+                ? requestedGroupCode.trim()
+                    ? { groupId: requestedGroupCode.trim(), groupName: requestedGroupCode.trim() }
+                    : null
+                : resolveExamGuestGroup(examData, requestedGroupCode, true)
+            : null;
+
+        if (isGroupExam && !guestGroup) {
+            setEntryError("반 코드가 이 시험의 배포 대상과 일치하지 않습니다.");
+            return;
+        }
+
+        const submitter = await createGuestSubmitter(entryGuestName, guestGroup);
+        if (secureRemoteMode) {
+            await beginSecureEntry(submitter);
+            return;
+        }
+        const decision = evaluateExamAccess(examData, { session: submitter, pinVerified });
+        if (decision.status !== "allowed") {
+            const copy = accessDecisionCopy(decision);
+            setEntryError(copy.body);
+            return;
+        }
+        beginConfirmedEntry();
+    };
 
     const handleSubmitInternal = async (autoSubmitted = false, overrideSubmitter?: StudentSession) => {
         if (!examData) return;
@@ -1452,6 +1834,88 @@ export default function SolvePage() {
         const activeDrawingPageCount = Object.keys(activeDrawings).length;
         const questionDrawings = summarizeQuestionDrawings(examData.questions, activeDrawings);
         const canStoreHandwriting = canArchiveHandwriting(currentPlan);
+
+        if (secureRemoteMode) {
+            if (!secureAttemptTicket) {
+                submittedRef.current = false;
+                toast.error("응시 세션 만료", "시험 입장 정보를 다시 확인해주세요.");
+                return;
+            }
+            const result = await submitStudentAttempt({
+                ticket: secureAttemptTicket,
+                answers: studentAnswersRef.current,
+                autoSubmitted,
+                tabFociLostCount,
+                questionTimings,
+                focusLossEvents: focusLossEventsRef.current,
+            });
+            if (result.status !== "submitted") {
+                submittedRef.current = false;
+                const detail = result.status === "invalid_ticket"
+                    ? "응시 세션이 만료됐거나 위조된 요청입니다. 시험에 다시 입장해주세요."
+                    : result.status === "invalid_submission"
+                        ? "허용되지 않은 문항 또는 답안이 포함됐습니다. 답안을 확인해주세요."
+                        : "서버에 답안을 저장하지 못했습니다. 네트워크를 확인한 뒤 다시 제출해주세요.";
+                toast.error("서버 제출 실패", detail);
+                return;
+            }
+
+            const shouldArchiveDrawings = hasDrawings(activeDrawings) && canStoreHandwriting;
+            const handwritingUpload = shouldArchiveDrawings
+                ? await uploadStudentAttemptHandwriting({
+                    ticket: secureAttemptTicket,
+                    attemptId: result.receipt.attemptId,
+                    drawings: activeDrawings,
+                })
+                : null;
+            const officialResultCache = localResultCacheFromServerReceipt(result.receipt, {
+                examTitle: examData.title,
+                studentName: submitter.name,
+                studentId: submitter.studentId || submitter.guestId || persistId,
+                groupId: submitter.groupId,
+                groupName: submitter.groupName,
+                identityType: submitter.identityType || (submitter.isGuest ? "guest" : "temporary"),
+            });
+            const cachedAttempt: Attempt = {
+                id: result.receipt.attemptId,
+                examId: result.receipt.examId,
+                examTitle: examData.title,
+                studentName: submitter.name,
+                studentId: submitter.studentId || submitter.guestId || persistId,
+                groupId: submitter.groupId,
+                groupName: submitter.groupName,
+                identityType: submitter.identityType || (submitter.isGuest ? "guest" : "temporary"),
+                guestId: submitter.guestId,
+                startedAt,
+                finishedAt: result.receipt.finishedAt,
+                score: result.receipt.score,
+                totalScore: result.receipt.totalScore,
+                answers: officialResultCache.answers,
+                questionResults: officialResultCache.questionResults,
+                status: "completed",
+                autoSubmitted,
+                tabFociLostCount,
+                questionTimings,
+                focusLossEvents: focusLossEventsRef.current,
+                drawingsRef: handwritingUpload?.status === "uploaded" ? handwritingUpload.ref : undefined,
+                handwritingArchived: handwritingUpload?.status === "uploaded",
+                handwritingPlan: currentPlan,
+                questionDrawings,
+                retake: retakeConfig ? { ...retakeConfig, createdAt: new Date().toISOString() } : undefined,
+            };
+            saveLocalAttempt(cachedAttempt);
+            if (!shouldArchiveDrawings || handwritingUpload?.status === "uploaded") {
+                try { localStorage.removeItem(DRAFT_KEY); } catch {}
+                try { localStorage.removeItem(LEGACY_DRAFT_KEY); } catch {}
+            }
+            if (shouldArchiveDrawings && handwritingUpload?.status !== "uploaded") {
+                toast.info("답안 제출 완료 · 필기 재시도 필요", "답안은 공식 저장됐지만 필기 업로드가 실패했습니다. 이 기기의 임시저장은 유지됩니다.");
+            } else {
+                toast.success("서버 제출 완료", "서버에서 채점하고 공식 결과를 저장했습니다.");
+            }
+            router.push(`/student/review/${result.receipt.attemptId}`);
+            return;
+        }
 
         let drawingsRef: Attempt["drawingsRef"] | undefined = undefined;
         if (hasDrawings(activeDrawings) && canStoreHandwriting) {
@@ -1726,6 +2190,13 @@ export default function SolvePage() {
     }
 
     const submitPin = async () => {
+        if (secureRemoteMode) {
+            // The compatibility gateway verifies the PIN together with the
+            // selected student/guest identity when the entry button is pressed.
+            setPinVerified(true);
+            setPinError("");
+            return;
+        }
         // Local exams verify the on-device PIN; server exams re-request the
         // payload with the PIN and let the server decide.
         if (examSource === "local" && examData) {
@@ -1736,8 +2207,6 @@ export default function SolvePage() {
             pinRef.current = pinInput;
             setPinVerified(true);
             setPinError("");
-            const firstQuestionId = retakeConfig?.questionIds[0] || examData.questions[0]?.id;
-            if (firstQuestionId) beginQuestionVisit(firstQuestionId);
             return;
         }
         const res = await loadExamForSolvingClient(id, pinInput, {
@@ -1790,7 +2259,11 @@ export default function SolvePage() {
         );
     }
 
-    if (solveAccess !== "ok" && solveAccess !== "loading") {
+    const canOfferGroupGuestEntry = !!examData
+        && examData.accessConfig?.type === "group"
+        && (solveAccess === "login_required" || solveAccess === "group_denied");
+
+    if (solveAccess !== "ok" && solveAccess !== "loading" && !canOfferGroupGuestEntry) {
         return (
             <div className="layout-main solve-page" style={{
                 background: 'var(--background)',
@@ -1815,6 +2288,79 @@ export default function SolvePage() {
             <div style={{ padding: '2rem', textAlign: 'center' }}>
                 <h2>시험을 불러오는 중...</h2>
                 <Link href="/" className="btn btn-secondary">홈으로 돌아가기</Link>
+            </div>
+        );
+    }
+
+    const isGroupEntryExam = examData.accessConfig?.type === "group";
+    const resolvedLinkGuestGroup = isGroupEntryExam
+        ? secureRemoteMode
+            ? (entryGroupCode || linkClassCode).trim()
+                ? {
+                    groupId: (entryGroupCode || linkClassCode).trim(),
+                    groupName: (entryGroupCode || linkClassCode).trim(),
+                }
+                : null
+            : resolveExamGuestGroup(examData, entryGroupCode || linkClassCode, true)
+        : null;
+    const canUseStudentEntry = !!user && !user.isGuest && solveAccess === "ok";
+    const canShowEntryConfirm = !entryConfirmed && (solveAccess === "ok" || canOfferGroupGuestEntry);
+    const studentLoginHref = currentSolvePath
+        ? `/?role=student&next=${encodeURIComponent(currentSolvePath)}`
+        : "/?role=student";
+
+    if (canShowEntryConfirm) {
+        return (
+            <div className="layout-main solve-page" style={{
+                background: 'var(--background)',
+                minHeight: 'var(--app-viewport-height, 100dvh)',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                padding: '1rem',
+            }}>
+                <ExamEntryConfirmDialog
+                    examTitle={examData.title}
+                    user={user}
+                    canUseStudent={canUseStudentEntry}
+                    guestName={entryGuestName}
+                    groupCode={entryGroupCode}
+                    needsGroupCode={!!isGroupEntryExam && !resolvedLinkGuestGroup}
+                    suggestedGroupName={resolvedLinkGuestGroup?.groupName || ""}
+                    error={entryError}
+                    studentLoginHref={studentLoginHref}
+                    onGuestNameChange={(next) => {
+                        setEntryGuestName(next);
+                        if (entryError) setEntryError("");
+                    }}
+                    onGroupCodeChange={(next) => {
+                        setEntryGroupCode(next);
+                        if (entryError) setEntryError("");
+                    }}
+                    onContinueStudent={() => { void continueEntryAsStudent(); }}
+                    onContinueGuest={() => { void continueEntryAsGuest(); }}
+                    onExit={() => router.push("/")}
+                />
+            </div>
+        );
+    }
+
+    if (solveAccess !== "ok") {
+        return (
+            <div className="layout-main solve-page" style={{
+                background: 'var(--background)',
+                minHeight: 'var(--app-viewport-height, 100dvh)',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                padding: '1rem',
+            }}>
+                <ExamAccessBlockedDialog
+                    decision={{ status: solveAccess } as ExamAccessDecision}
+                    onExit={() => router.push(
+                        solveAccess === "login_required" ? buildStudentLoginHref() : "/student/dashboard"
+                    )}
+                />
             </div>
         );
     }
@@ -1997,11 +2543,12 @@ export default function SolvePage() {
                         }}>
                             <input
                                 type="checkbox"
+                                aria-label="선생님 모드"
                                 checked={isTeacherMode}
                                 onChange={(e) => toggleTeacherMode(e.target.checked)}
                                 style={{ margin: 0 }}
                             />
-                            선생님 모드
+                            <span className="solve-teacher-toggle-label">선생님 모드</span>
                         </label>
 
                         {isTeacherMode ? (
