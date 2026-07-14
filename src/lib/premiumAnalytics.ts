@@ -1403,58 +1403,20 @@ export function buildExamQuestionResultStats(exam: Exam, attempts: Attempt[]): E
 }
 
 /**
- * Minimum respondents required before the upper/lower-third discrimination index is
- * statistically meaningful. Below this the two groups overlap (or are identical for n=1),
- * so callers should render "-" instead of a noisy number.
+ * Minimum respondents required before a per-question discrimination index is statistically
+ * meaningful. Below this the correlation is noise (or undefined for n=1), so callers should
+ * render "-" instead of a noisy number.
  */
 export const DISCRIMINATION_MIN_RESPONDENTS = 5;
 
 /**
- * Per-question discrimination index (upper-third correct rate − lower-third correct rate),
- * or null when there are too few respondents to be reliable. Matches the inline computation
- * used by the exam analytics table so the CSV export and the UI never disagree.
- */
-export function buildExamQuestionDiscriminations(exam: Exam, attempts: Attempt[]): Map<number, number | null> {
-    const discriminations = new Map<number, number | null>();
-    if (attempts.length < DISCRIMINATION_MIN_RESPONDENTS) {
-        for (const question of exam.questions) discriminations.set(question.id, null);
-        return discriminations;
-    }
-
-    const resultsByAttemptId = new Map(attempts.map(attempt => [
-        attempt.id,
-        new Map(getAttemptQuestionResults(exam, attempt).map(result => [result.questionId, result])),
-    ]));
-    const sortedByScore = [...attempts].sort((a, b) => (
-        summarizeAttemptScore(exam, b).scorePercent - summarizeAttemptScore(exam, a).scorePercent
-    ));
-    const splitSize = Math.max(1, Math.ceil(sortedByScore.length / 3));
-    const upperGroup = sortedByScore.slice(0, splitSize);
-    const lowerGroup = sortedByScore.slice(-splitSize);
-    const rateForGroup = (group: Attempt[], questionId: number): number => {
-        let total = 0;
-        let correct = 0;
-        for (const attempt of group) {
-            const result = resultsByAttemptId.get(attempt.id)?.get(questionId);
-            if (!result || result.status === "ungraded") continue;
-            total += 1;
-            if (result.status === "correct" || result.isCorrect) correct += 1;
-        }
-        return total > 0 ? Math.round((correct / total) * 100) : 0;
-    };
-
-    for (const question of exam.questions) {
-        discriminations.set(question.id, rateForGroup(upperGroup, question.id) - rateForGroup(lowerGroup, question.id));
-    }
-    return discriminations;
-}
-
-/**
  * Per-question point-biserial correlation between correctness (0/1) and total attempt score —
- * a more statistically grounded discrimination index than the upper/lower-third split above.
- * Reuses DISCRIMINATION_MIN_RESPONDENTS as the reliability floor, applied per question (a
- * question answered by fewer respondents than the exam total — e.g. a retake subset — is
- * gated independently) rather than once for the whole exam.
+ * the single discrimination index used by the question-detail table, the 오답률 Top3 cards,
+ * teaching insights, and the CSV export. (The legacy upper/lower-third D index was removed
+ * in favor of this; psychometric convention flags r < .20 as poor discrimination.)
+ * DISCRIMINATION_MIN_RESPONDENTS is the reliability floor, applied per question (a question
+ * answered by fewer respondents than the exam total — e.g. a retake subset — is gated
+ * independently) rather than once for the whole exam.
  */
 export function buildExamQuestionPointBiserial(exam: Exam, attempts: Attempt[]): Map<number, number | null> {
     const pointBiserials = new Map<number, number | null>();

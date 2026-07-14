@@ -8,14 +8,12 @@ export interface DashboardExportQuestionStat {
     examTitle: string;
     questionNumber: number;
     correctRate: number;
-    /** null when there are too few respondents for a reliable discrimination index. */
-    discrimination: number | null;
     /**
-     * Point-biserial correlation between correctness and total score (a more statistically
-     * grounded discrimination index). Optional/undefined for callers that predate this field —
-     * rendered as "-" alongside the legacy upper/lower-third discrimination, same as null.
+     * Point-biserial correlation between correctness and total score — the unified
+     * discrimination index (the legacy upper/lower-third D column was removed).
+     * null when there are too few respondents for a reliable value; rendered as "-".
      */
-    pointBiserial?: number | null;
+    pointBiserial: number | null;
 }
 
 export interface DashboardStatsExportInput {
@@ -92,15 +90,14 @@ export function buildDashboardStatsCsvRows(input: DashboardStatsExportInput): un
         rows.push(
             [],
             ["문항별 통계"],
-            ["시험명", "문항 번호", "정답률(%)", "변별도(%)", "변별도(점이연상관)"],
+            ["시험명", "문항 번호", "정답률(%)", "변별도(점이연상관)"],
         );
         input.questionStats.forEach(stat => {
             rows.push([
                 stat.examTitle,
                 stat.questionNumber,
                 stat.correctRate,
-                stat.discrimination === null ? "-" : stat.discrimination,
-                stat.pointBiserial === null || stat.pointBiserial === undefined ? "-" : stat.pointBiserial,
+                stat.pointBiserial === null ? "-" : stat.pointBiserial,
             ]);
         });
     }

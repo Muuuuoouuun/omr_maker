@@ -25,7 +25,6 @@ import {
     studentScopeKeyForAttempt,
     summarizeAttemptScore,
     summarizeAttemptBehavior,
-    DISCRIMINATION_MIN_RESPONDENTS,
 } from "@/lib/premiumAnalytics";
 import { computeGroupScoreSummary, computeScoreDistribution } from "@/lib/scoreDistribution";
 import type { LearningRecommendation } from "@/lib/premiumAnalytics";
@@ -102,10 +101,6 @@ function roundScoreValue(value: number): number {
 
 function isGradableResult(result: QuestionResult): boolean {
     return result.status !== "ungraded";
-}
-
-function isCorrectResult(result: QuestionResult): boolean {
-    return result.status === "correct" || result.isCorrect;
 }
 
 function resultStatusLabel(result?: QuestionResult): string {
@@ -469,30 +464,6 @@ export default function ExamAnalyticsTab({
         const resultStats = buildExamQuestionResultStats(selectedExam, examAttempts);
         const statByQuestionId = new Map(resultStats.map(stat => [stat.questionId, stat]));
         const pointBiserialByQuestionId = buildExamQuestionPointBiserial(selectedExam, examAttempts);
-        const resultsByAttemptId = new Map(examAttempts.map(attempt => [
-            attempt.id,
-            new Map(getAttemptQuestionResults(selectedExam, attempt).map(result => [result.questionId, result])),
-        ]));
-        const sortedByScore = [...examAttempts].sort((a, b) => {
-            const aPct = summarizeAttemptScore(selectedExam, a).scorePercent;
-            const bPct = summarizeAttemptScore(selectedExam, b).scorePercent;
-            return bPct - aPct;
-        });
-        const splitSize = Math.max(1, Math.ceil(sortedByScore.length / 3));
-        const upperGroup = sortedByScore.slice(0, splitSize);
-        const lowerGroup = sortedByScore.slice(-splitSize);
-        const rateForGroup = (group: Attempt[], questionId: number) => {
-            if (group.length === 0) return 0;
-            let total = 0;
-            let correct = 0;
-            for (const attempt of group) {
-                const result = resultsByAttemptId.get(attempt.id)?.get(questionId);
-                if (!result || !isGradableResult(result)) continue;
-                total += 1;
-                if (isCorrectResult(result)) correct += 1;
-            }
-            return safeRatePercent(correct, total);
-        };
 
         return selectedExam.questions.map((q, qIndex) => {
             const stat = statByQuestionId.get(q.id);
@@ -503,12 +474,6 @@ export default function ExamAnalyticsTab({
             };
             const correctRate = stat?.correctRate ?? 0;
             const unansweredRate = stat?.unansweredRate ?? 0;
-            const upperCorrectRate = rateForGroup(upperGroup, q.id);
-            const lowerCorrectRate = rateForGroup(lowerGroup, q.id);
-            const discrimination = upperCorrectRate - lowerCorrectRate;
-            // With fewer than 5 respondents the upper/lower thirds overlap, so the
-            // discrimination index is noise — flag it so the UI shows "-" and skips it.
-            const discriminationReliable = examAttempts.length >= DISCRIMINATION_MIN_RESPONDENTS;
 
             const optionRates = Object.entries(optionCounts).map(([opt, count]) => ({
                 option: parseInt(opt),
@@ -538,10 +503,8 @@ export default function ExamAnalyticsTab({
                 totalCount: stat?.totalCount ?? 0,
                 wrongRate: stat?.wrongRate ?? 0,
                 unansweredRate,
-                discrimination,
-                discriminationReliable,
-                // 점이연 상관 기준 — statistically grounded item discrimination, shown in the
-                // 문항별 상세 table in place of the upper/lower-third split above.
+                // 점이연 상관 기준 — the unified item-discrimination index (null when the
+                // respondent pool is below DISCRIMINATION_MIN_RESPONDENTS → rendered "-").
                 pointBiserial: pointBiserialByQuestionId.get(q.id) ?? null,
                 topWrongOption,
                 optionRates,
@@ -657,10 +620,13 @@ export default function ExamAnalyticsTab({
         if (!examStats) return null;
 
         const weakConcept = conceptAnalytics[0];
-        // Weak discrimination only counts within the 35–85% correct-rate band (outside it a
-        // low index is expected, not a defect) and only when the index is reliable (n ≥ 5).
+        // Weak discrimination = point-biserial below the psychometric "poor" threshold
+        // (r < .20), same criterion as the 문항별 상세 table. Only counts within the
+        // 35–85% correct-rate band (outside it a low index is expected, not a defect)
+        // and only when the index is reliable (null = fewer than n ≥ 5 respondents).
         const hasWeakDiscrimination = (q: typeof questionAnalytics[number]) =>
-            q.discriminationReliable && q.discrimination < 10 && q.correctRate >= 35 && q.correctRate <= 85;
+            q.pointBiserial !== null && q.pointBiserial < WEAK_POINT_BISERIAL_THRESHOLD
+            && q.correctRate >= 35 && q.correctRate <= 85;
         const riskyQuestions = questionAnalytics.filter(q =>
             q.correctRate < 50 ||
             hasWeakDiscrimination(q) ||
@@ -2629,7 +2595,8 @@ export default function ExamAnalyticsTab({
                             </h3>
                             <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
                                 {topWrongQuestions.map((q, i) => {
-                                    const discriminationText = q.discriminationReliable ? `${q.discrimination}%` : '-';
+                                    // Point-biserial r, same index as the 문항별 상세 table ("-" below n ≥ 5).
+                                    const discriminationText = q.pointBiserial !== null ? q.pointBiserial.toFixed(2) : '-';
                                     return (
                                     <div key={i} style={{
                                         padding: '1rem',

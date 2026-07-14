@@ -70,10 +70,9 @@ describe("dashboard stats export", () => {
             scores: [40, 60, 80, 100], // median 70, sd ~21.2, pass-rate 75
             passThreshold: 70,
             questionStats: [
-                { examTitle: "중간, 모의고사", questionNumber: 1, correctRate: 82, discrimination: 40, pointBiserial: 0.34 },
-                { examTitle: "중간, 모의고사", questionNumber: 2, correctRate: 35, discrimination: null, pointBiserial: null },
-                // Callers that predate the pointBiserial field simply omit it.
-                { examTitle: "중간, 모의고사", questionNumber: 3, correctRate: 60, discrimination: 20 },
+                { examTitle: "중간, 모의고사", questionNumber: 1, correctRate: 82, pointBiserial: 0.34 },
+                // null = too few respondents for a reliable index → rendered as "-".
+                { examTitle: "중간, 모의고사", questionNumber: 2, correctRate: 35, pointBiserial: null },
             ],
         });
 
@@ -81,10 +80,9 @@ describe("dashboard stats export", () => {
         expect(rows).toContainEqual(["표준편차", 22.4]);
         expect(rows).toContainEqual(["합격률(70점 이상, %)", 50]);
         expect(rows).toContainEqual(["문항별 통계"]);
-        expect(rows).toContainEqual(["시험명", "문항 번호", "정답률(%)", "변별도(%)", "변별도(점이연상관)"]);
-        expect(rows).toContainEqual(["중간, 모의고사", 1, 82, 40, 0.34]);
-        expect(rows).toContainEqual(["중간, 모의고사", 2, 35, "-", "-"]);
-        expect(rows).toContainEqual(["중간, 모의고사", 3, 60, 20, "-"]);
+        expect(rows).toContainEqual(["시험명", "문항 번호", "정답률(%)", "변별도(점이연상관)"]);
+        expect(rows).toContainEqual(["중간, 모의고사", 1, 82, 0.34]);
+        expect(rows).toContainEqual(["중간, 모의고사", 2, 35, "-"]);
     });
 
     it("serializes to spreadsheet-safe CSV", () => {

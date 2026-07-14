@@ -34,7 +34,9 @@ import {
 } from "@/lib/rosterStorage";
 import { addRosterGroup, deleteRosterGroup, editRosterGroup } from "@/lib/rosterMutations";
 import {
+    applyRosterCsvConflictDispositions,
     buildRosterCsvImportPlan,
+    type RosterCsvConflictDisposition,
     type RosterCsvFieldChange,
     type RosterCsvImportPlan,
 } from "@/lib/rosterCsvImport";
@@ -1173,11 +1175,14 @@ function ManageUsersInner() {
         }
     };
 
-    const handleConfirmCsvImport = () => {
+    const handleConfirmCsvImport = (dispositions: Record<number, RosterCsvConflictDisposition>) => {
         if (!csvPreview) return;
         const plan = csvPreview;
         setCsvPreview(null);
-        if (!plan.hasChanges) {
+        // Fold the per-row conflict choices (신규 추가/기존 덮어쓰기/건너뛰기) into the
+        // planned students array before persisting.
+        const resolution = applyRosterCsvConflictDispositions(plan, dispositions);
+        if (!resolution.hasChanges) {
             toast.info(
                 "추가된 학생 없음",
                 plan.skips.length
@@ -1186,15 +1191,17 @@ function ManageUsersInner() {
             );
             return;
         }
-        const recomputedGroups = recomputeGroups(plan.nextStudents, plan.nextGroups);
-        persistRoster(plan.nextStudents, recomputedGroups, invites);
-        const addedTotal = plan.adds.length + plan.conflicts.length;
-        const updatedTotal = plan.updates.filter(update => update.changes.length > 0).length;
+        const recomputedGroups = recomputeGroups(resolution.nextStudents, plan.nextGroups);
+        persistRoster(resolution.nextStudents, recomputedGroups, invites);
+        const addedTotal = plan.adds.length + resolution.addedCount;
+        const updatedTotal = plan.updates.filter(update => update.changes.length > 0).length + resolution.overwrittenCount;
         toast.success(
             "CSV 가져오기 완료",
             `${addedTotal}명 추가 · ${updatedTotal}명 업데이트 · ${plan.createdGroups.length}개 반 생성`
             + `${plan.skips.length ? ` · ${plan.skips.length}행 제외` : ""}`
-            + `${plan.conflicts.length ? ` · ${plan.conflicts.length}건 id 충돌(새 학생으로 추가)` : ""}`,
+            + `${resolution.overwrittenCount ? ` · ${resolution.overwrittenCount}건 id 충돌 덮어쓰기` : ""}`
+            + `${resolution.skippedCount ? ` · ${resolution.skippedCount}건 id 충돌 건너뜀` : ""}`
+            + `${resolution.addedCount ? ` · ${resolution.addedCount}건 id 충돌 새 학생 추가` : ""}`,
         );
     };
 
@@ -3507,16 +3514,40 @@ function CsvPreviewSection({
     );
 }
 
+const CSV_CONFLICT_DISPOSITION_LABEL: Record<RosterCsvConflictDisposition, string> = {
+    add: "신규 추가",
+    overwrite: "기존 덮어쓰기",
+    skip: "건너뛰기",
+};
+
+function csvConflictDispositionNote(disposition: RosterCsvConflictDisposition, row: { existingName: string; existingEmail: string }): string {
+    if (disposition === "overwrite") return `기존 학생(${row.existingName} · ${row.existingEmail}) 정보를 이 행으로 덮어씁니다.`;
+    if (disposition === "skip") return "이 행은 가져오지 않습니다.";
+    return "새 id로 별도 학생을 추가합니다. 기존 학생은 그대로 둡니다.";
+}
+
 function CsvImportPreviewModal({
     plan, onClose, onConfirm,
 }: {
     plan: RosterCsvImportPlan;
     onClose: () => void;
-    onConfirm: () => void;
+    onConfirm: (dispositions: Record<number, RosterCsvConflictDisposition>) => void;
 }) {
-    const addedTotal = plan.adds.length + plan.conflicts.length;
+    // Per-conflict-row choice, keyed by CSV line. Missing entry = "add" (the
+    // historical "add as new" behavior stays the default).
+    const [conflictDispositions, setConflictDispositions] = useState<Record<number, RosterCsvConflictDisposition>>({});
+    const dispositionFor = (line: number): RosterCsvConflictDisposition => conflictDispositions[line] ?? "add";
+    const conflictAddCount = plan.conflicts.filter(row => dispositionFor(row.line) === "add").length;
+    const conflictOverwriteCount = plan.conflicts.filter(row => dispositionFor(row.line) === "overwrite").length;
+    const conflictSkipCount = plan.conflicts.filter(row => dispositionFor(row.line) === "skip").length;
+    const addedTotal = plan.adds.length + conflictAddCount;
     const changedUpdates = plan.updates.filter(update => update.changes.length > 0);
     const unchangedCount = plan.updates.length - changedUpdates.length;
+    // Mirrors applyRosterCsvConflictDispositions: skipping every conflict can turn a
+    // "has changes" plan into a no-op, so the confirm button tracks the live choices.
+    const effectiveHasChanges = plan.adds.length > 0
+        || changedUpdates.length > 0
+        || conflictAddCount + conflictOverwriteCount > 0;
     const rowStyle: React.CSSProperties = {
         fontSize: '0.8rem', color: 'var(--foreground)', lineHeight: 1.5,
         display: 'flex', alignItems: 'flex-start', gap: '0.5rem', wordBreak: 'keep-all',
@@ -3540,12 +3571,15 @@ function CsvImportPreviewModal({
                 display: 'flex', flexWrap: 'wrap', gap: '0.5rem', marginBottom: '1.25rem',
             }}>
                 <CsvDispositionBadge color="var(--success)" bg="rgba(16,185,129,0.1)" label={`추가 ${addedTotal}`} />
-                <CsvDispositionBadge color="var(--primary)" bg="rgba(99,102,241,0.1)" label={`업데이트 ${changedUpdates.length}`} />
+                <CsvDispositionBadge color="var(--primary)" bg="rgba(99,102,241,0.1)" label={`업데이트 ${changedUpdates.length + conflictOverwriteCount}`} />
                 {unchangedCount > 0 && (
                     <CsvDispositionBadge color="var(--muted)" bg="var(--background)" label={`변경 없음 ${unchangedCount}`} />
                 )}
                 {plan.conflicts.length > 0 && (
                     <CsvDispositionBadge color="var(--warning)" bg="rgba(245,158,11,0.12)" label={`id 충돌 ${plan.conflicts.length}`} />
+                )}
+                {conflictSkipCount > 0 && (
+                    <CsvDispositionBadge color="var(--muted)" bg="var(--background)" label={`충돌 건너뜀 ${conflictSkipCount}`} />
                 )}
                 {plan.createdGroups.length > 0 && (
                     <CsvDispositionBadge color="var(--foreground)" bg="var(--background)" label={`새 반 ${plan.createdGroups.length}`} />
@@ -3585,19 +3619,53 @@ function CsvImportPreviewModal({
                 {moreNote(CSV_PREVIEW_ROW_CAP, changedUpdates.length)}
             </CsvPreviewSection>
 
-            <CsvPreviewSection title="id 충돌 (새 학생으로 추가)" count={plan.conflicts.length} color="var(--warning)" bg="rgba(245,158,11,0.12)">
-                {plan.conflicts.slice(0, CSV_PREVIEW_ROW_CAP).map(row => (
-                    <div key={`cft-${row.line}`} style={rowStyle}>
-                        <span style={lineStyle}>#{row.line}</span>
-                        <span>
-                            <strong>{row.name}</strong> · {row.email} · {row.group}
-                            <span style={{ display: 'block', color: 'var(--muted)', fontSize: '0.75rem' }}>
-                                id <code>{row.importedId}</code>가 기존 학생({row.existingName} · {row.existingEmail})과 겹쳐 새 학생으로 추가됩니다.
+            <CsvPreviewSection title="id 충돌" count={plan.conflicts.length} color="var(--warning)" bg="rgba(245,158,11,0.12)">
+                {plan.conflicts.slice(0, CSV_PREVIEW_ROW_CAP).map(row => {
+                    const disposition = dispositionFor(row.line);
+                    return (
+                        <div key={`cft-${row.line}`} style={{ ...rowStyle, flexWrap: 'wrap', rowGap: '0.35rem' }}>
+                            <span style={lineStyle}>#{row.line}</span>
+                            <span style={{ flex: '1 1 200px', minWidth: 0 }}>
+                                <strong>{row.name}</strong> · {row.email} · {row.group}
+                                <span style={{ display: 'block', color: 'var(--muted)', fontSize: '0.75rem' }}>
+                                    id <code>{row.importedId}</code>가 기존 학생({row.existingName} · {row.existingEmail})과 겹칩니다.
+                                </span>
+                                <span style={{ display: 'block', color: disposition === "skip" ? 'var(--muted)' : 'var(--warning)', fontSize: '0.75rem', fontWeight: 700 }}>
+                                    {csvConflictDispositionNote(disposition, row)}
+                                </span>
                             </span>
-                        </span>
-                    </div>
-                ))}
+                            <select
+                                aria-label={`${row.line}행 id 충돌 처리 방법`}
+                                value={disposition}
+                                onChange={e => setConflictDispositions(prev => ({
+                                    ...prev,
+                                    [row.line]: e.target.value as RosterCsvConflictDisposition,
+                                }))}
+                                style={{
+                                    flexShrink: 0,
+                                    minHeight: 44,
+                                    padding: '0.45rem 0.6rem',
+                                    background: 'var(--background)',
+                                    border: '1px solid var(--border)',
+                                    borderRadius: 'var(--radius-md)',
+                                    color: 'var(--foreground)',
+                                    fontSize: '0.78rem',
+                                    fontWeight: 700,
+                                }}
+                            >
+                                {(Object.keys(CSV_CONFLICT_DISPOSITION_LABEL) as RosterCsvConflictDisposition[]).map(option => (
+                                    <option key={option} value={option}>{CSV_CONFLICT_DISPOSITION_LABEL[option]}</option>
+                                ))}
+                            </select>
+                        </div>
+                    );
+                })}
                 {moreNote(CSV_PREVIEW_ROW_CAP, plan.conflicts.length)}
+                {plan.conflicts.length > CSV_PREVIEW_ROW_CAP && (
+                    <div style={{ fontSize: '0.75rem', color: 'var(--muted)', fontWeight: 600 }}>
+                        표시되지 않은 충돌 행은 기본값(신규 추가)으로 처리됩니다.
+                    </div>
+                )}
             </CsvPreviewSection>
 
             <CsvPreviewSection title="제외" count={plan.skips.length} color="var(--error)" bg="rgba(239,68,68,0.1)">
@@ -3627,13 +3695,13 @@ function CsvImportPreviewModal({
                 </button>
                 <button
                     type="button"
-                    onClick={onConfirm}
-                    disabled={!plan.hasChanges}
-                    title={plan.hasChanges ? undefined : "반영할 변경 사항이 없습니다."}
+                    onClick={() => onConfirm(conflictDispositions)}
+                    disabled={!effectiveHasChanges}
+                    title={effectiveHasChanges ? undefined : "반영할 변경 사항이 없습니다."}
                     style={{
                         minHeight: 44, padding: '0.65rem 1.1rem', background: 'var(--primary)', color: 'white',
                         borderRadius: 'var(--radius-md)', fontWeight: 700, fontSize: '0.85rem',
-                        opacity: plan.hasChanges ? 1 : 0.5, cursor: plan.hasChanges ? 'pointer' : 'not-allowed',
+                        opacity: effectiveHasChanges ? 1 : 0.5, cursor: effectiveHasChanges ? 'pointer' : 'not-allowed',
                     }}
                 >
                     가져오기 확정

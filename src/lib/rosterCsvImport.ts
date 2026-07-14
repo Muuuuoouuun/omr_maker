@@ -304,3 +304,88 @@ export function buildRosterCsvImportPlan(
         hasChanges: adds.length + conflicts.length > 0 || updates.some(update => update.changes.length > 0),
     };
 }
+
+/**
+ * Per-conflict-row choice the teacher makes in the preview modal:
+ * - "add"       (신규 추가, default): keep the plan's behavior — the row becomes a new
+ *               student under the disambiguated id.
+ * - "overwrite" (기존 덮어쓰기): apply the row's fields onto the existing student that owns
+ *               the collided id (keeping that student's id/avatar/score history).
+ * - "skip"      (건너뛰기): drop the row entirely.
+ */
+export type RosterCsvConflictDisposition = "add" | "overwrite" | "skip";
+
+export interface RosterCsvConflictResolution {
+    /** Students array to persist, with each conflict disposition applied. */
+    nextStudents: RosterStudent[];
+    /** Conflict rows kept as brand-new students (disposition "add"). */
+    addedCount: number;
+    /** Conflict rows folded onto the colliding existing student (disposition "overwrite"). */
+    overwrittenCount: number;
+    /** Conflict rows dropped (disposition "skip"). */
+    skippedCount: number;
+    /** True when confirming would still change stored data after dispositions. */
+    hasChanges: boolean;
+}
+
+/**
+ * Apply per-row conflict dispositions to a dry-run plan at confirm time.
+ *
+ * `plan.nextStudents` already contains every conflict row as a prepended new student
+ * (the historical "add as new" behavior, which stays the default), so this only has to
+ * remove or fold back the rows the teacher redirected. Pure like the planner: neither
+ * the plan nor its arrays are mutated.
+ *
+ * `dispositions` is keyed by the conflict row's `line`; missing entries default to "add".
+ */
+export function applyRosterCsvConflictDispositions(
+    plan: RosterCsvImportPlan,
+    dispositions: Record<number, RosterCsvConflictDisposition>,
+): RosterCsvConflictResolution {
+    let nextStudents = [...plan.nextStudents];
+    let addedCount = 0;
+    let overwrittenCount = 0;
+    let skippedCount = 0;
+
+    for (const conflict of plan.conflicts) {
+        const disposition = dispositions[conflict.line] ?? "add";
+        if (disposition === "add") {
+            addedCount += 1;
+            continue;
+        }
+
+        // Both remaining dispositions drop the planner's prepended new student.
+        nextStudents = nextStudents.filter(student => student.id !== conflict.id);
+
+        if (disposition === "skip") {
+            skippedCount += 1;
+            continue;
+        }
+
+        // Overwrite: fold the CSV row onto the existing owner of the collided id,
+        // keeping its identity (id/avatar/score history). Mirrors the update path's
+        // region rule — a blank region cell must not wipe a stored region.
+        nextStudents = nextStudents.map(student => (
+            student.id === conflict.importedId
+                ? {
+                    ...student,
+                    name: conflict.name,
+                    email: conflict.email,
+                    group: conflict.group,
+                    ...(conflict.region ? { region: conflict.region } : {}),
+                }
+                : student
+        ));
+        overwrittenCount += 1;
+    }
+
+    return {
+        nextStudents,
+        addedCount,
+        overwrittenCount,
+        skippedCount,
+        hasChanges: plan.adds.length > 0
+            || plan.updates.some(update => update.changes.length > 0)
+            || addedCount + overwrittenCount > 0,
+    };
+}

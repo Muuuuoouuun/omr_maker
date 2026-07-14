@@ -42,6 +42,7 @@ const StudentAnalyticsTab = dynamic(() => import("@/components/dashboard/tabs/St
     loading: () => <TabSkeleton />,
 });
 import { toast } from "@/components/Toast";
+import { createDashboardRevalidationGate, isTeacherDashboardStorageKey } from "@/components/dashboard/dashboardRevalidation";
 import { buildDemoDashboardData, shouldUseDemoData } from "@/lib/demoData";
 import { buildQuestionResultRepairPlan } from "@/lib/analyticsDataRepair";
 import { loadAttempts, loadExams, saveAttempt } from "@/lib/omrPersistence";
@@ -187,6 +188,51 @@ function TeacherDashboard() {
         let cancelled = false;
         void loadDashboardData({ isCancelled: () => cancelled });
         return () => { cancelled = true; };
+    }, [loadDashboardData]);
+
+    // Cross-tab / refocus revalidation: another tab submitting an attempt, saving
+    // an exam, or editing the roster fires a "storage" event here; returning to a
+    // backgrounded tab fires focus/visibilitychange. Re-run the existing loader,
+    // throttled to once per window with one trailing refresh so bursts coalesce.
+    useEffect(() => {
+        let cancelled = false;
+        let trailingTimer: number | undefined;
+        const gate = createDashboardRevalidationGate();
+        const refresh = () => {
+            if (cancelled) return;
+            // Background refresh: never toast, and never surface transient errors.
+            void loadDashboardData({ isCancelled: () => cancelled, notifyOnError: false });
+        };
+        const trigger = () => {
+            const decision = gate.decide();
+            if (decision.kind === "refresh") {
+                refresh();
+            } else if (decision.kind === "schedule") {
+                trailingTimer = window.setTimeout(() => {
+                    trailingTimer = undefined;
+                    gate.confirmScheduledRefresh();
+                    refresh();
+                }, decision.delayMs);
+            }
+        };
+        const onStorage = (event: StorageEvent) => {
+            if (!isTeacherDashboardStorageKey(event.key)) return;
+            trigger();
+        };
+        const onVisibilityChange = () => {
+            if (document.visibilityState === "visible") trigger();
+        };
+        window.addEventListener("storage", onStorage);
+        window.addEventListener("focus", trigger);
+        document.addEventListener("visibilitychange", onVisibilityChange);
+        return () => {
+            cancelled = true;
+            if (trailingTimer !== undefined) window.clearTimeout(trailingTimer);
+            gate.cancelScheduled();
+            window.removeEventListener("storage", onStorage);
+            window.removeEventListener("focus", trigger);
+            document.removeEventListener("visibilitychange", onVisibilityChange);
+        };
     }, [loadDashboardData]);
 
     useEffect(() => {

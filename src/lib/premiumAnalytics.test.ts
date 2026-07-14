@@ -5,7 +5,6 @@ import {
     buildClassTypeWeaknessGroups,
     buildClassExamScoreGroups,
     buildClassExamWeaknessMatrix,
-    buildExamQuestionDiscriminations,
     buildExamQuestionPointBiserial,
     buildExamQuestionResultStats,
     buildLearningRecommendations,
@@ -717,32 +716,14 @@ describe("premium analytics", () => {
         expect(stat.revisitRate).toBeLessThanOrEqual(100);
     });
 
-    it("returns null discrimination for small respondent pools and a number otherwise (B5)", () => {
-        // Fewer than 5 respondents → discrimination is unreliable.
-        expect(buildExamQuestionDiscriminations(exam, [attempt]).get(2)).toBeNull();
-
-        const many: Attempt[] = Array.from({ length: 6 }, (_, i) => ({
-            ...attempt,
-            id: `disc-${i}`,
-            studentId: `disc-s${i}`,
-            // Top 2 answer q2 correctly (4), bottom answers wrong.
-            answers: i < 2 ? { 1: 2, 2: 4, 3: 1, 4: 3 } : { 1: 3, 2: 1, 3: 2, 4: 2 },
-            questionTimings: [],
-            questionDrawings: [],
-        }));
-        const discrimination = buildExamQuestionDiscriminations(exam, many).get(2);
-        expect(typeof discrimination).toBe("number");
-        expect(discrimination as number).toBeGreaterThan(0);
-    });
-
     it("returns null point-biserial for small respondent pools and a perfect correlation for cleanly separated groups", () => {
-        // Fewer than DISCRIMINATION_MIN_RESPONDENTS respondents → unreliable, matches the
-        // upper/lower-third guard above.
+        // Fewer than DISCRIMINATION_MIN_RESPONDENTS respondents → unreliable (B5 guard,
+        // formerly enforced by the removed upper/lower-third index).
         expect(buildExamQuestionPointBiserial(exam, [attempt]).get(2)).toBeNull();
 
-        // Same fixture as the discrimination test: the 2 respondents who answer q2
-        // correctly (4) also ace every other question (100%), and the 4 who miss q2 also
-        // miss everything else (0%) — a perfect correctness/score split, so r_pb = 1.
+        // The 2 respondents who answer q2 correctly (4) also ace every other question
+        // (100%), and the 4 who miss q2 also miss everything else (0%) — a perfect
+        // correctness/score split, so r_pb = 1.
         const many: Attempt[] = Array.from({ length: 6 }, (_, i) => ({
             ...attempt,
             id: `pb-${i}`,

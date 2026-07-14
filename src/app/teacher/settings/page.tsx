@@ -1231,7 +1231,10 @@ function SecuritySection({
                         <Shield size={15} color="var(--primary)" />
                         서버 인증으로 관리됨
                     </div>
-                    <p style={{ color: 'var(--muted)', fontSize: '0.82rem', lineHeight: 1.65, wordBreak: 'keep-all' }}>
+                    {/* keep-all keeps Korean words intact; overflowWrap:anywhere lets long
+                        env-var tokens (TEACHER_LOGIN_ID/TEACHER_PASSWORD) break instead of
+                        overflowing the card at narrow widths. */}
+                    <p style={{ color: 'var(--muted)', fontSize: '0.82rem', lineHeight: 1.65, wordBreak: 'keep-all', overflowWrap: 'anywhere' }}>
                         교사 계정 정보는 브라우저 설정에 저장하지 않습니다. 운영 환경에서는 <code style={{ fontWeight: 800 }}>TEACHER_ACCOUNTS</code> 또는 <code style={{ fontWeight: 800 }}>TEACHER_LOGIN_ID</code>/<code style={{ fontWeight: 800 }}>TEACHER_PASSWORD</code> 서버 환경변수를 변경한 뒤 다시 배포해 교체하세요.
                     </p>
                 </div>
@@ -1281,7 +1284,10 @@ function SecuritySection({
                                 {deploymentTone.icon}
                                 {deploymentReadiness.label}
                             </div>
-                            <p style={{ color: 'var(--muted)', fontSize: '0.82rem', lineHeight: 1.6, wordBreak: 'keep-all' }}>
+                            {/* overflowWrap:anywhere — the diagnostic details cite long env-var
+                                tokens (STUDENT_SESSION_SECRET, OMR_PRODUCTION_RLS_APPLIED=true)
+                                that keep-all alone cannot break, overflowing the 375px card. */}
+                            <p style={{ color: 'var(--muted)', fontSize: '0.82rem', lineHeight: 1.6, wordBreak: 'keep-all', overflowWrap: 'anywhere' }}>
                                 {deploymentReadiness.detail}
                             </p>
                             <div style={{ marginTop: '0.38rem', color: 'var(--foreground)', fontSize: '0.78rem', fontWeight: 850 }}>
@@ -1341,10 +1347,10 @@ function SecuritySection({
                                             {tone.icon}
                                         </span>
                                         <span style={{ minWidth: 0 }}>
-                                            <span style={{ display: 'block', color: 'var(--foreground)', fontSize: '0.8rem', fontWeight: 900, marginBottom: '0.18rem' }}>
+                                            <span style={{ display: 'block', color: 'var(--foreground)', fontSize: '0.8rem', fontWeight: 900, marginBottom: '0.18rem', overflowWrap: 'anywhere' }}>
                                                 {check.label}
                                             </span>
-                                            <span style={{ display: 'block', color: 'var(--muted)', fontSize: '0.74rem', lineHeight: 1.52, wordBreak: 'keep-all' }}>
+                                            <span style={{ display: 'block', color: 'var(--muted)', fontSize: '0.74rem', lineHeight: 1.52, wordBreak: 'keep-all', overflowWrap: 'anywhere' }}>
                                                 {check.detail}
                                             </span>
                                         </span>

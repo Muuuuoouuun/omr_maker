@@ -176,10 +176,17 @@ type SupabaseClientLike = {
     };
 };
 
-const EXAM_PREFIX = "omr_exam_";
-const ATTEMPTS_KEY = "omr_attempts";
-const DELETED_EXAMS_KEY = "omr_deleted_exam_ids";
-const SOLVE_DRAFT_PREFIX = "omr_draft_";
+// Exported so cross-tab listeners (dashboard revalidation) can recognize which
+// localStorage keys carry exam/attempt data without duplicating the literals.
+export const EXAM_STORAGE_KEY_PREFIX = "omr_exam_";
+export const ATTEMPTS_STORAGE_KEY = "omr_attempts";
+export const DELETED_EXAMS_STORAGE_KEY = "omr_deleted_exam_ids";
+export const SOLVE_DRAFT_STORAGE_KEY_PREFIX = "omr_draft_";
+
+const EXAM_PREFIX = EXAM_STORAGE_KEY_PREFIX;
+const ATTEMPTS_KEY = ATTEMPTS_STORAGE_KEY;
+const DELETED_EXAMS_KEY = DELETED_EXAMS_STORAGE_KEY;
+const SOLVE_DRAFT_PREFIX = SOLVE_DRAFT_STORAGE_KEY_PREFIX;
 
 let supabaseClientPromise: Promise<SupabaseClientLike | null> | null = null;
 

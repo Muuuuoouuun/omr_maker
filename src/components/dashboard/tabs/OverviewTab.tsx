@@ -19,7 +19,7 @@ import { safeRatePercent } from "@/lib/scoreUtils";
 import { buildExamSummaryRows, splitExamSummaryRows } from "@/lib/dashboardSummary";
 import { buildDashboardStatsCsv, type DashboardExportQuestionStat } from "@/lib/dashboardStatsExport";
 import { buildAttemptScoreLookup } from "@/lib/attemptScores";
-import { buildExamQuestionResultStats, buildExamQuestionDiscriminations, buildExamQuestionPointBiserial } from "@/lib/premiumAnalytics";
+import { buildExamQuestionResultStats, buildExamQuestionPointBiserial } from "@/lib/premiumAnalytics";
 import type { RosterGroup, RosterStudent } from "@/lib/rosterStorage";
 import { summarizePersistenceWrite } from "@/lib/persistenceFeedback";
 import { buildBillingUsageSummary } from "@/lib/billingUsage";
@@ -271,7 +271,6 @@ export default function OverviewTab({ exams: examsProp, attempts, stats, trendDa
             const exam = exams[i];
             const examAttempts = attempts.filter(attempt => attempt.examId === exam.id && !attempt.retake);
             if (examAttempts.length > 0) {
-                const discriminations = buildExamQuestionDiscriminations(exam, examAttempts);
                 const pointBiserials = buildExamQuestionPointBiserial(exam, examAttempts);
                 for (const stat of buildExamQuestionResultStats(exam, examAttempts)) {
                     if (stat.totalCount === 0) continue;
@@ -279,7 +278,6 @@ export default function OverviewTab({ exams: examsProp, attempts, stats, trendDa
                         examTitle: exam.title,
                         questionNumber: stat.questionNumber,
                         correctRate: stat.correctRate,
-                        discrimination: discriminations.get(stat.questionId) ?? null,
                         pointBiserial: pointBiserials.get(stat.questionId) ?? null,
                     });
                 }

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildRosterCsvImportPlan, mapRosterCsvHeader } from "./rosterCsvImport";
+import { applyRosterCsvConflictDispositions, buildRosterCsvImportPlan, mapRosterCsvHeader } from "./rosterCsvImport";
 import type { RosterGroup, RosterStudent } from "./rosterStorage";
 
 function makeStudent(overrides: Partial<RosterStudent> = {}): RosterStudent {
@@ -193,5 +193,109 @@ describe("buildRosterCsvImportPlan", () => {
         expect(plan.ok).toBe(true);
         expect(plan.hasChanges).toBe(false);
         expect(plan.skips).toHaveLength(1);
+    });
+});
+
+describe("applyRosterCsvConflictDispositions", () => {
+    const existing = makeStudent({
+        id: "s-100",
+        name: "기존학생",
+        email: "existing@example.com",
+        avatar: "#123456",
+        examsTaken: 7,
+        region: "서울",
+    });
+
+    function conflictPlan() {
+        return buildRosterCsvImportPlan(
+            [["id", ...HEADER], ["s-100", "새학생", "new@example.com", "3학년 A반", "부산"]],
+            [existing],
+            [makeGroup()],
+        );
+    }
+
+    it("keeps the conflict row as a new student by default (no disposition given)", () => {
+        const plan = conflictPlan();
+        const resolved = applyRosterCsvConflictDispositions(plan, {});
+
+        expect(resolved.addedCount).toBe(1);
+        expect(resolved.overwrittenCount).toBe(0);
+        expect(resolved.skippedCount).toBe(0);
+        expect(resolved.hasChanges).toBe(true);
+        expect(resolved.nextStudents).toEqual(plan.nextStudents);
+        // Both the untouched existing student and the disambiguated new one survive.
+        expect(resolved.nextStudents.find(s => s.id === "s-100")?.name).toBe("기존학생");
+        expect(resolved.nextStudents.find(s => s.id === plan.conflicts[0].id)?.name).toBe("새학생");
+    });
+
+    it("overwrite folds the row onto the existing student, keeping id/avatar/history", () => {
+        const plan = conflictPlan();
+        const resolved = applyRosterCsvConflictDispositions(plan, { [plan.conflicts[0].line]: "overwrite" });
+
+        expect(resolved.overwrittenCount).toBe(1);
+        expect(resolved.hasChanges).toBe(true);
+        // The prepended new student is gone.
+        expect(resolved.nextStudents.find(s => s.id === plan.conflicts[0].id)).toBeUndefined();
+        const overwritten = resolved.nextStudents.find(s => s.id === "s-100");
+        expect(overwritten).toMatchObject({
+            id: "s-100",
+            name: "새학생",
+            email: "new@example.com",
+            group: "3학년 A반",
+            region: "부산",
+            avatar: "#123456", // identity/history preserved
+            examsTaken: 7,
+        });
+    });
+
+    it("overwrite with a blank region cell keeps the stored region", () => {
+        const plan = buildRosterCsvImportPlan(
+            [["id", ...HEADER], ["s-100", "새학생", "new@example.com", "3학년 A반", ""]],
+            [existing],
+            [makeGroup()],
+        );
+        const resolved = applyRosterCsvConflictDispositions(plan, { [plan.conflicts[0].line]: "overwrite" });
+
+        expect(resolved.nextStudents.find(s => s.id === "s-100")?.region).toBe("서울");
+    });
+
+    it("skip drops the row and reports no changes when nothing else changed", () => {
+        const plan = conflictPlan();
+        const resolved = applyRosterCsvConflictDispositions(plan, { [plan.conflicts[0].line]: "skip" });
+
+        expect(resolved.skippedCount).toBe(1);
+        expect(resolved.hasChanges).toBe(false);
+        expect(resolved.nextStudents.find(s => s.id === plan.conflicts[0].id)).toBeUndefined();
+        expect(resolved.nextStudents.find(s => s.id === "s-100")?.name).toBe("기존학생");
+    });
+
+    it("applies mixed dispositions independently per row and does not mutate the plan", () => {
+        const second = makeStudent({ id: "s-200", name: "둘째기존", email: "second@example.com" });
+        const plan = buildRosterCsvImportPlan(
+            [
+                ["id", ...HEADER],
+                ["s-100", "충돌A", "a@example.com", "3학년 A반", ""],
+                ["s-200", "충돌B", "b@example.com", "3학년 A반", ""],
+                ["", "일반추가", "plain@example.com", "3학년 A반", ""],
+            ],
+            [existing, second],
+            [makeGroup()],
+        );
+        expect(plan.conflicts).toHaveLength(2);
+        const before = [...plan.nextStudents];
+
+        const resolved = applyRosterCsvConflictDispositions(plan, {
+            [plan.conflicts[0].line]: "overwrite",
+            [plan.conflicts[1].line]: "skip",
+        });
+
+        expect(resolved).toMatchObject({ addedCount: 0, overwrittenCount: 1, skippedCount: 1, hasChanges: true });
+        expect(resolved.nextStudents.find(s => s.id === "s-100")?.name).toBe("충돌A");
+        expect(resolved.nextStudents.find(s => s.id === "s-200")?.name).toBe("둘째기존");
+        expect(resolved.nextStudents.some(s => s.name === "충돌B")).toBe(false);
+        // The plain add is untouched by dispositions.
+        expect(resolved.nextStudents.some(s => s.name === "일반추가")).toBe(true);
+        // Purity: the plan's own array was not mutated.
+        expect(plan.nextStudents).toEqual(before);
     });
 });

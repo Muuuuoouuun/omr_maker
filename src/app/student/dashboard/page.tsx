@@ -6,6 +6,7 @@ import { useRouter } from "next/navigation";
 import BrandLogo from "@/components/BrandLogo";
 import { Exam } from "@/types/omr";
 import AssignmentBlock from "@/components/dashboard/AssignmentBlock";
+import { createDashboardRevalidationGate, isStudentDashboardStorageKey } from "@/components/dashboard/dashboardRevalidation";
 import ThemeToggle from "@/components/ThemeToggle";
 import { toast } from "@/components/Toast";
 import { Award, LogIn, Sparkles } from "lucide-react";
@@ -184,6 +185,50 @@ export default function StudentDashboard() {
         return () => { cancelled = true; };
 
     }, [router, refreshKey]);
+
+    // Cross-tab / refocus revalidation: submitting an exam in another tab (or a
+    // login/guest-merge there) fires a "storage" event; returning to this tab
+    // fires focus/visibilitychange. Bump refreshKey to re-run the loader above,
+    // throttled to once per window with one trailing refresh so bursts coalesce.
+    useEffect(() => {
+        let cancelled = false;
+        let trailingTimer: number | undefined;
+        const gate = createDashboardRevalidationGate();
+        const refresh = () => {
+            if (cancelled) return;
+            setRefreshKey(key => key + 1);
+        };
+        const trigger = () => {
+            const decision = gate.decide();
+            if (decision.kind === "refresh") {
+                refresh();
+            } else if (decision.kind === "schedule") {
+                trailingTimer = window.setTimeout(() => {
+                    trailingTimer = undefined;
+                    gate.confirmScheduledRefresh();
+                    refresh();
+                }, decision.delayMs);
+            }
+        };
+        const onStorage = (event: StorageEvent) => {
+            if (!isStudentDashboardStorageKey(event.key)) return;
+            trigger();
+        };
+        const onVisibilityChange = () => {
+            if (document.visibilityState === "visible") trigger();
+        };
+        window.addEventListener("storage", onStorage);
+        window.addEventListener("focus", trigger);
+        document.addEventListener("visibilitychange", onVisibilityChange);
+        return () => {
+            cancelled = true;
+            if (trailingTimer !== undefined) window.clearTimeout(trailingTimer);
+            gate.cancelScheduled();
+            window.removeEventListener("storage", onStorage);
+            window.removeEventListener("focus", trigger);
+            document.removeEventListener("visibilitychange", onVisibilityChange);
+        };
+    }, []);
 
     const handleConnectStudentAccount = () => {
         if (user?.guestId) {
