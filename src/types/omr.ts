@@ -266,6 +266,24 @@ export interface RetakeMetadata {
     createdAt: string;
 }
 
+export type StudentQuestionStatus = 'queued' | 'answered';
+
+export interface StudentQuestionAnswer {
+    body: string;
+    createdAt: string;
+    teacherName?: string;
+}
+
+/** A per-question free-text question the student left for the teacher on review. */
+export interface StudentQuestionNote {
+    questionId: number;
+    questionNumber: number;
+    body: string;
+    createdAt: string;
+    status: StudentQuestionStatus;
+    answer?: StudentQuestionAnswer;
+}
+
 export interface Attempt {
     id: string; // specific attempt ID
     examId: string;
@@ -323,6 +341,8 @@ export interface Attempt {
     focusLossEvents?: FocusLossEvent[];
     /** Present when this attempt is a premium retake over selected questions. */
     retake?: RetakeMetadata;
+    /** Per-question questions the student left for the teacher during review. */
+    studentQuestions?: StudentQuestionNote[];
     /** Guest provenance after a merge into a canonical student profile. */
     mergedFromGuestId?: string;
     mergedAt?: string;
