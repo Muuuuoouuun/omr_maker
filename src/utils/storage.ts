@@ -42,6 +42,18 @@ export function generateId(): string {
     return Math.random().toString(36).substring(2, 15) + Math.random().toString(36).substring(2, 15);
 }
 
+/**
+ * Stable display login-ID for a guest identity. Guests never pick a loginId, but
+ * the rest of the app (history matching, session badges) expects one — derive it
+ * deterministically from the guestId so the SAME guest (server-issued cookie id
+ * or device-local id) always reconciles to the same alias. Keep this in sync with
+ * the server-side owner mapping, which stores guests as `guest:<guestId>`.
+ */
+export function guestLoginIdFor(guestId: string): string {
+    const compact = guestId.trim().replace(/[^a-z0-9]/gi, "").slice(0, 6).toUpperCase();
+    return `GUEST-${compact || "TEMP"}`;
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
     return !!value && typeof value === "object" && !Array.isArray(value);
 }
@@ -172,6 +184,7 @@ function normalizeSession(raw: Partial<StudentSession> | null): StudentSession |
         ...raw,
         studentId,
         name: raw.name,
+        loginId: raw.loginId || (isGuest && raw.guestId ? guestLoginIdFor(raw.guestId) : undefined),
         regionId: normalizeIdentityText(raw.regionId) || undefined,
         regionName: normalizeIdentityText(raw.regionName) || undefined,
         isGuest,

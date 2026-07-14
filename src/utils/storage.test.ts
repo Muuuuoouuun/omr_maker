@@ -6,6 +6,7 @@ import {
     clearSession,
     consumePendingGuestMerge,
     getSession,
+    guestLoginIdFor,
     mergeGuestAttempts,
     previewGuestMerge,
     queueGuestMerge,
@@ -94,6 +95,51 @@ describe("student storage helpers", () => {
             studentId: "class-a::김학생",
             name: "김학생",
         });
+    });
+
+    it("derives a stable guest login-ID alias from the guestId", () => {
+        expect(guestLoginIdFor("3f9a12cd-77aa-4b1e-9c0d-2e5f6a7b8c9d")).toBe("GUEST-3F9A12");
+        // Same guest id (server-issued or device-local) always reconciles to the same alias.
+        expect(guestLoginIdFor("3f9a12cd-77aa-4b1e-9c0d-2e5f6a7b8c9d")).toBe(guestLoginIdFor("3F9A12CD-77aa"));
+        expect(guestLoginIdFor("   ")).toBe("GUEST-TEMP");
+    });
+
+    it("backfills the guest login-ID when restoring a guest session saved without one", () => {
+        const localStorage = createStorage();
+        const sessionStorage = createStorage();
+        stubBrowserStorage(localStorage, sessionStorage);
+
+        saveSession({
+            studentId: "guest:guest-uuid-1",
+            name: "Guest Student",
+            isGuest: true,
+            identityType: "guest",
+            guestId: "guest-uuid-1",
+        });
+
+        expect(getSession()).toMatchObject({
+            studentId: "guest:guest-uuid-1",
+            guestId: "guest-uuid-1",
+            loginId: guestLoginIdFor("guest-uuid-1"),
+            isGuest: true,
+        });
+    });
+
+    it("keeps an explicit loginId over the derived guest alias", () => {
+        const localStorage = createStorage();
+        const sessionStorage = createStorage();
+        stubBrowserStorage(localStorage, sessionStorage);
+
+        saveSession({
+            studentId: "guest:guest-uuid-2",
+            loginId: "CUSTOM-ID",
+            name: "Guest Student",
+            isGuest: true,
+            identityType: "guest",
+            guestId: "guest-uuid-2",
+        });
+
+        expect(getSession()).toMatchObject({ loginId: "CUSTOM-ID" });
     });
 
     it("restores a same-device student session backup after tab session storage is gone", () => {
