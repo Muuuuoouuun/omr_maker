@@ -857,7 +857,7 @@ describe("service UI surface", () => {
         expect(settingsPage).toContain("DataDbSection");
         expect(settingsPage).toContain("buildDataDbReadiness");
         expect(settingsPage).toContain("loadTeacherExams()");
-        expect(settingsPage).toContain("loadAttempts()");
+        expect(settingsPage).toContain("loadTeacherAttempts()");
         expect(settingsPage).toContain("loadRosterSnapshot(window.localStorage)");
         expect(settingsPage).toContain("readRosterTombstones(window.localStorage)");
         expect(settingsPage).toContain('aria-label="데이터 DB 상태 새로고침"');
@@ -932,7 +932,7 @@ describe("service UI surface", () => {
         expect(livePage).toContain('return { exams: loaded, mode: "real" }');
         expect(livePage).toContain("const isDemoLive = liveDataMode === \"demo\"");
         expect(livePage).toContain("allowSynthetic: isDemoLive");
-        expect(livePage).toContain("saveAttempt(attempt)");
+        expect(livePage).toContain("saveTeacherAttempt(attempt)");
         expect(livePage).toContain("forceCompleteLiveAttempt");
         expect(livePage).toContain("카카오 알림 연동 전");
         expect(livePage).toContain("데모 실시간 모드");

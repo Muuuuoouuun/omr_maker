@@ -16,7 +16,7 @@ import TeacherSessionChip from "@/components/TeacherSessionChip";
 import { toast } from "@/components/Toast";
 import { buildDemoDashboardData, shouldUseDemoData } from "@/lib/demoData";
 import { buildQuestionResultRepairPlan } from "@/lib/analyticsDataRepair";
-import { loadAttempts, saveAttempt } from "@/lib/omrPersistence";
+import { loadTeacherAttempts, saveTeacherAttempt } from "@/lib/teacherAttemptClient";
 import { loadTeacherExams } from "@/lib/teacherExamClient";
 import { summarizeAnalyticsDataHealth, summarizePersistenceHealth, type PersistenceHealth } from "@/lib/persistenceHealth";
 import { loadRosterSnapshot } from "@/lib/rosterPersistence";
@@ -99,7 +99,7 @@ function TeacherDashboard() {
     const loadDashboardData = useCallback(async (options: DashboardLoadOptions = {}) => {
         const [examResult, attemptResult, rosterResult] = await Promise.all([
             loadTeacherExams(),
-            loadAttempts(),
+            loadTeacherAttempts(),
             loadRosterSnapshot(localStorage),
         ]);
         if (options.isCancelled?.()) return;
@@ -198,7 +198,7 @@ function TeacherDashboard() {
             const repairedAttempts: Attempt[] = [];
             let failedCount = 0;
             for (const item of questionResultRepairPlan.items) {
-                const result = await saveAttempt(item.repairedAttempt);
+                const result = await saveTeacherAttempt(item.repairedAttempt);
                 if (result.localSaved || result.remoteSaved) {
                     repairedAttempts.push(item.repairedAttempt);
                 } else {

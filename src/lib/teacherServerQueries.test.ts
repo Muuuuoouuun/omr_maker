@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
     deleteExamCascadeForOrg,
+    fetchAttemptOrganizationId,
+    fetchAttemptRowByIdForOrg,
     fetchAttemptRowsForOrg,
     fetchExamRowsForOrg,
     saveAttemptRowWithResults,
@@ -93,6 +95,25 @@ describe("teacherServerQueries org scoping", () => {
         });
         const rows = await fetchAttemptRowsForOrg(client, "org_a");
         expect(rows.map(r => r.id)).toEqual(["a1"]);
+    });
+
+    it("reads one attempt only within the org scope", async () => {
+        const { client } = mockClient({
+            omr_attempts: [
+                { id: "a1", organization_id: "org_a" },
+                { id: "a1", organization_id: "org_b" },
+            ],
+        });
+        expect(await fetchAttemptRowByIdForOrg(client, "org_a", "a1")).toMatchObject({ organization_id: "org_a" });
+        expect(await fetchAttemptRowByIdForOrg(client, "org_c", "a1")).toBeNull();
+    });
+
+    it("reports the owning org of an attempt for the clobber guard", async () => {
+        const { client } = mockClient({
+            omr_attempts: [{ id: "a1", organization_id: "org_b" }],
+        });
+        expect(await fetchAttemptOrganizationId(client, "a1")).toBe("org_b");
+        expect(await fetchAttemptOrganizationId(client, "missing")).toBeNull();
     });
 
     it("saves an exam then replaces its questions within the org scope", async () => {

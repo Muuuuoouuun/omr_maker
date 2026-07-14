@@ -9,7 +9,8 @@ import type { Attempt, AttemptFeedback, Exam, FeedbackDownloadPolicy, PdfDrawing
 import { loadJsonRecord, storedDataUrlToFile } from "@/utils/blobStore";
 import { getCurrentPlan, getPlanLabel, hasPlanEntitlement } from "@/utils/plans";
 import { formatKoreanDateTime } from "@/lib/pure";
-import { fetchRemoteAttemptScoped, loadAttempt, loadExam, saveAttempt } from "@/lib/omrPersistence";
+import { loadTeacherAttempt as loadTeacherAttemptRecord, saveTeacherAttempt } from "@/lib/teacherAttemptClient";
+import { loadTeacherExam } from "@/lib/teacherExamClient";
 import { answerStudentQuestion } from "@/lib/studentQuestions";
 import { readActiveWorkspaceContext } from "@/lib/workspaceContext";
 import {
@@ -99,7 +100,7 @@ export default function TeacherAttemptPage() {
             }
 
             try {
-                const found = await loadAttempt(id);
+                const found = await loadTeacherAttemptRecord(id);
                 if (!found || cancelled) {
                     setLoaded(true);
                     return;
@@ -131,7 +132,7 @@ export default function TeacherAttemptPage() {
                     if (!cancelled && markupDrawings) setTeacherMarkupDrawings(markupDrawings);
                 }
 
-                const parsedExam = await loadExam(found.examId);
+                const parsedExam = await loadTeacherExam(found.examId);
                 if (parsedExam) {
                     setExam(parsedExam);
                     storedDataUrlToFile("problem.pdf", parsedExam.pdfData, parsedExam.pdfDataRef)
@@ -278,9 +279,9 @@ export default function TeacherAttemptPage() {
         // organization's attempt row.
         let base = attempt;
         try {
-            const fresh = await fetchRemoteAttemptScoped(attempt.id, {
-                organizationId: readActiveWorkspaceContext().organizationId,
-            });
+            // Freshest server copy, org-scoped server-side by the signed teacher
+            // session — a reply never merges onto another organization's row.
+            const fresh = await loadTeacherAttemptRecord(attempt.id);
             if (fresh) base = fresh;
         } catch {
             // Offline or Supabase unavailable — fall back to the cached attempt.
@@ -310,7 +311,7 @@ export default function TeacherAttemptPage() {
             return;
         }
         try {
-            const result = await saveAttempt(updated);
+            const result = await saveTeacherAttempt(updated);
             if (!result.localSaved) throw new Error("local save failed");
             setAttempt(updated);
             setAnswerDrafts(prev => ({ ...prev, [questionId]: "" }));

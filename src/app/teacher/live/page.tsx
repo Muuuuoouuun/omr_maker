@@ -7,7 +7,7 @@ import { Activity, Users, CheckCircle2, Clock, AlertTriangle, Bell, PlayCircle, 
 import { toast } from "@/components/Toast";
 import type { Exam, Attempt } from "@/types/omr";
 import { shouldUseDemoData } from "@/lib/demoData";
-import { loadAttempts, saveAttempt } from "@/lib/omrPersistence";
+import { loadTeacherAttempts, saveTeacherAttempt } from "@/lib/teacherAttemptClient";
 import { loadTeacherExams } from "@/lib/teacherExamClient";
 import { resolveAttemptScore } from "@/lib/attemptScores";
 import { buildLiveQuestionHeatmap } from "@/lib/liveAnalytics";
@@ -234,7 +234,7 @@ export default function LiveResultsPage() {
     const refreshFromStorage = useCallback(async () => {
         const [examResult, attemptResult] = await Promise.all([
             loadTeacherExams(),
-            loadAttempts(),
+            loadTeacherAttempts(),
         ]);
         const liveData = resolveLiveExamData(examResult.items);
         setExams(liveData.exams);
@@ -253,7 +253,7 @@ export default function LiveResultsPage() {
         const loadInitial = async () => {
             const [examResult, attemptResult] = await Promise.all([
                 loadTeacherExams(),
-                loadAttempts(),
+                loadTeacherAttempts(),
             ]);
             if (cancelled) return;
             const liveData = resolveLiveExamData(examResult.items);
@@ -427,7 +427,7 @@ export default function LiveResultsPage() {
             const completedById = new Map(completedAttempts.map(attempt => [attempt.id, attempt]));
             setAttempts(prev => prev.map(attempt => completedById.get(attempt.id) ?? attempt));
 
-            const results = await Promise.all(completedAttempts.map(attempt => saveAttempt(attempt)));
+            const results = await Promise.all(completedAttempts.map(attempt => saveTeacherAttempt(attempt)));
             const failedLocalCount = results.filter(result => !result.localSaved).length;
             const remoteIssueCount = results.filter(result => result.remoteError).length;
 

@@ -126,6 +126,41 @@ export async function fetchAttemptRowsForOrg(
     return (data ?? []) as SupabaseAttemptRow[];
 }
 
+export async function fetchAttemptRowByIdForOrg(
+    client: TeacherAdminClientLike,
+    organizationId: string,
+    attemptId: string,
+): Promise<SupabaseAttemptRow | null> {
+    const { data, error } = await client
+        .from("omr_attempts")
+        .select("*")
+        .eq("id", attemptId)
+        .eq("organization_id", organizationId)
+        .maybeSingle();
+    fail(error, "Failed to read attempt");
+    return (data ?? null) as SupabaseAttemptRow | null;
+}
+
+/**
+ * Read only the organization_id of an attempt by id, ignoring org scope. Used
+ * as a cross-tenant clobber guard before a teacher upsert: an id that already
+ * belongs to another organization must never be overwritten (upsert is keyed by
+ * id, so without this a crafted id could hijack another org's row).
+ */
+export async function fetchAttemptOrganizationId(
+    client: TeacherAdminClientLike,
+    attemptId: string,
+): Promise<string | null> {
+    const { data, error } = await client
+        .from("omr_attempts")
+        .select("organization_id")
+        .eq("id", attemptId)
+        .maybeSingle();
+    fail(error, "Failed to read attempt owner");
+    const org = (data as { organization_id?: string | null } | null)?.organization_id;
+    return typeof org === "string" && org.trim() ? org.trim() : null;
+}
+
 export async function saveAttemptRowWithResults(
     client: TeacherAdminClientLike,
     attemptRow: SupabaseAttemptRow,
