@@ -4,12 +4,13 @@ import { useEffect, useMemo, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
 import dynamic from "next/dynamic";
-import { Download, Lock, PenLine, Repeat2, Send, Target } from "lucide-react";
+import { CheckCircle2, Download, Lock, MessageSquare, PenLine, Repeat2, Send, Target } from "lucide-react";
 import type { Attempt, AttemptFeedback, Exam, FeedbackDownloadPolicy, PdfDrawings, PlanKey, QuestionResult } from "@/types/omr";
 import { loadJsonRecord, storedDataUrlToFile } from "@/utils/blobStore";
 import { getCurrentPlan, getPlanLabel, hasPlanEntitlement } from "@/utils/plans";
 import { formatKoreanDateTime } from "@/lib/pure";
-import { loadAttempt, loadExam } from "@/lib/omrPersistence";
+import { fetchRemoteAttemptScoped, loadAttempt, loadExam, saveAttempt } from "@/lib/omrPersistence";
+import { answerStudentQuestion } from "@/lib/studentQuestions";
 import { readActiveWorkspaceContext } from "@/lib/workspaceContext";
 import {
     buildLearningRecommendations,
@@ -18,7 +19,7 @@ import {
     getAttemptQuestionResults,
     summarizeAttemptScore,
 } from "@/lib/premiumAnalytics";
-import { hasTeacherSession } from "@/lib/teacherSession";
+import { hasTeacherSession, readTeacherSession } from "@/lib/teacherSession";
 import { buildRetakeHref } from "@/lib/retakeLinks";
 import {
     DEFAULT_FEEDBACK_DOWNLOAD_POLICY,
@@ -82,6 +83,9 @@ export default function TeacherAttemptPage() {
     const [feedbackNotice, setFeedbackNotice] = useState("");
     const [feedbackSaving, setFeedbackSaving] = useState(false);
     const [loaded, setLoaded] = useState(false);
+    const [answerDrafts, setAnswerDrafts] = useState<Record<number, string>>({});
+    const [savingAnswerFor, setSavingAnswerFor] = useState<number | null>(null);
+    const [answerNotice, setAnswerNotice] = useState("");
     const pdfExportEnabled = hasPlanEntitlement(currentPlan, "pdfExport");
     const feedbackEnabled = hasPlanEntitlement(currentPlan, "feedbackMarkup");
 
@@ -254,6 +258,72 @@ export default function TeacherAttemptPage() {
         }
     };
 
+    const updateAnswerDraft = (questionId: number, value: string) => {
+        setAnswerDrafts(prev => ({ ...prev, [questionId]: value.slice(0, 500) }));
+    };
+
+    const handleAnswerQuestion = async (questionId: number) => {
+        if (!attempt) return;
+        const body = (answerDrafts[questionId] || "").trim();
+        if (!body) return;
+        const teacherName = readTeacherSession()?.displayName;
+        const nowIso = new Date().toISOString();
+        setSavingAnswerFor(questionId);
+        setAnswerNotice("");
+        // Merge the reply onto the freshest server row, not the local-first cache
+        // this page loaded. saveAttempt writes the full payload last-writer-wins,
+        // so replying against a stale snapshot would silently drop any question the
+        // student asked after this device cached the attempt. The fresh read is
+        // scoped to this workspace (org) so a reply never merges onto another
+        // organization's attempt row.
+        let base = attempt;
+        try {
+            const fresh = await fetchRemoteAttemptScoped(attempt.id, {
+                organizationId: readActiveWorkspaceContext().organizationId,
+            });
+            if (fresh) base = fresh;
+        } catch {
+            // Offline or Supabase unavailable — fall back to the cached attempt.
+        }
+        let updated = answerStudentQuestion(base, questionId, body, nowIso, teacherName);
+        if (!updated && base !== attempt) {
+            // The fresh remote row can be missing this question note (the student
+            // asked it after this device cached, or the remote copy predates it).
+            // Union the locally-loaded note onto the fresh row so the reply
+            // attaches without dropping the fresh copy's other notes.
+            const localNote = (attempt.studentQuestions || []).find(note => note.questionId === questionId);
+            if (localNote) {
+                const mergedBase: Attempt = {
+                    ...base,
+                    studentQuestions: [
+                        ...(base.studentQuestions || []).filter(note => note.questionId !== questionId),
+                        localNote,
+                    ],
+                };
+                updated = answerStudentQuestion(mergedBase, questionId, body, nowIso, teacherName);
+            }
+        }
+        if (!updated) {
+            // Never silent: tell the teacher why the reply couldn't attach.
+            setSavingAnswerFor(null);
+            setAnswerNotice("답변을 전송하지 못했습니다. 질문을 찾지 못했어요. 화면을 새로고침한 뒤 다시 시도해주세요.");
+            return;
+        }
+        try {
+            const result = await saveAttempt(updated);
+            if (!result.localSaved) throw new Error("local save failed");
+            setAttempt(updated);
+            setAnswerDrafts(prev => ({ ...prev, [questionId]: "" }));
+            setAnswerNotice(result.remoteSaved
+                ? "답변을 전송했습니다. 학생 리뷰 화면에서 확인할 수 있습니다."
+                : "답변을 저장했습니다. 서버 동기화는 다음 접속 때 재시도됩니다.");
+        } catch {
+            setAnswerNotice("답변을 저장하지 못했습니다. 브라우저 저장소를 확인한 뒤 다시 시도해주세요.");
+        } finally {
+            setSavingAnswerFor(null);
+        }
+    };
+
     if (accessDenied) {
         return (
             <div style={{ minHeight: '100vh', display: 'grid', placeItems: 'center', padding: '2rem', textAlign: 'center' }}>
@@ -283,6 +353,9 @@ export default function TeacherAttemptPage() {
     const canEditFeedbackMarkup = feedbackEnabled && feedbackViewMode === "markup";
     const canShowReviewPdf = !!pdfFile && (canEditFeedbackMarkup || canShowDrawings || hasTeacherMarkup);
     const feedbackReturned = feedback?.status === "returned";
+    const studentQuestionNotes = attempt.studentQuestions || [];
+    const pendingQuestionCount = studentQuestionNotes.filter(note => note.status !== "answered").length;
+    const answeredQuestionCount = studentQuestionNotes.length - pendingQuestionCount;
 
     return (
         <div className="layout-main" style={{ minHeight: '100vh', background: '#f8fafc' }}>
@@ -612,6 +685,90 @@ export default function TeacherAttemptPage() {
                                 </div>
                             )}
                         </div>
+
+                        {studentQuestionNotes.length > 0 && (
+                            <div className="bento-card" style={{ padding: '1.25rem' }}>
+                                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '0.75rem', marginBottom: '0.75rem' }}>
+                                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.45rem', fontWeight: 900 }}>
+                                        <MessageSquare size={17} />
+                                        학생 질문
+                                    </div>
+                                    <span style={{
+                                        fontSize: '0.72rem',
+                                        fontWeight: 800,
+                                        color: pendingQuestionCount > 0 ? '#b45309' : '#0f766e',
+                                        background: pendingQuestionCount > 0 ? '#fef3c7' : '#ccfbf1',
+                                        borderRadius: '999px',
+                                        padding: '0.25rem 0.55rem'
+                                    }}>
+                                        {pendingQuestionCount > 0 ? `대기 ${pendingQuestionCount}` : `답변 완료 ${answeredQuestionCount}`}
+                                    </span>
+                                </div>
+
+                                <div style={{ display: 'grid', gap: '0.75rem' }}>
+                                    {studentQuestionNotes.map(note => {
+                                        const answered = note.status === "answered" && !!note.answer;
+                                        const draftValue = answerDrafts[note.questionId] ?? "";
+                                        const saving = savingAnswerFor === note.questionId;
+                                        return (
+                                            <div key={note.questionId} style={{ padding: '0.8rem', borderRadius: 10, border: '1px solid #e2e8f0', background: '#f8fafc' }}>
+                                                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '0.5rem', marginBottom: '0.4rem' }}>
+                                                    <span style={{ fontWeight: 900, fontSize: '0.84rem', color: '#0f172a' }}>{note.questionNumber}번 질문</span>
+                                                    <span style={{ fontSize: '0.72rem', fontWeight: 800, color: answered ? '#16a34a' : '#b45309' }}>
+                                                        {answered ? '답변 완료' : '대기'}
+                                                    </span>
+                                                </div>
+                                                <div style={{ color: '#475569', fontSize: '0.84rem', lineHeight: 1.6, whiteSpace: 'pre-wrap', marginBottom: '0.4rem' }}>
+                                                    {note.body}
+                                                </div>
+                                                <div style={{ fontSize: '0.72rem', color: '#94a3b8', fontWeight: 700, marginBottom: '0.5rem' }}>
+                                                    {formatKoreanDateTime(note.createdAt)}
+                                                </div>
+                                                {answered && note.answer && (
+                                                    <div style={{ padding: '0.65rem 0.75rem', borderRadius: 8, border: '1px solid #bbf7d0', background: '#f0fdf4', marginBottom: '0.5rem' }}>
+                                                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem', color: '#16a34a', fontWeight: 800, fontSize: '0.76rem', marginBottom: '0.3rem' }}>
+                                                            <CheckCircle2 size={13} />
+                                                            {note.answer.teacherName ? `${note.answer.teacherName} 답변` : '내 답변'}
+                                                            <span style={{ color: '#64748b', fontWeight: 600 }}>· {formatKoreanDateTime(note.answer.createdAt)}</span>
+                                                        </div>
+                                                        <div style={{ color: '#0f172a', fontSize: '0.84rem', lineHeight: 1.6, whiteSpace: 'pre-wrap' }}>
+                                                            {note.answer.body}
+                                                        </div>
+                                                    </div>
+                                                )}
+                                                <textarea
+                                                    value={draftValue}
+                                                    onChange={(event) => updateAnswerDraft(note.questionId, event.target.value)}
+                                                    placeholder={answered ? '답변을 수정하려면 다시 작성하세요.' : '학생 질문에 답변을 남겨주세요.'}
+                                                    aria-label={`${note.questionNumber}번 질문 답변`}
+                                                    rows={3}
+                                                    style={{ width: '100%', resize: 'vertical', border: '1px solid #cbd5e1', borderRadius: 8, padding: '0.55rem', font: 'inherit', color: '#0f172a', background: 'white' }}
+                                                />
+                                                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '0.5rem', marginTop: '0.45rem' }}>
+                                                    <span style={{ color: '#94a3b8', fontSize: '0.72rem', fontWeight: 700 }}>{draftValue.trim().length}/500</span>
+                                                    <button
+                                                        type="button"
+                                                        onClick={() => void handleAnswerQuestion(note.questionId)}
+                                                        disabled={saving || !draftValue.trim()}
+                                                        className="btn btn-primary"
+                                                        style={{ fontSize: '0.8rem', display: 'inline-flex', alignItems: 'center', gap: '0.35rem', opacity: saving || !draftValue.trim() ? 0.6 : 1 }}
+                                                    >
+                                                        <Send size={13} />
+                                                        {saving ? '전송 중' : answered ? '답변 수정' : '답변 전송'}
+                                                    </button>
+                                                </div>
+                                            </div>
+                                        );
+                                    })}
+                                </div>
+
+                                {answerNotice && (
+                                    <div style={{ marginTop: '0.75rem', padding: '0.65rem', borderRadius: 8, background: '#f8fafc', border: '1px solid #e2e8f0', color: '#334155', fontSize: '0.78rem', fontWeight: 800 }}>
+                                        {answerNotice}
+                                    </div>
+                                )}
+                            </div>
+                        )}
                     </aside>
 
                     <section className="bento-card" style={{ padding: 0, overflow: 'hidden', minHeight: 760 }}>

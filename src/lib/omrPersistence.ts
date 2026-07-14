@@ -1201,6 +1201,35 @@ async function fetchRemoteAttempt(id: string): Promise<Attempt | null> {
     }
 }
 
+/**
+ * Fetch the freshest remote copy of an attempt, optionally constrained to an
+ * organization. Teacher client paths (which have no server-action boundary yet)
+ * use this to re-read before a merge-write, so a reply never clobbers a question
+ * the student asked after this device cached the attempt, and never touches a
+ * row outside the teacher's active workspace. Returns null when Supabase is
+ * unavailable or the row is absent / out of the given org scope.
+ */
+export async function fetchRemoteAttemptScoped(
+    id: string,
+    options: { organizationId?: string } = {},
+): Promise<Attempt | null> {
+    const client = await getAvailableSupabaseClient();
+    if (!client) return null;
+
+    const org = options.organizationId?.trim();
+    let query = client.from("omr_attempts").select("*").eq("id", id);
+    if (org) query = query.eq("organization_id", org);
+    const { data, error } = await query.maybeSingle();
+
+    if (error) throw new Error(error.message || "Failed to load attempt from Supabase");
+    if (!data) return null;
+    try {
+        return attemptFromSupabaseRow(data as SupabaseAttemptRow);
+    } catch {
+        return null;
+    }
+}
+
 async function upsertRemoteExam(exam: Exam): Promise<void> {
     const client = await getAvailableSupabaseClient();
     if (!client) return;
