@@ -5,6 +5,12 @@ import type {
     SupabaseExamRow,
     SupabaseQuestionResultRow,
 } from "@/lib/omrPersistence";
+import type {
+    SupabaseRemoteRosterRows,
+    SupabaseRosterClassRow,
+    SupabaseRosterClassStudentRow,
+    SupabaseRosterStudentProfileRow,
+} from "@/lib/rosterPersistence";
 
 /**
  * Org-scoped teacher query helpers for the service-role server client.
@@ -172,5 +178,60 @@ export async function saveAttemptRowWithResults(
     if (questionResultRows.length > 0) {
         const resultsResult = await client.from("omr_question_results").upsert(questionResultRows);
         fail(resultsResult.error, "Failed to save attempt question results");
+    }
+}
+
+/* ----------------------------------------------------------------- roster -- */
+
+interface RosterReadResult {
+    data: unknown[] | null;
+    error: { message?: string } | null;
+}
+
+export interface RosterReadClientLike {
+    from(table: string): {
+        select(columns?: string): { eq(column: string, value: string): PromiseLike<RosterReadResult> };
+    };
+}
+
+/** Read the three roster tables (classes, student PII, enrollments) for one org. */
+export async function fetchRosterRowsForOrg(
+    client: RosterReadClientLike,
+    organizationId: string,
+): Promise<SupabaseRemoteRosterRows> {
+    const [classes, students, enrollments] = await Promise.all([
+        client.from("omr_classes").select("*").eq("organization_id", organizationId),
+        client.from("omr_student_profiles").select("*").eq("organization_id", organizationId),
+        client.from("omr_class_students").select("*").eq("organization_id", organizationId),
+    ]);
+    fail(classes.error, "Failed to read roster classes");
+    fail(students.error, "Failed to read roster students");
+    fail(enrollments.error, "Failed to read roster enrollments");
+    return {
+        classes: (classes.data ?? []) as SupabaseRosterClassRow[],
+        students: (students.data ?? []) as SupabaseRosterStudentProfileRow[],
+        enrollments: (enrollments.data ?? []) as SupabaseRosterClassStudentRow[],
+    };
+}
+
+export async function saveRosterRows(
+    client: TeacherAdminClientLike,
+    rows: {
+        classes: SupabaseRosterClassRow[];
+        students: SupabaseRosterStudentProfileRow[];
+        enrollments: SupabaseRosterClassStudentRow[];
+    },
+): Promise<void> {
+    if (rows.classes.length > 0) {
+        const result = await client.from("omr_classes").upsert(rows.classes);
+        fail(result.error, "Failed to save roster classes");
+    }
+    if (rows.students.length > 0) {
+        const result = await client.from("omr_student_profiles").upsert(rows.students);
+        fail(result.error, "Failed to save roster students");
+    }
+    if (rows.enrollments.length > 0) {
+        const result = await client.from("omr_class_students").upsert(rows.enrollments);
+        fail(result.error, "Failed to save roster enrollments");
     }
 }

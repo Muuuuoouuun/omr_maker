@@ -41,20 +41,21 @@ describe("persistence integration", () => {
         }
     });
 
-    it("teacher user management uses the roster persistence layer instead of local-only writes", () => {
+    it("teacher user management uses the server-first roster layer instead of local-only writes", () => {
         const source = readProjectFile("src/app/teacher/users/page.tsx");
 
-        expect(source).toContain("@/lib/rosterPersistence");
-        expect(source).toContain("loadRosterSnapshot");
-        expect(source).toContain("saveRosterSnapshot");
+        // Roster read/write goes through the org-scoped teacher server layer (B3).
+        expect(source).toContain("@/lib/teacherRosterClient");
+        expect(source).toContain("loadTeacherRoster");
+        expect(source).toContain("saveTeacherRoster");
         expect(source).toContain("persistRoster(");
     });
 
-    it("teacher analytics loads roster data through the shared roster persistence layer", () => {
+    it("teacher analytics loads roster data through the server-first roster layer", () => {
         const source = readProjectFile("src/app/teacher/dashboard/page.tsx");
 
-        expect(source).toContain("@/lib/rosterPersistence");
-        expect(source).toContain("loadRosterSnapshot(localStorage)");
+        expect(source).toContain("@/lib/teacherRosterClient");
+        expect(source).toContain("loadTeacherRoster(localStorage)");
         expect(source).toContain("summarizePersistenceHealth([examResult, attemptResult, rosterResult])");
         expect(source).not.toContain("readRosterStudents(localStorage)");
         expect(source).not.toContain("readRosterGroups(localStorage)");
@@ -65,12 +66,13 @@ describe("persistence integration", () => {
 
         expect(source).toContain("@/lib/teacherExamClient");
         expect(source).toContain("@/lib/teacherAttemptClient");
+        expect(source).toContain("@/lib/teacherRosterClient");
         expect(source).toContain("@/lib/rosterPersistence");
         expect(source).toContain("@/lib/dataDbReadiness");
         expect(source).toContain("Promise.all");
         expect(source).toContain("loadTeacherExams()");
         expect(source).toContain("loadTeacherAttempts()");
-        expect(source).toContain("loadRosterSnapshot(window.localStorage)");
+        expect(source).toContain("loadTeacherRoster(window.localStorage)");
         expect(source).toContain("readRosterTombstones(window.localStorage)");
         expect(source).toContain('sourceKey: "exams"');
         expect(source).toContain('sourceLabel: "시험"');

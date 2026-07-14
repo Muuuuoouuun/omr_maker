@@ -19,7 +19,7 @@ import { buildQuestionResultRepairPlan } from "@/lib/analyticsDataRepair";
 import { loadTeacherAttempts, saveTeacherAttempt } from "@/lib/teacherAttemptClient";
 import { loadTeacherExams } from "@/lib/teacherExamClient";
 import { summarizeAnalyticsDataHealth, summarizePersistenceHealth, type PersistenceHealth } from "@/lib/persistenceHealth";
-import { loadRosterSnapshot } from "@/lib/rosterPersistence";
+import { loadTeacherRoster } from "@/lib/teacherRosterClient";
 import { collectStudentQuestionInbox } from "@/lib/studentQuestions";
 import type { RosterGroup, RosterStudent } from "@/lib/rosterStorage";
 import { buildTeacherDashboardMetrics } from "@/lib/teacherDashboardMetrics";
@@ -100,7 +100,7 @@ function TeacherDashboard() {
         const [examResult, attemptResult, rosterResult] = await Promise.all([
             loadTeacherExams(),
             loadTeacherAttempts(),
-            loadRosterSnapshot(localStorage),
+            loadTeacherRoster(localStorage),
         ]);
         if (options.isCancelled?.()) return;
 

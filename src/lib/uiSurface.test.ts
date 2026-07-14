@@ -582,7 +582,7 @@ describe("service UI surface", () => {
 
         expect(dashboardPage).toContain("getCurrentPlan");
         expect(examAnalyticsTab).toContain("resolveExamSelectionInputValue");
-        expect(dashboardPage).toContain("loadRosterSnapshot(localStorage)");
+        expect(dashboardPage).toContain("loadTeacherRoster(localStorage)");
         expect(dashboardPage).toContain("summarizePersistenceHealth([examResult, attemptResult, rosterResult])");
         expect(dashboardPage).toContain("rosterStudents: shouldSeedDemo ? undefined : loadedRosterStudents");
         expect(dashboardPage).toContain("dashboardAnalysisActions");
@@ -858,7 +858,7 @@ describe("service UI surface", () => {
         expect(settingsPage).toContain("buildDataDbReadiness");
         expect(settingsPage).toContain("loadTeacherExams()");
         expect(settingsPage).toContain("loadTeacherAttempts()");
-        expect(settingsPage).toContain("loadRosterSnapshot(window.localStorage)");
+        expect(settingsPage).toContain("loadTeacherRoster(window.localStorage)");
         expect(settingsPage).toContain("readRosterTombstones(window.localStorage)");
         expect(settingsPage).toContain('aria-label="데이터 DB 상태 새로고침"');
         expect(settingsPage).toContain("원격 동기화 세부 상태");
@@ -906,9 +906,9 @@ describe("service UI surface", () => {
         expect(usersPage).toContain("function isLegacyDemoRosterSnapshot");
         expect(usersPage).toContain("localStorage.removeItem(key)");
         expect(usersPage).toContain("const storedStudents = readRosterStudents(localStorage)");
-        expect(usersPage).toContain("loadRosterSnapshot(localStorage)");
+        expect(usersPage).toContain("loadTeacherRoster(localStorage)");
         expect(usersPage).toContain("const nextStudents = useDemoRoster ? [] : rosterResult.students");
-        expect(usersPage).toContain("saveRosterSnapshot(localStorage");
+        expect(usersPage).toContain("saveTeacherRoster(localStorage");
         expect(usersPage).toContain("데모 명단 모드");
         expect(usersPage).toContain('aria-label="데모 명단 안내"');
         expect(usersPage).toContain("const rosterStudents = isDemoRoster ? MOCK_STUDENTS : students");

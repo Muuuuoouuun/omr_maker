@@ -11,7 +11,8 @@ import { buildDataDbReadiness, type DataDbReadinessSummary, type DataDbReadiness
 import type { DeploymentReadinessSummary, DeploymentReadinessTone } from "@/lib/deploymentReadiness";
 import { loadTeacherAttempts } from "@/lib/teacherAttemptClient";
 import { loadTeacherExams } from "@/lib/teacherExamClient";
-import { loadRosterSnapshot, readRosterTombstones } from "@/lib/rosterPersistence";
+import { readRosterTombstones } from "@/lib/rosterPersistence";
+import { loadTeacherRoster } from "@/lib/teacherRosterClient";
 import { PRIMARY_NOTIFICATION_CHANNEL } from "@/lib/serviceRoadmap";
 import {
     buildTeacherSessionDisplay,
@@ -316,7 +317,7 @@ export default function SettingsPage() {
             const [examResult, attemptResult, rosterResult] = await Promise.all([
                 loadTeacherExams(),
                 loadTeacherAttempts(),
-                loadRosterSnapshot(window.localStorage),
+                loadTeacherRoster(window.localStorage),
             ]);
             const summary = buildDataDbReadiness({
                 syncSources: [

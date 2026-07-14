@@ -11,7 +11,7 @@ import { decodeCsvBytes, parseCsvRows, serializeCsvRows } from "@/lib/csv";
 import { shouldUseDemoData } from "@/lib/demoData";
 import { loadTeacherAttempts } from "@/lib/teacherAttemptClient";
 import { loadTeacherExams } from "@/lib/teacherExamClient";
-import { loadRosterSnapshot, saveRosterSnapshot } from "@/lib/rosterPersistence";
+import { loadTeacherRoster, saveTeacherRoster } from "@/lib/teacherRosterClient";
 import { resolveAttemptScore } from "@/lib/attemptScores";
 import {
     applyRosterPerformance,
@@ -258,7 +258,7 @@ function ManageUsersInner() {
                     Object.values(ROSTER_STORAGE_KEYS).forEach(key => localStorage.removeItem(key));
                 }
 
-                const rosterResult = await loadRosterSnapshot(localStorage);
+                const rosterResult = await loadTeacherRoster(localStorage);
                 if (cancelled) return;
                 const hasRosterRows = rosterResult.students.length > 0
                     || rosterResult.groups.length > 0
@@ -329,7 +329,7 @@ function ManageUsersInner() {
             return filteredIds.length === prev.size ? prev : new Set(filteredIds);
         });
         setSelectedGroupId(prev => nextGroups.some(group => group.id === prev) ? prev : null);
-        void saveRosterSnapshot(localStorage, {
+        void saveTeacherRoster(localStorage, {
             students: nextStudents,
             groups: nextGroups,
             invites: nextInvites,

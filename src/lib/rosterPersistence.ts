@@ -111,7 +111,7 @@ interface SupabaseRosterRows {
     enrollments: SupabaseRosterClassStudentRow[];
 }
 
-interface SupabaseRemoteRosterRows {
+export interface SupabaseRemoteRosterRows {
     classes: SupabaseRosterClassRow[];
     students: SupabaseRosterStudentProfileRow[];
     enrollments: SupabaseRosterClassStudentRow[];
@@ -544,12 +544,42 @@ function mergeById<T extends { id: string }>(localItems: T[], remoteItems: T[]):
     return Array.from(items.values());
 }
 
-function mergeRosterSnapshots(localSnapshot: RosterSnapshot, remoteSnapshot: RosterSnapshot): RosterSnapshot {
+export function mergeRosterSnapshots(localSnapshot: RosterSnapshot, remoteSnapshot: RosterSnapshot): RosterSnapshot {
     return {
         students: mergeById(localSnapshot.students, remoteSnapshot.students),
         groups: mergeById(localSnapshot.groups, remoteSnapshot.groups),
         invites: localSnapshot.invites,
     };
+}
+
+/**
+ * Reconstruct a RosterSnapshot from already-fetched Supabase rows. Pure (no I/O),
+ * so both the publishable-key client path and the org-scoped teacher server
+ * action can share the exact same class/student/enrollment reconstruction.
+ */
+export function rosterSnapshotFromRemoteRows(rows: SupabaseRemoteRosterRows): RosterSnapshot {
+    const groups = rows.classes
+        .map((row, index) => rosterGroupFromSupabaseRow(row, index))
+        .filter((group): group is RosterGroup => !!group)
+        .sort((a, b) => `${a.region || ""}:${a.name}`.localeCompare(`${b.region || ""}:${b.name}`, "ko"));
+    const enrollmentByStudentId = new Map<string, SupabaseRosterClassStudentRow>();
+    for (const row of rows.enrollments) {
+        const current = enrollmentByStudentId.get(row.student_profile_id);
+        if (!current || row.enrollment_status === "active") {
+            enrollmentByStudentId.set(row.student_profile_id, row);
+        }
+    }
+    const students = rows.students
+        .map((row, index) => rosterStudentFromSupabaseRow(
+            row,
+            groups,
+            enrollmentByStudentId.get(row.id),
+            index,
+        ))
+        .filter((student): student is RosterStudent => !!student)
+        .sort((a, b) => a.name.localeCompare(b.name, "ko"));
+
+    return { students, groups, invites: [] };
 }
 
 async function fetchRemoteRosterSnapshot(
@@ -559,38 +589,7 @@ async function fetchRemoteRosterSnapshot(
     if (!client && isSupabaseConfigured()) throw new Error("Supabase client unavailable");
     if (!client) return { students: [], groups: [], invites: [] };
 
-    const [classResult, studentResult, enrollmentResult] = await Promise.all([
-        client.from("omr_classes").select("*").eq("organization_id", organizationId),
-        client.from("omr_student_profiles").select("*").eq("organization_id", organizationId),
-        client.from("omr_class_students").select("*").eq("organization_id", organizationId),
-    ]);
-
-    if (classResult.error) throw new Error(classResult.error.message || "Failed to load roster classes from Supabase");
-    if (studentResult.error) throw new Error(studentResult.error.message || "Failed to load roster students from Supabase");
-    if (enrollmentResult.error) throw new Error(enrollmentResult.error.message || "Failed to load roster enrollments from Supabase");
-
-    const groups = (classResult.data || [])
-        .map((row, index) => rosterGroupFromSupabaseRow(row as SupabaseRosterClassRow, index))
-        .filter((group): group is RosterGroup => !!group)
-        .sort((a, b) => `${a.region || ""}:${a.name}`.localeCompare(`${b.region || ""}:${b.name}`, "ko"));
-    const enrollmentByStudentId = new Map<string, SupabaseRosterClassStudentRow>();
-    for (const row of (enrollmentResult.data || []).map(row => row as SupabaseRosterClassStudentRow)) {
-        const current = enrollmentByStudentId.get(row.student_profile_id);
-        if (!current || row.enrollment_status === "active") {
-            enrollmentByStudentId.set(row.student_profile_id, row);
-        }
-    }
-    const students = (studentResult.data || [])
-        .map((row, index) => rosterStudentFromSupabaseRow(
-            row as SupabaseRosterStudentProfileRow,
-            groups,
-            enrollmentByStudentId.get((row as SupabaseRosterStudentProfileRow).id),
-            index,
-        ))
-        .filter((student): student is RosterStudent => !!student)
-        .sort((a, b) => a.name.localeCompare(b.name, "ko"));
-
-    return { students, groups, invites: [] };
+    return rosterSnapshotFromRemoteRows(await fetchRemoteRosterRows(client, organizationId));
 }
 
 async function fetchRemoteRosterRows(

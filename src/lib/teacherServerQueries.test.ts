@@ -5,11 +5,19 @@ import {
     fetchAttemptRowByIdForOrg,
     fetchAttemptRowsForOrg,
     fetchExamRowsForOrg,
+    fetchRosterRowsForOrg,
     saveAttemptRowWithResults,
     saveExamRowWithQuestions,
+    saveRosterRows,
+    type RosterReadClientLike,
     type SupabaseAdminDeleteFilter,
     type TeacherAdminClientLike,
 } from "./teacherServerQueries";
+import type {
+    SupabaseRosterClassRow,
+    SupabaseRosterClassStudentRow,
+    SupabaseRosterStudentProfileRow,
+} from "./rosterPersistence";
 import type { SupabaseAttemptRow, SupabaseExamQuestionRow, SupabaseExamRow } from "./omrPersistence";
 
 interface Recorded {
@@ -153,5 +161,60 @@ describe("teacherServerQueries org scoping", () => {
         const attemptRow = { id: "a1", organization_id: "org_a" } as unknown as SupabaseAttemptRow;
         await saveAttemptRowWithResults(client, attemptRow, [{ id: "a1:1" } as unknown as never]);
         expect(log.upserts.map(u => u.table)).toEqual(["omr_attempts", "omr_question_results"]);
+    });
+});
+
+function mockRosterReadClient(rows: Record<string, Record<string, unknown>[]>): {
+    client: RosterReadClientLike;
+    reads: [string, string, string][];
+} {
+    const reads: [string, string, string][] = [];
+    const client: RosterReadClientLike = {
+        from(table: string) {
+            return {
+                select() {
+                    return {
+                        eq(column: string, value: string) {
+                            const data = (rows[table] || []).filter(row => row[column] === value);
+                            reads.push([table, column, value]);
+                            return Promise.resolve({ data, error: null });
+                        },
+                    };
+                },
+            };
+        },
+    };
+    return { client, reads };
+}
+
+describe("teacherServerQueries roster scoping", () => {
+    it("reads all three roster tables scoped to the organization", async () => {
+        const { client } = mockRosterReadClient({
+            omr_classes: [
+                { id: "c1", organization_id: "org_a" },
+                { id: "c2", organization_id: "org_b" },
+            ],
+            omr_student_profiles: [
+                { id: "s1", organization_id: "org_a" },
+                { id: "s2", organization_id: "org_b" },
+            ],
+            omr_class_students: [
+                { class_id: "c1", student_profile_id: "s1", organization_id: "org_a" },
+            ],
+        });
+        const rows = await fetchRosterRowsForOrg(client, "org_a");
+        expect(rows.classes.map(c => c.id)).toEqual(["c1"]);
+        expect(rows.students.map(s => s.id)).toEqual(["s1"]);
+        expect(rows.enrollments).toHaveLength(1);
+    });
+
+    it("upserts only the non-empty roster tables", async () => {
+        const { client, log } = mockClient({});
+        await saveRosterRows(client, {
+            classes: [{ id: "c1" } as unknown as SupabaseRosterClassRow],
+            students: [] as SupabaseRosterStudentProfileRow[],
+            enrollments: [{ class_id: "c1", student_profile_id: "s1" } as unknown as SupabaseRosterClassStudentRow],
+        });
+        expect(log.upserts.map(u => u.table)).toEqual(["omr_classes", "omr_class_students"]);
     });
 });
