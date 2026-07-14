@@ -71,11 +71,26 @@ async function overlayPixelCount(page: Page): Promise<number> {
     });
 }
 
+// main's 입장 확인 (exam-entry confirmation) modal is preserved on the beta1 solve
+// page, so the drawing toolbar only mounts once entry is confirmed. Dismiss it as
+// the seeded roster student (falling back to guest entry) before the toolbar checks.
+async function confirmExamEntry(page: Page) {
+    const asStudent = page.getByRole("button", { name: "학생으로 시험 보기" });
+    const asGuest = page.getByRole("button", { name: "게스트로 시험 보기" });
+    await expect(asStudent.or(asGuest).first()).toBeVisible({ timeout: 20000 });
+    if (await asStudent.isVisible().catch(() => false)) {
+        await asStudent.click();
+    } else {
+        await asGuest.click();
+    }
+}
+
 test.describe("PDF drawing toolbar + eraser 부분/획 toggle", () => {
     test.beforeEach(async ({ page, context }) => {
         await resetBrowserState(page, context);
         await seedExamWithPdf(page, pdfDataUrl());
         await page.goto(`/solve/${EXAM_ID}`);
+        await confirmExamEntry(page);
         // The drawing toolbar (incl. eraser) appears as soon as pdfFile is set
         // (before the PDF paints), so the eraser button is visible right away.
         await expect(page.getByLabel("지우개")).toBeVisible({ timeout: 20000 });
