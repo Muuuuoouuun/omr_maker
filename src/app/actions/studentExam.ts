@@ -30,6 +30,7 @@ import {
     recordExamPinSuccess,
 } from "@/lib/examPinRateLimit";
 import { stripExamForReview, stripExamForSolving, type ReviewableExam, type SolvableExam } from "@/lib/examSolvePayload";
+import { upsertStudentQuestion, type StudentQuestionInput } from "@/lib/studentQuestions";
 import {
     attemptOwnedBy,
     attemptOwnerScope,
@@ -245,6 +246,38 @@ export async function loadExamForReview(
         return { status: "ok", exam: stripExamForReview(exam) };
     } catch (e) {
         console.error("loadExamForReview failed", e);
+        return { status: "error" };
+    }
+}
+
+/**
+ * Leave (or replace) a per-question free-text question on the student's OWN
+ * attempt. Ownership comes from the signed session cookie; ownAttempts reads
+ * the freshest org+owner-scoped rows from Supabase, so the note is merged onto
+ * the current server copy server-side and a crafted client can never touch
+ * anyone else's attempt. An explicit non-ok ctx status (denied/unauthenticated)
+ * is a hard stop — never satisfied from a device-local copy.
+ */
+export async function askAttemptQuestion(
+    attemptId: string,
+    question: StudentQuestionInput,
+): Promise<{ status: Status | "denied"; attempt?: Attempt }> {
+    const ctx = await resolveCtx();
+    if (!isCtx(ctx)) return ctx;
+    try {
+        const match = (await ownAttempts(ctx)).find(a => a.id === attemptId);
+        if (!match) return { status: "denied" };
+        const updated = upsertStudentQuestion(match, question, new Date().toISOString());
+        if (!updated) return { status: "error" };
+        const profileId = serverStudentProfileId(ctx.identity);
+        const { error } = await ctx.admin.from("omr_attempts").upsert({
+            ...attemptToSupabaseRow(updated),
+            student_profile_id: profileId,
+        });
+        if (error) return { status: "error" };
+        return { status: "ok", attempt: updated };
+    } catch (e) {
+        console.error("askAttemptQuestion failed", e);
         return { status: "error" };
     }
 }

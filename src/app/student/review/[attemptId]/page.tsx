@@ -1,16 +1,18 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
 import dynamic from "next/dynamic";
-import { BookOpen, ChevronDown, ChevronUp, Clock, Download, Repeat2, Target } from "lucide-react";
-import type { Attempt, AttemptFeedback, Exam, PdfDrawings } from "@/types/omr";
+import { BookOpen, CheckCircle2, ChevronDown, ChevronUp, Clock, Download, MessageSquare, Repeat2, Send, Target, TrendingUp } from "lucide-react";
+import type { Attempt, AttemptFeedback, Exam, PdfDrawings, Question, StudentQuestionNote } from "@/types/omr";
 import { storedDataUrlToFile, loadJsonRecord } from "@/utils/blobStore";
 import { attemptBelongsToSession, getSession } from "@/utils/storage";
-import { loadAttempt, loadExam } from "@/lib/omrPersistence";
-import { loadExamForReview, loadMyAttempt } from "@/app/actions/studentExam";
+import { loadAttempt, loadExam, saveAttempt, saveLocalAttempt } from "@/lib/omrPersistence";
+import { askAttemptQuestion, loadExamForReview, loadMyAttempt } from "@/app/actions/studentExam";
 import { loadMyAttemptClient, loadReviewExamClient } from "@/lib/studentExamClient";
+import { studentQuestionsByQuestionId, upsertStudentQuestion } from "@/lib/studentQuestions";
+import { buildAttemptRetakeRecovery } from "@/lib/retakeRecovery";
 import { formatKoreanDateTime } from "@/lib/pure";
 import {
     buildLearningRecommendations,
@@ -65,6 +67,19 @@ export default function ReviewPage() {
     const [returnedFeedback, setReturnedFeedback] = useState<AttemptFeedback | null>(null);
     const [teacherMarkupDrawings, setTeacherMarkupDrawings] = useState<PdfDrawings | undefined>(undefined);
     const [annotationDownloading, setAnnotationDownloading] = useState(false);
+    // Per-question Q&A: notes keyed by questionId, the open draft, and a small
+    // inline notice (this page does not import Toast — mirror the teacher
+    // attempt page's local-notice pattern).
+    const [studentQuestions, setStudentQuestions] = useState<Record<number, StudentQuestionNote>>({});
+    const [questionDrafts, setQuestionDrafts] = useState<Record<number, string>>({});
+    const [openQuestionBoxes, setOpenQuestionBoxes] = useState<Record<number, boolean>>({});
+    const [questionNotice, setQuestionNotice] = useState("");
+    const [sourceAttempt, setSourceAttempt] = useState<Attempt | null>(null);
+    // Latest attempt for the local Q&A merge path — reading `attempt` state
+    // directly in an async handler risks a stale closure dropping a concurrent
+    // question. A ref + a submission mutex keep local writes serialized.
+    const attemptRef = useRef<Attempt | null>(null);
+    const questionSaveInFlightRef = useRef(false);
 
     useEffect(() => {
         let cancelled = false;
@@ -90,6 +105,29 @@ export default function ReviewPage() {
                     }
                 }
                 setAttempt(found);
+                attemptRef.current = found;
+                setStudentQuestions(studentQuestionsByQuestionId(found));
+
+                // Load the retake's source attempt so the recovery card can
+                // compare against it. Pseudo sources ("exam:...", "student:...")
+                // and self-references are skipped. Same server-first ownership
+                // path as the attempt itself; a local hit re-verifies the session.
+                const sourceId = found.retake?.sourceAttemptId;
+                if (sourceId && !sourceId.includes(":") && sourceId !== found.id) {
+                    void loadMyAttemptClient(sourceId, {
+                        server: (attemptId) => loadMyAttempt(attemptId),
+                        localFallback: (attemptId) => loadAttempt(attemptId),
+                    }).then(sourceResult => {
+                        if (cancelled || sourceResult.status !== "ok" || !sourceResult.attempt) return;
+                        const src = sourceResult.attempt;
+                        if (sourceResult.source === "server") {
+                            setSourceAttempt(src);
+                        } else {
+                            const session = getSession();
+                            if (session && attemptBelongsToSession(src, session)) setSourceAttempt(src);
+                        }
+                    }).catch(() => { /* recovery card is best-effort */ });
+                }
 
                 const feedback = await loadReturnedAttemptFeedback(found.id);
                 if (feedback && !cancelled) {
@@ -255,9 +293,80 @@ export default function ReviewPage() {
         .sort((a, b) => a - b)
         .join(", ");
     const allReviewQuestionIds = reviewQuestions.map(question => question.id);
+    // Recovery vs the source attempt (loaded above). Uses the full exam so the
+    // lib scopes to retake.questionIds itself; the source score is measured over
+    // the SAME scoped review set so the two percentages compare 1:1.
+    const retakeRecovery = attempt.retake && sourceAttempt
+        ? buildAttemptRetakeRecovery(exam, attempt, sourceAttempt)
+        : null;
+    const sourceScoreSummary = retakeRecovery && sourceAttempt
+        ? summarizeAttemptScore(reviewExam, sourceAttempt)
+        : null;
 
     const toggleExplanation = (qId: number) => {
         setOpenExplanations(prev => ({ ...prev, [qId]: !prev[qId] }));
+    };
+
+    const updateQuestionDraft = (questionId: number, value: string) => {
+        setQuestionDrafts(prev => ({ ...prev, [questionId]: value.slice(0, 500) }));
+    };
+
+    const toggleQuestionBox = (questionId: number) => {
+        setOpenQuestionBoxes(prev => ({ ...prev, [questionId]: !prev[questionId] }));
+    };
+
+    const submitQuestion = async (question: Question) => {
+        const body = (questionDrafts[question.id] || "").trim();
+        if (!body) return;
+        // Serialize submissions: the local merge path reads-then-writes the
+        // attempt, so a second submit racing the first would build on a stale
+        // copy and drop the earlier note. One in-flight save at a time.
+        if (questionSaveInFlightRef.current) {
+            setQuestionNotice("이전 질문을 저장하는 중입니다. 잠시 후 다시 시도해주세요.");
+            return;
+        }
+        const base = attemptRef.current;
+        if (!base) return;
+        const input = { questionId: question.id, questionNumber: question.number, body };
+        questionSaveInFlightRef.current = true;
+        setQuestionNotice("");
+        try {
+            // Server-first: the action verifies ownership via the session cookie
+            // and merges the note into the attempt row server-side. An explicit
+            // "denied" is a hard stop, never written to the local copy.
+            let updated: Attempt | null = null;
+            try {
+                const res = await askAttemptQuestion(base.id, input);
+                if (res.status === "denied") {
+                    setQuestionNotice("이 기록에 질문을 남길 권한이 없습니다.");
+                    return;
+                }
+                if (res.status === "ok" && res.attempt) updated = res.attempt;
+            } catch {
+                // offline/dev — fall back to the local attempt write below.
+            }
+            if (updated) {
+                try { saveLocalAttempt(updated); } catch { /* quota — server copy is canonical */ }
+            } else {
+                // Merge onto the freshest local attempt (ref, not stale closure).
+                updated = upsertStudentQuestion(attemptRef.current || base, input, new Date().toISOString());
+                if (!updated) return;
+                const result = await saveAttempt(updated).catch(() => null);
+                if (!result?.localSaved) {
+                    setQuestionNotice("질문을 저장하지 못했습니다. 브라우저 저장소를 확인한 뒤 다시 시도해주세요.");
+                    return;
+                }
+            }
+            if (!updated) return;
+            attemptRef.current = updated;
+            setAttempt(updated);
+            setStudentQuestions(prev => ({ ...prev, ...studentQuestionsByQuestionId(updated) }));
+            setQuestionDrafts(prev => ({ ...prev, [question.id]: "" }));
+            setOpenQuestionBoxes(prev => ({ ...prev, [question.id]: true }));
+            setQuestionNotice("질문을 선생님께 전달했습니다. 답변이 등록되면 이 화면에 표시됩니다.");
+        } finally {
+            questionSaveInFlightRef.current = false;
+        }
     };
 
     const downloadFeedback = () => {
@@ -551,6 +660,52 @@ export default function ReviewPage() {
                     </section>
                 )}
 
+                {retakeRecovery && (
+                    <section style={{
+                        background: 'white',
+                        border: '1px solid #bbf7d0',
+                        borderRadius: '12px',
+                        padding: '1.25rem',
+                        marginBottom: '1.25rem',
+                        display: 'grid',
+                        gap: '0.85rem'
+                    }}>
+                        <div>
+                            <h2 style={{ fontSize: '1rem', fontWeight: 800, color: '#0f172a', display: 'flex', alignItems: 'center', gap: '0.45rem' }}>
+                                <TrendingUp size={17} color="#16a34a" />
+                                재시험 회복
+                            </h2>
+                            <p style={{ color: '#64748b', fontSize: '0.84rem', marginTop: '0.25rem' }}>
+                                {retakeRecovery.targetCount > 0
+                                    ? `원시험에서 틀린 ${retakeRecovery.targetCount}문항 중 ${retakeRecovery.recoveredCount}문항을 이번에 맞혔어요.`
+                                    : '이번 범위에는 원시험에서 틀린 문항이 없었습니다.'}
+                            </p>
+                        </div>
+                        <div style={{ display: 'grid', gridTemplateColumns: `repeat(${retakeRecovery.regressedCount > 0 ? 3 : 2}, 1fr)`, gap: '0.6rem' }}>
+                            <div style={{ padding: '0.75rem', borderRadius: '8px', background: '#f0fdf4', border: '1px solid #bbf7d0', textAlign: 'center' }}>
+                                <div style={{ color: '#64748b', fontSize: '0.72rem', fontWeight: 700, marginBottom: '0.25rem' }}>회복</div>
+                                <div style={{ color: '#16a34a', fontSize: '0.95rem', fontWeight: 900 }}>
+                                    {retakeRecovery.recoveryRate !== undefined
+                                        ? `${retakeRecovery.recoveredCount}/${retakeRecovery.targetCount} (${retakeRecovery.recoveryRate}%)`
+                                        : '대상 없음'}
+                                </div>
+                            </div>
+                            <div style={{ padding: '0.75rem', borderRadius: '8px', background: '#eef2ff', border: '1px solid #c7d2fe', textAlign: 'center' }}>
+                                <div style={{ color: '#64748b', fontSize: '0.72rem', fontWeight: 700, marginBottom: '0.25rem' }}>점수 변화</div>
+                                <div style={{ color: '#4f46e5', fontSize: '0.95rem', fontWeight: 900 }}>
+                                    {sourceScoreSummary ? `${sourceScoreSummary.scorePercent}% → ${scoreSummary.scorePercent}%` : '-'}
+                                </div>
+                            </div>
+                            {retakeRecovery.regressedCount > 0 && (
+                                <div style={{ padding: '0.75rem', borderRadius: '8px', background: '#fef2f2', border: '1px solid #fecaca', textAlign: 'center' }}>
+                                    <div style={{ color: '#64748b', fontSize: '0.72rem', fontWeight: 700, marginBottom: '0.25rem' }}>다시 틀림</div>
+                                    <div style={{ color: '#dc2626', fontSize: '0.95rem', fontWeight: 900 }}>{retakeRecovery.regressedCount}문항</div>
+                                </div>
+                            )}
+                        </div>
+                    </section>
+                )}
+
                 <section style={{
                     background: 'white',
                     border: '1px solid #e2e8f0',
@@ -758,6 +913,21 @@ export default function ReviewPage() {
                     </button>
                 </div>
 
+                {questionNotice && (
+                    <div style={{
+                        marginBottom: '1rem',
+                        padding: '0.7rem 0.9rem',
+                        borderRadius: 10,
+                        background: '#eff6ff',
+                        border: '1px solid #bfdbfe',
+                        color: '#1e3a8a',
+                        fontSize: '0.84rem',
+                        fontWeight: 700,
+                    }}>
+                        {questionNotice}
+                    </div>
+                )}
+
                 {/* Question List */}
                 <div style={{ display: 'grid', gap: '1rem' }}>
                     {filteredQuestions.map((q) => {
@@ -779,6 +949,9 @@ export default function ReviewPage() {
                         const timing = timingByQuestionId.get(q.id);
                         const questionFeedbackComments = visibleFeedbackComments.filter(comment => comment.questionId === q.id);
                         const statusLabel = isUngraded ? "미채점" : isCorrect ? "정답" : isSkipped ? "미응답" : "오답";
+                        const submittedQuestion = studentQuestions[q.id];
+                        const questionBoxOpen = !!openQuestionBoxes[q.id];
+                        const draft = questionDrafts[q.id] || "";
 
                         return (
                             <div key={q.id} style={{
@@ -856,6 +1029,97 @@ export default function ReviewPage() {
                                         ))}
                                     </div>
                                 )}
+
+                                <div style={{ marginTop: '1rem', borderTop: '1px dashed #e2e8f0', paddingTop: '0.85rem' }}>
+                                    <button
+                                        type="button"
+                                        onClick={() => toggleQuestionBox(q.id)}
+                                        style={{
+                                            display: 'inline-flex', alignItems: 'center', gap: '0.4rem',
+                                            background: 'transparent', border: 'none', cursor: 'pointer',
+                                            padding: 0, color: 'var(--primary, #4f46e5)', fontWeight: 600,
+                                            fontSize: '0.9rem',
+                                        }}
+                                        aria-expanded={questionBoxOpen || !!submittedQuestion}
+                                    >
+                                        <MessageSquare size={16} />
+                                        {submittedQuestion ? '질문 보기' : '선생님께 질문하기'}
+                                        {questionBoxOpen ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
+                                    </button>
+
+                                    {(questionBoxOpen || submittedQuestion) && (
+                                        <div style={{ marginTop: '0.6rem', display: 'grid', gap: '0.6rem' }}>
+                                            {submittedQuestion && (
+                                                <div style={{
+                                                    display: 'inline-flex', alignItems: 'center', gap: '0.35rem',
+                                                    color: submittedQuestion.status === 'answered' ? '#16a34a' : '#64748b',
+                                                    fontSize: '0.78rem', fontWeight: 800,
+                                                }}>
+                                                    <CheckCircle2 size={14} />
+                                                    {formatKoreanDateTime(submittedQuestion.createdAt)}
+                                                    {submittedQuestion.status === 'answered' ? ' · 답변 완료' : ' · 질문 대기'}
+                                                </div>
+                                            )}
+                                            {submittedQuestion && (
+                                                <div style={{
+                                                    padding: '0.65rem 0.75rem', borderRadius: '8px',
+                                                    border: '1px solid #e2e8f0', background: '#f8fafc',
+                                                    color: '#475569', fontSize: '0.84rem', lineHeight: 1.6,
+                                                    whiteSpace: 'pre-wrap',
+                                                }}>
+                                                    {submittedQuestion.body}
+                                                </div>
+                                            )}
+                                            {submittedQuestion?.status === 'answered' && submittedQuestion.answer && (
+                                                <div style={{ padding: '0.7rem 0.8rem', borderRadius: '8px', border: '1px solid #bbf7d0', background: '#f0fdf4' }}>
+                                                    <div style={{
+                                                        display: 'flex', alignItems: 'center', gap: '0.35rem',
+                                                        color: '#16a34a', fontWeight: 800, fontSize: '0.78rem', marginBottom: '0.35rem',
+                                                    }}>
+                                                        <MessageSquare size={13} />
+                                                        {submittedQuestion.answer.teacherName
+                                                            ? `${submittedQuestion.answer.teacherName} 선생님 답변`
+                                                            : '선생님 답변'}
+                                                        <span style={{ color: '#64748b', fontWeight: 600 }}>
+                                                            · {formatKoreanDateTime(submittedQuestion.answer.createdAt)}
+                                                        </span>
+                                                    </div>
+                                                    <div style={{ color: '#0f172a', fontSize: '0.86rem', lineHeight: 1.65, whiteSpace: 'pre-wrap' }}>
+                                                        {submittedQuestion.answer.body}
+                                                    </div>
+                                                </div>
+                                            )}
+                                            <label htmlFor={`student-question-${q.id}`} style={{ fontSize: '0.78rem', fontWeight: 800, color: '#475569' }}>
+                                                {submittedQuestion ? '질문 다시 남기기' : '선생님께 남길 질문'}
+                                            </label>
+                                            <textarea
+                                                id={`student-question-${q.id}`}
+                                                value={draft}
+                                                onChange={(event) => updateQuestionDraft(q.id, event.target.value)}
+                                                placeholder="어떤 부분이 헷갈렸는지 짧게 남겨두세요."
+                                                rows={3}
+                                                style={{
+                                                    width: '100%', resize: 'vertical', border: '1px solid #cbd5e1',
+                                                    borderRadius: 8, padding: '0.6rem', font: 'inherit',
+                                                    color: '#0f172a', background: 'white',
+                                                }}
+                                            />
+                                            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '0.5rem' }}>
+                                                <span style={{ color: '#94a3b8', fontSize: '0.74rem', fontWeight: 700 }}>{draft.trim().length}/500</span>
+                                                <button
+                                                    type="button"
+                                                    onClick={() => void submitQuestion(q)}
+                                                    disabled={!draft.trim()}
+                                                    className="btn btn-primary"
+                                                    style={{ fontSize: '0.82rem', display: 'inline-flex', alignItems: 'center', gap: '0.35rem', opacity: draft.trim() ? 1 : 0.6 }}
+                                                >
+                                                    <Send size={14} />
+                                                    질문 보내기
+                                                </button>
+                                            </div>
+                                        </div>
+                                    )}
+                                </div>
 
                                 {q.explanation && (
                                     <div style={{ marginTop: '1rem', borderTop: '1px dashed #e2e8f0', paddingTop: '0.85rem' }}>
