@@ -238,12 +238,15 @@ test.describe("Settings page", () => {
         for (const label of ["프로필", "알림", "시험 기본값", "채점", "API 키", "테마", "보안"]) {
             await expect(page.getByRole("button", { name: label, exact: true })).toBeVisible();
         }
+        await expect(page.getByText("프로필 상태")).toBeVisible();
+        await expect(page.getByText("로그인 계정과 권한")).toBeVisible();
     });
 
     test("switching section updates panel", async ({ page }) => {
         await openTeacherPage(page, "/teacher/settings");
         await page.getByRole("button", { name: "알림", exact: true }).click();
-        await expect(page.getByText("카카오 우선 채널을 기준으로 알림 대상을 관리합니다.")).toBeVisible();
+        await expect(page.getByText("카카오 후보 계산과 실제 발송 연동 상태를 구분해 보여줍니다.")).toBeVisible();
+        await expect(page.getByText("카카오 실제 발송")).toBeVisible();
     });
 
     test("security tab shows deployment login diagnostics", async ({ page }) => {

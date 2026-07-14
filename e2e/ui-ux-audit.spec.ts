@@ -6,20 +6,21 @@ test.describe.configure({ timeout: 90_000 });
 type AuditTarget = {
     name: string;
     path: string;
+    expectedText: string;
     viewport: { width: number; height: number };
     teacher?: boolean;
 };
 
 const TARGETS: AuditTarget[] = [
-    { name: "teacher-login-desktop", path: "/?role=teacher", viewport: { width: 1440, height: 900 } },
-    { name: "student-login-mobile", path: "/?role=student", viewport: { width: 390, height: 844 } },
-    { name: "admin-route-mobile", path: "/admin", viewport: { width: 390, height: 844 } },
-    { name: "teacher-dashboard-desktop", path: "/teacher/dashboard", viewport: { width: 1440, height: 900 }, teacher: true },
-    { name: "teacher-users-groups-mobile", path: "/teacher/users?tab=groups", viewport: { width: 390, height: 844 }, teacher: true },
-    { name: "teacher-settings-mobile", path: "/teacher/settings", viewport: { width: 390, height: 844 }, teacher: true },
-    { name: "teacher-billing-mobile", path: "/teacher/billing", viewport: { width: 390, height: 844 }, teacher: true },
-    { name: "create-editor-desktop", path: "/create", viewport: { width: 1440, height: 900 }, teacher: true },
-    { name: "create-editor-mobile", path: "/create", viewport: { width: 390, height: 844 }, teacher: true },
+    { name: "teacher-login-desktop", path: "/?role=teacher", expectedText: "교사 포털", viewport: { width: 1440, height: 900 } },
+    { name: "student-login-mobile", path: "/?role=student", expectedText: "학생 포털", viewport: { width: 390, height: 844 } },
+    { name: "admin-route-mobile", path: "/admin", expectedText: "관리자 기능은 교사 포털에서 관리합니다", viewport: { width: 390, height: 844 } },
+    { name: "teacher-dashboard-desktop", path: "/teacher/dashboard", expectedText: "분석 센터", viewport: { width: 1440, height: 900 }, teacher: true },
+    { name: "teacher-users-groups-mobile", path: "/teacher/users?tab=groups", expectedText: "사용자 관리", viewport: { width: 390, height: 844 }, teacher: true },
+    { name: "teacher-settings-mobile", path: "/teacher/settings", expectedText: "설정", viewport: { width: 390, height: 844 }, teacher: true },
+    { name: "teacher-billing-mobile", path: "/teacher/billing", expectedText: "결제 및 플랜", viewport: { width: 390, height: 844 }, teacher: true },
+    { name: "create-editor-desktop", path: "/create", expectedText: "설정", viewport: { width: 1440, height: 900 }, teacher: true },
+    { name: "create-editor-mobile", path: "/create", expectedText: "설정", viewport: { width: 390, height: 844 }, teacher: true },
 ];
 
 async function visitTarget(browser: Browser, target: AuditTarget): Promise<Page> {
@@ -34,8 +35,8 @@ async function visitTarget(browser: Browser, target: AuditTarget): Promise<Page>
     return page;
 }
 
-async function auditPage(page: Page) {
-    return page.evaluate(() => {
+async function auditPage(page: Page, target: AuditTarget) {
+    return page.evaluate(({ expectedText, expectedPath }) => {
         const isVisible = (element: Element) => {
             const style = window.getComputedStyle(element);
             const rect = element.getBoundingClientRect();
@@ -65,6 +66,9 @@ async function auditPage(page: Page) {
         const allVisible = Array.from(document.querySelectorAll("body *")).filter(isVisible);
         const pageText = body.innerText || "";
         const mojibakePattern = /[\uFFFD\u00C3\u00C2]|\u00E2\u20AC|[\u00EC\u00EB\u00ED\u00EA][\u0080-\u00BF]/;
+        const frameworkErrorPattern = /Application error|Runtime Error|Unhandled Runtime Error|Build Error|Failed to compile/i;
+        const normalizedPageText = pageText.replace(/\s+/g, " ").trim();
+        const currentPath = window.location.pathname;
 
         const smallTargets = Array.from(document.querySelectorAll("button,a,input,select,textarea,[role='button']"))
             .filter(isVisible)
@@ -112,6 +116,13 @@ async function auditPage(page: Page) {
 
         return {
             url: window.location.href,
+            pageTitle: document.title,
+            pathMatches: currentPath === expectedPath,
+            expectedTextFound: normalizedPageText.includes(expectedText),
+            meaningfulTextLength: normalizedPageText.length,
+            headingCount: document.querySelectorAll("h1,h2,h3,[role='heading']").length,
+            frameworkError: frameworkErrorPattern.test(normalizedPageText)
+                || !!document.querySelector("[data-nextjs-dialog-overlay], [data-next-badge-root='true'] [role='dialog']"),
             bodyOverflowX: Math.max(root.scrollWidth, body.scrollWidth) > root.clientWidth + 1,
             scrollWidth: Math.max(root.scrollWidth, body.scrollWidth),
             clientWidth: root.clientWidth,
@@ -119,6 +130,9 @@ async function auditPage(page: Page) {
             smallTargets,
             clippedText,
         };
+    }, {
+        expectedText: target.expectedText,
+        expectedPath: new URL(target.path, "http://localhost").pathname,
     });
 }
 
@@ -129,13 +143,19 @@ test.describe("UI-UX PROMAX layout audit", () => {
         const results: Array<{ name: string; result: Awaited<ReturnType<typeof auditPage>> }> = [];
         for (const target of TARGETS) {
             const page = await visitTarget(browser, target);
-            results.push({ name: target.name, result: await auditPage(page) });
+            results.push({ name: target.name, result: await auditPage(page, target) });
             await page.context().close();
         }
 
         console.log(JSON.stringify(results, null, 2));
 
         for (const { name, result } of results) {
+            expect(result.pageTitle, `${name} has the wrong document title`).toContain("OMR Maker");
+            expect(result.pathMatches, `${name} redirected to the wrong route: ${result.url}`).toBe(true);
+            expect(result.expectedTextFound, `${name} did not render its expected screen identity`).toBe(true);
+            expect(result.meaningfulTextLength, `${name} rendered an empty or near-empty shell`).toBeGreaterThan(40);
+            expect(result.headingCount, `${name} has no semantic heading`).toBeGreaterThan(0);
+            expect(result.frameworkError, `${name} shows a framework error overlay`).toBe(false);
             expect(result.mojibake, `${name} has mojibake text`).toBe(false);
             expect(result.bodyOverflowX, `${name} has body-level horizontal overflow`).toBe(false);
             expect(result.smallTargets, `${name} has touch targets below 44px`).toEqual([]);

@@ -376,6 +376,15 @@ test.describe("Mobile PWA entry", () => {
 
         await page.goto("/solve/mobile-qa-exam");
 
+        const startsWithFloatingRail = await page.evaluate(() => window.matchMedia("(min-width: 600px)").matches);
+        if (startsWithFloatingRail) {
+            await expect(page.locator("#solve-omr-pane")).toHaveClass(/is-collapsed/);
+            const floatingRailButton = page.locator(".solve-omr-rail-button");
+            await expect(floatingRailButton).toBeVisible();
+            await expectTouchTarget(floatingRailButton);
+            await floatingRailButton.click();
+        }
+
         await expect(page.locator(".solve-omr-scroll .omr-cardview-title").getByText("모바일 실전 시험")).toBeVisible();
         await expectTouchTarget(page.getByRole("link", { name: "OMR Maker" }));
         await expectTouchTarget(page.locator(".solve-controls .solve-collapse-button"));
@@ -386,19 +395,32 @@ test.describe("Mobile PWA entry", () => {
         expect(await smallTargets(page, ".solve-controls button, .solve-controls label, .solve-omr-scroll .q-bubble, .solve-omr-next-button, .solve-omr-pane-close")).toEqual([]);
         const solveLayout = await page.evaluate(() => {
             const body = document.querySelector<HTMLElement>(".solve-body");
+            const bodyRect = body?.getBoundingClientRect();
+            const pdf = document.querySelector<HTMLElement>(".solve-pdf-pane")?.getBoundingClientRect();
+            const paneElement = document.querySelector<HTMLElement>("#solve-omr-pane");
             const pane = document.querySelector<HTMLElement>("#solve-omr-pane")?.getBoundingClientRect();
             const title = document.querySelector<HTMLElement>(".solve-title")?.getBoundingClientRect();
             return {
                 isTablet: window.matchMedia("(min-width: 600px) and (max-width: 1180px)").matches,
                 direction: body ? getComputedStyle(body).flexDirection : null,
+                panePosition: paneElement ? getComputedStyle(paneElement).position : null,
+                paneBackdrop: paneElement ? getComputedStyle(paneElement).backdropFilter : null,
                 paneWidth: pane?.width ?? null,
+                paneRight: pane?.right ?? null,
+                bodyWidth: bodyRect?.width ?? null,
+                bodyRight: bodyRect?.right ?? null,
+                pdfWidth: pdf?.width ?? null,
                 titleWidth: title?.width ?? null,
             };
         });
         if (solveLayout.isTablet) {
             expect(solveLayout.direction).toBe("row");
+            expect(solveLayout.panePosition).toBe("absolute");
+            expect(solveLayout.paneBackdrop).toContain("blur");
             expect(solveLayout.paneWidth).toBeGreaterThanOrEqual(280);
             expect(solveLayout.paneWidth).toBeLessThanOrEqual(320);
+            expect(Math.abs((solveLayout.bodyWidth ?? 0) - (solveLayout.pdfWidth ?? 0))).toBeLessThanOrEqual(2);
+            expect(Math.abs((solveLayout.bodyRight ?? 0) - (solveLayout.paneRight ?? 0))).toBeLessThanOrEqual(14);
             expect(solveLayout.titleWidth).toBeGreaterThanOrEqual(72);
         }
         const solveHeaderRects = await page.evaluate(() => {
@@ -410,14 +432,28 @@ test.describe("Mobile PWA entry", () => {
         expect(solveHeaderRects!.brandRight).toBeLessThanOrEqual(solveHeaderRects!.titleLeft);
 
         await page.getByRole("button", { name: "1번 문항으로 이동" }).click();
-        const autoCollapsesAnswerSheet = await page.evaluate(() => window.matchMedia("(max-width: 1180px)").matches);
-        if (autoCollapsesAnswerSheet) {
-            await expect(page.locator("#solve-omr-pane")).toHaveClass(/is-collapsed/);
-        } else {
-            await page.locator(".solve-controls .solve-collapse-button").click();
-        }
+        await expect(page.locator("#solve-omr-pane")).toHaveClass(/is-collapsed/);
         await expect(page.locator("#solve-omr-pane")).toHaveAttribute("aria-hidden", "true");
         await expect(page.locator("#solve-omr-pane")).toHaveAttribute("inert", "");
+        const collapsedOverlay = await page.evaluate(() => {
+            const body = document.querySelector<HTMLElement>(".solve-body")?.getBoundingClientRect();
+            const pdf = document.querySelector<HTMLElement>(".solve-pdf-pane")?.getBoundingClientRect();
+            const rail = document.querySelector<HTMLElement>(".solve-omr-rail");
+            const railStyle = rail ? getComputedStyle(rail) : null;
+            return {
+                isFloatingOverlay: window.matchMedia("(min-width: 600px)").matches,
+                pdfKeepsFullWidth: body && pdf ? Math.abs(body.width - pdf.width) <= 2 : false,
+                railPosition: railStyle?.position ?? null,
+                railBackdrop: railStyle?.backdropFilter ?? null,
+                railVisibility: railStyle?.visibility ?? null,
+            };
+        });
+        if (collapsedOverlay.isFloatingOverlay) {
+            expect(collapsedOverlay.pdfKeepsFullWidth).toBe(true);
+            expect(collapsedOverlay.railPosition).toBe("absolute");
+            expect(collapsedOverlay.railBackdrop).toContain("blur");
+            expect(collapsedOverlay.railVisibility).toBe("visible");
+        }
         const reopenAnswerSheet = page.locator(".solve-controls .solve-collapse-button");
         await expect(reopenAnswerSheet).toHaveAttribute("aria-label", "답안지 펼치기");
         await expectTouchTarget(reopenAnswerSheet);
@@ -489,6 +525,19 @@ test.describe("Mobile PWA entry", () => {
         await expect(submitDialog).toContainText("전체 4문항 답안을 모두 선택했습니다.");
         await expectTouchTarget(submitDialog.getByRole("button", { name: "계속 풀기" }));
         await expectTouchTarget(submitDialog.getByRole("button", { name: "제출하기" }));
+        await expect(submitDialog.getByRole("button", { name: "닫기" })).toBeFocused();
+
+        await page.keyboard.press("Escape");
+        await expect(submitDialog).toBeHidden();
+        await expect(page.locator(".solve-submit-button")).toBeFocused();
+
+        await page.locator(".solve-submit-button").click();
+        await expect(submitDialog).toBeVisible();
+        await expect(submitDialog.getByRole("button", { name: "닫기" })).toBeFocused();
+        await page.keyboard.press("Shift+Tab");
+        await expect(submitDialog.getByRole("button", { name: "제출하기" })).toBeFocused();
+        await page.keyboard.press("Tab");
+        await expect(submitDialog.getByRole("button", { name: "닫기" })).toBeFocused();
 
         await submitDialog.getByRole("button", { name: "제출하기" }).click();
 

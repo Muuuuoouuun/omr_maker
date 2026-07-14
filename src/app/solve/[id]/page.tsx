@@ -90,6 +90,70 @@ function SolveDialogShell({
     children: React.ReactNode;
     onClose: () => void;
 }) {
+    const dialogRef = useRef<HTMLDivElement>(null);
+    const onCloseRef = useRef(onClose);
+
+    useEffect(() => {
+        onCloseRef.current = onClose;
+    }, [onClose]);
+
+    useEffect(() => {
+        const dialog = dialogRef.current;
+        if (!dialog) return;
+
+        const previouslyFocused = document.activeElement instanceof HTMLElement
+            ? document.activeElement
+            : null;
+        const focusableSelector = [
+            'button:not([disabled])',
+            'a[href]',
+            'input:not([disabled])',
+            'select:not([disabled])',
+            'textarea:not([disabled])',
+            '[tabindex]:not([tabindex="-1"])',
+        ].join(',');
+        const focusableElements = () => Array.from(dialog.querySelectorAll<HTMLElement>(focusableSelector))
+            .filter(element => element.getAttribute('aria-hidden') !== 'true');
+        const animationFrame = window.requestAnimationFrame(() => {
+            const autoFocusTarget = dialog.querySelector<HTMLElement>('[autofocus]');
+            (autoFocusTarget || focusableElements()[0] || dialog).focus();
+        });
+
+        const handleKeyDown = (event: KeyboardEvent) => {
+            if (event.key === 'Escape') {
+                event.preventDefault();
+                event.stopPropagation();
+                onCloseRef.current();
+                return;
+            }
+            if (event.key !== 'Tab') return;
+
+            const focusable = focusableElements();
+            if (focusable.length === 0) {
+                event.preventDefault();
+                dialog.focus();
+                return;
+            }
+            const first = focusable[0];
+            const last = focusable[focusable.length - 1];
+            const active = document.activeElement;
+            if (event.shiftKey && (active === first || !dialog.contains(active))) {
+                event.preventDefault();
+                last.focus();
+            } else if (!event.shiftKey && active === last) {
+                event.preventDefault();
+                first.focus();
+            }
+        };
+
+        document.addEventListener('keydown', handleKeyDown, true);
+        return () => {
+            window.cancelAnimationFrame(animationFrame);
+            document.removeEventListener('keydown', handleKeyDown, true);
+            if (previouslyFocused?.isConnected) previouslyFocused.focus();
+        };
+    }, []);
+
     return (
         <div
             role="presentation"
@@ -107,9 +171,11 @@ function SolveDialogShell({
             }}
         >
             <div
+                ref={dialogRef}
                 role="dialog"
                 aria-modal="true"
                 aria-label={title}
+                tabIndex={-1}
                 onClick={(e) => e.stopPropagation()}
                 style={{
                     width: '100%',
@@ -848,7 +914,8 @@ export default function SolvePage() {
         setHydratedOMRPanelKey("");
         const stored = window.localStorage.getItem(OMR_PANEL_KEY);
         const hasStoredPreference = stored === "collapsed" || stored === "expanded";
-        setIsOMRCollapsed(hasStoredPreference ? stored === "collapsed" : false);
+        const shouldStartCollapsed = window.matchMedia("(min-width: 600px)").matches;
+        setIsOMRCollapsed(hasStoredPreference ? stored === "collapsed" : shouldStartCollapsed);
         setHydratedOMRPanelKey(OMR_PANEL_KEY);
     }, [OMR_PANEL_KEY]);
 
@@ -1210,12 +1277,9 @@ export default function SolvePage() {
 
     const handleQuestionClick = (qId: number) => {
         beginQuestionVisit(qId);
-        // On responsive phone/tablet layouts, selecting a question should reveal
-        // as much of the problem sheet as possible. The persistent header toggle
-        // and tablet rail remain available to reopen the answer panel.
-        if (typeof window !== "undefined" && window.matchMedia("(max-width: 1180px)").matches) {
-            setIsOMRCollapsed(true);
-        }
+        // Selecting a question returns focus to the problem sheet. The header
+        // toggle and floating rail remain available to reopen the answer panel.
+        setIsOMRCollapsed(true);
         if (examData) {
             const activeQuestion = getActiveExamQuestions().find(q => q.id === qId);
             const q = activeQuestion || examData.questions.find(q => q.id === qId);
@@ -1984,7 +2048,14 @@ export default function SolvePage() {
                     />
                 </div>
 
-                <div className={`solve-omr-rail ${isOMRCollapsed ? 'is-collapsed' : ''}`} aria-label="빠른 답안 레일">
+                <div
+                    className={`solve-omr-rail ${isOMRCollapsed ? 'is-collapsed' : ''}`}
+                    aria-label="빠른 답안 레일"
+                    style={{
+                        backdropFilter: 'var(--solve-omr-rail-backdrop, none)',
+                        WebkitBackdropFilter: 'var(--solve-omr-rail-backdrop, none)'
+                    }}
+                >
                     <button
                         type="button"
                         className={`solve-omr-rail-button ${isOMRCollapsed ? 'is-collapsed' : ''}`}
@@ -2060,6 +2131,8 @@ export default function SolvePage() {
                     transition: 'width 0.24s, max-width 0.24s, flex-basis 0.24s',
                     overflow: 'hidden',
                     background: 'var(--background)',
+                    backdropFilter: 'var(--solve-omr-pane-backdrop, none)',
+                    WebkitBackdropFilter: 'var(--solve-omr-pane-backdrop, none)',
                     display: 'flex',
                     flexDirection: 'column'
                 }} aria-hidden={isOMRCollapsed} inert={isOMRCollapsed}>

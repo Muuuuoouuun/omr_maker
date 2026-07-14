@@ -745,12 +745,51 @@ test.describe("Teacher and student full journey", () => {
         await page.setViewportSize({ width: 820, height: 1180 });
         await page.goto(`/solve/${TEST_EXAM_ID}`);
 
-        await expect(page.getByRole("button", { name: "답안지 펼치기 · 0/3 · 미답 3개" })).toBeVisible();
-        await page.getByRole("button", { name: "1번 보기 2", exact: true }).click();
+        const openRail = page.getByRole("button", { name: "답안지 펼치기 · 0/3 · 미답 3개" });
+        await expect(openRail).toBeVisible();
+        await openRail.click();
+        await page.getByRole("button", { name: "문제 1번 보기 2", exact: true }).click();
+        await page.locator(".solve-omr-pane-close").click();
         await expect(page.getByRole("button", { name: "답안지 펼치기 · 1/3 · 미답 2개" })).toBeVisible();
 
         const hasBodyOverflow = await page.evaluate(() => document.documentElement.scrollWidth > document.documentElement.clientWidth + 1);
         expect(hasBodyOverflow).toBe(false);
+    });
+
+    test("keeps the desktop solve OMR as a blurred overlay without shrinking the PDF", async ({ page }) => {
+        await seedExamAndStudent(page);
+        await page.setViewportSize({ width: 1440, height: 900 });
+        await page.goto(`/solve/${TEST_EXAM_ID}`);
+
+        const openRail = page.getByRole("button", { name: "답안지 펼치기 · 0/3 · 미답 3개" });
+        await expect(openRail).toBeVisible();
+        await openRail.click();
+
+        const layout = await page.evaluate(() => {
+            const body = document.querySelector<HTMLElement>(".solve-body")?.getBoundingClientRect();
+            const pdf = document.querySelector<HTMLElement>(".solve-pdf-pane")?.getBoundingClientRect();
+            const paneElement = document.querySelector<HTMLElement>("#solve-omr-pane");
+            const pane = paneElement?.getBoundingClientRect();
+            const paneStyle = paneElement ? getComputedStyle(paneElement) : null;
+            return body && pdf && pane ? {
+                bodyWidth: body.width,
+                pdfWidth: pdf.width,
+                bodyRight: body.right,
+                paneRight: pane.right,
+                paneWidth: pane.width,
+                panePosition: paneStyle?.position,
+                paneBackdrop: paneStyle?.backdropFilter,
+            } : null;
+        });
+
+        expect(layout).not.toBeNull();
+        expect(Math.abs(layout!.bodyWidth - layout!.pdfWidth)).toBeLessThanOrEqual(2);
+        expect(Math.abs(layout!.bodyRight - layout!.paneRight)).toBeLessThanOrEqual(18);
+        expect(layout!.panePosition).toBe("absolute");
+        expect(layout!.paneBackdrop).toContain("blur");
+        expect(layout!.paneWidth).toBeGreaterThanOrEqual(300);
+        expect(layout!.paneWidth).toBeLessThanOrEqual(380);
+        expect(await page.evaluate(() => document.documentElement.scrollWidth > document.documentElement.clientWidth + 1)).toBe(false);
     });
 
     test("keeps tablet teacher analytics usable with real submission data", async ({ page }) => {
