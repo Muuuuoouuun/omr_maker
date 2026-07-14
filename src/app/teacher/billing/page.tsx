@@ -9,6 +9,7 @@ import type { PlanKey } from "@/types/omr";
 import { shouldUseDemoData } from "@/lib/demoData";
 import { loadTeacherAttempts } from "@/lib/teacherAttemptClient";
 import { loadTeacherExams } from "@/lib/teacherExamClient";
+import { loadTeacherPlan } from "@/lib/teacherPlanClient";
 import {
     buildBillingPlanHealth,
     buildBillingUsageSummary,
@@ -177,6 +178,18 @@ export default function BillingPage() {
 
         void hydrateUsage();
 
+        return () => { cancelled = true; };
+    }, []);
+
+    // Reconcile the displayed plan with the server source of truth
+    // (omr_organizations.plan). Server-first, falling back to the login-bound
+    // local plan when Supabase is unconfigured or the request is denied.
+    useEffect(() => {
+        if (typeof window === "undefined") return;
+        let cancelled = false;
+        void loadTeacherPlan().then(result => {
+            if (!cancelled) setCurrent(result.plan);
+        });
         return () => { cancelled = true; };
     }, []);
 

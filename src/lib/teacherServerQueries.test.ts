@@ -5,6 +5,7 @@ import {
     fetchAttemptRowByIdForOrg,
     fetchAttemptRowsForOrg,
     fetchExamRowsForOrg,
+    fetchOrganizationPlan,
     fetchRosterRowsForOrg,
     saveAttemptRowWithResults,
     saveExamRowWithQuestions,
@@ -216,5 +217,23 @@ describe("teacherServerQueries roster scoping", () => {
             enrollments: [{ class_id: "c1", student_profile_id: "s1" } as unknown as SupabaseRosterClassStudentRow],
         });
         expect(log.upserts.map(u => u.table)).toEqual(["omr_classes", "omr_class_students"]);
+    });
+});
+
+describe("teacherServerQueries org plan", () => {
+    it("reads the plan of the scoped organization row", async () => {
+        const { client } = mockRosterReadClient({
+            omr_organizations: [
+                { id: "org_a", plan: "pro" },
+                { id: "org_b", plan: "academy" },
+            ],
+        });
+        expect(await fetchOrganizationPlan(client, "org_a")).toBe("pro");
+        expect(await fetchOrganizationPlan(client, "org_b")).toBe("academy");
+    });
+
+    it("returns null when the organization row is absent", async () => {
+        const { client } = mockRosterReadClient({ omr_organizations: [] });
+        expect(await fetchOrganizationPlan(client, "missing")).toBeNull();
     });
 });

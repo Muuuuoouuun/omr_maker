@@ -235,3 +235,26 @@ export async function saveRosterRows(
         fail(result.error, "Failed to save roster enrollments");
     }
 }
+
+/* ------------------------------------------------------------- org / plan -- */
+
+/**
+ * Read the authoritative plan for one organization from omr_organizations.plan.
+ * The org row is the server source of truth for entitlements (system-review P1);
+ * this makes the plan a server-scoped read instead of a client localStorage
+ * value. Returns the raw plan string (normalization is the caller's job) or null
+ * when the org row is absent.
+ */
+export async function fetchOrganizationPlan(
+    client: RosterReadClientLike,
+    organizationId: string,
+): Promise<string | null> {
+    const { data, error } = await client
+        .from("omr_organizations")
+        .select("plan")
+        .eq("id", organizationId);
+    fail(error, "Failed to read organization plan");
+    const row = (data ?? [])[0] as { plan?: string | null } | undefined;
+    const plan = row?.plan;
+    return typeof plan === "string" && plan.trim() ? plan.trim() : null;
+}

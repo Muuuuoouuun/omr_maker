@@ -20,6 +20,7 @@ import { loadTeacherAttempts, saveTeacherAttempt } from "@/lib/teacherAttemptCli
 import { loadTeacherExams } from "@/lib/teacherExamClient";
 import { summarizeAnalyticsDataHealth, summarizePersistenceHealth, type PersistenceHealth } from "@/lib/persistenceHealth";
 import { loadTeacherRoster } from "@/lib/teacherRosterClient";
+import { loadTeacherPlan } from "@/lib/teacherPlanClient";
 import { collectStudentQuestionInbox } from "@/lib/studentQuestions";
 import type { RosterGroup, RosterStudent } from "@/lib/rosterStorage";
 import { buildTeacherDashboardMetrics } from "@/lib/teacherDashboardMetrics";
@@ -71,7 +72,7 @@ function TeacherDashboard() {
     });
     const [trendData, setTrendData] = useState<number[]>([]);
     const [dataMode, setDataMode] = useState<DashboardDataMode>("real");
-    const [currentPlan] = useState<PlanKey>(() => getCurrentPlan());
+    const [currentPlan, setCurrentPlanState] = useState<PlanKey>(() => getCurrentPlan());
     const [syncStatus, setSyncStatus] = useState<PersistenceHealth>(() => summarizePersistenceHealth([]));
     const [isRefreshingDashboardData, setIsRefreshingDashboardData] = useState(false);
     const [isRepairingAnalyticsData, setIsRepairingAnalyticsData] = useState(false);
@@ -95,6 +96,17 @@ function TeacherDashboard() {
             : collectStudentQuestionInbox(attempts),
         [attempts, dataMode],
     );
+
+    // Reconcile the gating plan with the server source (omr_organizations.plan),
+    // server-first with the login-bound local plan as fallback.
+    useEffect(() => {
+        if (typeof window === "undefined") return;
+        let cancelled = false;
+        void loadTeacherPlan().then(result => {
+            if (!cancelled) setCurrentPlanState(result.plan);
+        });
+        return () => { cancelled = true; };
+    }, []);
 
     const loadDashboardData = useCallback(async (options: DashboardLoadOptions = {}) => {
         const [examResult, attemptResult, rosterResult] = await Promise.all([

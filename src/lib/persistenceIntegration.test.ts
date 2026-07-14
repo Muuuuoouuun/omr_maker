@@ -82,6 +82,21 @@ describe("persistence integration", () => {
         expect(source).toContain('sourceLabel: "명단"');
     });
 
+    it("teacher plan reconciles with the server-source org plan (B4)", () => {
+        const billing = readProjectFile("src/app/teacher/billing/page.tsx");
+        const dashboard = readProjectFile("src/app/teacher/dashboard/page.tsx");
+        const planClient = readProjectFile("src/lib/teacherPlanClient.ts");
+
+        expect(billing).toContain("@/lib/teacherPlanClient");
+        expect(billing).toContain("loadTeacherPlan()");
+        expect(dashboard).toContain("@/lib/teacherPlanClient");
+        expect(dashboard).toContain("loadTeacherPlan()");
+        // Server-authoritative read: server plan is written back to the local gate,
+        // and a denial keeps the login-bound local plan (no fabricated upgrade).
+        expect(planClient).toContain("loadTeacherPlanAction");
+        expect(planClient).toContain("cachePlan");
+    });
+
     it("teacher management surfaces are behind the teacher auth gate", () => {
         const teacherLayout = readProjectFile("src/app/teacher/layout.tsx");
         const teacherAuthGate = readProjectFile("src/components/TeacherAuthGate.tsx");
