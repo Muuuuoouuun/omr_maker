@@ -118,6 +118,25 @@ begin
     if not has_function_privilege('service_role', 'public.omr_submit_attempt_v1(text,jsonb,jsonb)', 'execute') then
         raise exception 'service_role must have attempt RPC execute privilege';
     end if;
+    if has_function_privilege('anon', 'public.omr_submit_session_attempt_v1(jsonb,jsonb)', 'execute')
+        or has_function_privilege('authenticated', 'public.omr_submit_session_attempt_v1(jsonb,jsonb)', 'execute')
+    then
+        raise exception 'browser roles unexpectedly have session attempt RPC execute privilege';
+    end if;
+    if not has_function_privilege('service_role', 'public.omr_submit_session_attempt_v1(jsonb,jsonb)', 'execute') then
+        raise exception 'service_role must have session attempt RPC execute privilege';
+    end if;
+    if has_function_privilege('anon', 'public.omr_save_remote_asset_metadata_v1(jsonb)', 'execute')
+        or has_function_privilege('authenticated', 'public.omr_save_remote_asset_metadata_v1(jsonb)', 'execute')
+    then
+        raise exception 'browser roles unexpectedly have remote asset metadata RPC execute privilege';
+    end if;
+    if not has_function_privilege('service_role', 'public.omr_save_remote_asset_metadata_v1(jsonb)', 'execute') then
+        raise exception 'service_role must have remote asset metadata RPC execute privilege';
+    end if;
+    if pg_catalog.to_regprocedure('public.omr_mark_feedback_opened(text,timestamptz)') is not null then
+        raise exception 'legacy unscoped feedback RPC still exists';
+    end if;
     if has_function_privilege('anon', 'public.omr_save_exam_v1(jsonb,jsonb)', 'execute')
         or has_function_privilege('authenticated', 'public.omr_save_exam_v1(jsonb,jsonb)', 'execute')
     then
@@ -375,6 +394,7 @@ select * from public.omr_submit_attempt_v1(
         "organization_id":"live-org-a",
         "exam_id":"live-exam-a",
         "student_name":"Live Student",
+        "student_id":"live-student-owner",
         "status":"completed",
         "score":1,
         "total_score":1,
@@ -390,6 +410,7 @@ select * from public.omr_submit_attempt_v1(
         "attempt_id":"attempt_live-ticket-1",
         "exam_id":"live-exam-a",
         "student_name":"Live Student",
+        "student_id":"live-student-owner",
         "question_id":1,
         "question_number":1,
         "mistake_types":[],
@@ -414,6 +435,7 @@ select * from public.omr_submit_attempt_v1(
         "organization_id":"live-org-a",
         "exam_id":"live-exam-a",
         "student_name":"Live Student",
+        "student_id":"live-student-owner",
         "status":"completed",
         "score":1,
         "total_score":1,
@@ -436,6 +458,13 @@ begin
     end if;
 end
 $$;
+
+select * from public.omr_submit_session_attempt_v1(
+    (select to_jsonb(attempt) from public.omr_attempts attempt where id = 'attempt_live-ticket-1'),
+    (select coalesce(jsonb_agg(to_jsonb(result)), '[]'::jsonb)
+       from public.omr_question_results result
+      where attempt_id = 'attempt_live-ticket-1')
+);
 
 do $$
 begin
@@ -523,6 +552,9 @@ do $$
 begin
     if (select score from public.omr_attempts where id = 'attempt_live-ticket-1') <> 0 then
         raise exception 'teacher attempt RPC did not update the canonical attempt';
+    end if;
+    if exists (select 1 from public.omr_question_results where attempt_id = 'attempt_live-ticket-1') then
+        raise exception 'empty teacher replacement left stale question results';
     end if;
     begin
         perform public.omr_teacher_update_attempt_v1(
@@ -632,15 +664,20 @@ begin
 end
 $$;
 
-insert into public.omr_remote_assets (
-    id, organization_id, kind, attempt_id, storage_bucket, object_path,
-    mime_type, byte_size, sha256_hex
-) values (
-    'live-handwriting-asset', 'live-org-a', 'attempt_handwriting',
-    'attempt_live-ticket-1', 'omr-private-assets',
-    'organizations/live-org-a/attempts/attempt_live-ticket-1/handwriting/live-handwriting-asset.json',
-    'application/json', 2,
-    'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
+select public.omr_save_remote_asset_metadata_v1(
+    '{
+        "id":"live-handwriting-asset",
+        "organization_id":"live-org-a",
+        "kind":"attempt_handwriting",
+        "attempt_id":"attempt_live-ticket-1",
+        "storage_bucket":"omr-private-assets",
+        "object_path":"organizations/live-org-a/attempts/attempt_live-ticket-1/handwriting/live-handwriting-asset.json",
+        "mime_type":"application/json",
+        "byte_size":2,
+        "sha256_hex":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "created_at":"2026-07-14T00:04:00.000Z",
+        "updated_at":"2026-07-14T00:04:00.000Z"
+    }'
 );
 
 select public.omr_attach_attempt_handwriting_v1(
@@ -667,7 +704,7 @@ declare
     readiness jsonb;
 begin
     readiness := public.omr_service_readiness_v1();
-    if readiness->>'version' <> '202607140017' or readiness->>'ready' <> 'true' then
+    if readiness->>'version' <> '202607140018' or readiness->>'ready' <> 'true' then
         raise exception 'live readiness probe did not confirm the complete production data plane: %', readiness;
     end if;
 end

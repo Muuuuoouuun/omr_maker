@@ -138,6 +138,9 @@ async function loginAsStudent(page: Page) {
     await page.getByLabel("학생번호 또는 이메일").fill("kim.student@example.com");
     await page.getByLabel("반 선택").selectOption(TEST_GROUP_ID);
     await page.getByRole("button", { name: "시험 시작하기" }).click();
+    const issuedCodeDialog = page.getByRole("dialog", { name: "시작 코드가 발급되었습니다" });
+    await expect(issuedCodeDialog).toBeVisible();
+    await issuedCodeDialog.getByRole("button", { name: "저장했어요, 계속" }).click();
     await expect(page).toHaveURL(/\/student\/dashboard$/);
     const session = await page.evaluate(() => JSON.parse(window.sessionStorage.getItem("omr_student_session") || "null"));
     expect(session).toMatchObject({
@@ -445,6 +448,9 @@ test.describe("Teacher and student full journey", () => {
 
         await page.getByLabel("학생번호 또는 이메일").fill("kim.student@example.com");
         await page.getByRole("button", { name: "시험 시작하기" }).click();
+        const issuedCodeDialog = page.getByRole("dialog", { name: "시작 코드가 발급되었습니다" });
+        await expect(issuedCodeDialog).toBeVisible();
+        await issuedCodeDialog.getByRole("button", { name: "저장했어요, 계속" }).click();
         await expect(page).toHaveURL(/\/student\/dashboard$/);
 
         const session = await page.evaluate(() => JSON.parse(window.sessionStorage.getItem("omr_student_session") || "null"));
@@ -554,7 +560,7 @@ test.describe("Teacher and student full journey", () => {
         await expect(confirmDialog).toBeVisible();
         await confirmDialog.getByRole("button", { name: "제출하기" }).click();
 
-        await expect(page).toHaveURL(/\/student\/review\/\d+$/);
+        await expect(page).toHaveURL(/\/student\/review\/[^/?#]+$/);
         await expect(page.getByText("결과 리포트")).toBeVisible();
         await expect(page.getByText(TEST_EXAM_TITLE)).toBeVisible();
         await expect(page.getByText("20 / 30점")).toBeVisible();
@@ -582,7 +588,12 @@ test.describe("Teacher and student full journey", () => {
         await loginAsTeacher(page, "/create");
         await expect(page.getByText("스마트 에디터")).toBeVisible();
 
-        await page.getByLabel("시험 제목").fill(CREATED_EXAM_TITLE);
+        const examTitleInput = page.getByLabel("시험 제목");
+        if (!(await examTitleInput.isVisible().catch(() => false))) {
+            await page.getByRole("tab", { name: /^설정/ }).click();
+        }
+        await expect(examTitleInput).toBeVisible();
+        await examTitleInput.fill(CREATED_EXAM_TITLE);
         await page.getByLabel("빠른 정답 입력").fill(CREATED_ANSWER_KEY);
         await expect(
             page.locator("#create-settings-panel .create-design-check-pill", { hasText: "20/20 정답" })
@@ -640,7 +651,7 @@ test.describe("Teacher and student full journey", () => {
         await expect(confirmDialog).toBeVisible();
         await confirmDialog.getByRole("button", { name: "제출하기" }).click();
 
-        await expect(page).toHaveURL(/\/student\/review\/\d+$/);
+        await expect(page).toHaveURL(/\/student\/review\/[^/?#]+$/);
         await expect(page.getByText("결과 리포트")).toBeVisible();
         await expect(page.getByText(CREATED_EXAM_TITLE)).toBeVisible();
         await expect(page.getByText("100 / 100점")).toBeVisible();
@@ -679,7 +690,7 @@ test.describe("Teacher and student full journey", () => {
         await expect(confirmDialog).toBeVisible();
         await confirmDialog.getByRole("button", { name: "제출하기" }).click();
 
-        await expect(page).toHaveURL(/\/student\/review\/\d+$/);
+        await expect(page).toHaveURL(/\/student\/review\/[^/?#]+$/);
         await expect(page.getByText("결과 리포트")).toBeVisible();
         await expect(page.getByText(TEST_EXAM_TITLE)).toBeVisible();
         await expect(page.getByText("20 / 30점")).toBeVisible();
@@ -752,7 +763,7 @@ test.describe("Teacher and student full journey", () => {
         const openRail = page.getByRole("button", { name: "답안지 펼치기 · 0/3 · 미답 3개" });
         await expect(openRail).toBeVisible();
         await openRail.click();
-        await page.getByRole("button", { name: "문제 1번 보기 2", exact: true }).click();
+        await page.getByRole("radio", { name: "문제 1번 보기 2", exact: true }).click();
         await page.locator(".solve-omr-pane-close").click();
         await expect(page.getByRole("button", { name: "답안지 펼치기 · 1/3 · 미답 2개" })).toBeVisible();
 
@@ -764,6 +775,7 @@ test.describe("Teacher and student full journey", () => {
         await seedExamAndStudent(page);
         await page.setViewportSize({ width: 1440, height: 900 });
         await page.goto(`/solve/${TEST_EXAM_ID}`);
+        await continueSolveEntryIfPresent(page);
 
         const openRail = page.getByRole("button", { name: "답안지 펼치기 · 0/3 · 미답 3개" });
         await expect(openRail).toBeVisible();

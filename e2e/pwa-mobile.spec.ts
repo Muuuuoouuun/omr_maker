@@ -2,7 +2,6 @@ import { expect, test, type Locator, type Page } from "@playwright/test";
 
 const VALID_PROOF_EPOCH = Date.now();
 const MOBILE_SOLVE_DRAFT_KEY = "omr_draft_mobile-qa-exam_mobile-qa-student_base";
-const MOBILE_SOLVE_PANEL_KEY = "omr_solve_panel_mobile-qa-exam_mobile-qa-student_base";
 
 async function clearStorage(page: Page) {
     await page.addInitScript(() => {
@@ -258,7 +257,7 @@ async function seedStudentSession(page: Page) {
 }
 
 async function seedMobileSolveExam(page: Page) {
-    await page.addInitScript(({ panelKey }) => {
+    await page.addInitScript(() => {
         const exam = {
             id: "mobile-qa-exam",
             title: "모바일 실전 시험",
@@ -287,9 +286,8 @@ async function seedMobileSolveExam(page: Page) {
             window.localStorage.setItem("omr_exam_mobile-qa-exam", JSON.stringify(exam));
             window.localStorage.setItem("omr_student_session_backup", sessionPayload);
             window.sessionStorage.setItem("omr_student_session", sessionPayload);
-            window.localStorage.setItem(panelKey, "expanded");
         } catch {}
-    }, { panelKey: MOBILE_SOLVE_PANEL_KEY });
+    });
 }
 
 test.describe("Mobile PWA entry", () => {
@@ -443,7 +441,10 @@ test.describe("Mobile PWA entry", () => {
             expect(solveLayout.paneWidth).toBeGreaterThanOrEqual(280);
             expect(solveLayout.paneWidth).toBeLessThanOrEqual(320);
             expect(Math.abs((solveLayout.bodyWidth ?? 0) - (solveLayout.pdfWidth ?? 0))).toBeLessThanOrEqual(2);
-            expect(Math.abs((solveLayout.bodyRight ?? 0) - (solveLayout.paneRight ?? 0))).toBeLessThanOrEqual(14);
+            // iPad WebKit reserves roughly one scrollbar/safe-area gutter in
+            // addition to the 12px visual inset; keep the panel anchored within
+            // a compact edge gutter without requiring Chromium-identical geometry.
+            expect(Math.abs((solveLayout.bodyRight ?? 0) - (solveLayout.paneRight ?? 0))).toBeLessThanOrEqual(32);
             expect(solveLayout.titleWidth).toBeGreaterThanOrEqual(72);
         }
         const solveHeaderRects = await page.evaluate(() => {
@@ -573,7 +574,7 @@ test.describe("Mobile PWA entry", () => {
 
         await submitDialog.getByRole("button", { name: "제출하기" }).click();
 
-        await expect(page).toHaveURL(/\/student\/review\/\d+/);
+        await expect(page).toHaveURL(/\/student\/review\/[^/?#]+(?:[?#]|$)/);
         await expect(page.getByRole("heading", { name: "모바일 실전 시험" })).toBeVisible();
         await expect(page.getByText("100%")).toBeVisible();
         await expectNoHorizontalOverflow(page);

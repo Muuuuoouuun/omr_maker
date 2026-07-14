@@ -186,7 +186,9 @@ describe("persistence integration", () => {
         expect(core).toContain("submissionId: string");
         expect(action).toContain("attemptIdForStudentSubmission");
         expect(action).toContain("fetchAttemptRowByOwnerAndId");
-        expect(action).toContain('return { status: "ok", attempt: existingAttempt }');
+        expect(action).toContain('admin.rpc("omr_submit_session_attempt_v1"');
+        expect(action).toContain("repairs analytical rows");
+        expect(action).not.toContain('from("omr_question_results").upsert');
         expect(solve).toContain("submissionIdRef");
         expect(solve).toContain("submissionId: draftSnapshot.submissionId");
         expect(solve).toContain("submissionId,");

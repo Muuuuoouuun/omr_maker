@@ -8,6 +8,7 @@ import {
 } from "@/lib/workspaceContext";
 import { questionChoiceCount, type Attempt, type Exam, type QuestionResult, type QuestionResultStatus, type StoredDataRef } from "@/types/omr";
 import { MAX_SUB_QUESTION_LENGTH, normalizeQuestionSubQuestions } from "@/lib/subQuestions";
+import { SUPABASE_ATTEMPT_READ_COLUMNS, SUPABASE_EXAM_READ_COLUMNS } from "@/lib/supabaseReadColumns";
 
 type Env = Record<string, string | undefined>;
 
@@ -1239,7 +1240,7 @@ async function fetchRemoteExam(id: string): Promise<Exam | null> {
 
     const { data, error } = await client
         .from("omr_exams")
-        .select("*")
+        .select(SUPABASE_EXAM_READ_COLUMNS)
         .eq("id", id)
         .maybeSingle();
 
@@ -1256,7 +1257,7 @@ async function fetchRemoteExams(): Promise<Exam[]> {
     const client = await getAvailableSupabaseClient();
     if (!client) return [];
     const context = activePersistenceContext();
-    const query = client.from("omr_exams").select("*");
+    const query = client.from("omr_exams").select(SUPABASE_EXAM_READ_COLUMNS);
     const scopedQuery = shouldFilterRemoteByOrganization()
         ? query.eq("organization_id", context.organizationId)
         : query;
@@ -1279,7 +1280,7 @@ async function fetchRemoteAttempts(): Promise<Attempt[]> {
     const client = await getAvailableSupabaseClient();
     if (!client) return [];
     const context = activePersistenceContext();
-    const query = client.from("omr_attempts").select("*");
+    const query = client.from("omr_attempts").select(SUPABASE_ATTEMPT_READ_COLUMNS);
     const scopedQuery = shouldFilterRemoteByOrganization()
         ? query.eq("organization_id", context.organizationId)
         : query;
@@ -1307,7 +1308,7 @@ async function fetchRemoteAttemptsForStudent(studentProfileId: string): Promise<
 
     const { data, error } = await client
         .from("omr_attempts")
-        .select("*")
+        .select(SUPABASE_ATTEMPT_READ_COLUMNS)
         .eq("student_profile_id", normalizedStudentId)
         .order("finished_at", { ascending: false });
 
@@ -1337,7 +1338,7 @@ export async function fetchRemoteAttempt(
     // page merging a reply), it passes organizationId to prevent reading a
     // row that belongs to another teacher's workspace.
     const organizationId = scopedValue(options?.organizationId);
-    let query = client.from("omr_attempts").select("*").eq("id", id);
+    let query = client.from("omr_attempts").select(SUPABASE_ATTEMPT_READ_COLUMNS).eq("id", id);
     if (organizationId) query = query.eq("organization_id", organizationId);
 
     const { data, error } = await query.maybeSingle();
@@ -1360,7 +1361,7 @@ async function fetchRemoteAttemptForStudent(id: string, studentProfileId: string
 
     const { data, error } = await client
         .from("omr_attempts")
-        .select("*")
+        .select(SUPABASE_ATTEMPT_READ_COLUMNS)
         .eq("id", id)
         .eq("student_profile_id", normalizedStudentId)
         .maybeSingle();

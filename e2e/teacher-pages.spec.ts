@@ -144,12 +144,16 @@ test.describe("Create page label memory", () => {
         await page.goto("/create");
 
         const labelCard = page.locator(".create-label-batch-card");
+        if (!(await labelCard.isVisible().catch(() => false))) {
+            await page.getByRole("tab", { name: /^설정/ }).click();
+        }
         await expect(labelCard.getByText("문항 라벨 일괄 적용")).toBeVisible();
         await expect(labelCard.getByText(/Demo Admin 최근/)).toBeVisible();
 
         const hideGrammar = labelCard.getByRole("button", { name: "문법 후보 숨김" });
         await expect(hideGrammar).toBeVisible();
-        await hideGrammar.click();
+        await hideGrammar.focus();
+        await page.keyboard.press("Enter");
         await expect(hideGrammar).not.toBeVisible();
 
         await labelCard.getByRole("button", { name: "복구" }).click();
@@ -290,6 +294,7 @@ test.describe("Manage Users page", () => {
         await expect(page.getByTestId("student-start-code-value")).toHaveText("미발급");
 
         await page.getByTestId("issue-student-start-code").click();
+        await expect(page.getByTestId("student-start-code-value")).toHaveText(/^[A-Z2-9]{6}$/);
         const issuedCode = (await page.getByTestId("student-start-code-value").innerText()).trim();
         expect(issuedCode).toMatch(/^[A-Z2-9]{6}$/);
         await expect(page.getByTestId("student-login-start-code-value")).toHaveText(issuedCode);
@@ -400,7 +405,7 @@ test.describe("Global Search", () => {
     test("Cmd+K opens modal and Escape closes", async ({ page }) => {
         await page.goto("/teacher/live");
         await expect(page.getByRole("button", { name: "빠른 검색" })).toBeVisible();
-        await page.keyboard.press("ControlOrMeta+K");
+        await page.keyboard.press("Meta+K");
         await expect(page.getByPlaceholder(/빠른 검색/)).toBeVisible();
         await page.keyboard.press("Escape");
         await expect(page.getByPlaceholder(/빠른 검색/)).not.toBeVisible();
@@ -409,7 +414,7 @@ test.describe("Global Search", () => {
     test("typing filters results and Enter navigates", async ({ page }) => {
         await page.goto("/teacher/live");
         await expect(page.getByRole("button", { name: "빠른 검색" })).toBeVisible();
-        await page.keyboard.press("ControlOrMeta+K");
+        await page.keyboard.press("Meta+K");
         await page.getByPlaceholder(/빠른 검색/).fill("결제");
         await expect(page.getByText("결제 및 플랜").first()).toBeVisible();
         await page.keyboard.press("Enter");

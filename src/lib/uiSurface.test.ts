@@ -487,7 +487,8 @@ describe("service UI surface", () => {
         expect(css).toContain("height: 44px");
         expect(pwaMobileE2e).toContain("lets students answer and submit an exam in the phone and tablet app shell");
         expect(pwaMobileE2e).toContain("omr_exam_mobile-qa-exam");
-        expect(pwaMobileE2e).toContain("omr_solve_panel_mobile-qa-exam_mobile-qa-student");
+        expect(pwaMobileE2e).toContain("startsWithFloatingRail");
+        expect(pwaMobileE2e).toContain("toHaveClass(/is-collapsed/)");
         expect(pwaMobileE2e).toContain("문제 4번 보기 3");
         expect(pwaMobileE2e).toContain("score: 100");
     });

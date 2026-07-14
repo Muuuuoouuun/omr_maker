@@ -20,6 +20,10 @@ function readServiceReadinessMigration(): string {
     return readFileSync(path.join(rootDir, "supabase/migrations/202607140017_service_readiness_probe_v3.sql"), "utf8");
 }
 
+function readDataPlaneOptimizationMigration(): string {
+    return readFileSync(path.join(rootDir, "supabase/migrations/202607140018_data_plane_optimization.sql"), "utf8");
+}
+
 function readTeacherExamGatewayMigration(): string {
     return readFileSync(path.join(rootDir, "supabase/migrations/202607140007_teacher_exam_gateway.sql"), "utf8");
 }
@@ -63,6 +67,7 @@ describe("Supabase schema contract", () => {
     const productionRls = readProductionRls();
     const studentAttemptGateway = readStudentAttemptGatewayMigration();
     const serviceReadiness = readServiceReadinessMigration();
+    const dataPlaneOptimization = readDataPlaneOptimizationMigration();
     const teacherExamGateway = readTeacherExamGatewayMigration();
     const attemptHandwritingGateway = readAttemptHandwritingGatewayMigration();
     const teacherAttemptMutation = readTeacherAttemptMutationMigration();
@@ -353,11 +358,10 @@ describe("Supabase schema contract", () => {
             "updated_at",
         ]);
 
-        expectIndex(schema, "omr_attempt_feedback_attempt_idx");
         expectIndex(schema, "omr_attempt_feedback_student_unread_idx");
         expectIndex(schema, "omr_attempt_feedback_org_status_idx");
-        expect(schema).toContain("create or replace function public.omr_mark_feedback_opened");
-        expect(schema).toContain("notification_status = 'sent'");
+        expect(schema).not.toContain("create or replace function public.omr_mark_feedback_opened(");
+        expect(feedbackGateway).toContain("notification_status = 'sent'");
     });
 
     it("keeps the production RLS handoff separate from alpha public policies", () => {
@@ -391,8 +395,8 @@ describe("Supabase schema contract", () => {
         expect(productionRls).toContain("create or replace function public.omr_is_org_member");
         expect(productionRls).toContain("create or replace function public.omr_has_org_role");
         expect(productionRls).toContain("create or replace function public.omr_can_read_assignment");
-        expect(productionRls).toContain("create or replace function public.omr_mark_feedback_opened");
-        expect(productionRls).toContain("grant execute on function public.omr_mark_feedback_opened(text, timestamptz) to authenticated");
+        expect(productionRls).toContain("drop function if exists public.omr_mark_feedback_opened(text, timestamptz)");
+        expect(productionRls).not.toContain("grant execute on function public.omr_mark_feedback_opened(text, timestamptz) to authenticated");
         expect(productionRls).toContain("auth.uid()");
         expect(productionRls).toContain("to authenticated");
         expect(productionRls).toContain("revoke all on all tables in schema public from anon");
@@ -443,6 +447,20 @@ describe("Supabase schema contract", () => {
         expect(serviceReadiness).toContain("revoke all on function public.omr_service_readiness_v1() from anon");
         expect(serviceReadiness).toContain("revoke all on function public.omr_service_readiness_v1() from authenticated");
         expect(serviceReadiness).toContain("grant execute on function public.omr_service_readiness_v1() to service_role");
+    });
+
+    it("extends readiness with optimized data-plane and legacy RPC removal checks", () => {
+        expect(dataPlaneOptimization).toContain("create or replace function public.omr_service_readiness_v1");
+        expect(dataPlaneOptimization).toContain("omr_submit_session_attempt_v1(jsonb,jsonb)");
+        expect(dataPlaneOptimization).toContain("omr_save_remote_asset_metadata_v1(jsonb)");
+        expect(dataPlaneOptimization).toContain("'sessionAttemptRpc'");
+        expect(dataPlaneOptimization).toContain("'remoteAssetMetadataRpc'");
+        expect(dataPlaneOptimization).toContain("'queryPathIndexes'");
+        expect(dataPlaneOptimization).toContain("'legacyFeedbackRpcRemoved'");
+        expect(dataPlaneOptimization).toContain("'version', '202607140018'");
+        expect(dataPlaneOptimization).toContain("drop function if exists public.omr_mark_feedback_opened(text, timestamptz)");
+        expect(dataPlaneOptimization).toContain("revoke all on function public.omr_service_readiness_v1() from public, anon, authenticated");
+        expect(dataPlaneOptimization).toContain("grant execute on function public.omr_service_readiness_v1() to service_role");
     });
 
     it("keeps exam deletion and feedback mutations off browser roles", () => {

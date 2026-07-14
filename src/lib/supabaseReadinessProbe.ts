@@ -5,12 +5,13 @@ import {
 
 type Env = Record<string, string | undefined>;
 
-export const SUPABASE_READINESS_VERSION = "202607140017";
+export const SUPABASE_READINESS_VERSION = "202607140018";
 
 export interface SupabaseDeploymentProbe {
     ready: boolean;
     version?: string;
     attemptRpc?: boolean;
+    sessionAttemptRpc?: boolean;
     teacherExamRpc?: boolean;
     teacherExamDeleteRpc?: boolean;
     teacherAttemptRpc?: boolean;
@@ -19,6 +20,9 @@ export interface SupabaseDeploymentProbe {
     feedbackSaveRpc?: boolean;
     feedbackReturnRpc?: boolean;
     feedbackOpenRpc?: boolean;
+    remoteAssetMetadataRpc?: boolean;
+    queryPathIndexes?: boolean;
+    legacyFeedbackRpcRemoved?: boolean;
     examsForceRls?: boolean;
     attemptsForceRls?: boolean;
     questionResultsForceRls?: boolean;
@@ -49,6 +53,7 @@ export function parseSupabaseDeploymentProbe(value: unknown): SupabaseDeployment
     const version = clean(row.version);
     const checks = {
         attemptRpc: row.attemptRpc === true,
+        sessionAttemptRpc: row.sessionAttemptRpc === true,
         teacherExamRpc: row.teacherExamRpc === true,
         teacherExamDeleteRpc: row.teacherExamDeleteRpc === true,
         teacherAttemptRpc: row.teacherAttemptRpc === true,
@@ -57,6 +62,9 @@ export function parseSupabaseDeploymentProbe(value: unknown): SupabaseDeployment
         feedbackSaveRpc: row.feedbackSaveRpc === true,
         feedbackReturnRpc: row.feedbackReturnRpc === true,
         feedbackOpenRpc: row.feedbackOpenRpc === true,
+        remoteAssetMetadataRpc: row.remoteAssetMetadataRpc === true,
+        queryPathIndexes: row.queryPathIndexes === true,
+        legacyFeedbackRpcRemoved: row.legacyFeedbackRpcRemoved === true,
         examsForceRls: row.examsForceRls === true,
         attemptsForceRls: row.attemptsForceRls === true,
         questionResultsForceRls: row.questionResultsForceRls === true,

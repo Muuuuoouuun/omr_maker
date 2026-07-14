@@ -657,44 +657,6 @@ create table if not exists public.omr_attempt_feedback (
     unique (attempt_id)
 );
 
-create or replace function public.omr_mark_feedback_opened(
-    target_feedback_id text,
-    opened_at timestamptz default now()
-)
-returns public.omr_attempt_feedback
-language plpgsql
-security definer
-set search_path = ''
-as $$
-declare
-    feedback_row public.omr_attempt_feedback;
-begin
-    update public.omr_attempt_feedback
-        set
-            notification_status = 'sent',
-            first_opened_at = coalesce(first_opened_at, opened_at),
-            last_opened_at = opened_at,
-            open_count = open_count + 1,
-            updated_at = opened_at,
-            payload = jsonb_set(
-                jsonb_set(coalesce(payload, '{}'::jsonb), '{updatedAt}', to_jsonb(opened_at), true),
-                '{delivery}',
-                coalesce(payload->'delivery', '{}'::jsonb) || jsonb_build_object(
-                    'notificationStatus', 'sent',
-                    'firstOpenedAt', coalesce(first_opened_at, opened_at),
-                    'lastOpenedAt', opened_at,
-                    'openCount', open_count + 1
-                ),
-                true
-            )
-        where id = target_feedback_id
-            and status = 'returned'
-        returning * into feedback_row;
-
-    return feedback_row;
-end;
-$$;
-
 create table if not exists public.omr_kakao_candidate_reviews (
     id text primary key,
     organization_id text references public.omr_organizations(id) on delete cascade,
@@ -1005,6 +967,10 @@ create unique index if not exists omr_student_profiles_org_external_id_uidx
 create index if not exists omr_student_profiles_org_name_idx
     on public.omr_student_profiles (organization_id, display_name);
 
+create index if not exists omr_students_org_user_active_idx
+    on public.omr_student_profiles (organization_id, user_id)
+    where user_id is not null and status in ('invited', 'active');
+
 create index if not exists omr_classes_organization_id_idx
     on public.omr_classes (organization_id);
 
@@ -1013,6 +979,10 @@ create index if not exists omr_class_teachers_teacher_idx
 
 create index if not exists omr_class_students_student_idx
     on public.omr_class_students (organization_id, student_profile_id);
+
+create index if not exists omr_class_students_active_student_idx
+    on public.omr_class_students (student_profile_id, class_id)
+    where enrollment_status = 'active';
 
 create index if not exists omr_materials_org_owner_idx
     on public.omr_materials (organization_id, owner_user_id, created_at desc);
@@ -1026,6 +996,9 @@ create index if not exists omr_exams_updated_at_idx
 create index if not exists omr_exams_organization_id_idx
     on public.omr_exams (organization_id);
 
+create index if not exists omr_exams_org_updated_id_idx
+    on public.omr_exams (organization_id, updated_at desc, id);
+
 create index if not exists omr_exams_class_id_idx
     on public.omr_exams (class_id);
 
@@ -1034,6 +1007,9 @@ create index if not exists omr_exam_materials_material_idx
 
 create index if not exists omr_assignments_org_status_idx
     on public.omr_assignments (organization_id, status, due_at);
+
+create index if not exists omr_assignments_org_exam_idx
+    on public.omr_assignments (organization_id, exam_id);
 
 create index if not exists omr_assignment_targets_assignment_idx
     on public.omr_assignment_targets (assignment_id, target_type);
@@ -1047,6 +1023,12 @@ create unique index if not exists omr_attempts_ticket_id_unique_idx
 
 create index if not exists omr_attempts_organization_id_idx
     on public.omr_attempts (organization_id);
+
+create index if not exists omr_attempts_org_finished_id_idx
+    on public.omr_attempts (organization_id, finished_at desc, id);
+
+create index if not exists omr_attempts_org_exam_finished_id_idx
+    on public.omr_attempts (organization_id, exam_id, finished_at desc, id);
 
 create index if not exists omr_attempts_class_id_idx
     on public.omr_attempts (class_id);
@@ -1062,6 +1044,13 @@ create index if not exists omr_attempts_assignment_id_idx
 
 create index if not exists omr_attempts_student_profile_idx
     on public.omr_attempts (student_profile_id, finished_at desc);
+
+create index if not exists omr_attempts_owner_finished_id_idx
+    on public.omr_attempts (student_id, finished_at desc, id);
+
+create index if not exists omr_attempts_student_completed_idx
+    on public.omr_attempts (organization_id, student_profile_id, student_id, finished_at desc, id)
+    where status = 'completed';
 
 create index if not exists omr_attempts_finished_at_idx
     on public.omr_attempts (finished_at desc);
@@ -1138,11 +1127,12 @@ create index if not exists omr_assignment_submissions_assignment_idx
 create index if not exists omr_assignment_submissions_student_idx
     on public.omr_assignment_submissions (student_profile_id, submitted_at desc);
 
-create index if not exists omr_attempt_feedback_attempt_idx
-    on public.omr_attempt_feedback (attempt_id);
-
 create index if not exists omr_attempt_feedback_student_unread_idx
     on public.omr_attempt_feedback (student_profile_id, status, first_opened_at, updated_at desc);
+
+create index if not exists omr_feedback_student_returned_idx
+    on public.omr_attempt_feedback (organization_id, student_profile_id, updated_at desc, id)
+    where status = 'returned';
 
 create index if not exists omr_attempt_feedback_org_status_idx
     on public.omr_attempt_feedback (organization_id, status, updated_at desc);

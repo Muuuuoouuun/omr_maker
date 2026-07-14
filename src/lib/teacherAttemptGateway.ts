@@ -4,6 +4,7 @@ import {
     questionResultRowsForAttempt,
     type SupabaseAttemptRow,
 } from "@/lib/omrPersistence";
+import { SUPABASE_ATTEMPT_READ_COLUMNS } from "@/lib/supabaseReadColumns";
 import type { WorkspaceContext } from "@/lib/workspaceContext";
 import type { Attempt } from "@/types/omr";
 
@@ -12,16 +13,15 @@ interface AttemptQueryResult<T> {
     error: { message?: string } | null;
 }
 
+interface AttemptSelectQuery {
+    eq(column: string, value: string): AttemptSelectQuery;
+    order(column: string, options: { ascending: false }): Promise<AttemptQueryResult<unknown[]>>;
+    maybeSingle(): Promise<AttemptQueryResult<unknown>>;
+}
+
 export interface TeacherAttemptGatewayClient {
     from(table: "omr_attempts"): {
-        select(columns: string): {
-            eq(column: string, value: string): {
-                eq(column: string, value: string): {
-                    maybeSingle(): Promise<AttemptQueryResult<unknown>>;
-                };
-                order(column: string, options: { ascending: false }): Promise<AttemptQueryResult<unknown[]>>;
-            };
-        };
+        select(columns: string): AttemptSelectQuery;
     };
     rpc(name: "omr_teacher_update_attempt_v1", args: {
         p_organization_id: string;
@@ -69,12 +69,14 @@ export async function saveTeacherAttemptWithGateway(
 export async function listTeacherAttemptsWithGateway(
     client: TeacherAttemptGatewayClient,
     context: WorkspaceContext,
+    examId?: string,
 ): Promise<TeacherAttemptListResult> {
-    const result = await client
+    let query = client
         .from("omr_attempts")
-        .select("*")
-        .eq("organization_id", context.organizationId)
-        .order("finished_at", { ascending: false });
+        .select(SUPABASE_ATTEMPT_READ_COLUMNS)
+        .eq("organization_id", context.organizationId);
+    if (examId?.trim()) query = query.eq("exam_id", examId.trim());
+    const result = await query.order("finished_at", { ascending: false });
     if (result.error) return { status: "service_unavailable", error: result.error.message };
     const attempts = (result.data || []).flatMap(row => {
         try {
@@ -94,7 +96,7 @@ export async function loadTeacherAttemptWithGateway(
     if (!attemptId.trim()) return { status: "not_found" };
     const result = await client
         .from("omr_attempts")
-        .select("*")
+        .select(SUPABASE_ATTEMPT_READ_COLUMNS)
         .eq("organization_id", context.organizationId)
         .eq("id", attemptId.trim())
         .maybeSingle();

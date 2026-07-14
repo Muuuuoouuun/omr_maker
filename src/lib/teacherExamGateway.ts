@@ -4,6 +4,7 @@ import {
     examToSupabaseRow,
     type SupabaseExamRow,
 } from "@/lib/omrPersistence";
+import { SUPABASE_EXAM_READ_COLUMNS } from "@/lib/supabaseReadColumns";
 import { isRemoteAssetStoredDataRef } from "@/lib/remoteAssetContract.server";
 import type { WorkspaceContext } from "@/lib/workspaceContext";
 import type { Exam } from "@/types/omr";
@@ -107,7 +108,7 @@ export async function loadTeacherExamWithGateway(
     if (!clean(examId) || !clean(context.organizationId)) return { status: "not_found" };
     const result = await client
         .from("omr_exams")
-        .select("id, organization_id, class_id, title, payload, created_by_user_id, created_at, updated_at, archived")
+        .select(SUPABASE_EXAM_READ_COLUMNS)
         .eq("organization_id", context.organizationId)
         .eq("id", examId.trim())
         .maybeSingle();
@@ -127,7 +128,7 @@ export async function listTeacherExamsWithGateway(
     if (!clean(context.organizationId)) return { status: "service_unavailable" };
     const result = await client
         .from("omr_exams")
-        .select("id, organization_id, class_id, title, payload, created_by_user_id, created_at, updated_at, archived")
+        .select(SUPABASE_EXAM_READ_COLUMNS)
         .eq("organization_id", context.organizationId)
         .order("updated_at", { ascending: false });
     if (result.error) return { status: "service_unavailable", error: result.error.message };

@@ -23,24 +23,16 @@ const attempt: Attempt = {
 
 function clientWithRows(rows: unknown[]): { client: TeacherAttemptGatewayClient; filters: Array<[string, string]> } {
     const filters: Array<[string, string]> = [];
-    const second = {
-        async maybeSingle() {
-            return { data: rows[0] || null, error: null };
-        },
-    };
-    const first = {
-        eq(column: string, value: string) {
-            filters.push([column, value]);
-            return second;
-        },
-        async order() {
-            return { data: rows, error: null };
-        },
-    };
     const query = {
         eq(column: string, value: string) {
             filters.push([column, value]);
-            return first;
+            return query;
+        },
+        async maybeSingle() {
+            return { data: rows[0] || null, error: null };
+        },
+        async order() {
+            return { data: rows, error: null };
         },
     };
     return {
@@ -57,6 +49,18 @@ describe("teacher attempt gateway", () => {
             organizationName: "Org A",
         })).resolves.toMatchObject({ status: "loaded", attempts: [{ id: "attempt-1" }] });
         expect(filters).toContainEqual(["organization_id", "org-a"]);
+    });
+
+    it("narrows live polling to the selected exam", async () => {
+        const { client, filters } = clientWithRows([{ payload: attempt }]);
+        await expect(listTeacherAttemptsWithGateway(client, {
+            organizationId: "org-a",
+            organizationName: "Org A",
+        }, "exam-1")).resolves.toMatchObject({ status: "loaded" });
+        expect(filters).toEqual([
+            ["organization_id", "org-a"],
+            ["exam_id", "exam-1"],
+        ]);
     });
 
     it("loads an attempt with both organization and attempt id filters", async () => {

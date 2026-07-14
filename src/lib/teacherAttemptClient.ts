@@ -22,10 +22,14 @@ export async function loadTeacherAttempt(attemptId: string): Promise<Attempt | n
     return null;
 }
 
-export async function loadTeacherAttempts() {
-    const result = await listTeacherCanonicalAttempts();
+export async function loadTeacherAttempts(examId?: string) {
+    const result = await listTeacherCanonicalAttempts(examId);
     if (result.status === "loaded") {
-        saveLocalAttempts(result.attempts);
+        if (examId?.trim()) {
+            result.attempts.forEach(saveLocalAttempt);
+        } else {
+            saveLocalAttempts(result.attempts);
+        }
         return {
             items: result.attempts,
             remoteLoaded: true,
@@ -33,9 +37,14 @@ export async function loadTeacherAttempts() {
             pendingSyncCount: 0,
         };
     }
-    if (result.status === "local_only") return loadAttempts();
+    if (result.status === "local_only") {
+        const local = await loadAttempts();
+        if (!examId?.trim()) return local;
+        return { ...local, items: local.items.filter(attempt => attempt.examId === examId.trim()) };
+    }
+    const cached = readLocalAttempts();
     return {
-        items: readLocalAttempts(),
+        items: examId?.trim() ? cached.filter(attempt => attempt.examId === examId.trim()) : cached,
         remoteLoaded: false,
         remoteSynced: false,
         remoteError: result.status === "unauthorized"

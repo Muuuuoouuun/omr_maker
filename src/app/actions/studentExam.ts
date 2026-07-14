@@ -69,7 +69,12 @@ function evaluateGatedAccess(
     return access.status;
 }
 
-type AdminClient = SupabaseAdminClientLike & SupabaseAdminReadClientLike;
+type AdminClient = SupabaseAdminClientLike & SupabaseAdminReadClientLike & {
+    rpc(name: "omr_submit_session_attempt_v1", params: {
+        p_attempt: unknown;
+        p_question_results: unknown;
+    }): Promise<{ data: unknown; error: { message?: string } | null }>;
+};
 
 interface ResolvedCtx {
     identity: StudentServerIdentity;
@@ -124,6 +129,46 @@ async function ownAttempts(admin: AdminClient, identity: StudentServerIdentity):
         .filter((a): a is Attempt => !!a && attemptOwnedBy(a, identity));
 }
 
+async function ownAttempt(
+    admin: AdminClient,
+    identity: StudentServerIdentity,
+    attemptId: string,
+): Promise<Attempt | null> {
+    const row = await fetchAttemptRowByOwnerAndId(
+        admin,
+        { studentId: ownerStudentId(identity) },
+        attemptId,
+    );
+    if (!row) return null;
+    try {
+        const attempt = attemptFromSupabaseRow(row as Parameters<typeof attemptFromSupabaseRow>[0]);
+        return attemptOwnedBy(attempt, identity) ? attempt : null;
+    } catch {
+        return null;
+    }
+}
+
+function attemptFromRpcPayload(data: unknown): Attempt | null {
+    const candidate = Array.isArray(data) ? data[0] : data;
+    if (!candidate || typeof candidate !== "object") return null;
+    const payload = (candidate as { payload?: unknown }).payload;
+    return payload && typeof payload === "object" ? payload as Attempt : null;
+}
+
+async function saveSessionAttemptAtomically(
+    admin: AdminClient,
+    identity: StudentServerIdentity,
+    attempt: Attempt,
+): Promise<Attempt | null> {
+    const result = await admin.rpc("omr_submit_session_attempt_v1", {
+        p_attempt: attemptToSupabaseRow(attempt),
+        p_question_results: questionResultRowsForAttempt(attempt),
+    });
+    if (result.error) return null;
+    const stored = attemptFromRpcPayload(result.data);
+    return stored && attemptOwnedBy(stored, identity) ? stored : null;
+}
+
 export interface SolveLoadResult {
     status: Status | AccessStatus;
     exam?: SolvableExam;
@@ -159,10 +204,12 @@ export async function submitAttempt(input: SubmitAttemptInput, pin?: string): Pr
             secret: resolveStudentSessionSecret(),
         });
         if (!attemptId) return { status: "error" };
-        const existingRow = await fetchAttemptRowByOwnerAndId(ctx.admin, { studentId: ownerStudentId(ctx.identity) }, attemptId);
-        if (existingRow) {
-            const existingAttempt = attemptFromSupabaseRow(existingRow as Parameters<typeof attemptFromSupabaseRow>[0]);
-            if (attemptOwnedBy(existingAttempt, ctx.identity)) return { status: "ok", attempt: existingAttempt };
+        const existingAttempt = await ownAttempt(ctx.admin, ctx.identity, attemptId);
+        if (existingAttempt) {
+            // This also repairs analytical rows if an older app version wrote
+            // only the canonical attempt before its second query failed.
+            const repaired = await saveSessionAttemptAtomically(ctx.admin, ctx.identity, existingAttempt);
+            return repaired ? { status: "ok", attempt: repaired } : { status: "error" };
         }
 
         const row = await fetchExamRowById(ctx.admin, input.examId);
@@ -175,15 +222,8 @@ export async function submitAttempt(input: SubmitAttemptInput, pin?: string): Pr
             handwritingArchive: premium.handwritingArchive,
             handwritingPlan: premium.plan,
         });
-        const attemptResult = await ctx.admin.from("omr_attempts").upsert(attemptToSupabaseRow(attempt));
-        if (attemptResult.error) return { status: "error" };
-        // question-results upsert is idempotent (keyed by attempt id); a client retry reconciles a partial write.
-        const resultRows = questionResultRowsForAttempt(attempt);
-        if (resultRows.length > 0) {
-            const qrResult = await ctx.admin.from("omr_question_results").upsert(resultRows);
-            if (qrResult.error) return { status: "error" };
-        }
-        return { status: "ok", attempt };
+        const stored = await saveSessionAttemptAtomically(ctx.admin, ctx.identity, attempt);
+        return stored ? { status: "ok", attempt: stored } : { status: "error" };
     } catch (e) {
         console.error("submitAttempt failed", e);
         return { status: "error" };
@@ -223,7 +263,7 @@ export async function loadMyAttempt(attemptId: string): Promise<{ status: Status
     const ctx = await resolveCtx();
     if (!isCtx(ctx)) return ctx;
     try {
-        const match = (await ownAttempts(ctx.admin, ctx.identity)).find(a => a.id === attemptId);
+        const match = await ownAttempt(ctx.admin, ctx.identity, attemptId);
         return match ? { status: "ok", attempt: match } : { status: "denied" };
     } catch (e) {
         console.error("loadMyAttempt failed", e);
@@ -242,7 +282,7 @@ export async function loadExamForReview(
     const ctx = await resolveCtx();
     if (!isCtx(ctx)) return ctx;
     try {
-        const match = (await ownAttempts(ctx.admin, ctx.identity)).find(a => a.id === attemptId);
+        const match = await ownAttempt(ctx.admin, ctx.identity, attemptId);
         if (!match) return { status: "denied" };
         const row = await fetchExamRowById(ctx.admin, match.examId);
         if (!row) return { status: "not_found" };
@@ -266,7 +306,7 @@ export async function askAttemptQuestion(
     const ctx = await resolveCtx();
     if (!isCtx(ctx)) return ctx;
     try {
-        const match = (await ownAttempts(ctx.admin, ctx.identity)).find(a => a.id === attemptId);
+        const match = await ownAttempt(ctx.admin, ctx.identity, attemptId);
         if (!match) return { status: "denied" };
         const updated = upsertStudentQuestion(match, question, new Date().toISOString());
         if (!updated) return { status: "error" };

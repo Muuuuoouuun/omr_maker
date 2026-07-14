@@ -39,11 +39,10 @@ export interface RemoteAssetSupabaseGatewayClient {
     storage: {
         from(bucket: string): RemoteAssetStorageBucket;
     };
+    rpc(name: "omr_save_remote_asset_metadata_v1", params: {
+        p_asset: Record<string, unknown>;
+    }): Promise<GatewayResult<unknown>>;
     from(table: "omr_remote_assets"): {
-        upsert(
-            row: Record<string, unknown>,
-            options: { onConflict: "id"; ignoreDuplicates: false },
-        ): Promise<GatewayResult<unknown>>;
         select(columns: string): RemoteAssetMetadataQuery;
     };
 }
@@ -132,9 +131,8 @@ export async function uploadRemoteAssetWithGateway(
         return { status: "storage_unavailable", error: errorMessage(upload.error, "Remote asset upload failed") };
     }
 
-    const metadata = await client.from("omr_remote_assets").upsert(metadataRow(asset), {
-        onConflict: "id",
-        ignoreDuplicates: false,
+    const metadata = await client.rpc("omr_save_remote_asset_metadata_v1", {
+        p_asset: metadataRow(asset),
     });
     if (metadata.error) {
         await bucket.remove([objectPath]).catch(() => undefined);

@@ -262,6 +262,12 @@ export default function LiveResultsPage() {
         });
     }, []);
 
+    const refreshSelectedAttempts = useCallback(async () => {
+        if (!selectedExamId) return;
+        const attemptResult = await loadTeacherAttempts(selectedExamId);
+        setAttempts(attemptResult.items);
+    }, [selectedExamId]);
+
     // Initial load + adjust selected exam if real exams found
     useEffect(() => {
         let cancelled = false;
@@ -285,15 +291,16 @@ export default function LiveResultsPage() {
         return () => { cancelled = true; };
     }, []);
 
-    // Poll every 3s when tab is visible
+    // Poll only the selected exam every 3s. The catalog is loaded on entry and
+    // after explicit mutations, avoiding full-organization payload downloads.
     useEffect(() => {
         const id = setInterval(() => {
             if (typeof document === "undefined" || document.visibilityState === "visible") {
-                void refreshFromStorage();
+                void refreshSelectedAttempts();
             }
         }, 3000);
         return () => clearInterval(id);
-    }, [refreshFromStorage]);
+    }, [refreshSelectedAttempts]);
 
     const selectedExam = exams.find(e => e.id === selectedExamId) ?? exams[0];
     const hasExam = !!selectedExam;

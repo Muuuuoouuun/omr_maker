@@ -5969,7 +5969,9 @@ body:has(.create-workspace.is-resizing) {
   }
 }
 
-@media (max-width: 900px) and (orientation: portrait) {
+/* Phones use a bottom sheet; 600px+ tablets keep the dedicated floating
+   sidebar defined above in both orientations. */
+@media (max-width: 599px) and (orientation: portrait) {
   .solve-body {
     flex-direction: column;
   }

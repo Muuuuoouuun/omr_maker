@@ -44,14 +44,24 @@ function mockClient(options: {
                 return bucket;
             },
         },
+        async rpc(name, params) {
+            expect(name).toBe("omr_save_remote_asset_metadata_v1");
+            const row = params.p_asset;
+            if (options.metadataError) return { data: null, error: { message: options.metadataError } };
+            const existing = rows.get(String(row.id));
+            if (existing && (
+                existing.organization_id !== row.organization_id
+                || existing.object_path !== row.object_path
+                || existing.kind !== row.kind
+            )) {
+                return { data: null, error: { message: "remote asset identifier belongs to another scope" } };
+            }
+            rows.set(String(row.id), row);
+            return { data: row, error: null };
+        },
         from(table: "omr_remote_assets") {
             expect(table).toBe("omr_remote_assets");
             return {
-                async upsert(row: Record<string, unknown>) {
-                    if (options.metadataError) return { data: null, error: { message: options.metadataError } };
-                    rows.set(String(row.id), row);
-                    return { data: row, error: null };
-                },
                 select() {
                     const filters: Array<[string, string]> = [];
                     const query = {
@@ -126,6 +136,32 @@ describe("remote asset Supabase gateway", () => {
 
         expect(result).toEqual({ status: "metadata_unavailable", error: "db unavailable" });
         expect(removed).toEqual([["organizations/org-1/attempts/attempt-1/handwriting/asset-handwriting.json"]]);
+    });
+
+    it("rejects a cross-organization metadata collision and removes only the new object", async () => {
+        const { client, removed, rows } = mockClient();
+        await expect(uploadRemoteAssetWithGateway(client, {
+            organizationId: "org-1",
+            examId: "exam-1",
+            kind: "problem_pdf",
+            body: new Uint8Array([1]),
+        }, { assetId: "shared-asset" })).resolves.toMatchObject({ status: "uploaded" });
+
+        await expect(uploadRemoteAssetWithGateway(client, {
+            organizationId: "org-2",
+            examId: "exam-2",
+            kind: "problem_pdf",
+            body: new Uint8Array([2]),
+        }, { assetId: "shared-asset" })).resolves.toEqual({
+            status: "metadata_unavailable",
+            error: "remote asset identifier belongs to another scope",
+        });
+
+        expect(rows.get("shared-asset")).toMatchObject({
+            organization_id: "org-1",
+            exam_id: "exam-1",
+        });
+        expect(removed).toEqual([["organizations/org-2/exams/exam-2/problem/shared-asset.pdf"]]);
     });
 
     it("signs student downloads only for the exact problem PDF organization and exam scope", async () => {

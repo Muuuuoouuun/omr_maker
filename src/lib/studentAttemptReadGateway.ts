@@ -12,6 +12,7 @@ import {
     type SupabaseAttemptRow,
     type SupabaseExamRow,
 } from "@/lib/omrPersistence";
+import { SUPABASE_ATTEMPT_READ_COLUMNS } from "@/lib/supabaseReadColumns";
 import type { Attempt } from "@/types/omr";
 
 interface StudentAttemptReadResult<T> {
@@ -88,7 +89,7 @@ export async function listStudentAttemptsWithGateway(
 ): Promise<StudentAttemptListResult> {
     const result = await client
         .from("omr_attempts")
-        .select("*")
+        .select(SUPABASE_ATTEMPT_READ_COLUMNS)
         .eq("organization_id", session.organizationId)
         .eq("student_profile_id", session.studentId)
         .eq("student_id", session.studentId)
@@ -117,7 +118,7 @@ export async function loadStudentAttemptWithGateway(
     if (!normalizedAttemptId) return { status: "not_found" };
     const attemptResult = await client
         .from("omr_attempts")
-        .select("*")
+        .select(SUPABASE_ATTEMPT_READ_COLUMNS)
         .eq("organization_id", session.organizationId)
         .eq("student_profile_id", session.studentId)
         .eq("student_id", session.studentId)

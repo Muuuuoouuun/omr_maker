@@ -4,6 +4,7 @@ import { randomUUID } from "node:crypto";
 import { cookies } from "next/headers";
 import { parseSignedTeacherSessionCookie, TEACHER_SERVER_SESSION_COOKIE } from "@/lib/teacherServerSession";
 import {
+    createDevServerPlanStore,
     createServerPlanStoreFromEnv,
     evaluateServerPlanQuota,
     planLimit,
@@ -15,6 +16,7 @@ import {
     type ServerPlanQuotaResult,
     type ServerPlanUsage,
 } from "@/lib/serverPlan";
+import { isTeacherSessionActive } from "@/lib/teacherSession";
 import { hasPlanEntitlement, type PlanEntitlementKey, type PlanLimitMetric } from "@/utils/plans";
 
 export interface ServerPlanSnapshot extends ServerPlanAccess {
@@ -37,8 +39,21 @@ async function signedTeacherSession() {
 }
 
 async function accessAndStore() {
-    const store = createServerPlanStoreFromEnv();
-    const access = await resolveServerPlanAccess(await signedTeacherSession(), { store });
+    const session = await signedTeacherSession();
+    let store = createServerPlanStoreFromEnv();
+
+    // Local development must still support the complete teacher workflow when
+    // a hosted Supabase backend has not been configured. Keep that fallback
+    // behind both server-observed conditions: an active signed teacher session
+    // and a non-production runtime. The dev store remains quota-limited (free
+    // by default) and reads server-only plan variables; NEXT_PUBLIC_* values
+    // cannot opt into it or elevate the plan. Production therefore continues
+    // to fail closed whenever the canonical server plan store is unavailable.
+    if (!store && process.env.NODE_ENV !== "production" && isTeacherSessionActive(session)) {
+        store = createDevServerPlanStore(process.env);
+    }
+
+    const access = await resolveServerPlanAccess(session, { store });
     return { access, store };
 }
 

@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { createClient } from "@supabase/supabase-js";
 import { workspaceBootstrapRows, type WorkspaceContext } from "@/lib/workspaceContext";
+import { SUPABASE_ATTEMPT_READ_COLUMNS, SUPABASE_EXAM_READ_COLUMNS } from "@/lib/supabaseReadColumns";
 import { normalizePlan } from "@/utils/plans";
 
 type Env = Record<string, string | undefined>;
@@ -147,7 +148,7 @@ export async function fetchExamRowById(
     client: SupabaseAdminReadClientLike,
     examId: string,
 ): Promise<unknown | null> {
-    const { data, error } = await client.from("omr_exams").select("*").eq("id", examId).maybeSingle();
+    const { data, error } = await client.from("omr_exams").select(SUPABASE_EXAM_READ_COLUMNS).eq("id", examId).maybeSingle();
     if (error) throw new Error(error.message || "Failed to read exam");
     return data ?? null;
 }
@@ -159,7 +160,7 @@ export async function fetchAttemptRowsByOwner(
     // Callers pass the canonical student_id (guests are already normalized to "guest:<id>").
     const key = owner.studentId || "";
     if (!key) return [];
-    const { data, error } = await client.from("omr_attempts").select("*").eq("student_id", key).order("finished_at", { ascending: false });
+    const { data, error } = await client.from("omr_attempts").select(SUPABASE_ATTEMPT_READ_COLUMNS).eq("student_id", key).order("finished_at", { ascending: false });
     if (error) throw new Error(error.message || "Failed to read attempts");
     return data ?? [];
 }
@@ -172,7 +173,7 @@ export async function fetchAttemptRowByOwnerAndId(
     const key = owner.studentId || "";
     if (!key || !attemptId.trim()) return null;
     const { data, error } = await client.from("omr_attempts")
-        .select("*")
+        .select(SUPABASE_ATTEMPT_READ_COLUMNS)
         .eq("id", attemptId)
         .eq("student_id", key)
         .maybeSingle();
@@ -186,7 +187,7 @@ export async function fetchExamRowsByOrganization(
 ): Promise<unknown[]> {
     if (!organizationId.trim()) return [];
     const { data, error } = await client.from("omr_exams")
-        .select("*")
+        .select(SUPABASE_EXAM_READ_COLUMNS)
         .eq("organization_id", organizationId)
         .order("created_at", { ascending: false });
     if (error) throw new Error(error.message || "Failed to read organization exams");

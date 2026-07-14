@@ -38,14 +38,14 @@ async function actionContext(): Promise<TeacherAttemptActionContext> {
     };
 }
 
-export async function listTeacherCanonicalAttempts(): Promise<
+export async function listTeacherCanonicalAttempts(examId?: string): Promise<
     { status: "loaded"; attempts: Attempt[] }
     | { status: "local_only" | "unauthorized" | "service_unavailable"; error?: string }
 > {
     try {
         const gateway = await actionContext();
         if ("status" in gateway) return gateway;
-        return listTeacherAttemptsWithGateway(gateway.client, gateway.context);
+        return listTeacherAttemptsWithGateway(gateway.client, gateway.context, examId);
     } catch (error) {
         return { status: "service_unavailable", error: error instanceof Error ? error.message : "Attempt list failed" };
     }

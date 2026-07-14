@@ -3,6 +3,9 @@ import { loadEnvConfig } from "@next/env";
 
 loadEnvConfig(process.cwd());
 
+const e2eTeacherSessionSecret = "omr-maker-e2e-teacher-session-secret-2026";
+process.env.TEACHER_SESSION_SECRET = e2eTeacherSessionSecret;
+
 const externalBaseURL = process.env.PLAYWRIGHT_BASE_URL;
 const baseURL = externalBaseURL || "http://localhost:3003";
 const enableWebKitPwa = process.env.PLAYWRIGHT_ENABLE_WEBKIT === "1";
@@ -117,6 +120,7 @@ export default defineConfig({
         timeout: 60_000,
         env: {
             ...process.env,
+            TEACHER_SESSION_SECRET: e2eTeacherSessionSecret,
             TEACHER_ACCOUNTS: JSON.stringify([{
                 id: "admin",
                 email: "admin@example.com",
