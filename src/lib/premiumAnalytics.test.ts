@@ -3,8 +3,10 @@ import type { Attempt, Exam } from "@/types/omr";
 import type { RosterGroup, RosterStudent } from "@/lib/rosterStorage";
 import {
     buildClassTypeWeaknessGroups,
+    buildClassExamScoreGroups,
     buildClassExamWeaknessMatrix,
     buildExamQuestionDiscriminations,
+    buildExamQuestionPointBiserial,
     buildExamQuestionResultStats,
     buildLearningRecommendations,
     buildMostMissedQuestionStats,
@@ -731,6 +733,77 @@ describe("premium analytics", () => {
         const discrimination = buildExamQuestionDiscriminations(exam, many).get(2);
         expect(typeof discrimination).toBe("number");
         expect(discrimination as number).toBeGreaterThan(0);
+    });
+
+    it("returns null point-biserial for small respondent pools and a perfect correlation for cleanly separated groups", () => {
+        // Fewer than DISCRIMINATION_MIN_RESPONDENTS respondents → unreliable, matches the
+        // upper/lower-third guard above.
+        expect(buildExamQuestionPointBiserial(exam, [attempt]).get(2)).toBeNull();
+
+        // Same fixture as the discrimination test: the 2 respondents who answer q2
+        // correctly (4) also ace every other question (100%), and the 4 who miss q2 also
+        // miss everything else (0%) — a perfect correctness/score split, so r_pb = 1.
+        const many: Attempt[] = Array.from({ length: 6 }, (_, i) => ({
+            ...attempt,
+            id: `pb-${i}`,
+            studentId: `pb-s${i}`,
+            answers: i < 2 ? { 1: 2, 2: 4, 3: 1, 4: 3 } : { 1: 3, 2: 1, 3: 2, 4: 2 },
+            questionTimings: [],
+            questionDrawings: [],
+        }));
+        expect(buildExamQuestionPointBiserial(exam, many).get(2)).toBe(1);
+    });
+
+    it("groups per-class score percentages the same way as buildClassExamWeaknessMatrix", () => {
+        const secondAttempt: Attempt = {
+            ...attempt,
+            id: "attempt-2",
+            studentId: "student-2",
+            studentName: "이학생",
+            // 2/4 correct → 50%.
+            answers: { 1: 3, 2: 4, 3: 2, 4: 3 },
+            questionTimings: [],
+            questionDrawings: [],
+        };
+        const classBAttempt: Attempt = {
+            ...attempt,
+            id: "attempt-b",
+            studentId: "student-b",
+            studentName: "박학생",
+            groupId: "class-b",
+            groupName: "B반",
+            // 4/4 correct → 100%.
+            answers: { 1: 2, 2: 4, 3: 1, 4: 3 },
+            questionTimings: [],
+            questionDrawings: [],
+        };
+
+        // Base `attempt` answers { 1: 2, 2: 1, 4: 0 } → only Q1 correct → 25%.
+        const groups = buildClassExamScoreGroups(exam, [attempt, secondAttempt, classBAttempt]);
+
+        expect(groups).toHaveLength(2);
+        const classA = groups.find(group => group.groupKey === "class-a");
+        const classB = groups.find(group => group.groupKey === "class-b");
+        expect(classA?.groupName).toBe("A반");
+        expect([...(classA?.scores || [])].sort((a, b) => a - b)).toEqual([25, 50]);
+        expect(classB?.groupName).toBe("B반");
+        expect(classB?.scores).toEqual([100]);
+    });
+
+    it("excludes retakes from buildClassExamScoreGroups unless includeRetakes is set", () => {
+        const retakeAttempt: Attempt = {
+            ...attempt,
+            id: "attempt-retake",
+            studentId: "student-1",
+            retake: { sourceAttemptId: "attempt-1", mode: "wrong", questionIds: [2], createdAt: "2026-06-14T10:10:00.000Z" },
+            answers: { 1: 2, 2: 4, 3: 1, 4: 3 },
+        };
+
+        const withoutRetakes = buildClassExamScoreGroups(exam, [attempt, retakeAttempt]);
+        expect(withoutRetakes.find(group => group.groupKey === "class-a")?.scores).toEqual([25]);
+
+        const withRetakes = buildClassExamScoreGroups(exam, [attempt, retakeAttempt], { includeRetakes: true });
+        expect(withRetakes.find(group => group.groupKey === "class-a")?.scores.sort((a, b) => a - b)).toEqual([25, 100]);
     });
 
     it("summarizes label/tag statistics with correct, missed, and timing counts", () => {

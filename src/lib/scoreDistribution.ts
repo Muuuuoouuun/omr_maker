@@ -83,6 +83,93 @@ export function buildScoreBuckets(scores: number[]): ScoreBucket[] {
     return buckets;
 }
 
+export interface GroupScoreInput {
+    groupKey: string;
+    groupName: string;
+    scores: number[];
+}
+
+export interface GroupScoreSummary {
+    groupKey: string;
+    groupName: string;
+    count: number;
+    min: number;
+    median: number;
+    average: number;
+    max: number;
+}
+
+/**
+ * Per-group min/median/average/max score summary for the "반별 점수 비교" range-bar card.
+ * Groups with zero attempts are dropped so callers can render an empty state instead of a
+ * zeroed-out row; sorted by average score (desc) so the strongest class leads.
+ */
+export function computeGroupScoreSummary(groups: GroupScoreInput[]): GroupScoreSummary[] {
+    return groups
+        .map(group => {
+            const distribution = computeScoreDistribution(group.scores);
+            return {
+                groupKey: group.groupKey,
+                groupName: group.groupName,
+                count: distribution.count,
+                min: distribution.min,
+                median: distribution.median,
+                average: distribution.mean,
+                max: distribution.max,
+            };
+        })
+        .filter(summary => summary.count > 0)
+        .sort((a, b) => b.average - a.average || a.groupName.localeCompare(b.groupName, "ko"));
+}
+
+/**
+ * Percentile label for a 1-based rank among totalStudents. Returns null when there are
+ * fewer than 2 participants — "상위 100%" is meaningless (and misleading) for a lone entry,
+ * so callers should show the rank by itself instead.
+ */
+export function computeRankPercentile(rank: number, totalStudents: number): number | null {
+    if (!Number.isFinite(rank) || !Number.isFinite(totalStudents) || totalStudents < 2) return null;
+    return Math.max(1, Math.round((rank / totalStudents) * 100));
+}
+
+export interface PointBiserialSample {
+    /** Whether this respondent answered the item correctly. */
+    correct: boolean;
+    /** The continuous variable to correlate against — typically total attempt score. */
+    score: number;
+}
+
+/**
+ * Point-biserial correlation between a binary variable (item correctness) and a continuous
+ * variable (total score) — a more statistically grounded discrimination index than the
+ * upper/lower-third split. Returns null when there are fewer than minSamples respondents,
+ * when every respondent landed in the same correctness group, or when the scores have zero
+ * variance (correlation is undefined in all three cases).
+ */
+export function computePointBiserialCorrelation(samples: PointBiserialSample[], minSamples = 5): number | null {
+    if (samples.length < minSamples) return null;
+
+    const correctScores = samples.filter(sample => sample.correct).map(sample => sample.score);
+    const incorrectScores = samples.filter(sample => !sample.correct).map(sample => sample.score);
+    if (correctScores.length === 0 || incorrectScores.length === 0) return null;
+
+    const n = samples.length;
+    const allScores = samples.map(sample => sample.score);
+    const meanAll = allScores.reduce((sum, value) => sum + value, 0) / n;
+    const variance = allScores.reduce((sum, value) => sum + (value - meanAll) ** 2, 0) / n;
+    const standardDeviation = Math.sqrt(variance);
+    if (standardDeviation === 0) return null;
+
+    const meanCorrect = correctScores.reduce((sum, value) => sum + value, 0) / correctScores.length;
+    const meanIncorrect = incorrectScores.reduce((sum, value) => sum + value, 0) / incorrectScores.length;
+    const proportionCorrect = correctScores.length / n;
+    const proportionIncorrect = incorrectScores.length / n;
+
+    const correlation = ((meanCorrect - meanIncorrect) / standardDeviation)
+        * Math.sqrt(proportionCorrect * proportionIncorrect);
+    return roundTo(correlation, 2);
+}
+
 export function computeScoreDistribution(scores: number[]): ScoreDistributionSummary {
     const values = sanitizeScores(scores);
     if (values.length === 0) {

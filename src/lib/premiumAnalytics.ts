@@ -2,6 +2,7 @@ import { questionWeight } from "@/types/omr";
 import { canonicalQuestionIdFor } from "@/lib/questionBank";
 import type { RosterGroup, RosterStudent } from "@/lib/rosterStorage";
 import { rosterGroupMatchesStudent } from "@/lib/rosterStorage";
+import { computePointBiserialCorrelation, type PointBiserialSample } from "@/lib/scoreDistribution";
 import type {
     Attempt,
     Exam,
@@ -1064,20 +1065,27 @@ export function buildLearningRecommendations(
     return typeof options.limit === "number" ? sorted.slice(0, Math.max(0, options.limit)) : sorted;
 }
 
-export function buildClassExamWeaknessMatrix(
+interface GroupedAttemptEntry {
+    groupKey: string;
+    groupName: string;
+    regionName?: string;
+    rosterStudents: RosterStudent[];
+    attempts: Attempt[];
+}
+
+/**
+ * Buckets attempts into roster-aware class groups. Shared by buildClassExamWeaknessMatrix
+ * (per-class weakness/recommendation rows) and buildClassExamScoreGroups (per-class score
+ * ranges) so both features agree on exactly which attempts belong to which class.
+ */
+function buildGroupedAttemptEntries(
     exam: Exam,
     attempts: Attempt[],
-    options: ClassExamWeaknessMatrixOptions = {},
-): ClassExamWeaknessMatrixRow[] {
+    options: Pick<ClassExamWeaknessMatrixOptions, "rosterGroups" | "rosterStudents" | "includeRetakes">,
+): GroupedAttemptEntry[] {
     const rosterGroups = options.rosterGroups || [];
     const rosterStudents = options.rosterStudents || [];
-    const groupedAttempts = new Map<string, {
-        groupKey: string;
-        groupName: string;
-        regionName?: string;
-        rosterStudents: RosterStudent[];
-        attempts: Attempt[];
-    }>();
+    const groupedAttempts = new Map<string, GroupedAttemptEntry>();
     const includeRetakes = !!options.includeRetakes;
 
     const rosterGroupByKey = new Map<string, RosterGroup>();
@@ -1153,7 +1161,45 @@ export function buildClassExamWeaknessMatrix(
         );
     }
 
-    const rows = Array.from(groupedAttempts.values()).map(group => {
+    return Array.from(groupedAttempts.values());
+}
+
+export interface ClassExamScoreGroup {
+    groupKey: string;
+    groupName: string;
+    regionName?: string;
+    /** Score percentages (0–100) for every counted attempt in this class. */
+    scores: number[];
+}
+
+/**
+ * Per-class score percentages for the selected exam, grouped the same way as
+ * buildClassExamWeaknessMatrix. Feeds computeGroupScoreSummary (scoreDistribution.ts) for the
+ * "반별 점수 비교" range-bar card — kept separate from the weakness matrix since it only needs
+ * raw scores, not the recommendation/wrong-rate machinery.
+ */
+export function buildClassExamScoreGroups(
+    exam: Exam,
+    attempts: Attempt[],
+    options: Pick<ClassExamWeaknessMatrixOptions, "rosterGroups" | "rosterStudents" | "includeRetakes"> = {},
+): ClassExamScoreGroup[] {
+    return buildGroupedAttemptEntries(exam, attempts, options).map(group => ({
+        groupKey: group.groupKey,
+        groupName: group.groupName,
+        regionName: group.regionName,
+        scores: group.attempts.map(attempt => summarizeAttemptScore(exam, attempt).scorePercent),
+    }));
+}
+
+export function buildClassExamWeaknessMatrix(
+    exam: Exam,
+    attempts: Attempt[],
+    options: ClassExamWeaknessMatrixOptions = {},
+): ClassExamWeaknessMatrixRow[] {
+    const includeRetakes = !!options.includeRetakes;
+    const groupedEntries = buildGroupedAttemptEntries(exam, attempts, options);
+
+    const rows = groupedEntries.map(group => {
         const results = collectQuestionResults(exam, group.attempts, { includeRetakes });
         const gradableResults = results.filter(result => result.status !== "ungraded");
         const wrongResults = gradableResults.filter(isWrongOrUnansweredResult);
@@ -1401,6 +1447,42 @@ export function buildExamQuestionDiscriminations(exam: Exam, attempts: Attempt[]
         discriminations.set(question.id, rateForGroup(upperGroup, question.id) - rateForGroup(lowerGroup, question.id));
     }
     return discriminations;
+}
+
+/**
+ * Per-question point-biserial correlation between correctness (0/1) and total attempt score —
+ * a more statistically grounded discrimination index than the upper/lower-third split above.
+ * Reuses DISCRIMINATION_MIN_RESPONDENTS as the reliability floor, applied per question (a
+ * question answered by fewer respondents than the exam total — e.g. a retake subset — is
+ * gated independently) rather than once for the whole exam.
+ */
+export function buildExamQuestionPointBiserial(exam: Exam, attempts: Attempt[]): Map<number, number | null> {
+    const pointBiserials = new Map<number, number | null>();
+    if (attempts.length === 0) {
+        for (const question of exam.questions) pointBiserials.set(question.id, null);
+        return pointBiserials;
+    }
+
+    const scoreByAttemptId = new Map(attempts.map(attempt => [attempt.id, summarizeAttemptScore(exam, attempt).scorePercent]));
+    const resultsByAttemptId = new Map(attempts.map(attempt => [
+        attempt.id,
+        new Map(getAttemptQuestionResults(exam, attempt).map(result => [result.questionId, result])),
+    ]));
+
+    for (const question of exam.questions) {
+        const samples: PointBiserialSample[] = [];
+        for (const attempt of attempts) {
+            const result = resultsByAttemptId.get(attempt.id)?.get(question.id);
+            if (!result || result.status === "ungraded") continue;
+            samples.push({
+                correct: result.status === "correct" || !!result.isCorrect,
+                score: scoreByAttemptId.get(attempt.id) ?? 0,
+            });
+        }
+        pointBiserials.set(question.id, computePointBiserialCorrelation(samples, DISCRIMINATION_MIN_RESPONDENTS));
+    }
+
+    return pointBiserials;
 }
 
 export function buildMostMissedQuestionStats(exam: Exam, attempts: Attempt[], limit = 5): ExamQuestionResultStat[] {

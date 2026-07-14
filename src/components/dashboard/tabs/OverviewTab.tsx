@@ -19,7 +19,7 @@ import { safeRatePercent } from "@/lib/scoreUtils";
 import { buildExamSummaryRows, splitExamSummaryRows } from "@/lib/dashboardSummary";
 import { buildDashboardStatsCsv, type DashboardExportQuestionStat } from "@/lib/dashboardStatsExport";
 import { buildAttemptScoreLookup } from "@/lib/attemptScores";
-import { buildExamQuestionResultStats, buildExamQuestionDiscriminations } from "@/lib/premiumAnalytics";
+import { buildExamQuestionResultStats, buildExamQuestionDiscriminations, buildExamQuestionPointBiserial } from "@/lib/premiumAnalytics";
 import type { RosterGroup, RosterStudent } from "@/lib/rosterStorage";
 import { summarizePersistenceWrite } from "@/lib/persistenceFeedback";
 import { buildBillingUsageSummary } from "@/lib/billingUsage";
@@ -115,6 +115,9 @@ export default function OverviewTab({ exams: examsProp, attempts, stats, trendDa
     // without requiring the parent page to reload from localStorage.
     const [exams, setExams] = useState<Exam[]>(examsProp);
     const [deleteTarget, setDeleteTarget] = useState<Exam | null>(null);
+    // Guards the "통계 CSV" button while the per-exam × per-question pass runs, and drives its
+    // disabled/label state so a large workspace doesn't look unresponsive on click.
+    const [isExportingStats, setIsExportingStats] = useState(false);
 
     // Sync when parent reloads data (initial mount / navigation).
     useEffect(() => { setExams(examsProp); }, [examsProp]);
@@ -245,7 +248,10 @@ export default function OverviewTab({ exams: examsProp, attempts, stats, trendDa
         );
     };
 
-    const handleExportStatsCsv = () => {
+    const handleExportStatsCsv = async () => {
+        if (isExportingStats) return;
+        setIsExportingStats(true);
+        try {
         // Computed lazily on click so the richer distribution/per-question math never
         // runs on every dashboard render.
         const examById = new Map(exams.map(exam => [exam.id, exam]));
@@ -254,19 +260,34 @@ export default function OverviewTab({ exams: examsProp, attempts, stats, trendDa
             .filter(attempt => !attempt.retake && attempt.status === "completed")
             .map(attempt => scoreLookup.get(attempt.id)?.scorePercent ?? 0);
 
+        // Large workspaces (many exams and/or many attempts) make the per-exam ×
+        // per-question pass below expensive enough to freeze the tab if run in one
+        // synchronous block, so we yield to the main thread every few exams.
+        const shouldChunk = exams.length > 50 || attempts.length > 2000;
+        const EXAMS_PER_CHUNK = 5;
+
         const questionStats: DashboardExportQuestionStat[] = [];
-        for (const exam of exams) {
+        for (let i = 0; i < exams.length; i++) {
+            const exam = exams[i];
             const examAttempts = attempts.filter(attempt => attempt.examId === exam.id && !attempt.retake);
-            if (examAttempts.length === 0) continue;
-            const discriminations = buildExamQuestionDiscriminations(exam, examAttempts);
-            for (const stat of buildExamQuestionResultStats(exam, examAttempts)) {
-                if (stat.totalCount === 0) continue;
-                questionStats.push({
-                    examTitle: exam.title,
-                    questionNumber: stat.questionNumber,
-                    correctRate: stat.correctRate,
-                    discrimination: discriminations.get(stat.questionId) ?? null,
-                });
+            if (examAttempts.length > 0) {
+                const discriminations = buildExamQuestionDiscriminations(exam, examAttempts);
+                const pointBiserials = buildExamQuestionPointBiserial(exam, examAttempts);
+                for (const stat of buildExamQuestionResultStats(exam, examAttempts)) {
+                    if (stat.totalCount === 0) continue;
+                    questionStats.push({
+                        examTitle: exam.title,
+                        questionNumber: stat.questionNumber,
+                        correctRate: stat.correctRate,
+                        discrimination: discriminations.get(stat.questionId) ?? null,
+                        pointBiserial: pointBiserials.get(stat.questionId) ?? null,
+                    });
+                }
+            }
+
+            if (shouldChunk && (i + 1) % EXAMS_PER_CHUNK === 0 && i + 1 < exams.length) {
+                // Intentional yield to the main thread so "생성 중…" paints and the tab stays responsive.
+                await new Promise<void>(resolve => window.setTimeout(resolve, 0));
             }
         }
 
@@ -281,6 +302,9 @@ export default function OverviewTab({ exams: examsProp, attempts, stats, trendDa
         document.body.removeChild(link);
         window.setTimeout(() => URL.revokeObjectURL(url), 0);
         toast.success("통계 CSV 생성됨", "대시보드 요약과 시험별 통계를 내보냈습니다.");
+        } finally {
+            setIsExportingStats(false);
+        }
     };
 
     return (
@@ -455,13 +479,17 @@ export default function OverviewTab({ exams: examsProp, attempts, stats, trendDa
                         <button
                             type="button"
                             onClick={handleExportStatsCsv}
+                            disabled={isExportingStats}
                             style={{
                                 background: 'var(--surface)', color: 'var(--foreground)', padding: '0.6rem 1rem',
                                 borderRadius: 'var(--radius-lg)', fontSize: '0.85rem', fontWeight: 700,
                                 display: 'flex', alignItems: 'center', gap: '0.4rem',
-                                transition: 'var(--transition-base)', border: '1px solid var(--border)'
+                                transition: 'var(--transition-base)', border: '1px solid var(--border)',
+                                opacity: isExportingStats ? 0.7 : 1,
+                                cursor: isExportingStats ? 'not-allowed' : 'pointer',
                             }}
                             onMouseEnter={(e) => {
+                                if (isExportingStats) return;
                                 e.currentTarget.style.borderColor = 'var(--primary)';
                                 e.currentTarget.style.color = 'var(--primary)';
                             }}
@@ -471,7 +499,7 @@ export default function OverviewTab({ exams: examsProp, attempts, stats, trendDa
                             }}
                         >
                             <Download size={15} />
-                            통계 CSV
+                            {isExportingStats ? '생성 중…' : '통계 CSV'}
                         </button>
 
                         {/* Send All Alarms Button */}

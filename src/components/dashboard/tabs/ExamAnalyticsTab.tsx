@@ -11,7 +11,9 @@ import { AlertTriangle, CheckCircle, BarChart2, Download, ChevronUp, ChevronDown
 import { PremiumActionLink, PremiumFeatureCard } from "@/components/PremiumFeatureGate";
 import {
     attemptElapsedTimeSec,
+    buildClassExamScoreGroups,
     buildClassExamWeaknessMatrix,
+    buildExamQuestionPointBiserial,
     buildExamQuestionResultStats,
     buildLearningRecommendations,
     buildQuestionResultTagStats,
@@ -25,7 +27,7 @@ import {
     summarizeAttemptBehavior,
     DISCRIMINATION_MIN_RESPONDENTS,
 } from "@/lib/premiumAnalytics";
-import { computeScoreDistribution } from "@/lib/scoreDistribution";
+import { computeGroupScoreSummary, computeScoreDistribution } from "@/lib/scoreDistribution";
 import type { LearningRecommendation } from "@/lib/premiumAnalytics";
 import { buildQuestionBankReadiness, type QuestionBankReadinessStatus } from "@/lib/questionBank";
 import {
@@ -79,6 +81,13 @@ const difficultyLabelMap: Record<string, string> = {
     hard: "심화",
     killer: "킬러",
 };
+
+/**
+ * Below this, a question's point-biserial correlation with total score is considered weak
+ * item discrimination — the common psychometric convention (r < .20 "poor", .20–.29
+ * "marginal", ≥.30 "good") used to flag the 문항별 상세 table's 진단 badge.
+ */
+const WEAK_POINT_BISERIAL_THRESHOLD = 0.2;
 
 function formatSeconds(totalSec: number): string {
     if (totalSec < 60) return `${totalSec}초`;
@@ -459,6 +468,7 @@ export default function ExamAnalyticsTab({
 
         const resultStats = buildExamQuestionResultStats(selectedExam, examAttempts);
         const statByQuestionId = new Map(resultStats.map(stat => [stat.questionId, stat]));
+        const pointBiserialByQuestionId = buildExamQuestionPointBiserial(selectedExam, examAttempts);
         const resultsByAttemptId = new Map(examAttempts.map(attempt => [
             attempt.id,
             new Map(getAttemptQuestionResults(selectedExam, attempt).map(result => [result.questionId, result])),
@@ -530,6 +540,9 @@ export default function ExamAnalyticsTab({
                 unansweredRate,
                 discrimination,
                 discriminationReliable,
+                // 점이연 상관 기준 — statistically grounded item discrimination, shown in the
+                // 문항별 상세 table in place of the upper/lower-third split above.
+                pointBiserial: pointBiserialByQuestionId.get(q.id) ?? null,
                 topWrongOption,
                 optionRates,
                 answer: q.answer,
@@ -696,6 +709,23 @@ export default function ExamAnalyticsTab({
             rosterGroups: scopedRosterGroups,
             rosterStudents: scopedRosterStudents,
         });
+    }, [advancedAnalyticsEnabled, examAttempts, scopedRosterGroups, scopedRosterStudents, selectedExam]);
+
+    // Feeds the "반별 점수 비교" range-bar card — same Pro gate and grouping as the weakness
+    // matrix above, but only needs raw score percentages (min/median/average/max), not the
+    // recommendation machinery.
+    const groupScoreSummaries = useMemo(() => {
+        if (!advancedAnalyticsEnabled) return [];
+        if (!selectedExam || examAttempts.length === 0) return [];
+        const groups = buildClassExamScoreGroups(selectedExam, examAttempts, {
+            rosterGroups: scopedRosterGroups,
+            rosterStudents: scopedRosterStudents,
+        });
+        return computeGroupScoreSummary(groups.map(group => ({
+            groupKey: group.groupKey,
+            groupName: formatRegionScopedLabel(group.groupName, group.regionName),
+            scores: group.scores,
+        })));
     }, [advancedAnalyticsEnabled, examAttempts, scopedRosterGroups, scopedRosterStudents, selectedExam]);
 
     const classTypeWeaknessRows = useMemo(() => classWeaknessMatrixRows
@@ -1975,6 +2005,89 @@ export default function ExamAnalyticsTab({
                     </div>
                     )}
 
+                    {advancedAnalyticsEnabled && (
+                        <div className="card" style={{ padding: '1.5rem', border: '1px solid var(--border)', background: 'var(--surface)' }}>
+                            <div style={{ marginBottom: '1.25rem' }}>
+                                <h3 style={{ fontSize: '1rem', fontWeight: 900, color: 'var(--foreground)', display: 'flex', alignItems: 'center', gap: '0.45rem' }}>
+                                    <BarChart2 size={16} color="var(--primary)" />
+                                    반별 점수 비교
+                                </h3>
+                                <p style={{ fontSize: '0.8rem', color: 'var(--muted)', marginTop: '0.2rem' }}>
+                                    반별 점수의 최저~최고 범위와 중앙값, 평균을 한눈에 비교합니다.
+                                </p>
+                            </div>
+
+                            {groupScoreSummaries.length > 0 ? (
+                                <div style={{ display: 'flex', flexDirection: 'column', gap: '1.1rem' }}>
+                                    <div style={{ display: 'flex', alignItems: 'center', gap: '1rem', fontSize: '0.72rem', color: 'var(--muted)', fontWeight: 700 }}>
+                                        <span style={{ display: 'inline-flex', alignItems: 'center', gap: '0.3rem' }}>
+                                            <span style={{ width: '14px', height: '8px', borderRadius: '4px', background: 'var(--primary)', opacity: 0.35, display: 'inline-block' }} />
+                                            최저~최고
+                                        </span>
+                                        <span style={{ display: 'inline-flex', alignItems: 'center', gap: '0.3rem' }}>
+                                            <span style={{ width: '2px', height: '12px', background: 'var(--foreground)', display: 'inline-block' }} />
+                                            중앙값
+                                        </span>
+                                        <span style={{ display: 'inline-flex', alignItems: 'center', gap: '0.3rem' }}>
+                                            <span style={{ width: '9px', height: '9px', borderRadius: '50%', background: 'var(--warning)', display: 'inline-block' }} />
+                                            평균
+                                        </span>
+                                    </div>
+                                    {groupScoreSummaries.map(group => (
+                                        <div key={group.groupKey}>
+                                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: '0.4rem', gap: '0.5rem', flexWrap: 'wrap' }}>
+                                                <span style={{ fontWeight: 800, color: 'var(--foreground)', fontSize: '0.88rem' }}>{group.groupName}</span>
+                                                <span style={{ fontSize: '0.74rem', color: 'var(--muted)', fontWeight: 700 }}>
+                                                    최저 {group.min}% · 중앙값 {group.median}% · 평균 {group.average}% · 최고 {group.max}% · {group.count}명
+                                                </span>
+                                            </div>
+                                            <div style={{ position: 'relative', height: '10px', background: 'var(--border)', borderRadius: 'var(--radius-full)', width: '100%' }}>
+                                                <div style={{
+                                                    position: 'absolute',
+                                                    left: `${group.min}%`,
+                                                    width: `${Math.max(0, group.max - group.min)}%`,
+                                                    height: '100%',
+                                                    background: 'var(--primary)',
+                                                    opacity: 0.35,
+                                                    borderRadius: 'var(--radius-full)',
+                                                }} />
+                                                <div style={{
+                                                    position: 'absolute',
+                                                    left: `${group.median}%`,
+                                                    top: '-3px',
+                                                    width: '2px',
+                                                    height: '16px',
+                                                    background: 'var(--foreground)',
+                                                }} title={`중앙값 ${group.median}%`} />
+                                                <div style={{
+                                                    position: 'absolute',
+                                                    left: `calc(${Math.max(0, Math.min(100, group.average))}% - 5px)`,
+                                                    top: '-2px',
+                                                    width: '10px',
+                                                    height: '10px',
+                                                    borderRadius: '50%',
+                                                    background: 'var(--warning)',
+                                                    border: '2px solid var(--surface)',
+                                                }} title={`평균 ${group.average}%`} />
+                                            </div>
+                                        </div>
+                                    ))}
+                                </div>
+                            ) : (
+                                <div style={{
+                                    color: 'var(--muted)',
+                                    fontSize: '0.85rem',
+                                    padding: '1rem',
+                                    border: '1px dashed var(--border)',
+                                    borderRadius: 'var(--radius-md)',
+                                    background: 'var(--background)',
+                                }}>
+                                    반 정보가 있는 제출부터 반별 점수 비교가 표시됩니다.
+                                </div>
+                            )}
+                        </div>
+                    )}
+
                     {advancedAnalyticsEnabled && classWeaknessMatrixRows.length > 0 && (
                         <div className="card" style={{ padding: '1.5rem', border: '1px solid var(--border)', background: 'var(--surface)' }}>
                             <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: '1rem', marginBottom: '1rem', flexWrap: 'wrap' }}>
@@ -2595,7 +2708,7 @@ export default function ExamAnalyticsTab({
                                         <th style={{ padding: '0.75rem 1rem', borderRadius: 'var(--radius-md) 0 0 var(--radius-md)' }}>문항</th>
                                         <th style={{ padding: '0.75rem 1rem' }}>진단</th>
                                         <th style={{ padding: '0.75rem 1rem' }}>정답률</th>
-                                        <th style={{ padding: '0.75rem 1rem' }}>변별도</th>
+                                        <th style={{ padding: '0.75rem 1rem' }} title="점이연 상관 기준">변별도</th>
                                         <th style={{ padding: '0.75rem 1rem' }}>미응답</th>
                                         <th style={{ padding: '0.75rem 1rem' }}>평균시간</th>
                                         <th style={{ padding: '0.75rem 1rem' }}>재방문/변경</th>
@@ -2616,9 +2729,10 @@ export default function ExamAnalyticsTab({
                                 <tbody>
                                     {[...questionAnalytics].sort((a: { index: number }, b: { index: number }) => a.index - b.index).map((q, i) => {
                                         const optMap = q.optionRates.reduce((acc: Record<number, number>, curr: { option: number; rate: number }) => { acc[curr.option] = curr.rate; return acc; }, {});
+                                        const weakPointBiserial = q.pointBiserial !== null && q.pointBiserial < WEAK_POINT_BISERIAL_THRESHOLD;
                                         const qualityLabel = q.correctRate < 50
                                             ? '보강'
-                                            : (q.discriminationReliable && q.discrimination < 10)
+                                            : weakPointBiserial
                                                 ? '변별 점검'
                                                 : q.correctRate >= 90
                                                     ? '쉬움'
@@ -2655,8 +2769,11 @@ export default function ExamAnalyticsTab({
                                                 <td style={{ padding: '0.75rem 1rem', fontWeight: 600, color: q.correctRate < 40 ? 'var(--error)' : 'var(--text)' }}>
                                                     {q.correctRate}%
                                                 </td>
-                                                <td style={{ padding: '0.75rem 1rem', fontWeight: 700, color: (q.discriminationReliable && q.discrimination < 10) ? 'var(--warning)' : 'var(--muted)' }}>
-                                                    {q.discriminationReliable ? `${q.discrimination}%` : '-'}
+                                                <td
+                                                    style={{ padding: '0.75rem 1rem', fontWeight: 700, color: weakPointBiserial ? 'var(--warning)' : 'var(--muted)' }}
+                                                    title="점이연 상관 기준"
+                                                >
+                                                    {q.pointBiserial !== null ? q.pointBiserial.toFixed(2) : '-'}
                                                 </td>
                                                 <td style={{ padding: '0.75rem 1rem', fontWeight: 700, color: q.unansweredRate >= 20 ? 'var(--error)' : 'var(--muted)' }}>
                                                     {q.unansweredRate}%

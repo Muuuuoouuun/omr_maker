@@ -18,6 +18,7 @@ import {
     summarizeAttemptBehavior,
 } from "@/lib/premiumAnalytics";
 import { baseAttemptsOnly, buildAttemptScoreLookup, resolveAttemptScore, retakeAttemptsOnly } from "@/lib/attemptScores";
+import { computeRankPercentile } from "@/lib/scoreDistribution";
 import {
     buildRegionalLearningScopes,
     filterAttemptsByRegion,
@@ -304,6 +305,9 @@ export default function StudentAnalyticsTab({
                 scoreRate: studentScoreRate,
                 rank,
                 totalStudents,
+                // null for solo submissions (totalStudents < 2) — "상위 100%" is meaningless
+                // (and reads as last place) when there's no one else to compare against.
+                percentile: computeRankPercentile(rank, totalStudents),
                 strongPoint,
                 weakPoint: topWeakness?.title || weakPoint,
                 weakBasis: topWeakness?.basis,
@@ -752,9 +756,9 @@ export default function StudentAnalyticsTab({
                                         </td>
                                         <td style={{ padding: '1rem 0.5rem', fontWeight: 600 }}>
                                             {detail.rank} <span style={{ fontSize: '0.8rem', color: 'var(--muted)', fontWeight: 400 }}>/ {detail.totalStudents}명</span>
-                                            {detail.totalStudents > 0 && (
+                                            {detail.percentile !== null && (
                                                 <div style={{ fontSize: '0.72rem', color: 'var(--primary)', fontWeight: 800, marginTop: '0.2rem' }}>
-                                                    상위 {Math.max(1, Math.round((detail.rank / detail.totalStudents) * 100))}%
+                                                    상위 {detail.percentile}%
                                                 </div>
                                             )}
                                         </td>
