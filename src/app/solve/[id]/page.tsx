@@ -12,15 +12,27 @@ import { AlertTriangle, Clock, PanelRightClose, PanelRightOpen, PenLine, Save } 
 import { storedDataUrlToFile, saveJsonRecord, loadJsonRecord } from "@/utils/blobStore";
 import { resolveDraftDrawings } from "@/lib/draftRecovery";
 import { verifyTeacherPassword } from "@/app/actions/auth";
+import { loadExamForSolving, submitAttempt } from "@/app/actions/studentExam";
+import { issueGuestSession, issueStudentSession } from "@/app/actions/studentSession";
 import { saveTeacherSessionWithIdentity } from "@/lib/teacherSession";
-import { getOrCreateGuestId, getSession, saveSession, type StudentSession } from "@/utils/storage";
+import { generateId, getOrCreateGuestId, getSession, guestLoginIdFor, saveSession, type StudentSession } from "@/utils/storage";
 import { canArchiveHandwriting, getCurrentPlan, getPlanLabel } from "@/utils/plans";
-import { loadExam as loadPersistedExam, saveAttempt } from "@/lib/omrPersistence";
+import { loadExam as loadPersistedExam, readLocalExam, saveAttempt, saveLocalAttempt } from "@/lib/omrPersistence";
 import { buildQuestionResults } from "@/lib/premiumAnalytics";
 import { summarizeQuestionDrawings } from "@/lib/handwritingAnalytics";
 import { evaluateExamAccess, examRequiresPin, normalizeExamPin, verifyExamPin, type ExamAccessDecision } from "@/lib/examAccess";
 import { summarizePersistenceWrite } from "@/lib/persistenceFeedback";
 import { SOLVE_CLASS_CODE_PARAM } from "@/lib/examLinks";
+import { readStudentCodes } from "@/lib/studentCodes";
+import { readActiveWorkspaceContext } from "@/lib/workspaceContext";
+import type { StudentVerificationReason } from "@/lib/studentRosterVerification";
+import {
+    loadExamForSolvingClient,
+    submitAttemptClient,
+    type ExamSource,
+    type SolveAccessStatus,
+} from "@/lib/studentExamClient";
+import type { SubmitAttemptInput } from "@/lib/studentExamCore";
 
 const PDFViewer = dynamic(() => import("@/components/PDFViewer"), { ssr: false });
 import { DEFAULT_CHOICE_COUNT, gradeAttempt, questionChoiceCount } from "@/types/omr";
@@ -312,6 +324,33 @@ function buildStudentLoginHref(): string {
     if (typeof window === "undefined") return "/?role=student";
     const next = `${window.location.pathname}${window.location.search}`;
     return `/?role=student&next=${encodeURIComponent(next)}`;
+}
+
+type StudentIssueRefusalReason = StudentVerificationReason | "roster_unavailable" | "network_error";
+
+/**
+ * User-facing Korean copy for every refusal path of the roster-verified
+ * issueStudentSession action. The server never signs an unverified student
+ * session, so each refusal must tell the student what to fix instead of
+ * silently degrading.
+ */
+function studentSessionRefusalCopy(reason: StudentIssueRefusalReason): string {
+    switch (reason) {
+        case "roster_mismatch":
+            return "학생 명단에서 정보를 확인하지 못했습니다. 이름과 반이 명단과 일치하는지 확인하거나 선생님께 문의해주세요.";
+        case "ambiguous_student":
+            return "동명이인이 있어 본인 확인이 필요합니다. 학생 홈에서 학생번호 또는 이메일로 다시 로그인해주세요.";
+        case "code_required":
+            return "서버 확인에 시작 코드가 필요합니다. 학생 홈에서 시작 코드를 입력해 다시 로그인해주세요.";
+        case "code_mismatch":
+            return "시작 코드가 서버 기록과 일치하지 않습니다. 선생님이 발급한 시작 코드를 확인해주세요.";
+        case "invalid_input":
+            return "학생 정보가 올바르지 않습니다. 학생 홈에서 다시 로그인해주세요.";
+        case "roster_unavailable":
+            return "서버 명단을 확인할 수 없어 학생 인증을 진행하지 못했습니다. 잠시 후 다시 시도하거나 선생님께 문의해주세요.";
+        default:
+            return "학생 인증 중 문제가 발생했습니다. 네트워크 상태를 확인한 뒤 다시 시도해주세요.";
+    }
 }
 
 function buildRetakeDraftSegment(config: RetakeConfig | null): string {
@@ -746,6 +785,13 @@ export default function SolvePage() {
     const id = params?.id as string;
 
     const [examData, setExamData] = useState<Exam | null>(null);
+    /**
+     * Where examData came from. "server" = answer-less payload from the
+     * loadExamForSolving server action (access already server-checked).
+     * "local" = full on-device exam; access is evaluated client-side as before.
+     */
+    const [examSource, setExamSource] = useState<ExamSource>("local");
+    const [solveStatus, setSolveStatus] = useState<SolveAccessStatus | "loading">("loading");
     const [loadError, setLoadError] = useState<SolveLoadError | null>(null);
     const [studentAnswers, setStudentAnswers] = useState<Record<number, number>>({});
     const [drawings, setDrawings] = useState<PdfDrawings>({});
@@ -790,6 +836,15 @@ export default function SolvePage() {
     const [pinVerified, setPinVerified] = useState(false);
     const [pinInput, setPinInput] = useState("");
     const [pinError, setPinError] = useState("");
+    /** Verified PIN, threaded into server submit (incl. timer auto-submit). */
+    const pinRef = useRef("");
+    /**
+     * Client idempotency key for THIS solve session's submit intent. Stable across
+     * retries (impatient tap, network retry, auto-submit racing a manual submit) so
+     * the server's resolveAttemptId collapses them onto one attempt row; a fresh
+     * page load mints a new key for a genuinely new attempt.
+     */
+    const submitIdempotencyKeyRef = useRef("");
     const submittedRef = useRef(false);
     const studentAnswersRef = useRef<Record<number, number>>({});
     const latestDraftRef = useRef<SolveDraft | null>(null);
@@ -891,11 +946,25 @@ export default function SolvePage() {
             .sort((a, b) => a.questionNumber - b.questionNumber);
     };
 
+    /**
+     * Single source of truth for "may the student solve right now".
+     * Server-sourced exams: the server already decided (solveStatus).
+     * Local exams: live client evaluation, so schedule windows (startAt/endAt)
+     * keep being enforced mid-session exactly as before.
+     */
+    const solveAccess: SolveAccessStatus | "loading" = (examSource === "local" && examData)
+        ? (() => {
+            const decision = evaluateExamAccess(examData, { session: user, pinVerified });
+            return decision.status === "allowed" ? "ok" : decision.status;
+        })()
+        : solveStatus;
+    const solveAllowed = solveAccess === "ok";
+
     // Anti-cheat Window Focus/Visibility Monitoring
     useEffect(() => {
         if (submittedRef.current) return;
         if (!entryConfirmed) return;
-        if (examData && evaluateExamAccess(examData, { session: user, pinVerified }).status !== "allowed") return;
+        if (!solveAllowed) return;
 
         let isFocused = true;
 
@@ -950,7 +1019,7 @@ export default function SolvePage() {
             window.removeEventListener("focus", handleWindowFocus);
             document.removeEventListener("visibilitychange", handleVisibilityChange);
         };
-    }, [beginQuestionVisit, entryConfirmed, examData, getQuestionById, pinVerified, settleActiveQuestion, user]);
+    }, [beginQuestionVisit, entryConfirmed, getQuestionById, settleActiveQuestion, solveAllowed]);
 
     useEffect(() => {
         currentQuestionIdRef.current = currentQuestionId;
@@ -970,7 +1039,7 @@ export default function SolvePage() {
         if (typeof window === "undefined") return false;
         if (!DRAFT_KEY || submittedRef.current || !draftSnapshot) return false;
         if (!entryConfirmed) return false;
-        if (examData && evaluateExamAccess(examData, { session: user, pinVerified }).status !== "allowed") return false;
+        if (!solveAllowed) return false;
 
         const savedAt = new Date().toISOString();
         const draftDrawings = compactDrawings(draftSnapshot.drawings || {});
@@ -1022,7 +1091,7 @@ export default function SolvePage() {
             }
             return true;
         }
-    }, [DRAFT_KEY, draftOwnerKey, entryConfirmed, examData, id, pinVerified, user]);
+    }, [DRAFT_KEY, draftOwnerKey, entryConfirmed, id, solveAllowed]);
 
     useEffect(() => {
         if (typeof window === "undefined" || !OMR_PANEL_KEY) {
@@ -1042,44 +1111,63 @@ export default function SolvePage() {
         window.localStorage.setItem(OMR_PANEL_KEY, isOMRCollapsed ? "collapsed" : "expanded");
     }, [OMR_PANEL_KEY, hydratedOMRPanelKey, isOMRCollapsed]);
 
-    useEffect(() => {
-        setCurrentPlan(getCurrentPlan());
+    /**
+     * Ensure the httpOnly server cookie carries the roster-verified STUDENT
+     * identity for the locally logged-in student. The step-2 issueStudentSession
+     * refuses to sign anything the server roster/start-code check cannot verify
+     * (unknown student, ambiguous same-name, missing/wrong start code), so every
+     * refusal reason is returned for user-facing copy instead of being swallowed.
+     */
+    const ensureStudentServerSession = useCallback(async (
+        session: StudentSession,
+        organizationId: string | undefined,
+    ): Promise<{ ok: true } | { ok: false; reason: StudentIssueRefusalReason }> => {
+        const trimmedOrganizationId = organizationId?.trim();
+        if (!trimmedOrganizationId) return { ok: false, reason: "roster_unavailable" };
+        try {
+            const codes = readStudentCodes(localStorage);
+            const result = await issueStudentSession({
+                organizationId: trimmedOrganizationId,
+                name: session.name,
+                selectedGroupId: session.groupId,
+                studentLookup: session.loginId || session.studentId,
+                startCode: codes[session.studentId] || (session.loginId ? codes[session.loginId] : undefined),
+            });
+            if (result.ok) return { ok: true };
+            return { ok: false, reason: result.reason };
+        } catch {
+            return { ok: false, reason: "network_error" };
+        }
+    }, []);
 
-        const currentSession = getSession();
-        if (currentSession) setUser(currentSession);
-        const currentSearch = typeof window !== "undefined" ? window.location.search : "";
-        const currentPath = typeof window !== "undefined" ? `${window.location.pathname}${currentSearch}` : "";
-        const currentParams = new URLSearchParams(currentSearch);
-        setCurrentSolvePath(currentPath);
-        setLinkClassCode(
-            currentParams.get(SOLVE_CLASS_CODE_PARAM)
-            || currentParams.get("group")
-            || currentParams.get("groupId")
-            || currentParams.get("class")
-            || ""
-        );
-        setEntryGroupCode("");
-        setEntryGuestName("");
-        setEntryError("");
-        setEntryConfirmed(false);
-
-        const hydrateExam = async () => {
-            if (!id) return;
-            setLoadError(null);
-            const parsed = await loadPersistedExam(id);
-            if (!parsed) {
-                setLoadError({
-                    title: "시험을 찾을 수 없습니다",
-                    body: "링크가 잘못됐거나 선생님이 시험을 삭제했을 수 있습니다. 받은 링크를 다시 확인해주세요.",
-                });
-                return;
-            }
+    /**
+     * Initialize the solve workspace from a loaded exam payload. Shared by the
+     * initial hydrate and the server PIN gate (the server withholds the payload
+     * until the PIN passes, so PIN-gated exams fully initialize on PIN success).
+     * main's entry-confirm flow stays intact: question visits begin in
+     * beginConfirmedEntry, never here.
+     */
+    const applyLoadedExam = useCallback(async (
+        parsed: Exam,
+        source: ExamSource,
+        session: StudentSession | null,
+        pinAlreadyVerified = false,
+    ) => {
             try {
                 setLoadError(null);
                 examQuestionsRef.current = parsed.questions;
                 setExamData(parsed);
-                const requiresPin = examRequiresPin(parsed);
-                setPinVerified(!requiresPin);
+                setExamSource(source);
+                if (source === "local") {
+                    // pinAlreadyVerified: the PIN dialog just passed for this local
+                    // exam, so don't reset pinVerified back to false and re-gate it.
+                    const requiresPin = examRequiresPin(parsed);
+                    setPinVerified(pinAlreadyVerified || !requiresPin);
+                } else {
+                    // The server only hands out the payload once access (incl. PIN) passed.
+                    setPinVerified(true);
+                    setSolveStatus("ok");
+                }
                 setPinInput("");
                 setPinError("");
                 currentQuestionIdRef.current = null;
@@ -1128,7 +1216,7 @@ export default function SolvePage() {
 
                 // Restore draft (autosave) if present
                 try {
-                    const ownerKey = currentSession?.studentId || currentSession?.guestId || persistId;
+                    const ownerKey = session?.studentId || session?.guestId || persistId;
                     const draftSegment = buildRetakeDraftSegment(nextRetakeConfig);
                     const scopedDraftKey = ownerKey ? `omr_draft_${id}_${ownerKey}_${draftSegment}` : "";
                     const legacyScopedDraftKey = ownerKey ? `omr_draft_${id}_${ownerKey}` : "";
@@ -1195,10 +1283,139 @@ export default function SolvePage() {
                 });
                 toast.error("시험 데이터 로드 실패", "저장된 PDF 또는 시험 설정을 읽지 못했습니다.");
             }
+    }, [id, persistId]);
+
+    useEffect(() => {
+        setCurrentPlan(getCurrentPlan());
+
+        const currentSession = getSession();
+        if (currentSession) setUser(currentSession);
+        const currentSearch = typeof window !== "undefined" ? window.location.search : "";
+        const currentPath = typeof window !== "undefined" ? `${window.location.pathname}${currentSearch}` : "";
+        const currentParams = new URLSearchParams(currentSearch);
+        setCurrentSolvePath(currentPath);
+        setLinkClassCode(
+            currentParams.get(SOLVE_CLASS_CODE_PARAM)
+            || currentParams.get("group")
+            || currentParams.get("groupId")
+            || currentParams.get("class")
+            || ""
+        );
+        setEntryGroupCode("");
+        setEntryGuestName("");
+        setEntryError("");
+        setEntryConfirmed(false);
+
+        const hydrateExam = async () => {
+            if (!id) return;
+            setLoadError(null);
+            setSolveStatus("loading");
+
+            // Server session first — the exam server actions key off the signed
+            // httpOnly cookie. Guests get (or keep) a server-issued guestId;
+            // roster students get a best-effort roster-verified session (the
+            // entry-confirm dialog retries with the payload's organization id).
+            let session = currentSession;
+            try {
+                if (!session || session.isGuest) {
+                    const issued = await issueGuestSession(session?.name);
+                    if (issued.ok && issued.guestId && issued.guestId !== session?.guestId) {
+                        const guestSession: StudentSession = {
+                            studentId: `guest:${issued.guestId}`,
+                            loginId: guestLoginIdFor(issued.guestId),
+                            name: session?.name || "Guest Student",
+                            isGuest: true,
+                            identityType: "guest",
+                            guestId: issued.guestId,
+                            groupId: session?.groupId,
+                            groupName: session?.groupName || "Guest Mode",
+                        };
+                        saveSession(guestSession);
+                        setUser(guestSession);
+                        localStorage.setItem("omr_guest_id", issued.guestId);
+                        session = guestSession;
+                    }
+                } else if (session.studentId) {
+                    const localOrganizationId = readLocalExam(id)?.organizationId
+                        || readActiveWorkspaceContext().organizationId;
+                    await ensureStudentServerSession(session, localOrganizationId);
+                }
+            } catch {
+                // offline/dev — the local fallback path below still works
+            }
+
+            const loadOnce = () => loadExamForSolvingClient(id, undefined, {
+                server: (examId, pin) => loadExamForSolving(examId, pin),
+                readLocalExam,
+                evaluateLocalAccess: (exam) => {
+                    const requiresPin = examRequiresPin(exam);
+                    const decision = evaluateExamAccess(exam, { session, pinVerified: !requiresPin });
+                    return decision.status === "allowed" ? "ok" : decision.status;
+                },
+            });
+
+            let res = await loadOnce();
+            if (res.status === "unauthenticated" && session && !session.isGuest) {
+                // A student without a valid cookie yet (roster issuance needs the
+                // exam's organization id, which arrives with the payload): fetch the
+                // payload under a guest viewer cookie so the entry-confirm dialog can
+                // offer the roster-verified student path before anything starts.
+                try {
+                    const issued = await issueGuestSession(session.name);
+                    if (issued.ok) res = await loadOnce();
+                } catch {
+                    // offline — handled by the status branches below
+                }
+            }
+
+            if (res.exam) {
+                // Local-blocked states (PIN, schedule window) re-derive live from examData.
+                await applyLoadedExam(res.exam as Exam, res.source, session);
+                return;
+            }
+            if (res.status === "pin_required" || res.status === "pin_rate_limited") {
+                setExamSource(res.source);
+                setSolveStatus("pin_required");
+                if (res.status === "pin_rate_limited") {
+                    setPinError("PIN 시도 횟수를 초과했습니다. 잠시 후 다시 시도해주세요.");
+                }
+                return;
+            }
+            if (res.status === "login_required" || res.status === "group_denied"
+                || res.status === "not_started" || res.status === "ended" || res.status === "archived") {
+                setExamSource(res.source);
+                setSolveStatus(res.status);
+                return;
+            }
+            if (res.status === "denied") {
+                // Fail-closed production refusal: HARD STOP. The on-device copy still
+                // carries the answer key, so it must never back-fill this state.
+                setLoadError({
+                    title: "시험을 열 수 없습니다",
+                    body: "서버 보안 설정 문제로 시험 데이터를 제공할 수 없습니다. 이 상태에서는 기기에 저장된 사본으로도 응시할 수 없으니 선생님 또는 관리자에게 문의해주세요.",
+                });
+                return;
+            }
+            if (res.status === "unauthenticated") {
+                setLoadError({
+                    title: "세션을 확인하지 못했습니다",
+                    body: "브라우저 쿠키가 차단되어 있거나 세션이 만료되었습니다. 새로고침해도 반복되면 처음 화면에서 다시 로그인해주세요.",
+                });
+                return;
+            }
+            setLoadError(res.status === "not_found"
+                ? {
+                    title: "시험을 찾을 수 없습니다",
+                    body: "링크가 잘못됐거나 선생님이 시험을 삭제했을 수 있습니다. 받은 링크를 다시 확인해주세요.",
+                }
+                : {
+                    title: "시험을 불러올 수 없습니다",
+                    body: "네트워크 상태를 확인한 뒤 잠시 후 다시 시도해주세요.",
+                });
         };
 
-        hydrateExam();
-    }, [beginQuestionVisit, id, persistId]);
+        void hydrateExam();
+    }, [applyLoadedExam, ensureStudentServerSession, id]);
 
     // Show resume banner once after initial load
     useEffect(() => {
@@ -1211,7 +1428,7 @@ export default function SolvePage() {
     useEffect(() => {
         if (timeRemaining === null || submittedRef.current) return;
         if (!entryConfirmed) return;
-        if (examData && evaluateExamAccess(examData, { session: user, pinVerified }).status !== "allowed") return;
+        if (!solveAllowed) return;
         if (timeRemaining <= 0) {
             handleSubmitInternal(true);
             return;
@@ -1219,7 +1436,7 @@ export default function SolvePage() {
         const id = setTimeout(() => setTimeRemaining(t => (t === null ? null : t - 1)), 1000);
         return () => clearTimeout(id);
         // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [timeRemaining, entryConfirmed, examData, pinVerified, user]);
+    }, [timeRemaining, entryConfirmed, solveAllowed]);
 
     useEffect(() => {
         studentAnswersRef.current = studentAnswers;
@@ -1237,7 +1454,7 @@ export default function SolvePage() {
     useEffect(() => {
         if (!DRAFT_KEY) return;
         if (!entryConfirmed) return;
-        if (examData && evaluateExamAccess(examData, { session: user, pinVerified }).status !== "allowed") return;
+        if (!solveAllowed) return;
 
         const handleVisibilityChange = () => {
             if (document.visibilityState === "hidden") void saveDraftSnapshot();
@@ -1255,7 +1472,7 @@ export default function SolvePage() {
             window.removeEventListener("pagehide", handlePageHide);
             window.removeEventListener("visibilitychange", handleVisibilityChange);
         };
-    }, [DRAFT_KEY, entryConfirmed, examData, pinVerified, saveDraftSnapshot, user]);
+    }, [DRAFT_KEY, entryConfirmed, saveDraftSnapshot, solveAllowed]);
 
     // Warn on tab close if there are unsaved answers
     useEffect(() => {
@@ -1329,10 +1546,21 @@ export default function SolvePage() {
         setIsOMRCollapsed(prev => !prev);
     }, []);
 
-    const createGuestSubmitter = useCallback((name: string, group?: ExamGuestEntryGroup | null): StudentSession => {
-        const guestId = getOrCreateGuestId();
+    const createGuestSubmitter = useCallback(async (name: string, group?: ExamGuestEntryGroup | null): Promise<StudentSession> => {
+        // Server-issued guest identity: reuses a valid guest cookie (keeping the
+        // guestId stable) and refreshes its display name. Device-local id only
+        // as the offline/dev fallback.
+        let guestId = "";
+        try {
+            const issued = await issueGuestSession(name.trim() || undefined);
+            if (issued.ok && issued.guestId) guestId = issued.guestId;
+        } catch {
+            // offline/dev — fall back to the device-local guest id
+        }
+        if (!guestId) guestId = getOrCreateGuestId();
         const submitter: StudentSession = {
             studentId: `guest:${guestId}`,
+            loginId: guestLoginIdFor(guestId),
             name: name.trim() || "Guest Student",
             isGuest: true,
             identityType: 'guest',
@@ -1357,8 +1585,35 @@ export default function SolvePage() {
         if (firstQuestionId) beginQuestionVisit(firstQuestionId);
     }, [beginQuestionVisit, examData, hasResumed, retakeConfig]);
 
-    const continueEntryAsStudent = () => {
+    const continueEntryAsStudent = async () => {
         if (!examData || !user || user.isGuest) return;
+        if (examSource === "server") {
+            // The signed cookie identity is what the server records on submit — it
+            // must be the roster-verified student, not the guest viewer cookie that
+            // fetched the payload. Every refusal shows its own actionable message.
+            setEntryError("");
+            const issued = await ensureStudentServerSession(user, examData.organizationId);
+            if (!issued.ok) {
+                setEntryError(studentSessionRefusalCopy(issued.reason));
+                return;
+            }
+            // Re-check access as the verified student (group targeting may differ).
+            const res = await loadExamForSolvingClient(id, pinRef.current || undefined, {
+                server: (examId, pin) => loadExamForSolving(examId, pin),
+                readLocalExam,
+                evaluateLocalAccess: (exam) => {
+                    const decision = evaluateExamAccess(exam, { session: user, pinVerified });
+                    return decision.status === "allowed" ? "ok" : decision.status;
+                },
+            });
+            if (res.status !== "ok" || !res.exam) {
+                const copy = accessDecisionCopy({ status: res.status } as ExamAccessDecision);
+                setEntryError(copy.body);
+                return;
+            }
+            beginConfirmedEntry();
+            return;
+        }
         const decision = evaluateExamAccess(examData, { session: user, pinVerified });
         if (decision.status !== "allowed") {
             setEntryError("현재 학생 정보가 이 시험의 대상과 맞지 않습니다. 학생 홈에서 다시 로그인하거나 게스트로 입장하세요.");
@@ -1367,9 +1622,16 @@ export default function SolvePage() {
         beginConfirmedEntry();
     };
 
-    const continueEntryAsGuest = () => {
+    const continueEntryAsGuest = async () => {
         if (!examData) return;
         const isGroupExam = examData.accessConfig?.type === "group";
+        if (isGroupExam && examSource === "server") {
+            // The server-issued guest cookie carries no group binding, so a class-code
+            // guest entry cannot pass the server's group gate — refuse up-front instead
+            // of letting the submit fail after the student has answered everything.
+            setEntryError("이 시험은 반 배포 시험이라 서버 인증된 학생만 응시할 수 있습니다. 학생 로그인으로 입장해주세요.");
+            return;
+        }
         const requestedGroupCode = entryGroupCode || linkClassCode;
         const guestGroup = isGroupExam
             ? resolveExamGuestGroup(examData, requestedGroupCode, true)
@@ -1380,7 +1642,7 @@ export default function SolvePage() {
             return;
         }
 
-        const submitter = createGuestSubmitter(entryGuestName, guestGroup);
+        const submitter = await createGuestSubmitter(entryGuestName, guestGroup);
         const decision = evaluateExamAccess(examData, { session: submitter, pinVerified });
         if (decision.status !== "allowed") {
             const copy = accessDecisionCopy(decision);
@@ -1395,21 +1657,20 @@ export default function SolvePage() {
         if (submittedRef.current) return;
 
         let submitter = overrideSubmitter || user;
-        const accessDecision = evaluateExamAccess(examData, { session: submitter, pinVerified });
-        if (accessDecision.status !== "allowed") {
-            if (accessDecision.status === "login_required") {
+        if (!solveAllowed) {
+            if (solveAccess === "login_required") {
                 toast.error("로그인 필요", "이 시험은 지정된 반 학생만 응시할 수 있습니다.");
                 router.push(buildStudentLoginHref());
                 return;
             }
-            const copy = accessDecisionCopy(accessDecision);
+            const copy = accessDecisionCopy({ status: solveAccess } as ExamAccessDecision);
             toast.error(copy.title, copy.body);
             return;
         }
 
         if (!submitter) {
             if (autoSubmitted) {
-                submitter = createGuestSubmitter("Guest Student");
+                submitter = await createGuestSubmitter("Guest Student");
             } else {
                 setGuestName("");
                 setGuestSubmitPending({ autoSubmitted });
@@ -1419,9 +1680,7 @@ export default function SolvePage() {
 
         submittedRef.current = true;
 
-        // Use weighted grading from types/omr.ts
         const activeExamQuestions = getActiveExamQuestions();
-        const graded = gradeAttempt(activeExamQuestions, studentAnswers);
         const questionTimings = buildQuestionTimingSnapshot(activeExamQuestions);
 
         const attemptId = Date.now().toString();
@@ -1449,88 +1708,160 @@ export default function SolvePage() {
             toast.info("필기 보관은 Pro 기능입니다", "답안은 저장됐고 필기 원본은 장기 보관되지 않습니다.");
         }
 
-        const attemptData: Attempt = {
-            id: attemptId,
+        // Stable per-solve-session idempotency key: a retried submit (double tap,
+        // network retry, auto-submit racing a manual submit) collapses onto ONE
+        // server attempt row via resolveAttemptId.
+        if (!submitIdempotencyKeyRef.current) {
+            submitIdempotencyKeyRef.current = generateId();
+        }
+
+        const activeSubmitter = submitter;
+        const handwriting: Attempt["handwriting"] = {
+            schemaVersion: 1,
+            status: !hasDrawings(activeDrawings)
+                ? 'none'
+                : drawingsRef
+                    ? 'saved'
+                    : 'plan_required',
+            strokesRef: drawingsRef,
+            plan: currentPlan,
+            summary: {
+                pageCount: activeDrawingPageCount,
+                strokeCount: activeDrawingStrokeCount,
+                questionCount: questionDrawings.length,
+            },
+            questions: questionDrawingsById(questionDrawings),
+        };
+        const submitInput: SubmitAttemptInput = {
             examId: id,
-            examTitle: examData.title,
-            studentName: submitter.name,
-            studentId: submitter.studentId || submitter.guestId || persistId,
-            groupId: submitter.groupId,
-            groupName: submitter.groupName,
-            regionId: submitter.regionId,
-            regionName: submitter.regionName,
-            identityType: submitter.identityType || (submitter.isGuest ? 'guest' : 'temporary'),
-            guestId: submitter.guestId,
-            startedAt,
-            finishedAt: new Date().toISOString(),
-            score: graded.earnedScore,
-            totalScore: graded.totalScore,
             answers: studentAnswers,
+            startedAt,
+            idempotencyKey: submitIdempotencyKeyRef.current,
+            autoSubmitted,
+            tabFociLostCount,
+            questionTimings,
+            focusLossEvents: focusLossEventsRef.current,
             drawings: canStoreHandwriting && hasDrawings(activeDrawings) ? activeDrawings : undefined,
             drawingsRef,
-            handwriting: {
-                schemaVersion: 1,
-                status: !hasDrawings(activeDrawings)
-                    ? 'none'
-                    : drawingsRef
-                        ? 'saved'
-                        : 'plan_required',
-                strokesRef: drawingsRef,
-                plan: currentPlan,
-                summary: {
-                    pageCount: activeDrawingPageCount,
-                    strokeCount: activeDrawingStrokeCount,
-                    questionCount: questionDrawings.length,
-                },
-                questions: questionDrawingsById(questionDrawings),
-            },
+            handwriting,
             handwritingArchived: !!drawingsRef,
             handwritingPlan: currentPlan,
             drawingPageCount: activeDrawingPageCount,
             drawingStrokeCount: activeDrawingStrokeCount,
             questionDrawings,
-            status: 'completed' as const,
-            autoSubmitted,
-            tabFociLostCount,
-            questionTimings,
-            focusLossEvents: focusLossEventsRef.current,
             retake: retakeConfig ? {
                 ...retakeConfig,
                 createdAt: new Date().toISOString(),
             } : undefined,
         };
-        attemptData.questionResults = buildQuestionResults(
-            { ...examData, questions: activeExamQuestions },
-            attemptData,
-        );
 
-        try {
-            const result = await saveAttempt(attemptData);
-            const feedback = summarizePersistenceWrite(result, {
-                target: "답안",
-                action: "저장",
-                failureTitle: "답안 저장 실패",
-                failureDetail: "브라우저 저장소가 가득 찼거나 Supabase 저장에 실패했습니다.",
-            });
-            if (!feedback.ok) {
-                throw new Error(feedback.detail);
+        // Degraded/offline fallback — grades on-device with the full local exam
+        // (main's existing path, persistence feedback included). Never used for a
+        // server-sourced session: its payload has no answers to grade against.
+        const buildLocalGradedAttempt = async (input: SubmitAttemptInput): Promise<Attempt | null> => {
+            const graded = gradeAttempt(activeExamQuestions, input.answers);
+            const attemptData: Attempt = {
+                id: attemptId,
+                examId: id,
+                examTitle: examData.title,
+                studentName: activeSubmitter.name,
+                studentId: activeSubmitter.studentId || activeSubmitter.guestId || persistId,
+                groupId: activeSubmitter.groupId,
+                groupName: activeSubmitter.groupName,
+                regionId: activeSubmitter.regionId,
+                regionName: activeSubmitter.regionName,
+                identityType: activeSubmitter.identityType || (activeSubmitter.isGuest ? 'guest' : 'temporary'),
+                guestId: activeSubmitter.guestId,
+                startedAt: input.startedAt,
+                finishedAt: new Date().toISOString(),
+                score: graded.earnedScore,
+                totalScore: graded.totalScore,
+                answers: input.answers,
+                drawings: input.drawings,
+                drawingsRef: input.drawingsRef,
+                handwriting: input.handwriting,
+                handwritingArchived: input.handwritingArchived,
+                handwritingPlan: input.handwritingPlan,
+                drawingPageCount: input.drawingPageCount,
+                drawingStrokeCount: input.drawingStrokeCount,
+                questionDrawings: input.questionDrawings,
+                status: 'completed' as const,
+                autoSubmitted: input.autoSubmitted,
+                tabFociLostCount: input.tabFociLostCount,
+                questionTimings: input.questionTimings,
+                focusLossEvents: input.focusLossEvents,
+                retake: input.retake,
+            };
+            attemptData.questionResults = buildQuestionResults(
+                { ...examData, questions: activeExamQuestions },
+                attemptData,
+            );
+            try {
+                const result = await saveAttempt(attemptData);
+                const feedback = summarizePersistenceWrite(result, {
+                    target: "답안",
+                    action: "저장",
+                    failureTitle: "답안 저장 실패",
+                    failureDetail: "브라우저 저장소가 가득 찼거나 Supabase 저장에 실패했습니다.",
+                });
+                if (!feedback.ok) return null;
+                if (feedback.level === "info") {
+                    toast.info(feedback.title, feedback.detail);
+                }
+                return attemptData;
+            } catch {
+                return null;
             }
-            if (feedback.level === "info") {
-                toast.info(feedback.title, feedback.detail);
-            }
-            // Clean up draft
-            try { localStorage.removeItem(DRAFT_KEY); } catch {}
-            try { localStorage.removeItem(LEGACY_DRAFT_KEY); } catch {}
-        } catch {
+        };
+
+        const res = await submitAttemptClient(submitInput, pinRef.current || undefined, {
+            server: (input, pin) => submitAttempt(input, pin),
+            localFallback: buildLocalGradedAttempt,
+            allowLocalFallback: examSource === "local",
+        });
+
+        if (res.status !== "ok" || !res.attempt) {
             submittedRef.current = false;
-            toast.error("저장 공간 부족", "브라우저 저장소가 가득 찼습니다. 관리자에게 문의하세요.");
+            // A PIN rejection is only meaningful on the server path — the local
+            // grading path never checks a PIN, so treating a local-session
+            // pin_required as a PIN failure would re-gate against a stale local
+            // PIN and loop. Only the server path re-opens the PIN dialog.
+            if ((res.status === "pin_required" || res.status === "pin_rate_limited") && examSource === "server") {
+                setSolveStatus("pin_required");
+                toast.error(
+                    "PIN 확인 필요",
+                    res.status === "pin_rate_limited"
+                        ? "PIN 시도 횟수를 초과했습니다. 잠시 후 다시 제출해주세요."
+                        : "시험 PIN을 다시 입력한 뒤 제출해주세요.",
+                );
+            } else if (res.status === "denied") {
+                // Fail-closed server refusal: never silently downgraded to a
+                // local-graded attempt. Answers stay in the on-device draft.
+                toast.error("제출이 거부되었습니다", "서버 보안 설정 문제로 제출을 저장할 수 없습니다. 답안은 이 기기에 임시저장되어 있으니 선생님에게 문의해주세요.");
+            } else if (res.status === "ended" || res.status === "not_started" || res.status === "archived") {
+                const copy = accessDecisionCopy({ status: res.status } as ExamAccessDecision);
+                toast.error(copy.title, "제출이 저장되지 않았습니다. 선생님에게 문의해주세요.");
+            } else if (res.source === "local") {
+                toast.error("저장 공간 부족", "브라우저 저장소가 가득 찼습니다. 관리자에게 문의하세요.");
+            } else {
+                toast.error("제출 실패", "네트워크 상태를 확인한 뒤 다시 제출해주세요. 답안은 이 기기에 임시저장되어 있습니다.");
+            }
             return;
         }
+
+        if (res.source === "server") {
+            // Local echo so review/history/dashboard local caches see it immediately.
+            try { saveLocalAttempt(res.attempt); } catch { /* quota — server copy is canonical */ }
+        }
+
+        // Clean up draft
+        try { localStorage.removeItem(DRAFT_KEY); } catch {}
+        try { localStorage.removeItem(LEGACY_DRAFT_KEY); } catch {}
 
         if (autoSubmitted) {
             toast.info("시간 종료", "답안이 자동으로 제출되었습니다.");
         }
-        router.push(`/student/review/${attemptId}`);
+        router.push(`/student/review/${res.attempt.id}`);
     };
 
     const handleSubmit = () => {
@@ -1550,11 +1881,11 @@ export default function SolvePage() {
         void handleSubmitInternal(false);
     };
 
-    const submitGuestName = () => {
+    const submitGuestName = async () => {
         const pending = guestSubmitPending;
         const trimmedName = guestName.trim();
         if (!pending || !trimmedName) return;
-        const submitter = createGuestSubmitter(trimmedName);
+        const submitter = await createGuestSubmitter(trimmedName);
         setGuestSubmitPending(null);
         setGuestName("");
         void handleSubmitInternal(pending.autoSubmitted, submitter);
@@ -1594,6 +1925,20 @@ export default function SolvePage() {
                 setTeacherIdentifier("");
                 setTeacherPassword("");
                 toast.success("선생님 모드 켜짐", "정답/해설 PDF를 확인할 수 있습니다.");
+                // Student payloads no longer carry the answer-key PDF; recover it
+                // from the teacher-side full exam after teacher auth succeeds.
+                if (examSource === "server" && !answerFile) {
+                    void (async () => {
+                        try {
+                            const fullExam = await loadPersistedExam(id);
+                            if (!fullExam) return;
+                            const answerPdf = await storedDataUrlToFile("answer_key.pdf", fullExam.answerKeyPdf, fullExam.answerKeyPdfRef);
+                            if (answerPdf) setAnswerFile(answerPdf);
+                        } catch {
+                            // teacher can still upload the PDF manually
+                        }
+                    })();
+                }
             } else {
                 setTeacherAuthError(res.error || "비밀번호가 틀렸습니다.");
                 setIsTeacherMode(false);
@@ -1610,27 +1955,47 @@ export default function SolvePage() {
         return <SolveLoadErrorCard error={loadError} />;
     }
 
-    if (!examData) {
-        return (
-            <div style={{ padding: '2rem', textAlign: 'center' }}>
-                <h2>시험을 불러오는 중...</h2>
-                <Link href="/" className="btn btn-secondary">홈으로 돌아가기</Link>
-            </div>
-        );
-    }
-
-    const accessDecision = evaluateExamAccess(examData, { session: user, pinVerified });
-    const requiresPin = accessDecision.status === "pin_required";
-    const submitPin = () => {
-        if (!verifyExamPin(examData, pinInput)) {
-            setPinError("PIN이 일치하지 않습니다.");
+    const submitPin = async () => {
+        // Local exams verify the on-device PIN; server exams re-request the
+        // payload with the PIN and let the server decide.
+        if (examSource === "local" && examData) {
+            if (!verifyExamPin(examData, pinInput)) {
+                setPinError("PIN이 일치하지 않습니다.");
+                return;
+            }
+            pinRef.current = pinInput;
+            setPinVerified(true);
+            setPinError("");
             return;
         }
-        setPinVerified(true);
-        setPinError("");
+        const res = await loadExamForSolvingClient(id, pinInput, {
+            server: (examId, pin) => loadExamForSolving(examId, pin),
+            readLocalExam,
+            evaluateLocalAccess: (exam) => {
+                const decision = evaluateExamAccess(exam, { session: user, pinVerified: verifyExamPin(exam, pinInput) });
+                return decision.status === "allowed" ? "ok" : decision.status;
+            },
+        });
+        if (res.status === "ok" && res.exam) {
+            pinRef.current = pinInput;
+            setPinError("");
+            // The PIN just passed — tell applyLoadedExam not to re-gate a local exam.
+            await applyLoadedExam(res.exam as Exam, res.source, user, res.source === "local");
+            return;
+        }
+        setPinError(
+            res.status === "pin_rate_limited"
+                ? "PIN 시도 횟수를 초과했습니다. 잠시 후 다시 시도해주세요."
+                : res.status === "denied"
+                    ? "서버 보안 설정 문제로 PIN을 확인할 수 없습니다. 선생님에게 문의해주세요."
+                    : res.status === "error" || res.status === "not_found"
+                        // Request itself failed — don't imply the PIN was wrong.
+                        ? "확인 중 문제가 발생했습니다. 잠시 후 다시 시도해주세요."
+                        : "PIN이 일치하지 않습니다.",
+        );
     };
 
-    if (requiresPin) {
+    if (solveAccess === "pin_required") {
         return (
             <div className="layout-main solve-page" style={{
                 background: 'var(--background)',
@@ -1641,35 +2006,39 @@ export default function SolvePage() {
                 padding: '1rem',
             }}>
                 <ExamPinDialog
-                    examTitle={examData.title}
+                    examTitle={examData?.title || "이 시험"}
                     value={pinInput}
                     error={pinError}
                     onChange={(next) => {
                         setPinInput(next);
                         if (pinError) setPinError("");
                     }}
-                    onSubmit={submitPin}
+                    onSubmit={() => { void submitPin(); }}
                     onExit={() => router.push("/")}
                 />
             </div>
         );
     }
 
-    const isGroupEntryExam = examData.accessConfig?.type === "group";
+    const isGroupEntryExam = examData?.accessConfig?.type === "group";
     const resolvedLinkGuestGroup = isGroupEntryExam
         ? resolveExamGuestGroup(examData, entryGroupCode || linkClassCode, true)
         : null;
-    const groupEntryAvailable = isGroupEntryExam && allowedExamGroupIds(examData).length > 0;
-    const canUseStudentEntry = !!user && !user.isGuest && accessDecision.status === "allowed";
-    const canShowEntryConfirm = !entryConfirmed && (
-        accessDecision.status === "allowed"
-        || (groupEntryAvailable && (accessDecision.status === "login_required" || accessDecision.status === "group_denied"))
+    const groupEntryAvailable = !!isGroupEntryExam && allowedExamGroupIds(examData).length > 0;
+    const canUseStudentEntry = !!user && !user.isGuest && solveAccess === "ok";
+    const canShowEntryConfirm = !entryConfirmed && !!examData && (
+        solveAccess === "ok"
+        // Group-code guest entry over blocked states stays a LOCAL-exam flow: the
+        // server-issued guest cookie carries no group, so the server path cannot
+        // honor a class code (the blocked dialog routes to student login instead).
+        || (examSource === "local" && groupEntryAvailable
+            && (solveAccess === "login_required" || solveAccess === "group_denied"))
     );
     const studentLoginHref = currentSolvePath
         ? `/?role=student&next=${encodeURIComponent(currentSolvePath)}`
         : "/?role=student";
 
-    if (canShowEntryConfirm) {
+    if (canShowEntryConfirm && examData) {
         return (
             <div className="layout-main solve-page" style={{
                 background: 'var(--background)',
@@ -1697,15 +2066,18 @@ export default function SolvePage() {
                         setEntryGroupCode(next);
                         if (entryError) setEntryError("");
                     }}
-                    onContinueStudent={continueEntryAsStudent}
-                    onContinueGuest={continueEntryAsGuest}
+                    onContinueStudent={() => { void continueEntryAsStudent(); }}
+                    onContinueGuest={() => { void continueEntryAsGuest(); }}
                     onExit={() => router.push("/")}
                 />
             </div>
         );
     }
 
-    if (accessDecision.status !== "allowed") {
+    if (solveAccess !== "ok" && solveAccess !== "loading") {
+        const blockedDecision: ExamAccessDecision = (examSource === "local" && examData)
+            ? evaluateExamAccess(examData, { session: user, pinVerified })
+            : { status: solveAccess } as ExamAccessDecision;
         return (
             <div className="layout-main solve-page" style={{
                 background: 'var(--background)',
@@ -1716,11 +2088,20 @@ export default function SolvePage() {
                 padding: '1rem',
             }}>
                 <ExamAccessBlockedDialog
-                    decision={accessDecision}
+                    decision={blockedDecision}
                     onExit={() => router.push(
-                        accessDecision.status === "login_required" ? buildStudentLoginHref() : "/student/dashboard"
+                        blockedDecision.status === "login_required" ? buildStudentLoginHref() : "/student/dashboard"
                     )}
                 />
+            </div>
+        );
+    }
+
+    if (!examData) {
+        return (
+            <div style={{ padding: '2rem', textAlign: 'center' }}>
+                <h2>시험을 불러오는 중...</h2>
+                <Link href="/" className="btn btn-secondary">홈으로 돌아가기</Link>
             </div>
         );
     }
