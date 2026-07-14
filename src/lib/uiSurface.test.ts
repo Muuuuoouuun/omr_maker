@@ -709,7 +709,7 @@ describe("service UI surface", () => {
         expect(examAnalyticsTab).toContain("참여율");
         expect(examAnalyticsTab).toContain("미응시");
         expect(examAnalyticsTab).toContain("buildKakaoNotificationCandidates");
-        expect(examAnalyticsTab).toContain("setKakaoCandidateReview");
+        expect(examAnalyticsTab).toContain("saveKakaoCandidateReview");
         expect(examAnalyticsTab).toContain("summarizeKakaoCandidateReviews");
         expect(examAnalyticsTab).toContain("queueKakaoDispatchSimulation");
         expect(examAnalyticsTab).toContain("summarizeKakaoDispatchLogs");
