@@ -8,7 +8,7 @@ import { Exam, Attempt, type PlanKey } from "@/types/omr";
 import OverviewTab from "@/components/dashboard/tabs/OverviewTab";
 import ExamAnalyticsTab from "@/components/dashboard/tabs/ExamAnalyticsTab";
 import StudentAnalyticsTab from "@/components/dashboard/tabs/StudentAnalyticsTab";
-import { Activity, AlertTriangle, BarChart2, CheckCircle2, CloudOff, Database, GraduationCap, LayoutDashboard, RefreshCw } from "lucide-react";
+import { Activity, AlertTriangle, BarChart2, CheckCircle2, CloudOff, Database, GraduationCap, LayoutDashboard, MessageSquare, RefreshCw } from "lucide-react";
 import ThemeToggle from "@/components/ThemeToggle";
 import TeacherLogoutButton from "@/components/TeacherLogoutButton";
 import NotificationBell from "@/components/NotificationBell";
@@ -19,6 +19,7 @@ import { buildQuestionResultRepairPlan } from "@/lib/analyticsDataRepair";
 import { loadAttempts, loadExams, saveAttempt } from "@/lib/omrPersistence";
 import { summarizeAnalyticsDataHealth, summarizePersistenceHealth, type PersistenceHealth } from "@/lib/persistenceHealth";
 import { loadRosterSnapshot } from "@/lib/rosterPersistence";
+import { collectStudentQuestionInbox } from "@/lib/studentQuestions";
 import type { RosterGroup, RosterStudent } from "@/lib/rosterStorage";
 import { buildTeacherDashboardMetrics } from "@/lib/teacherDashboardMetrics";
 import { getCurrentPlan } from "@/utils/plans";
@@ -84,6 +85,14 @@ function TeacherDashboard() {
             ? buildQuestionResultRepairPlan([], [])
             : buildQuestionResultRepairPlan(exams, attempts),
         [attempts, dataMode, exams],
+    );
+    // Read-only teacher inbox of per-question student questions across attempts.
+    // Answering happens on the attempt page; this panel only surfaces the queue.
+    const studentQuestionInbox = useMemo(
+        () => dataMode === "demo"
+            ? collectStudentQuestionInbox([])
+            : collectStudentQuestionInbox(attempts),
+        [attempts, dataMode],
     );
 
     const loadDashboardData = useCallback(async (options: DashboardLoadOptions = {}) => {
@@ -750,6 +759,91 @@ function TeacherDashboard() {
                         );
                     })}
                 </div>
+
+                {(studentQuestionInbox.pending.length > 0 || studentQuestionInbox.answered.length > 0) && (
+                    <section
+                        style={{
+                            marginTop: '1.25rem',
+                            padding: '1.25rem',
+                            borderRadius: 'var(--radius-lg)',
+                            border: '1px solid var(--border)',
+                            background: 'var(--surface)',
+                        }}
+                    >
+                        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '0.75rem', marginBottom: '0.85rem', flexWrap: 'wrap' }}>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontWeight: 900, fontSize: '1rem', color: 'var(--foreground)' }}>
+                                <MessageSquare size={18} color="var(--primary)" />
+                                학생 질문 인박스
+                            </div>
+                            <div style={{ display: 'flex', gap: '0.4rem', flexWrap: 'wrap' }}>
+                                <span style={{
+                                    fontSize: '0.74rem',
+                                    fontWeight: 800,
+                                    color: studentQuestionInbox.pending.length > 0 ? '#b45309' : 'var(--muted)',
+                                    background: studentQuestionInbox.pending.length > 0 ? 'rgba(245,158,11,0.14)' : 'var(--background)',
+                                    borderRadius: '999px',
+                                    padding: '0.25rem 0.6rem',
+                                }}>
+                                    대기 {studentQuestionInbox.pending.length}
+                                </span>
+                                <span style={{
+                                    fontSize: '0.74rem',
+                                    fontWeight: 800,
+                                    color: '#0f766e',
+                                    background: 'rgba(13,148,136,0.12)',
+                                    borderRadius: '999px',
+                                    padding: '0.25rem 0.6rem',
+                                }}>
+                                    답변 완료 {studentQuestionInbox.answered.length}
+                                </span>
+                            </div>
+                        </div>
+
+                        {studentQuestionInbox.pending.length > 0 ? (
+                            <div style={{ display: 'grid', gap: '0.55rem' }}>
+                                {studentQuestionInbox.pending.slice(0, 6).map(entry => (
+                                    <Link
+                                        key={`${entry.attemptId}-${entry.note.questionId}`}
+                                        href={`/teacher/attempt/${entry.attemptId}`}
+                                        style={{
+                                            display: 'grid',
+                                            gap: '0.2rem',
+                                            padding: '0.75rem 0.85rem',
+                                            borderRadius: 'var(--radius-md)',
+                                            border: '1px solid var(--border)',
+                                            background: 'var(--background)',
+                                        }}
+                                    >
+                                        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '0.5rem' }}>
+                                            <span style={{ fontWeight: 900, fontSize: '0.84rem', color: 'var(--foreground)' }}>
+                                                {entry.studentName} · {entry.note.questionNumber}번
+                                            </span>
+                                            <span style={{ fontSize: '0.72rem', color: 'var(--muted)', fontWeight: 700, whiteSpace: 'nowrap' }}>
+                                                {entry.examTitle}
+                                            </span>
+                                        </div>
+                                        <span style={{ color: 'var(--muted)', fontSize: '0.82rem', lineHeight: 1.5, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                                            {entry.note.body}
+                                        </span>
+                                    </Link>
+                                ))}
+                                {studentQuestionInbox.pending.length > 6 && (
+                                    <div style={{ color: 'var(--muted)', fontSize: '0.78rem', fontWeight: 700 }}>
+                                        외 {studentQuestionInbox.pending.length - 6}건의 대기 질문
+                                    </div>
+                                )}
+                            </div>
+                        ) : (
+                            <div style={{ color: '#0f766e', fontSize: '0.86rem', fontWeight: 800 }}>
+                                대기 중인 학생 질문이 없습니다.
+                            </div>
+                        )}
+
+                        <p style={{ marginTop: '0.75rem', color: 'var(--muted)', fontSize: '0.76rem', fontWeight: 600 }}>
+                            질문을 누르면 해당 응시 화면에서 답변을 남길 수 있습니다.
+                        </p>
+                    </section>
+                )}
 
                 {/* Tabs */}
                 {renderTabs()}

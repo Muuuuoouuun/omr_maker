@@ -22,6 +22,7 @@ import {
     summarizeAttemptBehavior,
 } from "@/lib/premiumAnalytics";
 import type { LearningRecommendation } from "@/lib/premiumAnalytics";
+import { buildExamRetakeRecoveries, summarizeRetakeRecoveries } from "@/lib/retakeRecovery";
 import { buildQuestionBankReadiness, type QuestionBankReadinessStatus } from "@/lib/questionBank";
 import {
     buildRegionalActionPlans,
@@ -302,6 +303,14 @@ export default function ExamAnalyticsTab({
             ? baseRetakeAttempts
             : filterAttemptsByRegion(baseRetakeAttempts, activeRegionKey, rosterStudents, rosterGroups)
     ), [activeRegionKey, baseRetakeAttempts, rosterGroups, rosterStudents]);
+    // Recovery vs the source attempt; sources are looked up in the unfiltered
+    // pool because a retake can cross the current region filter.
+    const retakeRecoverySummary = useMemo(() => {
+        if (!selectedExam || retakeAttempts.length === 0) return null;
+        return summarizeRetakeRecoveries(
+            buildExamRetakeRecoveries(selectedExam, retakeAttempts, allSelectedExamAttempts),
+        );
+    }, [allSelectedExamAttempts, retakeAttempts, selectedExam]);
     const scopedRosterStudents = useMemo(() => (
         activeRegionKey === ALL_REGION_KEY
             ? rosterStudents
@@ -1577,6 +1586,11 @@ export default function ExamAnalyticsTab({
                             { label: '최저 점수', value: `${examStats.minScore}점`, color: 'var(--warning)' },
                             { label: '응시 인원', value: `${examStats.count}명`, color: 'var(--text)' },
                             { label: '재시험 제출', value: `${retakeAttempts.length}건`, color: '#0f766e' },
+                            ...(retakeRecoverySummary?.recoveryRate !== undefined ? [{
+                                label: '재시험 회복률',
+                                value: `${retakeRecoverySummary.recoveryRate}% (${retakeRecoverySummary.recoveredCount}/${retakeRecoverySummary.targetCount})`,
+                                color: '#16a34a',
+                            }] : []),
                         ].map((stat, i) => (
                             <div key={i} className="card" style={{ padding: '1.5rem', textAlign: 'center', borderTop: `4px solid ${stat.color}` }}>
                                 <div style={{ fontSize: '0.9rem', color: 'var(--muted)', marginBottom: '0.5rem' }}>{stat.label}</div>
