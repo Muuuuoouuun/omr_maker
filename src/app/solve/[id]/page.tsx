@@ -182,7 +182,12 @@ function SolveDialogShell({
         return () => {
             window.cancelAnimationFrame(animationFrame);
             document.removeEventListener('keydown', handleKeyDown, true);
-            if (previouslyFocused?.isConnected) previouslyFocused.focus();
+            // WebKit may apply its own post-Escape focus step after the React
+            // unmount cleanup. Restore on the next frame so the invoking
+            // control reliably regains focus across iPhone/iPad Safari too.
+            window.requestAnimationFrame(() => {
+                if (previouslyFocused?.isConnected) previouslyFocused.focus();
+            });
         };
     }, []);
 
@@ -2861,7 +2866,12 @@ export default function SolvePage() {
             {submitConfirm && (
                 <SubmitConfirmDialog
                     state={submitConfirm}
-                    onClose={() => setSubmitConfirm(null)}
+                    onClose={() => {
+                        setSubmitConfirm(null);
+                        window.requestAnimationFrame(() => {
+                            document.querySelector<HTMLElement>('.solve-submit-button')?.focus();
+                        });
+                    }}
                     onConfirm={confirmSubmit}
                 />
             )}
