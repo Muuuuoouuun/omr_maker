@@ -8,7 +8,7 @@ import { toast } from "@/components/Toast";
 import { verifyTeacherPassword } from "@/app/actions/auth";
 import { issueGuestSession, issueStudentSession } from "@/app/actions/studentSession";
 import { formatRegionScopedLabel } from "@/lib/dashboardSelection";
-import { readLocalAttempts } from "@/lib/omrPersistence";
+import { readLocalAttempts, syncMergedGuestAttempts } from "@/lib/omrPersistence";
 import { readRosterGroups, readRosterStudents, type RosterGroup, type RosterStudent } from "@/lib/rosterStorage";
 import { TEACHER_AUTH_DEPLOYMENT_HELP, shouldShowTeacherDeploymentHelp } from "@/lib/teacherAuthMessages";
 import {
@@ -359,6 +359,13 @@ export default function Home() {
       });
       if (mergedCount > 0) {
         toast.success("게스트 기록 연결됨", `${mergedCount}개의 시험 기록을 학생 기록으로 저장했습니다.`);
+        try {
+          // Push reassigned attempts to the server now; failures are queued and
+          // reconciled again on the dashboard, so login never blocks on sync.
+          await syncMergedGuestAttempts(identity.studentId, { guestId: pendingGuestMerge.guestId });
+        } catch {
+          // SyncFlusher retries queued attempts; dashboard reconciliation covers the rest.
+        }
       } else {
         toast.info("연결할 새 게스트 기록 없음", "이후 제출 기록은 학생 기록으로 저장됩니다.");
       }

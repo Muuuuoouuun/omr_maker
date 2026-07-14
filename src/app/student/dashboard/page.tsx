@@ -21,7 +21,7 @@ import {
     type GuestMergePreview,
     type StudentSession,
 } from "@/utils/storage";
-import { loadAttempts, loadExams } from "@/lib/omrPersistence";
+import { loadAttempts, loadExams, syncMergedGuestAttempts } from "@/lib/omrPersistence";
 import { averageResolvedAttemptPercent, baseAttemptsOnly, retakeAttemptsOnly } from "@/lib/attemptScores";
 import { evaluateExamAccess } from "@/lib/examAccess";
 import { listMyAssignments } from "@/app/actions/studentExam";
@@ -103,6 +103,20 @@ export default function StudentDashboard() {
             const myAttempts = attemptSource === "server"
                 ? myAttemptsResult.attempts
                 : myAttemptsResult.attempts.filter(a => attemptBelongsToSession(a, currentUser));
+
+            // A guest→student merge (here or on the login screen) reassigns
+            // attempt ownership in localStorage only, so the server list still
+            // owns those attempts as the guest and omits them here. When the
+            // server path is active, re-push any reassigned-but-missing attempts
+            // so they reappear, then refresh once they land. Self-terminating:
+            // once synced they show up in the server list and are skipped.
+            if (attemptSource === "server" && !currentUser.isGuest && currentUser.studentId) {
+                const serverIds = myAttempts.map(a => a.id);
+                void syncMergedGuestAttempts(currentUser.studentId, { skipAttemptIds: serverIds })
+                    .then(synced => { if (synced > 0 && !cancelled) setRefreshKey(key => key + 1); })
+                    .catch(() => { /* offline — local path already shows them */ });
+            }
+
             const myBaseAttempts = baseAttemptsOnly(myAttempts);
             const myRetakeAttempts = retakeAttemptsOnly(myAttempts);
             const guestIdForMerge = currentUser.isGuest ? currentUser.guestId : readStoredGuestId();
@@ -177,7 +191,7 @@ export default function StudentDashboard() {
         router.push("/?role=student");
     };
 
-    const handleMergeGuestIntoCurrentStudent = () => {
+    const handleMergeGuestIntoCurrentStudent = async () => {
         if (!user || user.isGuest) return;
         const guestId = guestMergePreview?.guestId || readStoredGuestId();
         if (!guestId) {
@@ -194,6 +208,11 @@ export default function StudentDashboard() {
             identityType: user.identityType,
         });
         if (mergedCount > 0) {
+            // Push the reassigned attempts to the server before refreshing so the
+            // authoritative server list returns them under the student instead of
+            // silently dropping them (they stay owned by the guest remotely until
+            // re-upserted). Offline failures queue for the SyncFlusher retry.
+            await syncMergedGuestAttempts(user.studentId, { guestId }).catch(() => 0);
             toast.success("게스트 기록 연결됨", `${mergedCount}개의 시험 기록을 학생 기록으로 저장했습니다.`);
             setRefreshKey(key => key + 1);
             return;
@@ -406,7 +425,7 @@ export default function StudentDashboard() {
                         </div>
                         <button
                             type="button"
-                            onClick={handleMergeGuestIntoCurrentStudent}
+                            onClick={() => void handleMergeGuestIntoCurrentStudent()}
                             className="btn btn-primary"
                             style={{ fontWeight: 800, padding: '0.72rem 1.25rem', fontSize: '0.9rem', flexShrink: 0 }}
                         >

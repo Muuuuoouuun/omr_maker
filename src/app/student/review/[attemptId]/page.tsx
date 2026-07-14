@@ -28,6 +28,7 @@ import { loadMyAttemptClient, loadReviewExamClient } from "@/lib/studentExamClie
 import { studentQuestionsByQuestionId, upsertStudentQuestion } from "@/lib/studentQuestions";
 import { buildAttemptRetakeRecovery } from "@/lib/retakeRecovery";
 import { toast } from "@/components/Toast";
+import ThemeToggle from "@/components/ThemeToggle";
 import { formatKoreanDateTime } from "@/lib/pure";
 import { safeScorePercent } from "@/lib/scoreUtils";
 import {
@@ -283,9 +284,9 @@ function QuestionCard({
                         <div style={{
                             padding: '0.65rem 0.75rem',
                             borderRadius: 'var(--radius-md)',
-                            border: '1px solid #e2e8f0',
-                            background: '#f8fafc',
-                            color: '#475569',
+                            border: '1px solid var(--border)',
+                            background: 'var(--background)',
+                            color: 'var(--muted)',
                             fontSize: '0.82rem',
                             lineHeight: 1.6,
                             whiteSpace: 'pre-wrap',
@@ -298,15 +299,15 @@ function QuestionCard({
                         <div style={{
                             padding: '0.7rem 0.8rem',
                             borderRadius: 'var(--radius-md)',
-                            border: '1px solid #99f6e4',
-                            background: '#f0fdfa',
+                            border: '1px solid color-mix(in srgb, var(--success) 45%, var(--border))',
+                            background: 'color-mix(in srgb, var(--success) 10%, var(--surface))',
                             marginBottom: '0.65rem',
                         }}>
                             <div style={{
                                 display: 'flex',
                                 alignItems: 'center',
                                 gap: '0.35rem',
-                                color: '#0f766e',
+                                color: 'var(--success)',
                                 fontWeight: 800,
                                 fontSize: '0.78rem',
                                 marginBottom: '0.35rem',
@@ -319,7 +320,7 @@ function QuestionCard({
                                     · {formatKoreanDateTime(submittedQuestion.answer.createdAt)}
                                 </span>
                             </div>
-                            <div style={{ color: '#134e4a', fontSize: '0.85rem', lineHeight: 1.65, whiteSpace: 'pre-wrap' }}>
+                            <div style={{ color: 'var(--foreground)', fontSize: '0.85rem', lineHeight: 1.65, whiteSpace: 'pre-wrap' }}>
                                 {submittedQuestion.answer.body}
                             </div>
                         </div>
@@ -766,6 +767,7 @@ export default function ReviewPage() {
                         <Link href="/student/history" className="btn btn-secondary" style={{ fontSize: '0.78rem', padding: '0.32rem 0.8rem' }}>
                             목록으로
                         </Link>
+                        <ThemeToggle size="small" />
                     </div>
                 </div>
             </header>

@@ -1536,6 +1536,61 @@ export function clearAttemptPendingSync(attemptId: string): void {
 }
 
 /**
+ * Local attempts whose owner was reassigned from a guest to a registered
+ * student by a guest→student merge. The merge (utils/storage.mergeGuestAttempts)
+ * only rewrites localStorage, so their remote rows still carry the old
+ * student_id ("guest:<id>"). Selecting them lets the caller re-push the
+ * ownership change to Supabase so the server assignment list — authoritative
+ * when Supabase is configured — returns them under the student.
+ *
+ * `guestId` narrows to a single merge; `skipAttemptIds` drops ids already
+ * present remotely (e.g. the current server list) so a load-time reconciliation
+ * only touches the rows the server is still missing and is self-terminating.
+ */
+export function selectMergedGuestAttempts(
+    attempts: Attempt[],
+    studentId: string,
+    options: { guestId?: string; skipAttemptIds?: string[] } = {},
+): Attempt[] {
+    if (!studentId || studentId.startsWith("guest:")) return [];
+    const skip = new Set(options.skipAttemptIds || []);
+    return attempts.filter(attempt =>
+        attempt.studentId === studentId
+        && !!attempt.mergedFromGuestId
+        && (!options.guestId || attempt.mergedFromGuestId === options.guestId)
+        && !skip.has(attempt.id),
+    );
+}
+
+/**
+ * Propagate a guest→student merge to Supabase. Without this the reassigned
+ * attempts live only in localStorage; the server assignment list still owns
+ * them as the guest, so they silently vanish from the student's dashboard and
+ * history on the (authoritative) server path. Re-upsert each reassigned attempt
+ * under the new owner; failures are queued for the SyncFlusher retry. Returns
+ * the number successfully re-synced.
+ */
+export async function syncMergedGuestAttempts(
+    studentId: string,
+    options: { guestId?: string; skipAttemptIds?: string[] } = {},
+): Promise<number> {
+    if (!isSupabaseConfigured()) return 0;
+    const reassigned = selectMergedGuestAttempts(readLocalAttempts(), studentId, options);
+    let synced = 0;
+    for (const attempt of reassigned) {
+        try {
+            await upsertRemoteAttempt(attempt);
+            clearAttemptPendingSync(attempt.id);
+            synced += 1;
+        } catch {
+            // Remember the failure so the online/visibility flush retries it.
+            queueAttemptPendingSync(attempt.id);
+        }
+    }
+    return synced;
+}
+
+/**
  * Retry remote upserts for attempts whose last save failed remotely. Covers
  * the common student path (submit → single review, no list load) via the
  * online/visibilitychange hooks in SyncFlusher. Returns how many are still pending.

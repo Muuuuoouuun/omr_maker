@@ -24,6 +24,7 @@ import {
     flushPendingAttemptSync,
     queueAttemptPendingSync,
     readPendingAttemptSyncIds,
+    selectMergedGuestAttempts,
     sanitizeAttemptPayload,
     sanitizeExamPayload,
     saveLocalExam,
@@ -931,5 +932,54 @@ describe("Pending attempt sync registry", () => {
 
         expect(remaining).toBe(1);
         expect(readPendingAttemptSyncIds()).toEqual(["a1"]);
+    });
+});
+
+describe("selectMergedGuestAttempts", () => {
+    const mergedFor = (id: string, studentId: string, mergedFromGuestId?: string): Attempt => ({
+        id,
+        examId: "exam-1",
+        examTitle: "Final",
+        studentName: "Kim",
+        studentId,
+        mergedFromGuestId,
+        startedAt: "2026-06-14T09:00:00.000Z",
+        finishedAt: "2026-06-14T09:30:00.000Z",
+        score: 10,
+        totalScore: 20,
+        answers: {},
+        status: "completed",
+    });
+
+    it("selects attempts reassigned from a guest to the student", () => {
+        const attempts = [
+            mergedFor("a1", "class-a::Kim", "guest-1"),
+            mergedFor("a2", "class-a::Kim", "guest-1"),
+            mergedFor("a3", "guest:guest-1"), // still a guest attempt — skip
+            mergedFor("a4", "class-a::Kim"), // no merge marker — skip
+            mergedFor("a5", "class-b::Lee", "guest-1"), // different student — skip
+        ];
+
+        const selected = selectMergedGuestAttempts(attempts, "class-a::Kim");
+        expect(selected.map(a => a.id)).toEqual(["a1", "a2"]);
+    });
+
+    it("narrows by guestId and skips ids already present remotely", () => {
+        const attempts = [
+            mergedFor("a1", "class-a::Kim", "guest-1"),
+            mergedFor("a2", "class-a::Kim", "guest-2"),
+            mergedFor("a3", "class-a::Kim", "guest-1"),
+        ];
+
+        expect(selectMergedGuestAttempts(attempts, "class-a::Kim", { guestId: "guest-1" }).map(a => a.id))
+            .toEqual(["a1", "a3"]);
+        expect(selectMergedGuestAttempts(attempts, "class-a::Kim", { skipAttemptIds: ["a1"] }).map(a => a.id))
+            .toEqual(["a2", "a3"]);
+    });
+
+    it("never targets a guest owner", () => {
+        const attempts = [mergedFor("a1", "guest:guest-1", "guest-1")];
+        expect(selectMergedGuestAttempts(attempts, "guest:guest-1")).toEqual([]);
+        expect(selectMergedGuestAttempts(attempts, "")).toEqual([]);
     });
 });

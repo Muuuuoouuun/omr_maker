@@ -23,6 +23,7 @@ import {
 } from "@/lib/premiumAnalytics";
 import { hasTeacherSession, readTeacherSession } from "@/lib/teacherSession";
 import { buildRetakeHref } from "@/lib/retakeLinks";
+import ThemeToggle from "@/components/ThemeToggle";
 
 const PDFViewer = dynamic(() => import("@/components/PDFViewer"), { ssr: false });
 
@@ -353,6 +354,7 @@ export default function TeacherAttemptPage() {
                         <Link href={`/teacher/exam/${attempt.examId}`} className="btn btn-secondary" style={{ fontSize: '0.85rem' }}>
                             시험 결과로
                         </Link>
+                        <ThemeToggle size="small" />
                     </div>
                 </div>
             </header>
