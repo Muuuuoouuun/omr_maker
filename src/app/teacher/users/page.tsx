@@ -60,6 +60,8 @@ import { PremiumActionLink } from "@/components/PremiumFeatureGate";
 import { findStudentStartCode, generateStartCode, readStudentCodes, writeStudentCodes } from "@/lib/studentCodes";
 import { getCurrentPlan, hasPlanEntitlement } from "@/utils/plans";
 import { studentIdFor } from "@/utils/storage";
+import { syncStudentAccessCodes } from "@/app/actions/studentSession";
+import { readActiveWorkspaceContext } from "@/lib/workspaceContext";
 
 type TabType = "students" | "groups" | "invites";
 type RosterDataMode = "real" | "demo";
@@ -212,9 +214,12 @@ function normalizeEmail(value: string): string {
     return value.trim().toLowerCase();
 }
 
-function resolveInviteUrl(): string {
-    if (typeof window === "undefined") return "/?role=student";
-    return `${window.location.origin}/?role=student`;
+function resolveInviteUrl(workspaceId: string): string {
+    const query = new URLSearchParams({ role: "student" });
+    if (workspaceId) query.set("workspace", workspaceId);
+    const path = `/?${query.toString()}`;
+    if (typeof window === "undefined") return path;
+    return `${window.location.origin}${path}`;
 }
 
 export default function ManageUsersPage() {
@@ -249,6 +254,8 @@ function ManageUsersInner() {
     const [allAttempts, setAllAttempts] = useState<Attempt[]>([]);
     const [exams, setExams] = useState<Exam[]>([]);
     const [studentCodeRegistry, setStudentCodeRegistry] = useState<Record<string, string>>({});
+    const [workspaceId, setWorkspaceId] = useState("");
+    const [issuingStudentCode, setIssuingStudentCode] = useState(false);
     const [currentPlan] = useState<PlanKey>(() => getCurrentPlan());
     const [hydrated, setHydrated] = useState(false);
     const studentGrowthReportsEnabled = hasPlanEntitlement(currentPlan, "studentGrowthReports");
@@ -291,6 +298,7 @@ function ManageUsersInner() {
         let cancelled = false;
         const hydrateRoster = async () => {
             try {
+                setWorkspaceId(readActiveWorkspaceContext(sessionStorage).organizationId);
                 const storedRosterExists = hasStoredRosterData(localStorage);
                 const storedStudents = readRosterStudents(localStorage);
                 const storedGroups = readRosterGroups(localStorage);
@@ -322,7 +330,18 @@ function ManageUsersInner() {
                         "Supabase 명단 동기화가 지연되어 현재 기기 데이터를 우선 사용했습니다."
                     );
                 }
-                setStudentCodeRegistry(readStudentCodes(localStorage));
+                const storedCodes = readStudentCodes(localStorage);
+                setStudentCodeRegistry(storedCodes);
+                const codeEntries = Object.entries(storedCodes).map(([studentId, code]) => ({ studentId, code }));
+                if (codeEntries.length > 0) {
+                    void syncStudentAccessCodes(codeEntries).then(result => {
+                        if (cancelled || result.status === "ok" || result.status === "degraded_local") return;
+                        toast.info(
+                            "시작 코드는 이 기기에 보관 중",
+                            "서버 동기화가 지연되어 다음 명단 로드 때 다시 연결합니다."
+                        );
+                    });
+                }
             } catch {
                 if (cancelled) return;
                 setStudents([]);
@@ -599,19 +618,39 @@ function ManageUsersInner() {
         setShowGroupProfileModal(true);
     };
 
-    const handleIssueStudentStartCode = () => {
+    const handleIssueStudentStartCode = async () => {
         if (!selected || isDemoRoster) {
             toast.info("실제 학생에서만 코드 발급", "저장된 명단의 학생을 선택한 뒤 시작 코드를 발급할 수 있습니다.");
             return;
         }
+        if (issuingStudentCode) return;
+        setIssuingStudentCode(true);
         const nextCode = generateStartCode();
         const nextRegistry = { ...studentCodeRegistry, [selected.id]: nextCode };
         if (!writeStudentCodes(localStorage, nextRegistry)) {
             toast.error("코드 저장 실패", "브라우저 저장소를 확인한 뒤 다시 시도해주세요.");
+            setIssuingStudentCode(false);
             return;
         }
         setStudentCodeRegistry(nextRegistry);
-        toast.success(selectedStartCode ? "시작 코드 재발급" : "시작 코드 발급", `${selected.name}: ${nextCode}`);
+        try {
+            const result = await syncStudentAccessCodes([{ studentId: selected.id, code: nextCode }]);
+            if (result.status === "error" || result.status === "unauthenticated" || result.missingCount) {
+                toast.info(
+                    "코드는 이 기기에 발급됨",
+                    "학생 서버 계정 연결이 지연되었습니다. 명단 동기화 후 다시 발급해주세요."
+                );
+                return;
+            }
+            toast.success(selectedStartCode ? "시작 코드 재발급" : "시작 코드 발급", `${selected.name}: ${nextCode}`);
+        } catch {
+            toast.info(
+                "코드는 이 기기에 발급됨",
+                "서버 연결이 지연되었습니다. 온라인 학생 로그인 전 다시 발급해주세요."
+            );
+        } finally {
+            setIssuingStudentCode(false);
+        }
     };
 
     const handleCopyStudentStartCode = async () => {
@@ -1045,7 +1084,8 @@ function ManageUsersInner() {
     // ===== Invite actions =====
     const handleCopyInvite = async () => {
         try {
-            await navigator.clipboard.writeText(resolveInviteUrl());
+            const activeWorkspaceId = workspaceId || readActiveWorkspaceContext(sessionStorage).organizationId;
+            await navigator.clipboard.writeText(resolveInviteUrl(activeWorkspaceId));
             setCopyFlash(true);
             setTimeout(() => setCopyFlash(false), 1500);
         } catch {}
@@ -1826,7 +1866,7 @@ function ManageUsersInner() {
                                             aria-label={selectedStartCode ? '학생 시작 코드 재발급' : '학생 시작 코드 발급'}
                                             data-testid="issue-student-start-code"
                                             onClick={handleIssueStudentStartCode}
-                                            disabled={isDemoRoster}
+                                            disabled={isDemoRoster || issuingStudentCode}
                                             style={{
                                                 flex: 1,
                                                 padding: '0.55rem 0.65rem',
@@ -1840,11 +1880,11 @@ function ManageUsersInner() {
                                                 alignItems: 'center',
                                                 justifyContent: 'center',
                                                 gap: '0.35rem',
-                                                opacity: isDemoRoster ? 0.55 : 1,
+                                                opacity: isDemoRoster || issuingStudentCode ? 0.55 : 1,
                                             }}
                                         >
-                                            <RefreshCw size={13} />
-                                            {selectedStartCode ? '재발급' : '발급'}
+                                            <RefreshCw size={13} className={issuingStudentCode ? 'animate-spin' : undefined} />
+                                            {issuingStudentCode ? '연결 중' : selectedStartCode ? '재발급' : '발급'}
                                         </button>
                                         <button
                                             type="button"
@@ -2188,7 +2228,9 @@ function ManageUsersInner() {
                             <LinkIcon size={20} color="var(--primary)" style={{ flexShrink: 0, marginTop: 2 }} />
                             <div style={{ flex: 1 }}>
                                 <div style={{ fontSize: '0.85rem', fontWeight: 700, marginBottom: '0.25rem' }}>초대 링크</div>
-                                <code style={{ fontSize: '0.8rem', color: 'var(--muted)' }}>현재 도메인/?role=student</code>
+                                <code style={{ fontSize: '0.8rem', color: 'var(--muted)' }}>
+                                    현재 도메인/?role=student&amp;workspace={workspaceId || '내-학원'}
+                                </code>
                             </div>
                             {copyFlash && (
                                 <span style={{ fontSize: '0.8rem', color: 'var(--success)', fontWeight: 700 }}>복사됨</span>

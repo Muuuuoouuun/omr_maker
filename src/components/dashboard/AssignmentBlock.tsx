@@ -1,8 +1,9 @@
 import Link from "next/link";
 import { Exam } from "@/types/omr";
+import type { SolvableExam } from "@/lib/examSolvePayload";
 
 interface AssignmentBlockProps {
-  exams: Array<Exam & { attemptId?: string }>;
+  exams: Array<(Exam | SolvableExam) & { attemptId?: string }>;
   type: "todo" | "done";
 }
 

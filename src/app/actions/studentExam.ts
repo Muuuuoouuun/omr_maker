@@ -1,9 +1,8 @@
 "use server";
 
 import { cookies } from "next/headers";
-import { randomUUID } from "node:crypto";
-import { parseSignedStudentSessionCookie, STUDENT_SERVER_SESSION_COOKIE, type StudentServerIdentity } from "@/lib/studentServerSession";
-import { getSupabaseServerConfigFromEnv, createSupabaseAdminClient, fetchAttemptRowsByOwner, fetchExamRowById, type SupabaseAdminClientLike, type SupabaseAdminReadClientLike } from "@/lib/supabaseServerAdmin";
+import { parseSignedStudentSessionCookie, resolveStudentSessionSecret, STUDENT_SERVER_SESSION_COOKIE, type StudentServerIdentity } from "@/lib/studentServerSession";
+import { getSupabaseServerConfigFromEnv, createSupabaseAdminClient, fetchAttemptRowByOwnerAndId, fetchAttemptRowsByOwner, fetchExamRowById, fetchExamRowsByOrganization, type SupabaseAdminClientLike, type SupabaseAdminReadClientLike } from "@/lib/supabaseServerAdmin";
 import { attemptFromSupabaseRow, examFromSupabaseRow, attemptToSupabaseRow, questionResultRowsForAttempt } from "@/lib/omrPersistence";
 import { evaluateExamAccess, examRequiresPin, verifyExamPin } from "@/lib/examAccess";
 import {
@@ -15,6 +14,7 @@ import {
 import { stripExamForReview, stripExamForSolving, type ReviewableExam, type SolvableExam } from "@/lib/examSolvePayload";
 import { attemptOwnedBy, buildServerAttempt, identityAccessSession, ownerStudentId, type SubmitAttemptInput } from "@/lib/studentExamCore";
 import { upsertStudentQuestion, type StudentQuestionInput } from "@/lib/studentQuestions";
+import { attemptIdForStudentSubmission } from "@/lib/studentSubmissionId";
 import type { Attempt, Exam } from "@/types/omr";
 
 type Status = "ok" | "unauthenticated" | "degraded_local" | "denied" | "not_found" | "error";
@@ -121,12 +121,25 @@ export async function submitAttempt(input: SubmitAttemptInput, pin?: string): Pr
     const ctx = await resolveCtx();
     if (!isCtx(ctx)) return ctx;
     try {
+        const attemptId = attemptIdForStudentSubmission({
+            submissionId: input.submissionId,
+            examId: input.examId,
+            ownerStudentId: ownerStudentId(ctx.identity),
+            secret: resolveStudentSessionSecret(),
+        });
+        if (!attemptId) return { status: "error" };
+        const existingRow = await fetchAttemptRowByOwnerAndId(ctx.admin, { studentId: ownerStudentId(ctx.identity) }, attemptId);
+        if (existingRow) {
+            const existingAttempt = attemptFromSupabaseRow(existingRow as Parameters<typeof attemptFromSupabaseRow>[0]);
+            if (attemptOwnedBy(existingAttempt, ctx.identity)) return { status: "ok", attempt: existingAttempt };
+        }
+
         const row = await fetchExamRowById(ctx.admin, input.examId);
         if (!row) return { status: "not_found" };
         const exam = examFromSupabaseRow(row as Parameters<typeof examFromSupabaseRow>[0]);
         const access = evaluateGatedAccess(exam, ctx.identity, pin, { graceMs: SUBMIT_ENDAT_GRACE_MS });
         if (access !== "allowed") return { status: access };
-        const attempt = buildServerAttempt(input, exam, ctx.identity, randomUUID(), new Date().toISOString());
+        const attempt = buildServerAttempt(input, exam, ctx.identity, attemptId, new Date().toISOString());
         const attemptResult = await ctx.admin.from("omr_attempts").upsert(attemptToSupabaseRow(attempt));
         if (attemptResult.error) return { status: "error" };
         // question-results upsert is idempotent (keyed by attempt id); a client retry reconciles a partial write.
@@ -142,11 +155,26 @@ export async function submitAttempt(input: SubmitAttemptInput, pin?: string): Pr
     }
 }
 
-export async function listMyAssignments(): Promise<{ status: Status; attempts?: Attempt[] }> {
+export async function listMyAssignments(): Promise<{ status: Status; attempts?: Attempt[]; exams?: SolvableExam[] }> {
     const ctx = await resolveCtx();
     if (!isCtx(ctx)) return ctx;
     try {
-        return { status: "ok", attempts: await ownAttempts(ctx.admin, ctx.identity) };
+        const [attempts, examRows] = await Promise.all([
+            ownAttempts(ctx.admin, ctx.identity),
+            ctx.identity.organizationId
+                ? fetchExamRowsByOrganization(ctx.admin, ctx.identity.organizationId)
+                : Promise.resolve([]),
+        ]);
+        const exams = examRows.flatMap(row => {
+            try {
+                const exam = examFromSupabaseRow(row as Parameters<typeof examFromSupabaseRow>[0]);
+                const access = evaluateGatedAccess(exam, ctx.identity, undefined);
+                return access === "allowed" || access === "pin_required" ? [stripExamForSolving(exam)] : [];
+            } catch {
+                return [];
+            }
+        });
+        return { status: "ok", attempts, exams };
     } catch (e) {
         console.error("listMyAssignments failed", e);
         return { status: "error" };

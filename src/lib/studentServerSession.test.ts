@@ -9,7 +9,7 @@ import {
 const GUEST: StudentIdentityInput = { kind: "guest", guestId: "g-123", name: "Guest Student", identityType: "guest" };
 const STUDENT: StudentIdentityInput = {
     kind: "student", studentId: "grp1::김철수", name: "김철수",
-    groupId: "grp1", groupName: "1반", identityType: "temporary",
+    organizationId: "teacher_abc", groupId: "grp1", groupName: "1반", identityType: "temporary",
 };
 const ENV = { STUDENT_SESSION_SECRET: "test-secret", NODE_ENV: "test" } as Record<string, string>;
 
@@ -31,7 +31,12 @@ describe("studentServerSession", () => {
         const now = 1_000_000;
         const cookie = createSignedStudentSessionCookie(STUDENT, ENV, now)!;
         const parsed = parseSignedStudentSessionCookie(cookie, ENV, now + 1000);
-        expect(parsed).toMatchObject({ kind: "student", studentId: "grp1::김철수", groupId: "grp1" });
+        expect(parsed).toMatchObject({
+            kind: "student",
+            studentId: "grp1::김철수",
+            organizationId: "teacher_abc",
+            groupId: "grp1",
+        });
     });
 
     it("rejects a tampered signature", () => {

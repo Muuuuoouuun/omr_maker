@@ -14,7 +14,12 @@ const GUEST: StudentServerIdentity = {
     kind: "guest", guestId: "g1", name: "Guest Student", identityType: "guest",
     issuedAt: 0, expiresAt: 9e15,
 };
-const INPUT: SubmitAttemptInput = { examId: "e1", answers: { 1: 3, 2: 4 }, startedAt: "2026-07-01T01:00:00.000Z" };
+const INPUT: SubmitAttemptInput = {
+    examId: "e1",
+    submissionId: "550e8400-e29b-41d4-a716-446655440000",
+    answers: { 1: 3, 2: 4 },
+    startedAt: "2026-07-01T01:00:00.000Z",
+};
 
 describe("remainingSecondsWithinWindow", () => {
     const NOW = Date.parse("2026-07-01T01:00:00.000Z");
@@ -94,7 +99,7 @@ describe("studentExamCore", () => {
     it("grades a retake over the scoped questions only", () => {
         const retake = { sourceAttemptId: "base1", questionIds: [2], mode: "wrong" as const, createdAt: "2026-07-01T01:00:00.000Z" };
         const attempt = buildServerAttempt(
-            { examId: "e1", answers: { 2: 2 }, startedAt: "2026-07-01T01:00:00.000Z", retake },
+            { ...INPUT, answers: { 2: 2 }, retake },
             EXAM, GUEST, "att-retake", "2026-07-01T01:30:00.000Z",
         );
         expect(attempt.totalScore).toBe(10);          // only q2 in scope
@@ -131,6 +136,7 @@ describe("studentExamCore", () => {
         const attempt = buildServerAttempt(
             {
                 examId: "e1",
+                submissionId: INPUT.submissionId,
                 answers: { 1: 3, 2: 2 },
                 startedAt: "2026-07-01T01:00:00.000Z",
                 retake: { sourceAttemptId: "base1", questionIds: [1, 2], mode: "custom", createdAt: "x" },

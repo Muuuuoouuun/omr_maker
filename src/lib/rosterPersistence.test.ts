@@ -819,6 +819,38 @@ describe("roster persistence", () => {
             const studentUpsert = recordedUpserts.find(call => call.table === "omr_student_profiles");
             expect(studentUpsert?.rows.map(row => row.id)).toEqual([edited.id]);
         });
+
+        it("preserves server-managed student access-code metadata during roster edits", async () => {
+            const snapshot: RosterSnapshot = { students: [students[0]], groups: [groups[0]], invites: [] };
+            seedRemoteRosterBaseline(snapshot);
+            const remoteStudent = remoteTables.omr_student_profiles[0];
+            remoteStudent.metadata = {
+                ...(remoteStudent.metadata as Record<string, unknown>),
+                studentAccessCode: {
+                    version: 1,
+                    hash: "a".repeat(64),
+                    updatedAt: "2026-06-16T01:00:00.000Z",
+                },
+            };
+
+            const storage = createStorage();
+            writeLocalRosterSnapshot(storage, snapshot);
+            recordedUpserts.length = 0;
+
+            await saveRosterSnapshot(storage, {
+                ...snapshot,
+                students: [{ ...students[0], avgScore: 91 }],
+            });
+
+            const studentUpsert = recordedUpserts.find(call => call.table === "omr_student_profiles");
+            expect(studentUpsert?.rows[0].metadata).toMatchObject({
+                avgScore: 91,
+                studentAccessCode: {
+                    version: 1,
+                    hash: "a".repeat(64),
+                },
+            });
+        });
     });
 
     describe("reconcileRemoteDeletions", () => {

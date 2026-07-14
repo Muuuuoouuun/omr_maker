@@ -9,6 +9,10 @@ import {
     verifyTeacherLogin,
     type TeacherLoginIdentity,
 } from "@/lib/teacherAuth";
+import {
+    TEACHER_AUTH_SESSION_CONFIG_ERROR,
+    TEACHER_AUTH_SESSION_COOKIE_ERROR,
+} from "@/lib/teacherAuthMessages";
 import { bootstrapWorkspaceWithServiceRole } from "@/lib/supabaseServerAdmin";
 import {
     buildTeacherLoginRateLimitKeys,
@@ -61,10 +65,16 @@ export async function verifyTeacherPassword(
 
     const result = verifyTeacherLogin(identifier, password);
     if (result.success && result.teacher) {
-        recordTeacherLoginSuccess(rateLimitKeys);
         const token = mintTeacherToken();
         const serverSession = createSignedTeacherSessionCookie(token, result.teacher);
-        if (serverSession) {
+        if (!serverSession) {
+            return {
+                success: false,
+                error: TEACHER_AUTH_SESSION_CONFIG_ERROR,
+            };
+        }
+
+        try {
             const cookieStore = await cookies();
             cookieStore.set(TEACHER_SERVER_SESSION_COOKIE, serverSession, {
                 httpOnly: true,
@@ -73,7 +83,15 @@ export async function verifyTeacherPassword(
                 path: "/",
                 maxAge: TEACHER_SERVER_SESSION_MAX_AGE_SECONDS,
             });
+        } catch (error) {
+            console.error("Teacher session cookie write failed", error);
+            return {
+                success: false,
+                error: TEACHER_AUTH_SESSION_COOKIE_ERROR,
+            };
         }
+
+        recordTeacherLoginSuccess(rateLimitKeys);
         const bootstrapResult = await bootstrapWorkspaceWithServiceRole(workspaceContextFromIdentity(result.teacher));
         if (!bootstrapResult.ok && !bootstrapResult.skipped) {
             console.warn("Teacher workspace bootstrap failed", bootstrapResult.error);

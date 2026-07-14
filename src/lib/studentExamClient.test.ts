@@ -16,6 +16,7 @@ const LOCAL_EXAM: Exam = {
 };
 
 const ATTEMPT = { id: "a1", examId: "e1" } as Attempt;
+const SUBMISSION = { examId: "e1", submissionId: "550e8400-e29b-41d4-a716-446655440000", answers: {}, startedAt: "x" };
 
 describe("loadExamForSolvingClient", () => {
     const okDeps = {
@@ -78,11 +79,11 @@ describe("submitAttemptClient", () => {
         const server = vi.fn().mockResolvedValue({ status: "ok", attempt: ATTEMPT });
         const localFallback = vi.fn();
         const res = await submitAttemptClient(
-            { examId: "e1", answers: {}, startedAt: "x" }, "1234",
+            SUBMISSION, "1234",
             { server, localFallback, allowLocalFallback: true },
         );
         expect(res).toMatchObject({ status: "ok", source: "server" });
-        expect(server).toHaveBeenCalledWith({ examId: "e1", answers: {}, startedAt: "x" }, "1234");
+        expect(server).toHaveBeenCalledWith(SUBMISSION, "1234");
         expect(localFallback).not.toHaveBeenCalled();
     });
 
@@ -90,7 +91,7 @@ describe("submitAttemptClient", () => {
         const server = vi.fn().mockResolvedValue({ status: "degraded_local" });
         const localFallback = vi.fn().mockResolvedValue(ATTEMPT);
         const res = await submitAttemptClient(
-            { examId: "e1", answers: {}, startedAt: "x" }, undefined,
+            SUBMISSION, undefined,
             { server, localFallback, allowLocalFallback: true },
         );
         expect(res).toMatchObject({ status: "ok", source: "local" });
@@ -100,7 +101,7 @@ describe("submitAttemptClient", () => {
         const server = vi.fn().mockRejectedValue(new Error("network"));
         const localFallback = vi.fn();
         const res = await submitAttemptClient(
-            { examId: "e1", answers: {}, startedAt: "x" }, undefined,
+            SUBMISSION, undefined,
             { server, localFallback, allowLocalFallback: false },
         );
         expect(res.status).toBe("error");
@@ -110,7 +111,7 @@ describe("submitAttemptClient", () => {
     it("passes access rejections through (pin_required)", async () => {
         const server = vi.fn().mockResolvedValue({ status: "pin_required" });
         const res = await submitAttemptClient(
-            { examId: "e1", answers: {}, startedAt: "x" }, undefined,
+            SUBMISSION, undefined,
             { server, localFallback: vi.fn(), allowLocalFallback: true },
         );
         expect(res.status).toBe("pin_required");
@@ -120,11 +121,12 @@ describe("submitAttemptClient", () => {
 describe("listMyAssignmentsClient", () => {
     it("uses the server list when available", async () => {
         const res = await listMyAssignmentsClient({
-            server: vi.fn().mockResolvedValue({ status: "ok", attempts: [ATTEMPT] }),
+            server: vi.fn().mockResolvedValue({ status: "ok", attempts: [ATTEMPT], exams: [{ id: "e1", title: "서버 시험", questions: [] }] }),
             localFallback: vi.fn(),
         });
         expect(res).toMatchObject({ status: "ok", source: "server" });
         expect(res.attempts).toHaveLength(1);
+        expect(res.exams).toEqual([expect.objectContaining({ id: "e1" })]);
     });
 
     it("falls back to the local list on degraded/error/throw", async () => {
@@ -140,6 +142,16 @@ describe("listMyAssignmentsClient", () => {
             expect(res).toMatchObject({ status: "ok", source: "local" });
             expect(res.attempts).toHaveLength(1);
         }
+    });
+
+    it("does not use a local identity when the server explicitly rejects the session", async () => {
+        const localFallback = vi.fn().mockResolvedValue([ATTEMPT]);
+        const res = await listMyAssignmentsClient({
+            server: vi.fn().mockResolvedValue({ status: "unauthenticated" }),
+            localFallback,
+        });
+        expect(res).toMatchObject({ status: "unauthenticated", source: "server", attempts: [] });
+        expect(localFallback).not.toHaveBeenCalled();
     });
 });
 

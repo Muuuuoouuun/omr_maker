@@ -4,7 +4,7 @@ import {
     getSupabaseServerConfigFromEnv,
     type SupabaseAdminClientLike,
 } from "./supabaseServerAdmin";
-import { fetchAttemptRowsByOwner, fetchExamRowById } from "./supabaseServerAdmin";
+import { fetchAttemptRowByOwnerAndId, fetchAttemptRowsByOwner, fetchExamRowById, fetchExamRowsByOrganization } from "./supabaseServerAdmin";
 import { workspaceContextFromIdentity } from "./workspaceContext";
 
 function mockAdminClient(failTable?: string): { client: SupabaseAdminClientLike; writes: { table: string; op: string; row: unknown }[] } {
@@ -131,6 +131,17 @@ describe("Supabase server admin reads", () => {
         expect(await fetchExamRowById(client, "missing")).toBeNull();
     });
 
+    it("fetches only exams in the signed student's organization", async () => {
+        const client = mockReadClient({
+            omr_exams: [
+                { id: "e1", organization_id: "teacher_a" },
+                { id: "e2", organization_id: "teacher_b" },
+            ],
+        });
+        expect(await fetchExamRowsByOrganization(client, "teacher_b"))
+            .toEqual([{ id: "e2", organization_id: "teacher_b" }]);
+    });
+
     it("fetches attempt rows scoped to a guest owner", async () => {
         const client = mockReadClient({
             omr_attempts: [
@@ -140,5 +151,18 @@ describe("Supabase server admin reads", () => {
         });
         const rows = await fetchAttemptRowsByOwner(client, { studentId: "guest:g1" });
         expect(rows.map(r => (r as { id: string }).id)).toEqual(["a1"]);
+    });
+
+    it("fetches one retry attempt by both id and owner", async () => {
+        const client = mockReadClient({
+            omr_attempts: [
+                { id: "same", student_id: "student-a", exam_id: "e1" },
+                { id: "same", student_id: "student-b", exam_id: "e1" },
+            ],
+        });
+        expect(await fetchAttemptRowByOwnerAndId(client, { studentId: "student-b" }, "same"))
+            .toEqual({ id: "same", student_id: "student-b", exam_id: "e1" });
+        expect(await fetchAttemptRowByOwnerAndId(client, { studentId: "student-c" }, "same"))
+            .toBeNull();
     });
 });

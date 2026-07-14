@@ -21,12 +21,13 @@ import {
     type GuestMergePreview,
     type StudentSession,
 } from "@/utils/storage";
-import { loadAttempts, loadExams, syncMergedGuestAttempts } from "@/lib/omrPersistence";
+import { readLocalAttempts, readLocalExams, syncMergedGuestAttempts } from "@/lib/omrPersistence";
 import { averageResolvedAttemptPercent, baseAttemptsOnly, retakeAttemptsOnly } from "@/lib/attemptScores";
 import { evaluateExamAccess } from "@/lib/examAccess";
 import { listMyAssignments } from "@/app/actions/studentExam";
 import { clearStudentServerSession } from "@/app/actions/studentSession";
 import { listMyAssignmentsClient } from "@/lib/studentExamClient";
+import type { SolvableExam } from "@/lib/examSolvePayload";
 
 /** True when this device holds an unsubmitted draft for the exam/owner pair. */
 function hasLocalDraftFor(examId: string, ownerKey: string): boolean {
@@ -54,8 +55,8 @@ function getTimeGreeting(): string {
 export default function StudentDashboard() {
     const router = useRouter();
     const [user, setUser] = useState<StudentSession | null>(null);
-    const [todoExams, setTodoExams] = useState<Exam[]>([]);
-    const [doneExams, setDoneExams] = useState<(Exam & { attemptId: string })[]>([]);
+    const [todoExams, setTodoExams] = useState<Array<Exam | SolvableExam>>([]);
+    const [doneExams, setDoneExams] = useState<Array<(Exam | SolvableExam) & { attemptId: string }>>([]);
     const [stats, setStats] = useState({
         avgScore: 0,
         completedCount: 0,
@@ -82,23 +83,27 @@ export default function StudentDashboard() {
             // 2. Load Data — own attempts come from the server boundary
             // (ownership enforced by the signed session cookie); local list is
             // the degraded fallback and keeps the client-side ownership filter.
-            const [examResult, myAttemptsResult] = await Promise.all([
-                loadExams(),
-                listMyAssignmentsClient({
-                    server: () => listMyAssignments(),
-                    localFallback: async () => (await loadAttempts()).items,
-                }),
-            ]);
+            const myAttemptsResult = await listMyAssignmentsClient({
+                server: () => listMyAssignments(),
+                localFallback: async () => readLocalAttempts(),
+            });
             if (cancelled) return;
-
-            const allExams = examResult.items;
-            const examById = new Map(allExams.map(exam => [exam.id, exam]));
-            if (examResult.remoteError) {
-                toast.info(
-                    "로컬 데이터 기준으로 표시 중",
-                    "서버 동기화가 일부 지연되고 있어 다음 접속 때 다시 재시도합니다."
-                );
+            if (myAttemptsResult.status === "unauthenticated" && currentUser.workspaceId) {
+                const query = new URLSearchParams({
+                    role: "student",
+                    workspace: currentUser.workspaceId,
+                    next: "/student/dashboard",
+                });
+                setSessionState("missing");
+                router.replace(`/?${query.toString()}`);
+                return;
             }
+
+            const localExams = myAttemptsResult.source === "local" ? readLocalExams() : [];
+            const allExams: Array<Exam | SolvableExam> = myAttemptsResult.source === "server"
+                ? myAttemptsResult.exams || []
+                : localExams;
+            const localExamById = new Map(localExams.map(exam => [exam.id, exam]));
             const attemptSource = myAttemptsResult.source;
             const myAttempts = attemptSource === "server"
                 ? myAttemptsResult.attempts
@@ -133,12 +138,14 @@ export default function StudentDashboard() {
                 : null;
 
             // 3. Categorize Exams
-            const done: (Exam & { attemptId: string })[] = [];
-            const todo: Exam[] = [];
+            const done: Array<(Exam | SolvableExam) & { attemptId: string }> = [];
+            const todo: Array<Exam | SolvableExam> = [];
 
             allExams.forEach(exam => {
-                const access = evaluateExamAccess(exam, { session: currentUser });
-                const hasAccess = access.status === "allowed" || access.status === "pin_required";
+                const hasAccess = attemptSource === "server" || (() => {
+                    const access = evaluateExamAccess(exam as Exam, { session: currentUser });
+                    return access.status === "allowed" || access.status === "pin_required";
+                })();
 
                 if (!hasAccess) return;
 
@@ -161,7 +168,10 @@ export default function StudentDashboard() {
             setDoneExams(done);
 
             // 4. Calculate Stats
-            const avg = averageResolvedAttemptPercent(myBaseAttempts, examById);
+            const avg = averageResolvedAttemptPercent(
+                myBaseAttempts,
+                attemptSource === "server" ? new Map() : localExamById,
+            );
             setStats({
                 avgScore: avg,
                 completedCount: myBaseAttempts.length,
@@ -222,6 +232,7 @@ export default function StudentDashboard() {
     };
 
     const handleLogout = () => {
+        const workspaceId = user?.workspaceId;
         clearSession();
         // Also drop the httpOnly server session cookie (shared-device safety).
         clearStudentServerSession().catch(() => { /* offline — cookie expires on TTL */ });
@@ -232,6 +243,10 @@ export default function StudentDashboard() {
         setGuestMergePreview(null);
         setSessionState("missing");
         toast.info("로그아웃됨", "다시 시험을 보려면 학생 로그인이 필요합니다.");
+        if (workspaceId) {
+            const query = new URLSearchParams({ role: "student", workspace: workspaceId });
+            router.replace(`/?${query.toString()}`);
+        }
     };
 
     if (!user) {

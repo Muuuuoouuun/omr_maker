@@ -18,6 +18,8 @@ import type { StudentServerIdentity } from "@/lib/studentServerSession";
 
 export interface SubmitAttemptInput {
     examId: string;
+    /** Stable per draft so network retries resolve to one server attempt. */
+    submissionId: string;
     answers: Record<number, number>;
     startedAt: string;
     autoSubmitted?: boolean;

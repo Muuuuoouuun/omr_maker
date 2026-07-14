@@ -206,6 +206,20 @@ function rosterRowUnchanged(
     return deepEqualJson(omitUpdatedAt(nextRow), omitUpdatedAt(remoteRow));
 }
 
+function preserveRemoteStudentMetadata(
+    nextRow: SupabaseRosterStudentProfileRow,
+    remoteRow: SupabaseRosterStudentProfileRow | undefined,
+): SupabaseRosterStudentProfileRow {
+    if (!remoteRow) return nextRow;
+    return {
+        ...nextRow,
+        metadata: {
+            ...metadata(remoteRow.metadata),
+            ...metadata(nextRow.metadata),
+        },
+    };
+}
+
 function activeRosterOrganizationId(): string {
     return readActiveWorkspaceContext().organizationId;
 }
@@ -742,7 +756,8 @@ async function upsertRemoteRosterSnapshot(
     const remoteEnrollmentsById = new Map(remote.enrollments.map(row => [enrollmentKey(row), row]));
 
     const changedClassRows = rows.classes.filter(row => !rosterRowUnchanged(row, remoteClassesById.get(row.id)));
-    const changedStudentRows = rows.students.filter(row => !rosterRowUnchanged(row, remoteStudentsById.get(row.id)));
+    const mergedStudentRows = rows.students.map(row => preserveRemoteStudentMetadata(row, remoteStudentsById.get(row.id)));
+    const changedStudentRows = mergedStudentRows.filter(row => !rosterRowUnchanged(row, remoteStudentsById.get(row.id)));
     const changedEnrollmentRows = rows.enrollments.filter(
         row => !rosterRowUnchanged(row, remoteEnrollmentsById.get(enrollmentKey(row))),
     );

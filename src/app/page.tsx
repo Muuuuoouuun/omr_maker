@@ -6,7 +6,12 @@ import BrandLogo from "@/components/BrandLogo";
 import ThemeToggle from "@/components/ThemeToggle";
 import { toast } from "@/components/Toast";
 import { verifyTeacherPassword } from "@/app/actions/auth";
-import { issueGuestSession, issueStudentSession } from "@/app/actions/studentSession";
+import {
+  issueGuestSession,
+  issueStudentSession,
+  loadStudentLoginDirectory,
+  type StudentSessionIssueStatus,
+} from "@/app/actions/studentSession";
 import { formatRegionScopedLabel } from "@/lib/dashboardSelection";
 import { readLocalAttempts, syncMergedGuestAttempts } from "@/lib/omrPersistence";
 import { readRosterGroups, readRosterStudents, type RosterGroup, type RosterStudent } from "@/lib/rosterStorage";
@@ -127,6 +132,15 @@ function resolveSessionRegion(params: {
   return regionName ? { regionId: regionName, regionName } : {};
 }
 
+function studentLoginErrorMessage(status: StudentSessionIssueStatus): string {
+  if (status === "rate_limited") return "로그인 시도가 많아 잠시 잠겼습니다. 10분 뒤 다시 시도해주세요.";
+  if (status === "code_not_issued") return "시작 코드가 아직 서버에 연결되지 않았습니다. 선생님에게 코드 재발급을 요청해주세요.";
+  if (status === "invalid_workspace") return "학생 초대 링크가 올바르지 않습니다. 선생님에게 새 링크를 요청해주세요.";
+  if (status === "invalid_credentials") return "이름, 반, 학생번호(또는 이메일), 시작 코드를 다시 확인해주세요.";
+  if (status === "unauthenticated") return "학생 세션을 시작하지 못했습니다. 다시 로그인해주세요.";
+  return "학생 계정을 확인하지 못했습니다. 잠시 후 다시 시도해주세요.";
+}
+
 export default function Home() {
   const router = useRouter();
   const [role, setRole] = useState<"none" | "teacher" | "student">("none");
@@ -147,31 +161,77 @@ export default function Home() {
   const [issuedCodeModal, setIssuedCodeModal] = useState<{ code: string; next: string } | null>(null);
   const [copiedIssuedCode, setCopiedIssuedCode] = useState(false);
   const [needsStudentLookup, setNeedsStudentLookup] = useState(false);
+  const [workspaceId, setWorkspaceId] = useState("");
+  const [studentDirectoryStatus, setStudentDirectoryStatus] = useState<"local" | "loading" | "remote" | "degraded_local" | "error">("local");
+  const [studentLoginPending, setStudentLoginPending] = useState(false);
+  const requiresServerStudentVerification = !!workspaceId && studentDirectoryStatus !== "degraded_local";
 
   useEffect(() => {
+    let cancelled = false;
+    let localGroups: RosterGroup[] = [];
     try {
       // Hydrate client-only localStorage state after mount.
-      // eslint-disable-next-line react-hooks/set-state-in-effect
-      setGroups(readRosterGroups(localStorage));
+      localGroups = readRosterGroups(localStorage);
+      setGroups(localGroups);
       const restoredSession = getSession();
       setRecentStudentSession(restoredSession && !restoredSession.isGuest ? restoredSession : null);
     } catch {
       // Keep the empty group list and show the existing teacher-contact message.
     }
 
-    const requestedRole = new URLSearchParams(window.location.search).get("role");
+    const query = new URLSearchParams(window.location.search);
+    const requestedRole = query.get("role");
     if (requestedRole === "student" || requestedRole === "teacher") {
       setRole(requestedRole);
     }
+    const requestedWorkspace = query.get("workspace")?.trim() || "";
+    setWorkspaceId(requestedWorkspace);
+    if (requestedWorkspace) {
+      setGroups([]);
+      setStudentDirectoryStatus("loading");
+      void loadStudentLoginDirectory(requestedWorkspace).then(result => {
+        if (cancelled) return;
+        if (result.status === "ok") {
+          const remoteGroups = (result.groups || []).map((group, index) => ({
+            ...group,
+            count: 0,
+            avgScore: 0,
+            color: ["#4f46e5", "#ec4899", "#8b5cf6", "#10b981", "#f59e0b"][index % 5],
+          }));
+          setGroups(remoteGroups);
+          setSelectedGroupId(previous => remoteGroups.some(group => group.id === previous) ? previous : "");
+          setStudentDirectoryStatus("remote");
+          return;
+        }
+        if (result.status === "degraded_local") {
+          setGroups(localGroups);
+          setStudentDirectoryStatus("degraded_local");
+          return;
+        }
+        setGroups([]);
+        setSelectedGroupId("");
+        setStudentDirectoryStatus("error");
+      }).catch(() => {
+        if (cancelled) return;
+        setGroups([]);
+        setSelectedGroupId("");
+        setStudentDirectoryStatus("error");
+      });
+    }
+    return () => { cancelled = true; };
   }, []);
 
   // Surface the start-code field proactively for returning students.
   useEffect(() => {
     if (role !== "student" || !studentName.trim() || !selectedGroupId) {
       // Derived from client-only localStorage inputs.
-      // eslint-disable-next-line react-hooks/set-state-in-effect
       setNeedsCode(false);
       setNeedsStudentLookup(false);
+      return;
+    }
+    if (requiresServerStudentVerification) {
+      setNeedsStudentLookup(true);
+      setNeedsCode(true);
       return;
     }
     try {
@@ -195,12 +255,11 @@ export default function Home() {
       setNeedsCode(false);
       setNeedsStudentLookup(false);
     }
-  }, [role, studentName, studentLookup, selectedGroupId, groups]);
+  }, [role, studentName, studentLookup, selectedGroupId, groups, requiresServerStudentVerification]);
 
   useEffect(() => {
     if (role !== "student") {
       // Derived from localStorage after role selection.
-      // eslint-disable-next-line react-hooks/set-state-in-effect
       setPendingGuestPreview(null);
       return;
     }
@@ -245,13 +304,99 @@ export default function Home() {
     }
   };
 
+  const finishStudentLogin = async (session: StudentSession, next: string, issuedCode?: string) => {
+    const pendingGuestMerge = consumePendingGuestMerge();
+    if (pendingGuestMerge) {
+      const mergedCount = mergeGuestAttempts(pendingGuestMerge.guestId, {
+        studentId: session.studentId,
+        name: session.name,
+        groupId: session.groupId,
+        groupName: session.groupName,
+        regionId: session.regionId,
+        regionName: session.regionName,
+        identityType: session.identityType,
+      });
+      if (mergedCount > 0) {
+        toast.success("게스트 기록 연결됨", `${mergedCount}개의 시험 기록을 학생 기록으로 저장했습니다.`);
+        try {
+          // Push reassigned attempts to the server now; failures are queued and
+          // reconciled again on the dashboard, so login never blocks on sync.
+          await syncMergedGuestAttempts(session.studentId, { guestId: pendingGuestMerge.guestId });
+        } catch {
+          // SyncFlusher retries queued attempts; dashboard reconciliation covers the rest.
+        }
+      } else {
+        toast.info("연결할 새 게스트 기록 없음", "이후 제출 기록은 학생 기록으로 저장됩니다.");
+      }
+    }
+
+    saveSession(session);
+    if (issuedCode) {
+      setCopiedIssuedCode(false);
+      setIssuedCodeModal({ code: issuedCode, next });
+      return;
+    }
+    router.push(next);
+  };
+
   const handleStudentLogin = async () => {
+    if (studentLoginPending) return;
     const trimmedName = studentName.trim();
+    const next = normalizeStudentRedirectPath(new URLSearchParams(window.location.search).get("next"));
     if (!trimmedName || !selectedGroupId) {
       setError("이름과 반을 모두 입력해주세요.");
       setTimeout(() => setError(""), 2000);
       return;
     }
+
+    if (requiresServerStudentVerification) {
+      if (studentDirectoryStatus === "loading") {
+        setError("학생 명단을 불러오는 중입니다. 잠시 후 다시 시도해주세요.");
+        return;
+      }
+      if (!studentLookup.trim() || !startCode.trim()) {
+        setNeedsStudentLookup(true);
+        setNeedsCode(true);
+        setError("학생번호(또는 이메일)와 시작 코드를 모두 입력해주세요.");
+        setTimeout(() => setError(""), 2500);
+        return;
+      }
+
+      setStudentLoginPending(true);
+      try {
+        const result = await issueStudentSession({
+          workspaceId,
+          name: trimmedName,
+          groupId: selectedGroupId,
+          studentLookup,
+          startCode,
+        });
+        if (!result.ok || !result.identity) {
+          setError(studentLoginErrorMessage(result.status));
+          return;
+        }
+        const identity = result.identity;
+        const session: StudentSession = {
+          name: identity.name,
+          studentId: identity.studentId,
+          loginId: studentLookup.trim(),
+          groupId: identity.groupId,
+          groupName: identity.groupName,
+          regionId: identity.regionId,
+          regionName: identity.regionName,
+          workspaceId,
+          isGuest: false,
+          identityType: "temporary",
+        };
+        await finishStudentLogin(session, next);
+      } catch {
+        setError("학생 인증 서버에 연결하지 못했습니다. 네트워크를 확인한 뒤 다시 시도해주세요.");
+      } finally {
+        setStudentLoginPending(false);
+      }
+      return;
+    }
+
     const students = readRosterStudents(localStorage);
     const identity = resolveStudentIdentity({
       name: trimmedName,
@@ -282,11 +427,8 @@ export default function Home() {
       groups,
       students,
     });
-
-    // Load existing start-code registry + attempts to decide anti-spoof path.
     const codes = readStudentCodes(localStorage);
     const attempts = readLocalAttempts();
-
     const hasPriorAttempt = attempts.some(a => a.studentId === identity.studentId
       || a.studentId === identity.legacyStudentId
       || (
@@ -294,7 +436,6 @@ export default function Home() {
         && !a.guestId
         && (!a.groupName || a.groupName === identity.groupName || a.groupId === identity.groupId)
       ));
-
     const codeDecision = resolveStudentStartCodeLogin({
       studentId: identity.studentId,
       legacyStudentId: identity.legacyStudentId,
@@ -302,85 +443,58 @@ export default function Home() {
       hasPriorAttempt,
       providedCode: startCode,
     });
-
     if (codeDecision.codesChanged && !writeStudentCodes(localStorage, codeDecision.codes)) {
       setError("시작 코드 저장에 실패했습니다. 브라우저 저장소를 확인해주세요.");
       setTimeout(() => setError(""), 2500);
       return;
     }
-
     if (codeDecision.status === "code_required") {
       setNeedsCode(true);
       setError("이미 등록된 학생입니다. 선생님이 발급한 시작 코드를 입력해주세요.");
       setTimeout(() => setError(""), 2500);
       return;
     }
-
     if (codeDecision.status === "code_mismatch") {
       setError("시작 코드가 일치하지 않습니다.");
       setTimeout(() => setError(""), 2500);
       return;
     }
 
-    const session: StudentSession = {
-      name: trimmedName,
-      studentId: identity.studentId,
-      loginId: identity.legacyStudentId,
-      groupId: selectedGroupId,
-      groupName: identity.groupName,
-      ...regionSnapshot,
-      isGuest: false,
-      identityType: "temporary",
-    };
-
-    // Mint the server-signed student session cookie; server actions (exam load,
-    // graded submit, own-attempt reads) key off it. Degrades silently in dev.
+    setStudentLoginPending(true);
     try {
-      await issueStudentSession({
+      const result = await issueStudentSession({
+        workspaceId: workspaceId || undefined,
         studentId: identity.studentId,
         name: trimmedName,
         groupId: selectedGroupId,
         groupName: identity.groupName,
         ...regionSnapshot,
       });
-    } catch {
-      // Supabase/secret unavailable — local flows keep working.
-    }
-
-    const pendingGuestMerge = consumePendingGuestMerge();
-    if (pendingGuestMerge) {
-      const mergedCount = mergeGuestAttempts(pendingGuestMerge.guestId, {
-        studentId: identity.studentId,
-        name: trimmedName,
-        groupId: selectedGroupId,
-        groupName: identity.groupName,
-        ...regionSnapshot,
-        identityType: "temporary",
-      });
-      if (mergedCount > 0) {
-        toast.success("게스트 기록 연결됨", `${mergedCount}개의 시험 기록을 학생 기록으로 저장했습니다.`);
-        try {
-          // Push reassigned attempts to the server now; failures are queued and
-          // reconciled again on the dashboard, so login never blocks on sync.
-          await syncMergedGuestAttempts(identity.studentId, { guestId: pendingGuestMerge.guestId });
-        } catch {
-          // SyncFlusher retries queued attempts; dashboard reconciliation covers the rest.
-        }
-      } else {
-        toast.info("연결할 새 게스트 기록 없음", "이후 제출 기록은 학생 기록으로 저장됩니다.");
+      if (!result.ok) {
+        setError(studentLoginErrorMessage(result.status));
+        return;
       }
+      const session: StudentSession = {
+        name: trimmedName,
+        studentId: identity.studentId,
+        loginId: identity.legacyStudentId,
+        groupId: selectedGroupId,
+        groupName: identity.groupName,
+        ...regionSnapshot,
+        workspaceId: workspaceId || undefined,
+        isGuest: false,
+        identityType: "temporary",
+      };
+      await finishStudentLogin(
+        session,
+        next,
+        codeDecision.status === "new_code_issued" ? codeDecision.code : undefined,
+      );
+    } catch {
+      setError("학생 세션을 시작하지 못했습니다. 브라우저와 네트워크 상태를 확인해주세요.");
+    } finally {
+      setStudentLoginPending(false);
     }
-
-    saveSession(session);
-    const next = normalizeStudentRedirectPath(new URLSearchParams(window.location.search).get("next"));
-    // A freshly issued start code is required for the student's next login, so
-    // hold navigation and show it persistently until the student acknowledges.
-    if (codeDecision.status === "new_code_issued") {
-      setCopiedIssuedCode(false);
-      setIssuedCodeModal({ code: codeDecision.code, next });
-      return;
-    }
-    router.push(next);
   };
 
   const handleGuest = async () => {
@@ -1028,7 +1142,11 @@ export default function Home() {
                         fontWeight: 600,
                       }}
                     >
-                      등록된 반이 없습니다. 선생님께 문의하세요.
+                      {studentDirectoryStatus === "loading"
+                        ? "반 목록을 불러오는 중입니다."
+                        : studentDirectoryStatus === "error"
+                          ? "학생 명단 연결에 실패했습니다. 선생님에게 새 초대 링크를 요청해주세요."
+                          : "등록된 반이 없습니다. 선생님께 문의하세요."}
                     </div>
                   )}
                   {error && (
@@ -1059,7 +1177,7 @@ export default function Home() {
                   </div>
                 )}
 
-                {needsCode && (
+                {(needsCode || requiresServerStudentVerification) && (
                   <div style={{ marginBottom: "1.75rem" }}>
                     <label
                       style={{
@@ -1096,6 +1214,7 @@ export default function Home() {
 
                 <button
                   onClick={handleStudentLogin}
+                  disabled={studentLoginPending || studentDirectoryStatus === "loading"}
                   className="btn btn-primary"
                   style={{
                     width: "100%",
@@ -1104,11 +1223,13 @@ export default function Home() {
                     marginBottom: "0.35rem",
                   }}
                 >
-                  시험 시작하기
+                  {studentLoginPending ? "계정 확인 중…" : "시험 시작하기"}
                 </button>
 
                 <p style={{ fontSize: "0.72rem", color: "var(--muted)", margin: "0 0 0.75rem", lineHeight: 1.45, wordBreak: "keep-all" }}>
-                  * 현재는 이름·반 기반 임시 신원입니다. 정식 학생 인증은 준비 중입니다.
+                  {requiresServerStudentVerification
+                    ? "* 선생님이 발급한 초대 링크와 시작 코드로 서버 명단을 확인합니다."
+                    : "* 현재 기기에 저장된 명단과 시작 코드로 로그인합니다."}
                 </p>
 
                 <div className="divider-label">

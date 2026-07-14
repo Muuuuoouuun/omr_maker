@@ -46,8 +46,9 @@ export interface SubmitClientResult {
 }
 
 export interface ListAttemptsClientResult {
-    status: "ok" | "error";
+    status: "ok" | "unauthenticated" | "error";
     attempts: Attempt[];
+    exams?: SolvableExam[];
     source: ExamSource;
 }
 
@@ -150,13 +151,16 @@ export async function submitAttemptClient(
 }
 
 export async function listMyAssignmentsClient(deps: {
-    server: () => Promise<{ status: string; attempts?: Attempt[] }>;
+    server: () => Promise<{ status: string; attempts?: Attempt[]; exams?: SolvableExam[] }>;
     localFallback: () => Promise<Attempt[]>;
 }): Promise<ListAttemptsClientResult> {
     try {
         const res = await deps.server();
         if (res.status === "ok" && res.attempts) {
-            return { status: "ok", attempts: res.attempts, source: "server" };
+            return { status: "ok", attempts: res.attempts, exams: res.exams || [], source: "server" };
+        }
+        if (res.status === "unauthenticated") {
+            return { status: "unauthenticated", attempts: [], exams: [], source: "server" };
         }
     } catch {
         // fall through to local

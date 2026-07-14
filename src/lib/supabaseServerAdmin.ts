@@ -150,3 +150,32 @@ export async function fetchAttemptRowsByOwner(
     if (error) throw new Error(error.message || "Failed to read attempts");
     return data ?? [];
 }
+
+export async function fetchAttemptRowByOwnerAndId(
+    client: SupabaseAdminReadClientLike,
+    owner: { studentId?: string },
+    attemptId: string,
+): Promise<unknown | null> {
+    const key = owner.studentId || "";
+    if (!key || !attemptId.trim()) return null;
+    const { data, error } = await client.from("omr_attempts")
+        .select("*")
+        .eq("id", attemptId)
+        .eq("student_id", key)
+        .maybeSingle();
+    if (error) throw new Error(error.message || "Failed to read attempt");
+    return data ?? null;
+}
+
+export async function fetchExamRowsByOrganization(
+    client: SupabaseAdminReadClientLike,
+    organizationId: string,
+): Promise<unknown[]> {
+    if (!organizationId.trim()) return [];
+    const { data, error } = await client.from("omr_exams")
+        .select("*")
+        .eq("organization_id", organizationId)
+        .order("created_at", { ascending: false });
+    if (error) throw new Error(error.message || "Failed to read organization exams");
+    return data ?? [];
+}

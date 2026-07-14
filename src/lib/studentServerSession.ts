@@ -10,6 +10,7 @@ export interface StudentIdentityInput {
     kind: "guest" | "student";
     guestId?: string;
     studentId?: string;
+    organizationId?: string;
     name: string;
     groupId?: string;
     groupName?: string;

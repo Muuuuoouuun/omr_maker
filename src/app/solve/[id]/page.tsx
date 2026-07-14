@@ -13,7 +13,7 @@ import { storedDataUrlToFile, saveJsonRecord, loadJsonRecord } from "@/utils/blo
 import { resolveDraftDrawings } from "@/lib/draftRecovery";
 import { verifyTeacherPassword } from "@/app/actions/auth";
 import { loadExamForSolving, submitAttempt } from "@/app/actions/studentExam";
-import { issueGuestSession, issueStudentSession } from "@/app/actions/studentSession";
+import { issueGuestSession, validateStudentSession } from "@/app/actions/studentSession";
 import { saveTeacherSessionWithIdentity } from "@/lib/teacherSession";
 import { getOrCreateGuestId, getSession, guestLoginIdFor, saveSession, type StudentSession } from "@/utils/storage";
 import { canArchiveHandwriting, getCurrentPlan, getPlanLabel } from "@/utils/plans";
@@ -55,7 +55,25 @@ interface SolveDraft {
     drawingsRef?: StoredDataRef;
     timeRemaining: number | null;
     startedAt: string;
+    submissionId: string;
     savedAt: string;
+}
+
+function createSubmissionId(): string {
+    const cryptoObject = typeof globalThis !== "undefined" ? globalThis.crypto : undefined;
+    if (cryptoObject?.randomUUID) return cryptoObject.randomUUID();
+    const bytes = new Uint8Array(16);
+    if (cryptoObject?.getRandomValues) cryptoObject.getRandomValues(bytes);
+    else for (let index = 0; index < bytes.length; index += 1) bytes[index] = Math.floor(Math.random() * 256);
+    bytes[6] = (bytes[6] & 0x0f) | 0x40;
+    bytes[8] = (bytes[8] & 0x3f) | 0x80;
+    const hex = [...bytes].map(value => value.toString(16).padStart(2, "0")).join("");
+    return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+}
+
+function validSubmissionId(value: unknown): value is string {
+    return typeof value === "string"
+        && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
 }
 
 interface QuestionTimingDraft {
@@ -341,7 +359,10 @@ function accessDecisionCopy(decision: ExamAccessDecision): { title: string; body
 function buildStudentLoginHref(): string {
     if (typeof window === "undefined") return "/?role=student";
     const next = `${window.location.pathname}${window.location.search}`;
-    return `/?role=student&next=${encodeURIComponent(next)}`;
+    const query = new URLSearchParams({ role: "student", next });
+    const workspaceId = getSession()?.workspaceId;
+    if (workspaceId) query.set("workspace", workspaceId);
+    return `/?${query.toString()}`;
 }
 
 function buildRetakeDraftSegment(config: RetakeConfig | null): string {
@@ -661,6 +682,7 @@ export default function SolvePage() {
     /** Verified PIN, threaded into server submit (incl. timer auto-submit). */
     const pinRef = useRef("");
     const submittedRef = useRef(false);
+    const submissionIdRef = useRef("");
     const studentAnswersRef = useRef<Record<number, number>>({});
     const latestDraftRef = useRef<SolveDraft | null>(null);
     const autosaveErrorShownRef = useRef(false);
@@ -861,6 +883,7 @@ export default function SolvePage() {
             drawingsRef: draftSnapshot.drawingsRef,
             timeRemaining: draftSnapshot.timeRemaining,
             startedAt: draftSnapshot.startedAt,
+            submissionId: draftSnapshot.submissionId,
             savedAt,
         };
 
@@ -1040,6 +1063,10 @@ export default function SolvePage() {
                             ? null
                             : remainingSecondsWithinWindow(rawRestoredTimeRemaining, parsed.endAt, now);
                         const restoredStartedAt = typeof draft.startedAt === "string" ? draft.startedAt : new Date().toISOString();
+                        const restoredSubmissionId = validSubmissionId(draft.submissionId)
+                            ? draft.submissionId
+                            : createSubmissionId();
+                        submissionIdRef.current = restoredSubmissionId;
                         if (typeof draft.timeRemaining === "number") {
                             setTimeRemaining(restoredTimeRemaining);
                         }
@@ -1052,6 +1079,7 @@ export default function SolvePage() {
                             drawingsRef: draft.drawingsRef,
                             timeRemaining: restoredTimeRemaining,
                             startedAt: restoredStartedAt,
+                            submissionId: restoredSubmissionId,
                             savedAt: typeof draft.savedAt === "string" ? draft.savedAt : new Date().toISOString(),
                         };
                         setHasResumed(true);
@@ -1087,9 +1115,8 @@ export default function SolvePage() {
             setLoadError(null);
             setSolveStatus("loading");
 
-            // Server session first — the exam server actions key off the signed
-            // cookie. Guests get (or keep) a server-issued guestId; roster
-            // students re-mint their temporary identity so deep links work.
+            // Server session first — exam actions key off the signed HttpOnly
+            // cookie. Never rebuild a student cookie from localStorage fields.
             let session = currentSession;
             try {
                 if (!session || session.isGuest) {
@@ -1110,14 +1137,16 @@ export default function SolvePage() {
                         session = guestSession;
                     }
                 } else if (session.studentId) {
-                    await issueStudentSession({
-                        studentId: session.studentId,
-                        name: session.name,
-                        groupId: session.groupId,
-                        groupName: session.groupName,
-                        regionId: session.regionId,
-                        regionName: session.regionName,
-                    });
+                    const validated = await validateStudentSession();
+                    if (!validated.ok) {
+                        const query = new URLSearchParams({
+                            role: "student",
+                            next: `/solve/${id}`,
+                        });
+                        if (session.workspaceId) query.set("workspace", session.workspaceId);
+                        router.replace(`/?${query.toString()}`);
+                        return;
+                    }
                 }
             } catch {
                 // offline/dev — the local fallback path below still works
@@ -1171,7 +1200,7 @@ export default function SolvePage() {
         };
 
         hydrateExam();
-    }, [applyLoadedExam, id]);
+    }, [applyLoadedExam, id, router]);
 
     // Show resume banner once after initial load
     useEffect(() => {
@@ -1195,12 +1224,14 @@ export default function SolvePage() {
 
     useEffect(() => {
         studentAnswersRef.current = studentAnswers;
+        if (!submissionIdRef.current) submissionIdRef.current = createSubmissionId();
         latestDraftRef.current = {
             answers: studentAnswers,
             drawings: compactDrawings(drawings),
             drawingsRef: latestDraftRef.current?.drawingsRef,
             timeRemaining,
             startedAt,
+            submissionId: submissionIdRef.current,
             savedAt: new Date().toISOString(),
         };
     }, [studentAnswers, drawings, timeRemaining, startedAt]);
@@ -1267,8 +1298,10 @@ export default function SolvePage() {
             drawingsRef: latestDraftRef.current?.drawingsRef,
             timeRemaining,
             startedAt,
+            submissionId: submissionIdRef.current || createSubmissionId(),
             savedAt: new Date().toISOString(),
         };
+        submissionIdRef.current = nextDraft.submissionId;
         studentAnswersRef.current = nextAnswers;
         latestDraftRef.current = nextDraft;
         setStudentAnswers(nextAnswers);
@@ -1371,7 +1404,9 @@ export default function SolvePage() {
         const activeExamQuestions = getActiveExamQuestions();
         const questionTimings = buildQuestionTimingSnapshot(activeExamQuestions);
 
-        const attemptId = Date.now().toString();
+        const submissionId = submissionIdRef.current || createSubmissionId();
+        submissionIdRef.current = submissionId;
+        const attemptId = submissionId;
         const activeDrawings = compactDrawings(drawings);
         const activeDrawingStrokeCount = drawingStrokeCount(activeDrawings);
         const activeDrawingPageCount = Object.keys(activeDrawings).length;
@@ -1415,6 +1450,7 @@ export default function SolvePage() {
         };
         const submitInput: SubmitAttemptInput = {
             examId: id,
+            submissionId,
             answers: studentAnswers,
             startedAt,
             autoSubmitted,

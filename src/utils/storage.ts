@@ -20,6 +20,7 @@ export interface StudentSession {
     groupName?: string;
     regionId?: string;
     regionName?: string;
+    workspaceId?: string;
     isGuest: boolean;
     identityType: IdentityType;
     guestId?: string; // specific UUID for guest
@@ -89,6 +90,7 @@ function normalizeSession(raw: Partial<StudentSession> | null): StudentSession |
         loginId: raw.loginId || (isGuest && raw.guestId ? guestLoginIdFor(raw.guestId) : undefined),
         regionId: normalizeIdentityText(raw.regionId) || undefined,
         regionName: normalizeIdentityText(raw.regionName) || undefined,
+        workspaceId: normalizeIdentityText(raw.workspaceId) || undefined,
         isGuest,
         identityType: raw.identityType || (isGuest ? 'guest' : 'temporary'),
     };

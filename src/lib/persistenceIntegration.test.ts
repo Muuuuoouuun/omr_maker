@@ -18,7 +18,7 @@ describe("persistence integration", () => {
     it("primary read screens use the shared persistence layer", () => {
         const screens = [
             { file: "src/app/teacher/dashboard/page.tsx", functions: ["loadExams", "loadAttempts"] },
-            { file: "src/app/student/dashboard/page.tsx", functions: ["loadExams", "loadAttempts"] },
+            { file: "src/app/student/dashboard/page.tsx", functions: ["readLocalExams", "readLocalAttempts"] },
             { file: "src/app/student/history/page.tsx", functions: ["loadAttempts"] },
             { file: "src/app/student/review/[attemptId]/page.tsx", functions: ["loadAttempt", "loadExam"] },
             { file: "src/app/teacher/exam/[id]/page.tsx", functions: ["loadExam", "loadAttempts"] },
@@ -130,12 +130,67 @@ describe("persistence integration", () => {
         expect(source).toContain("recordTeacherLoginFailure");
         expect(source).toContain("recordTeacherLoginSuccess");
         expect(source).toContain("TEACHER_LOGIN_RATE_LIMIT_ERROR");
+        expect(source).toContain("TEACHER_AUTH_SESSION_CONFIG_ERROR");
+        expect(source).toContain("TEACHER_AUTH_SESSION_COOKIE_ERROR");
+        expect(source).toContain("if (!serverSession)");
+        expect(source.indexOf("recordTeacherLoginSuccess(rateLimitKeys)")).toBeGreaterThan(source.indexOf("cookieStore.set(TEACHER_SERVER_SESSION_COOKIE"));
         expect(source).toContain("clientFingerprintFromHeaders");
         expect(source).toContain("bootstrapWorkspaceWithServiceRole");
         expect(source).toContain("workspaceContextFromIdentity(result.teacher)");
         expect(limiter).toContain("TEACHER_LOGIN_MAX_FAILURES");
         expect(limiter).toContain("TEACHER_LOGIN_LOCKOUT_MS");
         expect(limiter).toContain("teacher-login:client");
+    });
+
+    it("connects teacher-issued student access to a server-verified login flow", () => {
+        const action = readProjectFile("src/app/actions/studentSession.ts");
+        const home = readProjectFile("src/app/page.tsx");
+        const users = readProjectFile("src/app/teacher/users/page.tsx");
+        const solve = readProjectFile("src/app/solve/[id]/page.tsx");
+
+        expect(action).toContain("resolveServerStudentLogin");
+        expect(action).toContain("verifyStudentAccessCode");
+        expect(action).toContain("checkStudentLoginRateLimit");
+        expect(action).toContain("parseSignedTeacherSessionCookie");
+        expect(action).toContain("metadataWithStudentAccessCode");
+        expect(action).toContain("loadStudentLoginDirectory");
+        expect(action).toContain("organizationId: workspaceId");
+        expect(users).toContain("syncStudentAccessCodes");
+        expect(users).toContain('query.set("workspace", workspaceId)');
+        expect(home).toContain("loadStudentLoginDirectory(requestedWorkspace)");
+        expect(home).toContain("requiresServerStudentVerification");
+        expect(home).toContain("workspaceId,");
+        expect(home).toContain("studentLookup,");
+        expect(home).toContain("startCode,");
+        expect(solve).toContain("validateStudentSession");
+        expect(solve).not.toContain("issueStudentSession");
+    });
+
+    it("loads the student dashboard catalog from the signed organization without answer keys", () => {
+        const action = readProjectFile("src/app/actions/studentExam.ts");
+        const dashboard = readProjectFile("src/app/student/dashboard/page.tsx");
+
+        expect(action).toContain("fetchExamRowsByOrganization");
+        expect(action).toContain("ctx.identity.organizationId");
+        expect(action).toContain("stripExamForSolving(exam)");
+        expect(dashboard).toContain('myAttemptsResult.source === "server"');
+        expect(dashboard).toContain("myAttemptsResult.exams || []");
+        expect(dashboard).not.toContain("loadExams()");
+        expect(dashboard).toContain('myAttemptsResult.status === "unauthenticated"');
+    });
+
+    it("keeps answer submission idempotent across network retries", () => {
+        const action = readProjectFile("src/app/actions/studentExam.ts");
+        const solve = readProjectFile("src/app/solve/[id]/page.tsx");
+        const core = readProjectFile("src/lib/studentExamCore.ts");
+
+        expect(core).toContain("submissionId: string");
+        expect(action).toContain("attemptIdForStudentSubmission");
+        expect(action).toContain("fetchAttemptRowByOwnerAndId");
+        expect(action).toContain('return { status: "ok", attempt: existingAttempt }');
+        expect(solve).toContain("submissionIdRef");
+        expect(solve).toContain("submissionId: draftSnapshot.submissionId");
+        expect(solve).toContain("submissionId,");
     });
 
     it("Supabase schema includes alpha organization boundaries", () => {
