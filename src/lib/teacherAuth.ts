@@ -1,4 +1,6 @@
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
+import type { PlanKey } from "@/types/omr";
+import { normalizePlan } from "@/utils/plans";
 
 export { TEACHER_AUTH_DEPLOYMENT_CONFIG_ERROR, TEACHER_AUTH_ERROR } from "./teacherAuthMessages";
 
@@ -7,12 +9,14 @@ export interface TeacherCredential {
     email: string;
     name: string;
     password: string;
+    plan?: PlanKey;
 }
 
 export interface TeacherLoginIdentity {
     teacherId: string;
     email: string;
     displayName: string;
+    plan?: PlanKey;
 }
 
 export interface TeacherLoginVerification {
@@ -46,6 +50,7 @@ type TeacherAuthEnv = {
     TEACHER_EMAIL?: string;
     TEACHER_NAME?: string;
     TEACHER_PASSWORD?: string;
+    TEACHER_PLAN?: string;
     NEXT_PUBLIC_SUPABASE_URL?: string;
     NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY?: string;
     NEXT_PUBLIC_SUPABASE_ANON_KEY?: string;
@@ -76,6 +81,7 @@ function credentialFromRecord(value: unknown): TeacherCredential | null {
         email,
         name: clean(value.name) || clean(value.displayName) || email || id,
         password,
+        plan: normalizePlan(value.plan) ?? undefined,
     };
 }
 
@@ -148,6 +154,7 @@ export function resolveTeacherCredentials(env: TeacherAuthEnv = process.env): Te
             email,
             name: clean(env.TEACHER_NAME) || email || id,
             password: configuredPassword,
+            plan: normalizePlan(env.TEACHER_PLAN) ?? undefined,
         }];
     }
 
@@ -236,6 +243,7 @@ export function verifyTeacherLogin(
             teacherId: credential.id,
             email: credential.email,
             displayName: credential.name,
+            plan: credential.plan,
         },
     };
 }

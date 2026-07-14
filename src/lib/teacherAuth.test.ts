@@ -88,6 +88,59 @@ describe("teacher auth", () => {
         expect(verifyTeacherLogin("teacher-a", "pass-b", env)).toEqual({ success: false });
     });
 
+    it("binds a plan to each teacher account from JSON env and returns it on login", () => {
+        const env = {
+            NODE_ENV: "production",
+            TEACHER_ACCOUNTS: JSON.stringify([
+                { id: "admin", email: "admin@omr.test", name: "관리자", password: "admin1234", plan: "academy" },
+                { id: "test1", email: "t1@omr.test", name: "테스트1", password: "test1234", plan: "free" },
+                { id: "test2", email: "t2@omr.test", name: "테스트2", password: "test1234", plan: "pro" },
+            ]),
+        };
+
+        expect(resolveTeacherCredentials(env).map(item => [item.id, item.plan])).toEqual([
+            ["admin", "academy"],
+            ["test1", "free"],
+            ["test2", "pro"],
+        ]);
+        expect(verifyTeacherLogin("test2", "test1234", env)).toMatchObject({
+            success: true,
+            teacher: { teacherId: "test2", plan: "pro" },
+        });
+        expect(verifyTeacherLogin("admin", "admin1234", env).teacher?.plan).toBe("academy");
+    });
+
+    it("normalizes legacy 'school' plan to academy and ignores invalid or missing plan values", () => {
+        const env = {
+            NODE_ENV: "production",
+            TEACHER_ACCOUNTS: JSON.stringify([
+                { id: "legacy", email: "legacy@omr.test", password: "pass", plan: "school" },
+                { id: "bogus", email: "bogus@omr.test", password: "pass", plan: "ultra" },
+                { id: "none", email: "none@omr.test", password: "pass" },
+            ]),
+        };
+
+        const creds = resolveTeacherCredentials(env);
+        expect(creds.find(item => item.id === "legacy")?.plan).toBe("academy");
+        expect(creds.find(item => item.id === "bogus")?.plan).toBeUndefined();
+        expect(creds.find(item => item.id === "none")?.plan).toBeUndefined();
+    });
+
+    it("binds a plan to a single teacher via the TEACHER_PLAN env", () => {
+        const env = {
+            NODE_ENV: "production",
+            TEACHER_LOGIN_ID: "solo",
+            TEACHER_PASSWORD: "pass",
+            TEACHER_PLAN: "pro",
+        };
+
+        expect(resolveTeacherCredentials(env)[0]?.plan).toBe("pro");
+        expect(verifyTeacherLogin("solo", "pass", env)).toMatchObject({
+            success: true,
+            teacher: { teacherId: "solo", plan: "pro" },
+        });
+    });
+
     it("reports production deployment auth readiness without relying on Supabase", () => {
         expect(inspectTeacherAuthConfig({
             NODE_ENV: "production",

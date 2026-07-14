@@ -37,6 +37,7 @@ import {
 } from "@/utils/storage";
 import { normalizeStudentRedirectPath } from "@/lib/studentRedirect";
 import { normalizeTeacherRedirectPath, saveTeacherSessionWithIdentity } from "@/lib/teacherSession";
+import { setCurrentPlan } from "@/utils/plans";
 
 /* ─── SVG Icons ──────────────────────────────────────── */
 
@@ -289,6 +290,10 @@ export default function Home() {
           setTimeout(() => setError(""), 2000);
           return;
         }
+        // Bind the plan to the account: accounts with a configured plan get it,
+        // and accounts without one always initialize to Free so a plan from a
+        // previously signed-in account never leaks across the shared browser.
+        setCurrentPlan(res.teacher?.plan ?? "free");
         const next = normalizeTeacherRedirectPath(new URLSearchParams(window.location.search).get("next"));
         router.push(next);
       } else {
