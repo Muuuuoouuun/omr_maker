@@ -96,6 +96,8 @@ const SETTINGS_SIDEBAR_MIN_WIDTH = 250;
 const SETTINGS_SIDEBAR_DEFAULT_WIDTH = 320;
 const SETTINGS_SIDEBAR_COMFORT_WIDTH = 500;
 const PREVIEW_PANE_MIN_WIDTH = 260;
+const PREVIEW_SCALE_REFERENCE_WIDTH = 460;
+const PREVIEW_SCALE_MIN = PREVIEW_PANE_MIN_WIDTH / PREVIEW_SCALE_REFERENCE_WIDTH;
 const PREVIEW_RAIL_WIDTH = 64;
 const DESKTOP_RESIZER_TOTAL_WIDTH = 12;
 const PDF_PANE_EXPANDED_MIN_WIDTH = 300;
@@ -480,6 +482,27 @@ function CreateOMRPageInner() {
     const [activeResizer, setActiveResizer] = useState<'pdf' | 'sidebar' | null>(null);
     const createWorkspaceRef = useRef<HTMLDivElement>(null);
     const settingsSidebarRef = useRef<HTMLElement>(null);
+    const previewPaneRef = useRef<HTMLElement>(null);
+
+    useEffect(() => {
+        const previewPane = previewPaneRef.current;
+        if (!previewPane || typeof ResizeObserver === "undefined") return;
+
+        const syncPreviewScale = () => {
+            const paneWidth = previewPane.clientWidth;
+            const scale = Math.max(
+                PREVIEW_SCALE_MIN,
+                Math.min(1, paneWidth / PREVIEW_SCALE_REFERENCE_WIDTH),
+            );
+            previewPane.style.setProperty("--create-preview-scale", scale.toFixed(5));
+            previewPane.style.setProperty("--create-preview-content-width", `${(100 / scale).toFixed(5)}%`);
+        };
+
+        const observer = new ResizeObserver(syncPreviewScale);
+        observer.observe(previewPane);
+        syncPreviewScale();
+        return () => observer.disconnect();
+    }, []);
 
     const getWorkspaceLayoutWidth = useCallback(() => {
         if (createWorkspaceRef.current) {
@@ -3419,7 +3442,7 @@ function CreateOMRPageInner() {
                 )}
 
                 {/* 3. OMR Preview */}
-                <main id="create-preview-panel" className={`create-preview-main ${isPreviewCollapsed ? 'is-collapsed' : ''}`} style={{
+                <main ref={previewPaneRef} id="create-preview-panel" className={`create-preview-main ${isPreviewCollapsed ? 'is-collapsed' : ''}`} style={{
                     flex: isPreviewCollapsed ? `0 0 ${PREVIEW_RAIL_WIDTH}px` : 1,
                     width: isPreviewCollapsed ? `${PREVIEW_RAIL_WIDTH}px` : undefined,
                     display: 'flex',
@@ -3442,7 +3465,7 @@ function CreateOMRPageInner() {
                         </div>
                     ) : (
                         <>
-                    <div className="create-preview-toolbar" style={{
+                    <div className="create-preview-toolbar create-preview-scaled-surface" style={{
                         padding: '0.75rem 1.25rem',
                         borderBottom: '1px solid var(--border)',
                         background: 'var(--surface)',
@@ -3478,7 +3501,7 @@ function CreateOMRPageInner() {
                     </div>
                     </div>
 
-                    <div className="create-preview-context-strip" aria-label="미리보기 작업 상태">
+                    <div className="create-preview-context-strip create-preview-scaled-surface" aria-label="미리보기 작업 상태">
                         <div className="create-preview-context-meter" aria-label={`정답 입력률 ${answeredPercent}%`}>
                             <span style={{ width: `${answeredPercent}%` }} />
                         </div>
@@ -3507,7 +3530,7 @@ function CreateOMRPageInner() {
                         alignItems: 'stretch',
                         background: 'transparent',
                     }}>
-                        <div className="create-card-stage">
+                        <div className="create-card-stage create-preview-scaled-surface">
                             <OMRCardView
                                 title={title}
                                 questions={questions}

@@ -75,7 +75,12 @@ describe("service UI surface", () => {
         const createPage = readProjectFile("src/app/create/page.tsx");
 
         expect(createPage).toContain("const PREVIEW_PANE_MIN_WIDTH = 260");
+        expect(createPage).toContain("const PREVIEW_SCALE_REFERENCE_WIDTH = 460");
         expect(createPage).toContain("const PREVIEW_RAIL_WIDTH = 64");
+        expect(createPage).toContain("const previewPaneRef = useRef<HTMLElement>(null)");
+        expect(createPage).toContain("new ResizeObserver(syncPreviewScale)");
+        expect(createPage).toContain("paneWidth / PREVIEW_SCALE_REFERENCE_WIDTH");
+        expect(createPage).toContain("create-preview-scaled-surface");
         expect(createPage).toContain("flex: `0 0 ${pdfWidth}px`");
         expect(createPage).toContain("createWorkspaceRef.current.getBoundingClientRect().width");
         expect(createPage).toContain("setSidebarWidth(sharedPaneWidth - nextPdfWidth)");
@@ -86,6 +91,12 @@ describe("service UI surface", () => {
         expect(createPage).toContain("workspaceWidth - sidebarWidth - previewWidth");
         expect(createPage).toContain("workspaceWidth - pdfWidth - previewWidth");
         expect(css).toContain("@container (max-width: 540px)");
+        expect(css).toContain("zoom: var(--create-preview-scale)");
+        expect(css).toContain("--create-preview-content-width");
+        expect(css).toContain("container-name: create-settings");
+        expect(css).toContain("@container create-settings (max-width: 360px)");
+        expect(css).toContain("grid-template-columns: repeat(3, minmax(44px, 1fr))");
+        expect(css).toContain("grid-template-columns: auto auto minmax(0, 1fr)");
         expect(css).toContain(".omr-cardview.is-vertical-numbering .omr-cardview-grid");
         expect(css).toContain("grid-template-columns: minmax(0, 1fr)");
         expect(css).toContain("grid-auto-flow: row");

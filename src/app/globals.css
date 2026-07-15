@@ -2770,7 +2770,10 @@ body:has(.create-workspace.is-resizing) {
 }
 
 .create-settings-sidebar {
-  scrollbar-gutter: stable both-edges;
+  container-type: inline-size;
+  container-name: create-settings;
+  overflow-x: hidden;
+  scrollbar-gutter: stable;
   overscroll-behavior: contain;
 }
 
@@ -2972,7 +2975,6 @@ body:has(.create-workspace.is-resizing) {
 }
 
 .create-design-check-top,
-.create-readiness-line,
 .create-validation-line > div {
   display: flex;
   align-items: center;
@@ -3059,13 +3061,15 @@ body:has(.create-workspace.is-resizing) {
 }
 
 .create-readiness-line {
+  display: grid;
+  grid-template-columns: auto auto minmax(0, 1fr);
+  align-items: center;
+  gap: 0.25rem 0.35rem;
   min-height: 1.55rem;
   padding: 0.24rem 0.38rem;
   border: 1px solid var(--readiness-border);
   border-radius: 7px;
   background: var(--readiness-bg);
-  flex-wrap: wrap;
-  align-items: flex-start;
 }
 
 .create-readiness-dot {
@@ -3077,31 +3081,33 @@ body:has(.create-workspace.is-resizing) {
 }
 
 .create-readiness-line strong {
-  flex: 0 0 auto;
   color: var(--readiness-color);
   font-size: 0.7rem;
   font-weight: 950;
-  white-space: normal;
-  word-break: keep-all;
+  white-space: nowrap;
 }
 
 .create-readiness-line span:not(.create-readiness-dot) {
+  min-width: 0;
+  justify-self: end;
   color: var(--foreground);
   font-size: 0.68rem;
   font-weight: 850;
-  white-space: normal;
-  word-break: keep-all;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .create-readiness-line em {
+  grid-column: 1 / -1;
+  width: 100%;
   min-width: 0;
-  flex: 1;
   color: var(--muted);
   font-size: 0.66rem;
   font-style: normal;
   font-weight: 700;
-  overflow: visible;
-  text-align: right;
+  overflow-wrap: anywhere;
+  text-align: left;
   white-space: normal;
   word-break: keep-all;
 }
@@ -3133,6 +3139,7 @@ body:has(.create-workspace.is-resizing) {
 .create-readiness-mini-item::before {
   content: '';
   position: absolute;
+  top: 0.45rem;
   left: 0.33rem;
   width: 0.32rem;
   height: 0.32rem;
@@ -3187,6 +3194,107 @@ body:has(.create-workspace.is-resizing) {
 .create-validation-line.needs-work strong,
 .create-validation-line .is-error {
   color: var(--text-error);
+}
+
+@container create-settings (max-width: 360px) {
+  .create-settings-sticky-summary {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    gap: 0.65rem;
+    padding: 0.85rem 1rem 0.75rem;
+  }
+
+  .create-settings-sticky-summary > div:first-child {
+    min-width: 0;
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 0.5rem;
+  }
+
+  .create-settings-sticky-summary > div:first-child h2 {
+    flex: 0 0 auto;
+    margin-bottom: 0 !important;
+  }
+
+  .create-settings-sticky-summary > div:first-child > div {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .create-settings-toolbar {
+    width: 100%;
+    min-width: 0;
+    display: grid;
+    grid-template-columns: repeat(3, minmax(44px, 1fr));
+    justify-content: stretch;
+    gap: 0.35rem;
+  }
+
+  .create-settings-tool-button,
+  .create-settings-zoom-value,
+  .create-settings-toolbar .create-publish-chip {
+    width: 100%;
+    min-width: 0;
+  }
+
+  .create-settings-zoom-value,
+  .create-settings-toolbar .create-publish-chip {
+    min-height: 44px;
+    padding-inline: 0.3rem;
+  }
+
+  .create-settings-toolbar .create-publish-chip {
+    font-size: 0.66rem;
+  }
+
+  .create-settings-content,
+  .create-design-check-compact,
+  .create-design-metrics-mini,
+  .create-readiness-mini-list {
+    width: 100%;
+    max-width: 100%;
+    min-width: 0;
+  }
+
+  .create-design-check-compact {
+    overflow: hidden;
+  }
+
+  .create-validation-line > div {
+    flex-wrap: wrap;
+    row-gap: 0.2rem;
+  }
+
+  .create-validation-line span {
+    margin-left: auto;
+  }
+
+  .create-compact-control-row {
+    grid-template-columns: minmax(0, 1fr);
+    align-items: stretch;
+    gap: 0.4rem;
+  }
+
+  .create-compact-control-label {
+    justify-content: flex-start;
+  }
+
+  .create-count-buttons {
+    grid-template-columns: repeat(3, minmax(44px, 1fr));
+  }
+
+  .create-choice-buttons {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .create-count-buttons .btn,
+  .create-choice-buttons .btn {
+    width: 100%;
+    min-width: 0;
+  }
 }
 
 .create-question-quick-card {
@@ -3818,24 +3926,40 @@ body:has(.create-workspace.is-resizing) {
   white-space: nowrap;
 }
 
-/* The preview pane's own width (not just the viewport) can go down to
-   PREVIEW_PANE_MIN_WIDTH via the desktop resizer, so this has to react to
-   the container, not just @media viewport breakpoints. */
-@container (max-width: 420px) {
-  .create-preview-toolbar {
-    align-items: stretch !important;
-    flex-direction: column;
-    gap: 0.6rem;
+/* On desktop, the preview pane can be dragged down to 260px while the other
+   two panes remain visible. Scale the complete preview surfaces against a
+   stable 460px design width so text and question rows retain their layout
+   instead of independently wrapping at different breakpoints. */
+.create-preview-main {
+  --create-preview-scale: 1;
+  --create-preview-content-width: 100%;
+}
+
+@media (min-width: 1025px) {
+  .create-preview-main:not(.is-collapsed) .create-preview-scaled-surface {
+    width: var(--create-preview-content-width);
+    max-width: none;
+    zoom: var(--create-preview-scale);
   }
 
-  .create-preview-toolbar > div {
-    width: 100%;
-    justify-content: space-between;
+  .create-preview-context-strip.create-preview-scaled-surface .create-preview-context-item {
+    padding-inline: 0.25rem;
   }
 
-  .create-preview-status {
-    white-space: normal;
-    text-align: right;
+  .create-preview-context-strip.create-preview-scaled-surface .create-preview-context-item span,
+  .create-preview-context-strip.create-preview-scaled-surface .create-preview-context-item strong {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    word-break: normal;
+  }
+
+  .create-preview-context-strip.create-preview-scaled-surface .create-preview-context-item span {
+    font-size: 0.58rem;
+  }
+
+  .create-preview-context-strip.create-preview-scaled-surface .create-preview-context-item strong {
+    font-size: 0.7rem;
   }
 }
 
