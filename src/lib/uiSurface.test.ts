@@ -742,7 +742,7 @@ describe("service UI surface", () => {
         expect(dashboardPage).toContain("학생 성취도 보기");
         expect(dashboardPage).toContain("rosterStudents={rosterStudents}");
         expect(dashboardPage).toContain("rosterGroups={rosterGroups}");
-        expect(dashboardPage).toContain("currentPlan={currentPlan}");
+        expect(dashboardPage).toContain('currentPlan={isMockupAccount ? "academy" : currentPlan}');
         expect(dashboardPage).toContain("NotificationBell");
         expect(examAnalyticsTab).toContain("advancedAnalyticsEnabled");
         expect(examAnalyticsTab).toContain("retakeAssignmentsEnabled");

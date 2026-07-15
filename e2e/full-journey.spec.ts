@@ -580,6 +580,7 @@ test.describe("Teacher and student full journey", () => {
 
         await loginAsTeacher(page, "/teacher/dashboard?tab=exam");
         await expect(page.getByRole("heading", { name: "분석 센터" })).toBeVisible();
+        await page.getByRole("tab", { name: "학생·반" }).click();
         await expect(page.getByText("학생별 점수 및 성취도")).toBeVisible();
         await expect(page.getByRole("row", { name: new RegExp(`${TEST_STUDENT_NAME}.*20점`) })).toBeVisible();
     });
@@ -662,6 +663,7 @@ test.describe("Teacher and student full journey", () => {
         await expect(page.getByRole("button", { name: "통계 CSV" })).toBeVisible();
 
         await page.getByRole("button", { name: "시험 분석", exact: true }).click();
+        await page.getByRole("tab", { name: "학생·반" }).click();
         await expect(page.getByText("학생별 점수 및 성취도")).toBeVisible();
         await expect(page.getByRole("row", { name: new RegExp(`${TEST_STUDENT_NAME}.*100점`) })).toBeVisible();
     });
@@ -731,6 +733,7 @@ test.describe("Teacher and student full journey", () => {
         expect(csvRows).toContainEqual(["완료", TEST_EXAM_TITLE, "2026. 6. 19.", "1", "1", "100", "0", "N"]);
 
         await page.getByRole("button", { name: "시험 분석", exact: true }).click();
+        await page.getByRole("tab", { name: "학생·반" }).click();
         await expect(page.getByText("학생별 점수 및 성취도")).toBeVisible();
         const studentScoreRow = page.getByRole("row", { name: new RegExp(`${TEST_STUDENT_NAME}.*20점`) });
         await expect(studentScoreRow).toBeVisible();
@@ -815,6 +818,7 @@ test.describe("Teacher and student full journey", () => {
 
         await loginAsTeacher(page, "/teacher/dashboard?tab=exam");
         await expect(page.getByRole("heading", { name: "분석 센터" })).toBeVisible();
+        await page.getByRole("tab", { name: "학생·반" }).click();
         await expect(page.getByText("학생별 점수 및 성취도")).toBeVisible();
 
         const studentScoreRow = page.getByRole("row", { name: new RegExp(`${TEST_STUDENT_NAME}.*20점`) });

@@ -5,7 +5,8 @@ import { useRouter } from "next/navigation";
 import BrandLogo from "@/components/BrandLogo";
 import ThemeToggle from "@/components/ThemeToggle";
 import { toast } from "@/components/Toast";
-import { verifyTeacherPassword } from "@/app/actions/auth";
+import { startMockupTeacherSession, verifyTeacherPassword } from "@/app/actions/auth";
+import { BarChart3, Sparkles, Users } from "lucide-react";
 import {
   issueGuestSession,
   issueStudentSession,
@@ -207,6 +208,7 @@ export default function Home() {
   const [rosterStudents, setRosterStudents] = useState<RosterStudent[]>([]);
   const [teacherIdentifier, setTeacherIdentifier] = useState("");
   const [password, setPassword] = useState("");
+  const [mockupLoginPending, setMockupLoginPending] = useState(false);
   const [error, setError] = useState("");
   const studentNameInputRef = useRef<HTMLInputElement>(null);
   const [pendingGuestPreview, setPendingGuestPreview] = useState<GuestMergePreview | null>(null);
@@ -369,6 +371,30 @@ export default function Home() {
     } catch {
       setError("서버 인증 도중 오류가 발생했습니다.");
       setTimeout(() => setError(""), 2000);
+    }
+  };
+
+  const handleMockupLogin = async () => {
+    if (mockupLoginPending) return;
+    setMockupLoginPending(true);
+    setError("");
+    try {
+      const res = await startMockupTeacherSession();
+      if (!res.success || !res.token) {
+        setError(res.error || "데모 계정을 시작하지 못했습니다.");
+        return;
+      }
+      const saved = saveTeacherSessionWithIdentity(res.token, res.teacher);
+      if (!saved) {
+        setError("브라우저 세션 저장을 사용할 수 없습니다.");
+        return;
+      }
+      setCurrentPlan("academy");
+      router.push("/teacher/dashboard?showcase=1");
+    } catch {
+      setError("데모 계정을 여는 중 오류가 발생했습니다.");
+    } finally {
+      setMockupLoginPending(false);
     }
   };
 
@@ -1016,7 +1042,7 @@ export default function Home() {
         {role !== "none" && (
           <div
             className="glass-panel animate-slide-up home-login-card"
-            style={{ maxWidth: "440px", margin: "0 auto", padding: "2.75rem 2.5rem" }}
+            style={{ maxWidth: role === "teacher" ? "500px" : "440px", margin: "0 auto", padding: "2.75rem 2.5rem" }}
           >
             <button
               onClick={handleBack}
@@ -1154,6 +1180,33 @@ export default function Home() {
                   대시보드 입장
                 </button>
                 </form>
+
+                <div className="mockup-login-divider" aria-hidden="true"><span>또는 바로 체험하기</span></div>
+                <section className="mockup-login-card" aria-label="데모 계정 체험">
+                  <div className="mockup-login-card-heading">
+                    <span className="mockup-login-spark"><Sparkles size={18} /></span>
+                    <div>
+                      <strong>MOCKUP 계정</strong>
+                      <p>입력 없이 완성된 분석 화면을 둘러보세요.</p>
+                    </div>
+                    <span className="mockup-login-readonly">예시 데이터</span>
+                  </div>
+                  <div className="mockup-login-preview" aria-label="데모 계정 포함 데이터">
+                    <span><BarChart3 size={15} /><strong>7</strong>개 시험</span>
+                    <span><Users size={15} /><strong>84</strong>명 학생</span>
+                    <span><Sparkles size={15} />상세 분석</span>
+                  </div>
+                  <button
+                    type="button"
+                    className="mockup-login-button"
+                    onClick={() => void handleMockupLogin()}
+                    disabled={mockupLoginPending}
+                  >
+                    {mockupLoginPending ? "데모 준비 중…" : "데모 계정으로 둘러보기"}
+                    {!mockupLoginPending && <ChevronRight />}
+                  </button>
+                  <p className="mockup-login-note">실제 학교·학생 정보와 연결되지 않으며, 표시되는 모든 수치는 예시입니다.</p>
+                </section>
               </>
             ) : (
               <>

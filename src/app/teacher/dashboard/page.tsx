@@ -7,6 +7,7 @@ import { useRouter, useSearchParams } from "next/navigation";
 import BrandLogo from "@/components/BrandLogo";
 import { Exam, Attempt } from "@/types/omr";
 import OverviewTab from "@/components/dashboard/tabs/OverviewTab";
+import MockupOverview from "@/components/dashboard/MockupOverview";
 import { Activity, AlertTriangle, BarChart2, CheckCircle2, CloudOff, Database, GraduationCap, LayoutDashboard, RefreshCw, Search } from "lucide-react";
 import ThemeToggle from "@/components/ThemeToggle";
 import TeacherLogoutButton from "@/components/TeacherLogoutButton";
@@ -39,6 +40,8 @@ import { loadTeacherRosterSnapshot } from "@/lib/teacherRosterClient";
 import type { RosterGroup, RosterStudent } from "@/lib/rosterStorage";
 import { buildTeacherDashboardMetrics } from "@/lib/teacherDashboardMetrics";
 import { useServerPlan } from "@/lib/useServerPlan";
+import { readTeacherSession } from "@/lib/teacherSession";
+import { isMockupTeacherIdentity } from "@/lib/mockupAccount";
 
 type TabType = 'overview' | 'exam' | 'student';
 type DashboardDataMode = "real" | "demo";
@@ -60,6 +63,7 @@ type DashboardSnapshot = {
     rosterStudents: RosterStudent[];
     rosterGroups: RosterGroup[];
     allowDemoData?: boolean;
+    forceDemoData?: boolean;
 };
 
 function normalizeDashboardTab(value: string | null): TabType {
@@ -82,10 +86,15 @@ function TeacherDashboard() {
     const initialTab = normalizeDashboardTab(searchParams.get('tab'));
     const initialExamId = searchParams.get('examId') || undefined;
     const [activeTab, setActiveTab] = useState<TabType>(initialTab);
+    const showcaseRequested = searchParams.get("showcase") === "1";
+    const [isMockupAccount, setIsMockupAccount] = useState(showcaseRequested);
+    const [isAccountModeResolved, setIsAccountModeResolved] = useState(showcaseRequested);
     // Deferred to post-mount to avoid SSR/CSR hydration mismatch on the ⌘/Ctrl label.
     const [isMac, setIsMac] = useState(false);
     useEffect(() => {
         setIsMac(typeof navigator !== "undefined" && /Mac|iPhone|iPad/.test(navigator.platform));
+        setIsMockupAccount(previous => previous || isMockupTeacherIdentity(readTeacherSession()));
+        setIsAccountModeResolved(true);
     }, []);
     const [selectedExamIdForAnalytics, setSelectedExamIdForAnalytics] = useState<string | undefined>(initialExamId);
     const [exams, setExams] = useState<Exam[]>([]);
@@ -126,14 +135,18 @@ function TeacherDashboard() {
         // Demo data is only considered after the background refresh confirms that
         // both local and remote stores are empty. This avoids flashing examples over
         // a real remote workspace while its network request is still in flight.
-        const shouldSeedDemo = snapshot.allowDemoData === true
+        const shouldSeedDemo = snapshot.forceDemoData === true || (
+            snapshot.allowDemoData === true
             && shouldUseDemoData()
             && loadedExams.length === 0
-            && loadedAttempts.length === 0;
+            && loadedAttempts.length === 0
+        );
         if (shouldSeedDemo) {
             const demo = buildDemoDashboardData();
             loadedExams.push(...demo.exams);
             loadedAttempts.push(...demo.attempts);
+            loadedRosterStudents.push(...demo.rosterStudents);
+            loadedRosterGroups.push(...demo.rosterGroups);
         }
         setDataMode(shouldSeedDemo ? "demo" : "real");
 
@@ -158,6 +171,19 @@ function TeacherDashboard() {
     }, []);
 
     const loadDashboardData = useCallback(async (options: DashboardLoadOptions = {}) => {
+        if (isMockupAccount) {
+            applyDashboardSnapshot({
+                exams: [],
+                attempts: [],
+                rosterStudents: [],
+                rosterGroups: [],
+                forceDemoData: true,
+            });
+            if (options.notifyOnSuccess) {
+                toast.success("데모 데이터 새로고침 완료", "고정된 예시 데이터로 화면을 다시 구성했습니다.");
+            }
+            return;
+        }
         const [examResult, attemptResult, rosterResult] = await Promise.all([
             loadTeacherExams(),
             loadTeacherAttempts(),
@@ -185,21 +211,32 @@ function TeacherDashboard() {
         if (options.notifyOnSuccess && nextSyncStatus.kind !== "error") {
             toast.success("동기화 확인 완료", nextSyncStatus.detail);
         }
-    }, [applyDashboardSnapshot]);
+    }, [applyDashboardSnapshot, isMockupAccount]);
 
     useEffect(() => {
+        if (!isAccountModeResolved) return;
         let cancelled = false;
 
         // Render the last local snapshot synchronously on mount so the dashboard is
         // useful without waiting for Supabase reconciliation. The existing loader
         // then refreshes and replaces it with the merged source of truth.
-        const localRoster = readLocalRosterSnapshot(localStorage);
-        applyDashboardSnapshot({
-            exams: readLocalExams(),
-            attempts: readLocalAttempts(),
-            rosterStudents: localRoster.students,
-            rosterGroups: localRoster.groups,
-        });
+        if (isMockupAccount) {
+            applyDashboardSnapshot({
+                exams: [],
+                attempts: [],
+                rosterStudents: [],
+                rosterGroups: [],
+                forceDemoData: true,
+            });
+        } else {
+            const localRoster = readLocalRosterSnapshot(localStorage);
+            applyDashboardSnapshot({
+                exams: readLocalExams(),
+                attempts: readLocalAttempts(),
+                rosterStudents: localRoster.students,
+                rosterGroups: localRoster.groups,
+            });
+        }
         const refreshTimer = window.setTimeout(() => {
             void loadDashboardData({ isCancelled: () => cancelled });
         }, 0);
@@ -207,13 +244,14 @@ function TeacherDashboard() {
             cancelled = true;
             window.clearTimeout(refreshTimer);
         };
-    }, [applyDashboardSnapshot, loadDashboardData]);
+    }, [applyDashboardSnapshot, isAccountModeResolved, isMockupAccount, loadDashboardData]);
 
     // Cross-tab / refocus revalidation: another tab submitting an attempt, saving
     // an exam, or editing the roster fires a "storage" event here; returning to a
     // backgrounded tab fires focus/visibilitychange. Re-run the existing loader,
     // throttled to once per window with one trailing refresh so bursts coalesce.
     useEffect(() => {
+        if (!isAccountModeResolved) return;
         let cancelled = false;
         let trailingTimer: number | undefined;
         const gate = createDashboardRevalidationGate();
@@ -252,7 +290,7 @@ function TeacherDashboard() {
             window.removeEventListener("focus", trigger);
             document.removeEventListener("visibilitychange", onVisibilityChange);
         };
-    }, [loadDashboardData]);
+    }, [isAccountModeResolved, loadDashboardData]);
 
     useEffect(() => {
         const nextTab = normalizeDashboardTab(searchParams.get('tab'));
@@ -268,10 +306,10 @@ function TeacherDashboard() {
         setActiveTab(tab);
         if (examId !== undefined) setSelectedExamIdForAnalytics(examId);
         router.replace(
-            `/teacher/dashboard?tab=${tab}${examId ? `&examId=${encodeURIComponent(examId)}` : ''}`,
+            `/teacher/dashboard?tab=${tab}${examId ? `&examId=${encodeURIComponent(examId)}` : ''}${isMockupAccount ? "&showcase=1" : ""}`,
             { scroll: false },
         );
-    }, [router]);
+    }, [isMockupAccount, router]);
 
     const handleNavigateToExamAnalytics = (examId: string) => {
         applyTab('exam', examId);
@@ -391,6 +429,23 @@ function TeacherDashboard() {
     const dashboardAnalysisActions = useMemo<DashboardAnalysisAction[]>(() => {
         const actions: DashboardAnalysisAction[] = [];
 
+        if (isMockupAccount) {
+            return [
+                {
+                    key: "exam",
+                    label: "시험별 분석 보기",
+                    detail: "문항, 개념, 반별 약점을 예시 데이터로 살펴봅니다.",
+                    tone: "primary",
+                },
+                {
+                    key: "student",
+                    label: "학생별 성장 보기",
+                    detail: "학생별 점수 추이와 반복 약점을 확인합니다.",
+                    tone: "primary",
+                },
+            ];
+        }
+
         if (dataMode === "demo" || analyticsDataHealth.kind === "empty") {
             actions.push({
                 key: "create",
@@ -439,10 +494,16 @@ function TeacherDashboard() {
         });
 
         return actions;
-    }, [analyticsDataHealth.issues, analyticsDataHealth.kind, dataMode, questionResultRepairPlan.repairableCount]);
+    }, [analyticsDataHealth.issues, analyticsDataHealth.kind, dataMode, isMockupAccount, questionResultRepairPlan.repairableCount]);
 
     // Tab Navigation Component
-    const renderTabs = () => (
+    const renderTabs = () => isMockupAccount ? (
+        <div className="mockup-dashboard-tabs" role="tablist" aria-label="데모 분석 화면">
+            <button type="button" role="tab" aria-selected={activeTab === "overview"} onClick={() => applyTab("overview")}>개요</button>
+            <button type="button" role="tab" aria-selected={activeTab === "exam"} onClick={() => applyTab("exam", selectedExamIdForAnalytics)}>시험별 분석</button>
+            <button type="button" role="tab" aria-selected={activeTab === "student"} onClick={() => applyTab("student")}>학생별 분석</button>
+        </div>
+    ) : (
         <div style={{
             display: 'grid',
             gridTemplateColumns: 'repeat(auto-fit, minmax(min(160px, 100%), 1fr))',
@@ -507,18 +568,18 @@ function TeacherDashboard() {
     );
 
     return (
-        <div className="layout-main">
+        <div className={`layout-main${isMockupAccount ? " mockup-dashboard-shell" : ""}`}>
             <header className="header teacher-header">
                 <div className="container header-content">
                     <div className="teacher-header-brand" style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
                         <BrandLogo />
                         <span style={{
                             fontSize: '0.75rem', fontWeight: 700,
-                            background: 'rgba(99, 102, 241, 0.1)', color: 'var(--primary)',
+                            background: isMockupAccount ? '#e7f0ff' : 'rgba(99, 102, 241, 0.1)', color: isMockupAccount ? '#1769e0' : 'var(--primary)',
                             padding: '4px 10px', borderRadius: 'var(--radius-full)',
                             border: '1px solid rgba(99, 102, 241, 0.2)'
                         }}>
-                            교사
+                            {isMockupAccount ? "데모 계정" : "교사"}
                         </span>
                     </div>
                     <div className="teacher-header-actions" style={{ display: 'flex', alignItems: 'center', gap: '0.65rem' }}>
@@ -556,7 +617,7 @@ function TeacherDashboard() {
                                 borderRadius: 4, fontFamily: 'var(--font-mono)', fontSize: '0.7rem', fontWeight: 600
                             }}>{isMac ? '⌘K' : 'Ctrl K'}</kbd>
                         </button>
-                        <Link href="/teacher/live" style={{
+                        {!isMockupAccount && <Link href="/teacher/live" style={{
                             display: 'inline-flex', alignItems: 'center', gap: '0.35rem',
                             fontSize: '0.82rem', fontWeight: 700,
                             color: 'var(--success)',
@@ -567,7 +628,7 @@ function TeacherDashboard() {
                         }} className="nav-link-live" aria-label="실시간 모니터링">
                             <Activity size={14} />
                             <span>실시간</span>
-                        </Link>
+                        </Link>}
                         <TeacherSessionChip />
                         <NotificationBell />
                         <TeacherLogoutButton />
@@ -577,18 +638,20 @@ function TeacherDashboard() {
             </header>
             <GlobalSearch />
 
-            <main className="container dashboard-main animate-fade-in">
+            <main className={`container dashboard-main animate-fade-in${isMockupAccount ? " mockup-dashboard-main" : ""}`}>
                 {/* Welcome Section */}
                 <div className="dashboard-welcome">
                     <div style={{ minWidth: 0 }}>
                         <h1 style={{ fontSize: '2.5rem', marginBottom: '0.75rem', lineHeight: 1.2, fontWeight: 800, letterSpacing: '-0.02em', color: 'var(--foreground)' }}>
-                            분석 센터
+                            {isMockupAccount ? "좋은아침이에요, 김하늘 선생님" : "분석 센터"}
                         </h1>
                         <p className="text-muted" style={{ fontSize: '1.1rem' }}>
-                            시험 현황과 학생 성취도를 한눈에 확인하고 다음 조치를 시작하세요.
+                            {isMockupAccount
+                                ? "완성된 예시 시험으로 OMR Maker의 통계와 분석을 편하게 둘러보세요."
+                                : "시험 현황과 학생 성취도를 한눈에 확인하고 다음 조치를 시작하세요."}
                         </p>
                     </div>
-                    <div className="dashboard-welcome-status">
+                    {!isMockupAccount && <div className="dashboard-welcome-status">
                         <div
                             aria-label="데이터 동기화 상태"
                             title={syncStatus.error || syncStatus.detail}
@@ -671,14 +734,15 @@ function TeacherDashboard() {
                                 시험 출제하기
                             </Link>
                         )}
-                    </div>
+                    </div>}
                 </div>
 
                 {dataMode === "demo" && (
                     <div
                         role="status"
                         aria-label="데모 데이터 안내"
-                        style={{
+                        className={isMockupAccount ? "mockup-demo-notice" : undefined}
+                        style={isMockupAccount ? undefined : {
                             display: 'flex',
                             alignItems: 'flex-start',
                             gap: '0.85rem',
@@ -690,13 +754,15 @@ function TeacherDashboard() {
                             color: 'var(--foreground)',
                         }}
                     >
-                        <AlertTriangle size={19} color="var(--warning)" style={{ flexShrink: 0, marginTop: 2 }} />
+                        <AlertTriangle size={19} color={isMockupAccount ? "#1769e0" : "var(--warning)"} style={{ flexShrink: 0, marginTop: 2 }} />
                         <div style={{ minWidth: 0 }}>
-                            <div style={{ fontSize: '0.9rem', fontWeight: 900, color: 'var(--warning)', marginBottom: '0.2rem' }}>
-                                데모 데이터 모드
+                            <div style={isMockupAccount ? undefined : { fontSize: '0.9rem', fontWeight: 900, color: 'var(--warning)', marginBottom: '0.2rem' }}>
+                                {isMockupAccount ? "데모 전용 · 모든 데이터는 예시입니다" : "데모 데이터 모드"}
                             </div>
-                            <p style={{ fontSize: '0.82rem', color: 'var(--muted)', lineHeight: 1.55, wordBreak: 'keep-all' }}>
-                                현재 저장된 시험과 제출이 없어 예시 시험/학생 데이터로 화면을 채웠습니다. 실제 시험을 만들거나 제출이 들어오면 예시 데이터는 자동으로 사라집니다.
+                            <p style={isMockupAccount ? undefined : { fontSize: '0.82rem', color: 'var(--muted)', lineHeight: 1.55, wordBreak: 'keep-all' }}>
+                                {isMockupAccount
+                                    ? "실제 학교·학생 정보와 연결되지 않으며, 이 계정에서 보이는 시험·점수·인사이트는 제품 체험을 위해 구성한 샘플입니다."
+                                    : "현재 저장된 시험과 제출이 없어 예시 시험/학생 데이터로 화면을 채웠습니다. 실제 시험을 만들거나 제출이 들어오면 예시 데이터는 자동으로 사라집니다."}
                             </p>
                         </div>
                     </div>
@@ -831,7 +897,7 @@ function TeacherDashboard() {
                     </div>
                 )}
 
-                <div
+                {!isMockupAccount && <div
                     className="dashboard-analysis-actions"
                     aria-label="분석 다음 조치"
                     style={{
@@ -897,14 +963,24 @@ function TeacherDashboard() {
                             </button>
                         );
                     })}
-                </div>
+                </div>}
 
                 {/* Tabs */}
                 {renderTabs()}
 
                 {/* Tab Content */}
                 <div style={{ minHeight: '600px' }}>
-                    {activeTab === 'overview' && (
+                    {activeTab === 'overview' && isMockupAccount && (
+                        <MockupOverview
+                            exams={exams}
+                            attempts={attempts}
+                            rosterGroups={rosterGroups}
+                            totalStudents={stats.totalStudents}
+                            averageScore={stats.avgScore}
+                            onNavigateToExamAnalytics={handleNavigateToExamAnalytics}
+                        />
+                    )}
+                    {activeTab === 'overview' && !isMockupAccount && (
                         <OverviewTab
                             exams={exams}
                             attempts={attempts}
@@ -923,7 +999,7 @@ function TeacherDashboard() {
                             rosterStudents={rosterStudents}
                             rosterGroups={rosterGroups}
                             initialExamId={selectedExamIdForAnalytics}
-                            currentPlan={currentPlan}
+                            currentPlan={isMockupAccount ? "academy" : currentPlan}
                         />
                     )}
                     {activeTab === 'student' && (
@@ -932,7 +1008,7 @@ function TeacherDashboard() {
                             attempts={attempts}
                             rosterStudents={rosterStudents}
                             rosterGroups={rosterGroups}
-                            currentPlan={currentPlan}
+                            currentPlan={isMockupAccount ? "academy" : currentPlan}
                         />
                     )}
                 </div>

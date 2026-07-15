@@ -31,6 +31,7 @@ import { isSameOriginServerActionRequest, SERVER_ACTION_ORIGIN_ERROR } from "@/l
 import { buildDeploymentReadiness, type DeploymentReadinessSummary } from "@/lib/deploymentReadiness";
 import { workspaceContextFromIdentity } from "@/lib/workspaceContext";
 import { probeSupabaseDeploymentWithServiceRole } from "@/lib/supabaseReadinessProbe";
+import { MOCKUP_TEACHER_IDENTITY } from "@/lib/mockupAccount";
 
 function clientFingerprintFromHeaders(headerStore: Headers): string {
     const forwardedFor = headerStore.get("x-forwarded-for")?.split(",")[0]?.trim();
@@ -117,6 +118,49 @@ export async function verifyTeacherPassword(
     return {
         success: false,
         error: TEACHER_AUTH_ERROR,
+    };
+}
+
+/**
+ * Starts the public showcase workspace without touching a configured teacher
+ * account or bootstrapping a real Supabase workspace. The signed session is
+ * still required so the regular teacher route guard stays intact.
+ */
+export async function startMockupTeacherSession(): Promise<{
+    success: boolean;
+    token?: string;
+    teacher?: TeacherLoginIdentity;
+    error?: string;
+}> {
+    const headerStore = await headers();
+    if (!isSameOriginServerActionRequest(headerStore)) {
+        return { success: false, error: SERVER_ACTION_ORIGIN_ERROR };
+    }
+
+    const token = mintTeacherToken();
+    const serverSession = createSignedTeacherSessionCookie(token, MOCKUP_TEACHER_IDENTITY);
+    if (!serverSession) {
+        return { success: false, error: TEACHER_AUTH_SESSION_CONFIG_ERROR };
+    }
+
+    try {
+        const cookieStore = await cookies();
+        cookieStore.set(TEACHER_SERVER_SESSION_COOKIE, serverSession, {
+            httpOnly: true,
+            sameSite: "lax",
+            secure: shouldUseSecureTeacherSessionCookie(headerStore.get("host")),
+            path: "/",
+            maxAge: TEACHER_SERVER_SESSION_MAX_AGE_SECONDS,
+        });
+    } catch (error) {
+        console.error("Mockup teacher session cookie write failed", error);
+        return { success: false, error: TEACHER_AUTH_SESSION_COOKIE_ERROR };
+    }
+
+    return {
+        success: true,
+        token,
+        teacher: MOCKUP_TEACHER_IDENTITY,
     };
 }
 

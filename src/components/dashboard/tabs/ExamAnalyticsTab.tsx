@@ -1,14 +1,35 @@
 "use client";
 
-import { useMemo, useState, useEffect, useRef } from "react";
+import { useMemo, useState, useEffect, useRef, type CSSProperties } from "react";
 import { DEFAULT_CHOICE_COUNT, Exam, Attempt, questionChoiceCount, type PlanKey } from "@/types/omr";
 import type { QuestionResult } from "@/types/omr";
 import {
     BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip, ResponsiveContainer,
-    Radar, RadarChart, PolarGrid, PolarAngleAxis, PolarRadiusAxis
+    Radar, RadarChart, PolarGrid, PolarAngleAxis, PolarRadiusAxis, ReferenceLine
 } from 'recharts';
-import { AlertTriangle, CheckCircle, BarChart2, Download, ChevronUp, ChevronDown, Database, List, Target, Users, Lightbulb, MapPin, MessageCircle } from "lucide-react";
+import {
+    AlertTriangle,
+    ArrowRight,
+    BarChart2,
+    CalendarDays,
+    CheckCircle,
+    ChevronDown,
+    ChevronRight,
+    ChevronUp,
+    Database,
+    Download,
+    FileQuestion,
+    Lightbulb,
+    List,
+    MapPin,
+    MessageCircle,
+    Search,
+    Settings2,
+    Target,
+    Users,
+} from "lucide-react";
 import { PremiumActionLink, PremiumFeatureCard } from "@/components/PremiumFeatureGate";
+import styles from "./ExamAnalyticsTab.module.css";
 import {
     attemptElapsedTimeSec,
     buildClassExamScoreGroups,
@@ -43,7 +64,6 @@ import { formatRegionScopedLabel, resolveExamSelection, resolveExamSelectionInpu
 import { safeRatePercent } from "@/lib/scoreUtils";
 import { serializeCsvRows } from "@/lib/csv";
 import { buildRetakeHref } from "@/lib/retakeLinks";
-import { buildExamRetakeRecoveries, summarizeRetakeRecoveries } from "@/lib/retakeRecovery";
 import { buildKakaoNotificationCandidates, type KakaoNotificationCandidate, type KakaoNotificationCandidateKind } from "@/lib/kakaoNotificationQueue";
 import {
     buildKakaoCandidateMessagePreview,
@@ -88,11 +108,33 @@ const difficultyLabelMap: Record<string, string> = {
  */
 const WEAK_POINT_BISERIAL_THRESHOLD = 0.2;
 
+// Shared card surface so every analytics section reads as one coherent grammar
+// (rounded, subtly elevated, consistently bordered) — the `.card` class carries no
+// styling of its own, so the treatment lives here as an inline base that each card
+// spreads first and then overrides (padding, accents) as needed.
+const CARD_SURFACE_STYLE: CSSProperties = {
+    background: 'var(--surface)',
+    border: '1px solid var(--border)',
+    borderRadius: 'var(--radius-xl)',
+    boxShadow: 'var(--shadow-md)',
+};
+
 function formatSeconds(totalSec: number): string {
     if (totalSec < 60) return `${totalSec}초`;
     const minutes = Math.floor(totalSec / 60);
     const seconds = totalSec % 60;
     return seconds > 0 ? `${minutes}분 ${seconds}초` : `${minutes}분`;
+}
+
+function formatExamDate(value: string | undefined): string {
+    if (!value) return "일정 미설정";
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) return "일정 미설정";
+    return new Intl.DateTimeFormat("ko-KR", {
+        year: "numeric",
+        month: "2-digit",
+        day: "2-digit",
+    }).format(date);
 }
 
 function roundScoreValue(value: number): number {
@@ -112,6 +154,7 @@ function resultStatusLabel(result?: QuestionResult): string {
 }
 
 type AnalysisScope = "exam" | "class" | "student";
+type AnalyticsWorkspaceView = "overview" | "questions" | "students" | "operations";
 const ALL_REGION_KEY = "__all_regions__";
 const KAKAO_REVIEW_STATUS_OPTIONS: Array<{ status: KakaoCandidateReviewStatus; label: string }> = [
     { status: "ready", label: "후보 준비" },
@@ -215,6 +258,7 @@ export default function ExamAnalyticsTab({
     const [isSelectOpen, setIsSelectOpen] = useState(false);
     const [inputValue, setInputValue] = useState("");
     const [selectedRegionKey, setSelectedRegionKey] = useState(ALL_REGION_KEY);
+    const [activeWorkspaceView, setActiveWorkspaceView] = useState<AnalyticsWorkspaceView>("overview");
     const [analysisScope, setAnalysisScope] = useState<AnalysisScope>("exam");
     const [selectedClassKey, setSelectedClassKey] = useState("");
     const [selectedStudentKey, setSelectedStudentKey] = useState("");
@@ -288,7 +332,6 @@ export default function ExamAnalyticsTab({
     const selectedExam = useMemo(() => exams.find(e => e.id === selectedExamId), [exams, selectedExamId]);
     const allSelectedExamAttempts = useMemo(() => attempts.filter(a => a.examId === selectedExamId), [attempts, selectedExamId]);
     const baseExamAttempts = useMemo(() => allSelectedExamAttempts.filter(a => !a.retake), [allSelectedExamAttempts]);
-    const baseRetakeAttempts = useMemo(() => allSelectedExamAttempts.filter(a => !!a.retake), [allSelectedExamAttempts]);
     const regionScopeOptions = useMemo(() => (
         buildRegionalLearningScopes({
             students: rosterStudents,
@@ -307,19 +350,6 @@ export default function ExamAnalyticsTab({
             ? baseExamAttempts
             : filterAttemptsByRegion(baseExamAttempts, activeRegionKey, rosterStudents, rosterGroups)
     ), [activeRegionKey, baseExamAttempts, rosterGroups, rosterStudents]);
-    const retakeAttempts = useMemo(() => (
-        activeRegionKey === ALL_REGION_KEY
-            ? baseRetakeAttempts
-            : filterAttemptsByRegion(baseRetakeAttempts, activeRegionKey, rosterStudents, rosterGroups)
-    ), [activeRegionKey, baseRetakeAttempts, rosterGroups, rosterStudents]);
-    // Recovery vs the source attempt; sources are looked up in the unfiltered
-    // pool because a retake can cross the current region filter.
-    const retakeRecoverySummary = useMemo(() => {
-        if (!selectedExam || retakeAttempts.length === 0) return null;
-        return summarizeRetakeRecoveries(
-            buildExamRetakeRecoveries(selectedExam, retakeAttempts, allSelectedExamAttempts),
-        );
-    }, [allSelectedExamAttempts, retakeAttempts, selectedExam]);
     const scopedRosterStudents = useMemo(() => (
         activeRegionKey === ALL_REGION_KEY
             ? rosterStudents
@@ -650,6 +680,43 @@ export default function ExamAnalyticsTab({
         };
     }, [conceptAnalytics, examStats, questionAnalytics, studentScores]);
 
+    const studentAchievementBands = useMemo(() => {
+        const definitions = [
+            { key: "under40", label: "40점 미만", min: 0, max: 40, color: "#ef4444" },
+            { key: "under60", label: "40~59점", min: 40, max: 60, color: "#f97316" },
+            { key: "under80", label: "60~79점", min: 60, max: 80, color: "#eab308" },
+            { key: "over80", label: "80~100점", min: 80, max: 101, color: "#10b981" },
+        ];
+        const total = studentScores.length;
+        return definitions.map(definition => {
+            const count = studentScores.filter(student => (
+                student.scorePercentage >= definition.min && student.scorePercentage < definition.max
+            )).length;
+            return {
+                ...definition,
+                count,
+                rate: safeRatePercent(count, total),
+            };
+        });
+    }, [studentScores]);
+
+    const averageDistributionLabel = examStats?.distributionBuckets.find(bucket => (
+        examStats.avgScore >= bucket.min
+        && (examStats.avgScore < bucket.max || (bucket.max === 100 && examStats.avgScore <= 100))
+    ))?.label;
+    const overviewRetakeQuestionIds = (
+        teachingInsights?.riskyQuestions.length
+            ? teachingInsights.riskyQuestions
+            : questionAnalytics
+    )
+        .map(question => question.id)
+        .slice(0, 5);
+    const overviewRetakeHref = selectedExam && examAttempts[0] && overviewRetakeQuestionIds.length > 0
+        ? buildRetakeHref(selectedExam.id, examAttempts[0].id, overviewRetakeQuestionIds, "custom", {
+            concepts: teachingInsights?.weakConcept?.concept ? [teachingInsights.weakConcept.concept] : undefined,
+        })
+        : null;
+
     const examTypeWeaknessGroups = useMemo(() => {
         // Feeds Pro-gated UI only — skip the recommendation pass when locked.
         if (!advancedAnalyticsEnabled) return [];
@@ -869,6 +936,14 @@ export default function ExamAnalyticsTab({
             .slice(0, 6);
     }, [advancedAnalyticsEnabled, examAttempts]);
 
+    const handleSelectExam = (exam: Exam) => {
+        setSelectedExamId(exam.id);
+        setInputValue(exam.title);
+        setIsSelectOpen(false);
+        setSelectedClassKey("");
+        setSelectedStudentKey("");
+    };
+
     const handleSort = (field: 'name' | 'score') => {
         if (sortField === field) {
             setSortDir(sortDir === 'asc' ? 'desc' : 'asc');
@@ -944,156 +1019,160 @@ export default function ExamAnalyticsTab({
     }
 
     return (
-        <div className="fade-in-up" style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
-            {/* Filter Section */}
-            <div className="card" style={{ padding: '1.5rem', display: 'flex', alignItems: 'center', gap: '1rem', background: 'var(--surface)' }}>
-                <span style={{ fontWeight: 600, color: 'var(--text)' }}>분석할 시험 선택:</span>
-                <div ref={dropdownRef} style={{ position: 'relative', flex: 1, maxWidth: '400px' }}>
-                    <div
-                        style={{
-                            display: 'flex',
-                            alignItems: 'center',
-                            position: 'relative',
-                            borderRadius: 'var(--radius-md)',
-                            border: '1px solid var(--border)',
-                            background: 'var(--background)',
-                        }}
-                    >
-                        <input
-                            type="text"
-                            value={inputValue}
-                            onChange={(e) => {
-                                setInputValue(e.target.value);
-                                setIsSelectOpen(true);
-                            }}
-                            onFocus={() => {
-                                setIsSelectOpen(true);
-                                setInputValue(""); // Clear input to allow fresh search
-                            }}
-                            onBlur={() => {
-                                // Restore selected exam text if they didn't pick anything new
-                                setTimeout(() => {
-                                    if (!isSelectOpen) {
-                                        const currentExam = exams.find(e => e.id === selectedExamId);
+        <div className={`${styles.workspace} fade-in-up`}>
+            <section className={styles.headerPanel} aria-labelledby="exam-analytics-title">
+                <div className={styles.headingRow}>
+                    <div className={styles.headingCopy}>
+                        <h2 id="exam-analytics-title">시험별 통계</h2>
+                        <p>점수보다 먼저, 다음 수업에서 무엇을 바꿀지 확인하세요.</p>
+                    </div>
+                    <div className={styles.scopeNote}>
+                        <MapPin size={14} aria-hidden="true" />
+                        {activeRegionLabel} · 본시험 제출 기준
+                    </div>
+                </div>
+
+                <div className={styles.controlRow}>
+                    <div className={styles.field} ref={dropdownRef}>
+                        <label className={styles.fieldLabel} htmlFor="exam-analytics-search">시험</label>
+                        <div className={styles.combobox}>
+                            <Search size={17} aria-hidden="true" />
+                            <input
+                                id="exam-analytics-search"
+                                type="text"
+                                role="combobox"
+                                aria-autocomplete="list"
+                                aria-expanded={isSelectOpen}
+                                aria-controls="exam-analytics-options"
+                                value={inputValue}
+                                onChange={(event) => {
+                                    setInputValue(event.target.value);
+                                    setIsSelectOpen(true);
+                                }}
+                                onFocus={() => {
+                                    setIsSelectOpen(true);
+                                    const currentExam = exams.find(exam => exam.id === selectedExamId);
+                                    if (currentExam && inputValue === currentExam.title) setInputValue("");
+                                }}
+                                onKeyDown={(event) => {
+                                    if (event.key === "Escape") {
+                                        setIsSelectOpen(false);
+                                        const currentExam = exams.find(exam => exam.id === selectedExamId);
                                         if (currentExam) setInputValue(currentExam.title);
                                     }
-                                }, 150);
-                            }}
-                            placeholder="시험을 검색하거나 선택하세요"
-                            style={{
-                                width: '100%',
-                                padding: '0.75rem 1rem',
-                                paddingRight: '2.5rem',
-                                border: 'none',
-                                background: 'transparent',
-                                color: 'var(--text)',
-                                outline: 'none',
-                                cursor: 'text'
-                            }}
-                        />
-                        <ChevronDown
-                            size={18}
-                            style={{
-                                position: 'absolute',
-                                right: '1rem',
-                                pointerEvents: 'none',
-                                transform: isSelectOpen ? 'rotate(180deg)' : 'rotate(0deg)',
-                                transition: 'transform 0.2s',
-                                color: 'var(--muted)'
-                            }}
-                        />
-                    </div>
-
-                    {isSelectOpen && (
-                        <div style={{
-                            position: 'absolute',
-                            top: '100%',
-                            left: 0,
-                            right: 0,
-                            marginTop: '0.5rem',
-                            background: 'var(--background)',
-                            border: '1px solid var(--border)',
-                            borderRadius: 'var(--radius-md)',
-                            boxShadow: '0 4px 12px rgba(0,0,0,0.1)',
-                            zIndex: 50,
-                            maxHeight: '300px',
-                            overflowY: 'auto'
-                        }}>
-                            {filteredExams.length > 0 ? (
-                                filteredExams.map(exam => (
-                                    <div
-                                        key={exam.id}
-                                        onMouseDown={(e) => {
-                                            // Handle click with onMouseDown so it fires before input onBlur
-                                            e.preventDefault();
-                                            setSelectedExamId(exam.id);
-                                            setInputValue(exam.title);
-                                            setIsSelectOpen(false);
-                                            setSelectedClassKey("");
-                                            setSelectedStudentKey("");
-                                        }}
-                                        style={{
-                                            padding: '0.75rem 1rem',
-                                            cursor: 'pointer',
-                                            background: exam.id === selectedExamId ? 'var(--surface)' : 'transparent',
-                                            color: exam.id === selectedExamId ? 'var(--primary)' : 'var(--text)',
-                                            fontWeight: exam.id === selectedExamId ? 600 : 400,
-                                        }}
-                                        onMouseEnter={(e) => { e.currentTarget.style.background = 'rgba(99,102,241,0.06)'; }}
-                                        onMouseLeave={(e) => { e.currentTarget.style.background = exam.id === selectedExamId ? 'var(--surface)' : 'transparent'; }}
-                                    >
-                                        {exam.title}
-                                    </div>
-                                ))
-                            ) : (
-                                <div style={{ padding: '1rem', textAlign: 'center', color: 'var(--muted)' }}>
-                                    검색 결과가 없습니다
-                                </div>
-                            )}
+                                    if (event.key === "Enter" && isSelectOpen && filteredExams[0]) {
+                                        event.preventDefault();
+                                        handleSelectExam(filteredExams[0]);
+                                    }
+                                }}
+                                placeholder="시험을 검색하거나 선택하세요"
+                            />
+                            <ChevronDown
+                                size={17}
+                                aria-hidden="true"
+                                className={`${styles.comboboxChevron} ${isSelectOpen ? styles.comboboxChevronOpen : ""}`}
+                            />
                         </div>
-                    )}
-                </div>
-            </div>
 
-            {regionScopeOptions.length > 0 && (
-                <div className="card" style={{ padding: '1.2rem 1.35rem', display: 'flex', alignItems: 'center', gap: '1rem', background: 'var(--surface)', flexWrap: 'wrap' }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.45rem', fontWeight: 850, color: 'var(--foreground)' }}>
-                        <MapPin size={17} color="var(--primary)" />
-                        지역 분석 필터
+                        {isSelectOpen && (
+                            <div id="exam-analytics-options" role="listbox" className={styles.dropdown}>
+                                {filteredExams.length > 0 ? filteredExams.map(exam => (
+                                    <button
+                                        key={exam.id}
+                                        type="button"
+                                        role="option"
+                                        aria-selected={exam.id === selectedExamId}
+                                        className={`${styles.dropdownOption} ${exam.id === selectedExamId ? styles.dropdownOptionSelected : ""}`}
+                                        onMouseDown={(event) => {
+                                            event.preventDefault();
+                                            handleSelectExam(exam);
+                                        }}
+                                        onClick={() => handleSelectExam(exam)}
+                                    >
+                                        <span>{exam.title}</span>
+                                        <small>{exam.questions.length}문항</small>
+                                    </button>
+                                )) : (
+                                    <div className={styles.emptyOption}>검색 결과가 없습니다</div>
+                                )}
+                            </div>
+                        )}
                     </div>
-                    <select
-                        aria-label="시험 분석 지역 필터"
-                        value={activeRegionKey}
-                        onChange={event => {
-                            setSelectedRegionKey(event.target.value);
-                            setSelectedClassKey("");
-                            setSelectedStudentKey("");
-                        }}
-                        style={{
-                            minWidth: '180px',
-                            padding: '0.6rem 0.8rem',
-                            borderRadius: 'var(--radius-md)',
-                            border: '1px solid var(--border)',
-                            background: 'var(--background)',
-                            color: 'var(--foreground)',
-                            fontWeight: 800,
-                        }}
-                    >
-                        <option value={ALL_REGION_KEY}>전체 지역</option>
-                        {regionScopeOptions.map(scope => (
-                            <option key={scope.regionKey} value={scope.regionKey}>
-                                {scope.regionName} ({scope.attemptCount}건)
-                            </option>
-                        ))}
-                    </select>
-                    <div style={{ fontSize: '0.82rem', color: 'var(--muted)', lineHeight: 1.45 }}>
-                        {activeRegionLabel} 기준 제출 {examAttempts.length}건으로 평균, 문항 정답률, 약점 유형을 다시 계산합니다.
+
+                    <div className={styles.field}>
+                        <label className={styles.fieldLabel} htmlFor="exam-analytics-region">지역</label>
+                        <select
+                            id="exam-analytics-region"
+                            aria-label="시험 분석 지역 필터"
+                            className={styles.select}
+                            value={activeRegionKey}
+                            onChange={event => {
+                                setSelectedRegionKey(event.target.value);
+                                setSelectedClassKey("");
+                                setSelectedStudentKey("");
+                            }}
+                        >
+                            <option value={ALL_REGION_KEY}>전체 지역</option>
+                            {regionScopeOptions.map(scope => (
+                                <option key={scope.regionKey} value={scope.regionKey}>
+                                    {scope.regionName} ({scope.attemptCount}건)
+                                </option>
+                            ))}
+                        </select>
+                    </div>
+
+                    <div className={styles.examMeta} aria-label="선택 시험 정보">
+                        <div className={styles.metaItem}>
+                            <CalendarDays size={15} aria-hidden="true" />
+                            <span>{formatExamDate(selectedExam?.createdAt)}</span>
+                        </div>
+                        <div className={styles.metaItem}>
+                            <FileQuestion size={15} aria-hidden="true" />
+                            <span>문항 {selectedExam?.questions.length || 0}개</span>
+                        </div>
+                        <div className={styles.metaItem}>
+                            <Users size={15} aria-hidden="true" />
+                            <span>제출 {examAttempts.length}건</span>
+                        </div>
                     </div>
                 </div>
-            )}
 
-            {selectedExam && visibleRegionalActionPlans.length > 0 && (
-                <div className="card" style={{ padding: '1.35rem', border: '1px solid var(--border)', background: 'var(--surface)' }}>
+                <div className={styles.tabs} role="tablist" aria-label="시험 통계 보기 전환">
+                    {[
+                        { key: "overview" as const, label: "요약", icon: BarChart2 },
+                        { key: "questions" as const, label: "문항 분석", icon: List },
+                        { key: "students" as const, label: "학생·반", icon: Users },
+                        { key: "operations" as const, label: "운영", icon: Settings2 },
+                    ].map(item => {
+                        const Icon = item.icon;
+                        const selected = activeWorkspaceView === item.key;
+                        return (
+                            <button
+                                key={item.key}
+                                type="button"
+                                role="tab"
+                                aria-selected={selected}
+                                aria-controls={`exam-analytics-panel-${item.key}`}
+                                className={`${styles.tab} ${selected ? styles.tabSelected : ""}`}
+                                onClick={() => setActiveWorkspaceView(item.key)}
+                            >
+                                <Icon size={16} aria-hidden="true" />
+                                {item.label}
+                            </button>
+                        );
+                    })}
+                </div>
+            </section>
+
+            {activeWorkspaceView === "operations" && (
+            <div
+                id="exam-analytics-panel-operations"
+                role="tabpanel"
+                aria-label="시험 운영"
+                className={styles.legacyStack}
+            >
+            {activeWorkspaceView === "operations" && selectedExam && visibleRegionalActionPlans.length > 0 && (
+                <div className="card" style={{ ...CARD_SURFACE_STYLE,padding: '1.35rem', border: '1px solid var(--border)', background: 'var(--surface)' }}>
                     <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: '1rem', marginBottom: '1rem', flexWrap: 'wrap' }}>
                         <div>
                             <h3 style={{ fontSize: '1rem', fontWeight: 900, color: 'var(--foreground)', display: 'flex', alignItems: 'center', gap: '0.45rem' }}>
@@ -1191,8 +1270,8 @@ export default function ExamAnalyticsTab({
                 </div>
             )}
 
-            {selectedExam && kakaoCandidateSummary && kakaoCandidateSummary.totalCount > 0 && (
-                <div className="card" style={{ padding: '1.35rem', border: '1px solid var(--border)', background: 'var(--surface)' }}>
+            {activeWorkspaceView === "operations" && selectedExam && kakaoCandidateSummary && kakaoCandidateSummary.totalCount > 0 && (
+                <div className="card" style={{ ...CARD_SURFACE_STYLE,padding: '1.35rem', border: '1px solid var(--border)', background: 'var(--surface)' }}>
                     <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: '1rem', marginBottom: '1rem', flexWrap: 'wrap' }}>
                         <div>
                             <h3 style={{ fontSize: '1rem', fontWeight: 900, color: 'var(--foreground)', display: 'flex', alignItems: 'center', gap: '0.45rem' }}>
@@ -1206,9 +1285,9 @@ export default function ExamAnalyticsTab({
                         <span style={{
                             fontSize: '0.72rem',
                             fontWeight: 900,
-                            color: '#b45309',
-                            background: '#fffbeb',
-                            border: '1px solid #fde68a',
+                            color: 'var(--warning)',
+                            background: 'color-mix(in srgb, var(--warning) 12%, var(--surface))',
+                            border: '1px solid color-mix(in srgb, var(--warning) 32%, transparent)',
                             padding: '0.24rem 0.6rem',
                             borderRadius: 'var(--radius-full)',
                             whiteSpace: 'nowrap',
@@ -1507,8 +1586,8 @@ export default function ExamAnalyticsTab({
                 </div>
             )}
 
-            {selectedExam && questionBankReadiness && (
-                <div className="card" style={{ padding: '1.5rem', border: '1px solid var(--border)', background: 'var(--surface)' }}>
+            {activeWorkspaceView === "operations" && selectedExam && questionBankReadiness && (
+                <div className="card" style={{ ...CARD_SURFACE_STYLE,padding: '1.5rem', border: '1px solid var(--border)', background: 'var(--surface)' }}>
                     <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: '1rem', marginBottom: '1rem', flexWrap: 'wrap' }}>
                         <div>
                             <h3 style={{ fontSize: '1rem', fontWeight: 900, color: 'var(--foreground)', display: 'flex', alignItems: 'center', gap: '0.45rem' }}>
@@ -1612,193 +1691,281 @@ export default function ExamAnalyticsTab({
                 </div>
             )}
 
-            {selectedExam && !advancedAnalyticsEnabled && (
+            {activeWorkspaceView === "operations" && selectedExam && !advancedAnalyticsEnabled && (
                 <PremiumFeatureCard
                     title="고급 분석 잠금"
                     description="Free에서는 기본 통계와 정오표를 확인합니다. Pro 이상에서 분석 컷 전환, 반별 매트릭스, 유형 재추천 큐, 풀이 행동 신호를 사용할 수 있습니다."
                     badge="Pro"
                 />
             )}
+            </div>
+            )}
 
             {examStats ? (
                 <>
-                    {/* Stats Summary */}
-                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(150px, 100%), 1fr))', gap: '1rem' }}>
-                        {[
-                            { label: '평균 점수', value: `${examStats.avgScore}%`, color: 'var(--primary)' },
-                            { label: '중앙값', value: `${examStats.medianScore}%`, color: '#6366f1' },
-                            { label: '표준편차', value: `${examStats.standardDeviation}`, color: '#8b5cf6' },
-                            { label: '최고 점수', value: `${examStats.maxScore}%`, color: 'var(--success)' },
-                            { label: '최저 점수', value: `${examStats.minScore}%`, color: 'var(--warning)' },
-                            { label: '응시 인원', value: `${examStats.count}명`, color: 'var(--text)' },
-                            { label: '평균 응시시간', value: formatSeconds(examStats.avgElapsedTimeSec), color: '#0ea5e9' },
-                            { label: '필기 보관', value: `${examStats.handwritingArchiveCount}건`, color: '#7c3aed' },
-                            { label: '재시험 제출', value: `${retakeAttempts.length}건`, color: '#0f766e' },
-                            ...(retakeRecoverySummary?.recoveryRate !== undefined ? [{
-                                label: '재시험 회복률',
-                                value: `${retakeRecoverySummary.recoveryRate}% (${retakeRecoverySummary.recoveredCount}/${retakeRecoverySummary.targetCount})`,
-                                color: '#16a34a',
-                            }] : []),
-                        ].map((stat, i) => (
-                            <div key={i} className="card" style={{ padding: '1.5rem', textAlign: 'center', borderTop: `4px solid ${stat.color}` }}>
-                                <div style={{ fontSize: '0.9rem', color: 'var(--muted)', marginBottom: '0.5rem' }}>{stat.label}</div>
-                                <div style={{ fontSize: '2rem', fontWeight: 800, color: stat.color }}>{stat.value}</div>
-                            </div>
-                        ))}
-                    </div>
-
-                    {examStats.distributionBuckets.some(bucket => bucket.count > 0) && (
-                        <div className="card" style={{ padding: '1.5rem' }}>
-                            <h3 style={{ fontSize: '1.1rem', fontWeight: 700, marginBottom: '0.35rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                                <BarChart2 size={18} color="var(--primary)" />
-                                점수 분포
-                            </h3>
-                            <p style={{ fontSize: '0.82rem', color: 'var(--muted)', marginBottom: '1.25rem' }}>
-                                10점 구간별 응시 인원 분포입니다. (중앙값 {examStats.medianScore}% · 표준편차 {examStats.standardDeviation})
-                            </p>
-                            <div style={{ height: '260px', width: '100%', minWidth: 0 }}>
-                                <ResponsiveContainer width="100%" height="100%" minWidth={0} minHeight={260} initialDimension={{ width: 720, height: 260 }}>
-                                    <BarChart data={examStats.distributionBuckets} margin={{ top: 10, right: 10, left: 0, bottom: 0 }}>
-                                        <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="var(--border)" />
-                                        <XAxis dataKey="label" tick={{ fill: 'var(--muted)', fontSize: 12 }} axisLine={false} tickLine={false} />
-                                        <YAxis allowDecimals={false} tick={{ fill: 'var(--muted)' }} axisLine={false} tickLine={false} />
-                                        <RechartsTooltip
-                                            cursor={{ fill: 'rgba(99, 102, 241, 0.05)' }}
-                                            contentStyle={{ borderRadius: '8px', border: '1px solid var(--border)', boxShadow: '0 4px 12px rgba(0,0,0,0.05)', background: 'var(--background)', color: 'var(--foreground)' }}
-                                            formatter={(value: number | string | undefined) => [`${value}명`, '응시 인원']}
-                                            labelFormatter={(label) => `${label}점`}
-                                        />
-                                        <Bar dataKey="count" fill="var(--primary)" radius={[4, 4, 0, 0]} animationDuration={1200} />
-                                    </BarChart>
-                                </ResponsiveContainer>
-                            </div>
-                        </div>
-                    )}
-
-                    {teachingInsights && (
-                        <div className="card" style={{ padding: '1.5rem', background: 'var(--surface)', border: '1px solid var(--border)' }}>
-                            <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: '1rem', marginBottom: '1.25rem' }}>
-                                <div>
-                                    <h3 style={{ fontSize: '1.1rem', fontWeight: 800, display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.3rem' }}>
-                                        <Lightbulb size={18} color="var(--primary)" />
-                                        강사용 다음 액션
-                                    </h3>
-                                    <p style={{ fontSize: '0.82rem', color: 'var(--muted)', fontWeight: 500 }}>
-                                        점수 확인 후 바로 수업 운영에 쓰는 진단 요약입니다.
-                                    </p>
-                                </div>
-                                <span style={{
-                                    fontSize: '0.72rem',
-                                    fontWeight: 800,
-                                    color: 'var(--primary)',
-                                    background: 'rgba(99,102,241,0.1)',
-                                    border: '1px solid rgba(99,102,241,0.18)',
-                                    padding: '0.25rem 0.65rem',
-                                    borderRadius: 'var(--radius-full)',
-                                    whiteSpace: 'nowrap'
-                                }}>
-                                    Teacher UX
-                                </span>
-                            </div>
-
-                            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(190px, 100%), 1fr))', gap: '1rem', marginBottom: '1.25rem' }}>
-                                <div style={{ padding: '1rem', borderRadius: 'var(--radius-md)', background: 'var(--background)', border: '1px solid var(--border)' }}>
-                                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.45rem', fontSize: '0.82rem', fontWeight: 800, color: 'var(--primary)', marginBottom: '0.55rem' }}>
-                                        <Target size={15} />
-                                        오늘 보강
-                                    </div>
-                                    <div style={{ fontSize: '1rem', fontWeight: 800, color: 'var(--foreground)', lineHeight: 1.35 }}>
-                                        {teachingInsights.weakConcept?.concept || '데이터 대기'}
-                                    </div>
-                                    <div style={{ fontSize: '0.78rem', color: 'var(--muted)', marginTop: '0.45rem', lineHeight: 1.45 }}>
-                                        {teachingInsights.actionCopy}
+                    {activeWorkspaceView === "overview" && (
+                        <div
+                            id="exam-analytics-panel-overview"
+                            role="tabpanel"
+                            aria-label="시험 통계 요약"
+                            className={styles.legacyStack}
+                        >
+                            <section className={styles.summaryPanel} aria-label="시험 핵심 지표">
+                                <div className={styles.scoreFocus}>
+                                    <div className={styles.gauge}>
+                                        <svg viewBox="0 0 180 112" aria-hidden="true">
+                                            <path
+                                                className={styles.gaugeTrack}
+                                                pathLength="100"
+                                                d="M 18 94 A 72 72 0 0 1 162 94"
+                                            />
+                                            <path
+                                                className={styles.gaugeValue}
+                                                pathLength="100"
+                                                strokeDasharray={`${Math.max(0, Math.min(100, examStats.avgScore))} 100`}
+                                                d="M 18 94 A 72 72 0 0 1 162 94"
+                                            />
+                                        </svg>
+                                        <div className={styles.scoreValue}>
+                                            {examStats.avgScore}<span>점</span>
+                                        </div>
+                                        <div className={styles.scoreLabel}>전체 평균 점수</div>
                                     </div>
                                 </div>
 
-                                <div style={{ padding: '1rem', borderRadius: 'var(--radius-md)', background: 'var(--background)', border: '1px solid var(--border)' }}>
-                                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.45rem', fontSize: '0.82rem', fontWeight: 800, color: 'var(--warning)', marginBottom: '0.55rem' }}>
-                                        <AlertTriangle size={15} />
-                                        문항 품질 점검
-                                    </div>
-                                    <div style={{ fontSize: '1rem', fontWeight: 800, color: 'var(--foreground)', lineHeight: 1.35 }}>
-                                        {teachingInsights.riskyQuestions.length}문항 재검토
-                                    </div>
-                                    <div style={{ fontSize: '0.78rem', color: 'var(--muted)', marginTop: '0.45rem', lineHeight: 1.45 }}>
-                                        변별 약함 {teachingInsights.weakDiscriminationCount}개, 쉬운 문항 {teachingInsights.tooEasyCount}개
-                                    </div>
+                                <div className={styles.kpiRail}>
+                                    {[
+                                        { label: "응시", value: examStats.count, unit: "명" },
+                                        { label: "중앙값", value: examStats.medianScore, unit: "점" },
+                                        { label: "최고", value: examStats.maxScore, unit: "점" },
+                                        { label: "최저", value: examStats.minScore, unit: "점" },
+                                        { label: "평균 시간", value: formatSeconds(examStats.avgElapsedTimeSec), unit: "" },
+                                    ].map(item => (
+                                        <div key={item.label} className={styles.kpi}>
+                                            <span className={styles.kpiLabel}>{item.label}</span>
+                                            <strong>{item.value}<span>{item.unit}</span></strong>
+                                        </div>
+                                    ))}
                                 </div>
+                            </section>
 
-                                <div style={{ padding: '1rem', borderRadius: 'var(--radius-md)', background: 'var(--background)', border: '1px solid var(--border)' }}>
-                                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.45rem', fontSize: '0.82rem', fontWeight: 800, color: 'var(--success)', marginBottom: '0.55rem' }}>
-                                        <Users size={15} />
-                                        반 운영
+                            <div className={styles.overviewGrid}>
+                                <section className={styles.panel} aria-labelledby="score-distribution-title">
+                                    <div className={styles.panelHeading}>
+                                        <div>
+                                            <h3 id="score-distribution-title">
+                                                <BarChart2 size={17} aria-hidden="true" />
+                                                점수 분포
+                                            </h3>
+                                            <p>10점 구간별 응시 인원 · 표준편차 {examStats.standardDeviation}</p>
+                                        </div>
+                                        <span className={styles.legend}>평균 {examStats.avgScore}점</span>
                                     </div>
-                                    <div style={{ fontSize: '1rem', fontWeight: 800, color: 'var(--foreground)', lineHeight: 1.35 }}>
-                                        보충 {teachingInsights.lowStudents.length}명 · 심화 {teachingInsights.advancedStudents.length}명
+                                    <div className={styles.chart}>
+                                        <ResponsiveContainer width="100%" height="100%" minWidth={0} minHeight={270} initialDimension={{ width: 760, height: 270 }}>
+                                            <BarChart data={examStats.distributionBuckets} margin={{ top: 22, right: 10, left: -14, bottom: 0 }}>
+                                                <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="var(--border)" />
+                                                <XAxis
+                                                    dataKey="label"
+                                                    axisLine={false}
+                                                    tickLine={false}
+                                                    tick={{ fill: 'var(--muted)', fontSize: 11, fontWeight: 650 }}
+                                                />
+                                                <YAxis
+                                                    allowDecimals={false}
+                                                    axisLine={false}
+                                                    tickLine={false}
+                                                    tick={{ fill: 'var(--muted)', fontSize: 11 }}
+                                                />
+                                                <RechartsTooltip
+                                                    cursor={{ fill: 'color-mix(in srgb, var(--primary) 6%, transparent)' }}
+                                                    contentStyle={{
+                                                        borderRadius: 10,
+                                                        border: '1px solid var(--border)',
+                                                        boxShadow: 'var(--shadow-md)',
+                                                        background: 'var(--surface)',
+                                                        color: 'var(--foreground)',
+                                                        fontSize: 12,
+                                                    }}
+                                                    formatter={(value: number | string | undefined) => [`${value}명`, '응시 인원']}
+                                                    labelFormatter={(label) => `${label}점`}
+                                                />
+                                                {averageDistributionLabel && (
+                                                    <ReferenceLine
+                                                        x={averageDistributionLabel}
+                                                        stroke="var(--primary)"
+                                                        strokeDasharray="4 4"
+                                                        strokeWidth={1.5}
+                                                        label={{ value: `평균 ${examStats.avgScore}`, position: 'top', fill: 'var(--primary)', fontSize: 11, fontWeight: 800 }}
+                                                    />
+                                                )}
+                                                <Bar
+                                                    dataKey="count"
+                                                    fill="var(--primary-light)"
+                                                    radius={[5, 5, 0, 0]}
+                                                    maxBarSize={52}
+                                                    animationDuration={650}
+                                                />
+                                            </BarChart>
+                                        </ResponsiveContainer>
                                     </div>
-                                    <div style={{ fontSize: '0.78rem', color: 'var(--muted)', marginTop: '0.45rem', lineHeight: 1.45 }}>
-                                        60~79점 구간 {teachingInsights.borderlineStudents.length}명은 다음 시험 전 개념 점검 권장
-                                    </div>
-                                </div>
+                                </section>
+
+                                {teachingInsights && (
+                                    <section className={`${styles.panel} ${styles.actionPanel}`} aria-labelledby="teaching-actions-title">
+                                        <div className={styles.panelHeading}>
+                                            <div>
+                                                <h3 id="teaching-actions-title">
+                                                    <Lightbulb size={17} aria-hidden="true" />
+                                                    오늘의 수업 액션
+                                                </h3>
+                                                <p>우선순위가 높은 진단만 모았습니다.</p>
+                                            </div>
+                                        </div>
+
+                                        <div className={styles.actionList}>
+                                            <button type="button" className={styles.actionRow} onClick={() => setActiveWorkspaceView("questions")}>
+                                                <span className={`${styles.actionIcon} ${styles.actionIconDanger}`}>
+                                                    <Target size={18} aria-hidden="true" />
+                                                </span>
+                                                <span className={styles.actionCopy}>
+                                                    <strong>취약 개념 보강 · {teachingInsights.weakConcept?.concept || "데이터 확인"}</strong>
+                                                    <small>{teachingInsights.actionCopy}</small>
+                                                </span>
+                                                <span className={styles.actionSeverity}>높음</span>
+                                            </button>
+                                            <button type="button" className={styles.actionRow} onClick={() => setActiveWorkspaceView("questions")}>
+                                                <span className={`${styles.actionIcon} ${styles.actionIconWarning}`}>
+                                                    <AlertTriangle size={18} aria-hidden="true" />
+                                                </span>
+                                                <span className={styles.actionCopy}>
+                                                    <strong>문항 품질 {teachingInsights.riskyQuestions.length + teachingInsights.tooEasyCount}개 점검</strong>
+                                                    <small>변별 약함 {teachingInsights.weakDiscriminationCount}개 · 지나치게 쉬움 {teachingInsights.tooEasyCount}개</small>
+                                                </span>
+                                                <span className={`${styles.actionSeverity} ${styles.actionSeverityWarning}`}>점검</span>
+                                            </button>
+                                            <button type="button" className={styles.actionRow} onClick={() => setActiveWorkspaceView("students")}>
+                                                <span className={`${styles.actionIcon} ${styles.actionIconSuccess}`}>
+                                                    <Users size={18} aria-hidden="true" />
+                                                </span>
+                                                <span className={styles.actionCopy}>
+                                                    <strong>지원이 필요한 학생 {teachingInsights.lowStudents.length}명</strong>
+                                                    <small>60~79점 경계 구간 {teachingInsights.borderlineStudents.length}명 · 심화 {teachingInsights.advancedStudents.length}명</small>
+                                                </span>
+                                                <span className={`${styles.actionSeverity} ${styles.actionSeveritySuccess}`}>학생</span>
+                                            </button>
+                                        </div>
+
+                                        {overviewRetakeHref ? (
+                                            <PremiumActionLink
+                                                enabled={retakeAssignmentsEnabled}
+                                                href={overviewRetakeHref}
+                                                className={styles.primaryAction}
+                                                lockedTitle="Pro 이상에서 취약 문항 보강 세트를 만들 수 있습니다."
+                                            >
+                                                보강 세트 만들기
+                                                <ArrowRight size={15} aria-hidden="true" />
+                                            </PremiumActionLink>
+                                        ) : (
+                                            <button type="button" className={styles.primaryAction} onClick={() => setActiveWorkspaceView("questions")}>
+                                                취약 문항 보기
+                                                <ArrowRight size={15} aria-hidden="true" />
+                                            </button>
+                                        )}
+                                    </section>
+                                )}
                             </div>
 
-                            {conceptAnalytics.length > 0 && (
-                                <div style={{ overflowX: 'auto', border: '1px solid var(--border)', borderRadius: 'var(--radius-md)' }}>
-                                    <table style={{ width: '100%', minWidth: '680px', borderCollapse: 'collapse', textAlign: 'left' }}>
-                                        <thead style={{ background: 'var(--background)', color: 'var(--muted)', fontSize: '0.78rem' }}>
-                                            <tr>
-                                                <th style={{ padding: '0.75rem 0.9rem' }}>보강 우선순위</th>
-                                                <th style={{ padding: '0.75rem 0.9rem' }}>정답률</th>
-                                                <th style={{ padding: '0.75rem 0.9rem' }}>문항</th>
-                                                <th style={{ padding: '0.75rem 0.9rem' }}>오답 원인 힌트</th>
-                                                <th style={{ padding: '0.75rem 0.9rem' }}>수업 조치</th>
-                                            </tr>
-                                        </thead>
-                                        <tbody>
-                                            {conceptAnalytics.slice(0, 6).map((item, index) => {
-                                                const isWeak = item.correctRate < 60;
-                                                const action = isWeak
-                                                    ? '개념 재설명 + 유사문항 3개'
-                                                    : item.correctRate < 80
-                                                        ? '짧은 확인 문제'
-                                                        : '심화 변형문항';
-                                                return (
-                                                    <tr key={item.concept} style={{ borderTop: '1px solid var(--border)' }}>
-                                                        <td style={{ padding: '0.8rem 0.9rem', fontWeight: 800, color: index === 0 ? 'var(--error)' : 'var(--foreground)' }}>
-                                                            {index + 1}. {item.concept}
-                                                        </td>
-                                                        <td style={{ padding: '0.8rem 0.9rem' }}>
-                                                            <span style={{
-                                                                color: item.correctRate < 60 ? 'var(--error)' : item.correctRate < 80 ? 'var(--warning)' : 'var(--success)',
-                                                                fontWeight: 900,
-                                                            }}>
-                                                                {item.correctRate}%
+                            <div className={styles.detailGrid}>
+                                <section className={styles.panel} aria-labelledby="weak-questions-title">
+                                    <div className={styles.panelHeading}>
+                                        <div>
+                                            <h3 id="weak-questions-title">
+                                                <AlertTriangle size={17} aria-hidden="true" />
+                                                취약 문항 TOP 5
+                                            </h3>
+                                            <p>정답률이 낮은 순서로 바로 확인합니다.</p>
+                                        </div>
+                                    </div>
+                                    <div className={styles.tableWrap}>
+                                        <table className={styles.weakTable}>
+                                            <thead>
+                                                <tr>
+                                                    <th>문항</th>
+                                                    <th>개념</th>
+                                                    <th>정답률</th>
+                                                    <th>가장 많이 선택한 오답</th>
+                                                    <th>액션</th>
+                                                </tr>
+                                            </thead>
+                                            <tbody>
+                                                {questionAnalytics.slice(0, 5).map(question => (
+                                                    <tr key={question.id}>
+                                                        <td>{question.index}번</td>
+                                                        <td>{question.concept}</td>
+                                                        <td>
+                                                            <span className={question.correctRate < 40 ? styles.rateDanger : styles.rateWarning}>
+                                                                {question.correctRate}%
                                                             </span>
                                                         </td>
-                                                        <td style={{ padding: '0.8rem 0.9rem', color: 'var(--muted)', fontWeight: 700 }}>
-                                                            {item.questionNumbers.join(', ')}번
-                                                            {item.hardCount > 0 && (
-                                                                <span style={{ marginLeft: '0.4rem', color: 'var(--warning)' }}>심화 {item.hardCount}</span>
-                                                            )}
+                                                        <td>
+                                                            {question.topWrongOption
+                                                                ? `${question.topWrongOption.option}번 · ${question.topWrongOption.rate}%`
+                                                                : "오답 없음"}
                                                         </td>
-                                                        <td style={{ padding: '0.8rem 0.9rem', color: 'var(--muted)' }}>
-                                                            {item.mistakeTypes.slice(0, 3).join(', ') || '오답 선택률 확인'}
-                                                        </td>
-                                                        <td style={{ padding: '0.8rem 0.9rem', fontWeight: 800, color: isWeak ? 'var(--primary)' : 'var(--muted)' }}>
-                                                            {action}
+                                                        <td>
+                                                            <button type="button" className={styles.rowAction} onClick={() => setActiveWorkspaceView("questions")}>
+                                                                문항 분석
+                                                                <ChevronRight size={14} aria-hidden="true" />
+                                                            </button>
                                                         </td>
                                                     </tr>
-                                                );
-                                            })}
-                                        </tbody>
-                                    </table>
-                                </div>
-                            )}
+                                                ))}
+                                            </tbody>
+                                        </table>
+                                    </div>
+                                </section>
+
+                                <section className={`${styles.panel} ${styles.bandPanel}`} aria-labelledby="achievement-bands-title">
+                                    <div className={styles.panelHeading}>
+                                        <div>
+                                            <h3 id="achievement-bands-title">
+                                                <Users size={17} aria-hidden="true" />
+                                                학생 성취도 분포
+                                            </h3>
+                                            <p>지원 대상을 점수 구간으로 빠르게 나눕니다.</p>
+                                        </div>
+                                    </div>
+                                    <div className={styles.bandChart} aria-label="학생 점수 구간 분포">
+                                        {studentAchievementBands.map(band => band.count > 0 && (
+                                            <div
+                                                key={band.key}
+                                                className={styles.bandSegment}
+                                                style={{ flexBasis: `${Math.max(8, band.rate)}%`, background: band.color }}
+                                                title={`${band.label}: ${band.count}명 (${band.rate}%)`}
+                                            >
+                                                {band.rate}%
+                                            </div>
+                                        ))}
+                                    </div>
+                                    <div className={styles.bandLegend}>
+                                        {studentAchievementBands.map(band => (
+                                            <div key={band.key} className={styles.bandLegendItem}>
+                                                <strong>{band.count}명</strong>
+                                                <span>{band.label}</span>
+                                            </div>
+                                        ))}
+                                    </div>
+                                    <div className={styles.bandSummary}>
+                                        <strong>평균 {examStats.avgScore}점</strong> · 80점 미만 학생은 학생·반 탭에서 개별 약점과 재시험 이력을 확인할 수 있습니다.
+                                    </div>
+                                </section>
+                            </div>
                         </div>
                     )}
 
-                    {advancedAnalyticsEnabled && (
-                    <div className="card" style={{ padding: '1.5rem', border: '1px solid var(--border)', background: 'var(--surface)' }}>
+                    {activeWorkspaceView === "students" && advancedAnalyticsEnabled && (
+                    <div className="card" style={{ ...CARD_SURFACE_STYLE,padding: '1.5rem', border: '1px solid var(--border)', background: 'var(--surface)' }}>
                         <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: '1rem', marginBottom: '1rem', flexWrap: 'wrap' }}>
                             <div>
                                 <h3 style={{ fontSize: '1rem', fontWeight: 900, color: 'var(--foreground)', display: 'flex', alignItems: 'center', gap: '0.45rem' }}>
@@ -1968,8 +2135,8 @@ export default function ExamAnalyticsTab({
                     </div>
                     )}
 
-                    {advancedAnalyticsEnabled && (
-                        <div className="card" style={{ padding: '1.5rem', border: '1px solid var(--border)', background: 'var(--surface)' }}>
+                    {activeWorkspaceView === "students" && advancedAnalyticsEnabled && (
+                        <div className="card" style={{ ...CARD_SURFACE_STYLE,padding: '1.5rem', border: '1px solid var(--border)', background: 'var(--surface)' }}>
                             <div style={{ marginBottom: '1.25rem' }}>
                                 <h3 style={{ fontSize: '1rem', fontWeight: 900, color: 'var(--foreground)', display: 'flex', alignItems: 'center', gap: '0.45rem' }}>
                                     <BarChart2 size={16} color="var(--primary)" />
@@ -2051,8 +2218,8 @@ export default function ExamAnalyticsTab({
                         </div>
                     )}
 
-                    {advancedAnalyticsEnabled && classWeaknessMatrixRows.length > 0 && (
-                        <div className="card" style={{ padding: '1.5rem', border: '1px solid var(--border)', background: 'var(--surface)' }}>
+                    {activeWorkspaceView === "students" && advancedAnalyticsEnabled && classWeaknessMatrixRows.length > 0 && (
+                        <div className="card" style={{ ...CARD_SURFACE_STYLE,padding: '1.5rem', border: '1px solid var(--border)', background: 'var(--surface)' }}>
                             <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: '1rem', marginBottom: '1rem', flexWrap: 'wrap' }}>
                                 <div>
                                     <h3 style={{ fontSize: '1rem', fontWeight: 900, color: 'var(--foreground)', display: 'flex', alignItems: 'center', gap: '0.45rem' }}>
@@ -2067,8 +2234,8 @@ export default function ExamAnalyticsTab({
                                     fontSize: '0.72rem',
                                     fontWeight: 900,
                                     color: '#0f766e',
-                                    background: '#f0fdfa',
-                                    border: '1px solid #99f6e4',
+                                    background: 'color-mix(in srgb, #0f766e 10%, var(--surface))',
+                                    border: '1px solid color-mix(in srgb, #0f766e 28%, transparent)',
                                     padding: '0.24rem 0.6rem',
                                     borderRadius: 'var(--radius-full)',
                                     whiteSpace: 'nowrap',
@@ -2078,7 +2245,7 @@ export default function ExamAnalyticsTab({
                             </div>
 
                             <div style={{ overflowX: 'auto', border: '1px solid var(--border)', borderRadius: 'var(--radius-md)' }}>
-                                <table style={{ width: '100%', minWidth: '860px', borderCollapse: 'collapse', textAlign: 'left' }}>
+                                <table style={{ width: '100%', minWidth: '860px', borderCollapse: 'collapse', textAlign: 'left', fontVariantNumeric: 'tabular-nums' }}>
                                     <thead style={{ background: 'var(--background)', color: 'var(--muted)', fontSize: '0.78rem' }}>
                                         <tr>
                                             <th style={{ padding: '0.75rem 0.9rem' }}>반</th>
@@ -2175,9 +2342,9 @@ export default function ExamAnalyticsTab({
                         </div>
                     )}
 
-                    {advancedAnalyticsEnabled && (examTypeWeaknessGroups.length > 0 || classTypeWeaknessRows.length > 0) && (
+                    {activeWorkspaceView === "questions" && advancedAnalyticsEnabled && (examTypeWeaknessGroups.length > 0 || classTypeWeaknessRows.length > 0) && (
                         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(320px, 100%), 1fr))', gap: '1.5rem' }}>
-                            <div className="card" style={{ padding: '1.5rem', border: '1px solid var(--border)', background: 'var(--surface)' }}>
+                            <div className="card" style={{ ...CARD_SURFACE_STYLE,padding: '1.5rem', border: '1px solid var(--border)', background: 'var(--surface)' }}>
                                 <div style={{ display: 'flex', justifyContent: 'space-between', gap: '1rem', marginBottom: '1rem' }}>
                                     <div>
                                         <h3 style={{ fontSize: '1rem', fontWeight: 800, color: 'var(--foreground)', display: 'flex', alignItems: 'center', gap: '0.45rem' }}>
@@ -2192,8 +2359,8 @@ export default function ExamAnalyticsTab({
                                         fontSize: '0.72rem',
                                         fontWeight: 800,
                                         color: '#0f766e',
-                                        background: '#f0fdfa',
-                                        border: '1px solid #99f6e4',
+                                        background: 'color-mix(in srgb, #0f766e 10%, var(--surface))',
+                                        border: '1px solid color-mix(in srgb, #0f766e 28%, transparent)',
                                         padding: '0.22rem 0.55rem',
                                         borderRadius: '999px',
                                         whiteSpace: 'nowrap',
@@ -2255,7 +2422,7 @@ export default function ExamAnalyticsTab({
                                 )}
                             </div>
 
-                            <div className="card" style={{ padding: '1.5rem', border: '1px solid var(--border)', background: 'var(--surface)' }}>
+                            <div className="card" style={{ ...CARD_SURFACE_STYLE,padding: '1.5rem', border: '1px solid var(--border)', background: 'var(--surface)' }}>
                                 <h3 style={{ fontSize: '1rem', fontWeight: 800, color: 'var(--foreground)', display: 'flex', alignItems: 'center', gap: '0.45rem', marginBottom: '0.25rem' }}>
                                     <Users size={16} color="var(--primary)" />
                                     반별 약점 압력
@@ -2312,9 +2479,9 @@ export default function ExamAnalyticsTab({
                         </div>
                     )}
 
-                    {advancedAnalyticsEnabled && (similarQuestionGroups.length > 0 || behaviorRows.length > 0) && (
+                    {activeWorkspaceView === "students" && advancedAnalyticsEnabled && (similarQuestionGroups.length > 0 || behaviorRows.length > 0) && (
                         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(320px, 100%), 1fr))', gap: '1.5rem' }}>
-                            <div className="card" style={{ padding: '1.5rem', border: '1px solid var(--border)', background: 'var(--surface)' }}>
+                            <div className="card" style={{ ...CARD_SURFACE_STYLE,padding: '1.5rem', border: '1px solid var(--border)', background: 'var(--surface)' }}>
                                 <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: '1rem', marginBottom: '1rem' }}>
                                     <div>
                                         <h3 style={{ fontSize: '1rem', fontWeight: 800, color: 'var(--foreground)', display: 'flex', alignItems: 'center', gap: '0.45rem' }}>
@@ -2329,8 +2496,8 @@ export default function ExamAnalyticsTab({
                                         fontSize: '0.72rem',
                                         fontWeight: 800,
                                         color: '#0f766e',
-                                        background: '#f0fdfa',
-                                        border: '1px solid #99f6e4',
+                                        background: 'color-mix(in srgb, #0f766e 10%, var(--surface))',
+                                        border: '1px solid color-mix(in srgb, #0f766e 28%, transparent)',
                                         padding: '0.22rem 0.55rem',
                                         borderRadius: '999px',
                                         whiteSpace: 'nowrap',
@@ -2385,7 +2552,7 @@ export default function ExamAnalyticsTab({
                                 )}
                             </div>
 
-                            <div className="card" style={{ padding: '1.5rem', border: '1px solid var(--border)', background: 'var(--surface)' }}>
+                            <div className="card" style={{ ...CARD_SURFACE_STYLE,padding: '1.5rem', border: '1px solid var(--border)', background: 'var(--surface)' }}>
                                 <h3 style={{ fontSize: '1rem', fontWeight: 800, color: 'var(--foreground)', display: 'flex', alignItems: 'center', gap: '0.45rem', marginBottom: '0.25rem' }}>
                                     <List size={16} color="var(--primary)" />
                                     풀이 행동 신호
@@ -2426,9 +2593,16 @@ export default function ExamAnalyticsTab({
                         </div>
                     )}
 
+                    {activeWorkspaceView === "questions" && (
+                    <div
+                        id="exam-analytics-panel-questions"
+                        role="tabpanel"
+                        aria-label="문항 분석"
+                        className={styles.legacyStack}
+                    >
                     <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(320px, 100%), 1fr))', gap: '1.5rem' }}>
                         {/* Radar Chart for labels */}
-                        <div className="card" style={{ padding: '1.5rem', background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 'var(--radius-xl)', position: 'relative', overflow: 'hidden', minWidth: 0 }}>
+                        <div className="card" style={{ ...CARD_SURFACE_STYLE,padding: '1.5rem', background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 'var(--radius-xl)', position: 'relative', overflow: 'hidden', minWidth: 0 }}>
                             {/* Decorative background */}
                             <div style={{
                                 position: 'absolute', top: '-30px', right: '-30px',
@@ -2585,7 +2759,7 @@ export default function ExamAnalyticsTab({
                         </div>
 
                         {/* Top Hardest Questions */}
-                        <div className="card" style={{ padding: '1.5rem', minWidth: 0 }}>
+                        <div className="card" style={{ ...CARD_SURFACE_STYLE,padding: '1.5rem', minWidth: 0 }}>
                             <h3 style={{ fontSize: '1.1rem', fontWeight: 700, marginBottom: '1rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
                                 <AlertTriangle size={18} color="var(--error)" />
                                 오답률이 가장 높은 문항 Top 3
@@ -2598,7 +2772,7 @@ export default function ExamAnalyticsTab({
                                     <div key={i} style={{
                                         padding: '1rem',
                                         borderRadius: 'var(--radius-md)',
-                                        background: 'rgba(239, 68, 68, 0.05)',
+                                        background: 'color-mix(in srgb, var(--error) 6%, transparent)',
                                         borderLeft: '4px solid var(--error)',
                                         display: 'flex',
                                         justifyContent: 'space-between',
@@ -2632,7 +2806,7 @@ export default function ExamAnalyticsTab({
                     </div>
 
                     {/* Detailed Question correct rate bar chart */}
-                    <div className="card" style={{ padding: '1.5rem' }}>
+                    <div className="card" style={{ ...CARD_SURFACE_STYLE,padding: '1.5rem' }}>
                         <h3 style={{ fontSize: '1.1rem', fontWeight: 700, marginBottom: '1.5rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
                             <CheckCircle size={18} color="var(--success)" />
                             문항별 상세 정답률
@@ -2666,7 +2840,7 @@ export default function ExamAnalyticsTab({
                             세부사항: 문항별 선택률
                         </h4>
                         <div style={{ overflowX: 'auto' }}>
-                            <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left', minWidth: '820px' }}>
+                            <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left', minWidth: '820px', fontVariantNumeric: 'tabular-nums' }}>
                                 <thead>
                                     <tr style={{ background: 'var(--surface)', color: 'var(--muted)', fontSize: '0.85rem' }}>
                                         <th style={{ padding: '0.75rem 1rem', borderRadius: 'var(--radius-md) 0 0 var(--radius-md)' }}>문항</th>
@@ -2781,8 +2955,18 @@ export default function ExamAnalyticsTab({
                         </div>
                     </div>
 
+                    </div>
+                    )}
+
                     {/* Student Scores Section */}
-                    <div className="card" style={{ padding: '1.5rem', marginTop: '1.5rem' }}>
+                    {activeWorkspaceView === "students" && (
+                    <div
+                        id="exam-analytics-panel-students"
+                        role="tabpanel"
+                        aria-label="학생 및 반 분석"
+                        className="card"
+                        style={{ ...CARD_SURFACE_STYLE,padding: '1.5rem', marginTop: '1.5rem' }}
+                    >
                         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.5rem' }}>
                             <h3 style={{ fontSize: '1.1rem', fontWeight: 700, display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
                                 <AlertTriangle size={18} color="var(--primary)" style={{ visibility: 'hidden' }} />
@@ -2794,7 +2978,7 @@ export default function ExamAnalyticsTab({
                             data-testid="exam-analytics-student-table-scroll"
                             style={{ overflowX: 'auto', borderRadius: 'var(--radius-lg)', border: '1px solid var(--border)' }}
                         >
-                            <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left', minWidth: '940px' }}>
+                            <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left', minWidth: '940px', fontVariantNumeric: 'tabular-nums' }}>
                                 <thead style={{ background: 'var(--surface)' }}>
                                     <tr>
                                         <th
@@ -2933,10 +3117,19 @@ export default function ExamAnalyticsTab({
                             </table>
                         </div>
                     </div>
+                    )}
                 </>
             ) : (
-                <div className="card" style={{ padding: '3rem', textAlign: 'center', color: 'var(--muted)' }}>
-                    아직 응시한 학생이 없습니다.
+                <div
+                    id={activeWorkspaceView === "operations" ? undefined : `exam-analytics-panel-${activeWorkspaceView}`}
+                    role="tabpanel"
+                    className={styles.emptyState}
+                >
+                    <div>
+                        <BarChart2 size={28} aria-hidden="true" />
+                        <strong>아직 응시한 학생이 없습니다.</strong>
+                        <p>제출이 들어오면 점수 분포, 취약 문항, 학생별 성취 구간을 이 화면에서 바로 분석합니다.</p>
+                    </div>
                 </div>
             )}
         </div>
