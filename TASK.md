@@ -1,6 +1,6 @@
 # OMR Maker Project Task Plan
 
-> Last refreshed: 2026-07-14. Earlier revisions of this file described the pre-MVP plan;
+> Last refreshed: 2026-07-15. Earlier revisions of this file described the pre-MVP plan;
 > most of those items have shipped. This revision reflects the actual state of the app.
 
 ## 1. Project Overview
@@ -29,6 +29,15 @@
 
 ## 4. Backlog / Future
 
+- [ ] **시험 화면 이탈 판정·경고 완화**
+  - [ ] 화면을 벗어난 뒤 2초 안에 복귀하면 이탈 기록에서 제외한다.
+  - [ ] `window.blur`와 `document.hidden`이 같은 이탈에서 발생해도 1회만 집계한다.
+  - [ ] 2초 이상 이탈은 복귀 시 1회 기록하고, 제출 시 진행 중인 이탈도 2초를 넘겼다면 누락 없이 반영한다.
+  - [ ] 첫 이탈은 부드러운 안내로, 2회부터는 단계형 경고로 표시하고 현재의 강한 전면 빨간색 표현을 완화한다.
+  - [ ] 학생 안내 문구를 실제 저장 흐름에 맞게 “제출 기록과 함께 선생님 화면에 표시됩니다”로 수정한다.
+  - [ ] 교사·분석 화면은 1~2회를 중립적으로 표시하고 3회 이상부터 주의색으로 강조한다.
+  - [ ] 학생 리뷰에서는 이탈 횟수를 행동 기록으로만 표시하고 부정행위로 단정하지 않는다.
+  - [ ] 2초 미만 제외, 2초 이상 집계, 중복 방지, 학생 경고 단계, 교사 3회 강조를 자동화 테스트로 검증한다.
 - [ ] Real per-student authentication (accounts, not name/group).
 - [ ] Enable Supabase RLS in production (blocked on beta1 teacher server migration B1–B4).
 - [ ] Row-level roster upsert with `updated_at` optimistic concurrency (draft migration exists once infra pass lands).
