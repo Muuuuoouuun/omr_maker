@@ -1,0 +1,4 @@
+# Files whose tests or tooling assert exact byte content must keep LF on every
+# checkout (Windows autocrlf would otherwise rewrite them to CRLF).
+*.sql text eol=lf
+src/app/globals.css text eol=lf
