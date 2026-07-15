@@ -391,10 +391,17 @@ function formatRegionPercent(value: number): string {
     return `${Math.round(value * 100)}%`;
 }
 
-function readinessTone(level: ExamServiceReadinessLevel): { color: string; background: string; border: string } {
-    if (level === "ready") return { color: "var(--success)", background: "rgba(16,185,129,0.08)", border: "rgba(16,185,129,0.22)" };
-    if (level === "warning") return { color: "var(--warning)", background: "rgba(245,158,11,0.1)", border: "rgba(245,158,11,0.24)" };
-    return { color: "var(--error)", background: "rgba(239,68,68,0.08)", border: "rgba(239,68,68,0.22)" };
+// One signal grammar for every 설계 체크 status surface:
+// text = theme-tuned --text-* token, dot/accent = raw status token,
+// background = 10% token over surface, border = 28% token over border.
+function readinessTone(level: ExamServiceReadinessLevel): { color: string; accent: string; background: string; border: string } {
+    const token = level === "ready" ? "success" : level === "warning" ? "warning" : "error";
+    return {
+        color: `var(--text-${token})`,
+        accent: `var(--${token})`,
+        background: `color-mix(in srgb, var(--${token}) 10%, var(--surface))`,
+        border: `color-mix(in srgb, var(--${token}) 28%, var(--border))`,
+    };
 }
 
 function CreateEditorLoadingShell() {
@@ -624,6 +631,13 @@ function CreateOMRPageInner() {
 
     const scrollSettingsToTop = useCallback(() => {
         settingsSidebarRef.current?.scrollTo({ top: 0, behavior: "smooth" });
+    }, []);
+
+    // 설계 체크 metrics jump to the editor section where the count can be fixed.
+    const scrollSettingsToAnchor = useCallback((anchorId: string) => {
+        const sidebar = settingsSidebarRef.current;
+        const target = sidebar?.querySelector<HTMLElement>(`#${anchorId}`);
+        target?.scrollIntoView({ behavior: "smooth", block: "start" });
     }, []);
 
     const toggleComfortSidebarWidth = useCallback(() => {
@@ -2218,27 +2232,29 @@ function CreateOMRPageInner() {
                             </div>
                         </div>
                         <div className="create-settings-toolbar">
-                            <button
-                                type="button"
-                                className="create-settings-tool-button"
-                                onClick={() => adjustSettingsZoom(-SETTINGS_ZOOM_STEP)}
-                                disabled={settingsZoom <= SETTINGS_ZOOM_MIN}
-                                aria-label="설정 내용 축소"
-                                title="설정 내용 축소"
-                            >
-                                <ZoomOut size={14} />
-                            </button>
-                            <span className="create-settings-zoom-value">{Math.round(settingsZoom * 100)}%</span>
-                            <button
-                                type="button"
-                                className="create-settings-tool-button"
-                                onClick={() => adjustSettingsZoom(SETTINGS_ZOOM_STEP)}
-                                disabled={settingsZoom >= SETTINGS_ZOOM_MAX}
-                                aria-label="설정 내용 확대"
-                                title="설정 내용 확대"
-                            >
-                                <ZoomIn size={14} />
-                            </button>
+                            <div className="create-settings-zoom-group" role="group" aria-label="설정 내용 배율">
+                                <button
+                                    type="button"
+                                    className="create-settings-tool-button"
+                                    onClick={() => adjustSettingsZoom(-SETTINGS_ZOOM_STEP)}
+                                    disabled={settingsZoom <= SETTINGS_ZOOM_MIN}
+                                    aria-label="설정 내용 축소"
+                                    title="설정 내용 축소"
+                                >
+                                    <ZoomOut size={14} />
+                                </button>
+                                <span className="create-settings-zoom-value">{Math.round(settingsZoom * 100)}%</span>
+                                <button
+                                    type="button"
+                                    className="create-settings-tool-button"
+                                    onClick={() => adjustSettingsZoom(SETTINGS_ZOOM_STEP)}
+                                    disabled={settingsZoom >= SETTINGS_ZOOM_MAX}
+                                    aria-label="설정 내용 확대"
+                                    title="설정 내용 확대"
+                                >
+                                    <ZoomIn size={14} />
+                                </button>
+                            </div>
                             <button
                                 type="button"
                                 className="create-settings-tool-button"
@@ -2269,12 +2285,12 @@ function CreateOMRPageInner() {
                     <div className="create-settings-content" style={{ zoom: settingsZoom } as CSSProperties & { zoom: number }}>
                     <div style={{ marginBottom: '1.5rem' }}>
                         {answerKeyPdf && (
-                            <div style={{ marginBottom: '1rem', padding: '0.8rem', background: 'rgba(16, 185, 129, 0.08)', borderRadius: 'var(--radius-md)', border: '1px solid rgba(16, 185, 129, 0.25)', fontSize: '0.85rem' }}>
-                                <div style={{ color: 'var(--success)', fontWeight: 700, marginBottom: '0.2rem' }}>✓ 참고용 답지 등록됨</div>
-                                <div style={{ color: 'var(--success)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', opacity: 0.85 }}>{answerKeyPdf.name}</div>
+                            <div style={{ marginBottom: '1rem', padding: '0.8rem', background: 'color-mix(in srgb, var(--success) 10%, var(--surface))', borderRadius: 'var(--radius-md)', border: '1px solid color-mix(in srgb, var(--success) 28%, var(--border))', fontSize: '0.85rem' }}>
+                                <div style={{ color: 'var(--text-success)', fontWeight: 700, marginBottom: '0.2rem' }}>✓ 참고용 답지 등록됨</div>
+                                <div style={{ color: 'var(--text-success)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', opacity: 0.85 }}>{answerKeyPdf.name}</div>
                                 <button
                                     onClick={() => window.open(URL.createObjectURL(answerKeyPdf), '_blank')}
-                                    style={{ marginTop: '0.4rem', color: 'var(--success)', textDecoration: 'underline', background: 'none', border: 'none', padding: 0, cursor: 'pointer', fontSize: '0.75rem' }}
+                                    style={{ marginTop: '0.4rem', color: 'var(--text-success)', textDecoration: 'underline', background: 'none', border: 'none', padding: 0, cursor: 'pointer', fontSize: '0.75rem' }}
                                 >
                                     파일 보기
                                 </button>
@@ -2295,15 +2311,22 @@ function CreateOMRPageInner() {
 
                             <div className="create-design-metrics-mini">
                                 {[
-                                    { label: '개념', value: `${designSummary.conceptTagged}/${questionsCount}` },
-                                    { label: 'PDF', value: `${designSummary.pdfLinked}/${questionsCount}` },
-                                    { label: '필기', value: `${designSummary.pdfRegionLinked}/${questionsCount}` },
-                                    { label: '심화', value: `${designSummary.highDifficulty}` },
+                                    { label: '개념', value: `${designSummary.conceptTagged}/${questionsCount}`, anchor: 'create-label-batch-anchor', hint: '라벨 일괄 적용으로 이동' },
+                                    { label: 'PDF', value: `${designSummary.pdfLinked}/${questionsCount}`, anchor: 'create-region-calibration-anchor', hint: '문항 영역 보정으로 이동' },
+                                    { label: '필기', value: `${designSummary.pdfRegionLinked}/${questionsCount}`, anchor: 'create-region-calibration-anchor', hint: '문항 영역 보정으로 이동' },
+                                    { label: '심화', value: `${designSummary.highDifficulty}`, anchor: 'create-label-batch-anchor', hint: '난이도 일괄 설정으로 이동' },
                                 ].map(item => (
-                                    <div key={item.label} className="create-design-metric-mini">
+                                    <button
+                                        key={item.label}
+                                        type="button"
+                                        className="create-design-metric-mini"
+                                        onClick={() => scrollSettingsToAnchor(item.anchor)}
+                                        title={item.hint}
+                                        aria-label={`${item.label} ${item.value} · ${item.hint}`}
+                                    >
                                         <span>{item.label}</span>
                                         <strong>{item.value}</strong>
-                                    </div>
+                                    </button>
                                 ))}
                             </div>
 
@@ -2311,6 +2334,7 @@ function CreateOMRPageInner() {
                                 className="create-readiness-line"
                                 style={{
                                     '--readiness-color': serviceReadinessTone.color,
+                                    '--readiness-accent': serviceReadinessTone.accent,
                                     '--readiness-bg': serviceReadinessTone.background,
                                     '--readiness-border': serviceReadinessTone.border,
                                 } as CSSProperties}
@@ -2331,7 +2355,7 @@ function CreateOMRPageInner() {
                                             className="create-readiness-mini-item"
                                             title={item.message}
                                             style={{
-                                                '--readiness-item-color': tone.color,
+                                                '--readiness-item-color': tone.accent,
                                             } as CSSProperties}
                                         >
                                             <span>{item.label}</span>
@@ -2418,7 +2442,7 @@ function CreateOMRPageInner() {
                                 className="btn btn-secondary"
                                 aria-label="정답 인식 마법사 열기"
                                 title="정답 인식 마법사 (답지 추출)"
-                                style={{ border: '1px dashed #6366f1', color: '#6366f1', background: 'rgba(99, 102, 241, 0.05)' }}
+                                style={{ border: '1px dashed var(--primary)', color: 'var(--primary)', background: 'color-mix(in srgb, var(--primary) 5%, var(--surface))' }}
                                 onClick={() => setIsImportModalOpen(true)}
                             >
                                 <BrainCircuit size={17} />
@@ -2454,7 +2478,7 @@ function CreateOMRPageInner() {
                             </div>
                         )}
 
-                        <div style={{ marginBottom: '1rem', padding: '0.85rem', borderRadius: 'var(--radius-md)', border: '1px solid var(--border)', background: 'var(--background)' }}>
+                        <div id="create-region-calibration-anchor" style={{ marginBottom: '1rem', padding: '0.85rem', borderRadius: 'var(--radius-md)', border: '1px solid var(--border)', background: 'var(--background)', scrollMarginTop: '96px' }}>
                             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '0.5rem', marginBottom: '0.65rem' }}>
                                 <div>
                                     <div style={{ fontSize: '0.84rem', fontWeight: 900, color: 'var(--foreground)' }}>문항 영역 보정</div>
@@ -2466,8 +2490,13 @@ function CreateOMRPageInner() {
                                     flexShrink: 0,
                                     fontSize: '0.7rem',
                                     fontWeight: 900,
-                                    color: designSummary.pdfRegionLinked === questionsCount ? 'var(--success)' : 'var(--warning)',
-                                    background: designSummary.pdfRegionLinked === questionsCount ? 'rgba(16,185,129,0.1)' : 'rgba(245,158,11,0.1)',
+                                    color: designSummary.pdfRegionLinked === questionsCount ? 'var(--text-success)' : 'var(--text-warning)',
+                                    background: designSummary.pdfRegionLinked === questionsCount
+                                        ? 'color-mix(in srgb, var(--success) 10%, var(--surface))'
+                                        : 'color-mix(in srgb, var(--warning) 10%, var(--surface))',
+                                    border: designSummary.pdfRegionLinked === questionsCount
+                                        ? '1px solid color-mix(in srgb, var(--success) 28%, var(--border))'
+                                        : '1px solid color-mix(in srgb, var(--warning) 28%, var(--border))',
                                     borderRadius: '999px',
                                     padding: '0.2rem 0.5rem',
                                 }}>
@@ -2610,7 +2639,7 @@ function CreateOMRPageInner() {
                             )}
                         </div>
 
-                        <div className="create-label-batch-card">
+                        <div id="create-label-batch-anchor" className="create-label-batch-card" style={{ scrollMarginTop: '96px' }}>
                             <div className="create-label-batch-header">
                                 <div>
                                     <div className="create-label-batch-title">문항 라벨 일괄 적용</div>
@@ -3031,9 +3060,11 @@ function CreateOMRPageInner() {
                                             <span
                                                 style={{
                                                     fontSize: '0.68rem',
-                                                    color: hasSelectedAdvancedDesign ? 'var(--success)' : 'var(--primary)',
+                                                    color: hasSelectedAdvancedDesign ? 'var(--text-success)' : 'var(--primary)',
                                                     fontWeight: 800,
-                                                    background: hasSelectedAdvancedDesign ? 'rgba(16,185,129,0.1)' : 'rgba(99,102,241,0.1)',
+                                                    background: hasSelectedAdvancedDesign
+                                                        ? 'color-mix(in srgb, var(--success) 10%, var(--surface))'
+                                                        : 'color-mix(in srgb, var(--primary) 10%, var(--surface))',
                                                     padding: '2px 7px',
                                                     borderRadius: 'var(--radius-full)',
                                                     whiteSpace: 'nowrap',
