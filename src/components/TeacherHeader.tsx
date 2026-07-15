@@ -83,7 +83,7 @@ export default function TeacherHeader({ badge = "TEACHER", badgeColor }: Teacher
                             fontSize: '0.85rem', fontWeight: 600, color: 'var(--muted)',
                             padding: '0.5rem 0.9rem', borderRadius: 'var(--radius-full)',
                             transition: 'var(--transition-base)'
-                        }} className="nav-link">Dashboard</Link>
+                        }} className="nav-link">대시보드</Link>
                         <Link href="/teacher/live" style={{
                             display: 'inline-flex', alignItems: 'center', gap: '0.35rem',
                             fontSize: '0.85rem', fontWeight: 700,
@@ -95,7 +95,7 @@ export default function TeacherHeader({ badge = "TEACHER", badgeColor }: Teacher
                             minHeight: '2.75rem',
                         }} className="nav-link-live" aria-label="실시간 모니터링">
                             <Activity size={14} />
-                            <span>Live</span>
+                            <span>실시간</span>
                         </Link>
                         <TeacherSessionChip />
                         <NotificationBell />

@@ -4,7 +4,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Search, PlusCircle, Activity, Users, BarChart3, Settings as SettingsIcon, CreditCard, FileText, LayoutDashboard, X, CornerDownLeft } from "lucide-react";
 import { readLocalExams } from "@/lib/omrPersistence";
-import { readRosterStudents } from "@/lib/rosterStorage";
+import { readRosterGroups, readRosterStudents } from "@/lib/rosterStorage";
 
 interface SearchItem {
     id: string;
@@ -12,7 +12,7 @@ interface SearchItem {
     subtitle?: string;
     href: string;
     icon: React.ReactNode;
-    group: "page" | "exam" | "student" | "setting";
+    group: "page" | "exam" | "group" | "student" | "setting";
     keywords: string;
 }
 
@@ -31,6 +31,7 @@ const STATIC_ITEMS: SearchItem[] = [
 const GROUP_LABELS: Record<SearchItem["group"], string> = {
     page: "페이지",
     exam: "시험",
+    group: "반 · 그룹",
     student: "학생",
     setting: "설정",
 };
@@ -39,7 +40,7 @@ const GROUP_LABELS: Record<SearchItem["group"], string> = {
 // array must follow the same order so keyboard activeIdx / aria-activedescendant
 // reference the exact item the highlight shows (settings items are static and
 // would otherwise sort before dynamic exam/student results, desyncing the two).
-const GROUP_ORDER: SearchItem["group"][] = ["page", "exam", "student", "setting"];
+const GROUP_ORDER: SearchItem["group"][] = ["page", "exam", "group", "student", "setting"];
 const groupRank = (group: SearchItem["group"]) => GROUP_ORDER.indexOf(group);
 
 export default function GlobalSearch() {
@@ -102,14 +103,31 @@ export default function GlobalSearch() {
                     keywords: `exam ${ex.title}`,
                 });
             });
-            // Students
+            // Groups / classes — land on the "반 · 그룹" tab with that group's
+            // profile opened directly (same view as clicking "분석" on its card).
+            try {
+                readRosterGroups(localStorage).slice(0, 50).forEach(g => {
+                    items.push({
+                        id: `group-${g.id}`,
+                        title: g.name,
+                        subtitle: `${g.count}명 · ${g.region || "지역 미설정"}`,
+                        href: `/teacher/users?tab=groups&groupId=${encodeURIComponent(g.id)}`,
+                        icon: <Users size={16} />,
+                        group: "group",
+                        keywords: `group class 반 그룹 ${g.name} ${g.region || ""}`,
+                    });
+                });
+            } catch {
+                // ignore
+            }
+            // Students — land on the "학생" tab with that student's detail panel open.
             try {
                 readRosterStudents(localStorage).slice(0, 50).forEach(s => {
                     items.push({
                         id: `student-${s.id}`,
                         title: s.name,
                         subtitle: `${s.group} · ${s.email || "이메일 없음"}`,
-                        href: `/teacher/users`,
+                        href: `/teacher/users?tab=students&studentId=${encodeURIComponent(s.id)}`,
                         icon: <Users size={16} />,
                         group: "student",
                         keywords: `student ${s.name} ${s.email} ${s.group}`,
@@ -237,7 +255,7 @@ export default function GlobalSearch() {
                         value={query}
                         onChange={(e) => setQuery(e.target.value)}
                         onKeyDown={onInputKey}
-                        placeholder="빠른 검색... (페이지, 시험, 학생, 설정)"
+                        placeholder="빠른 검색... (페이지, 시험, 반, 학생, 설정)"
                         aria-label="빠른 검색 입력"
                         role="combobox"
                         aria-expanded={filtered.length > 0}
@@ -266,7 +284,7 @@ export default function GlobalSearch() {
                             결과가 없습니다
                         </div>
                     ) : (
-                        (["page", "exam", "student", "setting"] as const).map(groupKey => {
+                        (["page", "exam", "group", "student", "setting"] as const).map(groupKey => {
                             const items = grouped[groupKey];
                             if (!items || items.length === 0) return null;
                             return (

@@ -1,11 +1,12 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { useParams, useRouter } from "next/navigation";
+import { useParams } from "next/navigation";
 import Link from "next/link";
-import { BookOpen, PenLine } from "lucide-react";
+import { Activity, ArrowLeft, BarChart2, BookOpen, PenLine, Users } from "lucide-react";
 import { Exam, Attempt } from "@/types/omr";
 import StatCard from "@/components/dashboard/StatCard";
+import TeacherHeader from "@/components/TeacherHeader";
 import { toast } from "@/components/Toast";
 import { loadTeacherAttempts } from "@/lib/teacherAttemptClient";
 import { loadTeacherExam } from "@/lib/teacherExamClient";
@@ -27,7 +28,6 @@ interface AttemptTableSummary {
 
 export default function ExamDetailPage() {
     const params = useParams();
-    const router = useRouter();
     const id = params?.id as string;
 
     const [exam, setExam] = useState<Exam | null>(null);
@@ -203,16 +203,70 @@ export default function ExamDetailPage() {
         </button>
     );
 
+    const assignedGroupCount = exam.accessConfig?.type === "group" ? (exam.accessConfig.groupIds?.length || 0) : 0;
+
     return (
         <div className="layout-main" style={{ background: '#f8fafc', minHeight: '100vh' }}>
-            <header className="header" style={{ borderBottom: '1px solid var(--border)' }}>
-                <div className="container header-content">
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
-                        <button onClick={() => router.back()} style={{ fontSize: '1.2rem' }}>←</button>
-                        <span style={{ fontWeight: 700 }}>{exam.title}</span>
+            <TeacherHeader badge="시험 상세" />
+
+            <div className="header" style={{ borderBottom: '1px solid var(--border)', background: 'var(--surface)' }}>
+                <div className="container header-content" style={{ flexWrap: 'wrap', gap: '0.75rem', padding: '0.85rem 1rem' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.9rem', minWidth: 0 }}>
+                        <Link
+                            href="/teacher/dashboard"
+                            aria-label="대시보드로 돌아가기"
+                            style={{
+                                display: 'inline-flex', alignItems: 'center', gap: '0.35rem',
+                                fontSize: '0.85rem', fontWeight: 700, color: 'var(--muted)',
+                                padding: '0.4rem 0.7rem', borderRadius: 'var(--radius-full)',
+                                border: '1px solid var(--border)', flexShrink: 0, whiteSpace: 'nowrap',
+                            }}
+                        >
+                            <ArrowLeft size={14} />
+                            대시보드
+                        </Link>
+                        <span style={{ fontWeight: 700, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{exam.title}</span>
+                        {assignedGroupCount > 0 && (
+                            <Link
+                                href="/teacher/users?tab=groups"
+                                aria-label="배정된 반 명단 보기"
+                                title="이 시험이 배정된 반 목록을 확인합니다."
+                                style={{
+                                    display: 'inline-flex', alignItems: 'center', gap: '0.3rem',
+                                    fontSize: '0.76rem', fontWeight: 700, color: 'var(--muted)',
+                                    whiteSpace: 'nowrap', flexShrink: 0,
+                                }}
+                            >
+                                <Users size={13} />
+                                배정 반 {assignedGroupCount}개
+                            </Link>
+                        )}
+                    </div>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
+                        <Link
+                            href={`/teacher/dashboard?tab=exam&examId=${encodeURIComponent(exam.id)}`}
+                            className="btn btn-secondary"
+                            style={{ fontSize: '0.85rem', display: 'inline-flex', alignItems: 'center', gap: '0.35rem' }}
+                        >
+                            <BarChart2 size={14} />
+                            분석 보기
+                        </Link>
+                        <Link
+                            href="/teacher/live"
+                            aria-label="실시간 모니터링"
+                            style={{
+                                display: 'inline-flex', alignItems: 'center', gap: '0.35rem',
+                                fontSize: '0.85rem', fontWeight: 700, color: 'var(--success)',
+                                padding: '0.5rem 0.9rem', borderRadius: 'var(--radius-full)',
+                                border: '1px solid rgba(16,185,129,0.28)', background: 'rgba(16,185,129,0.08)',
+                            }}
+                        >
+                            <Activity size={14} />
+                            실시간
+                        </Link>
                     </div>
                 </div>
-            </header>
+            </div>
 
             <main className="container animate-fade-in" style={{ padding: '2rem 1rem' }}>
 

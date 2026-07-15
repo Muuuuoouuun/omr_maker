@@ -39,3 +39,25 @@ export function formatRegionScopedLabel(name: string, regionName?: string): stri
     const cleanRegion = regionName?.trim();
     return cleanRegion ? `${cleanName} · ${cleanRegion}` : cleanName;
 }
+
+/**
+ * Deep link from a region/group-scoped view (e.g. a class card on the roster
+ * page) into the teacher dashboard, preselecting a tab and carrying the
+ * region as a query param.
+ *
+ * NOTE: as of this writing, StudentAnalyticsTab and ExamAnalyticsTab only
+ * track their region filter as internal component state (`selectedRegionKey`)
+ * — neither accepts an incoming prop for it, so the `region` param below is
+ * inert until one of them reads it (see the "region deep link" handoff note
+ * for the exact prop/read needed). The link is still worth shipping now: it
+ * lands on the right tab immediately, and starts working fully the moment
+ * that prop lands.
+ */
+export function buildRegionScopedAnalyticsHref(
+    tab: "exam" | "student",
+    regionKey?: string,
+): string {
+    const params = new URLSearchParams({ tab });
+    if (regionKey) params.set("region", regionKey);
+    return `/teacher/dashboard?${params.toString()}`;
+}

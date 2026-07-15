@@ -62,6 +62,7 @@ import {
     type RegionalLearningScope,
 } from "@/lib/regionalAnalytics";
 import { buildRetakeHref } from "@/lib/retakeLinks";
+import { buildRegionScopedAnalyticsHref } from "@/lib/dashboardSelection";
 import { PremiumActionLink } from "@/components/PremiumFeatureGate";
 import { findStudentStartCode, generateStartCode, readStudentCodes, writeStudentCodes } from "@/lib/studentCodes";
 import { hasPlanEntitlement } from "@/utils/plans";
@@ -244,6 +245,12 @@ function ManageUsersInner() {
         if (t === "groups" || t === "invites" || t === "students") return t;
         return "students";
     })();
+    // Deep-link targets from GlobalSearch (or any other cross-link): a specific
+    // student opens the detail panel, a specific group opens its profile modal.
+    // Both are re-derived from searchParams so navigating here again with a new
+    // id (while already mounted) re-applies the target instead of no-op'ing.
+    const initialStudentId = searchParams?.get("studentId") || null;
+    const initialGroupId = searchParams?.get("groupId") || null;
     const [tab, setTab] = useState<TabType>(initialTab);
     useEffect(() => {
         // Keep deep links like /teacher/users?tab=groups on the requested workflow.
@@ -252,7 +259,10 @@ function ManageUsersInner() {
     const [query, setQuery] = useState("");
     const deferredQuery = useDeferredValue(query);
     const [selectedRegionKey, setSelectedRegionKey] = useState(ALL_REGION_KEY);
-    const [selectedId, setSelectedId] = useState<string | null>(null);
+    const [selectedId, setSelectedId] = useState<string | null>(initialStudentId);
+    useEffect(() => {
+        if (initialStudentId) setSelectedId(initialStudentId);
+    }, [initialStudentId]);
 
     const [students, setStudents] = useState<RosterStudent[]>([]);
     const [groups, setGroups] = useState<RosterGroup[]>([]);
@@ -658,6 +668,18 @@ function ManageUsersInner() {
         setSelectedGroupId(groupId);
         setShowGroupProfileModal(true);
     };
+
+    // Deep link from GlobalSearch (or any other cross-link): /teacher/users?tab=groups&groupId=<id>
+    // opens that group's profile the same way clicking "분석" on its card does.
+    // Guarded to fire once per incoming id so closing the modal doesn't reopen it.
+    const openedGroupDeepLinkRef = useRef<string | null>(null);
+    useEffect(() => {
+        if (!initialGroupId || !hydrated) return;
+        if (openedGroupDeepLinkRef.current === initialGroupId) return;
+        openedGroupDeepLinkRef.current = initialGroupId;
+        handleOpenGroupProfile(initialGroupId);
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [initialGroupId, hydrated]);
 
     const handleIssueStudentStartCode = async () => {
         if (!selected || isDemoRoster) {
@@ -2256,6 +2278,24 @@ function ManageUsersInner() {
                                             삭제
                                         </button>
                                     </div>
+                                    <NextLink
+                                        href={buildRegionScopedAnalyticsHref("student", g.region ? regionKeyFor(g.region) : undefined)}
+                                        aria-label={`${g.name} 대시보드 분석에서 보기`}
+                                        title="학생 성취도 탭에서 이 반의 지역 범위로 열립니다."
+                                        style={{
+                                            minHeight: 36,
+                                            display: 'flex',
+                                            alignItems: 'center',
+                                            justifyContent: 'center',
+                                            gap: '0.3rem',
+                                            fontSize: '0.74rem',
+                                            fontWeight: 800,
+                                            color: 'var(--muted)',
+                                        }}
+                                    >
+                                        <BarChart3 size={12} />
+                                        이 반 분석 대시보드에서 보기
+                                    </NextLink>
                                 </article>
                             );
                         })}

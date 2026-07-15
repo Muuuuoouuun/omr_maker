@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { formatRegionScopedLabel, resolveExamSelection, resolveExamSelectionInputValue, resolveScopedSelection } from "./dashboardSelection";
+import {
+    buildRegionScopedAnalyticsHref,
+    formatRegionScopedLabel,
+    resolveExamSelection,
+    resolveExamSelectionInputValue,
+    resolveScopedSelection,
+} from "./dashboardSelection";
 
 const exams = [
     { id: "exam-a", title: "중간고사 A" },
@@ -41,5 +47,15 @@ describe("dashboard selection", () => {
     it("formats duplicate class or student labels with region context", () => {
         expect(formatRegionScopedLabel("A반", "서울")).toBe("A반 · 서울");
         expect(formatRegionScopedLabel("A반", "")).toBe("A반");
+    });
+
+    it("builds a region-scoped dashboard analytics href", () => {
+        expect(buildRegionScopedAnalyticsHref("student", "seoul")).toBe("/teacher/dashboard?tab=student&region=seoul");
+        expect(buildRegionScopedAnalyticsHref("exam", "busan")).toBe("/teacher/dashboard?tab=exam&region=busan");
+    });
+
+    it("omits the region param when no region is given", () => {
+        expect(buildRegionScopedAnalyticsHref("student")).toBe("/teacher/dashboard?tab=student");
+        expect(buildRegionScopedAnalyticsHref("student", "")).toBe("/teacher/dashboard?tab=student");
     });
 });
