@@ -426,7 +426,7 @@ export default function OverviewTab({ exams: examsProp, attempts, stats, trendDa
             <div className="bento-card overview-exam-summary-card" style={{ gridColumn: 'span 4', overflow: 'hidden' }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.5rem' }}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: '1.5rem' }}>
-                        <h3 style={{ fontSize: '1.1rem', fontWeight: 700 }}>Exam Summary</h3>
+                        <h3 style={{ fontSize: '1.1rem', fontWeight: 700 }}>시험 요약</h3>
                         <div role="tablist" aria-label="시험 진행 상태" style={{ display: 'flex', gap: '1rem', fontSize: '0.9rem', color: 'var(--muted)', fontWeight: 600 }}>
                             <button
                                 type="button"
@@ -442,7 +442,7 @@ export default function OverviewTab({ exams: examsProp, attempts, stats, trendDa
                                     borderBottom: activeTab === 'ongoing' ? '2px solid var(--primary)' : '2px solid transparent',
                                     paddingBottom: '0.5rem',
                                     transition: 'all 0.2s'
-                                }}>Ongoing</button>
+                                }}>진행 중</button>
                             <button
                                 type="button"
                                 role="tab"
@@ -457,7 +457,7 @@ export default function OverviewTab({ exams: examsProp, attempts, stats, trendDa
                                     borderBottom: activeTab === 'completed' ? '2px solid var(--primary)' : '2px solid transparent',
                                     paddingBottom: '0.5rem',
                                     transition: 'all 0.2s'
-                                }}>Completed</button>
+                                }}>완료</button>
                         </div>
                     </div>
 
@@ -593,9 +593,9 @@ export default function OverviewTab({ exams: examsProp, attempts, stats, trendDa
                                                 borderRadius: 'var(--radius-full)',
                                                 fontSize: '0.75rem',
                                                 fontWeight: 800,
-                                                background: exam.retakeCount > 0 ? '#f0fdfa' : 'var(--background)',
+                                                background: exam.retakeCount > 0 ? 'color-mix(in srgb, #0f766e 8%, var(--surface))' : 'var(--background)',
                                                 color: exam.retakeCount > 0 ? '#0f766e' : 'var(--muted)',
-                                                border: exam.retakeCount > 0 ? '1px solid #99f6e4' : '1px solid var(--border)',
+                                                border: exam.retakeCount > 0 ? '1px solid color-mix(in srgb, #0f766e 28%, transparent)' : '1px solid var(--border)',
                                                 whiteSpace: 'nowrap',
                                             }}>
                                                 {exam.retakeCount}건

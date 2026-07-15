@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useMemo, useState, type CSSProperties } from "react";
 import Link from "next/link";
 import { Exam, Attempt, type PlanKey } from "@/types/omr";
 import {
@@ -39,6 +39,16 @@ interface StudentAnalyticsTabProps {
 }
 
 const ALL_REGION_KEY = "__all_regions__";
+
+// Shared card surface so student-analytics sections match the exam tab's coherent
+// grammar (rounded, subtly elevated, consistently bordered). The `.card` class has no
+// styling of its own, so each card spreads this base first and overrides as needed.
+const CARD_SURFACE_STYLE: CSSProperties = {
+    background: 'var(--surface)',
+    border: '1px solid var(--border)',
+    borderRadius: 'var(--radius-xl)',
+    boxShadow: 'var(--shadow-md)',
+};
 
 function regionalScopeLabel(scope: RegionalLearningScope | undefined): string {
     return scope?.regionName || "전체 지역";
@@ -345,7 +355,7 @@ export default function StudentAnalyticsTab({
     return (
         <div className="fade-in-up" style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
             {/* Filter Section */}
-            <div className="card" style={{ padding: '1.5rem', display: 'flex', alignItems: 'center', gap: '1rem', background: 'var(--surface)', flexWrap: 'wrap' }}>
+            <div className="card" style={{ ...CARD_SURFACE_STYLE,padding: '1.5rem', display: 'flex', alignItems: 'center', gap: '1rem', background: 'var(--surface)', flexWrap: 'wrap' }}>
                 {regionScopeOptions.length > 0 && (
                     <>
                         <span style={{ display: 'inline-flex', alignItems: 'center', gap: '0.35rem', fontWeight: 800, color: 'var(--text)' }}>
@@ -418,7 +428,7 @@ export default function StudentAnalyticsTab({
 
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(320px, 100%), 1fr))', gap: '1.5rem' }}>
                 {/* Left side: Chart */}
-                <div className="card" style={{ padding: '1.5rem', display: 'flex', flexDirection: 'column', minWidth: 0 }}>
+                <div className="card" style={{ ...CARD_SURFACE_STYLE,padding: '1.5rem', display: 'flex', flexDirection: 'column', minWidth: 0 }}>
                     <div style={{ marginBottom: '1.5rem' }}>
                         <h3 style={{ fontSize: '1.25rem', fontWeight: 700, display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.5rem' }}>
                             <TrendingUp size={20} color="var(--primary)" />
@@ -487,7 +497,7 @@ export default function StudentAnalyticsTab({
 
                 {/* Right side: Exam List & Unattempted Exams */}
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem', minWidth: 0 }}>
-                    <div className="card" style={{ padding: '1.5rem', display: 'flex', flexDirection: 'column' }}>
+                    <div className="card" style={{ ...CARD_SURFACE_STYLE,padding: '1.5rem', display: 'flex', flexDirection: 'column' }}>
                         <h3 style={{ fontSize: '1.1rem', fontWeight: 800, marginBottom: '0.45rem', display: 'flex', alignItems: 'center', gap: '0.45rem' }}>
                             <Target size={17} color="var(--primary)" />
                             학생 학습 큐
@@ -548,7 +558,7 @@ export default function StudentAnalyticsTab({
                     </div>
 
                     {/* Unattempted Exams & Reminder Queue */}
-                    <div className="card" style={{ padding: '1.5rem', display: 'flex', flexDirection: 'column' }}>
+                    <div className="card" style={{ ...CARD_SURFACE_STYLE,padding: '1.5rem', display: 'flex', flexDirection: 'column' }}>
                         <h3 style={{ fontSize: '1.1rem', fontWeight: 700, marginBottom: '0.5rem', color: 'var(--error)' }}>
                             미응시 시험 ({unattemptedExams.length})
                         </h3>
@@ -620,7 +630,7 @@ export default function StudentAnalyticsTab({
                         </div>
                     </div>
 
-                    <div className="card" style={{ padding: '1.5rem', display: 'flex', flexDirection: 'column', flex: 1 }}>
+                    <div className="card" style={{ ...CARD_SURFACE_STYLE,padding: '1.5rem', display: 'flex', flexDirection: 'column', flex: 1 }}>
                         <h3 style={{ fontSize: '1.1rem', fontWeight: 700, marginBottom: '0.5rem' }}>원시험 기록 ({studentBaseAttempts.length})</h3>
                         <p style={{ fontSize: '0.85rem', color: 'var(--muted)', marginBottom: '1.5rem' }}>차트에서 제외할 원시험의 체크를 해제하세요.</p>
 
@@ -668,7 +678,7 @@ export default function StudentAnalyticsTab({
                     </div>
 
                     {studentRetakeAttempts.length > 0 && (
-                        <div className="card" style={{ padding: '1.5rem', display: 'flex', flexDirection: 'column', gap: '0.8rem' }}>
+                        <div className="card" style={{ ...CARD_SURFACE_STYLE,padding: '1.5rem', display: 'flex', flexDirection: 'column', gap: '0.8rem' }}>
                             <h3 style={{ fontSize: '1.1rem', fontWeight: 800, color: '#0f766e' }}>
                                 재시험 회복 기록 ({studentRetakeAttempts.length})
                             </h3>
@@ -692,8 +702,8 @@ export default function StudentAnalyticsTab({
                                                 alignItems: 'center',
                                                 padding: '0.75rem',
                                                 borderRadius: 'var(--radius-md)',
-                                                background: '#f0fdfa',
-                                                border: '1px solid #99f6e4',
+                                                background: 'color-mix(in srgb, #0f766e 8%, var(--surface))',
+                                                border: '1px solid color-mix(in srgb, #0f766e 28%, transparent)',
                                                 color: 'inherit',
                                             }}
                                         >
@@ -716,7 +726,7 @@ export default function StudentAnalyticsTab({
             </div>
 
             {/* Detailed Table Section */}
-            <div className="card" style={{ padding: '1.5rem', display: 'flex', flexDirection: 'column' }}>
+            <div className="card" style={{ ...CARD_SURFACE_STYLE,padding: '1.5rem', display: 'flex', flexDirection: 'column' }}>
                 <h3 style={{ fontSize: '1.25rem', fontWeight: 700, marginBottom: '0.5rem' }}>
                     세부 시험 분석 내역
                 </h3>
@@ -725,7 +735,7 @@ export default function StudentAnalyticsTab({
                 </p>
 
                 <div style={{ overflowX: 'auto' }}>
-                    <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left', minWidth: '960px' }}>
+                    <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left', minWidth: '960px', fontVariantNumeric: 'tabular-nums' }}>
                         <thead>
                             <tr style={{ borderBottom: '2px solid var(--border)', color: 'var(--muted)', fontSize: '0.9rem' }}>
                                 <th style={{ padding: '1rem 0.5rem', fontWeight: 600 }}>시험명</th>
