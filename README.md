@@ -35,6 +35,8 @@ In production, there is no default account. Set one of these on the server befor
 
 Teacher login is currently backed by server environment variables, not Supabase Auth. If a deployed build only says the credentials are invalid, check the deployment provider's environment variables and redeploy before checking Supabase.
 
+For local account QA, setting `NEXT_PUBLIC_OMR_SEED_TEST_ACCOUNTS=1` in `.env.local` adds four login-ready students (`student1` through `student4`) to the existing local roster without replacing user-created rows. This seed is disabled in production. The students use the `테스트반` class; their development start codes are defined in `src/lib/localTestAccounts.ts`.
+
 Student login uses the roster student number or email as the account ID, and a six-character start code as the password-like credential. Import `examples/student-roster.csv` from `/teacher/users`, then students can choose `학생` and enter one of these sample names with the matching class. Share the CSV `id` or `email` value as the student's login ID, especially when names overlap:
 
 - `김민준` / `3학년 A반` / `서울`

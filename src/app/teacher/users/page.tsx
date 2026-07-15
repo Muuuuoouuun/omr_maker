@@ -12,6 +12,7 @@ import { shouldUseDemoData } from "@/lib/demoData";
 import { loadTeacherAttempts } from "@/lib/teacherAttemptClient";
 import { loadTeacherExams } from "@/lib/teacherExamClient";
 import { loadTeacherRosterSnapshot, saveTeacherRosterSnapshot } from "@/lib/teacherRosterClient";
+import { seedLocalTestStudentAccounts } from "@/lib/localTestAccounts";
 import { issueStudentStartCodeCredential } from "@/app/actions/studentAuth";
 import { authorizeRosterStudentSet } from "@/app/actions/premiumAccess";
 import { resolveAttemptScore } from "@/lib/attemptScores";
@@ -306,6 +307,7 @@ function ManageUsersInner() {
         let cancelled = false;
         const hydrateRoster = async () => {
             try {
+                seedLocalTestStudentAccounts(localStorage);
                 setWorkspaceId(readActiveWorkspaceContext(sessionStorage).organizationId);
                 const storedRosterExists = hasStoredRosterData(localStorage);
                 const storedStudents = readRosterStudents(localStorage);

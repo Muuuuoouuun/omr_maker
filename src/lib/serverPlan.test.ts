@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { createTeacherSession } from "./teacherSession";
+import { workspaceContextFromIdentity } from "./workspaceContext";
 import {
     createDevServerPlanStore,
     createServerPlanStoreFromEnv,
@@ -55,6 +56,36 @@ describe("server-authoritative plan access", () => {
         })?.source).toBe("dev-simulation");
     });
 
+    it("uses the signed-in teacher account plan in local server simulation", async () => {
+        const env = {
+            NODE_ENV: "development",
+            TEACHER_ACCOUNTS: JSON.stringify([
+                { id: "admin", password: "admin-pass", plan: "academy" },
+                { id: "teacher1", password: "teacher-pass", plan: "free" },
+                { id: "teacher2", password: "teacher-pass", plan: "pro" },
+            ]),
+        };
+        const store = createDevServerPlanStore(env);
+        const organizationId = (teacherId: string) => workspaceContextFromIdentity({ teacherId }).organizationId;
+
+        await expect(store.readPlan(organizationId("admin"))).resolves.toBe("academy");
+        await expect(store.readPlan(organizationId("teacher1"))).resolves.toBe("free");
+        await expect(store.readPlan(organizationId("teacher2"))).resolves.toBe("pro");
+        await expect(store.readPlan("unknown-organization")).resolves.toBe("free");
+    });
+
+    it("keeps the explicit global development plan override authoritative", async () => {
+        const store = createDevServerPlanStore({
+            OMR_DEV_PLAN: "pro",
+            TEACHER_ACCOUNTS: JSON.stringify([
+                { id: "admin", password: "admin-pass", plan: "academy" },
+            ]),
+        });
+        const adminOrganizationId = workspaceContextFromIdentity({ teacherId: "admin" }).organizationId;
+
+        await expect(store.readPlan(adminOrganizationId)).resolves.toBe("pro");
+    });
+
     it("reserves atomically, retries idempotently, and compensates failures in dev simulation", async () => {
         const store = createDevServerPlanStore({ OMR_DEV_PLAN: "free" });
         const period = seoulBillingPeriod(new Date("2026-07-14T00:00:00.000Z"));
@@ -96,4 +127,3 @@ describe("server-authoritative plan access", () => {
         })).resolves.toMatchObject({ allowed: false });
     });
 });
-

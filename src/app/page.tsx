@@ -13,6 +13,7 @@ import {
   type StudentSessionIssueStatus,
 } from "@/app/actions/studentSession";
 import { formatRegionScopedLabel } from "@/lib/dashboardSelection";
+import { seedLocalTestStudentAccounts } from "@/lib/localTestAccounts";
 import { readLocalAttempts, syncMergedGuestAttempts } from "@/lib/omrPersistence";
 import {
   readRosterGroups,
@@ -237,6 +238,7 @@ export default function Home() {
     let localGroups: RosterGroup[] = [];
     try {
       // Hydrate client-only localStorage state after mount.
+      seedLocalTestStudentAccounts(localStorage);
       localGroups = readRosterGroups(localStorage);
       setGroups(localGroups);
       setRosterStudents(readRosterStudents(localStorage));

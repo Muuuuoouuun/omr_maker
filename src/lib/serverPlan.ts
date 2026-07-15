@@ -1,8 +1,9 @@
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
+import { resolveTeacherCredentials } from "@/lib/teacherAuth";
 import type { TeacherSession } from "@/lib/teacherSession";
 import { isTeacherSessionActive } from "@/lib/teacherSession";
 import { getSupabaseServerConfigFromEnv } from "@/lib/supabaseServerAdmin";
-import { workspaceContextFromTeacherSession } from "@/lib/workspaceContext";
+import { workspaceContextFromIdentity, workspaceContextFromTeacherSession } from "@/lib/workspaceContext";
 import type { PlanKey } from "@/types/omr";
 import { normalizePlan, PLAN_BY_KEY, type PlanLimitMetric } from "@/utils/plans";
 
@@ -248,15 +249,26 @@ function devUsageKey(organizationId: string, metric: PlanLimitMetric, period: st
     return `${organizationId}:${metric}:${period}`;
 }
 
-function devPlan(env: Env): PlanKey {
-    return normalizePlan(env.OMR_DEV_PLAN || env.TEACHER_PLAN) || "free";
+function devPlan(env: Env, organizationId: string): PlanKey {
+    const globalOverride = normalizePlan(env.OMR_DEV_PLAN);
+    if (globalOverride) return globalOverride;
+
+    const accountPlan = resolveTeacherCredentials(env).find(credential => (
+        workspaceContextFromIdentity({
+            teacherId: credential.id,
+            email: credential.email,
+            displayName: credential.name,
+        }).organizationId === organizationId
+    ))?.plan;
+
+    return accountPlan || normalizePlan(env.TEACHER_PLAN) || "free";
 }
 
 export function createDevServerPlanStore(env: Env = process.env): ServerPlanStore {
     return {
         source: "dev-simulation",
-        async readPlan() {
-            return devPlan(env);
+        async readPlan(organizationId) {
+            return devPlan(env, organizationId);
         },
         async readUsage(organizationId, metric, period) {
             const key = devUsageKey(organizationId, metric, metric === "students" ? STUDENT_USAGE_PERIOD.key : period.key);
