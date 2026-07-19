@@ -101,7 +101,7 @@ export default function OMRCardView({
       <div className="omr-cardview-header">
         <div className="omr-cardview-header-top">
           <div style={{ minWidth: 0, flex: 1 }}>
-            <div className="omr-cardview-title">{title}</div>
+            <div className="omr-cardview-title" data-testid="omr-cardview-title">{title}</div>
             <div
               style={{
                 fontSize: "0.78rem",

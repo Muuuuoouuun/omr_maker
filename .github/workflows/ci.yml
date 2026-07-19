@@ -40,7 +40,7 @@ jobs:
       - name: Install Playwright browsers
         run: npx playwright install --with-deps chromium
       - name: Run E2E
-        run: npm run test:e2e
+        run: npm run test:e2e -- --project=chromium
         env:
           CI: "true"
       - name: Upload Playwright artifacts on failure

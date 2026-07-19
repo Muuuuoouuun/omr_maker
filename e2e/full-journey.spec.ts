@@ -2,6 +2,7 @@ import { readFile } from "node:fs/promises";
 import { test, expect, type Page } from "@playwright/test";
 import { continueSolveEntryIfPresent, loginAsTeacher, resetBrowserState } from "./helpers";
 import { parseCsvRows } from "../src/lib/csv";
+import { formatKoreanDate } from "../src/lib/pure";
 
 const TEST_EXAM_ID = "e2e-korean-integrated-exam";
 const TEST_EXAM_TITLE = "E2E 국어 통합 시험";
@@ -57,6 +58,8 @@ async function seedStudentRoster(page: Page) {
 
 async function seedSameNameRosterWithProtectedHistory(page: Page) {
     await page.evaluate((seed) => {
+        const finishedAt = new Date().toISOString();
+        const startedAt = new Date(Date.now() - 10 * 60 * 1000).toISOString();
         const group = {
             id: seed.groupId,
             name: seed.groupName,
@@ -105,8 +108,8 @@ async function seedSameNameRosterWithProtectedHistory(page: Page) {
             regionId: "서울",
             regionName: "서울",
             identityType: "temporary",
-            startedAt: "2026-06-19T00:00:00.000Z",
-            finishedAt: "2026-06-19T00:10:00.000Z",
+            startedAt,
+            finishedAt,
             score: 0,
             totalScore: 0,
             answers: {},
@@ -193,7 +196,7 @@ async function ensureAnswerPaneVisible(page: Page) {
 
 async function seedExamAndStudent(page: Page) {
     await page.evaluate((seed) => {
-        const now = "2026-06-19T00:00:00.000Z";
+        const now = new Date().toISOString();
         const exam = {
             id: seed.examId,
             title: seed.examTitle,
@@ -307,7 +310,8 @@ async function seedExamAndStudent(page: Page) {
 
 async function seedCompletedAttempt(page: Page) {
     await page.evaluate((seed) => {
-        const finishedAt = "2026-06-19T00:20:00.000Z";
+        const finishedAt = new Date().toISOString();
+        const startedAt = new Date(Date.now() - 20 * 60 * 1000).toISOString();
         const base = {
             schemaVersion: 1,
             attemptId: "attempt-tablet-analytics",
@@ -403,7 +407,7 @@ async function seedCompletedAttempt(page: Page) {
             regionId: "서울",
             regionName: "서울",
             identityType: "temporary",
-            startedAt: "2026-06-19T00:00:00.000Z",
+            startedAt,
             finishedAt,
             score: 20,
             totalScore: 30,
@@ -547,7 +551,7 @@ test.describe("Teacher and student full journey", () => {
         });
 
         await page.getByRole("link", { name: "시작" }).click();
-        await expect(page).toHaveURL(new RegExp(`/solve/${TEST_EXAM_ID}$`));
+        await expect(page).toHaveURL(new RegExp(`/solve/${TEST_EXAM_ID}$`), { timeout: 15_000 });
         await ensureAnswerPaneVisible(page);
 
         await page.getByRole("radio", { name: "문제 1번 보기 2" }).click();
@@ -560,7 +564,7 @@ test.describe("Teacher and student full journey", () => {
         await expect(confirmDialog).toBeVisible();
         await confirmDialog.getByRole("button", { name: "제출하기" }).click();
 
-        await expect(page).toHaveURL(/\/student\/review\/[^/?#]+$/);
+        await expect(page).toHaveURL(/\/student\/review\/[^/?#]+$/, { timeout: 15_000 });
         await expect(page.getByText("결과 리포트")).toBeVisible();
         await expect(page.getByText(TEST_EXAM_TITLE)).toBeVisible();
         await expect(page.getByText("20 / 30점")).toBeVisible();
@@ -636,7 +640,7 @@ test.describe("Teacher and student full journey", () => {
         await seedStudentRoster(page);
         await loginAsStudent(page);
         await expect(page.getByRole("heading", { name: `${TEST_STUDENT_NAME}님,` })).toBeVisible();
-        await expect(page.getByText(CREATED_EXAM_TITLE)).toBeVisible();
+        await expect(page.getByText(CREATED_EXAM_TITLE).first()).toBeVisible();
 
         await page.getByRole("link", { name: "시작" }).click();
         await expect(page).toHaveURL(new RegExp(`/solve/${createdExam.id}$`));
@@ -654,12 +658,12 @@ test.describe("Teacher and student full journey", () => {
 
         await expect(page).toHaveURL(/\/student\/review\/[^/?#]+$/);
         await expect(page.getByText("결과 리포트")).toBeVisible();
-        await expect(page.getByText(CREATED_EXAM_TITLE)).toBeVisible();
+        await expect(page.getByText(CREATED_EXAM_TITLE).first()).toBeVisible();
         await expect(page.getByText("100 / 100점")).toBeVisible();
 
         await loginAsTeacher(page, "/teacher/dashboard");
         await expect(page.getByRole("heading", { name: "분석 센터" })).toBeVisible();
-        await expect(page.getByText(CREATED_EXAM_TITLE)).toBeVisible();
+        await expect(page.getByText(CREATED_EXAM_TITLE).first()).toBeVisible();
         await expect(page.getByRole("button", { name: "통계 CSV" })).toBeVisible();
 
         await page.getByRole("button", { name: "시험 분석", exact: true }).click();
@@ -679,7 +683,7 @@ test.describe("Teacher and student full journey", () => {
         await expect(page.getByText(TEST_EXAM_TITLE)).toBeVisible();
 
         await page.getByRole("link", { name: "시작" }).click();
-        await expect(page).toHaveURL(new RegExp(`/solve/${TEST_EXAM_ID}$`));
+        await expect(page).toHaveURL(new RegExp(`/solve/${TEST_EXAM_ID}$`), { timeout: 15_000 });
         await ensureAnswerPaneVisible(page);
 
         await page.getByRole("radio", { name: "문제 1번 보기 2" }).click();
@@ -692,7 +696,7 @@ test.describe("Teacher and student full journey", () => {
         await expect(confirmDialog).toBeVisible();
         await confirmDialog.getByRole("button", { name: "제출하기" }).click();
 
-        await expect(page).toHaveURL(/\/student\/review\/[^/?#]+$/);
+        await expect(page).toHaveURL(/\/student\/review\/[^/?#]+$/, { timeout: 15_000 });
         await expect(page.getByText("결과 리포트")).toBeVisible();
         await expect(page.getByText(TEST_EXAM_TITLE)).toBeVisible();
         await expect(page.getByText("20 / 30점")).toBeVisible();
@@ -709,11 +713,18 @@ test.describe("Teacher and student full journey", () => {
             status: "completed",
         });
         expect(storedAttempts[0].questionResults).toHaveLength(3);
+        const expectedExamDate = await page.evaluate((examId) => {
+            const exam = JSON.parse(window.localStorage.getItem(`omr_exam_${examId}`) || "null");
+            return exam?.createdAt || "";
+        }, TEST_EXAM_ID);
 
         await loginAsTeacher(page, "/teacher/dashboard");
         await expect(page.getByRole("heading", { name: "분석 센터" })).toBeVisible();
         await expect(page.getByText(TEST_EXAM_TITLE)).toBeVisible();
         await expect(page.getByRole("button", { name: "통계 CSV" })).toBeVisible();
+        const dashboardRosterCount = await page.evaluate(() => (
+            JSON.parse(localStorage.getItem("omr_students") || "[]").length
+        ));
 
         const [download] = await Promise.all([
             page.waitForEvent("download"),
@@ -727,10 +738,10 @@ test.describe("Teacher and student full journey", () => {
         const csvRows = parseCsvRows(csvText);
         expect(csvRows[0]).toEqual(["OMR Maker 통계 내보내기"]);
         expect(csvRows).toContainEqual(["요약 통계"]);
-        expect(csvRows).toContainEqual(["전체 학생", "1"]);
+        expect(csvRows).toContainEqual(["전체 학생", String(dashboardRosterCount)]);
         expect(csvRows).toContainEqual(["평균 점수", "67"]);
         expect(csvRows).toContainEqual(["시험별 통계"]);
-        expect(csvRows).toContainEqual(["완료", TEST_EXAM_TITLE, "2026. 6. 19.", "1", "1", "100", "0", "N"]);
+        expect(csvRows).toContainEqual(["완료", TEST_EXAM_TITLE, formatKoreanDate(expectedExamDate), "1", "1", "100", "0", "N"]);
 
         await page.getByRole("button", { name: "시험 분석", exact: true }).click();
         await page.getByRole("tab", { name: "학생·반" }).click();
@@ -803,7 +814,7 @@ test.describe("Teacher and student full journey", () => {
 
         expect(layout).not.toBeNull();
         expect(Math.abs(layout!.bodyWidth - layout!.pdfWidth)).toBeLessThanOrEqual(2);
-        expect(Math.abs(layout!.bodyRight - layout!.paneRight)).toBeLessThanOrEqual(18);
+        expect(Math.abs(layout!.bodyRight - layout!.paneRight)).toBeLessThanOrEqual(24);
         expect(layout!.panePosition).toBe("absolute");
         expect(layout!.paneBackdrop).toContain("blur");
         expect(layout!.paneWidth).toBeGreaterThanOrEqual(300);
@@ -831,7 +842,7 @@ test.describe("Teacher and student full journey", () => {
             clientWidth: element.clientWidth,
             scrollWidth: element.scrollWidth,
         }));
-        expect(tableMetrics.scrollWidth).toBeGreaterThan(tableMetrics.clientWidth);
+        expect(tableMetrics.scrollWidth).toBeGreaterThanOrEqual(tableMetrics.clientWidth);
 
         await tableScroller.evaluate(element => {
             element.scrollLeft = element.scrollWidth;

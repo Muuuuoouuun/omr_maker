@@ -10,7 +10,7 @@ import ThemeToggle from "@/components/ThemeToggle";
 import { useRouter, useSearchParams } from "next/navigation";
 import { toast } from "@/components/Toast";
 import { getTeacherRemoteAssetUrl, uploadTeacherExamAsset } from "@/app/actions/remoteAssets";
-import { loadTeacherCanonicalExam, saveTeacherCanonicalExam } from "@/app/actions/teacherExam";
+import { deleteTeacherCanonicalExam, loadTeacherCanonicalExam, saveTeacherCanonicalExam } from "@/app/actions/teacherExam";
 import { ArrowUpToLine, BrainCircuit, ChevronDown, Crosshair, Eye, FileText, FolderOpen, Loader2, Maximize2, Minimize2, PanelRightClose, PanelRightOpen, RefreshCw, Redo2, RotateCcw, Save, Settings2, Unlink, Undo2, UploadCloud, X, ZoomIn, ZoomOut } from "lucide-react";
 
 function PdfViewerLoading() {
@@ -1635,6 +1635,7 @@ function CreateOMRPageInner() {
 
     const handleShareConfig = async (accessConfig: NonNullable<Exam["accessConfig"]>) => {
         let reservedExamId: string | null = null;
+        let createdCanonicalSkeleton = false;
         try {
             const validation = validateExamDraft({
                 title,
@@ -1675,6 +1676,87 @@ function CreateOMRPageInner() {
             let answerKeyData = loadedExam?.answerKeyPdf || "";
             let answerKeyPdfRef = loadedExam?.answerKeyPdfRef;
 
+            const rollbackNewExamPublish = async () => {
+                let canReleaseReservation = true;
+                if (createdCanonicalSkeleton) {
+                    const deleted = await deleteTeacherCanonicalExam(id);
+                    canReleaseReservation = ["deleted", "not_found", "local_only"].includes(deleted.status);
+                    if (canReleaseReservation) createdCanonicalSkeleton = false;
+                    if (!canReleaseReservation) {
+                        console.warn("Canonical exam skeleton rollback failed", "error" in deleted ? deleted.error : deleted.status);
+                    }
+                }
+                if (reservedExamId && canReleaseReservation) {
+                    const release = await releaseExamCreationAuthorization(reservedExamId);
+                    if (!release.ok) console.warn("Exam plan reservation release failed", release.error);
+                    reservedExamId = null;
+                }
+            };
+
+            // Fill only missing regions so teacher-tuned regions survive every re-share.
+            const questionsWithRegions = attachInferredQuestionPdfRegions(questions, { overwriteExisting: false });
+
+            // Fail closed before any exam or asset persistence. An edit can add
+            // premium prompts without consuming a new-exam quota.
+            if (questionsWithRegions.some(question => (question.subQuestions?.length || 0) > 0)) {
+                const entitlement = await authorizeAdvancedQuestionDesign();
+                if (!entitlement.ok) {
+                    await rollbackNewExamPublish();
+                    toast.error(
+                        entitlement.access.authoritative ? "Pro 기능" : "서버 플랜 확인 필요",
+                        entitlement.error || "하위 질문을 저장하려면 서버에서 Pro 이상 플랜이 확인되어야 합니다.",
+                    );
+                    return "";
+                }
+            }
+
+            const examDataWithAssets = (
+                nextPdfData: string,
+                nextPdfDataRef: Exam["pdfDataRef"],
+                nextAnswerKeyData: string,
+                nextAnswerKeyPdfRef: Exam["answerKeyPdfRef"],
+            ): Exam => ({
+                ...(loadedExam || {}),
+                id,
+                title,
+                questions: questionsWithRegions,
+                accessConfig,
+                pdfData: nextPdfData,
+                pdfDataRef: nextPdfDataRef,
+                answerKeyPdf: nextAnswerKeyData,
+                answerKeyPdfRef: nextAnswerKeyPdfRef,
+                createdAt,
+                updatedAt: new Date().toISOString(),
+                durationMin: typeof durationMin === "number" ? durationMin : undefined,
+                startAt: localInputToIso(startAt),
+                endAt: localInputToIso(endAt),
+                archived: loadedExam?.archived || false,
+            });
+
+            // Remote asset metadata is exam-scoped. For a new hosted exam,
+            // establish that canonical owner row before uploading its PDFs.
+            if (!loadedExam && (pdfFile || answerKeyPdf)) {
+                const skeletonSave = await saveTeacherCanonicalExam(
+                    examDataWithAssets(pdfData, pdfDataRef, answerKeyData, answerKeyPdfRef),
+                );
+                if (skeletonSave.status === "unauthorized") {
+                    await rollbackNewExamPublish();
+                    toast.error("교사 인증 필요", "교사로 다시 로그인한 뒤 시험을 저장해주세요.");
+                    return "";
+                }
+                if (skeletonSave.status === "plan_denied") {
+                    await rollbackNewExamPublish();
+                    toast.error("플랜 확인 필요", skeletonSave.error);
+                    return "";
+                }
+                if (skeletonSave.status === "invalid_exam" || skeletonSave.status === "service_unavailable") {
+                    await rollbackNewExamPublish();
+                    toast.error("배포 저장 실패", skeletonSave.error || "파일 업로드 전에 시험 저장소를 준비하지 못했습니다.");
+                    return "";
+                }
+                createdCanonicalSkeleton = skeletonSave.status === "saved";
+            }
+
             if (pdfFile) {
                 const formData = new FormData();
                 formData.set("file", pdfFile);
@@ -1689,6 +1771,7 @@ function CreateOMRPageInner() {
                     pdfData = stored.inlineDataUrl || "";
                     pdfDataRef = stored.ref;
                 } else {
+                    await rollbackNewExamPublish();
                     toast.error("문제지 업로드 실패", remote.error || "비공개 원격 저장소에 문제지를 보관하지 못했습니다.");
                     return "";
                 }
@@ -1708,60 +1791,36 @@ function CreateOMRPageInner() {
                     answerKeyData = stored.inlineDataUrl || "";
                     answerKeyPdfRef = stored.ref;
                 } else {
+                    await rollbackNewExamPublish();
                     toast.error("답지 업로드 실패", remote.error || "비공개 원격 저장소에 답지를 보관하지 못했습니다.");
                     return "";
                 }
             }
-
-            // Fill only missing regions so teacher-tuned regions survive every re-share.
-            const questionsWithRegions = attachInferredQuestionPdfRegions(questions, { overwriteExisting: false });
-
-            // Fail closed before persistence: an edit can add premium prompts
-            // without consuming a new-exam quota, so entitlement is checked on
-            // every save that contains them.
-            if (questionsWithRegions.some(question => (question.subQuestions?.length || 0) > 0)) {
-                const entitlement = await authorizeAdvancedQuestionDesign();
-                if (!entitlement.ok) {
-                    if (reservedExamId) {
-                        await releaseExamCreationAuthorization(reservedExamId);
-                        reservedExamId = null;
-                    }
-                    toast.error(
-                        entitlement.access.authoritative ? "Pro 기능" : "서버 플랜 확인 필요",
-                        entitlement.error || "하위 질문을 저장하려면 서버에서 Pro 이상 플랜이 확인되어야 합니다.",
-                    );
-                    return "";
-                }
-            }
-
-            const examData: Exam = {
-                ...(loadedExam || {}),
-                id,
-                title,
-                questions: questionsWithRegions,
-                accessConfig,
-                pdfData,
-                pdfDataRef,
-                answerKeyPdf: answerKeyData,
-                answerKeyPdfRef,
-                createdAt,
-                updatedAt: new Date().toISOString(),
-                durationMin: typeof durationMin === 'number' ? durationMin : undefined,
-                startAt: localInputToIso(startAt),
-                endAt: localInputToIso(endAt),
-                archived: loadedExam?.archived || false,
-            };
+            const examData = examDataWithAssets(pdfData, pdfDataRef, answerKeyData, answerKeyPdfRef);
 
             const serverSave = await saveTeacherCanonicalExam(examData);
             if (serverSave.status === "unauthorized") {
+                await rollbackNewExamPublish();
                 toast.error("교사 인증 필요", "교사로 다시 로그인한 뒤 시험을 저장해주세요.");
                 return "";
             }
+            if (serverSave.status === "plan_denied") {
+                await rollbackNewExamPublish();
+                toast.error("플랜 확인 필요", serverSave.error);
+                return "";
+            }
             if (serverSave.status === "invalid_exam" || serverSave.status === "service_unavailable") {
+                await rollbackNewExamPublish();
                 toast.error("배포 저장 실패", serverSave.error || "서버 시험 저장소에 시험을 보관하지 못했습니다.");
                 return "";
             }
             const persistedExam = serverSave.status === "saved" ? serverSave.exam : examData;
+            if (serverSave.status === "saved") {
+                // From this point the quota belongs to the committed exam, even
+                // if a browser cache write or later UI feedback fails.
+                createdCanonicalSkeleton = false;
+                reservedExamId = null;
+            }
             const result = serverSave.status === "saved"
                 ? { localSaved: saveLocalExam(persistedExam), remoteSaved: true }
                 : await saveExam(persistedExam);
@@ -1771,10 +1830,7 @@ function CreateOMRPageInner() {
                 failureTitle: "배포 저장 실패",
             });
             if (!feedback.ok) {
-                if (reservedExamId) {
-                    await releaseExamCreationAuthorization(reservedExamId);
-                    reservedExamId = null;
-                }
+                await rollbackNewExamPublish();
                 toast.error(feedback.title, feedback.detail);
                 return "";
             }
@@ -1808,7 +1864,12 @@ function CreateOMRPageInner() {
             }
             return shareUrl;
         } catch (e) {
-            if (reservedExamId) {
+            let canReleaseReservation = true;
+            if (createdCanonicalSkeleton && reservedExamId) {
+                const deleted = await deleteTeacherCanonicalExam(reservedExamId);
+                canReleaseReservation = ["deleted", "not_found", "local_only"].includes(deleted.status);
+            }
+            if (reservedExamId && canReleaseReservation) {
                 const release = await releaseExamCreationAuthorization(reservedExamId);
                 if (!release.ok) console.warn("Exam plan reservation release failed", release.error);
             }

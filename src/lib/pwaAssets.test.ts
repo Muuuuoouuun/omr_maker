@@ -977,7 +977,7 @@ describe("PWA assets", () => {
         expect(JSON.parse(mixedOrigin.stdout).errors).toContain("Android and iOS proof reports must come from the same deployed origin.");
         expect(staleGenerated.status).toBe(1);
         expect(JSON.parse(staleGenerated.stdout).errors).toContain("generatedAtEpoch must be newer than 7 days.");
-    });
+    }, 30_000);
 
     it("keeps the device-check page proof status aligned with strict installed app evidence", () => {
         const pageSource = getPwaCheckPageSource();

@@ -459,11 +459,9 @@ function ManageUsersInner() {
                 );
             }
         });
-        // Keep the server-owned reservation set in sync after reductions and
-        // same-size edits. Growth paths await the same action before persisting.
-        void queueRosterPlanSync(nextStudents).then(result => {
-            if (!result.ok) console.warn("Roster plan usage synchronization failed", result.error);
-        });
+        // The canonical server save now synchronizes reductions and same-size
+        // edits atomically. Growth paths still preflight below for immediate UI
+        // feedback, without racing a second post-save ledger mutation.
     };
 
     const authorizeRosterMutation = async (nextStudents: RosterStudent[]): Promise<boolean> => {

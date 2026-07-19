@@ -116,7 +116,7 @@ export default defineConfig({
     webServer: externalBaseURL ? undefined : {
         command: "npm run dev",
         url: baseURL,
-        reuseExistingServer: !process.env.CI,
+        reuseExistingServer: process.env.PLAYWRIGHT_REUSE_EXISTING_SERVER === "1",
         timeout: 60_000,
         env: {
             ...process.env,

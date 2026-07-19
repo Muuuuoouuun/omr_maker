@@ -52,6 +52,7 @@ async function generateAnswerRows(
     modelName: string,
     prompt: string,
     imageParts: ValidatedAnswerImagePart[],
+    onProviderCall: () => void,
 ): Promise<unknown[]> {
     const model = genAI.getGenerativeModel({
         model: modelName,
@@ -60,6 +61,7 @@ async function generateAnswerRows(
         }
     });
 
+    onProviderCall();
     const generatedContent = await model.generateContent([
         prompt,
         ...buildAnswerImageParts(imageParts)
@@ -93,6 +95,12 @@ export async function analyzeAnswerImages(
 ) {
     let validatedImageParts: ValidatedAnswerImagePart[] = [];
     let sharedAiRequestId: string | null = null;
+    let providerCallStarted = false;
+    let providerCallCount = 0;
+    const markProviderCallStarted = () => {
+        providerCallStarted = true;
+        providerCallCount += 1;
+    };
 
     try {
         await requireTeacherAiAccess();
@@ -136,14 +144,14 @@ export async function analyzeAnswerImages(
 
         let rows: unknown[];
         try {
-            rows = await generateAnswerRows(genAI, firstModel, prompt, validatedImageParts);
+            rows = await generateAnswerRows(genAI, firstModel, prompt, validatedImageParts, markProviderCallStarted);
         } catch (error: unknown) {
             console.warn("AI answer model failed; trying fallback model", safeAiAnswerLogMeta(error, {
                 imageCount: validatedImageParts.length,
                 model: firstModel,
                 fallbackModel: AI_ANSWER_MODELS.fallback,
             }));
-            return await generateAnswerRows(genAI, AI_ANSWER_MODELS.fallback, prompt, validatedImageParts);
+            return await generateAnswerRows(genAI, AI_ANSWER_MODELS.fallback, prompt, validatedImageParts, markProviderCallStarted);
         }
 
         if (firstModel === AI_ANSWER_MODELS.highAccuracy) {
@@ -153,7 +161,7 @@ export async function analyzeAnswerImages(
         const qualityReport = evaluateAnswerRowsQuality(rows);
         if (shouldUseHighAccuracyAnswerModel(options, qualityReport)) {
             try {
-                return await generateAnswerRows(genAI, AI_ANSWER_MODELS.highAccuracy, prompt, validatedImageParts);
+                return await generateAnswerRows(genAI, AI_ANSWER_MODELS.highAccuracy, prompt, validatedImageParts, markProviderCallStarted);
             } catch (error: unknown) {
                 console.warn("High accuracy AI answer model failed; trying fallback model", safeAiAnswerLogMeta(error, {
                     imageCount: validatedImageParts.length,
@@ -161,13 +169,15 @@ export async function analyzeAnswerImages(
                     fallbackModel: AI_ANSWER_MODELS.fallback,
                     qualityReason: qualityReport.reason,
                 }));
-                return await generateAnswerRows(genAI, AI_ANSWER_MODELS.fallback, prompt, validatedImageParts);
+                return await generateAnswerRows(genAI, AI_ANSWER_MODELS.fallback, prompt, validatedImageParts, markProviderCallStarted);
             }
         }
 
         return rows;
     } catch (error: unknown) {
-        if (sharedAiRequestId) {
+        // Once a provider request starts, real shared-key cost may have been
+        // incurred even if parsing or a later retry fails. Keep that usage.
+        if (sharedAiRequestId && !providerCallStarted) {
             const release = await releaseSharedAiRecognition(sharedAiRequestId);
             if (!release.ok) {
                 console.warn("AI plan reservation release failed", {
@@ -178,6 +188,7 @@ export async function analyzeAnswerImages(
         }
         console.warn("AI answer analysis failed", safeAiAnswerLogMeta(error, {
             imageCount: validatedImageParts.length || (Array.isArray(imageParts) ? imageParts.length : 0),
+            providerCallCount,
         }));
         throw new Error(safeAiAnswerErrorMessage(error));
     }
