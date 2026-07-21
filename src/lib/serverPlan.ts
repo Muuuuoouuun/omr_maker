@@ -110,6 +110,12 @@ export function planLimit(plan: PlanKey, metric: PlanLimitMetric): number {
     return PLAN_BY_KEY[plan].limits[metric];
 }
 
+const PLAN_RANK: Record<PlanKey, number> = { free: 0, pro: 1, academy: 2 };
+
+export function applyPlanCeiling(organizationPlan: PlanKey, ceiling?: PlanKey): PlanKey {
+    return ceiling && PLAN_RANK[ceiling] < PLAN_RANK[organizationPlan] ? ceiling : organizationPlan;
+}
+
 export function evaluateServerPlanQuota(
     plan: PlanKey,
     metric: PlanLimitMetric,
@@ -258,6 +264,9 @@ function devPlan(env: Env, organizationId: string): PlanKey {
             teacherId: credential.id,
             email: credential.email,
             displayName: credential.name,
+            organizationId: credential.organizationId,
+            organizationName: credential.organizationName,
+            memberRole: credential.memberRole,
         }).organizationId === organizationId
     ))?.plan;
 
@@ -356,12 +365,13 @@ export async function resolveServerPlanAccess(
     }
 
     try {
+        const organizationPlan = await store.readPlan(context.organizationId) || "free";
         return {
             authenticated: true,
             authoritative: true,
             organizationId: context.organizationId,
             actorUserId: context.actorUserId,
-            plan: await store.readPlan(context.organizationId) || "free",
+            plan: applyPlanCeiling(organizationPlan, session.plan),
             source: store.source,
         };
     } catch (error) {

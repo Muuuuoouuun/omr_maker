@@ -74,6 +74,45 @@ describe("server-authoritative plan access", () => {
         await expect(store.readPlan("unknown-organization")).resolves.toBe("free");
     });
 
+    it("caps a shared Academy organization by the signed account plan", async () => {
+        const store = {
+            source: "supabase" as const,
+            readPlan: async () => "academy" as const,
+            readUsage: async () => 0,
+            reserveUsage: async () => ({ allowed: true, used: 0 }),
+            releaseUsage: async () => ({ released: false, used: 0 }),
+            syncStudentUsage: async () => ({ allowed: true, used: 0 }),
+        };
+        const session = (teacherId: string, plan: "free" | "pro" | "academy") => createTeacherSession(TOKEN, Date.now(), {
+            teacherId,
+            organizationId: "teacher_sharedqa",
+            plan,
+        });
+
+        await expect(resolveServerPlanAccess(session("admin", "academy"), { store })).resolves.toMatchObject({ plan: "academy" });
+        await expect(resolveServerPlanAccess(session("teacher1", "free"), { store })).resolves.toMatchObject({ plan: "free" });
+        await expect(resolveServerPlanAccess(session("teacher2", "pro"), { store })).resolves.toMatchObject({ plan: "pro" });
+        await expect(resolveServerPlanAccess(session("teacher3", "academy"), { store })).resolves.toMatchObject({ plan: "academy" });
+    });
+
+    it("never lets an account ceiling elevate the organization plan", async () => {
+        const store = {
+            source: "supabase" as const,
+            readPlan: async () => "free" as const,
+            readUsage: async () => 0,
+            reserveUsage: async () => ({ allowed: true, used: 0 }),
+            releaseUsage: async () => ({ released: false, used: 0 }),
+            syncStudentUsage: async () => ({ allowed: true, used: 0 }),
+        };
+        const session = createTeacherSession(TOKEN, Date.now(), {
+            teacherId: "teacher3",
+            organizationId: "teacher_sharedqa",
+            plan: "academy",
+        });
+
+        await expect(resolveServerPlanAccess(session, { store })).resolves.toMatchObject({ plan: "free" });
+    });
+
     it("keeps the explicit global development plan override authoritative", async () => {
         const store = createDevServerPlanStore({
             OMR_DEV_PLAN: "pro",

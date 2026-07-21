@@ -41,6 +41,28 @@ describe("workspace context", () => {
         expect(context.actorUserId).not.toContain("@");
     });
 
+    it("shares an explicit organization while preserving actor and member identities", () => {
+        const admin = workspaceContextFromIdentity({
+            teacherId: "admin",
+            organizationId: "teacher_sharedqa",
+            organizationName: "OMR Maker 테스트",
+            memberRole: "admin",
+        });
+        const teacher = workspaceContextFromIdentity({
+            teacherId: "teacher1",
+            organizationId: "teacher_sharedqa",
+            organizationName: "OMR Maker 테스트",
+            memberRole: "teacher",
+        });
+
+        expect(admin.organizationId).toBe("teacher_sharedqa");
+        expect(teacher.organizationId).toBe("teacher_sharedqa");
+        expect(admin.organizationName).toBe("OMR Maker 테스트");
+        expect(admin.actorUserId).not.toBe(teacher.actorUserId);
+        expect(workspaceBootstrapRows(admin).member?.role).toBe("admin");
+        expect(workspaceBootstrapRows(teacher).member?.role).toBe("teacher");
+    });
+
     it("reads the active teacher session as the current workspace", () => {
         const session = createTeacherSession("tkn_test_0123456789abcdef0123456789abcdef", 1000, {
             teacherId: "director",

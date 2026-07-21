@@ -4,6 +4,7 @@ import {
     type TeacherSession,
     type TeacherSessionStorage,
 } from "@/lib/teacherSession";
+import type { TeacherMemberRole } from "@/lib/teacherSession";
 
 export const DEFAULT_WORKSPACE_ORGANIZATION_ID = "default";
 export const DEFAULT_WORKSPACE_ORGANIZATION_NAME = "OMR Maker";
@@ -14,12 +15,16 @@ export interface WorkspaceContext {
     actorUserId?: string;
     actorEmail?: string;
     actorLabel?: string;
+    memberRole?: TeacherMemberRole;
 }
 
 export interface WorkspaceIdentity {
     teacherId?: string;
     email?: string;
     displayName?: string;
+    organizationId?: string;
+    organizationName?: string;
+    memberRole?: TeacherMemberRole;
 }
 
 const DEFAULT_CONTEXT: WorkspaceContext = {
@@ -50,7 +55,7 @@ export interface WorkspaceBootstrapRows {
         user_id: string;
         email: string | null;
         display_name: string;
-        role: "owner";
+        role: TeacherMemberRole;
         status: "active";
         updated_at: string;
     };
@@ -89,12 +94,17 @@ export function workspaceContextFromIdentity(identity: WorkspaceIdentity | null 
 
     const hash = stableWorkspaceHash(key);
     const actorLabel = clean(identity?.displayName) || clean(identity?.email) || clean(identity?.teacherId) || "교사";
+    const explicitOrganizationId = clean(identity?.organizationId).toLowerCase();
+    const organizationId = /^(?:default|teacher_[a-z0-9]{7,16})$/.test(explicitOrganizationId)
+        ? explicitOrganizationId
+        : `teacher_${hash}`;
     return {
-        organizationId: `teacher_${hash}`,
-        organizationName: `${actorLabel} Workspace`,
+        organizationId,
+        organizationName: clean(identity?.organizationName) || `${actorLabel} Workspace`,
         actorUserId: `teacher_${hash}`,
         actorEmail: clean(identity?.email).toLowerCase() || undefined,
         actorLabel,
+        memberRole: identity?.memberRole,
     };
 }
 
@@ -140,7 +150,7 @@ export function workspaceBootstrapRows(
         user_id: actorUserId,
         email: actorEmail,
         display_name: actorLabel,
-        role: "owner",
+        role: context.memberRole || "owner",
         status: "active",
         updated_at: updatedAt,
     };
