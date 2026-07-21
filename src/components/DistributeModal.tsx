@@ -47,6 +47,7 @@ export default function DistributeModal({ isOpen, onClose, onSaveAndShare, onAut
     const dialogRef = useRef<HTMLDivElement>(null);
     const closeButtonRef = useRef<HTMLButtonElement>(null);
     const previouslyFocusedRef = useRef<HTMLElement | null>(null);
+    const copyResetTimerRef = useRef<number | undefined>(undefined);
     const onCloseRef = useRef(onClose);
     const dialogTitleId = useId();
 
@@ -54,9 +55,19 @@ export default function DistributeModal({ isOpen, onClose, onSaveAndShare, onAut
         onCloseRef.current = onClose;
     }, [onClose]);
 
+    useEffect(() => () => {
+        if (copyResetTimerRef.current !== undefined) {
+            window.clearTimeout(copyResetTimerRef.current);
+        }
+    }, []);
+
     useEffect(() => {
         if (!isOpen) {
             wasOpenRef.current = false;
+            if (copyResetTimerRef.current !== undefined) {
+                window.clearTimeout(copyResetTimerRef.current);
+                copyResetTimerRef.current = undefined;
+            }
             return;
         }
         if (wasOpenRef.current) {
@@ -179,10 +190,17 @@ export default function DistributeModal({ isOpen, onClose, onSaveAndShare, onAut
 
     const copyShareLink = async () => {
         if (!shareUrl) return;
+        if (copyResetTimerRef.current !== undefined) {
+            window.clearTimeout(copyResetTimerRef.current);
+            copyResetTimerRef.current = undefined;
+        }
         try {
             await navigator.clipboard.writeText(shareUrl);
             setCopyStatus("복사됨");
-            setTimeout(() => setCopyStatus(""), 1600);
+            copyResetTimerRef.current = window.setTimeout(() => {
+                copyResetTimerRef.current = undefined;
+                setCopyStatus("");
+            }, 1600);
         } catch {
             setCopyStatus("복사 실패");
         }

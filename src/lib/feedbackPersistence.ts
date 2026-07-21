@@ -693,21 +693,6 @@ export async function loadAttemptFeedback(attemptId: string): Promise<AttemptFee
     }
 }
 
-export async function loadReturnedAttemptFeedback(attemptId: string): Promise<AttemptFeedback | null> {
-    const local = loadLocalReturnedAttemptFeedback(attemptId);
-    if (!isSupabaseConfigured()) return local;
-
-    try {
-        const remote = await fetchRemoteFeedbackByAttemptId(attemptId);
-        const returnedRemote = remote?.status === "returned" ? remote : null;
-        if (returnedRemote) saveLocalAttemptFeedback(returnedRemote);
-        return newestFeedback(local, returnedRemote);
-    } catch (error) {
-        console.warn("Failed to load remote returned feedback", error);
-        return local;
-    }
-}
-
 export async function loadReturnedAttemptFeedbackForStudent(
     attemptId: string,
     studentProfileId: string,
@@ -888,29 +873,6 @@ export async function markFeedbackOpenedForStudent(
     }
 }
 
-export async function updateFeedbackDownloadPolicy(
-    feedbackId: string,
-    policy: FeedbackDownloadPolicy,
-): Promise<PersistenceResult> {
-    const current = readLocalAttemptFeedback().find(feedback => feedback.id === feedbackId)
-        || (isSupabaseConfigured() ? await fetchRemoteFeedbackById(feedbackId).catch(() => null) : null);
-    if (!current) return { localSaved: false, remoteSaved: false, remoteError: "Feedback not found" };
-    const next: AttemptFeedback = {
-        ...current,
-        downloadPolicy: normalizeFeedbackDownloadPolicy(policy),
-        updatedAt: new Date().toISOString(),
-    };
-    const localSaved = saveLocalAttemptFeedback(next);
-    if (!isSupabaseConfigured()) return { localSaved, remoteSaved: false };
-
-    try {
-        await upsertRemoteFeedback(next);
-        return { localSaved, remoteSaved: true };
-    } catch (error) {
-        return { localSaved, remoteSaved: false, remoteError: errorMessage(error) };
-    }
-}
-
 export function canDownloadReturnedFeedback(feedback: AttemptFeedback | null | undefined, now = new Date()): boolean {
     if (!feedback || feedback.status !== "returned") return false;
     if (!feedback.downloadPolicy.allowStudentDownload) return false;
@@ -923,13 +885,6 @@ export function canDownloadReturnedMarkup(feedback: AttemptFeedback | null | und
     if (!feedback.downloadPolicy.allowAnnotatedPdfDownload) return false;
     if (!feedback.downloadPolicy.expiresAt) return true;
     return Date.parse(feedback.downloadPolicy.expiresAt) >= now.getTime();
-}
-
-export async function createReturnedFeedbackDownloadUrl(feedbackId: string): Promise<{ url?: string; error?: string }> {
-    const feedback = readLocalAttemptFeedback().find(item => item.id === feedbackId);
-    if (!feedback || !canDownloadReturnedFeedback(feedback)) return { error: "Download is not allowed for this feedback" };
-    const blob = new Blob([buildFeedbackDownloadText(feedback)], { type: "text/plain;charset=utf-8" });
-    return { url: URL.createObjectURL(blob) };
 }
 
 export function buildFeedbackDownloadText(feedback: AttemptFeedback): string {

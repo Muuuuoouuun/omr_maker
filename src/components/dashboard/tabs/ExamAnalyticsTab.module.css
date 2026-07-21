@@ -14,6 +14,8 @@
 .summaryPanel,
 .panel,
 .legacyStack > :global(.card) {
+  min-width: 0;
+  max-width: 100%;
   border: 1px solid var(--border);
   background: var(--surface);
   box-shadow: 0 3px 14px rgba(15, 23, 42, 0.035);
@@ -23,6 +25,10 @@
   position: relative;
   z-index: 8;
   border-radius: var(--radius-lg);
+}
+
+.workspace > * {
+  min-width: 0;
 }
 
 .headingRow {
@@ -39,7 +45,7 @@
 
 .headingCopy h2 {
   color: var(--foreground);
-  font-size: clamp(1.35rem, 2vw, 1.8rem);
+  font-size: clamp(1.5rem, 2.2vw, 2rem);
   font-weight: 900;
   line-height: 1.2;
   letter-spacing: -0.035em;
@@ -48,7 +54,7 @@
 .headingCopy p {
   margin-top: 0.35rem;
   color: var(--muted);
-  font-size: 0.82rem;
+  font-size: 0.88rem;
   font-weight: 650;
   line-height: 1.5;
   word-break: keep-all;
@@ -65,7 +71,7 @@
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
   background: var(--background);
-  font-size: 0.72rem;
+  font-size: 0.78rem;
   font-weight: 800;
   white-space: nowrap;
 }
@@ -87,7 +93,7 @@
   display: block;
   margin-bottom: 0.35rem;
   color: var(--muted);
-  font-size: 0.69rem;
+  font-size: 0.75rem;
   font-weight: 850;
 }
 
@@ -187,7 +193,7 @@
   color: var(--foreground);
   border-radius: 0.55rem;
   font-family: inherit;
-  font-size: 0.82rem;
+  font-size: 0.86rem;
   font-weight: 700;
   text-align: left;
   transition: color 0.15s ease, background-color 0.15s ease;
@@ -210,7 +216,7 @@
 .dropdownOption small {
   flex: 0 0 auto;
   color: var(--muted);
-  font-size: 0.67rem;
+  font-size: 0.72rem;
   font-weight: 750;
 }
 
@@ -240,7 +246,7 @@
   padding: 0 0.65rem;
   color: var(--muted);
   border-left: 1px solid var(--border);
-  font-size: 0.72rem;
+  font-size: 0.78rem;
   font-weight: 750;
   white-space: nowrap;
 }
@@ -273,7 +279,7 @@
   color: var(--muted);
   border-radius: 0;
   font-family: inherit;
-  font-size: 0.78rem;
+  font-size: 0.84rem;
   font-weight: 800;
   transition: color 0.16s ease, background-color 0.16s ease;
 }
@@ -365,8 +371,10 @@
   color: var(--analytics-blue);
   font-size: clamp(2.4rem, 4vw, 3.35rem);
   font-weight: 950;
+  font-variant-numeric: tabular-nums lining-nums;
   line-height: 1;
   letter-spacing: -0.06em;
+  animation: metricSettle 0.44s cubic-bezier(0.22, 1, 0.36, 1) both;
 }
 
 .scoreValue span {
@@ -381,7 +389,7 @@
   bottom: 0;
   left: 0;
   color: var(--muted);
-  font-size: 0.7rem;
+  font-size: 0.76rem;
   font-weight: 800;
   text-align: center;
 }
@@ -407,7 +415,7 @@
 
 .kpiLabel {
   color: var(--muted);
-  font-size: 0.7rem;
+  font-size: 0.76rem;
   font-weight: 800;
 }
 
@@ -415,13 +423,20 @@
   overflow: hidden;
   max-width: 100%;
   color: var(--foreground);
-  font-size: clamp(1.2rem, 2.1vw, 1.75rem);
+  font-size: clamp(1.35rem, 2.2vw, 1.9rem);
   font-weight: 950;
+  font-variant-numeric: tabular-nums lining-nums;
   line-height: 1.1;
   letter-spacing: -0.045em;
   text-overflow: ellipsis;
   white-space: nowrap;
+  animation: metricSettle 0.44s cubic-bezier(0.22, 1, 0.36, 1) both;
 }
+
+.kpi:nth-child(2) strong { animation-delay: 0.04s; }
+.kpi:nth-child(3) strong { animation-delay: 0.08s; }
+.kpi:nth-child(4) strong { animation-delay: 0.12s; }
+.kpi:nth-child(5) strong { animation-delay: 0.16s; }
 
 .kpi strong span {
   margin-left: 0.08rem;
@@ -458,7 +473,7 @@
   align-items: center;
   gap: 0.45rem;
   color: var(--foreground);
-  font-size: 0.95rem;
+  font-size: 1.03rem;
   font-weight: 900;
   line-height: 1.3;
   letter-spacing: -0.02em;
@@ -471,7 +486,7 @@
 .panelHeading p {
   margin-top: 0.2rem;
   color: var(--muted);
-  font-size: 0.71rem;
+  font-size: 0.76rem;
   font-weight: 650;
   line-height: 1.45;
 }
@@ -481,7 +496,7 @@
   align-items: center;
   gap: 0.38rem;
   color: var(--muted);
-  font-size: 0.67rem;
+  font-size: 0.72rem;
   font-weight: 800;
   white-space: nowrap;
 }
@@ -570,7 +585,7 @@
 .actionCopy strong {
   overflow: hidden;
   color: var(--foreground);
-  font-size: 0.78rem;
+  font-size: 0.84rem;
   font-weight: 900;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -579,7 +594,7 @@
 .actionCopy small {
   overflow: hidden;
   color: var(--muted);
-  font-size: 0.68rem;
+  font-size: 0.73rem;
   font-weight: 650;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -613,7 +628,7 @@
   background: var(--analytics-blue);
   box-shadow: 0 8px 18px color-mix(in srgb, var(--primary) 22%, transparent);
   font-family: inherit;
-  font-size: 0.76rem;
+  font-size: 0.82rem;
   font-weight: 900;
   transition: background-color 0.16s ease, transform 0.16s ease, box-shadow 0.16s ease;
 }
@@ -640,7 +655,7 @@
   width: 100%;
   min-width: 660px;
   border-collapse: collapse;
-  font-size: 0.73rem;
+  font-size: 0.78rem;
 }
 
 .weakTable th,
@@ -656,7 +671,7 @@
   height: 36px;
   color: var(--muted);
   background: var(--background);
-  font-size: 0.65rem;
+  font-size: 0.71rem;
   font-weight: 850;
 }
 
@@ -749,14 +764,14 @@
 
 .bandLegendItem strong {
   color: var(--foreground);
-  font-size: 0.9rem;
+  font-size: 1rem;
   font-weight: 950;
 }
 
 .bandLegendItem span {
   overflow: hidden;
   color: var(--muted);
-  font-size: 0.63rem;
+  font-size: 0.7rem;
   font-weight: 750;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -865,7 +880,7 @@
   .tab {
     min-height: 48px;
     padding-inline: 0.55rem;
-    font-size: 0.72rem;
+    font-size: 0.78rem;
     white-space: nowrap;
   }
 
@@ -913,7 +928,7 @@
 
 @media (max-width: 520px) {
   .headingCopy p {
-    font-size: 0.75rem;
+    font-size: 0.82rem;
   }
 
   .examMeta {
@@ -953,11 +968,21 @@
   }
 }
 
+@keyframes metricSettle {
+  from { opacity: 0.78; transform: translateY(4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
 @media (prefers-reduced-motion: reduce) {
   .gaugeValue,
   .bandSegment,
   .primaryAction,
   .tab::after {
     transition: none;
+  }
+
+  .scoreValue,
+  .kpi strong {
+    animation: none;
   }
 }

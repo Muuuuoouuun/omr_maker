@@ -400,7 +400,7 @@ export default function StudentDashboard() {
                                     border: '1px solid rgba(99,102,241,0.18)',
                                     borderRadius: 'var(--radius-full)',
                                     padding: '0.18rem 0.5rem',
-                                    fontSize: '0.74rem',
+                                    fontSize: 'var(--type-caption)',
                                     fontWeight: 800,
                                     fontVariantNumeric: 'tabular-nums',
                                 }}>
@@ -554,7 +554,7 @@ export default function StudentDashboard() {
                         </div>
                         <div style={{ color: 'var(--muted)', fontSize: '0.9rem', fontWeight: 600 }}>완료한 원시험</div>
                         {stats.retakeCount > 0 && (
-                            <div style={{ marginTop: '0.5rem', color: '#0f766e', background: '#f0fdfa', border: '1px solid #99f6e4', borderRadius: '999px', padding: '0.2rem 0.55rem', fontSize: '0.72rem', fontWeight: 800 }}>
+                            <div style={{ marginTop: '0.5rem', color: '#0f766e', background: '#f0fdfa', border: '1px solid #99f6e4', borderRadius: '999px', padding: '0.2rem 0.55rem', fontSize: 'var(--type-caption)', fontWeight: 800 }}>
                                 재시험 {stats.retakeCount}회
                             </div>
                         )}

@@ -11,6 +11,44 @@ export interface ParsedAnswer {
     rawText: string;
 }
 
+const MAX_ANSWER_PDF_BYTES = 50 * 1024 * 1024;
+const TEXT_PAGE_CONCURRENCY = 4;
+const IMAGE_PAGE_CONCURRENCY = 2;
+
+function assertUsableAnswerPdf(file: File): void {
+    const hasPdfExtension = file.name.toLowerCase().endsWith(".pdf");
+    const hasPdfMimeType = file.type.toLowerCase() === "application/pdf";
+    if (!hasPdfExtension && !hasPdfMimeType) {
+        throw new Error("PDF 형식의 답지를 선택해주세요.");
+    }
+    if (file.size <= 0) {
+        throw new Error("빈 답지 파일은 인식할 수 없습니다.");
+    }
+    if (file.size > MAX_ANSWER_PDF_BYTES) {
+        throw new Error("답지 PDF는 50MB 이하 파일만 인식할 수 있습니다.");
+    }
+}
+
+async function mapInBatches<T, R>(
+    values: T[],
+    concurrency: number,
+    mapper: (value: T) => Promise<R>,
+): Promise<R[]> {
+    const results: R[] = [];
+    for (let index = 0; index < values.length; index += concurrency) {
+        const batch = values.slice(index, index + concurrency);
+        results.push(...await Promise.all(batch.map(mapper)));
+    }
+    return results;
+}
+
+function safePageFailureMeta(error: unknown, pageNumber: number) {
+    return {
+        pageNumber,
+        errorName: error instanceof Error ? error.name : typeof error,
+    };
+}
+
 const ANSWER_MAP: Record<string, number> = {
     A: 1,
     B: 2,
@@ -44,39 +82,47 @@ async function getPdfJs() {
 }
 
 export async function parseAnswerKeyPdf(file: File): Promise<ParsedAnswer[]> {
+    assertUsableAnswerPdf(file);
     const pdfjsLib = await getPdfJs();
     const arrayBuffer = await file.arrayBuffer();
     const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
 
-    let allText = '';
+    try {
+        const pageNumbers = Array.from({ length: pdf.numPages }, (_, index) => index + 1);
+        const pageTexts = await mapInBatches(pageNumbers, TEXT_PAGE_CONCURRENCY, async pageNumber => {
+            let page: Awaited<ReturnType<typeof pdf.getPage>> | null = null;
+            try {
+                page = await pdf.getPage(pageNumber);
+                const textContent = await page.getTextContent();
+                const items = textContent.items
+                    .map(rawItem => {
+                        const item = rawItem as { str?: unknown; transform?: unknown };
+                        const transform = Array.isArray(item.transform) ? item.transform : [];
+                        return {
+                            str: typeof item.str === "string" ? item.str : "",
+                            x: typeof transform[4] === "number" ? transform[4] : 0,
+                            y: typeof transform[5] === "number" ? transform[5] : 0,
+                        };
+                    })
+                    .sort((a, b) => Math.abs(a.y - b.y) > 5 ? b.y - a.y : a.x - b.x);
 
-    // Extract text from all pages
-    for (let i = 1; i <= pdf.numPages; i++) {
-        const page = await pdf.getPage(i);
-        const textContent = await page.getTextContent();
-
-        // Sort items by Y (descending) then X (ascending) to approximate reading order
-        // Note: PDF coordinates: (0,0) is bottom-left usually.
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const items = textContent.items.map((item: any) => ({
-            str: item.str,
-            x: item.transform[4],
-            y: item.transform[5]
-        }));
-
-        // Simple sort: Top to bottom, left to right
-        items.sort((a, b) => {
-            if (Math.abs(a.y - b.y) > 5) { // Threshold for same line
-                return b.y - a.y; // Higher Y first
+                return items.map(item => item.str).join(" ");
+            } catch (error: unknown) {
+                console.warn("Answer PDF text page skipped", safePageFailureMeta(error, pageNumber));
+                return "";
+            } finally {
+                page?.cleanup();
             }
-            return a.x - b.x;
         });
 
-        const pageText = items.map(item => item.str).join(' ');
-        allText += ` ${pageText}`;
+        return extractAnswersFromText(pageTexts.join(" "));
+    } finally {
+        try {
+            await pdf.destroy();
+        } catch (error: unknown) {
+            console.warn("Answer PDF cleanup failed", safePageFailureMeta(error, 0));
+        }
     }
-
-    return extractAnswersFromText(allText);
 }
 
 export function normalizeAnswerValue(value: unknown): number | null {
@@ -136,13 +182,67 @@ function addCandidate(
     }
 }
 
+const HORIZONTAL_ANSWER_TABLE_PATTERN = new RegExp(
+    String.raw`(?:문항\s*번호|문항|번호)\s*[:：]?\s*([0-9번\s,|/·]+?)\s*(?:정답|답)\s*[:：]?\s*([A-Ea-e①-⑤가나다라마ㄱㄴㄷㄹㅁ1-5번\s,|/·]+?)(?=\s*(?:배점|점수|해설|문항\s*번호|문항|번호)|$)`,
+    "g",
+);
+
+function answerTokensFromTable(value: string): number[] {
+    const tokens = value.match(/[A-Ea-e①-⑤가나다라마ㄱㄴㄷㄹㅁ]|(?<!\d)[1-5](?:\s*번)?(?!\d)/g) || [];
+    return tokens
+        .map(token => normalizeAnswerValue(token))
+        .filter((answer): answer is number => answer !== null);
+}
+
+/**
+ * Korean answer keys frequently use a transposed table such as:
+ * "문항 1 2 3 / 정답 ③ ④ ⑤". Generic adjacent-token parsing cannot
+ * safely understand that layout and can turn the question-number row into
+ * fake answers, so table spans are recognized (and removed) first.
+ */
+function extractHorizontalAnswerTables(text: string, candidates: Map<number, ParsedAnswer>): string {
+    const consumedRanges: Array<{ start: number; end: number }> = [];
+    HORIZONTAL_ANSWER_TABLE_PATTERN.lastIndex = 0;
+
+    let match: RegExpExecArray | null;
+    while ((match = HORIZONTAL_ANSWER_TABLE_PATTERN.exec(text)) !== null) {
+        const questionNumbers = (match[1].match(/\d{1,3}/g) || []).map(Number);
+        const answers = answerTokensFromTable(match[2]);
+
+        if (questionNumbers.length < 2) continue;
+        consumedRanges.push({ start: match.index, end: match.index + match[0].length });
+
+        // A shifted/missing cell is more dangerous than returning no result:
+        // require exact column alignment and let the teacher use AI/manual review.
+        if (questionNumbers.length !== answers.length) continue;
+
+        questionNumbers.forEach((questionNum, index) => {
+            addCandidate(candidates, questionNum, answers[index], 0.98, match?.[0] || "");
+        });
+    }
+
+    if (consumedRanges.length === 0) return text;
+
+    // RegExp match indices use UTF-16 code units, so split the same way.
+    const chars = text.split("");
+    for (const range of consumedRanges) {
+        for (let index = range.start; index < range.end; index++) chars[index] = " ";
+    }
+    return chars.join("");
+}
+
 export function extractAnswersFromText(text: string): ParsedAnswer[] {
     const candidates = new Map<number, ParsedAnswer>();
+    const residualText = extractHorizontalAnswerTables(text, candidates);
     // The digit alternative is guarded with a negative lookahead so a decimal
     // fragment ("2.5점" → "5") or a two-digit run is not read as an answer.
     const answerToken = String.raw`([A-Ea-e①-⑤가나다라마ㄱㄴㄷㄹㅁ]|[1-5](?:\s*번)?(?![0-9.점%]))`;
 
     const patterns: Array<{ regex: RegExp; confidence: number }> = [
+        {
+            regex: new RegExp(String.raw`(?:^|[^\d])(\d{1,3})\s*번\s*[\.\)\]\:：\-]?\s*${answerToken}`, "g"),
+            confidence: 0.93,
+        },
         {
             // (?!\d*\.\d) rejects a question number that is really the integer part
             // of a decimal score ("각 2.5점", "배점 1.5") whose "." is the separator.
@@ -161,7 +261,7 @@ export function extractAnswersFromText(text: string): ParsedAnswer[] {
 
     for (const { regex, confidence } of patterns) {
         let match: RegExpExecArray | null;
-        while ((match = regex.exec(text)) !== null) {
+        while ((match = regex.exec(residualText)) !== null) {
             addCandidate(
                 candidates,
                 Number(match[1]),
@@ -213,30 +313,69 @@ export async function parseAnswerKeyWithGemini(
     geminiApiKey?: string,
     options: AiAnswerModelRoutingOptions = {},
 ): Promise<ParsedAnswer[]> {
+    assertUsableAnswerPdf(file);
     const pdfjsLib = await getPdfJs();
     const arrayBuffer = await file.arrayBuffer();
     const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
 
-    const maxPages = Math.min(pdf.numPages, 3); // Max 3 pages to prevent heavy payloads
+    // Answer keys are often split by subject. Keep the request bounded while
+    // covering the same eight-image ceiling enforced by the server action.
+    const maxPages = Math.min(pdf.numPages, 8);
+    const maxTotalBase64Chars = 8_800_000;
+    const maxSingleBase64Chars = 4_800_000;
     const images: string[] = [];
 
-    for (let i = 1; i <= maxPages; i++) {
-        const page = await pdf.getPage(i);
-        // Decrease scale significantly to 1.0 down from 1.5. This keeps it around ~150kb per image.
-        const viewport = page.getViewport({ scale: 1.0 });
+    try {
+        const pageNumbers = Array.from({ length: maxPages }, (_, index) => index + 1);
+        const renderedPages = await mapInBatches(pageNumbers, IMAGE_PAGE_CONCURRENCY, async pageNumber => {
+            let page: Awaited<ReturnType<typeof pdf.getPage>> | null = null;
+            const canvas = document.createElement('canvas');
+            try {
+                page = await pdf.getPage(pageNumber);
+                const viewport = page.getViewport({
+                    scale: options.recognitionMode === "rerecognition" ? 1.75 : 1.5,
+                });
+                const context = canvas.getContext('2d');
+                canvas.height = Math.ceil(viewport.height);
+                canvas.width = Math.ceil(viewport.width);
 
-        const canvas = document.createElement('canvas');
-        const context = canvas.getContext('2d');
-        canvas.height = viewport.height;
-        canvas.width = viewport.width;
+                if (!context) throw new Error("canvas_context_unavailable");
 
-        if (context) {
-            // eslint-disable-next-line @typescript-eslint/no-explicit-any
-            await page.render({ canvasContext: context, viewport } as any).promise;
-            // Heavily compress jpeg to drastically reduce size and avoid Next.js Body Size Limit
-            images.push(canvas.toDataURL('image/jpeg', 0.5));
+                // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                await page.render({ canvasContext: context, viewport } as any).promise;
+                let image = canvas.toDataURL('image/jpeg', 0.72);
+                let base64Chars = image.slice(image.indexOf(",") + 1).length;
+                if (base64Chars > maxSingleBase64Chars) {
+                    image = canvas.toDataURL('image/jpeg', 0.52);
+                    base64Chars = image.slice(image.indexOf(",") + 1).length;
+                }
+                return { image, base64Chars };
+            } catch (error: unknown) {
+                console.warn("Answer PDF image page skipped", safePageFailureMeta(error, pageNumber));
+                return null;
+            } finally {
+                page?.cleanup();
+                canvas.width = 0;
+                canvas.height = 0;
+            }
+        });
+
+        let totalBase64Chars = 0;
+        for (const rendered of renderedPages) {
+            if (!rendered || rendered.base64Chars > maxSingleBase64Chars) continue;
+            if (totalBase64Chars + rendered.base64Chars > maxTotalBase64Chars) break;
+            images.push(rendered.image);
+            totalBase64Chars += rendered.base64Chars;
+        }
+    } finally {
+        try {
+            await pdf.destroy();
+        } catch (error: unknown) {
+            console.warn("Answer PDF cleanup failed", safePageFailureMeta(error, 0));
         }
     }
+
+    if (images.length === 0) throw new Error("정답 PDF 이미지를 준비하지 못했습니다.");
 
     try {
         const aiResults = await analyzeAnswerImages(images, geminiApiKey, options);
@@ -248,7 +387,7 @@ export async function parseAnswerKeyWithGemini(
         return normalizeGeminiAnswerRows(aiResults);
     } catch (e: unknown) {
         console.warn("AI answer parsing failed", safeAiAnswerLogMeta(e, {
-            pageCount: maxPages,
+            pageCount: images.length,
         }));
         throw new Error(`AI 인식 실패: ${safeAiAnswerErrorMessage(e)}`);
     }

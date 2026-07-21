@@ -6,10 +6,12 @@ import { cookies, headers } from "next/headers";
 import { resolveGeminiApiKey } from "@/lib/geminiApiKey";
 import { authorizeSharedAiRecognition, releaseSharedAiRecognition } from "@/app/actions/premiumAccess";
 import {
+    AI_ANSWER_IMAGE_LIMITS,
     extractAnswerJsonArrayPayload,
     invalidAiJsonError,
     safeAiAnswerErrorMessage,
     safeAiAnswerLogMeta,
+    shouldRetryAiAnswerModelError,
     validateAnswerImageParts,
     type ValidatedAnswerImagePart,
 } from "@/lib/aiAnswerSafety";
@@ -62,10 +64,10 @@ async function generateAnswerRows(
     });
 
     onProviderCall();
-    const generatedContent = await model.generateContent([
-        prompt,
-        ...buildAnswerImageParts(imageParts)
-    ]);
+    const generatedContent = await model.generateContent(
+        [prompt, ...buildAnswerImageParts(imageParts)],
+        { timeout: AI_ANSWER_PROVIDER_TIMEOUT_MS },
+    );
 
     const response = await generatedContent.response;
     const text = response.text();
@@ -86,7 +88,8 @@ async function generateAnswerRows(
 }
 
 /** Keep shared and personal model calls predictably bounded per request. */
-const MAX_ANSWER_IMAGE_PARTS = 3;
+const MAX_ANSWER_IMAGE_PARTS = AI_ANSWER_IMAGE_LIMITS.maxImages;
+const AI_ANSWER_PROVIDER_TIMEOUT_MS = 35_000;
 
 export async function analyzeAnswerImages(
     imageParts: string[],
@@ -130,13 +133,15 @@ export async function analyzeAnswerImages(
 
         Rules:
         1. Answers might be numbers (1-5) or alphabets (A-E). Map alphabets to numbers: A=1, B=2, C=3, D=4, E=5.
-        2. Ignore headers, footers, or irrelevant text.
-        3. Return ONLY a valid JSON array of objects.
-        4. Format: [{"questionNum": 1, "answer": 3, "score": 2}, {"questionNum": 2, "answer": 1, "score": 3}, ...]
-        5. Ensure the questionNum and answer are integers.
-        6. Ensure the score is a number. If a score/point value is not visible for a question, omit the "score" key or set it to null.
-        7. Include "confidence" as a number from 0 to 1 for each row. If uncertain, use a value below 0.65 instead of guessing.
-        8. Before returning, self-check for skipped question numbers, duplicate question numbers, and invalid answers.
+        2. Handle both row-based keys ("1번 ③") and horizontal tables where one row lists question numbers and the next row lists answers in matching columns.
+        3. Preserve the visible question number. Never shift later answers to fill a skipped or unreadable question.
+        4. Ignore headers, footers, score totals, explanations, student markings, or irrelevant text.
+        5. Return ONLY a valid JSON array of objects.
+        6. Format: [{"questionNum": 1, "answer": 3, "score": 2}, {"questionNum": 2, "answer": 1, "score": 3}, ...]
+        7. Ensure the questionNum and answer are integers.
+        8. Ensure the score is a number. If a score/point value is not visible for a question, omit the "score" key or set it to null.
+        9. Include "confidence" as a number from 0 to 1 for each row. If uncertain, use a value below 0.65 and do not guess.
+        10. Before returning, self-check for skipped question numbers, duplicate question numbers, invalid answers, and column misalignment.
         `;
         const firstModel = options.recognitionMode === "rerecognition"
             ? AI_ANSWER_MODELS.highAccuracy
@@ -146,6 +151,7 @@ export async function analyzeAnswerImages(
         try {
             rows = await generateAnswerRows(genAI, firstModel, prompt, validatedImageParts, markProviderCallStarted);
         } catch (error: unknown) {
+            if (!shouldRetryAiAnswerModelError(error)) throw error;
             console.warn("AI answer model failed; trying fallback model", safeAiAnswerLogMeta(error, {
                 imageCount: validatedImageParts.length,
                 model: firstModel,
@@ -163,6 +169,14 @@ export async function analyzeAnswerImages(
             try {
                 return await generateAnswerRows(genAI, AI_ANSWER_MODELS.highAccuracy, prompt, validatedImageParts, markProviderCallStarted);
             } catch (error: unknown) {
+                if (!shouldRetryAiAnswerModelError(error)) {
+                    console.warn("High accuracy AI answer model failed; keeping first-pass rows", safeAiAnswerLogMeta(error, {
+                        imageCount: validatedImageParts.length,
+                        model: AI_ANSWER_MODELS.highAccuracy,
+                        qualityReason: qualityReport.reason,
+                    }));
+                    return rows;
+                }
                 console.warn("High accuracy AI answer model failed; trying fallback model", safeAiAnswerLogMeta(error, {
                     imageCount: validatedImageParts.length,
                     model: AI_ANSWER_MODELS.highAccuracy,

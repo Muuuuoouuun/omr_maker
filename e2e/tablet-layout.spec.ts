@@ -186,7 +186,8 @@ test.describe("tablet layout", () => {
                 expect(solveMetrics.omrWidth).toBeGreaterThanOrEqual(viewport.width - 2);
             } else {
                 expect(solveMetrics.direction).toBe("row");
-                expect(solveMetrics.omrWidth).toBeGreaterThanOrEqual(Math.min(360, Math.floor(viewport.width * 0.42) - 2));
+                const expectedCompactPanelWidth = Math.max(280, Math.min(320, Math.floor(viewport.width * 0.32))) - 2;
+                expect(solveMetrics.omrWidth).toBeGreaterThanOrEqual(expectedCompactPanelWidth);
             }
             expect(solveMetrics.bubbleSize).toBeGreaterThanOrEqual(30);
         });

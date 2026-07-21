@@ -259,18 +259,6 @@ export function normalizePlan(value: unknown): PlanKey | null {
         : null;
 }
 
-export function getCurrentPlan(fallback: PlanKey = "free"): PlanKey {
-    if (typeof window === "undefined") return fallback;
-    try {
-        const raw = localStorage.getItem(PLAN_KEY);
-        const normalized = normalizePlan(raw) || fallback;
-        if (raw === "school") localStorage.setItem(PLAN_KEY, normalized);
-        return normalized;
-    } catch {
-        return fallback;
-    }
-}
-
 export function setCurrentPlan(plan: PlanKey): boolean {
     if (typeof window === "undefined") return false;
     try {

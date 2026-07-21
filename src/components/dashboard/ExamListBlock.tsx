@@ -336,7 +336,10 @@ export default function ExamListBlock({ exams }: ExamListBlockProps) {
               fontWeight: 600,
               display: "flex",
               alignItems: "center",
+              justifyContent: "center",
               gap: "0.3rem",
+              minHeight: "44px",
+              padding: "0 0.65rem",
               transition: "color 0.2s",
             }}
             onMouseEnter={(e) =>

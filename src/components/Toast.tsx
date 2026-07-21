@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useCallback, useRef } from "react";
 import { CheckCircle2, AlertCircle, Info, X } from "lucide-react";
 
 export type ToastKind = "success" | "error" | "info";
@@ -65,30 +65,60 @@ export const toast = {
         }),
 };
 
-const KIND: Record<ToastKind, { color: string; bg: string; icon: React.ReactNode }> = {
-    success: { color: "#10b981", bg: "rgba(16,185,129,0.08)", icon: <CheckCircle2 size={18} /> },
-    error: { color: "#ef4444", bg: "rgba(239,68,68,0.08)", icon: <AlertCircle size={18} /> },
-    info: { color: "#4f46e5", bg: "rgba(99,102,241,0.08)", icon: <Info size={18} /> },
+const KIND: Record<ToastKind, { color: string; icon: React.ReactNode }> = {
+    success: { color: "#10b981", icon: <CheckCircle2 size={18} /> },
+    error: { color: "#ef4444", icon: <AlertCircle size={18} /> },
+    info: { color: "#4f46e5", icon: <Info size={18} /> },
 };
 
 export default function ToastHost() {
     const [items, setItems] = useState<ToastMessage[]>([]);
+    const removalTimersRef = useRef(new Map<number, ReturnType<typeof setTimeout>>());
 
     const remove = useCallback((id: number) => {
+        const timer = removalTimersRef.current.get(id);
+        if (timer !== undefined) {
+            clearTimeout(timer);
+            removalTimersRef.current.delete(id);
+        }
         setItems(prev => prev.filter(t => t.id !== id));
     }, []);
 
     useEffect(() => {
         const listener: Listener = (msg) => {
             setItems(prev => [...prev, msg]);
-            setTimeout(() => remove(msg.id), msg.duration);
         };
         listeners.add(listener);
         if (pendingMessages.length > 0) {
             pendingMessages.splice(0).forEach(listener);
         }
         return () => { listeners.delete(listener); };
-    }, [remove]);
+    }, []);
+
+    useEffect(() => {
+        const activeIds = new Set(items.map(item => item.id));
+        removalTimersRef.current.forEach((timer, id) => {
+            if (activeIds.has(id)) return;
+            clearTimeout(timer);
+            removalTimersRef.current.delete(id);
+        });
+        items.forEach(item => {
+            if (removalTimersRef.current.has(item.id)) return;
+            const timer = setTimeout(() => {
+                removalTimersRef.current.delete(item.id);
+                setItems(prev => prev.filter(candidate => candidate.id !== item.id));
+            }, item.duration);
+            removalTimersRef.current.set(item.id, timer);
+        });
+    }, [items]);
+
+    useEffect(() => {
+        const removalTimers = removalTimersRef.current;
+        return () => {
+            removalTimers.forEach(timer => clearTimeout(timer));
+            removalTimers.clear();
+        };
+    }, []);
 
     if (items.length === 0) return null;
 

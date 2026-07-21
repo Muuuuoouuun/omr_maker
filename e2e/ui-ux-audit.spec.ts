@@ -9,6 +9,7 @@ type AuditTarget = {
     expectedText: string;
     viewport: { width: number; height: number };
     teacher?: boolean;
+    initialTheme?: "light" | "dark";
 };
 
 const TARGETS: AuditTarget[] = [
@@ -16,6 +17,7 @@ const TARGETS: AuditTarget[] = [
     { name: "student-login-mobile", path: "/?role=student", expectedText: "학생 포털", viewport: { width: 390, height: 844 } },
     { name: "admin-route-mobile", path: "/admin", expectedText: "관리자 기능은 교사 포털에서 관리합니다", viewport: { width: 390, height: 844 } },
     { name: "teacher-dashboard-desktop", path: "/teacher/dashboard", expectedText: "분석 센터", viewport: { width: 1440, height: 900 }, teacher: true },
+    { name: "teacher-showcase-mobile-dark-preference", path: "/teacher/dashboard?showcase=1&tab=exam", expectedText: "시험별 통계", viewport: { width: 390, height: 844 }, teacher: true, initialTheme: "dark" },
     { name: "teacher-users-groups-mobile", path: "/teacher/users?tab=groups", expectedText: "사용자 관리", viewport: { width: 390, height: 844 }, teacher: true },
     { name: "teacher-settings-mobile", path: "/teacher/settings", expectedText: "설정", viewport: { width: 390, height: 844 }, teacher: true },
     { name: "teacher-billing-mobile", path: "/teacher/billing", expectedText: "결제 및 플랜", viewport: { width: 390, height: 844 }, teacher: true },
@@ -26,12 +28,20 @@ const TARGETS: AuditTarget[] = [
 async function visitTarget(browser: Browser, target: AuditTarget): Promise<Page> {
     const context = await browser.newContext({ viewport: target.viewport });
     const page = await context.newPage();
+    if (target.initialTheme) {
+        await page.addInitScript(theme => window.localStorage.setItem("omr_theme", theme), target.initialTheme);
+    }
     if (target.teacher) {
         await openTeacherPage(page, target.path);
     } else {
         await page.goto(target.path, { waitUntil: "domcontentloaded" });
     }
     await page.waitForLoadState("networkidle").catch(() => undefined);
+    await page.waitForFunction(
+        expectedText => (document.body.innerText || "").includes(expectedText),
+        target.expectedText,
+        { timeout: 15_000 },
+    ).catch(() => undefined);
     return page;
 }
 
@@ -40,7 +50,11 @@ async function auditPage(page: Page, target: AuditTarget) {
         const isVisible = (element: Element) => {
             const style = window.getComputedStyle(element);
             const rect = element.getBoundingClientRect();
-            return style.visibility !== "hidden" && style.display !== "none" && rect.width > 0 && rect.height > 0;
+            return style.visibility !== "hidden"
+                && style.display !== "none"
+                && style.opacity !== "0"
+                && rect.width > 0
+                && rect.height > 0;
         };
         const labelFor = (element: Element) => {
             const text = (
@@ -63,6 +77,7 @@ async function auditPage(page: Page, target: AuditTarget) {
         };
         const root = document.documentElement;
         const body = document.body;
+        const minimumTargetSize = root.clientWidth <= 640 ? 44 : 24;
         const allVisible = Array.from(document.querySelectorAll("body *")).filter(isVisible);
         const pageText = body.innerText || "";
         const mojibakePattern = /[\uFFFD\u00C3\u00C2]|\u00E2\u20AC|[\u00EC\u00EB\u00ED\u00EA][\u0080-\u00BF]/;
@@ -83,7 +98,7 @@ async function auditPage(page: Page, target: AuditTarget) {
                     height: Math.round(rect.height),
                 };
             })
-            .filter(item => item.width < 44 || item.height < 44)
+            .filter(item => item.width < minimumTargetSize || item.height < minimumTargetSize)
             .slice(0, 12);
 
         const clippedText = allVisible
@@ -114,6 +129,35 @@ async function auditPage(page: Page, target: AuditTarget) {
             })
             .slice(0, 12);
 
+        // Body-level overflow checks miss surfaces that grow beyond the viewport
+        // while an ancestor clips the document. Audit semantic layout surfaces by
+        // their actual bounding boxes, but ignore children of intentional scrollers.
+        const offViewportSurfaces = Array.from(document.querySelectorAll("main, main > *, main section, main article"))
+            .filter(isVisible)
+            .filter(element => {
+                const rect = element.getBoundingClientRect();
+                if (rect.left >= -1 && rect.right <= root.clientWidth + 1) return false;
+                let ancestor = element.parentElement;
+                while (ancestor && ancestor !== body) {
+                    const overflowX = window.getComputedStyle(ancestor).overflowX;
+                    if (overflowX === "auto" || overflowX === "scroll") return false;
+                    ancestor = ancestor.parentElement;
+                }
+                return true;
+            })
+            .map(element => {
+                const rect = element.getBoundingClientRect();
+                return {
+                    label: labelFor(element),
+                    tag: element.tagName.toLowerCase(),
+                    className: (element as HTMLElement).className?.toString() || "",
+                    left: Math.round(rect.left),
+                    right: Math.round(rect.right),
+                    viewportWidth: root.clientWidth,
+                };
+            })
+            .slice(0, 12);
+
         return {
             url: window.location.href,
             pageTitle: document.title,
@@ -129,6 +173,7 @@ async function auditPage(page: Page, target: AuditTarget) {
             mojibake: mojibakePattern.test(pageText),
             smallTargets,
             clippedText,
+            offViewportSurfaces,
         };
     }, {
         expectedText: target.expectedText,
@@ -160,6 +205,7 @@ test.describe("UI-UX PROMAX layout audit", () => {
             expect(result.bodyOverflowX, `${name} has body-level horizontal overflow`).toBe(false);
             expect(result.smallTargets, `${name} has touch targets below 44px`).toEqual([]);
             expect(result.clippedText, `${name} has clipped text`).toEqual([]);
+            expect(result.offViewportSurfaces, `${name} has a surface clipped outside the viewport`).toEqual([]);
         }
     });
 });

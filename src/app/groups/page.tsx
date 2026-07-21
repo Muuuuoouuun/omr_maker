@@ -1,32 +1,12 @@
-"use client";
-
-import { useEffect } from "react";
-import { useRouter } from "next/navigation";
+import { redirect } from "next/navigation";
 
 /**
  * Legacy `/groups` route — superseded by the consolidated teacher console
  * at `/teacher/users` which has a dedicated "반 · 그룹" tab.
- * We redirect here and hint the tab via a query param.
+ * Keep the public URL compatible, but redirect on the server so this legacy
+ * route does not ship a client component or briefly render an intermediate
+ * loading screen before the teacher auth gate runs.
  */
 export default function LegacyGroupsRedirect() {
-    const router = useRouter();
-
-    useEffect(() => {
-        router.replace("/teacher/users?tab=groups");
-    }, [router]);
-
-    return (
-        <div
-            style={{
-                minHeight: '60vh',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                color: '#64748b',
-                fontSize: '0.95rem',
-            }}
-        >
-            그룹 관리 페이지로 이동 중...
-        </div>
-    );
+    redirect("/teacher/users?tab=groups");
 }

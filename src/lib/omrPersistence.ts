@@ -1573,53 +1573,6 @@ export async function loadAttempts(): Promise<LoadResult<Attempt>> {
     }
 }
 
-/**
- * Read-only attempt load for high-frequency pollers (e.g. the live monitor).
- * Fetches remote rows and merges with local, but performs NO write side effects:
- * no saveLocalAttempts, no attempt/question-result upserts. Use this for the 3s
- * live poll so an open monitor never fans out into N Supabase writes per tick;
- * keep the full loadAttempts() for explicit refreshes that should resync.
- */
-export async function loadAttemptsReadonly(): Promise<LoadResult<Attempt>> {
-    const localItems = readLocalAttempts();
-    if (!isSupabaseConfigured()) {
-        return { items: localItems, remoteLoaded: false };
-    }
-    try {
-        const deletedExamIds = readLocalDeletedExamIds();
-        const remoteItems = (await fetchRemoteAttempts())
-            .filter(attempt => !deletedExamIds[attempt.examId]);
-        return {
-            items: mergeById(localItems, remoteItems),
-            remoteLoaded: true,
-        };
-    } catch (error) {
-        return { items: localItems, remoteLoaded: false, remoteError: errorMessage(error) };
-    }
-}
-
-/**
- * Read-only exam load counterpart to loadAttemptsReadonly — merges remote exams
- * with local without re-saving each row locally or resyncing. For pollers only.
- */
-export async function loadExamsReadonly(): Promise<LoadResult<Exam>> {
-    const localItems = readLocalExams();
-    if (!isSupabaseConfigured()) {
-        return { items: localItems, remoteLoaded: false };
-    }
-    try {
-        const deletedExamIds = readLocalDeletedExamIds();
-        const remoteItems = (await fetchRemoteExams())
-            .filter(exam => !deletedExamIds[exam.id]);
-        return {
-            items: mergeById(localItems, remoteItems),
-            remoteLoaded: true,
-        };
-    } catch (error) {
-        return { items: localItems, remoteLoaded: false, remoteError: errorMessage(error) };
-    }
-}
-
 export async function loadAttemptsForStudent(scope: StudentAttemptScope): Promise<LoadResult<Attempt>> {
     const localItems = readLocalAttempts()
         .filter(attempt => attemptMatchesStudentScope(attempt, scope))

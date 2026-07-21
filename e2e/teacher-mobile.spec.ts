@@ -51,7 +51,7 @@ async function expectTeacherHeaderTouchFriendly(page: Page, options: { hasSearch
     await expect(header).toBeVisible();
     if (options.hasSearch) {
         await expectTouchTarget(header.getByRole("button", { name: "빠른 검색" }));
-        await expectTouchTarget(header.getByRole("link", { name: "Dashboard" }));
+        await expectTouchTarget(header.getByRole("link", { name: "대시보드" }));
     }
     await expectTouchTarget(header.getByRole("link", { name: "실시간 모니터링" }));
     await expectTouchTarget(header.getByRole("button", { name: /알림/ }));
@@ -130,6 +130,26 @@ test.describe("Teacher phone and tablet app surfaces", () => {
 
         await page.locator(".teacher-header").getByRole("button", { name: /알림/ }).click();
         await expect(page.getByRole("dialog", { name: "알림 목록" })).toBeVisible();
+        await expectNoHorizontalOverflow(page);
+    });
+
+    test("connects dashboard metrics to the next analysis action", async ({ page }) => {
+        await loginAsTeacher(page, "/teacher/dashboard?showcase=1");
+
+        await expect(page.getByRole("heading", { name: /김하늘 선생님/ })).toBeVisible();
+        const scoreMetric = page.getByRole("button", { name: /전체 평균 점수.*점수 원인 보기/ });
+        await expectTouchTarget(scoreMetric);
+        await expect(scoreMetric).toContainText(/직전 시험보다 .*점 (상승|하락)/);
+        await scoreMetric.click();
+        await expect(page).toHaveURL(/tab=exam/);
+        await expect(page.getByRole("tab", { name: "시험별 분석" })).toHaveAttribute("aria-selected", "true");
+
+        await page.getByRole("tab", { name: "개요" }).click();
+        const studentMetric = page.getByRole("button", { name: /명단 학생.*학생별 성취 보기/ });
+        await expectTouchTarget(studentMetric);
+        await studentMetric.click();
+        await expect(page).toHaveURL(/tab=student/);
+        await expect(page.getByRole("tab", { name: "학생별 분석" })).toHaveAttribute("aria-selected", "true");
         await expectNoHorizontalOverflow(page);
     });
 

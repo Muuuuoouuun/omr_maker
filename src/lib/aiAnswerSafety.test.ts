@@ -5,6 +5,7 @@ import {
     invalidAiJsonError,
     safeAiAnswerErrorMessage,
     safeAiAnswerLogMeta,
+    shouldRetryAiAnswerModelError,
     validateAnswerImageParts,
 } from "./aiAnswerSafety";
 
@@ -71,5 +72,24 @@ describe("AI answer safety", () => {
                 errorName: "AIAnswerInputError",
             });
         }
+    });
+
+    it("retries only errors that another model can plausibly recover", () => {
+        expect(shouldRetryAiAnswerModelError(invalidAiJsonError(120))).toBe(true);
+        expect(shouldRetryAiAnswerModelError(new Error("model not found: 404"))).toBe(true);
+
+        expect(shouldRetryAiAnswerModelError(new Error("invalid API key: 401"))).toBe(false);
+        expect(shouldRetryAiAnswerModelError(new Error("quota exhausted: 429"))).toBe(false);
+        expect(shouldRetryAiAnswerModelError(new Error("network fetch failed"))).toBe(false);
+        expect(shouldRetryAiAnswerModelError(new Error("request aborted due to timeout"))).toBe(false);
+    });
+
+    it("reports provider timeouts without exposing raw errors", () => {
+        const timeoutError = new Error("request aborted due to timeout after secret payload");
+
+        expect(safeAiAnswerErrorMessage(timeoutError)).toBe(
+            "AI 인식 시간이 초과되었습니다. 잠시 후 다시 시도해주세요.",
+        );
+        expect(safeAiAnswerLogMeta(timeoutError)).toMatchObject({ category: "timeout" });
     });
 });

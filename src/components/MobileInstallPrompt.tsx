@@ -83,6 +83,13 @@ export default function MobileInstallPrompt() {
       && isMobileViewport();
 
     let capturedPrompt = false;
+    let visibilityTimer: number | undefined;
+
+    const clearVisibilityTimer = () => {
+      if (visibilityTimer === undefined) return;
+      window.clearTimeout(visibilityTimer);
+      visibilityTimer = undefined;
+    };
 
     const handleBeforeInstallPrompt = (event: Event) => {
       event.preventDefault();
@@ -90,11 +97,16 @@ export default function MobileInstallPrompt() {
       capturedPrompt = true;
       setDeferredPrompt(installEvent);
       if (canBecomeVisible()) {
-        window.setTimeout(() => setIsVisible(true), 900);
+        clearVisibilityTimer();
+        visibilityTimer = window.setTimeout(() => {
+          visibilityTimer = undefined;
+          setIsVisible(true);
+        }, 900);
       }
     };
 
     const handleAppInstalled = () => {
+      clearVisibilityTimer();
       rememberPromptDismissed();
       setIsVisible(false);
       setShowIOSPrompt(false);
@@ -113,6 +125,7 @@ export default function MobileInstallPrompt() {
 
     return () => {
       window.clearTimeout(iosTimer);
+      clearVisibilityTimer();
       window.removeEventListener("beforeinstallprompt", handleBeforeInstallPrompt);
       window.removeEventListener("appinstalled", handleAppInstalled);
     };

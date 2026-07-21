@@ -98,19 +98,29 @@ export function validateAnswerImageParts(imageParts: unknown): ValidatedAnswerIm
     });
 }
 
-function categorizeAiAnswerError(message: string): string {
+type AiAnswerErrorCategory = "invalid_image_input" | "invalid_json" | "auth" | "quota" | "timeout" | "network" | "unknown";
+
+function categorizeAiAnswerError(error: unknown): AiAnswerErrorCategory {
+    const message = error instanceof Error ? error.message : String(error || "");
     const lower = message.toLowerCase();
+    const errorName = error instanceof Error ? error.name.toLowerCase() : "";
     if (message === INVALID_IMAGE_INPUT_CODE) return "invalid_image_input";
     if (message === INVALID_JSON_CODE || lower.includes("유효한 정답 형식")) return "invalid_json";
     if (lower.includes("api key") || lower.includes("apikey") || lower.includes("api 키") || lower.includes("권한") || lower.includes("401") || lower.includes("403")) return "auth";
     if (lower.includes("quota") || lower.includes("rate") || lower.includes("429") || lower.includes("resource_exhausted") || lower.includes("사용량") || lower.includes("요청 제한")) return "quota";
-    if (lower.includes("network") || lower.includes("fetch") || lower.includes("timeout") || lower.includes("네트워크")) return "network";
+    if (errorName === "aborterror" || lower.includes("timeout") || lower.includes("timed out") || lower.includes("aborted")) return "timeout";
+    if (lower.includes("network") || lower.includes("fetch") || lower.includes("네트워크")) return "network";
     return "unknown";
 }
 
+/** Avoid a second paid provider call when switching models cannot fix the cause. */
+export function shouldRetryAiAnswerModelError(error: unknown): boolean {
+    const category = categorizeAiAnswerError(error);
+    return category === "invalid_json" || category === "unknown";
+}
+
 export function safeAiAnswerErrorMessage(error: unknown): string {
-    const rawMessage = error instanceof Error ? error.message : String(error || "");
-    const category = categorizeAiAnswerError(rawMessage);
+    const category = categorizeAiAnswerError(error);
 
     if (category === "invalid_image_input") {
         return "정답 이미지 형식 또는 용량을 확인해주세요.";
@@ -123,6 +133,9 @@ export function safeAiAnswerErrorMessage(error: unknown): string {
     }
     if (category === "quota") {
         return "Gemini API 사용량 또는 요청 제한을 확인해주세요.";
+    }
+    if (category === "timeout") {
+        return "AI 인식 시간이 초과되었습니다. 잠시 후 다시 시도해주세요.";
     }
     if (category === "network") {
         return "네트워크 연결 상태를 확인한 뒤 다시 시도해주세요.";
@@ -139,7 +152,7 @@ export function safeAiAnswerLogMeta(error: unknown, extra: Record<string, unknow
 
     return {
         ...extra,
-        category: categorizeAiAnswerError(rawMessage),
+        category: categorizeAiAnswerError(error),
         errorName: error instanceof Error ? error.name : typeof error,
         messageLength: rawMessage.length,
         ...(responseLength !== undefined ? { responseLength } : {}),

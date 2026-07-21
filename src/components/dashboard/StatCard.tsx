@@ -6,6 +6,10 @@ interface StatCardProps {
   icon?: ReactNode;
   trend?: string;
   trendUp?: boolean;
+  detail?: string;
+  actionLabel?: string;
+  actionAriaLabel?: string;
+  onAction?: () => void;
   color?: string;
 }
 
@@ -15,6 +19,10 @@ export default function StatCard({
   icon,
   trend,
   trendUp,
+  detail,
+  actionLabel,
+  actionAriaLabel,
+  onAction,
   color = "var(--primary)",
 }: StatCardProps) {
   const isVarColor = color.startsWith("var(");
@@ -86,9 +94,10 @@ export default function StatCard({
       {/* Value + trend (tight vertical stack) */}
       <div style={{ display: "flex", flexDirection: "column", gap: "0.6rem" }}>
         <div
+          className="numeric-emphasis"
           style={{
             fontSize: "2.4rem",
-            fontWeight: 900,
+            fontWeight: 950,
             color: "var(--foreground)",
             lineHeight: 1.0,
             letterSpacing: "-0.04em",
@@ -97,6 +106,10 @@ export default function StatCard({
         >
           {value}
         </div>
+
+        {detail && (
+          <p className="stat-card-detail">{detail}</p>
+        )}
 
         {trend && (
           <div
@@ -132,6 +145,20 @@ export default function StatCard({
             </svg>
             {trend}
           </div>
+        )}
+
+        {actionLabel && onAction && (
+          <button
+            type="button"
+            className="stat-card-action"
+            onClick={onAction}
+            aria-label={actionAriaLabel || actionLabel}
+          >
+            {actionLabel}
+            <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+              <path d="M3.5 8h9M9 4.5 12.5 8 9 11.5" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+            </svg>
+          </button>
         )}
       </div>
 

@@ -10,7 +10,7 @@ import { TrendChartSkeleton } from "@/components/dashboard/DashboardLoadingSkele
 import ExamListBlock from "@/components/dashboard/ExamListBlock";
 import ExamActionsMenu, { ExamActionKind } from "@/components/dashboard/ExamActionsMenu";
 import { toast } from "@/components/Toast";
-import { Users, BarChart3, PlusCircle, Activity, Bell, Download, MessageSquare } from "lucide-react";
+import { Users, BarChart3, PlusCircle, Activity, Bell, Download, MessageSquare, ArrowRight, CheckCircle2, CircleAlert } from "lucide-react";
 import { copyStoredData } from "@/utils/blobStore";
 import { secureRandomId } from "@/utils/ids";
 import { deleteTeacherExamMutation, saveTeacherExamMutation } from "@/lib/teacherExamClient";
@@ -46,6 +46,7 @@ interface OverviewTabProps {
     rosterStudents?: RosterStudent[];
     rosterGroups?: RosterGroup[];
     onNavigateToExamAnalytics?: (examId: string) => void;
+    onNavigateToStudentAnalytics?: () => void;
 }
 
 function DeleteExamConfirmDialog({
@@ -116,7 +117,7 @@ function DeleteExamConfirmDialog({
     );
 }
 
-export default function OverviewTab({ exams: examsProp, attempts, stats, trendData, trendLabels, rosterStudents = [], rosterGroups = [], onNavigateToExamAnalytics }: OverviewTabProps) {
+export default function OverviewTab({ exams: examsProp, attempts, stats, trendData, trendLabels, rosterStudents = [], rosterGroups = [], onNavigateToExamAnalytics, onNavigateToStudentAnalytics }: OverviewTabProps) {
     const router = useRouter();
     const [activeTab, setActiveTab] = useState<'ongoing' | 'completed'>('ongoing');
     // Local copy so action handlers (archive/delete/duplicate) can update the table
@@ -217,6 +218,77 @@ export default function OverviewTab({ exams: examsProp, attempts, stats, trendDa
     );
     const examSummaryGroups = useMemo(() => splitExamSummaryRows(examSummaryRows), [examSummaryRows]);
 
+    const priorityBrief = useMemo(() => {
+        const priorityExam = examSummaryGroups.ongoing
+            .map(exam => ({
+                ...exam,
+                missingCount: Math.max(0, exam.total - exam.completedCount),
+                participationRate: Math.min(100, safeRatePercent(exam.completedCount, exam.total)),
+            }))
+            .filter(exam => exam.missingCount > 0)
+            .sort((a, b) => b.missingCount - a.missingCount || a.participationRate - b.participationRate)[0];
+
+        if (priorityExam) {
+            return {
+                tone: "warning" as const,
+                eyebrow: "오늘의 우선 조치",
+                title: `${priorityExam.title} 미응시 ${priorityExam.missingCount}명부터 확인하세요`,
+                detail: `현재 ${priorityExam.completedCount}/${priorityExam.total}명 응시 · 참여율 ${priorityExam.participationRate}%. 분석 화면에서 미응시 현황과 취약 문항을 이어서 확인할 수 있습니다.`,
+                status: "영향도 높음",
+                actionLabel: "미응시·문항 분석",
+                onAction: () => onNavigateToExamAnalytics
+                    ? onNavigateToExamAnalytics(priorityExam.id)
+                    : router.push(`/teacher/dashboard?tab=exam&examId=${encodeURIComponent(priorityExam.id)}`),
+            };
+        }
+
+        const latestExam = examSummaryRows[0];
+        if (latestExam && stats.avgScore < 80) {
+            return {
+                tone: "warning" as const,
+                eyebrow: "점수 점검 권장",
+                title: `전체 평균 ${stats.avgScore.toFixed(1)}점 · 최근 시험 문항을 점검하세요`,
+                detail: "오답률과 문항 변별도를 함께 확인하면 재지도할 문항을 빠르게 좁힐 수 있습니다.",
+                status: "평균 80점 미만",
+                actionLabel: "점수 원인 분석",
+                onAction: () => onNavigateToExamAnalytics
+                    ? onNavigateToExamAnalytics(latestExam.id)
+                    : router.push(`/teacher/dashboard?tab=exam&examId=${encodeURIComponent(latestExam.id)}`),
+            };
+        }
+
+        if (examSummaryRows.length > 0) {
+            return {
+                tone: "success" as const,
+                eyebrow: "운영 상태 안정",
+                title: "진행 시험의 응시 현황이 안정적입니다",
+                detail: "이제 학생별 반복 오답과 재시험 개선 폭을 확인해 다음 수업 대상을 정해보세요.",
+                status: "다음 단계 준비",
+                actionLabel: "학생별 성취 보기",
+                onAction: () => onNavigateToStudentAnalytics
+                    ? onNavigateToStudentAnalytics()
+                    : router.push("/teacher/dashboard?tab=student"),
+            };
+        }
+
+        return {
+            tone: "neutral" as const,
+            eyebrow: "첫 분석 준비",
+            title: "시험을 만들면 응시·점수·취약 문항이 연결됩니다",
+            detail: "시험을 배포하고 첫 응시가 들어오면 우선 조치와 학생별 분석을 자동으로 구성합니다.",
+            status: "데이터 대기",
+            actionLabel: "첫 시험 만들기",
+            onAction: () => router.push("/create"),
+        };
+    }, [examSummaryGroups.ongoing, examSummaryRows, onNavigateToExamAnalytics, onNavigateToStudentAnalytics, router, stats.avgScore]);
+
+    const latestExamRow = examSummaryRows[0];
+    const latestTrendScore = trendData.at(-1);
+    const previousTrendScore = trendData.at(-2);
+    const scoreDelta = latestTrendScore !== undefined && previousTrendScore !== undefined
+        ? latestTrendScore - previousTrendScore
+        : undefined;
+
     const questionInbox = useMemo(() => collectStudentQuestionInbox(attempts), [attempts]);
     const hasStudentQuestions = questionInbox.pending.length > 0 || questionInbox.answered.length > 0;
 
@@ -295,6 +367,23 @@ export default function OverviewTab({ exams: examsProp, attempts, stats, trendDa
 
     return (
         <div className="bento-grid fade-in-up">
+            <section className={`overview-action-brief is-${priorityBrief.tone}`} aria-labelledby="overview-priority-title">
+                <span className="overview-action-brief-icon" aria-hidden="true">
+                    {priorityBrief.tone === "success" ? <CheckCircle2 size={24} /> : <CircleAlert size={24} />}
+                </span>
+                <div className="overview-action-brief-copy">
+                    <span>{priorityBrief.eyebrow}</span>
+                    <h2 id="overview-priority-title">{priorityBrief.title}</h2>
+                    <p>{priorityBrief.detail}</p>
+                </div>
+                <div className="overview-action-brief-next">
+                    <span>{priorityBrief.status}</span>
+                    <button type="button" onClick={priorityBrief.onAction}>
+                        {priorityBrief.actionLabel}<ArrowRight size={16} />
+                    </button>
+                </div>
+            </section>
+
             {/* 1. 자주 쓰는 빠른 작업 */}
             <div className="bento-card col-span-2" style={{ padding: '1.5rem', display: 'flex', flexDirection: 'column' }}>
                 <div style={{ marginBottom: '1.5rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
@@ -660,6 +749,10 @@ export default function OverviewTab({ exams: examsProp, attempts, stats, trendDa
                         title="전체 학생"
                         value={stats.totalStudents}
                         icon={<Users size={28} color="var(--primary)" />}
+                        detail={`${rosterGroups.length}개 그룹 · ${rosterStudents.length > 0 ? "등록 명단" : "응시 기록"} 기준`}
+                        actionLabel="학생별 성취 보기"
+                        actionAriaLabel={`${stats.totalStudents}명 학생별 성취 분석 보기`}
+                        onAction={onNavigateToStudentAnalytics}
                     />
                 </div>
                 <div style={{ flex: 1, display: 'flex', width: '100%', minHeight: 0 }}>
@@ -668,8 +761,16 @@ export default function OverviewTab({ exams: examsProp, attempts, stats, trendDa
                         value={stats.avgScore}
                         icon={<BarChart3 size={28} color="var(--success)" />}
                         color="var(--success)"
-                        trend={stats.avgScore > 80 ? '양호' : '점검 필요'}
-                        trendUp={stats.avgScore > 80}
+                        detail="전체 완료 응시 기준"
+                        trend={scoreDelta === undefined
+                            ? (stats.avgScore >= 80 ? "현재 양호" : "점검 필요")
+                            : `직전 대비 ${scoreDelta >= 0 ? "+" : ""}${scoreDelta.toFixed(1)}점`}
+                        trendUp={scoreDelta === undefined ? stats.avgScore >= 80 : scoreDelta >= 0}
+                        actionLabel="점수 원인 분석"
+                        actionAriaLabel={`${stats.avgScore}점 평균 점수 원인 분석 보기`}
+                        onAction={latestExamRow && onNavigateToExamAnalytics
+                            ? () => onNavigateToExamAnalytics(latestExamRow.id)
+                            : undefined}
                     />
                 </div>
             </div>

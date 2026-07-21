@@ -555,14 +555,14 @@ th { background: #f8fafc; font-size: 12px; color: #64748b; text-transform: upper
                                     border: `1px solid ${paymentProviderStatusColor(paymentProviderReadiness.status)}`,
                                     borderRadius: 'var(--radius-full)',
                                     padding: '0.18rem 0.52rem',
-                                    fontSize: '0.68rem',
+                                    fontSize: 'var(--type-micro)',
                                     fontWeight: 950,
                                     whiteSpace: 'nowrap',
                                 }}>
                                     {paymentProviderReadiness.label}
                                 </span>
                             </div>
-                            <div style={{ fontSize: '0.74rem', color: 'var(--muted)', fontWeight: 750, lineHeight: 1.45, wordBreak: 'keep-all' }}>
+                            <div style={{ fontSize: '0.8rem', color: 'var(--muted)', fontWeight: 750, lineHeight: 1.5, wordBreak: 'keep-all' }}>
                                 {paymentProviderReadiness.detail}
                                 {paymentProviderReadiness.missing.length > 0 ? ` · 누락 ${paymentProviderReadiness.missing.join(", ")}` : ""}
                             </div>
@@ -604,7 +604,7 @@ th { background: #f8fafc; font-size: 12px; color: #64748b; text-transform: upper
                                     borderRadius: 'var(--radius-full)',
                                     background: planHealthMeta.background,
                                     color: planHealthMeta.color,
-                                    fontSize: '0.72rem',
+                                    fontSize: 'var(--type-caption)',
                                     fontWeight: 900
                                 }}>
                                     {planHealthMeta.label}
@@ -659,7 +659,7 @@ th { background: #f8fafc; font-size: 12px; color: #64748b; text-transform: upper
                                             borderRadius: 'var(--radius-full)',
                                             background: statusMeta.background,
                                             color: statusMeta.color,
-                                            fontSize: '0.65rem',
+                                            fontSize: 'var(--type-micro)',
                                             fontWeight: 900,
                                             whiteSpace: 'nowrap'
                                         }}>
@@ -691,7 +691,7 @@ th { background: #f8fafc; font-size: 12px; color: #64748b; text-transform: upper
                                     borderRadius: 'var(--radius-full)',
                                     background: planHealth.lockedEntitlements.length > 0 || enabledPlannedFeatureCount > 0 ? '#fef3c7' : '#d1fae5',
                                     color: planHealth.lockedEntitlements.length > 0 || enabledPlannedFeatureCount > 0 ? '#92400e' : '#047857',
-                                    fontSize: '0.65rem',
+                                    fontSize: 'var(--type-micro)',
                                     fontWeight: 900,
                                     whiteSpace: 'nowrap'
                                 }}>
@@ -806,7 +806,7 @@ th { background: #f8fafc; font-size: 12px; color: #64748b; text-transform: upper
                                             <strong style={{ fontSize: '0.9rem' }}>{entitlement.displayLabel}</strong>
                                             <span style={{
                                                 flexShrink: 0,
-                                                fontSize: '0.68rem',
+                                                fontSize: 'var(--type-micro)',
                                                 fontWeight: 800,
                                                 padding: '0.18rem 0.45rem',
                                                 borderRadius: 'var(--radius-full)',
@@ -861,7 +861,7 @@ th { background: #f8fafc; font-size: 12px; color: #64748b; text-transform: upper
                                     transform: isPro ? 'scale(1.02)' : 'none'
                                 }}>
                                     {isPro && (
-                                        <div style={{ position: 'absolute', top: 14, right: 14, padding: '0.2rem 0.7rem', background: p.gradient, color: 'white', borderRadius: 'var(--radius-full)', fontSize: '0.65rem', fontWeight: 800, letterSpacing: '0.08em' }}>
+                                        <div style={{ position: 'absolute', top: 14, right: 14, padding: '0.2rem 0.7rem', background: p.gradient, color: 'white', borderRadius: 'var(--radius-full)', fontSize: 'var(--type-micro)', fontWeight: 800, letterSpacing: '0.08em' }}>
                                             MOST POPULAR
                                         </div>
                                     )}
@@ -898,7 +898,7 @@ th { background: #f8fafc; font-size: 12px; color: #64748b; text-transform: upper
                                                             <small style={{ display: 'block', marginTop: '0.1rem', color: 'var(--muted)', fontSize: '0.7rem', lineHeight: 1.4 }}>{feature.detail}</small>
                                                         )}
                                                     </span>
-                                                    <span style={{ flexShrink: 0, padding: '0.12rem 0.38rem', borderRadius: 'var(--radius-full)', background: featureMeta.background, color: featureMeta.color, fontSize: '0.62rem', fontWeight: 900 }}>
+                                                    <span style={{ flexShrink: 0, padding: '0.12rem 0.38rem', borderRadius: 'var(--radius-full)', background: featureMeta.background, color: featureMeta.color, fontSize: 'var(--type-micro)', fontWeight: 900 }}>
                                                         {featureMeta.label}
                                                     </span>
                                                 </li>
@@ -976,7 +976,7 @@ th { background: #f8fafc; font-size: 12px; color: #64748b; text-transform: upper
                                             <td style={{ padding: '1rem 0.5rem', fontSize: '0.85rem', color: 'var(--muted)' }}>{inv.date}</td>
                                             <td style={{ padding: '1rem 0.5rem', fontSize: '0.9rem', fontWeight: 700 }}>₩{inv.amount.toLocaleString()}</td>
                                             <td style={{ padding: '1rem 0.5rem' }}>
-                                                <span style={{ background: statusMeta.background, color: statusMeta.color, padding: '0.25rem 0.65rem', borderRadius: 'var(--radius-full)', fontSize: '0.72rem', fontWeight: 700 }}>
+                                                <span style={{ background: statusMeta.background, color: statusMeta.color, padding: '0.25rem 0.65rem', borderRadius: 'var(--radius-full)', fontSize: 'var(--type-caption)', fontWeight: 700 }}>
                                                     {statusMeta.label}
                                                 </span>
                                             </td>
@@ -1100,7 +1100,7 @@ th { background: #f8fafc; font-size: 12px; color: #64748b; text-transform: upper
                                             </li>
                                         ))}
                                     </ul>
-                                    <p style={{ fontSize: '0.74rem', color: '#92400e', marginTop: '0.5rem', lineHeight: 1.45, wordBreak: 'keep-all' }}>
+                                    <p style={{ fontSize: '0.8rem', color: '#92400e', marginTop: '0.5rem', lineHeight: 1.5, wordBreak: 'keep-all' }}>
                                         기존 데이터는 삭제되지 않지만, 한도를 초과한 항목과 잠긴 기능은 다시 업그레이드하기 전까지 사용할 수 없습니다.
                                     </p>
                                 </div>
@@ -1115,7 +1115,7 @@ th { background: #f8fafc; font-size: 12px; color: #64748b; text-transform: upper
                                     <span style={{ fontWeight: 700 }}>이번 변경에서 결제되는 금액</span>
                                     <span style={{ fontWeight: 900, color: '#047857' }}>₩0</span>
                                 </div>
-                                <p style={{ marginTop: '0.45rem', color: 'var(--muted)', fontSize: '0.74rem', lineHeight: 1.45 }}>실결제와 구독은 시작되지 않으며 현재 브라우저의 플랜 표시만 바뀝니다.</p>
+                                <p style={{ marginTop: '0.45rem', color: 'var(--muted)', fontSize: '0.8rem', lineHeight: 1.5 }}>실결제와 구독은 시작되지 않으며 현재 브라우저의 플랜 표시만 바뀝니다.</p>
                             </div>
 
                             <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', padding: '0.7rem 0.85rem', background: 'var(--background)', border: `1px solid ${paymentProviderStatusColor(paymentProviderReadiness.status)}44`, borderRadius: 'var(--radius-md)', marginBottom: '1.25rem' }}>
@@ -1182,7 +1182,7 @@ function UsageCard({
         <div className="bento-card" style={{ padding: '1.25rem 1.4rem', position: 'relative', overflow: 'hidden' }}>
             <div style={{ position: 'absolute', top: 0, left: 0, right: 0, height: 3, background: `linear-gradient(90deg, ${color}, transparent)` }} />
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.5rem' }}>
-                <div style={{ fontSize: '0.72rem', fontWeight: 700, color: 'var(--muted)', letterSpacing: '0.08em', textTransform: 'uppercase' }}>{label}</div>
+                <div style={{ fontSize: 'var(--type-caption)', fontWeight: 700, color: 'var(--muted)', letterSpacing: '0.08em', textTransform: 'uppercase' }}>{label}</div>
                 {isWarning && <AlertCircle size={14} color="#f59e0b" aria-label="임계치 초과" />}
                 {locked && (
                     <span style={{

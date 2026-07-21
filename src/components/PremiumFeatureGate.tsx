@@ -116,7 +116,7 @@ export function PremiumFeatureCard({
                         <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap', marginBottom: '0.25rem' }}>
                             <strong style={{ fontSize: '0.98rem', color: 'var(--foreground)' }}>{title}</strong>
                             <span style={{
-                                fontSize: '0.68rem',
+                                fontSize: 'var(--type-micro)',
                                 fontWeight: 900,
                                 padding: '0.18rem 0.48rem',
                                 borderRadius: '999px',
@@ -126,7 +126,7 @@ export function PremiumFeatureCard({
                                 {resolvedBadge}
                             </span>
                         </div>
-                        <p style={{ color: 'var(--muted)', fontSize: '0.82rem', lineHeight: 1.55, wordBreak: 'keep-all' }}>
+                        <p style={{ color: 'var(--muted)', fontSize: 'var(--type-body-sm)', lineHeight: 1.55, wordBreak: 'keep-all' }}>
                             {description}
                         </p>
                     </div>
@@ -136,7 +136,7 @@ export function PremiumFeatureCard({
                     className="btn btn-secondary"
                     style={{
                         padding: '0.55rem 0.85rem',
-                        fontSize: '0.8rem',
+                        fontSize: 'var(--type-label)',
                         display: 'inline-flex',
                         alignItems: 'center',
                         gap: '0.35rem',

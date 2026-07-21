@@ -311,9 +311,13 @@ function TeacherDashboard() {
         );
     }, [isMockupAccount, router]);
 
-    const handleNavigateToExamAnalytics = (examId: string) => {
+    const handleNavigateToExamAnalytics = useCallback((examId: string) => {
         applyTab('exam', examId);
-    };
+    }, [applyTab]);
+
+    const handleNavigateToStudentAnalytics = useCallback(() => {
+        applyTab('student');
+    }, [applyTab]);
 
     const handleRefreshDashboardData = async () => {
         if (isRefreshingDashboardData) return;
@@ -632,13 +636,13 @@ function TeacherDashboard() {
                         <TeacherSessionChip />
                         <NotificationBell />
                         <TeacherLogoutButton />
-                        <ThemeToggle />
+                        {!isMockupAccount && <ThemeToggle />}
                     </div>
                 </div>
             </header>
             <GlobalSearch />
 
-            <main className={`container dashboard-main animate-fade-in${isMockupAccount ? " mockup-dashboard-main" : ""}`}>
+            <main className={`container dashboard-main animate-fade-in${isMockupAccount ? " mockup-dashboard-main" : ""}${isMockupAccount && activeTab !== "overview" ? " mockup-dashboard-subview" : ""}`}>
                 {/* Welcome Section */}
                 <div className="dashboard-welcome">
                     <div style={{ minWidth: 0 }}>
@@ -672,7 +676,7 @@ function TeacherDashboard() {
                                 <span style={{ fontSize: '0.8rem', fontWeight: 800, lineHeight: 1.1, whiteSpace: 'nowrap' }}>
                                     {syncStatus.label}
                                 </span>
-                                <span style={{ fontSize: '0.72rem', color: 'var(--muted)', lineHeight: 1.1, whiteSpace: 'nowrap' }}>
+                                <span style={{ fontSize: 'var(--type-caption)', color: 'var(--muted)', lineHeight: 1.2, whiteSpace: 'nowrap' }}>
                                     {syncStatus.detail}
                                 </span>
                             </span>
@@ -719,7 +723,7 @@ function TeacherDashboard() {
                                 <span style={{ fontSize: '0.8rem', fontWeight: 800, lineHeight: 1.1, whiteSpace: 'nowrap' }}>
                                     {analyticsDataHealth.label}
                                 </span>
-                                <span style={{ fontSize: '0.72rem', color: 'var(--muted)', lineHeight: 1.1, whiteSpace: 'nowrap' }}>
+                                <span style={{ fontSize: 'var(--type-caption)', color: 'var(--muted)', lineHeight: 1.2, whiteSpace: 'nowrap' }}>
                                     {analyticsDataHealth.score}점 · {analyticsDataHealth.detail}
                                 </span>
                             </span>
@@ -817,7 +821,7 @@ function TeacherDashboard() {
                                     </span>
                                     <span style={{
                                         flexShrink: 0,
-                                        fontSize: '0.72rem',
+                                        fontSize: 'var(--type-caption)',
                                         fontWeight: 900,
                                         color: issue.severity === "error" ? 'var(--error)' : 'var(--warning)',
                                     }}>
@@ -847,7 +851,7 @@ function TeacherDashboard() {
                                         }}
                                     >
                                         <span>{isRepairingAnalyticsData ? "문항 결과 복구 중..." : "문항 결과 자동 복구"}</span>
-                                        <span style={{ flexShrink: 0, color: 'var(--muted)', fontSize: '0.72rem' }}>
+                                        <span style={{ flexShrink: 0, color: 'var(--muted)', fontSize: 'var(--type-caption)' }}>
                                             {questionResultRepairPlan.repairableCount}제출 · {questionResultRepairPlan.repairedQuestionResultCount}문항
                                         </span>
                                     </button>
@@ -859,11 +863,11 @@ function TeacherDashboard() {
                                         border: '1px dashed var(--border)',
                                         background: 'var(--surface)',
                                     }}>
-                                        <div style={{ fontSize: '0.72rem', color: 'var(--muted)', fontWeight: 900 }}>
+                                        <div style={{ fontSize: 'var(--type-caption)', color: 'var(--muted)', fontWeight: 900 }}>
                                             복구 대상 미리보기
                                         </div>
                                         {questionResultRepairPlan.items.slice(0, 3).map(item => (
-                                            <div key={item.attemptId} style={{ display: 'flex', justifyContent: 'space-between', gap: '0.65rem', fontSize: '0.72rem', color: 'var(--foreground)', lineHeight: 1.35 }}>
+                                            <div key={item.attemptId} style={{ display: 'flex', justifyContent: 'space-between', gap: '0.65rem', fontSize: 'var(--type-caption)', color: 'var(--foreground)', lineHeight: 1.4 }}>
                                                 <span style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                                                     {item.examTitle} · {item.studentName || "학생 미상"}
                                                 </span>
@@ -873,7 +877,7 @@ function TeacherDashboard() {
                                             </div>
                                         ))}
                                         {questionResultRepairPlan.repairableCount > 3 && (
-                                            <div style={{ color: 'var(--muted)', fontSize: '0.7rem', fontWeight: 800 }}>
+                                            <div style={{ color: 'var(--muted)', fontSize: 'var(--type-micro)', fontWeight: 800 }}>
                                                 외 {questionResultRepairPlan.repairableCount - 3}개 제출 추가 복구 예정
                                             </div>
                                         )}
@@ -881,7 +885,7 @@ function TeacherDashboard() {
                                 </>
                             )}
                             {(questionResultRepairPlan.skippedOrphanAttemptCount > 0 || questionResultRepairPlan.skippedInProgressAttemptCount > 0) && (
-                                <div style={{ fontSize: '0.72rem', color: 'var(--muted)', fontWeight: 800, lineHeight: 1.5, wordBreak: 'keep-all' }}>
+                                <div style={{ fontSize: 'var(--type-caption)', color: 'var(--muted)', fontWeight: 800, lineHeight: 1.5, wordBreak: 'keep-all' }}>
                                     자동 복구 제외:
                                     {questionResultRepairPlan.skippedOrphanAttemptCount > 0 ? ` 시험 없는 제출 ${questionResultRepairPlan.skippedOrphanAttemptCount}건` : ""}
                                     {questionResultRepairPlan.skippedOrphanAttemptCount > 0 && questionResultRepairPlan.skippedInProgressAttemptCount > 0 ? " ·" : ""}
@@ -978,6 +982,7 @@ function TeacherDashboard() {
                             totalStudents={stats.totalStudents}
                             averageScore={stats.avgScore}
                             onNavigateToExamAnalytics={handleNavigateToExamAnalytics}
+                            onNavigateToStudentAnalytics={handleNavigateToStudentAnalytics}
                         />
                     )}
                     {activeTab === 'overview' && !isMockupAccount && (
@@ -990,6 +995,7 @@ function TeacherDashboard() {
                             rosterStudents={rosterStudents}
                             rosterGroups={rosterGroups}
                             onNavigateToExamAnalytics={handleNavigateToExamAnalytics}
+                            onNavigateToStudentAnalytics={handleNavigateToStudentAnalytics}
                         />
                     )}
                     {activeTab === 'exam' && (

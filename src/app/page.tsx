@@ -1101,7 +1101,7 @@ export default function Home() {
                     style={{
                       display: "block",
                       marginBottom: "0.55rem",
-                      fontSize: "0.75rem",
+                      fontSize: "var(--type-label)",
                       fontWeight: 700,
                       color: "var(--muted)",
                       textTransform: "uppercase",
@@ -1132,7 +1132,7 @@ export default function Home() {
                     style={{
                       display: "block",
                       marginBottom: "0.55rem",
-                      fontSize: "0.75rem",
+                      fontSize: "var(--type-label)",
                       fontWeight: 700,
                       color: "var(--muted)",
                       textTransform: "uppercase",
@@ -1159,17 +1159,17 @@ export default function Home() {
                   >
                     {error ? (
                       <>
-                      <p role="alert" style={{ fontSize: "0.8rem", color: "var(--error)", fontWeight: 600 }}>
+                      <p role="alert" style={{ fontSize: "var(--type-label)", color: "var(--error)", fontWeight: 600 }}>
                         {error}
                       </p>
                       {shouldShowTeacherDeploymentHelp(error) && (
-                        <p style={{ fontSize: "0.75rem", color: "var(--muted)", lineHeight: 1.45, wordBreak: "keep-all" }}>
+                        <p style={{ fontSize: "var(--type-label)", color: "var(--muted)", lineHeight: 1.5, wordBreak: "keep-all" }}>
                           {TEACHER_AUTH_DEPLOYMENT_HELP}
                         </p>
                       )}
                       </>
                     ) : (
-                    <p style={{ fontSize: "0.8rem", color: "var(--muted)", opacity: 0.75 }}>
+                    <p style={{ fontSize: "var(--type-label)", color: "var(--muted)", opacity: 0.82 }}>
                       교사용 계정 정보를 입력하세요.
                     </p>
                     )}
@@ -1234,7 +1234,7 @@ export default function Home() {
                     style={{
                       display: "block",
                       marginBottom: "0.55rem",
-                      fontSize: "0.75rem",
+                      fontSize: "var(--type-label)",
                       fontWeight: 700,
                       color: "var(--muted)",
                       textTransform: "uppercase",
@@ -1261,7 +1261,7 @@ export default function Home() {
                     <p
                       id="student-name-error"
                       role="alert"
-                      style={{ fontSize: "0.8rem", color: "var(--error)", marginTop: "0.45rem", fontWeight: 700 }}
+                      style={{ fontSize: "var(--type-label)", color: "var(--error)", marginTop: "0.45rem", fontWeight: 700 }}
                     >
                       {error}
                     </p>
@@ -1273,7 +1273,7 @@ export default function Home() {
                     style={{
                       display: "block",
                       marginBottom: "0.55rem",
-                      fontSize: "0.75rem",
+                      fontSize: "var(--type-label)",
                       fontWeight: 700,
                       color: needsStudentLookup ? "var(--warning)" : "var(--muted)",
                       textTransform: "uppercase",
@@ -1299,7 +1299,7 @@ export default function Home() {
                     }}
                   />
                   <p style={{
-                    fontSize: "0.75rem",
+                    fontSize: "var(--type-label)",
                     color: needsStudentLookup ? "var(--warning)" : "var(--muted)",
                     marginTop: "0.45rem",
                     lineHeight: 1.45,
@@ -1316,7 +1316,7 @@ export default function Home() {
                     style={{
                       display: "block",
                       marginBottom: "0.55rem",
-                      fontSize: "0.75rem",
+                      fontSize: "var(--type-label)",
                       fontWeight: 700,
                       color: "var(--muted)",
                       textTransform: "uppercase",
@@ -1353,14 +1353,14 @@ export default function Home() {
                     />
                   )}
                   {studentGroupOptions.length === 0 && (
-                    <p style={{ fontSize: "0.75rem", color: "var(--muted)", marginTop: "0.45rem", lineHeight: 1.45 }}>
+                    <p style={{ fontSize: "var(--type-label)", color: "var(--muted)", marginTop: "0.45rem", lineHeight: 1.5 }}>
                       등록된 반이 없으면 아래 반 코드로 게스트 시험을 시작할 수 있습니다.
                     </p>
                   )}
                 </div>
 
                 {error && error !== "이름을 입력해주세요." && (
-                  <p role="alert" style={{ fontSize: "0.8rem", color: "var(--error)", marginTop: "-0.35rem", marginBottom: "1.35rem", fontWeight: 600 }}>
+                  <p role="alert" style={{ fontSize: "var(--type-label)", color: "var(--error)", marginTop: "-0.35rem", marginBottom: "1.35rem", fontWeight: 600 }}>
                     {error}
                   </p>
                 )}
@@ -1392,7 +1392,7 @@ export default function Home() {
                       style={{
                         display: "block",
                         marginBottom: "0.55rem",
-                        fontSize: "0.75rem",
+                        fontSize: "var(--type-label)",
                         fontWeight: 700,
                         color: needsCode ? "var(--warning)" : "var(--muted)",
                         textTransform: "uppercase",
@@ -1415,7 +1415,7 @@ export default function Home() {
                       maxLength={6}
                       style={{ letterSpacing: "0.25em", fontFamily: "monospace", textTransform: "uppercase" }}
                     />
-                    <p style={{ fontSize: "0.75rem", color: "var(--muted)", marginTop: "0.45rem", opacity: 0.85 }}>
+                    <p style={{ fontSize: "var(--type-label)", color: "var(--muted)", marginTop: "0.45rem", opacity: 0.9, lineHeight: 1.5 }}>
                       학생 계정 비밀번호처럼 쓰이는 6자리 코드입니다. 분실 시 선생님에게 재발급을 요청하세요.
                     </p>
                   </div>
@@ -1435,7 +1435,7 @@ export default function Home() {
                   {studentLoginPending ? "계정 확인 중…" : "시험 시작하기"}
                 </button>
 
-                <p style={{ fontSize: "0.72rem", color: "var(--muted)", margin: "0 0 0.75rem", lineHeight: 1.45, wordBreak: "keep-all" }}>
+                <p style={{ fontSize: "var(--type-caption)", color: "var(--muted)", margin: "0 0 0.75rem", lineHeight: 1.5, wordBreak: "keep-all" }}>
                   {requiresServerStudentVerification
                     ? "* 선생님이 발급한 초대 링크와 시작 코드로 서버 명단을 확인합니다."
                     : "* 현재 기기에 저장된 명단과 시작 코드로 로그인합니다."}
@@ -1450,7 +1450,7 @@ export default function Home() {
                     style={{
                       display: "block",
                       marginBottom: "0.55rem",
-                      fontSize: "0.75rem",
+                      fontSize: "var(--type-label)",
                       fontWeight: 700,
                       color: "var(--muted)",
                       textTransform: "uppercase",

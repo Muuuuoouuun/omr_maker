@@ -2096,6 +2096,7 @@ function CreateOMRPageInner() {
                     onUploadAnswerPdf={(file) => {
                         handleAnswerKeyPdfFile(file);
                     }}
+                    expectedQuestionCount={questionsCount}
                 />
             )}
 

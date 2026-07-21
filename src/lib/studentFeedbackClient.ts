@@ -12,12 +12,6 @@ import {
 import type { PersistenceResult } from "@/lib/omrPersistence";
 import type { AttemptFeedback } from "@/types/omr";
 
-export async function loadStudentReturnedFeedback(): Promise<AttemptFeedback[]> {
-    const result = await listStudentCanonicalFeedback();
-    if (result.status === "loaded") return Promise.all(result.items.map(cacheFeedbackEnvelope));
-    return [];
-}
-
 export async function loadStudentReturnedFeedbackForAttempt(
     attemptId: string,
     studentProfileId: string,

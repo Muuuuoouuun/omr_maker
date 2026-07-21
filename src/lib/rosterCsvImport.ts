@@ -27,7 +27,6 @@ const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 // Accepted header aliases for the optional region/campus/branch column.
 const REGION_HEADERS = ["region", "campus", "branch", "지역", "지점", "캠퍼스"];
 
-export type RosterCsvDisposition = "add" | "update" | "conflict" | "skip";
 export type RosterCsvSkipReason = "missing-fields" | "invalid-email";
 export type RosterCsvFieldKey = "name" | "email" | "group" | "region";
 export type RosterCsvImportError = "empty" | "header";

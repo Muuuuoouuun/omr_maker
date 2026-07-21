@@ -27,6 +27,7 @@ import {
 import type { Attempt, Exam } from "@/types/omr";
 import type { RosterGroup } from "@/lib/rosterStorage";
 import { buildAttemptScoreLookup } from "@/lib/attemptScores";
+import { serializeCsvRows } from "@/lib/csv";
 
 interface MockupOverviewProps {
     exams: Exam[];
@@ -35,6 +36,7 @@ interface MockupOverviewProps {
     totalStudents: number;
     averageScore: number;
     onNavigateToExamAnalytics: (examId: string) => void;
+    onNavigateToStudentAnalytics: () => void;
 }
 
 function cleanExamTitle(title: string): string {
@@ -62,13 +64,27 @@ export default function MockupOverview({
     totalStudents,
     averageScore,
     onNavigateToExamAnalytics,
+    onNavigateToStudentAnalytics,
 }: MockupOverviewProps) {
     const model = useMemo(() => {
         const examById = new Map(exams.map(exam => [exam.id, exam]));
         const scoreLookup = buildAttemptScoreLookup(attempts, examById);
+        const attemptsByExamId = new Map<string, Attempt[]>();
+        const attemptsByGroupId = new Map<string, Attempt[]>();
+        for (const attempt of attempts) {
+            if (attempt.retake) continue;
+            const examAttempts = attemptsByExamId.get(attempt.examId);
+            if (examAttempts) examAttempts.push(attempt);
+            else attemptsByExamId.set(attempt.examId, [attempt]);
+
+            if (!attempt.groupId) continue;
+            const groupAttempts = attemptsByGroupId.get(attempt.groupId);
+            if (groupAttempts) groupAttempts.push(attempt);
+            else attemptsByGroupId.set(attempt.groupId, [attempt]);
+        }
         const orderedExams = [...exams].sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
         const rows = orderedExams.map(exam => {
-            const examAttempts = attempts.filter(attempt => attempt.examId === exam.id && !attempt.retake);
+            const examAttempts = attemptsByExamId.get(exam.id) || [];
             const score = examAttempts.length > 0
                 ? examAttempts.reduce((sum, attempt) => sum + (scoreLookup.get(attempt.id)?.scorePercent ?? 0), 0) / examAttempts.length
                 : 0;
@@ -85,7 +101,7 @@ export default function MockupOverview({
         });
 
         const classRows = rosterGroups.map(group => {
-            const groupAttempts = attempts.filter(attempt => attempt.groupId === group.id && !attempt.retake);
+            const groupAttempts = attemptsByGroupId.get(group.id) || [];
             const average = groupAttempts.length > 0
                 ? groupAttempts.reduce((sum, attempt) => sum + (scoreLookup.get(attempt.id)?.scorePercent ?? 0), 0) / groupAttempts.length
                 : group.avgScore;
@@ -93,25 +109,30 @@ export default function MockupOverview({
         });
 
         const possibleAttempts = Math.max(1, exams.length * totalStudents);
+        const completedAttemptCount = attempts.filter(attempt => !attempt.retake && attempt.status === "completed").length;
         return {
             rows,
             recentRows: [...rows].reverse().slice(0, 6),
             classRows,
-            completionRate: Math.round(attempts.filter(attempt => attempt.status === "completed").length / possibleAttempts * 100),
+            completionRate: Math.round(completedAttemptCount / possibleAttempts * 100),
+            completedAttemptCount,
+            possibleAttempts,
             activeExamCount: exams.filter(exam => !exam.archived).length,
         };
     }, [attempts, exams, rosterGroups, totalStudents]);
 
     const exportSummary = () => {
-        const header = "시험명,응시 학생,참여율,평균 점수,상태";
-        const rows = model.rows.map(row => [
-            row.title,
-            row.participants,
-            percent(row.participation),
-            `${row.average}점`,
-            row.archived ? "채점 완료" : "진행 중",
-        ].join(","));
-        const blob = new Blob(["\uFEFF" + [header, ...rows].join("\n")], { type: "text/csv;charset=utf-8" });
+        const csv = serializeCsvRows([
+            ["시험명", "응시 학생", "참여율", "평균 점수", "상태"],
+            ...model.rows.map(row => [
+                row.title,
+                row.participants,
+                percent(row.participation),
+                `${row.average}점`,
+                row.archived ? "채점 완료" : "진행 중",
+            ]),
+        ]);
+        const blob = new Blob(["\uFEFF" + csv], { type: "text/csv;charset=utf-8" });
         const url = URL.createObjectURL(blob);
         const anchor = document.createElement("a");
         anchor.href = url;
@@ -120,11 +141,67 @@ export default function MockupOverview({
         URL.revokeObjectURL(url);
     };
 
+    const scoredRows = model.rows.filter(row => row.participants > 0);
+    const latestRow = scoredRows.at(-1);
+    const previousRow = scoredRows.at(-2);
+    const activeRow = model.recentRows.find(row => !row.archived) || latestRow;
+    const lowestParticipationRow = model.rows
+        .filter(row => row.participants > 0)
+        .reduce<(typeof model.rows)[number] | undefined>((lowest, row) => (
+            !lowest || row.participation < lowest.participation ? row : lowest
+        ), undefined);
+    const averageDelta = latestRow && previousRow ? latestRow.average - previousRow.average : 0;
+    const averageComparison = previousRow
+        ? `직전 시험보다 ${Math.abs(averageDelta).toFixed(1)}점 ${averageDelta >= 0 ? "상승" : "하락"}`
+        : "직전 시험 비교 데이터 준비 중";
+
     const metrics = [
-        { label: "평균 점수", value: `${averageScore.toFixed(1)}점`, detail: "전체 시험 기준", icon: TrendingUp, tone: "blue" },
-        { label: "응시 학생", value: `${totalStudents}명`, detail: "4개 반 누적", icon: Users, tone: "mint" },
-        { label: "진행 중 시험", value: `${model.activeExamCount}개`, detail: "분석 가능한 시험", icon: FileCheck2, tone: "blue" },
-        { label: "채점 완료", value: `${model.completionRate}%`, detail: "예정 응시 기준", icon: CheckCircle2, tone: "mint" },
+        {
+            label: "전체 평균 점수",
+            value: `${averageScore.toFixed(1)}점`,
+            detail: latestRow ? `최근 ${latestRow.shortTitle} ${latestRow.average.toFixed(1)}점` : "전체 완료 응시 기준",
+            comparison: averageComparison,
+            comparisonTone: averageDelta > 0 ? "positive" : averageDelta < 0 ? "negative" : "neutral",
+            actionLabel: "점수 원인 보기",
+            icon: TrendingUp,
+            tone: "blue",
+            onAction: () => onNavigateToExamAnalytics(latestRow?.id || exams[0]?.id || ""),
+        },
+        {
+            label: "명단 학생",
+            value: `${totalStudents}명`,
+            detail: `${rosterGroups.length}개 반 · 등록 명단 기준`,
+            comparison: latestRow ? `최근 시험 참여율 ${percent(latestRow.participation)}` : "응시 데이터 준비 중",
+            comparisonTone: latestRow && latestRow.participation < 80 ? "negative" : "positive",
+            actionLabel: "학생별 성취 보기",
+            icon: Users,
+            tone: "mint",
+            onAction: onNavigateToStudentAnalytics,
+        },
+        {
+            label: "진행 중 시험",
+            value: `${model.activeExamCount}개`,
+            detail: `전체 ${exams.length}개 시험 중`,
+            comparison: activeRow ? `최근 확인: ${activeRow.shortTitle}` : "진행 시험 없음",
+            comparisonTone: "neutral",
+            actionLabel: "진행 시험 분석",
+            icon: FileCheck2,
+            tone: "blue",
+            onAction: () => onNavigateToExamAnalytics(activeRow?.id || exams[0]?.id || ""),
+        },
+        {
+            label: "응시 완료율",
+            value: `${model.completionRate}%`,
+            detail: `완료 ${model.completedAttemptCount}/${model.possibleAttempts}건`,
+            comparison: lowestParticipationRow
+                ? `최저 참여: ${lowestParticipationRow.shortTitle} ${percent(lowestParticipationRow.participation)}`
+                : "예정 응시 기준",
+            comparisonTone: model.completionRate < 80 ? "negative" : "positive",
+            actionLabel: "미응시·이탈 확인",
+            icon: CheckCircle2,
+            tone: "mint",
+            onAction: () => onNavigateToExamAnalytics(lowestParticipationRow?.id || latestRow?.id || exams[0]?.id || ""),
+        },
     ] as const;
 
     return (
@@ -134,12 +211,23 @@ export default function MockupOverview({
                     const Icon = metric.icon;
                     return (
                         <article className="mockup-metric" key={metric.label}>
-                            <span className={`mockup-metric-icon is-${metric.tone}`} aria-hidden="true"><Icon size={23} /></span>
-                            <span className="mockup-metric-copy">
-                                <span className="mockup-metric-label">{metric.label}</span>
-                                <strong>{metric.value}</strong>
-                                <span>{metric.detail}</span>
-                            </span>
+                            <button
+                                type="button"
+                                className="mockup-metric-action"
+                                onClick={metric.onAction}
+                                aria-label={`${metric.label} ${metric.value}. ${metric.comparison}. ${metric.actionLabel}`}
+                            >
+                                <span className={`mockup-metric-icon is-${metric.tone}`} aria-hidden="true"><Icon size={23} /></span>
+                                <span className="mockup-metric-copy">
+                                    <span className="mockup-metric-label">{metric.label}</span>
+                                    <strong>{metric.value}</strong>
+                                    <span className="mockup-metric-detail">{metric.detail}</span>
+                                    <span className="mockup-metric-footer">
+                                        <span className={`mockup-metric-change is-${metric.comparisonTone}`}>{metric.comparison}</span>
+                                        <span className="mockup-metric-link">{metric.actionLabel}<ArrowRight size={14} /></span>
+                                    </span>
+                                </span>
+                            </button>
                         </article>
                     );
                 })}
@@ -158,8 +246,8 @@ export default function MockupOverview({
                         <ResponsiveContainer
                             width="100%"
                             height="100%"
-                            minWidth={0}
-                            minHeight={0}
+                            minWidth={1}
+                            minHeight={1}
                             initialDimension={{ width: 860, height: 195 }}
                         >
                             <AreaChart data={model.rows} margin={{ top: 18, right: 18, bottom: 4, left: -18 }}>
@@ -187,25 +275,25 @@ export default function MockupOverview({
                 <article className="mockup-panel mockup-insights-panel">
                     <div className="mockup-panel-heading">
                         <div>
-                            <h2>학습 인사이트</h2>
-                            <p>지금 확인하면 좋은 변화 3가지예요.</p>
+                            <h2>오늘의 우선 조치</h2>
+                            <p>학습 영향이 큰 순서대로 바로 확인할 수 있어요.</p>
                         </div>
                     </div>
                     <div className="mockup-insight-list">
                         <button type="button" onClick={() => onNavigateToExamAnalytics("mock-calculus-limit")}>
                             <span className="mockup-insight-icon is-mint"><Target size={18} /></span>
-                            <span><strong>함수의 극한 정답률 58%</strong><small>최근 3회 평균보다 9%p 낮아요.</small></span>
-                            <em>개선 필요</em>
+                            <span><strong>함수의 극한 정답률 58%</strong><small>최근 3회 평균보다 9%p 낮아요 · 1순위 보완</small></span>
+                            <span className="mockup-insight-action">문항 분석 <ArrowRight size={15} /></span>
                         </button>
                         <button type="button" onClick={() => onNavigateToExamAnalytics("mock-final-comprehensive")}>
                             <span className="mockup-insight-icon is-blue"><Users size={18} /></span>
-                            <span><strong>2학년 3반이 평균 대비 6.2점 낮아요</strong><small>반별 평균 점수 비교 기준</small></span>
-                            <ArrowRight size={17} />
+                            <span><strong>2학년 3반이 평균 대비 6.2점 낮아요</strong><small>반별 평균 점수 비교 기준 · 집중 지도 대상</small></span>
+                            <span className="mockup-insight-action">반 비교 <ArrowRight size={15} /></span>
                         </button>
                         <button type="button" onClick={() => onNavigateToExamAnalytics("mock-math-midterm")}>
                             <span className="mockup-insight-icon is-coral"><CircleAlert size={18} /></span>
-                            <span><strong>서술형 12번 오답이 집중됐어요</strong><small>풀이 근거 누락 유형을 확인해보세요.</small></span>
-                            <em className="is-warning">주의</em>
+                            <span><strong>서술형 12번 오답이 집중됐어요</strong><small>풀이 근거 누락 유형 · 재지도 권장</small></span>
+                            <span className="mockup-insight-action">오답 유형 <ArrowRight size={15} /></span>
                         </button>
                     </div>
                 </article>
@@ -248,8 +336,8 @@ export default function MockupOverview({
                         <ResponsiveContainer
                             width="100%"
                             height="100%"
-                            minWidth={0}
-                            minHeight={0}
+                            minWidth={1}
+                            minHeight={1}
                             initialDimension={{ width: 700, height: 235 }}
                         >
                             <BarChart data={model.classRows} margin={{ top: 22, right: 4, bottom: 0, left: -24 }}>

@@ -2281,12 +2281,12 @@ function ManageUsersInner() {
                                         aria-label={`${g.name} 대시보드 분석에서 보기`}
                                         title="학생 성취도 탭에서 이 반의 지역 범위로 열립니다."
                                         style={{
-                                            minHeight: 36,
+                                            minHeight: 44,
                                             display: 'flex',
                                             alignItems: 'center',
                                             justifyContent: 'center',
                                             gap: '0.3rem',
-                                            fontSize: '0.74rem',
+                                            fontSize: '0.8rem',
                                             fontWeight: 800,
                                             color: 'var(--muted)',
                                         }}

@@ -59,26 +59,6 @@ function signaturesMatch(actual: string, expected: string): boolean {
     return actualBuffer.length === expectedBuffer.length && timingSafeEqual(actualBuffer, expectedBuffer);
 }
 
-export function createStudentServerIdentity(
-    input: StudentIdentityInput,
-    now = Date.now(),
-): StudentServerIdentity {
-    return {
-        ...input,
-        issuedAt: now,
-        expiresAt: now + STUDENT_SERVER_SESSION_MAX_AGE_SECONDS * 1000,
-    };
-}
-
-export function isStudentIdentityActive(identity: StudentServerIdentity | null, now = Date.now()): boolean {
-    return !!identity
-        && Number.isFinite(identity.issuedAt)
-        && Number.isFinite(identity.expiresAt)
-        && identity.issuedAt <= now + STUDENT_SERVER_SESSION_CLOCK_SKEW_MS
-        && identity.expiresAt > now
-        && identity.expiresAt - identity.issuedAt <= STUDENT_SERVER_SESSION_MAX_AGE_SECONDS * 1000;
-}
-
 function normalizeCookieInput(input: StudentSessionCookieInput, now: number): Record<string, unknown> | null {
     if ("kind" in input) {
         const name = clean(input.name);

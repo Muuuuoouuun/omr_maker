@@ -98,7 +98,9 @@ describe("persistence integration", () => {
         expect(teacherAuthGate).toContain("visibilitychange");
         expect(teacherAuthGate).toContain('window.addEventListener("focus"');
         expect(createPage).not.toContain("<TeacherAuthGate>");
-        expect(groupsPage).toContain('router.replace("/teacher/users?tab=groups")');
+        expect(groupsPage).toContain('redirect("/teacher/users?tab=groups")');
+        expect(groupsPage).not.toContain('"use client"');
+        expect(groupsPage).not.toContain("useEffect");
     });
 
     it("security settings expose real session controls instead of a fake password form", () => {

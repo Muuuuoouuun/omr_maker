@@ -1003,14 +1003,6 @@ export function buildClassTypeWeaknessGroups(
     return buildTypeWeaknessGroups(collectQuestionResults(exam, attempts, { groupKey }), kind);
 }
 
-export function buildExamTypeWeaknessGroups(
-    exam: Exam,
-    attempts: Attempt[],
-    kind: QuestionResultGroupKind = "concept",
-): TypeWeaknessGroup[] {
-    return buildTypeWeaknessGroups(collectQuestionResults(exam, attempts), kind);
-}
-
 export function buildLearningRecommendations(
     exam: Exam,
     attempts: Attempt[],

@@ -106,18 +106,6 @@ export function loadExam(examId: string): Exam | null {
     return isExam(parsed) ? parsed : null;
 }
 
-export function loadAllExams(): Exam[] {
-    if (typeof window === "undefined") return [];
-    const exams: Exam[] = [];
-    for (let i = 0; i < localStorage.length; i++) {
-        const key = localStorage.key(i);
-        if (!key?.startsWith(STORAGE_KEYS.EXAM_PREFIX)) continue;
-        const parsed = readLocalJson<unknown>(key, null);
-        if (isExam(parsed)) exams.push(parsed);
-    }
-    return exams;
-}
-
 export function saveExam(exam: Exam): boolean {
     return writeLocalJson(examStorageKey(exam.id), exam);
 }
@@ -125,14 +113,6 @@ export function saveExam(exam: Exam): boolean {
 export function loadAttempts(): Attempt[] {
     const parsed = readLocalJson<unknown>(STORAGE_KEYS.ATTEMPTS, []);
     return Array.isArray(parsed) ? parsed.filter(isAttempt) : [];
-}
-
-export function saveAttempts(attempts: Attempt[]): boolean {
-    return writeLocalJson(STORAGE_KEYS.ATTEMPTS, attempts);
-}
-
-export function appendAttempt(attempt: Attempt): boolean {
-    return saveAttempts([...loadAttempts(), attempt]);
 }
 
 export function getOrCreateGuestId(): string {
@@ -431,23 +411,6 @@ export function previewGuestMerge(guestId: string, target?: GuestMergeTarget | s
 
 function normalizeName(name: string): string {
     return name.trim().toLocaleLowerCase();
-}
-
-export function makeStudentId(name: string, groupId: string): string {
-    return `${groupId}::${name.trim()}`;
-}
-
-export function studentIdentityKeyFromAttempt(attempt: Attempt): string {
-    if (attempt.studentId) return `student:${attempt.studentId}`;
-    if (attempt.guestId) return `guest:${attempt.guestId}`;
-    return `name:${normalizeName(attempt.studentName)}`;
-}
-
-export function studentIdentityKeyFromSession(session: StudentSession): string {
-    if (session.isGuest && session.guestId) return `guest:${session.guestId}`;
-    if (session.studentId) return `student:${session.studentId}`;
-    if (session.groupId) return `legacy:${session.groupId}:${normalizeName(session.name)}`;
-    return `name:${normalizeName(session.name)}`;
 }
 
 export function attemptMatchesSession(attempt: Attempt, session: StudentSession): boolean {

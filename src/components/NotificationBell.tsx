@@ -282,7 +282,7 @@ export default function NotificationBell() {
                         minWidth: 16, height: 16, padding: '0 4px',
                         background: '#ef4444', color: 'white',
                         borderRadius: 'var(--radius-full)',
-                        fontSize: '0.62rem', fontWeight: 800,
+                        fontSize: 'var(--type-micro)', fontWeight: 800,
                         display: 'flex', alignItems: 'center', justifyContent: 'center',
                         border: '1.5px solid var(--surface)',
                         fontVariantNumeric: 'tabular-nums'
@@ -313,9 +313,9 @@ export default function NotificationBell() {
                         padding: '0.85rem 1rem', borderBottom: '1px solid var(--border)'
                     }}>
                         <div style={{ display: 'flex', alignItems: 'baseline', gap: '0.4rem' }}>
-                            <span style={{ fontSize: '0.95rem', fontWeight: 700 }}>알림</span>
+                            <span style={{ fontSize: '1.02rem', fontWeight: 800 }}>알림</span>
                             {unreadCount > 0 && (
-                                <span style={{ fontSize: '0.75rem', color: 'var(--muted)' }}>
+                                <span style={{ fontSize: 'var(--type-caption)', color: 'var(--muted)' }}>
                                     {unreadCount}개 읽지 않음
                                 </span>
                             )}
@@ -325,14 +325,14 @@ export default function NotificationBell() {
                                 {unreadCount > 0 && (
                                     <button
                                         onClick={markAllRead}
-                                        style={{ minHeight: 44, padding: '0 0.6rem', fontSize: '0.75rem', color: 'var(--primary)', fontWeight: 600 }}
+                                        style={{ minHeight: 44, padding: '0 0.6rem', fontSize: '0.8rem', color: 'var(--primary)', fontWeight: 650 }}
                                     >
                                         모두 읽음
                                     </button>
                                 )}
                                 <button
                                     onClick={() => setClearConfirmOpen(true)}
-                                    style={{ minHeight: 44, padding: '0 0.6rem', fontSize: '0.75rem', color: 'var(--muted)', fontWeight: 500 }}
+                                    style={{ minHeight: 44, padding: '0 0.6rem', fontSize: '0.8rem', color: 'var(--muted)', fontWeight: 550 }}
                                 >
                                     모두 삭제
                                 </button>
@@ -354,13 +354,13 @@ export default function NotificationBell() {
                                 borderBottom: '1px solid rgba(239,68,68,0.18)',
                             }}
                         >
-                            <span style={{ fontSize: '0.8rem', color: 'var(--foreground)', fontWeight: 700, wordBreak: 'keep-all' }}>
+                            <span style={{ fontSize: 'var(--type-label)', color: 'var(--foreground)', fontWeight: 750, wordBreak: 'keep-all' }}>
                                 모든 알림을 삭제할까요?
                             </span>
                             <div style={{ display: 'flex', gap: '0.45rem', flexShrink: 0 }}>
                                 <button
                                     onClick={() => setClearConfirmOpen(false)}
-                                    style={{ minHeight: 44, padding: '0 0.6rem', fontSize: '0.75rem', color: 'var(--muted)', fontWeight: 700 }}
+                                    style={{ minHeight: 44, padding: '0 0.6rem', fontSize: '0.8rem', color: 'var(--muted)', fontWeight: 700 }}
                                 >
                                     취소
                                 </button>
@@ -372,7 +372,7 @@ export default function NotificationBell() {
                                         borderRadius: 'var(--radius-md)',
                                         background: 'var(--error)',
                                         color: 'white',
-                                        fontSize: '0.75rem',
+                                        fontSize: '0.8rem',
                                         fontWeight: 800,
                                     }}
                                 >
@@ -406,12 +406,12 @@ export default function NotificationBell() {
                                         </div>
                                         <div style={{ flex: 1, minWidth: 0 }}>
                                             <div style={{ display: 'flex', justifyContent: 'space-between', gap: '0.5rem', marginBottom: '0.15rem' }}>
-                                                <span style={{ fontSize: '0.85rem', fontWeight: n.unread ? 700 : 500, color: 'var(--foreground)' }}>
+                                                <span style={{ fontSize: '0.9rem', fontWeight: n.unread ? 750 : 550, color: 'var(--foreground)' }}>
                                                     {n.title}
                                                 </span>
-                                                <span style={{ fontSize: '0.72rem', color: 'var(--muted)', flexShrink: 0, whiteSpace: 'nowrap' }}>{n.time}</span>
+                                                <span style={{ fontSize: 'var(--type-caption)', color: 'var(--muted)', flexShrink: 0, whiteSpace: 'nowrap' }}>{n.time}</span>
                                             </div>
-                                            <div style={{ fontSize: '0.78rem', color: 'var(--muted)', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                                            <div style={{ fontSize: 'var(--type-label)', color: 'var(--muted)', overflow: 'hidden', textOverflow: 'ellipsis' }}>
                                                 {n.message}
                                             </div>
                                         </div>

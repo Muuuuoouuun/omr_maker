@@ -59,7 +59,7 @@ export default function TrendChart({ data, labels, color = "#ffffff", height = 1
                 }}
             >
                 <div>
-                    <strong style={{ display: 'block', fontSize: '2.25rem', lineHeight: 1, fontVariantNumeric: 'tabular-nums' }}>
+                    <strong className="numeric-emphasis" style={{ display: 'block', fontSize: '2.25rem', lineHeight: 1, fontVariantNumeric: 'tabular-nums' }}>
                         {data[0]}점
                     </strong>
                     <span style={{ display: 'block', marginTop: '0.65rem', fontSize: '0.82rem', fontWeight: 700, opacity: 0.78 }}>

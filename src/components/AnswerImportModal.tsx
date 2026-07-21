@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useId } from 'react';
+import { useState, useEffect, useId, useRef } from 'react';
 import type { ParsedAnswer } from '@/services/answerParser';
 import { readStoredGeminiApiKey } from '@/lib/geminiApiKey';
 import type { AiAnswerRecognitionMode } from '@/lib/aiAnswerModelRouting';
@@ -14,34 +14,75 @@ interface AnswerImportModalProps {
     onClose: () => void;
     onApply: (answers: ParsedAnswer[]) => void;
     onUploadAnswerPdf?: (file: File) => void; // For reference-only PDF (teacher view only)
+    expectedQuestionCount?: number;
 }
 
-export default function AnswerImportModal({ isOpen, onClose, onApply, onUploadAnswerPdf }: AnswerImportModalProps) {
+const LOW_CONFIDENCE_THRESHOLD = 0.65;
+type AnswerRecognitionCache = { text?: ParsedAnswer[]; ai?: ParsedAnswer[] };
+
+export default function AnswerImportModal({
+    isOpen,
+    onClose,
+    onApply,
+    onUploadAnswerPdf,
+    expectedQuestionCount,
+}: AnswerImportModalProps) {
     const titleId = useId();
+    const analysisRunRef = useRef(0);
+    const analysisCacheRef = useRef<WeakMap<File, AnswerRecognitionCache>>(new WeakMap());
     const [file, setFile] = useState<File | null>(null);
     const [parsedData, setParsedData] = useState<ParsedAnswer[]>([]);
     const [isProcessing, setIsProcessing] = useState(false);
     const [error, setError] = useState<string | null>(null);
     const [useAI, setUseAI] = useState(false);
+    const [reviewedQuestions, setReviewedQuestions] = useState<Set<number>>(() => new Set());
+
+    const expectedNumbers = Number.isInteger(expectedQuestionCount) && (expectedQuestionCount || 0) > 0
+        ? Array.from({ length: expectedQuestionCount || 0 }, (_, index) => index + 1)
+        : [];
+    const recognizedNumbers = new Set(parsedData.map(item => item.questionNum));
+    const missingQuestionNumbers = expectedNumbers.filter(questionNum => !recognizedNumbers.has(questionNum));
+    const lowConfidenceData = parsedData.filter(item => item.confidence < LOW_CONFIDENCE_THRESHOLD);
+    const unreviewedLowConfidence = lowConfidenceData.filter(item => !reviewedQuestions.has(item.questionNum));
 
     // Use effect to re-analyze when AI mode is toggled if file exists
     useEffect(() => {
         if (file) {
-            analyzeFile(file, useAI);
+            void analyzeFile(file, useAI);
         }
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [useAI]);
+
+    useEffect(() => () => {
+        analysisRunRef.current += 1;
+    }, []);
 
     const analyzeFile = async (
         targetFile: File,
         isAiMode: boolean,
         recognitionMode: AiAnswerRecognitionMode = "default",
     ) => {
+        const analysisRun = ++analysisRunRef.current;
+        const cacheKey = isAiMode ? "ai" : "text";
         setIsProcessing(true);
         setError(null);
         setParsedData([]);
+        setReviewedQuestions(new Set());
 
         try {
+            const cachedResults = recognitionMode === "default"
+                ? analysisCacheRef.current.get(targetFile)?.[cacheKey]
+                : undefined;
+            if (cachedResults !== undefined) {
+                if (cachedResults.length === 0) {
+                    setError(isAiMode
+                        ? "AI가 정답을 찾지 못했습니다. 이미지가 선명한지 확인해주세요."
+                        : "텍스트 정답을 찾을 수 없습니다. 'AI 인식' 모드를 사용해보세요.");
+                }
+                setParsedData(cachedResults.map(item => ({ ...item })));
+                return;
+            }
+
             let results;
             if (isAiMode) {
                 const { parseAnswerKeyWithGemini } = await import('@/services/answerParser');
@@ -53,16 +94,24 @@ export default function AnswerImportModal({ isOpen, onClose, onApply, onUploadAn
                 results = await parseAnswerKeyPdf(targetFile);
             }
 
+            if (analysisRun !== analysisRunRef.current) return;
+
             if (results.length === 0) {
                 setError(isAiMode
                     ? "AI가 정답을 찾지 못했습니다. 이미지가 선명한지 확인해주세요."
-                    : "텍스트 정답을 찾을 수 없습니다. 'AI 인식' 모드를 사용보세요.");
+                    : "텍스트 정답을 찾을 수 없습니다. 'AI 인식' 모드를 사용해보세요.");
             }
             if (isAiMode && results.length > 0) {
                 incrementAiRecognitionUsage();
             }
+            const currentCache = analysisCacheRef.current.get(targetFile) || {};
+            if (!isAiMode || results.length > 0) {
+                currentCache[cacheKey] = results.map(item => ({ ...item }));
+                analysisCacheRef.current.set(targetFile, currentCache);
+            }
             setParsedData(results);
         } catch (err: unknown) {
+            if (analysisRun !== analysisRunRef.current) return;
             const message = err instanceof Error ? err.message : String(err || "");
             if (message.includes("Gemini API key") || message.includes("GEMINI_API_KEY") || message.includes("Gemini API 키")) {
                 setError("개인설정 > API 키에서 Gemini API 키를 저장한 뒤 다시 시도해주세요.");
@@ -70,28 +119,34 @@ export default function AnswerImportModal({ isOpen, onClose, onApply, onUploadAn
                 setError(`분석 실패: ${message || "처리 중 오류가 발생했습니다."}`);
             }
         } finally {
-            setIsProcessing(false);
+            if (analysisRun === analysisRunRef.current) setIsProcessing(false);
         }
     };
 
-    const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
         if (e.target.files && e.target.files[0]) {
             const selectedFile = e.target.files[0];
             setFile(selectedFile);
-            analyzeFile(selectedFile, useAI);
+            void analyzeFile(selectedFile, useAI);
         }
     };
 
     const handleAnswerChange = (idx: number, newVal: string) => {
         const numVal = parseInt(newVal, 10);
+        if (!Number.isInteger(numVal) || numVal < 1 || numVal > 5) return;
         setParsedData(prev => {
             const next = [...prev];
             next[idx] = { ...next[idx], answer: numVal };
             return next;
         });
+        setReviewedQuestions(prev => new Set(prev).add(parsedData[idx].questionNum));
     };
 
     const handleApply = () => {
+        if (unreviewedLowConfidence.length > 0) {
+            setError(`신뢰도가 낮은 ${unreviewedLowConfidence.length}개 문항을 확인해주세요.`);
+            return;
+        }
         if (parsedData.length > 0) {
             onApply(parsedData);
         }
@@ -164,12 +219,12 @@ export default function AnswerImportModal({ isOpen, onClose, onApply, onUploadAn
                         <div style={{ textAlign: 'center', padding: '2rem 1rem', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '1rem', background: 'rgba(99, 102, 241, 0.05)', borderRadius: '8px', marginBottom: '1.5rem', border: '1px solid rgba(99, 102, 241, 0.2)' }}>
                             <div style={{ fontWeight: 600, color: 'var(--primary)', fontSize: '1.05rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
                                 <BrainCircuit size={18} className="animate-pulse" />
-                                AI가 이미지를 분석하고 정답을 추출 중입니다...
+                                {useAI ? "AI가 이미지를 분석하고 정답을 추출 중입니다..." : "PDF 텍스트에서 정답을 추출 중입니다..."}
                             </div>
                             <div style={{ width: '80%', height: '8px', background: '#e2e8f0', borderRadius: '4px', overflow: 'hidden', boxShadow: 'inset 0 1px 2px rgba(0,0,0,0.1)' }}>
                                 <div className="ai-loading-bar" style={{ width: '100%', height: '100%' }}></div>
                             </div>
-                            <div style={{ fontSize: '0.85rem', color: 'var(--muted)' }}>최대 10~20초 정도 소요될 수 있습니다.</div>
+                            <div style={{ fontSize: '0.85rem', color: 'var(--muted)' }}>{useAI ? "보통 10~20초 정도 소요되며, 지연 요청은 자동으로 중단됩니다." : "여러 페이지를 동시에 확인하고 있습니다."}</div>
                         </div>
                     )}
 
@@ -196,9 +251,46 @@ export default function AnswerImportModal({ isOpen, onClose, onApply, onUploadAn
                                     <span style={{ fontSize: '0.8rem', color: 'var(--muted)' }}>필요시 직접 수정하세요</span>
                                 </div>
                             </div>
+                            <div
+                                aria-live="polite"
+                                style={{
+                                    marginBottom: '1rem',
+                                    padding: '0.75rem',
+                                    borderRadius: '6px',
+                                    border: `1px solid ${unreviewedLowConfidence.length > 0 ? '#f59e0b' : 'var(--border)'}`,
+                                    background: unreviewedLowConfidence.length > 0 ? '#fffbeb' : 'var(--background)',
+                                    color: unreviewedLowConfidence.length > 0 ? '#92400e' : 'var(--foreground)',
+                                    fontSize: '0.84rem',
+                                    lineHeight: 1.5,
+                                }}
+                            >
+                                <strong>
+                                    {expectedNumbers.length > 0
+                                        ? `${expectedNumbers.length}문항 중 ${expectedNumbers.length - missingQuestionNumbers.length}문항 인식`
+                                        : `${parsedData.length}문항 인식`}
+                                </strong>
+                                {missingQuestionNumbers.length > 0 && (
+                                    <div>
+                                        누락 확인: {missingQuestionNumbers.slice(0, 12).join(', ')}번
+                                        {missingQuestionNumbers.length > 12 ? ` 외 ${missingQuestionNumbers.length - 12}개` : ''}
+                                    </div>
+                                )}
+                                {unreviewedLowConfidence.length > 0 && (
+                                    <div>신뢰도가 낮은 {unreviewedLowConfidence.length}개 문항은 답을 확인한 뒤 ‘검토 완료’를 선택해주세요.</div>
+                                )}
+                            </div>
                             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(100px, 1fr))', gap: '0.5rem' }}>
                                 {parsedData.map((item, idx) => (
-                                    <div key={idx} style={{ padding: '0.5rem', border: '1px solid var(--border)', borderRadius: '4px', textAlign: 'center', background: 'var(--surface)' }}>
+                                    <div
+                                        key={item.questionNum}
+                                        style={{
+                                            padding: '0.5rem',
+                                            border: `1px solid ${item.confidence < LOW_CONFIDENCE_THRESHOLD ? '#f59e0b' : 'var(--border)'}`,
+                                            borderRadius: '4px',
+                                            textAlign: 'center',
+                                            background: item.confidence < LOW_CONFIDENCE_THRESHOLD ? '#fffbeb' : 'var(--surface)',
+                                        }}
+                                    >
                                         <div style={{ fontSize: '0.8rem', color: 'var(--muted)', marginBottom: '0.2rem' }}>
                                             문항 {item.questionNum}
                                             {item.score && <span style={{ color: '#10b981', marginLeft: '4px' }}>({item.score}점)</span>}
@@ -214,6 +306,24 @@ export default function AnswerImportModal({ isOpen, onClose, onApply, onUploadAn
                                             <option value={4}>④</option>
                                             <option value={5}>⑤</option>
                                         </select>
+                                        <div style={{ marginTop: '0.3rem', fontSize: '0.7rem', color: item.confidence < LOW_CONFIDENCE_THRESHOLD ? '#b45309' : 'var(--muted)' }}>
+                                            신뢰도 {Math.round(item.confidence * 100)}%
+                                        </div>
+                                        {item.confidence < LOW_CONFIDENCE_THRESHOLD && (
+                                            <label style={{ marginTop: '0.3rem', display: 'inline-flex', alignItems: 'center', gap: '0.25rem', color: '#92400e', fontSize: '0.72rem', cursor: 'pointer' }}>
+                                                <input
+                                                    type="checkbox"
+                                                    checked={reviewedQuestions.has(item.questionNum)}
+                                                    onChange={(event) => setReviewedQuestions(prev => {
+                                                        const next = new Set(prev);
+                                                        if (event.target.checked) next.add(item.questionNum);
+                                                        else next.delete(item.questionNum);
+                                                        return next;
+                                                    })}
+                                                />
+                                                검토 완료
+                                            </label>
+                                        )}
                                     </div>
                                 ))}
                             </div>
@@ -242,7 +352,7 @@ export default function AnswerImportModal({ isOpen, onClose, onApply, onUploadAn
                         <button
                             onClick={handleApply}
                             className="btn btn-primary"
-                            disabled={!file}
+                            disabled={!file || parsedData.length === 0 || unreviewedLowConfidence.length > 0 || isProcessing}
                         >
                             적용하기
                         </button>

@@ -291,7 +291,7 @@ export default function GlobalSearch() {
                                 <div key={groupKey}>
                                     <div style={{
                                         padding: '0.5rem 0.75rem 0.25rem',
-                                        fontSize: '0.7rem', fontWeight: 700,
+                                        fontSize: 'var(--type-caption)', fontWeight: 750,
                                         color: 'var(--muted)', letterSpacing: '0.08em',
                                         textTransform: 'uppercase'
                                     }}>
@@ -326,9 +326,9 @@ export default function GlobalSearch() {
                                                     {item.icon}
                                                 </div>
                                                 <div style={{ flex: 1, minWidth: 0 }}>
-                                                    <div style={{ fontSize: '0.9rem', fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{item.title}</div>
+                                                    <div style={{ fontSize: '0.95rem', fontWeight: 650, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{item.title}</div>
                                                     {item.subtitle && (
-                                                        <div style={{ fontSize: '0.78rem', color: 'var(--muted)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                                                        <div style={{ fontSize: 'var(--type-label)', color: 'var(--muted)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                                                             {item.subtitle}
                                                         </div>
                                                     )}
@@ -347,7 +347,7 @@ export default function GlobalSearch() {
                 <div style={{
                     display: 'flex', alignItems: 'center', justifyContent: 'space-between',
                     padding: '0.6rem 1rem', borderTop: '1px solid var(--border)',
-                    fontSize: '0.72rem', color: 'var(--muted)', background: 'var(--background)'
+                    fontSize: 'var(--type-caption)', color: 'var(--muted)', background: 'var(--background)'
                 }}>
                     <div style={{ display: 'flex', gap: '1rem' }}>
                         <span><kbd style={kbdStyle}>↑↓</kbd> 이동</span>
@@ -363,5 +363,5 @@ export default function GlobalSearch() {
 
 const kbdStyle: React.CSSProperties = {
     padding: '1px 5px', background: 'var(--surface)', border: '1px solid var(--border)',
-    borderRadius: 4, fontFamily: 'var(--font-mono)', fontSize: '0.68rem'
+    borderRadius: 4, fontFamily: 'var(--font-mono)', fontSize: 'var(--type-micro)'
 };

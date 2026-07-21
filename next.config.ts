@@ -1,11 +1,14 @@
-const securityHeaders = [
-  { key: "Strict-Transport-Security", value: "max-age=31536000" },
+const baselineSecurityHeaders = [
   { key: "Cross-Origin-Opener-Policy", value: "same-origin" },
   { key: "Cross-Origin-Resource-Policy", value: "same-origin" },
   { key: "X-Content-Type-Options", value: "nosniff" },
   { key: "Referrer-Policy", value: "strict-origin-when-cross-origin" },
   { key: "X-Frame-Options", value: "DENY" },
-  { key: "Permissions-Policy", value: "camera=(), microphone=(), geolocation=(), payment=()" },
+  { key: "Permissions-Policy", value: "camera=(), microphone=(), geolocation=(), payment=(), usb=()" },
+  {
+    key: "Content-Security-Policy",
+    value: "frame-ancestors 'none'; base-uri 'self'; object-src 'none'; form-action 'self'",
+  },
 ];
 
 /** @type {import('next').NextConfig} */
@@ -21,15 +24,17 @@ const nextConfig = {
     },
   },
   async headers() {
+    const globalHeaders = [
+      ...baselineSecurityHeaders,
+      ...(process.env.NODE_ENV === "production"
+        ? [{ key: "Strict-Transport-Security", value: "max-age=31536000; includeSubDomains" }]
+        : []),
+    ];
+
     return [
-      {
-        source: "/(.*)",
-        headers: securityHeaders,
-      },
       {
         source: "/sw.js",
         headers: [
-          ...securityHeaders,
           { key: "Content-Type", value: "application/javascript; charset=utf-8" },
           { key: "Cache-Control", value: "no-cache, no-store, must-revalidate" },
         ],
@@ -38,21 +43,11 @@ const nextConfig = {
         // Baseline security headers for every route. The teacher console and
         // student solve pages authenticate with signed session cookies, so
         // block framing (clickjacking against force-finish/delete/distribute
-        // buttons), MIME sniffing, and Referer leakage of exam ids. A fuller
-        // CSP (script-src etc.) needs testing against the inline theme script
-        // and pdf.js workers, so we start with frame-ancestors and tighten
-        // incrementally.
+        // buttons), MIME sniffing, unsafe base/object/form targets, and Referer
+        // leakage of exam ids. script-src/connect-src still need nonce and pdf.js
+        // worker validation before they can be tightened safely.
         source: "/:path*",
-        headers: [
-          { key: "X-Frame-Options", value: "DENY" },
-          { key: "X-Content-Type-Options", value: "nosniff" },
-          { key: "Referrer-Policy", value: "strict-origin-when-cross-origin" },
-          { key: "Content-Security-Policy", value: "frame-ancestors 'none'" },
-          { key: "Permissions-Policy", value: "camera=(), microphone=(), geolocation=(), payment=(), usb=()" },
-          ...(process.env.NODE_ENV === "production"
-            ? [{ key: "Strict-Transport-Security", value: "max-age=31536000; includeSubDomains" }]
-            : []),
-        ],
+        headers: globalHeaders,
       },
     ];
   },

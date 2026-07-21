@@ -745,7 +745,7 @@ function CapabilityStatusList({ items }: { items: readonly CapabilityStatusItem[
                         <span style={{ minWidth: 0 }}>
                             <span style={{ display: 'flex', alignItems: 'center', gap: '0.45rem', flexWrap: 'wrap', marginBottom: '0.2rem' }}>
                                 <strong style={{ fontSize: '0.86rem' }}>{item.label}</strong>
-                                <span style={{ padding: '0.13rem 0.42rem', borderRadius: 'var(--radius-full)', color, background, fontSize: '0.68rem', fontWeight: 900 }}>
+                                <span style={{ padding: '0.13rem 0.42rem', borderRadius: 'var(--radius-full)', color, background, fontSize: 'var(--type-micro)', fontWeight: 900 }}>
                                     {item.statusLabel}
                                 </span>
                             </span>
@@ -1120,7 +1120,7 @@ function DataDbSection({
                                             <span style={{ display: 'block', color: tone.color, fontSize: '0.8rem', fontWeight: 900 }}>
                                                 {source.label}
                                             </span>
-                                            <span style={{ display: 'block', color: 'var(--muted)', fontSize: '0.74rem', lineHeight: 1.45, wordBreak: 'keep-all' }}>
+                                            <span style={{ display: 'block', color: 'var(--muted)', fontSize: '0.8rem', lineHeight: 1.5, wordBreak: 'keep-all' }}>
                                                 {source.detail}
                                             </span>
                                         </span>
@@ -1131,7 +1131,7 @@ function DataDbSection({
                                         border: `1px solid ${tone.border}`,
                                         borderRadius: 'var(--radius-full)',
                                         padding: '0.18rem 0.5rem',
-                                        fontSize: '0.68rem',
+                                        fontSize: 'var(--type-micro)',
                                         fontWeight: 950,
                                         whiteSpace: 'nowrap',
                                     }}>
@@ -1258,7 +1258,7 @@ function SecuritySection({
                             <span style={{ minWidth: 0 }}>
                                 <span style={{ display: 'flex', alignItems: 'center', gap: '0.45rem', flexWrap: 'wrap', marginBottom: '0.18rem' }}>
                                     <strong style={{ fontSize: '0.86rem' }}>{item.label}</strong>
-                                    <span style={{ padding: '0.13rem 0.42rem', borderRadius: 'var(--radius-full)', color: 'var(--warning)', background: 'rgba(245,158,11,0.12)', fontSize: '0.68rem', fontWeight: 900 }}>
+                                    <span style={{ padding: '0.13rem 0.42rem', borderRadius: 'var(--radius-full)', color: 'var(--warning)', background: 'rgba(245,158,11,0.12)', fontSize: 'var(--type-micro)', fontWeight: 900 }}>
                                         연동 전
                                     </span>
                                 </span>
@@ -1352,7 +1352,7 @@ function SecuritySection({
                                             <span style={{ display: 'block', color: 'var(--foreground)', fontSize: '0.8rem', fontWeight: 900, marginBottom: '0.18rem', overflowWrap: 'anywhere' }}>
                                                 {check.label}
                                             </span>
-                                            <span style={{ display: 'block', color: 'var(--muted)', fontSize: '0.74rem', lineHeight: 1.52, wordBreak: 'keep-all', overflowWrap: 'anywhere' }}>
+                                            <span style={{ display: 'block', color: 'var(--muted)', fontSize: '0.8rem', lineHeight: 1.55, wordBreak: 'keep-all', overflowWrap: 'anywhere' }}>
                                                 {check.detail}
                                             </span>
                                         </span>
@@ -1437,7 +1437,7 @@ function SecuritySection({
                                 border: `1px solid ${sessionDisplay.isExpired ? 'rgba(239,68,68,0.2)' : 'rgba(16,185,129,0.2)'}`,
                                 borderRadius: 'var(--radius-full)',
                                 padding: '0.16rem 0.5rem',
-                                fontSize: '0.72rem',
+                                fontSize: 'var(--type-caption)',
                                 fontWeight: 900,
                             }}>
                                 {sessionDisplay.label}

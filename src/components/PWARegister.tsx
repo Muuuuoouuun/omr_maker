@@ -68,6 +68,7 @@ export default function PWARegister() {
     if (!("serviceWorker" in navigator)) return;
 
     let cleanupRegistrationListener: (() => void) | undefined;
+    let cleanupInstallingWorkerListener: (() => void) | undefined;
     let reloadOnNextController = false;
     let notifyOnNextController = false;
     let hasShownDeferredUpdateNotice = false;
@@ -82,7 +83,7 @@ export default function PWARegister() {
     const checkCurrentRegistrationForUpdates = () => {
       navigator.serviceWorker.getRegistration("/sw.js")
         .then(registration => {
-          if (registration) checkForUpdates(registration);
+          if (!isDisposed && registration) checkForUpdates(registration);
         })
         .catch(() => {
           // Some restricted webviews can reject service worker reads.
@@ -145,11 +146,15 @@ export default function PWARegister() {
             reloadOnNextController = canReloadForServiceWorkerUpdate(pathnameRef.current);
           }
 
-          installingWorker.addEventListener("statechange", () => {
+          cleanupInstallingWorkerListener?.();
+          const handleStateChange = () => {
+            if (isDisposed) return;
             if (installingWorker.state === "installed" && navigator.serviceWorker.controller) {
               requestActivation(registration.waiting || installingWorker);
             }
-          });
+          };
+          installingWorker.addEventListener("statechange", handleStateChange);
+          cleanupInstallingWorkerListener = () => installingWorker.removeEventListener("statechange", handleStateChange);
         };
 
         registration.addEventListener("updatefound", handleUpdateFound);
@@ -163,6 +168,7 @@ export default function PWARegister() {
 
     return () => {
       isDisposed = true;
+      cleanupInstallingWorkerListener?.();
       cleanupRegistrationListener?.();
       navigator.serviceWorker.removeEventListener("controllerchange", handleControllerChange);
       document.removeEventListener("visibilitychange", handleVisibilityChange);

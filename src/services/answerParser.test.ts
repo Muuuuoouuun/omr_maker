@@ -25,6 +25,41 @@ describe("answer parser normalization", () => {
         ]);
     });
 
+    it("extracts Korean horizontal answer tables", () => {
+        const parsed = extractAnswersFromText(
+            "문항 1 2 3 4 5 정답 ③ ④ ⑤ ① ② 배점 2 2 2 2 2 "
+            + "문항번호 6 7 8 정답 A B C",
+        );
+
+        expect(parsed.map(item => [item.questionNum, item.answer])).toEqual([
+            [1, 3],
+            [2, 4],
+            [3, 5],
+            [4, 1],
+            [5, 2],
+            [6, 1],
+            [7, 2],
+            [8, 3],
+        ]);
+    });
+
+    it("extracts numbered rows that use a Korean question suffix", () => {
+        const parsed = extractAnswersFromText("정답 1번 ③ 2번: ④ 3번) C 4번 - 2번");
+
+        expect(parsed.map(item => [item.questionNum, item.answer])).toEqual([
+            [1, 3],
+            [2, 4],
+            [3, 3],
+            [4, 2],
+        ]);
+    });
+
+    it("does not invent rows when a horizontal table has mismatched columns", () => {
+        const parsed = extractAnswersFromText("문항 1 2 3 4 정답 ① ② ③");
+
+        expect(parsed).toEqual([]);
+    });
+
     it("deduplicates repeated question rows by highest confidence", () => {
         const parsed = extractAnswersFromText("1. A 1 정답 ⑤ 2. B");
 

@@ -224,6 +224,46 @@ describe("service UI surface", () => {
         expect(layout).toContain("root.style.setProperty('--primary-dark', palette[1])");
     });
 
+    it("keeps responsive solve and PDF selectors aligned with rendered class names", () => {
+        const css = readProjectFile("src/app/globals.css");
+        const solvePage = readProjectFile("src/app/solve/[id]/page.tsx");
+        const pdfViewer = readProjectFile("src/components/PDFViewer.tsx");
+
+        for (const className of ["solve-timer", "solve-progress", "solve-controls"]) {
+            expect(solvePage).toContain(`className="${className}"`);
+            expect(css).toContain(`.${className}`);
+        }
+        for (const className of ["pdf-viewer-file", "pdf-viewer-controls", "pdf-viewer-drawing-tools", "pdf-viewer-page-wrap"]) {
+            expect(pdfViewer).toContain(`className="${className}"`);
+            expect(css).toContain(`.${className}`);
+        }
+        expect(css).not.toContain(".solve-timer-pill");
+        expect(css).not.toContain(".solve-header-actions");
+        expect(css).not.toContain(".pdf-toolbar-controls");
+        expect(css).not.toContain(".pdf-page-shell");
+    });
+
+    it("connects dashboard numbers to contextual explanations and next actions", () => {
+        const mockupOverview = readProjectFile("src/components/dashboard/MockupOverview.tsx");
+        const overviewTab = readProjectFile("src/components/dashboard/tabs/OverviewTab.tsx");
+        const statCard = readProjectFile("src/components/dashboard/StatCard.tsx");
+        const css = readProjectFile("src/app/globals.css");
+
+        expect(mockupOverview).toContain("직전 시험보다");
+        expect(mockupOverview).toContain("최근 시험 참여율");
+        expect(mockupOverview).toContain("점수 원인 보기");
+        expect(mockupOverview).toContain("학생별 성취 보기");
+        expect(mockupOverview).toContain("미응시·이탈 확인");
+        expect(mockupOverview).toContain('className="mockup-metric-action"');
+        expect(overviewTab).toContain("오늘의 우선 조치");
+        expect(overviewTab).toContain("미응시·문항 분석");
+        expect(overviewTab).toContain("onNavigateToStudentAnalytics");
+        expect(statCard).toContain('className="stat-card-action"');
+        expect(css).toContain(".overview-action-brief");
+        expect(css).toContain(".mockup-metric-change.is-negative");
+        expect(css).toMatch(/\.mockup-dashboard-shell\s*\{[\s\S]*?--text: #10203b;[\s\S]*?color: var\(--foreground\);/);
+    });
+
     it("keeps the app install prompt reachable on touch tablets", () => {
         const css = readProjectFile("src/app/globals.css");
         const installPrompt = readProjectFile("src/components/MobileInstallPrompt.tsx");
@@ -604,13 +644,13 @@ describe("service UI surface", () => {
         expect(nextConfig).toContain('Permissions-Policy');
         expect(nextConfig).toContain('camera=(), microphone=(), geolocation=(), payment=(), usb=()');
         expect(nextConfig).toContain('Strict-Transport-Security');
-        expect(nextConfig).toContain('key: "Strict-Transport-Security", value: "max-age=31536000"');
+        expect(nextConfig).toContain('key: "Strict-Transport-Security", value: "max-age=31536000; includeSubDomains"');
         expect(nextConfig).toContain('key: "Cross-Origin-Opener-Policy", value: "same-origin"');
         expect(nextConfig).toContain('key: "Cross-Origin-Resource-Policy", value: "same-origin"');
         expect(nextConfig).toContain('key: "X-Content-Type-Options", value: "nosniff"');
         expect(nextConfig).toContain('key: "Referrer-Policy", value: "strict-origin-when-cross-origin"');
         expect(nextConfig).toContain('key: "X-Frame-Options", value: "DENY"');
-        expect(nextConfig).toContain('key: "Permissions-Policy", value: "camera=(), microphone=(), geolocation=(), payment=()"');
+        expect(nextConfig).toContain('key: "Permissions-Policy", value: "camera=(), microphone=(), geolocation=(), payment=(), usb=()"');
     });
 
     it("protects server-funded AI answer analysis with origin, teacher session, and rate limits", () => {
@@ -925,8 +965,8 @@ describe("service UI surface", () => {
         expect(css).toContain(".create-label-batch-card");
         expect(css).toContain(".create-label-candidate-chip:hover .create-label-candidate-hide");
         expect(css).toContain(".create-label-candidate-chip:focus-within .create-label-candidate-hide");
-        expect(css).toContain("top: -7px");
-        expect(css).toContain("right: -7px");
+        expect(css).toContain("top: -10px");
+        expect(css).toContain("right: -10px");
         expect(css).toContain(".omr-cardview.is-vertical-numbering .omr-cardview-grid");
     });
 
@@ -967,6 +1007,7 @@ describe("service UI surface", () => {
         expect(css).toContain(".solve-omr-quick-card");
         expect(css).toContain(".solve-omr-quick-bubble.is-marked");
         expect(css).toContain("@media (min-width: 600px) and (max-width: 1180px)");
+        expect(css).toContain("overflow: clip !important");
         expect(css).toContain("--solve-omr-pane-backdrop: blur(18px) saturate(140%)");
         expect(css).toContain("width: clamp(280px, 32vw, 320px) !important");
         expect(css).toContain("transform: translateX(calc(100% + 1.5rem))");

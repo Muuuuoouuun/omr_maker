@@ -59,13 +59,6 @@ export function recomputeGroupStats<G extends GroupShape, S extends StudentShape
 // ---------- Attempt → Student progress ----------
 export type StudentStatus = "submitted" | "in_progress" | "not_started";
 
-export interface AttemptLike {
-    status?: string;
-    answers?: Record<number, number>;
-    score?: number;
-    totalScore?: number;
-}
-
 export function countAnswered(answers: Record<number, number> | undefined): number {
     if (!answers) return 0;
     let c = 0;
