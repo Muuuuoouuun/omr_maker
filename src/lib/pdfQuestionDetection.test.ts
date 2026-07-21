@@ -43,6 +43,17 @@ describe("pdf question detection", () => {
         });
     });
 
+    it("detects configured question numbers above 20 through the 50-question limit", () => {
+        const items: PdfTextLocatorItem[] = [21, 45, 50].flatMap((questionNumber, index) => [
+            { str: `${questionNumber}.`, x: 0.08, y: 0.18 + index * 0.2 },
+            { str: "다음 글을 읽고 물음에 답하시오.", x: 0.14, y: 0.18 + index * 0.2 },
+        ]);
+
+        const detected = detectQuestionLocationsFromText(items, [21, 45, 50]);
+
+        expect([...detected.keys()]).toEqual([21, 45, 50]);
+    });
+
     it("ignores answer-choice number rows", () => {
         const items: PdfTextLocatorItem[] = [
             { str: "1", x: 0.1, y: 0.78 },
