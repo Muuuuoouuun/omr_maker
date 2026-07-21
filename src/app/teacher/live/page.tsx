@@ -7,6 +7,7 @@ import { Activity, Users, CheckCircle2, Clock, AlertTriangle, Bell, PlayCircle, 
 import { toast } from "@/components/Toast";
 import type { Exam, Attempt } from "@/types/omr";
 import { shouldUseDemoData } from "@/lib/demoData";
+import { readTeacherSession } from "@/lib/teacherSession";
 import { loadTeacherAttempts, saveTeacherAttempt } from "@/lib/teacherAttemptClient";
 import { loadTeacherExam, loadTeacherExams, saveTeacherExamMutation } from "@/lib/teacherExamClient";
 import { resolveAttemptScore } from "@/lib/attemptScores";
@@ -152,10 +153,10 @@ function examToLiveExam(exam: Exam): LiveExam {
     };
 }
 
-function resolveLiveExamData(exams: Exam[]): { exams: LiveExam[]; mode: LiveDataMode } {
+function resolveLiveExamData(exams: Exam[], allowDemo: boolean): { exams: LiveExam[]; mode: LiveDataMode } {
     const loaded = exams.map(examToLiveExam);
     if (loaded.length > 0) return { exams: loaded, mode: "real" };
-    return shouldUseDemoData()
+    return allowDemo
         ? { exams: MOCK_EXAMS, mode: "demo" }
         : { exams: [], mode: "real" };
 }
@@ -235,10 +236,10 @@ function ForceFinishConfirmDialog({
 const MIN_STUDENT_CARDS = 8;
 
 export default function LiveResultsPage() {
-    const [exams, setExams] = useState<LiveExam[]>(() => shouldUseDemoData() ? MOCK_EXAMS : []);
-    const [liveDataMode, setLiveDataMode] = useState<LiveDataMode>(() => shouldUseDemoData() ? "demo" : "real");
+    const [exams, setExams] = useState<LiveExam[]>([]);
+    const [liveDataMode, setLiveDataMode] = useState<LiveDataMode>("real");
     const [attempts, setAttempts] = useState<Attempt[]>([]);
-    const [selectedExamId, setSelectedExamId] = useState<string>(() => shouldUseDemoData() ? MOCK_EXAMS[0].id : "");
+    const [selectedExamId, setSelectedExamId] = useState<string>("");
     const [, setTick] = useState(0);
     const [timerSeconds, setTimerSeconds] = useState(0);
     const [isPaused, setIsPaused] = useState(false);
@@ -251,7 +252,7 @@ export default function LiveResultsPage() {
             loadTeacherExams(),
             loadTeacherAttempts(),
         ]);
-        const liveData = resolveLiveExamData(examResult.items);
+        const liveData = resolveLiveExamData(examResult.items, shouldUseDemoData(readTeacherSession()));
         setExams(liveData.exams);
         setLiveDataMode(liveData.mode);
         if (liveData.mode === "real") setSyntheticByExam({});
@@ -277,7 +278,7 @@ export default function LiveResultsPage() {
                 loadTeacherAttempts(),
             ]);
             if (cancelled) return;
-            const liveData = resolveLiveExamData(examResult.items);
+            const liveData = resolveLiveExamData(examResult.items, shouldUseDemoData(readTeacherSession()));
             setExams(liveData.exams);
             setLiveDataMode(liveData.mode);
             if (liveData.mode === "real") setSyntheticByExam({});

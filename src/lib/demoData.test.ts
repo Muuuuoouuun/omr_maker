@@ -3,14 +3,11 @@ import { buildClassExamWeaknessMatrix } from "./premiumAnalytics";
 import { buildDemoDashboardData, shouldUseDemoData } from "./demoData";
 
 describe("demo data gating", () => {
-    it("allows demo data outside production", () => {
-        expect(shouldUseDemoData("development")).toBe(true);
-        expect(shouldUseDemoData("test")).toBe(true);
-        expect(shouldUseDemoData(undefined)).toBe(true);
-    });
-
-    it("blocks demo data in production", () => {
-        expect(shouldUseDemoData("production")).toBe(false);
+    it("allows demo data only for the public mockup identity", () => {
+        expect(shouldUseDemoData({ teacherId: "omr-showcase" })).toBe(true);
+        expect(shouldUseDemoData({ teacherId: "admin" })).toBe(false);
+        expect(shouldUseDemoData({ teacherId: "teacher1" })).toBe(false);
+        expect(shouldUseDemoData(null)).toBe(false);
     });
 
     it("seeds a complete showcase workspace with coherent class cuts", () => {

@@ -1155,6 +1155,7 @@ describe("service UI surface", () => {
         expect(css).toContain(".dashboard-data-health");
         expect(dashboardPage).toContain("metrics.trendData.length === 0 && shouldSeedDemo");
         expect(dashboardPage).not.toContain("metrics.trendData.length === 0 && shouldUseDemoData()");
+        expect(dashboardPage).not.toContain("allowDemoData");
     });
 
     it("keeps roster demo data display-only", () => {
@@ -1181,6 +1182,7 @@ describe("service UI surface", () => {
         expect(usersPage).not.toContain("readRosterStudents(localStorage, fallbackStudents)");
         expect(usersPage).not.toContain("Math.random");
         expect(usersPage).not.toContain("classin.app/join");
+        expect(usersPage).toContain("shouldUseDemoData(readTeacherSession())");
     });
 
     it("keeps live synthetic data scoped to demo mode", () => {
@@ -1203,5 +1205,6 @@ describe("service UI surface", () => {
         expect(livePage).not.toContain("독려 알림을 발송했습니다");
         expect(livePage).not.toContain("학생들의 시험 진행 상황을 실시간으로 모니터링하세요.");
         expect(livePage).not.toContain("Math.random");
+        expect(livePage).toContain("shouldUseDemoData(readTeacherSession())");
     });
 });

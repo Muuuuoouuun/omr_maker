@@ -29,7 +29,7 @@ const StudentAnalyticsTab = dynamic(() => import("@/components/dashboard/tabs/St
 });
 import { toast } from "@/components/Toast";
 import { createDashboardRevalidationGate, isTeacherDashboardStorageKey } from "@/components/dashboard/dashboardRevalidation";
-import { buildDemoDashboardData, shouldUseDemoData } from "@/lib/demoData";
+import { buildDemoDashboardData } from "@/lib/demoData";
 import { buildQuestionResultRepairPlan } from "@/lib/analyticsDataRepair";
 import { readLocalAttempts, readLocalExams } from "@/lib/omrPersistence";
 import { loadTeacherAttempts, saveTeacherAttempt } from "@/lib/teacherAttemptClient";
@@ -62,7 +62,6 @@ type DashboardSnapshot = {
     attempts: Attempt[];
     rosterStudents: RosterStudent[];
     rosterGroups: RosterGroup[];
-    allowDemoData?: boolean;
     forceDemoData?: boolean;
 };
 
@@ -132,15 +131,9 @@ function TeacherDashboard() {
         const loadedRosterStudents = [...snapshot.rosterStudents];
         const loadedRosterGroups = [...snapshot.rosterGroups];
 
-        // Demo data is only considered after the background refresh confirms that
-        // both local and remote stores are empty. This avoids flashing examples over
-        // a real remote workspace while its network request is still in flight.
-        const shouldSeedDemo = snapshot.forceDemoData === true || (
-            snapshot.allowDemoData === true
-            && shouldUseDemoData()
-            && loadedExams.length === 0
-            && loadedAttempts.length === 0
-        );
+        // Synthetic analytics are display-only and belong exclusively to the
+        // signed public mockup account. Real teacher accounts keep an empty state.
+        const shouldSeedDemo = snapshot.forceDemoData === true;
         if (shouldSeedDemo) {
             const demo = buildDemoDashboardData();
             loadedExams.push(...demo.exams);
@@ -205,7 +198,6 @@ function TeacherDashboard() {
             attempts: attemptResult.items,
             rosterStudents: rosterResult.students,
             rosterGroups: rosterResult.groups,
-            allowDemoData: true,
         });
 
         if (options.notifyOnSuccess && nextSyncStatus.kind !== "error") {

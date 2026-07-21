@@ -9,6 +9,7 @@ import { toast } from "@/components/Toast";
 import type { Attempt, Exam } from "@/types/omr";
 import { decodeCsvBytes, parseCsvRows, serializeCsvRows } from "@/lib/csv";
 import { shouldUseDemoData } from "@/lib/demoData";
+import { readTeacherSession } from "@/lib/teacherSession";
 import { loadTeacherAttempts } from "@/lib/teacherAttemptClient";
 import { loadTeacherExams } from "@/lib/teacherExamClient";
 import { loadTeacherRosterSnapshot, saveTeacherRosterSnapshot } from "@/lib/teacherRosterClient";
@@ -324,7 +325,7 @@ function ManageUsersInner() {
                 const storedGroups = readRosterGroups(localStorage);
                 const storedInvites = readRosterInvites(localStorage);
                 const legacyDemoRoster = storedRosterExists
-                    && shouldUseDemoData()
+                    && shouldUseDemoData(readTeacherSession())
                     && isLegacyDemoRosterSnapshot(storedStudents, storedGroups, storedInvites);
                 if (legacyDemoRoster) {
                     Object.values(ROSTER_STORAGE_KEYS).forEach(key => localStorage.removeItem(key));
@@ -335,7 +336,7 @@ function ManageUsersInner() {
                 const hasRosterRows = rosterResult.students.length > 0
                     || rosterResult.groups.length > 0
                     || rosterResult.invites.length > 0;
-                const useDemoRoster = shouldUseDemoData() && !hasRosterRows;
+                const useDemoRoster = shouldUseDemoData(readTeacherSession()) && !hasRosterRows;
                 const nextStudents = useDemoRoster ? [] : rosterResult.students;
                 const nextGroups = useDemoRoster ? [] : rosterResult.groups;
                 const nextInvites = useDemoRoster ? [] : rosterResult.invites;
