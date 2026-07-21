@@ -59,8 +59,11 @@ function pullEnvironment(target, directory) {
     return parseEnvFile(path);
 }
 
-function addSensitiveEnvironmentValue(name, target, value) {
-    runVercel(["env", "add", name, target, "--force", "--sensitive"], { input: `${value}\n` });
+function addEnvironmentValue(name, target, value) {
+    // Vercel encrypts ordinary environment variables at rest while keeping them
+    // available to authenticated `env pull` verification. The `--sensitive`
+    // variant is intentionally not used because it becomes permanently unreadable.
+    runVercel(["env", "add", name, target, "--force"], { input: `${value}\n` });
 }
 
 function serverConfig(env, target) {
@@ -167,14 +170,29 @@ function verifyTeacherAccounts(env, target) {
 }
 
 async function apply(environments) {
+    const inheritedPreviewKeys = [
+        "SUPABASE_URL",
+        "SUPABASE_SERVICE_ROLE_KEY",
+        "NEXT_PUBLIC_SUPABASE_URL",
+        "NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY",
+        "NEXT_PUBLIC_SUPABASE_ANON_KEY",
+        "STUDENT_ATTEMPT_SECRET",
+        "OMR_STUDENT_ATTEMPT_SECRET",
+    ];
+    for (const key of inheritedPreviewKeys) {
+        if (!environments.preview[key] && environments.production[key]) {
+            addEnvironmentValue(key, "preview", environments.production[key]);
+            environments.preview[key] = environments.production[key];
+        }
+    }
     const studentSecrets = chooseStudentSecrets(environments);
     const appliedDatabases = new Set();
     for (const target of targets) {
         const teacherSessionSecret = configuredSecret(environments[target], "TEACHER_SESSION_SECRET", "OMR_TEACHER_SESSION_SECRET") || secureSecret();
         const fixture = buildDeploymentFixture({ studentSessionSecret: studentSecrets[target] });
-        addSensitiveEnvironmentValue("TEACHER_ACCOUNTS", target, JSON.stringify(fixture.teacherAccounts));
-        addSensitiveEnvironmentValue("TEACHER_SESSION_SECRET", target, teacherSessionSecret);
-        addSensitiveEnvironmentValue("STUDENT_SESSION_SECRET", target, studentSecrets[target]);
+        addEnvironmentValue("TEACHER_ACCOUNTS", target, JSON.stringify(fixture.teacherAccounts));
+        addEnvironmentValue("TEACHER_SESSION_SECRET", target, teacherSessionSecret);
+        addEnvironmentValue("STUDENT_SESSION_SECRET", target, studentSecrets[target]);
 
         const config = serverConfig(environments[target], target);
         const databaseKey = `${config.url}\u0000${studentSecrets[target]}`;
