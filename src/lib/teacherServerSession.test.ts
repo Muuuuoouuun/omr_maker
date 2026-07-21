@@ -43,6 +43,10 @@ describe("teacher server session", () => {
             teacherId: "teacher-a",
             email: "a@example.com",
             displayName: "A Teacher",
+            organizationId: "teacher_sharedqa",
+            organizationName: "OMR Maker 테스트",
+            memberRole: "teacher",
+            plan: "pro",
         }, env, 1000);
 
         expect(cookie).toMatch(/^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/);
@@ -52,6 +56,10 @@ describe("teacher server session", () => {
             teacherId: "teacher-a",
             email: "a@example.com",
             displayName: "A Teacher",
+            organizationId: "teacher_sharedqa",
+            organizationName: "OMR Maker 테스트",
+            memberRole: "teacher",
+            plan: "pro",
         });
     });
 

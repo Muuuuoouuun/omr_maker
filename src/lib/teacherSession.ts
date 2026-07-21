@@ -4,6 +4,27 @@ export const LEGACY_TEACHER_TOKEN_KEY = "omr_teacher_token";
 export const TEACHER_SESSION_TTL_MS = 12 * 60 * 60 * 1000;
 export const TEACHER_SESSION_EXPIRING_SOON_MS = 30 * 60 * 1000;
 const DEFAULT_TEACHER_REDIRECT = "/teacher/dashboard";
+const ORGANIZATION_ID_PATTERN = /^(?:default|teacher_[a-z0-9]{7,16})$/;
+
+export type TeacherMemberRole = "owner" | "admin" | "teacher" | "assistant" | "viewer";
+export type TeacherPlanCeiling = "free" | "pro" | "academy";
+
+function normalizeMemberRole(value: unknown): TeacherMemberRole | undefined {
+    return typeof value === "string" && ["owner", "admin", "teacher", "assistant", "viewer"].includes(value.trim())
+        ? value.trim() as TeacherMemberRole
+        : undefined;
+}
+
+function normalizePlan(value: unknown): TeacherPlanCeiling | undefined {
+    return typeof value === "string" && ["free", "pro", "academy"].includes(value.trim())
+        ? value.trim() as TeacherPlanCeiling
+        : undefined;
+}
+
+function normalizeOrganizationId(value: unknown): string | undefined {
+    const normalized = typeof value === "string" ? value.trim().toLowerCase() : "";
+    return ORGANIZATION_ID_PATTERN.test(normalized) ? normalized : undefined;
+}
 
 export interface TeacherSession {
     schemaVersion: 1;
@@ -12,6 +33,10 @@ export interface TeacherSession {
     teacherId?: string;
     email?: string;
     displayName?: string;
+    organizationId?: string;
+    organizationName?: string;
+    memberRole?: TeacherMemberRole;
+    plan?: TeacherPlanCeiling;
     issuedAt: number;
     expiresAt: number;
 }
@@ -20,6 +45,10 @@ export interface TeacherSessionIdentity {
     teacherId: string;
     email?: string;
     displayName?: string;
+    organizationId?: string;
+    organizationName?: string;
+    memberRole?: TeacherMemberRole;
+    plan?: TeacherPlanCeiling;
 }
 
 export interface TeacherSessionStorage {
@@ -56,6 +85,10 @@ export function createTeacherSession(token: string, now = Date.now(), identity?:
         teacherId: identity?.teacherId?.trim() || undefined,
         email: identity?.email?.trim() || undefined,
         displayName: identity?.displayName?.trim() || undefined,
+        organizationId: normalizeOrganizationId(identity?.organizationId),
+        organizationName: identity?.organizationName?.trim() || undefined,
+        memberRole: normalizeMemberRole(identity?.memberRole),
+        plan: normalizePlan(identity?.plan),
         issuedAt: now,
         expiresAt: now + TEACHER_SESSION_TTL_MS,
     };
@@ -81,6 +114,10 @@ export function parseTeacherSession(raw: string | null | undefined, now = Date.n
             teacherId: typeof parsed.teacherId === "string" ? parsed.teacherId.trim() || undefined : undefined,
             email: typeof parsed.email === "string" ? parsed.email.trim() || undefined : undefined,
             displayName: typeof parsed.displayName === "string" ? parsed.displayName.trim() || undefined : undefined,
+            organizationId: normalizeOrganizationId(parsed.organizationId),
+            organizationName: typeof parsed.organizationName === "string" ? parsed.organizationName.trim() || undefined : undefined,
+            memberRole: normalizeMemberRole(parsed.memberRole),
+            plan: normalizePlan(parsed.plan),
             issuedAt: typeof parsed.issuedAt === "number" ? parsed.issuedAt : 0,
             expiresAt: typeof parsed.expiresAt === "number" ? parsed.expiresAt : 0,
         };

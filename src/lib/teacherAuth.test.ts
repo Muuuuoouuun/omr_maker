@@ -156,7 +156,50 @@ describe("teacher auth", () => {
         expect(verifyTeacherLogin("admin", "admin1234", env).teacher?.plan).toBe("academy");
     });
 
-    it("normalizes legacy 'school' plan to academy and ignores invalid or missing plan values", () => {
+    it("returns signed shared-workspace metadata for a deployment account", () => {
+        const env = {
+            NODE_ENV: "production",
+            TEACHER_ACCOUNTS: JSON.stringify([{
+                id: "teacher2",
+                email: "teacher2@omr.test",
+                name: "강사 2",
+                password: "teacher1234",
+                plan: "pro",
+                organizationId: "teacher_sharedqa",
+                organizationName: "OMR Maker 테스트",
+                memberRole: "teacher",
+            }]),
+        };
+
+        expect(resolveTeacherCredentials(env)[0]).toMatchObject({
+            organizationId: "teacher_sharedqa",
+            organizationName: "OMR Maker 테스트",
+            memberRole: "teacher",
+            plan: "pro",
+        });
+        expect(verifyTeacherLogin("teacher2", "teacher1234", env).teacher).toMatchObject({
+            teacherId: "teacher2",
+            organizationId: "teacher_sharedqa",
+            organizationName: "OMR Maker 테스트",
+            memberRole: "teacher",
+            plan: "pro",
+        });
+    });
+
+    it("rejects invalid explicit workspace metadata", () => {
+        const credentials = resolveTeacherCredentials({
+            NODE_ENV: "production",
+            TEACHER_ACCOUNTS: JSON.stringify([
+                { id: "bad-org", password: "pass", organizationId: "../../escape", memberRole: "teacher" },
+                { id: "bad-role", password: "pass", organizationId: "teacher_sharedqa", memberRole: "superadmin" },
+                { id: "bad-plan", password: "pass", organizationId: "teacher_sharedqa", memberRole: "teacher", plan: "ultra" },
+            ]),
+        });
+
+        expect(credentials).toEqual([]);
+    });
+
+    it("normalizes legacy 'school' plan to academy, rejects invalid plans, and allows a missing plan", () => {
         const env = {
             NODE_ENV: "production",
             TEACHER_ACCOUNTS: JSON.stringify([
@@ -168,7 +211,7 @@ describe("teacher auth", () => {
 
         const creds = resolveTeacherCredentials(env);
         expect(creds.find(item => item.id === "legacy")?.plan).toBe("academy");
-        expect(creds.find(item => item.id === "bogus")?.plan).toBeUndefined();
+        expect(creds.find(item => item.id === "bogus")).toBeUndefined();
         expect(creds.find(item => item.id === "none")?.plan).toBeUndefined();
     });
 
