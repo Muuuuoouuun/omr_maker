@@ -1,4 +1,5 @@
 import { createHash, pbkdf2Sync, randomBytes, timingSafeEqual } from "node:crypto";
+import type { TeacherMemberRole } from "@/lib/teacherSession";
 import type { PlanKey } from "@/types/omr";
 import { normalizePlan } from "@/utils/plans";
 
@@ -11,6 +12,9 @@ export interface TeacherCredential {
     password?: string;
     passwordHash?: string;
     plan?: PlanKey;
+    organizationId?: string;
+    organizationName?: string;
+    memberRole?: TeacherMemberRole;
 }
 
 export interface TeacherLoginIdentity {
@@ -18,6 +22,9 @@ export interface TeacherLoginIdentity {
     email: string;
     displayName: string;
     plan?: PlanKey;
+    organizationId?: string;
+    organizationName?: string;
+    memberRole?: TeacherMemberRole;
 }
 
 export interface TeacherLoginVerification {
@@ -71,6 +78,8 @@ type TeacherAuthEnv = {
 };
 
 const PASSWORD_HASH_ALGORITHM = "pbkdf2-sha256";
+export const TEACHER_ORGANIZATION_ID_PATTERN = /^(?:default|teacher_[a-z0-9]{7,16})$/;
+const MEMBER_ROLES = new Set<TeacherMemberRole>(["owner", "admin", "teacher", "assistant", "viewer"]);
 
 function clean(value: unknown): string {
     return typeof value === "string" ? value.trim() : "";
@@ -124,13 +133,28 @@ function credentialFromRecord(value: unknown): TeacherCredential | null {
     const id = clean(value.id) || clean(value.loginId) || email;
     const password = clean(value.password);
     const passwordHash = passwordHashFromRecord(value);
+    const rawPlan = clean(value.plan);
+    const plan = normalizePlan(rawPlan) ?? undefined;
+    const organizationId = clean(value.organizationId || value.organization_id).toLowerCase();
+    const organizationName = clean(value.organizationName || value.organization_name);
+    const rawMemberRole = clean(value.memberRole || value.member_role).toLowerCase();
+    const memberRole = MEMBER_ROLES.has(rawMemberRole as TeacherMemberRole)
+        ? rawMemberRole as TeacherMemberRole
+        : undefined;
     if (!id || (!password && !passwordHash)) return null;
+    if (rawPlan && !plan) return null;
+    if (organizationId && !TEACHER_ORGANIZATION_ID_PATTERN.test(organizationId)) return null;
+    if (rawMemberRole && !memberRole) return null;
+    if ((organizationName || memberRole) && !organizationId) return null;
 
-    const credential = {
+    const credential: Omit<TeacherCredential, "password" | "passwordHash"> = {
         id,
         email,
         name: clean(value.name) || clean(value.displayName) || email || id,
-        plan: normalizePlan(value.plan) ?? undefined,
+        plan,
+        organizationId: organizationId || undefined,
+        organizationName: organizationName || undefined,
+        memberRole,
     };
 
     if (passwordHash && isSupportedPasswordHash(passwordHash)) {
@@ -400,6 +424,9 @@ export function verifyTeacherLogin(
             email: credential.email,
             displayName: credential.name,
             plan: credential.plan,
+            organizationId: credential.organizationId,
+            organizationName: credential.organizationName,
+            memberRole: credential.memberRole,
         },
     };
 }

@@ -35,7 +35,11 @@ In production, there is no default account. Set one of these on the server befor
 
 Teacher login is currently backed by server environment variables, not Supabase Auth. If a deployed build only says the credentials are invalid, check the deployment provider's environment variables and redeploy before checking Supabase.
 
-For local account QA, setting `NEXT_PUBLIC_OMR_SEED_TEST_ACCOUNTS=1` in `.env.local` adds four login-ready students (`student1` through `student4`) to the existing local roster without replacing user-created rows. This seed is disabled in production. The students use the `테스트반` class; their development start codes are defined in `src/lib/localTestAccounts.ts`.
+The shared deployment QA workspace uses four teacher logins against the same Supabase organization (`teacher_sharedqa`): `admin` (Academy), `teacher1` (Free), `teacher2` (Pro), and `teacher3` (Academy). The organization itself is Academy; each signed account plan is a ceiling that can reduce, but never elevate, server authorization. Provision and verify the fixture with `npm run accounts:deploy:apply` and `npm run accounts:deploy:verify`. See `docs/deployment-test-accounts.md` for the test-only credentials and student entry URL.
+
+Synthetic dashboard, roster, and live-monitoring examples are restricted to the public `omr-showcase` mockup account. Normal admin and teacher accounts display their real workspace, including an empty state when no data exists.
+
+For local-only account QA, setting `NEXT_PUBLIC_OMR_SEED_TEST_ACCOUNTS=1` in `.env.local` adds four login-ready students (`student1` through `student4`) to the existing local roster without replacing user-created rows. This separate browser seed is disabled in production. The students use the `테스트반` class; their development start codes are defined in `src/lib/localTestAccounts.ts`.
 
 Student login uses the roster student number or email as the account ID, and a six-character start code as the password-like credential. Import `examples/student-roster.csv` from `/teacher/users`, then students can choose `학생` and enter one of these sample names with the matching class. Share the CSV `id` or `email` value as the student's login ID, especially when names overlap:
 
@@ -47,7 +51,7 @@ On first student login, the app issues a six-character start code. Returning stu
 
 If a class has same-name students, students must enter the roster email or teacher-issued student ID in `학생번호 또는 이메일` so records do not merge into the wrong profile.
 
-For deployment smoke testing with one administrator and one roster-backed student, see `docs/deployment-test-accounts.md` and import `examples/deployment-test-roster.csv`.
+For deployment smoke testing with the shared administrator, three teachers, and three roster-backed students, see `docs/deployment-test-accounts.md`.
 
 Production account, security, privacy, and usability rollout items are tracked in `docs/account-security-usability-checklist.md`.
 

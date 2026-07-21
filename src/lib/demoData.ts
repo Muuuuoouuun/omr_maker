@@ -1,5 +1,7 @@
 import type { Attempt, Exam, Question } from "@/types/omr";
 import type { RosterGroup, RosterStudent } from "@/lib/rosterStorage";
+import { isMockupTeacherIdentity } from "@/lib/mockupAccount";
+import type { TeacherSessionIdentity } from "@/lib/teacherSession";
 
 const DAY_MS = 86_400_000;
 const MINUTE_MS = 60_000;
@@ -116,8 +118,8 @@ export interface DemoDashboardData {
     rosterGroups: RosterGroup[];
 }
 
-export function shouldUseDemoData(nodeEnv = process.env.NODE_ENV): boolean {
-    return nodeEnv !== "production";
+export function shouldUseDemoData(identity: Partial<TeacherSessionIdentity> | null | undefined): boolean {
+    return isMockupTeacherIdentity(identity);
 }
 
 function stableUnitInterval(...values: number[]): number {

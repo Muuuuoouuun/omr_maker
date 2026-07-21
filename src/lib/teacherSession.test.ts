@@ -61,6 +61,21 @@ describe("teacher session", () => {
         });
     });
 
+    it("preserves shared workspace, member role, and plan ceiling metadata", () => {
+        const storage = memoryStorage();
+        const identity = {
+            teacherId: "teacher2",
+            organizationId: "teacher_sharedqa",
+            organizationName: "OMR Maker 테스트",
+            memberRole: "teacher" as const,
+            plan: "pro" as const,
+        };
+
+        expect(saveTeacherSessionWithIdentity(VALID_TOKEN, identity, storage, 1000)).toBe(true);
+        expect(readTeacherSession(storage, 1000)).toMatchObject(identity);
+        expect(parseTeacherSession(storage.data[TEACHER_SESSION_KEY], 1000)).toMatchObject(identity);
+    });
+
     it("stores a server-provided session snapshot without extending its expiry", () => {
         const storage = memoryStorage();
         const session = createTeacherSession(VALID_TOKEN, 1000, {

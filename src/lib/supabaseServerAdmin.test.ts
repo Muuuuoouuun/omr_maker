@@ -55,6 +55,9 @@ describe("Supabase server admin workspace bootstrap", () => {
             teacherId: "teacher-a",
             email: "teacher-a@example.com",
             displayName: "Teacher A",
+            organizationId: "teacher_sharedqa",
+            organizationName: "OMR Maker 테스트",
+            memberRole: "teacher",
         });
         const { client, writes } = mockAdminClient();
 
@@ -70,7 +73,7 @@ describe("Supabase server admin workspace bootstrap", () => {
         expect(writes[2].row).toMatchObject({
             organization_id: context.organizationId,
             user_id: context.actorUserId,
-            role: "owner",
+            role: "teacher",
             status: "active",
         });
         expect(writes[4].row).toMatchObject({
