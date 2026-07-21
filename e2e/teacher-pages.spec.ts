@@ -173,6 +173,17 @@ test.describe("Create page label memory", () => {
         expect(storedMemory).toContain("문학");
         expect(storedMemory).toContain("화자의 태도");
     });
+
+    test("accepts a custom 45-question exam size", async ({ page }) => {
+        await page.goto("/create");
+
+        const input = page.getByLabel("문항 수 직접 입력");
+        await input.fill("45");
+        await input.press("Enter");
+
+        await expect(input).toHaveValue("45");
+        await expect(page.getByText("새 시험 · 45문항 · 5지선다")).toBeVisible();
+    });
 });
 
 test.describe("Live Results page", () => {

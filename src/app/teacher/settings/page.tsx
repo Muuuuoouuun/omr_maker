@@ -7,6 +7,7 @@ import { toast } from "@/components/Toast";
 import { clearTeacherAuthSession, getTeacherDeploymentReadiness } from "@/app/actions/auth";
 import { SETTINGS_STORAGE_KEY, maskGeminiApiKey } from "@/lib/geminiApiKey";
 import { DEFAULT_SETTINGS, mergeSettings, readStoredSettings, type AppSettings } from "@/lib/appSettings";
+import { MAX_QUESTION_COUNT, MIN_QUESTION_COUNT } from "@/lib/questionCount";
 import { buildDataDbReadiness, type DataDbReadinessSummary, type DataDbReadinessTone } from "@/lib/dataDbReadiness";
 import type { DeploymentReadinessSummary, DeploymentReadinessTone } from "@/lib/deploymentReadiness";
 import { loadTeacherAttempts } from "@/lib/teacherAttemptClient";
@@ -775,7 +776,7 @@ function ExamDefaultsSection({ value, onChange, onSave, onCancel }: SectionProps
     return (
         <Card title="시험 기본값" desc="새 시험 생성 시 자동으로 적용될 값을 설정하세요.">
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem' }}>
-                <Field label="기본 문항 수"><input className="input-field" type="number" value={value.questions} onChange={e => onChange({ questions: Number(e.target.value) })} /></Field>
+                <Field label="기본 문항 수"><input className="input-field" type="number" min={MIN_QUESTION_COUNT} max={MAX_QUESTION_COUNT} step={1} value={value.questions} onChange={e => onChange({ questions: Number(e.target.value) })} /></Field>
                 <Field label="기본 시간 (분)"><input className="input-field" type="number" value={value.duration} onChange={e => onChange({ duration: Number(e.target.value) })} /></Field>
                 <Field label="문항당 기본 배점"><input className="input-field" type="number" value={value.scorePerQ} step={0.5} onChange={e => onChange({ scorePerQ: Number(e.target.value) })} /></Field>
                 <Field label="선택지 수">

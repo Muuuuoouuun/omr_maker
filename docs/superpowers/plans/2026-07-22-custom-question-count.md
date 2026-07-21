@@ -119,7 +119,7 @@ test("accepts a custom 45-question exam size", async ({ page }) => {
 
 - [ ] **Step 2: Run the browser test and verify the control is missing**
 
-Run: `npx playwright test e2e/teacher-pages.spec.ts --grep "custom 45-question" --project=desktop-chrome`
+Run: `npx playwright test e2e/teacher-pages.spec.ts --grep "custom 45-question" --project=chromium`
 
 Expected: FAIL because the labeled input does not exist.
 
@@ -147,7 +147,7 @@ Add `min={MIN_QUESTION_COUNT}`, `max={MAX_QUESTION_COUNT}`, and `step={1}` to th
 
 - [ ] **Step 5: Run the focused browser test**
 
-Run: `npx playwright test e2e/teacher-pages.spec.ts --grep "custom 45-question" --project=desktop-chrome`
+Run: `npx playwright test e2e/teacher-pages.spec.ts --grep "custom 45-question" --project=chromium`
 
 Expected: PASS with the committed input value and 45-question editor summary visible.
 

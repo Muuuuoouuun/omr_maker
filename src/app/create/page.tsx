@@ -43,6 +43,11 @@ import { validateExamDraft } from "@/lib/examValidation";
 import { buildSolveShareUrl, isShareUrlReachableByStudents } from "@/lib/shareLink";
 import { buildExamServiceReadiness, type ExamServiceReadinessLevel } from "@/lib/examServiceReadiness";
 import { readStoredExamDefaults } from "@/lib/appSettings";
+import {
+    MAX_QUESTION_COUNT,
+    MIN_QUESTION_COUNT,
+    parseQuestionCountInput,
+} from "@/lib/questionCount";
 import { loadExam, saveExam, saveLocalExam } from "@/lib/omrPersistence";
 import { attachInferredQuestionPdfRegions } from "@/lib/handwritingAnalytics";
 import {
@@ -458,6 +463,7 @@ function CreateOMRPageInner() {
     // OMR Data State
     const [title, setTitle] = useState("기말고사 OMR");
     const [questionsCount, setQuestionsCount] = useState(20);
+    const [questionCountInput, setQuestionCountInput] = useState("20");
     const [columns, setColumns] = useState(2);
     const [questions, setQuestions] = useState<Question[]>(() => buildDefaultQuestions(20, DEFAULT_CHOICE_COUNT, 5));
     const [initialDefaultsReady, setInitialDefaultsReady] = useState(false);
@@ -966,6 +972,10 @@ function CreateOMRPageInner() {
             return newQuestions;
         });
     }, [createDefaultQuestion, initialDefaultsReady, questionsCount]);
+
+    useEffect(() => {
+        setQuestionCountInput(String(questionsCount));
+    }, [questionsCount]);
 
     useEffect(() => {
         setLabelBatch(prev => ({
@@ -1482,6 +1492,19 @@ function CreateOMRPageInner() {
         setQuestionsCount(newCount);
     };
 
+    const commitQuestionCountInput = () => {
+        const nextCount = parseQuestionCountInput(questionCountInput);
+        if (nextCount === null) {
+            setQuestionCountInput(String(questionsCount));
+            toast.info(
+                "문항 수 확인",
+                `${MIN_QUESTION_COUNT}~${MAX_QUESTION_COUNT} 사이의 정수를 입력해주세요.`,
+            );
+            return;
+        }
+        handleQuestionCountChange(nextCount);
+    };
+
     // Guard: switching 5→4 may invalidate answers of 5.
     const handleDefaultChoicesChange = (next: 4 | 5) => {
         if (next === 4 && defaultChoices === 5) {
@@ -1921,6 +1944,8 @@ function CreateOMRPageInner() {
         } else if (confirmState.kind === "expandImportedAnswers") {
             applyImportedAnswers(confirmState.answers);
             toast.info("현재 문항까지만 적용", `${questionsCount}번까지의 정답만 반영했습니다.`);
+        } else if (confirmState.kind === "shrinkQuestions") {
+            setQuestionCountInput(String(questionsCount));
         }
         setConfirmState(null);
     };
@@ -1934,6 +1959,9 @@ function CreateOMRPageInner() {
         if (confirmState.kind === "restoreDraft") {
             handleConfirmAccept();
             return;
+        }
+        if (confirmState.kind === "shrinkQuestions") {
+            setQuestionCountInput(String(questionsCount));
         }
         setConfirmState(null);
     };
@@ -2462,17 +2490,42 @@ function CreateOMRPageInner() {
                         <div className="create-compact-control-label">
                             <span>문항 수</span>
                         </div>
-                        <div className="create-count-buttons">
-                            {[20, 25, 30, 40, 50].map(count => (
-                                <button
-                                    key={count}
-                                    className={`btn ${questionsCount === count ? 'btn-primary' : 'btn-secondary'}`}
-                                    style={{ padding: '0.42rem 0.2rem' }}
-                                    onClick={() => handleQuestionCountChange(count)}
-                                >
-                                    {count}
-                                </button>
-                            ))}
+                        <div style={{ minWidth: 0, display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) 5.25rem', gap: '0.35rem' }}>
+                            <div className="create-count-buttons">
+                                {[20, 25, 30, 40, 50].map(count => (
+                                    <button
+                                        key={count}
+                                        type="button"
+                                        className={`btn ${questionsCount === count ? 'btn-primary' : 'btn-secondary'}`}
+                                        style={{ padding: '0.42rem 0.2rem' }}
+                                        onClick={() => {
+                                            setQuestionCountInput(String(count));
+                                            handleQuestionCountChange(count);
+                                        }}
+                                    >
+                                        {count}
+                                    </button>
+                                ))}
+                            </div>
+                            <input
+                                type="number"
+                                min={MIN_QUESTION_COUNT}
+                                max={MAX_QUESTION_COUNT}
+                                step={1}
+                                inputMode="numeric"
+                                aria-label="문항 수 직접 입력"
+                                title={`${MIN_QUESTION_COUNT}~${MAX_QUESTION_COUNT}문항 직접 입력`}
+                                value={questionCountInput}
+                                onChange={event => setQuestionCountInput(event.target.value)}
+                                onBlur={commitQuestionCountInput}
+                                onKeyDown={event => {
+                                    if (event.key !== 'Enter') return;
+                                    event.preventDefault();
+                                    commitQuestionCountInput();
+                                }}
+                                className="input-field"
+                                style={{ width: '100%', minWidth: 0, minHeight: 44, padding: '0.42rem 0.35rem', textAlign: 'center', fontWeight: 850 }}
+                            />
                         </div>
                     </div>
 
