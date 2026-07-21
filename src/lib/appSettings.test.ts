@@ -27,6 +27,10 @@ describe("app settings", () => {
         expect(normalizeExamDefaults({}).choices).toBe(5);
     });
 
+    it("caps the default question count at the supported 50-question limit", () => {
+        expect(normalizeExamDefaults({ questions: 200 }).questions).toBe(50);
+    });
+
     it("parses stored settings and merges missing sections", () => {
         const settings = parseStoredSettings(JSON.stringify({
             examDefaults: {

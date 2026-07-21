@@ -1,4 +1,5 @@
 import { SETTINGS_STORAGE_KEY } from "@/lib/geminiApiKey";
+import { MAX_QUESTION_COUNT } from "@/lib/questionCount";
 import { DEFAULT_CHOICE_COUNT } from "@/types/omr";
 
 export interface AppSettings {
@@ -51,7 +52,7 @@ function autosaveSeconds(value: unknown, fallback: number): number {
 export function normalizeExamDefaults(value: unknown): ExamDefaults {
     const raw = asObject(value);
     return {
-        questions: positiveInt(raw.questions, DEFAULT_SETTINGS.examDefaults.questions, 200),
+        questions: positiveInt(raw.questions, DEFAULT_SETTINGS.examDefaults.questions, MAX_QUESTION_COUNT),
         duration: positiveInt(raw.duration, DEFAULT_SETTINGS.examDefaults.duration, 360),
         scorePerQ: positiveNumber(raw.scorePerQ, DEFAULT_SETTINGS.examDefaults.scorePerQ),
         choices: raw.choices === 4 ? 4 : DEFAULT_CHOICE_COUNT,
