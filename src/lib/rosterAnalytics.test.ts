@@ -96,50 +96,70 @@ describe("roster analytics", () => {
         });
     });
 
-    it("indexes attempts without changing exact-id or legacy name/group matching", () => {
+    it("assigns a studentProfileId attempt only to the exact roster student", () => {
         const now = Date.parse("2026-06-15T12:00:00.000Z");
-        const regionalStudents: RosterStudent[] = [
-            { ...student, id: "g-seoul::김학생", region: "서울" },
-            { ...student, id: "g-busan::김학생", email: "busan@example.com", region: "부산" },
-            { ...student, id: " g-seoul::이학생 ", name: "이학생", email: "lee@example.com", region: "서울" },
+        const sameNameStudents: RosterStudent[] = [
+            { ...student, id: "profile-a" },
+            { ...student, id: "profile-b", email: "b@example.com" },
         ];
-        const attempts: Attempt[] = [
-            attempt("exact", { 1: 1, 2: 2 }, "2026-06-15T10:00:00.000Z", {
-                studentId: regionalStudents[0].id,
-                studentName: "과거이름",
-                regionName: "부산",
-            }),
-            attempt("legacy-busan", { 1: 1, 2: 1 }, "2026-06-14T10:00:00.000Z", {
-                studentId: undefined,
-                studentName: "김학생",
-                groupName: "A반",
-                regionName: "부산",
-            }),
-            attempt("scoped-name", { 1: 1, 2: 2 }, "2026-06-13T10:00:00.000Z", {
-                studentId: "g-seoul::이학생",
-                studentName: "과거이름",
-                groupName: "다른반",
-                regionName: "서울",
-            }),
-            attempt("legacy-scoped-name", { 1: 1, 2: 1 }, "2026-06-13T09:00:00.000Z", {
-                studentId: "legacy-group::이학생",
-                studentName: undefined,
-                groupName: "A반",
-                regionName: "서울",
-            }),
-            attempt("unrelated", { 1: 1, 2: 2 }, "2026-06-12T10:00:00.000Z", {
-                studentId: "other::박학생",
-                studentName: "박학생",
-            }),
-        ];
-        const examById = new Map([[exam.id, exam]]);
+        const exact = attempt("profile-exact", { 1: 1, 2: 2 }, "2026-06-15T10:00:00.000Z", {
+            studentProfileId: "profile-b",
+            studentId: undefined,
+        });
 
-        const indexed = buildRosterPerformanceMap(regionalStudents, attempts, examById, now);
-        for (const profile of regionalStudents) {
-            expect(indexed.get(profile.id)).toEqual(
-                buildRosterStudentPerformance(profile, attempts, examById, now),
-            );
-        }
+        const indexed = buildRosterPerformanceMap(sameNameStudents, [exact], new Map([[exam.id, exam]]), now);
+
+        expect(indexed.get("profile-a")?.attempts).toEqual([]);
+        expect(indexed.get("profile-b")?.attempts.map(item => item.id)).toEqual(["profile-exact"]);
+    });
+
+    it("does not fall back to a matching name when a stable id misses the roster", () => {
+        const unmatchedStable = attempt("stable-miss", { 1: 1 }, "2026-06-15T10:00:00.000Z", {
+            studentProfileId: "missing-profile",
+            studentId: undefined,
+        });
+
+        const indexed = buildRosterPerformanceMap([student], [unmatchedStable], new Map([[exam.id, exam]]));
+
+        expect(indexed.get(student.id)?.attempts).toEqual([]);
+    });
+
+    it("excludes a legacy attempt when duplicate roster students both match", () => {
+        const duplicate = { ...student, id: "duplicate", email: "duplicate@example.com" };
+        const legacy = attempt("ambiguous", { 1: 1 }, "2026-06-15T10:00:00.000Z", {
+            studentId: undefined,
+        });
+
+        const indexed = buildRosterPerformanceMap([student, duplicate], [legacy], new Map([[exam.id, exam]]));
+
+        expect(indexed.get(student.id)?.attempts).toEqual([]);
+        expect(indexed.get(duplicate.id)?.attempts).toEqual([]);
+    });
+
+    it("includes a legacy name-and-group attempt when exactly one roster student matches", () => {
+        const other = { ...student, id: "other", name: "이학생", email: "other@example.com" };
+        const legacy = attempt("unique-legacy", { 1: 1 }, "2026-06-15T10:00:00.000Z", {
+            studentId: undefined,
+        });
+
+        const indexed = buildRosterPerformanceMap([student, other], [legacy], new Map([[exam.id, exam]]));
+
+        expect(indexed.get(student.id)?.attempts.map(item => item.id)).toEqual(["unique-legacy"]);
+        expect(indexed.get(other.id)?.attempts).toEqual([]);
+    });
+
+    it("keeps each indexed attempt bucket sorted newest first", () => {
+        const oldAttempt = attempt("old-indexed", { 1: 1 }, "2026-06-14T10:00:00.000Z");
+        const newAttempt = attempt("new-indexed", { 1: 1, 2: 2 }, "2026-06-15T10:00:00.000Z");
+
+        const indexed = buildRosterPerformanceMap(
+            [student],
+            [oldAttempt, newAttempt],
+            new Map([[exam.id, exam]]),
+            Date.parse("2026-06-15T12:00:00.000Z"),
+        );
+
+        expect(indexed.get(student.id)?.attempts.map(item => item.id)).toEqual(["new-indexed", "old-indexed"]);
     });
 
     it("applies performance and recomputes group averages from students with attempts", () => {

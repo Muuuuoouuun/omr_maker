@@ -42,12 +42,6 @@ function normalizedIdentity(value: string | undefined): string {
     return value?.trim() || "";
 }
 
-function scopedStudentName(value: string | undefined): string {
-    const normalized = normalizedIdentity(value);
-    const separatorIndex = normalized.indexOf("::");
-    return separatorIndex > 0 ? normalized.slice(separatorIndex + 2).trim() : "";
-}
-
 function performanceFromMatchedAttempts(
     student: RosterStudent,
     matched: Attempt[],
@@ -130,24 +124,35 @@ export function buildRosterPerformanceMap(
     for (const id of studentsById.keys()) attemptsByStudentId.set(id, []);
 
     for (const attempt of attempts) {
-        const candidateIds = new Set<string>();
-        const exactId = normalizedIdentity(attempt.studentId);
-        for (const id of studentIdsByNormalizedId.get(exactId) || []) candidateIds.add(id);
-
-        const candidateNames = new Set([
-            normalizedIdentity(attempt.studentName),
-            scopedStudentName(attempt.studentId),
-        ]);
-        for (const name of candidateNames) {
-            if (!name) continue;
-            for (const id of studentIdsByName.get(name) || []) candidateIds.add(id);
+        const stableIds = Array.from(new Set([
+            normalizedIdentity(attempt.studentProfileId),
+            normalizedIdentity(attempt.studentId),
+        ].filter(Boolean)));
+        if (stableIds.length > 0) {
+            const exactRosterIds = new Set<string>();
+            for (const stableId of stableIds) {
+                for (const rosterId of studentIdsByNormalizedId.get(stableId) || []) {
+                    exactRosterIds.add(rosterId);
+                }
+            }
+            if (exactRosterIds.size === 1) {
+                const [rosterId] = exactRosterIds;
+                attemptsByStudentId.get(rosterId)?.push(attempt);
+            }
+            continue;
         }
 
-        for (const id of candidateIds) {
+        const name = normalizedIdentity(attempt.studentName);
+        if (!name) continue;
+        const matchedRosterIds: string[] = [];
+        for (const id of studentIdsByName.get(name) || []) {
             const student = studentsById.get(id);
             if (student && attemptMatchesStudentProfile(attempt, student)) {
-                attemptsByStudentId.get(id)?.push(attempt);
+                matchedRosterIds.push(id);
             }
+        }
+        if (matchedRosterIds.length === 1) {
+            attemptsByStudentId.get(matchedRosterIds[0])?.push(attempt);
         }
     }
 

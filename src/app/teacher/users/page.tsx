@@ -68,10 +68,7 @@ import { PremiumActionLink } from "@/components/PremiumFeatureGate";
 import { findStudentStartCode, generateStartCode, readStudentCodes, writeStudentCodes } from "@/lib/studentCodes";
 import { hasPlanEntitlement } from "@/utils/plans";
 import { useServerPlan } from "@/lib/useServerPlan";
-import {
-    buildStudentResultHref,
-    matchRosterStudentForAttempt,
-} from "@/lib/studentResultHub";
+import { buildStudentResultHref } from "@/lib/studentResultHub";
 import { studentIdFor } from "@/utils/storage";
 import { syncStudentAccessCodes } from "@/app/actions/studentSession";
 import { readActiveWorkspaceContext } from "@/lib/workspaceContext";
@@ -618,18 +615,12 @@ function ManageUsersInner() {
     const selectedLegacyStudentId = selected ? studentIdForRoster(selected.name, selected.group, rosterGroups) : "";
     const selectedStartCode = selected ? findStudentStartCode(studentCodeRegistry, selected.id, selectedLegacyStudentId) : "";
 
-    // Resolve through the shared identity helper so ambiguous legacy name-only
-    // attempts never leak into another student's card or report.
+    // The shared roster performance index already applies strict stable-id and
+    // unambiguous legacy matching, and stores each bucket newest first.
     const selectedMatchedAttempts = useMemo<Attempt[]>(() => {
         if (!selected) return [];
-        return allAttempts
-            .filter(attempt => matchRosterStudentForAttempt(attempt, displayStudents)?.id === selected.id)
-            .sort((left, right) => {
-                const leftTime = Date.parse(left.finishedAt || left.startedAt || "") || 0;
-                const rightTime = Date.parse(right.finishedAt || right.startedAt || "") || 0;
-                return rightTime - leftTime || left.id.localeCompare(right.id);
-            });
-    }, [allAttempts, displayStudents, selected]);
+        return performanceByStudentId.get(selected.id)?.attempts || [];
+    }, [performanceByStudentId, selected]);
 
     const selectedRecentAttempts = selectedMatchedAttempts.slice(0, 3);
     const latestStableAttempt = selectedMatchedAttempts[0] || null;
@@ -2066,8 +2057,8 @@ function ManageUsersInner() {
                                         })
                                     )}
                                 </div>
-                                <div style={{ display: 'flex', gap: '0.5rem' }}>
-                                    <button onClick={handleSendMessage} style={{ flex: 1, padding: '0.7rem', background: 'var(--primary)', color: 'white', borderRadius: 'var(--radius-md)', fontWeight: 600, fontSize: '0.85rem', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.4rem' }}>
+                                <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
+                                    <button onClick={handleSendMessage} style={{ flex: '1 1 120px', minHeight: 44, padding: '0.7rem', background: 'var(--primary)', color: 'white', borderRadius: 'var(--radius-md)', fontWeight: 600, fontSize: '0.85rem', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.4rem' }}>
                                         <MessageCircle size={14} /> 메시지
                                     </button>
                                     {latestStableAttempt ? (
@@ -2075,7 +2066,7 @@ function ManageUsersInner() {
                                             href={buildStudentResultHref(latestStableAttempt.id, "report")}
                                             aria-label={`${selected.name} 최근 응시 리포트 상세 보기`}
                                             style={{
-                                                flex: 1,
+                                                flex: '1 1 120px',
                                                 minHeight: 44,
                                                 padding: '0.7rem',
                                                 background: 'var(--surface)',
@@ -2092,7 +2083,7 @@ function ManageUsersInner() {
                                             상세 보기
                                         </NextLink>
                                     ) : studentGrowthReportsEnabled ? (
-                                        <button onClick={handleOpenDetail} style={{ flex: 1, padding: '0.7rem', background: 'var(--surface)', color: 'var(--foreground)', border: '1px solid var(--border)', borderRadius: 'var(--radius-md)', fontWeight: 600, fontSize: '0.85rem' }}>
+                                        <button onClick={handleOpenDetail} style={{ flex: '1 1 120px', minHeight: 44, padding: '0.7rem', background: 'var(--surface)', color: 'var(--foreground)', border: '1px solid var(--border)', borderRadius: 'var(--radius-md)', fontWeight: 600, fontSize: '0.85rem' }}>
                                             상세 보기
                                         </button>
                                     ) : (
@@ -2100,7 +2091,8 @@ function ManageUsersInner() {
                                             href="/teacher/billing"
                                             title="Pro 이상에서 학생 성장 리포트를 열 수 있습니다."
                                             style={{
-                                                flex: 1,
+                                                flex: '1 1 120px',
+                                                minHeight: 44,
                                                 padding: '0.7rem',
                                                 background: 'var(--surface)',
                                                 color: 'var(--muted)',
@@ -2117,6 +2109,25 @@ function ManageUsersInner() {
                                             <Lock size={14} />
                                             성장 리포트 Pro
                                         </NextLink>
+                                    )}
+                                    {latestStableAttempt && studentGrowthReportsEnabled && (
+                                        <button
+                                            type="button"
+                                            onClick={handleOpenDetail}
+                                            style={{
+                                                flex: '1 1 120px',
+                                                minHeight: 44,
+                                                padding: '0.7rem',
+                                                background: 'var(--surface)',
+                                                color: 'var(--foreground)',
+                                                border: '1px solid var(--border)',
+                                                borderRadius: 'var(--radius-md)',
+                                                fontWeight: 600,
+                                                fontSize: '0.85rem',
+                                            }}
+                                        >
+                                            성장 분석
+                                        </button>
                                     )}
                                 </div>
                             </div>

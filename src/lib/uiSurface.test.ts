@@ -1053,6 +1053,17 @@ describe("service UI surface", () => {
         );
         expect(handwritingLink).toContain("minHeight: 44");
         expect(modalReportLink).toContain("minHeight: 44");
+
+        const selectedActionStart = usersPage.indexOf("<div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>");
+        const selectedActions = usersPage.slice(
+            selectedActionStart,
+            usersPage.indexOf("{tab === \"groups\"", usersPage.indexOf("{latestStableAttempt ? (")),
+        );
+        expect(selectedActions).toContain('buildStudentResultHref(latestStableAttempt.id, "report")');
+        expect(selectedActions).toContain("studentGrowthReportsEnabled &&");
+        expect(selectedActions).toContain("onClick={handleOpenDetail}");
+        expect(selectedActions).toContain("성장 분석");
+        expect(selectedActions).toContain("flexWrap: 'wrap'");
     });
 
     it("resets route-scoped student result state while preserving peer attempts on load failure", () => {
