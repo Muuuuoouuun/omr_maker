@@ -8,6 +8,7 @@ import {
     summarizeKoreanExamFixture,
     validateKoreanExamFixture,
 } from "../../scripts/korean-exam-fixture-core.mjs";
+import { buildPdfNormalizationJobs } from "../../scripts/korean-exam-pdf-core.mjs";
 
 describe("Korean exam Supabase fixture", () => {
     const fixture = buildKoreanExamFixture({ now: "2026-07-22T09:00:00.000Z" });
@@ -106,5 +107,18 @@ describe("Korean exam Supabase fixture", () => {
         expect(summary).not.toContain("service_role");
         expect(summary).not.toContain("signedUrl");
         expect(summary).not.toContain("eyJ");
+    });
+
+    it("builds safe PDF normalization jobs from the fixture manifest", () => {
+        const jobs = buildPdfNormalizationJobs(fixture.pdfArtifacts, "/workspace");
+
+        expect(jobs).toHaveLength(3);
+        expect(jobs.map(job => job.outputPath)).toEqual([
+            "/workspace/output/pdf/2025학년도-수능-국어-언어와매체-홀수형.pdf",
+            "/workspace/output/pdf/2026학년도-9월-모평-국어-언어와매체.pdf",
+            "/workspace/output/pdf/2026학년도-수능-국어-언어와매체-홀수형.pdf",
+        ]);
+        expect(jobs.every(job => job.sourcePageIndexes.join(",") === NORMALIZED_SOURCE_PAGE_INDEXES.join(","))).toBe(true);
+        expect(jobs.every(job => job.outputPageCount === 16)).toBe(true);
     });
 });
