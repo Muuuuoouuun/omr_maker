@@ -191,7 +191,31 @@ export async function loadExamForSolving(examId: string, pin?: string): Promise<
         const access = evaluateGatedAccess(exam, ctx.identity, pin);
         if (access !== "allowed") return { status: access };
         const premium = await examOwnerPremium(ctx.admin, exam);
-        return { status: "ok", exam: stripExamForSolving(exam, { handwritingArchive: premium.handwritingArchive }) };
+        const solvableExam = stripExamForSolving(exam, { handwritingArchive: premium.handwritingArchive });
+        const problemRef = solvableExam.pdfDataRef;
+        if (!isRemoteAssetStoredDataRef(problemRef)) {
+            return { status: "ok", exam: solvableExam };
+        }
+        if (problemRef.kind !== "problem_pdf" || problemRef.examId !== exam.id) {
+            return { status: "error" };
+        }
+        const signed = await createStudentProblemPdfSignedUrlWithGateway(
+            ctx.admin as unknown as RemoteAssetSupabaseGatewayClient,
+            {
+                assetId: problemRef.key,
+                organizationId: problemRef.organizationId,
+                examId: exam.id,
+            },
+        );
+        if (signed.status !== "signed") return { status: "error" };
+        return {
+            status: "ok",
+            exam: {
+                ...solvableExam,
+                pdfData: signed.signedUrl,
+                pdfDataRef: undefined,
+            },
+        };
     } catch (e) {
         console.error("loadExamForSolving failed", e);
         return { status: "error" };

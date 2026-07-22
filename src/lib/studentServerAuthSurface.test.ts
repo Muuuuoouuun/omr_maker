@@ -61,11 +61,26 @@ describe("student server authentication surface", () => {
 
     it("signs a private problem PDF only after authorizing the owned review attempt", () => {
         const action = source("src/app/actions/studentExam.ts");
+        const reviewStart = action.indexOf("export async function loadExamForReview");
+        const reviewEnd = action.indexOf("export async function askAttemptQuestion", reviewStart);
+        const reviewAction = action.slice(reviewStart, reviewEnd);
 
-        expect(action).toContain("createStudentProblemPdfSignedUrlWithGateway");
-        expect(action).toContain("isRemoteAssetStoredDataRef(problemRef)");
-        expect(action).toContain("pdfData: signed.signedUrl");
-        expect(action.indexOf("const match = await ownAttempt"))
-            .toBeLessThan(action.indexOf("const signed = await createStudentProblemPdfSignedUrlWithGateway"));
+        expect(reviewAction).toContain("createStudentProblemPdfSignedUrlWithGateway");
+        expect(reviewAction).toContain("isRemoteAssetStoredDataRef(problemRef)");
+        expect(reviewAction).toContain("pdfData: signed.signedUrl");
+        expect(reviewAction.indexOf("const match = await ownAttempt"))
+            .toBeLessThan(reviewAction.indexOf("const signed = await createStudentProblemPdfSignedUrlWithGateway"));
+    });
+
+    it("signs a private problem PDF only after solve access is allowed", () => {
+        const action = source("src/app/actions/studentExam.ts");
+        const solveStart = action.indexOf("export async function loadExamForSolving");
+        const solveEnd = action.indexOf("export async function submitAttempt", solveStart);
+        const solveAction = action.slice(solveStart, solveEnd);
+
+        expect(solveAction).toContain("createStudentProblemPdfSignedUrlWithGateway");
+        expect(solveAction).toContain("pdfData: signed.signedUrl");
+        expect(solveAction.indexOf('if (access !== "allowed") return { status: access }'))
+            .toBeLessThan(solveAction.indexOf("createStudentProblemPdfSignedUrlWithGateway"));
     });
 });
