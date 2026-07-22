@@ -48,7 +48,7 @@ export default function HistoryPage() {
                 const [attemptResult, examResult] = await Promise.all([
                     currentSession
                         ? loadStudentOfficialAttempts(currentSession)
-                        : Promise.resolve({ items: [], remoteLoaded: false }),
+                        : Promise.resolve({ items: [], remoteLoaded: false, remoteStatus: undefined }),
                     loadExams(),
                 ]);
                 if (cancelled) return;
