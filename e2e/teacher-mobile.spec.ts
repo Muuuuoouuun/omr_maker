@@ -310,7 +310,6 @@ test.describe("Teacher desktop Chromium result tab accessibility", () => {
     test.use({
         userAgent: desktopChrome.userAgent,
         viewport: desktopChrome.viewport,
-        screen: desktopChrome.screen,
         deviceScaleFactor: desktopChrome.deviceScaleFactor,
         isMobile: desktopChrome.isMobile,
         hasTouch: desktopChrome.hasTouch,
