@@ -901,7 +901,7 @@ describe("service UI surface", () => {
             "setExam(null);",
             "setDrawings(undefined);",
             "setPdfFile(null);",
-            "setHandwritingUnavailable(false);",
+            'setHandwritingStatus("idle");',
             "setFeedback(null);",
             'setFeedbackSummary("");',
             "setFeedbackPolicy(DEFAULT_FEEDBACK_DOWNLOAD_POLICY);",

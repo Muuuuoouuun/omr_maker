@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
 import dynamic from "next/dynamic";
@@ -48,6 +48,7 @@ import StudentResultHeader from "@/components/teacher/student-results/StudentRes
 import StudentResultTabs from "@/components/teacher/student-results/StudentResultTabs";
 import AnswersPanel from "@/components/teacher/student-results/AnswersPanel";
 import AnalyticsPanel from "@/components/teacher/student-results/AnalyticsPanel";
+import HandwritingPanel from "@/components/teacher/student-results/HandwritingPanel";
 import styles from "@/components/teacher/student-results/StudentResultHub.module.css";
 
 const PDFViewer = dynamic(() => import("@/components/PDFViewer"), { ssr: false });
@@ -58,6 +59,26 @@ function hasTeacherAccess(): boolean {
 
 function hasDrawings(drawings?: PdfDrawings): boolean {
     return !!drawings && Object.values(drawings).some(paths => paths.length > 0);
+}
+
+async function loadTeacherPdfFile(exam: Exam): Promise<File | null> {
+    const pdfData = exam.pdfDataRef?.store === "remote"
+        ? await getTeacherRemoteAssetUrl(exam.pdfDataRef)
+            .then(result => result.status === "signed" ? result.signedUrl : undefined)
+        : exam.pdfData;
+    return storedDataUrlToFile("problem.pdf", pdfData, exam.pdfDataRef);
+}
+
+async function loadAttemptDrawings(attempt: Attempt): Promise<PdfDrawings | undefined> {
+    if (hasDrawings(attempt.drawings)) return attempt.drawings;
+    const ref = attempt.handwriting?.strokesRef || attempt.drawingsRef;
+    if (!ref) return undefined;
+    if (ref.store !== "remote") return (await loadJsonRecord<PdfDrawings>(ref)) || undefined;
+    const signed = await getTeacherRemoteAssetUrl(ref);
+    if (signed.status !== "signed") return undefined;
+    const response = await fetch(signed.signedUrl, { cache: "no-store" });
+    if (!response.ok) throw new Error("handwriting_download_failed");
+    return response.json() as Promise<PdfDrawings>;
 }
 
 function formatAnswer(answer?: number): string {
@@ -89,6 +110,7 @@ export default function TeacherAttemptPage() {
     const id = params?.attemptId as string;
     const activeView = parseStudentResultView(searchParams.get("view"));
     const activeAttemptIdRef = useRef(id);
+    const handwritingLoadingAttemptRef = useRef<string | null>(null);
     useLayoutEffect(() => {
         activeAttemptIdRef.current = id;
     }, [id]);
@@ -98,8 +120,9 @@ export default function TeacherAttemptPage() {
     const [exam, setExam] = useState<Exam | null>(null);
     const [drawings, setDrawings] = useState<PdfDrawings | undefined>(undefined);
     const [pdfFile, setPdfFile] = useState<File | null>(null);
+    const [handwritingStatus, setHandwritingStatus] = useState<"idle" | "loading" | "ready" | "error">("idle");
     const [accessDenied, setAccessDenied] = useState(false);
-    const [handwritingUnavailable, setHandwritingUnavailable] = useState(false);
+    const handwritingUnavailable = handwritingStatus === "error";
     const { plan: currentPlan } = useServerPlan();
     const [feedback, setFeedback] = useState<AttemptFeedback | null>(null);
     const [feedbackSummary, setFeedbackSummary] = useState("");
@@ -130,7 +153,8 @@ export default function TeacherAttemptPage() {
             setExam(null);
             setDrawings(undefined);
             setPdfFile(null);
-            setHandwritingUnavailable(false);
+            setHandwritingStatus("idle");
+            handwritingLoadingAttemptRef.current = null;
             setFeedback(null);
             setFeedbackSummary("");
             setFeedbackPolicy(DEFAULT_FEEDBACK_DOWNLOAD_POLICY);
@@ -184,57 +208,13 @@ export default function TeacherAttemptPage() {
                     setFeedback(nextFeedback);
                     setFeedbackSummary(nextFeedback.summary || "");
                     setFeedbackPolicy(nextFeedback.downloadPolicy);
-                    const markupDrawings = await loadFeedbackMarkupDrawings(nextFeedback);
-                    if (!cancelled && markupDrawings) setTeacherMarkupDrawings(markupDrawings);
                 }
                 if (cancelled) return;
 
                 const parsedExam = await loadTeacherExam(found.examId);
                 if (cancelled) return;
-                if (parsedExam) {
-                    setExam(parsedExam);
-                    const pdfData = parsedExam.pdfDataRef?.store === "remote"
-                        ? await getTeacherRemoteAssetUrl(parsedExam.pdfDataRef)
-                            .then(result => result.status === "signed" ? result.signedUrl : undefined)
-                        : parsedExam.pdfData;
-                    if (cancelled) return;
-                    storedDataUrlToFile("problem.pdf", pdfData, parsedExam.pdfDataRef)
-                        .then(file => {
-                            if (!cancelled && file) setPdfFile(file);
-                        })
-                        .catch(() => {
-                            if (!cancelled) setPdfFile(null);
-                        });
-                }
-
-                const inlineDrawings = hasDrawings(found.drawings) ? found.drawings : undefined;
-                if (inlineDrawings) setDrawings(inlineDrawings);
-
-                const drawingsRef = found.handwriting?.strokesRef || found.drawingsRef;
-                if (found.handwritingArchived && drawingsRef) {
-                    const drawingsPromise = drawingsRef.store === "remote"
-                        ? getTeacherRemoteAssetUrl(drawingsRef).then(async result => {
-                            if (result.status !== "signed") return null;
-                            const response = await fetch(result.signedUrl, { cache: "no-store" });
-                            if (!response.ok) return null;
-                            return response.json() as Promise<PdfDrawings>;
-                        })
-                        : loadJsonRecord<PdfDrawings>(drawingsRef);
-                    drawingsPromise
-                        .then(restored => {
-                            if (cancelled) return;
-                            if (restored) setDrawings(restored);
-                            else if (!inlineDrawings) setHandwritingUnavailable(true);
-                        })
-                        .catch(() => {
-                            if (!cancelled && !inlineDrawings) setHandwritingUnavailable(true);
-                        })
-                        .finally(() => {
-                            if (!cancelled) setLoaded(true);
-                        });
-                } else {
-                    setLoaded(true);
-                }
+                if (parsedExam) setExam(parsedExam);
+                setLoaded(true);
             } catch {
                 if (!cancelled) setLoaded(true);
             }
@@ -244,6 +224,52 @@ export default function TeacherAttemptPage() {
 
         return () => { cancelled = true; };
     }, [id]);
+
+    const loadHandwritingResources = useCallback(async () => {
+        if (!attempt || handwritingStatus === "loading" || handwritingStatus === "ready") return;
+        const targetAttemptId = attempt.id;
+        if (activeAttemptIdRef.current !== targetAttemptId) return;
+        if (handwritingLoadingAttemptRef.current === targetAttemptId) return;
+        handwritingLoadingAttemptRef.current = targetAttemptId;
+        setHandwritingStatus("loading");
+        try {
+            const loadedExam = exam || await loadTeacherExam(attempt.examId);
+            if (activeAttemptIdRef.current !== targetAttemptId) return;
+            if (loadedExam && !exam) setExam(loadedExam);
+
+            const [file, restored, markupDrawings] = await Promise.all([
+                loadedExam ? loadTeacherPdfFile(loadedExam) : Promise.resolve(null),
+                loadAttemptDrawings(attempt),
+                feedback ? loadFeedbackMarkupDrawings(feedback) : Promise.resolve(null),
+            ]);
+            if (activeAttemptIdRef.current !== targetAttemptId) return;
+
+            setPdfFile(file);
+            setDrawings(restored);
+            if (markupDrawings) setTeacherMarkupDrawings(markupDrawings);
+            const drawingsReady = restored !== undefined;
+            if (file && drawingsReady) setHandwritingStatus("ready");
+            else setHandwritingStatus("error");
+        } catch {
+            if (activeAttemptIdRef.current === targetAttemptId) {
+                setHandwritingStatus("error");
+            }
+        } finally {
+            if (handwritingLoadingAttemptRef.current === targetAttemptId) {
+                handwritingLoadingAttemptRef.current = null;
+            }
+        }
+    }, [attempt, exam, feedback, handwritingStatus]);
+
+    useEffect(() => {
+        if (activeView === "handwriting" && handwritingArchiveEnabled && attempt?.handwritingArchived) {
+            if (!loaded || handwritingStatus !== "idle") return;
+            const timeoutId = window.setTimeout(() => {
+                void loadHandwritingResources();
+            }, 0);
+            return () => window.clearTimeout(timeoutId);
+        }
+    }, [activeView, attempt, handwritingArchiveEnabled, handwritingStatus, loadHandwritingResources, loaded]);
 
     const analytics = useMemo(() => {
         if (!attempt || !exam) return null;
@@ -658,7 +684,30 @@ export default function TeacherAttemptPage() {
                                     behavior: analytics.behavior,
                                 } : null}
                             />
-                        ) : activeView === "handwriting" || activeView === "report" ? (
+                        ) : activeView === "handwriting" ? (
+                            <HandwritingPanel
+                                attempt={attempt}
+                                handwritingArchiveEnabled={handwritingArchiveEnabled}
+                                feedbackEnabled={feedbackEnabled}
+                                handwritingStatus={handwritingStatus}
+                                pdfFile={pdfFile}
+                                drawings={drawings}
+                                teacherMarkupDrawings={teacherMarkupDrawings}
+                                feedbackViewMode={feedbackViewMode}
+                                onFeedbackViewModeChange={setFeedbackViewMode}
+                                onTeacherMarkupChange={handleTeacherMarkupChange}
+                                feedback={feedback}
+                                feedbackSummary={feedbackSummary}
+                                onFeedbackSummaryChange={setFeedbackSummary}
+                                feedbackPolicy={feedbackPolicy}
+                                onFeedbackPolicyChange={updateFeedbackPolicy}
+                                feedbackNotice={feedbackNotice}
+                                feedbackSaving={feedbackSaving}
+                                onSaveFeedback={saveFeedback}
+                                onDownloadHandwriting={handleDownloadHandwriting}
+                                onRetry={() => void loadHandwritingResources()}
+                            />
+                        ) : activeView === "report" ? (
                             <>
                                 {examUnavailable && (
                             <div style={{

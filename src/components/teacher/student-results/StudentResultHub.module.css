@@ -23,6 +23,189 @@
   min-width: 0;
 }
 
+.state {
+  display: grid;
+  justify-items: start;
+  gap: 0.65rem;
+  min-height: 180px;
+  align-content: center;
+  padding: 1.5rem;
+  color: var(--foreground);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+}
+
+.state h2,
+.state p {
+  margin: 0;
+}
+
+.state h2 {
+  font-size: var(--type-heading-sm);
+}
+
+.state p {
+  color: var(--muted);
+  line-height: 1.55;
+}
+
+.handwritingLayout {
+  display: grid;
+  grid-template-columns: minmax(240px, 340px) minmax(0, 1fr);
+  gap: 1rem;
+  align-items: start;
+}
+
+.handwritingSidebar {
+  display: grid;
+  gap: 1rem;
+}
+
+.metadataList,
+.feedbackReceipt {
+  display: grid;
+  gap: 0.4rem;
+  color: var(--muted);
+  font-size: 0.82rem;
+}
+
+.questionChips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  margin-top: 0.9rem;
+}
+
+.questionChips span {
+  padding: 0.25rem 0.55rem;
+  color: var(--primary-dark);
+  border-radius: var(--radius-full);
+  background: color-mix(in srgb, var(--primary) 10%, var(--surface));
+  font-size: 0.72rem;
+  font-weight: 800;
+}
+
+.feedbackForm {
+  display: grid;
+  gap: 0.75rem;
+}
+
+.feedbackForm label {
+  display: grid;
+  gap: 0.35rem;
+  color: var(--foreground);
+  font-size: 0.78rem;
+  font-weight: 800;
+}
+
+.feedbackForm textarea,
+.feedbackForm input[type="datetime-local"] {
+  width: 100%;
+  padding: 0.6rem;
+  color: #0f172a;
+  border: 1px solid #64748b;
+  border-radius: var(--radius-sm);
+  background: #fff;
+  font: inherit;
+}
+
+.feedbackForm textarea {
+  resize: vertical;
+}
+
+.feedbackForm .checkboxLabel {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.feedbackActions {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.5rem;
+}
+
+.feedbackActions button {
+  justify-content: center;
+}
+
+.feedbackNotice {
+  padding: 0.65rem;
+  color: var(--foreground);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--background);
+  font-size: 0.78rem;
+  font-weight: 800;
+}
+
+.feedbackReceipt {
+  padding-top: 0.75rem;
+  border-top: 1px solid var(--border);
+}
+
+.handwritingViewer {
+  min-height: 760px;
+  padding: 0;
+  overflow: hidden;
+}
+
+.viewerHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 1rem 1.2rem;
+  border-bottom: 1px solid var(--border);
+}
+
+.viewerHeader h2,
+.viewerHeader p {
+  margin: 0;
+}
+
+.viewerHeader h2 {
+  font-size: 1rem;
+  font-weight: 900;
+}
+
+.viewerHeader p {
+  margin-top: 0.15rem;
+  color: var(--muted);
+  font-size: 0.82rem;
+}
+
+.viewModeGroup {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.4rem;
+  flex-wrap: wrap;
+}
+
+.viewModeGroup button {
+  min-height: 36px;
+  padding: 0.35rem 0.65rem;
+  font-size: 0.74rem;
+}
+
+.viewerBody {
+  height: 720px;
+  background: #525659;
+}
+
+.viewerBody .state {
+  height: 100%;
+  color: #fff;
+  border: 0;
+  border-radius: 0;
+  background: #525659;
+}
+
+.viewerBody .state p {
+  color: #e2e8f0;
+}
+
 .statGrid,
 .diagnosticGrid {
   display: grid;
@@ -391,6 +574,19 @@
   .sectionHeading {
     align-items: flex-start;
     flex-direction: column;
+  }
+
+  .handwritingLayout {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .viewerHeader {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .viewModeGroup {
+    justify-content: flex-start;
   }
 }
 
