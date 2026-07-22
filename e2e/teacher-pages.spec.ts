@@ -112,6 +112,129 @@ async function seedStoredRoster(page: Page) {
     });
 }
 
+async function seedStudentResultHub(page: Page) {
+    await page.addInitScript(() => {
+        const exam = {
+            id: "result-hub-exam",
+            title: "학생 결과 허브 시험",
+            createdAt: "2026-07-22T00:00:00.000Z",
+            updatedAt: "2026-07-22T00:00:00.000Z",
+            questions: [
+                { id: 1, number: 1, answer: 2, choices: 4, score: 50, label: "개념" },
+                { id: 2, number: 2, answer: 4, choices: 4, score: 50, label: "응용" },
+            ],
+            accessConfig: { type: "public" },
+        };
+        const original = {
+            id: "result-hub-original",
+            examId: exam.id,
+            examTitle: exam.title,
+            studentName: "결과 허브 학생",
+            studentId: "result-hub-student",
+            studentProfileId: "result-hub-student",
+            groupId: "result-hub-group",
+            groupName: "결과 허브반",
+            startedAt: "2026-07-22T09:00:00.000Z",
+            finishedAt: "2026-07-22T09:30:00.000Z",
+            score: 60,
+            totalScore: 100,
+            answers: { 1: 2, 2: 1 },
+            drawings: {
+                1: [JSON.stringify({
+                    color: "#ef4444",
+                    points: [{ x: 0.2, y: 0.2 }, { x: 0.3, y: 0.25 }],
+                })],
+            },
+            handwriting: {
+                schemaVersion: 1,
+                status: "saved",
+                plan: "pro",
+                summary: { pageCount: 1, strokeCount: 1, questionCount: 1 },
+                questions: {
+                    1: { questionId: 1, questionNumber: 1, page: 1, strokeCount: 1 },
+                },
+            },
+            handwritingArchived: true,
+            handwritingPlan: "pro",
+            drawingPageCount: 1,
+            drawingStrokeCount: 1,
+            questionDrawings: [
+                { questionId: 1, questionNumber: 1, page: 1, strokeCount: 1 },
+            ],
+            status: "completed",
+        };
+        const retake = {
+            id: "result-hub-retake",
+            examId: exam.id,
+            examTitle: exam.title,
+            studentName: "결과 허브 학생",
+            studentId: "result-hub-student",
+            studentProfileId: "result-hub-student",
+            groupId: "result-hub-group",
+            groupName: "결과 허브반",
+            startedAt: "2026-07-22T08:00:00.000Z",
+            finishedAt: "2026-07-22T08:20:00.000Z",
+            score: 80,
+            totalScore: 100,
+            answers: { 1: 2, 2: 4 },
+            status: "completed",
+            retake: {
+                sourceAttemptId: original.id,
+                questionIds: [2],
+                mode: "wrong",
+                createdAt: "2026-07-22T08:00:00.000Z",
+            },
+        };
+
+        window.localStorage.setItem(`omr_exam_${exam.id}`, JSON.stringify(exam));
+        window.localStorage.setItem("omr_attempts", JSON.stringify([original, retake]));
+    });
+}
+
+test("opens one student result hub and preserves the selected view across attempts", async ({ page, baseURL }) => {
+    await authenticateTeacher(page, baseURL);
+    await seedStudentResultHub(page);
+    await page.goto("/teacher/exam/result-hub-exam");
+
+    const originalRow = page.getByRole("row").filter({ hasText: "필기 저장됨" });
+    const retakeRow = page.getByRole("row").filter({ hasText: "재시험 1문항" });
+    await expect(originalRow.getByRole("link", { name: "결과 허브 학생 결과 보기" })).toHaveCount(1);
+    await expect(retakeRow.getByRole("link", { name: "결과 허브 학생 결과 보기" })).toHaveCount(1);
+
+    await originalRow.getByRole("link", { name: "결과 허브 학생 결과 보기" }).click();
+    await expect(page).toHaveURL(/\/teacher\/attempt\/result-hub-original/);
+
+    const resultTabs = page.getByRole("tablist", { name: "학생 결과 보기" });
+    for (const label of ["답안", "필기", "리포트", "분석"]) {
+        await expect(resultTabs.getByRole("tab", { name: label })).toBeVisible();
+    }
+    await expect(resultTabs.getByRole("tab")).toHaveCount(4);
+    await expect(resultTabs.getByRole("tab", { name: "답안" })).toHaveAttribute("aria-selected", "true");
+
+    await resultTabs.getByRole("tab", { name: "분석" }).click();
+    await expect(page).toHaveURL(/view=analytics/);
+    await page.getByRole("link", { name: /재시험 1/ }).click();
+    await expect(page).toHaveURL(/result-hub-retake\?view=analytics/);
+    await expect(page.getByRole("link", { name: /재시험 1 \+20점/ })).toBeVisible();
+
+    await page.getByRole("tab", { name: "리포트" }).click();
+    await expect(page.getByRole("tabpanel", { name: "리포트" })).toBeVisible();
+    await page.getByRole("link", { name: /^원시험/ }).click();
+    await expect(page).toHaveURL(/result-hub-original\?view=report/);
+    await expect(page.getByRole("tabpanel", { name: "리포트" })).toBeVisible();
+
+    await page.goto("/teacher/attempt/result-hub-original?view=handwriting");
+    await expect(page.getByRole("tab", { name: "필기" })).toHaveAttribute("aria-selected", "true");
+    await page.getByRole("tab", { name: "답안" }).click();
+    await expect(page.getByRole("tab", { name: "답안" })).toHaveAttribute("aria-selected", "true");
+    await page.goBack();
+    await expect(page).toHaveURL(/view=handwriting/);
+    await expect(page.getByRole("tab", { name: "필기" })).toHaveAttribute("aria-selected", "true");
+
+    await page.goto("/teacher/attempt/result-hub-original?view=invalid");
+    await expect(page.getByRole("tab", { name: "답안" })).toHaveAttribute("aria-selected", "true");
+});
+
 test.describe("Teacher dashboard", () => {
     test.beforeEach(async ({ page, baseURL }) => {
         await authenticateTeacher(page, baseURL);
