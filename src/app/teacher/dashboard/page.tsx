@@ -654,8 +654,8 @@ function TeacherDashboard() {
                             style={{
                                 display: 'flex',
                                 alignItems: 'center',
-                                gap: '0.6rem',
-                                padding: '0.65rem 0.85rem',
+                                gap: '0.4rem',
+                                padding: '0.35rem 0.55rem',
                                 borderRadius: 'var(--radius-full)',
                                 border: `1px solid ${syncTone.border}`,
                                 background: syncTone.background,
@@ -663,12 +663,12 @@ function TeacherDashboard() {
                                 minWidth: 0,
                             }}
                         >
-                            <SyncIcon size={17} />
-                            <span style={{ display: 'grid', gap: 2, minWidth: 0 }}>
-                                <span style={{ fontSize: '0.8rem', fontWeight: 800, lineHeight: 1.1, whiteSpace: 'nowrap' }}>
+                            <SyncIcon size={13} />
+                            <span style={{ display: 'grid', gap: 0, minWidth: 0 }}>
+                                <span style={{ fontSize: '0.7rem', fontWeight: 800, lineHeight: 1.05, whiteSpace: 'nowrap' }}>
                                     {syncStatus.label}
                                 </span>
-                                <span style={{ fontSize: 'var(--type-caption)', color: 'var(--muted)', lineHeight: 1.2, whiteSpace: 'nowrap' }}>
+                                <span style={{ fontSize: '0.63rem', color: 'var(--muted)', lineHeight: 1.1, whiteSpace: 'nowrap' }}>
                                     {syncStatus.detail}
                                 </span>
                             </span>
@@ -701,8 +701,8 @@ function TeacherDashboard() {
                             style={{
                                 display: 'flex',
                                 alignItems: 'center',
-                                gap: '0.6rem',
-                                padding: '0.65rem 0.85rem',
+                                gap: '0.4rem',
+                                padding: '0.35rem 0.55rem',
                                 borderRadius: 'var(--radius-full)',
                                 border: `1px solid ${dataHealthTone.border}`,
                                 background: dataHealthTone.background,
@@ -710,21 +710,21 @@ function TeacherDashboard() {
                                 minWidth: 0,
                             }}
                         >
-                            <DataHealthIcon size={17} />
-                            <span style={{ display: 'grid', gap: 2, minWidth: 0 }}>
-                                <span style={{ fontSize: '0.8rem', fontWeight: 800, lineHeight: 1.1, whiteSpace: 'nowrap' }}>
+                            <DataHealthIcon size={13} />
+                            <span style={{ display: 'grid', gap: 0, minWidth: 0 }}>
+                                <span style={{ fontSize: '0.7rem', fontWeight: 800, lineHeight: 1.05, whiteSpace: 'nowrap' }}>
                                     {analyticsDataHealth.label}
                                 </span>
-                                <span style={{ fontSize: 'var(--type-caption)', color: 'var(--muted)', lineHeight: 1.2, whiteSpace: 'nowrap' }}>
+                                <span style={{ fontSize: '0.63rem', color: 'var(--muted)', lineHeight: 1.1, whiteSpace: 'nowrap' }}>
                                     {analyticsDataHealth.score}점 · {analyticsDataHealth.detail}
                                 </span>
                             </span>
                         </div>
                         {activeTab !== 'overview' && (
                             <Link href="/create" style={{
-                                padding: '0.75rem 1.5rem', background: 'var(--primary)',
+                                padding: '0.55rem 1.1rem', background: 'var(--primary)',
                                 color: 'white', borderRadius: 'var(--radius-full)',
-                                fontWeight: 600, display: 'flex', alignItems: 'center', gap: '0.5rem',
+                                fontWeight: 600, fontSize: '0.85rem', display: 'flex', alignItems: 'center', gap: '0.4rem',
                                 boxShadow: '0 4px 12px rgba(99, 102, 241, 0.3)'
                             }}>
                                 시험 출제하기
@@ -771,10 +771,10 @@ function TeacherDashboard() {
                         style={{
                             display: 'grid',
                             gridTemplateColumns: 'minmax(0, 1.2fr) minmax(220px, 1fr)',
-                            gap: '1rem',
+                            gap: '0.75rem',
                             alignItems: 'stretch',
-                            padding: '1rem 1.1rem',
-                            marginBottom: '1.5rem',
+                            padding: '0.65rem 0.85rem',
+                            marginBottom: '1rem',
                             borderRadius: 'var(--radius-lg)',
                             border: `1px solid ${dataHealthTone.border}`,
                             background: dataHealthTone.background,
@@ -782,18 +782,18 @@ function TeacherDashboard() {
                         }}
                         className="dashboard-data-health"
                     >
-                        <div style={{ display: 'flex', alignItems: 'flex-start', gap: '0.85rem', minWidth: 0 }}>
-                            <DataHealthIcon size={20} color={dataHealthTone.color} style={{ flexShrink: 0, marginTop: 2 }} />
+                        <div style={{ display: 'flex', alignItems: 'flex-start', gap: '0.6rem', minWidth: 0 }}>
+                            <DataHealthIcon size={16} color={dataHealthTone.color} style={{ flexShrink: 0, marginTop: 2 }} />
                             <div style={{ minWidth: 0 }}>
-                                <div style={{ fontSize: '0.9rem', fontWeight: 900, color: dataHealthTone.color, marginBottom: '0.2rem' }}>
+                                <div style={{ fontSize: '0.8rem', fontWeight: 900, color: dataHealthTone.color, marginBottom: '0.15rem' }}>
                                     {analyticsDataHealth.label}
                                 </div>
-                                <p style={{ fontSize: '0.82rem', color: 'var(--muted)', lineHeight: 1.55, wordBreak: 'keep-all' }}>
+                                <p style={{ fontSize: '0.76rem', color: 'var(--muted)', lineHeight: 1.45, wordBreak: 'keep-all' }}>
                                     시험 {analyticsDataHealth.totalExamCount}개, 제출 {analyticsDataHealth.totalAttemptCount}건, 문항 {analyticsDataHealth.totalQuestionCount}개 기준입니다. {analyticsDataHealth.detail}
                                 </p>
                             </div>
                         </div>
-                        <div style={{ display: 'grid', gap: '0.45rem', alignContent: 'center' }}>
+                        <div style={{ display: 'grid', gap: '0.35rem', alignContent: 'center' }}>
                             {analyticsDataHealth.issues.slice(0, 4).map(issue => (
                                 <div
                                     key={issue.key}
@@ -802,13 +802,13 @@ function TeacherDashboard() {
                                         justifyContent: 'space-between',
                                         alignItems: 'center',
                                         gap: '0.75rem',
-                                        padding: '0.45rem 0.55rem',
+                                        padding: '0.35rem 0.5rem',
                                         borderRadius: 'var(--radius-md)',
                                         border: '1px solid var(--border)',
                                         background: 'var(--surface)',
                                     }}
                                 >
-                                    <span style={{ fontSize: '0.78rem', fontWeight: 800, color: 'var(--foreground)', minWidth: 0 }}>
+                                    <span style={{ fontSize: '0.74rem', fontWeight: 800, color: 'var(--foreground)', minWidth: 0 }}>
                                         {issue.label}
                                     </span>
                                     <span style={{
@@ -832,13 +832,13 @@ function TeacherDashboard() {
                                             alignItems: 'center',
                                             justifyContent: 'space-between',
                                             gap: '0.75rem',
-                                            padding: '0.58rem 0.7rem',
+                                            padding: '0.45rem 0.6rem',
                                             borderRadius: 'var(--radius-md)',
                                             border: '1px solid rgba(99,102,241,0.28)',
                                             background: 'rgba(99,102,241,0.1)',
                                             color: 'var(--primary)',
                                             cursor: isRepairingAnalyticsData ? 'wait' : 'pointer',
-                                            fontSize: '0.8rem',
+                                            fontSize: '0.76rem',
                                             fontWeight: 900,
                                         }}
                                     >
@@ -849,8 +849,8 @@ function TeacherDashboard() {
                                     </button>
                                     <div style={{
                                         display: 'grid',
-                                        gap: '0.35rem',
-                                        padding: '0.62rem 0.68rem',
+                                        gap: '0.3rem',
+                                        padding: '0.5rem 0.6rem',
                                         borderRadius: 'var(--radius-md)',
                                         border: '1px dashed var(--border)',
                                         background: 'var(--surface)',
@@ -885,7 +885,7 @@ function TeacherDashboard() {
                                 </div>
                             )}
                             {analyticsDataHealth.issues.length === 0 && (
-                                <div style={{ fontSize: '0.8rem', color: 'var(--muted)', fontWeight: 800 }}>
+                                <div style={{ fontSize: '0.74rem', color: 'var(--muted)', fontWeight: 800 }}>
                                     실제 시험과 제출이 쌓이면 자동으로 점검합니다.
                                 </div>
                             )}
@@ -898,9 +898,9 @@ function TeacherDashboard() {
                     aria-label="분석 다음 조치"
                     style={{
                         display: 'grid',
-                        gridTemplateColumns: 'repeat(auto-fit, minmax(min(210px, 100%), 1fr))',
-                        gap: '0.75rem',
-                        marginBottom: '1.5rem',
+                        gridTemplateColumns: 'repeat(auto-fit, minmax(min(190px, 100%), 1fr))',
+                        gap: '0.6rem',
+                        marginBottom: '1rem',
                     }}
                 >
                     {dashboardAnalysisActions.map(action => {
@@ -911,18 +911,18 @@ function TeacherDashboard() {
                                 : { border: 'var(--border)', background: 'var(--surface)', color: 'var(--foreground)' };
                         const content = (
                             <>
-                                <span style={{ display: 'block', color: actionTone.color, fontSize: '0.86rem', fontWeight: 950, marginBottom: '0.2rem' }}>
+                                <span style={{ display: 'block', color: actionTone.color, fontSize: '0.82rem', fontWeight: 950, marginBottom: '0.15rem' }}>
                                     {action.label}
                                 </span>
-                                <span style={{ display: 'block', color: 'var(--muted)', fontSize: '0.76rem', lineHeight: 1.45, wordBreak: 'keep-all' }}>
+                                <span style={{ display: 'block', color: 'var(--muted)', fontSize: '0.72rem', lineHeight: 1.4, wordBreak: 'keep-all' }}>
                                     {action.detail}
                                 </span>
                             </>
                         );
                         const sharedStyle = {
                             width: '100%',
-                            minHeight: 78,
-                            padding: '0.85rem 0.95rem',
+                            minHeight: 56,
+                            padding: '0.6rem 0.8rem',
                             borderRadius: 'var(--radius-lg)',
                             border: `1px solid ${actionTone.border}`,
                             background: actionTone.background,

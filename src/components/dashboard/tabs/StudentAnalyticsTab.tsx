@@ -1,7 +1,8 @@
 "use client";
 
-import { useMemo, useState, type CSSProperties } from "react";
+import { useMemo, useRef, useState, type CSSProperties } from "react";
 import Link from "next/link";
+import useCometReveal from "@/components/dashboard/useCometReveal";
 import { Exam, Attempt, type PlanKey } from "@/types/omr";
 import {
     LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip,
@@ -236,6 +237,14 @@ export default function StudentAnalyticsTab({
             });
     }, [studentAttempts, excludedExamIds, examsById, attemptScoreById, averageScoreByExamId]);
 
+    // 시안 B — comet head leads the "내 점수" line draw (soft-light variant).
+    const trendChartRef = useRef<HTMLDivElement | null>(null);
+    useCometReveal(trendChartRef, {
+        color: "var(--primary)",
+        replayKey: trendData,
+        enabled: studentGrowthReportsEnabled && trendData.length > 1,
+    });
+
     const detailedAnalysis = useMemo(() => {
         const getScoreRate = (candidate: Attempt) => (
             attemptScoreById.get(candidate.id)?.scorePercent
@@ -428,7 +437,7 @@ export default function StudentAnalyticsTab({
 
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(320px, 100%), 1fr))', gap: '1.5rem' }}>
                 {/* Left side: Chart */}
-                <div className="card" style={{ ...CARD_SURFACE_STYLE,padding: '1.5rem', display: 'flex', flexDirection: 'column', minWidth: 0 }}>
+                <div className="card chart-card-enter" style={{ ...CARD_SURFACE_STYLE, padding: '1.5rem', display: 'flex', flexDirection: 'column', minWidth: 0 }}>
                     <div style={{ marginBottom: '1.5rem' }}>
                         <h3 style={{ fontSize: '1.25rem', fontWeight: 700, display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.5rem' }}>
                             <TrendingUp size={20} color="var(--primary)" />
@@ -447,7 +456,8 @@ export default function StudentAnalyticsTab({
                         />
                     )}
 
-                    <div style={{ flex: 1, minHeight: studentGrowthReportsEnabled ? '350px' : 0, width: '100%', minWidth: 0 }}>
+                    <div ref={trendChartRef} className="comet-chart-light" style={{ flex: 1, minHeight: studentGrowthReportsEnabled ? '350px' : 0, width: '100%', minWidth: 0, position: 'relative' }}>
+                        <div className="chart-texture is-light" aria-hidden="true" />
                         {studentGrowthReportsEnabled && trendData.length > 0 ? (
                             <ResponsiveContainer
                                 width="100%"
@@ -469,11 +479,12 @@ export default function StudentAnalyticsTab({
                                         name="내 점수"
                                         type="monotone"
                                         dataKey="studentScore"
+                                        className="comet-target"
                                         stroke="var(--primary)"
                                         strokeWidth={3}
                                         dot={{ r: 5, strokeWidth: 2, fill: 'var(--background)' }}
                                         activeDot={{ r: 7 }}
-                                        animationDuration={1500}
+                                        isAnimationActive={false}
                                     />
                                     <Line
                                         name="선택 범위 평균"
@@ -483,7 +494,9 @@ export default function StudentAnalyticsTab({
                                         strokeWidth={2}
                                         strokeDasharray="5 5"
                                         dot={{ r: 4, strokeWidth: 0, fill: 'var(--muted)' }}
-                                        animationDuration={1500}
+                                        animationBegin={1200}
+                                        animationDuration={900}
+                                        animationEasing="ease-out"
                                     />
                                 </LineChart>
                             </ResponsiveContainer>

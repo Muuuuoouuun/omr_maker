@@ -1,4 +1,5 @@
 import { ReactNode } from "react";
+import CountUp, { parseCountableValue } from "./CountUp";
 
 interface StatCardProps {
   title: string;
@@ -11,6 +12,8 @@ interface StatCardProps {
   actionAriaLabel?: string;
   onAction?: () => void;
   color?: string;
+  /** Stagger the entrance animation when rendering several cards in a row/grid. */
+  delayMs?: number;
 }
 
 export default function StatCard({
@@ -24,9 +27,11 @@ export default function StatCard({
   actionAriaLabel,
   onAction,
   color = "var(--primary)",
+  delayMs = 0,
 }: StatCardProps) {
   const isVarColor = color.startsWith("var(");
   const rawHex = isVarColor ? null : color;
+  const countable = parseCountableValue(value);
 
   const iconBg = rawHex ? `${rawHex}18` : `color-mix(in srgb, ${color}, transparent 85%)`;
   const glowBg = rawHex ? `${rawHex}10` : `color-mix(in srgb, ${color}, transparent 94%)`;
@@ -36,7 +41,7 @@ export default function StatCard({
 
   return (
     <div
-      className="bento-card col-span-1"
+      className="bento-card col-span-1 kpi-spring"
       style={{
         position: "relative",
         overflow: "hidden",
@@ -46,6 +51,7 @@ export default function StatCard({
         flexDirection: "column",
         justifyContent: "space-between",
         gap: "0.9rem",
+        animationDelay: `${delayMs}ms`,
       }}
     >
       {/* Top accent stripe */}
@@ -104,7 +110,17 @@ export default function StatCard({
             fontVariantNumeric: "tabular-nums",
           }}
         >
-          {value}
+          {countable ? (
+            <CountUp
+              value={countable.num}
+              decimals={countable.decimals}
+              prefix={countable.prefix}
+              suffix={countable.suffix}
+              delayMs={delayMs + 150}
+            />
+          ) : (
+            value
+          )}
         </div>
 
         {detail && (

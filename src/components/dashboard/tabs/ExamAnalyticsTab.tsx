@@ -84,6 +84,8 @@ import {
 } from "@/lib/kakaoCandidateReviewPersistence";
 import { getKakaoProviderReadiness, type KakaoProviderReadinessStatus } from "@/lib/kakaoProvider";
 import { hasPlanEntitlement } from "@/utils/plans";
+import CountUp from "@/components/dashboard/CountUp";
+import WaveBar from "@/components/dashboard/WaveBar";
 
 interface ExamAnalyticsTabProps {
     exams: Exam[];
@@ -259,6 +261,25 @@ export default function ExamAnalyticsTab({
     const [inputValue, setInputValue] = useState("");
     const [selectedRegionKey, setSelectedRegionKey] = useState(ALL_REGION_KEY);
     const [activeWorkspaceView, setActiveWorkspaceView] = useState<AnalyticsWorkspaceView>("overview");
+    // Gauge entrance sweep (시안 C): render the arc at 0 for the first paint,
+    // then let the CSS stroke-dasharray transition fill it to the real value —
+    // synced with the CountUp rolling the score number up beside it.
+    const [gaugeReady, setGaugeReady] = useState(false);
+    useEffect(() => {
+        if (window.matchMedia?.("(prefers-reduced-motion: reduce)").matches) {
+            setGaugeReady(true);
+            return;
+        }
+        // Double rAF so the 0-state actually paints before the transition target.
+        let raf2 = 0;
+        const raf1 = requestAnimationFrame(() => {
+            raf2 = requestAnimationFrame(() => setGaugeReady(true));
+        });
+        return () => {
+            cancelAnimationFrame(raf1);
+            cancelAnimationFrame(raf2);
+        };
+    }, []);
     const [analysisScope, setAnalysisScope] = useState<AnalysisScope>("exam");
     const [selectedClassKey, setSelectedClassKey] = useState("");
     const [selectedStudentKey, setSelectedStudentKey] = useState("");
@@ -1722,12 +1743,12 @@ export default function ExamAnalyticsTab({
                                             <path
                                                 className={styles.gaugeValue}
                                                 pathLength="100"
-                                                strokeDasharray={`${Math.max(0, Math.min(100, examStats.avgScore))} 100`}
+                                                strokeDasharray={`${gaugeReady ? Math.max(0, Math.min(100, examStats.avgScore)) : 0} 100`}
                                                 d="M 18 94 A 72 72 0 0 1 162 94"
                                             />
                                         </svg>
                                         <div className={styles.scoreValue}>
-                                            {examStats.avgScore}<span>점</span>
+                                            <CountUp value={examStats.avgScore} suffix="점" delayMs={150} />
                                         </div>
                                         <div className={styles.scoreLabel}>전체 평균 점수</div>
                                     </div>
@@ -1743,7 +1764,13 @@ export default function ExamAnalyticsTab({
                                     ].map(item => (
                                         <div key={item.label} className={styles.kpi}>
                                             <span className={styles.kpiLabel}>{item.label}</span>
-                                            <strong>{item.value}<span>{item.unit}</span></strong>
+                                            <strong>
+                                                {typeof item.value === "number" ? (
+                                                    <CountUp value={item.value} suffix={item.unit} delayMs={150} />
+                                                ) : (
+                                                    <>{item.value}<span>{item.unit}</span></>
+                                                )}
+                                            </strong>
                                         </div>
                                     ))}
                                 </div>
@@ -1802,9 +1829,9 @@ export default function ExamAnalyticsTab({
                                                 <Bar
                                                     dataKey="count"
                                                     fill="var(--primary-light)"
-                                                    radius={[5, 5, 0, 0]}
                                                     maxBarSize={52}
-                                                    animationDuration={650}
+                                                    isAnimationActive={false}
+                                                    shape={<WaveBar radius={5} />}
                                                 />
                                             </BarChart>
                                         </ResponsiveContainer>
@@ -2602,7 +2629,7 @@ export default function ExamAnalyticsTab({
                     >
                     <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(320px, 100%), 1fr))', gap: '1.5rem' }}>
                         {/* Radar Chart for labels */}
-                        <div className="card" style={{ ...CARD_SURFACE_STYLE,padding: '1.5rem', background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 'var(--radius-xl)', position: 'relative', overflow: 'hidden', minWidth: 0 }}>
+                        <div className="card chart-card-enter" style={{ ...CARD_SURFACE_STYLE, padding: '1.5rem', background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 'var(--radius-xl)', position: 'relative', overflow: 'hidden', minWidth: 0, animationDelay: '60ms' }}>
                             {/* Decorative background */}
                             <div style={{
                                 position: 'absolute', top: '-30px', right: '-30px',
@@ -2632,7 +2659,7 @@ export default function ExamAnalyticsTab({
                                 fall back to a bar-style list for 1–2 labels. */}
                             {scopedLabelAnalytics.length >= 3 ? (
                                 <>
-                                    <div style={{ height: '300px', width: '100%', minWidth: 0, position: 'relative' }}>
+                                    <div className="radar-bloom" style={{ height: '300px', width: '100%', minWidth: 0, position: 'relative' }}>
                                         <ResponsiveContainer
                                             width="100%"
                                             height="100%"
@@ -2686,8 +2713,7 @@ export default function ExamAnalyticsTab({
                                                     fillOpacity={0.85}
                                                     dot={{ fill: '#6366f1', stroke: '#fff', strokeWidth: 2, r: 5 }}
                                                     activeDot={{ fill: '#ec4899', stroke: '#fff', strokeWidth: 2, r: 7 }}
-                                                    animationDuration={1400}
-                                                    animationEasing="ease-out"
+                                                    isAnimationActive={false}
                                                     filter="url(#radarGlow)"
                                                 />
                                                 <RechartsTooltip
@@ -2806,7 +2832,7 @@ export default function ExamAnalyticsTab({
                     </div>
 
                     {/* Detailed Question correct rate bar chart */}
-                    <div className="card" style={{ ...CARD_SURFACE_STYLE,padding: '1.5rem' }}>
+                    <div className="card chart-card-enter" style={{ ...CARD_SURFACE_STYLE, padding: '1.5rem' }}>
                         <h3 style={{ fontSize: '1.1rem', fontWeight: 700, marginBottom: '1.5rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
                             <CheckCircle size={18} color="var(--success)" />
                             문항별 상세 정답률
@@ -2829,7 +2855,7 @@ export default function ExamAnalyticsTab({
                                         formatter={(value: number | string | undefined) => [`${value}%`, '정답률']}
                                         labelFormatter={(label) => `${label}번 문항`}
                                     />
-                                    <Bar dataKey="correctRate" fill="var(--primary)" radius={[4, 4, 0, 0]} animationDuration={1500} />
+                                    <Bar dataKey="correctRate" fill="var(--primary)" isAnimationActive={false} shape={<WaveBar />} />
                                 </BarChart>
                             </ResponsiveContainer>
                         </div>

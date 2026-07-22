@@ -272,10 +272,10 @@ export default function ExamDetailPage() {
 
                 {/* Stats Row */}
                 <div className="bento-grid" style={{ marginBottom: '2rem', gridTemplateColumns: 'repeat(4, 1fr)', gridAutoRows: 'auto' }}>
-                    <StatCard title="원시험 제출" value={stats.submitCount} icon={<span>📝</span>} />
-                    <StatCard title="원시험 평균" value={`${stats.avgPct}%`} icon={<span>📊</span>} color="var(--primary)" />
-                    <StatCard title="원시험 최고" value={`${stats.maxPct}%`} icon={<span>🏆</span>} color="var(--warning)" />
-                    <StatCard title="재시험 제출" value={retakeAttempts.length} icon={<span>↻</span>} color="#0f766e" />
+                    <StatCard title="원시험 제출" value={stats.submitCount} icon={<span>📝</span>} delayMs={0} />
+                    <StatCard title="원시험 평균" value={`${stats.avgPct}%`} icon={<span>📊</span>} color="var(--primary)" delayMs={60} />
+                    <StatCard title="원시험 최고" value={`${stats.maxPct}%`} icon={<span>🏆</span>} color="var(--warning)" delayMs={120} />
+                    <StatCard title="재시험 제출" value={retakeAttempts.length} icon={<span>↻</span>} color="#0f766e" delayMs={180} />
                 </div>
 
                 <section className="bento-card" style={{

@@ -493,20 +493,21 @@ export default function OverviewTab({ exams: examsProp, attempts, stats, trendDa
                 </div>
             )}
 
-            {/* 2. Score Trend */}
-            <div className="bento-card col-span-2" style={{
+            {/* 2. Score Trend — 시안 B dark-glass surface (dot-grid + glow) */}
+            <div className="bento-card col-span-2 comet-chart-dark" style={{
                 background: 'linear-gradient(135deg, var(--primary), var(--primary-dark))',
                 color: 'white', border: 'none',
                 position: 'relative', overflow: 'hidden'
             }}>
+                <div className="chart-texture is-dark" aria-hidden="true" />
                 <div style={{ marginBottom: '1.5rem', position: 'relative', zIndex: 1 }}>
                     <h3 style={{ fontSize: '1.25rem', fontWeight: 700 }}>평균 점수 추이</h3>
                     <p style={{ opacity: 0.8, fontSize: '0.95rem' }}>최근 7개 시험의 평균 점수 흐름</p>
                 </div>
 
-                <div style={{ position: 'absolute', top: '-20%', right: '-10%', width: '200px', height: '200px', background: 'radial-gradient(circle, rgba(255,255,255,0.2) 0%, transparent 70%)' }}></div>
+                <div style={{ position: 'absolute', top: '-20%', right: '-10%', width: '220px', height: '220px', background: 'radial-gradient(circle, rgba(255,255,255,0.28) 0%, transparent 70%)' }}></div>
 
-                <div style={{ flex: 1, display: 'flex', alignItems: 'flex-end', width: '100%' }}>
+                <div style={{ flex: 1, display: 'flex', alignItems: 'flex-end', width: '100%', position: 'relative', zIndex: 1 }}>
                     <TrendChart data={trendData} labels={trendLabels} color="white" height={160} />
                 </div>
             </div>
@@ -753,6 +754,7 @@ export default function OverviewTab({ exams: examsProp, attempts, stats, trendDa
                         actionLabel="학생별 성취 보기"
                         actionAriaLabel={`${stats.totalStudents}명 학생별 성취 분석 보기`}
                         onAction={onNavigateToStudentAnalytics}
+                        delayMs={0}
                     />
                 </div>
                 <div style={{ flex: 1, display: 'flex', width: '100%', minHeight: 0 }}>
@@ -771,6 +773,7 @@ export default function OverviewTab({ exams: examsProp, attempts, stats, trendDa
                         onAction={latestExamRow && onNavigateToExamAnalytics
                             ? () => onNavigateToExamAnalytics(latestExamRow.id)
                             : undefined}
+                        delayMs={90}
                     />
                 </div>
             </div>

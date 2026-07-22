@@ -1,7 +1,8 @@
 "use client";
 
-import { useId, useMemo } from "react";
+import { useId, useMemo, useRef } from "react";
 import { AreaChart, Area, ResponsiveContainer, Tooltip } from "recharts";
+import useCometReveal from "./useCometReveal";
 
 interface TrendChartProps {
     data: number[];
@@ -10,11 +11,39 @@ interface TrendChartProps {
     height?: number;
 }
 
+/** Rounded value flag pinned beside the final data point (시안 B). */
+function LastPointFlag(props: { x?: number; y?: number; value?: number; index?: number; lastIndex: number }) {
+    const { x, y, value, index, lastIndex } = props;
+    if (index !== lastIndex || x === undefined || y === undefined) return null;
+    return (
+        <g className="comet-flag" pointerEvents="none">
+            <rect x={x - 62} y={y - 12} width={50} height={23} rx={7} fill="#ffffff" />
+            <text
+                x={x - 37}
+                y={y + 4}
+                textAnchor="middle"
+                fontSize={12}
+                fontWeight={800}
+                fill="var(--primary-dark)"
+            >
+                {value}점
+            </text>
+        </g>
+    );
+}
+
 export default function TrendChart({ data, labels, color = "#ffffff", height = 100 }: TrendChartProps) {
     // Namespaced per-instance so two charts sharing a color don't collide on the
     // gradient id (which previously derived only from the color).
     const rawId = useId();
     const gradientId = `trend-gradient-${rawId.replace(/[^a-zA-Z0-9_-]/g, "")}`;
+    const chartRef = useRef<HTMLDivElement | null>(null);
+    // 시안 B — comet head leads the line draw; only meaningful with 2+ points.
+    useCometReveal(chartRef, {
+        color,
+        replayKey: data,
+        enabled: data.length > 1,
+    });
 
     const chartData = useMemo(() => {
         return data.map((val, i) => ({
@@ -25,7 +54,7 @@ export default function TrendChart({ data, labels, color = "#ffffff", height = 1
 
     if (data.length === 0) {
         return (
-            <div style={{
+            <div className="chart-card-enter" style={{
                 height,
                 minWidth: 0,
                 display: 'flex',
@@ -48,6 +77,7 @@ export default function TrendChart({ data, labels, color = "#ffffff", height = 1
             <div
                 role="status"
                 aria-label={`최근 시험 평균 점수 ${data[0]}점. 비교할 시험이 쌓이면 추이가 표시됩니다.`}
+                className="chart-card-enter"
                 style={{
                     width: '100%',
                     minWidth: 0,
@@ -72,10 +102,12 @@ export default function TrendChart({ data, labels, color = "#ffffff", height = 1
 
     return (
         <div
+            className="chart-card-enter"
             style={{ width: '100%', minWidth: 0, height }}
             role="img"
             tabIndex={0}
             aria-label={`최근 ${data.length}개 시험 평균 점수 추이. 최신 점수 ${data[data.length - 1]}점.`}
+            ref={chartRef}
         >
             <ResponsiveContainer
                 width="100%"
@@ -111,13 +143,14 @@ export default function TrendChart({ data, labels, color = "#ffffff", height = 1
                     <Area
                         type="monotone"
                         dataKey="score"
+                        className="comet-target"
                         stroke={color}
                         fill={`url(#${gradientId})`}
                         strokeWidth={3}
-                        animationDuration={1500}
-                        animationEasing="ease-out"
+                        isAnimationActive={false}
                         activeDot={{ r: 7, strokeWidth: 0, fill: color }}
                         dot={{ r: 5, strokeWidth: 2, fill: 'var(--primary-dark)', stroke: color }}
+                        label={<LastPointFlag lastIndex={chartData.length - 1} />}
                     />
                 </AreaChart>
             </ResponsiveContainer>

@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo } from "react";
+import { useMemo, useRef } from "react";
 import {
     Area,
     AreaChart,
@@ -28,6 +28,9 @@ import type { Attempt, Exam } from "@/types/omr";
 import type { RosterGroup } from "@/lib/rosterStorage";
 import { buildAttemptScoreLookup } from "@/lib/attemptScores";
 import { serializeCsvRows } from "@/lib/csv";
+import CountUp, { parseCountableValue } from "@/components/dashboard/CountUp";
+import WaveBar from "@/components/dashboard/WaveBar";
+import useCometReveal from "@/components/dashboard/useCometReveal";
 
 interface MockupOverviewProps {
     exams: Exam[];
@@ -155,6 +158,14 @@ export default function MockupOverview({
         ? `직전 시험보다 ${Math.abs(averageDelta).toFixed(1)}점 ${averageDelta >= 0 ? "상승" : "하락"}`
         : "직전 시험 비교 데이터 준비 중";
 
+    // 시안 B — comet head leads the demo trend line draw (soft-light variant).
+    const trendChartRef = useRef<HTMLDivElement | null>(null);
+    useCometReveal(trendChartRef, {
+        color: "#1769e0",
+        replayKey: model.rows,
+        enabled: model.rows.length > 1,
+    });
+
     const metrics = [
         {
             label: "전체 평균 점수",
@@ -207,10 +218,11 @@ export default function MockupOverview({
     return (
         <section className="mockup-overview" aria-label="데모 계정 대시보드 개요">
             <div className="mockup-metric-grid">
-                {metrics.map(metric => {
+                {metrics.map((metric, metricIndex) => {
                     const Icon = metric.icon;
+                    const countable = parseCountableValue(metric.value);
                     return (
-                        <article className="mockup-metric" key={metric.label}>
+                        <article className="mockup-metric kpi-spring" style={{ animationDelay: `${metricIndex * 80}ms` }} key={metric.label}>
                             <button
                                 type="button"
                                 className="mockup-metric-action"
@@ -220,7 +232,19 @@ export default function MockupOverview({
                                 <span className={`mockup-metric-icon is-${metric.tone}`} aria-hidden="true"><Icon size={23} /></span>
                                 <span className="mockup-metric-copy">
                                     <span className="mockup-metric-label">{metric.label}</span>
-                                    <strong>{metric.value}</strong>
+                                    <strong>
+                                        {countable ? (
+                                            <CountUp
+                                                value={countable.num}
+                                                decimals={countable.decimals}
+                                                prefix={countable.prefix}
+                                                suffix={countable.suffix}
+                                                delayMs={metricIndex * 80 + 150}
+                                            />
+                                        ) : (
+                                            metric.value
+                                        )}
+                                    </strong>
                                     <span className="mockup-metric-detail">{metric.detail}</span>
                                     <span className="mockup-metric-footer">
                                         <span className={`mockup-metric-change is-${metric.comparisonTone}`}>{metric.comparison}</span>
@@ -242,7 +266,7 @@ export default function MockupOverview({
                         </div>
                         <span className="mockup-legend"><i /> 평균 점수</span>
                     </div>
-                    <div className="mockup-chart" aria-label="최근 7개 시험 평균 점수 선 그래프">
+                    <div ref={trendChartRef} className="mockup-chart comet-chart-light" aria-label="최근 7개 시험 평균 점수 선 그래프">
                         <ResponsiveContainer
                             width="100%"
                             height="100%"
@@ -266,7 +290,7 @@ export default function MockupOverview({
                                     labelFormatter={(_, payload) => payload[0]?.payload?.title || ""}
                                     contentStyle={{ border: "1px solid #dfe7f1", borderRadius: 10, boxShadow: "0 10px 28px rgba(15,39,71,0.1)", fontSize: 12 }}
                                 />
-                                <Area type="monotone" dataKey="average" stroke="#1769e0" strokeWidth={3} fill="url(#mockupScoreFill)" dot={{ r: 4, fill: "#fff", stroke: "#1769e0", strokeWidth: 3 }} activeDot={{ r: 6 }} />
+                                <Area type="monotone" dataKey="average" className="comet-target" stroke="#1769e0" strokeWidth={3} fill="url(#mockupScoreFill)" dot={{ r: 4, fill: "#fff", stroke: "#1769e0", strokeWidth: 3 }} activeDot={{ r: 6 }} isAnimationActive={false} />
                             </AreaChart>
                         </ResponsiveContainer>
                     </div>
@@ -345,7 +369,7 @@ export default function MockupOverview({
                                 <XAxis dataKey="name" axisLine={false} tickLine={false} tick={{ fill: "#64748b", fontSize: 11, fontWeight: 700 }} />
                                 <YAxis domain={[60, 100]} axisLine={false} tickLine={false} tick={{ fill: "#94a3b8", fontSize: 10 }} />
                                 <Tooltip formatter={(value) => [`${Number(value).toFixed(1)}점`, "반 평균"]} contentStyle={{ border: "1px solid #dfe7f1", borderRadius: 10, fontSize: 12 }} />
-                                <Bar dataKey="average" radius={[7, 7, 0, 0]} maxBarSize={42}>
+                                <Bar dataKey="average" maxBarSize={42} isAnimationActive={false} shape={<WaveBar radius={7} />}>
                                     {model.classRows.map(row => <Cell key={row.name} fill={row.color} />)}
                                 </Bar>
                             </BarChart>

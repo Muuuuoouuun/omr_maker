@@ -358,7 +358,9 @@
 .gaugeValue {
   stroke: var(--analytics-blue);
   filter: drop-shadow(0 5px 7px color-mix(in srgb, var(--primary) 24%, transparent));
-  transition: stroke-dasharray 0.45s ease;
+  /* 0.9s to sync with the CountUp rolling the score up beside the arc
+     (entrance sweep starts from `0 100` — see gaugeReady in the component). */
+  transition: stroke-dasharray 0.9s var(--ease-out-soft, ease);
 }
 
 .scoreValue {
@@ -971,6 +973,13 @@
 @keyframes metricSettle {
   from { opacity: 0.78; transform: translateY(4px); }
   to { opacity: 1; transform: translateY(0); }
+}
+
+/* Keep the settle curve on the shared motion token so KPI entrances across the
+   dashboard speak one easing language (see :root tokens in globals.css). */
+.scoreValue,
+.kpi strong {
+  animation-timing-function: var(--ease-out-soft, cubic-bezier(0.22, 1, 0.36, 1));
 }
 
 @media (prefers-reduced-motion: reduce) {
