@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { Attempt } from "@/types/omr";
 import {
     buildStudentAttemptSeries,
@@ -124,17 +124,27 @@ describe("student result hub", () => {
         ]);
     });
 
-    it("rounds source deltas to one decimal place", () => {
-        const original = attempt({ id: "original", studentId: "student-1", score: 6, totalScore: 10 });
+    it("rounds fractional source deltas to one decimal place", async () => {
+        vi.resetModules();
+        vi.doMock("@/lib/scoreUtils", () => ({
+            safeScorePercent: (score: number) => score,
+        }));
+
+        const original = attempt({ id: "original", studentId: "student-1", score: 60.01, totalScore: 10 });
         const retake = attempt({
             id: "retake",
             studentId: "student-1",
-            score: 8,
+            score: 80.06,
             totalScore: 10,
             retake: { sourceAttemptId: "original", questionIds: [], mode: "wrong", createdAt: "2026-06-02T10:00:00.000Z" },
         });
-
-        const [source, result] = buildStudentAttemptSeries(original, [original, retake]);
-        expect(result.scoreDelta).toBe(Number((result.scorePercent - source.scorePercent).toFixed(1)));
+        try {
+            const { buildStudentAttemptSeries: buildSeriesWithFractionalScores } = await import("./studentResultHub");
+            const [, result] = buildSeriesWithFractionalScores(original, [original, retake]);
+            expect(result.scoreDelta).toBe(20.1);
+        } finally {
+            vi.doUnmock("@/lib/scoreUtils");
+            vi.resetModules();
+        }
     });
 });
