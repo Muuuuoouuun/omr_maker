@@ -7,10 +7,8 @@ import type { AttemptScoreSummary, WeaknessGroup } from "@/lib/premiumAnalytics"
 import type { StudentProfileInsight } from "@/lib/studentProfileAnalytics";
 import { formatKoreanDateTime } from "@/lib/pure";
 import { safeScorePercent } from "@/lib/scoreUtils";
-import LockedFeaturePanel from "./LockedFeaturePanel";
+import CumulativeGrowthPanel, { type CumulativeLoadStatus } from "./CumulativeGrowthPanel";
 import styles from "./StudentResultHub.module.css";
-
-export type CumulativeLoadStatus = "idle" | "loading" | "ready" | "error";
 
 export interface ReportAnalyticsData {
     score: AttemptScoreSummary;
@@ -43,6 +41,7 @@ interface ReportPanelProps {
     rosterMatched: boolean;
     studentGrowthReportsEnabled: boolean;
     pdfExportEnabled: boolean;
+    onRetryCumulative: () => void;
 }
 
 function Stat({ label, value }: { label: string; value: string | number }) {
@@ -51,64 +50,6 @@ function Stat({ label, value }: { label: string; value: string | number }) {
             <span>{label}</span>
             <strong>{value}</strong>
         </div>
-    );
-}
-
-function CumulativeGrowthBlock({
-    insight,
-    status,
-    error,
-    rosterMatched,
-    enabled,
-}: {
-    insight: StudentProfileInsight | null;
-    status: CumulativeLoadStatus;
-    error?: string;
-    rosterMatched: boolean;
-    enabled: boolean;
-}) {
-    if (!enabled) {
-        return (
-            <LockedFeaturePanel
-                title="누적 성장"
-                description="시험별 성장 추이와 반복 약점은 Pro 이상에서 확인할 수 있습니다."
-                previewItems={["최근 점수 변화", "반복 약점", "최근 원시험 이력"]}
-            />
-        );
-    }
-
-    return (
-        <section className="bento-card" style={{ padding: "1.25rem" }} aria-labelledby="report-growth-title">
-            <h2 id="report-growth-title" className={styles.reportSectionTitle}>누적 성장</h2>
-            {status === "idle" || status === "loading" ? (
-                <p className={styles.emptyText} role="status">누적 이력을 불러오는 중입니다.</p>
-            ) : status === "error" ? (
-                <p className={styles.emptyText}>누적 이력을 불러오지 못했습니다.{error ? ` ${error}` : ""}</p>
-            ) : !rosterMatched ? (
-                <p className={styles.emptyText}>누적 이력을 학생 명단과 안정적으로 연결할 수 없습니다.</p>
-            ) : insight ? (
-                <>
-                    <div className={styles.reportStatGrid}>
-                        <Stat label="최근 점수" value={`${insight.latestScore}%`} />
-                        <Stat label="이전 대비" value={`${insight.trendDelta > 0 ? "+" : ""}${insight.trendDelta}%p`} />
-                        <Stat label="원시험" value={`${insight.baseAttemptCount}회`} />
-                        <Stat label="재시험" value={`${insight.retakeAttemptCount}회`} />
-                    </div>
-                    <div className={styles.reportGrowthDetails}>
-                        <div>
-                            <strong>반복 약점</strong>
-                            <p>{insight.weaknessGroups.slice(0, 3).map(group => group.title).join(", ") || "뚜렷한 반복 약점 없음"}</p>
-                        </div>
-                        <div>
-                            <strong>최근 원시험</strong>
-                            <p>{insight.attempts.filter(item => !item.isRetake).slice(0, 4).map(item => `${item.examTitle} ${item.scorePercent}%`).join(" · ") || "기록 없음"}</p>
-                        </div>
-                    </div>
-                </>
-            ) : (
-                <p className={styles.emptyText}>누적 성장 데이터가 없습니다.</p>
-            )}
-        </section>
     );
 }
 
@@ -125,13 +66,14 @@ export default function ReportPanel({
     rosterMatched,
     studentGrowthReportsEnabled,
     pdfExportEnabled,
+    onRetryCumulative,
 }: ReportPanelProps) {
     const fallbackPercent = safeScorePercent(attempt.score, attempt.totalScore);
     const score = analytics?.score;
 
     return (
-        <div className={styles.reportPrintRoot}>
-            <div className={`${styles.reportActions} ${styles.screenOnly}`}>
+        <div className={`${styles.reportPrintRoot} student-result-report-print-root`}>
+            <div className={`${styles.reportActions} ${styles.screenOnly} student-result-report-screen-only`}>
                 {pdfExportEnabled ? (
                     <button type="button" className="btn btn-secondary" onClick={() => window.print()} aria-label="현재 학생 리포트 인쇄 또는 PDF 저장">
                         <Download size={15} aria-hidden="true" /> 인쇄 / PDF 저장
@@ -174,16 +116,20 @@ export default function ReportPanel({
 
                 <section className="bento-card" style={{ padding: "1.25rem" }} aria-labelledby="report-weakness-title">
                     <h2 id="report-weakness-title" className={styles.reportSectionTitle}>주요 오답과 약점</h2>
-                    <div className={styles.reportTwoColumns}>
-                        <div>
-                            <strong>상위 오답·미응답</strong>
-                            <p>{analytics?.wrongResults.slice(0, 5).map(result => `${result.questionNumber}번`).join(", ") || "없음"}</p>
+                    {analytics ? (
+                        <div className={styles.reportTwoColumns}>
+                            <div>
+                                <strong>상위 오답·미응답</strong>
+                                <p>{analytics.wrongResults.slice(0, 5).map(result => `${result.questionNumber}번`).join(", ") || "없음"}</p>
+                            </div>
+                            <div>
+                                <strong>약점 그룹</strong>
+                                <p>{analytics.weaknessGroups.slice(0, 3).map(group => group.title).join(", ") || "뚜렷한 약점 없음"}</p>
+                            </div>
                         </div>
-                        <div>
-                            <strong>약점 그룹</strong>
-                            <p>{analytics?.weaknessGroups.slice(0, 3).map(group => group.title).join(", ") || "뚜렷한 약점 없음"}</p>
-                        </div>
-                    </div>
+                    ) : (
+                        <p className={styles.emptyText}>시험 정보를 불러오지 못해 오답과 약점을 계산할 수 없습니다.</p>
+                    )}
                 </section>
 
                 {attempt.retake && (
@@ -205,12 +151,15 @@ export default function ReportPanel({
                     <p className={styles.reportFeedback}>{feedbackSummary.trim() || "작성된 전체 피드백이 없습니다."}</p>
                 </section>
 
-                <CumulativeGrowthBlock
+                <CumulativeGrowthPanel
+                    titleId="report-growth-title"
                     insight={cumulativeInsight}
                     status={cumulativeStatus}
                     error={cumulativeError}
                     rosterMatched={rosterMatched}
                     enabled={studentGrowthReportsEnabled}
+                    lockedDescription="시험별 성장 추이와 반복 약점은 Pro 이상에서 확인할 수 있습니다."
+                    onRetry={onRetryCumulative}
                 />
             </div>
         </div>

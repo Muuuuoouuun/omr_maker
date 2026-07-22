@@ -88,14 +88,16 @@
   }
 
   body:has(.teacher-attempt-page) * {
+    visibility: hidden !important;
+  }
+
+  .teacher-attempt-page .student-result-report-print-root,
+  .teacher-attempt-page .student-result-report-print-root * {
     visibility: visible !important;
   }
 
   .teacher-attempt-print-hide,
-  .teacher-attempt-page .teacher-attempt-detail,
-  .teacher-attempt-page button,
-  .teacher-attempt-page textarea,
-  .teacher-attempt-page a.btn {
+  .teacher-attempt-page .student-result-report-screen-only {
     display: none !important;
   }
 
@@ -107,6 +109,31 @@
   .teacher-attempt-main {
     padding: 12mm !important;
     max-width: none !important;
+  }
+
+  .teacher-attempt-page .student-result-report-print-root {
+    position: static !important;
+    width: auto !important;
+    color-scheme: light;
+    --foreground: #0f172a;
+    --muted: #475569;
+    --surface: #fff;
+    --background: #f8fafc;
+    --border: #cbd5e1;
+    --primary: #4338ca;
+    --primary-dark: #3730a3;
+    color: #0f172a !important;
+    background: #fff !important;
+  }
+
+  .teacher-attempt-page .student-result-report-print-root .bento-card,
+  .teacher-attempt-page .student-result-report-print-root [class*="reportStat"],
+  .teacher-attempt-page .student-result-report-print-root [class*="reportSummary"] > div,
+  .teacher-attempt-page .student-result-report-print-root [class*="reportTwoColumns"] > div,
+  .teacher-attempt-page .student-result-report-print-root [class*="reportGrowthDetails"] > div {
+    color: #0f172a !important;
+    border-color: #cbd5e1 !important;
+    background: #fff !important;
   }
 
   .teacher-attempt-layout {

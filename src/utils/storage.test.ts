@@ -296,6 +296,19 @@ describe("student storage helpers", () => {
         }), student)).toBe(true);
     });
 
+    it("matches a roster profile by stable studentProfileId without requiring legacy group metadata", () => {
+        const student = { id: "student-1", name: "김학생", group: "B반" };
+
+        expect(attemptMatchesStudentProfile(attempt({
+            id: "stable-profile-id",
+            studentProfileId: "student-1",
+            studentId: undefined,
+            studentName: "김학생",
+            groupId: undefined,
+            groupName: undefined,
+        }), student)).toBe(true);
+    });
+
     it("matches roster profiles across scoped legacy student ids without leaking other classes", () => {
         const student = { id: "class-a::김학생", name: "김학생", group: "A반" };
 

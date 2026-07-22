@@ -19,7 +19,6 @@ import {
 import { loadTeacherExam, loadTeacherExams } from "@/lib/teacherExamClient";
 import { loadTeacherRosterSnapshot } from "@/lib/teacherRosterClient";
 import type { RosterStudent } from "@/lib/rosterStorage";
-import { attemptMatchesStudentProfile } from "@/utils/storage";
 import { buildStudentProfileInsight } from "@/lib/studentProfileAnalytics";
 import { answerStudentQuestion } from "@/lib/studentQuestions";
 import { toast } from "@/components/Toast";
@@ -43,14 +42,19 @@ import {
     returnTeacherAttemptFeedback,
     saveTeacherAttemptFeedbackDraft,
 } from "@/lib/teacherFeedbackClient";
-import { buildStudentAttemptSeries, parseStudentResultView } from "@/lib/studentResultHub";
+import {
+    buildStudentAttemptSeries,
+    filterCumulativeAttemptsForStudent,
+    matchRosterStudentForAttempt,
+    parseStudentResultView,
+} from "@/lib/studentResultHub";
 import StudentResultHeader from "@/components/teacher/student-results/StudentResultHeader";
 import StudentResultTabs from "@/components/teacher/student-results/StudentResultTabs";
 import AnswersPanel from "@/components/teacher/student-results/AnswersPanel";
 import AnalyticsPanel from "@/components/teacher/student-results/AnalyticsPanel";
 import HandwritingPanel from "@/components/teacher/student-results/HandwritingPanel";
 import ReportPanel from "@/components/teacher/student-results/ReportPanel";
-import type { CumulativeLoadStatus } from "@/components/teacher/student-results/ReportPanel";
+import type { CumulativeLoadStatus } from "@/components/teacher/student-results/CumulativeGrowthPanel";
 import styles from "@/components/teacher/student-results/StudentResultHub.module.css";
 
 function hasTeacherAccess(): boolean {
@@ -119,6 +123,8 @@ export default function TeacherAttemptPage() {
     const [rosterStudent, setRosterStudent] = useState<RosterStudent | null>(null);
     const [cumulativeStatus, setCumulativeStatus] = useState<CumulativeLoadStatus>("idle");
     const [cumulativeError, setCumulativeError] = useState("");
+    const [cumulativeAttemptId, setCumulativeAttemptId] = useState<string | null>(null);
+    const [cumulativeLoadRequest, setCumulativeLoadRequest] = useState(0);
     const [subQuestionFilter, setSubQuestionFilter] = useState<'needs_review' | 'all'>('needs_review');
     const [savingSubQuestionKey, setSavingSubQuestionKey] = useState<string | null>(null);
     const pdfExportEnabled = hasPlanEntitlement(currentPlan, "pdfExport");
@@ -152,6 +158,8 @@ export default function TeacherAttemptPage() {
             setRosterStudent(null);
             setCumulativeStatus("idle");
             setCumulativeError("");
+            setCumulativeAttemptId(null);
+            setCumulativeLoadRequest(0);
             cumulativeLoadingAttemptRef.current = null;
             cumulativeSettledAttemptIdRef.current = null;
             setSubQuestionFilter('needs_review');
@@ -265,7 +273,17 @@ export default function TeacherAttemptPage() {
         }
     }, [activeView, attempt, handwritingArchiveEnabled, handwritingStatus, loadHandwritingResources, loaded]);
 
+    const retryCumulativeLoad = useCallback(() => {
+        const targetAttemptId = attempt?.id;
+        if (!targetAttemptId || activeAttemptIdRef.current !== targetAttemptId) return;
+        cumulativeSettledAttemptIdRef.current = null;
+        setCumulativeStatus("idle");
+        setCumulativeError("");
+        setCumulativeLoadRequest(value => value + 1);
+    }, [attempt]);
+
     useEffect(() => {
+        if (!studentGrowthReportsEnabled) return;
         if (activeView !== "report" && activeView !== "analytics") return;
         if (!loaded || !attempt) return;
         const targetAttemptId = attempt.id;
@@ -274,6 +292,7 @@ export default function TeacherAttemptPage() {
         if (cumulativeSettledAttemptIdRef.current === targetAttemptId) return;
 
         cumulativeLoadingAttemptRef.current = targetAttemptId;
+        setCumulativeAttemptId(targetAttemptId);
         setCumulativeStatus("loading");
         setCumulativeError("");
 
@@ -285,15 +304,22 @@ export default function TeacherAttemptPage() {
                     loadTeacherRosterSnapshot(window.localStorage),
                 ]);
                 if (activeAttemptIdRef.current !== targetAttemptId) return;
-                const matchedStudent = rosterResult.students.find(student => attemptMatchesStudentProfile(attempt, student));
-                setCumulativeAttempts(attemptResult.items);
+                const matchedStudent = matchRosterStudentForAttempt(attempt, rosterResult.students);
+                const filteredAttempts = filterCumulativeAttemptsForStudent(attempt, attemptResult.items);
+                const warnings = [attemptResult.remoteError, examResult.remoteError, rosterResult.remoteError]
+                    .filter((message): message is string => Boolean(message));
+                setCumulativeAttempts(filteredAttempts);
                 setCumulativeExams(examResult.items);
                 setRosterStudent(matchedStudent || null);
                 cumulativeSettledAttemptIdRef.current = targetAttemptId;
-                setCumulativeStatus("ready");
+                setCumulativeError(warnings.join(" "));
+                if (warnings.length > 0) {
+                    setCumulativeStatus("stale");
+                } else {
+                    setCumulativeStatus("ready");
+                }
             } catch {
                 if (activeAttemptIdRef.current !== targetAttemptId) return;
-                cumulativeSettledAttemptIdRef.current = targetAttemptId;
                 setCumulativeError("잠시 후 다시 시도해 주세요.");
                 setCumulativeStatus("error");
             } finally {
@@ -302,7 +328,7 @@ export default function TeacherAttemptPage() {
                 }
             }
         })();
-    }, [activeView, attempt, loaded]);
+    }, [activeView, attempt, cumulativeLoadRequest, loaded, studentGrowthReportsEnabled]);
 
     const analytics = useMemo(() => {
         if (!attempt || !exam) return null;
@@ -344,14 +370,14 @@ export default function TeacherAttemptPage() {
     }, [attempt, peerAttempts]);
 
     const cumulativeInsight = useMemo(() => {
-        if (!rosterStudent) return null;
+        if (!attempt || cumulativeAttemptId !== attempt.id || !rosterStudent) return null;
         return buildStudentProfileInsight(
             rosterStudent,
             cumulativeAttempts,
             new Map(cumulativeExams.map(item => [item.id, item])),
             { recentLimit: 8, weaknessLimit: 6 },
         );
-    }, [cumulativeAttempts, cumulativeExams, rosterStudent]);
+    }, [attempt, cumulativeAttemptId, cumulativeAttempts, cumulativeExams, rosterStudent]);
 
     const selectedAttemptLabel = useMemo(() => {
         const selected = attemptSeries.find(item => item.attempt.id === attempt?.id);
@@ -455,7 +481,7 @@ export default function TeacherAttemptPage() {
         );
     }
 
-    if (!loaded) {
+    if (!loaded || (attempt !== null && attempt.id !== id)) {
         return <div style={{ padding: '2rem', textAlign: 'center' }}>Loading...</div>;
     }
 
@@ -472,6 +498,8 @@ export default function TeacherAttemptPage() {
             </div>
         );
     }
+
+    const cumulativeStateMatchesAttempt = cumulativeAttemptId === attempt.id;
 
     // F2: when the exam payload can't be loaded, analytics is null. Fall back to
     // the score stored on the attempt so the header percent matches the score
@@ -687,11 +715,12 @@ export default function TeacherAttemptPage() {
                                     retakeQuestionIds: analytics.retakeQuestionIds,
                                     behavior: analytics.behavior,
                                 } : null}
-                                cumulativeInsight={cumulativeInsight}
-                                cumulativeStatus={cumulativeStatus}
-                                cumulativeError={cumulativeError}
-                                rosterMatched={!!rosterStudent}
+                                cumulativeInsight={cumulativeStateMatchesAttempt ? cumulativeInsight : null}
+                                cumulativeStatus={cumulativeStateMatchesAttempt ? cumulativeStatus : "idle"}
+                                cumulativeError={cumulativeStateMatchesAttempt ? cumulativeError : ""}
+                                rosterMatched={cumulativeStateMatchesAttempt && !!rosterStudent}
                                 studentGrowthReportsEnabled={studentGrowthReportsEnabled}
+                                onRetryCumulative={retryCumulativeLoad}
                             />
                         ) : activeView === "handwriting" ? (
                             <HandwritingPanel
@@ -729,12 +758,13 @@ export default function TeacherAttemptPage() {
                                 selectedAttemptLabel={selectedAttemptLabel}
                                 feedbackSummary={feedbackSummary}
                                 retakeScoreDelta={retakeScoreDelta}
-                                cumulativeInsight={cumulativeInsight}
-                                cumulativeStatus={cumulativeStatus}
-                                cumulativeError={cumulativeError}
-                                rosterMatched={!!rosterStudent}
+                                cumulativeInsight={cumulativeStateMatchesAttempt ? cumulativeInsight : null}
+                                cumulativeStatus={cumulativeStateMatchesAttempt ? cumulativeStatus : "idle"}
+                                cumulativeError={cumulativeStateMatchesAttempt ? cumulativeError : ""}
+                                rosterMatched={cumulativeStateMatchesAttempt && !!rosterStudent}
                                 studentGrowthReportsEnabled={studentGrowthReportsEnabled}
                                 pdfExportEnabled={pdfExportEnabled}
+                                onRetryCumulative={retryCumulativeLoad}
                             />
                         ) : null}
                     </section>

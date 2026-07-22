@@ -349,6 +349,9 @@ export function attemptMatchesStudentProfile(
             .filter(Boolean)
     );
 
+    const attemptProfileId = normalizeIdentityText(attempt.studentProfileId);
+    if (attemptProfileId) return attemptProfileId === profileId;
+
     const attemptStudentId = normalizeIdentityText(attempt.studentId);
     if (attemptStudentId && attemptStudentId === profileId) return true;
 

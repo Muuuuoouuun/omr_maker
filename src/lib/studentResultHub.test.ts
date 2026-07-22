@@ -1,11 +1,30 @@
 import { describe, expect, it, vi } from "vitest";
 import type { Attempt } from "@/types/omr";
+import type { RosterStudent } from "@/lib/rosterStorage";
 import {
     buildStudentAttemptSeries,
     buildStudentResultHref,
+    filterCumulativeAttemptsForStudent,
+    matchRosterStudentForAttempt,
     parseStudentResultView,
     sameStudentAttempt,
 } from "./studentResultHub";
+
+function student(partial: Partial<RosterStudent>): RosterStudent {
+    return {
+        id: "student-1",
+        name: "김학생",
+        email: "student@example.com",
+        group: "A반",
+        avatar: "#fff",
+        avgScore: 0,
+        examsTaken: 0,
+        lastActive: "2026-06-01T10:00:00.000Z",
+        trend: "flat",
+        status: "active",
+        ...partial,
+    };
+}
 
 function attempt(partial: Partial<Attempt>): Attempt {
     return {
@@ -24,6 +43,55 @@ function attempt(partial: Partial<Attempt>): Attempt {
 }
 
 describe("student result hub", () => {
+    it("exposes a strict roster matcher for cumulative student results", async () => {
+        const hub = await import("./studentResultHub");
+        expect(hub).toHaveProperty("matchRosterStudentForAttempt");
+        expect(hub).toHaveProperty("filterCumulativeAttemptsForStudent");
+    });
+
+    it("prefers an exact stable roster id over duplicate name and group matches", () => {
+        const duplicate = student({ id: "student-2" });
+        const exact = student({ id: "profile-1" });
+
+        expect(matchRosterStudentForAttempt(
+            attempt({ studentProfileId: " profile-1 ", studentId: "legacy-id", groupName: "A반" }),
+            [duplicate, exact],
+        )).toBe(exact);
+    });
+
+    it("does not fall back to name and group when a stable attempt id has no roster match", () => {
+        expect(matchRosterStudentForAttempt(
+            attempt({ studentProfileId: "missing-profile", groupName: "A반" }),
+            [student({ id: "student-2" })],
+        )).toBeNull();
+    });
+
+    it("does not fall back to a legacy student id when an authoritative profile id is present", () => {
+        expect(matchRosterStudentForAttempt(
+            attempt({ studentProfileId: "missing-profile", studentId: "student-2", groupName: "A반" }),
+            [student({ id: "student-2" })],
+        )).toBeNull();
+    });
+
+    it("accepts only one legacy roster candidate and rejects ambiguous duplicates", () => {
+        const first = student({ id: "student-1" });
+        const duplicate = student({ id: "student-2" });
+        const otherGroup = student({ id: "student-3", group: "B반" });
+        const legacyAttempt = attempt({ groupName: "A반" });
+
+        expect(matchRosterStudentForAttempt(legacyAttempt, [first, otherGroup])).toBe(first);
+        expect(matchRosterStudentForAttempt(legacyAttempt, [first, duplicate])).toBeNull();
+    });
+
+    it("filters cumulative attempts through the selected attempt identity", () => {
+        const selected = attempt({ id: "selected", studentProfileId: "student-1", groupName: "A반" });
+        const same = attempt({ id: "same", studentId: "student-1", groupName: "A반" });
+        const duplicateName = attempt({ id: "duplicate", studentId: "student-2", groupName: "A반" });
+
+        expect(filterCumulativeAttemptsForStudent(selected, [duplicateName, same, selected]))
+            .toEqual([same, selected]);
+    });
+
     it("defaults missing or invalid views to answers while retaining handwriting", () => {
         expect(parseStudentResultView()).toBe("answers");
         expect(parseStudentResultView("unexpected")).toBe("answers");

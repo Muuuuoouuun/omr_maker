@@ -41,7 +41,7 @@ export default function StudentResultTabs({ attemptId, activeView }: StudentResu
     };
 
     return (
-        <nav className={styles.tabs} role="tablist" aria-label="학생 결과 보기">
+        <nav className={`${styles.tabs} student-result-report-screen-only`} role="tablist" aria-label="학생 결과 보기">
             {tabs.map(({ view, label, Icon }, index) => {
                 const isSelected = view === activeView;
 

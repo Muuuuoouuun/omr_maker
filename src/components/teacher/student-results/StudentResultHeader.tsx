@@ -105,7 +105,7 @@ export default function StudentResultHeader({
     const scorePercent = safeScorePercent(attempt.score, attempt.totalScore);
 
     return (
-        <header className={styles.header}>
+        <header className={`${styles.header} student-result-report-screen-only`}>
             <nav className={`${styles.breadcrumb} ${styles.screenOnly}`} aria-label="현재 위치">
                 <Link href={`/teacher/exam/${encodeURIComponent(attempt.examId)}`}>시험 상세</Link>
                 <span aria-hidden="true">&gt;</span>

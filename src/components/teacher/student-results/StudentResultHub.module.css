@@ -664,6 +664,18 @@
   color: var(--primary);
 }
 
+.cumulativeWarning {
+  margin: 0 0 0.8rem;
+  padding: 0.65rem 0.75rem;
+  color: var(--foreground);
+  border: 1px solid color-mix(in srgb, var(--warning) 45%, var(--border));
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--warning) 10%, var(--surface));
+  font-size: 0.78rem;
+  font-weight: 750;
+  line-height: 1.5;
+}
+
 @media (max-width: 760px) {
   .headerMain {
     grid-template-columns: minmax(0, 1fr);
@@ -718,18 +730,7 @@
 }
 
 @media print {
-  :global(body *) {
-    visibility: hidden !important;
-  }
-
-  .reportPrintRoot,
-  .reportPrintRoot * {
-    visibility: visible !important;
-  }
-
   .reportPrintRoot {
-    position: absolute;
-    inset: 0;
     width: 100%;
     color: #000;
     background: #fff;

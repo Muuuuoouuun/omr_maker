@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 
@@ -884,7 +884,7 @@ describe("service UI surface", () => {
             "report-weakness-title",
             "report-retake-title",
             "report-feedback-title",
-            "<CumulativeGrowthBlock",
+            "<CumulativeGrowthPanel",
         ];
 
         let previousIndex = -1;
@@ -905,7 +905,7 @@ describe("service UI surface", () => {
         expect(teacherAttemptPage).toContain("loadTeacherAttempts()");
         expect(teacherAttemptPage).toContain("loadTeacherExams()");
         expect(teacherAttemptPage).toContain("loadTeacherRosterSnapshot(window.localStorage)");
-        expect(teacherAttemptPage).toContain("rosterResult.students.find(student => attemptMatchesStudentProfile(attempt, student))");
+        expect(teacherAttemptPage).toContain("matchRosterStudentForAttempt(attempt, rosterResult.students)");
         expect(teacherAttemptPage).toContain("activeAttemptIdRef.current !== targetAttemptId");
         expect(teacherAttemptPage).not.toContain("student.name === attempt.studentName");
     });
@@ -913,13 +913,14 @@ describe("service UI surface", () => {
     it("keeps current-exam analytics first and appends plan-scoped cumulative growth", () => {
         const analyticsPanel = readProjectFile("src/components/teacher/student-results/AnalyticsPanel.tsx");
         const currentExamIndex = analyticsPanel.indexOf("오답·미응답·유형 분석");
-        const cumulativeIndex = analyticsPanel.indexOf("누적 성장");
+        const cumulativeIndex = analyticsPanel.lastIndexOf("<CumulativeGrowthPanel");
+        const cumulativePanel = readProjectFile("src/components/teacher/student-results/CumulativeGrowthPanel.tsx");
 
         expect(currentExamIndex).toBeGreaterThan(-1);
         expect(cumulativeIndex).toBeGreaterThan(currentExamIndex);
         expect(analyticsPanel).toContain("studentGrowthReportsEnabled");
-        expect(analyticsPanel).toContain("LockedFeaturePanel");
-        expect(analyticsPanel).toContain("누적 이력을 학생 명단과 안정적으로 연결할 수 없습니다.");
+        expect(cumulativePanel).toContain("LockedFeaturePanel");
+        expect(cumulativePanel).toContain("누적 이력을 학생 명단과 안정적으로 연결할 수 없습니다.");
         expect(analyticsPanel).toContain("cumulativeStatus");
         expect(analyticsPanel).toContain("cumulativeError");
     });
@@ -928,11 +929,12 @@ describe("service UI surface", () => {
         const teacherAttemptPage = readProjectFile("src/app/teacher/attempt/[attemptId]/page.tsx");
         const reportPanel = readProjectFile("src/components/teacher/student-results/ReportPanel.tsx");
         const studentResultCss = readProjectFile("src/components/teacher/student-results/StudentResultHub.module.css");
+        const globals = readProjectFile("src/app/globals.css");
 
-        expect(reportPanel).toContain("className={styles.reportPrintRoot}");
+        expect(reportPanel).toContain("student-result-report-print-root");
         expect(reportPanel).toContain("onClick={() => window.print()}");
         expect(studentResultCss).toContain("@media print");
-        expect(studentResultCss).toContain(":global(body *)");
+        expect(globals).toContain(".student-result-report-print-root *");
         expect(studentResultCss).toContain(".reportPrintRoot");
         expect(studentResultCss).toContain(".screenOnly");
         expect(teacherAttemptPage).not.toContain("const PDFViewer = dynamic");
@@ -940,6 +942,69 @@ describe("service UI surface", () => {
         expect(teacherAttemptPage).not.toContain("function SmallStat");
         expect(teacherAttemptPage).not.toContain("function QuestionResultRow");
         expect(teacherAttemptPage).not.toContain("function AllQuestionRow");
+    });
+
+    it("shares retryable cumulative growth states and skips locked-plan loads", () => {
+        const teacherAttemptPage = readProjectFile("src/app/teacher/attempt/[attemptId]/page.tsx");
+        const reportPanel = readProjectFile("src/components/teacher/student-results/ReportPanel.tsx");
+        const analyticsPanel = readProjectFile("src/components/teacher/student-results/AnalyticsPanel.tsx");
+        const cumulativePanelPath = path.join(rootDir, "src/components/teacher/student-results/CumulativeGrowthPanel.tsx");
+        expect(existsSync(cumulativePanelPath)).toBe(true);
+        if (!existsSync(cumulativePanelPath)) return;
+        const cumulativePanel = readProjectFile("src/components/teacher/student-results/CumulativeGrowthPanel.tsx");
+
+        expect(teacherAttemptPage).toContain("if (!studentGrowthReportsEnabled) return;");
+        expect(teacherAttemptPage).toContain("attemptResult.remoteError");
+        expect(teacherAttemptPage).toContain("examResult.remoteError");
+        expect(teacherAttemptPage).toContain("rosterResult.remoteError");
+        expect(teacherAttemptPage).toContain('setCumulativeStatus("stale")');
+        expect(teacherAttemptPage).toContain("const retryCumulativeLoad = useCallback");
+        expect(reportPanel).toContain("<CumulativeGrowthPanel");
+        expect(analyticsPanel).toContain("<CumulativeGrowthPanel");
+        expect(cumulativePanel).toContain("onRetry");
+        expect(cumulativePanel).toContain("다시 시도");
+        expect(cumulativePanel).toContain('status === "stale"');
+    });
+
+    it("uses the strict roster matcher and selected-attempt filtering for cumulative insight", () => {
+        const teacherAttemptPage = readProjectFile("src/app/teacher/attempt/[attemptId]/page.tsx");
+
+        expect(teacherAttemptPage).toContain("matchRosterStudentForAttempt(attempt, rosterResult.students)");
+        expect(teacherAttemptPage).toContain("filterCumulativeAttemptsForStudent(attempt, attemptResult.items)");
+        expect(teacherAttemptPage).not.toContain("rosterResult.students.find(student => attemptMatchesStudentProfile");
+    });
+
+    it("keeps cumulative data and the rendered attempt keyed to the current route", () => {
+        const teacherAttemptPage = readProjectFile("src/app/teacher/attempt/[attemptId]/page.tsx");
+
+        expect(teacherAttemptPage).toContain("attempt.id !== id");
+        expect(teacherAttemptPage).toContain("cumulativeAttemptId === attempt.id");
+        expect(teacherAttemptPage).toContain("setCumulativeAttemptId(targetAttemptId)");
+        expect(teacherAttemptPage).toContain("setCumulativeAttemptId(null)");
+    });
+
+    it("defines the actual global print cascade and a forced light report palette", () => {
+        const globals = readProjectFile("src/app/globals.css");
+        const reportPanel = readProjectFile("src/components/teacher/student-results/ReportPanel.tsx");
+        const studentResultCss = readProjectFile("src/components/teacher/student-results/StudentResultHub.module.css");
+
+        expect(reportPanel).toContain("student-result-report-print-root");
+        expect(reportPanel).toContain("student-result-report-screen-only");
+        expect(globals).toMatch(/body:has\(\.teacher-attempt-page\) \*\s*\{[^}]*visibility:\s*hidden !important;/);
+        expect(globals).toContain(".student-result-report-print-root,");
+        expect(globals).toContain(".student-result-report-print-root *");
+        expect(globals).toContain("color-scheme: light;");
+        expect(globals).toContain("--foreground: #0f172a;");
+        expect(globals).toContain("--surface: #fff;");
+        expect(globals).not.toContain("body:has(.teacher-attempt-page) * {\n    visibility: visible !important;");
+        expect(studentResultCss).not.toMatch(/\.reportPrintRoot\s*\{[^}]*position:\s*absolute;/);
+    });
+
+    it("distinguishes unavailable report calculations from a calculated empty result", () => {
+        const reportPanel = readProjectFile("src/components/teacher/student-results/ReportPanel.tsx");
+
+        expect(reportPanel).toContain("시험 정보를 불러오지 못해 오답과 약점을 계산할 수 없습니다.");
+        expect(reportPanel).toContain("analytics ? (");
     });
 
     it("keeps student result panel inputs and small status text readable in both themes", () => {

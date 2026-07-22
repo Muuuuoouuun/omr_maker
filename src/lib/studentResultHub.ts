@@ -1,5 +1,7 @@
 import type { Attempt } from "@/types/omr";
+import type { RosterStudent } from "@/lib/rosterStorage";
 import { safeScorePercent } from "@/lib/scoreUtils";
+import { attemptMatchesStudentProfile } from "@/utils/storage";
 
 export const STUDENT_RESULT_VIEWS = ["answers", "handwriting", "report", "analytics"] as const;
 
@@ -41,6 +43,27 @@ export function parseStudentResultView(value?: string | null): StudentResultView
 
 export function buildStudentResultHref(attemptId: string, view: StudentResultView): string {
     return `/teacher/attempt/${encodeURIComponent(attemptId)}?view=${view}`;
+}
+
+export function matchRosterStudentForAttempt(
+    attempt: Attempt,
+    students: RosterStudent[],
+): RosterStudent | null {
+    const profileId = normalized(attempt.studentProfileId);
+    if (profileId) return students.find(student => normalized(student.id) === profileId) || null;
+
+    const studentId = normalized(attempt.studentId);
+    if (studentId) return students.find(student => normalized(student.id) === studentId) || null;
+
+    const legacyCandidates = students.filter(student => attemptMatchesStudentProfile(attempt, student));
+    return legacyCandidates.length === 1 ? legacyCandidates[0] : null;
+}
+
+export function filterCumulativeAttemptsForStudent(
+    selectedAttempt: Attempt,
+    attempts: Attempt[],
+): Attempt[] {
+    return attempts.filter(candidate => sameStudentAttempt(selectedAttempt, candidate));
 }
 
 export function sameStudentAttempt(left: Attempt, right: Attempt): boolean {
