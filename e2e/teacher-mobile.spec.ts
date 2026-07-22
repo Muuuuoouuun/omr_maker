@@ -313,10 +313,12 @@ test.describe("Teacher desktop Chromium result tab accessibility", () => {
         const answersTab = tabs.getByRole("tab", { name: "답안" });
         const handwritingTab = tabs.getByRole("tab", { name: "필기" });
         await answersTab.focus();
+        const urlBeforeArrowRight = page.url();
         await answersTab.press("ArrowRight");
         await expect(handwritingTab).toBeFocused();
         await expect(answersTab).toHaveAttribute("aria-selected", "true");
         await expect(handwritingTab).toHaveAttribute("aria-selected", "false");
+        await expect(page).toHaveURL(urlBeforeArrowRight);
 
         await page.keyboard.press("Enter");
         await expect(page).toHaveURL(/view=handwriting/);
