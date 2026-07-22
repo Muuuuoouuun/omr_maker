@@ -35,7 +35,7 @@ interface TextLine {
 
 interface QuestionTokenMatch {
     questionNumber: number;
-    kind: "inline" | "punctuated" | "bare";
+    kind: "q_prefixed" | "inline" | "punctuated" | "bare";
     body: string;
 }
 
@@ -56,7 +56,10 @@ function isFiniteNumber(value: unknown): value is number {
 
 function normalizeText(value: string): string {
     return value
+        .replace(/[０-９]/g, digit => String.fromCharCode(digit.charCodeAt(0) - 0xfee0))
+        .replace(/[Ｑｑ]/g, "Q")
         .replace(/[．。]/g, ".")
+        .replace(/[（]/g, "(")
         .replace(/[）]/g, ")")
         .replace(/[］]/g, "]")
         .replace(/\s+/g, " ")
@@ -71,7 +74,16 @@ function matchQuestionToken(raw: string): QuestionTokenMatch | null {
     const text = normalizeText(raw);
     if (!text) return null;
 
-    const inline = text.match(/^\[?\s*(\d{1,3})\s*[\]\.)]\s*(?=[가-힣A-Za-z(（「『])(.+)$/);
+    const qPrefixedInline = text.match(/^Q\s*\[?\s*(\d{1,3})\s*[\]\.)]\s*(.+)$/i);
+    if (qPrefixedInline) {
+        return {
+            questionNumber: Number(qPrefixedInline[1]),
+            kind: "q_prefixed",
+            body: qPrefixedInline[2].trim(),
+        };
+    }
+
+    const inline = text.match(/^(?:Q\s*)?\[?\s*(\d{1,3})\s*[\]\.)]\s*(?=[가-힣A-Za-z㉠-㉻(（「『<〈《])(.+)$/i);
     if (inline) {
         return {
             questionNumber: Number(inline[1]),
@@ -80,7 +92,17 @@ function matchQuestionToken(raw: string): QuestionTokenMatch | null {
         };
     }
 
-    const punctuated = text.match(/^\[?\s*(\d{1,3})\s*[\]\.)]\s*$/);
+    const parenthesized = text.match(/^(?:Q\s*)?[\(（]\s*(\d{1,3})\s*[\)）]\s*(.*)$/i);
+    if (parenthesized) {
+        const body = parenthesized[2].trim();
+        return {
+            questionNumber: Number(parenthesized[1]),
+            kind: body ? "inline" : "punctuated",
+            body,
+        };
+    }
+
+    const punctuated = text.match(/^(?:Q\s*)?\[?\s*(\d{1,3})\s*[\]\.)]\s*$/i);
     if (punctuated) {
         return {
             questionNumber: Number(punctuated[1]),
@@ -89,7 +111,7 @@ function matchQuestionToken(raw: string): QuestionTokenMatch | null {
         };
     }
 
-    const bare = text.match(/^(\d{1,3})$/);
+    const bare = text.match(/^(?:Q\s*)?(\d{1,3})$/i);
     if (bare) {
         return {
             questionNumber: Number(bare[1]),
@@ -148,7 +170,11 @@ function lineItemsInSameColumn(line: TextLine, item: NormalizedTextItem): Normal
 function countOptionLikeNumbers(line: TextLine): number {
     return line.items.filter(item => {
         const match = matchQuestionToken(item.str);
-        return !!match && match.kind !== "inline" && match.questionNumber >= 1 && match.questionNumber <= 5;
+        return !!match
+            && match.kind !== "inline"
+            && match.kind !== "q_prefixed"
+            && match.questionNumber >= 1
+            && match.questionNumber <= 5;
     }).length;
 }
 
@@ -171,7 +197,7 @@ function isLikelyPageHeader(
     if (HEADER_KEYWORD_PATTERN.test(compactLine)) return true;
 
     const compactContinuation = continuationText.replace(/\s/g, "");
-    const shortParentheticalSubject = /^\(?[가-힣A-Za-zⅠⅡⅢⅣⅤ0-9]+\)?$/.test(compactContinuation)
+    const shortParentheticalSubject = /^\(?[가-힣A-Za-z]+(?:Ⅰ|Ⅱ|Ⅲ|Ⅳ|Ⅴ|I|II|III|IV|V|1|2)\)?$/.test(compactContinuation)
         && compactContinuation.length <= 16;
     return item.x < 0.25 && shortParentheticalSubject;
 }
@@ -198,6 +224,11 @@ function scoreQuestionCandidate(
     line: TextLine,
     lines: TextLine[],
 ): number {
+    if (match.kind === "q_prefixed") {
+        if (item.y < 0.045 || item.y > 0.96) return 50;
+        return item.x > 0.92 ? 90 : 125;
+    }
+
     const currentLineText = lineText(line);
     const sameColumnItems = lineItemsInSameColumn(line, item);
     const lineStartX = Math.min(...sameColumnItems.map(other => other.x));
@@ -244,6 +275,14 @@ export function isBetterDetectedQuestionPlacement(next: DetectedQuestionPlacemen
     if (current.page < next.page && current.location.score >= next.location.score - 20) return false;
     if (next.page !== current.page) return next.location.score > current.location.score;
     return isBetterDetectedQuestionLocation(next.location, current.location);
+}
+
+export function findMissingExpectedQuestionNumbers(
+    expectedQuestionNumbers: Iterable<number>,
+    matchedQuestionNumbers: Iterable<number>,
+): number[] {
+    const matched = new Set(matchedQuestionNumbers);
+    return [...new Set(expectedQuestionNumbers)].filter(questionNumber => !matched.has(questionNumber));
 }
 
 export function detectQuestionLocationsFromText(

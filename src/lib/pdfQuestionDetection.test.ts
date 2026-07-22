@@ -1,12 +1,17 @@
 import { describe, expect, it } from "vitest";
 import {
     detectQuestionLocationsFromText,
+    findMissingExpectedQuestionNumbers,
     isBetterDetectedQuestionPlacement,
     type DetectedQuestionPlacement,
     type PdfTextLocatorItem,
 } from "./pdfQuestionDetection";
 
 describe("pdf question detection", () => {
+    it("reports the exact expected question numbers that remain unmatched", () => {
+        expect(findMissingExpectedQuestionNumbers([1, 2, 3, 4], [1, 3])).toEqual([2, 4]);
+    });
+
     it("prefers a real question heading over footer or table numbers", () => {
         const items: PdfTextLocatorItem[] = [
             { str: "1", x: 0.52, y: 0.91 },
@@ -40,6 +45,98 @@ describe("pdf question detection", () => {
         expect(detected.get(6)).toMatchObject({
             questionNumber: 6,
             x: 0.09,
+        });
+    });
+
+    it("detects a Q-prefixed question number emitted as one PDF text item", () => {
+        const items: PdfTextLocatorItem[] = [
+            { str: "Q12. ____", x: 0.08, y: 0.2 },
+        ];
+
+        const detected = detectQuestionLocationsFromText(items, [12]);
+
+        expect(detected.get(12)).toMatchObject({
+            questionNumber: 12,
+            x: 0.08,
+        });
+    });
+
+    it("detects every Q-prefixed heading laid out across the same PDF row", () => {
+        const items: PdfTextLocatorItem[] = [
+            { str: "Q1. ____", x: 0.1, y: 0.2 },
+            { str: "Q2. ____", x: 0.3, y: 0.2 },
+            { str: "Q3. ____", x: 0.6, y: 0.2 },
+        ];
+
+        const detected = detectQuestionLocationsFromText(items, [1, 2, 3]);
+
+        expect([...detected.keys()]).toEqual([1, 2, 3]);
+    });
+
+    it("detects a question number enclosed in parentheses", () => {
+        const items: PdfTextLocatorItem[] = [
+            { str: "(12)", x: 0.08, y: 0.2 },
+            { str: "다음 글을 읽고 물음에 답하시오.", x: 0.13, y: 0.2 },
+        ];
+
+        const detected = detectQuestionLocationsFromText(items, [12]);
+
+        expect(detected.get(12)).toMatchObject({
+            questionNumber: 12,
+            x: 0.08,
+        });
+    });
+
+    it("normalizes full-width digits in a question heading", () => {
+        const items: PdfTextLocatorItem[] = [
+            { str: "１２． 다음 글을 읽고 물음에 답하시오.", x: 0.08, y: 0.2 },
+        ];
+
+        const detected = detectQuestionLocationsFromText(items, [12]);
+
+        expect(detected.get(12)).toMatchObject({
+            questionNumber: 12,
+            x: 0.08,
+        });
+    });
+
+    it("does not discard a top-of-page question whose body starts with a short parenthetical label", () => {
+        const items: PdfTextLocatorItem[] = [
+            { str: "1.", x: 0.08, y: 0.11 },
+            { str: "(가)", x: 0.12, y: 0.11 },
+        ];
+
+        const detected = detectQuestionLocationsFromText(items, [1]);
+
+        expect(detected.get(1)).toMatchObject({
+            questionNumber: 1,
+            x: 0.08,
+        });
+    });
+
+    it("detects a question whose inline body starts with an angle-bracket label", () => {
+        const items: PdfTextLocatorItem[] = [
+            { str: "7. <보기>에서 옳은 것을 고르시오.", x: 0.08, y: 0.2 },
+        ];
+
+        const detected = detectQuestionLocationsFromText(items, [7]);
+
+        expect(detected.get(7)).toMatchObject({
+            questionNumber: 7,
+            x: 0.08,
+        });
+    });
+
+    it("detects a question whose inline body starts with a Korean enclosed label", () => {
+        const items: PdfTextLocatorItem[] = [
+            { str: "8. ㉠～㉢에 대한 설명으로 옳은 것은?", x: 0.08, y: 0.2 },
+        ];
+
+        const detected = detectQuestionLocationsFromText(items, [8]);
+
+        expect(detected.get(8)).toMatchObject({
+            questionNumber: 8,
+            x: 0.08,
         });
     });
 

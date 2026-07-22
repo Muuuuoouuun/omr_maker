@@ -52,6 +52,7 @@ import { loadExam, saveExam, saveLocalExam } from "@/lib/omrPersistence";
 import { attachInferredQuestionPdfRegions } from "@/lib/handwritingAnalytics";
 import {
     detectQuestionLocationsFromText,
+    findMissingExpectedQuestionNumbers,
     isBetterDetectedQuestionPlacement,
     type DetectedQuestionPlacement,
     type PdfTextLocatorItem,
@@ -1635,13 +1636,31 @@ function CreateOMRPageInner() {
                 newQuestions,
             );
             const questionsWithPassages = attachInferredPassageSources(newQuestions, passageGroups);
-            setQuestions(attachInferredQuestionPdfRegions(questionsWithPassages, {
+            const matchedQuestions = attachInferredQuestionPdfRegions(questionsWithPassages, {
                 overwriteExisting: true,
                 textPages: pdfTextPages,
                 passageGroups,
-            }));
+            });
+            setQuestions(matchedQuestions);
             const passageMessage = passageGroups.length > 0 ? `, 지문 묶음 ${passageGroups.length}개` : "";
-            toast.success("위치 자동 매칭 완료", `총 ${pdf.numPages}페이지에서 새로 ${mappedCount}개, 갱신 ${updatedCount}개 문항의 위치와 영역${passageMessage}를 찾았습니다.`);
+            const missingQuestionNumbers = findMissingExpectedQuestionNumbers(
+                expectedQuestionNumbers,
+                matchedQuestions
+                    .filter(question => question.pdfLocation || question.pdfRegion)
+                    .map(question => question.number),
+            );
+            if (missingQuestionNumbers.length > 0) {
+                const preview = missingQuestionNumbers.slice(0, 12).join(", ");
+                const remainder = missingQuestionNumbers.length > 12
+                    ? ` 외 ${missingQuestionNumbers.length - 12}개`
+                    : "";
+                toast.info(
+                    "일부 문항 위치 확인 필요",
+                    `새로 ${mappedCount}개, 갱신 ${updatedCount}개를 찾았습니다. 미인식: ${preview}번${remainder}. 해당 문항은 PDF에서 직접 찍어주세요.`,
+                );
+            } else {
+                toast.success("위치 자동 매칭 완료", `총 ${pdf.numPages}페이지에서 새로 ${mappedCount}개, 갱신 ${updatedCount}개 문항의 위치와 영역${passageMessage}를 찾았습니다.`);
+            }
         } catch (e) {
             console.error(e);
             if (!run.cancelled) {
