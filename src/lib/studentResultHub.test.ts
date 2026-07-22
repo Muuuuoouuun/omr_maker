@@ -28,6 +28,8 @@ describe("student result hub", () => {
         expect(parseStudentResultView()).toBe("answers");
         expect(parseStudentResultView("unexpected")).toBe("answers");
         expect(parseStudentResultView("handwriting")).toBe("handwriting");
+        expect(parseStudentResultView("report")).toBe("report");
+        expect(parseStudentResultView("analytics")).toBe("analytics");
     });
 
     it("builds canonical result links with encoded attempt ids", () => {
@@ -39,6 +41,17 @@ describe("student result hub", () => {
             attempt({ studentProfileId: " profile-1 " }),
             attempt({ id: "attempt-2", studentId: "profile-1" }),
         )).toBe(true);
+    });
+
+    it("falls back to matching guest ids without joining different guests", () => {
+        expect(sameStudentAttempt(
+            attempt({ guestId: "guest-1" }),
+            attempt({ id: "same-guest", guestId: "guest-1" }),
+        )).toBe(true);
+        expect(sameStudentAttempt(
+            attempt({ guestId: "guest-1" }),
+            attempt({ id: "other-guest", guestId: "guest-2" }),
+        )).toBe(false);
     });
 
     it("only uses the legacy name fallback within the same non-empty group", () => {
@@ -67,5 +80,61 @@ describe("student result hub", () => {
             expect.objectContaining({ attempt: original, kind: "original", ordinal: 1, scorePercent: 60, scoreDelta: null }),
             expect.objectContaining({ attempt: retake, kind: "retake", ordinal: 1, scorePercent: 80, scoreDelta: 20 }),
         ]);
+    });
+
+    it("orders attempts chronologically within original and retake groups", () => {
+        const laterOriginal = attempt({ id: "original-later", studentId: "student-1", finishedAt: "2026-06-03T10:00:00.000Z" });
+        const earlierOriginal = attempt({ id: "original-earlier", studentId: "student-1", finishedAt: "2026-06-01T10:00:00.000Z" });
+        const laterRetake = attempt({
+            id: "retake-later",
+            studentId: "student-1",
+            finishedAt: "2026-06-05T10:00:00.000Z",
+            retake: { sourceAttemptId: "original-later", questionIds: [], mode: "wrong", createdAt: "2026-06-04T10:00:00.000Z" },
+        });
+        const earlierRetake = attempt({
+            id: "retake-earlier",
+            studentId: "student-1",
+            finishedAt: "2026-06-04T10:00:00.000Z",
+            retake: { sourceAttemptId: "original-earlier", questionIds: [], mode: "wrong", createdAt: "2026-06-03T10:00:00.000Z" },
+        });
+
+        expect(buildStudentAttemptSeries(laterOriginal, [laterRetake, laterOriginal, earlierRetake, earlierOriginal])
+            .map(item => [item.attempt.id, item.ordinal]))
+            .toEqual([
+                ["original-earlier", 1],
+                ["original-later", 2],
+                ["retake-earlier", 1],
+                ["retake-later", 2],
+            ]);
+    });
+
+    it("uses safe score percentages and a null delta when a retake source is missing", () => {
+        const original = attempt({ id: "original", studentId: "student-1", score: 3, totalScore: 6 });
+        const orphanRetake = attempt({
+            id: "orphan-retake",
+            studentId: "student-1",
+            score: 5,
+            totalScore: 8,
+            retake: { sourceAttemptId: "missing", questionIds: [], mode: "wrong", createdAt: "2026-06-02T10:00:00.000Z" },
+        });
+
+        expect(buildStudentAttemptSeries(original, [orphanRetake, original])).toEqual([
+            expect.objectContaining({ attempt: original, scorePercent: 50, scoreDelta: null }),
+            expect.objectContaining({ attempt: orphanRetake, scorePercent: 63, scoreDelta: null }),
+        ]);
+    });
+
+    it("rounds source deltas to one decimal place", () => {
+        const original = attempt({ id: "original", studentId: "student-1", score: 6, totalScore: 10 });
+        const retake = attempt({
+            id: "retake",
+            studentId: "student-1",
+            score: 8,
+            totalScore: 10,
+            retake: { sourceAttemptId: "original", questionIds: [], mode: "wrong", createdAt: "2026-06-02T10:00:00.000Z" },
+        });
+
+        const [source, result] = buildStudentAttemptSeries(original, [original, retake]);
+        expect(result.scoreDelta).toBe(Number((result.scorePercent - source.scorePercent).toFixed(1)));
     });
 });
