@@ -19,6 +19,7 @@ import type { Attempt, Exam } from "@/types/omr";
 export interface StudentAttemptClientListResult {
     items: Attempt[];
     remoteLoaded: boolean;
+    remoteStatus?: "unauthorized" | "service_unavailable";
     remoteError?: string;
 }
 
@@ -87,6 +88,7 @@ export async function loadStudentOfficialAttempts(
     return {
         items: [],
         remoteLoaded: false,
+        remoteStatus: result.status,
         remoteError: result.status === "unauthorized"
             ? "Student server session is missing"
             : result.error || "Official student attempts unavailable",

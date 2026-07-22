@@ -34,7 +34,7 @@ export default function HistoryPage() {
     const [page, setPage] = useState(1);
     const [now] = useState(() => Date.now());
     const [unreadFeedbackAttemptIds, setUnreadFeedbackAttemptIds] = useState<Set<string>>(() => new Set());
-    const [loadState, setLoadState] = useState<"loading" | "ready" | "error">("loading");
+    const [loadState, setLoadState] = useState<"loading" | "ready" | "unauthenticated" | "error">("loading");
     const [retryKey, setRetryKey] = useState(0);
 
     useEffect(() => {
@@ -52,6 +52,17 @@ export default function HistoryPage() {
                     loadExams(),
                 ]);
                 if (cancelled) return;
+                if (attemptResult.remoteStatus === "unauthorized") {
+                    setAttempts([]);
+                    setExams([]);
+                    setUnreadFeedbackAttemptIds(new Set());
+                    setLoadState("unauthenticated");
+                    return;
+                }
+                if (attemptResult.remoteStatus === "service_unavailable") {
+                    setLoadState("error");
+                    return;
+                }
                 const mine = currentSession
                     ? attemptResult.items.filter(attempt => attemptBelongsToSession(attempt, currentSession))
                     : [];
@@ -170,6 +181,14 @@ export default function HistoryPage() {
                 {loadState === "loading" ? (
                     <div role="status" aria-live="polite" style={{ textAlign: 'center', padding: '4rem 1rem', color: 'var(--muted)' }}>
                         시험 기록을 불러오는 중입니다.
+                    </div>
+                ) : loadState === "unauthenticated" ? (
+                    <div role="alert" style={{ textAlign: 'center', padding: '3rem 1rem', color: 'var(--foreground)', background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: '12px' }}>
+                        <p style={{ fontSize: '1.05rem', fontWeight: 800 }}>로그인 세션이 만료되었습니다.</p>
+                        <p style={{ color: 'var(--muted)', marginTop: '0.5rem' }}>학생 계정으로 다시 로그인하면 시험 기록을 이어서 볼 수 있습니다.</p>
+                        <Link href={session?.workspaceId ? `/?role=student&workspace=${encodeURIComponent(session.workspaceId)}&next=${encodeURIComponent("/student/history")}` : "/?role=student&next=%2Fstudent%2Fhistory"} className="btn btn-primary" style={{ marginTop: '1.25rem', display: 'inline-flex' }}>
+                            다시 로그인
+                        </Link>
                     </div>
                 ) : loadState === "error" ? (
                     <div role="alert" style={{ textAlign: 'center', padding: '3rem 1rem', color: 'var(--foreground)', background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: '12px' }}>
