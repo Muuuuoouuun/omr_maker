@@ -91,14 +91,35 @@
 
 .countBadge {
   padding: 0.25rem 0.55rem;
-  color: var(--primary);
+  color: var(--text-primary);
   background: color-mix(in srgb, var(--primary) 11%, var(--surface));
 }
 
 .signalChip {
   padding: 0.16rem 0.45rem;
-  color: var(--error);
+  color: var(--text-error);
   background: color-mix(in srgb, var(--error) 10%, var(--surface));
+}
+
+.replyTextarea {
+  width: 100%;
+  padding: 0.6rem;
+  color: #0f172a;
+  background: #fff;
+  border: 1px solid #64748b;
+  border-radius: var(--radius-sm);
+  font: inherit;
+  resize: vertical;
+}
+
+.replyTextarea::placeholder {
+  color: #64748b;
+  opacity: 1;
+}
+
+.replyTextarea:focus-visible {
+  outline: 3px solid #4338ca;
+  outline-offset: 2px;
 }
 
 .header {

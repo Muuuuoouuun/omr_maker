@@ -35,7 +35,7 @@ function questionNumberLabel(questionNumbers: number[]): string {
 }
 
 function DiagnosticResultRow({ result }: { result: QuestionResult }) {
-    const accent = result.status === "unanswered" ? "#64748b" : "#dc2626";
+    const accent = result.status === "unanswered" ? "var(--foreground)" : "var(--text-error)";
     const statusLabel = result.status === "unanswered" ? "미응답" : "오답";
     const typeLabel = result.concept || result.unit || result.label || result.source || "유형 미지정";
 

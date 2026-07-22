@@ -32,10 +32,10 @@ interface AnswersPanelProps {
 }
 
 const STATUS_META: Record<QuestionResult["status"], { label: string; color: string }> = {
-    correct: { label: "정답", color: "var(--success)" },
-    wrong: { label: "오답", color: "var(--error)" },
-    unanswered: { label: "미응답", color: "var(--muted)" },
-    ungraded: { label: "미채점", color: "var(--muted)" },
+    correct: { label: "정답", color: "var(--text-success)" },
+    wrong: { label: "오답", color: "var(--text-error)" },
+    unanswered: { label: "미응답", color: "var(--foreground)" },
+    ungraded: { label: "미채점", color: "var(--foreground)" },
 };
 
 function formatAnswer(answer?: number): string {
@@ -50,11 +50,11 @@ function formatQuestionTime(totalSec?: number): string {
     return seconds > 0 ? `${minutes}분 ${seconds}초` : `${minutes}분`;
 }
 
-function SmallStat({ label, value, color }: { label: string; value: number; color: string }) {
+function SmallStat({ label, value, accent, textColor }: { label: string; value: number; accent: string; textColor: string }) {
     return (
-        <div style={{ background: `${color}12`, border: `1px solid ${color}24`, borderRadius: "var(--radius-md)", padding: "0.7rem", textAlign: "center" }}>
-            <div style={{ fontSize: "0.72rem", color: "var(--muted)", fontWeight: 800, marginBottom: "0.15rem" }}>{label}</div>
-            <div style={{ color, fontWeight: 900, fontSize: "1.1rem" }}>{value}</div>
+        <div style={{ background: `color-mix(in srgb, ${accent} 8%, var(--surface))`, border: `1px solid color-mix(in srgb, ${accent} 20%, var(--border))`, borderRadius: "var(--radius-md)", padding: "0.7rem", textAlign: "center" }}>
+            <div style={{ fontSize: "0.72rem", color: "var(--foreground)", fontWeight: 800, marginBottom: "0.15rem" }}>{label}</div>
+            <div style={{ color: textColor, fontWeight: 900, fontSize: "1.1rem" }}>{value}</div>
         </div>
     );
 }
@@ -137,15 +137,15 @@ export default function AnswersPanel({
                     <span style={{ color: "var(--muted)", fontWeight: 800 }}>{currentEarnedScore} / {currentTotalScore}점</span>
                 </div>
                 {scoreRegraded && (
-                    <div style={{ marginTop: "0.65rem", color: "var(--warning)", fontSize: "0.72rem", fontWeight: 800 }}>
+                    <div style={{ marginTop: "0.65rem", color: "var(--text-warning)", fontSize: "0.72rem", fontWeight: 800 }}>
                         현재 정답 기준 재채점됨 · 제출 당시 {attempt.score}점 ({storedPercent}%)
                     </div>
                 )}
                 <div className={styles.statGrid} style={{ gridTemplateColumns: `repeat(${counts.ungradedCount > 0 ? 4 : 3}, minmax(0, 1fr))` }}>
-                    <SmallStat label="정답" value={counts.correctCount} color="#16a34a" />
-                    <SmallStat label="오답" value={counts.incorrectCount} color="#dc2626" />
-                    <SmallStat label="미응답" value={counts.unansweredCount} color="#64748b" />
-                    {counts.ungradedCount > 0 && <SmallStat label="미채점" value={counts.ungradedCount} color="#64748b" />}
+                    <SmallStat label="정답" value={counts.correctCount} accent="var(--success)" textColor="var(--text-success)" />
+                    <SmallStat label="오답" value={counts.incorrectCount} accent="var(--error)" textColor="var(--text-error)" />
+                    <SmallStat label="미응답" value={counts.unansweredCount} accent="var(--muted)" textColor="var(--foreground)" />
+                    {counts.ungradedCount > 0 && <SmallStat label="미채점" value={counts.ungradedCount} accent="var(--muted)" textColor="var(--foreground)" />}
                 </div>
             </section>
 
@@ -187,7 +187,7 @@ export default function AnswersPanel({
                                 <article key={key} style={{ padding: "0.75rem", border: "1px solid var(--border)", borderRadius: "var(--radius-sm)", background: "var(--background)" }}>
                                     <div style={{ display: "flex", justifyContent: "space-between", gap: "0.5rem", alignItems: "start" }}>
                                         <strong style={{ fontSize: "0.82rem" }}>{question.number}번 · {subQuestion.prompt}</strong>
-                                        <span style={{ color: answer?.reviewStatus === "reviewed" ? "var(--success)" : answer ? "var(--warning)" : "var(--muted)", fontSize: "0.7rem", fontWeight: 900, whiteSpace: "nowrap" }}>{answer?.reviewStatus === "reviewed" ? "검토 완료" : answer ? "검토 필요" : "미응답"}</span>
+                                        <span style={{ color: answer?.reviewStatus === "reviewed" ? "var(--text-success)" : answer ? "var(--text-warning)" : "var(--foreground)", fontSize: "0.7rem", fontWeight: 900, whiteSpace: "nowrap" }}>{answer?.reviewStatus === "reviewed" ? "검토 완료" : answer ? "검토 필요" : "미응답"}</span>
                                     </div>
                                     <div style={{ marginTop: "0.45rem", whiteSpace: "pre-wrap", fontSize: "0.82rem", lineHeight: 1.55, color: answer ? "var(--foreground)" : "var(--muted)" }}>{answer?.body || "작성된 응답이 없습니다."}</div>
                                     {subQuestion.answerGuide && <div style={{ marginTop: "0.45rem", paddingTop: "0.45rem", borderTop: "1px dashed var(--border)", fontSize: "0.72rem", color: "var(--muted)" }}>교사용 가이드: {subQuestion.answerGuide}</div>}
@@ -221,18 +221,18 @@ export default function AnswersPanel({
                                 <div style={{ color: "#334155", fontSize: "0.82rem", lineHeight: 1.6, whiteSpace: "pre-wrap" }}>{note.body}</div>
                                 {note.status === "answered" && note.answer && (
                                     <div style={{ marginTop: "0.55rem", padding: "0.65rem", borderRadius: "var(--radius-sm)", background: "white", border: "1px solid #e2e8f0" }}>
-                                        <div style={{ color: "#16a34a", fontWeight: 800, fontSize: "0.74rem", marginBottom: "0.25rem" }}>내 답변 · {formatKoreanDateTime(note.answer.createdAt)}</div>
+                                        <div style={{ color: "#047857", fontWeight: 800, fontSize: "0.74rem", marginBottom: "0.25rem" }}>내 답변 · {formatKoreanDateTime(note.answer.createdAt)}</div>
                                         <div style={{ color: "#334155", fontSize: "0.82rem", lineHeight: 1.6, whiteSpace: "pre-wrap" }}>{note.answer.body}</div>
                                     </div>
                                 )}
                                 <label style={{ display: "grid", gap: "0.35rem", marginTop: "0.6rem", color: "#334155", fontSize: "0.74rem", fontWeight: 800 }}>
                                     {note.status === "answered" ? "답변 수정" : "교사 답변"}
                                     <textarea
+                                        className={styles.replyTextarea}
                                         value={answerDrafts[note.questionId] || ""}
                                         onChange={event => onAnswerDraftChange(note.questionId, event.target.value.slice(0, 500))}
                                         placeholder={note.status === "answered" ? "답변을 고치려면 새로 입력하세요." : "학생에게 보낼 답변을 입력하세요."}
                                         rows={3}
-                                        style={{ width: "100%", padding: "0.6rem", borderRadius: "var(--radius-sm)", border: "1px solid #cbd5e1", font: "inherit", resize: "vertical", background: "white" }}
                                     />
                                 </label>
                                 <div style={{ display: "flex", justifyContent: "flex-end", marginTop: "0.45rem" }}>

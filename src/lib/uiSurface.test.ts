@@ -868,6 +868,26 @@ describe("service UI surface", () => {
         expect(teacherAttemptPage).toMatch(/activeView === ["']analytics["'][\s\S]*?<AnalyticsPanel/);
     });
 
+    it("keeps student result panel inputs and small status text readable in both themes", () => {
+        const answersPanel = readProjectFile("src/components/teacher/student-results/AnswersPanel.tsx");
+        const analyticsPanel = readProjectFile("src/components/teacher/student-results/AnalyticsPanel.tsx");
+        const studentResultCss = readProjectFile("src/components/teacher/student-results/StudentResultHub.module.css");
+
+        expect(answersPanel).toContain("className={styles.replyTextarea}");
+        expect(studentResultCss).toMatch(/\.replyTextarea\s*\{[^}]*color:\s*#0f172a;[^}]*background:\s*#fff;/);
+        expect(studentResultCss).toMatch(/\.replyTextarea::placeholder\s*\{[^}]*color:\s*#64748b;/);
+        expect(answersPanel).toContain('correct: { label: "정답", color: "var(--text-success)" }');
+        expect(answersPanel).toContain('wrong: { label: "오답", color: "var(--text-error)" }');
+        expect(answersPanel).toContain('color: "var(--text-warning)"');
+        expect(answersPanel).toContain('textColor="var(--text-success)"');
+        expect(answersPanel).toContain('textColor="var(--text-error)"');
+        expect(answersPanel).toContain('fontSize: "0.72rem", color: "var(--foreground)"');
+        expect(answersPanel).toContain('color: "#047857"');
+        expect(analyticsPanel).toContain('const accent = result.status === "unanswered" ? "var(--foreground)" : "var(--text-error)";');
+        expect(studentResultCss).toMatch(/\.countBadge\s*\{[^}]*color:\s*var\(--text-primary\);/);
+        expect(studentResultCss).toMatch(/\.signalChip\s*\{[^}]*color:\s*var\(--text-error\);/);
+    });
+
     it("resets route-scoped student result state while preserving peer attempts on load failure", () => {
         const teacherAttemptPage = readProjectFile("src/app/teacher/attempt/[attemptId]/page.tsx");
         const loaderStart = teacherAttemptPage.indexOf("const loadTeacherAttempt = async () => {");
