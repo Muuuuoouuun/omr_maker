@@ -22,6 +22,8 @@ function easeOutCubic(t: number): number {
 }
 
 const LINE_EASING = "cubic-bezier(0.33, 1, 0.68, 1)";
+// Mirrors --ease-spring in globals.css — keep in sync if that token's value changes
+// (WAAPI's easing option can't resolve var(), so this has to stay a literal copy).
 const SPRING_EASING = "cubic-bezier(0.34, 1.56, 0.64, 1)";
 const TAIL_COUNT = 5;
 const TAIL_LAG_MS = 42;
@@ -147,9 +149,11 @@ export default function useCometReveal(
                     rafId = requestAnimationFrame(frame);
                 } else {
                     // Arrival: fade the comet out, leaving the end dot/ping.
+                    // Mirrors --ease-out-soft in globals.css — keep in sync if that token's value changes
+                    // (WAAPI's easing option can't resolve var(), so this has to stay a literal copy).
                     const fade = cometGroup.animate(
                         [{ opacity: 1 }, { opacity: 0 }],
-                        { duration: 260, easing: "ease-out", fill: "forwards" },
+                        { duration: 260, easing: "cubic-bezier(0.22, 1, 0.36, 1)", fill: "forwards" },
                     );
                     fade.onfinish = () => cometGroup.remove();
                 }
@@ -159,9 +163,11 @@ export default function useCometReveal(
             // 3) Area fill fade-in behind the draw.
             const area = container.querySelector<SVGPathElement>(".comet-target path.recharts-area-area");
             if (area) {
+                // Mirrors --ease-out-soft in globals.css — keep in sync if that token's value changes
+                // (WAAPI's easing option can't resolve var(), so this has to stay a literal copy).
                 const areaAnim = area.animate(
                     [{ opacity: 0 }, { opacity: 1 }],
-                    { duration: 650, delay: delayMs + durationMs * 0.6, easing: "ease-out", fill: "both" },
+                    { duration: 650, delay: delayMs + durationMs * 0.6, easing: "cubic-bezier(0.22, 1, 0.36, 1)", fill: "both" },
                 );
                 cleanups.push(() => {
                     areaAnim.cancel();
@@ -206,6 +212,8 @@ export default function useCometReveal(
                 ping.style.transformBox = "fill-box";
                 ping.style.transformOrigin = "center";
                 parent.appendChild(ping);
+                // Mirrors --ease-out-soft in globals.css — keep in sync if that token's value changes
+                // (WAAPI's easing option can't resolve var(), so this has to stay a literal copy).
                 const pingAnim = ping.animate(
                     [
                         { transform: "scale(0.4)", opacity: 0.7 },
@@ -215,7 +223,7 @@ export default function useCometReveal(
                         duration: 1000,
                         delay: delayMs + durationMs,
                         iterations: 2,
-                        easing: "ease-out",
+                        easing: "cubic-bezier(0.22, 1, 0.36, 1)",
                     },
                 );
                 pingAnim.onfinish = () => ping.remove();

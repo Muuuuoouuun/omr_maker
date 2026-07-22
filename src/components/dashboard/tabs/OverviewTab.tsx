@@ -6,6 +6,7 @@ import dynamic from "next/dynamic";
 import { useRouter } from "next/navigation";
 import { Exam, Attempt } from "@/types/omr";
 import StatCard from "@/components/dashboard/StatCard";
+import StatusPill from "@/components/dashboard/StatusPill";
 import { TrendChartSkeleton } from "@/components/dashboard/DashboardLoadingSkeleton";
 import ExamListBlock from "@/components/dashboard/ExamListBlock";
 import ExamActionsMenu, { ExamActionKind } from "@/components/dashboard/ExamActionsMenu";
@@ -387,7 +388,7 @@ export default function OverviewTab({ exams: examsProp, attempts, stats, trendDa
             {/* 1. 자주 쓰는 빠른 작업 */}
             <div className="bento-card col-span-2" style={{ padding: '1.5rem', display: 'flex', flexDirection: 'column' }}>
                 <div style={{ marginBottom: '1.5rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                    <h3 style={{ fontSize: '1.1rem', fontWeight: 700, color: 'var(--foreground)' }}>
+                    <h3 style={{ fontSize: 'var(--type-heading-md)', fontWeight: 700, color: 'var(--foreground)' }}>
                         빠른 작업 <span style={{ fontWeight: 400, color: 'var(--muted)', fontSize: '0.9rem' }}>자주 쓰는 기능 바로가기</span>
                     </h3>
                 </div>
@@ -423,21 +424,19 @@ export default function OverviewTab({ exams: examsProp, attempts, stats, trendDa
             {hasStudentQuestions && (
                 <div id="student-question-inbox" className="bento-card col-span-2" style={{ padding: '1.5rem', display: 'flex', flexDirection: 'column', scrollMarginTop: '5rem' }}>
                     <div style={{ marginBottom: '1rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '0.75rem' }}>
-                        <h3 style={{ fontSize: '1.1rem', fontWeight: 700, color: 'var(--foreground)', display: 'inline-flex', alignItems: 'center', gap: '0.45rem' }}>
+                        <h3 style={{ fontSize: 'var(--type-heading-md)', fontWeight: 700, color: 'var(--foreground)', display: 'inline-flex', alignItems: 'center', gap: '0.45rem' }}>
                             <MessageSquare size={18} style={{ color: '#0f766e' }} />
                             학생 질문
                         </h3>
-                        <span style={{
-                            background: questionInbox.pending.length > 0 ? 'rgba(15,118,110,0.12)' : 'var(--background)',
-                            color: questionInbox.pending.length > 0 ? '#0f766e' : 'var(--muted)',
-                            padding: '0.3rem 0.6rem',
-                            borderRadius: 'var(--radius-full)',
-                            fontSize: '0.75rem',
-                            fontWeight: 700,
-                            whiteSpace: 'nowrap',
-                        }}>
-                            대기 {questionInbox.pending.length} · 답변 {questionInbox.answered.length}
-                        </span>
+                        <StatusPill
+                            tone={questionInbox.pending.length > 0 ? "primary" : "muted"}
+                            variant="outline"
+                            size="sm"
+                            label={`대기 ${questionInbox.pending.length} · 답변 ${questionInbox.answered.length}`}
+                            style={questionInbox.pending.length > 0
+                                ? { color: '#0f766e', border: '1px solid rgba(15,118,110,0.28)' }
+                                : undefined}
+                        />
                     </div>
                     {questionInbox.pending.length === 0 ? (
                         <div style={{ color: 'var(--muted)', fontSize: '0.88rem', padding: '0.5rem 0' }}>
@@ -516,7 +515,7 @@ export default function OverviewTab({ exams: examsProp, attempts, stats, trendDa
             <div className="bento-card overview-exam-summary-card" style={{ gridColumn: 'span 4', overflow: 'hidden' }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.5rem' }}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: '1.5rem' }}>
-                        <h3 style={{ fontSize: '1.1rem', fontWeight: 700 }}>시험 요약</h3>
+                        <h3 style={{ fontSize: 'var(--type-heading-md)', fontWeight: 700 }}>시험 요약</h3>
                         <div role="tablist" aria-label="시험 진행 상태" style={{ display: 'flex', gap: '1rem', fontSize: '0.9rem', color: 'var(--muted)', fontWeight: 600 }}>
                             <button
                                 type="button"
@@ -630,8 +629,6 @@ export default function OverviewTab({ exams: examsProp, attempts, stats, trendDa
                                 const targetColor = participationRate > 70 ? 'var(--success)' : (participationRate > 30 ? 'var(--warning)' : 'var(--error)');
                                 const isArchived = exam.archived;
                                 const statusText = isArchived ? '보관됨' : participationRate === 100 ? '완료' : '진행 중';
-                                const statusBg = isArchived ? 'rgba(100,116,139,0.12)' : participationRate === 100 ? 'rgba(16, 185, 129, 0.1)' : 'rgba(139, 92, 246, 0.1)';
-                                const statusColor = isArchived ? 'var(--muted)' : participationRate === 100 ? 'var(--success)' : 'var(--accent)';
 
                                 return (
                                     <tr
@@ -652,17 +649,12 @@ export default function OverviewTab({ exams: examsProp, attempts, stats, trendDa
                                                 {exam.title}
                                             </button>
                                             {isArchived && (
-                                                <span style={{
-                                                    marginLeft: '0.5rem',
-                                                    display: 'inline-block',
-                                                    padding: '0.15rem 0.5rem',
-                                                    fontSize: '0.7rem',
-                                                    fontWeight: 700,
-                                                    background: 'rgba(100,116,139,0.15)',
-                                                    color: 'var(--muted)',
-                                                    borderRadius: 'var(--radius-full)',
-                                                    verticalAlign: 'middle',
-                                                }}>보관됨</span>
+                                                <StatusPill
+                                                    tone="muted"
+                                                    size="sm"
+                                                    label="보관됨"
+                                                    style={{ marginLeft: '0.5rem', verticalAlign: 'middle' }}
+                                                />
                                             )}
                                         </td>
                                         <td style={{ color: 'var(--muted)', fontSize: '0.9rem' }}>{formatKoreanDate(exam.createdAt)}</td>
@@ -678,23 +670,28 @@ export default function OverviewTab({ exams: examsProp, attempts, stats, trendDa
                                             <span style={{ color: 'var(--foreground)', fontWeight: 600 }}>{exam.completedCount}</span> / {exam.total}
                                         </td>
                                         <td>
-                                            <span style={{
-                                                padding: '0.25rem 0.6rem',
-                                                borderRadius: 'var(--radius-full)',
-                                                fontSize: '0.75rem',
-                                                fontWeight: 800,
-                                                background: exam.retakeCount > 0 ? 'color-mix(in srgb, #0f766e 8%, var(--surface))' : 'var(--background)',
-                                                color: exam.retakeCount > 0 ? '#0f766e' : 'var(--muted)',
-                                                border: exam.retakeCount > 0 ? '1px solid color-mix(in srgb, #0f766e 28%, transparent)' : '1px solid var(--border)',
-                                                whiteSpace: 'nowrap',
-                                            }}>
-                                                {exam.retakeCount}건
-                                            </span>
+                                            <StatusPill
+                                                tone={exam.retakeCount > 0 ? "primary" : "muted"}
+                                                size="sm"
+                                                label={`${exam.retakeCount}건`}
+                                                style={exam.retakeCount > 0
+                                                    ? {
+                                                        background: 'color-mix(in srgb, #0f766e 8%, var(--surface))',
+                                                        color: '#0f766e',
+                                                        border: '1px solid color-mix(in srgb, #0f766e 28%, transparent)',
+                                                    }
+                                                    : undefined}
+                                            />
                                         </td>
                                         <td>
-                                            <span style={{ background: statusBg, color: statusColor, padding: '0.3rem 0.6rem', borderRadius: 'var(--radius-full)', fontSize: '0.75rem', fontWeight: 700, textTransform: 'uppercase', whiteSpace: 'nowrap' }}>
-                                                {statusText}
-                                            </span>
+                                            <StatusPill
+                                                tone={isArchived ? "muted" : participationRate === 100 ? "success" : "primary"}
+                                                size="sm"
+                                                label={statusText}
+                                                style={!isArchived && participationRate !== 100
+                                                    ? { textTransform: 'uppercase', background: 'rgba(139, 92, 246, 0.1)', color: 'var(--accent)' }
+                                                    : { textTransform: 'uppercase' }}
+                                            />
                                         </td>
                                         {activeTab === 'ongoing' && (
                                             <td style={{ textAlign: 'right' }}>

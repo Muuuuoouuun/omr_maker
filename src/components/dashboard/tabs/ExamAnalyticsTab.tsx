@@ -86,6 +86,7 @@ import { getKakaoProviderReadiness, type KakaoProviderReadinessStatus } from "@/
 import { hasPlanEntitlement } from "@/utils/plans";
 import CountUp from "@/components/dashboard/CountUp";
 import WaveBar from "@/components/dashboard/WaveBar";
+import StatusPill from "@/components/dashboard/StatusPill";
 
 interface ExamAnalyticsTabProps {
     exams: Exam[];
@@ -1196,7 +1197,7 @@ export default function ExamAnalyticsTab({
                 <div className="card" style={{ ...CARD_SURFACE_STYLE,padding: '1.35rem', border: '1px solid var(--border)', background: 'var(--surface)' }}>
                     <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: '1rem', marginBottom: '1rem', flexWrap: 'wrap' }}>
                         <div>
-                            <h3 style={{ fontSize: '1rem', fontWeight: 900, color: 'var(--foreground)', display: 'flex', alignItems: 'center', gap: '0.45rem' }}>
+                            <h3 style={{ fontSize: 'var(--type-heading-sm)', fontWeight: 900, color: 'var(--foreground)', display: 'flex', alignItems: 'center', gap: '0.45rem' }}>
                                 <Target size={16} color="var(--primary)" />
                                 지역별 다음 액션
                             </h3>
@@ -1295,7 +1296,7 @@ export default function ExamAnalyticsTab({
                 <div className="card" style={{ ...CARD_SURFACE_STYLE,padding: '1.35rem', border: '1px solid var(--border)', background: 'var(--surface)' }}>
                     <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: '1rem', marginBottom: '1rem', flexWrap: 'wrap' }}>
                         <div>
-                            <h3 style={{ fontSize: '1rem', fontWeight: 900, color: 'var(--foreground)', display: 'flex', alignItems: 'center', gap: '0.45rem' }}>
+                            <h3 style={{ fontSize: 'var(--type-heading-sm)', fontWeight: 900, color: 'var(--foreground)', display: 'flex', alignItems: 'center', gap: '0.45rem' }}>
                                 <MessageCircle size={16} color="#f59e0b" />
                                 카카오 후보 검토
                             </h3>
@@ -1611,7 +1612,7 @@ export default function ExamAnalyticsTab({
                 <div className="card" style={{ ...CARD_SURFACE_STYLE,padding: '1.5rem', border: '1px solid var(--border)', background: 'var(--surface)' }}>
                     <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: '1rem', marginBottom: '1rem', flexWrap: 'wrap' }}>
                         <div>
-                            <h3 style={{ fontSize: '1rem', fontWeight: 900, color: 'var(--foreground)', display: 'flex', alignItems: 'center', gap: '0.45rem' }}>
+                            <h3 style={{ fontSize: 'var(--type-heading-sm)', fontWeight: 900, color: 'var(--foreground)', display: 'flex', alignItems: 'center', gap: '0.45rem' }}>
                                 <Database size={16} color="var(--primary)" />
                                 문항 DB 준비 상태
                             </h3>
@@ -1995,7 +1996,7 @@ export default function ExamAnalyticsTab({
                     <div className="card" style={{ ...CARD_SURFACE_STYLE,padding: '1.5rem', border: '1px solid var(--border)', background: 'var(--surface)' }}>
                         <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: '1rem', marginBottom: '1rem', flexWrap: 'wrap' }}>
                             <div>
-                                <h3 style={{ fontSize: '1rem', fontWeight: 900, color: 'var(--foreground)', display: 'flex', alignItems: 'center', gap: '0.45rem' }}>
+                                <h3 style={{ fontSize: 'var(--type-heading-sm)', fontWeight: 900, color: 'var(--foreground)', display: 'flex', alignItems: 'center', gap: '0.45rem' }}>
                                     <Target size={16} color="var(--primary)" />
                                     분석 컷 전환
                                 </h3>
@@ -2003,18 +2004,7 @@ export default function ExamAnalyticsTab({
                                     같은 시험 데이터를 시험 전체, 반, 학생 기준으로 잘라 약점 유형을 다시 계산합니다.
                                 </p>
                             </div>
-                            <span style={{
-                                fontSize: '0.72rem',
-                                fontWeight: 900,
-                                color: 'var(--primary)',
-                                background: 'rgba(99,102,241,0.1)',
-                                border: '1px solid rgba(99,102,241,0.18)',
-                                padding: '0.24rem 0.6rem',
-                                borderRadius: 'var(--radius-full)',
-                                whiteSpace: 'nowrap',
-                            }}>
-                                {scopedSummary}
-                            </span>
+                            <StatusPill tone="primary" size="sm" label={scopedSummary} />
                         </div>
 
                         <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap', marginBottom: '1rem' }}>
@@ -2165,7 +2155,7 @@ export default function ExamAnalyticsTab({
                     {activeWorkspaceView === "students" && advancedAnalyticsEnabled && (
                         <div className="card" style={{ ...CARD_SURFACE_STYLE,padding: '1.5rem', border: '1px solid var(--border)', background: 'var(--surface)' }}>
                             <div style={{ marginBottom: '1.25rem' }}>
-                                <h3 style={{ fontSize: '1rem', fontWeight: 900, color: 'var(--foreground)', display: 'flex', alignItems: 'center', gap: '0.45rem' }}>
+                                <h3 style={{ fontSize: 'var(--type-heading-sm)', fontWeight: 900, color: 'var(--foreground)', display: 'flex', alignItems: 'center', gap: '0.45rem' }}>
                                     <BarChart2 size={16} color="var(--primary)" />
                                     반별 점수 비교
                                 </h3>
@@ -2249,7 +2239,7 @@ export default function ExamAnalyticsTab({
                         <div className="card" style={{ ...CARD_SURFACE_STYLE,padding: '1.5rem', border: '1px solid var(--border)', background: 'var(--surface)' }}>
                             <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: '1rem', marginBottom: '1rem', flexWrap: 'wrap' }}>
                                 <div>
-                                    <h3 style={{ fontSize: '1rem', fontWeight: 900, color: 'var(--foreground)', display: 'flex', alignItems: 'center', gap: '0.45rem' }}>
+                                    <h3 style={{ fontSize: 'var(--type-heading-sm)', fontWeight: 900, color: 'var(--foreground)', display: 'flex', alignItems: 'center', gap: '0.45rem' }}>
                                         <Users size={16} color="var(--primary)" />
                                         반별 시험 분석 매트릭스
                                     </h3>
@@ -2257,18 +2247,7 @@ export default function ExamAnalyticsTab({
                                         같은 시험을 반별로 잘라 평균, 참여율, 오답 압력, 집중 문항, 재추천 대상을 비교합니다.
                                     </p>
                                 </div>
-                                <span style={{
-                                    fontSize: '0.72rem',
-                                    fontWeight: 900,
-                                    color: '#0f766e',
-                                    background: 'color-mix(in srgb, #0f766e 10%, var(--surface))',
-                                    border: '1px solid color-mix(in srgb, #0f766e 28%, transparent)',
-                                    padding: '0.24rem 0.6rem',
-                                    borderRadius: 'var(--radius-full)',
-                                    whiteSpace: 'nowrap',
-                                }}>
-                                    Class cut
-                                </span>
+                                <StatusPill tone="success" size="sm" label="Class cut" />
                             </div>
 
                             <div style={{ overflowX: 'auto', border: '1px solid var(--border)', borderRadius: 'var(--radius-md)' }}>
@@ -2374,7 +2353,7 @@ export default function ExamAnalyticsTab({
                             <div className="card" style={{ ...CARD_SURFACE_STYLE,padding: '1.5rem', border: '1px solid var(--border)', background: 'var(--surface)' }}>
                                 <div style={{ display: 'flex', justifyContent: 'space-between', gap: '1rem', marginBottom: '1rem' }}>
                                     <div>
-                                        <h3 style={{ fontSize: '1rem', fontWeight: 800, color: 'var(--foreground)', display: 'flex', alignItems: 'center', gap: '0.45rem' }}>
+                                        <h3 style={{ fontSize: 'var(--type-heading-sm)', fontWeight: 800, color: 'var(--foreground)', display: 'flex', alignItems: 'center', gap: '0.45rem' }}>
                                             <Target size={16} color="var(--primary)" />
                                             유형 재추천 큐
                                         </h3>
@@ -2382,19 +2361,7 @@ export default function ExamAnalyticsTab({
                                             저장된 문항별 결과 데이터로 오답률이 높은 개념을 바로 묶습니다.
                                         </p>
                                     </div>
-                                    <span style={{
-                                        fontSize: '0.72rem',
-                                        fontWeight: 800,
-                                        color: '#0f766e',
-                                        background: 'color-mix(in srgb, #0f766e 10%, var(--surface))',
-                                        border: '1px solid color-mix(in srgb, #0f766e 28%, transparent)',
-                                        padding: '0.22rem 0.55rem',
-                                        borderRadius: '999px',
-                                        whiteSpace: 'nowrap',
-                                        height: 'fit-content',
-                                    }}>
-                                        Result rows
-                                    </span>
+                                    <StatusPill tone="success" size="sm" label="Result rows" />
                                 </div>
 
                                 {examTypeWeaknessGroups.length > 0 ? (
@@ -2450,7 +2417,7 @@ export default function ExamAnalyticsTab({
                             </div>
 
                             <div className="card" style={{ ...CARD_SURFACE_STYLE,padding: '1.5rem', border: '1px solid var(--border)', background: 'var(--surface)' }}>
-                                <h3 style={{ fontSize: '1rem', fontWeight: 800, color: 'var(--foreground)', display: 'flex', alignItems: 'center', gap: '0.45rem', marginBottom: '0.25rem' }}>
+                                <h3 style={{ fontSize: 'var(--type-heading-sm)', fontWeight: 800, color: 'var(--foreground)', display: 'flex', alignItems: 'center', gap: '0.45rem', marginBottom: '0.25rem' }}>
                                     <Users size={16} color="var(--primary)" />
                                     반별 약점 압력
                                 </h3>
@@ -2511,7 +2478,7 @@ export default function ExamAnalyticsTab({
                             <div className="card" style={{ ...CARD_SURFACE_STYLE,padding: '1.5rem', border: '1px solid var(--border)', background: 'var(--surface)' }}>
                                 <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: '1rem', marginBottom: '1rem' }}>
                                     <div>
-                                        <h3 style={{ fontSize: '1rem', fontWeight: 800, color: 'var(--foreground)', display: 'flex', alignItems: 'center', gap: '0.45rem' }}>
+                                        <h3 style={{ fontSize: 'var(--type-heading-sm)', fontWeight: 800, color: 'var(--foreground)', display: 'flex', alignItems: 'center', gap: '0.45rem' }}>
                                             <Target size={16} color="var(--primary)" />
                                             유사 유형 소팅
                                         </h3>
@@ -2519,18 +2486,7 @@ export default function ExamAnalyticsTab({
                                             같은 지문/작품, 개념, 단원 기준으로 오답 압력이 높은 묶음입니다.
                                         </p>
                                     </div>
-                                    <span style={{
-                                        fontSize: '0.72rem',
-                                        fontWeight: 800,
-                                        color: '#0f766e',
-                                        background: 'color-mix(in srgb, #0f766e 10%, var(--surface))',
-                                        border: '1px solid color-mix(in srgb, #0f766e 28%, transparent)',
-                                        padding: '0.22rem 0.55rem',
-                                        borderRadius: '999px',
-                                        whiteSpace: 'nowrap',
-                                    }}>
-                                        Premium
-                                    </span>
+                                    <StatusPill tone="success" size="sm" label="Premium" />
                                 </div>
 
                                 {similarQuestionGroups.length > 0 ? (
@@ -2580,7 +2536,7 @@ export default function ExamAnalyticsTab({
                             </div>
 
                             <div className="card" style={{ ...CARD_SURFACE_STYLE,padding: '1.5rem', border: '1px solid var(--border)', background: 'var(--surface)' }}>
-                                <h3 style={{ fontSize: '1rem', fontWeight: 800, color: 'var(--foreground)', display: 'flex', alignItems: 'center', gap: '0.45rem', marginBottom: '0.25rem' }}>
+                                <h3 style={{ fontSize: 'var(--type-heading-sm)', fontWeight: 800, color: 'var(--foreground)', display: 'flex', alignItems: 'center', gap: '0.45rem', marginBottom: '0.25rem' }}>
                                     <List size={16} color="var(--primary)" />
                                     풀이 행동 신호
                                 </h3>
@@ -2640,7 +2596,7 @@ export default function ExamAnalyticsTab({
 
                             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '1.25rem', position: 'relative' }}>
                                 <div>
-                                    <h3 style={{ fontSize: '1rem', fontWeight: 700, display: 'flex', alignItems: 'center', gap: '0.5rem', letterSpacing: '-0.01em' }}>
+                                    <h3 style={{ fontSize: 'var(--type-heading-sm)', fontWeight: 700, display: 'flex', alignItems: 'center', gap: '0.5rem', letterSpacing: '-0.01em' }}>
                                         <BarChart2 size={16} color="var(--primary)" />
                                         항목별(라벨) 정답률 분석
                                     </h3>
@@ -2798,8 +2754,8 @@ export default function ExamAnalyticsTab({
                                     <div key={i} style={{
                                         padding: '1rem',
                                         borderRadius: 'var(--radius-md)',
-                                        background: 'color-mix(in srgb, var(--error) 6%, transparent)',
-                                        borderLeft: '4px solid var(--error)',
+                                        background: 'var(--grade-red-soft)',
+                                        borderLeft: '4px solid var(--grade-red)',
                                         display: 'flex',
                                         justifyContent: 'space-between',
                                         alignItems: 'center'
@@ -2817,7 +2773,7 @@ export default function ExamAnalyticsTab({
                                         </div>
                                         <div style={{ textAlign: 'right' }}>
                                             <div style={{ fontSize: '0.85rem', color: 'var(--muted)' }}>오답률</div>
-                                            <div style={{ fontWeight: 800, fontSize: '1.2rem', color: 'var(--error)' }}>
+                                            <div style={{ fontWeight: 800, fontSize: '1.2rem', color: 'var(--grade-red)' }}>
                                                 {q.wrongRate}%
                                             </div>
                                         </div>
@@ -2861,7 +2817,7 @@ export default function ExamAnalyticsTab({
                         </div>
 
                         {/* Option Selection Rates Table */}
-                        <h4 style={{ fontSize: '1.05rem', fontWeight: 700, marginTop: '1rem', marginBottom: '1rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                        <h4 style={{ fontSize: 'var(--type-heading-sm)', fontWeight: 700, marginTop: '1rem', marginBottom: '1rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
                             <List size={16} color="var(--primary)" />
                             세부사항: 문항별 선택률
                         </h4>
