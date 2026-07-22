@@ -303,6 +303,26 @@ describe("feedback persistence", () => {
         });
     });
 
+    it("omits undefined markup rows while retaining explicit empty and nonempty updates", () => {
+        const feedback = createAttemptFeedbackDraft(attempt, "2026-06-26T10:00:00.000Z");
+        const persistenceContext = {
+            organizationId: "org-1",
+            organizationName: "Class",
+            actorUserId: "teacher-1",
+        };
+
+        const omitted = feedbackToSupabaseRow(feedback, persistenceContext);
+        expect(Object.prototype.hasOwnProperty.call(omitted, "markup_drawings")).toBe(false);
+
+        const cleared = feedbackToSupabaseRow(feedback, persistenceContext, {});
+        expect(Object.prototype.hasOwnProperty.call(cleared, "markup_drawings")).toBe(true);
+        expect(cleared.markup_drawings).toBeNull();
+
+        const supplied = feedbackToSupabaseRow(feedback, persistenceContext, { 1: ["stroke"] });
+        expect(Object.prototype.hasOwnProperty.call(supplied, "markup_drawings")).toBe(true);
+        expect(supplied.markup_drawings).toEqual({ 1: ["stroke"] });
+    });
+
     it("uses the Supabase read-receipt RPC instead of remote feedback upsert when marking opened", async () => {
         const localStorage = createStorage();
         vi.stubGlobal("window", { localStorage });
