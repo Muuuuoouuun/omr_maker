@@ -859,6 +859,15 @@ describe("service UI surface", () => {
         expect(teacherAttemptPage).toContain("loadTeacherAttempts(found.examId)");
     });
 
+    it("renders dedicated answer and analytics panels only for their active result views", () => {
+        const teacherAttemptPage = readProjectFile("src/app/teacher/attempt/[attemptId]/page.tsx");
+
+        expect(teacherAttemptPage).toContain('import AnswersPanel from "@/components/teacher/student-results/AnswersPanel";');
+        expect(teacherAttemptPage).toContain('import AnalyticsPanel from "@/components/teacher/student-results/AnalyticsPanel";');
+        expect(teacherAttemptPage).toMatch(/activeView === ["']answers["'][\s\S]*?<AnswersPanel/);
+        expect(teacherAttemptPage).toMatch(/activeView === ["']analytics["'][\s\S]*?<AnalyticsPanel/);
+    });
+
     it("resets route-scoped student result state while preserving peer attempts on load failure", () => {
         const teacherAttemptPage = readProjectFile("src/app/teacher/attempt/[attemptId]/page.tsx");
         const loaderStart = teacherAttemptPage.indexOf("const loadTeacherAttempt = async () => {");

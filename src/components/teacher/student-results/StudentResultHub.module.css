@@ -16,6 +16,91 @@
   padding: 1rem;
 }
 
+.panelStack,
+.rowList {
+  display: grid;
+  gap: 0.75rem;
+  min-width: 0;
+}
+
+.statGrid,
+.diagnosticGrid {
+  display: grid;
+  gap: 0.55rem;
+  margin-top: 1rem;
+}
+
+.diagnosticGrid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.sectionHeading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  margin-bottom: 0.8rem;
+}
+
+.sectionHeading h2,
+.sectionHeading p {
+  margin: 0;
+}
+
+.sectionHeading h2 {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  font-size: 1rem;
+  font-weight: 900;
+}
+
+.sectionHeading p,
+.emptyText {
+  color: var(--muted);
+  font-size: 0.78rem;
+  line-height: 1.55;
+}
+
+.emptyText {
+  margin: 0;
+  padding: 0.7rem 0;
+  font-weight: 700;
+}
+
+.filterGroup {
+  display: flex;
+  gap: 0.35rem;
+  flex-wrap: wrap;
+}
+
+.filterGroup button {
+  min-height: 36px;
+  padding: 0.35rem 0.65rem;
+  font-size: 0.74rem;
+}
+
+.countBadge,
+.signalChip {
+  display: inline-flex;
+  align-items: center;
+  border-radius: var(--radius-full);
+  font-size: 0.72rem;
+  font-weight: 850;
+}
+
+.countBadge {
+  padding: 0.25rem 0.55rem;
+  color: var(--primary);
+  background: color-mix(in srgb, var(--primary) 11%, var(--surface));
+}
+
+.signalChip {
+  padding: 0.16rem 0.45rem;
+  color: var(--error);
+  background: color-mix(in srgb, var(--error) 10%, var(--surface));
+}
+
 .header {
   display: grid;
   gap: 1rem;
@@ -275,6 +360,16 @@
 
   .tabs {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .statGrid,
+  .diagnosticGrid {
+    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+  }
+
+  .sectionHeading {
+    align-items: flex-start;
+    flex-direction: column;
   }
 }
 

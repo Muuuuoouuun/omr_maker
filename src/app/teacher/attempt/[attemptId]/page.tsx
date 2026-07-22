@@ -26,6 +26,7 @@ import {
     buildRetakeQuestionIds,
     buildStudentWeaknessGroups,
     getAttemptQuestionResults,
+    summarizeAttemptBehavior,
     summarizeAttemptScore,
 } from "@/lib/premiumAnalytics";
 import { hasTeacherSession, readTeacherSession } from "@/lib/teacherSession";
@@ -45,6 +46,8 @@ import {
 import { buildStudentAttemptSeries, parseStudentResultView } from "@/lib/studentResultHub";
 import StudentResultHeader from "@/components/teacher/student-results/StudentResultHeader";
 import StudentResultTabs from "@/components/teacher/student-results/StudentResultTabs";
+import AnswersPanel from "@/components/teacher/student-results/AnswersPanel";
+import AnalyticsPanel from "@/components/teacher/student-results/AnalyticsPanel";
 import styles from "@/components/teacher/student-results/StudentResultHub.module.css";
 
 const PDFViewer = dynamic(() => import("@/components/PDFViewer"), { ssr: false });
@@ -261,6 +264,7 @@ export default function TeacherAttemptPage() {
             attempt,
             limit: 3,
         });
+        const behavior = summarizeAttemptBehavior(attempt);
 
         return {
             questionResults,
@@ -270,6 +274,7 @@ export default function TeacherAttemptPage() {
             retakeQuestionIds,
             weaknessGroups,
             recommendations,
+            behavior,
         };
     }, [attempt, exam]);
 
@@ -389,6 +394,14 @@ export default function TeacherAttemptPage() {
     // solve time (when timings were captured).
     const timingByQuestionId = new Map((attempt.questionTimings || []).map(timing => [timing.questionId, timing]));
     const allQuestionResults = analytics?.questionResults ?? [];
+    const answerQuestionResults = analytics?.questionResults ?? attempt.questionResults ?? [];
+    const answerCounts = analytics?.counts ?? answerQuestionResults.reduce((acc, result) => {
+        if (result.status === "correct") acc.correctCount += 1;
+        if (result.status === "wrong") acc.incorrectCount += 1;
+        if (result.status === "unanswered") acc.unansweredCount += 1;
+        if (result.status === "ungraded") acc.ungradedCount += 1;
+        return acc;
+    }, { correctCount: 0, incorrectCount: 0, unansweredCount: 0, ungradedCount: 0 });
     const allQuestionsToShow = allQuestionsWrongOnly
         ? allQuestionResults.filter(result => result.status === "wrong" || result.status === "unanswered")
         : allQuestionResults;
@@ -617,7 +630,37 @@ export default function TeacherAttemptPage() {
                         aria-labelledby={`student-result-tab-${activeView}`}
                         className={styles.panel}
                     >
-                        {examUnavailable && (
+                        {activeView === "answers" ? (
+                            <AnswersPanel
+                                attempt={attempt}
+                                exam={exam ?? undefined}
+                                questionResults={answerQuestionResults}
+                                counts={answerCounts}
+                                score={analytics?.score}
+                                subQuestionFilter={subQuestionFilter}
+                                onSubQuestionFilterChange={setSubQuestionFilter}
+                                onReviewSubQuestion={setSubQuestionReviewed}
+                                savingSubQuestionKey={savingSubQuestionKey}
+                                answerDrafts={answerDrafts}
+                                onAnswerDraftChange={(questionId, value) => setAnswerDrafts(prev => ({ ...prev, [questionId]: value }))}
+                                onAnswerStudentQuestion={handleAnswerQuestion}
+                                savingQuestionId={savingAnswerFor}
+                            />
+                        ) : activeView === "analytics" ? (
+                            <AnalyticsPanel
+                                attempt={attempt}
+                                exam={exam ?? undefined}
+                                data={analytics ? {
+                                    wrongResults: analytics.wrongResults,
+                                    weaknessGroups: analytics.weaknessGroups,
+                                    recommendations: analytics.recommendations,
+                                    retakeQuestionIds: analytics.retakeQuestionIds,
+                                    behavior: analytics.behavior,
+                                } : null}
+                            />
+                        ) : activeView === "handwriting" || activeView === "report" ? (
+                            <>
+                                {examUnavailable && (
                             <div style={{
                                 marginBottom: '1rem',
                                 padding: '0.7rem 0.85rem',
@@ -1252,6 +1295,8 @@ export default function TeacherAttemptPage() {
                         </div>
                     </section>
                         </section>
+                            </>
+                        ) : null}
                     </section>
                 </div>
             </main>
