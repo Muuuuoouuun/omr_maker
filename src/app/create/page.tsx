@@ -2553,9 +2553,9 @@ function CreateOMRPageInner() {
                         <div style={{ minWidth: 0, display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) 4.25rem', gap: '0.35rem' }}>
                             <div
                                 className="create-count-buttons"
-                                style={{ gridTemplateColumns: 'repeat(5, minmax(0, 2.15rem))', gap: '0.25rem', justifyContent: 'start', alignSelf: 'center' }}
+                                style={{ gridTemplateColumns: 'repeat(6, minmax(0, 2.15rem))', gap: '0.25rem', justifyContent: 'start', alignSelf: 'center' }}
                             >
-                                {[20, 25, 30, 40, 50].map(count => (
+                                {[20, 25, 30, 40, 45, 50].map(count => (
                                     <button
                                         key={count}
                                         type="button"
