@@ -62,8 +62,28 @@ export function matchRosterStudentForAttempt(
 export function filterCumulativeAttemptsForStudent(
     selectedAttempt: Attempt,
     attempts: Attempt[],
+    students: RosterStudent[],
+    resolvedSelectedStudent?: RosterStudent | null,
 ): Attempt[] {
-    return attempts.filter(candidate => sameStudentAttempt(selectedAttempt, candidate));
+    const selectedStudent = resolvedSelectedStudent === undefined
+        ? matchRosterStudentForAttempt(selectedAttempt, students)
+        : resolvedSelectedStudent;
+    const selectedAttemptId = normalized(selectedAttempt.id);
+    const selectedStableIds = nonEmptyValues([selectedAttempt.studentProfileId, selectedAttempt.studentId]);
+
+    return attempts.filter(candidate => {
+        const candidateAttemptId = normalized(candidate.id);
+        if (selectedAttemptId && selectedAttemptId === candidateAttemptId) return true;
+
+        const candidateStableIds = nonEmptyValues([candidate.studentProfileId, candidate.studentId]);
+        if (selectedStableIds.length > 0 && candidateStableIds.length > 0) {
+            return matchingValues(selectedStableIds, candidateStableIds);
+        }
+
+        if (!sameStudentAttempt(selectedAttempt, candidate) || !selectedStudent) return false;
+        const candidateStudent = matchRosterStudentForAttempt(candidate, students);
+        return Boolean(candidateStudent && normalized(candidateStudent.id) === normalized(selectedStudent.id));
+    });
 }
 
 export function sameStudentAttempt(left: Attempt, right: Attempt): boolean {

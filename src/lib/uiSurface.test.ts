@@ -970,7 +970,9 @@ describe("service UI surface", () => {
         const teacherAttemptPage = readProjectFile("src/app/teacher/attempt/[attemptId]/page.tsx");
 
         expect(teacherAttemptPage).toContain("matchRosterStudentForAttempt(attempt, rosterResult.students)");
-        expect(teacherAttemptPage).toContain("filterCumulativeAttemptsForStudent(attempt, attemptResult.items)");
+        expect(teacherAttemptPage).toContain("filterCumulativeAttemptsForStudent(");
+        expect(teacherAttemptPage).toContain("rosterResult.students,");
+        expect(teacherAttemptPage).toContain("matchedStudent,");
         expect(teacherAttemptPage).not.toContain("rosterResult.students.find(student => attemptMatchesStudentProfile");
     });
 

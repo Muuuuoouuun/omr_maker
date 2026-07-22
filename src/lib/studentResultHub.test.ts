@@ -88,8 +88,52 @@ describe("student result hub", () => {
         const same = attempt({ id: "same", studentId: "student-1", groupName: "A반" });
         const duplicateName = attempt({ id: "duplicate", studentId: "student-2", groupName: "A반" });
 
-        expect(filterCumulativeAttemptsForStudent(selected, [duplicateName, same, selected]))
+        expect(filterCumulativeAttemptsForStudent(
+            selected,
+            [duplicateName, same, selected],
+            [student({ id: "student-1" }), student({ id: "student-2" })],
+        ))
             .toEqual([same, selected]);
+    });
+
+    it("excludes an ambiguous id-less legacy attempt for duplicate roster students", () => {
+        const selected = attempt({ id: "selected", studentProfileId: "student-a", groupName: "A반" });
+        const exactA = attempt({ id: "exact-a", studentId: "student-a", groupName: "A반" });
+        const exactB = attempt({ id: "exact-b", studentProfileId: "student-b", groupName: "A반" });
+        const ambiguousLegacy = attempt({ id: "legacy", groupName: "A반" });
+        const roster = [student({ id: "student-a" }), student({ id: "student-b" })];
+
+        expect(filterCumulativeAttemptsForStudent(
+            selected,
+            [exactB, ambiguousLegacy, exactA, selected],
+            roster,
+            roster[0],
+        )).toEqual([exactA, selected]);
+    });
+
+    it("keeps a compatible id-less legacy attempt when the roster match is unique", () => {
+        const selected = attempt({ id: "selected", studentProfileId: "student-a", groupName: "A반" });
+        const legacy = attempt({ id: "legacy", groupName: "A반" });
+        const onlyStudent = student({ id: "student-a" });
+
+        expect(filterCumulativeAttemptsForStudent(
+            selected,
+            [legacy, selected],
+            [onlyStudent],
+            onlyStudent,
+        )).toEqual([legacy, selected]);
+    });
+
+    it("does not attach an id-less legacy attempt when the selected stable id has no roster record", () => {
+        const selected = attempt({ id: "selected", studentProfileId: "missing-student", groupName: "A반" });
+        const legacy = attempt({ id: "legacy", groupName: "A반" });
+
+        expect(filterCumulativeAttemptsForStudent(
+            selected,
+            [legacy, selected],
+            [student({ id: "other-student" })],
+            null,
+        )).toEqual([selected]);
     });
 
     it("defaults missing or invalid views to answers while retaining handwriting", () => {

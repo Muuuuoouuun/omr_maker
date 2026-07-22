@@ -305,7 +305,12 @@ export default function TeacherAttemptPage() {
                 ]);
                 if (activeAttemptIdRef.current !== targetAttemptId) return;
                 const matchedStudent = matchRosterStudentForAttempt(attempt, rosterResult.students);
-                const filteredAttempts = filterCumulativeAttemptsForStudent(attempt, attemptResult.items);
+                const filteredAttempts = filterCumulativeAttemptsForStudent(
+                    attempt,
+                    attemptResult.items,
+                    rosterResult.students,
+                    matchedStudent,
+                );
                 const warnings = [attemptResult.remoteError, examResult.remoteError, rosterResult.remoteError]
                     .filter((message): message is string => Boolean(message));
                 setCumulativeAttempts(filteredAttempts);
