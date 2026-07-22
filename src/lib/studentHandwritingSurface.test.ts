@@ -75,8 +75,9 @@ describe("student handwriting result surface", () => {
         expect(page).not.toContain('activeView === "handwriting" || activeView === "report"');
     });
 
-    it("omits unloaded markup from report saves and directs teachers to the handwriting tab", () => {
+    it("omits unloaded markup from saves and keeps handwriting discoverable in the result tabs", () => {
         const page = readProjectFile("src/app/teacher/attempt/[attemptId]/page.tsx");
+        const tabs = readProjectFile("src/components/teacher/student-results/StudentResultTabs.tsx");
         const saveFeedback = page.slice(
             page.indexOf("const saveFeedback = async"),
             page.indexOf("if (accessDenied)"),
@@ -92,7 +93,7 @@ describe("student handwriting result surface", () => {
         expect(saveFeedback).toContain(": undefined;");
         expect(saveFeedback).toContain("saveTeacherAttemptFeedbackDraft(nextFeedback, markupDrawingsForSave)");
         expect(page).not.toContain("문제 PDF 또는 필기 데이터를 불러오는 중입니다.");
-        expect(page).toContain('buildStudentResultHref(attempt.id, "handwriting")');
-        expect(page).toContain("필기 탭에서 원본 보기");
+        expect(page).toContain("<StudentResultTabs");
+        expect(tabs).toContain('{ view: "handwriting", label: "필기"');
     });
 });

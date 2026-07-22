@@ -776,6 +776,7 @@ describe("service UI surface", () => {
         const studentAnalyticsTab = readProjectFile("src/components/dashboard/tabs/StudentAnalyticsTab.tsx");
         const usersPage = readProjectFile("src/app/teacher/users/page.tsx");
         const teacherAttemptPage = readProjectFile("src/app/teacher/attempt/[attemptId]/page.tsx");
+        const reportPanel = readProjectFile("src/components/teacher/student-results/ReportPanel.tsx");
         const premiumGate = readProjectFile("src/components/PremiumFeatureGate.tsx");
 
         expect(dashboardPage).toContain("useServerPlan");
@@ -841,9 +842,9 @@ describe("service UI surface", () => {
         expect(usersPage).toContain("반별 리포트 Pro");
         expect(usersPage).toContain("학생 성장 리포트는 Pro 기능입니다");
         expect(teacherAttemptPage).toContain("pdfExportEnabled");
-        expect(teacherAttemptPage).toContain("인쇄/PDF 저장 Pro");
-        expect(teacherAttemptPage).toContain("현재 결과 요약 인쇄 또는 PDF 저장");
-        expect(teacherAttemptPage).toContain("window.print()");
+        expect(reportPanel).toContain("인쇄/PDF 저장 Pro");
+        expect(reportPanel).toContain("현재 학생 리포트 인쇄 또는 PDF 저장");
+        expect(reportPanel).toContain("window.print()");
         expect(premiumGate).toContain('href="/teacher/billing"');
         expect(premiumGate).toContain("requiredPlan");
         expect(premiumGate).toContain("Pro 필요");
@@ -866,6 +867,79 @@ describe("service UI surface", () => {
         expect(teacherAttemptPage).toContain('import AnalyticsPanel from "@/components/teacher/student-results/AnalyticsPanel";');
         expect(teacherAttemptPage).toMatch(/activeView === ["']answers["'][\s\S]*?<AnswersPanel/);
         expect(teacherAttemptPage).toMatch(/activeView === ["']analytics["'][\s\S]*?<AnalyticsPanel/);
+    });
+
+    it("renders the report view through a dedicated report panel", () => {
+        const teacherAttemptPage = readProjectFile("src/app/teacher/attempt/[attemptId]/page.tsx");
+
+        expect(teacherAttemptPage).toContain('import ReportPanel from "@/components/teacher/student-results/ReportPanel";');
+        expect(teacherAttemptPage).toMatch(/activeView === ["']report["'][\s\S]*?<ReportPanel/);
+    });
+
+    it("keeps the student report sections in the fixed summary-to-growth order", () => {
+        const reportPanel = readProjectFile("src/components/teacher/student-results/ReportPanel.tsx");
+        const orderedMarkers = [
+            "report-summary-title",
+            "report-score-title",
+            "report-weakness-title",
+            "report-retake-title",
+            "report-feedback-title",
+            "<CumulativeGrowthBlock",
+        ];
+
+        let previousIndex = -1;
+        for (const marker of orderedMarkers) {
+            const index = reportPanel.indexOf(marker, previousIndex + 1);
+            expect(index, `${marker} section`).toBeGreaterThan(previousIndex);
+            previousIndex = index;
+        }
+    });
+
+    it("loads cumulative result sources lazily with stable roster matching and route guards", () => {
+        const teacherAttemptPage = readProjectFile("src/app/teacher/attempt/[attemptId]/page.tsx");
+
+        expect(teacherAttemptPage).toContain('activeView !== "report" && activeView !== "analytics"');
+        expect(teacherAttemptPage).toContain("cumulativeLoadingAttemptRef.current === targetAttemptId");
+        expect(teacherAttemptPage).toContain("cumulativeSettledAttemptIdRef.current === targetAttemptId");
+        expect(teacherAttemptPage).toContain("Promise.all([");
+        expect(teacherAttemptPage).toContain("loadTeacherAttempts()");
+        expect(teacherAttemptPage).toContain("loadTeacherExams()");
+        expect(teacherAttemptPage).toContain("loadTeacherRosterSnapshot(window.localStorage)");
+        expect(teacherAttemptPage).toContain("rosterResult.students.find(student => attemptMatchesStudentProfile(attempt, student))");
+        expect(teacherAttemptPage).toContain("activeAttemptIdRef.current !== targetAttemptId");
+        expect(teacherAttemptPage).not.toContain("student.name === attempt.studentName");
+    });
+
+    it("keeps current-exam analytics first and appends plan-scoped cumulative growth", () => {
+        const analyticsPanel = readProjectFile("src/components/teacher/student-results/AnalyticsPanel.tsx");
+        const currentExamIndex = analyticsPanel.indexOf("오답·미응답·유형 분석");
+        const cumulativeIndex = analyticsPanel.indexOf("누적 성장");
+
+        expect(currentExamIndex).toBeGreaterThan(-1);
+        expect(cumulativeIndex).toBeGreaterThan(currentExamIndex);
+        expect(analyticsPanel).toContain("studentGrowthReportsEnabled");
+        expect(analyticsPanel).toContain("LockedFeaturePanel");
+        expect(analyticsPanel).toContain("누적 이력을 학생 명단과 안정적으로 연결할 수 없습니다.");
+        expect(analyticsPanel).toContain("cumulativeStatus");
+        expect(analyticsPanel).toContain("cumulativeError");
+    });
+
+    it("scopes printing to the dedicated report and removes the legacy detail branch", () => {
+        const teacherAttemptPage = readProjectFile("src/app/teacher/attempt/[attemptId]/page.tsx");
+        const reportPanel = readProjectFile("src/components/teacher/student-results/ReportPanel.tsx");
+        const studentResultCss = readProjectFile("src/components/teacher/student-results/StudentResultHub.module.css");
+
+        expect(reportPanel).toContain("className={styles.reportPrintRoot}");
+        expect(reportPanel).toContain("onClick={() => window.print()}");
+        expect(studentResultCss).toContain("@media print");
+        expect(studentResultCss).toContain(":global(body *)");
+        expect(studentResultCss).toContain(".reportPrintRoot");
+        expect(studentResultCss).toContain(".screenOnly");
+        expect(teacherAttemptPage).not.toContain("const PDFViewer = dynamic");
+        expect(teacherAttemptPage).not.toContain(") : false ? (");
+        expect(teacherAttemptPage).not.toContain("function SmallStat");
+        expect(teacherAttemptPage).not.toContain("function QuestionResultRow");
+        expect(teacherAttemptPage).not.toContain("function AllQuestionRow");
     });
 
     it("keeps student result panel inputs and small status text readable in both themes", () => {
@@ -911,9 +985,11 @@ describe("service UI surface", () => {
             "setFeedbackSaving(false);",
             "setAnswerDrafts({});",
             "setSavingAnswerFor(null);",
-            "setWrongExpanded(false);",
-            "setAllQuestionsOpen(false);",
-            "setAllQuestionsWrongOnly(false);",
+            "setCumulativeAttempts([]);",
+            "setCumulativeExams([]);",
+            "setRosterStudent(null);",
+            'setCumulativeStatus("idle");',
+            'setCumulativeError("");',
             "setSubQuestionFilter('needs_review');",
             "setSavingSubQuestionKey(null);",
         ]) {

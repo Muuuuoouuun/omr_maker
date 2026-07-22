@@ -9,7 +9,9 @@ import type {
     LearningRecommendation,
     WeaknessGroup,
 } from "@/lib/premiumAnalytics";
+import type { StudentProfileInsight } from "@/lib/studentProfileAnalytics";
 import { buildRetakeHref } from "@/lib/retakeLinks";
+import LockedFeaturePanel from "./LockedFeaturePanel";
 import styles from "./StudentResultHub.module.css";
 
 export interface CurrentExamAnalyticsData {
@@ -24,6 +26,11 @@ interface AnalyticsPanelProps {
     attempt: Attempt;
     exam?: Exam;
     data: CurrentExamAnalyticsData | null;
+    cumulativeInsight: StudentProfileInsight | null;
+    cumulativeStatus: "idle" | "loading" | "ready" | "error";
+    cumulativeError?: string;
+    rosterMatched: boolean;
+    studentGrowthReportsEnabled: boolean;
 }
 
 function formatAnswer(answer?: number): string {
@@ -88,17 +95,35 @@ function BehaviorSignals({ behavior }: { behavior: AttemptBehaviorSummary }) {
     );
 }
 
-export default function AnalyticsPanel({ attempt, exam, data }: AnalyticsPanelProps) {
+export default function AnalyticsPanel({
+    attempt,
+    exam,
+    data,
+    cumulativeInsight,
+    cumulativeStatus,
+    cumulativeError,
+    rosterMatched,
+    studentGrowthReportsEnabled,
+}: AnalyticsPanelProps) {
     const [wrongExpanded, setWrongExpanded] = useState(false);
 
     if (!exam || !data) {
         return (
-            <section className="bento-card" style={{ padding: "1.25rem" }} aria-labelledby="analytics-unavailable-title">
-                <h2 id="analytics-unavailable-title" style={{ margin: 0, fontSize: "1rem" }}>현재 시험 분석을 표시할 수 없습니다.</h2>
-                <p style={{ margin: "0.45rem 0 0", color: "var(--muted)", fontSize: "0.84rem", lineHeight: 1.55 }}>
-                    시험 정보를 불러오지 못했습니다. 제출 당시 저장된 점수와 제출 정보는 상단 요약과 답안 탭에서 계속 확인할 수 있습니다.
-                </p>
-            </section>
+            <div className={styles.panelStack}>
+                <section className="bento-card" style={{ padding: "1.25rem" }} aria-labelledby="analytics-unavailable-title">
+                    <h2 id="analytics-unavailable-title" style={{ margin: 0, fontSize: "1rem" }}>현재 시험 분석을 표시할 수 없습니다.</h2>
+                    <p style={{ margin: "0.45rem 0 0", color: "var(--muted)", fontSize: "0.84rem", lineHeight: 1.55 }}>
+                        시험 정보를 불러오지 못했습니다. 제출 당시 저장된 점수와 제출 정보는 상단 요약과 답안 탭에서 계속 확인할 수 있습니다.
+                    </p>
+                </section>
+                <CumulativeAnalyticsBlock
+                    insight={cumulativeInsight}
+                    status={cumulativeStatus}
+                    error={cumulativeError}
+                    rosterMatched={rosterMatched}
+                    enabled={studentGrowthReportsEnabled}
+                />
+            </div>
         );
     }
 
@@ -175,6 +200,68 @@ export default function AnalyticsPanel({ attempt, exam, data }: AnalyticsPanelPr
                     <p className={styles.emptyText}>재시험이 필요한 오답 또는 미응답 문항이 없습니다.</p>
                 )}
             </section>
+
+            <CumulativeAnalyticsBlock
+                insight={cumulativeInsight}
+                status={cumulativeStatus}
+                error={cumulativeError}
+                rosterMatched={rosterMatched}
+                enabled={studentGrowthReportsEnabled}
+            />
         </div>
+    );
+}
+
+function CumulativeAnalyticsBlock({
+    insight,
+    status,
+    error,
+    rosterMatched,
+    enabled,
+}: {
+    insight: StudentProfileInsight | null;
+    status: "idle" | "loading" | "ready" | "error";
+    error?: string;
+    rosterMatched: boolean;
+    enabled: boolean;
+}) {
+    if (!enabled) {
+        return (
+            <LockedFeaturePanel
+                title="누적 성장"
+                description="현재 시험 진단은 계속 볼 수 있으며, 누적 성장 추이는 Pro 이상에서 확인할 수 있습니다."
+                previewItems={["최근 점수 변화", "반복 약점", "최근 원시험 이력"]}
+            />
+        );
+    }
+
+    return (
+        <section className="bento-card" style={{ padding: "1.25rem" }} aria-labelledby="analytics-growth-title">
+            <div className={styles.sectionHeading}>
+                <h2 id="analytics-growth-title">누적 성장</h2>
+            </div>
+            {status === "idle" || status === "loading" ? (
+                <p className={styles.emptyText} role="status">누적 이력을 불러오는 중입니다.</p>
+            ) : status === "error" ? (
+                <p className={styles.emptyText}>누적 이력을 불러오지 못했습니다.{error ? ` ${error}` : ""}</p>
+            ) : !rosterMatched ? (
+                <p className={styles.emptyText}>누적 이력을 학생 명단과 안정적으로 연결할 수 없습니다.</p>
+            ) : insight ? (
+                <>
+                    <div className={styles.reportStatGrid}>
+                        <div className={styles.reportStat}><span>최근 점수</span><strong>{insight.latestScore}%</strong></div>
+                        <div className={styles.reportStat}><span>이전 대비</span><strong>{insight.trendDelta > 0 ? "+" : ""}{insight.trendDelta}%p</strong></div>
+                        <div className={styles.reportStat}><span>원시험</span><strong>{insight.baseAttemptCount}회</strong></div>
+                        <div className={styles.reportStat}><span>재시험</span><strong>{insight.retakeAttemptCount}회</strong></div>
+                    </div>
+                    <div className={styles.reportGrowthDetails}>
+                        <div><strong>반복 약점</strong><p>{insight.weaknessGroups.slice(0, 3).map(group => group.title).join(", ") || "뚜렷한 반복 약점 없음"}</p></div>
+                        <div><strong>최근 원시험</strong><p>{insight.attempts.filter(item => !item.isRetake).slice(0, 4).map(item => `${item.examTitle} ${item.scorePercent}%`).join(" · ") || "기록 없음"}</p></div>
+                    </div>
+                </>
+            ) : (
+                <p className={styles.emptyText}>누적 성장 데이터가 없습니다.</p>
+            )}
+        </section>
     );
 }
