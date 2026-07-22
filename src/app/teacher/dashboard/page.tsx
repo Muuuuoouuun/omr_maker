@@ -8,6 +8,7 @@ import BrandLogo from "@/components/BrandLogo";
 import { Exam, Attempt } from "@/types/omr";
 import OverviewTab from "@/components/dashboard/tabs/OverviewTab";
 import MockupOverview from "@/components/dashboard/MockupOverview";
+import StatusPill from "@/components/dashboard/StatusPill";
 import { Activity, AlertTriangle, BarChart2, CheckCircle2, CloudOff, Database, GraduationCap, LayoutDashboard, RefreshCw, Search } from "lucide-react";
 import ThemeToggle from "@/components/ThemeToggle";
 import TeacherLogoutButton from "@/components/TeacherLogoutButton";
@@ -422,6 +423,22 @@ function TeacherDashboard() {
         },
     }[analyticsDataHealth.kind];
     const DataHealthIcon = dataHealthTone.icon;
+    // Tone prop for the shared <StatusPill> (see docs/design-system.md — 컴포넌트 재사용).
+    // Distinct from syncTone/dataHealthTone above, which stay in raw border/background/color
+    // form for the refresh button and the analytics-issue banner further down this file.
+    const syncPillTone = ({
+        checking: "primary",
+        local: "muted",
+        synced: "success",
+        pending: "warning",
+        error: "error",
+    } as const)[syncStatus.kind];
+    const dataHealthPillTone = ({
+        empty: "muted",
+        ready: "success",
+        attention: "warning",
+        blocked: "error",
+    } as const)[analyticsDataHealth.kind];
     const dashboardAnalysisActions = useMemo<DashboardAnalysisAction[]>(() => {
         const actions: DashboardAnalysisAction[] = [];
 
@@ -638,7 +655,7 @@ function TeacherDashboard() {
                 {/* Welcome Section */}
                 <div className="dashboard-welcome">
                     <div style={{ minWidth: 0 }}>
-                        <h1 style={{ fontSize: '2.5rem', marginBottom: '0.75rem', lineHeight: 1.2, fontWeight: 800, letterSpacing: '-0.02em', color: 'var(--foreground)' }}>
+                        <h1 style={{ fontSize: '2.5rem', marginBottom: '0.75rem', lineHeight: 1.2, fontWeight: 800, letterSpacing: '-0.01em', color: 'var(--foreground)' }}>
                             {isMockupAccount ? "좋은아침이에요, 김하늘 선생님" : "분석 센터"}
                         </h1>
                         <p className="text-muted" style={{ fontSize: '1.1rem' }}>
@@ -651,27 +668,14 @@ function TeacherDashboard() {
                         <div
                             aria-label="데이터 동기화 상태"
                             title={syncStatus.error || syncStatus.detail}
-                            style={{
-                                display: 'flex',
-                                alignItems: 'center',
-                                gap: '0.4rem',
-                                padding: '0.35rem 0.55rem',
-                                borderRadius: 'var(--radius-full)',
-                                border: `1px solid ${syncTone.border}`,
-                                background: syncTone.background,
-                                color: syncTone.color,
-                                minWidth: 0,
-                            }}
+                            style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', minWidth: 0 }}
                         >
-                            <SyncIcon size={13} />
-                            <span style={{ display: 'grid', gap: 0, minWidth: 0 }}>
-                                <span style={{ fontSize: '0.7rem', fontWeight: 800, lineHeight: 1.05, whiteSpace: 'nowrap' }}>
-                                    {syncStatus.label}
-                                </span>
-                                <span style={{ fontSize: '0.63rem', color: 'var(--muted)', lineHeight: 1.1, whiteSpace: 'nowrap' }}>
-                                    {syncStatus.detail}
-                                </span>
-                            </span>
+                            <StatusPill
+                                icon={<SyncIcon size={13} />}
+                                label={syncStatus.label}
+                                detail={syncStatus.detail}
+                                tone={syncPillTone}
+                            />
                             <button
                                 type="button"
                                 onClick={handleRefreshDashboardData}
@@ -698,27 +702,14 @@ function TeacherDashboard() {
                         <div
                             aria-label="분석 데이터 상태"
                             title={analyticsDataHealth.issues[0]?.detail || analyticsDataHealth.detail}
-                            style={{
-                                display: 'flex',
-                                alignItems: 'center',
-                                gap: '0.4rem',
-                                padding: '0.35rem 0.55rem',
-                                borderRadius: 'var(--radius-full)',
-                                border: `1px solid ${dataHealthTone.border}`,
-                                background: dataHealthTone.background,
-                                color: dataHealthTone.color,
-                                minWidth: 0,
-                            }}
+                            style={{ minWidth: 0 }}
                         >
-                            <DataHealthIcon size={13} />
-                            <span style={{ display: 'grid', gap: 0, minWidth: 0 }}>
-                                <span style={{ fontSize: '0.7rem', fontWeight: 800, lineHeight: 1.05, whiteSpace: 'nowrap' }}>
-                                    {analyticsDataHealth.label}
-                                </span>
-                                <span style={{ fontSize: '0.63rem', color: 'var(--muted)', lineHeight: 1.1, whiteSpace: 'nowrap' }}>
-                                    {analyticsDataHealth.score}점 · {analyticsDataHealth.detail}
-                                </span>
-                            </span>
+                            <StatusPill
+                                icon={<DataHealthIcon size={13} />}
+                                label={analyticsDataHealth.label}
+                                detail={`${analyticsDataHealth.score}점 · ${analyticsDataHealth.detail}`}
+                                tone={dataHealthPillTone}
+                            />
                         </div>
                         {activeTab !== 'overview' && (
                             <Link href="/create" style={{

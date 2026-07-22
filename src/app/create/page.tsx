@@ -7,6 +7,7 @@ import dynamic from "next/dynamic";
 import TeacherLogoutButton from "@/components/TeacherLogoutButton";
 import TeacherSessionChip from "@/components/TeacherSessionChip";
 import ThemeToggle from "@/components/ThemeToggle";
+import CreatePdfUploadPlaceholder from "@/components/CreatePdfUploadPlaceholder";
 import { useRouter, useSearchParams } from "next/navigation";
 import { toast } from "@/components/Toast";
 import { getTeacherRemoteAssetUrl, uploadTeacherExamAsset } from "@/app/actions/remoteAssets";
@@ -371,6 +372,41 @@ export function isEditDraftNewerThanExam(
     return draftTime > examTime;
 }
 
+export function shouldUploadExamPdf(file: File | null, explicitlyReplaced: boolean): file is File {
+    return explicitlyReplaced && file !== null;
+}
+
+type PdfAssetUploadOutcome<T> =
+    | { status: "skipped" }
+    | { status: "uploaded"; value: T }
+    | { status: "failed"; error: unknown };
+
+export async function runPdfAssetUploadsConcurrently<TProblem, TAnswer>(uploads: {
+    problem?: () => Promise<TProblem>;
+    answer?: () => Promise<TAnswer>;
+    rollback?: () => Promise<void>;
+}): Promise<{
+    problem: PdfAssetUploadOutcome<TProblem>;
+    answer: PdfAssetUploadOutcome<TAnswer>;
+}> {
+    const settle = async <T,>(upload?: () => Promise<T>): Promise<PdfAssetUploadOutcome<T>> => {
+        if (!upload) return { status: "skipped" };
+        try {
+            return { status: "uploaded", value: await upload() };
+        } catch (error) {
+            return { status: "failed", error };
+        }
+    };
+    const [problem, answer] = await Promise.all([
+        settle(uploads.problem),
+        settle(uploads.answer),
+    ]);
+    if ((problem.status === "failed" || answer.status === "failed") && uploads.rollback) {
+        await uploads.rollback();
+    }
+    return { problem, answer };
+}
+
 function splitTagInput(value: string): string[] {
     return value
         .split(",")
@@ -658,7 +694,12 @@ function CreateOMRPageInner() {
     // PDF State
     const [pdfFile, setPdfFile] = useState<File | null>(null);
     const [answerKeyPdf, setAnswerKeyPdf] = useState<File | null>(null); // Teacher reference answer key
+    const problemPdfFileRef = useRef<File | null>(null);
+    const answerKeyPdfFileRef = useRef<File | null>(null);
+    const problemPdfReplacedRef = useRef(false);
+    const answerKeyPdfReplacedRef = useRef(false);
     const [activeViewTab, setActiveViewTab] = useState<'problem' | 'answer'>('problem');
+    const activePdfFile = activeViewTab === 'problem' ? pdfFile : answerKeyPdf;
     const [isDetectingLocation, setIsDetectingLocation] = useState(false);
     const autoDetectRunRef = useRef<{ cancelled: boolean; timeoutId: ReturnType<typeof setTimeout> | null } | null>(null);
 
@@ -952,6 +993,10 @@ function CreateOMRPageInner() {
         if (!editId) return;
         if (typeof window === 'undefined') return;
         let cancelled = false;
+        problemPdfFileRef.current = null;
+        answerKeyPdfFileRef.current = null;
+        problemPdfReplacedRef.current = false;
+        answerKeyPdfReplacedRef.current = false;
         const loadExistingExam = async () => {
             try {
                 const serverExam = await loadTeacherCanonicalExam(editId);
@@ -988,7 +1033,10 @@ function CreateOMRPageInner() {
                     parsed.pdfDataRef?.store === "remote" ? undefined : parsed.pdfDataRef,
                 )
                     .then(file => {
-                        if (!cancelled && file) setPdfFile(file);
+                        if (!cancelled && file && !problemPdfReplacedRef.current) {
+                            problemPdfFileRef.current = file;
+                            setPdfFile(file);
+                        }
                     })
                     .catch(() => {
                         if (!cancelled) toast.error('문제지 PDF 불러오기 실패');
@@ -1003,7 +1051,10 @@ function CreateOMRPageInner() {
                     parsed.answerKeyPdfRef?.store === "remote" ? undefined : parsed.answerKeyPdfRef,
                 )
                     .then(file => {
-                        if (!cancelled && file) setAnswerKeyPdf(file);
+                        if (!cancelled && file && !answerKeyPdfReplacedRef.current) {
+                            answerKeyPdfFileRef.current = file;
+                            setAnswerKeyPdf(file);
+                        }
                     })
                     .catch(() => {
                         if (!cancelled) toast.error('답지 PDF 불러오기 실패');
@@ -1219,7 +1270,9 @@ function CreateOMRPageInner() {
             toast.error("PDF 업로드 실패", "문제지는 PDF 파일만 등록할 수 있습니다.");
             return false;
         }
+        problemPdfFileRef.current = file;
         setPdfFile(file);
+        problemPdfReplacedRef.current = true;
         setActiveViewTab('problem');
         toast.success("문제지 PDF 업로드됨", file.name);
         return true;
@@ -1231,7 +1284,9 @@ function CreateOMRPageInner() {
             toast.error("PDF 업로드 실패", "답지는 PDF 파일만 등록할 수 있습니다.");
             return false;
         }
+        answerKeyPdfFileRef.current = file;
         setAnswerKeyPdf(file);
+        answerKeyPdfReplacedRef.current = true;
         setActiveViewTab('answer');
         toast.success("답지 PDF 업로드됨", file.name);
         return true;
@@ -1782,6 +1837,14 @@ function CreateOMRPageInner() {
             let pdfDataRef = loadedExam?.pdfDataRef;
             let answerKeyData = loadedExam?.answerKeyPdf || "";
             let answerKeyPdfRef = loadedExam?.answerKeyPdfRef;
+            const currentProblemPdf = problemPdfFileRef.current;
+            const currentAnswerKeyPdf = answerKeyPdfFileRef.current;
+            const problemPdfToUpload = shouldUploadExamPdf(currentProblemPdf, problemPdfReplacedRef.current)
+                ? currentProblemPdf
+                : null;
+            const answerKeyPdfToUpload = shouldUploadExamPdf(currentAnswerKeyPdf, answerKeyPdfReplacedRef.current)
+                ? currentAnswerKeyPdf
+                : null;
 
             const rollbackNewExamPublish = async () => {
                 let canReleaseReservation = true;
@@ -1842,7 +1905,7 @@ function CreateOMRPageInner() {
 
             // Remote asset metadata is exam-scoped. For a new hosted exam,
             // establish that canonical owner row before uploading its PDFs.
-            if (!loadedExam && (pdfFile || answerKeyPdf)) {
+            if (!loadedExam && (problemPdfToUpload || answerKeyPdfToUpload)) {
                 const skeletonSave = await saveTeacherCanonicalExam(
                     examDataWithAssets(pdfData, pdfDataRef, answerKeyData, answerKeyPdfRef),
                 );
@@ -1864,44 +1927,70 @@ function CreateOMRPageInner() {
                 createdCanonicalSkeleton = skeletonSave.status === "saved";
             }
 
-            if (pdfFile) {
-                const formData = new FormData();
-                formData.set("file", pdfFile);
-                formData.set("kind", "problem_pdf");
-                formData.set("examId", id);
-                const remote = await uploadTeacherExamAsset(formData);
-                if (remote.status === "uploaded") {
-                    pdfData = "";
-                    pdfDataRef = remote.ref;
-                } else if (remote.status === "local_only") {
-                    const stored = await saveFileDataUrl(`exam:${id}:problemPdf`, pdfFile);
-                    pdfData = stored.inlineDataUrl || "";
-                    pdfDataRef = stored.ref;
-                } else {
-                    await rollbackNewExamPublish();
-                    toast.error("문제지 업로드 실패", remote.error || "비공개 원격 저장소에 문제지를 보관하지 못했습니다.");
-                    return "";
+            const assetUploads = await runPdfAssetUploadsConcurrently({
+                problem: problemPdfToUpload
+                    ? async () => {
+                        const formData = new FormData();
+                        formData.set("file", problemPdfToUpload);
+                        formData.set("kind", "problem_pdf");
+                        formData.set("examId", id);
+                        const remote = await uploadTeacherExamAsset(formData);
+                        if (remote.status === "uploaded") {
+                            return { data: "", ref: remote.ref };
+                        }
+                        if (remote.status === "local_only") {
+                            const stored = await saveFileDataUrl(`exam:${id}:problemPdf`, problemPdfToUpload);
+                            return { data: stored.inlineDataUrl || "", ref: stored.ref };
+                        }
+                        throw new Error(remote.error || "비공개 원격 저장소에 문제지를 보관하지 못했습니다.");
+                    }
+                    : undefined,
+                answer: answerKeyPdfToUpload
+                    ? async () => {
+                        const formData = new FormData();
+                        formData.set("file", answerKeyPdfToUpload);
+                        formData.set("kind", "answer_key_pdf");
+                        formData.set("examId", id);
+                        const remote = await uploadTeacherExamAsset(formData);
+                        if (remote.status === "uploaded") {
+                            return { data: "", ref: remote.ref };
+                        }
+                        if (remote.status === "local_only") {
+                            const stored = await saveFileDataUrl(`exam:${id}:answerKeyPdf`, answerKeyPdfToUpload);
+                            return { data: stored.inlineDataUrl || "", ref: stored.ref };
+                        }
+                        throw new Error(remote.error || "비공개 원격 저장소에 답지를 보관하지 못했습니다.");
+                    }
+                    : undefined,
+                rollback: rollbackNewExamPublish,
+            });
+            const assetUploadFailed = assetUploads.problem.status === "failed" || assetUploads.answer.status === "failed";
+            if (assetUploadFailed) {
+                if (assetUploads.problem.status === "failed") {
+                    toast.error(
+                        "문제지 업로드 실패",
+                        assetUploads.problem.error instanceof Error && assetUploads.problem.error.message
+                            ? assetUploads.problem.error.message
+                            : "비공개 원격 저장소에 문제지를 보관하지 못했습니다.",
+                    );
                 }
+                if (assetUploads.answer.status === "failed") {
+                    toast.error(
+                        "답지 업로드 실패",
+                        assetUploads.answer.error instanceof Error && assetUploads.answer.error.message
+                            ? assetUploads.answer.error.message
+                            : "비공개 원격 저장소에 답지를 보관하지 못했습니다.",
+                    );
+                }
+                return "";
             }
-
-            if (answerKeyPdf) {
-                const formData = new FormData();
-                formData.set("file", answerKeyPdf);
-                formData.set("kind", "answer_key_pdf");
-                formData.set("examId", id);
-                const remote = await uploadTeacherExamAsset(formData);
-                if (remote.status === "uploaded") {
-                    answerKeyData = "";
-                    answerKeyPdfRef = remote.ref;
-                } else if (remote.status === "local_only") {
-                    const stored = await saveFileDataUrl(`exam:${id}:answerKeyPdf`, answerKeyPdf);
-                    answerKeyData = stored.inlineDataUrl || "";
-                    answerKeyPdfRef = stored.ref;
-                } else {
-                    await rollbackNewExamPublish();
-                    toast.error("답지 업로드 실패", remote.error || "비공개 원격 저장소에 답지를 보관하지 못했습니다.");
-                    return "";
-                }
+            if (assetUploads.problem.status === "uploaded") {
+                pdfData = assetUploads.problem.value.data;
+                pdfDataRef = assetUploads.problem.value.ref;
+            }
+            if (assetUploads.answer.status === "uploaded") {
+                answerKeyData = assetUploads.answer.value.data;
+                answerKeyPdfRef = assetUploads.answer.value.ref;
             }
             const examData = examDataWithAssets(pdfData, pdfDataRef, answerKeyData, answerKeyPdfRef);
 
@@ -1948,6 +2037,8 @@ function CreateOMRPageInner() {
                 toast.info(feedback.title, feedback.detail);
             }
             rememberLabelUsage(labelSettingsUsageFromQuestions(questionsWithRegions));
+            problemPdfReplacedRef.current = false;
+            answerKeyPdfReplacedRef.current = false;
             setLoadedExam(persistedExam);
             setQuestions(questionsWithRegions);
             if (!editId) {
@@ -2336,15 +2427,25 @@ function CreateOMRPageInner() {
                     )}
 
                     <div style={{ flex: 1, position: 'relative' }}>
-                        <PDFViewer
-                            file={activeViewTab === 'problem' ? pdfFile : answerKeyPdf}
-                            onLoadSuccess={() => undefined}
-                            onPageClick={activeViewTab === 'problem' ? handlePdfPageClick : undefined}
-                            onFileDrop={activeViewTab === 'problem' ? handleFileDrop : setAnswerKeyPdf}
-                            markers={activeViewTab === 'problem'
-                                ? problemPdfMarkers
-                                : []}
-                        />
+                        {activePdfFile ? (
+                            <PDFViewer
+                                file={activePdfFile}
+                                onLoadSuccess={() => undefined}
+                                onPageClick={activeViewTab === 'problem' ? handlePdfPageClick : undefined}
+                                onFileDrop={activeViewTab === 'problem' ? handleFileDrop : handleAnswerKeyPdfFile}
+                                markers={activeViewTab === 'problem'
+                                    ? problemPdfMarkers
+                                    : []}
+                            />
+                        ) : (
+                            <CreatePdfUploadPlaceholder
+                                onFileSelect={activeViewTab === 'problem' ? handleFileDrop : handleAnswerKeyPdfFile}
+                                onInvalidFile={() => toast.error("PDF 업로드 실패", "PDF 파일만 등록할 수 있습니다.")}
+                                title={activeViewTab === 'problem' ? "문제지 PDF 업로드" : "답지 PDF 업로드"}
+                                ariaLabel={activeViewTab === 'problem' ? "문제지 PDF 업로드" : "답지 PDF 업로드"}
+                                kindLabel={activeViewTab === 'problem' ? "문제지 PDF" : "참고용 답지 PDF"}
+                            />
+                        )}
                     </div>
                 </div>
 

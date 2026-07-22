@@ -31,6 +31,13 @@
   --text-error: #b91c1c;
   --text-warning: #92400e;
 
+  /* Grading red — reserved for correctness/scoring emphasis (marked answers,
+     wrong-answer counts). Distinct from --error so "you got this wrong" never
+     reads as "something broke". */
+  --grade-red: #c02b3c;
+  --grade-red-soft: rgba(192, 43, 60, 0.08);
+  --grade-red-line: rgba(192, 43, 60, 0.24);
+
   /* Radius */
   --radius-sm: 0.5rem;
   --radius-md: 0.75rem;
@@ -53,7 +60,17 @@
   --transition-smooth: all 0.5s cubic-bezier(0.25, 1, 0.5, 1);
   --transition-spring: all 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275);
 
-  --font-sans: var(--font-geist-sans), system-ui, -apple-system, sans-serif;
+  /* Pretendard (KR text) and Geist (numerals) are wired via next/font/local
+     and next/font/google in layout.tsx, which expose --font-pretendard /
+     --font-geist-sans / --font-geist-mono as custom properties scoped to
+     <body>'s className. Do NOT compose them into a --font-sans-style
+     intermediate custom property here in :root: a var() chain that reaches
+     from an ancestor of <body> into properties only defined on <body> itself
+     resolves to invalid (empty) in this app's setup, which silently drops
+     the whole font-family declaration. Reference --font-pretendard /
+     --font-geist-sans directly at the point of use instead (see `body` and
+     `.numeric-emphasis` below) — both already do this, and everything else
+     gets Pretendard-led text for free via normal inheritance from `body`. */
   --font-mono: var(--font-geist-mono), monospace;
 
   /* Fluid type scale: keep mobile compact, improve desktop readability. */
@@ -62,6 +79,7 @@
   --type-label: 0.84rem;
   --type-body-sm: 0.88rem;
   --type-heading-sm: 1.02rem;
+  --type-heading-md: 1.1rem; /* fills a real gap: 14+ hand-typed h3s across the app cluster at 1.1-1.35rem with nothing between --type-heading-sm and --type-heading-lg to land on. */
   --type-heading-lg: clamp(1.8rem, 3vw, 2.45rem);
   --type-metric: clamp(1.6rem, 2.2vw, 2.05rem);
 
@@ -1135,6 +1153,10 @@
 
   --shadow-glass: 0 8px 32px 0 rgba(0, 0, 0, 0.5);
   --shadow-glow: 0 0 20px rgba(99, 102, 241, 0.2);
+
+  --grade-red: #f0687a;
+  --grade-red-soft: rgba(240, 104, 122, 0.12);
+  --grade-red-line: rgba(240, 104, 122, 0.32);
 }
 
 /* Smooth theme transition */
@@ -1213,7 +1235,7 @@ body {
   color: var(--foreground);
   background: var(--background);
   background-attachment: fixed;
-  font-family: var(--font-sans);
+  font-family: var(--font-pretendard), var(--font-geist-sans), system-ui, -apple-system, "Apple SD Gothic Neo", "Malgun Gothic", sans-serif;
   line-height: 1.6;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
@@ -1516,6 +1538,7 @@ html[data-motion="off"] *::after {
 .student-review-mini-stat strong,
 .mockup-metric-copy strong,
 .create-design-metric-mini strong {
+  font-family: var(--font-geist-sans), var(--font-pretendard), system-ui, sans-serif;
   font-variant-numeric: tabular-nums lining-nums;
   font-weight: 950;
   animation: metricSettle 0.44s cubic-bezier(0.22, 1, 0.36, 1) both;

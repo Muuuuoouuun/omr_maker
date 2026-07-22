@@ -97,7 +97,10 @@ export default function CountUp({
         <>
             {prefix}
             {formatted}
-            {suffix}
+            {/* Korean unit suffixes (점/명/개) must not inherit the parent's tight
+                tabular-digit letter-spacing (some callers use -0.045em to -0.06em) —
+                that convention is for Latin/numeric display, not Hangul. */}
+            <span style={{ letterSpacing: "normal" }}>{suffix}</span>
         </>
     );
 }
