@@ -142,6 +142,16 @@ export default function PDFViewer({
     const strokeEraseChangedRef = useRef<boolean>(false);
     const eraseDragStrokesRef = useRef<Array<{ raw: string; pts: DrawPoint[] | null; halfWidth: number }> | null>(null);
     const pendingFocusTargetRef = useRef<PdfFocusTarget | null>(null);
+    // Mirrors the drawings prop, updated synchronously on every emit: commits
+    // that land within the same frame (redo then an immediate stroke) must not
+    // read a stale render's snapshot, or the earlier change gets overwritten.
+    const latestDrawingsRef = useRef(drawings);
+    useEffect(() => { latestDrawingsRef.current = drawings; }, [drawings]);
+    const emitDrawingsChange = useCallback((page: number, paths: string[]) => {
+        if (!onDrawingsChange) return;
+        latestDrawingsRef.current = { ...latestDrawingsRef.current, [page]: paths };
+        onDrawingsChange(page, paths);
+    }, [onDrawingsChange]);
 
     // Floating OMR popup state - tracks active marker index (page + list index)
     const [activePopupKey, setActivePopupKey] = useState<string | null>(null);
@@ -430,7 +440,7 @@ export default function PDFViewer({
         const newUndo = pageUndo.slice(0, -1);
 
         // Push current state to redo stack
-        const currentState = drawings[pageNumber] || [];
+        const currentState = latestDrawingsRef.current[pageNumber] || [];
         setRedoStack(prev => ({
             ...prev,
             [pageNumber]: [...(prev[pageNumber] || []), currentState]
@@ -441,8 +451,8 @@ export default function PDFViewer({
             [pageNumber]: newUndo
         }));
 
-        onDrawingsChange(pageNumber, previousState);
-    }, [canEditDrawing, drawings, onDrawingsChange, pageNumber, undoStack]);
+        emitDrawingsChange(pageNumber, previousState);
+    }, [canEditDrawing, emitDrawingsChange, onDrawingsChange, pageNumber, undoStack]);
 
     const handleRedo = useCallback(() => {
         if (!canEditDrawing || !onDrawingsChange) return;
@@ -453,7 +463,7 @@ export default function PDFViewer({
         const newRedo = pageRedo.slice(0, -1);
 
         // Push current state to undo stack
-        const currentState = drawings[pageNumber] || [];
+        const currentState = latestDrawingsRef.current[pageNumber] || [];
         setUndoStack(prev => ({
             ...prev,
             [pageNumber]: [...(prev[pageNumber] || []), currentState]
@@ -464,8 +474,8 @@ export default function PDFViewer({
             [pageNumber]: newRedo
         }));
 
-        onDrawingsChange(pageNumber, nextState);
-    }, [canEditDrawing, drawings, onDrawingsChange, pageNumber, redoStack]);
+        emitDrawingsChange(pageNumber, nextState);
+    }, [canEditDrawing, emitDrawingsChange, onDrawingsChange, pageNumber, redoStack]);
 
     // Keyboard Shortcuts for Undo/Redo
     useEffect(() => {
@@ -554,7 +564,7 @@ export default function PDFViewer({
         if (removed) {
             eraseDragStrokesRef.current = kept;
             strokeEraseChangedRef.current = true;
-            onDrawingsChange(pageNumber, kept.map(e => e.raw));
+            emitDrawingsChange(pageNumber, kept.map(e => e.raw));
         }
     };
 
@@ -572,7 +582,7 @@ export default function PDFViewer({
 
         if (pointerDrawingMode === 'eraser' && eraserMode === 'stroke') {
             activeEraserModeRef.current = 'stroke';
-            const baseline = drawings[pageNumber] || [];
+            const baseline = latestDrawingsRef.current[pageNumber] || [];
             strokeEraseBaselineRef.current = baseline;
             eraseDragStrokesRef.current = buildEraseCache(baseline);
             strokeEraseChangedRef.current = false;
@@ -663,7 +673,7 @@ export default function PDFViewer({
                 width: getDrawingWidth(pointerDrawingMode),
                 points: finishedPath
             };
-            const currentPaths = drawings[pageNumber] || [];
+            const currentPaths = latestDrawingsRef.current[pageNumber] || [];
 
             // Push to Undo Stack and clear Redo Stack
             setUndoStack(prev => ({
@@ -675,7 +685,7 @@ export default function PDFViewer({
                 [pageNumber]: []
             }));
 
-            onDrawingsChange(pageNumber, [...currentPaths, JSON.stringify(newPath)]);
+            emitDrawingsChange(pageNumber, [...currentPaths, JSON.stringify(newPath)]);
         }
         currentPathRef.current = [];
     };
@@ -715,7 +725,7 @@ export default function PDFViewer({
 
     const requestClearPage = () => {
         if (!onDrawingsChange) return;
-        const currentPaths = drawings[pageNumber] || [];
+        const currentPaths = latestDrawingsRef.current[pageNumber] || [];
         if (currentPaths.length === 0) {
             toast.info("삭제할 필기 없음", "현재 페이지에 저장된 필기가 없습니다.");
             return;
@@ -725,7 +735,7 @@ export default function PDFViewer({
 
     const confirmClearPage = () => {
         if (!onDrawingsChange) return;
-        const currentPaths = drawings[pageNumber] || [];
+        const currentPaths = latestDrawingsRef.current[pageNumber] || [];
         setUndoStack(prev => ({
             ...prev,
             [pageNumber]: [...(prev[pageNumber] || []), currentPaths]
@@ -734,7 +744,7 @@ export default function PDFViewer({
             ...prev,
             [pageNumber]: []
         }));
-        onDrawingsChange(pageNumber, []);
+        emitDrawingsChange(pageNumber, []);
         setClearConfirmOpen(false);
         toast.success("필기 삭제됨", "현재 페이지의 필기를 지웠습니다.");
     };
@@ -1028,8 +1038,10 @@ export default function PDFViewer({
             </div>
 
             {/* PDF Content */}
-            <div ref={wrapperRef} className="pdf-viewer-scroll scroll-custom" style={{ flex: 1, overflow: 'auto', display: 'flex', flexDirection: 'column', alignItems: 'center', background: '#525659', position: 'relative' }}>
-                <div className="pdf-viewer-page-wrap" style={{ flex: 1, display: 'flex', justifyContent: 'center', padding: '2rem', width: '100%' }}>
+            {/* "safe center": plain center clips the left edge of content wider
+                than the pane (left overflow is unreachable by scrolling). */}
+            <div ref={wrapperRef} className="pdf-viewer-scroll scroll-custom" style={{ flex: 1, overflow: 'auto', display: 'flex', flexDirection: 'column', alignItems: 'safe center', background: '#525659', position: 'relative' }}>
+                <div className="pdf-viewer-page-wrap" style={{ flex: 1, display: 'flex', justifyContent: 'safe center', padding: '2rem', width: '100%' }}>
                     {file ? (
                         <Document
                             file={file}

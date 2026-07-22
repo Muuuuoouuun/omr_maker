@@ -3,6 +3,7 @@ import type { Attempt, Exam } from "@/types/omr";
 import {
     buildAttemptRetakeRecovery,
     buildExamRetakeRecoveries,
+    buildSourceAttemptRecovery,
     summarizeRetakeRecoveries,
 } from "./retakeRecovery";
 
@@ -140,6 +141,60 @@ describe("retake recovery", () => {
             retakeCount: 0,
             measuredCount: 0,
             recoveryRate: undefined,
+        });
+    });
+});
+
+describe("buildSourceAttemptRecovery", () => {
+    it("marks source misses recovered by any retake of that attempt", () => {
+        // Retake 1 recovers q2; retake 2 recovers q3; q4 stays wrong everywhere.
+        const retake1 = attempt({
+            id: "rt-1",
+            answers: { 2: 2, 3: 0, 4: 5 },
+            retake: { sourceAttemptId: "src-1", questionIds: [2, 3, 4], mode: "wrong", createdAt: "x" },
+        });
+        const retake2 = attempt({
+            id: "rt-2",
+            answers: { 3: 3, 4: 1 },
+            retake: { sourceAttemptId: "src-1", questionIds: [3, 4], mode: "custom", createdAt: "x" },
+        });
+
+        const summary = buildSourceAttemptRecovery(EXAM, SOURCE, [SOURCE, retake1, retake2]);
+        expect(summary).toEqual({
+            retakeCount: 2,
+            recoveredQuestionIds: [2, 3],
+            unrecoveredQuestionIds: [4],
+        });
+    });
+
+    it("ignores retakes of other attempts and other owners", () => {
+        const unrelated = attempt({
+            id: "rt-x",
+            answers: { 2: 2 },
+            retake: { sourceAttemptId: "src-999", questionIds: [2], mode: "wrong", createdAt: "x" },
+        });
+        const otherOwner = attempt({
+            id: "rt-y",
+            studentId: "s2",
+            answers: { 2: 2 },
+            retake: { sourceAttemptId: "src-1", questionIds: [2], mode: "wrong", createdAt: "x" },
+        });
+
+        const summary = buildSourceAttemptRecovery(EXAM, SOURCE, [unrelated, otherOwner]);
+        expect(summary).toEqual({
+            retakeCount: 0,
+            recoveredQuestionIds: [],
+            unrecoveredQuestionIds: [2, 3, 4],
+        });
+    });
+
+    it("reports no recovery when the attempt had no misses", () => {
+        const perfect = attempt({ id: "src-2", answers: { 1: 1, 2: 2, 3: 3, 4: 4 } });
+        const summary = buildSourceAttemptRecovery(EXAM, perfect, []);
+        expect(summary).toEqual({
+            retakeCount: 0,
+            recoveredQuestionIds: [],
+            unrecoveredQuestionIds: [],
         });
     });
 });

@@ -17,9 +17,9 @@ import { openStudentExam, previewStudentExam, submitStudentAttempt } from "@/app
 import { uploadStudentAttemptHandwriting } from "@/app/actions/remoteAssets";
 import { issueGuestSession, validateStudentSession } from "@/app/actions/studentSession";
 import { saveTeacherSessionWithIdentity } from "@/lib/teacherSession";
-import { getOrCreateGuestId, getSession, guestLoginIdFor, saveSession, type StudentSession } from "@/utils/storage";
+import { attemptBelongsToSession, getOrCreateGuestId, getSession, guestLoginIdFor, saveSession, type StudentSession } from "@/utils/storage";
 import { canArchiveHandwriting, getPlanLabel } from "@/utils/plans";
-import { loadExam as loadPersistedExam, readLocalExam, saveAttempt, saveLocalAttempt, saveLocalExam } from "@/lib/omrPersistence";
+import { loadExam as loadPersistedExam, readLocalAttempts, readLocalExam, saveAttempt, saveLocalAttempt, saveLocalExam } from "@/lib/omrPersistence";
 import { buildQuestionResults } from "@/lib/premiumAnalytics";
 import { summarizeQuestionDrawings } from "@/lib/handwritingAnalytics";
 import { evaluateExamAccess, examRequiresPin, normalizeExamPin, verifyExamPin, type ExamAccessDecision } from "@/lib/examAccess";
@@ -35,6 +35,8 @@ import { findMissingRequiredSubQuestions, requiredSubQuestionProgress, sanitizeS
 import { summarizePersistenceWrite } from "@/lib/persistenceFeedback";
 import { stripTeacherOnlySubQuestionFields, type SolvableExam } from "@/lib/examSolvePayload";
 import { SOLVE_CLASS_CODE_PARAM } from "@/lib/examLinks";
+import { readRosterGroups } from "@/lib/rosterStorage";
+import { recallSolvePdf, rememberSolvePdf } from "@/lib/solvePdfCache";
 import { clientExamFromStudentExamPreview, clientExamFromStudentSolveExam } from "@/lib/studentExamContract";
 import { localResultCacheFromServerReceipt } from "@/lib/studentAttemptReceipt";
 
@@ -275,6 +277,17 @@ function allowedExamGroupIds(exam: Pick<Exam, "accessConfig"> | null | undefined
     return (exam.accessConfig.groupIds || []).map(cleanEntryText).filter(Boolean);
 }
 
+/** Students should see the roster group name, not the raw distribution group id. */
+function friendlyGroupName(groupId: string): string {
+    if (typeof window === "undefined") return groupId;
+    try {
+        const match = readRosterGroups(window.localStorage).find(group => group.id === groupId);
+        return match?.name || groupId;
+    } catch {
+        return groupId;
+    }
+}
+
 function resolveExamGuestGroup(
     exam: Pick<Exam, "accessConfig"> | null | undefined,
     requestedCode: string,
@@ -286,12 +299,12 @@ function resolveExamGuestGroup(
     const normalizedCode = normalizeEntryCode(requestedCode);
     if (normalizedCode) {
         const matchedGroupId = allowedGroups.find(groupId => normalizeEntryCode(groupId) === normalizedCode);
-        if (matchedGroupId) return { groupId: matchedGroupId, groupName: matchedGroupId };
+        if (matchedGroupId) return { groupId: matchedGroupId, groupName: friendlyGroupName(matchedGroupId) };
         return null;
     }
 
     if (allowSingleGroupFallback && allowedGroups.length === 1) {
-        return { groupId: allowedGroups[0], groupName: allowedGroups[0] };
+        return { groupId: allowedGroups[0], groupName: friendlyGroupName(allowedGroups[0]) };
     }
     return null;
 }
@@ -510,7 +523,7 @@ function ExamEntryConfirmDialog({
                     </div>
                     {suggestedGroupName && (
                         <div style={{ marginTop: '0.35rem', fontSize: '0.8rem', color: 'var(--primary)', fontWeight: 800 }}>
-                            반 코드: {suggestedGroupName}
+                            대상 반: {suggestedGroupName}
                         </div>
                     )}
                 </div>
@@ -867,6 +880,7 @@ export default function SolvePage() {
     const [studentAnswers, setStudentAnswers] = useState<Record<number, number>>({});
     const [subQuestionAnswers, setSubQuestionAnswers] = useState<SubQuestionAnswers>({});
     const [drawings, setDrawings] = useState<PdfDrawings>({});
+    const handwritingNoticeShownRef = useRef(false);
     const [pdfFile, setPdfFile] = useState<File | null>(null);
     const [currentPlan, setCurrentPlan] = useState<PlanKey>("free");
     const [retakeConfig, setRetakeConfig] = useState<RetakeConfig | null>(null);
@@ -1343,7 +1357,14 @@ export default function SolvePage() {
                         ? Promise.resolve(null)
                         : storedDataUrlToFile("answer_key.pdf", parsed.answerKeyPdf, parsed.answerKeyPdfRef),
                 ]);
-                if (problemPdf) setPdfFile(problemPdf);
+                if (problemPdf) {
+                    setPdfFile(problemPdf);
+                } else {
+                    // No exam-attached PDF: reuse the file the student uploaded
+                    // earlier this tab (e.g. entering a retake of the same exam).
+                    const cachedPdf = recallSolvePdf(parsed.id);
+                    if (cachedPdf) setPdfFile(cachedPdf);
+                }
                 if (answerPdf) setAnswerFile(answerPdf);
             } catch {
                 setLoadError({
@@ -1655,7 +1676,16 @@ export default function SolvePage() {
         }
     };
 
+    const handleStudentPdfUpload = (file: File) => {
+        rememberSolvePdf(id, file);
+        setPdfFile(file);
+    };
+
     const handleDrawingsChange = (page: number, newPaths: string[]) => {
+        if (!handwritingNoticeShownRef.current && newPaths.length > 0 && !canArchiveHandwriting(currentPlan)) {
+            handwritingNoticeShownRef.current = true;
+            toast.info("필기는 임시로만 유지됩니다", "Free 플랜에서는 제출 후 필기 원본이 보관되지 않습니다. 답안 채점에는 영향이 없습니다.");
+        }
         setDrawings(prev => ({ ...prev, [page]: newPaths }));
     };
 
@@ -1704,6 +1734,23 @@ export default function SolvePage() {
         const firstQuestionId = retakeConfig?.questionIds[0] || examData.questions[0]?.id;
         if (firstQuestionId) beginQuestionVisit(firstQuestionId);
     }, [beginQuestionVisit, examData, hasResumed, retakeConfig]);
+
+    // Retake links opened from the student's own review skip the entry-confirm
+    // dialog: identity and access are already established, so re-asking
+    // "학생으로 시험 보기" is pure friction. Guests and secure-remote mode keep
+    // the dialog (remote entry needs the explicit openStudentExam handshake).
+    const autoRetakeEntryRef = useRef(false);
+    useEffect(() => {
+        if (autoRetakeEntryRef.current || entryConfirmed) return;
+        if (!examData || !user || user.isGuest) return;
+        if (secureRemoteMode || solveAccess !== "ok") return;
+        const retakeFrom = new URLSearchParams(window.location.search).get("retakeFrom") || "";
+        if (!retakeFrom || retakeFrom.includes(":")) return;
+        const sourceAttempt = readLocalAttempts().find(candidate => candidate.id === retakeFrom);
+        if (!sourceAttempt || !attemptBelongsToSession(sourceAttempt, user)) return;
+        autoRetakeEntryRef.current = true;
+        beginConfirmedEntry();
+    }, [beginConfirmedEntry, entryConfirmed, examData, secureRemoteMode, solveAccess, user]);
 
     const beginSecureEntry = async (submitter: StudentSession) => {
         if (!examData) return false;
@@ -2606,7 +2653,7 @@ export default function SolvePage() {
                                 padding: '0.45rem 0.85rem'
                             }}>
                                 PDF 열기
-                                <input id="pdf-upload-input" type="file" accept=".pdf" onChange={(e) => e.target.files && setPdfFile(e.target.files[0])} style={{ display: 'none' }} />
+                                <input id="pdf-upload-input" type="file" accept=".pdf" onChange={(e) => e.target.files && handleStudentPdfUpload(e.target.files[0])} style={{ display: 'none' }} />
                             </label>
                         )}
 
@@ -2661,7 +2708,7 @@ export default function SolvePage() {
                         <div className="solve-upload-overlay" style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 10, pointerEvents: 'none' }}>
                             <label className="btn btn-secondary" style={{ pointerEvents: 'auto', cursor: 'pointer', boxShadow: '0 4px 10px rgba(0,0,0,0.3)' }}>
                                 문제지 PDF 업로드
-                                <input type="file" accept=".pdf" onChange={(e) => e.target.files && setPdfFile(e.target.files[0])} style={{ display: 'none' }} />
+                                <input type="file" accept=".pdf" onChange={(e) => e.target.files && handleStudentPdfUpload(e.target.files[0])} style={{ display: 'none' }} />
                             </label>
                         </div>
                     )}
@@ -2669,7 +2716,7 @@ export default function SolvePage() {
                     <PDFViewer
                         file={activeTab === 'problem' ? pdfFile : answerFile}
                         onLoadSuccess={() => { }}
-                        onFileDrop={activeTab === 'problem' ? setPdfFile : setAnswerFile}
+                        onFileDrop={activeTab === 'problem' ? handleStudentPdfUpload : setAnswerFile}
                         enableDrawing={activeTab === 'problem'}
                         drawings={drawings}
                         onDrawingsChange={handleDrawingsChange}

@@ -3,7 +3,7 @@ import { Exam } from "@/types/omr";
 import type { SolvableExam } from "@/lib/examSolvePayload";
 
 interface AssignmentBlockProps {
-  exams: Array<(Exam | SolvableExam) & { attemptId?: string; hasUnreadFeedback?: boolean }>;
+  exams: Array<(Exam | SolvableExam) & { attemptId?: string; hasUnreadFeedback?: boolean; answeredQuestionCount?: number }>;
   type: "todo" | "done";
 }
 
@@ -221,6 +221,22 @@ export default function AssignmentBlock({ exams, type }: AssignmentBlockProps) {
                       }}
                     >
                       새 피드백
+                    </span>
+                  )}
+                  {!isTodo && (exam.answeredQuestionCount || 0) > 0 && (
+                    <span
+                      style={{
+                        color: "#0f766e",
+                        background: "#f0fdfa",
+                        border: "1px solid #99f6e4",
+                        borderRadius: "999px",
+                        padding: "1px 7px",
+                        fontSize: "0.7rem",
+                        fontWeight: 900,
+                        whiteSpace: "nowrap",
+                      }}
+                    >
+                      선생님 답변 {exam.answeredQuestionCount}
                     </span>
                   )}
                 </div>

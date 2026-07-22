@@ -135,6 +135,57 @@ export function buildExamRetakeRecoveries(
         .sort((a, b) => Date.parse(b.finishedAt) - Date.parse(a.finishedAt));
 }
 
+export interface SourceRecoverySummary {
+    /** Retakes of this attempt that were counted. */
+    retakeCount: number;
+    /** Missed on the source, answered correctly on at least one retake. */
+    recoveredQuestionIds: number[];
+    /** Missed on the source and still missed (or untried) on every retake. */
+    unrecoveredQuestionIds: number[];
+}
+
+/**
+ * The ORIGINAL attempt's view of recovery: which of its missed questions the
+ * same student later answered correctly on any retake of it. Retakes whose
+ * owner differs from the source owner are ignored.
+ */
+export function buildSourceAttemptRecovery(
+    exam: Exam,
+    sourceAttempt: Attempt,
+    candidateAttempts: Attempt[],
+): SourceRecoverySummary {
+    const sourceOwner = attemptOwnerKey(sourceAttempt);
+    const retakes = candidateAttempts.filter(candidate => {
+        if (!candidate.retake || candidate.retake.sourceAttemptId !== sourceAttempt.id) return false;
+        if (candidate.id === sourceAttempt.id || candidate.examId !== sourceAttempt.examId) return false;
+        const owner = attemptOwnerKey(candidate);
+        return !(owner && sourceOwner && owner !== sourceOwner);
+    });
+
+    const sourceById = new Map(getAttemptQuestionResults(exam, sourceAttempt).map(r => [r.questionId, r]));
+    const missedIds = exam.questions
+        .map(question => question.id)
+        .filter(id => isMissed(sourceById.get(id)?.status));
+    if (retakes.length === 0 || missedIds.length === 0) {
+        return { retakeCount: retakes.length, recoveredQuestionIds: [], unrecoveredQuestionIds: missedIds };
+    }
+
+    const recovered = new Set<number>();
+    for (const retakeAttempt of retakes) {
+        const scopedIds = new Set(retakeAttempt.retake?.questionIds || []);
+        const retakeById = new Map(getAttemptQuestionResults(exam, retakeAttempt).map(r => [r.questionId, r]));
+        for (const id of missedIds) {
+            if (!scopedIds.has(id)) continue;
+            if (isCorrect(retakeById.get(id)?.status)) recovered.add(id);
+        }
+    }
+    return {
+        retakeCount: retakes.length,
+        recoveredQuestionIds: missedIds.filter(id => recovered.has(id)),
+        unrecoveredQuestionIds: missedIds.filter(id => !recovered.has(id)),
+    };
+}
+
 export function summarizeRetakeRecoveries(insights: RetakeRecoveryInsight[]): RetakeRecoverySummary {
     const measured = insights.filter(insight => insight.targetCount > 0);
     const targetCount = measured.reduce((sum, insight) => sum + insight.targetCount, 0);

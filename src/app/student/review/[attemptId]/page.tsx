@@ -23,12 +23,12 @@ import {
 import type { Attempt, AttemptFeedback, Exam, PdfDrawings, Question, QuestionResultStatus, QuestionTiming, StudentQuestionNote } from "@/types/omr";
 import { storedDataUrlToFile, loadJsonRecord } from "@/utils/blobStore";
 import { attemptBelongsToSession, getSession } from "@/utils/storage";
-import { loadAttempt, loadExam, saveAttempt, saveLocalAttempt } from "@/lib/omrPersistence";
+import { loadAttempt, loadExam, readLocalAttempts, saveAttempt, saveLocalAttempt } from "@/lib/omrPersistence";
 import { askAttemptQuestion, loadExamForReview, loadMyAttempt } from "@/app/actions/studentExam";
 import { loadMyAttemptClient, loadReviewExamClient } from "@/lib/studentExamClient";
 import { stripTeacherOnlySubQuestionFields } from "@/lib/examSolvePayload";
 import { studentQuestionsByQuestionId, upsertStudentQuestion } from "@/lib/studentQuestions";
-import { buildAttemptRetakeRecovery } from "@/lib/retakeRecovery";
+import { buildAttemptRetakeRecovery, buildSourceAttemptRecovery } from "@/lib/retakeRecovery";
 import { toast } from "@/components/Toast";
 import ThemeToggle from "@/components/ThemeToggle";
 import { formatKoreanDateTime } from "@/lib/pure";
@@ -180,6 +180,7 @@ function QuestionCard({
     submittedQuestion,
     subQuestionAnswers,
     retakeHref,
+    recovered,
     onToggleExplanation,
     onToggleQuestionBox,
     onDraftChange,
@@ -190,6 +191,7 @@ function QuestionCard({
     userAnswer?: number;
     correctAnswer?: number;
     status: QuestionResultStatus;
+    recovered?: boolean;
     timing?: QuestionTiming;
     explanationOpen: boolean;
     questionBoxOpen: boolean;
@@ -230,8 +232,9 @@ function QuestionCard({
                 <StatusChip status={status} />
             </div>
 
-            {(question.label || question.tags?.concept || question.tags?.source || timing) && (
+            {(recovered || question.label || question.tags?.concept || question.tags?.source || timing) && (
                 <div className="student-review-meta-row">
+                    {recovered && <MetaChip tone="teal">재시험 회복</MetaChip>}
                     {question.label && <MetaChip>#{question.label}</MetaChip>}
                     {question.tags?.concept && <MetaChip tone="primary">{question.tags.concept}</MetaChip>}
                     {question.tags?.source && <MetaChip tone="teal">{question.tags.source}</MetaChip>}
@@ -670,6 +673,11 @@ export default function ReviewPage() {
     const retakeRecovery = attempt.retake && sourceAttempt
         ? buildAttemptRetakeRecovery(exam, attempt, sourceAttempt)
         : null;
+    // Original-attempt view: misses that a later retake of THIS attempt fixed.
+    const sourceRecovery = !attempt.retake
+        ? buildSourceAttemptRecovery(exam, attempt, readLocalAttempts())
+        : null;
+    const recoveredQuestionIdSet = new Set(sourceRecovery?.recoveredQuestionIds || []);
     // Source score over the SAME scoped question set, so the two percentages compare 1:1.
     const sourceScoreSummary = retakeRecovery && sourceAttempt
         ? summarizeAttemptScore(reviewExam, sourceAttempt)
@@ -1033,6 +1041,14 @@ export default function ReviewPage() {
                                 <strong>오답 재시험</strong>
                             </div>
                             <p>오답과 같은 유형을 바로 다시 풉니다.</p>
+                            {sourceRecovery && sourceRecovery.recoveredQuestionIds.length > 0 && (
+                                <p className="student-review-success-note" style={{ marginBottom: '0.6rem' }}>
+                                    이미 재시험으로 {sourceRecovery.recoveredQuestionIds.length}문항을 회복했어요.
+                                    {sourceRecovery.unrecoveredQuestionIds.length > 0
+                                        ? ` 남은 오답은 ${sourceRecovery.unrecoveredQuestionIds.length}문항입니다.`
+                                        : ' 모든 오답을 회복했습니다.'}
+                                </p>
+                            )}
                             <div className="student-review-side-actions">
                                 {retakeQuestionIds.length > 0 ? (
                                     <Link href={buildRetakeHref(attempt.examId, attempt.id, retakeQuestionIds, "wrong")} className="btn btn-primary student-review-full-button">
@@ -1217,6 +1233,7 @@ export default function ReviewPage() {
                                             userAnswer={selectedQuestionState.userAnswer}
                                             correctAnswer={selectedQuestionState.correctAnswer}
                                             status={selectedQuestionState.status}
+                                            recovered={recoveredQuestionIdSet.has(selectedQuestion.id)}
                                             timing={selectedQuestionState.timing}
                                             explanationOpen={!!openExplanations[selectedQuestion.id]}
                                             questionBoxOpen={!!openQuestionBoxes[selectedQuestion.id]}

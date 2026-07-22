@@ -58,7 +58,7 @@ export default function StudentDashboard() {
     const router = useRouter();
     const [user, setUser] = useState<StudentSession | null>(null);
     const [todoExams, setTodoExams] = useState<Array<Exam | SolvableExam>>([]);
-    const [doneExams, setDoneExams] = useState<Array<(Exam | SolvableExam) & { attemptId: string; hasUnreadFeedback?: boolean }>>([]);
+    const [doneExams, setDoneExams] = useState<Array<(Exam | SolvableExam) & { attemptId: string; hasUnreadFeedback?: boolean; answeredQuestionCount?: number }>>([]);
     const [stats, setStats] = useState({
         avgScore: 0,
         completedCount: 0,
@@ -149,7 +149,7 @@ export default function StudentDashboard() {
                 : null;
 
             // 3. Categorize Exams
-            const done: Array<(Exam | SolvableExam) & { attemptId: string; hasUnreadFeedback?: boolean }> = [];
+            const done: Array<(Exam | SolvableExam) & { attemptId: string; hasUnreadFeedback?: boolean; answeredQuestionCount?: number }> = [];
             const todo: Array<Exam | SolvableExam> = [];
 
             allExams.forEach(exam => {
@@ -167,6 +167,8 @@ export default function StudentDashboard() {
                         ...exam,
                         attemptId: attempt.id,
                         hasUnreadFeedback: unreadFeedbackAttemptIds.has(attempt.id),
+                        answeredQuestionCount: (attempt.studentQuestions || [])
+                            .filter(note => note.status === "answered").length,
                     });
                 } else if (
                     // Guests on the server path only see exams they actually
