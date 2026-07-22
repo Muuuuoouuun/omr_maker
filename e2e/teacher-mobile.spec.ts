@@ -1,4 +1,6 @@
-import { expect, test, type Locator, type Page } from "@playwright/test";
+import { devices, expect, test, type Locator, type Page } from "@playwright/test";
+import { readFileSync } from "node:fs";
+import path from "node:path";
 import { loginAsTeacher } from "./helpers";
 
 function isLocalBaseURL(baseURL?: string): boolean {
@@ -62,12 +64,15 @@ async function expectTeacherHeaderTouchFriendly(page: Page, options: { hasSearch
 }
 
 async function seedTeacherAttemptReview(page: Page) {
-    await page.addInitScript(() => {
+    const pdfBytes = readFileSync(path.join(process.cwd(), "e2e/fixtures/sample-problem.pdf"));
+    const pdfData = `data:application/pdf;base64,${pdfBytes.toString("base64")}`;
+    await page.addInitScript(({ pdfData }) => {
         const exam = {
             id: "teacher-mobile-review-exam",
             title: "교사 모바일 리뷰 시험",
             createdAt: "2026-07-13T00:00:00.000Z",
             updatedAt: "2026-07-13T00:00:00.000Z",
+            pdfData,
             questions: [
                 { id: 1, number: 1, answer: 2, choices: 4, score: 50, label: "개념" },
                 { id: 2, number: 2, answer: 4, choices: 4, score: 50, label: "응용" },
@@ -88,6 +93,28 @@ async function seedTeacherAttemptReview(page: Page) {
             score: 50,
             totalScore: 100,
             answers: { 1: 2, 2: 1 },
+            drawings: {
+                1: [JSON.stringify({
+                    color: "#ef4444",
+                    points: [{ x: 0.2, y: 0.2 }, { x: 0.3, y: 0.25 }],
+                })],
+            },
+            handwriting: {
+                schemaVersion: 1,
+                status: "saved",
+                plan: "pro",
+                summary: { pageCount: 1, strokeCount: 1, questionCount: 1 },
+                questions: {
+                    2: { questionId: 2, questionNumber: 2, page: 1, strokeCount: 1 },
+                },
+            },
+            handwritingArchived: true,
+            handwritingPlan: "pro",
+            drawingPageCount: 1,
+            drawingStrokeCount: 1,
+            questionDrawings: [
+                { questionId: 2, questionNumber: 2, page: 1, strokeCount: 1 },
+            ],
             status: "completed",
             studentQuestions: [{
                 questionId: 2,
@@ -99,7 +126,7 @@ async function seedTeacherAttemptReview(page: Page) {
         };
         window.localStorage.setItem(`omr_exam_${exam.id}`, JSON.stringify(exam));
         window.localStorage.setItem("omr_attempts", JSON.stringify([attempt]));
-    });
+    }, { pdfData });
 }
 
 test.describe("Teacher phone and tablet app surfaces", () => {
@@ -227,27 +254,73 @@ test.describe("Teacher phone and tablet app surfaces", () => {
         await loginAsTeacher(page, "/teacher/attempt/teacher-mobile-review-attempt");
 
         await expect(page.getByRole("heading", { name: "모바일 학생" })).toBeVisible();
-        await expect(page.getByRole("heading", { name: "학생 풀이 필기" })).toBeVisible();
         await expect(page.getByText("2번 오답 근거를 알려주세요.")).toBeVisible();
+        await expect(page.getByRole("tab", { name: "답안" })).toBeVisible();
+        await page.getByRole("tab", { name: "필기" }).click();
+        await expect(page.getByRole("heading", { name: "학생 풀이 필기" })).toBeVisible();
         await expectNoHorizontalOverflow(page);
         await expect(page.locator(".mobile-install-prompt")).toHaveCount(0);
 
-        const layout = await page.evaluate(() => {
-            const sidebar = document.querySelector<HTMLElement>(".teacher-attempt-sidebar")?.getBoundingClientRect();
-            const detail = document.querySelector<HTMLElement>(".teacher-attempt-detail")?.getBoundingClientRect();
-            return sidebar && detail ? {
-                compact: window.matchMedia("(max-width: 760px)").matches,
-                sidebarWidth: sidebar.width,
-                detailWidth: detail.width,
-                detailTop: detail.top,
-                sidebarBottom: sidebar.bottom,
-            } : null;
-        });
-        expect(layout).not.toBeNull();
-        expect(layout!.detailWidth).toBeGreaterThanOrEqual(300);
-        expect(layout!.detailWidth).toBeGreaterThanOrEqual(layout!.sidebarWidth - 2);
-        if (layout!.compact) {
-            expect(layout!.detailTop).toBeGreaterThanOrEqual(layout!.sidebarBottom);
-        }
+        const handwritingPanel = page.getByRole("tabpanel", { name: "필기" });
+        const sidebarBox = await handwritingPanel.locator("aside").boundingBox();
+        const viewerBox = await page.getByRole("heading", { name: "학생 풀이 필기" })
+            .locator("xpath=ancestor::section[1]")
+            .boundingBox();
+        expect(sidebarBox).not.toBeNull();
+        expect(viewerBox).not.toBeNull();
+        expect(viewerBox!.width).toBeGreaterThanOrEqual(300);
+        expect(viewerBox!.width).toBeGreaterThanOrEqual(sidebarBox!.width - 2);
+        expect(viewerBox!.y).toBeGreaterThanOrEqual(sidebarBox!.y + sidebarBox!.height);
+    });
+
+    test("lays out the mobile student result tabs as touch-friendly rows", async ({ page }) => {
+        await page.setViewportSize({ width: 390, height: 844 });
+        await seedTeacherAttemptReview(page);
+        await loginAsTeacher(page, "/teacher/attempt/teacher-mobile-review-attempt");
+
+        const tabs = page.getByRole("tablist", { name: "학생 결과 보기" });
+        const boxes = await Promise.all(["답안", "필기", "리포트", "분석"].map(
+            label => tabs.getByRole("tab", { name: label }).boundingBox(),
+        ));
+        expect(boxes.every(box => box !== null)).toBe(true);
+        expect(new Set(boxes.map(box => Math.round(box!.y))).size).toBe(2);
+        for (const box of boxes) expect(box!.height).toBeGreaterThanOrEqual(44);
+        await expect(page.getByLabel("응시 회차 선택")).toBeVisible();
+        await expectNoHorizontalOverflow(page);
+    });
+});
+
+test.describe("Teacher desktop Chromium result tab accessibility", () => {
+    const desktopChrome = devices["Desktop Chrome"];
+    test.use({
+        userAgent: desktopChrome.userAgent,
+        viewport: desktopChrome.viewport,
+        screen: desktopChrome.screen,
+        deviceScaleFactor: desktopChrome.deviceScaleFactor,
+        isMobile: desktopChrome.isMobile,
+        hasTouch: desktopChrome.hasTouch,
+    });
+
+    test.beforeEach(async ({ baseURL }) => {
+        test.skip(!isLocalBaseURL(baseURL), "Authenticated teacher checks require local teacher login.");
+    });
+
+    test("moves focus across result tabs before keyboard activation", async ({ page }) => {
+        await seedTeacherAttemptReview(page);
+        await loginAsTeacher(page, "/teacher/attempt/teacher-mobile-review-attempt");
+
+        const tabs = page.getByRole("tablist", { name: "학생 결과 보기" });
+        const answersTab = tabs.getByRole("tab", { name: "답안" });
+        const handwritingTab = tabs.getByRole("tab", { name: "필기" });
+        await answersTab.focus();
+        await answersTab.press("ArrowRight");
+        await expect(handwritingTab).toBeFocused();
+        await expect(answersTab).toHaveAttribute("aria-selected", "true");
+        await expect(handwritingTab).toHaveAttribute("aria-selected", "false");
+
+        await page.keyboard.press("Enter");
+        await expect(page).toHaveURL(/view=handwriting/);
+        await expect(page.getByRole("tab", { name: "답안" })).toHaveAttribute("aria-selected", "false");
+        await expect(page.getByRole("tab", { name: "필기" })).toHaveAttribute("aria-selected", "true");
     });
 });
