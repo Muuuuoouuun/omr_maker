@@ -13,6 +13,11 @@ export const NORMALIZED_SOURCE_PAGE_INDEXES = Object.freeze([
 const OUTPUT_DIRECTORY = "output/pdf";
 const REMOTE_BUCKET = "omr-private-assets";
 const CREATED_BY_USER_ID = "teacher_fixture_korean_exam";
+const SAMPLE_HANDWRITING_DRAWINGS = Object.freeze({
+    1: ["M 120 180 L 210 180 L 210 260", "M 130 300 L 250 300"],
+    5: ["M 80 420 L 250 420", "M 160 360 L 160 500"],
+    13: ["M 100 200 L 260 200", "M 100 250 L 220 310"],
+});
 
 const EXAM_DEFINITIONS = Object.freeze([
     {
@@ -228,7 +233,7 @@ function buildAttempt({
         classId: SHARED_CLASS_ID,
         studentProfileId,
         studentName: `학생 ${studentNumber}`,
-        studentId: `student${studentNumber}`,
+        studentId: studentProfileId,
         groupId: SHARED_CLASS_ID,
         groupName: "테스트반",
         regionName: "서울",
@@ -290,7 +295,7 @@ function buildAttempt({
         classId: SHARED_CLASS_ID,
         studentProfileId,
         studentName: `학생 ${studentNumber}`,
-        studentId: `student${studentNumber}`,
+        studentId: studentProfileId,
         groupId: SHARED_CLASS_ID,
         groupName: "테스트반",
         regionName: "서울",
@@ -311,6 +316,7 @@ function buildAttempt({
             answerChangeCount: result.answerChangeCount,
         })),
         ...(handwriting ? {
+            drawings: SAMPLE_HANDWRITING_DRAWINGS,
             drawingsRef: handwritingRef,
             handwriting: {
                 schemaVersion: 1,
@@ -563,11 +569,7 @@ export function buildKoreanExamFixture({ now = new Date().toISOString() } = {}) 
         bucket: REMOTE_BUCKET,
         objectPath: handwritingObjectPath(original.id),
         originalName: `${original.id}-handwriting.json`,
-        drawings: {
-            1: ["M 120 180 L 210 180 L 210 260", "M 130 300 L 250 300"],
-            5: ["M 80 420 L 250 420", "M 160 360 L 160 500"],
-            13: ["M 100 200 L 260 200", "M 100 250 L 220 310"],
-        },
+        drawings: SAMPLE_HANDWRITING_DRAWINGS,
     }];
 
     const fixture = {

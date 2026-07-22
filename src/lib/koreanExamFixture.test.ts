@@ -71,6 +71,7 @@ describe("Korean exam Supabase fixture", () => {
         expect(original.questionResults.some(result => result.status === "wrong")).toBe(true);
         expect(original.questionResults.some(result => result.status === "unanswered")).toBe(true);
         expect(original.handwriting?.summary.strokeCount).toBeGreaterThan(0);
+        expect(original.drawings).toEqual(fixture.handwritingPayloads[0].drawings);
         expect(retake.retake?.sourceAttemptId).toBe(original.id);
         expect(retake.retake?.questionIds).toEqual(
             original.questionResults.filter(result => result.status !== "correct").map(result => result.questionId),
@@ -85,6 +86,18 @@ describe("Korean exam Supabase fixture", () => {
             status: "returned",
         });
         expect(fixture.feedback[0].questionComments.length).toBeGreaterThan(0);
+    });
+
+    it("uses the canonical student profile id for both student read-gateway keys", () => {
+        for (const attempt of fixture.attempts) {
+            expect(attempt.studentId).toBe(attempt.studentProfileId);
+            expect(attempt.questionResults.every(result => (
+                result.studentId === attempt.studentProfileId
+                && result.studentProfileId === attempt.studentProfileId
+            ))).toBe(true);
+        }
+        expect(fixture.attemptRows.every(row => row.student_id === row.student_profile_id)).toBe(true);
+        expect(fixture.questionResultRows.every(row => row.student_id === row.student_profile_id)).toBe(true);
     });
 
     it("produces deterministic canonical row ids and validates the complete fixture", () => {

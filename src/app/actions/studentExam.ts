@@ -18,6 +18,11 @@ import { attemptIdForStudentSubmission } from "@/lib/studentSubmissionId";
 import type { Attempt, Exam } from "@/types/omr";
 import type { PlanKey } from "@/types/omr";
 import { hasPlanEntitlement, normalizePlan } from "@/utils/plans";
+import { isRemoteAssetStoredDataRef } from "@/lib/remoteAssetContract.server";
+import {
+    createStudentProblemPdfSignedUrlWithGateway,
+    type RemoteAssetSupabaseGatewayClient,
+} from "@/lib/remoteAssetGateway.server";
 
 type Status = "ok" | "unauthenticated" | "degraded_local" | "denied" | "not_found" | "error";
 type AccessStatus = "pin_required" | "pin_rate_limited" | "login_required" | "group_denied" | "not_started" | "ended" | "archived";
@@ -287,7 +292,31 @@ export async function loadExamForReview(
         const row = await fetchExamRowById(ctx.admin, match.examId);
         if (!row) return { status: "not_found" };
         const exam = examFromSupabaseRow(row as Parameters<typeof examFromSupabaseRow>[0]);
-        return { status: "ok", exam: stripExamForReview(exam) };
+        const reviewExam = stripExamForReview(exam);
+        const problemRef = exam.pdfDataRef;
+        if (!isRemoteAssetStoredDataRef(problemRef)) {
+            return { status: "ok", exam: reviewExam };
+        }
+        if (problemRef.kind !== "problem_pdf" || problemRef.examId !== exam.id) {
+            return { status: "error" };
+        }
+        const signed = await createStudentProblemPdfSignedUrlWithGateway(
+            ctx.admin as unknown as RemoteAssetSupabaseGatewayClient,
+            {
+                assetId: problemRef.key,
+                organizationId: problemRef.organizationId,
+                examId: exam.id,
+            },
+        );
+        if (signed.status !== "signed") return { status: "error" };
+        return {
+            status: "ok",
+            exam: {
+                ...reviewExam,
+                pdfData: signed.signedUrl,
+                pdfDataRef: undefined,
+            },
+        };
     } catch (e) {
         console.error("loadExamForReview failed", e);
         return { status: "error" };

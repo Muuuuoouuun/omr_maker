@@ -58,4 +58,14 @@ describe("student server authentication surface", () => {
             .toBeLessThan(action.indexOf("const cookieStore = await cookies()"));
         expect(solvePage).toContain("session.studentId && session.workspaceId");
     });
+
+    it("signs a private problem PDF only after authorizing the owned review attempt", () => {
+        const action = source("src/app/actions/studentExam.ts");
+
+        expect(action).toContain("createStudentProblemPdfSignedUrlWithGateway");
+        expect(action).toContain("isRemoteAssetStoredDataRef(problemRef)");
+        expect(action).toContain("pdfData: signed.signedUrl");
+        expect(action.indexOf("const match = await ownAttempt"))
+            .toBeLessThan(action.indexOf("const signed = await createStudentProblemPdfSignedUrlWithGateway"));
+    });
 });
