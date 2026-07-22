@@ -3261,7 +3261,9 @@ function StudentModal({
     const [email, setEmail] = useState(initial?.email ?? "");
     const [groupId, setGroupId] = useState(initialGroupIdValue);
     const [region, setRegion] = useState(initial?.region ?? initialGroup?.region ?? "");
+    const [formError, setFormError] = useState("");
     const selectedGroup = groups.find(item => item.id === groupId);
+    const hasNoGroups = groups.length === 0;
 
     const inputStyle: React.CSSProperties = {
         width: '100%', padding: '0.65rem 0.85rem', background: 'var(--background)',
@@ -3279,7 +3281,15 @@ function StudentModal({
             <form
                 onSubmit={(e) => {
                     e.preventDefault();
-                    if (!name.trim() || !email.trim() || !selectedGroup) return;
+                    if (!name.trim()) { setFormError("학생 이름을 입력해주세요."); return; }
+                    if (!email.trim()) { setFormError("학생 이메일을 입력해주세요."); return; }
+                    if (!selectedGroup) {
+                        setFormError(hasNoGroups
+                            ? "반이 아직 없습니다. 반 · 그룹 탭에서 반을 먼저 만든 뒤 학생을 추가해주세요."
+                            : "소속 반을 선택해주세요.");
+                        return;
+                    }
+                    setFormError("");
                     onSubmit({
                         name: name.trim(),
                         email: email.trim(),
@@ -3315,6 +3325,11 @@ function StudentModal({
                         {groups.length === 0 && <option value="">반을 먼저 만들어주세요</option>}
                         {groups.map(g => <option key={g.id} value={g.id}>{groupOptionLabel(g)}</option>)}
                     </select>
+                    {hasNoGroups && (
+                        <p style={{ fontSize: '0.78rem', color: 'var(--warning, #b45309)', marginTop: '0.45rem', lineHeight: 1.5, wordBreak: 'keep-all' }}>
+                            아직 만든 반이 없습니다. <strong>반 · 그룹</strong> 탭에서 반을 만들면 학생을 추가할 수 있습니다.
+                        </p>
+                    )}
                 </div>
                 <div style={{ marginBottom: '1.25rem' }}>
                     <label style={labelStyle}>지역</label>
@@ -3326,6 +3341,11 @@ function StudentModal({
                         placeholder="예: 서울, 부산, 온라인"
                     />
                 </div>
+                {formError && (
+                    <p role="alert" style={{ fontSize: '0.8rem', color: 'var(--danger, #dc2626)', marginBottom: '0.75rem', lineHeight: 1.5, wordBreak: 'keep-all' }}>
+                        {formError}
+                    </p>
+                )}
                 <div style={{ display: 'flex', gap: '0.5rem', justifyContent: 'flex-end' }}>
                     <button
                         type="button"
