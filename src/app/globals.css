@@ -1555,6 +1555,67 @@ html[data-motion="off"] :where(
   100% { background-position: -100% 0; }
 }
 
+@keyframes solveSubmissionSpin {
+  to { transform: rotate(360deg); }
+}
+
+.solve-submission-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 10020;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: max(1rem, env(safe-area-inset-top)) max(1rem, env(safe-area-inset-right)) max(1rem, env(safe-area-inset-bottom)) max(1rem, env(safe-area-inset-left));
+  background: rgba(15, 23, 42, 0.72);
+  backdrop-filter: blur(10px);
+}
+
+.solve-submission-card {
+  width: min(100%, 430px);
+  padding: 2rem 1.5rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+  color: var(--foreground);
+  box-shadow: 0 24px 70px rgba(0, 0, 0, 0.3);
+  text-align: center;
+}
+
+.solve-submission-spinner {
+  margin-bottom: 1rem;
+  color: var(--primary);
+  animation: solveSubmissionSpin 0.9s linear infinite;
+}
+
+.solve-submission-card h2 {
+  margin-bottom: 0.55rem;
+  font-size: 1.18rem;
+  font-weight: 850;
+  line-height: 1.4;
+  word-break: keep-all;
+}
+
+.solve-submission-card p {
+  margin-bottom: 0.8rem;
+  color: var(--muted);
+  font-size: 0.94rem;
+  line-height: 1.65;
+  word-break: keep-all;
+}
+
+.solve-submission-card span {
+  color: var(--muted);
+  font-size: 0.75rem;
+  font-weight: 650;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .solve-submission-spinner {
+    animation-duration: 1.8s;
+  }
+}
+
 @keyframes gradientLoop {
   0%   { background-position: 0% 50%; }
   50%  { background-position: 100% 50%; }

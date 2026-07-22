@@ -1,4 +1,4 @@
-import type { Question } from "@/types/omr";
+import type { Question, QuestionPdfRegion } from "@/types/omr";
 import type { PdfTextLocatorItem } from "./pdfQuestionDetection";
 
 export interface PdfPageTextItems {
@@ -10,12 +10,14 @@ export interface DetectedPassageGroup {
     startQuestion: number;
     endQuestion: number;
     page: number;
+    x?: number;
     y: number;
     text: string;
     source: string;
 }
 
 interface TextLine {
+    x: number;
     y: number;
     text: string;
 }
@@ -33,20 +35,25 @@ function normalizeText(value: string): string {
 }
 
 function buildLines(items: PdfTextLocatorItem[]): TextLine[] {
-    const lines: Array<{ y: number; items: PdfTextLocatorItem[] }> = [];
+    const lines: Array<{ y: number; column: 0 | 1; items: PdfTextLocatorItem[] }> = [];
 
     for (const item of [...items].sort((a, b) => a.y - b.y || a.x - b.x)) {
-        const line = lines.find(candidate => Math.abs(candidate.y - item.y) <= LINE_Y_THRESHOLD);
+        const column = item.x >= 0.5 ? 1 : 0;
+        const line = lines.find(candidate => (
+            candidate.column === column
+            && Math.abs(candidate.y - item.y) <= LINE_Y_THRESHOLD
+        ));
         if (line) {
             line.items.push(item);
             line.y = line.items.reduce((sum, current) => sum + current.y, 0) / line.items.length;
         } else {
-            lines.push({ y: item.y, items: [item] });
+            lines.push({ y: item.y, column, items: [item] });
         }
     }
 
     return lines
         .map(line => ({
+            x: Math.min(...line.items.map(item => item.x)),
             y: line.y,
             text: normalizeText(line.items
                 .sort((a, b) => a.x - b.x)
@@ -67,8 +74,9 @@ function parsePassageRange(text: string): { start: number; end: number } | null 
     if (!Number.isInteger(start) || !Number.isInteger(end)) return null;
     if (start <= 0 || end < start || end - start > MAX_GROUP_SPAN) return null;
 
-    const cueWindow = normalized.slice(Math.max(0, match.index || 0), Math.min(normalized.length, (match.index || 0) + 120));
-    if (!PASSAGE_CUE_PATTERN.test(cueWindow)) return null;
+    const cueWindow = normalized.slice(Math.max(0, match.index || 0));
+    const explicitlyBracketed = /^\s*\[\s*\d{1,3}\s*[~～∼-]\s*\d{1,3}\s*\]/.test(normalized);
+    if (!explicitlyBracketed && !PASSAGE_CUE_PATTERN.test(cueWindow)) return null;
 
     return { start, end };
 }
@@ -102,6 +110,7 @@ export function detectPassageGroupsFromPdfText(
                     startQuestion: range.start,
                     endQuestion: range.end,
                     page: page.page,
+                    x: line.x,
                     y: line.y,
                     text: line.text,
                 });
@@ -115,6 +124,95 @@ export function detectPassageGroupsFromPdfText(
             ...group,
             source: sourceLabel(index + 1, group.startQuestion, group.endQuestion),
         }));
+}
+
+const PASSAGE_COLUMN_LEFT = [0.045, 0.515] as const;
+const PASSAGE_COLUMN_WIDTH = 0.44;
+const PASSAGE_PAGE_TOP = 0.055;
+const PASSAGE_PAGE_BOTTOM = 0.955;
+const PASSAGE_START_PADDING = 0.008;
+const PASSAGE_END_PADDING = 0.012;
+
+function columnIndex(x: number | undefined): 0 | 1 {
+    return typeof x === "number" && x >= 0.5 ? 1 : 0;
+}
+
+function readingSegment(page: number, x: number | undefined): number {
+    return (page - 1) * 2 + columnIndex(x);
+}
+
+function rounded(value: number): number {
+    return Math.round(value * 1_000) / 1_000;
+}
+
+function passageRegionsForGroup(
+    group: DetectedPassageGroup,
+    questions: Question[],
+): QuestionPdfRegion[] {
+    const startSegment = readingSegment(group.page, group.x);
+    const firstQuestion = questions
+        .filter(question => question.number >= group.startQuestion && question.number <= group.endQuestion)
+        .map(question => ({ question, location: question.pdfLocation || question.pdfRegion }))
+        .filter((entry): entry is typeof entry & { location: NonNullable<typeof entry.location> } => !!entry.location)
+        .filter(entry => readingSegment(entry.location.page, entry.location.x) >= startSegment)
+        .sort((a, b) => (
+            readingSegment(a.location.page, a.location.x) - readingSegment(b.location.page, b.location.x)
+            || a.location.y - b.location.y
+        ))[0];
+
+    const endSegment = firstQuestion
+        ? readingSegment(firstQuestion.location.page, firstQuestion.location.x)
+        : startSegment;
+    const regions = [];
+
+    for (let segment = startSegment; segment <= endSegment; segment += 1) {
+        const page = Math.floor(segment / 2) + 1;
+        const column = (segment % 2) as 0 | 1;
+        const top = segment === startSegment
+            ? Math.max(PASSAGE_PAGE_TOP, group.y - PASSAGE_START_PADDING)
+            : PASSAGE_PAGE_TOP;
+        const bottom = segment === endSegment && firstQuestion
+            ? Math.min(PASSAGE_PAGE_BOTTOM, firstQuestion.location.y - PASSAGE_END_PADDING)
+            : PASSAGE_PAGE_BOTTOM;
+        if (bottom <= top + 0.02) continue;
+        regions.push({
+            page,
+            x: PASSAGE_COLUMN_LEFT[column],
+            y: rounded(top),
+            width: PASSAGE_COLUMN_WIDTH,
+            height: rounded(bottom - top),
+        });
+    }
+
+    return regions;
+}
+
+/**
+ * Preserve the common reading material separately from each question crop.
+ * A passage may cross both columns and multiple pages, so one shared region
+ * list is attached to every member question instead of stretching a question
+ * rectangle over unrelated content.
+ */
+export function attachInferredPassageRegions(
+    questions: Question[],
+    groups: DetectedPassageGroup[],
+    options: { overwriteExisting?: boolean } = {},
+): Question[] {
+    if (groups.length === 0) return questions;
+
+    const groupRegions = groups.map(group => ({
+        group,
+        regions: passageRegionsForGroup(group, questions),
+    }));
+
+    return questions.map(question => {
+        const match = groupRegions.find(({ group }) => (
+            question.number >= group.startQuestion && question.number <= group.endQuestion
+        ));
+        if (!match || match.regions.length === 0) return question;
+        if (!options.overwriteExisting && question.passagePdfRegions?.length) return question;
+        return { ...question, passagePdfRegions: match.regions };
+    });
 }
 
 export function selectPassageGroupsForQuestions(

@@ -59,7 +59,7 @@ export interface StudentExamPreview {
 
 export type StudentSolveQuestion = Pick<
     Question,
-    "id" | "number" | "choices" | "pdfLocation" | "pdfRegion"
+    "id" | "number" | "choices" | "pdfLocation" | "pdfRegion" | "passagePdfRegions"
 >;
 
 export interface StudentSolveExam {
@@ -122,6 +122,7 @@ function studentQuestion(question: Question): StudentSolveQuestion {
         ...(question.choices ? { choices: question.choices } : {}),
         ...(question.pdfLocation ? { pdfLocation: question.pdfLocation } : {}),
         ...(question.pdfRegion ? { pdfRegion: question.pdfRegion } : {}),
+        ...(question.passagePdfRegions?.length ? { passagePdfRegions: question.passagePdfRegions } : {}),
     };
 }
 

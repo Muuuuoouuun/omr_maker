@@ -8,7 +8,7 @@ import OMRCardView from "@/components/OMRCardView";
 import ThemeToggle from "@/components/ThemeToggle";
 import dynamic from "next/dynamic";
 import { toast } from "@/components/Toast";
-import { AlertTriangle, Clock, PanelRightClose, PanelRightOpen, PenLine, Save } from "lucide-react";
+import { AlertTriangle, Clock, LoaderCircle, PanelRightClose, PanelRightOpen, PenLine, Save } from "lucide-react";
 import { storedDataUrlToFile, saveJsonRecord, loadJsonRecord } from "@/utils/blobStore";
 import { resolveDraftDrawings } from "@/lib/draftRecovery";
 import { verifyTeacherPassword } from "@/app/actions/auth";
@@ -39,6 +39,11 @@ import { readRosterGroups } from "@/lib/rosterStorage";
 import { recallSolvePdf, rememberSolvePdf } from "@/lib/solvePdfCache";
 import { clientExamFromStudentExamPreview, clientExamFromStudentSolveExam } from "@/lib/studentExamContract";
 import { localResultCacheFromServerReceipt } from "@/lib/studentAttemptReceipt";
+import {
+    SUBMISSION_DELAY_NOTICE_MS,
+    submissionProgressCopy,
+    type SubmitProgressPhase,
+} from "@/lib/submissionProgress";
 
 const PDFViewer = dynamic(() => import("@/components/PDFViewer"), { ssr: false });
 import { DEFAULT_CHOICE_COUNT, gradeAttempt, questionChoiceCount } from "@/types/omr";
@@ -710,6 +715,31 @@ function SubmitConfirmDialog({
     );
 }
 
+function SubmissionProgressOverlay({
+    phase,
+    delayed,
+}: {
+    phase: SubmitProgressPhase;
+    delayed: boolean;
+}) {
+    const copy = submissionProgressCopy(phase, delayed);
+    return (
+        <div className="solve-submission-overlay" role="presentation">
+            <div
+                className="solve-submission-card"
+                role="status"
+                aria-live="polite"
+                aria-atomic="true"
+            >
+                <LoaderCircle className="solve-submission-spinner" size={42} aria-hidden="true" />
+                <h2>{copy.title}</h2>
+                <p>{copy.detail}</p>
+                <span>중복 제출을 막기 위해 이 화면에서 잠시 기다려 주세요.</span>
+            </div>
+        </div>
+    );
+}
+
 function GuestNameDialog({
     value,
     onChange,
@@ -905,6 +935,8 @@ export default function SolvePage() {
     // Layout State
     const [isOMRCollapsed, setIsOMRCollapsed] = useState(false);
     const [submitConfirm, setSubmitConfirm] = useState<SubmitConfirmState | null>(null);
+    const [submissionProgress, setSubmissionProgress] = useState<SubmitProgressPhase | null>(null);
+    const [submissionDelayed, setSubmissionDelayed] = useState(false);
     const [guestSubmitPending, setGuestSubmitPending] = useState<{ autoSubmitted: boolean } | null>(null);
     const [guestName, setGuestName] = useState("");
     const [entryConfirmed, setEntryConfirmed] = useState(false);
@@ -940,6 +972,12 @@ export default function SolvePage() {
     const focusLossEventsRef = useRef<FocusLossEvent[]>([]);
     const pdfFocusRequestIdRef = useRef(0);
     const [hydratedOMRPanelKey, setHydratedOMRPanelKey] = useState("");
+
+    useEffect(() => {
+        if (submissionProgress !== "submitting") return;
+        const timeout = window.setTimeout(() => setSubmissionDelayed(true), SUBMISSION_DELAY_NOTICE_MS);
+        return () => window.clearTimeout(timeout);
+    }, [submissionProgress]);
 
     const interactionAllowed = !!examData && entryConfirmed && (
         secureRemoteMode
@@ -1874,6 +1912,14 @@ export default function SolvePage() {
         }
 
         submittedRef.current = true;
+        setSubmissionDelayed(false);
+        setSubmissionProgress("submitting");
+
+        const resetFailedSubmission = () => {
+            submittedRef.current = false;
+            setSubmissionProgress(null);
+            setSubmissionDelayed(false);
+        };
 
         const activeExamQuestions = getActiveExamQuestions();
         const questionTimings = buildQuestionTimingSnapshot(activeExamQuestions);
@@ -1889,20 +1935,28 @@ export default function SolvePage() {
 
         if (secureRemoteMode) {
             if (!secureAttemptTicket) {
-                submittedRef.current = false;
+                resetFailedSubmission();
                 toast.error("응시 세션 만료", "시험 입장 정보를 다시 확인해주세요.");
                 return;
             }
-            const result = await submitStudentAttempt({
-                ticket: secureAttemptTicket,
-                answers: studentAnswersRef.current,
-                autoSubmitted,
-                tabFociLostCount,
-                questionTimings,
-                focusLossEvents: focusLossEventsRef.current,
-            });
+            let result: Awaited<ReturnType<typeof submitStudentAttempt>>;
+            try {
+                result = await submitStudentAttempt({
+                    ticket: secureAttemptTicket,
+                    answers: studentAnswersRef.current,
+                    autoSubmitted,
+                    tabFociLostCount,
+                    questionTimings,
+                    focusLossEvents: focusLossEventsRef.current,
+                });
+            } catch (error) {
+                console.error("Secure student submission failed", error);
+                resetFailedSubmission();
+                toast.error("서버 제출 실패", "네트워크를 확인한 뒤 다시 제출해주세요. 답안은 이 기기에 임시저장되어 있습니다.");
+                return;
+            }
             if (result.status !== "submitted") {
-                submittedRef.current = false;
+                resetFailedSubmission();
                 const detail = result.status === "invalid_ticket"
                     ? "응시 세션이 만료됐거나 위조된 요청입니다. 시험에 다시 입장해주세요."
                     : result.status === "invalid_submission"
@@ -1913,13 +1967,19 @@ export default function SolvePage() {
             }
 
             const shouldArchiveDrawings = hasDrawings(activeDrawings) && canStoreHandwriting;
-            const handwritingUpload = shouldArchiveDrawings
-                ? await uploadStudentAttemptHandwriting({
-                    ticket: secureAttemptTicket,
-                    attemptId: result.receipt.attemptId,
-                    drawings: activeDrawings,
-                })
-                : null;
+            let handwritingUpload: Awaited<ReturnType<typeof uploadStudentAttemptHandwriting>> | null = null;
+            if (shouldArchiveDrawings) {
+                setSubmissionProgress("saving_handwriting");
+                try {
+                    handwritingUpload = await uploadStudentAttemptHandwriting({
+                        ticket: secureAttemptTicket,
+                        attemptId: result.receipt.attemptId,
+                        drawings: activeDrawings,
+                    });
+                } catch (error) {
+                    console.error("Student handwriting upload failed after answer submission", error);
+                }
+            }
             const officialResultCache = localResultCacheFromServerReceipt(result.receipt, {
                 examTitle: examData.title,
                 studentName: submitter.name,
@@ -1965,6 +2025,7 @@ export default function SolvePage() {
             } else {
                 toast.success("서버 제출 완료", "서버에서 채점하고 공식 결과를 저장했습니다.");
             }
+            setSubmissionProgress("opening_review");
             router.push(`/student/review/${result.receipt.attemptId}`);
             return;
         }
@@ -1978,7 +2039,7 @@ export default function SolvePage() {
                 console.error("Failed to save drawings to IndexedDB", e);
             }
             if (!drawingsRef) {
-                submittedRef.current = false;
+                resetFailedSubmission();
                 toast.error("필기 저장 실패", "답안 제출 전 필기 저장에 실패했습니다. 잠시 후 다시 제출해주세요.");
                 return;
             }
@@ -2099,7 +2160,7 @@ export default function SolvePage() {
         });
 
         if (res.status !== "ok" || !res.attempt) {
-            submittedRef.current = false;
+            resetFailedSubmission();
             // A PIN rejection is only meaningful on the server path — the local
             // grading path never checks a PIN, so treating a local-session
             // pin_required as a PIN failure would re-gate against a stale local
@@ -2133,6 +2194,7 @@ export default function SolvePage() {
         if (autoSubmitted) {
             toast.info("시간 종료", "답안이 자동으로 제출되었습니다.");
         }
+        setSubmissionProgress("opening_review");
         router.push(`/student/review/${res.attempt.id}`);
     };
 
@@ -2675,8 +2737,8 @@ export default function SolvePage() {
                             {isOMRCollapsed ? <PanelRightOpen size={14} /> : <PanelRightClose size={14} />}
                         </button>
 
-                        <button className="btn btn-primary solve-submit-button" style={{ padding: '0.5rem 1rem', fontSize: '0.85rem' }} onClick={handleSubmit}>
-                            제출하기
+                        <button className="btn btn-primary solve-submit-button" style={{ padding: '0.5rem 1rem', fontSize: '0.85rem' }} onClick={handleSubmit} disabled={submissionProgress !== null}>
+                            {submissionProgress ? "제출 중" : "제출하기"}
                         </button>
                         <ThemeToggle />
                     </div>
@@ -2921,6 +2983,10 @@ export default function SolvePage() {
                     }}
                     onConfirm={confirmSubmit}
                 />
+            )}
+
+            {submissionProgress && (
+                <SubmissionProgressOverlay phase={submissionProgress} delayed={submissionDelayed} />
             )}
 
             {guestSubmitPending && (

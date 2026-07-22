@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { Question } from "@/types/omr";
 import {
+    attachInferredPassageRegions,
     attachInferredPassageSources,
     detectPassageGroupsFromPdfText,
     selectPassageGroupsForQuestions,
@@ -105,5 +106,34 @@ describe("pdf passage grouping", () => {
             "지문 02 (38-42번)",
             "지문 03 (43-45번)",
         ]);
+    });
+
+    it("stores a shared multi-column passage region on every member question", () => {
+        const groups = [{
+            startQuestion: 4,
+            endQuestion: 9,
+            page: 2,
+            x: 0.08,
+            y: 0.14,
+            text: "[4~9] 다음 글을 읽고 물음에 답하시오.",
+            source: "지문 01 (4-9번)",
+        }];
+        const questions: Question[] = Array.from({ length: 6 }, (_, index) => ({
+            id: index + 4,
+            number: index + 4,
+            pdfLocation: index === 0
+                ? { page: 3, x: 0.56, y: 0.42 }
+                : { page: 3, x: 0.56, y: 0.5 + index * 0.05 },
+        }));
+
+        const linked = attachInferredPassageRegions(questions, groups);
+
+        expect(linked[0].passagePdfRegions).toEqual([
+            { page: 2, x: 0.045, y: 0.132, width: 0.44, height: 0.823 },
+            { page: 2, x: 0.515, y: 0.055, width: 0.44, height: 0.9 },
+            { page: 3, x: 0.045, y: 0.055, width: 0.44, height: 0.9 },
+            { page: 3, x: 0.515, y: 0.055, width: 0.44, height: 0.353 },
+        ]);
+        expect(linked.every(question => question.passagePdfRegions === linked[0].passagePdfRegions)).toBe(true);
     });
 });

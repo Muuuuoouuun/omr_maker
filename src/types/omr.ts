@@ -89,6 +89,8 @@ export interface Question {
     };
     /** Optional precise crop box for premium question-level review/DB. */
     pdfRegion?: QuestionPdfRegion;
+    /** Shared reading-passage regions used by every question in the detected range. */
+    passagePdfRegions?: QuestionPdfRegion[];
     /** Optional cropped question image asset for future premium question-bank storage. */
     imageAssetRef?: StoredDataRef;
     /** Optional thought-process prompts. Maximum two; normalized on persistence. */
@@ -254,6 +256,7 @@ export interface QuestionResult {
     pdfPage?: number;
     pdfLocation?: Question["pdfLocation"];
     pdfRegion?: QuestionPdfRegion;
+    passagePdfRegions?: QuestionPdfRegion[];
     timeSec?: number;
     visitCount?: number;
     revisitCount?: number;

@@ -34,6 +34,7 @@ interface MarkerData {
     y: number;
     label: string | number;
     color?: string;
+    kind?: 'question' | 'passage';
     region?: MarkerRegion;
     onClick?: () => void;
     // Floating OMR popup support
@@ -1117,7 +1118,9 @@ export default function PDFViewer({
                                     const hasAnswerHandler = !!marker.onAnswer;
                                     const markerColor = marker.color || '#ef4444';
                                     const isMarked = marker.currentAnswer !== undefined && marker.currentAnswer !== null;
-                                    const regionBackground = markerColor === '#6366f1'
+                                    const regionBackground = marker.kind === 'passage'
+                                        ? 'rgba(15,118,110,0.09)'
+                                        : markerColor === '#6366f1'
                                         ? 'rgba(99,102,241,0.1)'
                                         : 'rgba(239,68,68,0.07)';
 
@@ -1134,7 +1137,7 @@ export default function PDFViewer({
                                             {marker.region && (
                                                 <div
                                                     aria-hidden="true"
-                                                    title={`문항 영역 ${marker.label}번`}
+                                                    title={marker.kind === 'passage' ? `공통 지문 영역 ${marker.label}` : `문항 영역 ${marker.label}번`}
                                                     style={{
                                                         position: 'absolute',
                                                         left: `${marker.region.x * 100}%`,
@@ -1185,7 +1188,9 @@ export default function PDFViewer({
                                                         transform: isPopupActive ? 'scale(1.06)' : 'scale(1)',
                                                         fontVariantNumeric: 'tabular-nums',
                                                     }}
-                                                    title={`문제 ${marker.label}번${isMarked ? ` · 현재: ${marker.currentAnswer}` : ''}`}
+                                                    title={marker.kind === 'passage'
+                                                        ? `공통 지문 ${marker.label}`
+                                                        : `문제 ${marker.label}번${isMarked ? ` · 현재: ${marker.currentAnswer}` : ''}`}
                                                 >
                                                     {formatMarkerLabel(marker.label)}
                                                 </button>

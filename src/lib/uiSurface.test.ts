@@ -172,6 +172,17 @@ describe("service UI surface", () => {
         expect(css).toContain(".solve-omr-pane-handwriting");
     });
 
+    it("keeps submission progress visible until the review page opens", () => {
+        const solvePage = readProjectFile("src/app/solve/[id]/page.tsx");
+
+        expect(solvePage).toContain("SubmissionProgressOverlay");
+        expect(solvePage).toContain('role="status"');
+        expect(solvePage).toContain('aria-live="polite"');
+        expect(solvePage).toContain("SUBMISSION_DELAY_NOTICE_MS");
+        expect(solvePage).toContain('setSubmissionProgress("saving_handwriting")');
+        expect(solvePage).toContain('setSubmissionProgress("opening_review")');
+    });
+
     it("exposes OMR answers as keyboard-operable radio groups", () => {
         const omrCardView = readProjectFile("src/components/OMRCardView.tsx");
         const homePage = readProjectFile("src/app/page.tsx");
@@ -934,7 +945,7 @@ describe("service UI surface", () => {
         expect(createPage).toContain("handleStopAutoDetectLocations");
         expect(createPage).toContain("create-auto-detect-notice");
         expect(pdfViewer).toContain("interface MarkerRegion");
-        expect(pdfViewer).toContain("title={`문항 영역 ${marker.label}번`}");
+        expect(pdfViewer).toContain("marker.kind === 'passage' ? `공통 지문 영역 ${marker.label}` : `문항 영역 ${marker.label}번`");
         expect(pdfViewer).toContain("marker.region.width");
         expect(css).toContain(".create-auto-detect-notice");
     });

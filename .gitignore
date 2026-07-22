@@ -58,3 +58,4 @@ lint*.txt
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+.gstack/

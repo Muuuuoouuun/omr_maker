@@ -58,6 +58,7 @@ import {
     type PdfTextLocatorItem,
 } from "@/lib/pdfQuestionDetection";
 import {
+    attachInferredPassageRegions,
     attachInferredPassageSources,
     detectPassageGroupsFromPdfText,
     selectPassageGroupsForQuestions,
@@ -722,6 +723,13 @@ function CreateOMRPageInner() {
         const highDifficulty = questions.filter(q => q.tags?.difficulty === "hard" || q.tags?.difficulty === "killer").length;
         const pdfLinked = questions.filter(q => q.pdfLocation || q.pdfRegion).length;
         const pdfRegionLinked = questions.filter(q => q.pdfRegion).length;
+        const passageQuestionLinked = questions.filter(q => q.passagePdfRegions?.length).length;
+        const passageGroupCount = new Set(
+            questions
+                .filter(q => q.passagePdfRegions?.length)
+                .map(q => q.tags?.source)
+                .filter(Boolean),
+        ).size;
         const totalExpectedSec = questions.reduce((sum, q) => sum + (q.tags?.expectedTimeSec || 0), 0);
         const conceptCount = new Set(
             questions
@@ -735,6 +743,8 @@ function CreateOMRPageInner() {
             highDifficulty,
             pdfLinked,
             pdfRegionLinked,
+            passageQuestionLinked,
+            passageGroupCount,
             totalExpectedMin: totalExpectedSec > 0 ? Math.round(totalExpectedSec / 60) : 0,
             conceptCount,
         };
@@ -780,6 +790,56 @@ function CreateOMRPageInner() {
     const selectedQuestionChoiceCount = selectedQuestion
         ? questionChoiceCount(selectedQuestion, defaultChoices)
         : defaultChoices;
+    const problemPdfMarkers = useMemo(() => {
+        const questionMarkers = questions
+            .filter(q => q.pdfLocation || q.pdfRegion)
+            .map(q => {
+                const region = q.pdfRegion;
+                const anchor = q.pdfLocation || (region
+                    ? {
+                        page: region.page,
+                        x: region.x + region.width / 2,
+                        y: region.y + region.height / 2,
+                    }
+                    : undefined);
+                if (!anchor) return null;
+                return {
+                    page: anchor.page,
+                    x: anchor.x,
+                    y: anchor.y,
+                    label: q.number,
+                    kind: 'question' as const,
+                    color: selectedQuestionId === q.id ? '#6366f1' : '#ef4444',
+                    region: region
+                        ? { x: region.x, y: region.y, width: region.width, height: region.height }
+                        : undefined,
+                    onClick: () => setSelectedQuestionId(q.id),
+                };
+            })
+            .filter((marker): marker is NonNullable<typeof marker> => !!marker);
+        const seenPassageRegions = new Set<string>();
+        const passageMarkers = questions.flatMap(question => {
+            const source = question.tags?.source;
+            if (!source || !question.passagePdfRegions?.length) return [];
+            const rangeLabel = source.match(/\((\d+-\d+)번\)/)?.[1] || source;
+            return question.passagePdfRegions.flatMap(region => {
+                const key = `${source}:${region.page}:${region.x}:${region.y}:${region.width}:${region.height}`;
+                if (seenPassageRegions.has(key)) return [];
+                seenPassageRegions.add(key);
+                return [{
+                    page: region.page,
+                    x: region.x + 0.025,
+                    y: region.y + 0.014,
+                    label: `지문 ${rangeLabel}`,
+                    kind: 'passage' as const,
+                    color: '#0f766e',
+                    region: { x: region.x, y: region.y, width: region.width, height: region.height },
+                    onClick: () => setSelectedQuestionId(question.id),
+                }];
+            });
+        });
+        return [...passageMarkers, ...questionMarkers];
+    }, [questions, selectedQuestionId]);
 
     // Undo/Redo + autosave refs
     const historyRef = useRef<HistorySnapshot[]>([]);
@@ -1238,7 +1298,7 @@ function CreateOMRPageInner() {
 
         setQuestions(prev => prev.map(q =>
             q.id === selectedQuestionId
-                ? { ...q, pdfLocation: undefined, pdfRegion: undefined }
+                ? { ...q, pdfLocation: undefined, pdfRegion: undefined, passagePdfRegions: undefined }
                 : q
         ));
         toast.info("PDF 연결 해제", `${target.number}번 문항의 PDF 위치와 영역을 지웠습니다.`);
@@ -1635,7 +1695,12 @@ function CreateOMRPageInner() {
                 detectPassageGroupsFromPdfText(pdfTextPages, expectedQuestionNumbers),
                 newQuestions,
             );
-            const questionsWithPassages = attachInferredPassageSources(newQuestions, passageGroups);
+            const questionsWithPassageSources = attachInferredPassageSources(newQuestions, passageGroups);
+            const questionsWithPassages = attachInferredPassageRegions(
+                questionsWithPassageSources,
+                passageGroups,
+                { overwriteExisting: true },
+            );
             const matchedQuestions = attachInferredQuestionPdfRegions(questionsWithPassages, {
                 overwriteExisting: true,
                 textPages: pdfTextPages,
@@ -2277,31 +2342,7 @@ function CreateOMRPageInner() {
                             onPageClick={activeViewTab === 'problem' ? handlePdfPageClick : undefined}
                             onFileDrop={activeViewTab === 'problem' ? handleFileDrop : setAnswerKeyPdf}
                             markers={activeViewTab === 'problem'
-                                ? questions
-                                    .filter(q => q.pdfLocation || q.pdfRegion)
-                                    .map(q => {
-                                        const region = q.pdfRegion;
-                                        const anchor = q.pdfLocation || (region
-                                            ? {
-                                                page: region.page,
-                                                x: region.x + region.width / 2,
-                                                y: region.y + region.height / 2,
-                                            }
-                                            : undefined);
-                                        if (!anchor) return null;
-                                        return {
-                                            page: anchor.page,
-                                            x: anchor.x,
-                                            y: anchor.y,
-                                            label: q.number,
-                                            color: selectedQuestionId === q.id ? '#6366f1' : '#ef4444',
-                                            region: region
-                                                ? { x: region.x, y: region.y, width: region.width, height: region.height }
-                                                : undefined,
-                                            onClick: () => setSelectedQuestionId(q.id)
-                                        };
-                                    })
-                                    .filter((marker): marker is NonNullable<typeof marker> => !!marker)
+                                ? problemPdfMarkers
                                 : []}
                         />
                     </div>
@@ -2423,7 +2464,7 @@ function CreateOMRPageInner() {
                                     { label: '개념', value: `${designSummary.conceptTagged}/${questionsCount}`, anchor: 'create-label-batch-anchor', hint: '라벨 일괄 적용으로 이동' },
                                     { label: 'PDF', value: `${designSummary.pdfLinked}/${questionsCount}`, anchor: 'create-region-calibration-anchor', hint: '문항 영역 보정으로 이동' },
                                     { label: '필기', value: `${designSummary.pdfRegionLinked}/${questionsCount}`, anchor: 'create-region-calibration-anchor', hint: '문항 영역 보정으로 이동' },
-                                    { label: '심화', value: `${designSummary.highDifficulty}`, anchor: 'create-label-batch-anchor', hint: '난이도 일괄 설정으로 이동' },
+                                    { label: '지문', value: `${designSummary.passageGroupCount}묶음`, anchor: 'create-region-calibration-anchor', hint: '공통 지문 연결 영역 확인' },
                                 ].map(item => (
                                     <button
                                         key={item.label}
@@ -2629,6 +2670,15 @@ function CreateOMRPageInner() {
                                     {designSummary.pdfRegionLinked}/{questionsCount}
                                 </span>
                             </div>
+
+                            {designSummary.passageGroupCount > 0 && (
+                                <div className="create-auto-detect-notice" role="status" style={{ marginBottom: '0.65rem' }}>
+                                    <div>
+                                        <strong>공통 지문 {designSummary.passageGroupCount}묶음 연결</strong>
+                                        <span>{designSummary.passageQuestionLinked}개 문항이 청록색 지문 영역을 함께 참조합니다.</span>
+                                    </div>
+                                </div>
+                            )}
 
                             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.45rem' }}>
                                 <button

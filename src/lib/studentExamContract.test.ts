@@ -28,6 +28,7 @@ const fullExam: Exam = {
         explanation: "정답은 3번",
         tags: { subject: "수학", concept: "비밀 태그" },
         pdfLocation: { page: 1, x: 0.2, y: 0.3 },
+        passagePdfRegions: [{ page: 1, x: 0.05, y: 0.08, width: 0.44, height: 0.3 }],
     }],
 };
 
@@ -39,7 +40,12 @@ describe("student exam contract", () => {
             title: "중간고사",
             pdfData: "data:application/pdf;base64,problem",
             access: { type: "group", requiresPin: true },
-            questions: [{ id: 1, number: 1, choices: 5 }],
+            questions: [{
+                id: 1,
+                number: 1,
+                choices: 5,
+                passagePdfRegions: [{ page: 1, x: 0.05, y: 0.08, width: 0.44, height: 0.3 }],
+            }],
         });
 
         const serialized = JSON.stringify(dto);
