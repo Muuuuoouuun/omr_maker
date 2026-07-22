@@ -22,11 +22,11 @@ Development teacher login (role `교사`). Configure accounts with `.env.local` 
 | `test2` | `test1234` | Pro | Pro tier |
 | `test3` | `test1234` | Academy | Enterprise tier |
 
-With no `TEACHER_ACCOUNTS`/`TEACHER_PASSWORD` configured, the app falls back to `admin` / `admin123` (no bound plan → Free).
+With no `TEACHER_ACCOUNTS`/`TEACHER_PASSWORD` configured, the app falls back to `admin` / `admin123`. The `admin` account is bound to the Academy plan and can use every feature without quota limits.
 
 In production, there is no default account. Set one of these on the server before deploying:
 
-- Single teacher: `TEACHER_LOGIN_ID`, optional `TEACHER_EMAIL`/`TEACHER_NAME`/`TEACHER_PLAN`, and `TEACHER_PASSWORD`
+- Single teacher: `TEACHER_LOGIN_ID`, optional `TEACHER_EMAIL`/`TEACHER_NAME`/`TEACHER_PLAN`, and `TEACHER_PASSWORD`. An account whose login id is exactly `admin` defaults to the Academy plan and admin role.
 - Multiple teachers: `TEACHER_ACCOUNTS` as a JSON array, for example `[{"id":"teacher1","email":"teacher1@example.com","name":"Teacher 1","password":"change-me","plan":"pro"}]`
 - `omr_organizations.plan` is the authoritative plan when Supabase service-role access is configured. Browser `omr_plan` values are display caches only and never authorize paid mutations.
 - Without a server plan store, paid mutations fail closed. Local development may opt into the process-local simulator with `OMR_PLAN_DEV_SIMULATION=1` and `OMR_DEV_PLAN=free|pro|academy`; this override is ignored in production.

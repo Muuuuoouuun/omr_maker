@@ -297,11 +297,13 @@ export function resolveTeacherCredentials(env: TeacherAuthEnv = process.env): Te
     if (configuredPasswordHash || configuredPassword) {
         const email = clean(env.TEACHER_EMAIL).toLowerCase();
         const id = clean(env.TEACHER_LOGIN_ID) || email || "admin";
+        const isAdmin = id.toLowerCase() === "admin";
         return [{
             id,
             email,
             name: clean(env.TEACHER_NAME) || email || id,
-            plan: normalizePlan(env.TEACHER_PLAN) ?? undefined,
+            plan: normalizePlan(env.TEACHER_PLAN) ?? (isAdmin ? "academy" : undefined),
+            memberRole: isAdmin ? "admin" : undefined,
             ...(configuredPasswordHash ? { passwordHash: configuredPasswordHash } : { password: configuredPassword }),
         }];
     }
@@ -313,6 +315,8 @@ export function resolveTeacherCredentials(env: TeacherAuthEnv = process.env): Te
         email: "admin@example.com",
         name: "Demo Admin",
         password: "admin123",
+        plan: "academy",
+        memberRole: "admin",
     }];
 }
 

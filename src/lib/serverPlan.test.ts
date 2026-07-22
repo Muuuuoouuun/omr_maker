@@ -113,6 +113,26 @@ describe("server-authoritative plan access", () => {
         await expect(resolveServerPlanAccess(session, { store })).resolves.toMatchObject({ plan: "free" });
     });
 
+    it("gives the signed admin account the unlimited Academy plan, including legacy sessions", async () => {
+        const store = {
+            source: "supabase" as const,
+            readPlan: async () => "free" as const,
+            readUsage: async () => 0,
+            reserveUsage: async () => ({ allowed: true, used: 0 }),
+            releaseUsage: async () => ({ released: false, used: 0 }),
+            syncStudentUsage: async () => ({ allowed: true, used: 0 }),
+        };
+        const session = createTeacherSession(TOKEN, Date.now(), {
+            teacherId: "admin",
+            organizationId: "teacher_sharedqa",
+        });
+
+        await expect(resolveServerPlanAccess(session, { store })).resolves.toMatchObject({
+            authoritative: true,
+            plan: "academy",
+        });
+    });
+
     it("keeps the explicit global development plan override authoritative", async () => {
         const store = createDevServerPlanStore({
             OMR_DEV_PLAN: "pro",

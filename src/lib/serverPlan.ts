@@ -371,7 +371,9 @@ export async function resolveServerPlanAccess(
             authoritative: true,
             organizationId: context.organizationId,
             actorUserId: context.actorUserId,
-            plan: applyPlanCeiling(organizationPlan, session.plan),
+            plan: session.memberRole === "admin" || session.teacherId?.trim().toLowerCase() === "admin"
+                ? "academy"
+                : applyPlanCeiling(organizationPlan, session.plan),
             source: store.source,
         };
     } catch (error) {

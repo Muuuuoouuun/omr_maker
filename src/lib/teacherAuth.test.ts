@@ -29,8 +29,27 @@ describe("teacher auth", () => {
             email: "admin@example.com",
             name: "Demo Admin",
             password: "admin123",
+            plan: "academy",
+            memberRole: "admin",
         }]);
         expect(resolveTeacherCredentials({ NODE_ENV: "production" })).toEqual([]);
+    });
+
+    it("gives an explicitly configured admin account the highest plan when no plan is specified", () => {
+        const env = {
+            NODE_ENV: "production",
+            TEACHER_LOGIN_ID: "admin",
+            TEACHER_PASSWORD: "secret-pass",
+        };
+
+        expect(verifyTeacherLogin("admin", "secret-pass", env)).toMatchObject({
+            success: true,
+            teacher: {
+                teacherId: "admin",
+                plan: "academy",
+                memberRole: "admin",
+            },
+        });
     });
 
     it("prefers configured teacher credentials and trims accidental whitespace", () => {
