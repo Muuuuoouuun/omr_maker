@@ -116,11 +116,10 @@ export default function StudentResultHeader({
                 <div className={styles.studentSummary}>
                     <p className={styles.examTitle}>{title}</p>
                     <h1>{attempt.studentName}</h1>
-                    <p className={styles.finishedAt}>응시 완료 {formatKoreanDateTime(attempt.finishedAt)}</p>
+                    <p className={styles.finishedAt}>{formatKoreanDateTime(attempt.finishedAt)} 제출</p>
                 </div>
                 <p className={styles.score} aria-label={`점수 ${scorePercent}점`}>
-                    <strong>{scorePercent}%</strong>
-                    <span>점수</span>
+                    <strong>{scorePercent}점</strong>
                 </p>
             </div>
 

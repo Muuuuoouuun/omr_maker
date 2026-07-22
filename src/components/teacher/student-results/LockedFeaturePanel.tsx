@@ -10,7 +10,7 @@ interface LockedFeaturePanelProps {
 
 export default function LockedFeaturePanel({ title, description, previewItems }: LockedFeaturePanelProps) {
     return (
-        <section className={`${styles.panel} ${styles.lockedFeature}`} role="note">
+        <section className={`${styles.panel} ${styles.lockedFeature}`} role="note" aria-label={`${title} 제한`}>
             <Lock className={styles.lockIcon} size={22} aria-hidden="true" />
             <h2>{title}</h2>
             <p>{description}</p>
