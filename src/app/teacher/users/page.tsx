@@ -2043,6 +2043,8 @@ function ManageUsersInner() {
                                                                 style={{
                                                                     display: 'inline-flex',
                                                                     alignItems: 'center',
+                                                                    justifyContent: 'center',
+                                                                    minHeight: 44,
                                                                     gap: '0.25rem',
                                                                     padding: '0.25rem 0.45rem',
                                                                     borderRadius: '999px',
@@ -3102,6 +3104,10 @@ function StudentProfileModal({
                                             href={buildStudentResultHref(attempt.id, "report")}
                                             aria-label={`${attempt.examTitle} 리포트 열기`}
                                             style={{
+                                                display: 'inline-flex',
+                                                alignItems: 'center',
+                                                justifyContent: 'center',
+                                                minHeight: 44,
                                                 padding: '0.35rem 0.65rem',
                                                 borderRadius: 'var(--radius-md)',
                                                 background: 'var(--surface)',
@@ -3109,6 +3115,7 @@ function StudentProfileModal({
                                                 color: 'var(--foreground)',
                                                 fontSize: '0.76rem',
                                                 fontWeight: 800,
+                                                textAlign: 'center',
                                             }}
                                         >
                                             리포트 열기

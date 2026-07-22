@@ -1042,6 +1042,17 @@ describe("service UI surface", () => {
         expect(usersPage).toContain('buildStudentResultHref(latestStableAttempt.id, "report")');
         expect(analytics).toContain('buildStudentResultHref(detail.attemptId, "analytics")');
         expect(analytics).toContain("결과 분석");
+
+        const handwritingLink = usersPage.slice(
+            usersPage.indexOf('buildStudentResultHref(a.id, "handwriting")'),
+            usersPage.indexOf('</NextLink>', usersPage.indexOf('buildStudentResultHref(a.id, "handwriting")')),
+        );
+        const modalReportLink = usersPage.slice(
+            usersPage.indexOf('buildStudentResultHref(attempt.id, "report")'),
+            usersPage.indexOf('</NextLink>', usersPage.indexOf('buildStudentResultHref(attempt.id, "report")')),
+        );
+        expect(handwritingLink).toContain("minHeight: 44");
+        expect(modalReportLink).toContain("minHeight: 44");
     });
 
     it("resets route-scoped student result state while preserving peer attempts on load failure", () => {
