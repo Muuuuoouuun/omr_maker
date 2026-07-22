@@ -11,23 +11,16 @@ npm run dev
 
 The dev server runs on [http://localhost:3003](http://localhost:3003).
 
-## Sample Accounts
+## Authentication setup
 
-Development teacher login (role `교사`). Configure accounts with `.env.local` `TEACHER_ACCOUNTS`. The table below is an example seed, not an account set guaranteed to exist in every checkout:
-
-| ID | Password | Plan | Notes |
-| --- | --- | --- | --- |
-| `admin` | `admin1234` | Academy | Academy catalog example; unfinished organization features remain unavailable |
-| `test1` | `test1234` | Free | Free tier |
-| `test2` | `test1234` | Pro | Pro tier |
-| `test3` | `test1234` | Academy | Enterprise tier |
+Teacher accounts are server configuration, not source-controlled signup records. Configure development accounts in `.env.local` with `TEACHER_ACCOUNTS`; do not publish shared test credentials in documentation or commit environment files.
 
 With no `TEACHER_ACCOUNTS`/`TEACHER_PASSWORD` configured, the app falls back to `admin` / `admin123`. The `admin` account is bound to the Academy plan and can use every feature without quota limits.
 
 In production, there is no default account. Set one of these on the server before deploying:
 
 - Single teacher: `TEACHER_LOGIN_ID`, optional `TEACHER_EMAIL`/`TEACHER_NAME`/`TEACHER_PLAN`, and `TEACHER_PASSWORD`. An account whose login id is exactly `admin` defaults to the Academy plan and admin role.
-- Multiple teachers: `TEACHER_ACCOUNTS` as a JSON array, for example `[{"id":"teacher1","email":"teacher1@example.com","name":"Teacher 1","password":"change-me","plan":"pro"}]`
+- Multiple teachers: `TEACHER_ACCOUNTS` as a JSON array, for example `[{"id":"teacher-id","email":"teacher@example.com","name":"Teacher","password":"replace-with-a-strong-password","plan":"pro"}]`
 - `omr_organizations.plan` is the authoritative plan when Supabase service-role access is configured. Browser `omr_plan` values are display caches only and never authorize paid mutations.
 - Without a server plan store, paid mutations fail closed. Local development may opt into the process-local simulator with `OMR_PLAN_DEV_SIMULATION=1` and `OMR_DEV_PLAN=free|pro|academy`; this override is ignored in production.
 - Academy is a catalog tier, not a promise that every listed organization feature is implemented. Billing readiness labels are the source of truth for unavailable/partial features.
@@ -39,7 +32,7 @@ The shared deployment QA workspace uses four teacher logins against the same Sup
 
 Synthetic dashboard, roster, and live-monitoring examples are restricted to the public `omr-showcase` mockup account. Normal admin and teacher accounts display their real workspace, including an empty state when no data exists.
 
-For local-only account QA, setting `NEXT_PUBLIC_OMR_SEED_TEST_ACCOUNTS=1` in `.env.local` adds four login-ready students (`student1` through `student4`) to the existing local roster without replacing user-created rows. This separate browser seed is disabled in production. The students use the `테스트반` class; their development start codes are defined in `src/lib/localTestAccounts.ts`.
+For local account QA, setting `NEXT_PUBLIC_OMR_SEED_TEST_ACCOUNTS=1` in `.env.local` adds four login-ready students (`student1` through `student4`) to the current browser's local roster without replacing user-created rows. This seed is disabled in production and does not create Supabase Auth users. Remove the flag and clear the dedicated QA browser's `omr_*` local/session storage when the fixture is no longer needed. The students use the `테스트반` class; their development start codes are defined in `src/lib/localTestAccounts.ts`.
 
 Student login uses the roster student number or email as the account ID, and a six-character start code as the password-like credential. Import `examples/student-roster.csv` from `/teacher/users`, then students can choose `학생` and enter one of these sample names with the matching class. Share the CSV `id` or `email` value as the student's login ID, especially when names overlap:
 
