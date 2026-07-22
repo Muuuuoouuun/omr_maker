@@ -41,7 +41,7 @@ describe("student handwriting result surface", () => {
         expect(lazyLoad).toContain('setHandwritingStatus("loading")');
         expect(lazyLoad).toContain("const drawingsReady = restored !== undefined");
         expect(lazyLoad).toContain("loadFeedbackMarkupDrawings(feedback)");
-        expect(lazyLoad).toContain('if (file && drawingsReady) setHandwritingStatus("ready")');
+        expect(lazyLoad).toContain("if (file && drawingsReady) {");
         expect(lazyLoad).toContain('setHandwritingStatus("ready")');
         expect(lazyLoad).toContain('setHandwritingStatus("error")');
         expect(page).toContain('const [handwritingStatus, setHandwritingStatus] = useState<"idle" | "loading" | "ready" | "error">("idle")');
@@ -73,5 +73,26 @@ describe("student handwriting result surface", () => {
         expect(page).toContain("<HandwritingPanel");
         expect(page).toContain(') : activeView === "report" ? (');
         expect(page).not.toContain('activeView === "handwriting" || activeView === "report"');
+    });
+
+    it("omits unloaded markup from report saves and directs teachers to the handwriting tab", () => {
+        const page = readProjectFile("src/app/teacher/attempt/[attemptId]/page.tsx");
+        const saveFeedback = page.slice(
+            page.indexOf("const saveFeedback = async"),
+            page.indexOf("if (accessDenied)"),
+        );
+
+        expect(page).toContain("const handwritingReadyAttemptIdRef = useRef<string | null>(null)");
+        expect(page).toContain("handwritingReadyAttemptIdRef.current = targetAttemptId");
+        expect(saveFeedback).toContain("const markupDrawingsForSave =");
+        expect(saveFeedback).toContain('handwritingStatus === "ready"');
+        expect(saveFeedback).toContain("handwritingReadyAttemptIdRef.current === targetAttemptId");
+        expect(saveFeedback).toContain("activeAttemptIdRef.current === targetAttemptId");
+        expect(saveFeedback).toContain("? teacherMarkupDrawings");
+        expect(saveFeedback).toContain(": undefined;");
+        expect(saveFeedback).toContain("saveTeacherAttemptFeedbackDraft(nextFeedback, markupDrawingsForSave)");
+        expect(page).not.toContain("문제 PDF 또는 필기 데이터를 불러오는 중입니다.");
+        expect(page).toContain('buildStudentResultHref(attempt.id, "handwriting")');
+        expect(page).toContain("필기 탭에서 원본 보기");
     });
 });

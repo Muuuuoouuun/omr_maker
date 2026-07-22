@@ -43,7 +43,7 @@ import {
     returnTeacherAttemptFeedback,
     saveTeacherAttemptFeedbackDraft,
 } from "@/lib/teacherFeedbackClient";
-import { buildStudentAttemptSeries, parseStudentResultView } from "@/lib/studentResultHub";
+import { buildStudentAttemptSeries, buildStudentResultHref, parseStudentResultView } from "@/lib/studentResultHub";
 import StudentResultHeader from "@/components/teacher/student-results/StudentResultHeader";
 import StudentResultTabs from "@/components/teacher/student-results/StudentResultTabs";
 import AnswersPanel from "@/components/teacher/student-results/AnswersPanel";
@@ -111,6 +111,7 @@ export default function TeacherAttemptPage() {
     const activeView = parseStudentResultView(searchParams.get("view"));
     const activeAttemptIdRef = useRef(id);
     const handwritingLoadingAttemptRef = useRef<string | null>(null);
+    const handwritingReadyAttemptIdRef = useRef<string | null>(null);
     useLayoutEffect(() => {
         activeAttemptIdRef.current = id;
     }, [id]);
@@ -155,6 +156,7 @@ export default function TeacherAttemptPage() {
             setPdfFile(null);
             setHandwritingStatus("idle");
             handwritingLoadingAttemptRef.current = null;
+            handwritingReadyAttemptIdRef.current = null;
             setFeedback(null);
             setFeedbackSummary("");
             setFeedbackPolicy(DEFAULT_FEEDBACK_DOWNLOAD_POLICY);
@@ -231,6 +233,7 @@ export default function TeacherAttemptPage() {
         if (activeAttemptIdRef.current !== targetAttemptId) return;
         if (handwritingLoadingAttemptRef.current === targetAttemptId) return;
         handwritingLoadingAttemptRef.current = targetAttemptId;
+        handwritingReadyAttemptIdRef.current = null;
         setHandwritingStatus("loading");
         try {
             const loadedExam = exam || await loadTeacherExam(attempt.examId);
@@ -248,10 +251,16 @@ export default function TeacherAttemptPage() {
             setDrawings(restored);
             if (markupDrawings) setTeacherMarkupDrawings(markupDrawings);
             const drawingsReady = restored !== undefined;
-            if (file && drawingsReady) setHandwritingStatus("ready");
-            else setHandwritingStatus("error");
+            if (file && drawingsReady) {
+                handwritingReadyAttemptIdRef.current = targetAttemptId;
+                setHandwritingStatus("ready");
+            } else {
+                handwritingReadyAttemptIdRef.current = null;
+                setHandwritingStatus("error");
+            }
         } catch {
             if (activeAttemptIdRef.current === targetAttemptId) {
+                handwritingReadyAttemptIdRef.current = null;
                 setHandwritingStatus("error");
             }
         } finally {
@@ -335,9 +344,14 @@ export default function TeacherAttemptPage() {
             summary: feedbackSummary.trim() || undefined,
             downloadPolicy: feedbackPolicy,
         };
+        const markupDrawingsForSave = handwritingStatus === "ready"
+            && handwritingReadyAttemptIdRef.current === targetAttemptId
+            && activeAttemptIdRef.current === targetAttemptId
+            ? teacherMarkupDrawings
+            : undefined;
 
         try {
-            const saveResult = await saveTeacherAttemptFeedbackDraft(nextFeedback, teacherMarkupDrawings);
+            const saveResult = await saveTeacherAttemptFeedbackDraft(nextFeedback, markupDrawingsForSave);
             if (activeAttemptIdRef.current !== targetAttemptId) return;
             if (!saveResult.localSaved && !saveResult.remoteSaved) {
                 setFeedbackNotice(saveResult.remoteError || "피드백을 저장하지 못했습니다.");
@@ -1332,12 +1346,20 @@ export default function TeacherAttemptPage() {
                                             {attempt.handwritingArchived
                                                 ? handwritingUnavailable
                                                     ? '필기 원본을 불러오지 못했습니다.'
-                                                    : '문제 PDF 또는 필기 데이터를 불러오는 중입니다.'
+                                                    : '필기 원본은 상단의 필기 탭에서 확인할 수 있습니다.'
                                                 : '이 응시는 필기 원본이 보관되지 않았습니다.'}
                                         </div>
                                         <div style={{ fontSize: '0.85rem', color: '#cbd5e1' }}>
                                             Free 플랜 제출 또는 저장 실패 기록은 답안/점수만 확인할 수 있습니다.
                                         </div>
+                                        {attempt.handwritingArchived && (
+                                            <Link
+                                                href={buildStudentResultHref(attempt.id, "handwriting")}
+                                                style={{ display: 'inline-flex', marginTop: '0.8rem', color: 'white', fontWeight: 900, textDecoration: 'underline' }}
+                                            >
+                                                필기 탭에서 원본 보기
+                                            </Link>
+                                        )}
                                     </div>
                                 </div>
                             )}
