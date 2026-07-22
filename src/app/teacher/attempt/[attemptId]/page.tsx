@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
 import dynamic from "next/dynamic";
@@ -85,6 +85,10 @@ export default function TeacherAttemptPage() {
     const searchParams = useSearchParams();
     const id = params?.attemptId as string;
     const activeView = parseStudentResultView(searchParams.get("view"));
+    const activeAttemptIdRef = useRef(id);
+    useLayoutEffect(() => {
+        activeAttemptIdRef.current = id;
+    }, [id]);
 
     const [attempt, setAttempt] = useState<Attempt | null>(null);
     const [peerAttempts, setPeerAttempts] = useState<Attempt[]>([]);
@@ -271,7 +275,8 @@ export default function TeacherAttemptPage() {
 
     const attemptSeries = useMemo(() => {
         if (!attempt) return [];
-        return buildStudentAttemptSeries(attempt, peerAttempts.length ? peerAttempts : [attempt]);
+        const series = buildStudentAttemptSeries(attempt, peerAttempts.length ? peerAttempts : [attempt]);
+        return series.length > 0 ? series : buildStudentAttemptSeries(attempt, [attempt]);
     }, [attempt, peerAttempts]);
 
     const mergedReviewDrawings = useMemo(
@@ -289,6 +294,8 @@ export default function TeacherAttemptPage() {
 
     const saveFeedback = async (returnAfterSave = false) => {
         if (!attempt || !feedbackEnabled) return;
+        const targetAttemptId = attempt.id;
+        if (activeAttemptIdRef.current !== targetAttemptId) return;
         setFeedbackSaving(true);
         setFeedbackNotice("");
         const base = feedback || createAttemptFeedbackDraft(attempt);
@@ -300,19 +307,23 @@ export default function TeacherAttemptPage() {
 
         try {
             const saveResult = await saveTeacherAttemptFeedbackDraft(nextFeedback, teacherMarkupDrawings);
+            if (activeAttemptIdRef.current !== targetAttemptId) return;
             if (!saveResult.localSaved && !saveResult.remoteSaved) {
                 setFeedbackNotice(saveResult.remoteError || "피드백을 저장하지 못했습니다.");
                 return;
             }
 
-            let latest = await loadTeacherAttemptFeedback(attempt.id);
+            let latest = await loadTeacherAttemptFeedback(targetAttemptId);
+            if (activeAttemptIdRef.current !== targetAttemptId) return;
             if (returnAfterSave && latest) {
                 const returnResult = await returnTeacherAttemptFeedback(latest.id);
+                if (activeAttemptIdRef.current !== targetAttemptId) return;
                 if (!returnResult.localSaved && !returnResult.remoteSaved) {
                     setFeedbackNotice(returnResult.remoteError || "초안은 저장됐지만 학생에게 반환하지 못했습니다.");
                     return;
                 }
-                latest = await loadTeacherAttemptFeedback(attempt.id);
+                latest = await loadTeacherAttemptFeedback(targetAttemptId);
+                if (activeAttemptIdRef.current !== targetAttemptId) return;
             }
 
             if (latest) {
@@ -322,9 +333,11 @@ export default function TeacherAttemptPage() {
             }
             setFeedbackNotice(returnAfterSave ? "학생에게 피드백을 반환했습니다." : "피드백 초안을 저장했습니다.");
         } catch {
-            setFeedbackNotice("피드백 저장 중 오류가 발생했습니다.");
+            if (activeAttemptIdRef.current === targetAttemptId) {
+                setFeedbackNotice("피드백 저장 중 오류가 발생했습니다.");
+            }
         } finally {
-            setFeedbackSaving(false);
+            if (activeAttemptIdRef.current === targetAttemptId) setFeedbackSaving(false);
         }
     };
 
@@ -408,6 +421,8 @@ export default function TeacherAttemptPage() {
     const setSubQuestionReviewed = async (questionId: number, subQuestionId: string, reviewed: boolean) => {
         const currentAnswer = attempt.subQuestionAnswers?.[questionId]?.[subQuestionId];
         if (!currentAnswer) return;
+        const targetAttemptId = attempt.id;
+        if (activeAttemptIdRef.current !== targetAttemptId) return;
         const key = `${questionId}:${subQuestionId}`;
         setSavingSubQuestionKey(key);
         const next: Attempt = {
@@ -427,20 +442,25 @@ export default function TeacherAttemptPage() {
         };
         try {
             const result = await saveTeacherAttempt(next);
+            if (activeAttemptIdRef.current !== targetAttemptId) return;
             if (!result.localSaved && !result.remoteSaved) {
                 throw new Error(result.remoteError || '심화 응답 검토 상태를 저장하지 못했습니다.');
             }
             setAttempt(next);
             if (!result.remoteSaved) toast.info('로컬 저장됨', '개발 모드에서 이 기기에 검토 상태를 저장했습니다.');
         } catch {
-            toast.error('검토 상태 저장 실패', '네트워크 상태를 확인하고 다시 시도해 주세요.');
+            if (activeAttemptIdRef.current === targetAttemptId) {
+                toast.error('검토 상태 저장 실패', '네트워크 상태를 확인하고 다시 시도해 주세요.');
+            }
         } finally {
-            setSavingSubQuestionKey(null);
+            if (activeAttemptIdRef.current === targetAttemptId) setSavingSubQuestionKey(null);
         }
     };
     const handleAnswerQuestion = async (questionId: number) => {
         const body = (answerDrafts[questionId] || "").trim();
         if (!body) return;
+        const targetAttemptId = attempt.id;
+        if (activeAttemptIdRef.current !== targetAttemptId) return;
         const teacherName = readTeacherSession()?.displayName;
         setSavingAnswerFor(questionId);
         // Merge the reply onto the freshest server row, not the local-first cache
@@ -451,11 +471,14 @@ export default function TeacherAttemptPage() {
         let base = attempt;
         try {
             // The server gateway scopes this fresh fetch to the signed-in teacher's workspace.
-            const fresh = await loadTeacherAttemptRecord(attempt.id);
+            const fresh = await loadTeacherAttemptRecord(targetAttemptId);
+            if (activeAttemptIdRef.current !== targetAttemptId) return;
             if (fresh) base = fresh;
         } catch {
             // Offline or Supabase unavailable — fall back to the cached attempt.
+            if (activeAttemptIdRef.current !== targetAttemptId) return;
         }
+        if (activeAttemptIdRef.current !== targetAttemptId) return;
         let updated = answerStudentQuestion(base, questionId, body, nowIso, teacherName);
         if (!updated && base !== attempt) {
             // F5: the fresh remote row can be missing this question note (the
@@ -482,6 +505,7 @@ export default function TeacherAttemptPage() {
         }
         try {
             const result = await saveTeacherAttempt(updated);
+            if (activeAttemptIdRef.current !== targetAttemptId) return;
             if (!result.localSaved && !result.remoteSaved) {
                 throw new Error(result.remoteError || "attempt save failed");
             }
@@ -493,9 +517,11 @@ export default function TeacherAttemptPage() {
                 toast.info("답변 저장됨", "서버 동기화는 다음 접속 때 재시도됩니다.");
             }
         } catch {
-            toast.error("답변 저장 실패", "브라우저 저장소를 확인한 뒤 다시 시도해주세요.");
+            if (activeAttemptIdRef.current === targetAttemptId) {
+                toast.error("답변 저장 실패", "브라우저 저장소를 확인한 뒤 다시 시도해주세요.");
+            }
         } finally {
-            setSavingAnswerFor(null);
+            if (activeAttemptIdRef.current === targetAttemptId) setSavingAnswerFor(null);
         }
     };
     const handleDownloadHandwriting = () => {

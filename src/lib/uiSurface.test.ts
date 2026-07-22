@@ -905,6 +905,28 @@ describe("service UI surface", () => {
         expect(studentResultCss).toMatch(/\.panel\s*\{[^}]*padding:/);
     });
 
+    it("guards student result mutations by route and keeps the current attempt in its series", () => {
+        const teacherAttemptPage = readProjectFile("src/app/teacher/attempt/[attemptId]/page.tsx");
+        const mutationRanges = [
+            ["const saveFeedback = async", "if (accessDenied)"],
+            ["const setSubQuestionReviewed = async", "const handleAnswerQuestion = async"],
+            ["const handleAnswerQuestion = async", "const handleDownloadHandwriting ="],
+        ] as const;
+
+        expect(teacherAttemptPage).toContain("const activeAttemptIdRef = useRef(id);");
+        expect(teacherAttemptPage).toContain("activeAttemptIdRef.current = id;");
+        for (const [startMarker, endMarker] of mutationRanges) {
+            const start = teacherAttemptPage.indexOf(startMarker);
+            const end = teacherAttemptPage.indexOf(endMarker, start);
+            const mutation = teacherAttemptPage.slice(start, end);
+            expect(mutation).toContain("const targetAttemptId = attempt.id;");
+            expect(mutation).toContain("activeAttemptIdRef.current !== targetAttemptId");
+            expect(mutation).toMatch(/finally\s*\{[^}]*activeAttemptIdRef\.current === targetAttemptId/);
+        }
+        expect(teacherAttemptPage).toContain("const series = buildStudentAttemptSeries(");
+        expect(teacherAttemptPage).toContain("return series.length > 0 ? series : buildStudentAttemptSeries(attempt, [attempt]);");
+    });
+
     it("keeps the dashboard overview bento grid usable on mobile", () => {
         const css = readProjectFile("src/app/globals.css");
         const overviewTab = readProjectFile("src/components/dashboard/tabs/OverviewTab.tsx");
