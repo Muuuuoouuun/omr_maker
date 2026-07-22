@@ -849,6 +849,16 @@ describe("service UI surface", () => {
         expect(premiumGate).toContain("Pro 필요");
     });
 
+    it("wires the canonical teacher attempt route to the student result hub", () => {
+        const teacherAttemptPage = readProjectFile("src/app/teacher/attempt/[attemptId]/page.tsx");
+
+        expect(teacherAttemptPage).toContain("parseStudentResultView");
+        expect(teacherAttemptPage).toContain("buildStudentAttemptSeries");
+        expect(teacherAttemptPage).toContain("StudentResultHeader");
+        expect(teacherAttemptPage).toContain("StudentResultTabs");
+        expect(teacherAttemptPage).toContain("loadTeacherAttempts(found.examId)");
+    });
+
     it("keeps the dashboard overview bento grid usable on mobile", () => {
         const css = readProjectFile("src/app/globals.css");
         const overviewTab = readProjectFile("src/components/dashboard/tabs/OverviewTab.tsx");

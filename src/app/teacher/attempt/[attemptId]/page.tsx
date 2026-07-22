@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { useParams, useRouter } from "next/navigation";
+import { useParams, useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
 import dynamic from "next/dynamic";
 import { Download, ListChecks, Lock, MessageSquare, PenLine, Repeat2, Send, Target } from "lucide-react";
@@ -13,7 +13,11 @@ import { useServerPlan } from "@/lib/useServerPlan";
 import { formatKoreanDateTime } from "@/lib/pure";
 import { safeScorePercent } from "@/lib/scoreUtils";
 import { readActiveWorkspaceContext } from "@/lib/workspaceContext";
-import { loadTeacherAttempt as loadTeacherAttemptRecord, saveTeacherAttempt } from "@/lib/teacherAttemptClient";
+import {
+    loadTeacherAttempt as loadTeacherAttemptRecord,
+    loadTeacherAttempts,
+    saveTeacherAttempt,
+} from "@/lib/teacherAttemptClient";
 import { loadTeacherExam } from "@/lib/teacherExamClient";
 import { answerStudentQuestion } from "@/lib/studentQuestions";
 import { toast } from "@/components/Toast";
@@ -38,6 +42,10 @@ import {
     returnTeacherAttemptFeedback,
     saveTeacherAttemptFeedbackDraft,
 } from "@/lib/teacherFeedbackClient";
+import { buildStudentAttemptSeries, parseStudentResultView } from "@/lib/studentResultHub";
+import StudentResultHeader from "@/components/teacher/student-results/StudentResultHeader";
+import StudentResultTabs from "@/components/teacher/student-results/StudentResultTabs";
+import styles from "@/components/teacher/student-results/StudentResultHub.module.css";
 
 const PDFViewer = dynamic(() => import("@/components/PDFViewer"), { ssr: false });
 
@@ -74,9 +82,12 @@ function formatFeedbackDate(iso?: string): string {
 export default function TeacherAttemptPage() {
     const params = useParams();
     const router = useRouter();
+    const searchParams = useSearchParams();
     const id = params?.attemptId as string;
+    const activeView = parseStudentResultView(searchParams.get("view"));
 
     const [attempt, setAttempt] = useState<Attempt | null>(null);
+    const [peerAttempts, setPeerAttempts] = useState<Attempt[]>([]);
     const [exam, setExam] = useState<Exam | null>(null);
     const [drawings, setDrawings] = useState<PdfDrawings | undefined>(undefined);
     const [pdfFile, setPdfFile] = useState<File | null>(null);
@@ -131,6 +142,13 @@ export default function TeacherAttemptPage() {
                 }
 
                 setAttempt(found);
+                void loadTeacherAttempts(found.examId)
+                    .then(result => {
+                        if (!cancelled) setPeerAttempts(result.items);
+                    })
+                    .catch(() => {
+                        if (!cancelled) setPeerAttempts([]);
+                    });
 
                 const existingFeedback = await loadTeacherAttemptFeedback(found.id);
                 if (!cancelled) {
@@ -226,6 +244,11 @@ export default function TeacherAttemptPage() {
             recommendations,
         };
     }, [attempt, exam]);
+
+    const attemptSeries = useMemo(() => {
+        if (!attempt) return [];
+        return buildStudentAttemptSeries(attempt, peerAttempts.length ? peerAttempts : [attempt]);
+    }, [attempt, peerAttempts]);
 
     const mergedReviewDrawings = useMemo(
         () => mergePdfDrawings(drawings, teacherMarkupDrawings),
@@ -530,21 +553,35 @@ export default function TeacherAttemptPage() {
             </header>
 
             <main className="container teacher-attempt-main" style={{ padding: '1.5rem 1rem 2.5rem' }}>
-                {examUnavailable && (
-                    <div style={{
-                        marginBottom: '1rem',
-                        padding: '0.7rem 0.85rem',
-                        borderRadius: 'var(--radius-md)',
-                        border: '1px solid var(--warning)',
-                        background: 'color-mix(in srgb, var(--warning) 12%, transparent)',
-                        color: 'var(--warning)',
-                        fontSize: '0.82rem',
-                        fontWeight: 800,
-                    }}>
-                        시험 정보를 불러오지 못해 점수/유형 분석을 표시할 수 없습니다. 아래 점수는 제출 당시 저장된 값입니다.
-                    </div>
-                )}
-                <section className="teacher-attempt-layout" style={{
+                <div className={styles.shell}>
+                    <StudentResultHeader
+                        attempt={attempt}
+                        examTitle={exam?.title}
+                        series={attemptSeries}
+                        activeView={activeView}
+                    />
+                    <StudentResultTabs attemptId={attempt.id} activeView={activeView} />
+                    <section
+                        id={`student-result-panel-${activeView}`}
+                        role="tabpanel"
+                        aria-labelledby={`student-result-tab-${activeView}`}
+                        className={styles.panel}
+                    >
+                        {examUnavailable && (
+                            <div style={{
+                                marginBottom: '1rem',
+                                padding: '0.7rem 0.85rem',
+                                borderRadius: 'var(--radius-md)',
+                                border: '1px solid var(--warning)',
+                                background: 'color-mix(in srgb, var(--warning) 12%, transparent)',
+                                color: 'var(--warning)',
+                                fontSize: '0.82rem',
+                                fontWeight: 800,
+                            }}>
+                                시험 정보를 불러오지 못해 점수/유형 분석을 표시할 수 없습니다. 아래 점수는 제출 당시 저장된 값입니다.
+                            </div>
+                        )}
+                        <section className="teacher-attempt-layout" style={{
                     display: 'grid',
                     gridTemplateColumns: 'minmax(240px, 340px) minmax(0, 1fr)',
                     gap: '1rem',
@@ -1164,7 +1201,9 @@ export default function TeacherAttemptPage() {
                             )}
                         </div>
                     </section>
-                </section>
+                        </section>
+                    </section>
+                </div>
             </main>
         </div>
     );

@@ -7,6 +7,11 @@
   box-shadow: var(--shadow-sm);
 }
 
+.shell {
+  display: grid;
+  gap: 1rem;
+}
+
 .header {
   display: grid;
   gap: 1rem;
