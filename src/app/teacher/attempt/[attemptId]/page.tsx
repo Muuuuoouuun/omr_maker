@@ -117,6 +117,28 @@ export default function TeacherAttemptPage() {
     useEffect(() => {
         let cancelled = false;
         const loadTeacherAttempt = async () => {
+            setLoaded(false);
+            setAccessDenied(false);
+            setAttempt(null);
+            setExam(null);
+            setDrawings(undefined);
+            setPdfFile(null);
+            setHandwritingUnavailable(false);
+            setFeedback(null);
+            setFeedbackSummary("");
+            setFeedbackPolicy(DEFAULT_FEEDBACK_DOWNLOAD_POLICY);
+            setTeacherMarkupDrawings({});
+            setFeedbackViewMode("student");
+            setFeedbackNotice("");
+            setFeedbackSaving(false);
+            setAnswerDrafts({});
+            setSavingAnswerFor(null);
+            setWrongExpanded(false);
+            setAllQuestionsOpen(false);
+            setAllQuestionsWrongOnly(false);
+            setSubQuestionFilter('needs_review');
+            setSavingSubQuestionKey(null);
+
             if (!hasTeacherAccess()) {
                 setAccessDenied(true);
                 setLoaded(true);
@@ -125,7 +147,8 @@ export default function TeacherAttemptPage() {
 
             try {
                 const found = await loadTeacherAttemptRecord(id);
-                if (!found || cancelled) {
+                if (cancelled) return;
+                if (!found) {
                     setLoaded(true);
                     return;
                 }
@@ -146,9 +169,7 @@ export default function TeacherAttemptPage() {
                     .then(result => {
                         if (!cancelled) setPeerAttempts(result.items);
                     })
-                    .catch(() => {
-                        if (!cancelled) setPeerAttempts([]);
-                    });
+                    .catch(() => undefined);
 
                 const existingFeedback = await loadTeacherAttemptFeedback(found.id);
                 if (!cancelled) {
@@ -159,14 +180,17 @@ export default function TeacherAttemptPage() {
                     const markupDrawings = await loadFeedbackMarkupDrawings(nextFeedback);
                     if (!cancelled && markupDrawings) setTeacherMarkupDrawings(markupDrawings);
                 }
+                if (cancelled) return;
 
                 const parsedExam = await loadTeacherExam(found.examId);
+                if (cancelled) return;
                 if (parsedExam) {
                     setExam(parsedExam);
                     const pdfData = parsedExam.pdfDataRef?.store === "remote"
                         ? await getTeacherRemoteAssetUrl(parsedExam.pdfDataRef)
                             .then(result => result.status === "signed" ? result.signedUrl : undefined)
                         : parsedExam.pdfData;
+                    if (cancelled) return;
                     storedDataUrlToFile("problem.pdf", pdfData, parsedExam.pdfDataRef)
                         .then(file => {
                             if (!cancelled && file) setPdfFile(file);
@@ -590,7 +614,7 @@ export default function TeacherAttemptPage() {
                     <aside className="teacher-attempt-sidebar" style={{ display: 'grid', gap: '1rem' }}>
                         <div className="bento-card" style={{ padding: '1.25rem' }}>
                             <div style={{ fontSize: '0.75rem', fontWeight: 800, color: 'var(--muted)', letterSpacing: '0.08em', marginBottom: '0.6rem' }}>응시 요약</div>
-                            <h1 style={{ fontSize: '1.25rem', fontWeight: 900, marginBottom: '0.25rem' }}>{attempt.studentName}</h1>
+                            <div style={{ fontSize: '1.25rem', fontWeight: 900, marginBottom: '0.25rem' }}>{attempt.studentName}</div>
                             <div style={{ fontSize: '2.6rem', fontWeight: 900, color: 'var(--primary)', lineHeight: 1, marginTop: '0.75rem' }}>{percent}%</div>
                             <div style={{ color: 'var(--muted)', fontWeight: 700, marginTop: '0.25rem' }}>
                                 {analytics?.score.earnedScore ?? attempt.score} / {analytics?.score.totalScore ?? attempt.totalScore}점

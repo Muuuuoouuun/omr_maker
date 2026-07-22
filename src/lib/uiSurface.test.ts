@@ -859,6 +859,52 @@ describe("service UI surface", () => {
         expect(teacherAttemptPage).toContain("loadTeacherAttempts(found.examId)");
     });
 
+    it("resets route-scoped student result state while preserving peer attempts on load failure", () => {
+        const teacherAttemptPage = readProjectFile("src/app/teacher/attempt/[attemptId]/page.tsx");
+        const loaderStart = teacherAttemptPage.indexOf("const loadTeacherAttempt = async () => {");
+        const authCheck = teacherAttemptPage.indexOf("if (!hasTeacherAccess())", loaderStart);
+        const resetBlock = teacherAttemptPage.slice(loaderStart, authCheck);
+
+        for (const reset of [
+            "setLoaded(false);",
+            "setAccessDenied(false);",
+            "setAttempt(null);",
+            "setExam(null);",
+            "setDrawings(undefined);",
+            "setPdfFile(null);",
+            "setHandwritingUnavailable(false);",
+            "setFeedback(null);",
+            'setFeedbackSummary("");',
+            "setFeedbackPolicy(DEFAULT_FEEDBACK_DOWNLOAD_POLICY);",
+            "setTeacherMarkupDrawings({});",
+            'setFeedbackViewMode("student");',
+            'setFeedbackNotice("");',
+            "setFeedbackSaving(false);",
+            "setAnswerDrafts({});",
+            "setSavingAnswerFor(null);",
+            "setWrongExpanded(false);",
+            "setAllQuestionsOpen(false);",
+            "setAllQuestionsWrongOnly(false);",
+            "setSubQuestionFilter('needs_review');",
+            "setSavingSubQuestionKey(null);",
+        ]) {
+            expect(resetBlock).toContain(reset);
+        }
+        expect(resetBlock).not.toContain("setPeerAttempts");
+        expect(teacherAttemptPage).toContain("if (cancelled) return;\n                if (!found) {");
+        expect(teacherAttemptPage).toContain("if (cancelled) return;\n\n                const parsedExam");
+        expect(teacherAttemptPage).toContain(".catch(() => undefined);");
+        expect(teacherAttemptPage).not.toContain("setPeerAttempts([])");
+    });
+
+    it("keeps one student result heading and insets the legacy tab panel", () => {
+        const teacherAttemptPage = readProjectFile("src/app/teacher/attempt/[attemptId]/page.tsx");
+        const studentResultCss = readProjectFile("src/components/teacher/student-results/StudentResultHub.module.css");
+
+        expect(teacherAttemptPage).not.toContain("{attempt.studentName}</h1>");
+        expect(studentResultCss).toMatch(/\.panel\s*\{[^}]*padding:/);
+    });
+
     it("keeps the dashboard overview bento grid usable on mobile", () => {
         const css = readProjectFile("src/app/globals.css");
         const overviewTab = readProjectFile("src/components/dashboard/tabs/OverviewTab.tsx");

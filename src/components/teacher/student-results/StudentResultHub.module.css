@@ -12,6 +12,10 @@
   gap: 1rem;
 }
 
+.panel {
+  padding: 1rem;
+}
+
 .header {
   display: grid;
   gap: 1rem;
