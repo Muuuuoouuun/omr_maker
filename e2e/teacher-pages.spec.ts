@@ -198,6 +198,43 @@ test.describe("Create page label memory", () => {
         await expect(input).toHaveValue("45");
         await expect(page.getByText("새 시험 · 45문항 · 5지선다")).toBeVisible();
     });
+
+    test("keeps settings actions in one compact non-overlapping icon row", async ({ page }) => {
+        await page.setViewportSize({ width: 320, height: 800 });
+        await page.goto("/create");
+        await page.getByRole("tab", { name: "설정 0/20 정답" }).click();
+
+        const toolbar = page.locator(".create-settings-toolbar");
+        const toolbarBox = await toolbar.boundingBox();
+        expect(toolbarBox).not.toBeNull();
+        expect(toolbarBox!.height).toBeLessThanOrEqual(40);
+
+        const iconButtons = toolbar.locator(".create-settings-tool-button");
+        await expect(iconButtons).toHaveCount(4);
+        for (let index = 0; index < 4; index += 1) {
+            const box = await iconButtons.nth(index).boundingBox();
+            expect(box?.width).toBeGreaterThanOrEqual(32);
+            expect(box?.width).toBeLessThanOrEqual(36);
+            expect(box?.height).toBeLessThanOrEqual(36);
+        }
+
+        const toolbarItems = toolbar.locator(":scope > *");
+        await expect(toolbarItems).toHaveCount(4);
+        const boxes = await Promise.all(
+            Array.from({ length: 4 }, (_, index) => toolbarItems.nth(index).boundingBox()),
+        );
+        for (let left = 0; left < boxes.length; left += 1) {
+            for (let right = left + 1; right < boxes.length; right += 1) {
+                const a = boxes[left]!;
+                const b = boxes[right]!;
+                const overlaps = a.x < b.x + b.width
+                    && a.x + a.width > b.x
+                    && a.y < b.y + b.height
+                    && a.y + a.height > b.y;
+                expect(overlaps).toBe(false);
+            }
+        }
+    });
 });
 
 test.describe("Live Results page", () => {
