@@ -2604,20 +2604,9 @@ function CreateOMRPageInner() {
                                         필기 수집과 문항 DB용 영역입니다.
                                     </div>
                                 </div>
-                                <span style={{
-                                    flexShrink: 0,
-                                    fontSize: '0.7rem',
-                                    fontWeight: 900,
-                                    color: designSummary.pdfRegionLinked === questionsCount ? 'var(--text-success)' : 'var(--text-warning)',
-                                    background: designSummary.pdfRegionLinked === questionsCount
-                                        ? 'color-mix(in srgb, var(--success) 10%, var(--surface))'
-                                        : 'color-mix(in srgb, var(--warning) 10%, var(--surface))',
-                                    border: designSummary.pdfRegionLinked === questionsCount
-                                        ? '1px solid color-mix(in srgb, var(--success) 28%, var(--border))'
-                                        : '1px solid color-mix(in srgb, var(--warning) 28%, var(--border))',
-                                    borderRadius: '999px',
-                                    padding: '0.2rem 0.5rem',
-                                }}>
+                                <span
+                                    className={`create-region-count-text ${designSummary.pdfRegionLinked === questionsCount ? 'is-ready' : 'needs-work'}`}
+                                >
                                     {designSummary.pdfRegionLinked}/{questionsCount}
                                 </span>
                             </div>

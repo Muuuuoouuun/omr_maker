@@ -235,6 +235,47 @@ test.describe("Create page label memory", () => {
             }
         }
     });
+
+    test("renders readiness and progress counts as text without pill backgrounds", async ({ page }) => {
+        await page.goto("/create");
+
+        const input = page.getByLabel("문항 수 직접 입력");
+        await input.fill("45");
+        await input.press("Enter");
+        await expect(input).toHaveValue("45");
+
+        const textOnlyIndicators = [
+            page.locator(".create-publish-chip"),
+            page.locator(".create-design-check-pill"),
+            page.locator("#create-region-calibration-anchor > div > span"),
+            page.locator(".create-preview-status"),
+        ];
+
+        for (const indicator of textOnlyIndicators) {
+            await expect(indicator).toHaveCount(1);
+            const styles = await indicator.evaluate(element => {
+                const computed = getComputedStyle(element);
+                return {
+                    backgroundColor: computed.backgroundColor,
+                    borderRadius: computed.borderRadius,
+                    borderTopWidth: computed.borderTopWidth,
+                    paddingLeft: computed.paddingLeft,
+                    paddingRight: computed.paddingRight,
+                };
+            });
+            expect(styles).toEqual({
+                backgroundColor: "rgba(0, 0, 0, 0)",
+                borderRadius: "0px",
+                borderTopWidth: "0px",
+                paddingLeft: "0px",
+                paddingRight: "0px",
+            });
+        }
+
+        await expect(page.locator(".create-design-check-pill")).toHaveText("0/45 정답");
+        await expect(page.locator("#create-region-calibration-anchor > div > span")).toHaveText("0/45");
+        await expect(page.locator(".create-preview-status")).toHaveText("0/45 정답 입력");
+    });
 });
 
 test.describe("Live Results page", () => {

@@ -3912,8 +3912,8 @@ body:has(.create-workspace.is-resizing) {
 }
 
 .create-settings-toolbar .create-publish-chip {
-  min-height: 34px;
-  padding: 0 0.55rem;
+  min-height: 0;
+  padding: 0;
   flex: 0 0 auto;
   white-space: nowrap;
 }
@@ -4085,29 +4085,29 @@ body:has(.create-workspace.is-resizing) {
   white-space: nowrap;
 }
 
-.create-design-check-pill {
+.create-design-check-pill,
+.create-region-count-text {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  min-height: 1.35rem;
-  padding: 0.1rem 0.48rem;
-  border: 1px solid transparent;
-  border-radius: var(--radius-full);
+  min-height: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
   font-size: 0.68rem;
   font-weight: 900;
   white-space: nowrap;
 }
 
-.create-design-check-pill.is-ready {
+.create-design-check-pill.is-ready,
+.create-region-count-text.is-ready {
   color: var(--text-success);
-  background: color-mix(in srgb, var(--success) 10%, var(--surface));
-  border-color: color-mix(in srgb, var(--success) 28%, var(--border));
 }
 
-.create-design-check-pill.needs-work {
+.create-design-check-pill.needs-work,
+.create-region-count-text.needs-work {
   color: var(--text-warning);
-  background: color-mix(in srgb, var(--warning) 10%, var(--surface));
-  border-color: color-mix(in srgb, var(--warning) 28%, var(--border));
 }
 
 .create-design-metrics-mini {
@@ -4352,8 +4352,8 @@ body:has(.create-workspace.is-resizing) {
   }
 
   .create-settings-toolbar .create-publish-chip {
-    min-height: 34px;
-    padding-inline: 0.55rem;
+    min-height: 0;
+    padding-inline: 0;
     font-size: 0.66rem;
   }
 
@@ -4898,26 +4898,23 @@ body:has(.create-workspace.is-resizing) {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  min-height: 28px;
-  padding: 0 0.6rem;
-  border-radius: var(--radius-full);
+  min-height: 0;
+  padding: 0;
+  border-radius: 0;
   font-size: 0.72rem;
   font-weight: 900;
   line-height: 1;
   white-space: nowrap;
-  border: 1px solid transparent;
+  border: 0;
+  background: transparent;
 }
 
 .create-publish-chip.is-ready {
   color: var(--text-success);
-  background: color-mix(in srgb, var(--success) 10%, var(--surface));
-  border-color: color-mix(in srgb, var(--success) 28%, var(--border));
 }
 
 .create-publish-chip.needs-work {
   color: var(--text-warning);
-  background: color-mix(in srgb, var(--warning) 10%, var(--surface));
-  border-color: color-mix(in srgb, var(--warning) 28%, var(--border));
 }
 
 .create-preview-main {
@@ -5022,10 +5019,10 @@ body:has(.create-workspace.is-resizing) {
 
 .create-preview-status {
   min-width: 0;
-  padding: 0.22rem 0.55rem;
-  border-radius: var(--radius-full);
-  border: 1px solid rgba(99, 102, 241, 0.16);
-  background: rgba(99, 102, 241, 0.08);
+  padding: 0;
+  border-radius: 0;
+  border: 0;
+  background: transparent;
   color: var(--primary);
   font-size: 0.72rem;
   font-weight: 800;
