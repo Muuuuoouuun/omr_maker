@@ -8,6 +8,19 @@ function isLocalBaseURL(baseURL?: string): boolean {
     return url.hostname === "localhost" || url.hostname === "127.0.0.1" || url.hostname === "::1";
 }
 
+function sortedCoordinateGroupCounts(values: number[], tolerance = 2): number[] {
+    const groups: number[][] = [];
+    for (const value of [...values].sort((left, right) => left - right)) {
+        const currentGroup = groups[groups.length - 1];
+        if (currentGroup && Math.abs(value - currentGroup[0]) <= tolerance) {
+            currentGroup.push(value);
+        } else {
+            groups.push([value]);
+        }
+    }
+    return groups.map(group => group.length).sort((left, right) => left - right);
+}
+
 async function expectNoHorizontalOverflow(page: Page) {
     await expect.poll(async () => page.evaluate(() => (
         document.documentElement.scrollWidth > document.documentElement.clientWidth
@@ -282,9 +295,11 @@ test.describe("Teacher phone and tablet app surfaces", () => {
         const boxes = await Promise.all(["답안", "필기", "리포트", "분석"].map(
             label => tabs.getByRole("tab", { name: label }).boundingBox(),
         ));
-        expect(boxes.every(box => box !== null)).toBe(true);
-        expect(new Set(boxes.map(box => Math.round(box!.y))).size).toBe(2);
-        for (const box of boxes) expect(box!.height).toBeGreaterThanOrEqual(44);
+        const tabBoxes = boxes.filter((box): box is NonNullable<typeof box> => box !== null);
+        expect(tabBoxes).toHaveLength(4);
+        expect(sortedCoordinateGroupCounts(tabBoxes.map(box => box.y))).toEqual([2, 2]);
+        expect(sortedCoordinateGroupCounts(tabBoxes.map(box => box.x))).toEqual([2, 2]);
+        for (const box of tabBoxes) expect(box.height).toBeGreaterThanOrEqual(44);
         await expect(page.getByLabel("응시 회차 선택")).toBeVisible();
         await expectNoHorizontalOverflow(page);
     });
