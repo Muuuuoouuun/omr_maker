@@ -2,11 +2,23 @@ import { describe, expect, it } from "vitest";
 import {
     buildDeploymentFixture,
     redactFixtureSummary,
+    vercelReadableEnvArgs,
     verifyStudentStartCodeHash,
     verifyTeacherPasswordHash,
 } from "../../scripts/deployment-test-accounts-core.mjs";
 
 describe("deployment test account fixture", () => {
+    it("keeps provisioned Vercel values readable for authenticated verification", () => {
+        expect(vercelReadableEnvArgs("TEACHER_ACCOUNTS", "production")).toEqual([
+            "env",
+            "add",
+            "TEACHER_ACCOUNTS",
+            "production",
+            "--force",
+            "--no-sensitive",
+        ]);
+    });
+
     it("builds shared accounts without plaintext teacher passwords", () => {
         const fixture = buildDeploymentFixture({
             studentSessionSecret: "student-secret",

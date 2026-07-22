@@ -15,6 +15,14 @@ export const STUDENT_START_CODES = Object.freeze({
     student3: "CDE456",
 });
 
+export function vercelReadableEnvArgs(name, target) {
+    if (typeof name !== "string" || !name.trim()) throw new Error("Vercel environment variable name is required");
+    if (!new Set(["production", "preview", "development"]).has(target)) {
+        throw new Error("Vercel environment target is invalid");
+    }
+    return ["env", "add", name, target, "--force", "--no-sensitive"];
+}
+
 const HASH_ALGORITHM = "pbkdf2-sha256";
 const HASH_ITERATIONS = 120_000;
 const HASH_BYTES = 32;

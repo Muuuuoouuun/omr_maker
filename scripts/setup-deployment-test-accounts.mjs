@@ -10,6 +10,7 @@ import {
     redactFixtureSummary,
     SHARED_CLASS_ID,
     SHARED_ORGANIZATION_ID,
+    vercelReadableEnvArgs,
 } from "./deployment-test-accounts-core.mjs";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -62,8 +63,8 @@ function pullEnvironment(target, directory) {
 function addEnvironmentValue(name, target, value) {
     // Vercel encrypts ordinary environment variables at rest while keeping them
     // available to authenticated `env pull` verification. The `--sensitive`
-    // variant is intentionally not used because it becomes permanently unreadable.
-    runVercel(["env", "add", name, target, "--force"], { input: `${value}\n` });
+    // default is intentionally overridden because it becomes permanently unreadable.
+    runVercel(vercelReadableEnvArgs(name, target), { input: `${value}\n` });
 }
 
 function serverConfig(env, target) {
