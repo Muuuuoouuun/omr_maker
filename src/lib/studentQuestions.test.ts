@@ -2,8 +2,10 @@ import { describe, expect, it } from "vitest";
 import type { Attempt } from "@/types/omr";
 import {
     answerStudentQuestion,
+    answeredQuestionKeys,
     answeredStudentQuestions,
     collectStudentQuestionInbox,
+    newlyAnsweredKeys,
     pendingStudentQuestions,
     studentQuestionsByQuestionId,
     upsertStudentQuestion,
@@ -99,5 +101,26 @@ describe("studentQuestions", () => {
 
     it("returns empty inbox lists when no attempts carry questions", () => {
         expect(collectStudentQuestionInbox([attempt()])).toEqual({ pending: [], answered: [] });
+    });
+
+    it("keys only answered questions and re-keys on a fresh answer timestamp", () => {
+        let a = attempt({ id: "a1" });
+        a = upsertStudentQuestion(a, { questionId: 1, questionNumber: 1, body: "q1" }, "2026-07-01T09:00:00.000Z")!;
+        a = upsertStudentQuestion(a, { questionId: 2, questionNumber: 2, body: "q2" }, "2026-07-01T09:10:00.000Z")!;
+        a = answerStudentQuestion(a, 1, "answer", "2026-07-02T08:00:00.000Z", "선생")!;
+
+        // Only the answered question (q1) is keyed; the still-queued q2 is not.
+        expect(answeredQuestionKeys([a])).toEqual(["a1:1:2026-07-02T08:00:00.000Z"]);
+
+        // Re-answering the same question with a newer timestamp yields a new key.
+        const reAnswered = answerStudentQuestion(a, 1, "정정", "2026-07-03T08:00:00.000Z", "선생")!;
+        expect(answeredQuestionKeys([reAnswered])).toEqual(["a1:1:2026-07-03T08:00:00.000Z"]);
+    });
+
+    it("diffs answer keys against the seen set", () => {
+        const seen = ["a1:1:t0"];
+        expect(newlyAnsweredKeys(["a1:1:t0", "a1:2:t1"], seen)).toEqual(["a1:2:t1"]);
+        expect(newlyAnsweredKeys(["a1:1:t0"], seen)).toEqual([]);
+        expect(newlyAnsweredKeys([], seen)).toEqual([]);
     });
 });

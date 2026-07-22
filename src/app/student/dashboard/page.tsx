@@ -30,6 +30,7 @@ import { clearStudentServerSession } from "@/app/actions/studentSession";
 import { listMyAssignmentsClient } from "@/lib/studentExamClient";
 import type { SolvableExam } from "@/lib/examSolvePayload";
 import { loadStudentReturnedFeedbackWithDevFallback } from "@/lib/studentFeedbackClient";
+import { answeredQuestionKeys, newlyAnsweredKeys } from "@/lib/studentQuestions";
 
 /** True when this device holds an unsubmitted draft for the exam/owner pair. */
 function hasLocalDraftFor(examId: string, ownerKey: string): boolean {
@@ -195,6 +196,28 @@ export default function StudentDashboard() {
                 retakeCount: myRetakeAttempts.length,
             });
             setGuestMergePreview(mergePreview && mergePreview.mergeableCount > 0 ? mergePreview : null);
+
+            // Arrival notification: toast once when a teacher answer newly lands.
+            // The first load on a device establishes a silent baseline so we only
+            // announce answers that arrive after the student last saw the dashboard.
+            if (!currentUser.isGuest) {
+                try {
+                    const SEEN_KEY = "omr_student_seen_answers";
+                    const currentKeys = answeredQuestionKeys(myBaseAttempts);
+                    const raw = localStorage.getItem(SEEN_KEY);
+                    if (raw === null) {
+                        localStorage.setItem(SEEN_KEY, JSON.stringify(currentKeys));
+                    } else {
+                        let seen: string[] = [];
+                        try { const parsed = JSON.parse(raw); if (Array.isArray(parsed)) seen = parsed; } catch {}
+                        const fresh = newlyAnsweredKeys(currentKeys, seen);
+                        if (fresh.length > 0) {
+                            toast.success("선생님 답변 도착", `${fresh.length}개 질문에 답변이 등록됐어요. 완료 기록에서 복습하세요.`);
+                        }
+                        localStorage.setItem(SEEN_KEY, JSON.stringify(currentKeys));
+                    }
+                } catch { /* storage unavailable — badge still surfaces answers */ }
+            }
         };
 
         void loadStudentData();

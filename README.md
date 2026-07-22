@@ -106,6 +106,7 @@ SUPABASE_SERVICE_ROLE_KEY=server_only_service_role_key_for_workspace_bootstrap
 3. Restart the dev or production server.
 
 See `supabase/README.md` for details, the current RLS warning, and the production RLS handoff.
+Before going live with real student data, work through the consolidated [Go-Live Gate](docs/production-readiness.md).
 
 The alpha schema includes organization, member, class, exam, attempt, plan-usage, and audit-log tables. Current saves use an interim teacher-scoped `teacher_<hash>` organization id when a teacher session is active. `SUPABASE_SERVICE_ROLE_KEY` is required for authoritative plan lookup and atomic quota reservation; when set, teacher login also bootstraps the matching workspace/member/profile rows from the server. Current `schema.sql` business-data RLS policies are open only for alpha/local testing (plan-usage tables remain server-only); configure Supabase Auth, fill real `organization_id`/membership rows, and apply `supabase/production-rls.sql` before storing real student data.
 

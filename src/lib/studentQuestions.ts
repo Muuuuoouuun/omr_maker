@@ -82,6 +82,31 @@ export function answeredStudentQuestions(attempt: Pick<Attempt, "studentQuestion
     return (attempt.studentQuestions || []).filter(note => note.status === "answered" && !!note.answer);
 }
 
+/**
+ * Stable keys for every teacher-answered question across attempts. Keyed by
+ * attempt + question + answer timestamp so re-answering the same question
+ * produces a fresh key (and thus re-notifies the student).
+ */
+export function answeredQuestionKeys(
+    attempts: Pick<Attempt, "id" | "studentQuestions">[],
+): string[] {
+    const keys: string[] = [];
+    for (const attempt of attempts) {
+        for (const note of attempt.studentQuestions || []) {
+            if (note.status === "answered" && note.answer) {
+                keys.push(`${attempt.id}:${note.questionNumber}:${note.answer.createdAt}`);
+            }
+        }
+    }
+    return keys;
+}
+
+/** Answer keys present now but not in the previously-seen set. */
+export function newlyAnsweredKeys(current: string[], seen: string[]): string[] {
+    const seenSet = new Set(seen);
+    return current.filter(key => !seenSet.has(key));
+}
+
 export interface StudentQuestionInboxEntry {
     attemptId: string;
     examId: string;

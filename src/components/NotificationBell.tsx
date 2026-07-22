@@ -6,6 +6,7 @@ import { Bell, CheckCircle2, CreditCard, MessageCircle, Users, Clock } from "luc
 import { readLocalAttempts, readLocalExams } from "@/lib/omrPersistence";
 import { readRosterGroups, readRosterInvites, readRosterStudents } from "@/lib/rosterStorage";
 import { buildKakaoNotificationCandidates } from "@/lib/kakaoNotificationQueue";
+import { collectStudentQuestionInbox } from "@/lib/studentQuestions";
 
 interface Notification {
     id: string;
@@ -16,7 +17,7 @@ interface Notification {
     href?: string;
     kind: "info" | "success" | "warning" | "billing";
     /** Stable key for auto-generated notifications so we don't spawn duplicates on refresh */
-    source?: "invites" | "recent-exams" | "plan-renewal" | "kakao-candidates";
+    source?: "invites" | "recent-exams" | "plan-renewal" | "kakao-candidates" | "student-questions";
 }
 
 const STORAGE_KEY = "omr_notifications";
@@ -85,7 +86,25 @@ function computeAutoNotifications(): Notification[] {
         }
     } catch {}
 
-    // 3) Kakao notification candidates. These are planning records only:
+    // 3) Pending student questions waiting on a teacher answer. Links to the
+    // dashboard overview inbox where the teacher can reply.
+    try {
+        const pendingQuestions = collectStudentQuestionInbox(attempts).pending.length;
+        if (pendingQuestions > 0) {
+            out.push({
+                id: `auto-student-questions:${pendingQuestions}`,
+                source: "student-questions",
+                kind: "info",
+                title: "학생 질문 대기",
+                message: `${pendingQuestions}건의 학생 질문이 답변을 기다립니다`,
+                time: "답변 전",
+                unread: true,
+                href: "/teacher/dashboard#student-question-inbox",
+            });
+        }
+    } catch {}
+
+    // 4) Kakao notification candidates. These are planning records only:
     // no message is sent from this local UI.
     try {
         const queue = buildKakaoNotificationCandidates({

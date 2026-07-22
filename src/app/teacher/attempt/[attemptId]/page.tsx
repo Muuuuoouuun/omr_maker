@@ -930,6 +930,26 @@ export default function TeacherAttemptPage() {
                                     필기 파일 저장 Pro
                                 </Link>
                             )}
+                            {!attempt.handwritingArchived
+                                && (handwriting?.summary.strokeCount ?? attempt.drawingStrokeCount ?? 0) > 0 && (
+                                <div style={{ marginTop: '0.9rem' }}>
+                                    <p style={{ fontSize: '0.78rem', color: 'var(--muted)', lineHeight: 1.5, marginBottom: handwritingArchiveEnabled ? 0 : '0.55rem', wordBreak: 'keep-all' }}>
+                                        이 제출은 {getPlanLabel(handwriting?.plan || attempt.handwritingPlan || 'free')} 플랜이라 학생 필기 원본이 보관되지 않았습니다.
+                                        {!handwritingArchiveEnabled && ' Pro 이상에서는 이후 제출부터 학생 필기가 자동 보관됩니다.'}
+                                    </p>
+                                    {!handwritingArchiveEnabled && (
+                                        <Link
+                                            href="/teacher/billing"
+                                            className="btn btn-primary"
+                                            style={{ width: '100%', fontSize: '0.82rem', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: '0.35rem' }}
+                                            title="Pro 이상에서 학생 필기가 자동 보관됩니다."
+                                        >
+                                            <Lock size={14} />
+                                            Pro로 필기 보관하기
+                                        </Link>
+                                    )}
+                                </div>
+                            )}
                         </div>
 
                         <div className="bento-card" style={{ padding: '1.25rem' }}>

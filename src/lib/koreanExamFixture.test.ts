@@ -17,6 +17,11 @@ import {
     uniqueSupabaseTargets,
 } from "../../scripts/setup-korean-exam-fixture.mjs";
 
+// The fixture builder lives in an untyped .mjs script, so annotate the shapes
+// this test reaches into to keep `tsc --noEmit` free of implicit-any.
+interface FixtureQuestion { id: number; answer: number; score: number; }
+interface FixtureResult { status: string; questionId: number; studentId: string; studentProfileId: string; }
+
 describe("Korean exam Supabase fixture", () => {
     const fixture = buildKoreanExamFixture({ now: "2026-07-22T09:00:00.000Z" });
 
@@ -32,11 +37,11 @@ describe("Korean exam Supabase fixture", () => {
 
         for (const exam of fixture.exams) {
             expect(exam.questions).toHaveLength(45);
-            expect(exam.questions.map(question => question.id)).toEqual(Array.from({ length: 45 }, (_, index) => index + 1));
-            expect(exam.questions.every(question => Number.isInteger(question.answer) && question.answer >= 1 && question.answer <= 5)).toBe(true);
-            expect(exam.questions.filter(question => question.score === 3)).toHaveLength(10);
-            expect(exam.questions.filter(question => question.score === 2)).toHaveLength(35);
-            expect(exam.questions.reduce((total, question) => total + question.score, 0)).toBe(100);
+            expect(exam.questions.map((question: FixtureQuestion) => question.id)).toEqual(Array.from({ length: 45 }, (_, index) => index + 1));
+            expect(exam.questions.every((question: FixtureQuestion) => Number.isInteger(question.answer) && question.answer >= 1 && question.answer <= 5)).toBe(true);
+            expect(exam.questions.filter((question: FixtureQuestion) => question.score === 3)).toHaveLength(10);
+            expect(exam.questions.filter((question: FixtureQuestion) => question.score === 2)).toHaveLength(35);
+            expect(exam.questions.reduce((total: number, question: FixtureQuestion) => total + question.score, 0)).toBe(100);
             expect(exam.accessConfig).toEqual({ type: "group", groupIds: [SHARED_CLASS_ID] });
             expect(exam.fixtureOwner).toBe(KOREAN_EXAM_FIXTURE_OWNER);
         }
@@ -68,16 +73,16 @@ describe("Korean exam Supabase fixture", () => {
 
         const original = fixture.attempts[0];
         const retake = fixture.attempts[1];
-        expect(original.questionResults.some(result => result.status === "wrong")).toBe(true);
-        expect(original.questionResults.some(result => result.status === "unanswered")).toBe(true);
+        expect(original.questionResults.some((result: FixtureResult) => result.status === "wrong")).toBe(true);
+        expect(original.questionResults.some((result: FixtureResult) => result.status === "unanswered")).toBe(true);
         expect(original.handwriting?.summary.strokeCount).toBeGreaterThan(0);
         expect(original.drawings).toEqual(fixture.handwritingPayloads[0].drawings);
         expect(retake.retake?.sourceAttemptId).toBe(original.id);
         expect(retake.retake?.questionIds).toEqual(
-            original.questionResults.filter(result => result.status !== "correct").map(result => result.questionId),
+            original.questionResults.filter((result: FixtureResult) => result.status !== "correct").map((result: FixtureResult) => result.questionId),
         );
-        expect(retake.questionResults.some(result => result.status === "correct")).toBe(true);
-        expect(retake.questionResults.some(result => result.status === "wrong")).toBe(true);
+        expect(retake.questionResults.some((result: FixtureResult) => result.status === "correct")).toBe(true);
+        expect(retake.questionResults.some((result: FixtureResult) => result.status === "wrong")).toBe(true);
 
         expect(fixture.feedback).toHaveLength(1);
         expect(fixture.feedback[0]).toMatchObject({
@@ -91,7 +96,7 @@ describe("Korean exam Supabase fixture", () => {
     it("uses the canonical student profile id for both student read-gateway keys", () => {
         for (const attempt of fixture.attempts) {
             expect(attempt.studentId).toBe(attempt.studentProfileId);
-            expect(attempt.questionResults.every(result => (
+            expect(attempt.questionResults.every((result: FixtureResult) => (
                 result.studentId === attempt.studentProfileId
                 && result.studentProfileId === attempt.studentProfileId
             ))).toBe(true);
@@ -189,7 +194,7 @@ describe("Korean exam Supabase fixture", () => {
             { target: "production", url: "https://same.supabase.co", serviceRoleKey: "a" },
             { target: "preview", url: "https://same.supabase.co", serviceRoleKey: "b" },
             { target: "development", url: "https://other.supabase.co", serviceRoleKey: "c" },
-        ]).map(config => config.target)).toEqual(["production", "development"]);
+        ]).map((config: { target: string }) => config.target)).toEqual(["production", "development"]);
     });
 
     it("exposes exact live verification expectations", () => {

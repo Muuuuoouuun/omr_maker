@@ -421,7 +421,7 @@ export default function OverviewTab({ exams: examsProp, attempts, stats, trendDa
 
             {/* 1.5 Student question inbox — shown only when questions exist */}
             {hasStudentQuestions && (
-                <div className="bento-card col-span-2" style={{ padding: '1.5rem', display: 'flex', flexDirection: 'column' }}>
+                <div id="student-question-inbox" className="bento-card col-span-2" style={{ padding: '1.5rem', display: 'flex', flexDirection: 'column', scrollMarginTop: '5rem' }}>
                     <div style={{ marginBottom: '1rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '0.75rem' }}>
                         <h3 style={{ fontSize: '1.1rem', fontWeight: 700, color: 'var(--foreground)', display: 'inline-flex', alignItems: 'center', gap: '0.45rem' }}>
                             <MessageSquare size={18} style={{ color: '#0f766e' }} />

@@ -589,6 +589,47 @@ test.describe("Teacher and student full journey", () => {
         await expect(page.getByRole("row", { name: new RegExp(`${TEST_STUDENT_NAME}.*20점`) })).toBeVisible();
     });
 
+    test("skips the entry dialog and scopes questions when re-entering a retake from the student's own review", async ({ page }) => {
+        await seedExamAndStudent(page);
+        await requireStartCodeForSeedStudent(page);
+
+        // Log in as the roster student and submit with Q3 wrong (answer key is 4).
+        await page.goto("/?role=student");
+        await page.getByLabel("이름").fill(TEST_STUDENT_NAME);
+        await page.getByLabel("학생번호 또는 이메일").fill("kim.student@example.com");
+        await page.getByLabel("반 선택").selectOption(TEST_GROUP_ID);
+        await page.getByLabel("시작 코드").fill(TEST_STUDENT_START_CODE);
+        await page.getByRole("button", { name: "시험 시작하기" }).click();
+        await expect(page).toHaveURL(/\/student\/dashboard$/);
+
+        await page.getByRole("link", { name: "시작" }).click();
+        await expect(page).toHaveURL(new RegExp(`/solve/${TEST_EXAM_ID}$`), { timeout: 15_000 });
+        await ensureAnswerPaneVisible(page);
+        await page.getByRole("radio", { name: "문제 1번 보기 2" }).click();
+        await page.getByRole("radio", { name: "문제 2번 보기 3" }).click();
+        await page.getByRole("radio", { name: "문제 3번 보기 1" }).click();
+        await page.locator(".solve-submit-button").click();
+        const confirmDialog = page.getByRole("dialog", { name: "답안 제출" });
+        await expect(confirmDialog).toBeVisible();
+        await confirmDialog.getByRole("button", { name: "제출하기" }).click();
+        await expect(page).toHaveURL(/\/student\/review\/[^/?#]+$/, { timeout: 15_000 });
+
+        // Re-enter the wrong-answer retake from the student's own review.
+        await page.getByRole("link", { name: "오답만" }).click();
+        await expect(page).toHaveURL(new RegExp(`/solve/${TEST_EXAM_ID}\\?.*retakeFrom=`), { timeout: 15_000 });
+
+        // Auto-skip: the "시험 입장 확인" dialog must not appear for the owner's retake.
+        await expect(page.getByRole("dialog", { name: "시험 입장 확인" })).toBeHidden();
+
+        // The answer pane is reachable without dismissing any dialog, scoped to Q3 only.
+        const expandButton = page.getByRole("button", { name: "답안지 펼치기", exact: true });
+        if (await expandButton.isVisible().catch(() => false)) {
+            await expandButton.click();
+        }
+        await expect(page.getByRole("radio", { name: "문제 3번 보기 4" })).toBeVisible();
+        await expect(page.getByRole("radio", { name: "문제 1번 보기 1" })).toHaveCount(0);
+    });
+
     test("creates an exam through the teacher UI before student submission and analytics", async ({ page }) => {
         await loginAsTeacher(page, "/create");
         await expect(page.getByText("스마트 에디터")).toBeVisible();
