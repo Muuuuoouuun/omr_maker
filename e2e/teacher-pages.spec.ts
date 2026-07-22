@@ -174,10 +174,17 @@ test.describe("Create page label memory", () => {
         expect(storedMemory).toContain("화자의 태도");
     });
 
-    test("accepts a custom 45-question exam size", async ({ page }) => {
+    test("keeps presets compact while accepting a custom 45-question exam size", async ({ page }) => {
         await page.goto("/create");
 
         const input = page.getByLabel("문항 수 직접 입력");
+        const presetButtons = page.locator(".create-count-buttons .btn");
+        await expect(presetButtons).toHaveCount(5);
+        for (let index = 0; index < 5; index += 1) {
+            const box = await presetButtons.nth(index).boundingBox();
+            expect(box?.height).toBeLessThanOrEqual(36);
+        }
+
         await input.fill("45");
         await input.press("Enter");
 

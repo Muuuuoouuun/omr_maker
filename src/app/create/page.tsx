@@ -2491,13 +2491,16 @@ function CreateOMRPageInner() {
                             <span>문항 수</span>
                         </div>
                         <div style={{ minWidth: 0, display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) 5.25rem', gap: '0.35rem' }}>
-                            <div className="create-count-buttons">
+                            <div
+                                className="create-count-buttons"
+                                style={{ gridTemplateColumns: 'repeat(5, 2.15rem)', gap: '0.25rem', justifyContent: 'start', alignSelf: 'center' }}
+                            >
                                 {[20, 25, 30, 40, 50].map(count => (
                                     <button
                                         key={count}
                                         type="button"
                                         className={`btn ${questionsCount === count ? 'btn-primary' : 'btn-secondary'}`}
-                                        style={{ padding: '0.42rem 0.2rem' }}
+                                        style={{ minWidth: 0, minHeight: 34, padding: '0.28rem 0.12rem', fontSize: '0.72rem' }}
                                         onClick={() => {
                                             setQuestionCountInput(String(count));
                                             handleQuestionCountChange(count);
