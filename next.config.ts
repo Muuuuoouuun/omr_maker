@@ -11,9 +11,18 @@ const baselineSecurityHeaders = [
   },
 ];
 
+// Next.js Server Action ids change between builds. A student can keep a solve
+// page open for 80+ minutes while Vercel promotes a newer deployment, so tag
+// each build and let Next.js hard-reload on version skew before it posts an old
+// action id. Vercel's raw id starts with the prefix reserved from custom ids.
+const deploymentId = process.env.VERCEL_DEPLOYMENT_ID
+  ?.replace(/^dpl_/, "")
+  .slice(0, 32);
+
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   poweredByHeader: false,
+  ...(deploymentId ? { deploymentId } : {}),
   turbopack: {
     root: process.cwd(),
   },

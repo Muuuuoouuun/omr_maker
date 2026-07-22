@@ -18,6 +18,15 @@ afterEach(() => {
 });
 
 describe("security response headers", () => {
+    it("adds a deployment-specific id so long-running exam pages recover from version skew", async () => {
+        vi.resetModules();
+        vi.stubEnv("VERCEL_DEPLOYMENT_ID", "dpl_2MRGdE6G5Q1fi2Bms5q4k4uBLUqN");
+
+        const { default: nextConfig } = await import("../../next.config");
+
+        expect(nextConfig.deploymentId).toBe("2MRGdE6G5Q1fi2Bms5q4k4uBLUqN");
+    });
+
     it("denies framing, MIME sniffing, sensitive device APIs, and referrer leakage", async () => {
         vi.resetModules();
         const { default: nextConfig } = await import("../../next.config");
