@@ -53,4 +53,20 @@ npm run accounts:deploy:verify
 
 ## 샘플 데이터 경계
 
-일반 `admin`과 `teacher1`~`teacher3` 계정에는 합성 시험·학생·분석 데이터를 넣지 않습니다. 데이터가 없으면 실제 빈 상태를 표시합니다. 기존 합성 분석 데이터는 로그인 화면의 공개 `omr-showcase` 목업 계정에서만 표시되며 Supabase 테스트 조직에는 저장되지 않습니다.
+`teacher_sharedqa` 조직에는 국어 QA 시나리오를 위해 실제 Supabase 행과 비공개 Storage 파일로 구성한 샘플 시험 3개가 등록되어 있습니다. 이 데이터는 `admin`과 `teacher1`~`teacher3` 계정에서 공통으로 보입니다.
+
+- 학생 1: 2025학년도 수능 원시험 76점, 교사 피드백·필기 보관, 오답 재시험 75%
+- 학생 2: 같은 원시험 94점, 오답 3문항, 재시험 미응시
+- 학생 3: 배포된 시험 3개 모두 미응시
+- 나머지 2개 시험: 세 학생 모두 미응시
+
+샘플 시험은 다음 명령으로 멱등 적용·검증·삭제할 수 있습니다.
+
+```bash
+npm run exams:korean:dry-run
+npm run exams:korean:apply
+npm run exams:korean:verify
+npm run exams:korean:remove
+```
+
+합성 분석 데이터인 공개 `omr-showcase` 목업과 달리, 이 국어 QA 시나리오는 교사 제작·배포·학생 응시·리뷰·재시험의 서버 경계를 검증하기 위한 실제 공유 워크스페이스 데이터입니다. 자세한 검증 결과와 알려진 보완점은 [국어 샘플 시험 적용 평가](./korean-exam-fixture-evaluation.md)를 참고합니다.
