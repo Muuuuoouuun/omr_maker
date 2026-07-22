@@ -45,6 +45,35 @@ export interface SubmitAttemptInput {
     questionDrawings?: QuestionDrawingSummary[];
 }
 
+/**
+ * Only a real stroke payload/reference needs the server-owned plan lookup.
+ * Empty handwriting summaries are useful client UI state, but cannot produce
+ * an archive and should not add a database round trip to every submission.
+ */
+export function hasArchiveableHandwriting(input: SubmitAttemptInput): boolean {
+    if (input.drawingsRef || input.handwriting?.strokesRef) return true;
+    return Object.values(input.drawings || {}).some(paths => Array.isArray(paths) && paths.length > 0);
+}
+
+/**
+ * The idempotency read and canonical-exam read are independent. Start both in
+ * the first database round; a retry can return as soon as its stored attempt is
+ * found, while a new submission awaits the already-running exam read.
+ */
+export async function loadSubmissionBaseInParallel<TAttempt, TExam>(
+    loadExistingAttempt: () => Promise<TAttempt | null>,
+    loadExamRow: () => Promise<TExam | null>,
+): Promise<{ existingAttempt: TAttempt | null; examRow: TExam | null }> {
+    const existingAttemptPromise = loadExistingAttempt();
+    const examRowPromise = loadExamRow();
+    // A retry does not consume this speculative read. Observe a possible
+    // rejection so returning early cannot create an unhandled promise.
+    void examRowPromise.catch(() => undefined);
+    const existingAttempt = await existingAttemptPromise;
+    if (existingAttempt) return { existingAttempt, examRow: null };
+    return { existingAttempt: null, examRow: await examRowPromise };
+}
+
 const RETAKE_MODES: RetakeMetadata["mode"][] = ["wrong", "similar", "custom"];
 
 /**

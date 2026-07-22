@@ -12,7 +12,15 @@ import {
     recordExamPinSuccess,
 } from "@/lib/examPinRateLimit";
 import { stripExamForReview, stripExamForSolving, type ReviewableExam, type SolvableExam } from "@/lib/examSolvePayload";
-import { attemptOwnedBy, buildServerAttempt, identityAccessSession, ownerStudentId, type SubmitAttemptInput } from "@/lib/studentExamCore";
+import {
+    attemptOwnedBy,
+    buildServerAttempt,
+    hasArchiveableHandwriting,
+    identityAccessSession,
+    loadSubmissionBaseInParallel,
+    ownerStudentId,
+    type SubmitAttemptInput,
+} from "@/lib/studentExamCore";
 import { upsertStudentQuestion, type StudentQuestionInput } from "@/lib/studentQuestions";
 import { attemptIdForStudentSubmission } from "@/lib/studentSubmissionId";
 import type { Attempt, Exam } from "@/types/omr";
@@ -233,7 +241,10 @@ export async function submitAttempt(input: SubmitAttemptInput, pin?: string): Pr
             secret: resolveStudentSessionSecret(),
         });
         if (!attemptId) return { status: "error" };
-        const existingAttempt = await ownAttempt(ctx.admin, ctx.identity, attemptId);
+        const { existingAttempt, examRow } = await loadSubmissionBaseInParallel(
+            () => ownAttempt(ctx.admin, ctx.identity, attemptId),
+            () => fetchExamRowById(ctx.admin, input.examId),
+        );
         if (existingAttempt) {
             // This also repairs analytical rows if an older app version wrote
             // only the canonical attempt before its second query failed.
@@ -241,12 +252,13 @@ export async function submitAttempt(input: SubmitAttemptInput, pin?: string): Pr
             return repaired ? { status: "ok", attempt: repaired } : { status: "error" };
         }
 
-        const row = await fetchExamRowById(ctx.admin, input.examId);
-        if (!row) return { status: "not_found" };
-        const exam = examFromSupabaseRow(row as Parameters<typeof examFromSupabaseRow>[0]);
+        if (!examRow) return { status: "not_found" };
+        const exam = examFromSupabaseRow(examRow as Parameters<typeof examFromSupabaseRow>[0]);
         const access = evaluateGatedAccess(exam, ctx.identity, pin, { graceMs: SUBMIT_ENDAT_GRACE_MS });
         if (access !== "allowed") return { status: access };
-        const premium = await examOwnerPremium(ctx.admin, exam);
+        const premium = hasArchiveableHandwriting(input)
+            ? await examOwnerPremium(ctx.admin, exam)
+            : { plan: "free" as const, handwritingArchive: false };
         const attempt = buildServerAttempt(input, exam, ctx.identity, attemptId, new Date().toISOString(), {
             handwritingArchive: premium.handwritingArchive,
             handwritingPlan: premium.plan,

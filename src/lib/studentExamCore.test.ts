@@ -1,5 +1,14 @@
 import { describe, expect, it } from "vitest";
-import { attemptOwnedBy, buildServerAttempt, identityAccessSession, remainingSecondsWithinWindow, resolveRetakeScope, type SubmitAttemptInput } from "./studentExamCore";
+import {
+    attemptOwnedBy,
+    buildServerAttempt,
+    hasArchiveableHandwriting,
+    identityAccessSession,
+    loadSubmissionBaseInParallel,
+    remainingSecondsWithinWindow,
+    resolveRetakeScope,
+    type SubmitAttemptInput,
+} from "./studentExamCore";
 import type { Exam } from "@/types/omr";
 import type { StudentServerIdentity } from "./studentServerSession";
 
@@ -51,6 +60,66 @@ describe("remainingSecondsWithinWindow", () => {
 });
 
 describe("studentExamCore", () => {
+    it("starts the retry lookup and exam lookup in the same submission round", async () => {
+        const started: string[] = [];
+        let releaseAttempt!: (value: string | null) => void;
+        let releaseExam!: (value: string | null) => void;
+        const attempt = new Promise<string | null>(resolve => { releaseAttempt = resolve; });
+        const exam = new Promise<string | null>(resolve => { releaseExam = resolve; });
+
+        const pending = loadSubmissionBaseInParallel(
+            () => { started.push("attempt"); return attempt; },
+            () => { started.push("exam"); return exam; },
+        );
+
+        expect(started).toEqual(["attempt", "exam"]);
+        releaseAttempt(null);
+        releaseExam("exam-row");
+        await expect(pending).resolves.toEqual({ existingAttempt: null, examRow: "exam-row" });
+    });
+
+    it("does not make an idempotent retry wait for the speculative exam lookup", async () => {
+        let releaseExam!: (value: string | null) => void;
+        const exam = new Promise<string | null>(resolve => { releaseExam = resolve; });
+        const pending = loadSubmissionBaseInParallel(
+            async () => "stored-attempt",
+            () => exam,
+        );
+
+        await expect(pending).resolves.toEqual({ existingAttempt: "stored-attempt", examRow: null });
+        releaseExam("late-exam-row");
+    });
+
+    it("requires a plan lookup only when the submission contains handwriting that can be archived", () => {
+        expect(hasArchiveableHandwriting(INPUT)).toBe(false);
+        expect(hasArchiveableHandwriting({
+            ...INPUT,
+            handwriting: {
+                schemaVersion: 1,
+                status: "none",
+                plan: "pro",
+                summary: { pageCount: 0, strokeCount: 0, questionCount: 0 },
+                questions: {},
+            },
+            handwritingPlan: "pro",
+            drawingPageCount: 0,
+            drawingStrokeCount: 0,
+            questionDrawings: [],
+        })).toBe(false);
+        expect(hasArchiveableHandwriting({ ...INPUT, drawings: { 1: ["M0 0L1 1"] } })).toBe(true);
+        expect(hasArchiveableHandwriting({
+            ...INPUT,
+            handwriting: {
+                schemaVersion: 1,
+                status: "saved",
+                strokesRef: { store: "indexeddb", key: "attempt:a:drawings" },
+                plan: "pro",
+                summary: { pageCount: 1, strokeCount: 1, questionCount: 1 },
+                questions: {},
+            },
+        })).toBe(true);
+    });
+
     it("server-grades and injects owner/org, ignoring any client score", () => {
         const attempt = buildServerAttempt(INPUT, EXAM, GUEST, "att1", "2026-07-01T01:30:00.000Z");
         expect(attempt.score).toBe(10);       // only q1 correct
