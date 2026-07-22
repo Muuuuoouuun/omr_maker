@@ -54,6 +54,20 @@ describe("student result hub", () => {
         )).toBe(false);
     });
 
+    it("does not fall back when conflicting stable ids are present", () => {
+        expect(sameStudentAttempt(
+            attempt({ studentId: "student-1", guestId: "guest-1", groupId: "group-1" }),
+            attempt({ id: "other-student", studentProfileId: "student-2", guestId: "guest-1", groupId: "group-1" }),
+        )).toBe(false);
+    });
+
+    it("does not fall back to name and group when guest ids differ", () => {
+        expect(sameStudentAttempt(
+            attempt({ guestId: "guest-1", groupId: "group-1" }),
+            attempt({ id: "other-guest", guestId: "guest-2", groupId: "group-1" }),
+        )).toBe(false);
+    });
+
     it("only uses the legacy name fallback within the same non-empty group", () => {
         const grouped = attempt({ studentName: " 김학생 ", groupId: "group-1" });
         expect(sameStudentAttempt(grouped, attempt({ id: "same-group", studentName: "김학생", groupName: "group-1" }))).toBe(true);
@@ -80,6 +94,13 @@ describe("student result hub", () => {
             expect.objectContaining({ attempt: original, kind: "original", ordinal: 1, scorePercent: 60, scoreDelta: null }),
             expect.objectContaining({ attempt: retake, kind: "retake", ordinal: 1, scorePercent: 80, scoreDelta: 20 }),
         ]);
+    });
+
+    it("includes a legacy attempt itself even without an identity fallback", () => {
+        const legacy = attempt({ id: "legacy", studentName: "김학생" });
+        const unrelated = attempt({ id: "same-name", studentName: "김학생" });
+
+        expect(buildStudentAttemptSeries(legacy, [unrelated, legacy]).map(item => item.attempt.id)).toEqual(["legacy"]);
     });
 
     it("orders attempts chronologically within original and retake groups", () => {

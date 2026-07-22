@@ -18,8 +18,12 @@ function normalized(value: string | undefined): string | null {
     return trimmed ? trimmed : null;
 }
 
+function nonEmptyValues(values: Array<string | undefined>): string[] {
+    return values.map(normalized).filter((value): value is string => Boolean(value));
+}
+
 function matchingValues(left: Array<string | undefined>, right: Array<string | undefined>): boolean {
-    const leftValues = new Set(left.map(normalized).filter((value): value is string => Boolean(value)));
+    const leftValues = new Set(nonEmptyValues(left));
     return right.some(value => {
         const candidate = normalized(value);
         return candidate !== null && leftValues.has(candidate);
@@ -40,11 +44,19 @@ export function buildStudentResultHref(attemptId: string, view: StudentResultVie
 }
 
 export function sameStudentAttempt(left: Attempt, right: Attempt): boolean {
-    if (matchingValues([left.studentProfileId, left.studentId], [right.studentProfileId, right.studentId])) return true;
+    const leftAttemptId = normalized(left.id);
+    const rightAttemptId = normalized(right.id);
+    if (leftAttemptId && leftAttemptId === rightAttemptId) return true;
+
+    const leftStableIds = nonEmptyValues([left.studentProfileId, left.studentId]);
+    const rightStableIds = nonEmptyValues([right.studentProfileId, right.studentId]);
+    if (leftStableIds.length > 0 && rightStableIds.length > 0) {
+        return matchingValues(leftStableIds, rightStableIds);
+    }
 
     const leftGuestId = normalized(left.guestId);
     const rightGuestId = normalized(right.guestId);
-    if (leftGuestId && leftGuestId === rightGuestId) return true;
+    if (leftGuestId && rightGuestId) return leftGuestId === rightGuestId;
 
     const leftName = normalized(left.studentName);
     const rightName = normalized(right.studentName);
