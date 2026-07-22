@@ -174,8 +174,10 @@ test.describe("Create page label memory", () => {
         expect(storedMemory).toContain("화자의 태도");
     });
 
-    test("keeps presets compact while accepting a custom 45-question exam size", async ({ page }) => {
+    test("keeps presets compact and clear of the custom input on narrow screens", async ({ page }) => {
+        await page.setViewportSize({ width: 320, height: 800 });
         await page.goto("/create");
+        await page.getByRole("tab", { name: "설정 0/20 정답" }).click();
 
         const input = page.getByLabel("문항 수 직접 입력");
         const presetButtons = page.locator(".create-count-buttons .btn");
@@ -184,6 +186,11 @@ test.describe("Create page label memory", () => {
             const box = await presetButtons.nth(index).boundingBox();
             expect(box?.height).toBeLessThanOrEqual(36);
         }
+        const lastPresetBox = await presetButtons.nth(4).boundingBox();
+        const inputBox = await input.boundingBox();
+        expect(lastPresetBox).not.toBeNull();
+        expect(inputBox).not.toBeNull();
+        expect(lastPresetBox!.x + lastPresetBox!.width).toBeLessThanOrEqual(inputBox!.x);
 
         await input.fill("45");
         await input.press("Enter");

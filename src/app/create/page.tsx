@@ -2490,10 +2490,10 @@ function CreateOMRPageInner() {
                         <div className="create-compact-control-label">
                             <span>문항 수</span>
                         </div>
-                        <div style={{ minWidth: 0, display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) 5.25rem', gap: '0.35rem' }}>
+                        <div style={{ minWidth: 0, display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) 4.25rem', gap: '0.35rem' }}>
                             <div
                                 className="create-count-buttons"
-                                style={{ gridTemplateColumns: 'repeat(5, 2.15rem)', gap: '0.25rem', justifyContent: 'start', alignSelf: 'center' }}
+                                style={{ gridTemplateColumns: 'repeat(5, minmax(0, 2.15rem))', gap: '0.25rem', justifyContent: 'start', alignSelf: 'center' }}
                             >
                                 {[20, 25, 30, 40, 50].map(count => (
                                     <button
