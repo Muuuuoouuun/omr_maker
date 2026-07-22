@@ -68,6 +68,10 @@ import { PremiumActionLink } from "@/components/PremiumFeatureGate";
 import { findStudentStartCode, generateStartCode, readStudentCodes, writeStudentCodes } from "@/lib/studentCodes";
 import { hasPlanEntitlement } from "@/utils/plans";
 import { useServerPlan } from "@/lib/useServerPlan";
+import {
+    buildStudentResultHref,
+    matchRosterStudentForAttempt,
+} from "@/lib/studentResultHub";
 import { studentIdFor } from "@/utils/storage";
 import { syncStudentAccessCodes } from "@/app/actions/studentSession";
 import { readActiveWorkspaceContext } from "@/lib/workspaceContext";
@@ -614,19 +618,29 @@ function ManageUsersInner() {
     const selectedLegacyStudentId = selected ? studentIdForRoster(selected.name, selected.group, rosterGroups) : "";
     const selectedStartCode = selected ? findStudentStartCode(studentCodeRegistry, selected.id, selectedLegacyStudentId) : "";
 
-    // Recent attempts for the selected student (from omr_attempts)
-    const selectedRecentAttempts = useMemo<Attempt[]>(() => {
+    // Resolve through the shared identity helper so ambiguous legacy name-only
+    // attempts never leak into another student's card or report.
+    const selectedMatchedAttempts = useMemo<Attempt[]>(() => {
         if (!selected) return [];
-        return performanceByStudentId.get(selected.id)?.attempts.slice(0, 3) || [];
-    }, [selected, performanceByStudentId]);
+        return allAttempts
+            .filter(attempt => matchRosterStudentForAttempt(attempt, displayStudents)?.id === selected.id)
+            .sort((left, right) => {
+                const leftTime = Date.parse(left.finishedAt || left.startedAt || "") || 0;
+                const rightTime = Date.parse(right.finishedAt || right.startedAt || "") || 0;
+                return rightTime - leftTime || left.id.localeCompare(right.id);
+            });
+    }, [allAttempts, displayStudents, selected]);
+
+    const selectedRecentAttempts = selectedMatchedAttempts.slice(0, 3);
+    const latestStableAttempt = selectedMatchedAttempts[0] || null;
 
     const selectedProfile = useMemo<StudentProfileInsight | null>(() => {
         if (!selected) return null;
-        return buildStudentProfileInsight(selected, allAttempts, examById, {
+        return buildStudentProfileInsight(selected, selectedMatchedAttempts, examById, {
             recentLimit: 8,
             weaknessLimit: 6,
         });
-    }, [selected, allAttempts, examById]);
+    }, [selected, selectedMatchedAttempts, examById]);
 
     const selectedHandwritingCount = selectedProfile?.handwritingArchiveCount ?? 0;
 
@@ -2023,8 +2037,9 @@ function ManageUsersInner() {
                                                     <div style={{ display: 'flex', alignItems: 'center', gap: '0.45rem' }}>
                                                         {hasHandwriting && (
                                                             <NextLink
-                                                                href={`/teacher/attempt/${a.id}`}
-                                                                title="학생 필기 리포트 열기"
+                                                                href={buildStudentResultHref(a.id, "handwriting")}
+                                                                aria-label={`${a.examTitle} 학생 필기 열람`}
+                                                                title="학생 필기 열기"
                                                                 style={{
                                                                     display: 'inline-flex',
                                                                     alignItems: 'center',
@@ -2053,7 +2068,28 @@ function ManageUsersInner() {
                                     <button onClick={handleSendMessage} style={{ flex: 1, padding: '0.7rem', background: 'var(--primary)', color: 'white', borderRadius: 'var(--radius-md)', fontWeight: 600, fontSize: '0.85rem', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.4rem' }}>
                                         <MessageCircle size={14} /> 메시지
                                     </button>
-                                    {studentGrowthReportsEnabled ? (
+                                    {latestStableAttempt ? (
+                                        <NextLink
+                                            href={buildStudentResultHref(latestStableAttempt.id, "report")}
+                                            aria-label={`${selected.name} 최근 응시 리포트 상세 보기`}
+                                            style={{
+                                                flex: 1,
+                                                minHeight: 44,
+                                                padding: '0.7rem',
+                                                background: 'var(--surface)',
+                                                color: 'var(--foreground)',
+                                                border: '1px solid var(--border)',
+                                                borderRadius: 'var(--radius-md)',
+                                                fontWeight: 600,
+                                                fontSize: '0.85rem',
+                                                display: 'flex',
+                                                alignItems: 'center',
+                                                justifyContent: 'center',
+                                            }}
+                                        >
+                                            상세 보기
+                                        </NextLink>
+                                    ) : studentGrowthReportsEnabled ? (
                                         <button onClick={handleOpenDetail} style={{ flex: 1, padding: '0.7rem', background: 'var(--surface)', color: 'var(--foreground)', border: '1px solid var(--border)', borderRadius: 'var(--radius-md)', fontWeight: 600, fontSize: '0.85rem' }}>
                                             상세 보기
                                         </button>
@@ -3063,7 +3099,8 @@ function StudentProfileModal({
                                     </div>
                                     <div style={{ marginTop: '0.7rem', display: 'flex', justifyContent: 'flex-end' }}>
                                         <NextLink
-                                            href={attempt.detailHref}
+                                            href={buildStudentResultHref(attempt.id, "report")}
+                                            aria-label={`${attempt.examTitle} 리포트 열기`}
                                             style={{
                                                 padding: '0.35rem 0.65rem',
                                                 borderRadius: 'var(--radius-md)',

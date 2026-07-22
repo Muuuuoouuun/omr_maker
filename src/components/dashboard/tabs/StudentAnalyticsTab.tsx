@@ -30,6 +30,7 @@ import type { RosterGroup, RosterStudent } from "@/lib/rosterStorage";
 import { resolveScopedSelection } from "@/lib/dashboardSelection";
 import { buildRetakeHref } from "@/lib/retakeLinks";
 import { hasPlanEntitlement } from "@/utils/plans";
+import { buildStudentResultHref } from "@/lib/studentResultHub";
 
 interface StudentAnalyticsTabProps {
     exams: Exam[];
@@ -773,6 +774,25 @@ export default function StudentAnalyticsTab({
                                     <tr key={detail.attemptId} className="card-hover" style={{ borderBottom: '1px solid var(--border)' }}>
                                         <td style={{ padding: '1rem 0.5rem', fontWeight: 600, color: 'var(--foreground)' }}>
                                             {detail.examTitle}
+                                            <div style={{ marginTop: '0.35rem' }}>
+                                                <Link
+                                                    href={buildStudentResultHref(detail.attemptId, "analytics")}
+                                                    aria-label={`${detail.examTitle} 결과 분석 열기`}
+                                                    style={{
+                                                        display: 'inline-flex',
+                                                        alignItems: 'center',
+                                                        minHeight: 44,
+                                                        color: 'var(--text-primary)',
+                                                        fontSize: '0.76rem',
+                                                        fontWeight: 800,
+                                                        textDecoration: 'underline',
+                                                        textUnderlineOffset: '0.18em',
+                                                        whiteSpace: 'nowrap',
+                                                    }}
+                                                >
+                                                    결과 분석
+                                                </Link>
+                                            </div>
                                         </td>
                                         <td style={{ padding: '1rem 0.5rem', fontWeight: 700, color: detail.scoreRate >= 80 ? 'var(--success)' : (detail.scoreRate < 50 ? 'var(--error)' : 'inherit') }}>
                                             {detail.score} <span style={{ fontSize: '0.8rem', color: 'var(--muted)', fontWeight: 400 }}>/ {detail.totalScore}</span>

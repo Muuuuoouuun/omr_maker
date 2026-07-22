@@ -14,6 +14,7 @@ import { formatKoreanDateTime } from "@/lib/pure";
 import { resolveAttemptScore, type ResolvedAttemptScore } from "@/lib/attemptScores";
 import { serializeCsvRows } from "@/lib/csv";
 import { getAttemptQuestionResults } from "@/lib/premiumAnalytics";
+import { buildStudentResultHref } from "@/lib/studentResultHub";
 
 type SortKey = "name" | "percent" | "finishedAt";
 type SortDir = "asc" | "desc";
@@ -381,17 +382,13 @@ export default function ExamDetailPage() {
                                                 <td style={{ padding: '1rem', fontWeight: 600 }}>
                                                     <div style={{ display: 'flex', alignItems: 'center', gap: '0.45rem', flexWrap: 'wrap' }}>
                                                         <span>{attempt.studentName || 'Anonymous'}</span>
+                                                        {attempt.handwritingArchived && (
+                                                            <span className="tone-chip tone-primary" style={{ fontSize: '0.72rem', fontWeight: 800 }}>
+                                                                필기 저장됨
+                                                            </span>
+                                                        )}
                                                         {attempt.retake && (
-                                                            <span style={{
-                                                                padding: '0.16rem 0.45rem',
-                                                                borderRadius: '999px',
-                                                                background: '#f0fdfa',
-                                                                color: '#0f766e',
-                                                                border: '1px solid #99f6e4',
-                                                                fontSize: '0.72rem',
-                                                                fontWeight: 800,
-                                                                whiteSpace: 'nowrap',
-                                                            }}>
+                                                            <span className="tone-chip tone-teal" style={{ fontSize: '0.72rem', fontWeight: 800 }}>
                                                                 재시험 {attempt.retake.questionIds.length}문항
                                                             </span>
                                                         )}
@@ -434,11 +431,12 @@ export default function ExamDetailPage() {
                                                 </td>
                                                 <td style={{ padding: '1rem', textAlign: 'right' }}>
                                                     <Link
-                                                        href={`/teacher/attempt/${attempt.id}`}
+                                                        href={buildStudentResultHref(attempt.id, "answers")}
                                                         className="btn btn-secondary"
-                                                        style={{ padding: '0.3rem 0.8rem', fontSize: '0.8rem' }}
+                                                        aria-label={`${attempt.studentName || '학생'} 결과 보기`}
+                                                        style={{ padding: '0.45rem 0.8rem', fontSize: '0.8rem', minHeight: 44, whiteSpace: 'nowrap' }}
                                                     >
-                                                        {attempt.handwritingArchived ? "필기 보기" : "OMR 보기"}
+                                                        학생 결과 보기
                                                     </Link>
                                                 </td>
                                             </tr>

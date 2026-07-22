@@ -1029,6 +1029,21 @@ describe("service UI surface", () => {
         expect(studentResultCss).toMatch(/\.signalChip\s*\{[^}]*color:\s*var\(--text-error\);/);
     });
 
+    it("deep-links result entry points to the intended hub views", () => {
+        const examPage = readProjectFile("src/app/teacher/exam/[id]/page.tsx");
+        const usersPage = readProjectFile("src/app/teacher/users/page.tsx");
+        const analytics = readProjectFile("src/components/dashboard/tabs/StudentAnalyticsTab.tsx");
+
+        expect(examPage).toContain("학생 결과 보기");
+        expect(examPage).toContain('buildStudentResultHref(attempt.id, "answers")');
+        expect(examPage).toContain("필기 저장됨");
+        expect(usersPage).toContain('buildStudentResultHref(a.id, "handwriting")');
+        expect(usersPage).toContain('buildStudentResultHref(attempt.id, "report")');
+        expect(usersPage).toContain('buildStudentResultHref(latestStableAttempt.id, "report")');
+        expect(analytics).toContain('buildStudentResultHref(detail.attemptId, "analytics")');
+        expect(analytics).toContain("결과 분석");
+    });
+
     it("resets route-scoped student result state while preserving peer attempts on load failure", () => {
         const teacherAttemptPage = readProjectFile("src/app/teacher/attempt/[attemptId]/page.tsx");
         const loaderStart = teacherAttemptPage.indexOf("const loadTeacherAttempt = async () => {");
