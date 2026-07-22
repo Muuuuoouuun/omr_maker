@@ -113,6 +113,40 @@ describe("roster analytics", () => {
         expect(indexed.get("profile-b")?.attempts.map(item => item.id)).toEqual(["profile-exact"]);
     });
 
+    it("assigns conflicting canonical and legacy ids only to the canonical roster student", () => {
+        const canonical = { ...student, id: "profile-a" };
+        const legacy = { ...student, id: "profile-b", email: "legacy@example.com" };
+        const conflicting = attempt("conflicting-ids", { 1: 1 }, "2026-06-15T10:00:00.000Z", {
+            studentProfileId: canonical.id,
+            studentId: legacy.id,
+        });
+
+        const indexed = buildRosterPerformanceMap(
+            [canonical, legacy],
+            [conflicting],
+            new Map([[exam.id, exam]]),
+        );
+
+        expect(indexed.get(canonical.id)?.attempts.map(item => item.id)).toEqual(["conflicting-ids"]);
+        expect(indexed.get(legacy.id)?.attempts).toEqual([]);
+    });
+
+    it("drops a canonical-id attempt when only its conflicting legacy roster student exists", () => {
+        const legacy = { ...student, id: "profile-b" };
+        const conflicting = attempt("missing-canonical", { 1: 1 }, "2026-06-15T10:00:00.000Z", {
+            studentProfileId: "profile-a",
+            studentId: legacy.id,
+        });
+
+        const indexed = buildRosterPerformanceMap(
+            [legacy],
+            [conflicting],
+            new Map([[exam.id, exam]]),
+        );
+
+        expect(indexed.get(legacy.id)?.attempts).toEqual([]);
+    });
+
     it("does not fall back to a matching name when a stable id misses the roster", () => {
         const unmatchedStable = attempt("stable-miss", { 1: 1 }, "2026-06-15T10:00:00.000Z", {
             studentProfileId: "missing-profile",

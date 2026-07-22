@@ -96,6 +96,51 @@ describe("student result hub", () => {
             .toEqual([same, selected]);
     });
 
+    it("uses only authoritative profile ids for cumulative stable matching", () => {
+        const selected = attempt({
+            id: "selected",
+            studentProfileId: "student-a",
+            studentId: "student-b",
+            groupName: "A반",
+        });
+        const conflictingProfile = attempt({
+            id: "conflicting-profile",
+            studentProfileId: "student-b",
+            groupName: "A반",
+        });
+        const roster = [student({ id: "student-a" }), student({ id: "student-b" })];
+
+        expect(filterCumulativeAttemptsForStudent(
+            selected,
+            [conflictingProfile, selected],
+            roster,
+            roster[0],
+        )).toEqual([selected]);
+    });
+
+    it("rejects cumulative candidates from another organization before exact-id matching", () => {
+        const selected = attempt({
+            id: "shared-attempt",
+            organizationId: "org-a",
+            studentProfileId: "student-a",
+            groupName: "A반",
+        });
+        const otherOrganization = attempt({
+            id: "shared-attempt",
+            organizationId: "org-b",
+            studentProfileId: "student-a",
+            groupName: "A반",
+        });
+        const rosterStudent = student({ id: "student-a" });
+
+        expect(filterCumulativeAttemptsForStudent(
+            selected,
+            [otherOrganization, selected],
+            [rosterStudent],
+            rosterStudent,
+        )).toEqual([selected]);
+    });
+
     it("excludes an ambiguous id-less legacy attempt for duplicate roster students", () => {
         const selected = attempt({ id: "selected", studentProfileId: "student-a", groupName: "A반" });
         const exactA = attempt({ id: "exact-a", studentId: "student-a", groupName: "A반" });
@@ -136,6 +181,19 @@ describe("student result hub", () => {
         )).toEqual([selected]);
     });
 
+    it("does not trust a supplied roster student when the selected attempt cannot uniquely resolve", () => {
+        const selected = attempt({ id: "selected", studentProfileId: "missing-student", groupName: "A반" });
+        const legacy = attempt({ id: "legacy", groupName: "A반" });
+        const unrelated = student({ id: "other-student" });
+
+        expect(filterCumulativeAttemptsForStudent(
+            selected,
+            [legacy, selected],
+            [unrelated],
+            unrelated,
+        )).toEqual([selected]);
+    });
+
     it("defaults missing or invalid views to answers while retaining handwriting", () => {
         expect(parseStudentResultView()).toBe("answers");
         expect(parseStudentResultView("unexpected")).toBe("answers");
@@ -153,6 +211,38 @@ describe("student result hub", () => {
             attempt({ studentProfileId: " profile-1 " }),
             attempt({ id: "attempt-2", studentId: "profile-1" }),
         )).toBe(true);
+    });
+
+    it("does not let a legacy id override a conflicting authoritative profile id", () => {
+        expect(sameStudentAttempt(
+            attempt({ studentProfileId: "profile-a", studentId: "profile-b", groupId: "group-1" }),
+            attempt({ id: "attempt-2", studentProfileId: "profile-b", groupId: "group-1" }),
+        )).toBe(false);
+    });
+
+    it("rejects organization conflicts before matching attempt or student ids", () => {
+        const scoped = attempt({
+            id: "shared-attempt",
+            organizationId: "org-a",
+            studentProfileId: "profile-1",
+        });
+
+        expect(sameStudentAttempt(scoped, attempt({
+            id: "shared-attempt",
+            organizationId: "org-b",
+            studentProfileId: "profile-1",
+        }))).toBe(false);
+        expect(sameStudentAttempt(scoped, attempt({
+            id: "other-attempt",
+            studentProfileId: "profile-1",
+        }))).toBe(true);
+    });
+
+    it("does not bridge one stable attempt to an id-less legacy attempt", () => {
+        expect(sameStudentAttempt(
+            attempt({ studentProfileId: "profile-1", groupName: "A반" }),
+            attempt({ id: "legacy", groupName: "A반" }),
+        )).toBe(false);
     });
 
     it("falls back to matching guest ids without joining different guests", () => {
@@ -206,6 +296,23 @@ describe("student result hub", () => {
             expect.objectContaining({ attempt: original, kind: "original", ordinal: 1, scorePercent: 60, scoreDelta: null }),
             expect.objectContaining({ attempt: retake, kind: "retake", ordinal: 1, scorePercent: 80, scoreDelta: 20 }),
         ]);
+    });
+
+    it("keeps same-exam and same-student attempts inside their organization", () => {
+        const selected = attempt({
+            id: "selected",
+            organizationId: "org-a",
+            studentProfileId: "student-1",
+        });
+        const otherOrganization = attempt({
+            id: "selected",
+            organizationId: "org-b",
+            studentProfileId: "student-1",
+        });
+
+        expect(buildStudentAttemptSeries(selected, [otherOrganization, selected])
+            .map(item => item.attempt.organizationId))
+            .toEqual(["org-a"]);
     });
 
     it("includes a legacy attempt itself even without an identity fallback", () => {

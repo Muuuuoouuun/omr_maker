@@ -124,17 +124,10 @@ export function buildRosterPerformanceMap(
     for (const id of studentsById.keys()) attemptsByStudentId.set(id, []);
 
     for (const attempt of attempts) {
-        const stableIds = Array.from(new Set([
-            normalizedIdentity(attempt.studentProfileId),
-            normalizedIdentity(attempt.studentId),
-        ].filter(Boolean)));
-        if (stableIds.length > 0) {
-            const exactRosterIds = new Set<string>();
-            for (const stableId of stableIds) {
-                for (const rosterId of studentIdsByNormalizedId.get(stableId) || []) {
-                    exactRosterIds.add(rosterId);
-                }
-            }
+        const stableId = normalizedIdentity(attempt.studentProfileId)
+            || normalizedIdentity(attempt.studentId);
+        if (stableId) {
+            const exactRosterIds = studentIdsByNormalizedId.get(stableId) || new Set<string>();
             if (exactRosterIds.size === 1) {
                 const [rosterId] = exactRosterIds;
                 attemptsByStudentId.get(rosterId)?.push(attempt);

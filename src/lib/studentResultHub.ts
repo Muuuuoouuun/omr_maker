@@ -32,6 +32,32 @@ function matchingValues(left: Array<string | undefined>, right: Array<string | u
     });
 }
 
+function authoritativeStableId(attempt: Attempt): string | null {
+    return normalized(attempt.studentProfileId) || normalized(attempt.studentId);
+}
+
+function organizationsConflict(left: Attempt, right: Attempt): boolean {
+    const leftOrganizationId = normalized(left.organizationId);
+    const rightOrganizationId = normalized(right.organizationId);
+    return Boolean(leftOrganizationId && rightOrganizationId && leftOrganizationId !== rightOrganizationId);
+}
+
+function guardedLegacyCompatibility(left: Attempt, right: Attempt): boolean {
+    const leftGuestId = normalized(left.guestId);
+    const rightGuestId = normalized(right.guestId);
+    if (leftGuestId || rightGuestId) {
+        return Boolean(leftGuestId && rightGuestId && leftGuestId === rightGuestId);
+    }
+
+    const leftName = normalized(left.studentName);
+    const rightName = normalized(right.studentName);
+    return Boolean(
+        leftName
+        && leftName === rightName
+        && matchingValues([left.groupId, left.groupName], [right.groupId, right.groupName]),
+    );
+}
+
 function timestamp(attempt: Attempt): number {
     const value = Date.parse(attempt.finishedAt);
     return Number.isFinite(value) ? value : 0;
@@ -65,49 +91,46 @@ export function filterCumulativeAttemptsForStudent(
     students: RosterStudent[],
     resolvedSelectedStudent?: RosterStudent | null,
 ): Attempt[] {
+    const matchedSelectedStudent = matchRosterStudentForAttempt(selectedAttempt, students);
     const selectedStudent = resolvedSelectedStudent === undefined
-        ? matchRosterStudentForAttempt(selectedAttempt, students)
-        : resolvedSelectedStudent;
+        ? matchedSelectedStudent
+        : matchedSelectedStudent
+            && normalized(matchedSelectedStudent.id) === normalized(resolvedSelectedStudent?.id)
+            ? resolvedSelectedStudent
+            : null;
     const selectedAttemptId = normalized(selectedAttempt.id);
-    const selectedStableIds = nonEmptyValues([selectedAttempt.studentProfileId, selectedAttempt.studentId]);
+    const selectedStableId = authoritativeStableId(selectedAttempt);
 
     return attempts.filter(candidate => {
+        if (organizationsConflict(selectedAttempt, candidate)) return false;
+
         const candidateAttemptId = normalized(candidate.id);
         if (selectedAttemptId && selectedAttemptId === candidateAttemptId) return true;
 
-        const candidateStableIds = nonEmptyValues([candidate.studentProfileId, candidate.studentId]);
-        if (selectedStableIds.length > 0 && candidateStableIds.length > 0) {
-            return matchingValues(selectedStableIds, candidateStableIds);
+        const candidateStableId = authoritativeStableId(candidate);
+        if (selectedStableId && candidateStableId) {
+            return selectedStableId === candidateStableId;
         }
 
-        if (!sameStudentAttempt(selectedAttempt, candidate) || !selectedStudent) return false;
+        if (!selectedStudent || !guardedLegacyCompatibility(selectedAttempt, candidate)) return false;
         const candidateStudent = matchRosterStudentForAttempt(candidate, students);
         return Boolean(candidateStudent && normalized(candidateStudent.id) === normalized(selectedStudent.id));
     });
 }
 
 export function sameStudentAttempt(left: Attempt, right: Attempt): boolean {
+    if (organizationsConflict(left, right)) return false;
+
     const leftAttemptId = normalized(left.id);
     const rightAttemptId = normalized(right.id);
     if (leftAttemptId && leftAttemptId === rightAttemptId) return true;
 
-    const leftStableIds = nonEmptyValues([left.studentProfileId, left.studentId]);
-    const rightStableIds = nonEmptyValues([right.studentProfileId, right.studentId]);
-    if (leftStableIds.length > 0 && rightStableIds.length > 0) {
-        return matchingValues(leftStableIds, rightStableIds);
-    }
+    const leftStableId = authoritativeStableId(left);
+    const rightStableId = authoritativeStableId(right);
+    if (leftStableId && rightStableId) return leftStableId === rightStableId;
+    if (leftStableId || rightStableId) return false;
 
-    const leftGuestId = normalized(left.guestId);
-    const rightGuestId = normalized(right.guestId);
-    if (leftGuestId && rightGuestId) return leftGuestId === rightGuestId;
-
-    const leftName = normalized(left.studentName);
-    const rightName = normalized(right.studentName);
-    return Boolean(
-        leftName
-        && leftName === rightName
-        && matchingValues([left.groupId, left.groupName], [right.groupId, right.groupName]),
-    );
+    return guardedLegacyCompatibility(left, right);
 }
 
 export function buildStudentAttemptSeries(selectedAttempt: Attempt, attempts: Attempt[]): StudentAttemptSeriesItem[] {
