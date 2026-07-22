@@ -31,6 +31,7 @@ import { studentQuestionsByQuestionId, upsertStudentQuestion } from "@/lib/stude
 import { buildAttemptRetakeRecovery, buildSourceAttemptRecovery } from "@/lib/retakeRecovery";
 import { toast } from "@/components/Toast";
 import ThemeToggle from "@/components/ThemeToggle";
+import CountUp from "@/components/dashboard/CountUp";
 import { formatKoreanDateTime } from "@/lib/pure";
 import { safeScorePercent } from "@/lib/scoreUtils";
 import {
@@ -122,25 +123,26 @@ function MiniStat({ label, value, color }: { label: string; value: number | stri
     return (
         <div className="student-review-mini-stat">
             <span>{label}</span>
-            <strong style={{ color }}>{value}</strong>
+            <strong style={{ color }}>
+                {/* Numeric stats roll up with the score reveal; strings stay static. */}
+                {typeof value === "number" ? <CountUp value={value} delayMs={250} durationMs={700} /> : value}
+            </strong>
         </div>
     );
 }
 
 function StatusChip({ status }: { status: QuestionResultStatus }) {
+    // Palette lives in globals.css tone classes so both themes render correctly.
     const copy = status === "correct"
-        ? { label: "정답", color: "#15803d", background: "#dcfce7", border: "#bbf7d0" }
+        ? { label: "정답", tone: "tone-success" }
         : status === "wrong"
-            ? { label: "오답", color: "#dc2626", background: "#fef2f2", border: "#fecaca" }
+            ? { label: "오답", tone: "tone-error" }
             : status === "unanswered"
-                ? { label: "미응답", color: "#475569", background: "#f1f5f9", border: "#e2e8f0" }
-                : { label: "미채점", color: "#64748b", background: "#f8fafc", border: "#e2e8f0" };
+                ? { label: "미응답", tone: "tone-neutral" }
+                : { label: "미채점", tone: "tone-neutral" };
 
     return (
-        <span
-            className="student-review-status-chip"
-            style={{ color: copy.color, background: copy.background, borderColor: copy.border }}
-        >
+        <span className={`student-review-status-chip ${copy.tone}`}>
             {copy.label}
         </span>
     );
@@ -154,15 +156,9 @@ function questionStatusLabel(status: QuestionResultStatus): string {
 }
 
 function MetaChip({ children, tone = "neutral" }: { children: ReactNode; tone?: "neutral" | "primary" | "teal" | "amber" }) {
-    const palette = {
-        neutral: { color: "#64748b", background: "#f8fafc", border: "#e2e8f0" },
-        primary: { color: "#4f46e5", background: "#eef2ff", border: "#c7d2fe" },
-        teal: { color: "#0f766e", background: "#f0fdfa", border: "#99f6e4" },
-        amber: { color: "#9a3412", background: "#fff7ed", border: "#fed7aa" },
-    }[tone];
-
+    // Palette lives in globals.css tone classes so both themes render correctly.
     return (
-        <span className="student-review-meta-chip" style={{ color: palette.color, background: palette.background, borderColor: palette.border }}>
+        <span className={`student-review-meta-chip tone-${tone}`}>
             {children}
         </span>
     );
@@ -181,6 +177,7 @@ function QuestionCard({
     subQuestionAnswers,
     retakeHref,
     recovered,
+    explanationRequestArmed,
     onToggleExplanation,
     onToggleQuestionBox,
     onDraftChange,
@@ -199,6 +196,7 @@ function QuestionCard({
     submittedQuestion?: StudentQuestionNote;
     subQuestionAnswers?: NonNullable<Attempt["subQuestionAnswers"]>[number];
     retakeHref: string;
+    explanationRequestArmed?: boolean;
     onToggleExplanation: () => void;
     onToggleQuestionBox: () => void;
     onDraftChange: (value: string) => void;
@@ -265,10 +263,13 @@ function QuestionCard({
                         type="button"
                         onClick={onRequestExplanation}
                         className="student-review-link-button"
-                        title="선생님께 이 문항의 해설 작성을 요청합니다"
+                        title={explanationRequestArmed
+                            ? "한 번 더 누르면 선생님께 해설 요청이 전송됩니다"
+                            : "선생님께 이 문항의 해설 작성을 요청합니다"}
+                        aria-live="polite"
                     >
                         <HelpCircle size={14} />
-                        해설 요청
+                        {explanationRequestArmed ? "한 번 더 누르면 전송" : "해설 요청"}
                     </button>
                 )}
                 <button
@@ -410,6 +411,14 @@ export default function ReviewPage() {
     const [loadError, setLoadError] = useState(false);
     const [reloadKey, setReloadKey] = useState(0);
     const [handwritingUnavailable, setHandwritingUnavailable] = useState(false);
+    // Two-step confirm for the one-click explanation request: the first click
+    // arms the button, the second sends. Auto-disarms after a moment so a
+    // stray click never silently fires a request to the teacher.
+    const [explanationRequestArmedId, setExplanationRequestArmedId] = useState<number | null>(null);
+    const explanationRequestTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+    useEffect(() => () => {
+        if (explanationRequestTimerRef.current) clearTimeout(explanationRequestTimerRef.current);
+    }, []);
     const [returnedFeedback, setReturnedFeedback] = useState<AttemptFeedback | null>(null);
     const [teacherMarkupDrawings, setTeacherMarkupDrawings] = useState<PdfDrawings | undefined>(undefined);
     const [annotationDownloading, setAnnotationDownloading] = useState(false);
@@ -456,6 +465,10 @@ export default function ReviewPage() {
             if (!id || cancelled) return;
             // Reset the error flag so a retry starts clean.
             setLoadError(false);
+            // Both server round-trips key off the route attemptId, so start the
+            // review-exam fetch in parallel with the attempt load instead of
+            // chaining them — halves the wait on slow networks.
+            const serverExamPromise = loadExamForReview(id).catch(() => ({ status: "error" as const }));
             // Server-first: the action returns the attempt only when the signed
             // session cookie owns it. Device-local records fall back to the
             // existing client-side ownership check.
@@ -530,8 +543,9 @@ export default function ReviewPage() {
 
                 // Server-first review payload: answers/explanations included
                 // (post-submit), PIN and answer-key PDF withheld server-side.
+                // The server fetch was already started above, in parallel.
                 const examResult = await loadReviewExamClient(found.id, {
-                    server: (attemptId) => loadExamForReview(attemptId),
+                    server: () => serverExamPromise,
                     localFallback: async () => {
                         const localExam = await loadExam(found.examId);
                         return localExam ? stripTeacherOnlySubQuestionFields(localExam) : null;
@@ -617,7 +631,44 @@ export default function ReviewPage() {
     }
 
     if (!attempt || !exam) {
-        return <div role="status" aria-live="polite" style={{ padding: '2rem', textAlign: 'center', color: 'var(--muted)' }}>결과 리포트를 불러오는 중입니다.</div>;
+        // Layout-mirroring skeleton: same shell as the loaded report so the
+        // real content replaces the placeholders without a layout jump.
+        const skeletonBlock = (height: number | string) => (
+            <div
+                aria-hidden="true"
+                className="animate-pulse"
+                style={{
+                    height,
+                    borderRadius: 'var(--radius-lg)',
+                    background: 'color-mix(in srgb, var(--muted) 14%, transparent)',
+                }}
+            />
+        );
+        return (
+            <div className="layout-main student-review-page">
+                <span role="status" aria-live="polite" className="sr-only">결과 리포트를 불러오는 중입니다.</span>
+                <header className="header">
+                    <div className="container header-content">
+                        <span style={{ fontWeight: 800 }}>결과 리포트</span>
+                    </div>
+                </header>
+                <main className="container student-review-main">
+                    <section className="student-review-shell" aria-hidden="true">
+                        <aside className="student-review-sidebar" style={{ display: 'grid', gap: '0.9rem', alignContent: 'start' }}>
+                            {skeletonBlock(170)}
+                            {skeletonBlock(64)}
+                            {skeletonBlock(210)}
+                            {skeletonBlock(130)}
+                        </aside>
+                        <section className="student-review-content" style={{ display: 'grid', gap: '0.9rem', alignContent: 'start' }}>
+                            {skeletonBlock(56)}
+                            {skeletonBlock(96)}
+                            {skeletonBlock(300)}
+                        </section>
+                    </section>
+                </main>
+            </div>
+        );
     }
 
     const reviewQuestionIds = attempt.retake?.questionIds?.length
@@ -739,6 +790,17 @@ export default function ReviewPage() {
         setQuestionDrafts(prev => ({ ...prev, [questionId]: value.slice(0, 500) }));
     };
 
+    /** Jump to the next wrong/unanswered question after the current one (wraps). */
+    const goToNextWrongQuestion = () => {
+        const orderedIds = filteredQuestions.map(question => question.id);
+        const wrongOrdered = orderedIds.filter(questionId => wrongQuestionIds.has(questionId));
+        if (wrongOrdered.length === 0) return;
+        const currentIndex = selectedQuestion ? orderedIds.indexOf(selectedQuestion.id) : -1;
+        const next = wrongOrdered.find(questionId => orderedIds.indexOf(questionId) > currentIndex)
+            ?? wrongOrdered[0];
+        setSelectedQuestionId(next);
+    };
+
     const submitQuestionBody = async (question: Question, rawBody: string) => {
         const body = rawBody.trim();
         if (!body) return false;
@@ -802,8 +864,16 @@ export default function ReviewPage() {
         if (saved) setQuestionDrafts(prev => ({ ...prev, [question.id]: "" }));
     };
 
-    /** One-click "please write an explanation" — reuses the Q&A channel. */
+    /** Two-step "please write an explanation" — first click arms, second sends. */
     const requestExplanation = async (question: Question) => {
+        if (explanationRequestArmedId !== question.id) {
+            setExplanationRequestArmedId(question.id);
+            if (explanationRequestTimerRef.current) clearTimeout(explanationRequestTimerRef.current);
+            explanationRequestTimerRef.current = setTimeout(() => setExplanationRequestArmedId(null), 5000);
+            return;
+        }
+        if (explanationRequestTimerRef.current) clearTimeout(explanationRequestTimerRef.current);
+        setExplanationRequestArmedId(null);
         const saved = await submitQuestionBody(
             question,
             `${question.number}번 해설이 아직 없어요. 풀이 과정을 알려주세요.`,
@@ -889,13 +959,14 @@ export default function ReviewPage() {
             <main className="container animate-fade-in student-review-main">
                 <section className="student-review-shell">
                     <aside className="student-review-sidebar">
-                        <section className="bento-card student-review-score-card">
+                        <section className="bento-card student-review-score-card kpi-spring">
                             <div className="student-review-score-copy">
                                 <h1>{attempt.examTitle}</h1>
                                 <p>{formatKoreanDateTime(attempt.finishedAt)} 응시 완료</p>
                             </div>
                             <div className="student-review-score-row">
-                                <strong>{scoreSummary.scorePercent}<span>%</span></strong>
+                                {/* 채점 완료 모멘트: 점수가 0→최종값으로 차오릅니다. */}
+                                <strong><CountUp value={scoreSummary.scorePercent} delayMs={200} /><span>%</span></strong>
                                 <div>{scoreSummary.earnedScore} / {scoreSummary.totalScore}점</div>
                             </div>
                             {scoreRegraded && (
@@ -931,7 +1002,7 @@ export default function ReviewPage() {
                         </section>
 
                         {returnedFeedback && (
-                            <section className="bento-card student-review-side-card" aria-labelledby="student-feedback-title">
+                            <section className="bento-card student-review-side-card kpi-spring" style={{ animationDelay: '90ms' }} aria-labelledby="student-feedback-title">
                                 <div className="student-review-card-head">
                                     <div>
                                         <div className="student-review-section-title">
@@ -1003,7 +1074,7 @@ export default function ReviewPage() {
                         </section>
 
                         {retakeRecovery && (
-                            <section className="bento-card student-review-side-card">
+                            <section className="bento-card student-review-side-card kpi-spring" style={{ animationDelay: '160ms' }}>
                                 <div className="student-review-section-title">
                                     <TrendingUp size={16} />
                                     <strong>재시험 회복</strong>
@@ -1035,7 +1106,7 @@ export default function ReviewPage() {
                             </section>
                         )}
 
-                        <section className="bento-card student-review-side-card">
+                        <section className="bento-card student-review-side-card kpi-spring" style={{ animationDelay: '230ms' }}>
                             <div className="student-review-section-title">
                                 <Target size={17} />
                                 <strong>오답 재시험</strong>
@@ -1113,7 +1184,7 @@ export default function ReviewPage() {
                         </section>
 
                         {(attempt.questionTimings?.length || behaviorSummary.focusLossCount > 0) && (
-                            <section className="bento-card student-review-side-card">
+                            <section className="bento-card student-review-side-card kpi-spring" style={{ animationDelay: '300ms' }}>
                                 <div className="student-review-section-title">
                                     <Clock size={16} />
                                     <strong>풀이 행동</strong>
@@ -1127,7 +1198,7 @@ export default function ReviewPage() {
                             </section>
                         )}
 
-                        <section className="bento-card student-review-side-card">
+                        <section className="bento-card student-review-side-card kpi-spring" style={{ animationDelay: '370ms' }}>
                             <div className="student-review-section-title">
                                 <HelpCircle size={16} />
                                 <strong>질문/해설</strong>
@@ -1183,7 +1254,12 @@ export default function ReviewPage() {
                                 <div className="student-review-question-toolbar">
                                     <div>
                                         <h2>문항 상세</h2>
-                                        <p>번호를 선택하고 해설/질문만 펼쳐봅니다.</p>
+                                        <p>
+                                            번호를 선택하고 해설/질문만 펼쳐봅니다.
+                                            <span className="student-review-kbd-hint" aria-hidden="true">
+                                                <kbd>←</kbd><kbd>→</kbd> 문항 이동
+                                            </span>
+                                        </p>
                                     </div>
                                     <div className="student-review-filter-tabs" role="group" aria-label="문항 필터">
                                         <button
@@ -1199,6 +1275,15 @@ export default function ReviewPage() {
                                             className={`btn ${filterWrong ? "btn-primary" : "btn-secondary"}`}
                                         >
                                             오답 {wrongAndUnansweredCount}
+                                        </button>
+                                        <button
+                                            type="button"
+                                            onClick={goToNextWrongQuestion}
+                                            disabled={wrongAndUnansweredCount === 0}
+                                            className="btn btn-secondary"
+                                            title="현재 문항 다음의 오답/미응답 문항으로 이동합니다"
+                                        >
+                                            다음 오답 →
                                         </button>
                                     </div>
                                 </div>
@@ -1241,6 +1326,7 @@ export default function ReviewPage() {
                                             submittedQuestion={studentQuestions[selectedQuestion.id]}
                                             subQuestionAnswers={attempt.subQuestionAnswers?.[selectedQuestion.id]}
                                             retakeHref={buildRetakeHref(attempt.examId, attempt.id, [selectedQuestion.id], "custom")}
+                                            explanationRequestArmed={explanationRequestArmedId === selectedQuestion.id}
                                             onToggleExplanation={() => toggleExplanation(selectedQuestion.id)}
                                             onToggleQuestionBox={() => toggleQuestionBox(selectedQuestion.id)}
                                             onDraftChange={(value) => updateQuestionDraft(selectedQuestion.id, value)}

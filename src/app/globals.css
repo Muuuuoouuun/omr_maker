@@ -175,7 +175,57 @@
 }
 
 .student-review-workbench.no-pdf {
-  grid-template-columns: minmax(0, 1fr);
+  /* Without a handwriting PDF the question panel is the only column — cap it
+     so the report keeps a readable measure instead of stranding whitespace. */
+  grid-template-columns: minmax(0, 860px);
+  justify-content: start;
+}
+
+/* ←/→ keyboard-nav hint. Hidden on touch devices where it means nothing. */
+.student-review-kbd-hint {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.2rem;
+  margin-left: 0.5rem;
+  color: var(--muted);
+  font-size: 0.72rem;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.student-review-kbd-hint kbd {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 1.15rem;
+  padding: 0.05rem 0.22rem;
+  border: 1px solid var(--border);
+  border-bottom-width: 2px;
+  border-radius: 5px;
+  background: var(--surface);
+  font-family: inherit;
+  font-size: 0.68rem;
+  line-height: 1.3;
+}
+
+@media (hover: none) and (pointer: coarse) {
+  .student-review-kbd-hint {
+    display: none;
+  }
+}
+
+/* Mobile: keep the score hero compact — no stretched card or oversized digit.
+   (.bento-card is declared later in this file, so match its compound to win.) */
+@media (max-width: 640px) {
+  .bento-card.student-review-score-card,
+  .student-review-score-card {
+    min-height: auto;
+    padding: 0.9rem 1rem;
+  }
+
+  .student-review-score-row strong {
+    font-size: 2rem;
+  }
 }
 
 .student-review-score-card {
@@ -614,6 +664,9 @@
   padding: 0.18rem 0.48rem;
   font-size: 0.72rem;
   font-weight: 950;
+  /* Never stretch to fill a stacked (mobile) flex column. */
+  flex: 0 0 auto;
+  align-self: flex-start;
 }
 
 .student-review-meta-chip {
@@ -743,6 +796,93 @@
   border-color: var(--border);
   background: var(--surface);
   color: var(--foreground);
+}
+
+/* ── Tone system: theme-aware pill/text palettes shared by student history &
+   review chips. Shape (.tone-chip) and color (.tone-*) are split so review's
+   own chip base classes can reuse the color tones without shape conflicts. ── */
+.tone-chip {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.2rem 0.6rem;
+  border: 1px solid transparent;
+  border-radius: var(--radius-full);
+  white-space: nowrap;
+}
+
+.tone-primary { color: #4f46e5; background: #eef2ff; border-color: #c7d2fe; }
+.tone-teal    { color: #0f766e; background: #f0fdfa; border-color: #99f6e4; }
+.tone-amber   { color: #9a3412; background: #fff7ed; border-color: #fed7aa; }
+.tone-neutral { color: #64748b; background: #f8fafc; border-color: #e2e8f0; }
+.tone-success { color: #15803d; background: #dcfce7; border-color: #bbf7d0; }
+.tone-error   { color: #dc2626; background: #fef2f2; border-color: #fecaca; }
+.tone-text-teal { color: #0f766e; }
+
+[data-theme="dark"] .tone-primary { color: #a5b4fc; background: color-mix(in srgb, #6366f1 18%, transparent); border-color: color-mix(in srgb, #6366f1 42%, transparent); }
+[data-theme="dark"] .tone-teal    { color: #5eead4; background: color-mix(in srgb, #14b8a6 15%, transparent); border-color: color-mix(in srgb, #14b8a6 38%, transparent); }
+[data-theme="dark"] .tone-amber   { color: #fdba74; background: color-mix(in srgb, #f97316 15%, transparent); border-color: color-mix(in srgb, #f97316 36%, transparent); }
+[data-theme="dark"] .tone-neutral { color: var(--muted); background: color-mix(in srgb, var(--muted) 12%, transparent); border-color: color-mix(in srgb, var(--muted) 30%, transparent); }
+[data-theme="dark"] .tone-success { color: #86efac; background: color-mix(in srgb, #22c55e 14%, transparent); border-color: color-mix(in srgb, #22c55e 36%, transparent); }
+[data-theme="dark"] .tone-error   { color: #fca5a5; background: color-mix(in srgb, #ef4444 14%, transparent); border-color: color-mix(in srgb, #ef4444 38%, transparent); }
+[data-theme="dark"] .tone-text-teal { color: #2dd4bf; }
+
+/* Dark variants for the review question map + link buttons — these previously
+   kept their light pastel palette and glared on the dark theme. */
+[data-theme="dark"] .student-review-question-dot {
+  border-color: var(--border);
+  background: color-mix(in srgb, var(--surface), #000 12%);
+  color: var(--muted);
+}
+
+[data-theme="dark"] .student-review-question-dot.is-correct {
+  border-color: color-mix(in srgb, #22c55e 36%, transparent);
+  background: color-mix(in srgb, #22c55e 12%, transparent);
+  color: #86efac;
+}
+
+[data-theme="dark"] .student-review-question-dot.is-wrong {
+  border-color: color-mix(in srgb, #ef4444 38%, transparent);
+  background: color-mix(in srgb, #ef4444 12%, transparent);
+  color: #fca5a5;
+}
+
+[data-theme="dark"] .student-review-question-dot.is-unanswered {
+  border-color: var(--border);
+  background: color-mix(in srgb, var(--surface), #000 12%);
+  color: var(--muted);
+}
+
+[data-theme="dark"] .student-review-question-dot.is-active {
+  border-color: var(--primary);
+  background: color-mix(in srgb, var(--primary) 20%, transparent);
+  color: #c7d2fe;
+}
+
+[data-theme="dark"] .student-review-link-button:hover {
+  background: color-mix(in srgb, var(--primary) 18%, transparent);
+}
+
+[data-theme="dark"] .student-review-question-submitted {
+  color: #5eead4;
+}
+
+[data-theme="dark"] .student-review-question-map {
+  border-color: var(--border);
+  background: color-mix(in srgb, var(--surface), #000 10%);
+}
+
+[data-theme="dark"] .student-review-recommendation-head {
+  color: #a5b4fc;
+}
+
+[data-theme="dark"] .student-review-recommendation-row {
+  border-color: color-mix(in srgb, #6366f1 40%, transparent);
+  background: color-mix(in srgb, #6366f1 14%, transparent);
+  color: #c7d2fe;
+}
+
+[data-theme="dark"] .student-review-recommendation-row small {
+  color: #a5b4fc;
 }
 
 .student-review-question-submitted,
