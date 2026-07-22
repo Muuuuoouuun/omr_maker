@@ -9,6 +9,13 @@ import {
     validateKoreanExamFixture,
 } from "../../scripts/korean-exam-fixture-core.mjs";
 import { buildPdfNormalizationJobs } from "../../scripts/korean-exam-pdf-core.mjs";
+import {
+    assertFixtureOwned,
+    buildPrivateObjectPath,
+    fixtureVerificationExpectations,
+    parseFixtureMode,
+    uniqueSupabaseTargets,
+} from "../../scripts/setup-korean-exam-fixture.mjs";
 
 describe("Korean exam Supabase fixture", () => {
     const fixture = buildKoreanExamFixture({ now: "2026-07-22T09:00:00.000Z" });
@@ -120,5 +127,66 @@ describe("Korean exam Supabase fixture", () => {
         ]);
         expect(jobs.every(job => job.sourcePageIndexes.join(",") === NORMALIZED_SOURCE_PAGE_INDEXES.join(","))).toBe(true);
         expect(jobs.every(job => job.outputPageCount === 16)).toBe(true);
+    });
+
+    it("parses exactly one fixture runner mode", () => {
+        expect(parseFixtureMode(["--dry-run"])).toBe("dry-run");
+        expect(parseFixtureMode(["--apply"])).toBe("apply");
+        expect(parseFixtureMode(["--verify"])).toBe("verify");
+        expect(parseFixtureMode(["--remove"])).toBe("remove");
+        expect(() => parseFixtureMode([])).toThrow("exactly one mode");
+        expect(() => parseFixtureMode(["--apply", "--verify"])).toThrow("exactly one mode");
+    });
+
+    it("builds private object paths inside the shared organization", () => {
+        expect(buildPrivateObjectPath({
+            organizationId: SHARED_ORGANIZATION_ID,
+            kind: "problem_pdf",
+            ownerId: "fixture-korean-2025-csat-media",
+            assetId: "fixture-asset-problem",
+        })).toBe(
+            "organizations/teacher_sharedqa/exams/fixture-korean-2025-csat-media/problem/fixture-asset-problem.pdf",
+        );
+        expect(buildPrivateObjectPath({
+            organizationId: SHARED_ORGANIZATION_ID,
+            kind: "attempt_handwriting",
+            ownerId: "fixture-attempt-student1-original",
+            assetId: "fixture-asset-handwriting",
+        })).toBe(
+            "organizations/teacher_sharedqa/attempts/fixture-attempt-student1-original/handwriting/fixture-asset-handwriting.json",
+        );
+        expect(() => buildPrivateObjectPath({
+            organizationId: "../outside",
+            kind: "problem_pdf",
+            ownerId: "exam",
+            assetId: "asset",
+        })).toThrow("unsafe scope segment");
+    });
+
+    it("rejects collisions that are not owned by this fixture", () => {
+        expect(() => assertFixtureOwned({ payload: { fixtureOwner: KOREAN_EXAM_FIXTURE_OWNER } }, "exam-1")).not.toThrow();
+        expect(() => assertFixtureOwned({ payload: { fixtureOwner: "someone-else" } }, "exam-1")).toThrow(
+            "refusing to overwrite",
+        );
+        expect(() => assertFixtureOwned(null, "exam-1")).not.toThrow();
+    });
+
+    it("deduplicates deployment targets that share one Supabase project", () => {
+        expect(uniqueSupabaseTargets([
+            { target: "production", url: "https://same.supabase.co", serviceRoleKey: "a" },
+            { target: "preview", url: "https://same.supabase.co", serviceRoleKey: "b" },
+            { target: "development", url: "https://other.supabase.co", serviceRoleKey: "c" },
+        ]).map(config => config.target)).toEqual(["production", "development"]);
+    });
+
+    it("exposes exact live verification expectations", () => {
+        expect(fixtureVerificationExpectations(fixture)).toEqual({
+            exams: 3,
+            examQuestions: 135,
+            attempts: 3,
+            questionResults: 98,
+            returnedFeedback: 1,
+            remoteAssets: 4,
+        });
     });
 });
