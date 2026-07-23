@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { Exam } from "@/types/omr";
 import type { SolvableExam } from "@/lib/examSolvePayload";
+import StatusPill from "@/components/dashboard/StatusPill";
 
 interface AssignmentBlockProps {
   exams: Array<(Exam | SolvableExam) & { attemptId?: string; hasUnreadFeedback?: boolean; answeredQuestionCount?: number }>;
@@ -208,36 +209,19 @@ export default function AssignmentBlock({ exams, type }: AssignmentBlockProps) {
                     {exam.accessConfig?.type === "group" ? "클래스" : "공개"}
                   </span>
                   {!isTodo && exam.hasUnreadFeedback && (
-                    <span
-                      style={{
-                        color: "#4f46e5",
-                        background: "#eef2ff",
-                        border: "1px solid #c7d2fe",
-                        borderRadius: "999px",
-                        padding: "1px 7px",
-                        fontSize: "0.7rem",
-                        fontWeight: 900,
-                        whiteSpace: "nowrap",
-                      }}
-                    >
-                      새 피드백
-                    </span>
+                    <StatusPill size="sm" tone="primary" label="새 피드백" />
                   )}
                   {!isTodo && (exam.answeredQuestionCount || 0) > 0 && (
-                    <span
+                    <StatusPill
+                      size="sm"
+                      tone="primary"
+                      label={`선생님 답변 ${exam.answeredQuestionCount}`}
                       style={{
                         color: "#0f766e",
                         background: "#f0fdfa",
                         border: "1px solid #99f6e4",
-                        borderRadius: "999px",
-                        padding: "1px 7px",
-                        fontSize: "0.7rem",
-                        fontWeight: 900,
-                        whiteSpace: "nowrap",
                       }}
-                    >
-                      선생님 답변 {exam.answeredQuestionCount}
-                    </span>
+                    />
                   )}
                 </div>
               </div>

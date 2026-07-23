@@ -2438,7 +2438,7 @@ export default function ExamAnalyticsTab({
                                                 }}>
                                                     <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '0.75rem', marginBottom: '0.35rem' }}>
                                                         <span style={{ fontWeight: 900, color: 'var(--foreground)' }}>{row.label}</span>
-                                                        <span style={{ color: 'var(--error)', fontSize: '0.78rem', fontWeight: 900 }}>
+                                                        <span style={{ color: 'var(--grade-red)', fontSize: '0.78rem', fontWeight: 900 }}>
                                                             {row.topGroup.wrongRate}%
                                                         </span>
                                                     </div>
@@ -2857,6 +2857,11 @@ export default function ExamAnalyticsTab({
                                                 : q.correctRate >= 90
                                                     ? '쉬움'
                                                     : '정상';
+                                        // 보강/변별 점검 = a correctness/quality problem worth flagging (grade-red);
+                                        // 정상/쉬움 = no issue (success).
+                                        const qualityTone: "grade" | "success" = qualityLabel === '정상' || qualityLabel === '쉬움'
+                                            ? 'success'
+                                            : 'grade';
                                         return (
                                             <tr
                                                 key={i}
@@ -2874,19 +2879,9 @@ export default function ExamAnalyticsTab({
                                                     )}
                                                 </td>
                                                 <td style={{ padding: '0.75rem 1rem' }}>
-                                                    <span style={{
-                                                        padding: '0.22rem 0.48rem',
-                                                        borderRadius: '999px',
-                                                        fontSize: '0.72rem',
-                                                        fontWeight: 900,
-                                                        background: qualityLabel === '정상' ? 'rgba(16,185,129,0.08)' : 'rgba(245,158,11,0.1)',
-                                                        color: qualityLabel === '정상' ? 'var(--success)' : 'var(--warning)',
-                                                        whiteSpace: 'nowrap',
-                                                    }}>
-                                                        {qualityLabel}
-                                                    </span>
+                                                    <StatusPill tone={qualityTone} size="sm" label={qualityLabel} />
                                                 </td>
-                                                <td style={{ padding: '0.75rem 1rem', fontWeight: 600, color: q.correctRate < 40 ? 'var(--error)' : 'var(--text)' }}>
+                                                <td style={{ padding: '0.75rem 1rem', fontWeight: 600, color: q.correctRate < 40 ? 'var(--grade-red)' : 'var(--text)' }}>
                                                     {q.correctRate}%
                                                 </td>
                                                 <td
@@ -2895,7 +2890,7 @@ export default function ExamAnalyticsTab({
                                                 >
                                                     {q.pointBiserial !== null ? q.pointBiserial.toFixed(2) : '-'}
                                                 </td>
-                                                <td style={{ padding: '0.75rem 1rem', fontWeight: 700, color: q.unansweredRate >= 20 ? 'var(--error)' : 'var(--muted)' }}>
+                                                <td style={{ padding: '0.75rem 1rem', fontWeight: 700, color: q.unansweredRate >= 20 ? 'var(--grade-red)' : 'var(--muted)' }}>
                                                     {q.unansweredRate}%
                                                 </td>
                                                 <td style={{ padding: '0.75rem 1rem', color: q.timeOverExpectedRate && q.timeOverExpectedRate >= 130 ? 'var(--warning)' : 'var(--muted)', fontWeight: 800 }}>

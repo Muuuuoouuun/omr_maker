@@ -7,6 +7,7 @@ import type { Attempt, AttemptFeedback, FeedbackDownloadPolicy, PdfDrawings } fr
 import { mergePdfDrawings } from "@/lib/feedbackPersistence";
 import { formatKoreanDateTime } from "@/lib/pure";
 import { getPlanLabel } from "@/utils/plans";
+import StatusPill from "@/components/dashboard/StatusPill";
 import LockedFeaturePanel from "./LockedFeaturePanel";
 import styles from "./StudentResultHub.module.css";
 
@@ -142,7 +143,7 @@ export default function HandwritingPanel({
                 <section className="bento-card" style={{ padding: "1.25rem" }} aria-labelledby="handwriting-metadata-title">
                     <div className={styles.sectionHeading}>
                         <h2 id="handwriting-metadata-title"><PenLine size={17} aria-hidden="true" /> 필기 보관</h2>
-                        <span className={styles.countBadge}>저장됨</span>
+                        <StatusPill tone="success" label="저장됨" size="sm" />
                     </div>
                     <div className={styles.metadataList}>
                         <div>플랜: <strong>{getPlanLabel(handwriting?.plan || attempt.handwritingPlan || "free")}</strong></div>
@@ -153,7 +154,7 @@ export default function HandwritingPanel({
                     {questionSummaries.length > 0 && (
                         <div className={styles.questionChips} aria-label="필기 연결 문항">
                             {questionSummaries.slice(0, 18).map(question => (
-                                <span key={question.questionId}>{question.questionNumber}번</span>
+                                <StatusPill key={question.questionId} tone="primary" size="sm" label={`${question.questionNumber}번`} />
                             ))}
                         </div>
                     )}
@@ -167,7 +168,11 @@ export default function HandwritingPanel({
                 <section className="bento-card" style={{ padding: "1.25rem" }} aria-labelledby="teacher-feedback-title">
                     <div className={styles.sectionHeading}>
                         <h2 id="teacher-feedback-title"><Send size={17} aria-hidden="true" /> 교사 피드백</h2>
-                        <span className={styles.countBadge}>{feedbackReturned ? "반환됨" : feedbackEnabled ? "초안" : "Pro"}</span>
+                        <StatusPill
+                            tone={feedbackReturned ? "success" : feedbackEnabled ? "warning" : "muted"}
+                            label={feedbackReturned ? "반환됨" : feedbackEnabled ? "초안" : "Pro"}
+                            size="sm"
+                        />
                     </div>
                     {!feedbackEnabled ? (
                         <div className={styles.panelStack}>

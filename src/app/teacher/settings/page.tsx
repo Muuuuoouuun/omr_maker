@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import TeacherHeader from "@/components/TeacherHeader";
+import StatusPill from "@/components/dashboard/StatusPill";
 import { User, Bell, FileText, CheckCircle, Key, Palette, Shield, Copy, Eye, EyeOff, Save, RotateCcw, Download, Upload, LogOut, Database, RefreshCw, AlertTriangle, CloudOff } from "lucide-react";
 import { toast } from "@/components/Toast";
 import { clearTeacherAuthSession, getTeacherDeploymentReadiness } from "@/app/actions/auth";
@@ -750,9 +751,7 @@ function CapabilityStatusList({ items }: { items: readonly CapabilityStatusItem[
                         <span style={{ minWidth: 0 }}>
                             <span style={{ display: 'flex', alignItems: 'center', gap: '0.45rem', flexWrap: 'wrap', marginBottom: '0.2rem' }}>
                                 <strong style={{ fontSize: '0.86rem' }}>{item.label}</strong>
-                                <span style={{ padding: '0.13rem 0.42rem', borderRadius: 'var(--radius-full)', color, background, fontSize: 'var(--type-micro)', fontWeight: 900 }}>
-                                    {item.statusLabel}
-                                </span>
+                                <StatusPill tone={ready ? "success" : "warning"} label={item.statusLabel} size="sm" />
                             </span>
                             <span style={{ display: 'block', color: 'var(--muted)', fontSize: '0.78rem', lineHeight: 1.55, wordBreak: 'keep-all' }}>
                                 {item.detail}
@@ -870,9 +869,7 @@ function ApiSection({ value, onChange, onSave, onCancel, showKey, setShowKey }: 
                 </div>
                 {hasKey && (
                     <div style={{ marginTop: '0.6rem', display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
-                        <span style={{ fontSize: '0.78rem', fontWeight: 700, color: 'var(--success)', background: 'rgba(16,185,129,0.1)', padding: '0.25rem 0.55rem', borderRadius: 'var(--radius-full)' }}>
-                            개인 키 저장 준비됨
-                        </span>
+                        <StatusPill tone="success" label="개인 키 저장 준비됨" size="sm" />
                         <span style={{ fontSize: '0.78rem', color: 'var(--muted)', fontFamily: 'var(--font-mono)' }}>
                             {maskedKey}
                         </span>
@@ -1130,18 +1127,13 @@ function DataDbSection({
                                             </span>
                                         </span>
                                     </span>
-                                    <span style={{
-                                        flexShrink: 0,
-                                        color: tone.color,
-                                        border: `1px solid ${tone.border}`,
-                                        borderRadius: 'var(--radius-full)',
-                                        padding: '0.18rem 0.5rem',
-                                        fontSize: 'var(--type-micro)',
-                                        fontWeight: 950,
-                                        whiteSpace: 'nowrap',
-                                    }}>
-                                        {source.pendingCount > 0 ? `${source.pendingCount}건 대기` : source.remoteLoaded ? "원격" : "로컬"}
-                                    </span>
+                                    <StatusPill
+                                        tone={({ ready: "success", warning: "warning", error: "error", neutral: "muted" } as const)[source.tone]}
+                                        variant="outline"
+                                        size="sm"
+                                        label={source.pendingCount > 0 ? `${source.pendingCount}건 대기` : source.remoteLoaded ? "원격" : "로컬"}
+                                        style={{ flexShrink: 0 }}
+                                    />
                                 </div>
                             );
                         })}
@@ -1263,9 +1255,7 @@ function SecuritySection({
                             <span style={{ minWidth: 0 }}>
                                 <span style={{ display: 'flex', alignItems: 'center', gap: '0.45rem', flexWrap: 'wrap', marginBottom: '0.18rem' }}>
                                     <strong style={{ fontSize: '0.86rem' }}>{item.label}</strong>
-                                    <span style={{ padding: '0.13rem 0.42rem', borderRadius: 'var(--radius-full)', color: 'var(--warning)', background: 'rgba(245,158,11,0.12)', fontSize: 'var(--type-micro)', fontWeight: 900 }}>
-                                        연동 전
-                                    </span>
+                                    <StatusPill tone="warning" label="연동 전" size="sm" />
                                 </span>
                                 <span style={{ display: 'block', color: 'var(--muted)', fontSize: '0.78rem', lineHeight: 1.55, wordBreak: 'keep-all' }}>
                                     {item.detail}
@@ -1436,17 +1426,7 @@ function SecuritySection({
                     <div>
                         <div style={{ fontSize: '0.9rem', fontWeight: 800, display: 'flex', alignItems: 'center', gap: '0.45rem', flexWrap: 'wrap' }}>
                             <span>현재 브라우저</span>
-                            <span style={{
-                                color: sessionDisplay.isExpired ? 'var(--error)' : 'var(--success)',
-                                background: sessionDisplay.isExpired ? 'rgba(239,68,68,0.08)' : 'rgba(16,185,129,0.1)',
-                                border: `1px solid ${sessionDisplay.isExpired ? 'rgba(239,68,68,0.2)' : 'rgba(16,185,129,0.2)'}`,
-                                borderRadius: 'var(--radius-full)',
-                                padding: '0.16rem 0.5rem',
-                                fontSize: 'var(--type-caption)',
-                                fontWeight: 900,
-                            }}>
-                                {sessionDisplay.label}
-                            </span>
+                            <StatusPill tone={sessionDisplay.isExpired ? "error" : "success"} label={sessionDisplay.label} size="sm" />
                         </div>
                         <div style={{ fontSize: '0.78rem', color: 'var(--muted)', marginTop: '0.22rem' }}>
                             {sessionDisplay.detail}

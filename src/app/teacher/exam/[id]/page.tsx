@@ -6,6 +6,7 @@ import Link from "next/link";
 import { Activity, ArrowLeft, BarChart2, BookOpen, PenLine, Users } from "lucide-react";
 import { Exam, Attempt } from "@/types/omr";
 import StatCard from "@/components/dashboard/StatCard";
+import StatusPill from "@/components/dashboard/StatusPill";
 import TeacherHeader from "@/components/TeacherHeader";
 import { toast } from "@/components/Toast";
 import { loadTeacherAttempts } from "@/lib/teacherAttemptClient";
@@ -252,18 +253,8 @@ export default function ExamDetailPage() {
                             <BarChart2 size={14} />
                             분석 보기
                         </Link>
-                        <Link
-                            href="/teacher/live"
-                            aria-label="실시간 모니터링"
-                            style={{
-                                display: 'inline-flex', alignItems: 'center', gap: '0.35rem',
-                                fontSize: '0.85rem', fontWeight: 700, color: 'var(--success)',
-                                padding: '0.5rem 0.9rem', borderRadius: 'var(--radius-full)',
-                                border: '1px solid rgba(16,185,129,0.28)', background: 'rgba(16,185,129,0.08)',
-                            }}
-                        >
-                            <Activity size={14} />
-                            실시간
+                        <Link href="/teacher/live" aria-label="실시간 모니터링">
+                            <StatusPill tone="success" icon={<Activity size={14} />} label="실시간" />
                         </Link>
                     </div>
                 </div>
@@ -388,9 +379,11 @@ export default function ExamDetailPage() {
                                                             </span>
                                                         )}
                                                         {attempt.retake && (
-                                                            <span className="tone-chip tone-teal" style={{ fontSize: '0.72rem', fontWeight: 800 }}>
-                                                                재시험 {attempt.retake.questionIds.length}문항
-                                                            </span>
+                                                            <StatusPill
+                                                                tone="retake"
+                                                                size="sm"
+                                                                label={`재시험 ${attempt.retake.questionIds.length}문항`}
+                                                            />
                                                         )}
                                                     </div>
                                                 </td>
@@ -402,31 +395,19 @@ export default function ExamDetailPage() {
                                                     {formatKoreanDateTime(attempt.finishedAt)}
                                                 </td>
                                                 <td style={{ padding: '1rem' }}>
-                                                    <span style={{
-                                                        padding: '2px 8px', borderRadius: '4px', fontSize: '0.8rem', fontWeight: 600,
-                                                        background: summary && (summary.wrongCount > 0 || summary.unansweredCount > 0) ? '#fef2f2' : '#dcfce7',
-                                                        color: summary && (summary.wrongCount > 0 || summary.unansweredCount > 0) ? '#991b1b' : '#166534'
-                                                    }}>
-                                                        {summary
+                                                    <StatusPill
+                                                        tone={summary && (summary.wrongCount > 0 || summary.unansweredCount > 0) ? "grade" : "success"}
+                                                        size="sm"
+                                                        label={summary
                                                             ? `정 ${summary.correctCount} · 오 ${summary.wrongCount} · 미 ${summary.unansweredCount}`
                                                             : "Completed"}
-                                                    </span>
+                                                    />
                                                 </td>
                                                 <td style={{ padding: '1rem' }}>
                                                     {attempt.tabFociLostCount && attempt.tabFociLostCount > 0 ? (
-                                                        <span style={{
-                                                            padding: '2px 8px', borderRadius: '4px', fontSize: '0.8rem', fontWeight: 600,
-                                                            background: '#fee2e2', color: '#991b1b', display: 'inline-flex', alignItems: 'center', gap: '4px'
-                                                        }}>
-                                                            ⚠️ {attempt.tabFociLostCount}회 이탈
-                                                        </span>
+                                                        <StatusPill tone="error" size="sm" label={`⚠️ ${attempt.tabFociLostCount}회 이탈`} />
                                                     ) : (
-                                                        <span style={{
-                                                            padding: '2px 8px', borderRadius: '4px', fontSize: '0.8rem', fontWeight: 600,
-                                                            background: '#f1f5f9', color: '#475569'
-                                                        }}>
-                                                            정상 (0회)
-                                                        </span>
+                                                        <StatusPill tone="muted" size="sm" label="정상 (0회)" />
                                                     )}
                                                 </td>
                                                 <td style={{ padding: '1rem', textAlign: 'right' }}>

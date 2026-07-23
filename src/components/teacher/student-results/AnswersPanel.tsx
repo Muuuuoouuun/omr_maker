@@ -2,6 +2,7 @@
 
 import { useMemo, useState } from "react";
 import { ListChecks, MessageSquare, Send } from "lucide-react";
+import StatusPill from "@/components/dashboard/StatusPill";
 import type { Attempt, Exam, QuestionResult } from "@/types/omr";
 import type { AttemptScoreSummary } from "@/lib/premiumAnalytics";
 import { formatKoreanDateTime } from "@/lib/pure";
@@ -137,9 +138,12 @@ export default function AnswersPanel({
                     <span style={{ color: "var(--muted)", fontWeight: 800 }}>{currentEarnedScore} / {currentTotalScore}점</span>
                 </div>
                 {scoreRegraded && (
-                    <div style={{ marginTop: "0.65rem", color: "var(--text-warning)", fontSize: "0.72rem", fontWeight: 800 }}>
-                        현재 정답 기준 재채점됨 · 제출 당시 {attempt.score}점 ({storedPercent}%)
-                    </div>
+                    <StatusPill
+                        tone="warning"
+                        label="현재 정답 기준 재채점됨"
+                        detail={`제출 당시 ${attempt.score}점 (${storedPercent}%)`}
+                        style={{ marginTop: "0.65rem" }}
+                    />
                 )}
                 <div className={styles.statGrid} style={{ gridTemplateColumns: `repeat(${counts.ungradedCount > 0 ? 4 : 3}, minmax(0, 1fr))` }}>
                     <SmallStat label="정답" value={counts.correctCount} accent="var(--success)" textColor="var(--text-success)" />
@@ -208,7 +212,15 @@ export default function AnswersPanel({
             <section className="bento-card" style={{ padding: "1.25rem" }} aria-labelledby="student-questions-title">
                 <div className={styles.sectionHeading}>
                     <h2 id="student-questions-title"><MessageSquare size={18} aria-hidden="true" /> 학생 질문</h2>
-                    <span className={styles.countBadge}>대기 {pendingQuestionCount} · 답변 {answeredQuestionCount}</span>
+                    <StatusPill
+                        label={`대기 ${pendingQuestionCount} · 답변 ${answeredQuestionCount}`}
+                        size="sm"
+                        style={{
+                            color: "var(--text-primary)",
+                            background: "color-mix(in srgb, var(--primary) 11%, var(--surface))",
+                            border: "none",
+                        }}
+                    />
                 </div>
                 {studentQuestions.length > 0 ? (
                     <div className={styles.rowList}>

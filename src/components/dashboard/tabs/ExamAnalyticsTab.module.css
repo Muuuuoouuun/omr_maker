@@ -701,7 +701,7 @@
 }
 
 .rateDanger {
-  color: var(--analytics-coral);
+  color: var(--grade-red);
   font-weight: 950;
 }
 

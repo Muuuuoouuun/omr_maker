@@ -19,7 +19,7 @@ import { CSSProperties, ReactNode } from "react";
  *  - variant="outline"          → border + color only, no background fill.
  */
 
-type StatusPillTone = "primary" | "success" | "warning" | "error" | "grade" | "muted";
+type StatusPillTone = "primary" | "success" | "warning" | "error" | "grade" | "retake" | "muted";
 type StatusPillVariant = "filled" | "outline";
 type StatusPillSize = "sm" | "md";
 
@@ -50,6 +50,7 @@ const TONE_STYLES: Record<StatusPillTone, { color: string; background: string; b
   warning: { color: "var(--warning)", background: "rgba(245,158,11,0.12)", border: "rgba(245,158,11,0.28)" },
   error: { color: "var(--error)", background: "rgba(239,68,68,0.1)", border: "rgba(239,68,68,0.24)" },
   grade: { color: "var(--grade-red)", background: "var(--grade-red-soft)", border: "var(--grade-red-line)" },
+  retake: { color: "var(--retake)", background: "var(--retake-soft)", border: "var(--retake-line)" },
   muted: { color: "var(--muted)", background: "rgba(100,116,139,0.1)", border: "rgba(100,116,139,0.22)" },
 };
 

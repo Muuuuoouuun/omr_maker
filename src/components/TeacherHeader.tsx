@@ -9,6 +9,7 @@ import GlobalSearch from "./GlobalSearch";
 import NotificationBell from "./NotificationBell";
 import TeacherLogoutButton from "./TeacherLogoutButton";
 import TeacherSessionChip from "./TeacherSessionChip";
+import StatusPill from "./dashboard/StatusPill";
 
 interface TeacherHeaderProps {
     badge?: string;
@@ -33,15 +34,20 @@ export default function TeacherHeader({ badge = "TEACHER", badgeColor }: Teacher
                 <div className="container header-content">
                     <div className="teacher-header-brand" style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
                         <BrandLogo />
-                        <span style={{
-                            fontSize: '0.75rem', fontWeight: 700,
-                            background: `color-mix(in srgb, ${color}, transparent 88%)`,
-                            color,
-                            padding: '4px 10px', borderRadius: 'var(--radius-full)',
-                            border: `1px solid color-mix(in srgb, ${color}, transparent 78%)`
-                        }}>
-                            {badge}
-                        </span>
+                        {/* badgeColor is an arbitrary per-page accent (callers pass e.g. LIVE red,
+                            SETTINGS indigo, BILLING purple, USERS green — none of which map onto
+                            a semantic StatusPill tone), so it stays a style override rather than
+                            a tone mapping. */}
+                        <StatusPill
+                            tone="primary"
+                            size="sm"
+                            label={badge}
+                            style={{
+                                color,
+                                background: `color-mix(in srgb, ${color}, transparent 88%)`,
+                                border: `1px solid color-mix(in srgb, ${color}, transparent 78%)`,
+                            }}
+                        />
                     </div>
                     <div className="teacher-header-actions" style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
                         {/* Search trigger — opens modal via Cmd+K */}
@@ -85,17 +91,17 @@ export default function TeacherHeader({ badge = "TEACHER", badgeColor }: Teacher
                             transition: 'var(--transition-base)'
                         }} className="nav-link">대시보드</Link>
                         <Link href="/teacher/live" style={{
-                            display: 'inline-flex', alignItems: 'center', gap: '0.35rem',
-                            fontSize: '0.85rem', fontWeight: 700,
-                            color: 'var(--success)',
-                            padding: '0.5rem 0.9rem', borderRadius: 'var(--radius-full)',
-                            border: '1px solid rgba(16,185,129,0.28)',
-                            background: 'rgba(16,185,129,0.08)',
+                            display: 'inline-flex', alignItems: 'center',
                             transition: 'var(--transition-base)',
                             minHeight: '2.75rem',
                         }} className="nav-link-live" aria-label="실시간 모니터링">
-                            <Activity size={14} />
-                            <span>실시간</span>
+                            <StatusPill
+                                tone="success"
+                                icon={<Activity size={14} />}
+                                label="실시간"
+                                className="nav-link-live-pill"
+                                style={{ minHeight: '2.75rem' }}
+                            />
                         </Link>
                         <TeacherSessionChip />
                         <NotificationBell />
@@ -110,8 +116,12 @@ export default function TeacherHeader({ badge = "TEACHER", badgeColor }: Teacher
                     .header-search-btn { min-width: 2.75rem !important; width: 2.75rem !important; padding: 0 !important; justify-content: center !important; }
                     .header-search-btn span { display: none !important; }
                     .header-search-btn kbd { display: none !important; }
-                    .nav-link-live { min-width: 2.75rem !important; width: 2.75rem !important; padding: 0 !important; justify-content: center !important; }
-                    .nav-link-live span { display: none !important; }
+                    .nav-link-live { min-width: 2.75rem !important; width: 2.75rem !important; }
+                    .nav-link-live-pill { min-width: 2.75rem !important; width: 2.75rem !important; padding: 0 !important; justify-content: center !important; }
+                    /* Hide only the label span, not the icon-wrapper span StatusPill also
+                       renders — the label is always StatusPill's last child span when an icon
+                       is present. */
+                    .nav-link-live-pill > span:last-child { display: none !important; }
                 }
             `}</style>
         </>

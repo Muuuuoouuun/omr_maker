@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { getServerPlanSnapshot, type ServerPlanSnapshot } from "@/app/actions/premiumAccess";
 import TeacherHeader from "@/components/TeacherHeader";
+import StatusPill from "@/components/dashboard/StatusPill";
 import { CreditCard, Check, Zap, Crown, Building, Download, Sparkles, TrendingUp, AlertCircle, X, Lock, Clock3 } from "lucide-react";
 import { formatLimit, usagePct } from "@/lib/pure";
 import { toast } from "@/components/Toast";
@@ -126,6 +127,45 @@ const PLAN_FEATURE_STATUS_META: Record<PremiumDeliveryStatus, { label: string; c
     partial: { label: "부분 제공", color: "#92400e", background: "#fef3c7" },
     planned: { label: "준비 중", color: "#475569", background: "#e2e8f0" },
 };
+
+// Tone lookups for the shared <StatusPill> (see docs/design-system.md — 컴포넌트 재사용).
+// Kept separate from the *_META records above: those keep returning their own hex
+// color/background because a few are still read directly for icon tinting (e.g.
+// FEATURE_STATUS_META.color on the entitlement icon box, PLAN_FEATURE_STATUS_META.color
+// on the Check/AlertCircle/Clock3 icons) even after the pill markup at the same call
+// site switched over to StatusPill's own tone-driven colors.
+const PLAN_HEALTH_TONE = {
+    ready: "success",
+    watch: "warning",
+    upgrade: "error",
+} as const;
+
+const LIMIT_STATUS_TONE = {
+    ok: "success",
+    near: "warning",
+    blocked: "error",
+    unlimited: "primary",
+} as const;
+
+const FEATURE_STATUS_TONE = {
+    available: "success",
+    partial: "warning",
+    planned: "muted",
+    locked: "warning",
+} as const;
+
+const PLAN_FEATURE_STATUS_TONE = {
+    available: "success",
+    partial: "warning",
+    planned: "muted",
+} as const;
+
+const PAYMENT_PROVIDER_STATUS_TONE = {
+    ready: "success",
+    simulation: "primary",
+    blocked: "warning",
+    disabled: "muted",
+} as const;
 
 function paymentProviderStatusColor(status: PaymentProviderReadinessStatus): string {
     if (status === "ready") return "#047857";
@@ -315,9 +355,12 @@ export default function BillingPage() {
         }),
         [current, usage]
     );
-    const planHealthMeta = enabledPlannedFeatureCount > 0 && planHealth.level === "ready"
-        ? { label: "일부 준비 중", color: "#92400e", background: "#fef3c7" }
-        : PLAN_HEALTH_META[planHealth.level];
+    const planHealthLabel = enabledPlannedFeatureCount > 0 && planHealth.level === "ready"
+        ? "일부 준비 중"
+        : PLAN_HEALTH_META[planHealth.level].label;
+    const planHealthTone = enabledPlannedFeatureCount > 0 && planHealth.level === "ready"
+        ? "warning"
+        : PLAN_HEALTH_TONE[planHealth.level];
     const healthUpgradePlan = planHealth.level !== "ready" && planHealth.upgradeTarget && planHealth.upgradeTarget !== current
         ? PLAN_BY_KEY[planHealth.upgradeTarget]
         : null;
@@ -470,9 +513,14 @@ th { background: #f8fafc; font-size: 12px; color: #64748b; text-transform: upper
                     <div style={{ position: 'relative', zIndex: 1, display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: '1.5rem' }}>
                         <div>
                             <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.75rem' }}>
-                                <span style={{ fontSize: '0.75rem', fontWeight: 700, background: 'rgba(255,255,255,0.2)', padding: '4px 10px', borderRadius: 'var(--radius-full)', letterSpacing: '0.08em' }}>
-                                    {serverPlanSnapshot?.authoritative && serverPlanSnapshot.source === "supabase" ? "SERVER PLAN" : serverPlanSnapshot?.source === "dev-simulation" ? "SIMULATED PLAN" : "SAFE DEFAULT"}
-                                </span>
+                                {/* Sits on the plan gradient, not a plain surface — tone colors would lack
+                                    contrast here, so this stays a translucent-white pill via style override. */}
+                                <StatusPill
+                                    tone="muted"
+                                    size="sm"
+                                    label={serverPlanSnapshot?.authoritative && serverPlanSnapshot.source === "supabase" ? "SERVER PLAN" : serverPlanSnapshot?.source === "dev-simulation" ? "SIMULATED PLAN" : "SAFE DEFAULT"}
+                                    style={{ background: 'rgba(255,255,255,0.2)', color: 'white', border: 'none', letterSpacing: '0.08em' }}
+                                />
                                 {PLAN_ICONS[currentPlan.key]}
                             </div>
                             <h2 style={{ fontSize: '2.5rem', fontWeight: 900, letterSpacing: '-0.03em', marginBottom: '0.25rem' }}>{currentPlan.name}</h2>
@@ -550,17 +598,12 @@ th { background: #f8fafc; font-size: 12px; color: #64748b; text-transform: upper
                                 <span style={{ fontSize: '0.78rem', fontWeight: 900, color: 'var(--foreground)' }}>
                                     결제 provider 상태
                                 </span>
-                                <span style={{
-                                    color: paymentProviderStatusColor(paymentProviderReadiness.status),
-                                    border: `1px solid ${paymentProviderStatusColor(paymentProviderReadiness.status)}`,
-                                    borderRadius: 'var(--radius-full)',
-                                    padding: '0.18rem 0.52rem',
-                                    fontSize: 'var(--type-micro)',
-                                    fontWeight: 950,
-                                    whiteSpace: 'nowrap',
-                                }}>
-                                    {paymentProviderReadiness.label}
-                                </span>
+                                <StatusPill
+                                    tone={PAYMENT_PROVIDER_STATUS_TONE[paymentProviderReadiness.status]}
+                                    variant="outline"
+                                    size="sm"
+                                    label={paymentProviderReadiness.label}
+                                />
                             </div>
                             <div style={{ fontSize: '0.8rem', color: 'var(--muted)', fontWeight: 750, lineHeight: 1.5, wordBreak: 'keep-all' }}>
                                 {paymentProviderReadiness.detail}
@@ -568,28 +611,16 @@ th { background: #f8fafc; font-size: 12px; color: #64748b; text-transform: upper
                             </div>
                         </div>
                         <div style={{ display: 'flex', gap: '0.45rem', flexWrap: 'wrap' }} aria-label="결제 연동 후보">
-                            {paymentProviderRolloutReadiness.map(item => {
-                                const chipColor = item.publicKeyPresent ? '#047857' : item.active ? '#b45309' : 'var(--foreground)';
-                                return (
-                                    <span
-                                        key={item.provider.key}
-                                        title={item.missing.length > 0 ? `누락 ${item.missing.join(", ")}` : item.label}
-                                        style={{
-                                            padding: '0.35rem 0.65rem',
-                                            borderRadius: 'var(--radius-full)',
-                                            background: item.active ? 'rgba(99,102,241,0.1)' : 'var(--surface)',
-                                            border: `1px solid ${item.active ? 'rgba(99,102,241,0.32)' : 'var(--border)'}`,
-                                            fontSize: '0.78rem',
-                                            fontWeight: 800,
-                                            color: item.active
-                                                ? (item.publicKeyPresent ? 'var(--primary)' : '#b45309')
-                                                : chipColor
-                                        }}
-                                    >
-                                        {item.provider.priority}. {item.provider.label} · {item.label}
-                                    </span>
-                                );
-                            })}
+                            {paymentProviderRolloutReadiness.map(item => (
+                                <span key={item.provider.key} title={item.missing.length > 0 ? `누락 ${item.missing.join(", ")}` : item.label}>
+                                    <StatusPill
+                                        tone={item.active
+                                            ? (item.publicKeyPresent ? "primary" : "warning")
+                                            : (item.publicKeyPresent ? "success" : "muted")}
+                                        label={`${item.provider.priority}. ${item.provider.label} · ${item.label}`}
+                                    />
+                                </span>
+                            ))}
                         </div>
                     </div>
                 </div>
@@ -599,16 +630,7 @@ th { background: #f8fafc; font-size: 12px; color: #64748b; text-transform: upper
                         <div>
                             <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.35rem', flexWrap: 'wrap' }}>
                                 <h2 style={{ fontSize: '1.2rem', fontWeight: 800 }}>사용량·권한 서비스 점검</h2>
-                                <span style={{
-                                    padding: '0.22rem 0.55rem',
-                                    borderRadius: 'var(--radius-full)',
-                                    background: planHealthMeta.background,
-                                    color: planHealthMeta.color,
-                                    fontSize: 'var(--type-caption)',
-                                    fontWeight: 900
-                                }}>
-                                    {planHealthMeta.label}
-                                </span>
+                                <StatusPill tone={planHealthTone} size="sm" label={planHealthLabel} />
                             </div>
                             <p style={{ fontSize: '0.88rem', color: 'var(--muted)', lineHeight: 1.55, wordBreak: 'keep-all' }}>
                                 {enabledPlannedFeatureCount > 0 && planHealth.level === "ready"
@@ -654,17 +676,7 @@ th { background: #f8fafc; font-size: 12px; color: #64748b; text-transform: upper
                                 >
                                     <div style={{ display: 'flex', justifyContent: 'space-between', gap: '0.5rem', alignItems: 'center', marginBottom: '0.4rem' }}>
                                         <span style={{ fontSize: '0.78rem', fontWeight: 800, color: 'var(--muted)' }}>{limitView.label}</span>
-                                        <span style={{
-                                            padding: '0.18rem 0.45rem',
-                                            borderRadius: 'var(--radius-full)',
-                                            background: statusMeta.background,
-                                            color: statusMeta.color,
-                                            fontSize: 'var(--type-micro)',
-                                            fontWeight: 900,
-                                            whiteSpace: 'nowrap'
-                                        }}>
-                                            {statusMeta.label}
-                                        </span>
+                                        <StatusPill tone={LIMIT_STATUS_TONE[limitView.status]} size="sm" label={statusMeta.label} />
                                     </div>
                                     <div style={{ fontSize: '1.25rem', fontWeight: 900, fontVariantNumeric: 'tabular-nums', marginBottom: '0.2rem' }}>
                                         {formatLimit(limitView.used)}
@@ -686,21 +698,17 @@ th { background: #f8fafc; font-size: 12px; color: #64748b; text-transform: upper
                                 <span style={{ fontSize: '0.78rem', fontWeight: 800, color: 'var(--muted)' }}>
                                     {planHealth.lockedEntitlements.length > 0 ? '잠긴 프리미엄 기능' : '준비 중인 기능'}
                                 </span>
-                                <span style={{
-                                    padding: '0.18rem 0.45rem',
-                                    borderRadius: 'var(--radius-full)',
-                                    background: planHealth.lockedEntitlements.length > 0 || enabledPlannedFeatureCount > 0 ? '#fef3c7' : '#d1fae5',
-                                    color: planHealth.lockedEntitlements.length > 0 || enabledPlannedFeatureCount > 0 ? '#92400e' : '#047857',
-                                    fontSize: 'var(--type-micro)',
-                                    fontWeight: 900,
-                                    whiteSpace: 'nowrap'
-                                }}>
-                                    {planHealth.lockedEntitlements.length > 0
-                                        ? `${planHealth.lockedEntitlements.length}개 잠금`
-                                        : enabledPlannedFeatureCount > 0
-                                            ? `${enabledPlannedFeatureCount}개 준비 중`
-                                            : '모두 제공'}
-                                </span>
+                                <StatusPill
+                                    tone={planHealth.lockedEntitlements.length > 0 || enabledPlannedFeatureCount > 0 ? "warning" : "success"}
+                                    size="sm"
+                                    label={
+                                        planHealth.lockedEntitlements.length > 0
+                                            ? `${planHealth.lockedEntitlements.length}개 잠금`
+                                            : enabledPlannedFeatureCount > 0
+                                                ? `${enabledPlannedFeatureCount}개 준비 중`
+                                                : '모두 제공'
+                                    }
+                                />
                             </div>
                             <div style={{ fontSize: '1.25rem', fontWeight: 900, marginBottom: '0.2rem' }}>
                                 {planHealth.lockedEntitlements.length || enabledPlannedFeatureCount}개
@@ -749,20 +757,16 @@ th { background: #f8fafc; font-size: 12px; color: #64748b; text-transform: upper
                                 현재 플랜에서 바로 쓸 수 있는 기능과 업그레이드가 필요한 기능입니다.
                             </p>
                         </div>
-                        <span style={{
-                            display: 'inline-flex',
-                            alignItems: 'center',
-                            gap: '0.35rem',
-                            padding: '0.35rem 0.65rem',
-                            borderRadius: 'var(--radius-full)',
-                            background: `color-mix(in srgb, ${currentPlan.color}, transparent 90%)`,
-                            color: currentPlan.color,
-                            fontSize: '0.78rem',
-                            fontWeight: 800
-                        }}>
-                            {PLAN_ICONS[currentPlan.key]}
-                            {currentPlan.name}
-                        </span>
+                        <StatusPill
+                            tone="muted"
+                            icon={PLAN_ICONS[currentPlan.key]}
+                            label={currentPlan.name}
+                            style={{
+                                background: `color-mix(in srgb, ${currentPlan.color}, transparent 90%)`,
+                                color: currentPlan.color,
+                                border: 'none',
+                            }}
+                        />
                     </div>
 
                     <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: '0.75rem' }}>
@@ -804,17 +808,12 @@ th { background: #f8fafc; font-size: 12px; color: #64748b; text-transform: upper
                                     <div style={{ minWidth: 0, flex: 1 }}>
                                         <div style={{ display: 'flex', justifyContent: 'space-between', gap: '0.6rem', alignItems: 'center', marginBottom: '0.25rem' }}>
                                             <strong style={{ fontSize: '0.9rem' }}>{entitlement.displayLabel}</strong>
-                                            <span style={{
-                                                flexShrink: 0,
-                                                fontSize: 'var(--type-micro)',
-                                                fontWeight: 800,
-                                                padding: '0.18rem 0.45rem',
-                                                borderRadius: 'var(--radius-full)',
-                                                color: statusMeta.color,
-                                                background: statusMeta.background,
-                                            }}>
-                                                {entitlement.statusLabel}
-                                            </span>
+                                            <StatusPill
+                                                tone={FEATURE_STATUS_TONE[entitlement.status]}
+                                                size="sm"
+                                                label={entitlement.statusLabel}
+                                                style={{ flexShrink: 0 }}
+                                            />
                                         </div>
                                         <p style={{ fontSize: '0.78rem', color: 'var(--muted)', lineHeight: 1.45, wordBreak: 'keep-all' }}>
                                             {entitlement.displayDescription}
@@ -844,7 +843,7 @@ th { background: #f8fafc; font-size: 12px; color: #64748b; text-transform: upper
                                 background: yearly ? 'var(--primary)' : 'transparent',
                                 color: yearly ? 'white' : 'var(--muted)', transition: 'var(--transition-base)',
                                 display: 'flex', alignItems: 'center', gap: '0.3rem'
-                            }}>연간 <span style={{ fontSize: '0.7rem', background: 'rgba(16,185,129,0.2)', color: '#10b981', padding: '2px 7px', borderRadius: 'var(--radius-full)', fontWeight: 700 }}>-20%</span></button>
+                            }}>연간 <StatusPill tone="success" size="sm" label="-20%" /></button>
                         </div>
                     </div>
 
@@ -898,9 +897,12 @@ th { background: #f8fafc; font-size: 12px; color: #64748b; text-transform: upper
                                                             <small style={{ display: 'block', marginTop: '0.1rem', color: 'var(--muted)', fontSize: '0.7rem', lineHeight: 1.4 }}>{feature.detail}</small>
                                                         )}
                                                     </span>
-                                                    <span style={{ flexShrink: 0, padding: '0.12rem 0.38rem', borderRadius: 'var(--radius-full)', background: featureMeta.background, color: featureMeta.color, fontSize: 'var(--type-micro)', fontWeight: 900 }}>
-                                                        {featureMeta.label}
-                                                    </span>
+                                                    <StatusPill
+                                                        tone={PLAN_FEATURE_STATUS_TONE[feature.status]}
+                                                        size="sm"
+                                                        label={featureMeta.label}
+                                                        style={{ flexShrink: 0 }}
+                                                    />
                                                 </li>
                                             );
                                         })}
@@ -976,9 +978,7 @@ th { background: #f8fafc; font-size: 12px; color: #64748b; text-transform: upper
                                             <td style={{ padding: '1rem 0.5rem', fontSize: '0.85rem', color: 'var(--muted)' }}>{inv.date}</td>
                                             <td style={{ padding: '1rem 0.5rem', fontSize: '0.9rem', fontWeight: 700 }}>₩{inv.amount.toLocaleString()}</td>
                                             <td style={{ padding: '1rem 0.5rem' }}>
-                                                <span style={{ background: statusMeta.background, color: statusMeta.color, padding: '0.25rem 0.65rem', borderRadius: 'var(--radius-full)', fontSize: 'var(--type-caption)', fontWeight: 700 }}>
-                                                    {statusMeta.label}
-                                                </span>
+                                                <StatusPill tone={inv.status === "paid" ? "success" : "warning"} size="sm" label={statusMeta.label} />
                                             </td>
                                             <td style={{ padding: '1rem 0.5rem', textAlign: 'right' }}>
                                                 <button
@@ -1185,21 +1185,26 @@ function UsageCard({
                 <div style={{ fontSize: 'var(--type-caption)', fontWeight: 700, color: 'var(--muted)', letterSpacing: '0.08em', textTransform: 'uppercase' }}>{label}</div>
                 {isWarning && <AlertCircle size={14} color="#f59e0b" aria-label="임계치 초과" />}
                 {locked && (
-                    <span style={{
-                        display: 'inline-flex', alignItems: 'center', gap: '0.2rem',
-                        fontSize: '0.6rem', fontWeight: 800, letterSpacing: '0.1em',
-                        background: '#fef3c7', color: '#92400e',
-                        padding: '2px 7px', borderRadius: 'var(--radius-full)'
-                    }}>
-                        <Lock size={10} /> LOCKED
-                    </span>
+                    <StatusPill
+                        tone="warning"
+                        size="sm"
+                        icon={<Lock size={10} />}
+                        label="LOCKED"
+                        style={{ letterSpacing: '0.1em' }}
+                    />
                 )}
                 {isUnlimited && (
-                    <span style={{
-                        fontSize: '0.6rem', fontWeight: 800, letterSpacing: '0.1em',
-                        background: `color-mix(in srgb, ${color}, transparent 90%)`, color,
-                        padding: '2px 7px', borderRadius: 'var(--radius-full)'
-                    }}>UNLIMITED</span>
+                    <StatusPill
+                        tone="muted"
+                        size="sm"
+                        label="UNLIMITED"
+                        style={{
+                            background: `color-mix(in srgb, ${color}, transparent 90%)`,
+                            color,
+                            border: 'none',
+                            letterSpacing: '0.1em',
+                        }}
+                    />
                 )}
             </div>
             <div style={{ fontSize: '1.8rem', fontWeight: 900, letterSpacing: '-0.03em', fontVariantNumeric: 'tabular-nums', marginBottom: '0.25rem' }}>

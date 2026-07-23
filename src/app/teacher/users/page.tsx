@@ -4,6 +4,7 @@ import { Suspense, useState, useMemo, useEffect, useRef, useDeferredValue } from
 import { useSearchParams } from "next/navigation";
 import NextLink from "next/link";
 import TeacherHeader from "@/components/TeacherHeader";
+import StatusPill from "@/components/dashboard/StatusPill";
 import { Users, UserPlus, Upload, Search, MessageCircle, TrendingUp, TrendingDown, MoreVertical, Link as LinkIcon, FolderPlus, CheckCircle2, Clock, X, Trash2, Download, PenLine, Target, AlertTriangle, FileText, BarChart3, Copy, KeyRound, RefreshCw, Lock, MapPin } from "lucide-react";
 import { toast } from "@/components/Toast";
 import type { Attempt, Exam } from "@/types/omr";
@@ -1928,19 +1929,18 @@ function ManageUsersInner() {
                                             <KeyRound size={13} />
                                             시작 코드
                                         </div>
-                                        <span style={{
-                                            minWidth: 86,
-                                            textAlign: 'center',
-                                            padding: '0.25rem 0.5rem',
-                                            borderRadius: '999px',
-                                            background: selectedStartCode ? 'rgba(16,185,129,0.1)' : 'rgba(245,158,11,0.12)',
-                                            color: selectedStartCode ? '#047857' : '#b45309',
-                                            fontSize: '0.72rem',
-                                            fontWeight: 850,
-                                            fontVariantNumeric: 'tabular-nums',
-                                            letterSpacing: selectedStartCode ? '0.08em' : 0,
-                                        }} data-testid="student-start-code-value">
-                                            {selectedStartCode || '미발급'}
+                                        <span data-testid="student-start-code-value">
+                                            <StatusPill
+                                                tone={selectedStartCode ? 'success' : 'warning'}
+                                                label={selectedStartCode || '미발급'}
+                                                size="sm"
+                                                style={{
+                                                    minWidth: 86,
+                                                    justifyContent: 'center',
+                                                    fontVariantNumeric: 'tabular-nums',
+                                                    letterSpacing: selectedStartCode ? '0.08em' : 0,
+                                                }}
+                                            />
                                         </span>
                                     </div>
                                     <p style={{ fontSize: '0.76rem', color: 'var(--muted)', lineHeight: 1.55, marginBottom: '0.75rem', wordBreak: 'keep-all' }}>
@@ -2014,9 +2014,12 @@ function ManageUsersInner() {
                                                     <div style={{ minWidth: 0 }}>
                                                         <div style={{ fontWeight: 600, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: 220 }}>{a.examTitle}</div>
                                                         {a.retake && (
-                                                            <div style={{ marginTop: '0.25rem', display: 'inline-flex', alignItems: 'center', gap: '0.25rem', color: '#0f766e', background: '#f0fdfa', border: '1px solid #99f6e4', borderRadius: '999px', padding: '0.1rem 0.4rem', fontSize: '0.7rem', fontWeight: 900 }}>
-                                                                재시험 {a.retake.questionIds.length}문항
-                                                            </div>
+                                                            <StatusPill
+                                                                tone="retake"
+                                                                label={`재시험 ${a.retake.questionIds.length}문항`}
+                                                                size="sm"
+                                                                style={{ marginTop: '0.25rem' }}
+                                                            />
                                                         )}
                                                         {hasHandwriting && (
                                                             <div style={{ marginTop: '0.25rem', display: 'flex', alignItems: 'center', gap: '0.35rem', color: '#7c3aed', fontSize: '0.73rem', fontWeight: 800 }}>
@@ -2409,20 +2412,17 @@ function ManageUsersInner() {
                             <tbody>
                                 {rosterInvites.map(inv => {
                                     const map = {
-                                        pending: { color: '#f59e0b', bg: 'rgba(245,158,11,0.1)', label: '대기 중' },
-                                        accepted: { color: '#10b981', bg: 'rgba(16,185,129,0.1)', label: '수락됨' },
-                                        expired: { color: '#94a3b8', bg: 'rgba(148,163,184,0.1)', label: '만료' },
-                                    };
+                                        pending: { tone: 'warning', label: '대기 중' },
+                                        accepted: { tone: 'success', label: '수락됨' },
+                                        expired: { tone: 'muted', label: '만료' },
+                                    } as const;
                                     const m = map[inv.status as keyof typeof map] ?? map.pending;
                                     return (
                                         <tr key={inv.id} style={{ borderBottom: '1px solid var(--border)' }}>
                                             <td style={{ padding: '1rem 0.5rem', fontSize: '0.9rem', fontWeight: 600 }}>{inv.email}</td>
                                             <td style={{ padding: '1rem 0.5rem', fontSize: '0.85rem', color: 'var(--muted)' }}>{inv.sentAt}</td>
                                             <td style={{ padding: '1rem 0.5rem' }}>
-                                                <span style={{
-                                                    background: m.bg, color: m.color, padding: '0.3rem 0.7rem',
-                                                    borderRadius: 'var(--radius-full)', fontSize: '0.75rem', fontWeight: 700
-                                                }}>{m.label}</span>
+                                                <StatusPill tone={m.tone} label={m.label} size="sm" />
                                             </td>
                                             <td style={{ padding: '1rem 0.5rem', textAlign: 'right' }}>
                                                 <div style={{ display: 'flex', gap: '0.75rem', justifyContent: 'flex-end' }}>
@@ -2782,16 +2782,15 @@ function GroupProfileModal({
                             </div>
                         </div>
                     </div>
-                    <span style={{
-                        padding: '0.35rem 0.7rem',
-                        borderRadius: 'var(--radius-full)',
-                        background: `color-mix(in srgb, ${group.color}, transparent 88%)`,
-                        color: group.color,
-                        fontWeight: 900,
-                        fontSize: '0.8rem',
-                    }}>
-                        평균 {profile.averageScore}점
-                    </span>
+                    <StatusPill
+                        label={`평균 ${profile.averageScore}점`}
+                        size="sm"
+                        style={{
+                            background: `color-mix(in srgb, ${group.color}, transparent 88%)`,
+                            color: group.color,
+                            border: 'none',
+                        }}
+                    />
                 </div>
 
                 <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: '0.75rem' }}>
@@ -2868,16 +2867,7 @@ function GroupProfileModal({
                                     <div style={{ display: 'flex', justifyContent: 'space-between', gap: '0.75rem', marginBottom: '0.4rem' }}>
                                         <div style={{ minWidth: 0 }}>
                                             <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', marginBottom: '0.2rem', flexWrap: 'wrap' }}>
-                                                <span style={{
-                                                    padding: '0.18rem 0.45rem',
-                                                    background: 'rgba(239,68,68,0.1)',
-                                                    color: '#ef4444',
-                                                    borderRadius: 'var(--radius-full)',
-                                                    fontSize: '0.68rem',
-                                                    fontWeight: 900,
-                                                }}>
-                                                    {weaknessKindLabel(weakness.kind)}
-                                                </span>
+                                                <StatusPill tone="grade" label={weaknessKindLabel(weakness.kind)} size="sm" />
                                                 <span style={{ color: 'var(--muted)', fontSize: '0.72rem' }}>{weakness.examTitle}</span>
                                             </div>
                                             <div style={{ fontWeight: 900, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{weakness.title}</div>
@@ -2999,7 +2989,10 @@ function StudentProfileModal({
     onClose: () => void;
     retakeAssignmentsEnabled: boolean;
 }) {
-    const trendColor = profile.trendDelta >= 0 ? "var(--success)" : "var(--error)";
+    // Score trend is exam-performance signal (an improving/declining trend),
+    // not a system state — success for up, grade (not error) for down. See
+    // docs/design-system.md's --error vs --grade-red rule.
+    const trendTone = profile.trendDelta >= 0 ? "success" : "grade";
     const trendLabel = profile.trendDelta === 0
         ? "변화 없음"
         : `${profile.trendDelta > 0 ? "+" : ""}${profile.trendDelta}점`;
@@ -3040,16 +3033,7 @@ function StudentProfileModal({
                     </div>
                     <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
                         <span className="badge badge-primary">{student.group}</span>
-                        <span style={{
-                            padding: '0.35rem 0.65rem',
-                            borderRadius: 'var(--radius-full)',
-                            background: `color-mix(in srgb, ${trendColor}, transparent 88%)`,
-                            color: trendColor,
-                            fontSize: '0.78rem',
-                            fontWeight: 800,
-                        }}>
-                            최근 추세 {trendLabel}
-                        </span>
+                        <StatusPill tone={trendTone} label={`최근 추세 ${trendLabel}`} size="sm" />
                     </div>
                 </div>
 
@@ -3082,9 +3066,11 @@ function StudentProfileModal({
                                             <div style={{ display: 'flex', gap: '0.35rem', alignItems: 'center', flexWrap: 'wrap', marginTop: '0.15rem' }}>
                                                 <span style={{ fontSize: '0.76rem', color: 'var(--muted)' }}>{formatAttemptDate(attempt.finishedAt)}</span>
                                                 {attempt.isRetake && (
-                                                    <span style={{ color: '#0f766e', background: '#f0fdfa', border: '1px solid #99f6e4', borderRadius: '999px', padding: '0.08rem 0.38rem', fontSize: '0.68rem', fontWeight: 900 }}>
-                                                        재시험 {attempt.retakeQuestionCount}문항
-                                                    </span>
+                                                    <StatusPill
+                                                        tone="retake"
+                                                        label={`재시험 ${attempt.retakeQuestionCount}문항`}
+                                                        size="sm"
+                                                    />
                                                 )}
                                             </div>
                                         </div>
@@ -3152,16 +3138,7 @@ function StudentProfileModal({
                                     <div style={{ display: 'flex', justifyContent: 'space-between', gap: '0.75rem', marginBottom: '0.4rem' }}>
                                         <div style={{ minWidth: 0 }}>
                                             <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', marginBottom: '0.2rem', flexWrap: 'wrap' }}>
-                                                <span style={{
-                                                    padding: '0.18rem 0.45rem',
-                                                    background: 'rgba(239,68,68,0.1)',
-                                                    color: '#ef4444',
-                                                    borderRadius: 'var(--radius-full)',
-                                                    fontSize: '0.68rem',
-                                                    fontWeight: 900,
-                                                }}>
-                                                    {weaknessKindLabel(group.kind)}
-                                                </span>
+                                                <StatusPill tone="grade" label={weaknessKindLabel(group.kind)} size="sm" />
                                                 <span style={{ color: 'var(--muted)', fontSize: '0.72rem' }}>{group.examTitle}</span>
                                             </div>
                                             <div style={{ fontWeight: 900, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{group.title}</div>
@@ -3641,32 +3618,19 @@ const CSV_FIELD_LABEL: Record<RosterCsvFieldChange["field"], string> = {
     region: "지역",
 };
 
-function CsvDispositionBadge({ color, bg, label }: { color: string; bg: string; label: string }) {
-    return (
-        <span style={{
-            display: 'inline-block', flexShrink: 0, padding: '0.1rem 0.5rem',
-            borderRadius: 'var(--radius-full)', fontSize: '0.72rem', fontWeight: 800,
-            color, background: bg, whiteSpace: 'nowrap',
-        }}>
-            {label}
-        </span>
-    );
-}
-
 function CsvPreviewSection({
-    title, count, color, bg, children,
+    title, count, tone, children,
 }: {
     title: string;
     count: number;
-    color: string;
-    bg: string;
+    tone: "primary" | "success" | "warning" | "error" | "grade" | "retake" | "muted";
     children: React.ReactNode;
 }) {
     if (count === 0) return null;
     return (
         <div style={{ marginBottom: '1rem' }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.5rem' }}>
-                <CsvDispositionBadge color={color} bg={bg} label={title} />
+                <StatusPill tone={tone} label={title} size="sm" />
                 <span style={{ fontSize: '0.82rem', fontWeight: 800, color: 'var(--foreground)' }}>{count}건</span>
             </div>
             <div style={{
@@ -3737,26 +3701,26 @@ function CsvImportPreviewModal({
             <div style={{
                 display: 'flex', flexWrap: 'wrap', gap: '0.5rem', marginBottom: '1.25rem',
             }}>
-                <CsvDispositionBadge color="var(--success)" bg="rgba(16,185,129,0.1)" label={`추가 ${addedTotal}`} />
-                <CsvDispositionBadge color="var(--primary)" bg="rgba(99,102,241,0.1)" label={`업데이트 ${changedUpdates.length + conflictOverwriteCount}`} />
+                <StatusPill tone="success" label={`추가 ${addedTotal}`} size="sm" />
+                <StatusPill tone="primary" label={`업데이트 ${changedUpdates.length + conflictOverwriteCount}`} size="sm" />
                 {unchangedCount > 0 && (
-                    <CsvDispositionBadge color="var(--muted)" bg="var(--background)" label={`변경 없음 ${unchangedCount}`} />
+                    <StatusPill tone="muted" label={`변경 없음 ${unchangedCount}`} size="sm" />
                 )}
                 {plan.conflicts.length > 0 && (
-                    <CsvDispositionBadge color="var(--warning)" bg="rgba(245,158,11,0.12)" label={`id 충돌 ${plan.conflicts.length}`} />
+                    <StatusPill tone="warning" label={`id 충돌 ${plan.conflicts.length}`} size="sm" />
                 )}
                 {conflictSkipCount > 0 && (
-                    <CsvDispositionBadge color="var(--muted)" bg="var(--background)" label={`충돌 건너뜀 ${conflictSkipCount}`} />
+                    <StatusPill tone="muted" label={`충돌 건너뜀 ${conflictSkipCount}`} size="sm" />
                 )}
                 {plan.createdGroups.length > 0 && (
-                    <CsvDispositionBadge color="var(--foreground)" bg="var(--background)" label={`새 반 ${plan.createdGroups.length}`} />
+                    <StatusPill tone="muted" label={`새 반 ${plan.createdGroups.length}`} size="sm" style={{ color: 'var(--foreground)' }} />
                 )}
                 {plan.skips.length > 0 && (
-                    <CsvDispositionBadge color="var(--error)" bg="rgba(239,68,68,0.1)" label={`제외 ${plan.skips.length}`} />
+                    <StatusPill tone="error" label={`제외 ${plan.skips.length}`} size="sm" />
                 )}
             </div>
 
-            <CsvPreviewSection title="추가" count={plan.adds.length} color="var(--success)" bg="rgba(16,185,129,0.1)">
+            <CsvPreviewSection title="추가" count={plan.adds.length} tone="success">
                 {plan.adds.slice(0, CSV_PREVIEW_ROW_CAP).map(row => (
                     <div key={`add-${row.line}`} style={rowStyle}>
                         <span style={lineStyle}>#{row.line}</span>
@@ -3766,7 +3730,7 @@ function CsvImportPreviewModal({
                 {moreNote(CSV_PREVIEW_ROW_CAP, plan.adds.length)}
             </CsvPreviewSection>
 
-            <CsvPreviewSection title="업데이트" count={changedUpdates.length} color="var(--primary)" bg="rgba(99,102,241,0.1)">
+            <CsvPreviewSection title="업데이트" count={changedUpdates.length} tone="primary">
                 {changedUpdates.slice(0, CSV_PREVIEW_ROW_CAP).map(row => (
                     <div key={`upd-${row.line}`} style={rowStyle}>
                         <span style={lineStyle}>#{row.line}</span>
@@ -3786,7 +3750,7 @@ function CsvImportPreviewModal({
                 {moreNote(CSV_PREVIEW_ROW_CAP, changedUpdates.length)}
             </CsvPreviewSection>
 
-            <CsvPreviewSection title="id 충돌" count={plan.conflicts.length} color="var(--warning)" bg="rgba(245,158,11,0.12)">
+            <CsvPreviewSection title="id 충돌" count={plan.conflicts.length} tone="warning">
                 {plan.conflicts.slice(0, CSV_PREVIEW_ROW_CAP).map(row => {
                     const disposition = dispositionFor(row.line);
                     return (
@@ -3835,7 +3799,7 @@ function CsvImportPreviewModal({
                 )}
             </CsvPreviewSection>
 
-            <CsvPreviewSection title="제외" count={plan.skips.length} color="var(--error)" bg="rgba(239,68,68,0.1)">
+            <CsvPreviewSection title="제외" count={plan.skips.length} tone="error">
                 {plan.skips.slice(0, CSV_PREVIEW_ROW_CAP).map(row => (
                     <div key={`skp-${row.line}`} style={rowStyle}>
                         <span style={lineStyle}>#{row.line}</span>

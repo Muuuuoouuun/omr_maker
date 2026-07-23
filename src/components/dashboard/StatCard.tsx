@@ -34,7 +34,6 @@ export default function StatCard({
   const countable = parseCountableValue(value);
 
   const iconBg = rawHex ? `${rawHex}18` : `color-mix(in srgb, ${color}, transparent 85%)`;
-  const glowBg = rawHex ? `${rawHex}10` : `color-mix(in srgb, ${color}, transparent 94%)`;
   const accentGrad = rawHex
     ? `linear-gradient(90deg, ${rawHex}, transparent)`
     : `linear-gradient(90deg, ${color}, transparent)`;
@@ -177,21 +176,6 @@ export default function StatCard({
           </button>
         )}
       </div>
-
-      {/* Background glow */}
-      <div
-        style={{
-          position: "absolute",
-          bottom: "-40px",
-          right: "-40px",
-          width: "130px",
-          height: "130px",
-          background: glowBg,
-          borderRadius: "50%",
-          pointerEvents: "none",
-          filter: "blur(20px)",
-        }}
-      />
     </div>
   );
 }

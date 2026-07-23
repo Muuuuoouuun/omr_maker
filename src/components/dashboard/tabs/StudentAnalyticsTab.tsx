@@ -3,6 +3,7 @@
 import { useMemo, useRef, useState, type CSSProperties } from "react";
 import Link from "next/link";
 import useCometReveal from "@/components/dashboard/useCometReveal";
+import StatusPill from "@/components/dashboard/StatusPill";
 import { Exam, Attempt, type PlanKey } from "@/types/omr";
 import {
     LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip,
@@ -539,7 +540,7 @@ export default function StudentAnalyticsTab({
                                                 </div>
                                             </div>
                                             {typeof item.weakRate === "number" && (
-                                                <span style={{ color: item.weakRate >= 70 ? 'var(--error)' : 'var(--warning)', fontWeight: 900, fontSize: '0.8rem' }}>
+                                                <span style={{ color: item.weakRate >= 70 ? 'var(--grade-red)' : 'var(--warning)', fontWeight: 900, fontSize: '0.8rem' }}>
                                                     {item.weakRate}%
                                                 </span>
                                             )}
@@ -682,7 +683,7 @@ export default function StudentAnalyticsTab({
                                             <div style={{ fontWeight: 600, fontSize: '0.9rem', whiteSpace: 'nowrap', textOverflow: 'ellipsis', overflow: 'hidden' }}>{attempt.examTitle}</div>
                                             <div style={{ fontSize: '0.75rem', color: 'var(--muted)' }}>{formatKoreanDate(attempt.finishedAt)}</div>
                                         </div>
-                                        <div style={{ fontWeight: 800, fontSize: '1.1rem', color: scoreRate >= 80 ? 'var(--success)' : (scoreRate < 50 ? 'var(--error)' : 'var(--text)') }}>
+                                        <div style={{ fontWeight: 800, fontSize: '1.1rem', color: scoreRate >= 80 ? 'var(--success)' : (scoreRate < 50 ? 'var(--grade-red)' : 'var(--text)') }}>
                                             {scoreRate}점
                                         </div>
                                     </label>
@@ -693,7 +694,7 @@ export default function StudentAnalyticsTab({
 
                     {studentRetakeAttempts.length > 0 && (
                         <div className="card" style={{ ...CARD_SURFACE_STYLE,padding: '1.5rem', display: 'flex', flexDirection: 'column', gap: '0.8rem' }}>
-                            <h3 style={{ fontSize: '1.1rem', fontWeight: 800, color: '#0f766e' }}>
+                            <h3 style={{ fontSize: '1.1rem', fontWeight: 800, color: 'var(--retake)' }}>
                                 재시험 회복 기록 ({studentRetakeAttempts.length})
                             </h3>
                             <p style={{ fontSize: '0.85rem', color: 'var(--muted)' }}>
@@ -716,18 +717,18 @@ export default function StudentAnalyticsTab({
                                                 alignItems: 'center',
                                                 padding: '0.75rem',
                                                 borderRadius: 'var(--radius-md)',
-                                                background: 'color-mix(in srgb, #0f766e 8%, var(--surface))',
-                                                border: '1px solid color-mix(in srgb, #0f766e 28%, transparent)',
+                                                background: 'var(--retake-soft)',
+                                                border: '1px solid var(--retake-line)',
                                                 color: 'inherit',
                                             }}
                                         >
                                             <div style={{ minWidth: 0 }}>
                                                 <div style={{ fontWeight: 800, color: 'var(--foreground)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{attempt.examTitle}</div>
-                                                <div style={{ color: '#0f766e', fontSize: '0.75rem', marginTop: '0.2rem', fontWeight: 800 }}>
+                                                <div style={{ color: 'var(--retake)', fontSize: '0.75rem', marginTop: '0.2rem', fontWeight: 800 }}>
                                                     {attempt.retake?.questionIds.length || 0}문항 · {formatKoreanDate(attempt.finishedAt)}
                                                 </div>
                                             </div>
-                                            <div style={{ color: scoreRate >= 80 ? 'var(--success)' : scoreRate < 50 ? 'var(--error)' : 'var(--text)', fontWeight: 900 }}>
+                                            <div style={{ color: scoreRate >= 80 ? 'var(--success)' : scoreRate < 50 ? 'var(--grade-red)' : 'var(--text)', fontWeight: 900 }}>
                                                 {scoreRate}점
                                             </div>
                                         </Link>
@@ -794,7 +795,7 @@ export default function StudentAnalyticsTab({
                                                 </Link>
                                             </div>
                                         </td>
-                                        <td style={{ padding: '1rem 0.5rem', fontWeight: 700, color: detail.scoreRate >= 80 ? 'var(--success)' : (detail.scoreRate < 50 ? 'var(--error)' : 'inherit') }}>
+                                        <td style={{ padding: '1rem 0.5rem', fontWeight: 700, color: detail.scoreRate >= 80 ? 'var(--success)' : (detail.scoreRate < 50 ? 'var(--grade-red)' : 'inherit') }}>
                                             {detail.score} <span style={{ fontSize: '0.8rem', color: 'var(--muted)', fontWeight: 400 }}>/ {detail.totalScore}</span>
                                         </td>
                                         <td style={{ padding: '1rem 0.5rem', fontWeight: 600 }}>
@@ -807,18 +808,14 @@ export default function StudentAnalyticsTab({
                                         </td>
                                         <td style={{ padding: '1rem 0.5rem' }}>
                                             {detail.strongPoint ?
-                                                <span style={{ background: 'rgba(16, 185, 129, 0.1)', color: 'var(--success)', padding: '4px 8px', borderRadius: '4px', fontSize: '0.85rem', fontWeight: 600 }}>
-                                                    {detail.strongPoint}
-                                                </span>
+                                                <StatusPill tone="success" size="sm" label={detail.strongPoint} />
                                                 : <span style={{ color: 'var(--muted)' }}>-</span>
                                             }
                                         </td>
                                         <td style={{ padding: '1rem 0.5rem' }}>
                                             {detail.weakPoint ?
                                                 <div>
-                                                    <span style={{ background: 'rgba(239, 68, 68, 0.1)', color: 'var(--error)', padding: '4px 8px', borderRadius: '4px', fontSize: '0.85rem', fontWeight: 700 }}>
-                                                        {detail.weakPoint}
-                                                    </span>
+                                                    <StatusPill tone="grade" size="sm" label={detail.weakPoint} />
                                                     {(detail.weakBasis || detail.weakQuestionNumbers.length > 0) && (
                                                         <div style={{ color: 'var(--muted)', fontSize: '0.75rem', marginTop: '0.3rem' }}>
                                                             {detail.weakBasis || '약점'} · {detail.weakQuestionNumbers.join(', ') || detail.retakeIds.join(', ')}번

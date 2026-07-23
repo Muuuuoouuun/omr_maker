@@ -11,6 +11,7 @@ import type {
 } from "@/lib/premiumAnalytics";
 import type { StudentProfileInsight } from "@/lib/studentProfileAnalytics";
 import { buildRetakeHref } from "@/lib/retakeLinks";
+import StatusPill from "@/components/dashboard/StatusPill";
 import CumulativeGrowthPanel, { type CumulativeLoadStatus } from "./CumulativeGrowthPanel";
 import styles from "./StudentResultHub.module.css";
 
@@ -48,7 +49,7 @@ function DiagnosticResultRow({ result }: { result: QuestionResult }) {
     const typeLabel = result.concept || result.unit || result.label || result.source || "유형 미지정";
 
     return (
-        <article style={{ padding: "0.75rem", borderRadius: "var(--radius-sm)", border: "1px solid color-mix(in srgb, var(--error) 20%, var(--border))", background: "color-mix(in srgb, var(--error) 5%, var(--surface))" }}>
+        <article style={{ padding: "0.75rem", borderRadius: "var(--radius-sm)", border: "1px solid var(--grade-red-line)", background: "var(--grade-red-soft)" }}>
             <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "0.7rem", flexWrap: "wrap" }}>
                 <strong style={{ color: accent, fontSize: "0.88rem" }}>{result.questionNumber}번 · {statusLabel}</strong>
                 <span style={{ color: "var(--muted)", fontSize: "0.74rem", fontWeight: 800 }}>{typeLabel}</span>
@@ -139,7 +140,7 @@ export default function AnalyticsPanel({
             <section className="bento-card" style={{ padding: "1.25rem" }} aria-labelledby="wrong-analysis-title">
                 <div className={styles.sectionHeading}>
                     <h2 id="wrong-analysis-title"><Target size={18} aria-hidden="true" /> 오답·미응답·유형 분석</h2>
-                    <span className={styles.countBadge}>{data.wrongResults.length}문항</span>
+                    <StatusPill tone="grade" size="sm" label={`${data.wrongResults.length}문항`} />
                 </div>
                 {data.wrongResults.length > 0 ? (
                     <>

@@ -1019,7 +1019,8 @@ describe("service UI surface", () => {
         expect(studentResultCss).toMatch(/\.replyTextarea::placeholder\s*\{[^}]*color:\s*#64748b;/);
         expect(answersPanel).toContain('correct: { label: "정답", color: "var(--text-success)" }');
         expect(answersPanel).toContain('wrong: { label: "오답", color: "var(--text-error)" }');
-        expect(answersPanel).toContain('color: "var(--text-warning)"');
+        expect(answersPanel).toContain('tone="warning"');
+        expect(answersPanel).toContain('"var(--text-warning)"');
         expect(answersPanel).toContain('textColor="var(--text-success)"');
         expect(answersPanel).toContain('textColor="var(--text-error)"');
         expect(answersPanel).toContain('fontSize: "0.72rem", color: "var(--foreground)"');

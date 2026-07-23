@@ -38,6 +38,14 @@
   --grade-red-soft: rgba(192, 43, 60, 0.08);
   --grade-red-line: rgba(192, 43, 60, 0.24);
 
+  /* Retake — a real, recurring product concept (재시험), not a generic status.
+     This exact teal was already hand-copied identically across 5+ files
+     (dashboard, exam detail, student roster) — formalizing what was already
+     a consistent, deliberate color, not inventing a new one. */
+  --retake: #0f766e;
+  --retake-soft: #f0fdfa;
+  --retake-line: #99f6e4;
+
   /* Radius */
   --radius-sm: 0.5rem;
   --radius-md: 0.75rem;
@@ -1157,6 +1165,10 @@
   --grade-red: #f0687a;
   --grade-red-soft: rgba(240, 104, 122, 0.12);
   --grade-red-line: rgba(240, 104, 122, 0.32);
+
+  --retake: #2dd4bf;
+  --retake-soft: rgba(45, 212, 191, 0.12);
+  --retake-line: rgba(45, 212, 191, 0.32);
 }
 
 /* Smooth theme transition */
