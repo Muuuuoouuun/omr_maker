@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { DEFAULT_SETTINGS, normalizeExamDefaults, parseStoredSettings } from "./appSettings";
+import {
+    DEFAULT_SETTINGS,
+    normalizeExamDefaults,
+    parseImportedSettings,
+    parseStoredSettings,
+} from "./appSettings";
 
 describe("app settings", () => {
     it("defaults exam creation to 5-choice questions", () => {
@@ -50,5 +55,21 @@ describe("app settings", () => {
             autosaveSec: 10,
         });
         expect(settings.profile.name).toBe(DEFAULT_SETTINGS.profile.name);
+    });
+
+    it("accepts complete exported settings and rejects unrelated JSON values", () => {
+        expect(parseImportedSettings(DEFAULT_SETTINGS)).toEqual(DEFAULT_SETTINGS);
+        expect(parseImportedSettings({})).toBeNull();
+        expect(parseImportedSettings([])).toBeNull();
+        expect(parseImportedSettings({ hello: "world" })).toBeNull();
+        expect(parseImportedSettings({ ...DEFAULT_SETTINGS, theme: "dark" })).toBeNull();
+        expect(parseImportedSettings({
+            ...DEFAULT_SETTINGS,
+            api: { geminiKey: {} },
+        })).toBeNull();
+        expect(parseImportedSettings({
+            ...DEFAULT_SETTINGS,
+            theme: { ...DEFAULT_SETTINGS.theme, mode: "sepia" },
+        })).toBeNull();
     });
 });

@@ -57,6 +57,11 @@ describe("Windows and Android native development surface", () => {
 
     it("ships the Android shell with minimal permissions and branded assets", () => {
         const manifest = readProjectFile("android/app/src/main/AndroidManifest.xml");
+        const mainActivity = readProjectFile("android/app/src/main/java/com/omrmaker/app/MainActivity.java");
+        const activityLayout = readProjectFile("android/app/src/main/res/layout/activity_main.xml");
+        const launcherBackground = readProjectFile("android/app/src/main/res/values/ic_launcher_background.xml");
+        const strings = readProjectFile("android/app/src/main/res/values/strings.xml");
+        const filePaths = readProjectFile("android/app/src/main/res/xml/file_paths.xml");
         const styles = readProjectFile("android/app/src/main/res/values/styles.xml");
         const launcher = "android/app/src/main/res/mipmap-xxxhdpi/ic_launcher.png";
         const splash = "android/app/src/main/res/drawable-port-xxxhdpi/splash.png";
@@ -64,6 +69,11 @@ describe("Windows and Android native development surface", () => {
         expect(manifest).toContain('android:allowBackup="false"');
         expect(manifest).toContain('android.permission.INTERNET');
         expect(manifest).not.toContain('android.permission.CAMERA');
+        expect(mainActivity).toContain("class MainActivity extends BridgeActivity");
+        expect(activityLayout).toContain('tools:context=".MainActivity"');
+        expect(launcherBackground).toContain('name="ic_launcher_background"');
+        expect(strings).toContain('<string name="app_name">OMR Maker</string>');
+        expect(filePaths).toContain('<cache-path name="my_cache_images"');
         expect(styles).toContain("windowSplashScreenAnimatedIcon");
         expect(existsSync(path.join(rootDir, launcher))).toBe(true);
         expect(existsSync(path.join(rootDir, splash))).toBe(true);

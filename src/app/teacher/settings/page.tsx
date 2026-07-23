@@ -6,7 +6,7 @@ import { User, Bell, FileText, CheckCircle, Key, Palette, Shield, Copy, Eye, Eye
 import { toast } from "@/components/Toast";
 import { clearTeacherAuthSession, getTeacherDeploymentReadiness } from "@/app/actions/auth";
 import { SETTINGS_STORAGE_KEY, maskGeminiApiKey } from "@/lib/geminiApiKey";
-import { DEFAULT_SETTINGS, mergeSettings, readStoredSettings, type AppSettings } from "@/lib/appSettings";
+import { DEFAULT_SETTINGS, parseImportedSettings, readStoredSettings, type AppSettings } from "@/lib/appSettings";
 import { MAX_QUESTION_COUNT, MIN_QUESTION_COUNT } from "@/lib/questionCount";
 import { buildDataDbReadiness, type DataDbReadinessSummary, type DataDbReadinessTone } from "@/lib/dataDbReadiness";
 import type { DeploymentReadinessSummary, DeploymentReadinessTone } from "@/lib/deploymentReadiness";
@@ -418,8 +418,12 @@ export default function SettingsPage() {
     const handleImportFile = useCallback(async (file: File) => {
         try {
             const text = await file.text();
-            const parsed = JSON.parse(text) as Partial<Settings>;
-            const merged = mergeSettings(parsed);
+            const parsed = JSON.parse(text) as unknown;
+            const merged = parseImportedSettings(parsed);
+            if (!merged) {
+                toast.error("가져오기 실패", "OMR Maker에서 내보낸 전체 설정 백업 파일을 선택해주세요.");
+                return;
+            }
             setDraft(merged);
             setPersisted(merged);
             draftRef.current = merged;

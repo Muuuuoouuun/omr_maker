@@ -11,7 +11,7 @@ import {
     recordExamPinFailure,
     recordExamPinSuccess,
 } from "@/lib/examPinRateLimit";
-import { stripExamForReview, stripExamForSolving, type ReviewableExam, type SolvableExam } from "@/lib/examSolvePayload";
+import { stripExamForAttemptReview, stripExamForSolving, type ReviewableExam, type SolvableExam } from "@/lib/examSolvePayload";
 import {
     attemptOwnedBy,
     buildServerAttempt,
@@ -328,7 +328,7 @@ export async function loadExamForReview(
         const row = await fetchExamRowById(ctx.admin, match.examId);
         if (!row) return { status: "not_found" };
         const exam = examFromSupabaseRow(row as Parameters<typeof examFromSupabaseRow>[0]);
-        const reviewExam = stripExamForReview(exam);
+        const reviewExam = stripExamForAttemptReview(exam, match);
         const problemRef = exam.pdfDataRef;
         if (!isRemoteAssetStoredDataRef(problemRef)) {
             return { status: "ok", exam: reviewExam };

@@ -20,7 +20,7 @@ import type { Question } from "@/types/omr";
 describe("Korean 45-question PDF detection", () => {
     it("keeps every real common passage linked without broken normalized regions", async () => {
         const pdfPath = path.join(process.cwd(), "output/pdf/2026학년도-수능-국어-언어와매체-홀수형.pdf");
-        const pdf = await getDocument({ data: new Uint8Array(await readFile(pdfPath)), disableWorker: true }).promise;
+        const pdf = await getDocument({ data: new Uint8Array(await readFile(pdfPath)) }).promise;
         const expected = new Set(Array.from({ length: 45 }, (_, index) => index + 1));
         const bestLocations = new Map<number, DetectedQuestionPlacement>();
         const pages: PdfPageTextItems[] = [];

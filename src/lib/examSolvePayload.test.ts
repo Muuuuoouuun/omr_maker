@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { stripExamForReview, stripExamForSolving } from "./examSolvePayload";
-import type { Exam } from "@/types/omr";
+import { stripExamForAttemptReview, stripExamForReview, stripExamForSolving } from "./examSolvePayload";
+import type { Attempt, Exam } from "@/types/omr";
 
 const EXAM: Exam = {
     id: "e1", title: "기말고사", createdAt: "2026-07-01T00:00:00.000Z",
@@ -98,5 +98,45 @@ describe("stripExamForReview", () => {
         });
         expect(reviewable.questions[0].subQuestions?.[0].prompt).toBe("왜 골랐나요?");
         expect(JSON.stringify(reviewable)).not.toContain("정답 근거");
+    });
+});
+
+describe("stripExamForAttemptReview", () => {
+    it("reveals answers only for questions issued in the completed attempt", () => {
+        const attempt = {
+            id: "attempt-1",
+            examId: EXAM.id,
+            examTitle: EXAM.title,
+            studentName: "학생",
+            startedAt: "2026-07-01T00:00:00.000Z",
+            finishedAt: "2026-07-01T01:00:00.000Z",
+            score: 10,
+            totalScore: 10,
+            answers: { 1: 3 },
+            status: "completed",
+            questionResults: [{
+                schemaVersion: 1,
+                attemptId: "attempt-1",
+                examId: EXAM.id,
+                examTitle: EXAM.title,
+                studentName: "학생",
+                questionId: 1,
+                questionNumber: 1,
+                score: 10,
+                earnedScore: 10,
+                selectedAnswer: 3,
+                correctAnswer: 3,
+                status: "correct",
+                isCorrect: true,
+                isWrong: false,
+                isUnanswered: false,
+                finishedAt: "2026-07-01T01:00:00.000Z",
+            }],
+        } as Attempt;
+
+        const reviewable = stripExamForAttemptReview(EXAM, attempt);
+
+        expect(reviewable.questions.map(question => question.id)).toEqual([1]);
+        expect(JSON.stringify(reviewable)).not.toContain('"id":2');
     });
 });

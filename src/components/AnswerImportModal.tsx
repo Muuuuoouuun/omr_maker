@@ -20,6 +20,41 @@ interface AnswerImportModalProps {
 const LOW_CONFIDENCE_THRESHOLD = 0.65;
 type AnswerRecognitionCache = { text?: ParsedAnswer[]; ai?: ParsedAnswer[] };
 
+export function takeSelectedAnswerPdf(
+    input: Pick<HTMLInputElement, "files" | "value">,
+): File | null {
+    const selectedFile = input.files?.[0] ?? null;
+    input.value = "";
+    return selectedFile;
+}
+
+export function validateImportedAnswers(
+    expectedQuestionCount: number | undefined,
+    parsedData: ParsedAnswer[],
+    reviewedQuestions: ReadonlySet<number>,
+): string | null {
+    const unreviewedLowConfidence = parsedData.filter(
+        item => item.confidence < LOW_CONFIDENCE_THRESHOLD && !reviewedQuestions.has(item.questionNum),
+    );
+    if (unreviewedLowConfidence.length > 0) {
+        return `신뢰도가 낮은 ${unreviewedLowConfidence.length}개 문항을 확인해주세요.`;
+    }
+
+    if (Number.isInteger(expectedQuestionCount) && (expectedQuestionCount || 0) > 0) {
+        const recognizedNumbers = new Set(parsedData.map(item => item.questionNum));
+        const missing = Array.from(
+            { length: expectedQuestionCount || 0 },
+            (_, index) => index + 1,
+        ).filter(questionNum => !recognizedNumbers.has(questionNum));
+        if (missing.length > 0) {
+            const preview = missing.slice(0, 12).join(", ");
+            const remainder = missing.length > 12 ? ` 외 ${missing.length - 12}개` : "";
+            return `누락된 문항(${preview}번${remainder})의 정답을 확인해주세요.`;
+        }
+    }
+    return null;
+}
+
 export default function AnswerImportModal({
     isOpen,
     onClose,
@@ -124,11 +159,10 @@ export default function AnswerImportModal({
     };
 
     const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-        if (e.target.files && e.target.files[0]) {
-            const selectedFile = e.target.files[0];
-            setFile(selectedFile);
-            void analyzeFile(selectedFile, useAI);
-        }
+        const selectedFile = takeSelectedAnswerPdf(e.currentTarget);
+        if (!selectedFile) return;
+        setFile(selectedFile);
+        void analyzeFile(selectedFile, useAI);
     };
 
     const handleAnswerChange = (idx: number, newVal: string) => {
@@ -143,8 +177,13 @@ export default function AnswerImportModal({
     };
 
     const handleApply = () => {
-        if (unreviewedLowConfidence.length > 0) {
-            setError(`신뢰도가 낮은 ${unreviewedLowConfidence.length}개 문항을 확인해주세요.`);
+        const validationError = validateImportedAnswers(
+            expectedQuestionCount,
+            parsedData,
+            reviewedQuestions,
+        );
+        if (validationError) {
+            setError(validationError);
             return;
         }
         if (parsedData.length > 0) {
@@ -352,7 +391,7 @@ export default function AnswerImportModal({
                         <button
                             onClick={handleApply}
                             className="btn btn-primary"
-                            disabled={!file || parsedData.length === 0 || unreviewedLowConfidence.length > 0 || isProcessing}
+                            disabled={!file || parsedData.length === 0 || missingQuestionNumbers.length > 0 || unreviewedLowConfidence.length > 0 || isProcessing}
                         >
                             적용하기
                         </button>

@@ -23,9 +23,66 @@ export const DEFAULT_SETTINGS: AppSettings = {
 };
 
 type ExamDefaults = AppSettings["examDefaults"];
+const SETTINGS_SECTION_KEYS = [
+    "profile",
+    "notifications",
+    "examDefaults",
+    "grading",
+    "api",
+    "theme",
+    "security",
+] as const satisfies readonly (keyof AppSettings)[];
 
 function asObject(value: unknown): Record<string, unknown> {
     return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
+}
+
+function isObject(value: unknown): value is Record<string, unknown> {
+    return !!value && typeof value === "object" && !Array.isArray(value);
+}
+
+function isFiniteNumber(value: unknown): value is number {
+    return typeof value === "number" && Number.isFinite(value);
+}
+
+function isCompleteSettingsExport(value: unknown): value is AppSettings {
+    if (!isObject(value) || !SETTINGS_SECTION_KEYS.every(key => isObject(value[key]))) return false;
+    const profile = asObject(value.profile);
+    const notifications = asObject(value.notifications);
+    const examDefaults = asObject(value.examDefaults);
+    const grading = asObject(value.grading);
+    const api = asObject(value.api);
+    const theme = asObject(value.theme);
+    const security = asObject(value.security);
+
+    return typeof profile.name === "string"
+        && typeof profile.email === "string"
+        && typeof profile.school === "string"
+        && typeof profile.subject === "string"
+        && typeof profile.publicProfile === "boolean"
+        && typeof notifications.email === "boolean"
+        && typeof notifications.push === "boolean"
+        && typeof notifications.weekly === "boolean"
+        && typeof notifications.autoRemind === "boolean"
+        && typeof notifications.quietStart === "string"
+        && typeof notifications.quietEnd === "string"
+        && isFiniteNumber(examDefaults.questions)
+        && isFiniteNumber(examDefaults.duration)
+        && isFiniteNumber(examDefaults.scorePerQ)
+        && (examDefaults.choices === 4 || examDefaults.choices === 5)
+        && isFiniteNumber(examDefaults.autosaveSec)
+        && typeof grading.negative === "boolean"
+        && typeof grading.partial === "boolean"
+        && typeof grading.autoRelease === "boolean"
+        && ["half", "up", "down", "none"].includes(grading.rounding as string)
+        && typeof api.geminiKey === "string"
+        && ["light", "dark", "auto"].includes(theme.mode as string)
+        && typeof theme.accent === "string"
+        && /^#[0-9a-f]{6}$/i.test(theme.accent)
+        && ["comfortable", "compact"].includes(theme.density as string)
+        && typeof theme.motion === "boolean"
+        && typeof security.twoFactor === "boolean"
+        && typeof security.loginAlerts === "boolean";
 }
 
 function finiteNumber(value: unknown, fallback: number): number {
@@ -71,6 +128,16 @@ export function mergeSettings(parsed: Partial<AppSettings> | null | undefined): 
         theme: { ...DEFAULT_SETTINGS.theme, ...(parsed.theme ?? {}) },
         security: { ...DEFAULT_SETTINGS.security, ...(parsed.security ?? {}) },
     };
+}
+
+/**
+ * Settings imports are destructive, so only accept the complete object shape
+ * produced by this app's export action. Stored settings stay backward
+ * compatible through parseStoredSettings, which intentionally accepts partial
+ * objects written by older app versions.
+ */
+export function parseImportedSettings(value: unknown): AppSettings | null {
+    return isCompleteSettingsExport(value) ? mergeSettings(value) : null;
 }
 
 export function parseStoredSettings(rawSettings: string | null | undefined): AppSettings {

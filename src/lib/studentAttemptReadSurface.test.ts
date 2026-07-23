@@ -31,8 +31,9 @@ describe("student official attempt read surface", () => {
         expect(history).not.toContain("loadAttemptsForStudent(currentSession)");
         expect(review).toContain("loadMyAttemptClient(id, {");
         expect(review).toContain("server: (attemptId) => loadMyAttempt(attemptId)");
+        expect(review).toContain("const serverExamPromise = loadExamForReview(id)");
         expect(review).toContain("loadReviewExamClient(found.id, {");
-        expect(review).toContain("server: (attemptId) => loadExamForReview(attemptId)");
+        expect(review).toContain("server: () => serverExamPromise");
         expect(review).not.toContain("loadStudentOfficialAttempt(id, session)");
         expect(review).not.toContain("loadAttemptForStudent");
     });

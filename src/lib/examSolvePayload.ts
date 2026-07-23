@@ -1,4 +1,4 @@
-import type { Exam, Question, QuestionSubQuestion } from "@/types/omr";
+import type { Attempt, Exam, Question, QuestionSubQuestion } from "@/types/omr";
 
 export type StudentSubQuestion = Omit<QuestionSubQuestion, "answerGuide" | "teacherNote">;
 export type SolvableQuestion = Omit<Question, "answer" | "explanation" | "subQuestions"> & {
@@ -64,6 +64,29 @@ export function stripExamForReview(exam: Exam): ReviewableExam {
             ? { type: accessConfig.type, groupIds: accessConfig.groupIds, hasPin: !!accessConfig.pin }
             : undefined,
     };
+}
+
+/**
+ * Post-submit projection scoped to the question set that was actually issued
+ * for this attempt. Server-graded attempts always persist one question result
+ * per issued question, including unanswered questions, so this prevents a
+ * subset submission from unlocking answers for the rest of the canonical exam.
+ *
+ * Legacy attempts without question results retain the historical full-exam
+ * review behavior because their issued question set cannot be reconstructed.
+ */
+export function stripExamForAttemptReview(exam: Exam, attempt: Attempt): ReviewableExam {
+    const issuedQuestionIds = new Set(
+        (attempt.questionResults || [])
+            .map(result => result.questionId)
+            .filter(questionId => Number.isInteger(questionId) && questionId > 0),
+    );
+    return stripExamForReview(issuedQuestionIds.size > 0
+        ? {
+            ...exam,
+            questions: exam.questions.filter(question => issuedQuestionIds.has(question.id)),
+        }
+        : exam);
 }
 
 /**
