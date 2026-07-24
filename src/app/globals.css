@@ -55,10 +55,13 @@
   --radius-full: 9999px;
 
   /* Shadows */
-  --shadow-sm: 0 1px 2px 0 rgb(0 0 0 / 0.05);
-  --shadow-md: 0 4px 6px -1px rgb(0 0 0 / 0.08), 0 2px 4px -2px rgb(0 0 0 / 0.08);
-  --shadow-lg: 0 10px 15px -3px rgb(0 0 0 / 0.08), 0 4px 6px -4px rgb(0 0 0 / 0.04);
-  --shadow-xl: 0 20px 25px -5px rgb(0 0 0 / 0.08), 0 8px 10px -6px rgb(0 0 0 / 0.04);
+  /* Layered elevation: a tight contact shadow + a soft, slate-tinted ambient
+     falloff. The two layers are what read as "quality" — a single blurred
+     drop reads flat. Tuned subtle; hover states step one level up. */
+  --shadow-sm: 0 1px 2px 0 rgb(15 23 42 / 0.05);
+  --shadow-md: 0 1px 2px rgb(15 23 42 / 0.04), 0 6px 16px -4px rgb(15 23 42 / 0.08);
+  --shadow-lg: 0 2px 4px rgb(15 23 42 / 0.04), 0 14px 32px -8px rgb(15 23 42 / 0.12);
+  --shadow-xl: 0 3px 6px rgb(15 23 42 / 0.05), 0 24px 48px -12px rgb(15 23 42 / 0.16);
   --shadow-glass: 0 8px 32px 0 rgba(31, 38, 135, 0.1);
   --shadow-glow: 0 0 15px rgba(99, 102, 241, 0.3);
 
@@ -1473,19 +1476,21 @@ html[data-motion="off"] *::after {
 }
 
 .btn:active {
-  transform: scale(0.96);
+  /* A soft press, not a shrink — 0.96 made large buttons visibly "pop". */
+  transform: scale(0.98);
+  transition-duration: 0.1s;
 }
 
 .btn-primary {
   background: linear-gradient(135deg, var(--primary), var(--primary-dark));
   color: white;
-  box-shadow: 0 4px 15px rgba(79, 70, 229, 0.38);
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.08), 0 4px 14px rgba(79, 70, 229, 0.32);
 }
 
 .btn-primary:hover {
   background: linear-gradient(135deg, var(--primary-light), var(--primary));
-  box-shadow: 0 8px 24px rgba(79, 70, 229, 0.55);
-  transform: translateY(-2px);
+  box-shadow: 0 2px 4px rgba(15, 23, 42, 0.08), 0 8px 22px rgba(79, 70, 229, 0.42);
+  transform: translateY(-1px);
 }
 
 .btn-secondary {
@@ -1497,7 +1502,9 @@ html[data-motion="off"] *::after {
 
 .btn-secondary:hover {
   background: var(--background);
-  border-color: var(--muted);
+  /* Soften: a full --muted border was a harsher jump than any other hover. */
+  border-color: color-mix(in srgb, var(--border), var(--muted) 45%);
+  box-shadow: var(--shadow-md);
   transform: translateY(-1px);
 }
 
@@ -1638,7 +1645,8 @@ html[data-motion="off"] :where(
   transform-origin: bottom;
   transform: scaleY(0);
   animation: barWaveGrow 0.8s var(--ease-spring-soft) both;
-  animation-delay: calc(var(--wave-i, 0) * 65ms + 120ms);
+  /* 60ms stagger — the app-wide sequential-reveal step (design-system.md). */
+  animation-delay: calc(var(--wave-i, 0) * 60ms + 120ms);
   transition: filter 0.18s ease;
 }
 
@@ -1867,15 +1875,22 @@ html[data-motion="off"] :where(
 
 /* ─── Interactive Cards ───────────────────────────────── */
 .card-hover {
-  transition: var(--transition-spring);
+  transition: transform 0.3s var(--ease-out-soft), box-shadow 0.3s var(--ease-out-soft), border-color 0.3s var(--ease-out-soft);
   cursor: pointer;
   border: 1px solid transparent;
 }
 
+/* Clickable cards lift — but gently. The old -8px + scale pop read as toy-like
+   next to the rest of the app's restrained motion. */
 .card-hover:hover {
-  transform: translateY(-8px) scale(1.012);
-  box-shadow: 0 28px 56px rgba(0, 0, 0, 0.11), 0 0 0 1px rgba(99, 102, 241, 0.18);
-  border-color: rgba(99, 102, 241, 0.22);
+  transform: translateY(-4px);
+  box-shadow: var(--shadow-xl), 0 0 0 1px color-mix(in srgb, var(--primary) 18%, transparent);
+  border-color: color-mix(in srgb, var(--primary) 24%, transparent);
+}
+
+.card-hover:active {
+  transform: translateY(-1px);
+  transition-duration: 0.1s;
 }
 
 /* ─── Home App Entry ─────────────────────────────────── */
@@ -2135,7 +2150,9 @@ html[data-motion="off"] :where(
   padding: 1.75rem;
   box-shadow: var(--shadow-md);
   border: 1px solid var(--border);
-  transition: var(--transition-base);
+  /* Only the properties hover actually changes — `all` invites accidental
+     transitions (e.g. theme swaps animating text color card-by-card). */
+  transition: box-shadow 0.3s cubic-bezier(0.4, 0, 0.2, 1), border-color 0.3s cubic-bezier(0.4, 0, 0.2, 1), transform 0.3s cubic-bezier(0.4, 0, 0.2, 1);
   overflow: hidden;
   display: flex;
   flex-direction: column;
@@ -2143,9 +2160,11 @@ html[data-motion="off"] :where(
   min-width: 0;
 }
 
+/* Informational cards deepen softly on hover — no lift. Lifting implies
+   "clickable"; that affordance is reserved for .card-hover / link cards. */
 .bento-card:hover {
-  transform: translateY(-3px);
   box-shadow: var(--shadow-lg);
+  border-color: color-mix(in srgb, var(--border), var(--muted) 24%);
 }
 
 .overview-exam-summary-scroll {
@@ -6234,7 +6253,9 @@ body:has(.create-workspace.is-resizing) {
 .pdf-viewer-drawing-tools {
   display: flex;
   align-items: center;
-  gap: 0.4rem;
+  /* Breathing room between tool clusters — the bar gained the highlighter
+     swatches and 필압 toggle, and 0.4rem read cramped. */
+  gap: 0.55rem;
   margin-right: 1rem;
   padding-right: 1rem;
   border-right: 1px solid #555;

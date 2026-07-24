@@ -18,7 +18,14 @@
   max-width: 100%;
   border: 1px solid var(--border);
   background: var(--surface);
-  box-shadow: 0 3px 14px rgba(15, 23, 42, 0.035);
+  /* Shared elevation token (layered contact + ambient) instead of a bespoke
+     one-off shadow — keeps this workspace in step with app-wide cards. */
+  box-shadow: var(--shadow-md);
+  transition: box-shadow 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.panel:hover {
+  box-shadow: var(--shadow-lg);
 }
 
 .headerPanel {
@@ -732,6 +739,10 @@
 .bandPanel {
   display: flex;
   flex-direction: column;
+  /* Size to content instead of stretching to the (taller) TOP5 table row —
+     the stretched card stranded ~200px of dead space between the legend and
+     the bottom-anchored summary line. */
+  align-self: start;
 }
 
 .bandChart {
