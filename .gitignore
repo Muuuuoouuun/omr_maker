@@ -60,3 +60,8 @@ lint*.txt
 next-env.d.ts
 .gstack/
 .worktrees/
+
+# Android platform dropped — this app ships iOS(Capacitor)/web/desktop only.
+# The android/ tree also sat half-evicted in iCloud Drive and hung every
+# git operation that tried to read it.
+/android/
