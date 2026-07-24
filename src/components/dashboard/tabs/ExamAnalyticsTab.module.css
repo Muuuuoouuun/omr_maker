@@ -869,6 +869,17 @@
   .summaryPanel {
     grid-template-columns: minmax(190px, 0.55fr) minmax(0, 1.45fr);
   }
+
+  /* 5 fixed columns run out of room for longer values (e.g. "41분 49초")
+     well before the 760px mobile breakpoint kicks in — nothing covered the
+     768-1024px tablet-portrait gap, so the value just clipped under ellipsis. */
+  .kpiRail {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .kpi:nth-child(3n+1) {
+    border-left: 0;
+  }
 }
 
 @media (max-width: 760px) {

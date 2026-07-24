@@ -5614,6 +5614,37 @@ body:has(.create-workspace.is-resizing) {
   }
 }
 
+/* Tablet-portrait gap: the header's own content runs ~190px wider than an
+   iPad-portrait viewport (measured ~1023px vs 834px available), well above
+   the 720px mobile breakpoint below — nothing covered 721-1024px, so the
+   row just overflowed and squeezed .create-editor-brand's badge into a
+   ~37px column where "스마트 에디터" wrapped one character per line. Reuse
+   the same wrap-to-two-rows treatment the mobile breakpoint already uses,
+   just at a wider threshold — no need to also shrink the logo/buttons like
+   the phone tier does, there's enough room once the row can wrap. */
+@media (max-width: 1024px) and (min-width: 721px) {
+  .create-editor-header {
+    flex-wrap: wrap;
+    gap: 0.6rem;
+    padding: 0.65rem 1.25rem !important;
+  }
+
+  .create-editor-brand {
+    width: 100%;
+    justify-content: space-between;
+  }
+
+  .create-editor-actions {
+    width: 100%;
+    flex-basis: 100%;
+    overflow-x: auto;
+    justify-content: flex-start;
+    padding: 0.1rem 0 0.35rem;
+    scrollbar-gutter: stable;
+    overscroll-behavior-x: contain;
+  }
+}
+
 @media (max-width: 720px) {
   .teacher-header .header-content {
     padding-top: 0.65rem;
