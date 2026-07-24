@@ -1164,6 +1164,14 @@ export default function SolvePage() {
     const LEGACY_DRAFT_KEY = id ? `omr_draft_${id}` : "";
     const OMR_PANEL_KEY = id && draftOwnerKey ? `${OMR_PANEL_STORAGE_PREFIX}_${id}_${draftOwnerKey}_${draftRetakeSegment}` : "";
 
+    // Dirty tracking for the drawings side of autosave: the interval fires
+    // every 3s regardless, but re-serializing (JSON → base64 → IndexedDB put)
+    // an unchanged, potentially large stroke payload each tick is wasted work.
+    // `drawings` state is replaced on every real change, so reference identity
+    // is an exact dirty check.
+    const lastPersistedDrawingsRef = useRef<PdfDrawings | null>(null);
+    const rawDrawingsRef = useRef<PdfDrawings | null>(null);
+
     const saveDraftSnapshot = useCallback(async (draftSnapshot = latestDraftRef.current) => {
         if (typeof window === "undefined") return false;
         if (!DRAFT_KEY || submittedRef.current || !draftSnapshot) return false;
@@ -1194,9 +1202,14 @@ export default function SolvePage() {
 
         try {
             let drawingsRef = draftSnapshot.drawingsRef;
-            if (hasDrawings(draftDrawings)) {
+            const drawingsDirty = rawDrawingsRef.current !== lastPersistedDrawingsRef.current;
+            if (hasDrawings(draftDrawings) && drawingsDirty) {
+                // Capture the state reference BEFORE the await: strokes landing
+                // mid-write must still read as dirty on the next tick.
+                const persistedFrom = rawDrawingsRef.current;
                 drawingsRef = await saveJsonRecord(`draft:${id}:${draftOwnerKey}:drawings`, draftDrawings);
                 if (!drawingsRef) throw new Error("Failed to save draft drawings");
+                lastPersistedDrawingsRef.current = persistedFrom;
             }
 
             const persistedDraft: SolveDraft = {
@@ -1576,6 +1589,7 @@ export default function SolvePage() {
     useEffect(() => {
         studentAnswersRef.current = studentAnswers;
         subQuestionAnswersRef.current = subQuestionAnswers;
+        rawDrawingsRef.current = drawings;
         if (!submissionIdRef.current) submissionIdRef.current = createSubmissionId();
         latestDraftRef.current = {
             answers: studentAnswers,

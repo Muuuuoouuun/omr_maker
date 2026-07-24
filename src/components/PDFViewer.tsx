@@ -7,6 +7,7 @@ import { toast } from '@/components/Toast';
 import {
     Check,
     Eraser,
+    Feather,
     FileText,
     Hand,
     Highlighter,
@@ -75,7 +76,28 @@ interface PDFViewerProps {
 }
 
 type DrawingMode = 'click' | 'pen' | 'highlighter' | 'eraser';
-type DrawPoint = { x: number; y: number };
+/**
+ * Normalized stroke point. `p` (0..1 pointer pressure) is present only on pen
+ * strokes captured from a real stylus with 필압 enabled — mouse/touch strokes
+ * and legacy stored data omit it and render at constant width.
+ */
+type DrawPoint = { x: number; y: number; p?: number };
+
+/** Pressure → stroke-width multiplier (p=0.5 ⇒ ×1.0, clamped to a usable range). */
+function pressureScale(p: number): number {
+    return 0.55 + 0.9 * Math.min(1, Math.max(0, p));
+}
+
+/** Some styluses report pressure 0 on hover/unsupported states — treat as neutral. */
+function normalizePressure(pressure: number): number {
+    return pressure > 0 ? Math.min(1, pressure) : 0.5;
+}
+
+/** 4 decimal places ≈ 0.1px on a 1000px page — visually lossless, but cuts the
+    serialized JSON (full-precision floats dominate stroke payloads) by ~60%. */
+function roundCoord(value: number): number {
+    return Math.round(value * 10000) / 10000;
+}
 
 const PEN_COLORS = ['#111827', '#ef4444', '#2563eb', '#16a34a'];
 const HIGHLIGHTER_COLORS = [
@@ -126,6 +148,9 @@ export default function PDFViewer({
     const [eraserWidth, setEraserWidth] = useState(22);
     const [eraserMode, setEraserMode] = useState<'pixel' | 'stroke'>('stroke');
     const [fingerDrawingEnabled, setFingerDrawingEnabled] = useState(false);
+    // 필압: stylus pressure varies pen stroke width (see pressureScale). On by
+    // default — pressure is only ever recorded from a real pen pointer.
+    const [pressureEnabled, setPressureEnabled] = useState(true);
     const [undoStack, setUndoStack] = useState<Record<number, string[][]>>({});
     const [redoStack, setRedoStack] = useState<Record<number, string[][]>>({});
     const [clearConfirmOpen, setClearConfirmOpen] = useState(false);
@@ -138,6 +163,11 @@ export default function PDFViewer({
     // so drawing never forces a synchronous layout/reflow mid-stroke.
     const activeStrokeRectRef = useRef<DOMRect | null>(null);
     const activePointerIdRef = useRef<number | null>(null);
+    // Pointer type of the in-flight stroke. Read at stroke END so the
+    // click→pen toolbar switch never re-renders (and re-evaluates the canvas's
+    // touch-action) in the middle of the first pen stroke — that mid-stroke
+    // style flip was a source of first-stroke jank on stylus devices.
+    const activePointerTypeRef = useRef<string>('');
     const activeEraserModeRef = useRef<'pixel' | 'stroke'>('stroke');
     const strokeEraseBaselineRef = useRef<string[] | null>(null);
     const strokeEraseChangedRef = useRef<boolean>(false);
@@ -159,6 +189,14 @@ export default function PDFViewer({
 
     // Canvas Ref
     const canvasRef = useRef<HTMLCanvasElement>(null);
+    // Live-stroke overlay: the in-progress pen/highlighter stroke renders here
+    // (cleared + redrawn as one smoothed path every frame), then commits onto
+    // the main canvas on pointer-up. Drawing the live stroke segment-by-segment
+    // on the main canvas doubled alpha at every joint (visible "지지직" blotches
+    // with the translucent highlighter) and skipped the quadratic smoothing the
+    // committed stroke gets — which is why strokes visibly "changed shape" the
+    // moment the pen lifted.
+    const liveCanvasRef = useRef<HTMLCanvasElement>(null);
     const eraserRingRef = useRef<HTMLDivElement>(null);
     const containerRef = useRef<HTMLDivElement>(null);
     const wrapperRef = useRef<HTMLDivElement>(null);
@@ -331,6 +369,15 @@ export default function PDFViewer({
         ctx.clearRect(0, 0, rect.width, rect.height);
     };
 
+    // `desynchronized` lets the compositor present ink with lower latency where
+    // supported; harmless elsewhere. Only the live overlay uses it — the main
+    // canvas keeps default presentation for stable readback/undo redraws.
+    const getLiveContext = () => {
+        const live = liveCanvasRef.current;
+        if (!live) return null;
+        return live.getContext('2d', { desynchronized: true });
+    };
+
     const applyStrokeStyle = useCallback((
         ctx: CanvasRenderingContext2D,
         mode: DrawingMode,
@@ -362,9 +409,38 @@ export default function PDFViewer({
         const firstY = first.y * rect.height;
 
         if (points.length === 1) {
+            const dotScale = typeof first.p === 'number' ? pressureScale(first.p) : 1;
             ctx.beginPath();
-            ctx.arc(firstX, firstY, Math.max(1, width / 2), 0, Math.PI * 2);
+            ctx.arc(firstX, firstY, Math.max(1, (width * dotScale) / 2), 0, Math.PI * 2);
             ctx.fill();
+            ctx.globalCompositeOperation = 'source-over';
+            return;
+        }
+
+        // 필압 stroke: opaque pen strokes with recorded pressure render as
+        // per-segment quadratic curves so lineWidth can vary along the stroke.
+        // Overlapping round caps are invisible on opaque ink, so this stays
+        // artifact-free (translucent highlighter never records pressure).
+        const hasPressure = mode === 'pen' && points.some(point => typeof point.p === 'number');
+        if (hasPressure && points.length >= 2) {
+            let prevX = firstX;
+            let prevY = firstY;
+            for (let i = 1; i < points.length; i++) {
+                const current = points[i];
+                const currentX = current.x * rect.width;
+                const currentY = current.y * rect.height;
+                const isLast = i === points.length - 1;
+                const next = isLast ? current : points[i + 1];
+                const endX = isLast ? currentX : ((current.x + next.x) / 2) * rect.width;
+                const endY = isLast ? currentY : ((current.y + next.y) / 2) * rect.height;
+                ctx.lineWidth = Math.max(0.5, width * pressureScale(current.p ?? 0.5));
+                ctx.beginPath();
+                ctx.moveTo(prevX, prevY);
+                ctx.quadraticCurveTo(currentX, currentY, endX, endY);
+                ctx.stroke();
+                prevX = endX;
+                prevY = endY;
+            }
             ctx.globalCompositeOperation = 'source-over';
             return;
         }
@@ -411,6 +487,13 @@ export default function PDFViewer({
         if (!metrics) return;
         prepareCanvas(canvas, ctx, metrics.rect, metrics.dpr);
 
+        // Warm + size the live-stroke overlay up front so the very first
+        // pen-down doesn't pay for backing-store allocation mid-stroke.
+        const liveCtx = getLiveContext();
+        if (liveCanvasRef.current && liveCtx) {
+            prepareCanvas(liveCanvasRef.current, liveCtx, metrics.rect, metrics.dpr);
+        }
+
         // Draw saved paths
         const paths = drawings[pageNumber] || [];
         paths.forEach(pathStr => {
@@ -430,7 +513,12 @@ export default function PDFViewer({
         // Reset globalCompositeOperation to default
         ctx.globalCompositeOperation = 'source-over';
 
-    }, [pageNumber, drawings, shouldRenderDrawingLayer, scale, file, eraserWidth, highlighterWidth, drawSmoothPath]); // Re-render on these changes
+        // `pageRenderVersion` and `containerWidth` are essential deps: the PDF
+        // page (and the container's real width) arrive AFTER mount, and nothing
+        // else re-triggers this effect when the parent doesn't re-render — a
+        // read-only review could otherwise keep a default-sized, blank overlay
+        // and never paint the stored handwriting.
+    }, [pageNumber, drawings, shouldRenderDrawingLayer, scale, file, eraserWidth, highlighterWidth, drawSmoothPath, pageRenderVersion, containerWidth]); // Re-render on these changes
 
     const handleUndo = useCallback(() => {
         if (!canEditDrawing || !onDrawingsChange) return;
@@ -508,6 +596,26 @@ export default function PDFViewer({
         return () => window.removeEventListener('keydown', handleKeyDown);
     }, [canEditDrawing, handleRedo, handleUndo]);
 
+    // Tool shortcuts: V(선택)/P(펜)/H(형광펜)/E(지우개). Plain keys only, and
+    // never while typing in a field.
+    useEffect(() => {
+        if (!canEditDrawing) return;
+        const handleToolKey = (e: KeyboardEvent) => {
+            if (e.metaKey || e.ctrlKey || e.altKey) return;
+            const target = e.target as HTMLElement | null;
+            if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable)) return;
+            const key = e.key.toLowerCase();
+            if (key === 'v') setDrawingMode('click');
+            else if (key === 'p') setDrawingMode('pen');
+            else if (key === 'h') setDrawingMode('highlighter');
+            else if (key === 'e') setDrawingMode('eraser');
+            else return;
+            e.preventDefault();
+        };
+        window.addEventListener('keydown', handleToolKey);
+        return () => window.removeEventListener('keydown', handleToolKey);
+    }, [canEditDrawing]);
+
     const drawingModeForPointer = (e: React.PointerEvent<HTMLCanvasElement>): DrawingMode => {
         if (e.pointerType === 'pen' && drawingMode === 'click') return 'pen';
         return drawingMode;
@@ -569,17 +677,43 @@ export default function PDFViewer({
         }
     };
 
+    /**
+     * Redraw the ENTIRE in-progress stroke on the live overlay as one smoothed
+     * path. A stroke is at most a few hundred points, so a full clear+redraw
+     * per frame is cheap — and it renders with exactly the geometry and alpha
+     * the committed stroke will have, so nothing "snaps" on pen-up.
+     */
+    const renderLiveStroke = () => {
+        const live = liveCanvasRef.current;
+        const ctx = getLiveContext();
+        const metrics = getCanvasMetrics();
+        if (!live || !ctx || !metrics) return;
+        prepareCanvas(live, ctx, metrics.rect, metrics.dpr);
+        const mode = activeDrawingModeRef.current;
+        drawSmoothPath(
+            ctx,
+            currentPathRef.current,
+            metrics.rect,
+            mode,
+            getDrawingColor(mode),
+            getDrawingWidth(mode),
+        );
+    };
+
     const startDrawing = (e: React.PointerEvent<HTMLCanvasElement>) => {
         if (!shouldHandlePointer(e)) return;
         e.preventDefault();
         setActivePopupKey(null);
         e.currentTarget.setPointerCapture?.(e.pointerId);
         activePointerIdRef.current = e.pointerId;
+        activePointerTypeRef.current = e.pointerType;
         activeStrokeRectRef.current = containerRef.current?.getBoundingClientRect() ?? null;
         isDrawingRef.current = true;
         const pointerDrawingMode = drawingModeForPointer(e);
         activeDrawingModeRef.current = pointerDrawingMode;
-        if (e.pointerType === 'pen' && drawingMode === 'click') setDrawingMode('pen');
+        // NOTE: the click→pen toolbar switch is deferred to stopDrawing — a
+        // setState here re-rendered (and flipped the canvas's touch-action)
+        // during the first pen stroke, causing visible first-stroke jank.
 
         if (pointerDrawingMode === 'eraser' && eraserMode === 'stroke') {
             activeEraserModeRef.current = 'stroke';
@@ -594,7 +728,11 @@ export default function PDFViewer({
         }
 
         activeEraserModeRef.current = 'pixel';
-        currentPathRef.current = [getPos(e)];
+        const capturePressure = pointerDrawingMode === 'pen' && e.pointerType === 'pen' && pressureEnabled;
+        const startPos = getPos(e);
+        currentPathRef.current = [capturePressure ? { ...startPos, p: normalizePressure(e.pressure) } : startPos];
+        // Show the contact point immediately (a tap should leave a dot).
+        if (pointerDrawingMode !== 'eraser') renderLiveStroke();
     };
 
     const draw = (e: React.PointerEvent<HTMLCanvasElement>) => {
@@ -606,31 +744,56 @@ export default function PDFViewer({
             return;
         }
 
-        const pos = getPos(e);
+        // Fold in coalesced samples: browsers batch high-frequency pen input
+        // (120Hz+) into one event per frame — without these, fast strokes lose
+        // most of their true curvature and render angular while drawing.
+        const native = e.nativeEvent;
+        const coalesced = typeof native.getCoalescedEvents === "function"
+            ? native.getCoalescedEvents()
+            : [];
+        const samples: Array<{ clientX: number; clientY: number; pressure: number }> =
+            coalesced.length > 0 ? coalesced : [native];
+
         const path = currentPathRef.current;
-        const last = path[path.length - 1];
-        if (last && Math.hypot(pos.x - last.x, pos.y - last.y) < MIN_POINT_DISTANCE) return;
+        const isEraser = activeDrawingModeRef.current === 'eraser';
+        const capturePressure = activeDrawingModeRef.current === 'pen'
+            && activePointerTypeRef.current === 'pen'
+            && pressureEnabled;
+        const mainCtx = isEraser ? canvasRef.current.getContext('2d') : null;
+        const metrics = isEraser ? getCanvasMetrics() : null;
+        let appended = false;
 
-        currentPathRef.current = [...path, pos];
+        for (const sample of samples) {
+            const rawPos = getPos(sample);
+            const pos: DrawPoint = capturePressure
+                ? { ...rawPos, p: normalizePressure(sample.pressure) }
+                : rawPos;
+            const last = path[path.length - 1];
+            if (last && Math.hypot(pos.x - last.x, pos.y - last.y) < MIN_POINT_DISTANCE) continue;
+            path.push(pos);
+            appended = true;
 
-        // Real-time visual feedback drawing segment-by-segment
-        const ctx = canvasRef.current.getContext('2d');
-        const metrics = getCanvasMetrics();
-        if (ctx && metrics) {
-            const pointerDrawingMode = activeDrawingModeRef.current;
-            ctx.save();
-            ctx.setTransform(metrics.dpr, 0, 0, metrics.dpr, 0, 0);
-            drawSmoothPath(
-                ctx,
-                last ? [last, pos] : [pos],
-                metrics.rect,
-                pointerDrawingMode,
-                getDrawingColor(pointerDrawingMode),
-                getDrawingWidth(pointerDrawingMode),
-            );
-            ctx.restore();
-            ctx.globalCompositeOperation = 'source-over';
+            // The pixel eraser must apply destination-out to the MAIN canvas
+            // as it moves — segment-by-segment is correct here (erasing the
+            // same pixels twice is harmless, unlike double-alpha ink).
+            if (isEraser && mainCtx && metrics) {
+                mainCtx.save();
+                mainCtx.setTransform(metrics.dpr, 0, 0, metrics.dpr, 0, 0);
+                drawSmoothPath(
+                    mainCtx,
+                    last ? [last, pos] : [pos],
+                    metrics.rect,
+                    'eraser',
+                    getDrawingColor('eraser'),
+                    getDrawingWidth('eraser'),
+                );
+                mainCtx.restore();
+                mainCtx.globalCompositeOperation = 'source-over';
+            }
         }
+
+        if (!appended) return;
+        if (!isEraser) renderLiveStroke();
     };
 
     const stopDrawing = (e?: React.PointerEvent<HTMLCanvasElement>) => {
@@ -668,11 +831,45 @@ export default function PDFViewer({
         // Save Path
         if (finishedPath.length > 0 && onDrawingsChange) {
             const pointerDrawingMode = activeDrawingModeRef.current;
+
+            // Zero-gap handoff for ink strokes: stamp the finished stroke onto
+            // the main canvas NOW (same smoothed geometry the live overlay was
+            // showing), then clear the overlay. The async React effect redraw
+            // that follows emitDrawingsChange repaints the identical pixels.
+            if (pointerDrawingMode !== 'eraser') {
+                const mainCtx = canvasRef.current?.getContext('2d');
+                const metrics = getCanvasMetrics();
+                if (mainCtx && metrics) {
+                    mainCtx.save();
+                    mainCtx.setTransform(metrics.dpr, 0, 0, metrics.dpr, 0, 0);
+                    drawSmoothPath(
+                        mainCtx,
+                        finishedPath,
+                        metrics.rect,
+                        pointerDrawingMode,
+                        getDrawingColor(pointerDrawingMode),
+                        getDrawingWidth(pointerDrawingMode),
+                    );
+                    mainCtx.restore();
+                    mainCtx.globalCompositeOperation = 'source-over';
+                    const liveCtx = getLiveContext();
+                    if (liveCanvasRef.current && liveCtx) {
+                        prepareCanvas(liveCanvasRef.current, liveCtx, metrics.rect, metrics.dpr);
+                    }
+                }
+            }
+
             const newPath = {
                 mode: pointerDrawingMode,
                 color: getDrawingColor(pointerDrawingMode),
                 width: getDrawingWidth(pointerDrawingMode),
-                points: finishedPath
+                // Round on commit: full-precision floats dominate the stored
+                // JSON; 4dp is visually identical (~0.1px at page scale).
+                points: finishedPath.map(point => (
+                    typeof point.p === 'number'
+                        ? { x: roundCoord(point.x), y: roundCoord(point.y), p: Math.round(point.p * 1000) / 1000 }
+                        : { x: roundCoord(point.x), y: roundCoord(point.y) }
+                )),
             };
             const currentPaths = latestDrawingsRef.current[pageNumber] || [];
 
@@ -689,6 +886,12 @@ export default function PDFViewer({
             emitDrawingsChange(pageNumber, [...currentPaths, JSON.stringify(newPath)]);
         }
         currentPathRef.current = [];
+
+        // Deferred click→pen toolbar switch (see startDrawing): now that the
+        // stroke is committed, flipping mode/touch-action can't disturb it.
+        if (activePointerTypeRef.current === 'pen' && drawingMode === 'click') {
+            setDrawingMode('pen');
+        }
     };
 
     const updateEraserRing = (e: React.PointerEvent<HTMLCanvasElement>) => {
@@ -713,7 +916,8 @@ export default function PDFViewer({
         if (eraserRingRef.current) eraserRingRef.current.style.display = 'none';
     };
 
-    const getPos = (e: React.PointerEvent<HTMLCanvasElement>) => {
+    // Accepts native PointerEvents too (coalesced events carry no React wrapper).
+    const getPos = (e: { clientX: number; clientY: number }) => {
         if (!canvasRef.current) return { x: 0, y: 0 };
         const rect = activeStrokeRectRef.current ?? canvasRef.current.getBoundingClientRect();
         const normalizedX = (e.clientX - rect.left) / rect.width;
@@ -815,7 +1019,7 @@ export default function PDFViewer({
                                         type="button"
                                         className={`pdf-tool-button ${drawingMode === 'click' ? 'active' : ''}`}
                                         onClick={() => setDrawingMode('click')}
-                                        title="선택"
+                                        title="선택 (V)"
                                         aria-label="선택"
                                     >
                                         <MousePointer2 size={15} />
@@ -824,7 +1028,7 @@ export default function PDFViewer({
                                         type="button"
                                         className={`pdf-tool-button has-color ${drawingMode === 'pen' ? 'active' : ''}`}
                                         onClick={() => setDrawingMode('pen')}
-                                        title="펜"
+                                        title="펜 (P)"
                                         aria-label="펜"
                                     >
                                         <PenLine size={15} />
@@ -833,15 +1037,8 @@ export default function PDFViewer({
                                     <button
                                         type="button"
                                         className={`pdf-tool-button has-color ${drawingMode === 'highlighter' ? 'active' : ''}`}
-                                        onClick={() => {
-                                            if (drawingMode === 'highlighter') {
-                                                const idx = HIGHLIGHTER_COLORS.indexOf(highlighterColor);
-                                                setHighlighterColor(HIGHLIGHTER_COLORS[(idx + 1) % HIGHLIGHTER_COLORS.length]);
-                                            } else {
-                                                setDrawingMode('highlighter');
-                                            }
-                                        }}
-                                        title={drawingMode === 'highlighter' ? "형광펜 (다시 클릭하면 색 변경)" : "형광펜"}
+                                        onClick={() => setDrawingMode('highlighter')}
+                                        title="형광펜 (H)"
                                         aria-label="형광펜"
                                     >
                                         <Highlighter size={15} />
@@ -851,7 +1048,7 @@ export default function PDFViewer({
                                         type="button"
                                         className={`pdf-tool-button ${drawingMode === 'eraser' ? 'active' : ''}`}
                                         onClick={() => setDrawingMode('eraser')}
-                                        title="지우개"
+                                        title="지우개 (E)"
                                         aria-label="지우개"
                                     >
                                         <Eraser size={15} />
@@ -933,10 +1130,43 @@ export default function PDFViewer({
                                             <span className="pdf-nib-bar" style={{ background: penColor, height: `${nibBarHeight}px`, boxShadow: `0 0 6px ${penColor}80` }} />
                                         </span>
                                         {widthControl}
+                                        <button
+                                            type="button"
+                                            className={`pdf-tool-button ${pressureEnabled ? 'active' : ''}`}
+                                            onClick={() => setPressureEnabled(value => !value)}
+                                            title={pressureEnabled ? "필압 켜짐 · 펜 압력에 따라 굵기 변화" : "필압 꺼짐 · 일정한 굵기"}
+                                            aria-label={pressureEnabled ? "필압 끄기" : "필압 켜기"}
+                                            aria-pressed={pressureEnabled}
+                                        >
+                                            <Feather size={15} />
+                                        </button>
                                     </div>
                                 )}
 
-                                {drawingMode !== 'click' && drawingMode !== 'pen' && widthControl}
+                                {drawingMode === 'highlighter' && (
+                                    <div className="pdf-pen-group" role="group" aria-label="형광펜 옵션">
+                                        <div className="pdf-color-swatches" aria-label="형광펜 색상">
+                                            {HIGHLIGHTER_COLORS.map((color, idx) => (
+                                                <button
+                                                    key={color}
+                                                    type="button"
+                                                    className={`pdf-color-swatch ${highlighterColor === color ? 'active' : ''}`}
+                                                    onClick={() => setHighlighterColor(color)}
+                                                    title={`형광펜 색상 ${idx + 1}`}
+                                                    aria-label={`형광펜 색상 ${idx + 1}`}
+                                                    aria-pressed={highlighterColor === color}
+                                                    style={{ background: HIGHLIGHTER_CURSOR_COLORS[idx] ?? HIGHLIGHTER_CURSOR_COLORS[0] }}
+                                                >
+                                                    {highlighterColor === color && <Check size={12} strokeWidth={3} aria-hidden="true" />}
+                                                </button>
+                                            ))}
+                                        </div>
+                                        <span className="pdf-pen-group-divider" aria-hidden="true" />
+                                        {widthControl}
+                                    </div>
+                                )}
+
+                                {drawingMode === 'eraser' && widthControl}
 
                                 <button
                                     type="button"
@@ -1082,6 +1312,23 @@ export default function PDFViewer({
                                             cursor: canvasCursor,
                                             pointerEvents: canEditDrawing ? 'auto' : 'none',
                                             touchAction: fingerDrawingEnabled && drawingMode !== 'click' ? 'none' : 'pan-x pan-y pinch-zoom'
+                                        }}
+                                    />
+                                )}
+                                {/* Live-stroke overlay: input passes through to the
+                                    main canvas below; this layer only displays the
+                                    in-progress stroke (see renderLiveStroke). */}
+                                {canEditDrawing && (
+                                    <canvas
+                                        ref={liveCanvasRef}
+                                        data-testid="pdf-draw-live-overlay"
+                                        aria-hidden="true"
+                                        style={{
+                                            position: 'absolute',
+                                            top: 0, left: 0,
+                                            width: '100%', height: '100%',
+                                            zIndex: 11,
+                                            pointerEvents: 'none',
                                         }}
                                     />
                                 )}
