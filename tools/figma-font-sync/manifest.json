@@ -1,0 +1,12 @@
+{
+  "name": "OMR Maker — Pretendard Sync",
+  "id": "omr-maker-pretendard-sync",
+  "api": "1.0.0",
+  "main": "code.js",
+  "editorType": ["figma"],
+  "documentAccess": "dynamic-page",
+  "networkAccess": {
+    "allowedDomains": ["none"],
+    "reasoning": "This plugin only replaces fallback fonts in the open OMR Maker design file."
+  }
+}
