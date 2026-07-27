@@ -1,0 +1,12 @@
+{
+  "name": "OMR Maker — Product Map Builder",
+  "id": "omr-maker-product-map-builder",
+  "api": "1.0.0",
+  "main": "code.js",
+  "editorType": ["figma"],
+  "documentAccess": "dynamic-page",
+  "networkAccess": {
+    "allowedDomains": ["none"],
+    "reasoning": "The builder only writes nodes from values hard-coded off the OMR Maker source tree. It never fetches anything."
+  }
+}
