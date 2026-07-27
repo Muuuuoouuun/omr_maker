@@ -1,5 +1,14 @@
 # OMR Maker Figma Product Map Implementation Plan
 
+> **Superseded (2026-07-27).** Tasks 1–7 below assume a Figma MCP connector
+> (`whoami` / `create_new_file` / `use_figma`). That connector is unauthenticated
+> in this environment, so the plan is not executable as written. The same
+> artifact is now built through the Figma Plugin API instead — see
+> [`tools/figma-product-map/`](../../../tools/figma-product-map/README.md).
+> The content below is still the source of truth for *what* the file contains;
+> only the delivery mechanism changed. Step 2 of Task 1 (create the file) is now
+> a manual "new design file in Figma desktop" before running the plugin.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** 현재 OMR Maker의 웹/PWA 구조, 주요 화면, 사용자 흐름, 디자인 시스템을 하나의 편집 가능한 Figma 디자인 파일로 정리한다.
