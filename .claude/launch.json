@@ -12,6 +12,12 @@
       "runtimeExecutable": "npx",
       "runtimeArgs": ["next", "dev", "--experimental-https", "-p", "3003"],
       "port": 3003
+    },
+    {
+      "name": "omr-prod",
+      "runtimeExecutable": "npx",
+      "runtimeArgs": ["next", "start", "-p", "3005"],
+      "port": 3005
     }
   ]
 }

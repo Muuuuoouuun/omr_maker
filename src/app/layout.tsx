@@ -1,6 +1,10 @@
 import type { Metadata, Viewport } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
-import localFont from "next/font/local";
+// Pretendard's dynamic subset: 92 @font-face rules that split the Korean glyph
+// set by unicode-range, so the browser fetches only the ranges a page actually
+// renders. See the --font-pretendard note in globals.css for why this is not
+// wired through next/font/local.
+import "pretendard/dist/web/variable/pretendardvariable-dynamic-subset.css";
 import "./globals.css";
 import ToastHost from "@/components/Toast";
 import PWARegister from "@/components/PWARegister";
@@ -18,18 +22,6 @@ const geistSans = Geist({
 const geistMono = Geist_Mono({
   variable: "--font-geist-mono",
   subsets: ["latin"],
-});
-
-// Geist only covers Latin, so Korean text — nearly all visible copy in this
-// app — was silently falling back to the OS default font. Pretendard is the
-// de-facto standard Korean UI typeface (SIL OFL, full weight range via one
-// variable file) and becomes the primary body/heading face; Geist stays
-// scoped to numerals and mono contexts where it's already in use.
-const pretendard = localFont({
-  src: "../../node_modules/pretendard/dist/web/variable/woff2/PretendardVariable.woff2",
-  variable: "--font-pretendard",
-  display: "swap",
-  weight: "45 920",
 });
 
 export const metadata: Metadata = {
@@ -138,7 +130,7 @@ export default function RootLayout({
       <head>
         <script dangerouslySetInnerHTML={{ __html: themeInitScript }} />
       </head>
-      <body className={`${geistSans.variable} ${geistMono.variable} ${pretendard.variable}`}>
+      <body className={`${geistSans.variable} ${geistMono.variable}`}>
         <NativePlatformSync />
         <ViewportHeightSync />
         <PWARegister />

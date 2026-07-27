@@ -7,7 +7,6 @@ import { useRouter, useSearchParams } from "next/navigation";
 import BrandLogo from "@/components/BrandLogo";
 import { Exam, Attempt } from "@/types/omr";
 import OverviewTab from "@/components/dashboard/tabs/OverviewTab";
-import MockupOverview from "@/components/dashboard/MockupOverview";
 import StatusPill from "@/components/dashboard/StatusPill";
 import { Activity, AlertTriangle, BarChart2, CheckCircle2, CloudOff, Database, GraduationCap, LayoutDashboard, RefreshCw, Search } from "lucide-react";
 import ThemeToggle from "@/components/ThemeToggle";
@@ -25,6 +24,13 @@ const ExamAnalyticsTab = dynamic(() => import("@/components/dashboard/tabs/ExamA
     loading: () => <AnalyticsTabSkeleton />,
 });
 const StudentAnalyticsTab = dynamic(() => import("@/components/dashboard/tabs/StudentAnalyticsTab"), {
+    ssr: false,
+    loading: () => <AnalyticsTabSkeleton />,
+});
+// Only ever rendered for the ?showcase=1 demo account, but a static import made
+// it the one thing that still pulled recharts into every teacher's initial
+// dashboard bundle — cancelling out the two dynamic() calls above.
+const MockupOverview = dynamic(() => import("@/components/dashboard/MockupOverview"), {
     ssr: false,
     loading: () => <AnalyticsTabSkeleton />,
 });

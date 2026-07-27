@@ -71,17 +71,23 @@
   --transition-smooth: all 0.5s cubic-bezier(0.25, 1, 0.5, 1);
   --transition-spring: all 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275);
 
-  /* Pretendard (KR text) and Geist (numerals) are wired via next/font/local
-     and next/font/google in layout.tsx, which expose --font-pretendard /
-     --font-geist-sans / --font-geist-mono as custom properties scoped to
-     <body>'s className. Do NOT compose them into a --font-sans-style
+  /* Geist (numerals/mono) is wired via next/font/google in layout.tsx, which
+     exposes --font-geist-sans / --font-geist-mono as custom properties scoped
+     to <body>'s className. Do NOT compose those two into a --font-sans-style
      intermediate custom property here in :root: a var() chain that reaches
      from an ancestor of <body> into properties only defined on <body> itself
      resolves to invalid (empty) in this app's setup, which silently drops
-     the whole font-family declaration. Reference --font-pretendard /
-     --font-geist-sans directly at the point of use instead (see `body` and
-     `.numeric-emphasis` below) — both already do this, and everything else
-     gets Pretendard-led text for free via normal inheritance from `body`. */
+     the whole font-family declaration. Reference --font-geist-sans directly
+     at the point of use instead (see `.numeric-emphasis` below).
+
+     Pretendard is NOT a next/font variable. next/font/local can only take one
+     file, and Pretendard's single variable woff2 carries the full 11,172-syllable
+     Korean set at ~2MB — preloaded on every route. layout.tsx imports the
+     upstream dynamic-subset stylesheet instead (92 @font-face rules split by
+     unicode-range), so a page fetches only the ~30KB subsets its text touches.
+     That makes --font-pretendard a plain family-name literal, safe to define
+     here in :root because it resolves without reaching into <body>. */
+  --font-pretendard: "Pretendard Variable";
   --font-mono: var(--font-geist-mono), monospace;
 
   /* Fluid type scale: keep mobile compact, improve desktop readability. */
