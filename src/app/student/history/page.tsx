@@ -5,7 +5,7 @@ import Link from "next/link";
 import BrandLogo from "@/components/BrandLogo";
 import { Attempt, Exam } from "@/types/omr";
 import { attemptBelongsToSession, getSession, type StudentSession } from "@/utils/storage";
-import { loadExams } from "@/lib/omrPersistence";
+import { readLocalExams } from "@/lib/omrPersistence";
 import {
     loadStudentOfficialAttempts,
     safeExamStubFromStudentAttempt,
@@ -50,7 +50,7 @@ export default function HistoryPage() {
                     currentSession
                         ? loadStudentOfficialAttempts(currentSession)
                         : Promise.resolve({ items: [], remoteLoaded: false, remoteStatus: undefined }),
-                    loadExams(),
+                    Promise.resolve({ items: readLocalExams() }),
                 ]);
                 if (cancelled) return;
                 if (attemptResult.remoteStatus === "unauthorized") {

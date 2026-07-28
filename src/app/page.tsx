@@ -15,7 +15,7 @@ import {
 } from "@/app/actions/studentSession";
 import { formatRegionScopedLabel } from "@/lib/dashboardSelection";
 import { seedLocalTestStudentAccounts } from "@/lib/localTestAccounts";
-import { readLocalAttempts, syncMergedGuestAttempts } from "@/lib/omrPersistence";
+import { readLocalAttempts } from "@/lib/omrPersistence";
 import {
   readRosterGroups,
   readRosterStudents,
@@ -412,11 +412,6 @@ export default function Home() {
       });
       if (mergedCount > 0) {
         toast.success("게스트 기록 연결됨", `${mergedCount}개의 시험 기록을 학생 기록으로 저장했습니다.`);
-        // Push reassigned attempts in the background. Local ownership has
-        // already moved, and the dashboard/SyncFlusher retries remote failures,
-        // so a slow sync must not hold the student on the login screen.
-        void syncMergedGuestAttempts(session.studentId, { guestId: pendingGuestMerge.guestId })
-          .catch(() => { /* dashboard reconciliation retries this later */ });
       } else {
         toast.info("연결할 새 게스트 기록 없음", "이후 제출 기록은 학생 기록으로 저장됩니다.");
       }

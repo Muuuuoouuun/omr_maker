@@ -15,11 +15,11 @@ describe("persistence integration", () => {
         expect(source).not.toMatch(/const\s+loadExam\s*=\s*async/);
     });
 
-    it("primary read screens use the shared persistence layer", () => {
+    it("primary read screens use server clients with explicit local cache helpers", () => {
         const screens = [
             { file: "src/app/teacher/dashboard/page.tsx", functions: ["loadTeacherExams", "loadTeacherAttempts"] },
             { file: "src/app/student/dashboard/page.tsx", functions: ["listMyAssignmentsClient", "listMyAssignments"] },
-            { file: "src/app/student/history/page.tsx", functions: ["loadStudentOfficialAttempts", "loadExams"] },
+            { file: "src/app/student/history/page.tsx", functions: ["loadStudentOfficialAttempts", "readLocalExams"] },
             { file: "src/app/student/review/[attemptId]/page.tsx", functions: ["loadMyAttemptClient", "loadReviewExamClient"] },
             { file: "src/app/teacher/exam/[id]/page.tsx", functions: ["loadTeacherExam", "loadTeacherAttempts"] },
             { file: "src/app/teacher/attempt/[attemptId]/page.tsx", functions: ["loadTeacherAttemptRecord", "loadTeacherExam"] },

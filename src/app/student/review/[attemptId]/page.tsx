@@ -27,7 +27,6 @@ import {
     loadAttempt,
     loadExam,
     readLocalAttempts,
-    saveAttempt,
     saveLocalAttempt,
     saveLocalServerConfirmedAttempt,
 } from "@/lib/omrPersistence";
@@ -950,8 +949,8 @@ export default function ReviewPage() {
                 // Merge onto the freshest local attempt (ref, not stale closure).
                 updated = upsertStudentQuestion(attemptRef.current || base, input, new Date().toISOString());
                 if (!updated) return false;
-                const result = await saveAttempt(updated).catch(() => null);
-                if (!result?.localSaved) {
+                const localSaved = await saveLocalAttempt(updated).catch(() => false);
+                if (!localSaved) {
                     toast.error("질문 저장 실패", "브라우저 저장소를 확인한 뒤 다시 시도해주세요.");
                     return false;
                 }

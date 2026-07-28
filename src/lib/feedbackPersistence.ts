@@ -18,6 +18,7 @@ import {
     workspaceBootstrapRows,
     type WorkspaceContext,
 } from "@/lib/workspaceContext";
+import { canUseCanonicalBrowserDataPlane } from "@/lib/productionBrowserBoundary";
 
 const FEEDBACK_KEY = "omr_attempt_feedback";
 
@@ -423,7 +424,10 @@ export function studentVisibleAttemptFeedback(
 
 async function getSupabaseClient(): Promise<SupabaseClientLike | null> {
     const config = getSupabaseConfig();
-    if (!config) return null;
+    if (!canUseCanonicalBrowserDataPlane({
+        nodeEnv: process.env.NODE_ENV,
+        hasPublicSupabase: !!config,
+    }) || !config) return null;
     if (supabaseClientPromise) return supabaseClientPromise;
 
     supabaseClientPromise = import("@supabase/supabase-js")

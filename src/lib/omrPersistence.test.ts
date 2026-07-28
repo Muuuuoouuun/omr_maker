@@ -1394,17 +1394,14 @@ describe("Supabase config", () => {
     });
 
     it.each(["true", "1", "yes"])(
-        "allows production browser Supabase sync when OMR_PRODUCTION_RLS_APPLIED=%s",
+        "keeps production browser Supabase sync disabled when OMR_PRODUCTION_RLS_APPLIED=%s",
         flag => {
             expect(getSupabaseConfigFromEnv({
                 NODE_ENV: "production",
                 NEXT_PUBLIC_SUPABASE_URL: "https://wqhiajvisirxdjivhmlt.supabase.co",
                 NEXT_PUBLIC_SUPABASE_ANON_KEY: "anon-public-key",
                 OMR_PRODUCTION_RLS_APPLIED: flag,
-            })).toEqual({
-                url: "https://wqhiajvisirxdjivhmlt.supabase.co",
-                publishableKey: "anon-public-key",
-            });
+            })).toBeNull();
         },
     );
 

@@ -10,6 +10,7 @@ import { questionChoiceCount, type Attempt, type Exam, type QuestionResult, type
 import { MAX_SUB_QUESTION_LENGTH, normalizeQuestionSubQuestions } from "@/lib/subQuestions";
 import { SUPABASE_ATTEMPT_READ_COLUMNS, SUPABASE_EXAM_READ_COLUMNS } from "@/lib/supabaseReadColumns";
 import { withBrowserStorageLock } from "@/lib/browserStorageLock";
+import { canUseCanonicalBrowserDataPlane } from "@/lib/productionBrowserBoundary";
 
 type Env = Record<string, string | undefined>;
 
@@ -210,11 +211,6 @@ function clean(value: unknown): string {
     return typeof value === "string" ? value.trim() : "";
 }
 
-function isProductionRlsApplied(value: unknown): boolean {
-    const normalized = clean(value).toLowerCase();
-    return normalized === "true" || normalized === "1" || normalized === "yes";
-}
-
 function scopedValue(value: unknown): string | null {
     return clean(value) || null;
 }
@@ -319,12 +315,10 @@ export function getSupabaseConfigFromEnv(env: Env): SupabaseConfig | null {
     )?.trim();
 
     if (!url || !publishableKey) return null;
-    if (
-        clean(env.NODE_ENV).toLowerCase() === "production" &&
-        !isProductionRlsApplied(env.OMR_PRODUCTION_RLS_APPLIED)
-    ) {
-        return null;
-    }
+    if (!canUseCanonicalBrowserDataPlane({
+        nodeEnv: clean(env.NODE_ENV).toLowerCase() || undefined,
+        hasPublicSupabase: true,
+    })) return null;
     return { url, publishableKey };
 }
 
@@ -1432,7 +1426,10 @@ export async function saveLocalAttempt(attempt: Attempt): Promise<boolean> {
 
 async function getSupabaseClient(): Promise<SupabaseClientLike | null> {
     const config = getSupabaseConfig();
-    if (!config) return null;
+    if (!canUseCanonicalBrowserDataPlane({
+        nodeEnv: process.env.NODE_ENV,
+        hasPublicSupabase: !!config,
+    }) || !config) return null;
     if (supabaseClientPromise) return supabaseClientPromise;
 
     supabaseClientPromise = import("@supabase/supabase-js")
