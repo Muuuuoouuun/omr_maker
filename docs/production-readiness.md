@@ -4,24 +4,44 @@
 개별 절차의 상세는 각 원본 문서를 참조하고, 이 문서는 "무엇을 언제 확인하는가"의 단일 진입점 역할을 합니다.
 
 > ⚠️ **현재 상태**: 프로덕션 배포는 되어 있으나, `schema.sql`의 업무 데이터 RLS 정책은
-> 알파/로컬 테스트용으로 열려 있습니다. 아래 **1. Supabase RLS 핸드오프**를 완료하기 전까지는
+> 알파/로컬 테스트용으로 열려 있습니다. 아래 **1. Supabase 서버 전용 핸드오프**를 완료하기 전까지는
 > 실제(민감) 학생 데이터를 저장하지 마세요.
 
-## 1. Supabase RLS 핸드오프 (실제 학생 데이터 전 필수)
+## 1. Supabase 서버 전용 핸드오프 (실제 학생 데이터 전 필수)
 
-`supabase/production-rls.sql`은 알파 공개 정책을 제거하고, 익명 테이블 접근을 회수하며,
-RLS를 강제하고 Supabase Auth + `omr_organization_members`로 데이터를 게이트합니다.
+`supabase/production-server-boundary.sql`은 canonical/PII 데이터 평면을
+서버 전용으로 전환합니다. `public`, `anon`, `authenticated`의 테이블·시퀀스·함수 권한과
+alpha/기존 브라우저 정책을 제거하고, 모든 `public.omr_*` 테이블에 RLS를 강제하면서
+service-role RPC만 유지합니다. 기존 `production-rls.sql`은 직접 authenticated 브라우저
+접근을 허용하는 이전 프로필이므로 새 컷오버에 적용하지 않습니다.
 
-- **선행 조건과 적용 순서**: [supabase/README.md](../supabase/README.md)의 `Production RLS Handoff` 7단계.
-  (Auth 활성화 → `organization_id` 백필 → 멤버 행 생성 → 조직 생성/부트스트랩/감사로그를 서버·서비스롤로 이전 →
-  `production-rls.sql` 실행 → Pro/Academy 서버측 권한 검사 → 보관 필기 데이터 보존 규칙.)
-- **자동 적용을 하지 않는 이유**: 위 선행 조건(특히 Auth·org 백필)이 충족되지 않은 상태에서
-  정책만 강제하면 정상 트래픽이 차단됩니다. 그래서 프로비저닝 스크립트는 이 파일을 자동 실행하지 않습니다.
-- **자동 검증(회귀)**: `npm run test:supabase:live` 는 로컬 Postgres 컨테이너에
-  `schema.sql` → 마이그레이션 → `production-rls.sql` → `live-test-assertions.sql`을 순서대로 적용해
-  정책이 의도대로 동작하는지 검증합니다. 스키마/정책을 바꾸면 이 명령으로 먼저 회귀를 확인하세요.
-- **적용 후**: 익명 quick-entry 학생은 publishable 키로 직접 쓸 수 없습니다.
-  학생 Auth 계정 또는 서명된 과제 토큰이 준비될 때까지 학생 제출은 서버 경유로 유지하세요.
+### 적용 순서
+
+1. 쓰기를 유지보수 모드로 전환하고 복구 가능한 DB 스냅샷을 생성합니다.
+2. 동일한 커밋의 `schema.sql`과 모든 `migrations`를 파일명 순으로 적용합니다.
+3. 신뢰된 DB 소유자/service role로
+   `select public.omr_assert_production_boundary_preflight_v1();`을 실행합니다.
+   조직 null·고아·교차 조직·학생 credential 누락 중 하나라도 0이 아니면 중단합니다.
+4. DB 소유자 권한으로 `supabase/production-server-boundary.sql`을 적용합니다. service-role
+   API key만으로는 grant나 RLS를 바꿀 수 없습니다. 이 트랜잭션도 가장 먼저 같은 preflight
+   assertion을 실행하므로 검사와 권한 회수 사이의 잘못된 수동 순서를 막습니다.
+5. `schema.sql` → sorted `migrations` → `production-server-boundary.sql` →
+   `live-test-assertions.sql` 순서를 실행하는 `npm run test:supabase:live`와
+   CI의 blocking `supabase-live-contract` 작업을 통과시킵니다.
+6. 릴리스 증거에 커밋 SHA, 정책 해시(SHA-256), CI 실행 URL, 대상 DB 프로젝트,
+   실행자·시각, preflight 결과, anon/authenticated 공격 거부 결과를 기록합니다.
+7. 같은 커밋의 서버 빌드를 배포하고 교사·학생 server action 여정을 확인한 뒤 쓰기를 재개합니다.
+
+현재 public 앱 테이블은 `public.omr_*` 27개입니다. 로컬 verifier의 28번째 관계인
+`storage.buckets`는 Supabase 관리 `storage` 스키마 카탈로그이므로 이 프로필이 FORCE RLS를
+재작성하지 않습니다. 대신 라이브 검증에서 `omr-private-assets` bucket의 `public = false`를
+별도로 확인하며, 새 public OMR 테이블이 생기면 동적 catalog assertion이 누락을 차단합니다.
+
+### 롤백
+
+브라우저 canonical CRUD를 다시 열어 롤백하지 않습니다. 먼저 앱 쓰기를 중단하고 서버 배포를
+되돌립니다. DB 권한 완화는 보안 책임자의 별도 승인, 명시적 검토 SQL, 새 라이브 검증 로그가
+있을 때만 허용하며 alpha 정책이나 `production-rls.sql`을 긴급 롤백으로 사용하지 않습니다.
 
 ## 2. Vercel 프리뷰 배포 보호(SSO)와 QA 우회
 

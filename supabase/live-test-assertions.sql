@@ -1,11 +1,116 @@
 \set ON_ERROR_STOP on
 
-grant usage on schema public to anon, authenticated, service_role;
-grant select, insert, update, delete on all tables in schema public to anon, authenticated;
-grant select, insert, update, delete on all tables in schema public to service_role;
-
 do $$
 begin
+    if has_schema_privilege('anon', 'public', 'usage')
+        or has_schema_privilege('authenticated', 'public', 'usage')
+    then
+        raise exception 'browser roles unexpectedly retain public schema usage';
+    end if;
+    if not has_schema_privilege('service_role', 'public', 'usage') then
+        raise exception 'service_role lost public schema usage';
+    end if;
+
+    if exists (
+        select 1
+          from pg_class relation
+          join pg_namespace namespace on namespace.oid = relation.relnamespace
+         where namespace.nspname = 'public'
+           and relation.relkind in ('r', 'p')
+           and relation.relname like 'omr\_%' escape '\'
+           and (
+               has_table_privilege('anon', relation.oid, 'SELECT')
+               or has_table_privilege('anon', relation.oid, 'INSERT')
+               or has_table_privilege('anon', relation.oid, 'UPDATE')
+               or has_table_privilege('anon', relation.oid, 'DELETE')
+               or has_table_privilege('authenticated', relation.oid, 'SELECT')
+               or has_table_privilege('authenticated', relation.oid, 'INSERT')
+               or has_table_privilege('authenticated', relation.oid, 'UPDATE')
+               or has_table_privilege('authenticated', relation.oid, 'DELETE')
+           )
+    ) then
+        raise exception 'browser roles unexpectedly retain an OMR table privilege';
+    end if;
+
+    if exists (
+        select 1
+          from pg_class relation
+          join pg_namespace namespace on namespace.oid = relation.relnamespace
+         where namespace.nspname = 'public'
+           and relation.relkind in ('r', 'p')
+           and relation.relname like 'omr\_%' escape '\'
+           and (
+               not has_table_privilege('service_role', relation.oid, 'SELECT')
+               or not has_table_privilege('service_role', relation.oid, 'INSERT')
+               or not has_table_privilege('service_role', relation.oid, 'UPDATE')
+               or not has_table_privilege('service_role', relation.oid, 'DELETE')
+           )
+    ) then
+        raise exception 'service_role lost an OMR table privilege';
+    end if;
+
+    if exists (
+        select 1
+          from pg_class relation
+          join pg_namespace namespace on namespace.oid = relation.relnamespace
+         where namespace.nspname = 'public'
+           and relation.relkind = 'S'
+           and (
+               has_sequence_privilege('anon', relation.oid, 'USAGE')
+               or has_sequence_privilege('anon', relation.oid, 'SELECT')
+               or has_sequence_privilege('anon', relation.oid, 'UPDATE')
+               or has_sequence_privilege('authenticated', relation.oid, 'USAGE')
+               or has_sequence_privilege('authenticated', relation.oid, 'SELECT')
+               or has_sequence_privilege('authenticated', relation.oid, 'UPDATE')
+           )
+    ) then
+        raise exception 'browser roles unexpectedly retain an OMR sequence privilege';
+    end if;
+
+    if exists (
+        select 1
+          from pg_proc routine
+          join pg_namespace namespace on namespace.oid = routine.pronamespace
+         where namespace.nspname = 'public'
+           and (
+               has_function_privilege('anon', routine.oid, 'EXECUTE')
+               or has_function_privilege('authenticated', routine.oid, 'EXECUTE')
+           )
+    ) then
+        raise exception 'browser roles unexpectedly retain a public function privilege';
+    end if;
+
+    if exists (
+        select 1
+          from pg_proc routine
+          join pg_namespace namespace on namespace.oid = routine.pronamespace
+         where namespace.nspname = 'public'
+           and not has_function_privilege('service_role', routine.oid, 'EXECUTE')
+    ) then
+        raise exception 'service_role lost a public function execute privilege';
+    end if;
+
+    if exists (
+        select 1
+          from pg_policies policy
+         where policy.schemaname = 'public'
+           and policy.tablename like 'omr\_%' escape '\'
+    ) then
+        raise exception 'production server boundary left an alpha or browser policy';
+    end if;
+
+    if exists (
+        select 1
+          from pg_class relation
+          join pg_namespace namespace on namespace.oid = relation.relnamespace
+         where namespace.nspname = 'public'
+           and relation.relkind in ('r', 'p')
+           and relation.relname like 'omr\_%' escape '\'
+           and (not relation.relrowsecurity or not relation.relforcerowsecurity)
+    ) then
+        raise exception 'production server boundary must ENABLE and FORCE RLS on every OMR table';
+    end if;
+
     if not exists (
         select 1
           from pg_class relation
@@ -53,40 +158,32 @@ insert into public.omr_exams (
     ('live-exam-b', 'live-org-b', 'Org B Exam', '{"id":"live-exam-b","title":"Org B Exam","questions":[],"createdAt":"2026-07-14T00:00:00.000Z"}', now(), now());
 
 set role authenticated;
-select set_config('request.jwt.claim.sub', '11111111-1111-4111-8111-111111111111', false);
-
-do $$
-declare
-    visible_exam_count integer;
-begin
-    select count(*) into visible_exam_count from public.omr_exams;
-    if visible_exam_count <> 1 then
-        raise exception 'teacher A must see exactly one organization exam, saw %', visible_exam_count;
-    end if;
-end
-$$;
-
-insert into public.omr_exams (
-    id, organization_id, title, payload, created_at, updated_at
-) values (
-    'live-exam-a-created', 'live-org-a', 'Teacher A Exam',
-    '{"id":"live-exam-a-created","title":"Teacher A Exam","questions":[],"createdAt":"2026-07-14T00:00:00.000Z"}',
-    now(), now()
-);
 
 do $$
 begin
     begin
+        perform 1 from public.omr_exams;
+        raise exception 'authenticated SELECT unexpectedly reached canonical tables';
+    exception when insufficient_privilege then null;
+    end;
+    begin
         insert into public.omr_exams (
             id, organization_id, title, payload, created_at, updated_at
         ) values (
-            'live-cross-org-write', 'live-org-b', 'Forbidden',
-            '{"id":"live-cross-org-write","title":"Forbidden","questions":[],"createdAt":"2026-07-14T00:00:00.000Z"}',
-            now(), now()
+            'live-auth-forbidden', 'live-org-a', 'Forbidden', '{}', now(), now()
         );
-        raise exception 'cross-organization insert unexpectedly succeeded';
-    exception
-        when insufficient_privilege then null;
+        raise exception 'authenticated INSERT unexpectedly reached canonical tables';
+    exception when insufficient_privilege then null;
+    end;
+    begin
+        update public.omr_exams set title = title where id = 'live-exam-a';
+        raise exception 'authenticated UPDATE unexpectedly reached canonical tables';
+    exception when insufficient_privilege then null;
+    end;
+    begin
+        delete from public.omr_exams where id = 'live-exam-a';
+        raise exception 'authenticated DELETE unexpectedly reached canonical tables';
+    exception when insufficient_privilege then null;
     end;
 end
 $$;
@@ -95,13 +192,31 @@ reset role;
 set role anon;
 
 do $$
-declare
-    visible_exam_count integer;
 begin
-    select count(*) into visible_exam_count from public.omr_exams;
-    if visible_exam_count <> 0 then
-        raise exception 'anonymous role must not read canonical exams, saw %', visible_exam_count;
-    end if;
+    begin
+        perform 1 from public.omr_exams;
+        raise exception 'anon SELECT unexpectedly reached canonical tables';
+    exception when insufficient_privilege then null;
+    end;
+    begin
+        insert into public.omr_exams (
+            id, organization_id, title, payload, created_at, updated_at
+        ) values (
+            'live-anon-forbidden', 'live-org-a', 'Forbidden', '{}', now(), now()
+        );
+        raise exception 'anon INSERT unexpectedly reached canonical tables';
+    exception when insufficient_privilege then null;
+    end;
+    begin
+        update public.omr_exams set title = title where id = 'live-exam-a';
+        raise exception 'anon UPDATE unexpectedly reached canonical tables';
+    exception when insufficient_privilege then null;
+    end;
+    begin
+        delete from public.omr_exams where id = 'live-exam-a';
+        raise exception 'anon DELETE unexpectedly reached canonical tables';
+    exception when insufficient_privilege then null;
+    end;
 end
 $$;
 

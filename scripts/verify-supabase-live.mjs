@@ -66,7 +66,7 @@ try {
         psqlFile(`supabase/migrations/${migration}`);
     }
 
-    psqlFile("supabase/production-rls.sql");
+    psqlFile("supabase/production-server-boundary.sql");
     psqlFile("supabase/live-test-assertions.sql");
 } finally {
     run("docker", ["rm", "--force", container], { capture: true, allowFailure: true });
