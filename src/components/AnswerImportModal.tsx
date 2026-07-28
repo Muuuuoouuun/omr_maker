@@ -5,6 +5,7 @@ import type { ParsedAnswer } from '@/services/answerParser';
 import { readStoredGeminiApiKey } from '@/lib/geminiApiKey';
 import type { AiAnswerRecognitionMode } from '@/lib/aiAnswerModelRouting';
 import { activateFilePicker } from '@/lib/activateFilePicker';
+import { useDialogFocus } from '@/hooks/useDialogFocus';
 import { BrainCircuit, FileText, FolderOpen, RefreshCw, UploadCloud, X } from 'lucide-react';
 import {
     incrementAiRecognitionUsage,
@@ -73,6 +74,7 @@ export default function AnswerImportModal({
     const [error, setError] = useState<string | null>(null);
     const [useAI, setUseAI] = useState(false);
     const [reviewedQuestions, setReviewedQuestions] = useState<Set<number>>(() => new Set());
+    const dialogRef = useDialogFocus(isOpen, onClose);
 
     const expectedNumbers = Number.isInteger(expectedQuestionCount) && (expectedQuestionCount || 0) > 0
         ? Array.from({ length: expectedQuestionCount || 0 }, (_, index) => index + 1)
@@ -208,9 +210,11 @@ export default function AnswerImportModal({
             padding: '1rem'
         }}>
             <div
+                ref={dialogRef}
                 role="dialog"
                 aria-modal="true"
                 aria-labelledby={titleId}
+                tabIndex={-1}
                 style={{
                 background: 'var(--surface)',
                 color: 'var(--foreground)',

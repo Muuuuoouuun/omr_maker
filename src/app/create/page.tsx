@@ -8,6 +8,7 @@ import TeacherLogoutButton from "@/components/TeacherLogoutButton";
 import TeacherSessionChip from "@/components/TeacherSessionChip";
 import ThemeToggle from "@/components/ThemeToggle";
 import CreatePdfUploadPlaceholder from "@/components/CreatePdfUploadPlaceholder";
+import { useDialogFocus } from "@/hooks/useDialogFocus";
 import { activateFilePicker } from "@/lib/activateFilePicker";
 import { useRouter, useSearchParams } from "next/navigation";
 import { toast } from "@/components/Toast";
@@ -36,7 +37,7 @@ const PDFViewer = dynamic(() => import("@/components/PDFViewer"), {
 });
 const AnswerImportModal = dynamic(() => import("@/components/AnswerImportModal"), { ssr: false });
 const DistributeModal = dynamic(() => import("@/components/DistributeModal"), { ssr: false });
-import { Suspense, useState, useEffect, useRef, useCallback, useMemo, type CSSProperties } from "react";
+import { Suspense, useState, useEffect, useId, useRef, useCallback, useMemo, type CSSProperties } from "react";
 import { DEFAULT_CHOICE_COUNT, questionChoiceCount, type Exam, type Question, type QuestionSubQuestion, type QuestionSubQuestionTemplateId } from "@/types/omr";
 import type { ParsedAnswer } from "@/services/answerParser";
 import { saveFileDataUrl, storedDataUrlToFile } from "@/utils/blobStore";
@@ -238,13 +239,8 @@ function CreateConfirmDialog({
 }) {
     // Backdrop / Escape must never be the destructive path (esp. deleting a
     // recovered draft): they resolve to the safe, non-destructive action.
-    useEffect(() => {
-        const onKey = (e: KeyboardEvent) => {
-            if (e.key === "Escape") onDismiss();
-        };
-        window.addEventListener("keydown", onKey);
-        return () => window.removeEventListener("keydown", onKey);
-    }, [onDismiss]);
+    const titleId = useId();
+    const dialogRef = useDialogFocus(true, onDismiss);
     const copy = (() => {
         if (state.kind === "restoreDraft") {
             return {
@@ -299,9 +295,11 @@ function CreateConfirmDialog({
             }}
         >
             <div
+                ref={dialogRef}
                 role="dialog"
                 aria-modal="true"
-                aria-label={copy.title}
+                aria-labelledby={titleId}
+                tabIndex={-1}
                 onClick={(e) => e.stopPropagation()}
                 style={{
                     width: '100%',
@@ -314,7 +312,7 @@ function CreateConfirmDialog({
                     padding: '1.5rem',
                 }}
             >
-                <h2 style={{ fontSize: '1.15rem', fontWeight: 800, marginBottom: '0.65rem' }}>
+                <h2 id={titleId} style={{ fontSize: '1.15rem', fontWeight: 800, marginBottom: '0.65rem' }}>
                     {copy.title}
                 </h2>
                 <p style={{ color: 'var(--muted)', lineHeight: 1.7, fontSize: '0.95rem', wordBreak: 'keep-all', marginBottom: '1.25rem' }}>

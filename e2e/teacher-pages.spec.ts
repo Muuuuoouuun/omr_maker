@@ -332,6 +332,52 @@ test.describe("Create page label memory", () => {
         await expect(dialog.getByText("sample-problem.pdf", { exact: true })).toBeVisible();
     });
 
+    test("dialog focus wraps and returns to the answer import trigger", async ({ page }) => {
+        await page.goto("/create");
+        const trigger = page.getByRole("button", { name: "정답 인식 마법사 열기" });
+        await trigger.focus();
+        await trigger.press("Enter");
+
+        const dialog = page.getByRole("dialog", { name: "정답 PDF 불러오기" });
+        const firstControl = dialog.getByRole("button", { name: "정답 PDF 모달 닫기" });
+        const lastEnabledControl = dialog.getByRole("button", { name: "취소" });
+        await expect(dialog).toBeVisible();
+        await expect(firstControl).toBeFocused();
+
+        await page.keyboard.press("Shift+Tab");
+        await expect(lastEnabledControl).toBeFocused();
+        await page.keyboard.press("Tab");
+        await expect(firstControl).toBeFocused();
+
+        await page.keyboard.press("Escape");
+        await expect(dialog).not.toBeVisible();
+        await expect(trigger).toBeFocused();
+    });
+
+    test("dialog focus wraps and returns to the create settings trigger", async ({ page }) => {
+        await page.goto("/create");
+        await page.getByLabel("빠른 정답 입력").fill("5");
+
+        const trigger = page.getByRole("button", { name: "4지선다", exact: true });
+        await trigger.focus();
+        await trigger.press("Enter");
+
+        const dialog = page.getByRole("dialog", { name: "4지선다로 변경" });
+        const firstControl = dialog.getByRole("button", { name: "유지" });
+        const lastControl = dialog.getByRole("button", { name: "변경" });
+        await expect(dialog).toBeVisible();
+        await expect(firstControl).toBeFocused();
+
+        await page.keyboard.press("Shift+Tab");
+        await expect(lastControl).toBeFocused();
+        await page.keyboard.press("Tab");
+        await expect(firstControl).toBeFocused();
+
+        await page.keyboard.press("Escape");
+        await expect(dialog).not.toBeVisible();
+        await expect(trigger).toBeFocused();
+    });
+
     test("remembers label presets and lets teachers hide stale candidates", async ({ page }) => {
         await page.goto("/create");
 
