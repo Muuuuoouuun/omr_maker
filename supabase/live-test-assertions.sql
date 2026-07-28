@@ -1,7 +1,101 @@
 \set ON_ERROR_STOP on
 
+-- Created after the production profile under the single migration owner. Its
+-- effective grants prove future public functions inherit the intended defaults.
+create or replace function public.omr_default_acl_probe_v1()
+returns text
+language sql
+set search_path = ''
+as $$
+    select 'server-only'::text
+$$;
+
 do $$
 begin
+    if not exists (
+        select 1
+          from pg_default_acl default_acl
+         where default_acl.defaclrole = 'postgres'::regrole
+           and default_acl.defaclnamespace = 0
+           and default_acl.defaclobjtype = 'f'
+    ) or exists (
+        select 1
+          from pg_default_acl default_acl
+          cross join lateral aclexplode(default_acl.defaclacl) privilege
+         where default_acl.defaclrole = 'postgres'::regrole
+           and default_acl.defaclnamespace = 0
+           and default_acl.defaclobjtype = 'f'
+           and privilege.grantee = 0
+           and privilege.privilege_type = 'EXECUTE'
+    ) then
+        raise exception 'pg_default_acl retained PUBLIC function execute';
+    end if;
+
+    if not exists (
+        select 1
+          from pg_default_acl default_acl
+          cross join lateral aclexplode(default_acl.defaclacl) privilege
+         where default_acl.defaclrole = 'postgres'::regrole
+           and default_acl.defaclnamespace = 'public'::regnamespace
+           and default_acl.defaclobjtype = 'f'
+           and privilege.grantee = 'service_role'::regrole
+           and privilege.privilege_type = 'EXECUTE'
+    ) then
+        raise exception 'pg_default_acl lost service_role public function execute';
+    end if;
+
+    if not exists (
+        select 1
+          from pg_default_acl default_acl
+          cross join lateral aclexplode(default_acl.defaclacl) privilege
+         where default_acl.defaclrole = 'postgres'::regrole
+           and default_acl.defaclnamespace = 'public'::regnamespace
+           and default_acl.defaclobjtype = 'r'
+           and privilege.grantee = 'service_role'::regrole
+           and privilege.privilege_type = 'INSERT'
+    ) or not exists (
+        select 1
+          from pg_default_acl default_acl
+          cross join lateral aclexplode(default_acl.defaclacl) privilege
+         where default_acl.defaclrole = 'postgres'::regrole
+           and default_acl.defaclnamespace = 'public'::regnamespace
+           and default_acl.defaclobjtype = 'S'
+           and privilege.grantee = 'service_role'::regrole
+           and privilege.privilege_type = 'USAGE'
+    ) then
+        raise exception 'pg_default_acl lost service_role public table or sequence privilege';
+    end if;
+
+    if exists (
+        select 1
+          from pg_default_acl default_acl
+          cross join lateral aclexplode(default_acl.defaclacl) privilege
+         where default_acl.defaclrole = 'postgres'::regrole
+           and default_acl.defaclnamespace = 'public'::regnamespace
+           and privilege.grantee in ('anon'::regrole, 'authenticated'::regrole)
+    ) then
+        raise exception 'pg_default_acl granted a public object privilege to a browser role';
+    end if;
+
+    if has_function_privilege(
+        'anon',
+        'public.omr_default_acl_probe_v1()',
+        'EXECUTE'
+    ) or has_function_privilege(
+        'authenticated',
+        'public.omr_default_acl_probe_v1()',
+        'EXECUTE'
+    ) then
+        raise exception 'browser role executed a default-ACL probe function';
+    end if;
+    if not has_function_privilege(
+        'service_role',
+        'public.omr_default_acl_probe_v1()',
+        'EXECUTE'
+    ) then
+        raise exception 'service_role could not execute the default-ACL probe function';
+    end if;
+
     if has_schema_privilege('anon', 'public', 'usage')
         or has_schema_privilege('authenticated', 'public', 'usage')
     then
@@ -111,6 +205,55 @@ begin
         raise exception 'production server boundary must ENABLE and FORCE RLS on every OMR table';
     end if;
 
+    if to_regclass('storage.objects') is null
+        or to_regclass('storage.buckets') is null
+    then
+        raise exception 'live production boundary requires Storage relation fixtures';
+    end if;
+    if has_table_privilege('anon', 'storage.objects', 'SELECT')
+        or has_table_privilege('anon', 'storage.objects', 'INSERT')
+        or has_table_privilege('anon', 'storage.objects', 'UPDATE')
+        or has_table_privilege('anon', 'storage.objects', 'DELETE')
+        or has_table_privilege('authenticated', 'storage.objects', 'SELECT')
+        or has_table_privilege('authenticated', 'storage.objects', 'INSERT')
+        or has_table_privilege('authenticated', 'storage.objects', 'UPDATE')
+        or has_table_privilege('authenticated', 'storage.objects', 'DELETE')
+        or has_table_privilege('anon', 'storage.buckets', 'SELECT')
+        or has_table_privilege('anon', 'storage.buckets', 'INSERT')
+        or has_table_privilege('anon', 'storage.buckets', 'UPDATE')
+        or has_table_privilege('anon', 'storage.buckets', 'DELETE')
+        or has_table_privilege('authenticated', 'storage.buckets', 'SELECT')
+        or has_table_privilege('authenticated', 'storage.buckets', 'INSERT')
+        or has_table_privilege('authenticated', 'storage.buckets', 'UPDATE')
+        or has_table_privilege('authenticated', 'storage.buckets', 'DELETE')
+    then
+        raise exception 'browser roles unexpectedly retain a Storage table privilege';
+    end if;
+    if not has_table_privilege('service_role', 'storage.objects', 'SELECT')
+        or not has_table_privilege('service_role', 'storage.objects', 'INSERT')
+        or not has_table_privilege('service_role', 'storage.objects', 'UPDATE')
+        or not has_table_privilege('service_role', 'storage.objects', 'DELETE')
+        or not has_table_privilege('service_role', 'storage.buckets', 'SELECT')
+        or not has_table_privilege('service_role', 'storage.buckets', 'INSERT')
+        or not has_table_privilege('service_role', 'storage.buckets', 'UPDATE')
+        or not has_table_privilege('service_role', 'storage.buckets', 'DELETE')
+    then
+        raise exception 'service_role lost a Storage table privilege';
+    end if;
+    if exists (
+        select 1
+          from pg_policies policy
+         where policy.schemaname = 'storage'
+           and policy.tablename = 'objects'
+           and (
+               policy.policyname ilike 'OMR%'
+               or coalesce(policy.qual, '') ilike '%omr-private-assets%'
+               or coalesce(policy.with_check, '') ilike '%omr-private-assets%'
+           )
+    ) then
+        raise exception 'production server boundary left an OMR Storage policy';
+    end if;
+
     if not exists (
         select 1
           from pg_class relation
@@ -185,6 +328,37 @@ begin
         raise exception 'authenticated DELETE unexpectedly reached canonical tables';
     exception when insufficient_privilege then null;
     end;
+    begin
+        perform public.omr_default_acl_probe_v1();
+        raise exception 'browser role executed a default-ACL probe function';
+    exception when insufficient_privilege then null;
+    end;
+    begin
+        perform 1
+          from storage.objects
+         where bucket_id = 'omr-private-assets';
+        raise exception 'authenticated Storage SELECT unexpectedly succeeded';
+    exception when insufficient_privilege then null;
+    end;
+    begin
+        insert into storage.objects (bucket_id, name)
+        values ('omr-private-assets', 'authenticated-forbidden');
+        raise exception 'authenticated Storage INSERT unexpectedly succeeded';
+    exception when insufficient_privilege then null;
+    end;
+    begin
+        update storage.objects
+           set name = name
+         where bucket_id = 'omr-private-assets';
+        raise exception 'authenticated Storage UPDATE unexpectedly succeeded';
+    exception when insufficient_privilege then null;
+    end;
+    begin
+        delete from storage.objects
+         where bucket_id = 'omr-private-assets';
+        raise exception 'authenticated Storage DELETE unexpectedly succeeded';
+    exception when insufficient_privilege then null;
+    end;
 end
 $$;
 
@@ -217,6 +391,84 @@ begin
         raise exception 'anon DELETE unexpectedly reached canonical tables';
     exception when insufficient_privilege then null;
     end;
+    begin
+        perform public.omr_default_acl_probe_v1();
+        raise exception 'browser role executed a default-ACL probe function';
+    exception when insufficient_privilege then null;
+    end;
+    begin
+        perform 1
+          from storage.objects
+         where bucket_id = 'omr-private-assets';
+        raise exception 'anon Storage SELECT unexpectedly succeeded';
+    exception when insufficient_privilege then null;
+    end;
+    begin
+        insert into storage.objects (bucket_id, name)
+        values ('omr-private-assets', 'anon-forbidden');
+        raise exception 'anon Storage INSERT unexpectedly succeeded';
+    exception when insufficient_privilege then null;
+    end;
+    begin
+        update storage.objects
+           set name = name
+         where bucket_id = 'omr-private-assets';
+        raise exception 'anon Storage UPDATE unexpectedly succeeded';
+    exception when insufficient_privilege then null;
+    end;
+    begin
+        delete from storage.objects
+         where bucket_id = 'omr-private-assets';
+        raise exception 'anon Storage DELETE unexpectedly succeeded';
+    exception when insufficient_privilege then null;
+    end;
+end
+$$;
+
+reset role;
+
+set role service_role;
+
+do $$
+declare
+    probe_name text;
+begin
+    if public.omr_default_acl_probe_v1() is distinct from 'server-only' then
+        raise exception 'service_role could not execute the default-ACL probe function';
+    end if;
+
+    insert into storage.objects (bucket_id, name)
+    values ('omr-private-assets', 'service-role-storage-probe')
+    returning name into probe_name;
+    if probe_name is distinct from 'service-role-storage-probe' then
+        raise exception 'service_role Storage CRUD probe failed';
+    end if;
+
+    select name
+      into probe_name
+      from storage.objects
+     where bucket_id = 'omr-private-assets'
+       and name = 'service-role-storage-probe';
+    if probe_name is distinct from 'service-role-storage-probe' then
+        raise exception 'service_role Storage CRUD probe failed';
+    end if;
+
+    update storage.objects
+       set name = 'service-role-storage-probe-updated'
+     where bucket_id = 'omr-private-assets'
+       and name = 'service-role-storage-probe'
+    returning name into probe_name;
+    if probe_name is distinct from 'service-role-storage-probe-updated' then
+        raise exception 'service_role Storage CRUD probe failed';
+    end if;
+
+    delete from storage.objects
+     where bucket_id = 'omr-private-assets'
+       and name = 'service-role-storage-probe-updated'
+    returning name into probe_name;
+    if probe_name is distinct from 'service-role-storage-probe-updated' then
+        raise exception 'service_role Storage CRUD probe failed';
+    end if;
 end
 $$;
 
@@ -613,18 +865,33 @@ select set_config('request.jwt.claim.sub', '33333333-3333-4333-8333-333333333333
 
 do $$
 begin
-    update public.omr_assignment_submissions
-       set score = 999,
-           status = 'graded'
-     where id = 'live-submission-a';
-    if found then
-        raise exception 'student unexpectedly mutated a canonical gradebook row';
-    end if;
+    begin
+        update public.omr_assignment_submissions
+           set score = 999,
+               status = 'submitted'
+         where id = 'live-submission-a';
+        raise exception 'authenticated assignment submission UPDATE unexpectedly succeeded';
+    exception when insufficient_privilege then null;
+    end;
 end
 $$;
 
 reset role;
 set role service_role;
+
+do $$
+begin
+    if not exists (
+        select 1
+          from public.omr_assignment_submissions
+         where id = 'live-submission-a'
+           and score = 1
+           and status = 'graded'
+    ) then
+        raise exception 'authenticated assignment submission denial mutated canonical gradebook row';
+    end if;
+end
+$$;
 
 select public.omr_save_exam_v1(
     '{
@@ -1665,5 +1932,7 @@ end
 $$;
 
 reset role;
+
+drop function public.omr_default_acl_probe_v1();
 
 select 'OMR live PostgreSQL verification passed' as result;

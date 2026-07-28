@@ -53,7 +53,7 @@ The contract test checks that the SQL schema still exposes the roster, fact, reg
 
 SQL migration semantics are release-blocking in `.github/workflows/ci.yml` under
 `supabase-live-contract`. The job runs `scripts/verify-supabase-live.mjs` against
-PostgreSQL 17 and applies:
+PostgreSQL 17 with `postgres` as the single migration owner and applies:
 
 `schema.sql` → sorted `migrations` → `production-server-boundary.sql` →
 `live-test-assertions.sql`
@@ -61,10 +61,13 @@ PostgreSQL 17 and applies:
 The server-only profile first calls
 `omr_assert_production_boundary_preflight_v1`, then removes browser table,
 sequence, and function privileges, removes alpha/legacy browser policies, and
-keeps service-role RPC execution available. The assertions enumerate every
+keeps service-role RPC execution available. It also closes `storage.objects` and
+`storage.buckets`; because Storage grants are table-wide, this intentionally
+disables all browser Storage API CRUD, including buckets unrelated to OMR.
+Uploads/downloads must use trusted service-role gateways. The assertions enumerate every
 `public.omr_*` table, public sequence, and public function from PostgreSQL
 catalogs, verify ENABLE + FORCE RLS, perform actual denied browser CRUD, and
-exercise the service-role workflows.
+exercise the service-role workflows and Storage CRUD.
 
 Run `npm run test:supabase:live` locally when Docker is available. A machine
 without Docker cannot replace this required CI gate with source-string
@@ -139,12 +142,15 @@ direct authenticated-browser profile; do not use it for a new production cutover
 idempotent, but its preflight is intentionally fail-closed. Use this order:
 
 1. Put writes into maintenance mode and take a restorable database snapshot.
-2. Deploy the matching `schema.sql` and all `migrations` in filename order.
-3. As the trusted database owner/service role, run
+2. Connect as `postgres`, the single migration owner, and deploy the matching
+   `schema.sql` and all `migrations` in filename order. Do not mix owners: default
+   privileges are owner-specific.
+3. In that `postgres` session, run
    `select public.omr_assert_production_boundary_preflight_v1();`. Stop unless
    every bounded organization-integrity count is zero.
-4. As the database owner, apply `supabase/production-server-boundary.sql`. A
-   service-role API key cannot alter grants or RLS. Do not separately apply
+4. Still as `postgres`, apply `supabase/production-server-boundary.sql`. The
+   profile rejects another `current_user`; a service-role API key cannot alter
+   grants, RLS, or `postgres` default ACLs. Do not separately apply
    `production-rls.sql`.
 5. Run `npm run test:supabase:live` for the same commit and require the
    `supabase-live-contract` CI job to pass.
@@ -154,10 +160,12 @@ idempotent, but its preflight is intentionally fail-closed. Use this order:
 7. Deploy the matching server build and verify teacher/student server-action
    journeys before reopening writes.
 
-The profile covers all 27 `public.omr_*` app tables. `storage.buckets` is the
-28th local-verifier relation but belongs to Supabase's managed `storage` schema;
-the live gate verifies the `omr-private-assets` bucket separately and does not
-rewrite platform-managed storage policies.
+The profile covers all 27 `public.omr_*` app tables and conditionally closes the
+effective privileges on Supabase-managed `storage.objects` and
+`storage.buckets`. It removes repository-known OMR/`omr-private-assets` Storage
+policies but does not rewrite unrelated policy definitions. The table-level
+revocation still disables all browser Storage API CRUD globally; service-role
+gateways remain available.
 
 Rollback must not restore browser canonical CRUD. First stop application writes
 and roll back the server deployment. Any database privilege loosening requires

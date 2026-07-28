@@ -18,13 +18,16 @@ service-role RPC만 유지합니다. 기존 `production-rls.sql`은 직접 authe
 ### 적용 순서
 
 1. 쓰기를 유지보수 모드로 전환하고 복구 가능한 DB 스냅샷을 생성합니다.
-2. 동일한 커밋의 `schema.sql`과 모든 `migrations`를 파일명 순으로 적용합니다.
-3. 신뢰된 DB 소유자/service role로
+2. 단일 migration owner인 `postgres`로 접속해 동일한 커밋의 `schema.sql`과 모든
+   `migrations`를 파일명 순으로 적용합니다. PostgreSQL default privilege는 소유자별이므로
+   실행자를 섞지 않습니다.
+3. 같은 `postgres` 세션에서
    `select public.omr_assert_production_boundary_preflight_v1();`을 실행합니다.
    조직 null·고아·교차 조직·학생 credential 누락 중 하나라도 0이 아니면 중단합니다.
-4. DB 소유자 권한으로 `supabase/production-server-boundary.sql`을 적용합니다. service-role
-   API key만으로는 grant나 RLS를 바꿀 수 없습니다. 이 트랜잭션도 가장 먼저 같은 preflight
-   assertion을 실행하므로 검사와 권한 회수 사이의 잘못된 수동 순서를 막습니다.
+4. 계속 `postgres`로 `supabase/production-server-boundary.sql`을 적용합니다. 다른
+   `current_user`는 프로필이 거부하며, service-role API key만으로는 grant·RLS·`postgres`
+   default ACL을 바꿀 수 없습니다. 이 트랜잭션도 가장 먼저 같은 preflight assertion을
+   실행하므로 검사와 권한 회수 사이의 잘못된 수동 순서를 막습니다.
 5. `schema.sql` → sorted `migrations` → `production-server-boundary.sql` →
    `live-test-assertions.sql` 순서를 실행하는 `npm run test:supabase:live`와
    CI의 blocking `supabase-live-contract` 작업을 통과시킵니다.
@@ -32,10 +35,13 @@ service-role RPC만 유지합니다. 기존 `production-rls.sql`은 직접 authe
    실행자·시각, preflight 결과, anon/authenticated 공격 거부 결과를 기록합니다.
 7. 같은 커밋의 서버 빌드를 배포하고 교사·학생 server action 여정을 확인한 뒤 쓰기를 재개합니다.
 
-현재 public 앱 테이블은 `public.omr_*` 27개입니다. 로컬 verifier의 28번째 관계인
-`storage.buckets`는 Supabase 관리 `storage` 스키마 카탈로그이므로 이 프로필이 FORCE RLS를
-재작성하지 않습니다. 대신 라이브 검증에서 `omr-private-assets` bucket의 `public = false`를
-별도로 확인하며, 새 public OMR 테이블이 생기면 동적 catalog assertion이 누락을 차단합니다.
+현재 public 앱 테이블은 `public.omr_*` 27개입니다. 별도의 Supabase 관리 관계인
+`storage.objects`와 `storage.buckets`도 존재할 때 effective table privilege를 회수하고
+service role만 유지합니다. 테이블 privilege는 bucket별로 나눌 수 없으므로 이 조치는
+OMR 외 bucket을 포함한 **모든 브라우저 Storage API CRUD를 의도적으로 중단**합니다.
+파일 작업은 service-role 서버 gateway만 사용해야 합니다. 프로필은 repository가 아는
+OMR/`omr-private-assets` 정책을 제거하되 다른 앱의 정책 정의를 임의로 삭제하지 않습니다.
+라이브 검증은 actual anon/authenticated 공격과 service-role Storage CRUD를 모두 수행합니다.
 
 ### 롤백
 

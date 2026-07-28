@@ -5,6 +5,7 @@ import { spawnSync } from "node:child_process";
 const root = resolve(import.meta.dirname, "..");
 const container = `omr-postgres-verify-${process.pid}`;
 const password = "omr-live-test-password";
+const migrationOwner = "postgres";
 
 function run(command, args, options = {}) {
     const result = spawnSync(command, args, {
@@ -22,7 +23,7 @@ function run(command, args, options = {}) {
 function psqlFile(path) {
     run("docker", [
         "exec", container,
-        "psql", "-U", "postgres", "-d", "postgres",
+        "psql", "-U", migrationOwner, "-d", "postgres",
         "-v", "ON_ERROR_STOP=1",
         "-f", `/workspace/${path}`,
     ]);
@@ -44,7 +45,7 @@ try {
 
     let ready = false;
     for (let attempt = 0; attempt < 60; attempt += 1) {
-        const probe = run("docker", ["exec", container, "pg_isready", "-U", "postgres"], {
+        const probe = run("docker", ["exec", container, "pg_isready", "-U", migrationOwner], {
             capture: true,
             allowFailure: true,
         });

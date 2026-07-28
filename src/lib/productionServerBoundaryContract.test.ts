@@ -68,6 +68,7 @@ describe("production server-only database boundary", () => {
     const profile = readOptional("supabase/production-server-boundary.sql");
     const schema = read("supabase/schema.sql");
     const legacyProductionProfile = read("supabase/production-rls.sql");
+    const livePrelude = read("supabase/live-test-prelude.sql");
     const verifier = read("scripts/verify-supabase-live.mjs");
     const liveAssertions = read("supabase/live-test-assertions.sql");
     const supabaseReadme = read("supabase/README.md");
@@ -162,5 +163,69 @@ describe("production server-only database boundary", () => {
         expect(productionReadiness).toContain("CI");
         expect(productionReadiness).toContain("커밋 SHA");
         expect(productionReadiness).toContain("정책 해시");
+    });
+
+    it("treats the legacy assignment-submission update as an expected denial without mutation", () => {
+        expect(liveAssertions).toMatch(
+            /set role authenticated;[\s\S]*?begin\s+begin\s+update public\.omr_assignment_submissions[\s\S]*?raise exception 'authenticated assignment submission UPDATE unexpectedly succeeded';\s+exception when insufficient_privilege then null;\s+end;/i,
+        );
+        expect(liveAssertions).toContain(
+            "authenticated assignment submission denial mutated canonical gradebook row",
+        );
+    });
+
+    it("closes the effective Storage table boundary and exercises browser and service-role CRUD", () => {
+        expect(livePrelude).toContain("create table if not exists storage.objects");
+        expect(livePrelude).toContain('create policy "OMR private assets alpha access"');
+
+        expect(profile).toContain("to_regclass('storage.objects')");
+        expect(profile).toContain(
+            "revoke all on table storage.objects from public, anon, authenticated",
+        );
+        expect(profile).toContain("grant all on table storage.objects to service_role");
+        expect(profile).toContain(
+            "revoke all on table storage.buckets from public, anon, authenticated",
+        );
+        expect(profile).toContain("grant all on table storage.buckets to service_role");
+        expect(profile).toContain("omr-private-assets");
+
+        expect(liveAssertions).toContain("browser roles unexpectedly retain a Storage table privilege");
+        expect(liveAssertions).toContain("service_role lost a Storage table privilege");
+        expect(liveAssertions).toContain("anon Storage SELECT unexpectedly succeeded");
+        expect(liveAssertions).toContain("authenticated Storage DELETE unexpectedly succeeded");
+        expect(liveAssertions).toContain("service_role Storage CRUD probe failed");
+
+        for (const document of [supabaseReadme, productionReadiness]) {
+            expect(document).toContain("storage.objects");
+            expect(document).toMatch(/모든 브라우저 Storage API|all browser Storage API/i);
+        }
+    });
+
+    it("pins migrations and default privileges to postgres and proves future functions stay server-only", () => {
+        expect(verifier).toContain('const migrationOwner = "postgres"');
+        expect(verifier).toContain('"psql", "-U", migrationOwner');
+
+        expect(profile).toContain("current_user is distinct from 'postgres'");
+        expect(profile).toContain("production boundary must run as migration owner postgres");
+        expect(profile).toMatch(
+            /alter default privileges for role postgres\s+revoke execute on functions from public;/i,
+        );
+        expect(profile).toMatch(
+            /alter default privileges for role postgres in schema public\s+revoke all on functions from anon, authenticated;/i,
+        );
+        expect(profile).toMatch(
+            /alter default privileges for role postgres in schema public\s+grant all on functions to service_role;/i,
+        );
+
+        expect(liveAssertions).toContain("pg_default_acl retained PUBLIC function execute");
+        expect(liveAssertions).toContain("pg_default_acl lost service_role public function execute");
+        expect(liveAssertions).toContain("omr_default_acl_probe_v1");
+        expect(liveAssertions).toContain("browser role executed a default-ACL probe function");
+        expect(liveAssertions).toContain("service_role could not execute the default-ACL probe function");
+
+        for (const document of [supabaseReadme, productionReadiness]) {
+            expect(document).toContain("postgres");
+            expect(document).toMatch(/single migration owner|단일 migration owner/i);
+        }
     });
 });

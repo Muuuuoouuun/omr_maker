@@ -8,6 +8,27 @@
 
 begin;
 
+-- Schema, migrations, this profile, and verification use one owner so default
+-- ACLs cannot vary silently by deployment step.
+do $$
+begin
+    if current_user is distinct from 'postgres' then
+        raise exception using
+            errcode = '42501',
+            message = 'production boundary must run as migration owner postgres';
+    end if;
+    if (
+        select count(*)
+          from pg_roles
+         where rolname in ('anon', 'authenticated', 'service_role')
+    ) <> 3 then
+        raise exception using
+            errcode = '42704',
+            message = 'production boundary requires anon, authenticated, and service_role roles';
+    end if;
+end
+$$;
+
 -- Fail before changing privileges. The assertion is SECURITY DEFINER,
 -- service-role-only, bounded, and reports no PII or raw row identifiers.
 select public.omr_assert_production_boundary_preflight_v1();
@@ -26,19 +47,59 @@ grant all on all tables in schema public to service_role;
 grant all on all sequences in schema public to service_role;
 grant all on all functions in schema public to service_role;
 
+-- Storage table privileges are relation-wide. Closing storage.objects and
+-- storage.buckets therefore intentionally disables every browser Storage API
+-- path, not only omr-private-assets; trusted storage gateways use service_role.
+-- The conditional form also supports the lightweight local verifier and
+-- projects where the Storage extension has not yet provisioned its tables.
+do $$
+declare
+    app_policy record;
+begin
+    if to_regclass('storage.objects') is not null then
+        execute 'revoke all on table storage.objects from public, anon, authenticated';
+        execute 'grant all on table storage.objects to service_role';
+
+        for app_policy in
+            select policyname
+              from pg_policies
+             where schemaname = 'storage'
+               and tablename = 'objects'
+               and (
+                   policyname ilike 'OMR%'
+                   or coalesce(qual, '') ilike '%omr-private-assets%'
+                   or coalesce(with_check, '') ilike '%omr-private-assets%'
+               )
+        loop
+            execute format(
+                'drop policy if exists %I on storage.objects',
+                app_policy.policyname
+            );
+        end loop;
+    end if;
+
+    if to_regclass('storage.buckets') is not null then
+        execute 'revoke all on table storage.buckets from public, anon, authenticated';
+        execute 'grant all on table storage.buckets to service_role';
+    end if;
+end
+$$;
+
 -- Keep future public-schema objects fail-closed when migrations run as the
 -- profile owner. Reapplying this file is safe.
-alter default privileges in schema public
+alter default privileges for role postgres
+    revoke execute on functions from public;
+alter default privileges for role postgres in schema public
     revoke all on tables from public, anon, authenticated;
-alter default privileges in schema public
+alter default privileges for role postgres in schema public
     revoke all on sequences from public, anon, authenticated;
-alter default privileges in schema public
-    revoke all on functions from public, anon, authenticated;
-alter default privileges in schema public
+alter default privileges for role postgres in schema public
+    revoke all on functions from anon, authenticated;
+alter default privileges for role postgres in schema public
     grant all on tables to service_role;
-alter default privileges in schema public
+alter default privileges for role postgres in schema public
     grant all on sequences to service_role;
-alter default privileges in schema public
+alter default privileges for role postgres in schema public
     grant all on functions to service_role;
 
 -- Alpha allow-all policies from schema.sql.
@@ -127,9 +188,9 @@ drop policy if exists "prod audit logs read by admins" on public.omr_audit_logs;
 -- Defense in depth: every canonical/PII registry remains RLS-enabled and
 -- FORCE RLS even though browser roles have no direct relation privileges.
 -- This is the complete set of 27 public.omr_* app tables created by schema.sql
--- plus migrations. storage.buckets is the 28th relation in the local verifier,
--- but it is a Supabase-managed storage-schema catalog, not a public app table;
--- its private bucket invariant is verified separately by live assertions.
+-- plus migrations. Supabase-managed storage.objects/storage.buckets stay
+-- outside this FORCE RLS list, but their effective privileges are closed and
+-- verified separately above and by live assertions.
 alter table if exists public.omr_organizations enable row level security;
 alter table if exists public.omr_organizations force row level security;
 alter table if exists public.omr_plan_usage enable row level security;
