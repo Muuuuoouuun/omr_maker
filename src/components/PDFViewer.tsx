@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useRef, useEffect, useCallback, useMemo } from 'react';
+import { useState, useRef, useEffect, useLayoutEffect, useCallback, useMemo } from 'react';
 import { Document, Page, pdfjs } from 'react-pdf';
 import { DEFAULT_CHOICE_COUNT, normalizeChoiceCount, type PdfDrawings } from '@/types/omr';
 import { toast } from '@/components/Toast';
@@ -23,6 +23,11 @@ import 'react-pdf/dist/Page/AnnotationLayer.css';
 import 'react-pdf/dist/Page/TextLayer.css';
 import { buildPenCursor, buildHighlighterCursor } from '@/lib/drawingCursors';
 import { strokeHitTest } from '@/lib/strokeGeometry';
+import {
+    canCompletePdfRender,
+    isPdfRenderReady,
+    type PdfRenderIdentity,
+} from './pdfRenderReadiness';
 
 // Worker setup for Next.js — version the URL so a pdfjs-dist upgrade is a cache
 // miss (avoids the "API version X does not match Worker version Y" hard-fail for
@@ -138,7 +143,7 @@ export default function PDFViewer({
     const [scale, setScale] = useState<number>(1.0);
     const [isDragging, setIsDragging] = useState(false);
     const [pageRenderVersion, setPageRenderVersion] = useState(0);
-    const [pdfRenderReady, setPdfRenderReady] = useState(false);
+    const [completedPdfRenderIdentity, setCompletedPdfRenderIdentity] = useState<PdfRenderIdentity | null>(null);
 
     // Drawing State
     const [drawingMode, setDrawingMode] = useState<DrawingMode>('click');
@@ -202,6 +207,17 @@ export default function PDFViewer({
     const containerRef = useRef<HTMLDivElement>(null);
     const wrapperRef = useRef<HTMLDivElement>(null);
     const [containerWidth, setContainerWidth] = useState<number>(0);
+    const currentPdfRenderIdentity = useMemo<PdfRenderIdentity>(() => ({
+        file,
+        pageNumber,
+        scale,
+        containerWidth,
+    }), [file, pageNumber, scale, containerWidth]);
+    const currentPdfRenderIdentityRef = useRef(currentPdfRenderIdentity);
+    useLayoutEffect(() => {
+        currentPdfRenderIdentityRef.current = currentPdfRenderIdentity;
+    }, [currentPdfRenderIdentity]);
+    const pdfRenderReady = isPdfRenderReady(currentPdfRenderIdentity, completedPdfRenderIdentity);
     const activeStrokeWidth = drawingMode === 'eraser'
         ? eraserWidth
         : drawingMode === 'highlighter'
@@ -261,10 +277,6 @@ export default function PDFViewer({
         setInputPage("1");
         setActivePopupKey(null);
     }, [file]);
-
-    useEffect(() => {
-        setPdfRenderReady(false);
-    }, [file, pageNumber, scale, containerWidth]);
 
     useEffect(() => {
         if (typeof forcePage === 'number' && forcePage >= 1 && forcePage <= numPages) {
@@ -332,12 +344,15 @@ export default function PDFViewer({
     }
 
     const handlePageRenderSuccess = () => {
+        const completedIdentity = currentPdfRenderIdentity;
         const backingCanvas = containerRef.current?.querySelector<HTMLCanvasElement>(".react-pdf__Page__canvas");
-        const backingCanvasReady = Boolean(
-            backingCanvas && backingCanvas.width > 0 && backingCanvas.height > 0,
-        );
-        setPdfRenderReady(backingCanvasReady);
-        if (!backingCanvasReady) return;
+        if (!canCompletePdfRender(
+            currentPdfRenderIdentityRef.current,
+            completedIdentity,
+            backingCanvas?.width ?? 0,
+            backingCanvas?.height ?? 0,
+        )) return;
+        setCompletedPdfRenderIdentity(completedIdentity);
         setPageRenderVersion(value => value + 1);
     };
 

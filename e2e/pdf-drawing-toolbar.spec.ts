@@ -172,6 +172,13 @@ test.describe("PDF drawing toolbar + eraser 부분/획 toggle", () => {
         await expect(overlay).toBeVisible();
         await expect(overlay).toHaveAttribute("data-pdf-ready", "true");
         await expect.poll(async () => overlay.evaluate((element) => {
+            const pdfPage = element.closest(".react-pdf__Page") ?? element.parentElement;
+            const backingCanvas = pdfPage?.querySelector(".react-pdf__Page__canvas");
+            return backingCanvas instanceof HTMLCanvasElement
+                ? backingCanvas.width * backingCanvas.height
+                : 0;
+        })).toBeGreaterThan(0);
+        await expect.poll(async () => overlay.evaluate((element) => {
             const canvas = element as HTMLCanvasElement;
             return canvas.width * canvas.height;
         })).toBeGreaterThan(0);
