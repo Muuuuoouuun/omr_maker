@@ -1,4 +1,4 @@
-import { existsSync, readFileSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 
@@ -8,16 +8,7 @@ function readProjectFile(filePath: string): string {
     return readFileSync(path.join(rootDir, filePath), "utf8");
 }
 
-function readPngSize(filePath: string): { height: number; width: number } {
-    const buffer = readFileSync(path.join(rootDir, filePath));
-    expect(buffer.subarray(1, 4).toString("ascii")).toBe("PNG");
-    return {
-        height: buffer.readUInt32BE(20),
-        width: buffer.readUInt32BE(16),
-    };
-}
-
-describe("Windows and Android native development surface", () => {
+describe("Windows, iOS, and web native development surface", () => {
     it("keeps remote WebView configuration opt-in and development-only", () => {
         const config = readProjectFile("capacitor.config.ts");
         const shell = readProjectFile("mobile/www/index.html");
@@ -53,31 +44,5 @@ describe("Windows and Android native development surface", () => {
         expect(installPrompt).toContain("!Capacitor.isNativePlatform()");
         expect(css).toContain("html[data-native-platform] .mobile-install-prompt");
         expect(css).toContain("html[data-native-platform] .layout-main");
-    });
-
-    it("ships the Android shell with minimal permissions and branded assets", () => {
-        const manifest = readProjectFile("android/app/src/main/AndroidManifest.xml");
-        const mainActivity = readProjectFile("android/app/src/main/java/com/omrmaker/app/MainActivity.java");
-        const activityLayout = readProjectFile("android/app/src/main/res/layout/activity_main.xml");
-        const launcherBackground = readProjectFile("android/app/src/main/res/values/ic_launcher_background.xml");
-        const strings = readProjectFile("android/app/src/main/res/values/strings.xml");
-        const filePaths = readProjectFile("android/app/src/main/res/xml/file_paths.xml");
-        const styles = readProjectFile("android/app/src/main/res/values/styles.xml");
-        const launcher = "android/app/src/main/res/mipmap-xxxhdpi/ic_launcher.png";
-        const splash = "android/app/src/main/res/drawable-port-xxxhdpi/splash.png";
-
-        expect(manifest).toContain('android:allowBackup="false"');
-        expect(manifest).toContain('android.permission.INTERNET');
-        expect(manifest).not.toContain('android.permission.CAMERA');
-        expect(mainActivity).toContain("class MainActivity extends BridgeActivity");
-        expect(activityLayout).toContain('tools:context=".MainActivity"');
-        expect(launcherBackground).toContain('name="ic_launcher_background"');
-        expect(strings).toContain('<string name="app_name">OMR Maker</string>');
-        expect(filePaths).toContain('<cache-path name="my_cache_images"');
-        expect(styles).toContain("windowSplashScreenAnimatedIcon");
-        expect(existsSync(path.join(rootDir, launcher))).toBe(true);
-        expect(existsSync(path.join(rootDir, splash))).toBe(true);
-        expect(readPngSize(launcher)).toEqual({ height: 192, width: 192 });
-        expect(readPngSize(splash)).toEqual({ height: 1920, width: 1280 });
     });
 });
