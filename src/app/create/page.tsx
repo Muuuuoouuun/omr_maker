@@ -8,6 +8,7 @@ import TeacherLogoutButton from "@/components/TeacherLogoutButton";
 import TeacherSessionChip from "@/components/TeacherSessionChip";
 import ThemeToggle from "@/components/ThemeToggle";
 import CreatePdfUploadPlaceholder from "@/components/CreatePdfUploadPlaceholder";
+import { activateFilePicker } from "@/components/AnswerImportModal";
 import { useRouter, useSearchParams } from "next/navigation";
 import { toast } from "@/components/Toast";
 import { getTeacherRemoteAssetUrl, uploadTeacherExamAsset } from "@/app/actions/remoteAssets";
@@ -696,6 +697,8 @@ function CreateOMRPageInner() {
     const [answerKeyPdf, setAnswerKeyPdf] = useState<File | null>(null); // Teacher reference answer key
     const problemPdfFileRef = useRef<File | null>(null);
     const answerKeyPdfFileRef = useRef<File | null>(null);
+    const problemPdfInputRef = useRef<HTMLInputElement>(null);
+    const answerKeyPdfInputRef = useRef<HTMLInputElement>(null);
     const problemPdfReplacedRef = useRef(false);
     const answerKeyPdfReplacedRef = useRef(false);
     const [activeViewTab, setActiveViewTab] = useState<'problem' | 'answer'>('problem');
@@ -2250,19 +2253,57 @@ function CreateOMRPageInner() {
                         >
                             <Redo2 size={16} />
                         </button>
-                        <label className="btn btn-secondary" style={{ cursor: 'pointer', padding: '0.55rem 1rem', fontSize: '0.85rem' }}>
+                        <input
+                            ref={problemPdfInputRef}
+                            id="pdf-upload-input"
+                            type="file"
+                            accept={PDF_ACCEPT}
+                            onChange={handleFileChange}
+                            className="sr-only"
+                            tabIndex={-1}
+                            aria-hidden="true"
+                        />
+                        <button
+                            type="button"
+                            className="btn btn-secondary"
+                            aria-label="문제지 PDF 업로드"
+                            onClick={() => {
+                                if (problemPdfInputRef.current) {
+                                    activateFilePicker(problemPdfInputRef.current);
+                                }
+                            }}
+                            style={{ cursor: 'pointer', padding: '0.55rem 1rem', fontSize: '0.85rem' }}
+                        >
                             <UploadCloud size={16} />
                             문제지 업로드
-                            <input id="pdf-upload-input" type="file" accept={PDF_ACCEPT} onChange={handleFileChange} style={{ display: 'none' }} />
-                        </label>
-                        <label className="btn btn-secondary" style={{ cursor: 'pointer', padding: '0.55rem 1rem', fontSize: '0.85rem' }}>
-                            <UploadCloud size={16} />
-                            답지 업로드
-                            <input type="file" accept={PDF_ACCEPT} onChange={(e) => {
+                        </button>
+                        <input
+                            ref={answerKeyPdfInputRef}
+                            id="answer-key-pdf-upload-input"
+                            type="file"
+                            accept={PDF_ACCEPT}
+                            onChange={(e) => {
                                 handleAnswerKeyPdfFile(e.currentTarget.files?.[0]);
                                 e.currentTarget.value = "";
-                            }} style={{ display: 'none' }} />
-                        </label>
+                            }}
+                            className="sr-only"
+                            tabIndex={-1}
+                            aria-hidden="true"
+                        />
+                        <button
+                            type="button"
+                            className="btn btn-secondary"
+                            aria-label="답지 PDF 업로드"
+                            onClick={() => {
+                                if (answerKeyPdfInputRef.current) {
+                                    activateFilePicker(answerKeyPdfInputRef.current);
+                                }
+                            }}
+                            style={{ cursor: 'pointer', padding: '0.55rem 1rem', fontSize: '0.85rem' }}
+                        >
+                            <UploadCloud size={16} />
+                            답지 업로드
+                        </button>
                         <button
                             className="btn btn-secondary"
                             style={{ padding: '0.55rem 1rem', fontSize: '0.85rem' }}

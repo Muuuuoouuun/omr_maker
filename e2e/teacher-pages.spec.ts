@@ -1,4 +1,5 @@
 import { test, expect, type Page } from "@playwright/test";
+import path from "node:path";
 import { mintTeacherToken } from "../src/lib/teacherAuth";
 import { MOCKUP_TEACHER_IDENTITY } from "../src/lib/mockupAccount";
 import { createSignedTeacherSessionCookie, TEACHER_SERVER_SESSION_COOKIE } from "../src/lib/teacherServerSession";
@@ -277,6 +278,39 @@ test.describe("Teacher dashboard", () => {
 test.describe("Create page label memory", () => {
     test.beforeEach(async ({ page, baseURL }) => {
         await authenticateTeacher(page, baseURL);
+    });
+
+    test("keyboard upload buttons activate problem and answer-key PDF inputs", async ({ page }) => {
+        await page.goto("/create");
+        const fixturePath = path.join(process.cwd(), "e2e/fixtures/sample-problem.pdf");
+        const uploadToolbar = page.getByRole("toolbar", { name: "출제 도구 모음" });
+        const problemUpload = uploadToolbar.getByRole("button", { name: "문제지 PDF 업로드" });
+        const answerUpload = uploadToolbar.getByRole("button", { name: "답지 PDF 업로드" });
+        const problemInput = page.locator("#pdf-upload-input");
+        const answerInput = page.locator("#answer-key-pdf-upload-input");
+
+        for (const input of [problemInput, answerInput]) {
+            await input.evaluate(element => {
+                element.addEventListener("click", () => {
+                    const current = Number(element.getAttribute("data-keyboard-activations") || "0");
+                    element.setAttribute("data-keyboard-activations", String(current + 1));
+                });
+            });
+        }
+
+        await problemUpload.focus();
+        await expect(problemUpload).toBeFocused();
+        await page.keyboard.press("Enter");
+        await expect(problemInput).toHaveAttribute("data-keyboard-activations", "1");
+        await problemInput.setInputFiles(fixturePath);
+        await expect(page.getByText("문제지 PDF 업로드됨", { exact: true })).toBeVisible();
+
+        await answerUpload.focus();
+        await expect(answerUpload).toBeFocused();
+        await page.keyboard.press("Space");
+        await expect(answerInput).toHaveAttribute("data-keyboard-activations", "1");
+        await answerInput.setInputFiles(fixturePath);
+        await expect(page.getByText("답지 PDF 업로드됨", { exact: true })).toBeVisible();
     });
 
     test("remembers label presets and lets teachers hide stale candidates", async ({ page }) => {

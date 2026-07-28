@@ -20,6 +20,10 @@ interface AnswerImportModalProps {
 const LOW_CONFIDENCE_THRESHOLD = 0.65;
 type AnswerRecognitionCache = { text?: ParsedAnswer[]; ai?: ParsedAnswer[] };
 
+export function activateFilePicker(input: Pick<HTMLInputElement, "click">): void {
+    input.click();
+}
+
 export function takeSelectedAnswerPdf(
     input: Pick<HTMLInputElement, "files" | "value">,
 ): File | null {
@@ -65,6 +69,7 @@ export default function AnswerImportModal({
     const titleId = useId();
     const analysisRunRef = useRef(0);
     const analysisCacheRef = useRef<WeakMap<File, AnswerRecognitionCache>>(new WeakMap());
+    const answerPdfInputRef = useRef<HTMLInputElement>(null);
     const [file, setFile] = useState<File | null>(null);
     const [parsedData, setParsedData] = useState<ParsedAnswer[]>([]);
     const [isProcessing, setIsProcessing] = useState(false);
@@ -232,11 +237,30 @@ export default function AnswerImportModal({
 
                 <div style={{ padding: '1.5rem', overflowY: 'auto', flex: 1 }}>
                     <div style={{ marginBottom: '1.5rem', textAlign: 'center', padding: '2rem', border: '2px dashed var(--border)', borderRadius: '8px', background: 'var(--background)' }}>
-                        <input type="file" accept=".pdf" onChange={handleFileChange} style={{ display: 'none' }} id="answer-pdf-upload" />
-                        <label htmlFor="answer-pdf-upload" className="btn btn-primary" style={{ cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: '0.5rem' }}>
+                        <input
+                            ref={answerPdfInputRef}
+                            type="file"
+                            accept=".pdf"
+                            onChange={handleFileChange}
+                            className="sr-only"
+                            tabIndex={-1}
+                            aria-hidden="true"
+                            id="answer-pdf-upload"
+                        />
+                        <button
+                            type="button"
+                            className="btn btn-primary"
+                            aria-label="정답 PDF 업로드"
+                            onClick={() => {
+                                if (answerPdfInputRef.current) {
+                                    activateFilePicker(answerPdfInputRef.current);
+                                }
+                            }}
+                            style={{ cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: '0.5rem' }}
+                        >
                             <UploadCloud size={17} />
                             {file ? "PDF 변경하기" : "PDF 업로드하여 정답 추출"}
-                        </label>
+                        </button>
                         {file && <p style={{ marginTop: '0.5rem', fontSize: '0.9rem', color: 'var(--muted)' }}>{file.name}</p>}
                     </div>
 
