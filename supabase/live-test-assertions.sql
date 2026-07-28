@@ -1225,6 +1225,199 @@ on conflict (organization_id, student_profile_id) do update
 set start_code_hash = excluded.start_code_hash,
     updated_at = now();
 
+insert into public.omr_organization_members (
+    organization_id, user_id, role, status
+) values
+    ('live-org-a', 'live-teacher-assigned', 'teacher', 'active'),
+    ('live-org-b', 'live-teacher-cross-class', 'teacher', 'active')
+on conflict (organization_id, user_id) do update
+set role = excluded.role,
+    status = excluded.status,
+    updated_at = now();
+
+insert into public.omr_teacher_profiles (
+    organization_id, user_id, display_name, status
+) values
+    ('live-org-a', 'live-teacher-assigned', '담당 교사', 'active'),
+    ('live-org-b', 'live-teacher-cross-class', '다른 반 교사', 'active')
+on conflict (organization_id, user_id) do update
+set display_name = excluded.display_name,
+    status = excluded.status,
+    updated_at = now();
+
+insert into public.omr_exam_questions (
+    id, organization_id, class_id, exam_id, question_id, question_number,
+    canonical_question_id, choices, correct_answer, score, payload, updated_at
+) values
+    (
+        'live-exam-a:1', 'live-org-a', 'live-class-a', 'live-exam-a', 1, 1,
+        'live-exam-a:1', 5, 2, 4, '{"id":1,"number":1,"answer":2,"score":4}', now()
+    ),
+    (
+        'live-exam-a:2', 'live-org-a', 'live-class-a', 'live-exam-a', 2, 2,
+        'live-exam-a:2', 5, 3, 6, '{"id":2,"number":2,"answer":3,"score":6}', now()
+    )
+on conflict (exam_id, question_id) do update
+set organization_id = excluded.organization_id,
+    class_id = excluded.class_id,
+    canonical_question_id = excluded.canonical_question_id,
+    correct_answer = excluded.correct_answer,
+    score = excluded.score,
+    payload = excluded.payload,
+    updated_at = excluded.updated_at;
+
+do $$
+declare
+    diagnostics jsonb;
+    candidate_hash text;
+    original_hash text;
+begin
+    select start_code_hash
+      into original_hash
+      from public.omr_student_start_credentials
+     where organization_id = 'live-org-a'
+       and student_profile_id = 'live-student-a';
+
+    update public.omr_student_start_credentials
+       set start_code_hash =
+           'pbkdf2-sha256:00010000:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA:BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB'
+     where organization_id = 'live-org-a'
+       and student_profile_id = 'live-student-a';
+    diagnostics := public.omr_production_boundary_preflight_v1();
+    if (diagnostics->>'students_without_credentials')::bigint <> 0 then
+        raise exception 'uppercase PBKDF2 credential was rejected';
+    end if;
+
+    foreach candidate_hash in array array[
+        'pbkdf2-sha256:9999:' || repeat('a', 32) || ':' || repeat('b', 64),
+        'pbkdf2-sha256:1000001:' || repeat('a', 32) || ':' || repeat('b', 64),
+        'pbkdf2-sha256:999999999999999999999999:' || repeat('a', 32) || ':' || repeat('b', 64),
+        'pbkdf2-sha256:10000:' || repeat('a', 33) || ':' || repeat('b', 64),
+        'pbkdf2-sha256:10000:' || repeat('a', 129) || ':' || repeat('b', 64),
+        'pbkdf2-sha256:10000:' || repeat('a', 130) || ':' || repeat('b', 64),
+        'pbkdf2-sha256:10000:' || repeat('a', 32) || ':' || repeat('b', 63),
+        'pbkdf2-sha512:10000:' || repeat('a', 32) || ':' || repeat('b', 64),
+        'pbkdf2-sha256:10000:' || repeat('a', 32) || ':' || repeat('b', 64) || ':extra'
+    ]
+    loop
+        update public.omr_student_start_credentials
+           set start_code_hash = candidate_hash
+         where organization_id = 'live-org-a'
+           and student_profile_id = 'live-student-a';
+        diagnostics := public.omr_production_boundary_preflight_v1();
+        if (diagnostics->>'students_without_credentials')::bigint <> 1 then
+            raise exception 'unsafe PBKDF2 boundary fixture was accepted';
+        end if;
+    end loop;
+
+    execute 'alter table public.omr_student_start_credentials alter column start_code_hash drop not null';
+    update public.omr_student_start_credentials
+       set start_code_hash = null
+     where organization_id = 'live-org-a'
+       and student_profile_id = 'live-student-a';
+    diagnostics := public.omr_production_boundary_preflight_v1();
+    if (diagnostics->>'students_without_credentials')::bigint <> 1 then
+        raise exception 'NULL PBKDF2 boundary fixture was accepted';
+    end if;
+    update public.omr_student_start_credentials
+       set start_code_hash = original_hash
+     where organization_id = 'live-org-a'
+       and student_profile_id = 'live-student-a';
+    execute 'alter table public.omr_student_start_credentials alter column start_code_hash set not null';
+end
+$$;
+
+do $$
+declare
+    diagnostics jsonb;
+begin
+    insert into public.omr_class_students (
+        class_id, organization_id, student_profile_id, enrollment_status
+    ) values (
+        'live-class-b', 'live-org-a', 'live-student-a', 'active'
+    );
+    diagnostics := public.omr_production_boundary_preflight_v1();
+    if (diagnostics->>'cross_organization_rows')::bigint < 1 then
+        raise exception 'class-student cross-organization fixture was not detected';
+    end if;
+    delete from public.omr_class_students
+     where class_id = 'live-class-b'
+       and student_profile_id = 'live-student-a';
+
+    insert into public.omr_class_teachers (
+        class_id, organization_id, teacher_user_id, class_role
+    ) values (
+        'live-class-a', 'live-org-a', 'live-teacher-cross-class', 'grader'
+    );
+    diagnostics := public.omr_production_boundary_preflight_v1();
+    if (diagnostics->>'orphan_rows')::bigint < 1
+        or (diagnostics->>'cross_organization_rows')::bigint < 1
+    then
+        raise exception 'class-teacher exact membership fixture was not detected';
+    end if;
+    delete from public.omr_class_teachers
+     where class_id = 'live-class-a'
+       and teacher_user_id = 'live-teacher-cross-class';
+end
+$$;
+
+do $$
+declare
+    diagnostics jsonb;
+    assert_message text;
+begin
+    insert into public.omr_question_results (
+        id, organization_id, class_id, attempt_id, exam_id,
+        student_name, question_id, question_number, status,
+        is_correct, is_wrong, is_unanswered, score, earned_score,
+        finished_at, payload
+    ) values (
+        'raw-live-private-result-id',
+        'live-org-a',
+        'live-class-a',
+        'attempt_live-ticket-1',
+        'live-exam-a',
+        '김학생',
+        999,
+        999,
+        'ungraded',
+        false,
+        false,
+        false,
+        0,
+        0,
+        now(),
+        '{}'
+    );
+
+    diagnostics := public.omr_production_boundary_preflight_v1();
+    if (diagnostics->>'orphan_rows')::bigint < 1 then
+        raise exception 'missing exam-question result fixture was not detected';
+    end if;
+    if diagnostics::text like '%김학생%'
+        or diagnostics::text like '%raw-live-private-result-id%'
+    then
+        raise exception 'preflight diagnostics exposed 김학생 or a raw row identifier';
+    end if;
+
+    begin
+        perform public.omr_assert_production_boundary_preflight_v1();
+        raise exception 'missing exam-question preflight fixture unexpectedly passed';
+    exception
+        when check_violation then
+            assert_message := sqlerrm;
+            if assert_message like '%김학생%'
+                or assert_message like '%raw-live-private-result-id%'
+            then
+                raise exception 'preflight exception exposed 김학생 or a raw row identifier';
+            end if;
+    end;
+
+    delete from public.omr_question_results
+     where id = 'raw-live-private-result-id';
+end
+$$;
+
 do $$
 declare
     diagnostics jsonb;
@@ -1243,16 +1436,22 @@ begin
             id, organization_id, exam_id, student_name, identity_type,
             payload, started_at, finished_at
         ) values (
-            'live-preflight-cross-org',
+            'raw-live-private-attempt-id',
             'live-org-a',
             'live-exam-b',
-            'Boundary Fixture',
+            '김학생',
             'temporary',
-            '{"id":"live-preflight-cross-org"}',
+            '{"id":"raw-live-private-attempt-id"}',
             '2026-07-14T00:00:00.000Z',
             '2026-07-14T00:01:00.000Z'
         );
 
+        diagnostics := public.omr_production_boundary_preflight_v1();
+        if diagnostics::text like '%김학생%'
+            or diagnostics::text like '%raw-live-private-attempt-id%'
+        then
+            raise exception 'preflight diagnostics exposed 김학생 or a raw row identifier';
+        end if;
         perform public.omr_assert_production_boundary_preflight_v1();
         raise exception 'cross-organization preflight fixture unexpectedly passed';
     exception
@@ -1260,12 +1459,17 @@ begin
             if sqlerrm not like 'production boundary preflight failed:%' then
                 raise;
             end if;
+            if sqlerrm like '%김학생%'
+                or sqlerrm like '%raw-live-private-attempt-id%'
+            then
+                raise exception 'preflight exception exposed 김학생 or a raw row identifier';
+            end if;
     end;
 
     if exists (
         select 1
           from public.omr_attempts
-         where id = 'live-preflight-cross-org'
+         where id = 'raw-live-private-attempt-id'
     ) then
         raise exception 'failed preflight fixture was not rolled back';
     end if;

@@ -114,6 +114,8 @@ describe("Supabase schema contract", () => {
             "omr_attempts",
             "omr_question_results",
             "omr_classes",
+            "omr_class_students",
+            "omr_class_teachers",
             "omr_student_profiles",
             "omr_teacher_profiles",
             "omr_organization_members",
@@ -133,6 +135,44 @@ describe("Supabase schema contract", () => {
         );
         expect(liveAssertions).toContain("preflight must report zero organization-integrity violations");
         expect(liveAssertions).toContain("cross-organization preflight fixture unexpectedly passed");
+    });
+
+    it("matches credential parsing and relationship integrity without leaking row identifiers", () => {
+        expect(productionBoundaryPreflight).toContain("credential_hash_parts");
+        expect(productionBoundaryPreflight).toMatch(/credential_hash_parts\.algorithm\s*=\s*'pbkdf2-sha256'/i);
+        expect(productionBoundaryPreflight).toMatch(/raw_iterations\s*~\s*'\^\[0-9\]\+\$'/i);
+        expect(productionBoundaryPreflight).toContain("between 10000 and 1000000");
+        expect(productionBoundaryPreflight).toMatch(/salt_hex\s*~\*\s*'\^\[a-f0-9\]\+\$'/i);
+        expect(productionBoundaryPreflight).toMatch(/length\(credential_hash_parts\.salt_hex\)\s+between 32 and 128/i);
+        expect(productionBoundaryPreflight).toMatch(/length\(credential_hash_parts\.salt_hex\)\s*%\s*2\s*=\s*0/i);
+        expect(productionBoundaryPreflight).toMatch(/hash_hex\s*~\*\s*'\^\[a-f0-9\]\{64\}\$'/i);
+
+        expect(productionBoundaryPreflight).toMatch(
+            /student_membership\.organization_id\s+is distinct from\s+class_row\.organization_id/i,
+        );
+        expect(productionBoundaryPreflight).toMatch(
+            /student_membership\.organization_id\s+is distinct from\s+student\.organization_id/i,
+        );
+        expect(productionBoundaryPreflight).toMatch(
+            /teacher_membership\.organization_id\s+is distinct from\s+class_row\.organization_id/i,
+        );
+        expect(productionBoundaryPreflight).toContain("exact_teacher_profile");
+        expect(productionBoundaryPreflight).toContain("exact_organization_member");
+        expect(productionBoundaryPreflight).toMatch(
+            /exam_question\.exam_id\s*=\s*result\.exam_id[\s\S]*exam_question\.question_id\s*=\s*result\.question_id/i,
+        );
+
+        expect(productionBoundaryPreflight).not.toMatch(
+            /jsonb_agg\(\s*entity\s*\|\|\s*':'\s*\|\|\s*row_id/i,
+        );
+        expect(productionBoundaryPreflight).toContain("'ordinal'");
+        expect(liveAssertions).toContain("uppercase PBKDF2 credential was rejected");
+        expect(liveAssertions).toContain("unsafe PBKDF2 boundary fixture was accepted");
+        expect(liveAssertions).toContain("class-student cross-organization fixture was not detected");
+        expect(liveAssertions).toContain("class-teacher exact membership fixture was not detected");
+        expect(liveAssertions).toContain("missing exam-question result fixture was not detected");
+        expect(liveAssertions).toContain("preflight diagnostics exposed 김학생 or a raw row identifier");
+        expect(liveAssertions).toContain("preflight exception exposed 김학생 or a raw row identifier");
     });
 
     it("revokes a withdrawn student's credential before a deterministic id can be reused", () => {
