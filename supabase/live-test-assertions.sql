@@ -215,6 +215,18 @@ begin
     if not has_function_privilege('service_role', 'public.omr_service_readiness_v1()', 'execute') then
         raise exception 'service_role must have readiness RPC execute privilege';
     end if;
+    if has_function_privilege('anon', 'public.omr_production_boundary_preflight_v1()', 'execute')
+        or has_function_privilege('authenticated', 'public.omr_production_boundary_preflight_v1()', 'execute')
+        or has_function_privilege('anon', 'public.omr_assert_production_boundary_preflight_v1()', 'execute')
+        or has_function_privilege('authenticated', 'public.omr_assert_production_boundary_preflight_v1()', 'execute')
+    then
+        raise exception 'browser roles unexpectedly have production-boundary preflight execute privilege';
+    end if;
+    if not has_function_privilege('service_role', 'public.omr_production_boundary_preflight_v1()', 'execute')
+        or not has_function_privilege('service_role', 'public.omr_assert_production_boundary_preflight_v1()', 'execute')
+    then
+        raise exception 'service_role must have production-boundary preflight execute privilege';
+    end if;
 end
 $$;
 
@@ -1192,6 +1204,70 @@ begin
            and payload ->> 'handwritingArchived' = 'true'
     ) then
         raise exception 'handwriting attachment was not persisted on the official attempt';
+    end if;
+end
+$$;
+
+insert into public.omr_student_start_credentials (
+    organization_id, student_profile_id, start_code_hash
+) values
+    (
+        'live-org-a',
+        'live-student-a',
+        'pbkdf2-sha256:10000:0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
+    ),
+    (
+        'live-org-b',
+        'live-student-b',
+        'pbkdf2-sha256:10000:0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'
+    )
+on conflict (organization_id, student_profile_id) do update
+set start_code_hash = excluded.start_code_hash,
+    updated_at = now();
+
+do $$
+declare
+    diagnostics jsonb;
+begin
+    diagnostics := public.omr_production_boundary_preflight_v1();
+    if (diagnostics->>'null_organization_rows')::bigint <> 0
+        or (diagnostics->>'orphan_rows')::bigint <> 0
+        or (diagnostics->>'cross_organization_rows')::bigint <> 0
+        or (diagnostics->>'students_without_credentials')::bigint <> 0
+    then
+        raise exception 'preflight must report zero organization-integrity violations: %', diagnostics;
+    end if;
+
+    begin
+        insert into public.omr_attempts (
+            id, organization_id, exam_id, student_name, identity_type,
+            payload, started_at, finished_at
+        ) values (
+            'live-preflight-cross-org',
+            'live-org-a',
+            'live-exam-b',
+            'Boundary Fixture',
+            'temporary',
+            '{"id":"live-preflight-cross-org"}',
+            '2026-07-14T00:00:00.000Z',
+            '2026-07-14T00:01:00.000Z'
+        );
+
+        perform public.omr_assert_production_boundary_preflight_v1();
+        raise exception 'cross-organization preflight fixture unexpectedly passed';
+    exception
+        when check_violation then
+            if sqlerrm not like 'production boundary preflight failed:%' then
+                raise;
+            end if;
+    end;
+
+    if exists (
+        select 1
+          from public.omr_attempts
+         where id = 'live-preflight-cross-org'
+    ) then
+        raise exception 'failed preflight fixture was not rolled back';
     end if;
 end
 $$;

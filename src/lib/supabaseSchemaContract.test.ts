@@ -49,6 +49,11 @@ function readStudentCredentialRevocationMigration(): string {
     return existsSync(migrationPath) ? readFileSync(migrationPath, "utf8") : "";
 }
 
+function readProductionBoundaryPreflightMigration(): string {
+    const migrationPath = path.join(rootDir, "supabase/migrations/202607280002_production_boundary_preflight.sql");
+    return existsSync(migrationPath) ? readFileSync(migrationPath, "utf8") : "";
+}
+
 function readLiveAssertions(): string {
     return readFileSync(path.join(rootDir, "supabase/live-test-assertions.sql"), "utf8");
 }
@@ -83,7 +88,52 @@ describe("Supabase schema contract", () => {
     const teacherExamDelete = readTeacherExamDeleteMigration();
     const feedbackGateway = readFeedbackGatewayMigration();
     const studentCredentialRevocation = readStudentCredentialRevocationMigration();
+    const productionBoundaryPreflight = readProductionBoundaryPreflightMigration();
     const liveAssertions = readLiveAssertions();
+
+    it("fails production-boundary deployment on bounded organization-integrity diagnostics", () => {
+        expect(productionBoundaryPreflight).toContain(
+            "create or replace function public.omr_production_boundary_preflight_v1()",
+        );
+        expect(productionBoundaryPreflight).toContain("security definer");
+        expect(productionBoundaryPreflight).toContain("set search_path = ''");
+
+        for (const key of [
+            "null_organization_rows",
+            "orphan_rows",
+            "cross_organization_rows",
+            "students_without_credentials",
+        ]) {
+            expect(productionBoundaryPreflight).toContain(`'${key}'`);
+        }
+
+        for (const table of [
+            "omr_organizations",
+            "omr_exams",
+            "omr_exam_questions",
+            "omr_attempts",
+            "omr_question_results",
+            "omr_classes",
+            "omr_student_profiles",
+            "omr_teacher_profiles",
+            "omr_organization_members",
+            "omr_student_start_credentials",
+        ]) {
+            expect(productionBoundaryPreflight).toContain(`public.${table}`);
+        }
+
+        expect(productionBoundaryPreflight).toMatch(/order\s+by[\s\S]*limit\s+10/i);
+        expect(productionBoundaryPreflight).toContain("omr_assert_production_boundary_preflight_v1");
+        expect(productionBoundaryPreflight).toContain("production boundary preflight failed");
+        expect(productionBoundaryPreflight).toMatch(
+            /revoke all on function public\.omr_production_boundary_preflight_v1\(\)\s+from public, anon, authenticated/i,
+        );
+        expect(productionBoundaryPreflight).toMatch(
+            /grant execute on function public\.omr_production_boundary_preflight_v1\(\)\s+to service_role/i,
+        );
+        expect(liveAssertions).toContain("preflight must report zero organization-integrity violations");
+        expect(liveAssertions).toContain("cross-organization preflight fixture unexpectedly passed");
+    });
 
     it("revokes a withdrawn student's credential before a deterministic id can be reused", () => {
         expect(schema).toContain("omr_revoke_withdrawn_student_credential_v1");
