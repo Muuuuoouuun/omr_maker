@@ -440,6 +440,25 @@ describe("service UI surface", () => {
         expect(teacherMobileE2e).toContain(".create-editor-actions button, .create-editor-actions label");
     });
 
+    it("pins the Playwright-owned billing plan simulation without Supabase", () => {
+        const playwrightConfig = readProjectFile("playwright.config.ts");
+        const webServerEnv = playwrightConfig.match(
+            /webServer:[\s\S]*?env:\s*{([\s\S]*?)\n\s{8}},\n\s{4}},\n}\);/,
+        )?.[1];
+
+        expect(webServerEnv).toBeDefined();
+        const inheritedEnvIndex = webServerEnv?.indexOf("...process.env") ?? -1;
+        expect(inheritedEnvIndex).toBeGreaterThanOrEqual(0);
+        expect(webServerEnv?.indexOf('OMR_PLAN_DEV_SIMULATION: "1"')).toBeGreaterThan(inheritedEnvIndex);
+        expect(webServerEnv?.indexOf('OMR_DEV_PLAN: "free"')).toBeGreaterThan(inheritedEnvIndex);
+        expect(webServerEnv).toContain('NEXT_PUBLIC_SUPABASE_URL: ""');
+        expect(webServerEnv).toContain('NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY: ""');
+        expect(webServerEnv).toContain('NEXT_PUBLIC_SUPABASE_ANON_KEY: ""');
+        expect(webServerEnv).toContain('SUPABASE_URL: ""');
+        expect(webServerEnv).toContain('SUPABASE_SERVICE_ROLE_KEY: ""');
+        expect(webServerEnv).toContain('OMR_SUPABASE_SERVICE_ROLE_KEY: ""');
+    });
+
     it("keeps installed phone and tablet app shells inside safe areas", () => {
         const css = readProjectFile("src/app/globals.css");
         const layout = readProjectFile("src/app/layout.tsx");

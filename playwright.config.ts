@@ -120,6 +120,8 @@ export default defineConfig({
         timeout: 60_000,
         env: {
             ...process.env,
+            OMR_PLAN_DEV_SIMULATION: "1",
+            OMR_DEV_PLAN: "free",
             TEACHER_SESSION_SECRET: e2eTeacherSessionSecret,
             TEACHER_ACCOUNTS: JSON.stringify([{
                 id: "admin",
