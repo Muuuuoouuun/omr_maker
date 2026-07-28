@@ -61,4 +61,12 @@ describe("dialog focus contract", () => {
             atLast: true,
         })).toBe("none");
     });
+
+    it("supports the approved positional key-action contract", () => {
+        expect(resolveDialogKeyAction("Escape", false)).toBe("close");
+        expect(resolveDialogKeyAction("Tab", true)).toBe("wrap-first");
+        expect(resolveDialogKeyAction("Tab", false, true)).toBe("wrap-last");
+        expect(resolveDialogKeyAction("Tab", false)).toBe("none");
+        expect(resolveDialogKeyAction("Enter", true, true)).toBe("none");
+    });
 });

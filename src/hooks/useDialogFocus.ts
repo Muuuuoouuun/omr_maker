@@ -18,7 +18,25 @@ export interface DialogKeyState {
     atLast: boolean;
 }
 
-export function resolveDialogKeyAction(state: DialogKeyState): DialogKeyAction {
+export function resolveDialogKeyAction(
+    key: string,
+    atLast: boolean,
+    atFirst?: boolean,
+): DialogKeyAction;
+export function resolveDialogKeyAction(state: DialogKeyState): DialogKeyAction;
+export function resolveDialogKeyAction(
+    stateOrKey: DialogKeyState | string,
+    atLast = false,
+    atFirst = false,
+): DialogKeyAction {
+    if (typeof stateOrKey === "string") {
+        if (stateOrKey === "Escape") return "close";
+        if (stateOrKey !== "Tab") return "none";
+        if (atLast) return "wrap-first";
+        if (atFirst) return "wrap-last";
+        return "none";
+    }
+    const state = stateOrKey;
     if (state.key === "Escape") return "close";
     if (state.key !== "Tab") return "none";
     if (!state.shiftKey && state.atLast) return "wrap-first";
