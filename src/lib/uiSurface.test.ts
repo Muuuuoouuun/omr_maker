@@ -22,6 +22,23 @@ function expectEnvOverridesAfterInherited(envSource: string, overrideKeys: reado
 }
 
 describe("service UI surface", () => {
+    it("defines the Balanced hierarchy and motion token contract", () => {
+        const css = readProjectFile("src/app/globals.css");
+
+        expect(css).toContain("--space-related: 1rem");
+        expect(css).toContain("--space-card: 1.5rem");
+        expect(css).toContain("--space-section: 2.5rem");
+        expect(css).toContain("--motion-hover: 160ms");
+        expect(css).toContain("--motion-panel: 210ms");
+        expect(css).toContain("--motion-distance: 0.375rem");
+        expect(css).toContain("--ease-balanced: cubic-bezier(0.2, 0.8, 0.2, 1)");
+        expect(css).toContain("--text-body-min: 1rem");
+        expect(css).toContain("--text-caption-min: 0.8125rem");
+        expect(css).toContain("--shadow-action: 0 8px 18px rgb(37 99 235 / 20%)");
+        expect(css).toContain("--motion-hover: 1ms");
+        expect(css).toContain("--motion-panel: 1ms");
+    });
+
     it("keeps premium scrollbars on the app, PDF viewer, and dense panels", () => {
         const css = readProjectFile("src/app/globals.css");
         const pdfViewer = readProjectFile("src/components/PDFViewer.tsx");
