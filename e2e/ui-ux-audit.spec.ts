@@ -85,9 +85,27 @@ async function auditPage(page: Page, target: AuditTarget) {
         const normalizedPageText = pageText.replace(/\s+/g, " ").trim();
         const currentPath = window.location.pathname;
 
-        const smallTargets = Array.from(document.querySelectorAll("button,a,input,select,textarea,[role='button']"))
+        const interactiveTargets = Array.from(
+            document.querySelectorAll("button,a,input,select,textarea,[role='button']"),
+        );
+        const isNonInteractiveFileUploadProxy = (element: Element) => (
+            element instanceof HTMLInputElement
+            && element.type === "file"
+            && element.getAttribute("aria-hidden") === "true"
+            && element.getAttribute("tabindex") === "-1"
+            && element.tabIndex < 0
+        );
+        const excludedFileUploadProxies = interactiveTargets
+            .filter(isNonInteractiveFileUploadProxy)
+            .map(element => ({
+                tag: element.tagName.toLowerCase(),
+                type: (element as HTMLInputElement).type,
+                ariaHidden: element.getAttribute("aria-hidden"),
+                tabIndex: (element as HTMLElement).tabIndex,
+            }));
+        const smallTargets = interactiveTargets
             .filter(isVisible)
-            .filter(element => element.getAttribute("aria-hidden") !== "true")
+            .filter(element => !isNonInteractiveFileUploadProxy(element))
             .map(element => {
                 const rect = element.getBoundingClientRect();
                 return {
@@ -173,6 +191,7 @@ async function auditPage(page: Page, target: AuditTarget) {
             clientWidth: root.clientWidth,
             mojibake: mojibakePattern.test(pageText),
             smallTargets,
+            excludedFileUploadProxies,
             clippedText,
             offViewportSurfaces,
         };
@@ -184,6 +203,51 @@ async function auditPage(page: Page, target: AuditTarget) {
 
 test.describe("UI-UX PROMAX layout audit", () => {
     test.skip(({ browserName }) => browserName !== "chromium", "Layout audit runs on Chromium only.");
+
+    test("keeps aria-hidden interactive controls in the touch target audit", async ({ page }) => {
+        await page.setContent(`
+            <main>
+                <h1>Audit fixture</h1>
+                <button
+                    type="button"
+                    aria-hidden="true"
+                    style="width: 12px; height: 12px; min-width: 0; min-height: 0"
+                >
+                    Hidden interactive target
+                </button>
+                <input
+                    type="file"
+                    aria-hidden="true"
+                    tabindex="-1"
+                    style="position: absolute; width: 1px; height: 1px"
+                />
+            </main>
+        `);
+
+        const result = await auditPage(page, {
+            name: "aria-hidden-interactive-fixture",
+            path: "/",
+            expectedText: "Audit fixture",
+            viewport: { width: 390, height: 844 },
+        });
+
+        expect(result.smallTargets).toEqual([
+            expect.objectContaining({
+                label: "Hidden interactive target",
+                tag: "button",
+                height: 12,
+            }),
+        ]);
+        expect(result.smallTargets[0]?.width).toBeLessThan(44);
+        expect(result.excludedFileUploadProxies).toEqual([
+            {
+                tag: "input",
+                type: "file",
+                ariaHidden: "true",
+                tabIndex: -1,
+            },
+        ]);
+    });
 
     test("uses balanced motion for primary actions, cards, modal panels, and tab indicators", async ({ page }) => {
         type MotionSnapshot = {
