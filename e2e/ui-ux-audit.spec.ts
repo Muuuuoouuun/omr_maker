@@ -187,8 +187,8 @@ test.describe("UI-UX PROMAX layout audit", () => {
     test("keeps one visible landing landmark and one role-specific level-one heading", async ({ browser }) => {
         const landingStates = [
             { name: "initial", path: "/", expectedText: "OMR Maker", heading: "OMR Maker" },
-            { name: "teacher", path: "/?role=teacher", expectedText: "교사 포털", heading: "교사 포털 로그인" },
-            { name: "student", path: "/?role=student", expectedText: "학생 포털", heading: "학생 포털 로그인" },
+            { name: "teacher", path: "/?role=teacher", expectedText: "교사 포털", heading: "환영합니다" },
+            { name: "student", path: "/?role=student", expectedText: "학생 포털", heading: "학습 시작" },
         ] as const;
 
         for (const state of landingStates) {

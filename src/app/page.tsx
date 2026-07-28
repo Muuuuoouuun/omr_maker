@@ -1084,7 +1084,7 @@ export default function Home() {
                       letterSpacing: 0,
                     }}
                   >
-                    교사 포털 로그인
+                    환영합니다
                   </h1>
                 </div>
 
@@ -1226,7 +1226,7 @@ export default function Home() {
                       letterSpacing: 0,
                     }}
                   >
-                    학생 포털 로그인
+                    학습 시작
                   </h1>
                 </div>
 

@@ -221,8 +221,8 @@ describe("service UI surface", () => {
         expect(homePage.match(/<\/main>/g) ?? []).toHaveLength(1);
         expect(homePage).toContain('<main id="main-content" className="landing-main">');
         expect(homePage).toMatch(/<h1[^>]*>/);
-        expect(homePage).toContain("교사 포털 로그인");
-        expect(homePage).toContain("학생 포털 로그인");
+        expect(homePage).toContain("환영합니다");
+        expect(homePage).toContain("학습 시작");
     });
 
     it("keeps premium scrollbars on the app, PDF viewer, and dense panels", () => {
