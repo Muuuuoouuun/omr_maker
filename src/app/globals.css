@@ -1456,6 +1456,30 @@ html[data-motion="off"] *::after {
   }
 }
 
+html[data-motion="off"] :where(
+  .btn-primary,
+  .mockup-primary-action,
+  .bento-card,
+  .mockup-panel,
+  [role="dialog"]
+),
+html[data-motion="off"] .mockup-dashboard-tabs button::after {
+  transition-duration: 1ms !important;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :where(
+    .btn-primary,
+    .mockup-primary-action,
+    .bento-card,
+    .mockup-panel,
+    [role="dialog"]
+  ),
+  .mockup-dashboard-tabs button::after {
+    transition-duration: 1ms !important;
+  }
+}
+
 @keyframes floatOrb1 {
   0%, 100% { transform: translate(0px, 0px); }
   25%       { transform: translate(70px, 45px); }
@@ -1518,12 +1542,19 @@ html[data-motion="off"] *::after {
   background: linear-gradient(135deg, var(--primary), var(--primary-dark));
   color: white;
   box-shadow: 0 1px 2px rgba(15, 23, 42, 0.08), 0 4px 14px rgba(79, 70, 229, 0.32);
+  transition:
+    transform var(--motion-hover) var(--ease-balanced),
+    box-shadow var(--motion-hover) var(--ease-balanced);
 }
 
 .btn-primary:hover {
   background: linear-gradient(135deg, var(--primary-light), var(--primary));
   box-shadow: 0 2px 4px rgba(15, 23, 42, 0.08), 0 8px 22px rgba(79, 70, 229, 0.42);
-  transform: translateY(-1px);
+  transform: translateY(calc(-1 * var(--motion-distance)));
+}
+
+.btn-primary:active {
+  transition-duration: var(--motion-hover);
 }
 
 .btn-secondary {
@@ -1539,6 +1570,15 @@ html[data-motion="off"] *::after {
   border-color: color-mix(in srgb, var(--border), var(--muted) 45%);
   box-shadow: var(--shadow-md);
   transform: translateY(-1px);
+}
+
+/* Dialog components share behavior through useDialogFocus; this selector gives
+   their visual panel the same restrained state-transition contract. */
+[role="dialog"] {
+  transition:
+    opacity var(--motion-panel) var(--ease-balanced),
+    transform var(--motion-panel) var(--ease-balanced),
+    box-shadow var(--motion-panel) var(--ease-balanced);
 }
 
 /* ─── Typography ─────────────────────────────────────── */
@@ -2185,7 +2225,10 @@ html[data-motion="off"] :where(
   border: 1px solid var(--border);
   /* Only the properties hover actually changes — `all` invites accidental
      transitions (e.g. theme swaps animating text color card-by-card). */
-  transition: box-shadow 0.3s cubic-bezier(0.4, 0, 0.2, 1), border-color 0.3s cubic-bezier(0.4, 0, 0.2, 1), transform 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+  transition:
+    box-shadow var(--motion-panel) var(--ease-balanced),
+    border-color var(--motion-panel) var(--ease-balanced),
+    transform var(--motion-panel) var(--ease-balanced);
   overflow: hidden;
   display: flex;
   flex-direction: column;
@@ -2567,6 +2610,13 @@ html[data-motion="off"] :where(
   height: 3px;
   border-radius: 3px 3px 0 0;
   background: transparent;
+  opacity: 0;
+  transform: scaleX(0);
+  transform-origin: center;
+  transition:
+    transform var(--motion-panel) var(--ease-balanced),
+    opacity var(--motion-panel) var(--ease-balanced),
+    background-color var(--motion-panel) var(--ease-balanced);
 }
 
 .mockup-dashboard-tabs button[aria-selected="true"] {
@@ -2575,6 +2625,8 @@ html[data-motion="off"] :where(
 
 .mockup-dashboard-tabs button[aria-selected="true"]::after {
   background: #1769e0;
+  opacity: 1;
+  transform: scaleX(1);
 }
 
 .mockup-login-divider {
@@ -2735,6 +2787,13 @@ html[data-motion="off"] :where(
   border: 1px solid #e2e8f1;
   border-radius: 0.85rem;
   box-shadow: 0 3px 12px rgba(25, 55, 94, 0.035);
+}
+
+.mockup-panel {
+  transition:
+    box-shadow var(--motion-panel) var(--ease-balanced),
+    border-color var(--motion-panel) var(--ease-balanced),
+    transform var(--motion-panel) var(--ease-balanced);
 }
 
 .mockup-metric {
@@ -3147,11 +3206,15 @@ html[data-motion="off"] :where(
   color: #fff;
   background: var(--mockup-blue);
   box-shadow: 0 8px 18px rgba(23, 105, 224, 0.2);
+  transition:
+    transform var(--motion-hover) var(--ease-balanced),
+    box-shadow var(--motion-hover) var(--ease-balanced);
 }
 
 .mockup-primary-action:hover {
   background: #1058c3;
-  transform: translateY(-1px);
+  box-shadow: 0 10px 22px rgba(23, 105, 224, 0.28);
+  transform: translateY(calc(-1 * var(--motion-distance)));
 }
 
 @media (max-width: 1100px) {

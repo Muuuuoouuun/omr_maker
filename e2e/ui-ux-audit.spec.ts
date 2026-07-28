@@ -87,6 +87,7 @@ async function auditPage(page: Page, target: AuditTarget) {
 
         const smallTargets = Array.from(document.querySelectorAll("button,a,input,select,textarea,[role='button']"))
             .filter(isVisible)
+            .filter(element => element.getAttribute("aria-hidden") !== "true")
             .map(element => {
                 const rect = element.getBoundingClientRect();
                 return {
@@ -183,6 +184,72 @@ async function auditPage(page: Page, target: AuditTarget) {
 
 test.describe("UI-UX PROMAX layout audit", () => {
     test.skip(({ browserName }) => browserName !== "chromium", "Layout audit runs on Chromium only.");
+
+    test("uses balanced motion for primary actions, cards, modal panels, and tab indicators", async ({ page }) => {
+        type MotionSnapshot = {
+            duration: string;
+            property: string;
+            timing: string;
+            distance: string;
+        };
+        const readMotion = async (selector: string, pseudo?: "::after"): Promise<MotionSnapshot> => (
+            page.locator(selector).first().evaluate((element, pseudoElement) => {
+                const style = window.getComputedStyle(element, pseudoElement || null);
+                const rootStyle = window.getComputedStyle(document.documentElement);
+                return {
+                    duration: style.transitionDuration,
+                    property: style.transitionProperty,
+                    timing: style.transitionTimingFunction,
+                    distance: rootStyle.getPropertyValue("--motion-distance").trim(),
+                };
+            }, pseudo)
+        );
+        const expectRestrainedProperties = (snapshot: MotionSnapshot) => {
+            expect(snapshot.property).not.toMatch(/(^|, )all(,|$)|width|height|margin|padding|flex-basis/);
+        };
+        const expectEveryDuration = (snapshot: MotionSnapshot, duration: string) => {
+            expect(snapshot.duration.split(", ").every(value => value === duration)).toBe(true);
+        };
+
+        await openTeacherPage(page, "/teacher/dashboard?showcase=1&tab=overview");
+        await expect(page.locator(".mockup-dashboard-tabs")).toBeVisible();
+        const actionMotion = await readMotion(".mockup-primary-action");
+        const cardMotion = await readMotion(".mockup-panel");
+        const tabMotion = await readMotion('.mockup-dashboard-tabs button[aria-selected="true"]', "::after");
+
+        await openTeacherPage(page, "/create");
+        await page.getByRole("button", { name: "정답 인식 마법사 열기" }).click();
+        await expect(page.getByRole("dialog", { name: "정답 PDF 불러오기" })).toBeVisible();
+        const modalMotion = await readMotion('[role="dialog"]');
+
+        expectEveryDuration(actionMotion, "0.16s");
+        expectEveryDuration(cardMotion, "0.21s");
+        expectEveryDuration(modalMotion, "0.21s");
+        expectEveryDuration(tabMotion, "0.21s");
+        for (const snapshot of [actionMotion, cardMotion, modalMotion, tabMotion]) {
+            expect(snapshot.timing).toContain("cubic-bezier(0.2, 0.8, 0.2, 1)");
+            expect(snapshot.distance).toBe(".375rem");
+            expectRestrainedProperties(snapshot);
+        }
+
+        await page.emulateMedia({ reducedMotion: "reduce" });
+        for (const [selector, pseudo] of [
+            [".btn-primary", undefined],
+            ['[role="dialog"]', undefined],
+        ] as const) {
+            const reduced = await readMotion(selector, pseudo);
+            expect(reduced.duration.split(", ").every(duration => duration === "0.001s")).toBe(true);
+            expect(reduced.distance).toBe("0rem");
+            expectRestrainedProperties(reduced);
+        }
+
+        await page.emulateMedia({ reducedMotion: "no-preference" });
+        await page.locator("html").evaluate(element => element.setAttribute("data-motion", "off"));
+        const disabled = await readMotion(".btn-primary");
+        expect(disabled.duration.split(", ").every(duration => duration === "0.001s")).toBe(true);
+        expect(disabled.distance).toBe("0rem");
+        expectRestrainedProperties(disabled);
+    });
 
     test("keeps one visible landing landmark and one role-specific level-one heading", async ({ browser }) => {
         const landingStates = [
