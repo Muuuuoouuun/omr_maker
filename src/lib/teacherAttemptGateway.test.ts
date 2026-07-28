@@ -118,6 +118,7 @@ describe("teacher attempt gateway", () => {
             organizationId: "org-a",
             organizationName: "Org A",
             actorUserId: "teacher-1",
+            actorLabel: "김 선생",
             memberRole: "teacher",
         })).resolves.toMatchObject({
             status: "saved",
@@ -134,6 +135,9 @@ describe("teacher attempt gateway", () => {
                 p_attempt_id: "attempt-1",
                 p_question_id: "1",
                 p_answer: "설명입니다.",
+                p_actor_user_id: "teacher-1",
+                p_member_role: "teacher",
+                p_actor_label: "김 선생",
             },
         }]);
     });
@@ -166,6 +170,7 @@ describe("teacher attempt gateway", () => {
             organizationId: "org-a",
             organizationName: "Org A",
             actorUserId: "teacher-1",
+            actorLabel: "김 선생",
             memberRole: "teacher",
         });
         expect(calls).toEqual([{
@@ -175,16 +180,70 @@ describe("teacher attempt gateway", () => {
                 p_attempt_id: "attempt-1",
                 p_subquestion_id: "7:reason",
                 p_status: "reviewed",
+                p_actor_user_id: "teacher-1",
+                p_member_role: "teacher",
+                p_actor_label: "김 선생",
             },
         }]);
     });
 
-    it("force-finishes only selected IDs and never forwards score or question results", async () => {
+    it("loads canonical attempts and exams before force-finishing with trusted grading", async () => {
         const calls: Array<{ name: string; args: Record<string, unknown> }> = [];
+        const inProgress: Attempt = {
+            ...attempt,
+            status: "in_progress",
+            score: 0,
+            totalScore: 0,
+            answers: { 1: 2 },
+            questionResults: [],
+            classId: "class-a",
+        };
+        const canonicalExam = {
+            id: "exam-1",
+            organizationId: "org-a",
+            classId: "class-a",
+            title: "시험",
+            createdAt: "2026-07-14T00:00:00.000Z",
+            updatedAt: "2026-07-14T00:00:30.000Z",
+            questions: [
+                { id: 1, number: 1, answer: 2, score: 4, choices: 5 },
+                { id: 2, number: 2, answer: 3, score: 6, choices: 5 },
+            ],
+        };
         const client = {
+            from(table: string) {
+                const filters: Array<[string, unknown]> = [];
+                const query = {
+                    eq(column: string, value: unknown) {
+                        filters.push([column, value]);
+                        return query;
+                    },
+                    in(column: string, value: unknown) {
+                        filters.push([column, value]);
+                        return query;
+                    },
+                    async order() {
+                        return table === "omr_attempts"
+                            ? { data: [{ payload: inProgress, updated_at: "2026-07-14T00:00:20.000Z" }], error: null }
+                            : { data: [{ payload: canonicalExam, updated_at: canonicalExam.updatedAt }], error: null };
+                    },
+                };
+                return { select: () => query };
+            },
             async rpc(name: string, args: Record<string, unknown>) {
                 calls.push({ name, args });
-                return { data: [{ payload: attempt }], error: null };
+                return {
+                    data: [{
+                        payload: {
+                            ...inProgress,
+                            status: "completed",
+                            score: 4,
+                            totalScore: 10,
+                            finishedAt: "2026-07-14T00:02:00.000Z",
+                        },
+                    }],
+                    error: null,
+                };
             },
         } as unknown as TeacherAttemptGatewayClient;
         const scoped = teacherAttemptGateway as unknown as {
@@ -198,7 +257,7 @@ describe("teacher attempt gateway", () => {
         if (!scoped.forceFinishTeacherAttemptsWithGateway) return;
 
         await scoped.forceFinishTeacherAttemptsWithGateway(client, {
-            attemptIds: ["attempt-1", "attempt-1", " attempt-2 "],
+            attemptIds: ["attempt-1", "attempt-1", " attempt-1 "],
             finishedAt: "2026-07-14T00:02:00.000Z",
             score: 999,
             questionResults: [{ questionId: 1, score: 999 }],
@@ -206,16 +265,38 @@ describe("teacher attempt gateway", () => {
             organizationId: "org-a",
             organizationName: "Org A",
             actorUserId: "teacher-1",
+            actorLabel: "관리자",
             memberRole: "admin",
         });
-        expect(calls).toEqual([{
+        expect(calls).toHaveLength(1);
+        expect(calls[0]).toMatchObject({
             name: "omr_force_finish_attempts_v1",
             args: {
                 p_organization_id: "org-a",
-                p_attempt_ids: ["attempt-1", "attempt-2"],
+                p_attempt_ids: ["attempt-1"],
                 p_finished_at: "2026-07-14T00:02:00.000Z",
+                p_actor_user_id: "teacher-1",
+                p_member_role: "admin",
+                p_actor_label: "관리자",
             },
-        }]);
+        });
+        expect(calls[0].args.p_gradings).toEqual([
+            expect.objectContaining({
+                attempt_id: "attempt-1",
+                expected_answers: { 1: 2 },
+                expected_exam_updated_at: canonicalExam.updatedAt,
+                score: 4,
+                total_score: 10,
+                question_results: [
+                    expect.objectContaining({ questionId: 1, status: "correct" }),
+                    expect.objectContaining({ questionId: 2, status: "unanswered" }),
+                ],
+                question_result_rows: [
+                    expect.objectContaining({ attempt_id: "attempt-1", question_id: 1, status: "correct" }),
+                    expect.objectContaining({ attempt_id: "attempt-1", question_id: 2, status: "unanswered" }),
+                ],
+            }),
+        ]);
     });
 
     it("rejects viewer mutations before calling the service-role RPC", async () => {

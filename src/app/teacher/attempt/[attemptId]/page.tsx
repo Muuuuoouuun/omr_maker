@@ -31,7 +31,7 @@ import {
     summarizeAttemptBehavior,
     summarizeAttemptScore,
 } from "@/lib/premiumAnalytics";
-import { hasTeacherSession, readTeacherSession } from "@/lib/teacherSession";
+import { hasTeacherSession } from "@/lib/teacherSession";
 import ThemeToggle from "@/components/ThemeToggle";
 import {
     DEFAULT_FEEDBACK_DOWNLOAD_POLICY,
@@ -533,7 +533,6 @@ export default function TeacherAttemptPage() {
                 questionId,
                 subQuestionId,
                 reviewed ? "reviewed" : "needs_review",
-                readTeacherSession()?.displayName,
             );
             if (activeAttemptIdRef.current !== targetAttemptId) return;
             if ((!result.localSaved && !result.remoteSaved) || !result.attempt) {
@@ -554,14 +553,12 @@ export default function TeacherAttemptPage() {
         if (!body) return;
         const targetAttemptId = attempt.id;
         if (activeAttemptIdRef.current !== targetAttemptId) return;
-        const teacherName = readTeacherSession()?.displayName;
         setSavingAnswerFor(questionId);
         try {
             const result = await answerTeacherAttemptQuestion(
                 attempt,
                 questionId,
                 body,
-                teacherName,
             );
             if (activeAttemptIdRef.current !== targetAttemptId) return;
             if ((!result.localSaved && !result.remoteSaved) || !result.attempt) {

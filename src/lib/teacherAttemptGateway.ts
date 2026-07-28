@@ -1,8 +1,15 @@
 import {
     attemptFromSupabaseRow,
+    examFromSupabaseRow,
+    questionResultRowsForAttempt,
     type SupabaseAttemptRow,
+    type SupabaseExamRow,
 } from "@/lib/omrPersistence";
-import { SUPABASE_ATTEMPT_READ_COLUMNS } from "@/lib/supabaseReadColumns";
+import {
+    SUPABASE_ATTEMPT_READ_COLUMNS,
+    SUPABASE_EXAM_READ_COLUMNS,
+} from "@/lib/supabaseReadColumns";
+import { gradeTeacherForcedAttemptOnServer } from "@/lib/serverAttemptGrading";
 import { STUDENT_QUESTION_MAX_LENGTH } from "@/lib/studentQuestions";
 import { canTeacherRoleWrite } from "@/lib/teacherSession";
 import type { WorkspaceContext } from "@/lib/workspaceContext";
@@ -15,12 +22,13 @@ interface AttemptQueryResult<T> {
 
 interface AttemptSelectQuery {
     eq(column: string, value: string): AttemptSelectQuery;
-    order(column: string, options: { ascending: false }): Promise<AttemptQueryResult<unknown[]>>;
+    in(column: string, values: string[]): AttemptSelectQuery;
+    order(column: string, options: { ascending: boolean }): Promise<AttemptQueryResult<unknown[]>>;
     maybeSingle(): Promise<AttemptQueryResult<unknown>>;
 }
 
 export interface TeacherAttemptGatewayClient {
-    from(table: "omr_attempts"): {
+    from(table: "omr_attempts" | "omr_exams"): {
         select(columns: string): AttemptSelectQuery;
     };
     rpc(
@@ -75,7 +83,16 @@ function clean(value: unknown): string {
 function mutationContextIsAuthorized(context: WorkspaceContext): boolean {
     return !!clean(context.organizationId)
         && !!clean(context.actorUserId)
+        && !!clean(context.actorLabel)
         && canTeacherRoleWrite(context.memberRole);
+}
+
+function actorRpcArgs(context: WorkspaceContext) {
+    return {
+        p_actor_user_id: clean(context.actorUserId),
+        p_member_role: context.memberRole,
+        p_actor_label: clean(context.actorLabel),
+    };
 }
 
 function attemptFromMutationResult(
@@ -113,6 +130,7 @@ export async function answerTeacherAttemptQuestionWithGateway(
         p_attempt_id: attemptId,
         p_question_id: questionId,
         p_answer: answer,
+        ...actorRpcArgs(context),
     }));
 }
 
@@ -140,6 +158,7 @@ export async function setTeacherAttemptSubquestionReviewWithGateway(
         p_attempt_id: attemptId,
         p_subquestion_id: `${questionId}:${subquestionId}`,
         p_status: input.status,
+        ...actorRpcArgs(context),
     }));
 }
 
@@ -158,16 +177,111 @@ export async function forceFinishTeacherAttemptsWithGateway(
     ) {
         return { status: "invalid_request" };
     }
+    const attemptResult = await client
+        .from("omr_attempts")
+        .select(SUPABASE_ATTEMPT_READ_COLUMNS)
+        .eq("organization_id", context.organizationId)
+        .in("id", attemptIds)
+        .order("id", { ascending: true });
+    if (attemptResult.error) {
+        return { status: "service_unavailable", error: attemptResult.error.message };
+    }
+    const storedAttempts = (attemptResult.data || []).flatMap(row => {
+        try {
+            const record = row as SupabaseAttemptRow;
+            return [{
+                attempt: attemptFromSupabaseRow(record),
+            }];
+        } catch {
+            return [];
+        }
+    });
+    if (
+        storedAttempts.length !== attemptIds.length
+        || new Set(storedAttempts.map(item => item.attempt.id)).size !== attemptIds.length
+        || storedAttempts.some(item => !attemptIds.includes(item.attempt.id))
+    ) {
+        return { status: "not_found" };
+    }
+
+    const examIds = [...new Set(storedAttempts.map(item => clean(item.attempt.examId)).filter(Boolean))];
+    const examResult = await client
+        .from("omr_exams")
+        .select(SUPABASE_EXAM_READ_COLUMNS)
+        .eq("organization_id", context.organizationId)
+        .in("id", examIds)
+        .order("id", { ascending: true });
+    if (examResult.error) {
+        return { status: "service_unavailable", error: examResult.error.message };
+    }
+    const examsById = new Map((examResult.data || []).flatMap(row => {
+        try {
+            const record = row as SupabaseExamRow;
+            const exam = examFromSupabaseRow(record);
+            const updatedAt = clean(record.updated_at);
+            return updatedAt ? [[exam.id, { exam, updatedAt }] as const] : [];
+        } catch {
+            return [];
+        }
+    }));
+    if (examsById.size !== examIds.length) return { status: "not_found" };
+
+    const gradingByAttemptId = new Map<string, Record<string, unknown>>();
+    for (const stored of storedAttempts) {
+        const canonicalExam = examsById.get(stored.attempt.examId);
+        if (!canonicalExam) return { status: "not_found" };
+        const graded = gradeTeacherForcedAttemptOnServer(
+            canonicalExam.exam,
+            stored.attempt,
+            finishedAt,
+        );
+        if (!graded.ok) {
+            return { status: "service_unavailable", error: graded.error };
+        }
+        const questionResultRows = questionResultRowsForAttempt(
+            graded.attempt,
+            finishedAt,
+            context,
+        );
+        if (questionResultRows.length !== (graded.attempt.questionResults || []).length) {
+            return { status: "service_unavailable", error: "Invalid canonical grading rows" };
+        }
+        gradingByAttemptId.set(stored.attempt.id, {
+            attempt_id: stored.attempt.id,
+            expected_answers: stored.attempt.answers || {},
+            expected_retake_question_ids: stored.attempt.retake?.questionIds || [],
+            expected_exam_updated_at: canonicalExam.updatedAt,
+            score: graded.attempt.score,
+            total_score: graded.attempt.totalScore,
+            question_results: graded.attempt.questionResults || [],
+            question_result_rows: questionResultRows,
+        });
+    }
+    const gradings = attemptIds.map(attemptId => gradingByAttemptId.get(attemptId));
+    if (gradings.some(grading => !grading)) {
+        return { status: "service_unavailable", error: "Missing canonical grading" };
+    }
+
     const result = await client.rpc("omr_force_finish_attempts_v1", {
         p_organization_id: context.organizationId,
         p_attempt_ids: attemptIds,
         p_finished_at: finishedAt,
+        ...actorRpcArgs(context),
+        p_gradings: gradings,
     });
     if (result.error) return { status: "service_unavailable", error: result.error.message };
     const records = Array.isArray(result.data) ? result.data : result.data ? [result.data] : [];
     if (records.length !== attemptIds.length) return { status: "not_found" };
     try {
-        return { status: "saved", attempts: records.map(record => attemptFromSupabaseRow(record)) };
+        const attempts = records.map(record => attemptFromSupabaseRow(record));
+        if (
+            attempts.some(item => clean(item.organizationId) !== clean(context.organizationId))
+            || attempts.some(item => item.status !== "completed")
+            || attempts.some((item, index) => item.id !== attemptIds[index])
+        ) {
+            return { status: "service_unavailable", error: "Invalid canonical attempt scope" };
+        }
+        return { status: "saved", attempts };
     } catch {
         return { status: "service_unavailable", error: "Invalid canonical attempt payload" };
     }

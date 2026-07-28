@@ -36,11 +36,22 @@ async function actionContext(requireWrite = false): Promise<TeacherAttemptAction
     const session = parseSignedTeacherSessionCookie(cookieStore.get(TEACHER_SERVER_SESSION_COOKIE)?.value);
     if (!session) return { status: "unauthorized" };
     if (requireWrite && !canTeacherRoleWrite(session.memberRole)) return { status: "forbidden" };
+    const context = workspaceContextFromTeacherSession(session);
+    if (
+        requireWrite
+        && (
+            !context.actorUserId?.trim()
+            || !context.actorLabel?.trim()
+            || !context.memberRole
+        )
+    ) {
+        return { status: "forbidden" };
+    }
     const config = getSupabaseServerConfigFromEnv();
     if (!config) return { status: process.env.NODE_ENV === "production" ? "service_unavailable" : "local_only" };
     return {
         client: createSupabaseAdminClient(config) as unknown as TeacherAttemptGatewayClient,
-        context: workspaceContextFromTeacherSession(session),
+        context,
     };
 }
 

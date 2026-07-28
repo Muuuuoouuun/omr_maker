@@ -490,19 +490,16 @@ export default function LiveResultsPage() {
 
             const finishedAt = new Date().toISOString();
             const result = await forceFinishTeacherAttempts(targets, finishedAt);
-            const completedById = new Map(result.attempts.map(attempt => [attempt.id, attempt]));
-            setAttempts(prev => prev.map(attempt => completedById.get(attempt.id) ?? attempt));
-
-            setTimerSeconds(0);
-            setIsPaused(true);
-            setForceFinishConfirmOpen(false);
-
             if (!result.localSaved && !result.remoteSaved) {
                 toast.error("종료 처리 실패", result.remoteError || "응시를 종료하지 못했습니다. 다시 시도해주세요.");
-                void refreshFromStorage();
                 return;
             }
 
+            const completedById = new Map(result.attempts.map(attempt => [attempt.id, attempt]));
+            setAttempts(prev => prev.map(attempt => completedById.get(attempt.id) ?? attempt));
+            setTimerSeconds(0);
+            setIsPaused(true);
+            setForceFinishConfirmOpen(false);
             toast.success(
                 "응시 종료 처리됨",
                 `${result.attempts.length}건을 완료 제출로 저장했습니다.${result.remoteSaved ? "" : " 개발 모드에서 이 기기에 저장했습니다."}`

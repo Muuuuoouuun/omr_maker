@@ -16,9 +16,9 @@ describe("teacher attempt scoped mutation contract", () => {
         const sql = source(path).toLowerCase();
 
         for (const signature of [
-            "omr_answer_attempt_question_v1(text, text, text, text)",
-            "omr_set_subquestion_review_v1(text, text, text, text)",
-            "omr_force_finish_attempts_v1(text, text[], timestamptz)",
+            "omr_answer_attempt_question_v1(text, text, text, text, text, text, text)",
+            "omr_set_subquestion_review_v1(text, text, text, text, text, text, text)",
+            "omr_force_finish_attempts_v1(text, text[], timestamptz, text, text, text, jsonb)",
         ]) {
             expect(sql).toContain(`revoke all on function public.${signature} from public, anon, authenticated`);
             expect(sql).toContain(`grant execute on function public.${signature} to service_role`);
@@ -26,8 +26,16 @@ describe("teacher attempt scoped mutation contract", () => {
         expect(sql).toContain("for update");
         expect(sql).toContain("attempt organization mismatch");
         expect(sql).toContain("attempt class scope mismatch");
-        expect(sql).not.toMatch(/\bset\s+score\s*=/);
-        expect(sql).not.toContain("omr_question_results");
+        expect(sql).toContain("omr_class_teachers");
+        expect(sql).toContain("class_role in ('lead', 'co_teacher', 'grader')");
+        expect(sql).toContain("p_actor_user_id");
+        expect(sql).toContain("p_member_role");
+        expect(sql).toContain("'teachername'");
+        expect(sql).toContain("'reviewedby'");
+        expect(sql).toMatch(/\bscore\s*=/);
+        expect(sql).toContain("omr_question_results");
+        expect(sql).toContain("expected_answers");
+        expect(sql).toContain("expected_exam_updated_at");
         expect(sql).not.toContain("student_id =");
     });
 
@@ -43,6 +51,9 @@ describe("teacher attempt scoped mutation contract", () => {
         expect(action).not.toContain("saveTeacherCanonicalAttempt");
         expect(action.match(/actionContext\(true\)/g)).toHaveLength(3);
         expect(action.match(/actionContext\(\)/g)?.length).toBeGreaterThanOrEqual(2);
+        expect(action).toContain("actorUserId");
+        expect(action).toContain("actorLabel");
+        expect(action).toContain("memberRole");
     });
 
     it("removes broad attempt saves from official teacher pages", () => {
@@ -57,5 +68,30 @@ describe("teacher attempt scoped mutation contract", () => {
         expect(live).toContain("forceFinishTeacherAttempts");
         expect(review).toContain("answerTeacherAttemptQuestion");
         expect(review).toContain("setTeacherAttemptSubquestionReview");
+    });
+
+    it("keeps the real live-force-finish dialog and timer unchanged on retryable failure", () => {
+        const live = source("src/app/teacher/live/page.tsx");
+        const failure = live.indexOf("if (!result.localSaved && !result.remoteSaved)");
+        const attemptTransition = live.indexOf("setAttempts(", failure);
+        const timerTransition = live.indexOf("setTimerSeconds(0)", failure);
+        const closeTransition = live.indexOf("setForceFinishConfirmOpen(false)", failure);
+        const successToast = live.indexOf('toast.success(', failure);
+
+        expect(failure).toBeGreaterThan(-1);
+        expect(attemptTransition).toBeGreaterThan(failure);
+        expect(timerTransition).toBeGreaterThan(failure);
+        expect(closeTransition).toBeGreaterThan(failure);
+        expect(successToast).toBeGreaterThan(failure);
+        expect(attemptTransition).toBeLessThan(successToast);
+        expect(timerTransition).toBeLessThan(successToast);
+        expect(closeTransition).toBeLessThan(successToast);
+
+        const failureBranch = live.slice(failure, attemptTransition);
+        expect(failureBranch).toContain('toast.error("종료 처리 실패"');
+        expect(failureBranch).not.toContain("refreshFromStorage");
+        expect(failureBranch).not.toContain("setTimerSeconds");
+        expect(failureBranch).not.toContain("setIsPaused");
+        expect(failureBranch).not.toContain("setForceFinishConfirmOpen");
     });
 });

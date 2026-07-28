@@ -1,7 +1,10 @@
 import { describe, expect, it } from "vitest";
 import type { StudentAttemptTicketClaims } from "./studentAttemptTicket";
-import type { Exam } from "@/types/omr";
-import { gradeStudentAttemptOnServer } from "./serverAttemptGrading";
+import type { Attempt, Exam } from "@/types/omr";
+import {
+    gradeStudentAttemptOnServer,
+    gradeTeacherForcedAttemptOnServer,
+} from "./serverAttemptGrading";
 
 const exam: Exam = {
     id: "exam-1",
@@ -88,5 +91,103 @@ describe("server attempt grading", () => {
             .toEqual({ ok: false, error: "exam_not_started" });
         expect(gradeStudentAttemptOnServer({ ...exam, endAt: new Date(1_000).toISOString() }, ticket, { ticket: "x", answers: {} }, 32_001))
             .toEqual({ ok: false, error: "exam_ended" });
+    });
+
+    it("recomputes a stale teacher force-finish score and grades missing answers as unanswered", () => {
+        const staleAttempt: Attempt = {
+            id: "attempt-live-1",
+            examId: exam.id,
+            examTitle: exam.title,
+            organizationId: "org-1",
+            classId: "class-1",
+            studentName: "학생 1",
+            studentId: "student-1",
+            startedAt: "2026-07-14T00:00:00.000Z",
+            finishedAt: "2026-07-14T00:00:00.000Z",
+            score: 999,
+            totalScore: 999,
+            answers: { 1: 3 },
+            status: "in_progress",
+            questionResults: [],
+        };
+
+        const result = gradeTeacherForcedAttemptOnServer(
+            exam,
+            staleAttempt,
+            "2026-07-14T00:10:00.000Z",
+        );
+
+        expect(result.ok).toBe(true);
+        if (!result.ok) return;
+        expect(result.attempt).toMatchObject({
+            id: "attempt-live-1",
+            classId: "class-1",
+            status: "completed",
+            autoSubmitted: true,
+            finishedAt: "2026-07-14T00:10:00.000Z",
+            score: 5,
+            totalScore: 10,
+        });
+        expect(result.attempt.questionResults?.map(row => ({
+            questionId: row.questionId,
+            status: row.status,
+            earnedScore: row.earnedScore,
+        }))).toEqual([
+            { questionId: 1, status: "correct", earnedScore: 5 },
+            { questionId: 2, status: "unanswered", earnedScore: 0 },
+            { questionId: 3, status: "ungraded", earnedScore: 0 },
+        ]);
+    });
+
+    it("returns an already completed attempt unchanged on an idempotent force-finish retry", () => {
+        const completed: Attempt = {
+            id: "attempt-live-2",
+            examId: exam.id,
+            examTitle: exam.title,
+            organizationId: "org-1",
+            studentName: "학생 2",
+            startedAt: "2026-07-14T00:00:00.000Z",
+            finishedAt: "2026-07-14T00:05:00.000Z",
+            score: 5,
+            totalScore: 10,
+            answers: { 1: 3 },
+            status: "completed",
+            autoSubmitted: true,
+            questionResults: [{
+                questionId: 1,
+                status: "correct",
+            } as NonNullable<Attempt["questionResults"]>[number]],
+        };
+
+        const result = gradeTeacherForcedAttemptOnServer(
+            exam,
+            completed,
+            "2026-07-14T00:20:00.000Z",
+        );
+
+        expect(result).toEqual({ ok: true, attempt: completed });
+    });
+
+    it("fails closed when stored answers are outside the canonical exam scope or choice range", () => {
+        const base: Attempt = {
+            id: "attempt-live-3",
+            examId: exam.id,
+            examTitle: exam.title,
+            organizationId: "org-1",
+            studentName: "학생 3",
+            startedAt: "2026-07-14T00:00:00.000Z",
+            finishedAt: "2026-07-14T00:00:00.000Z",
+            score: 0,
+            totalScore: 0,
+            answers: { 99: 1 },
+            status: "in_progress",
+        };
+        expect(gradeTeacherForcedAttemptOnServer(exam, base, "2026-07-14T00:10:00.000Z"))
+            .toEqual({ ok: false, error: "unexpected_question" });
+        expect(gradeTeacherForcedAttemptOnServer(
+            exam,
+            { ...base, answers: { 2: 5 } },
+            "2026-07-14T00:10:00.000Z",
+        )).toEqual({ ok: false, error: "invalid_answer" });
     });
 });
