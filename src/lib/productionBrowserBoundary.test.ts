@@ -55,12 +55,46 @@ describe("canonical browser data-plane boundary", () => {
 
         expect(dashboard).toContain("listMyAssignmentsClient({");
         expect(history).toContain("loadStudentOfficialAttempts(currentSession)");
-        expect(review).toContain("askAttemptQuestion(base.id, input)");
+        expect(review).toContain("flushPendingStudentQuestions(base.id, askAttemptQuestion)");
 
         for (const page of [home, dashboard]) {
             expect(page).not.toContain("syncMergedGuestAttempts");
         }
         expect(history).not.toContain("loadExams");
         expect(review).not.toMatch(/\bsaveAttempt\b/);
+    });
+
+    it("claims a signed guest owner before issuing the verified student cookie", () => {
+        const action = source("src/app/actions/studentSession.ts");
+        const home = source("src/app/page.tsx");
+        const migration = source("supabase/migrations/202607280000_student_guest_claim.sql");
+
+        expect(action).toContain("isSameOriginServerActionRequest");
+        expect(action).toContain("claimSignedGuestAttempts");
+        expect(action).toContain("existingGuestSession");
+        expect(action.indexOf("await claimSignedGuestAttempts"))
+            .toBeLessThan(action.indexOf("await setSessionCookie({", action.indexOf("await claimSignedGuestAttempts")));
+        expect(home).toContain("result.guestClaim");
+        expect(home).toContain("guestClaim.status === \"claimed\"");
+        expect(migration).toContain("omr_claim_guest_attempts_v1");
+        expect(migration).toContain("for update");
+        expect(migration).toContain("grant execute on function public.omr_claim_guest_attempts_v1");
+    });
+
+    it("keeps failed student questions visible and retries the durable full union", () => {
+        const review = source("src/app/student/review/[attemptId]/page.tsx");
+
+        expect(review).toContain("queuePendingStudentQuestion");
+        expect(review).toContain("pendingStudentQuestionNotesById");
+        expect(review).toContain("flushPendingStudentQuestions");
+        expect(review).toContain("질문 전송 보류");
+        expect(review).toContain("return false");
+
+        const action = source("src/app/actions/studentExam.ts");
+        const questionStart = action.indexOf("export async function askAttemptQuestion");
+        const questionAction = action.slice(questionStart);
+        expect(questionAction).toContain("isSameOriginServerActionRequest");
+        expect(questionAction.indexOf("isSameOriginServerActionRequest"))
+            .toBeLessThan(questionAction.indexOf("resolveCtx()"));
     });
 });

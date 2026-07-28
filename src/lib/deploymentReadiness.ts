@@ -35,6 +35,31 @@ function publicSupabaseConfigured(env: Env): boolean {
     return !!(url && key);
 }
 
+function canonicalBrowserBoundaryCheck(
+    env: Env,
+    hasPublicSupabase: boolean,
+): DeploymentReadinessCheck {
+    const isProduction = clean(env.NODE_ENV).toLowerCase() === "production";
+    if (isProduction) {
+        return {
+            key: "canonical_browser_boundary",
+            label: "운영 브라우저 데이터 경계",
+            detail: hasPublicSupabase
+                ? "publishable key가 설정되어 있어도 운영 브라우저 canonical CRUD는 비활성입니다. 공식 데이터는 Supabase 서버 게이트웨이만 사용합니다."
+                : "운영 브라우저 canonical CRUD는 비활성입니다. 공식 데이터는 Supabase 서버 게이트웨이만 사용합니다.",
+            tone: "ready",
+        };
+    }
+    return {
+        key: "canonical_browser_boundary",
+        label: "브라우저 데이터 경계",
+        detail: hasPublicSupabase
+            ? "개발·테스트 환경에서만 publishable key 기반 canonical 동기화를 사용할 수 있습니다."
+            : "공개 Supabase 환경변수가 없어 개발 브라우저 동기화도 비활성입니다.",
+        tone: hasPublicSupabase ? "ready" : "warning",
+    };
+}
+
 function describeIssues(issues: { label: string; detail: string }[]): string {
     if (issues.length === 0) return "";
     return issues.map(issue => `${issue.label}: ${issue.detail}`).join(" ");
@@ -107,7 +132,7 @@ function isFlagEnabled(value: unknown): boolean {
 
 function productionRlsCheck(
     env: Env,
-    supabasePublicReady: boolean,
+    serverGatewayReady: boolean,
     databaseProbe?: SupabaseDeploymentProbe | null,
 ): DeploymentReadinessCheck {
     const rlsApplied = isFlagEnabled(env.OMR_PRODUCTION_RLS_APPLIED);
@@ -133,14 +158,11 @@ function productionRlsCheck(
         };
     }
 
-    // Production + remote sync but no confirmation that PII tables are locked down is the
-    // dangerous state: student email/phone/guardian_contact would sit under the open alpha
-    // RLS (schema.sql). Escalate to a hard error so real data is not stored on public policies.
-    if (isProduction && supabasePublicReady) {
+    if (isProduction && serverGatewayReady) {
         return {
             key: "production_rls",
             label: "실사용 RLS 전환",
-            detail: "프로덕션에서 Supabase 원격 저장이 켜져 있는데 production-rls.sql 적용이 확인되지 않았습니다. 지금은 학생 이메일·전화·보호자 연락처가 공개 alpha RLS로 노출될 수 있습니다. production-rls.sql을 적용한 뒤 OMR_PRODUCTION_RLS_APPLIED=true를 설정하세요.",
+            detail: "Supabase 서버 게이트웨이는 설정됐지만 production-rls.sql 적용이 확인되지 않았습니다. 운영 데이터 저장 전 실제 DB 권한과 FORCE RLS를 검증하세요.",
             tone: "error",
         };
     }
@@ -199,14 +221,7 @@ export function buildDeploymentReadiness(
         sessionSecretCheck(env),
         studentSessionSecretCheck(env),
         studentAttemptSecretCheck(env),
-        {
-            key: "supabase_public_sync",
-            label: "Supabase 클라이언트 동기화",
-            detail: supabasePublicReady
-                ? "NEXT_PUBLIC_SUPABASE_URL과 publishable/anon key가 있어 허용된 공개 동기화 기능을 사용할 수 있습니다. 교사·학생 공식 데이터는 서버 게이트웨이를 경유합니다."
-                : "공개 Supabase 환경변수가 없어 브라우저 동기화는 비활성입니다. 운영 공식 데이터는 서버 게이트웨이 설정으로 별도 확인합니다.",
-            tone: supabasePublicReady ? "ready" : "warning",
-        },
+        canonicalBrowserBoundaryCheck(env, supabasePublicReady),
         {
             key: "supabase_service_role",
             label: "Supabase 서버 게이트웨이",
@@ -215,7 +230,7 @@ export function buildDeploymentReadiness(
                 : "서비스롤 키가 없으면 안전한 원격 시험·서버 채점 게이트웨이가 비활성입니다. SUPABASE_SERVICE_ROLE_KEY는 서버 환경변수에만 설정하세요.",
             tone: serviceRoleReady ? "ready" : isProduction ? "error" : "warning",
         },
-        productionRlsCheck(env, supabasePublicReady || serviceRoleReady, databaseProbe),
+        productionRlsCheck(env, serviceRoleReady, databaseProbe),
     ];
 
     const readyCount = checks.filter(check => check.tone === "ready").length;
@@ -228,7 +243,7 @@ export function buildDeploymentReadiness(
             ? "교사 계정, 서버 세션, 학생 티켓, Supabase 서버 게이트웨이 설정을 먼저 고쳐야 합니다."
             : hasWarning
                 ? "핵심 흐름은 실행 가능하지만 운영 데이터 전에는 남은 보안/DB 항목을 확인하세요."
-                : "교사 계정, 서버 세션, 학생 응시 티켓, 공개 동기화, 서버 게이트웨이와 RLS가 모두 준비됐습니다.",
+                : "교사 계정, 서버 세션, 학생 응시 티켓, 브라우저 데이터 경계, 서버 게이트웨이와 RLS가 모두 준비됐습니다.",
         credentialCount: authConfig.credentialCount,
         readyCount,
         totalCount: checks.length,

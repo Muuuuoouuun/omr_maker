@@ -9,6 +9,7 @@ import {
     STUDENT_SERVER_SESSION_COOKIE,
     STUDENT_SERVER_SESSION_MAX_AGE_SECONDS,
     type StudentIdentityInput,
+    type StudentServerIdentity,
 } from "@/lib/studentServerSession";
 import { shouldUseSecureTeacherSessionCookie } from "@/lib/teacherServerSession";
 import {
@@ -38,6 +39,12 @@ import {
     TEACHER_SERVER_SESSION_COOKIE,
 } from "@/lib/teacherServerSession";
 import { workspaceContextFromTeacherSession } from "@/lib/workspaceContext";
+import {
+    claimSignedGuestAttempts,
+    type GuestClaimResult,
+    type GuestClaimRpcClient,
+} from "@/lib/studentGuestClaimGateway";
+import { isSameOriginServerActionRequest } from "@/lib/serverActionSecurity";
 
 const WORKSPACE_ID_PATTERN = /^(?:default|teacher_[a-z0-9]{7,16})$/;
 const MAX_CODE_SYNC_ENTRIES = 500;
@@ -51,7 +58,7 @@ interface StudentAuthFilter {
     order(column: string, options?: { ascending?: boolean }): PromiseLike<{ data: unknown[] | null; error: QueryError }>;
 }
 
-interface StudentAuthClient {
+interface StudentAuthClient extends GuestClaimRpcClient {
     from(table: string): {
         select(columns?: string): StudentAuthFilter;
         upsert(row: unknown): PromiseLike<{ error: QueryError }>;
@@ -87,6 +94,7 @@ export interface StudentSessionIssueResult {
     ok: boolean;
     status: StudentSessionIssueStatus;
     identity?: IssuedStudentIdentity;
+    guestClaim?: GuestClaimResult;
     error?: string;
 }
 
@@ -186,7 +194,17 @@ export async function issueStudentSession(input: {
     groupName?: string;
     regionId?: string;
     regionName?: string;
+    guestAttemptIds?: string[];
 }): Promise<StudentSessionIssueResult> {
+    const headerStore = await headers();
+    if (!headerStore.get("origin") || !isSameOriginServerActionRequest(headerStore)) {
+        return { ok: false, status: "unauthenticated" };
+    }
+    const cookieStore = await cookies();
+    const existingIdentity = parseSignedStudentSessionCookie(
+        cookieStore.get(STUDENT_SERVER_SESSION_COOKIE)?.value,
+    );
+    const existingGuestSession = existingIdentity?.kind === "guest" ? existingIdentity : null;
     const client = adminClient();
     if (!client) {
         const studentId = clean(input.studentId);
@@ -215,7 +233,6 @@ export async function issueStudentSession(input: {
     const studentLookup = clean(input.studentLookup);
     if (!workspaceId) return { ok: false, status: "invalid_workspace" };
 
-    const headerStore = await headers();
     const rateLimitKeys = buildStudentLoginRateLimitKeys({
         workspaceId,
         studentLookup,
@@ -295,6 +312,28 @@ export async function issueStudentSession(input: {
             regionId: regionName,
             regionName,
         };
+        const now = Date.now();
+        const verifiedStudent: StudentServerIdentity = {
+            kind: "student",
+            ...identity,
+            organizationId: workspaceId,
+            identityType: "temporary",
+            issuedAt: now,
+            expiresAt: now + STUDENT_SERVER_SESSION_MAX_AGE_SECONDS * 1000,
+        };
+        const guestClaim = await claimSignedGuestAttempts(client, {
+            guest: existingGuestSession,
+            student: verifiedStudent,
+            attemptIds: input.guestAttemptIds,
+        });
+        if (guestClaim.status === "retryable_error") {
+            return {
+                ok: false,
+                status: "error",
+                guestClaim,
+                error: "게스트 기록을 서버에 연결하지 못했습니다. 다시 시도해주세요.",
+            };
+        }
         const cookieResult = await setSessionCookie({
             kind: "student",
             ...identity,
@@ -303,7 +342,7 @@ export async function issueStudentSession(input: {
         });
         if (!cookieResult.ok) return { ok: false, status: "error" };
         recordStudentLoginSuccess(rateLimitKeys);
-        return { ok: true, status: "ok", identity };
+        return { ok: true, status: "ok", identity, guestClaim };
     } catch (error) {
         console.error("issueStudentSession failed", error);
         return { ok: false, status: "error" };

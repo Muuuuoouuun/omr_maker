@@ -142,8 +142,9 @@ describe("deployment readiness", () => {
             tone: "ready",
         }));
         expect(summary.checks).toContainEqual(expect.objectContaining({
-            key: "supabase_public_sync",
+            key: "canonical_browser_boundary",
             tone: "ready",
+            detail: expect.stringContaining("운영 브라우저 canonical CRUD는 비활성"),
         }));
         expect(summary.checks).toContainEqual(expect.objectContaining({
             key: "supabase_service_role",
@@ -158,6 +159,23 @@ describe("deployment readiness", () => {
             tone: "ready",
         }));
         expect(summary.readyCount).toBe(7);
+    });
+
+    it("does not report public Supabase keys as production browser synchronization", () => {
+        const summary = buildDeploymentReadiness({
+            NODE_ENV: "production",
+            NEXT_PUBLIC_SUPABASE_URL: "https://example.supabase.co",
+            NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY: "sb_publishable_public",
+        });
+
+        expect(summary.checks).toContainEqual(expect.objectContaining({
+            key: "canonical_browser_boundary",
+            label: "운영 브라우저 데이터 경계",
+            tone: "ready",
+            detail: expect.stringContaining("publishable key"),
+        }));
+        expect(JSON.stringify(summary)).not.toContain("Supabase 클라이언트 동기화");
+        expect(JSON.stringify(summary)).not.toContain("공개 alpha RLS");
     });
 
     it("does not accept a production RLS flag without a live DB probe", () => {
@@ -179,7 +197,7 @@ describe("deployment readiness", () => {
         }));
     });
 
-    it("escalates to an error when production sync is on but production RLS is not confirmed", () => {
+    it("keeps the browser boundary ready while reporting missing production server controls separately", () => {
         const summary = buildDeploymentReadiness({
             NODE_ENV: "production",
             TEACHER_ACCOUNTS: JSON.stringify([{ id: "teacher-a", email: "a@example.com", password: "pass-a" }]),
@@ -191,9 +209,16 @@ describe("deployment readiness", () => {
 
         expect(summary.label).toBe("배포 확인 필요");
         expect(summary.checks).toContainEqual(expect.objectContaining({
-            key: "production_rls",
+            key: "canonical_browser_boundary",
+            tone: "ready",
+        }));
+        expect(summary.checks).toContainEqual(expect.objectContaining({
+            key: "supabase_service_role",
             tone: "error",
-            detail: expect.stringContaining("공개 alpha RLS"),
+        }));
+        expect(summary.checks).toContainEqual(expect.objectContaining({
+            key: "production_rls",
+            tone: "warning",
         }));
     });
 });

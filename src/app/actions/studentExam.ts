@@ -385,6 +385,10 @@ export async function askAttemptQuestion(
     attemptId: string,
     question: StudentQuestionInput,
 ): Promise<{ status: Status | "denied"; attempt?: Attempt }> {
+    const headerStore = await headers();
+    if (!headerStore.get("origin") || !isSameOriginServerActionRequest(headerStore)) {
+        return { status: "error" };
+    }
     const ctx = await resolveCtx();
     if (!isCtx(ctx)) return ctx;
     try {

@@ -34,6 +34,12 @@ import { askAttemptQuestion, loadExamForReview, loadMyAttempt, submitAttempt } f
 import { loadMyAttemptClient, loadReviewExamClient } from "@/lib/studentExamClient";
 import { stripTeacherOnlySubQuestionFields } from "@/lib/examSolvePayload";
 import { studentQuestionsByQuestionId, upsertStudentQuestion } from "@/lib/studentQuestions";
+import {
+    flushPendingStudentQuestions,
+    pendingStudentQuestionNotesById,
+    queuePendingStudentQuestion,
+    readPendingStudentQuestions,
+} from "@/lib/studentQuestionOutbox";
 import { buildAttemptRetakeRecovery, buildSourceAttemptRecovery } from "@/lib/retakeRecovery";
 import { toast } from "@/components/Toast";
 import ThemeToggle from "@/components/ThemeToggle";
@@ -572,8 +578,20 @@ export default function ReviewPage() {
                 // only backfills questions never migrated onto the attempt.
                 setStudentQuestions({
                     ...readStudentQuestionQueue(found.id),
+                    ...pendingStudentQuestionNotesById(found.id),
                     ...studentQuestionsByQuestionId(found),
                 });
+                const pendingQuestions = readPendingStudentQuestions(found.id);
+                if (pendingQuestions.length > 0) {
+                    setQuestionDrafts(previous => ({
+                        ...previous,
+                        ...Object.fromEntries(pendingQuestions.map(question => [question.questionId, question.body])),
+                    }));
+                    setOpenQuestionBoxes(previous => ({
+                        ...previous,
+                        ...Object.fromEntries(pendingQuestions.map(question => [question.questionId, true])),
+                    }));
+                }
 
                 if (session?.studentId) {
                     try {
@@ -923,43 +941,51 @@ export default function ReviewPage() {
         const input = { questionId: question.id, questionNumber: question.number, body };
         questionSaveInFlightRef.current = true;
         try {
-            // Server-first: the action verifies ownership via the session cookie
-            // and merges the note into the attempt row server-side.
-            let updated: Attempt | null = null;
-            try {
-                const res = await askAttemptQuestion(base.id, input);
-                if (res.status === "ok" && res.attempt) updated = res.attempt;
-            } catch {
-                // offline/dev — fall back to the local attempt write below
-            }
-            if (updated) {
-                // F7: the server row can be missing notes queued offline on this
-                // device (not yet synced). Union the freshest local notes with the
-                // server copy — server wins on conflict — so submitting online never
-                // drops a locally-queued question.
-                updated = {
-                    ...updated,
-                    studentQuestions: mergeStudentQuestionNotes(
-                        attemptRef.current?.studentQuestions,
-                        updated.studentQuestions,
-                    ),
-                };
-                try { await saveLocalAttempt(updated); } catch { /* quota — server copy is canonical */ }
-            } else {
-                // Merge onto the freshest local attempt (ref, not stale closure).
-                updated = upsertStudentQuestion(attemptRef.current || base, input, new Date().toISOString());
-                if (!updated) return false;
-                const localSaved = await saveLocalAttempt(updated).catch(() => false);
-                if (!localSaved) {
-                    toast.error("질문 저장 실패", "브라우저 저장소를 확인한 뒤 다시 시도해주세요.");
-                    return false;
-                }
+            const queuedAt = new Date().toISOString();
+            if (!queuePendingStudentQuestion({ attemptId: base.id, ...input, queuedAt })) {
+                toast.error("질문 저장 실패", "브라우저 저장소를 확인한 뒤 다시 시도해주세요.");
+                return false;
             }
 
+            const localUpdated = upsertStudentQuestion(attemptRef.current || base, input, queuedAt);
+            if (!localUpdated) return false;
+            const localSaved = await saveLocalAttempt(localUpdated).catch(() => false);
+            attemptRef.current = localUpdated;
+            setAttempt(localUpdated);
+            setStudentQuestions(previous => ({
+                ...previous,
+                ...pendingStudentQuestionNotesById(base.id),
+                ...studentQuestionsByQuestionId(localUpdated),
+            }));
+            setOpenQuestionBoxes(prev => ({ ...prev, [question.id]: true }));
+            if (!localSaved) {
+                toast.error(
+                    "질문 전송 보류",
+                    "질문 재전송 정보는 보관했지만 결과 캐시 저장에 실패했습니다. 저장 공간을 확인한 뒤 다시 눌러주세요.",
+                );
+                return false;
+            }
+
+            const flushed = await flushPendingStudentQuestions(base.id, askAttemptQuestion);
+            if (flushed.status !== "sent") {
+                toast.error(
+                    "질문 전송 보류",
+                    "질문 내용은 이 기기에 보관했습니다. 네트워크와 로그인 상태를 확인한 뒤 질문 저장을 다시 눌러주세요.",
+                );
+                return false;
+            }
+
+            const updated: Attempt = {
+                ...flushed.attempt,
+                studentQuestions: mergeStudentQuestionNotes(
+                    localUpdated.studentQuestions,
+                    flushed.attempt.studentQuestions,
+                ),
+            };
+            await saveLocalAttempt(updated).catch(() => false);
             attemptRef.current = updated;
             setAttempt(updated);
-            setStudentQuestions(prev => ({ ...prev, ...studentQuestionsByQuestionId(updated) }));
-            setOpenQuestionBoxes(prev => ({ ...prev, [question.id]: true }));
+            setStudentQuestions(previous => ({ ...previous, ...studentQuestionsByQuestionId(updated) }));
             return true;
         } finally {
             questionSaveInFlightRef.current = false;

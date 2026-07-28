@@ -11,6 +11,7 @@ import {
   issueGuestSession,
   issueStudentSession,
   loadStudentLoginDirectory,
+  type StudentSessionIssueResult,
   type StudentSessionIssueStatus,
 } from "@/app/actions/studentSession";
 import { formatRegionScopedLabel } from "@/lib/dashboardSelection";
@@ -195,6 +196,18 @@ function studentLoginErrorMessage(status: StudentSessionIssueStatus): string {
   if (status === "invalid_credentials") return "이름, 반, 학생번호(또는 이메일), 시작 코드를 다시 확인해주세요.";
   if (status === "unauthenticated") return "학생 세션을 시작하지 못했습니다. 다시 로그인해주세요.";
   return "학생 계정을 확인하지 못했습니다. 잠시 후 다시 시도해주세요.";
+}
+
+function pendingGuestAttemptIds(): string[] {
+  const pending = readPendingGuestMerge();
+  if (!pending) return [];
+  return readLocalAttempts()
+    .filter(attempt => (
+      attempt.guestId === pending.guestId
+      || attempt.studentId === `guest:${pending.guestId}`
+    ))
+    .map(attempt => attempt.id)
+    .slice(0, 100);
 }
 
 export default function Home() {
@@ -398,22 +411,44 @@ export default function Home() {
     }
   };
 
-  const finishStudentLogin = async (session: StudentSession, next: string, issuedCode?: string) => {
-    const pendingGuestMerge = consumePendingGuestMerge();
+  const finishStudentLogin = async (
+    session: StudentSession,
+    next: string,
+    issuedCode?: string,
+    guestClaim?: StudentSessionIssueResult["guestClaim"],
+  ) => {
+    const pendingGuestMerge = readPendingGuestMerge();
     if (pendingGuestMerge) {
-      const mergedCount = mergeGuestAttempts(pendingGuestMerge.guestId, {
-        studentId: session.studentId,
-        name: session.name,
-        groupId: session.groupId,
-        groupName: session.groupName,
-        regionId: session.regionId,
-        regionName: session.regionName,
-        identityType: session.identityType,
-      });
-      if (mergedCount > 0) {
-        toast.success("게스트 기록 연결됨", `${mergedCount}개의 시험 기록을 학생 기록으로 저장했습니다.`);
+      const pendingCount = previewGuestMerge(pendingGuestMerge.guestId)?.mergeableCount || 0;
+      const authoritativeClaimed = guestClaim !== undefined
+        && guestClaim.status === "claimed"
+        && guestClaim.claimedCount >= pendingCount;
+      const localOnly = guestClaim === undefined;
+      if (authoritativeClaimed || localOnly) {
+        consumePendingGuestMerge();
+        const mergedCount = mergeGuestAttempts(pendingGuestMerge.guestId, {
+          studentId: session.studentId,
+          name: session.name,
+          groupId: session.groupId,
+          groupName: session.groupName,
+          regionId: session.regionId,
+          regionName: session.regionName,
+          identityType: session.identityType,
+        });
+        const count = authoritativeClaimed ? guestClaim.claimedCount : mergedCount;
+        if (count > 0) {
+          toast.success(
+            authoritativeClaimed ? "게스트 기록 서버 연결됨" : "게스트 기록 이 기기에 연결됨",
+            `${count}개의 시험 기록을 학생 기록으로 저장했습니다.`,
+          );
+        } else {
+          toast.info("연결할 새 게스트 기록 없음", "이후 제출 기록은 학생 기록으로 저장됩니다.");
+        }
       } else {
-        toast.info("연결할 새 게스트 기록 없음", "이후 제출 기록은 학생 기록으로 저장됩니다.");
+        toast.error(
+          "게스트 기록 연결 보류",
+          "서버에서 기록 소유권을 확인하지 못했습니다. 기록은 이 기기에 보관되며 다음 로그인에서 다시 시도합니다.",
+        );
       }
     }
 
@@ -463,6 +498,7 @@ export default function Home() {
           groupId: selectedGroupId,
           studentLookup,
           startCode,
+          guestAttemptIds: pendingGuestAttemptIds(),
         });
         if (!result.ok || !result.identity) {
           setError(studentLoginErrorMessage(result.status));
@@ -481,7 +517,7 @@ export default function Home() {
           isGuest: false,
           identityType: "temporary",
         };
-        await finishStudentLogin(session, next);
+        await finishStudentLogin(session, next, undefined, result.guestClaim);
       } catch {
         setError("학생 인증 서버에 연결하지 못했습니다. 네트워크를 확인한 뒤 다시 시도해주세요.");
       } finally {
@@ -564,6 +600,7 @@ export default function Home() {
         groupId: selectedGroupId,
         groupName: identity.groupName,
         ...regionSnapshot,
+        guestAttemptIds: pendingGuestAttemptIds(),
       });
       if (!result.ok) {
         setError(studentLoginErrorMessage(result.status));
@@ -584,6 +621,7 @@ export default function Home() {
         session,
         next,
         codeDecision.status === "new_code_issued" ? codeDecision.code : undefined,
+        result.guestClaim,
       );
     } catch {
       setError("학생 세션을 시작하지 못했습니다. 브라우저와 네트워크 상태를 확인해주세요.");
