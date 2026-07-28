@@ -7,8 +7,10 @@ import {
     collectStudentQuestionInbox,
     newlyAnsweredKeys,
     pendingStudentQuestions,
+    validateStudentQuestionForAttempt,
     studentQuestionsByQuestionId,
     upsertStudentQuestion,
+    STUDENT_QUESTION_MAX_COUNT,
     STUDENT_QUESTION_MAX_LENGTH,
 } from "./studentQuestions";
 
@@ -46,6 +48,60 @@ describe("studentQuestions", () => {
 
     it("rejects empty bodies", () => {
         expect(upsertStudentQuestion(attempt(), { questionId: 1, questionNumber: 1, body: "   " }, NOW)).toBeNull();
+    });
+
+    it("validates the question id against canonical results and derives its number", () => {
+        const ownedAttempt = attempt({
+            questionResults: [
+                { questionId: 7, questionNumber: 3 } as NonNullable<Attempt["questionResults"]>[number],
+            ],
+        });
+
+        expect(validateStudentQuestionForAttempt(ownedAttempt, {
+            questionId: 7,
+            questionNumber: 999,
+            body: "  왜 이 답인가요?  ",
+        })).toEqual({
+            questionId: 7,
+            questionNumber: 3,
+            body: "왜 이 답인가요?",
+        });
+        expect(validateStudentQuestionForAttempt(ownedAttempt, {
+            questionId: 8,
+            questionNumber: 8,
+            body: "임의 문항",
+        })).toBeNull();
+    });
+
+    it("rejects oversized text and a new question beyond the per-attempt cap", () => {
+        const results = Array.from({ length: STUDENT_QUESTION_MAX_COUNT + 1 }, (_, index) => ({
+            questionId: index + 1,
+            questionNumber: index + 1,
+        })) as NonNullable<Attempt["questionResults"]>;
+        const notes = Array.from({ length: STUDENT_QUESTION_MAX_COUNT }, (_, index) => ({
+            questionId: index + 1,
+            questionNumber: index + 1,
+            body: "질문",
+            createdAt: NOW,
+            status: "queued" as const,
+        }));
+        const ownedAttempt = attempt({ questionResults: results, studentQuestions: notes });
+
+        expect(validateStudentQuestionForAttempt(ownedAttempt, {
+            questionId: 1,
+            questionNumber: 1,
+            body: "질".repeat(STUDENT_QUESTION_MAX_LENGTH + 1),
+        })).toBeNull();
+        expect(validateStudentQuestionForAttempt(ownedAttempt, {
+            questionId: STUDENT_QUESTION_MAX_COUNT + 1,
+            questionNumber: 1,
+            body: "새 질문",
+        })).toBeNull();
+        expect(validateStudentQuestionForAttempt(ownedAttempt, {
+            questionId: 1,
+            questionNumber: 999,
+            body: "기존 질문 수정",
+        })).toMatchObject({ questionId: 1, questionNumber: 1 });
     });
 
     it("re-asking replaces the note and clears the previous answer", () => {

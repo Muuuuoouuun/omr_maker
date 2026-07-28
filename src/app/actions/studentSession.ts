@@ -45,6 +45,12 @@ import {
     type GuestClaimRpcClient,
 } from "@/lib/studentGuestClaimGateway";
 import { isSameOriginServerActionRequest } from "@/lib/serverActionSecurity";
+import {
+    createSignedGuestClaimCapability,
+    GUEST_CLAIM_CAPABILITY_COOKIE,
+    GUEST_CLAIM_CAPABILITY_MAX_ATTEMPTS,
+    GUEST_CLAIM_CAPABILITY_MAX_AGE_SECONDS,
+} from "@/lib/studentGuestClaimCapability";
 
 const WORKSPACE_ID_PATTERN = /^(?:default|teacher_[a-z0-9]{7,16})$/;
 const MAX_CODE_SYNC_ENTRIES = 500;
@@ -145,6 +151,32 @@ async function setSessionCookie(input: StudentIdentityInput): Promise<{ ok: bool
     }
 }
 
+async function setGuestClaimCapabilityCookie(input: {
+    guestId: string;
+    studentId: string;
+    organizationId: string;
+    classId: string;
+    attemptIds: string[];
+}): Promise<boolean> {
+    const value = createSignedGuestClaimCapability(input);
+    if (!value) return false;
+    try {
+        const headerStore = await headers();
+        const cookieStore = await cookies();
+        cookieStore.set(GUEST_CLAIM_CAPABILITY_COOKIE, value, {
+            httpOnly: true,
+            sameSite: "lax",
+            secure: shouldUseSecureTeacherSessionCookie(headerStore.get("host")),
+            path: "/",
+            maxAge: GUEST_CLAIM_CAPABILITY_MAX_AGE_SECONDS,
+        });
+        return true;
+    } catch (error) {
+        console.error("Guest claim capability cookie write failed", error);
+        return false;
+    }
+}
+
 /** Minimal public directory used by an academy-specific student invite link. */
 export async function loadStudentLoginDirectory(workspaceValue: string): Promise<{
     status: "ok" | "degraded_local" | "invalid_workspace" | "error";
@@ -205,6 +237,14 @@ export async function issueStudentSession(input: {
         cookieStore.get(STUDENT_SERVER_SESSION_COOKIE)?.value,
     );
     const existingGuestSession = existingIdentity?.kind === "guest" ? existingIdentity : null;
+    const requestedGuestAttemptIds = [...new Set((input.guestAttemptIds || []).map(clean).filter(Boolean))];
+    if (existingGuestSession && requestedGuestAttemptIds.length > GUEST_CLAIM_CAPABILITY_MAX_ATTEMPTS) {
+        return {
+            ok: false,
+            status: "error",
+            error: `한 번에 연결할 수 있는 게스트 기록은 ${GUEST_CLAIM_CAPABILITY_MAX_ATTEMPTS}건입니다.`,
+        };
+    }
     const client = adminClient();
     if (!client) {
         const studentId = clean(input.studentId);
@@ -324,7 +364,7 @@ export async function issueStudentSession(input: {
         const guestClaim = await claimSignedGuestAttempts(client, {
             guest: existingGuestSession,
             student: verifiedStudent,
-            attemptIds: input.guestAttemptIds,
+            attemptIds: requestedGuestAttemptIds,
         });
         if (guestClaim.status === "retryable_error") {
             return {
@@ -332,6 +372,24 @@ export async function issueStudentSession(input: {
                 status: "error",
                 guestClaim,
                 error: "게스트 기록을 서버에 연결하지 못했습니다. 다시 시도해주세요.",
+            };
+        }
+        if (
+            existingGuestSession
+            && requestedGuestAttemptIds.length > 0
+            && !await setGuestClaimCapabilityCookie({
+                guestId: existingGuestSession.guestId || "",
+                studentId: identity.studentId,
+                organizationId: workspaceId,
+                classId: groupId,
+                attemptIds: requestedGuestAttemptIds,
+            })
+        ) {
+            return {
+                ok: false,
+                status: "error",
+                guestClaim,
+                error: "게스트 기록 재시도 권한을 보관하지 못했습니다. 다시 시도해주세요.",
             };
         }
         const cookieResult = await setSessionCookie({

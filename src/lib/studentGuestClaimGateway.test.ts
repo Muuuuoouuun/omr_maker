@@ -3,7 +3,7 @@ import { claimSignedGuestAttempts } from "./studentGuestClaimGateway";
 
 describe("signed guest-attempt claim gateway", () => {
     it("atomically moves only the signed guest owner into the verified student scope", async () => {
-        const rpc = vi.fn().mockResolvedValue({ data: 2, error: null });
+        const rpc = vi.fn().mockResolvedValue({ data: ["attempt-1"], error: null });
 
         await expect(claimSignedGuestAttempts({ rpc }, {
             guest: {
@@ -26,7 +26,10 @@ describe("signed guest-attempt claim gateway", () => {
                 expiresAt: 9e15,
             },
             attemptIds: ["attempt-1", "attempt-2"],
-        })).resolves.toEqual({ status: "claimed", claimedCount: 2 });
+        })).resolves.toEqual({
+            status: "claimed",
+            acknowledgedAttemptIds: ["attempt-1"],
+        });
 
         expect(rpc).toHaveBeenCalledWith("omr_claim_guest_attempts_v1", {
             p_guest_id: "guest-secret",
@@ -56,7 +59,7 @@ describe("signed guest-attempt claim gateway", () => {
                 expiresAt: 9e15,
             },
             attemptIds: [],
-        })).resolves.toEqual({ status: "not_requested", claimedCount: 0 });
+        })).resolves.toEqual({ status: "not_requested", acknowledgedAttemptIds: [] });
         expect(rpc).not.toHaveBeenCalled();
     });
 
@@ -89,7 +92,7 @@ describe("signed guest-attempt claim gateway", () => {
             attemptIds: ["attempt-1"],
         })).resolves.toEqual({
             status: "retryable_error",
-            claimedCount: 0,
+            acknowledgedAttemptIds: [],
             error: "database unavailable",
         });
     });

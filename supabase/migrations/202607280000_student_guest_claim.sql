@@ -9,13 +9,14 @@ create or replace function public.omr_claim_guest_attempts_v1(
     p_group_name text,
     p_attempt_ids text[]
 )
-returns bigint
+returns text[]
 language plpgsql
 security definer
 set search_path = public, pg_temp
 as $$
 declare
-    claimed_count bigint := 0;
+    acknowledged_attempt_ids text[] := '{}'::text[];
+    merged_timestamp timestamptz := now();
 begin
     if nullif(btrim(p_guest_id), '') is null
         or nullif(btrim(p_student_profile_id), '') is null
@@ -63,7 +64,7 @@ begin
         group_name = p_group_name,
         identity_type = 'temporary',
         merged_from_guest_id = coalesce(attempt.merged_from_guest_id, p_guest_id),
-        merged_at = coalesce(attempt.merged_at, now()),
+        merged_at = coalesce(attempt.merged_at, merged_timestamp),
         payload = (
             coalesce(attempt.payload, '{}'::jsonb)
             - 'guestId'
@@ -76,7 +77,31 @@ begin
             'groupName', p_group_name,
             'identityType', 'temporary',
             'mergedFromGuestId', p_guest_id,
-            'mergedAt', coalesce(attempt.merged_at, now())
+            'mergedAt', coalesce(attempt.merged_at, merged_timestamp)
+        ) || case
+            when jsonb_typeof(attempt.payload->'questionResults') = 'array' then
+                jsonb_build_object(
+                    'questionResults',
+                    (
+                        select coalesce(
+                            jsonb_agg(
+                                (question_result - 'guestId') || jsonb_build_object(
+                                    'studentId', p_student_profile_id,
+                                    'studentProfileId', p_student_profile_id,
+                                    'studentName', p_student_name,
+                                    'groupId', p_class_id,
+                                    'groupName', p_group_name,
+                                    'identityType', 'temporary'
+                                )
+                                order by ordinal
+                            ),
+                            '[]'::jsonb
+                        )
+                        from jsonb_array_elements(attempt.payload->'questionResults')
+                            with ordinality as nested(question_result, ordinal)
+                    )
+                )
+            else '{}'::jsonb
         )
     where attempt.organization_id = p_organization_id
       and attempt.student_id = 'guest:' || p_guest_id
@@ -86,11 +111,9 @@ begin
           or attempt.id = any(p_attempt_ids)
       );
 
-    get diagnostics claimed_count = row_count;
-
     if coalesce(array_length(p_attempt_ids, 1), 0) > 0 then
-        select count(*)
-        into claimed_count
+        select coalesce(array_agg(attempt.id order by attempt.id), '{}'::text[])
+        into acknowledged_attempt_ids
         from public.omr_attempts attempt
         where attempt.organization_id = p_organization_id
           and attempt.id = any(p_attempt_ids)
@@ -126,7 +149,7 @@ begin
           or result.attempt_id = any(p_attempt_ids)
       );
 
-    return claimed_count;
+    return acknowledged_attempt_ids;
 end;
 $$;
 

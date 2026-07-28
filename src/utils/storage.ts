@@ -451,6 +451,7 @@ export function scorePercent(attempt: Pick<Attempt, "score" | "totalScore">): nu
 export function mergeGuestAttempts(
     guestId: string,
     target: GuestMergeTarget | string,
+    options: { attemptIds?: string[] } = {},
 ) {
     if (typeof window === 'undefined') return 0;
 
@@ -459,13 +460,17 @@ export function mergeGuestAttempts(
 
     try {
         const targetProfile = normalizeMergeTarget(target);
+        const allowedAttemptIds = options.attemptIds ? new Set(options.attemptIds) : null;
 
         let updated = false;
         let mergedCount = 0;
         const mergedAt = new Date().toISOString();
 
         const newAttempts = allAttempts.map(attempt => {
-            if (isGuestAttemptMergeable(attempt, guestId, targetProfile)) {
+            if (
+                (!allowedAttemptIds || allowedAttemptIds.has(attempt.id))
+                && isGuestAttemptMergeable(attempt, guestId, targetProfile)
+            ) {
                 updated = true;
                 mergedCount += 1;
                 return {

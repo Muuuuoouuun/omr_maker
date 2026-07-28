@@ -49,6 +49,18 @@ npm test -- --run src/lib/supabaseSchemaContract.test.ts src/lib/workspaceContex
 
 The contract test checks that the SQL schema still exposes the roster, fact, region, retake, guest-merge, and Kakao pre-send columns/indexes used by the app. The workspace-context tests check that app-managed teacher sessions create stable interim `teacher_<hash>` organization/user scopes without exposing raw email addresses in row ids.
 
+## Live PostgreSQL CI gate
+
+SQL migration semantics are release-blocking in `.github/workflows/ci.yml` under
+`supabase-live-contract`. The job runs `scripts/verify-supabase-live.mjs` against
+PostgreSQL 17, applies `schema.sql` and every migration in filename order, then
+executes `supabase/live-test-assertions.sql`. The guest-claim assertions verify
+exact per-attempt acknowledgements, idempotent retries, nested
+`payload.questionResults[*]` ownership rewrites, sibling JSON preservation, and
+browser-role privilege revocation. Run `npm run test:supabase:live` locally when
+Docker is available; a machine without Docker cannot replace this required CI
+gate with source-string assertions.
+
 Under the current alpha public-policy sync model, remote roster/exam/attempt saves also bootstrap:
 
 - `omr_organizations`

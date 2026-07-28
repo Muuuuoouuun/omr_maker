@@ -942,8 +942,14 @@ export default function ReviewPage() {
         questionSaveInFlightRef.current = true;
         try {
             const queuedAt = new Date().toISOString();
-            if (!queuePendingStudentQuestion({ attemptId: base.id, ...input, queuedAt })) {
-                toast.error("질문 저장 실패", "브라우저 저장소를 확인한 뒤 다시 시도해주세요.");
+            const queued = await queuePendingStudentQuestion({ attemptId: base.id, ...input, queuedAt });
+            if (queued.status !== "queued") {
+                toast.error(
+                    "질문 저장 실패",
+                    queued.status === "capacity_exceeded"
+                        ? "전송 대기 질문이 100건에 도달했습니다. 네트워크 연결 후 기존 질문을 전송하고 다시 시도해주세요."
+                        : "브라우저 저장소를 확인한 뒤 다시 시도해주세요.",
+                );
                 return false;
             }
 

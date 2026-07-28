@@ -7,6 +7,7 @@ import type { Attempt, StudentQuestionNote } from "@/types/omr";
  */
 
 export const STUDENT_QUESTION_MAX_LENGTH = 500;
+export const STUDENT_QUESTION_MAX_COUNT = 100;
 
 export interface StudentQuestionInput {
     questionId: number;
@@ -16,6 +17,24 @@ export interface StudentQuestionInput {
 
 export function normalizeStudentQuestionBody(body: string): string {
     return body.trim().slice(0, STUDENT_QUESTION_MAX_LENGTH);
+}
+
+export function validateStudentQuestionForAttempt(
+    attempt: Pick<Attempt, "questionResults" | "studentQuestions">,
+    input: StudentQuestionInput,
+): StudentQuestionInput | null {
+    const body = input.body.trim();
+    if (!body || body.length > STUDENT_QUESTION_MAX_LENGTH || !Number.isSafeInteger(input.questionId)) return null;
+    const result = (attempt.questionResults || []).find(candidate => candidate.questionId === input.questionId);
+    if (!result || !Number.isFinite(result.questionNumber)) return null;
+    const existing = (attempt.studentQuestions || []).some(note => note.questionId === input.questionId);
+    const uniqueCount = new Set((attempt.studentQuestions || []).map(note => note.questionId)).size;
+    if (!existing && uniqueCount >= STUDENT_QUESTION_MAX_COUNT) return null;
+    return {
+        questionId: result.questionId,
+        questionNumber: result.questionNumber,
+        body,
+    };
 }
 
 function sortNotes(notes: StudentQuestionNote[]): StudentQuestionNote[] {

@@ -126,6 +126,14 @@ begin
     if not has_function_privilege('service_role', 'public.omr_submit_session_attempt_v1(jsonb,jsonb)', 'execute') then
         raise exception 'service_role must have session attempt RPC execute privilege';
     end if;
+    if has_function_privilege('anon', 'public.omr_claim_guest_attempts_v1(text,text,text,text,text,text,text[])', 'execute')
+        or has_function_privilege('authenticated', 'public.omr_claim_guest_attempts_v1(text,text,text,text,text,text,text[])', 'execute')
+    then
+        raise exception 'browser roles unexpectedly have guest claim RPC execute privilege';
+    end if;
+    if not has_function_privilege('service_role', 'public.omr_claim_guest_attempts_v1(text,text,text,text,text,text,text[])', 'execute') then
+        raise exception 'service_role must have guest claim RPC execute privilege';
+    end if;
     if has_function_privilege('anon', 'public.omr_save_remote_asset_metadata_v1(jsonb)', 'execute')
         or has_function_privilege('authenticated', 'public.omr_save_remote_asset_metadata_v1(jsonb)', 'execute')
     then
@@ -255,6 +263,93 @@ begin
            and enrollment_status = 'active'
     ) then
         raise exception 'failed roster RPC did not roll back its partial changes';
+    end if;
+end
+$$;
+
+insert into public.omr_attempts (
+    id, organization_id, exam_id, student_name, student_id, identity_type,
+    payload, started_at, finished_at
+) values (
+    'live-guest-attempt-a', 'live-org-a', 'live-exam-a', 'Guest A',
+    'guest:live-guest-a', 'guest',
+    '{
+        "id":"live-guest-attempt-a",
+        "guestId":"live-guest-a",
+        "studentId":"guest:live-guest-a",
+        "custom":{"preserved":true},
+        "questionResults":[{
+            "questionId":1,
+            "studentId":"guest:live-guest-a",
+            "status":"wrong",
+            "analytics":{"skill":"fraction"}
+        }]
+    }',
+    '2026-07-28T00:00:00.000Z', '2026-07-28T00:10:00.000Z'
+);
+
+insert into public.omr_question_results (
+    id, organization_id, attempt_id, exam_id, student_name, student_id,
+    identity_type, question_id, question_number, status, finished_at, payload
+) values (
+    'live-guest-attempt-a:1', 'live-org-a', 'live-guest-attempt-a',
+    'live-exam-a', 'Guest A', 'guest:live-guest-a', 'guest', 1, 1, 'wrong',
+    '2026-07-28T00:10:00.000Z',
+    '{"questionId":1,"studentId":"guest:live-guest-a","analytics":{"skill":"fraction"}}'
+);
+
+do $$
+declare
+    acknowledged text[];
+    attempt_payload jsonb;
+    result_payload jsonb;
+begin
+    select public.omr_claim_guest_attempts_v1(
+        'live-guest-a',
+        'live-student-a',
+        'live-org-a',
+        'live-class-a',
+        '학생 A',
+        'A반',
+        array['live-guest-attempt-a', 'live-local-only-a']
+    ) into acknowledged;
+
+    if acknowledged is distinct from array['live-guest-attempt-a']::text[] then
+        raise exception 'guest claim must ACK only canonical attempt ids, got %', acknowledged;
+    end if;
+
+    select payload into attempt_payload
+      from public.omr_attempts
+     where id = 'live-guest-attempt-a';
+    select payload into result_payload
+      from public.omr_question_results
+     where id = 'live-guest-attempt-a:1';
+
+    if attempt_payload->>'studentId' <> 'live-student-a'
+        or attempt_payload ? 'guestId'
+        or attempt_payload#>>'{questionResults,0,studentId}' <> 'live-student-a'
+        or attempt_payload#>>'{questionResults,0,analytics,skill}' <> 'fraction'
+        or attempt_payload#>>'{custom,preserved}' <> 'true'
+    then
+        raise exception 'guest claim did not preserve and rewrite nested attempt payload: %', attempt_payload;
+    end if;
+    if result_payload->>'studentId' <> 'live-student-a'
+        or result_payload#>>'{analytics,skill}' <> 'fraction'
+    then
+        raise exception 'guest claim did not preserve and rewrite result payload: %', result_payload;
+    end if;
+
+    select public.omr_claim_guest_attempts_v1(
+        'live-guest-a',
+        'live-student-a',
+        'live-org-a',
+        'live-class-a',
+        '학생 A',
+        'A반',
+        array['live-guest-attempt-a']
+    ) into acknowledged;
+    if acknowledged is distinct from array['live-guest-attempt-a']::text[] then
+        raise exception 'guest claim retry must remain idempotently acknowledged';
     end if;
 end
 $$;

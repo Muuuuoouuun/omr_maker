@@ -14,6 +14,7 @@ import {
   type StudentSessionIssueResult,
   type StudentSessionIssueStatus,
 } from "@/app/actions/studentSession";
+import { reconcileGuestAttempts } from "@/app/actions/studentExam";
 import { formatRegionScopedLabel } from "@/lib/dashboardSelection";
 import { seedLocalTestStudentAccounts } from "@/lib/localTestAccounts";
 import { readLocalAttempts } from "@/lib/omrPersistence";
@@ -48,6 +49,7 @@ import {
 import { normalizeStudentRedirectPath } from "@/lib/studentRedirect";
 import { normalizeTeacherRedirectPath, saveTeacherSessionWithIdentity } from "@/lib/teacherSession";
 import { setCurrentPlan } from "@/utils/plans";
+import { guestAttemptToReconcileItem } from "@/lib/studentGuestReconcileGateway";
 
 /* ─── SVG Icons ──────────────────────────────────────── */
 
@@ -206,8 +208,7 @@ function pendingGuestAttemptIds(): string[] {
       attempt.guestId === pending.guestId
       || attempt.studentId === `guest:${pending.guestId}`
     ))
-    .map(attempt => attempt.id)
-    .slice(0, 100);
+    .map(attempt => attempt.id);
 }
 
 export default function Home() {
@@ -417,48 +418,74 @@ export default function Home() {
     issuedCode?: string,
     guestClaim?: StudentSessionIssueResult["guestClaim"],
   ) => {
+    let guestReconciliationComplete = true;
     const pendingGuestMerge = readPendingGuestMerge();
     if (pendingGuestMerge) {
-      const pendingCount = previewGuestMerge(pendingGuestMerge.guestId)?.mergeableCount || 0;
-      const authoritativeClaimed = guestClaim !== undefined
-        && guestClaim.status === "claimed"
-        && guestClaim.claimedCount >= pendingCount;
-      const localOnly = guestClaim === undefined;
-      if (authoritativeClaimed || localOnly) {
+      const preview = previewGuestMerge(pendingGuestMerge.guestId);
+      const target = {
+        studentId: session.studentId,
+        name: session.name,
+        groupId: session.groupId,
+        groupName: session.groupName,
+        regionId: session.regionId,
+        regionName: session.regionName,
+        identityType: session.identityType,
+      };
+      if (guestClaim === undefined) {
         consumePendingGuestMerge();
-        const mergedCount = mergeGuestAttempts(pendingGuestMerge.guestId, {
-          studentId: session.studentId,
-          name: session.name,
-          groupId: session.groupId,
-          groupName: session.groupName,
-          regionId: session.regionId,
-          regionName: session.regionName,
-          identityType: session.identityType,
-        });
-        const count = authoritativeClaimed ? guestClaim.claimedCount : mergedCount;
-        if (count > 0) {
+        const mergedCount = mergeGuestAttempts(pendingGuestMerge.guestId, target);
+        if (mergedCount > 0) {
           toast.success(
-            authoritativeClaimed ? "게스트 기록 서버 연결됨" : "게스트 기록 이 기기에 연결됨",
-            `${count}개의 시험 기록을 학생 기록으로 저장했습니다.`,
+            "게스트 기록 이 기기에 연결됨",
+            `${mergedCount}개의 시험 기록을 학생 기록으로 저장했습니다.`,
           );
-        } else {
-          toast.info("연결할 새 게스트 기록 없음", "이후 제출 기록은 학생 기록으로 저장됩니다.");
         }
       } else {
-        toast.error(
-          "게스트 기록 연결 보류",
-          "서버에서 기록 소유권을 확인하지 못했습니다. 기록은 이 기기에 보관되며 다음 로그인에서 다시 시도합니다.",
+        const acknowledgedAttemptIds = new Set(
+          guestClaim.status === "claimed" ? guestClaim.acknowledgedAttemptIds : [],
         );
+        const localAttempts = new Map(readLocalAttempts().map(attempt => [attempt.id, attempt]));
+        for (const localAttemptId of preview.attemptIds) {
+          if (acknowledgedAttemptIds.has(localAttemptId)) continue;
+          const attempt = localAttempts.get(localAttemptId);
+          const item = attempt
+            ? guestAttemptToReconcileItem(attempt, pendingGuestMerge.guestId)
+            : null;
+          if (!item) continue;
+          const reconciled = await reconcileGuestAttempts([item]);
+          for (const acknowledgement of reconciled.acknowledgements || []) {
+            acknowledgedAttemptIds.add(acknowledgement.localAttemptId);
+          }
+        }
+        const confirmedIds = preview.attemptIds.filter(id => acknowledgedAttemptIds.has(id));
+        if (confirmedIds.length > 0) {
+          mergeGuestAttempts(pendingGuestMerge.guestId, target, { attemptIds: confirmedIds });
+        }
+        if (confirmedIds.length === preview.attemptIds.length) {
+          consumePendingGuestMerge();
+          toast.success(
+            "게스트 기록 서버 연결됨",
+            `${confirmedIds.length}개의 시험 기록을 학생 기록으로 저장했습니다.`,
+          );
+        } else {
+          guestReconciliationComplete = false;
+          toast.error(
+            "게스트 기록 연결 보류",
+            `서버 확인 ${confirmedIds.length}/${preview.attemptIds.length}건. 확인되지 않은 기록과 재시도 권한은 보관했습니다.`,
+          );
+        }
       }
     }
 
+    if (!guestReconciliationComplete) return false;
     saveSession(session);
     if (issuedCode) {
       setCopiedIssuedCode(false);
       setIssuedCodeModal({ code: issuedCode, next });
-      return;
+      return true;
     }
     router.push(next);
+    return true;
   };
 
   const handleStudentLogin = async () => {
@@ -501,7 +528,7 @@ export default function Home() {
           guestAttemptIds: pendingGuestAttemptIds(),
         });
         if (!result.ok || !result.identity) {
-          setError(studentLoginErrorMessage(result.status));
+          setError(result.error || studentLoginErrorMessage(result.status));
           return;
         }
         const identity = result.identity;
@@ -603,7 +630,7 @@ export default function Home() {
         guestAttemptIds: pendingGuestAttemptIds(),
       });
       if (!result.ok) {
-        setError(studentLoginErrorMessage(result.status));
+        setError(result.error || studentLoginErrorMessage(result.status));
         return;
       }
       const session: StudentSession = {
