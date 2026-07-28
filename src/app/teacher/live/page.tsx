@@ -14,6 +14,7 @@ import { resolveAttemptScore } from "@/lib/attemptScores";
 import { buildLiveQuestionHeatmap, dedupeLiveAttempts } from "@/lib/liveAnalytics";
 import { forceCompleteLiveAttempt, liveAttemptsNeedingForceFinish } from "@/lib/liveControls";
 import { safeRatePercent } from "@/lib/scoreUtils";
+import { awaySeverity } from "@/lib/examAwayTracker";
 
 type StudentStatus = "submitted" | "in_progress" | "not_started";
 type LiveDataMode = "real" | "demo";
@@ -28,6 +29,7 @@ interface LiveStudent {
     totalQ: number;
     startedAt?: string;
     score?: number;
+    awayCount: number;
 }
 
 interface LiveExam {
@@ -111,6 +113,7 @@ function attemptToStudent(a: Attempt, totalQ: number, exam?: Exam): LiveStudent 
         totalQ,
         startedAt: a.startedAt,
         score,
+        awayCount: a.focusLossEvents?.length || a.tabFociLostCount || 0,
     };
 }
 
@@ -136,6 +139,7 @@ function genSyntheticStudents(count: number, totalQ: number, startIdx: number): 
             totalQ,
             startedAt: status !== "not_started" ? new Date(Date.now() - (seed % 1800) * 1000).toISOString() : undefined,
             score: status === "submitted" ? Math.round(50 + (seed % 50)) : undefined,
+            awayCount: 0,
         });
     }
     return out;
@@ -880,6 +884,14 @@ function StudentCard({ student, delay }: { student: LiveStudent; delay: number }
                     <div style={{ fontSize: '0.95rem', fontWeight: 800, color: meta.color }}>{student.score}</div>
                 )}
             </div>
+            {student.awayCount > 0 && (
+                <span
+                    className="away-severity-badge"
+                    data-away-severity={awaySeverity(student.awayCount)}
+                >
+                    화면 이탈 {student.awayCount}회
+                </span>
+            )}
             <div style={{ height: 5, background: 'var(--border)', borderRadius: 'var(--radius-full)', overflow: 'hidden' }}>
                 <div style={{ width: `${student.progress}%`, height: '100%', background: meta.color, borderRadius: 'var(--radius-full)', transition: 'width 0.6s ease-out' }} />
             </div>

@@ -34,6 +34,7 @@ import ThemeToggle from "@/components/ThemeToggle";
 import CountUp from "@/components/dashboard/CountUp";
 import { formatKoreanDateTime } from "@/lib/pure";
 import { safeScorePercent } from "@/lib/scoreUtils";
+import { awaySeverity } from "@/lib/examAwayTracker";
 import {
     buildLearningRecommendations,
     buildRetakeQuestionIds,
@@ -1193,7 +1194,14 @@ export default function ReviewPage() {
                                     <MiniStat label="추적" value={formatSeconds(behaviorSummary.totalTrackedTimeSec)} color="var(--foreground)" />
                                     <MiniStat label="평균" value={formatSeconds(behaviorSummary.averageTimeSec)} color="var(--foreground)" />
                                     <MiniStat label="재방문" value={behaviorSummary.revisitedQuestionNumbers.length ? `${behaviorSummary.revisitedQuestionNumbers.join(", ")}번` : "없음"} color="var(--foreground)" />
-                                    <MiniStat label="이탈" value={`${behaviorSummary.focusLossCount}회`} color="var(--foreground)" />
+                                    {behaviorSummary.focusLossCount > 0 && (
+                                        <span
+                                            className="away-severity-badge"
+                                            data-away-severity={awaySeverity(behaviorSummary.focusLossCount)}
+                                        >
+                                            시험 중 화면을 벗어난 기록 {behaviorSummary.focusLossCount}회
+                                        </span>
+                                    )}
                                 </div>
                             </section>
                         )}

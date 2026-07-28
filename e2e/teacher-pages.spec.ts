@@ -208,6 +208,60 @@ async function seedStudentResultHub(page: Page) {
     });
 }
 
+async function seedAwaySeverityAttempts(page: Page) {
+    await page.addInitScript(() => {
+        const exam = {
+            id: "away-severity-exam",
+            title: "화면 이탈 표시 시험",
+            createdAt: "2026-07-28T00:00:00.000Z",
+            updatedAt: "2026-07-28T00:00:00.000Z",
+            durationMin: 60,
+            questions: [
+                { id: 1, number: 1, answer: 2, choices: 4, score: 100, label: "개념" },
+            ],
+            accessConfig: { type: "public" },
+        };
+        const attempts = [1, 2, 3].map(count => ({
+            id: `away-severity-${count}`,
+            examId: exam.id,
+            examTitle: exam.title,
+            studentName: `이탈 ${count}회 학생`,
+            studentId: `away-severity-student-${count}`,
+            startedAt: `2026-07-28T09:0${count}:00.000Z`,
+            finishedAt: `2026-07-28T09:1${count}:00.000Z`,
+            score: 100,
+            totalScore: 100,
+            answers: { 1: 2 },
+            focusLossEvents: Array.from({ length: count }, (_, index) => ({
+                at: `2026-07-28T09:0${count}:0${index}.000Z`,
+                questionId: 1,
+                questionNumber: 1,
+                count: index + 1,
+                reason: index % 2 === 0 ? "blur" : "hidden",
+            })),
+            status: "completed",
+        }));
+        const requestedStudentCount = Number(
+            window.localStorage.getItem("omr_away_severity_student_count") || "1",
+        );
+        const studentAttempt = attempts.find(attempt => attempt.id === `away-severity-${requestedStudentCount}`)
+            || attempts[0];
+        const studentSession = {
+            studentId: studentAttempt.studentId,
+            loginId: studentAttempt.studentId,
+            name: studentAttempt.studentName,
+            isGuest: false,
+            identityType: "temporary",
+            createdAt: "2026-07-28T00:00:00.000Z",
+        };
+
+        window.localStorage.setItem(`omr_exam_${exam.id}`, JSON.stringify(exam));
+        window.localStorage.setItem("omr_attempts", JSON.stringify(attempts));
+        window.localStorage.setItem("omr_student_session_backup", JSON.stringify(studentSession));
+        window.sessionStorage.setItem("omr_student_session", JSON.stringify(studentSession));
+    });
+}
+
 test("opens one student result hub and preserves the selected view across attempts", async ({ page, baseURL }) => {
     await authenticateTeacher(page, baseURL);
     await seedStudentResultHub(page);
@@ -581,6 +635,72 @@ test.describe("Live Results page", () => {
         await expect(pauseBtn).toBeVisible();
         await pauseBtn.click();
         await expect(page.getByRole("button", { name: "재개" })).toBeVisible();
+    });
+
+    test("away severity stays factual and escalates from neutral to attention", async ({ page }) => {
+        await seedAwaySeverityAttempts(page);
+        await page.goto("/teacher/live");
+
+        const liveAway = page.locator("[data-away-severity]");
+        await expect(liveAway).toHaveCount(3);
+        for (const count of [1, 2]) {
+            await expect(liveAway.filter({ hasText: `화면 이탈 ${count}회` })).toHaveAttribute(
+                "data-away-severity",
+                "neutral",
+            );
+        }
+        await expect(liveAway.filter({ hasText: "화면 이탈 3회" })).toHaveAttribute(
+            "data-away-severity",
+            "attention",
+        );
+        const liveTones = await liveAway.evaluateAll(elements => elements.map(element => {
+            const styles = getComputedStyle(element);
+            return {
+                severity: element.getAttribute("data-away-severity"),
+                backgroundColor: styles.backgroundColor,
+                color: styles.color,
+            };
+        }));
+        expect(liveTones.filter(tone => tone.severity === "neutral")).toEqual([
+            {
+                severity: "neutral",
+                backgroundColor: "rgb(241, 245, 249)",
+                color: "rgb(71, 85, 105)",
+            },
+            {
+                severity: "neutral",
+                backgroundColor: "rgb(241, 245, 249)",
+                color: "rgb(71, 85, 105)",
+            },
+        ]);
+        expect(liveTones.filter(tone => tone.severity === "attention")).toEqual([{
+            severity: "attention",
+            backgroundColor: "rgb(254, 243, 199)",
+            color: "rgb(146, 64, 14)",
+        }]);
+
+        for (const count of [1, 2, 3]) {
+            await page.goto(`/teacher/attempt/away-severity-${count}`);
+            const detailAway = page.getByText(`화면 이탈 ${count}회`, { exact: true });
+            await expect(detailAway).toHaveAttribute(
+                "data-away-severity",
+                count >= 3 ? "attention" : "neutral",
+            );
+            await expect(page.getByText(/부정행위|cheating/i)).toHaveCount(0);
+        }
+
+        for (const count of [1, 2, 3]) {
+            await page.evaluate(value => {
+                window.localStorage.setItem("omr_away_severity_student_count", String(value));
+            }, count);
+            await page.goto(`/student/review/away-severity-${count}`);
+            const studentAway = page.getByText(`시험 중 화면을 벗어난 기록 ${count}회`, { exact: true });
+            await expect(studentAway).toHaveAttribute(
+                "data-away-severity",
+                count >= 3 ? "attention" : "neutral",
+            );
+            await expect(page.getByText(/부정행위|cheating/i)).toHaveCount(0);
+        }
     });
 });
 

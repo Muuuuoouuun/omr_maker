@@ -895,6 +895,31 @@
 .tone-error   { color: #dc2626; background: #fef2f2; border-color: #fecaca; }
 .tone-text-teal { color: #0f766e; }
 
+.away-severity-badge {
+  display: inline-flex;
+  align-items: center;
+  width: fit-content;
+  margin-block: 0.25rem;
+  padding: 0.25rem 0.55rem;
+  border: 1px solid transparent;
+  border-radius: var(--radius-full);
+  font-size: var(--type-caption-min);
+  font-weight: 700;
+  line-height: 1.35;
+}
+
+[data-away-severity="neutral"] {
+  color: #475569;
+  background: #f1f5f9;
+  border-color: #cbd5e1;
+}
+
+[data-away-severity="attention"] {
+  color: #92400e;
+  background: #fef3c7;
+  border-color: #fcd34d;
+}
+
 [data-theme="dark"] .tone-primary { color: #a5b4fc; background: color-mix(in srgb, #6366f1 18%, transparent); border-color: color-mix(in srgb, #6366f1 42%, transparent); }
 [data-theme="dark"] .tone-teal    { color: #5eead4; background: color-mix(in srgb, #14b8a6 15%, transparent); border-color: color-mix(in srgb, #14b8a6 38%, transparent); }
 [data-theme="dark"] .tone-amber   { color: #fdba74; background: color-mix(in srgb, #f97316 15%, transparent); border-color: color-mix(in srgb, #f97316 36%, transparent); }
@@ -902,6 +927,8 @@
 [data-theme="dark"] .tone-success { color: #86efac; background: color-mix(in srgb, #22c55e 14%, transparent); border-color: color-mix(in srgb, #22c55e 36%, transparent); }
 [data-theme="dark"] .tone-error   { color: #fca5a5; background: color-mix(in srgb, #ef4444 14%, transparent); border-color: color-mix(in srgb, #ef4444 38%, transparent); }
 [data-theme="dark"] .tone-text-teal { color: #2dd4bf; }
+[data-theme="dark"] [data-away-severity="neutral"] { color: #cbd5e1; background: color-mix(in srgb, #334155 60%, transparent); border-color: #475569; }
+[data-theme="dark"] [data-away-severity="attention"] { color: #fcd34d; background: color-mix(in srgb, #78350f 50%, transparent); border-color: #b45309; }
 
 /* Dark variants for the review question map + link buttons — these previously
    kept their light pastel palette and glared on the dark theme. */

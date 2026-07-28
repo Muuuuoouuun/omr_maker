@@ -10,6 +10,7 @@ import { hasPlanEntitlement } from "@/utils/plans";
 import { useServerPlan } from "@/lib/useServerPlan";
 import { formatKoreanDateTime } from "@/lib/pure";
 import { safeScorePercent } from "@/lib/scoreUtils";
+import { awaySeverity } from "@/lib/examAwayTracker";
 import { readActiveWorkspaceContext } from "@/lib/workspaceContext";
 import {
     loadTeacherAttempt as loadTeacherAttemptRecord,
@@ -517,6 +518,8 @@ export default function TeacherAttemptPage() {
         if (result.status === "ungraded") acc.ungradedCount += 1;
         return acc;
     }, { correctCount: 0, incorrectCount: 0, unansweredCount: 0, ungradedCount: 0 });
+    const awayCount = analytics?.behavior.focusLossCount
+        ?? summarizeAttemptBehavior(attempt).focusLossCount;
     const setSubQuestionReviewed = async (questionId: number, subQuestionId: string, reviewed: boolean) => {
         const currentAnswer = attempt.subQuestionAnswers?.[questionId]?.[subQuestionId];
         if (!currentAnswer) return;
@@ -686,6 +689,16 @@ export default function TeacherAttemptPage() {
                         series={attemptSeries}
                         activeView={activeView}
                     />
+                    {awayCount > 0 && (
+                        <div className={styles.screenOnly}>
+                            <span
+                                className="away-severity-badge"
+                                data-away-severity={awaySeverity(awayCount)}
+                            >
+                                화면 이탈 {awayCount}회
+                            </span>
+                        </div>
+                    )}
                     <StudentResultTabs attemptId={attempt.id} activeView={activeView} />
                     <section
                         id={`student-result-panel-${activeView}`}
