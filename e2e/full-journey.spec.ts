@@ -20,6 +20,15 @@ const SAME_NAME_FIRST_ID = "same-name-001";
 const SAME_NAME_SECOND_ID = "same-name-002";
 const SAME_NAME_SECOND_EMAIL = "same.second@example.edu";
 const SAME_NAME_START_CODE = "ZXCV12";
+const submissionReceiptEntryKey = (attemptId: string) => (
+    `omr_student_submission_receipt_v2:${encodeURIComponent(attemptId)}`
+);
+const submissionRequestEntryKey = (attemptId: string) => (
+    `omr_student_submission_request_v2:${encodeURIComponent(attemptId)}`
+);
+const submissionAliasEntryKey = (attemptId: string) => (
+    `omr_student_submission_alias_v2:${encodeURIComponent(attemptId)}`
+);
 
 async function seedStudentRoster(page: Page) {
     await page.evaluate((seed) => {
@@ -1019,6 +1028,66 @@ test.describe("Teacher and student full journey", () => {
         expect(hasBodyOverflow).toBe(false);
     });
 
+    test("keeps the solve draft when a pending replay request cannot be stored", async ({ page }) => {
+        await seedExamAndStudent(page);
+        await page.goto(`/solve/${TEST_EXAM_ID}`);
+        await ensureAnswerPaneVisible(page);
+        await page.getByRole("radio", { name: "문제 1번 보기 2" }).click();
+        await page.getByRole("radio", { name: "문제 2번 보기 3" }).click();
+        await page.getByRole("radio", { name: "문제 3번 보기 1" }).click();
+        await expect(page.getByText("모든 문제 표기 완료")).toBeVisible();
+
+        await page.evaluate(() => {
+            const prototype = Storage.prototype as Storage & {
+                __omrOriginalSetItem?: Storage["setItem"];
+            };
+            prototype.__omrOriginalSetItem = prototype.setItem;
+            prototype.setItem = function setItem(key: string, value: string) {
+                if (key.startsWith("omr_student_submission_request_v2:")) {
+                    throw new DOMException("quota", "QuotaExceededError");
+                }
+                return prototype.__omrOriginalSetItem!.call(this, key, value);
+            };
+        });
+        let submitActionAborted = false;
+        await page.route("**/*", async route => {
+            const request = route.request();
+            if (!submitActionAborted && request.method() === "POST" && request.headers()["next-action"]) {
+                submitActionAborted = true;
+                await route.abort("internetdisconnected");
+                return;
+            }
+            await route.continue();
+        });
+
+        await page.locator(".solve-submit-button").click();
+        const confirmDialog = page.getByRole("dialog", { name: "답안 제출" });
+        await expect(confirmDialog).toBeVisible();
+        await confirmDialog.getByRole("button", { name: "제출하기" }).click();
+
+        await expect(page.getByText("제출 재시도 저장 실패")).toBeVisible();
+        await expect(page).toHaveURL(new RegExp(`/solve/${TEST_EXAM_ID}$`));
+        expect(submitActionAborted).toBe(true);
+        const durableState = await page.evaluate((draftKey) => {
+            const draft = JSON.parse(window.localStorage.getItem(draftKey) || "null");
+            const attempts = JSON.parse(window.localStorage.getItem("omr_attempts") || "[]");
+            const requestKeys = [...Array(window.localStorage.length)]
+                .map((_, index) => window.localStorage.key(index))
+                .filter(key => key?.startsWith("omr_student_submission_request_v2:"));
+            return {
+                draft,
+                attemptCount: attempts.length,
+                requestKeys,
+            };
+        }, `omr_draft_${TEST_EXAM_ID}_${TEST_STUDENT_ID}_base`);
+        expect(durableState.draft).toMatchObject({
+            submissionId: expect.any(String),
+            answers: { 1: 2, 2: 3, 3: 1 },
+        });
+        expect(durableState.attemptCount).toBe(1);
+        expect(durableState.requestKeys).toEqual([]);
+    });
+
     test("reconciles manual and automatic submission receipt retries through the real server action", async ({ page }) => {
         await seedStudentRoster(page);
         await loginAsStudent(page);
@@ -1026,67 +1095,72 @@ test.describe("Teacher and student full journey", () => {
         await seedCompletedAttempt(page);
         const attemptId = "attempt-tablet-analytics";
 
-        await page.evaluate((id) => {
-            window.localStorage.setItem("omr_student_submission_receipts_v1", JSON.stringify({
-                receipts: {
-                    [id]: {
-                        attemptId: id,
-                        status: "confirmed",
-                        updatedAt: "2026-07-28T00:00:00.000Z",
-                    },
+        await page.evaluate(({ id, entryKey }) => {
+            window.localStorage.setItem(entryKey, JSON.stringify({
+                version: 2,
+                revision: 1,
+                receipt: {
+                    attemptId: id,
+                    status: "confirmed",
+                    updatedAt: "2026-07-28T00:00:00.000Z",
                 },
-                requests: {},
-                reconciliations: {},
             }));
-        }, attemptId);
+        }, { id: attemptId, entryKey: submissionReceiptEntryKey(attemptId) });
         await page.goto(`/student/review/${attemptId}`);
         await expect(page.getByRole("status")).toHaveText("서버 반영 완료");
         await page.reload();
         await expect(page.getByRole("status")).toHaveText("서버 반영 완료");
 
-        await page.evaluate((id) => {
-            window.localStorage.setItem("omr_student_submission_receipts_v1", JSON.stringify({
-                receipts: {
-                    [id]: {
-                        attemptId: id,
-                        status: "local_only",
-                        updatedAt: "2026-07-28T00:00:30.000Z",
-                    },
+        await page.evaluate(({ id, entryKey }) => {
+            window.localStorage.setItem(entryKey, JSON.stringify({
+                version: 2,
+                revision: 2,
+                receipt: {
+                    attemptId: id,
+                    status: "local_only",
+                    updatedAt: "2026-07-28T00:00:30.000Z",
                 },
-                requests: {},
-                reconciliations: {},
             }));
-        }, attemptId);
+        }, { id: attemptId, entryKey: submissionReceiptEntryKey(attemptId) });
         await page.reload();
         await expect(page.getByRole("status")).toHaveText("이 기기에만 저장됨");
         await expect(page.getByText("다른 기기에서는 이 결과를 볼 수 없습니다.")).toBeVisible();
+        const crossTab = await page.context().newPage();
+        await crossTab.goto(`/student/review/${attemptId}`);
+        await expect(crossTab.getByRole("status")).toHaveText("이 기기에만 저장됨");
 
-        await page.evaluate((id) => {
+        await page.evaluate(({ id, entryKey, requestKey }) => {
             const input = {
                 examId: "e2e-korean-integrated-exam",
                 submissionId: "11111111-1111-4111-8111-111111111111",
                 answers: { 1: 2, 2: 3, 3: 1 },
                 startedAt: "2026-07-28T00:00:00.000Z",
             };
-            window.localStorage.setItem("omr_student_submission_receipts_v1", JSON.stringify({
-                receipts: {
-                    [id]: {
-                        attemptId: id,
-                        status: "pending",
-                        updatedAt: "2026-07-28T00:01:00.000Z",
-                    },
+            window.localStorage.setItem(entryKey, JSON.stringify({
+                version: 2,
+                revision: 3,
+                receipt: {
+                    attemptId: id,
+                    status: "pending",
+                    updatedAt: "2026-07-28T00:01:00.000Z",
                 },
-                requests: {
-                    [id]: { attemptId: id, input },
-                },
-                reconciliations: {},
+            }));
+            window.localStorage.setItem(requestKey, JSON.stringify({
+                version: 2,
+                revision: 1,
+                request: { attemptId: id, input },
             }));
             window.dispatchEvent(new StorageEvent("storage", {
-                key: "omr_student_submission_receipts_v1",
+                key: entryKey,
             }));
             (window as typeof window & { receiptRetryNoReload?: string }).receiptRetryNoReload = "manual";
-        }, attemptId);
+        }, {
+            id: attemptId,
+            entryKey: submissionReceiptEntryKey(attemptId),
+            requestKey: submissionRequestEntryKey(attemptId),
+        });
         await expect(page.getByRole("status")).toHaveText("서버 반영 대기 · 자동 재시도");
+        await expect(crossTab.getByRole("status")).toHaveText("서버 반영 대기 · 자동 재시도");
         const retry = page.getByRole("button", { name: "지금 다시 시도" });
         await expect(retry).toBeVisible();
         await retry.click();
@@ -1094,25 +1168,36 @@ test.describe("Teacher and student full journey", () => {
         await expect(page).not.toHaveURL(new RegExp(`/student/review/${attemptId}$`));
         const manualCanonicalId = new URL(page.url()).pathname.split("/").pop() || "";
         expect(manualCanonicalId).not.toBe(attemptId);
+        await expect(crossTab).toHaveURL(new RegExp(`/student/review/${manualCanonicalId}$`));
+        await expect(crossTab.getByRole("status")).toHaveText("서버 반영 완료");
+        await crossTab.close();
         expect(await page.evaluate(() => (
             (window as typeof window & { receiptRetryNoReload?: string }).receiptRetryNoReload
         ))).toBe("manual");
         await expect(page.getByText("20 / 30점")).toBeVisible();
-        const manualState = await page.evaluate(({ oldId, canonicalId }) => {
-            const state = JSON.parse(window.localStorage.getItem("omr_student_submission_receipts_v1") || "{}");
+        const manualState = await page.evaluate(({ oldId, canonicalId, oldEntryKey, oldRequestKey, canonicalEntryKey, aliasKey }) => {
             const attempts = JSON.parse(window.localStorage.getItem("omr_attempts") || "[]");
+            const canonicalEnvelope = JSON.parse(window.localStorage.getItem(canonicalEntryKey) || "null");
+            const aliasEnvelope = JSON.parse(window.localStorage.getItem(aliasKey) || "null");
             return {
-                oldReceipt: state.receipts?.[oldId],
-                oldRequest: state.requests?.[oldId],
-                canonicalReceipt: state.receipts?.[canonicalId],
-                reconciliation: state.reconciliations?.[oldId],
+                oldReceipt: window.localStorage.getItem(oldEntryKey),
+                oldRequest: window.localStorage.getItem(oldRequestKey),
+                canonicalReceipt: canonicalEnvelope?.receipt,
+                reconciliation: aliasEnvelope?.canonicalAttemptId,
                 cachedOld: attempts.some((attempt: { id?: string }) => attempt.id === oldId),
                 canonicalCount: attempts.filter((attempt: { id?: string }) => attempt.id === canonicalId).length,
             };
-        }, { oldId: attemptId, canonicalId: manualCanonicalId });
+        }, {
+            oldId: attemptId,
+            canonicalId: manualCanonicalId,
+            oldEntryKey: submissionReceiptEntryKey(attemptId),
+            oldRequestKey: submissionRequestEntryKey(attemptId),
+            canonicalEntryKey: submissionReceiptEntryKey(manualCanonicalId),
+            aliasKey: submissionAliasEntryKey(attemptId),
+        });
         expect(manualState).toEqual({
-            oldReceipt: undefined,
-            oldRequest: undefined,
+            oldReceipt: null,
+            oldRequest: null,
             canonicalReceipt: expect.objectContaining({ status: "confirmed" }),
             reconciliation: manualCanonicalId,
             cachedOld: false,
@@ -1140,31 +1225,38 @@ test.describe("Teacher and student full journey", () => {
         await page.goto(`/student/review/${automaticLocalId}`);
         await expect(page.getByRole("status")).toHaveText("이 기기에만 저장됨");
 
-        await page.evaluate((id) => {
-            const state = JSON.parse(window.localStorage.getItem("omr_student_submission_receipts_v1") || "{}");
-            state.receipts ||= {};
-            state.requests ||= {};
-            state.reconciliations ||= {};
-            state.receipts[id] = {
-                attemptId: id,
-                status: "pending",
-                updatedAt: "2026-07-28T00:03:00.000Z",
-            };
-            state.requests[id] = {
-                attemptId: id,
-                input: {
+        await page.evaluate(({ id, entryKey, requestKey }) => {
+            window.localStorage.setItem(entryKey, JSON.stringify({
+                version: 2,
+                revision: 2,
+                receipt: {
+                    attemptId: id,
+                    status: "pending",
+                    updatedAt: "2026-07-28T00:03:00.000Z",
+                },
+            }));
+            window.localStorage.setItem(requestKey, JSON.stringify({
+                version: 2,
+                revision: 1,
+                request: {
+                    attemptId: id,
+                    input: {
                     examId: "e2e-korean-integrated-exam",
                     submissionId: "22222222-2222-4222-8222-222222222222",
                     answers: { 1: 2, 2: 3, 3: 1 },
                     startedAt: "2026-07-28T00:00:00.000Z",
+                    },
                 },
-            };
-            window.localStorage.setItem("omr_student_submission_receipts_v1", JSON.stringify(state));
+            }));
             window.dispatchEvent(new StorageEvent("storage", {
-                key: "omr_student_submission_receipts_v1",
+                key: entryKey,
             }));
             (window as typeof window & { receiptRetryNoReload?: string }).receiptRetryNoReload = "automatic";
-        }, automaticLocalId);
+        }, {
+            id: automaticLocalId,
+            entryKey: submissionReceiptEntryKey(automaticLocalId),
+            requestKey: submissionRequestEntryKey(automaticLocalId),
+        });
         await expect(page.getByRole("status")).toHaveText("서버 반영 대기 · 자동 재시도");
         await page.evaluate(() => window.dispatchEvent(new Event("online")));
         await expect(page.getByRole("status")).toHaveText("서버 반영 완료");
@@ -1174,26 +1266,139 @@ test.describe("Teacher and student full journey", () => {
         expect(await page.evaluate(() => (
             (window as typeof window & { receiptRetryNoReload?: string }).receiptRetryNoReload
         ))).toBe("automatic");
-        const automaticState = await page.evaluate(({ oldId, canonicalId }) => {
-            const state = JSON.parse(window.localStorage.getItem("omr_student_submission_receipts_v1") || "{}");
+        const automaticState = await page.evaluate(({ oldId, canonicalId, oldEntryKey, oldRequestKey, canonicalEntryKey, aliasKey }) => {
             const attempts = JSON.parse(window.localStorage.getItem("omr_attempts") || "[]");
+            const canonicalEnvelope = JSON.parse(window.localStorage.getItem(canonicalEntryKey) || "null");
+            const aliasEnvelope = JSON.parse(window.localStorage.getItem(aliasKey) || "null");
             return {
-                oldReceipt: state.receipts?.[oldId],
-                oldRequest: state.requests?.[oldId],
-                canonicalReceipt: state.receipts?.[canonicalId],
-                reconciliation: state.reconciliations?.[oldId],
+                oldReceipt: window.localStorage.getItem(oldEntryKey),
+                oldRequest: window.localStorage.getItem(oldRequestKey),
+                canonicalReceipt: canonicalEnvelope?.receipt,
+                reconciliation: aliasEnvelope?.canonicalAttemptId,
                 cachedOld: attempts.some((attempt: { id?: string }) => attempt.id === oldId),
                 canonicalCount: attempts.filter((attempt: { id?: string }) => attempt.id === canonicalId).length,
             };
-        }, { oldId: automaticLocalId, canonicalId: automaticCanonicalId });
+        }, {
+            oldId: automaticLocalId,
+            canonicalId: automaticCanonicalId,
+            oldEntryKey: submissionReceiptEntryKey(automaticLocalId),
+            oldRequestKey: submissionRequestEntryKey(automaticLocalId),
+            canonicalEntryKey: submissionReceiptEntryKey(automaticCanonicalId),
+            aliasKey: submissionAliasEntryKey(automaticLocalId),
+        });
         expect(automaticState).toEqual({
-            oldReceipt: undefined,
-            oldRequest: undefined,
+            oldReceipt: null,
+            oldRequest: null,
             canonicalReceipt: expect.objectContaining({ status: "confirmed" }),
             reconciliation: automaticCanonicalId,
             cachedOld: false,
             canonicalCount: 1,
         });
+
+        const pinLocalId = "attempt-pin-local";
+        await page.evaluate(({ sourceId, localId, entryKey, requestKey }) => {
+            const attempts = JSON.parse(window.localStorage.getItem("omr_attempts") || "[]");
+            const source = attempts.find((attempt: { id?: string }) => attempt.id === sourceId);
+            if (!source) throw new Error("PIN source attempt missing");
+            const pendingPinAttempt = {
+                ...source,
+                id: localId,
+                finishedAt: new Date(Date.now() + 2_000).toISOString(),
+                questionResults: (source.questionResults || []).map((result: object) => ({
+                    ...result,
+                    attemptId: localId,
+                })),
+            };
+            window.localStorage.setItem("omr_attempts", JSON.stringify([...attempts, pendingPinAttempt]));
+            window.localStorage.setItem(entryKey, JSON.stringify({
+                version: 2,
+                revision: 1,
+                receipt: {
+                    attemptId: localId,
+                    status: "pending",
+                    updatedAt: "2026-07-28T00:04:00.000Z",
+                    requiresPin: true,
+                },
+            }));
+            window.localStorage.setItem(requestKey, JSON.stringify({
+                version: 2,
+                revision: 1,
+                request: {
+                    attemptId: localId,
+                    requiresPin: true,
+                    input: {
+                        examId: "e2e-korean-integrated-exam",
+                        submissionId: "33333333-3333-4333-8333-333333333333",
+                        answers: { 1: 2, 2: 3, 3: 1 },
+                        startedAt: "2026-07-28T00:00:00.000Z",
+                    },
+                },
+            }));
+        }, {
+            sourceId: automaticCanonicalId,
+            localId: pinLocalId,
+            entryKey: submissionReceiptEntryKey(pinLocalId),
+            requestKey: submissionRequestEntryKey(pinLocalId),
+        });
+        await page.goto(`/student/review/${pinLocalId}`);
+        await expect(page.getByRole("status")).toHaveText("서버 반영 대기 · 자동 재시도");
+        await expect(page.getByText("자동 재시도하지 않습니다. 시험 PIN을 입력한 뒤 직접 다시 시도해주세요.")).toBeVisible();
+        await page.evaluate(() => window.dispatchEvent(new Event("online")));
+        await page.waitForTimeout(250);
+        await expect(page).toHaveURL(new RegExp(`/student/review/${pinLocalId}$`));
+        const pinRetry = page.getByRole("button", { name: "지금 다시 시도" });
+        await expect(pinRetry).toBeDisabled();
+        await page.getByLabel("시험 PIN").fill("2468");
+        await expect(pinRetry).toBeEnabled();
+        expect(await page.evaluate(() => JSON.stringify(window.localStorage))).not.toContain("2468");
+        await pinRetry.click();
+        await expect(page.getByRole("status")).toHaveText("서버 반영 완료");
+        await expect(page).not.toHaveURL(new RegExp(`/student/review/${pinLocalId}$`));
+        const pinCanonicalId = new URL(page.url()).pathname.split("/").pop() || "";
+        expect(await page.evaluate(() => (
+            [...Array(window.localStorage.length)]
+                .map((_, index) => window.localStorage.getItem(window.localStorage.key(index) || "") || "")
+                .join("")
+        ))).not.toContain("2468");
+
+        const permanentLocalId = "attempt-permanent-local";
+        const permanentAction = "학생 계정으로 다시 로그인한 뒤 시험 기록을 확인해주세요.";
+        await page.evaluate(({ sourceId, localId, entryKey, actionDetail }) => {
+            const attempts = JSON.parse(window.localStorage.getItem("omr_attempts") || "[]");
+            const source = attempts.find((attempt: { id?: string }) => attempt.id === sourceId);
+            if (!source) throw new Error("permanent source attempt missing");
+            window.localStorage.setItem("omr_attempts", JSON.stringify([
+                ...attempts,
+                {
+                    ...source,
+                    id: localId,
+                    finishedAt: new Date(Date.now() + 3_000).toISOString(),
+                    questionResults: (source.questionResults || []).map((result: object) => ({
+                        ...result,
+                        attemptId: localId,
+                    })),
+                },
+            ]));
+            window.localStorage.setItem(entryKey, JSON.stringify({
+                version: 2,
+                revision: 1,
+                receipt: {
+                    attemptId: localId,
+                    status: "local_only",
+                    updatedAt: "2026-07-28T00:05:00.000Z",
+                    reason: "login_required",
+                    actionDetail,
+                },
+            }));
+        }, {
+            sourceId: pinCanonicalId,
+            localId: permanentLocalId,
+            entryKey: submissionReceiptEntryKey(permanentLocalId),
+            actionDetail: permanentAction,
+        });
+        await page.goto(`/student/review/${permanentLocalId}`);
+        await expect(page.getByRole("status")).toHaveText("이 기기에만 저장됨");
+        await expect(page.getByText(permanentAction)).toBeVisible();
 
         await page.goto("/student/history");
         await expect(page.getByRole("heading", { name: "내 시험 기록" })).toBeVisible();

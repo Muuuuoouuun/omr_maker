@@ -19,7 +19,7 @@ export default function SyncFlusher() {
         let running = false;
         const flush = () => {
             if (running) return;
-            if (pendingSubmissionReceiptIds().length === 0) return;
+            if (pendingSubmissionReceiptIds({ automaticOnly: true }).length === 0) return;
             running = true;
             void flushPendingSubmissionReceipts({
                 submitSignedSessionAttempt: submitAttempt,

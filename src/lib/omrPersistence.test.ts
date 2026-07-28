@@ -855,6 +855,132 @@ describe("Supabase persistence mapping", () => {
         expect(localStorage.getItem("omr_attempts")).toBe(rawAttempts);
     });
 
+    it("merges device artifacts from both provisional and existing canonical records on a second-tab reconciliation", () => {
+        const provisional: Attempt = {
+            ...attempt,
+            id: "attempt-local",
+            score: 0,
+            answers: { 1: 1 },
+            drawingsRef: {
+                store: "indexeddb",
+                key: "provisional-drawings",
+                updatedAt: "2026-07-28T00:01:00.000Z",
+            },
+            handwriting: {
+                schemaVersion: 1,
+                status: "saved",
+                strokesRef: {
+                    store: "indexeddb",
+                    key: "provisional-handwriting",
+                    updatedAt: "2026-07-28T00:01:00.000Z",
+                },
+                plan: "pro",
+                summary: { pageCount: 1, strokeCount: 4, questionCount: 1 },
+                questions: {
+                    1: { questionId: 1, questionNumber: 1, page: 1, strokeCount: 4 },
+                },
+            },
+            drawingStrokeCount: 4,
+            questionDrawings: [{ questionId: 1, questionNumber: 1, page: 1, strokeCount: 4 }],
+            studentQuestions: [{
+                questionId: 1,
+                questionNumber: 1,
+                body: "첫 질문",
+                createdAt: "2026-07-28T00:01:00.000Z",
+                status: "queued",
+            }],
+        };
+        const existingCanonical: Attempt = {
+            ...attempt,
+            id: "attempt-server",
+            score: 10,
+            answers: { 1: 2 },
+            drawingsRef: {
+                store: "indexeddb",
+                key: "canonical-drawings",
+                updatedAt: "2026-07-28T00:02:00.000Z",
+            },
+            handwriting: {
+                schemaVersion: 1,
+                status: "saved",
+                strokesRef: {
+                    store: "indexeddb",
+                    key: "canonical-handwriting",
+                    updatedAt: "2026-07-28T00:02:00.000Z",
+                },
+                plan: "pro",
+                summary: { pageCount: 2, strokeCount: 7, questionCount: 1 },
+                questions: {
+                    2: { questionId: 2, questionNumber: 2, page: 2, strokeCount: 7 },
+                },
+            },
+            drawingStrokeCount: 7,
+            questionDrawings: [{ questionId: 2, questionNumber: 2, page: 2, strokeCount: 7 }],
+            studentQuestions: [
+                {
+                    questionId: 1,
+                    questionNumber: 1,
+                    body: "첫 질문",
+                    createdAt: "2026-07-28T00:01:00.000Z",
+                    status: "queued",
+                },
+                {
+                    questionId: 2,
+                    questionNumber: 2,
+                    body: "둘째 질문",
+                    createdAt: "2026-07-28T00:02:00.000Z",
+                    status: "answered",
+                },
+            ],
+        };
+        const authoritative: Attempt = {
+            ...attempt,
+            id: "attempt-server",
+            score: 100,
+            totalScore: 100,
+            answers: { 1: 3 },
+            questionResults: [],
+            drawingStrokeCount: undefined,
+            drawingsRef: undefined,
+            questionDrawings: undefined,
+            studentQuestions: undefined,
+        };
+        const localStorage = createStorage({
+            omr_attempts: JSON.stringify([provisional, existingCanonical]),
+        });
+        vi.stubGlobal("window", { localStorage });
+        vi.stubGlobal("localStorage", localStorage);
+
+        const replacement = replaceLocalAttemptWithCanonical("attempt-local", authoritative);
+
+        expect(replacement.attempt).toMatchObject({
+            id: "attempt-server",
+            score: 100,
+            totalScore: 100,
+            answers: { 1: 3 },
+            drawingsRef: existingCanonical.drawingsRef,
+            drawingStrokeCount: 7,
+        });
+        expect(replacement.attempt?.questionDrawings).toEqual([
+            provisional.questionDrawings![0],
+            existingCanonical.questionDrawings![0],
+        ]);
+        expect(replacement.attempt?.studentQuestions).toEqual([
+            provisional.studentQuestions![0],
+            existingCanonical.studentQuestions![1],
+        ]);
+        expect(replacement.attempt?.handwriting).toMatchObject({
+            status: "saved",
+            strokesRef: existingCanonical.handwriting!.strokesRef,
+            summary: { pageCount: 2, strokeCount: 7, questionCount: 2 },
+            questions: {
+                1: provisional.handwriting!.questions[1],
+                2: existingCanonical.handwriting!.questions[2],
+            },
+        });
+        expect(readLocalAttempts().map(candidate => candidate.id)).toEqual(["attempt-server"]);
+    });
+
     it("bulk-saves exams and rewrites deletion markers at most once", () => {
         const secondExam = { ...exam, id: "exam-2", title: "Second exam" };
         const localStorage = createStorage({

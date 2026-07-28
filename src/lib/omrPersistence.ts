@@ -1083,19 +1083,90 @@ export interface LocalAttemptReplacement {
     rollback: () => boolean;
 }
 
-function withDeviceOnlyAttemptArtifacts(authoritative: Attempt, local?: Attempt): Attempt {
-    if (!local) return authoritative;
+function newestStoredDataRef(attempts: Attempt[]): Attempt["drawingsRef"] {
+    return attempts
+        .flatMap(attempt => attempt.drawingsRef ? [attempt.drawingsRef] : [])
+        .sort((left, right) => (
+            (Date.parse(right.updatedAt || "") || 0) - (Date.parse(left.updatedAt || "") || 0)
+        ))[0];
+}
+
+function mergedAttemptHandwriting(attempts: Attempt[]): Attempt["handwriting"] {
+    const items = attempts.flatMap(attempt => attempt.handwriting ? [attempt.handwriting] : []);
+    if (items.length === 0) return undefined;
+    const latest = items[items.length - 1];
+    const questions = items.reduce<NonNullable<Attempt["handwriting"]>["questions"]>((merged, handwriting) => {
+        for (const [questionId, summary] of Object.entries(handwriting.questions)) {
+            const current = merged[Number(questionId)];
+            if (!current || summary.strokeCount > current.strokeCount) {
+                merged[Number(questionId)] = summary;
+            }
+        }
+        return merged;
+    }, {});
+    const strokesRef = items
+        .flatMap(handwriting => handwriting.strokesRef ? [handwriting.strokesRef] : [])
+        .sort((left, right) => (
+            (Date.parse(right.updatedAt || "") || 0) - (Date.parse(left.updatedAt || "") || 0)
+        ))[0];
+    return {
+        schemaVersion: 1,
+        status: items.some(handwriting => handwriting.status === "saved") ? "saved" : latest.status,
+        strokesRef,
+        plan: latest.plan,
+        summary: {
+            pageCount: Math.max(...items.map(handwriting => handwriting.summary.pageCount)),
+            strokeCount: Math.max(...items.map(handwriting => handwriting.summary.strokeCount)),
+            questionCount: Object.keys(questions).length,
+        },
+        questions,
+    };
+}
+
+function unionQuestionDrawings(attempts: Attempt[]): Attempt["questionDrawings"] {
+    const merged = new Map<string, NonNullable<Attempt["questionDrawings"]>[number]>();
+    for (const item of attempts.flatMap(attempt => attempt.questionDrawings || [])) {
+        const key = `${item.questionId}:${item.page}`;
+        const current = merged.get(key);
+        if (!current || item.strokeCount > current.strokeCount) merged.set(key, item);
+    }
+    const items = [...merged.values()].sort((left, right) => (
+        left.questionId - right.questionId || left.page - right.page
+    ));
+    return items.length > 0 ? items : undefined;
+}
+
+function unionStudentQuestions(attempts: Attempt[]): Attempt["studentQuestions"] {
+    const merged = new Map<string, NonNullable<Attempt["studentQuestions"]>[number]>();
+    for (const item of attempts.flatMap(attempt => attempt.studentQuestions || [])) {
+        const key = `${item.questionId}:${item.createdAt}:${item.body}`;
+        merged.set(key, item);
+    }
+    const items = [...merged.values()].sort((left, right) => (
+        left.createdAt.localeCompare(right.createdAt)
+        || left.questionId - right.questionId
+        || left.body.localeCompare(right.body)
+    ));
+    return items.length > 0 ? items : undefined;
+}
+
+function withDeviceOnlyAttemptArtifacts(authoritative: Attempt, localAttempts: Attempt[]): Attempt {
+    if (localAttempts.length === 0) return authoritative;
+    const attempts = [...localAttempts, authoritative];
+    const latestLocal = localAttempts[localAttempts.length - 1];
     return {
         ...authoritative,
-        drawings: authoritative.drawings ?? local.drawings,
-        drawingsRef: authoritative.drawingsRef ?? local.drawingsRef,
-        handwriting: authoritative.handwriting ?? local.handwriting,
-        handwritingArchived: authoritative.handwritingArchived ?? local.handwritingArchived,
-        handwritingPlan: authoritative.handwritingPlan ?? local.handwritingPlan,
-        drawingPageCount: authoritative.drawingPageCount ?? local.drawingPageCount,
-        drawingStrokeCount: authoritative.drawingStrokeCount ?? local.drawingStrokeCount,
-        questionDrawings: authoritative.questionDrawings ?? local.questionDrawings,
-        studentQuestions: authoritative.studentQuestions ?? local.studentQuestions,
+        drawings: authoritative.drawings ?? latestLocal.drawings,
+        drawingsRef: newestStoredDataRef(attempts),
+        handwriting: mergedAttemptHandwriting(attempts),
+        handwritingArchived: attempts.some(attempt => attempt.handwritingArchived)
+            || (attempts.some(attempt => attempt.handwritingArchived === false) ? false : undefined),
+        handwritingPlan: authoritative.handwritingPlan ?? latestLocal.handwritingPlan
+            ?? localAttempts.find(attempt => !!attempt.handwritingPlan)?.handwritingPlan,
+        drawingPageCount: Math.max(0, ...attempts.map(attempt => attempt.drawingPageCount || 0)) || undefined,
+        drawingStrokeCount: Math.max(0, ...attempts.map(attempt => attempt.drawingStrokeCount || 0)) || undefined,
+        questionDrawings: unionQuestionDrawings(attempts),
+        studentQuestions: unionStudentQuestions(attempts),
     };
 }
 
@@ -1116,7 +1187,12 @@ export function replaceLocalAttemptWithCanonical(
     if (!hasBrowserStorage()) return { committed: false, rollback: noRollback };
 
     const storage = localStorage;
-    const previousRaw = storage.getItem(ATTEMPTS_KEY);
+    let previousRaw: string | null;
+    try {
+        previousRaw = storage.getItem(ATTEMPTS_KEY);
+    } catch {
+        return { committed: false, rollback: noRollback };
+    }
     let rawItems: unknown[];
     try {
         const parsed = previousRaw ? JSON.parse(previousRaw) : [];
@@ -1125,11 +1201,18 @@ export function replaceLocalAttemptWithCanonical(
         rawItems = [];
     }
 
-    const previousAttempt = rawItems
+    const localAttempts = rawItems
         .map(sanitizeAttemptPayload)
-        .find(candidate => candidate?.id === previousAttemptId);
+        .filter((candidate): candidate is Attempt => (
+            !!candidate && (candidate.id === previousAttemptId || candidate.id === authoritativeAttempt.id)
+        ))
+        .sort((left, right) => {
+            if (left.id === previousAttemptId && right.id !== previousAttemptId) return -1;
+            if (right.id === previousAttemptId && left.id !== previousAttemptId) return 1;
+            return 0;
+        });
     const mergedAttempt = stripHeavyAttemptPayload(
-        withDeviceOnlyAttemptArtifacts(authoritativeAttempt, previousAttempt || undefined),
+        withDeviceOnlyAttemptArtifacts(authoritativeAttempt, localAttempts),
     );
     const replacedIds = new Set([previousAttemptId, authoritativeAttempt.id]);
     const removedItems = rawItems.filter(item => {

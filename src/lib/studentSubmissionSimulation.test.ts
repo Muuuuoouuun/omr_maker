@@ -68,4 +68,28 @@ describe("student submission development simulation", () => {
         expect(first.attempt.id).not.toBe(input.submissionId);
         expect(first.attempt.questionResults).toHaveLength(3);
     });
+
+    it("expires idle entries, evicts the least-recently-used entry at the cap, and supports deterministic reset", () => {
+        const simulate = createStudentSubmissionSimulator({ ttlMs: 1_000, maxEntries: 2 });
+        const withSubmission = (submissionId: string): SubmitAttemptInput => ({ ...input, submissionId });
+        const first = simulate(withSubmission("11111111-1111-4111-8111-111111111111"), identity, env, 1_000);
+        const second = simulate(withSubmission("22222222-2222-4222-8222-222222222222"), identity, env, 1_100);
+        expect(first.status).toBe("ok");
+        expect(second.status).toBe("ok");
+
+        simulate(withSubmission("11111111-1111-4111-8111-111111111111"), identity, env, 1_200);
+        simulate(withSubmission("33333333-3333-4333-8333-333333333333"), identity, env, 1_300);
+        const evictedReplay = simulate(withSubmission("22222222-2222-4222-8222-222222222222"), identity, env, 1_400);
+        expect(evictedReplay.status).toBe("ok");
+        if (second.status !== "ok" || evictedReplay.status !== "ok") throw new Error("expected attempts");
+        expect(evictedReplay.attempt.finishedAt).not.toBe(second.attempt.finishedAt);
+
+        const ttlReplay = simulate(withSubmission("33333333-3333-4333-8333-333333333333"), identity, env, 2_401);
+        expect(ttlReplay.status).toBe("ok");
+        simulate.reset();
+        const resetReplay = simulate(withSubmission("33333333-3333-4333-8333-333333333333"), identity, env, 2_500);
+        if (ttlReplay.status !== "ok" || resetReplay.status !== "ok") throw new Error("expected attempts");
+        expect(resetReplay.attempt.finishedAt).not.toBe(ttlReplay.attempt.finishedAt);
+        expect(simulate.size()).toBe(1);
+    });
 });

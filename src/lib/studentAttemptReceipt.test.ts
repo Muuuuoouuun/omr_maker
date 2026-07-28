@@ -14,6 +14,8 @@ import {
     readReconciledSubmissionAttemptId,
     readSubmissionReceipt,
     retryPendingSubmissionReceipt,
+    SUBMISSION_RECEIPT_ENTRY_PREFIX,
+    SUBMISSION_RECEIPT_REQUEST_PREFIX,
     submissionReceiptLabel,
 } from "./studentAttemptReceipt";
 
@@ -98,6 +100,352 @@ describe("student attempt receipt cache", () => {
         expect(pendingSubmissionReceiptIds()).toEqual(["attempt-local-1"]);
     });
 
+    it("keeps a retryable service outage pending", async () => {
+        const storage = createStorage();
+        vi.stubGlobal("window", { localStorage: storage });
+        queuePendingSubmissionReceipt({
+            attemptId: "attempt-service-outage",
+            input: {
+                examId: "exam-1",
+                submissionId: "submission-service-outage",
+                answers: {},
+                startedAt: "2026-07-28T00:00:00.000Z",
+            },
+        });
+
+        const result = await retryPendingSubmissionReceipt("attempt-service-outage", {
+            submitSignedSessionAttempt: async () => ({ status: "service_unavailable" }),
+        });
+
+        expect(result.status).toBe("pending");
+        expect(readSubmissionReceipt("attempt-service-outage")?.status).toBe("pending");
+        expect(pendingSubmissionReceiptIds()).toEqual(["attempt-service-outage"]);
+    });
+
+    it("stores PIN-gated replay intent without ever persisting the raw PIN", () => {
+        const storage = createStorage();
+        vi.stubGlobal("window", { localStorage: storage });
+
+        expect(queuePendingSubmissionReceipt({
+            attemptId: "attempt-pin",
+            input: {
+                examId: "exam-1",
+                submissionId: "submission-pin",
+                answers: { 1: 2 },
+                startedAt: "2026-07-28T00:00:00.000Z",
+            },
+            requiresPin: true,
+        })).toBe(true);
+
+        expect(readSubmissionReceipt("attempt-pin")).toMatchObject({
+            status: "pending",
+            requiresPin: true,
+        });
+        expect([...Array(storage.length)].map((_, index) => storage.getItem(storage.key(index)!) || "").join(""))
+            .not.toContain("1234");
+    });
+
+    it.each([
+        ["unauthenticated", "login_required"],
+        ["login_required", "login_required"],
+        ["ended", "exam_ended"],
+        ["archived", "exam_archived"],
+        ["group_denied", "access_denied"],
+        ["denied", "access_denied"],
+        ["not_found", "not_found"],
+    ])("stops replay for permanent %s outcomes with a truthful local-only reason", async (status, reason) => {
+        const storage = createStorage();
+        vi.stubGlobal("window", { localStorage: storage });
+        queuePendingSubmissionReceipt({
+            attemptId: `attempt-${status}`,
+            input: {
+                examId: "exam-1",
+                submissionId: `submission-${status}`,
+                answers: {},
+                startedAt: "2026-07-28T00:00:00.000Z",
+            },
+        });
+
+        const result = await retryPendingSubmissionReceipt(`attempt-${status}`, {
+            submitSignedSessionAttempt: async () => ({ status }),
+        });
+
+        expect(result.status).toBe("local_only");
+        expect(readSubmissionReceipt(`attempt-${status}`)).toMatchObject({
+            status: "local_only",
+            reason,
+            actionDetail: expect.any(String),
+        });
+        expect(pendingSubmissionReceiptIds()).not.toContain(`attempt-${status}`);
+    });
+
+    it("keeps PIN retries manual across reload, skips network without a PIN, and confirms with a supplied PIN", async () => {
+        const storage = createStorage();
+        vi.stubGlobal("window", { localStorage: storage });
+        queuePendingSubmissionReceipt({
+            attemptId: "attempt-pin",
+            input: {
+                examId: "exam-1",
+                submissionId: "submission-pin",
+                answers: { 1: 2 },
+                startedAt: "2026-07-28T00:00:00.000Z",
+            },
+            requiresPin: true,
+        });
+        const submit = vi.fn(async (_input, pin?: string) => pin === "2468"
+            ? {
+                status: "ok",
+                attempt: {
+                    id: "attempt-server-pin",
+                    examId: "exam-1",
+                    examTitle: "시험",
+                    studentName: "학생",
+                    startedAt: "2026-07-28T00:00:00.000Z",
+                    finishedAt: "2026-07-28T00:02:00.000Z",
+                    score: 10,
+                    totalScore: 10,
+                    answers: { 1: 2 },
+                    status: "completed" as const,
+                },
+            }
+            : { status: "pin_required" });
+
+        const missingPin = await retryPendingSubmissionReceipt("attempt-pin", {
+            submitSignedSessionAttempt: submit,
+        });
+        expect(missingPin).toMatchObject({ status: "pending", requiresPin: true });
+        expect(submit).not.toHaveBeenCalled();
+
+        const wrongPin = await retryPendingSubmissionReceipt("attempt-pin", {
+            submitSignedSessionAttempt: submit,
+            pin: "1111",
+        });
+        expect(wrongPin).toMatchObject({ status: "pending", requiresPin: true });
+        expect(readSubmissionReceipt("attempt-pin")).toMatchObject({ status: "pending", requiresPin: true });
+
+        const confirmed = await retryPendingSubmissionReceipt("attempt-pin", {
+            submitSignedSessionAttempt: submit,
+            pin: "2468",
+        });
+        expect(confirmed.status).toBe("confirmed");
+        expect(JSON.stringify([...Array(storage.length)].map((_, index) => storage.getItem(storage.key(index)!))))
+            .not.toContain("2468");
+    });
+
+    it("isolates per-attempt envelopes, migrates v1, and quarantines only the corrupt entry", () => {
+        const legacy = {
+            receipts: {
+                "attempt-one": {
+                    attemptId: "attempt-one",
+                    status: "pending",
+                    updatedAt: "2026-07-28T00:00:00.000Z",
+                },
+                "attempt-two": {
+                    attemptId: "attempt-two",
+                    status: "confirmed",
+                    updatedAt: "2026-07-28T00:01:00.000Z",
+                },
+            },
+            requests: {
+                "attempt-one": {
+                    attemptId: "attempt-one",
+                    input: {
+                        examId: "exam-1",
+                        submissionId: "submission-one",
+                        answers: {},
+                        startedAt: "2026-07-28T00:00:00.000Z",
+                    },
+                },
+            },
+            reconciliations: {},
+        };
+        const storage = createStorage({
+            omr_student_submission_receipts_v1: JSON.stringify(legacy),
+        });
+        vi.stubGlobal("window", { localStorage: storage });
+
+        expect(readSubmissionReceipt("attempt-one")?.status).toBe("pending");
+        expect(readSubmissionReceipt("attempt-two")?.status).toBe("confirmed");
+        expect(storage.getItem(`${SUBMISSION_RECEIPT_ENTRY_PREFIX}${encodeURIComponent("attempt-one")}`)).toBeTruthy();
+        storage.setItem(`${SUBMISSION_RECEIPT_ENTRY_PREFIX}${encodeURIComponent("attempt-one")}`, "{bad");
+
+        expect(readSubmissionReceipt("attempt-one")).toBeNull();
+        expect(readSubmissionReceipt("attempt-two")?.status).toBe("confirmed");
+        expect([...Array(storage.length)].map((_, index) => storage.key(index)))
+            .toEqual(expect.arrayContaining([expect.stringContaining("quarantine")]));
+    });
+
+    it("keeps the v1 registry intact when migration is interrupted by quota and resumes later", () => {
+        const legacy = JSON.stringify({
+            receipts: {
+                "attempt-one": {
+                    attemptId: "attempt-one",
+                    status: "pending",
+                    updatedAt: "2026-07-28T00:00:00.000Z",
+                },
+            },
+            requests: {
+                "attempt-one": {
+                    attemptId: "attempt-one",
+                    input: {
+                        examId: "exam-1",
+                        submissionId: "submission-one",
+                        answers: {},
+                        startedAt: "2026-07-28T00:00:00.000Z",
+                    },
+                },
+            },
+        });
+        const base = createStorage({ omr_student_submission_receipts_v1: legacy });
+        let failMigration = true;
+        const storage = {
+            get length() { return base.length; },
+            clear() { base.clear(); },
+            getItem(key: string) { return base.getItem(key); },
+            key(index: number) { return base.key(index); },
+            removeItem(key: string) { base.removeItem(key); },
+            setItem(key: string, value: string) {
+                if (failMigration && key.startsWith(SUBMISSION_RECEIPT_REQUEST_PREFIX)) throw new Error("quota");
+                base.setItem(key, value);
+            },
+        } as Storage;
+        vi.stubGlobal("window", { localStorage: storage });
+
+        readSubmissionReceipt("attempt-one");
+        expect(storage.getItem("omr_student_submission_receipts_v1")).toBe(legacy);
+        expect(storage.getItem("omr_student_submission_receipts_v2_migrated")).toBeNull();
+
+        failMigration = false;
+        expect(pendingSubmissionReceiptIds()).toEqual(["attempt-one"]);
+        expect(storage.getItem("omr_student_submission_receipts_v1")).toBeNull();
+    });
+
+    it("keeps distinct pending submissions isolated and rejects a stale pending overwrite after confirmation", () => {
+        const storage = createStorage();
+        vi.stubGlobal("window", { localStorage: storage });
+        const request = (id: string) => ({
+            attemptId: id,
+            input: {
+                examId: "exam-1",
+                submissionId: `submission-${id}`,
+                answers: {},
+                startedAt: "2026-07-28T00:00:00.000Z",
+            },
+        });
+
+        expect(queuePendingSubmissionReceipt(request("attempt-one"))).toBe(true);
+        expect(queuePendingSubmissionReceipt(request("attempt-two"))).toBe(true);
+        expect(pendingSubmissionReceiptIds().sort()).toEqual(["attempt-one", "attempt-two"]);
+        expect(storage.getItem(`${SUBMISSION_RECEIPT_REQUEST_PREFIX}${encodeURIComponent("attempt-one")}`)).toBeTruthy();
+        expect(storage.getItem(`${SUBMISSION_RECEIPT_REQUEST_PREFIX}${encodeURIComponent("attempt-two")}`)).toBeTruthy();
+
+        expect(persistSubmissionReceipt({
+            attemptId: "attempt-one",
+            status: "confirmed",
+            updatedAt: "2026-07-28T00:02:00.000Z",
+        })).toBe(true);
+        expect(queuePendingSubmissionReceipt(request("attempt-one"))).toBe(false);
+        expect(readSubmissionReceipt("attempt-one")?.status).toBe("confirmed");
+        expect(pendingSubmissionReceiptIds()).toEqual(["attempt-two"]);
+    });
+
+    it("uses a same-attempt Web Lock when available", async () => {
+        const storage = createStorage();
+        const requestLock = vi.fn(async (
+            _name: string,
+            _options: object,
+            operation: () => Promise<unknown>,
+        ) => operation());
+        vi.stubGlobal("window", { localStorage: storage });
+        vi.stubGlobal("navigator", { locks: { request: requestLock } });
+        queuePendingSubmissionReceipt({
+            attemptId: "attempt-lock",
+            input: {
+                examId: "exam-1",
+                submissionId: "submission-lock",
+                answers: {},
+                startedAt: "2026-07-28T00:00:00.000Z",
+            },
+        });
+
+        await retryPendingSubmissionReceipt("attempt-lock", {
+            submitSignedSessionAttempt: async () => ({ status: "error" }),
+        });
+
+        expect(requestLock).toHaveBeenCalledWith(
+            "omr-submission:attempt-lock",
+            { mode: "exclusive" },
+            expect.any(Function),
+        );
+    });
+
+    it("caps confirmed receipts without ever pruning pending requests", () => {
+        const storage = createStorage();
+        vi.stubGlobal("window", { localStorage: storage });
+        queuePendingSubmissionReceipt({
+            attemptId: "attempt-must-stay-pending",
+            input: {
+                examId: "exam-1",
+                submissionId: "submission-must-stay-pending",
+                answers: {},
+                startedAt: "2026-07-28T00:00:00.000Z",
+            },
+        });
+        for (let index = 0; index < 120; index += 1) {
+            expect(persistSubmissionReceipt({
+                attemptId: `attempt-confirmed-${index}`,
+                status: "confirmed",
+                updatedAt: new Date(index * 1_000).toISOString(),
+            })).toBe(true);
+        }
+
+        const receiptKeys = [...Array(storage.length)]
+            .map((_, index) => storage.key(index))
+            .filter(key => key?.startsWith(SUBMISSION_RECEIPT_ENTRY_PREFIX));
+        expect(receiptKeys).toHaveLength(101);
+        expect(readSubmissionReceipt("attempt-must-stay-pending")?.status).toBe("pending");
+        expect(pendingSubmissionReceiptIds()).toEqual(["attempt-must-stay-pending"]);
+    });
+
+    it("caps old-to-canonical aliases", async () => {
+        const storage = createStorage();
+        vi.stubGlobal("window", { localStorage: storage });
+        for (let index = 0; index < 110; index += 1) {
+            const oldId = `attempt-old-${index}`;
+            queuePendingSubmissionReceipt({
+                attemptId: oldId,
+                input: {
+                    examId: "exam-1",
+                    submissionId: `submission-${index}`,
+                    answers: {},
+                    startedAt: "2026-07-28T00:00:00.000Z",
+                },
+            });
+            await retryPendingSubmissionReceipt(oldId, {
+                submitSignedSessionAttempt: async () => ({
+                    status: "ok",
+                    attempt: {
+                        id: `attempt-canonical-${index}`,
+                        examId: "exam-1",
+                        examTitle: "시험",
+                        studentName: "학생",
+                        startedAt: "2026-07-28T00:00:00.000Z",
+                        finishedAt: new Date(index * 1_000).toISOString(),
+                        score: 10,
+                        totalScore: 10,
+                        answers: {},
+                        status: "completed",
+                    },
+                }),
+            });
+        }
+
+        const aliasKeys = [...Array(storage.length)]
+            .map((_, index) => storage.key(index))
+            .filter(key => key?.startsWith("omr_student_submission_alias_v2:"));
+        expect(aliasKeys).toHaveLength(100);
+    });
+
     it("confirms and cleans up only after the intended server request succeeds", async () => {
         const storage = createStorage();
         vi.stubGlobal("window", { localStorage: storage });
@@ -143,6 +491,15 @@ describe("student attempt receipt cache", () => {
         expect(readSubmissionReceipt("attempt-server-1")?.status).toBe("confirmed");
         expect(readReconciledSubmissionAttemptId("attempt-local-1")).toBe("attempt-server-1");
         expect(pendingSubmissionReceiptIds()).toEqual([]);
+        expect(queuePendingSubmissionReceipt({
+            attemptId: "attempt-local-1",
+            input: {
+                examId: "exam-1",
+                submissionId: "stale-submission",
+                answers: {},
+                startedAt: "2026-07-28T00:00:00.000Z",
+            },
+        })).toBe(false);
     });
 
     it("keeps the replay request pending when durable confirmation storage fails", async () => {
@@ -162,9 +519,13 @@ describe("student attempt receipt cache", () => {
         const base = createStorage();
         base.setItem("omr_attempts", JSON.stringify([localAttempt]));
         const storage = {
-            ...base,
+            get length() { return base.length; },
+            clear() { base.clear(); },
+            getItem(key: string) { return base.getItem(key); },
+            key(index: number) { return base.key(index); },
+            removeItem(key: string) { base.removeItem(key); },
             setItem(key: string, value: string) {
-                if (failReceiptWrites && key === "omr_student_submission_receipts_v1") {
+                if (failReceiptWrites && key.startsWith(SUBMISSION_RECEIPT_ENTRY_PREFIX)) {
                     throw new Error("quota");
                 }
                 base.setItem(key, value);

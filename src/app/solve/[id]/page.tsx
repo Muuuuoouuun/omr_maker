@@ -40,8 +40,8 @@ import { clientExamFromStudentExamPreview, clientExamFromStudentSolveExam } from
 import {
     localResultCacheFromServerReceipt,
     persistSubmissionReceipt,
-    queuePendingSubmissionReceipt,
 } from "@/lib/studentAttemptReceipt";
+import { persistStudentSubmissionDisposition } from "@/lib/studentSubmissionDurability";
 import {
     beginAwaySession,
     finishAwaySession,
@@ -2239,25 +2239,17 @@ export default function SolvePage() {
             try { saveLocalAttempt(res.attempt); } catch { /* quota — server copy is canonical */ }
         }
 
-        if (res.receiptStatus === "confirmed") {
-            persistSubmissionReceipt({
-                attemptId: res.attempt.id,
-                status: "confirmed",
-                updatedAt: new Date().toISOString(),
-            });
-        } else if (res.receiptStatus === "pending" && !pinRef.current) {
-            queuePendingSubmissionReceipt({
-                attemptId: res.attempt.id,
-                input: submitInput,
-            });
-        } else {
-            // A development-only exam, a server-side not-found fallback, or a
-            // PIN-gated local attempt has no safely replayable server request.
-            persistSubmissionReceipt({
-                attemptId: res.attempt.id,
-                status: "local_only",
-                updatedAt: new Date().toISOString(),
-            });
+        const durability = persistStudentSubmissionDisposition({
+            attemptId: res.attempt.id,
+            receiptStatus: res.receiptStatus || "local_only",
+            input: submitInput,
+            requiresPin: res.receiptStatus === "pending" && !!pinRef.current,
+        });
+        if (!durability.durable) {
+            resetFailedSubmission();
+            await saveDraftSnapshot();
+            toast.error("제출 재시도 저장 실패", durability.error);
+            return;
         }
 
         // Clean up draft

@@ -66,10 +66,10 @@ import {
 } from "@/lib/studentFeedbackClient";
 import {
     persistSubmissionReceipt,
+    isSubmissionReceiptStorageKey,
     readReconciledSubmissionAttemptId,
     readSubmissionReceipt,
     retryPendingSubmissionReceipt,
-    SUBMISSION_RECEIPT_KEY,
     SUBMISSION_RECEIPT_RECONCILED_EVENT,
     submissionReceiptLabel,
     type SubmissionReceipt,
@@ -419,6 +419,7 @@ export default function ReviewPage() {
     const [submissionReceipt, setSubmissionReceipt] = useState<SubmissionReceipt | null>(null);
     const [submissionRetrying, setSubmissionRetrying] = useState(false);
     const [submissionRetryFeedback, setSubmissionRetryFeedback] = useState("");
+    const [submissionRetryPin, setSubmissionRetryPin] = useState("");
     const [restoredDrawings, setRestoredDrawings] = useState<PdfDrawings | undefined>(undefined);
     const [pdfFile, setPdfFile] = useState<File | null>(null);
     const [pdfLoadFailed, setPdfLoadFailed] = useState(false);
@@ -460,7 +461,7 @@ export default function ReviewPage() {
             applyReconciliation(event.detail);
         };
         const onStorage = (event: StorageEvent) => {
-            if (event.key !== SUBMISSION_RECEIPT_KEY) return;
+            if (!isSubmissionReceiptStorageKey(event.key)) return;
             const canonicalAttemptId = readReconciledSubmissionAttemptId(id);
             if (canonicalAttemptId) {
                 const canonicalAttempt = readLocalAttempts().find(candidate => candidate.id === canonicalAttemptId);
@@ -760,6 +761,9 @@ export default function ReviewPage() {
             const result = await retryPendingSubmissionReceipt(attempt.id, {
                 submitSignedSessionAttempt: submitAttempt,
                 onAuthoritativeAttempt: replaceLocalAttemptWithCanonical,
+                ...(submissionReceipt?.requiresPin && submissionRetryPin.trim()
+                    ? { pin: submissionRetryPin.trim() }
+                    : {}),
             });
             if (result.status === "confirmed") {
                 setSubmissionRetryFeedback("서버 반영을 확인했습니다.");
@@ -769,6 +773,7 @@ export default function ReviewPage() {
                 setSubmissionRetryFeedback(result.error);
             }
         } finally {
+            setSubmissionRetryPin("");
             setSubmissionRetrying(false);
         }
     };
@@ -1117,19 +1122,38 @@ export default function ReviewPage() {
                                         {submissionReceiptLabel(submissionReceipt)}
                                     </span>
                                     {submissionReceipt.status === "pending" && (
-                                        <button
-                                            type="button"
-                                            className="btn btn-secondary"
-                                            onClick={handleSubmissionRetry}
-                                            disabled={submissionRetrying}
-                                            style={{ justifySelf: "start" }}
-                                        >
-                                            {submissionRetrying ? "다시 시도 중…" : "지금 다시 시도"}
-                                        </button>
+                                        <>
+                                            {submissionReceipt.requiresPin && (
+                                                <>
+                                                    <p style={{ margin: 0, color: "var(--muted)", fontSize: "var(--type-caption-min)" }}>
+                                                        자동 재시도하지 않습니다. 시험 PIN을 입력한 뒤 직접 다시 시도해주세요.
+                                                    </p>
+                                                    <label style={{ display: "grid", gap: "0.3rem", maxWidth: "16rem" }}>
+                                                        <span style={{ fontWeight: 700 }}>시험 PIN</span>
+                                                        <input
+                                                            type="password"
+                                                            value={submissionRetryPin}
+                                                            onChange={event => setSubmissionRetryPin(event.target.value)}
+                                                            autoComplete="off"
+                                                            inputMode="numeric"
+                                                        />
+                                                    </label>
+                                                </>
+                                            )}
+                                            <button
+                                                type="button"
+                                                className="btn btn-secondary"
+                                                onClick={handleSubmissionRetry}
+                                                disabled={submissionRetrying || (submissionReceipt.requiresPin && !submissionRetryPin.trim())}
+                                                style={{ justifySelf: "start" }}
+                                            >
+                                                {submissionRetrying ? "다시 시도 중…" : "지금 다시 시도"}
+                                            </button>
+                                        </>
                                     )}
                                     {submissionReceipt.status === "local_only" && (
                                         <p style={{ margin: 0, color: "var(--muted)", fontSize: "var(--type-caption-min)" }}>
-                                            다른 기기에서는 이 결과를 볼 수 없습니다.
+                                            {submissionReceipt.actionDetail || "다른 기기에서는 이 결과를 볼 수 없습니다."}
                                         </p>
                                     )}
                                     {submissionRetryFeedback && (

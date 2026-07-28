@@ -10,6 +10,22 @@ export type StudentSubmissionSimulationResult =
     | { status: "invalid" }
     | { status: "ok"; attempt: Attempt };
 
+export interface StudentSubmissionSimulator {
+    (
+        input: SubmitAttemptInput,
+        identity: StudentServerIdentity,
+        env?: Env,
+        now?: number,
+    ): StudentSubmissionSimulationResult;
+    reset(): void;
+    size(): number;
+}
+
+export interface StudentSubmissionSimulatorOptions {
+    ttlMs?: number;
+    maxEntries?: number;
+}
+
 function clean(value: unknown): string {
     return typeof value === "string" ? value.trim() : "";
 }
@@ -55,18 +71,17 @@ function inputMatchesTrustedExam(input: SubmitAttemptInput, exam: Exam): boolean
     });
 }
 
-export function createStudentSubmissionSimulator(): (
-    input: SubmitAttemptInput,
-    identity: StudentServerIdentity,
-    env?: Env,
-    now?: number,
-) => StudentSubmissionSimulationResult {
-    const attempts = new Map<string, Attempt>();
-    return (
-        input,
-        identity,
-        env = process.env,
-        now = Date.now(),
+export function createStudentSubmissionSimulator(
+    options: StudentSubmissionSimulatorOptions = {},
+): StudentSubmissionSimulator {
+    const ttlMs = Math.max(1, options.ttlMs ?? 30 * 60 * 1_000);
+    const maxEntries = Math.max(1, options.maxEntries ?? 256);
+    const attempts = new Map<string, { attempt: Attempt; lastAccessedAt: number }>();
+    const simulate = ((
+        input: SubmitAttemptInput,
+        identity: StudentServerIdentity,
+        env: Env = process.env,
+        now: number = Date.now(),
     ): StudentSubmissionSimulationResult => {
         if (env.NODE_ENV === "production" || !enabled(env.OMR_E2E_STUDENT_SUBMISSION_SIMULATION)) {
             return { status: "disabled" };
@@ -81,8 +96,15 @@ export function createStudentSubmissionSimulator(): (
             secret,
         });
         if (!attemptId) return { status: "invalid" };
+        for (const [id, entry] of attempts) {
+            if (now - entry.lastAccessedAt > ttlMs) attempts.delete(id);
+        }
         const existing = attempts.get(attemptId);
-        if (existing) return { status: "ok", attempt: existing };
+        if (existing) {
+            attempts.delete(attemptId);
+            attempts.set(attemptId, { ...existing, lastAccessedAt: now });
+            return { status: "ok", attempt: existing.attempt };
+        }
         const attempt = buildServerAttempt(
             input,
             exam,
@@ -90,7 +112,15 @@ export function createStudentSubmissionSimulator(): (
             attemptId,
             new Date(now).toISOString(),
         );
-        attempts.set(attemptId, attempt);
+        while (attempts.size >= maxEntries) {
+            const oldest = attempts.keys().next().value;
+            if (typeof oldest !== "string") break;
+            attempts.delete(oldest);
+        }
+        attempts.set(attemptId, { attempt, lastAccessedAt: now });
         return { status: "ok", attempt };
-    };
+    }) as StudentSubmissionSimulator;
+    simulate.reset = () => attempts.clear();
+    simulate.size = () => attempts.size;
+    return simulate;
 }
