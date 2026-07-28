@@ -63,10 +63,22 @@ describe("student official attempt read surface", () => {
 
     it("replays pending submissions through the purpose-specific server action", () => {
         const flusher = source("src/components/SyncFlusher.tsx");
+        const orchestration = source("src/lib/studentSubmissionFlush.ts");
         expect(flusher).toContain("flushPendingSubmissionReceipts");
         expect(flusher).toContain("submitSignedSessionAttempt: submitAttempt");
+        expect(flusher).toContain("maintainAndFlushPendingSubmissionReceipts");
+        expect(flusher).toContain("window.setTimeout(flush, cleanupDelayMs)");
+        expect(flusher).toContain("window.clearTimeout(cleanupTimer)");
+        expect(flusher).toContain(".catch(() =>");
+        expect(flusher).toContain("rerunRequested = true");
+        expect(flusher).toContain("if (rerunRequested && !disposed) {");
         expect(flusher).toContain("STUDENT_SESSION_CHANGED_EVENT");
         expect(flusher).toContain('window.addEventListener(STUDENT_SESSION_CHANGED_EVENT, flush)');
+        expect(flusher).toContain('window.addEventListener("online", flush)');
+        expect(flusher).toContain('if (document.visibilityState === "visible") flush()');
+        expect(orchestration).toContain("await dependencies.migrateLegacySubmissionReceipts()");
+        expect(orchestration.indexOf("await dependencies.migrateLegacySubmissionReceipts()"))
+            .toBeLessThan(orchestration.indexOf("dependencies.pendingSubmissionReceiptIds("));
         expect(flusher).not.toContain("flushPendingAttemptSync");
         expect(flusher).not.toContain("upsertRemoteAttempt");
     });

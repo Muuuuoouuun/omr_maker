@@ -15,6 +15,7 @@ import {
     readReconciledSubmissionAttemptId,
     readSubmissionReceipt,
     retryPendingSubmissionReceipt,
+    SUBMISSION_RECEIPT_LEGACY_CLEANUP_CANDIDATE_KEY,
     SUBMISSION_RECEIPT_ENTRY_PREFIX,
     SUBMISSION_RECEIPT_REQUEST_PREFIX,
     submissionReceiptLabel,
@@ -66,6 +67,117 @@ const receipt: ServerGradedAttemptReceipt = {
 };
 
 describe("student attempt receipt cache", () => {
+    it("requires two unchanged maintenance generations across the grace interval before legacy cleanup", async () => {
+        const raw = JSON.stringify({
+            receipts: {
+                "attempt-grace": {
+                    attemptId: "attempt-grace",
+                    status: "pending",
+                    updatedAt: "2026-07-28T00:00:00.000Z",
+                },
+            },
+        });
+        const storage = createStorage({ omr_student_submission_receipts_v1: raw });
+        vi.stubGlobal("window", { localStorage: storage });
+
+        expect(await migrateLegacySubmissionReceipts({ now: 1_000, cleanupGraceMs: 100 })).toBe(true);
+        expect(readSubmissionReceipt("attempt-grace")?.status).toBe("pending");
+        expect(storage.getItem("omr_student_submission_receipts_v1")).toBe(raw);
+        const firstCandidate = JSON.parse(
+            storage.getItem(SUBMISSION_RECEIPT_LEGACY_CLEANUP_CANDIDATE_KEY) || "{}",
+        );
+        expect(firstCandidate).toMatchObject({
+            version: 1,
+            firstSeenAt: 1_000,
+            generation: 1,
+            fingerprint: expect.any(String),
+        });
+        expect(Object.keys(firstCandidate).sort()).toEqual([
+            "fingerprint",
+            "firstSeenAt",
+            "generation",
+            "version",
+        ]);
+        expect(JSON.stringify(firstCandidate)).not.toContain(raw);
+
+        expect(await migrateLegacySubmissionReceipts({ now: 1_050, cleanupGraceMs: 100 })).toBe(true);
+        expect(storage.getItem("omr_student_submission_receipts_v1")).toBe(raw);
+        expect(await migrateLegacySubmissionReceipts({ now: 1_101, cleanupGraceMs: 100 })).toBe(true);
+        expect(storage.getItem("omr_student_submission_receipts_v1")).not.toContain("attempt-grace");
+        expect(storage.getItem(SUBMISSION_RECEIPT_LEGACY_CLEANUP_CANDIDATE_KEY)).toBeNull();
+    });
+
+    it("resets cleanup generation and migrates a late old-tab write before grace cleanup", async () => {
+        const firstRaw = JSON.stringify({
+            receipts: {
+                "attempt-before-late-write": {
+                    attemptId: "attempt-before-late-write",
+                    status: "pending",
+                    updatedAt: "2026-07-28T00:00:00.000Z",
+                },
+            },
+        });
+        const lateRaw = JSON.stringify({
+            receipts: {
+                "attempt-after-late-write": {
+                    attemptId: "attempt-after-late-write",
+                    status: "pending",
+                    updatedAt: "2026-07-28T00:01:00.000Z",
+                },
+            },
+        });
+        const storage = createStorage({ omr_student_submission_receipts_v1: firstRaw });
+        vi.stubGlobal("window", { localStorage: storage });
+
+        expect(await migrateLegacySubmissionReceipts({ now: 2_000, cleanupGraceMs: 100 })).toBe(true);
+        const firstFingerprint = JSON.parse(
+            storage.getItem(SUBMISSION_RECEIPT_LEGACY_CLEANUP_CANDIDATE_KEY) || "{}",
+        ).fingerprint;
+        storage.setItem("omr_student_submission_receipts_v1", lateRaw);
+
+        expect(await migrateLegacySubmissionReceipts({ now: 2_050, cleanupGraceMs: 100 })).toBe(true);
+        expect(readSubmissionReceipt("attempt-after-late-write")?.status).toBe("pending");
+        expect(storage.getItem("omr_student_submission_receipts_v1")).toBe(lateRaw);
+        expect(JSON.parse(
+            storage.getItem(SUBMISSION_RECEIPT_LEGACY_CLEANUP_CANDIDATE_KEY) || "{}",
+        )).toMatchObject({
+            firstSeenAt: 2_050,
+            generation: 1,
+            fingerprint: expect.not.stringContaining(firstFingerprint),
+        });
+
+        expect(await migrateLegacySubmissionReceipts({ now: 2_151, cleanupGraceMs: 100 })).toBe(true);
+        expect(storage.getItem("omr_student_submission_receipts_v1")).not.toContain("attempt-after-late-write");
+    });
+
+    it("keeps malformed PIN raw through grace using metadata-only state, then redacts it", async () => {
+        const raw = '{"requests":{"attempt-pin":{"pin":"TOP-SECRET-2468"';
+        const storage = createStorage({ omr_student_submission_receipts_v1: raw });
+        vi.stubGlobal("window", { localStorage: storage });
+
+        expect(await migrateLegacySubmissionReceipts({ now: 3_000, cleanupGraceMs: 100 })).toBe(true);
+        expect(storage.getItem("omr_student_submission_receipts_v1")).toBe(raw);
+        const candidate = storage.getItem(SUBMISSION_RECEIPT_LEGACY_CLEANUP_CANDIDATE_KEY) || "";
+        const metadataOnlyValues = [...Array(storage.length)]
+            .flatMap((_, index) => {
+                const key = storage.key(index) || "";
+                if (key === "omr_student_submission_receipts_v1") return [];
+                return [key, storage.getItem(key) || ""];
+            })
+            .join("");
+        expect(candidate).toContain("fingerprint");
+        expect(metadataOnlyValues).toContain('"sourceKind":"legacy"');
+        expect(metadataOnlyValues).not.toContain("TOP-SECRET-2468");
+        expect(metadataOnlyValues).not.toContain(raw);
+
+        expect(await migrateLegacySubmissionReceipts({ now: 3_101, cleanupGraceMs: 100 })).toBe(true);
+        const allValues = [...Array(storage.length)]
+            .map((_, index) => storage.getItem(storage.key(index) || "") || "")
+            .join("");
+        expect(allValues).not.toContain("TOP-SECRET-2468");
+        expect(allValues).not.toContain(raw);
+    });
+
     it("overlays late v1 data without mutating storage from synchronous read APIs", () => {
         const legacy = {
             receipts: {
@@ -242,11 +354,11 @@ describe("student attempt receipt cache", () => {
         expect(await migrateLegacySubmissionReceipts()).toBe(false);
         expect(storage.getItem(currentKey)).toBe(currentEnvelope);
         expect(storage.getItem(legacyKey)).toBe(lateLegacy);
-        expect(readSubmissionReceipt("attempt-first-race")?.status).toBe("pending");
+        expect(readSubmissionReceipt("attempt-late-race")?.status).toBe("pending");
 
         expect(await migrateLegacySubmissionReceipts()).toBe(true);
         expect(storage.getItem(currentKey)).toBe(currentEnvelope);
-        expect(storage.getItem(legacyKey)).toBeNull();
+        expect(storage.getItem(legacyKey)).toBe(lateLegacy);
         expect(readSubmissionReceipt("attempt-late-race")?.status).toBe("pending");
     });
 
@@ -358,7 +470,7 @@ describe("student attempt receipt cache", () => {
             expect(await migrateLegacySubmissionReceipts()).toBe(true);
             expect(storage.getItem(receiptStorageKey)).toBe(terminalReceipt);
             expect(storage.getItem(requestStorageKey)).toBeNull();
-            expect(storage.getItem("omr_student_submission_receipts_v1")).toBeNull();
+            expect(storage.getItem("omr_student_submission_receipts_v1")).toBeTruthy();
         },
     );
 
@@ -830,7 +942,19 @@ describe("student attempt receipt cache", () => {
 
         expect(readSubmissionReceipt("attempt-one")).toBeNull();
         expect(storage.getItem("omr_student_submission_receipts_v1")).toBe(raw);
-        expect(await migrateLegacySubmissionReceipts()).toBe(true);
+        expect(await migrateLegacySubmissionReceipts({ now: 4_000, cleanupGraceMs: 100 })).toBe(true);
+        const metadataOnlyValues = [...Array(storage.length)]
+            .flatMap((_, index) => {
+                const key = storage.key(index) || "";
+                if (key === "omr_student_submission_receipts_v1") return [];
+                return [storage.getItem(key) || ""];
+            })
+            .join("");
+        expect(metadataOnlyValues).not.toContain("TOP-SECRET-2468");
+        expect(metadataOnlyValues).not.toContain(raw);
+        expect(metadataOnlyValues).toContain("byteLength");
+
+        expect(await migrateLegacySubmissionReceipts({ now: 4_101, cleanupGraceMs: 100 })).toBe(true);
         const allValues = [...Array(storage.length)]
             .map((_, index) => storage.getItem(storage.key(index) || "") || "")
             .join("");
@@ -901,7 +1025,7 @@ describe("student attempt receipt cache", () => {
         failMigration = false;
         expect(await migrateLegacySubmissionReceipts()).toBe(true);
         expect(pendingSubmissionReceiptIds()).toEqual(["attempt-one"]);
-        expect(storage.getItem("omr_student_submission_receipts_v1")).toBeNull();
+        expect(storage.getItem("omr_student_submission_receipts_v1")).toBe(legacy);
     });
 
     it("migrates a late v1 write even when the v2 marker already exists", async () => {
@@ -932,7 +1056,7 @@ describe("student attempt receipt cache", () => {
 
         expect(pendingSubmissionReceiptIds()).toEqual(["attempt-late-v1"]);
         expect(await migrateLegacySubmissionReceipts()).toBe(true);
-        expect(storage.getItem("omr_student_submission_receipts_v1")).toBeNull();
+        expect(storage.getItem("omr_student_submission_receipts_v1")).toBeTruthy();
     });
 
     it("bounds migrated confirmed receipts that predate local provenance", async () => {

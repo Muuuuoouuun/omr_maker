@@ -62,8 +62,16 @@ export const SUBMISSION_RECEIPT_ENTRY_PREFIX = "omr_student_submission_receipt_v
 export const SUBMISSION_RECEIPT_REQUEST_PREFIX = "omr_student_submission_request_v2:";
 export const SUBMISSION_RECEIPT_ALIAS_PREFIX = "omr_student_submission_alias_v2:";
 export const SUBMISSION_RECEIPT_QUARANTINE_PREFIX = "omr_student_submission_quarantine_v2:";
+export const SUBMISSION_RECEIPT_LEGACY_CLEANUP_CANDIDATE_KEY =
+    "omr_student_submission_legacy_cleanup_candidate_v2";
+export const SUBMISSION_RECEIPT_LEGACY_CLEANUP_GRACE_MS = 2_000;
 export const SUBMISSION_RECEIPT_RECONCILED_EVENT = "omr:submission-receipt-reconciled";
 const MIGRATION_MARKER_KEY = "omr_student_submission_receipts_v2_migrated";
+const SANITIZED_LEGACY_REGISTRY = JSON.stringify({
+    receipts: {},
+    requests: {},
+    reconciliations: {},
+});
 const CONFIRMED_RETENTION_CAP = 100;
 const ALIAS_RETENTION_CAP = 100;
 const RETRY_ERROR = "서버에 아직 반영하지 못했습니다. 네트워크를 확인한 뒤 다시 시도해주세요.";
@@ -170,7 +178,7 @@ function storageKeys(storage: Storage, prefix: string): string[] {
     return keys;
 }
 
-function quarantineCorruptValue(storage: Storage, key: string, raw: string): void {
+function writeQuarantineMetadata(storage: Storage, key: string, raw: string): void {
     const sourceKind = key === SUBMISSION_RECEIPT_KEY
         ? "legacy"
         : key.startsWith(SUBMISSION_RECEIPT_ENTRY_PREFIX)
@@ -194,6 +202,10 @@ function quarantineCorruptValue(storage: Storage, key: string, raw: string): voi
         // Metadata is best-effort. Corrupt submission data may contain a PIN,
         // so it is never copied into quarantine.
     }
+}
+
+function quarantineCorruptValue(storage: Storage, key: string, raw: string): void {
+    writeQuarantineMetadata(storage, key, raw);
     try {
         storage.removeItem(key);
     } catch {
@@ -355,6 +367,64 @@ interface LegacyRegistry {
     reconciliations?: Record<string, unknown>;
 }
 
+interface LegacyCleanupCandidate {
+    version: 1;
+    fingerprint: string;
+    firstSeenAt: number;
+    generation: number;
+}
+
+function readLegacyCleanupCandidate(
+    storage: Storage,
+    options: { removeInvalid?: boolean } = {},
+): LegacyCleanupCandidate | null {
+    const raw = storage.getItem(SUBMISSION_RECEIPT_LEGACY_CLEANUP_CANDIDATE_KEY);
+    if (!raw) return null;
+    try {
+        const candidate = JSON.parse(raw) as Partial<LegacyCleanupCandidate>;
+        if (
+            candidate.version !== 1
+            || typeof candidate.fingerprint !== "string"
+            || !/^[a-f0-9]{64}$/.test(candidate.fingerprint)
+            || typeof candidate.firstSeenAt !== "number"
+            || !Number.isFinite(candidate.firstSeenAt)
+            || !Number.isInteger(candidate.generation)
+            || candidate.generation! < 1
+        ) {
+            throw new Error("invalid");
+        }
+        return candidate as LegacyCleanupCandidate;
+    } catch {
+        if (options.removeInvalid) {
+            try { storage.removeItem(SUBMISSION_RECEIPT_LEGACY_CLEANUP_CANDIDATE_KEY); } catch {}
+        }
+        return null;
+    }
+}
+
+function readLegacyOverlayRegistry(storage: Storage): LegacyRegistry | undefined {
+    // Once a fingerprint candidate exists, that exact generation has already
+    // been copied to v2. Old-tab changes become visible after the next awaited
+    // maintenance pass resets the candidate and migrates the new generation.
+    if (storage.getItem(SUBMISSION_RECEIPT_LEGACY_CLEANUP_CANDIDATE_KEY) !== null) {
+        return undefined;
+    }
+    return parseLegacyRegistry(storage, { quarantine: false })?.registry;
+}
+
+async function legacyRawFingerprint(raw: string): Promise<string | null> {
+    try {
+        if (!globalThis.crypto?.subtle) return null;
+        const bytes = new TextEncoder().encode(raw);
+        const digest = await globalThis.crypto.subtle.digest("SHA-256", bytes);
+        return [...new Uint8Array(digest)]
+            .map(value => value.toString(16).padStart(2, "0"))
+            .join("");
+    } catch {
+        return null;
+    }
+}
+
 function parseLegacyRegistry(
     storage: Storage,
     options: { quarantine?: boolean } = {},
@@ -373,15 +443,29 @@ function parseLegacyRegistry(
     }
 }
 
-function migrateLegacyRegistryUnlocked(storage: Storage): boolean {
-    const legacy = parseLegacyRegistry(storage);
-    if (!legacy) {
+async function migrateLegacyRegistryUnlocked(
+    storage: Storage,
+    options: { now?: number; cleanupGraceMs?: number } = {},
+): Promise<boolean> {
+    const now = options.now ?? Date.now();
+    const cleanupGraceMs = Math.max(0, options.cleanupGraceMs ?? SUBMISSION_RECEIPT_LEGACY_CLEANUP_GRACE_MS);
+    const raw = storage.getItem(SUBMISSION_RECEIPT_KEY);
+    if (!raw || raw === SANITIZED_LEGACY_REGISTRY) {
         maintainV2Registry(storage);
+        try { storage.removeItem(SUBMISSION_RECEIPT_LEGACY_CLEANUP_CANDIDATE_KEY); } catch {}
         try { storage.setItem(MIGRATION_MARKER_KEY, "1"); } catch {}
         return true;
     }
+    const fingerprint = await legacyRawFingerprint(raw);
+    if (!fingerprint) return false;
+    const previousCandidate = readLegacyCleanupCandidate(storage, { removeInvalid: true });
+    const parsed = parseLegacyRegistry(storage, { quarantine: false });
+    const legacy = parsed?.raw === raw ? parsed : null;
+    if (!legacy && previousCandidate?.fingerprint !== fingerprint) {
+        writeQuarantineMetadata(storage, SUBMISSION_RECEIPT_KEY, raw);
+    }
     try {
-        for (const [id, value] of Object.entries(legacy.registry.receipts || {})) {
+        for (const [id, value] of Object.entries(legacy?.registry.receipts || {})) {
             const receipt = sanitizeReceipt(id, value);
             if (
                 receipt
@@ -391,7 +475,7 @@ function migrateLegacyRegistryUnlocked(storage: Storage): boolean {
                 writeReceiptEnvelope(storage, receipt);
             }
         }
-        for (const [id, value] of Object.entries(legacy.registry.requests || {})) {
+        for (const [id, value] of Object.entries(legacy?.registry.requests || {})) {
             if (!isPendingSubmissionRequest(id, value)) continue;
             if (v2SupersedesPending(storage, id)) {
                 storage.removeItem(requestKey(id));
@@ -406,7 +490,7 @@ function migrateLegacyRegistryUnlocked(storage: Storage): boolean {
                 });
             }
         }
-        for (const [previousId, canonicalId] of Object.entries(legacy.registry.reconciliations || {})) {
+        for (const [previousId, canonicalId] of Object.entries(legacy?.registry.reconciliations || {})) {
             if (
                 previousId
                 && typeof canonicalId === "string"
@@ -421,10 +505,42 @@ function migrateLegacyRegistryUnlocked(storage: Storage): boolean {
         // Keep a bounded recovery window while all newly written confirmed
         // receipts are required to have a matching server-confirmed attempt.
         maintainV2Registry(storage);
-        // A legacy writer is outside this lock protocol. If it wrote a newer
-        // registry while we copied the snapshot, leave it for the next pass.
-        if (storage.getItem(SUBMISSION_RECEIPT_KEY) !== legacy.raw) return false;
-        storage.removeItem(SUBMISSION_RECEIPT_KEY);
+        // A legacy writer is outside this lock protocol. If it writes while the
+        // snapshot is copied, discard the cleanup generation. The next awaited
+        // pass migrates the new raw and starts a fresh grace interval.
+        if (storage.getItem(SUBMISSION_RECEIPT_KEY) !== raw) {
+            storage.removeItem(SUBMISSION_RECEIPT_LEGACY_CLEANUP_CANDIDATE_KEY);
+            return false;
+        }
+        const candidate: LegacyCleanupCandidate = previousCandidate?.fingerprint === fingerprint
+            ? {
+                ...previousCandidate,
+                generation: previousCandidate.generation + 1,
+            }
+            : {
+                version: 1,
+                fingerprint,
+                firstSeenAt: now,
+                generation: 1,
+            };
+        storage.setItem(
+            SUBMISSION_RECEIPT_LEGACY_CLEANUP_CANDIDATE_KEY,
+            JSON.stringify(candidate),
+        );
+        if (
+            candidate.generation >= 2
+            && now - candidate.firstSeenAt >= cleanupGraceMs
+        ) {
+            const finalRaw = storage.getItem(SUBMISSION_RECEIPT_KEY);
+            if (!finalRaw || await legacyRawFingerprint(finalRaw) !== fingerprint) {
+                storage.removeItem(SUBMISSION_RECEIPT_LEGACY_CLEANUP_CANDIDATE_KEY);
+                return false;
+            }
+            // This final in-lock check narrows, but cannot eliminate, the
+            // unavoidable limitation of an old writer that ignores this lock.
+            storage.setItem(SUBMISSION_RECEIPT_KEY, SANITIZED_LEGACY_REGISTRY);
+            storage.removeItem(SUBMISSION_RECEIPT_LEGACY_CLEANUP_CANDIDATE_KEY);
+        }
         storage.setItem(MIGRATION_MARKER_KEY, "1");
         return true;
     } catch {
@@ -434,13 +550,28 @@ function migrateLegacyRegistryUnlocked(storage: Storage): boolean {
     }
 }
 
-export async function migrateLegacySubmissionReceipts(): Promise<boolean> {
+export async function migrateLegacySubmissionReceipts(
+    options: { now?: number; cleanupGraceMs?: number } = {},
+): Promise<boolean> {
     const storage = browserStorage();
     if (!storage) return false;
     return withBrowserStorageLock(
         "submission-receipts",
-        () => migrateLegacyRegistryUnlocked(storage),
+        () => migrateLegacyRegistryUnlocked(storage, options),
     );
+}
+
+export function legacySubmissionReceiptCleanupDelayMs(
+    now = Date.now(),
+    cleanupGraceMs = SUBMISSION_RECEIPT_LEGACY_CLEANUP_GRACE_MS,
+): number | null {
+    const storage = browserStorage();
+    if (!storage) return null;
+    const raw = storage.getItem(SUBMISSION_RECEIPT_KEY);
+    if (!raw || raw === SANITIZED_LEGACY_REGISTRY) return null;
+    const candidate = readLegacyCleanupCandidate(storage);
+    if (!candidate) return null;
+    return Math.max(0, candidate.firstSeenAt + Math.max(0, cleanupGraceMs) - now);
 }
 
 function pruneRetainedRecords(storage: Storage): void {
@@ -535,13 +666,13 @@ export function submissionReceiptForAttempt(
     };
 }
 
-function persistSubmissionReceiptUnlocked(
+async function persistSubmissionReceiptUnlocked(
     receipt: SubmissionReceipt,
     provenanceAttached = false,
-): boolean {
+): Promise<boolean> {
     const storage = browserStorage();
     if (!storage) return false;
-    migrateLegacyRegistryUnlocked(storage);
+    await migrateLegacyRegistryUnlocked(storage);
     const current = parseReceiptEnvelope(storage, receipt.attemptId)?.receipt;
     if (current?.status === "confirmed" && receipt.status === "pending") return false;
     if (receipt.status === "pending" && storage.getItem(aliasKey(receipt.attemptId))) return false;
@@ -587,14 +718,14 @@ export function readSubmissionReceipt(attemptId: string): SubmissionReceipt | nu
         return parseReceiptEnvelope(storage, attemptId, { quarantine: false })?.receipt || null;
     }
     if (storage.getItem(aliasKey(attemptId)) !== null) return null;
-    const legacy = parseLegacyRegistry(storage, { quarantine: false })?.registry;
+    const legacy = readLegacyOverlayRegistry(storage);
     return sanitizeReceipt(attemptId, legacy?.receipts?.[attemptId]) || null;
 }
 
 export function readReconciledSubmissionAttemptId(attemptId: string): string | null {
     const storage = browserStorage();
     if (!storage) return null;
-    const legacy = parseLegacyRegistry(storage, { quarantine: false })?.registry;
+    const legacy = readLegacyOverlayRegistry(storage);
     let current = attemptId;
     const visited = new Set<string>();
     while (!visited.has(current)) {
@@ -629,13 +760,13 @@ export function readReconciledSubmissionAttemptId(attemptId: string): string | n
     return current !== attemptId ? current : null;
 }
 
-function queuePendingSubmissionReceiptUnlocked(
+async function queuePendingSubmissionReceiptUnlocked(
     request: PendingSignedSessionSubmission,
     updatedAt = new Date().toISOString(),
-): boolean {
+): Promise<boolean> {
     const storage = browserStorage();
     if (!storage) return false;
-    migrateLegacyRegistryUnlocked(storage);
+    await migrateLegacyRegistryUnlocked(storage);
     if (parseReceiptEnvelope(storage, request.attemptId)?.receipt.status === "confirmed") return false;
     if (storage.getItem(aliasKey(request.attemptId))) return false;
     const receipt: SubmissionReceipt = {
@@ -680,7 +811,7 @@ export async function queuePendingSubmissionReceipt(
 export function pendingSubmissionReceiptIds(options: { automaticOnly?: boolean } = {}): string[] {
     const storage = browserStorage();
     if (!storage) return [];
-    const legacy = parseLegacyRegistry(storage, { quarantine: false })?.registry;
+    const legacy = readLegacyOverlayRegistry(storage);
     const ids = new Set(
         storageKeys(storage, SUBMISSION_RECEIPT_REQUEST_PREFIX)
             .flatMap(key => attemptIdFromKey(key, SUBMISSION_RECEIPT_REQUEST_PREFIX) || []),

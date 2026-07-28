@@ -1630,13 +1630,23 @@ test.describe("Teacher and student full journey", () => {
         });
         await page.reload();
         await expect(page.getByRole("status")).toHaveText("서버 반영 완료");
-        const quarantineValues = await page.evaluate(() => (
+        const quarantineMetadata = await page.evaluate(() => (
+            [...Array(window.localStorage.length)]
+                .flatMap((_, index) => {
+                    const key = window.localStorage.key(index) || "";
+                    if (!key.startsWith("omr_student_submission_quarantine_v2:")) return [];
+                    return [window.localStorage.getItem(key) || ""];
+                })
+                .join("")
+        ));
+        expect(quarantineMetadata).not.toContain("BROWSER-SECRET-2468");
+        expect(quarantineMetadata).toContain("byteLength");
+        await expect.poll(async () => page.evaluate(() => (
             [...Array(window.localStorage.length)]
                 .map((_, index) => window.localStorage.getItem(window.localStorage.key(index) || "") || "")
                 .join("")
-        ));
-        expect(quarantineValues).not.toContain("BROWSER-SECRET-2468");
-        expect(quarantineValues).toContain("byteLength");
+                .includes("BROWSER-SECRET-2468")
+        )), { timeout: 8_000 }).toBe(false);
 
         await page.goto("/student/history");
         await expect(page.getByRole("heading", { name: "내 시험 기록" })).toBeVisible();
