@@ -165,7 +165,10 @@ describe("Supabase schema contract", () => {
             /from public\.omr_exam_questions exam_question[\s\S]{0,180}exam_question\.question_id\s*=\s*result\.question_id/i,
         );
         expect(productionBoundaryPreflight).toMatch(
-            /when credential_hash_parts\.raw_iterations ~ '\^\[0-9\]\+\$'\s+and length\(credential_hash_parts\.raw_iterations\) <= 7\s+then credential_hash_parts\.raw_iterations::numeric/i,
+            /coalesce\(\s*nullif\(ltrim\(credential_hash_raw_parts\.raw_iterations, '0'\), ''\),\s*'0'\s*\) as normalized_iterations/i,
+        );
+        expect(productionBoundaryPreflight).toMatch(
+            /when credential_hash_parts\.raw_iterations ~ '\^\[0-9\]\+\$'\s+and length\(credential_hash_parts\.normalized_iterations\) <= 7\s+then credential_hash_parts\.normalized_iterations::numeric/i,
         );
 
         expect(productionBoundaryPreflight).not.toMatch(
@@ -181,6 +184,8 @@ describe("Supabase schema contract", () => {
         expect(liveAssertions).toContain("same-scope removed membership created a false cross-organization violation");
         expect(liveAssertions).toContain("active teacher with inactive membership was accepted");
         expect(liveAssertions).toContain("500-digit iteration fixture raised instead of returning an invalid count");
+        expect(liveAssertions).toContain("maximum-length leading-zero PBKDF2 credential was rejected");
+        expect(liveAssertions).toContain("all-zero PBKDF2 iteration fixture was accepted");
         expect(liveAssertions).toContain("preflight diagnostics exposed 김학생 or a raw row identifier");
         expect(liveAssertions).toContain("preflight exception exposed 김학생 or a raw row identifier");
     });

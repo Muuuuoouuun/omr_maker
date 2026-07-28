@@ -1267,6 +1267,28 @@ begin
         raise exception 'uppercase PBKDF2 credential was rejected';
     end if;
 
+    update public.omr_student_start_credentials
+       set start_code_hash =
+           'pbkdf2-sha256:' || repeat('0', 395) || '10000:'
+           || repeat('a', 32) || ':' || repeat('b', 64)
+     where organization_id = 'live-org-a'
+       and student_profile_id = 'live-student-a';
+    diagnostics := public.omr_production_boundary_preflight_v1();
+    if (diagnostics->>'students_without_credentials')::bigint <> 0 then
+        raise exception 'maximum-length leading-zero PBKDF2 credential was rejected';
+    end if;
+
+    update public.omr_student_start_credentials
+       set start_code_hash =
+           'pbkdf2-sha256:' || repeat('0', 400) || ':'
+           || repeat('a', 32) || ':' || repeat('b', 64)
+     where organization_id = 'live-org-a'
+       and student_profile_id = 'live-student-a';
+    diagnostics := public.omr_production_boundary_preflight_v1();
+    if (diagnostics->>'students_without_credentials')::bigint <> 1 then
+        raise exception 'all-zero PBKDF2 iteration fixture was accepted';
+    end if;
+
     foreach candidate_hash in array array[
         'pbkdf2-sha256:9999:' || repeat('a', 32) || ':' || repeat('b', 64),
         'pbkdf2-sha256:1000001:' || repeat('a', 32) || ':' || repeat('b', 64),

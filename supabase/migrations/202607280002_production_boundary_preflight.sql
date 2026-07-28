@@ -423,7 +423,7 @@ cross_organization_violations(entity, row_id) as (
         on student.id = credential.student_profile_id
      where credential.organization_id <> student.organization_id
 ),
-credential_hash_parts as (
+credential_hash_raw_parts as (
     select
         student.organization_id,
         student.id as student_profile_id,
@@ -440,6 +440,15 @@ credential_hash_parts as (
         on credential.organization_id = student.organization_id
        and credential.student_profile_id = student.id
 ),
+credential_hash_parts as (
+    select
+        credential_hash_raw_parts.*,
+        coalesce(
+            nullif(ltrim(credential_hash_raw_parts.raw_iterations, '0'), ''),
+            '0'
+        ) as normalized_iterations
+      from credential_hash_raw_parts
+),
 credential_hash_validity as (
     select
         credential_hash_parts.*,
@@ -451,8 +460,8 @@ credential_hash_validity as (
             and credential_hash_parts.raw_iterations ~ '^[0-9]+$'
             and case
                 when credential_hash_parts.raw_iterations ~ '^[0-9]+$'
-                    and length(credential_hash_parts.raw_iterations) <= 7
-                then credential_hash_parts.raw_iterations::numeric between 10000 and 1000000
+                    and length(credential_hash_parts.normalized_iterations) <= 7
+                then credential_hash_parts.normalized_iterations::numeric between 10000 and 1000000
                 else false
             end
             and credential_hash_parts.salt_hex ~* '^[a-f0-9]+$'
