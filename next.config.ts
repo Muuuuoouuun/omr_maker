@@ -18,11 +18,21 @@ const baselineSecurityHeaders = [
 const deploymentId = process.env.VERCEL_DEPLOYMENT_ID
   ?.replace(/^dpl_/, "")
   .slice(0, 32);
+const isDesktopRuntime = process.env.OMR_DESKTOP_RUNTIME === "1";
 
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   poweredByHeader: false,
   ...(deploymentId ? { deploymentId } : {}),
+  ...(isDesktopRuntime
+    ? {
+        images: {
+          // Electron serves from a read-only ASAR, so retain optimization without
+          // attempting to create `.next/cache/images` inside the archive.
+          maximumDiskCacheSize: 0,
+        },
+      }
+    : {}),
   turbopack: {
     root: process.cwd(),
   },

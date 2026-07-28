@@ -11,6 +11,7 @@ const expectedCachePrefix = "omr-maker-v15";
 const mobileSolveDraftKey = "omr_draft_mobile-pwa-smoke-exam_mobile-pwa-smoke-student_base";
 const mobileSolvePanelKey = "omr_solve_panel_mobile-pwa-smoke-exam_mobile-pwa-smoke-student_base";
 const simulatedActionOutageKey = "omr_pwa_smoke_simulate_action_outage";
+const optimizedImagePath = "/_next/image?url=%2Flogo.png&w=96&q=75";
 const requiredHttpResources = [
     { contentType: "text/html", pathname: "/pwa-check" },
     { contentType: "application/manifest+json", pathname: "/manifest.webmanifest" },
@@ -22,6 +23,7 @@ const requiredHttpResources = [
     { contentType: "image/jpeg", pathname: "/screenshots/omr-mobile-home.jpg" },
     { contentType: "image/jpeg", pathname: "/screenshots/omr-wide-home.jpg" },
     { contentType: "text/html", pathname: "/offline.html" },
+    { contentType: "image/", pathname: optimizedImagePath, requireNonEmpty: true },
 ];
 const requiredImageSpecs = [
     { height: 180, src: "/apple-touch-icon.png", width: 180 },
@@ -57,7 +59,8 @@ function assertDeployableOrigin(url) {
 }
 
 function expectedHandoffOriginReport() {
-    return externalBaseUrl ? "handoff-origin=pass:공유 가능" : "handoff-origin=warn:로컬 전용";
+    const isShareableExternalOrigin = externalBaseUrl && !isLocalhostUrl(baseUrl);
+    return isShareableExternalOrigin ? "handoff-origin=pass:공유 가능" : "handoff-origin=warn:로컬 전용";
 }
 
 function isExpectedOfflineBrowserProblem(problem) {
@@ -85,7 +88,9 @@ async function waitForHttp(url, timeoutMs = 30_000) {
 async function fetchResourceInfo(pathname) {
     const url = new URL(pathname, baseUrl);
     const response = await fetch(url, { cache: "no-store" });
+    const body = await response.arrayBuffer();
     return {
+        byteLength: body.byteLength,
         cacheControl: response.headers.get("cache-control") || "",
         contentLength: response.headers.get("content-length") || "",
         contentType: response.headers.get("content-type") || "",
@@ -101,11 +106,22 @@ async function collectResourceState() {
     resources.forEach(resource => {
         const expected = requiredHttpResources.find(item => item.pathname === resource.pathname);
         assert(resource.ok, "PWA resource did not return HTTP 2xx", resource);
-        assert(
-            resource.contentType.toLowerCase().includes(expected.contentType),
-            "PWA resource content-type is incorrect",
-            { expectedContentType: expected.contentType, ...resource },
-        );
+        if (expected.contentType === "image/") {
+            assert(
+                resource.contentType.toLowerCase().startsWith("image/"),
+                "Next image optimizer response content-type is incorrect",
+                resource,
+            );
+        } else {
+            assert(
+                resource.contentType.toLowerCase().includes(expected.contentType),
+                "PWA resource content-type is incorrect",
+                { expectedContentType: expected.contentType, ...resource },
+            );
+        }
+        if (expected.requireNonEmpty) {
+            assert(resource.byteLength > 0, "Optimized image response must not be empty", resource);
+        }
     });
 
     const serviceWorker = resources.find(resource => resource.pathname === "/sw.js");

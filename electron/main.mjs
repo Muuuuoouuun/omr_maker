@@ -12,6 +12,10 @@ if (!process.env.NEXT_TELEMETRY_DISABLED) {
 // browser scopes localStorage/IndexedDB (drafts, roster, plan, exams) by origin,
 // so a random ephemeral port would wipe all client data on every launch.
 const PREFERRED_DESKTOP_PORT = 41730;
+const DESKTOP_SMOKE_ENABLED = process.env.OMR_DESKTOP_SMOKE === "1";
+const DESKTOP_SMOKE_SUCCESS_MARKER = "OMR_DESKTOP_SMOKE_OK";
+const DESKTOP_SMOKE_FAILURE_MARKER = "OMR_DESKTOP_SMOKE_FAILED";
+const optimizedImagePath = "/_next/image?url=%2Flogo.png&w=96&q=75";
 
 let nextServer;
 let packagedStartUrl = null;
@@ -92,6 +96,7 @@ function isSameOrigin(targetUrl, baseUrl) {
 
 async function startPackagedNextServer() {
   const appDir = app.getAppPath();
+  process.env.OMR_DESKTOP_RUNTIME = "1";
   const nextApp = next({ dev: false, dir: appDir });
   const requestHandler = nextApp.getRequestHandler();
 
@@ -109,6 +114,20 @@ async function startPackagedNextServer() {
   return `http://127.0.0.1:${port}`;
 }
 
+async function closeNextServer() {
+  const server = nextServer;
+  nextServer = null;
+  packagedStartUrl = null;
+  if (!server?.listening) return;
+
+  await new Promise((resolve, reject) => {
+    server.close((error) => {
+      if (error) reject(error);
+      else resolve();
+    });
+  });
+}
+
 async function resolveStartUrl() {
   if (!app.isPackaged) {
     return process.env.ELECTRON_START_URL || "http://127.0.0.1:3003";
@@ -119,6 +138,45 @@ async function resolveStartUrl() {
     packagedStartUrl = await startPackagedNextServer();
   }
   return packagedStartUrl;
+}
+
+async function runPackagedDesktopSmoke() {
+  try {
+    if (!app.isPackaged) {
+      throw new Error("Packaged desktop smoke must run from an electron-builder executable");
+    }
+
+    const startUrl = await resolveStartUrl();
+    const url = new URL(optimizedImagePath, startUrl);
+    const response = await fetch(url, { cache: "no-store" });
+    const body = await response.arrayBuffer();
+    const contentType = response.headers.get("content-type") || "";
+
+    if (!response.ok) {
+      throw new Error(`Next image optimizer returned HTTP ${response.status}`);
+    }
+    if (!contentType.toLowerCase().startsWith("image/")) {
+      throw new Error(`Next image optimizer returned ${contentType || "no content-type"}`);
+    }
+    if (body.byteLength === 0) {
+      throw new Error("Next image optimizer returned an empty response");
+    }
+
+    console.log(`${DESKTOP_SMOKE_SUCCESS_MARKER} ${JSON.stringify({
+      bytes: body.byteLength,
+      contentType,
+      status: response.status,
+      url: url.href,
+    })}`);
+    await closeNextServer();
+    app.exit(0);
+  } catch (error) {
+    console.error(DESKTOP_SMOKE_FAILURE_MARKER, error);
+    await closeNextServer().catch(closeError => {
+      console.error("Failed to close packaged Next server", closeError);
+    });
+    app.exit(1);
+  }
 }
 
 async function createWindow() {
@@ -166,39 +224,43 @@ async function createWindow() {
 
 app.setAppUserModelId("com.omrmaker.desktop");
 
-// Single-instance lock: a second launch would otherwise bind a second server on
-// a different port (new origin → split/lost client data). Focus the existing
-// window instead.
-if (!app.requestSingleInstanceLock()) {
-  app.quit();
+if (DESKTOP_SMOKE_ENABLED) {
+  app.whenReady().then(runPackagedDesktopSmoke);
 } else {
-  app.on("second-instance", () => {
-    const [existing] = BrowserWindow.getAllWindows();
-    if (existing) {
-      if (existing.isMinimized()) existing.restore();
-      existing.focus();
+  // Single-instance lock: a second launch would otherwise bind a second server on
+  // a different port (new origin → split/lost client data). Focus the existing
+  // window instead.
+  if (!app.requestSingleInstanceLock()) {
+    app.quit();
+  } else {
+    app.on("second-instance", () => {
+      const [existing] = BrowserWindow.getAllWindows();
+      if (existing) {
+        if (existing.isMinimized()) existing.restore();
+        existing.focus();
+      }
+    });
+
+    app.whenReady().then(createWindow).catch((error) => {
+      console.error("Failed to start OMR Maker desktop app", error);
+      app.quit();
+    });
+  }
+
+  app.on("activate", () => {
+    if (BrowserWindow.getAllWindows().length === 0) {
+      createWindow().catch((error) => {
+        console.error("Failed to reopen OMR Maker desktop app", error);
+      });
     }
   });
 
-  app.whenReady().then(createWindow).catch((error) => {
-    console.error("Failed to start OMR Maker desktop app", error);
-    app.quit();
+  app.on("window-all-closed", () => {
+    if (process.platform !== "darwin") {
+      app.quit();
+    }
   });
 }
-
-app.on("activate", () => {
-  if (BrowserWindow.getAllWindows().length === 0) {
-    createWindow().catch((error) => {
-      console.error("Failed to reopen OMR Maker desktop app", error);
-    });
-  }
-});
-
-app.on("window-all-closed", () => {
-  if (process.platform !== "darwin") {
-    app.quit();
-  }
-});
 
 app.on("before-quit", () => {
   if (nextServer) {

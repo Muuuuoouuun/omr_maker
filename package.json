@@ -9,6 +9,7 @@
     "start": "next start",
     "desktop:dev": "concurrently -k -s first \"npm:dev\" \"wait-on http://127.0.0.1:3003 && electron .\"",
     "desktop:pack": "npm run build && electron-builder --dir",
+    "desktop:smoke:packaged": "node scripts/desktop-package-smoke.mjs",
     "desktop:dist:win": "npm run build && electron-builder --win nsis --x64",
     "android:doctor": "node scripts/android-doctor.mjs",
     "android:sync": "cap sync android",
