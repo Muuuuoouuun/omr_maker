@@ -37,15 +37,6 @@ import {
 } from "@/lib/remoteAssetGateway.server";
 import { isSameOriginServerActionRequest } from "@/lib/serverActionSecurity";
 import { createStudentSubmissionSimulator } from "@/lib/studentSubmissionSimulation";
-import {
-    GUEST_CLAIM_CAPABILITY_COOKIE,
-    guestClaimCapabilityMatchesStudent,
-    parseSignedGuestClaimCapability,
-} from "@/lib/studentGuestClaimCapability";
-import {
-    reconcileGuestAttemptSubmissions,
-    type GuestAttemptReconcileItem,
-} from "@/lib/studentGuestReconcileGateway";
 
 type Status = "ok" | "unauthenticated" | "degraded_local" | "denied" | "not_found" | "error";
 type AccessStatus = "pin_required" | "pin_rate_limited" | "login_required" | "group_denied" | "not_started" | "ended" | "archived";
@@ -416,63 +407,6 @@ export async function askAttemptQuestion(
         return { status: "ok", attempt: updated };
     } catch (e) {
         console.error("askAttemptQuestion failed", e);
-        return { status: "error" };
-    }
-}
-
-/**
- * Canonicalize device-local guest submissions after login. The separate
- * HttpOnly capability is bound to the original signed guest, the exact local
- * attempt ids, and the verified target student. Client scores/results are
- * ignored; every ACK is produced only after rebuilding from the canonical exam.
- */
-export async function reconcileGuestAttempts(
-    items: GuestAttemptReconcileItem[],
-): Promise<{
-    status: Status | "partial";
-    acknowledgements?: { localAttemptId: string; canonicalAttemptId: string }[];
-}> {
-    const headerStore = await headers();
-    if (!headerStore.get("origin") || !isSameOriginServerActionRequest(headerStore)) {
-        return { status: "error" };
-    }
-    const ctx = await resolveCtx();
-    if (!isCtx(ctx)) return ctx;
-    if (ctx.identity.kind !== "student") return { status: "denied" };
-    const cookieStore = await cookies();
-    const capability = parseSignedGuestClaimCapability(
-        cookieStore.get(GUEST_CLAIM_CAPABILITY_COOKIE)?.value,
-    );
-    if (!capability || !guestClaimCapabilityMatchesStudent(capability, ctx.identity)) {
-        return { status: "denied" };
-    }
-    try {
-        const result = await reconcileGuestAttemptSubmissions({
-            capability,
-            student: ctx.identity,
-            items,
-        }, {
-            attemptIdFor: (localAttemptId, examId, studentId) => attemptIdForStudentSubmission({
-                submissionId: localAttemptId,
-                examId,
-                ownerStudentId: studentId,
-                secret: resolveStudentSessionSecret(),
-            }),
-            loadExam: async examId => {
-                const row = await fetchExamRowById(ctx.admin, examId);
-                if (!row) return null;
-                try {
-                    return examFromSupabaseRow(row as Parameters<typeof examFromSupabaseRow>[0]);
-                } catch {
-                    return null;
-                }
-            },
-            loadExisting: attemptId => ownAttempt(ctx.admin, ctx.identity, attemptId),
-            save: attempt => saveSessionAttemptAtomically(ctx.admin, ctx.identity, attempt),
-        });
-        return result;
-    } catch (error) {
-        console.error("reconcileGuestAttempts failed", error);
         return { status: "error" };
     }
 }

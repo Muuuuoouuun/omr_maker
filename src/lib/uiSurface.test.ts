@@ -823,9 +823,10 @@ describe("service UI surface", () => {
         expect(solvePage).toContain('Link href="/?role=student"');
     });
 
-    it("keeps guest attempt merging visible and idempotent in the student flow", () => {
+    it("keeps guest recovery visible and merges only server-acknowledged rows", () => {
         const homePage = readProjectFile("src/app/page.tsx");
         const studentDashboard = readProjectFile("src/app/student/dashboard/page.tsx");
+        const recoveryPanel = readProjectFile("src/components/StudentGuestRecoveryPanel.tsx");
         const storage = readProjectFile("src/utils/storage.ts");
 
         expect(storage).toContain("previewGuestMerge");
@@ -837,9 +838,11 @@ describe("service UI surface", () => {
         expect(homePage).toContain("recentStudentSession");
         expect(homePage).toContain("최근 학생");
         expect(homePage).toContain("handleContinueRecentStudent");
-        expect(studentDashboard).toContain("연결하지 않은 게스트 기록");
-        expect(studentDashboard).toContain("handleMergeGuestIntoCurrentStudent");
+        expect(studentDashboard).toContain("<StudentGuestRecoveryPanel");
         expect(studentDashboard).toContain("previewGuestMerge");
+        expect(recoveryPanel).toContain("미검증 로컬 기록 복구");
+        expect(recoveryPanel).toContain("acknowledgedAttemptIds");
+        expect(recoveryPanel).not.toContain("handleMergeGuestIntoCurrentStudent");
     });
 
     it("keeps teacher session health visible in operational headers", () => {

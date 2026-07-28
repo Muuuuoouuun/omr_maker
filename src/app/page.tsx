@@ -14,7 +14,6 @@ import {
   type StudentSessionIssueResult,
   type StudentSessionIssueStatus,
 } from "@/app/actions/studentSession";
-import { reconcileGuestAttempts } from "@/app/actions/studentExam";
 import { formatRegionScopedLabel } from "@/lib/dashboardSelection";
 import { seedLocalTestStudentAccounts } from "@/lib/localTestAccounts";
 import { readLocalAttempts } from "@/lib/omrPersistence";
@@ -49,7 +48,7 @@ import {
 import { normalizeStudentRedirectPath } from "@/lib/studentRedirect";
 import { normalizeTeacherRedirectPath, saveTeacherSessionWithIdentity } from "@/lib/teacherSession";
 import { setCurrentPlan } from "@/utils/plans";
-import { guestAttemptToReconcileItem } from "@/lib/studentGuestReconcileGateway";
+import { readGuestRecoveryState } from "@/lib/studentGuestRecovery";
 
 /* ─── SVG Icons ──────────────────────────────────────── */
 
@@ -418,7 +417,6 @@ export default function Home() {
     issuedCode?: string,
     guestClaim?: StudentSessionIssueResult["guestClaim"],
   ) => {
-    let guestReconciliationComplete = true;
     const pendingGuestMerge = readPendingGuestMerge();
     if (pendingGuestMerge) {
       const preview = previewGuestMerge(pendingGuestMerge.guestId);
@@ -431,53 +429,30 @@ export default function Home() {
         regionName: session.regionName,
         identityType: session.identityType,
       };
-      if (guestClaim === undefined) {
+      const acknowledgedAttemptIds = new Set(
+        guestClaim?.status === "claimed" || guestClaim?.status === "partial"
+          ? guestClaim.acknowledgedAttemptIds
+          : [],
+      );
+      const confirmedIds = preview.attemptIds.filter(id => acknowledgedAttemptIds.has(id));
+      if (confirmedIds.length > 0) {
+        mergeGuestAttempts(pendingGuestMerge.guestId, target, { attemptIds: confirmedIds });
+      }
+      const recovery = readGuestRecoveryState(window.localStorage);
+      if (recovery?.status === "unverified" && recovery.attemptIds.length === 0) {
         consumePendingGuestMerge();
-        const mergedCount = mergeGuestAttempts(pendingGuestMerge.guestId, target);
-        if (mergedCount > 0) {
-          toast.success(
-            "게스트 기록 이 기기에 연결됨",
-            `${mergedCount}개의 시험 기록을 학생 기록으로 저장했습니다.`,
-          );
-        }
-      } else {
-        const acknowledgedAttemptIds = new Set(
-          guestClaim.status === "claimed" ? guestClaim.acknowledgedAttemptIds : [],
+        toast.success(
+          "게스트 기록 서버 연결됨",
+          `${confirmedIds.length}개의 서버 소유 기록을 학생 기록으로 저장했습니다.`,
         );
-        const localAttempts = new Map(readLocalAttempts().map(attempt => [attempt.id, attempt]));
-        for (const localAttemptId of preview.attemptIds) {
-          if (acknowledgedAttemptIds.has(localAttemptId)) continue;
-          const attempt = localAttempts.get(localAttemptId);
-          const item = attempt
-            ? guestAttemptToReconcileItem(attempt, pendingGuestMerge.guestId)
-            : null;
-          if (!item) continue;
-          const reconciled = await reconcileGuestAttempts([item]);
-          for (const acknowledgement of reconciled.acknowledgements || []) {
-            acknowledgedAttemptIds.add(acknowledgement.localAttemptId);
-          }
-        }
-        const confirmedIds = preview.attemptIds.filter(id => acknowledgedAttemptIds.has(id));
-        if (confirmedIds.length > 0) {
-          mergeGuestAttempts(pendingGuestMerge.guestId, target, { attemptIds: confirmedIds });
-        }
-        if (confirmedIds.length === preview.attemptIds.length) {
-          consumePendingGuestMerge();
-          toast.success(
-            "게스트 기록 서버 연결됨",
-            `${confirmedIds.length}개의 시험 기록을 학생 기록으로 저장했습니다.`,
-          );
-        } else {
-          guestReconciliationComplete = false;
-          toast.error(
-            "게스트 기록 연결 보류",
-            `서버 확인 ${confirmedIds.length}/${preview.attemptIds.length}건. 확인되지 않은 기록과 재시도 권한은 보관했습니다.`,
-          );
-        }
+      } else {
+        toast.info(
+          "미검증 로컬 기록 분리 보관",
+          "확인되지 않은 기록은 학생 기록에 합치지 않았습니다. 대시보드에서 내보내거나 서버 소유 기록을 다시 확인할 수 있습니다.",
+        );
       }
     }
 
-    if (!guestReconciliationComplete) return false;
     saveSession(session);
     if (issuedCode) {
       setCopiedIssuedCode(false);

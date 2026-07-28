@@ -15,7 +15,10 @@ export interface GuestClaimRpcClient {
 export type GuestClaimResult =
     | { status: "not_requested"; acknowledgedAttemptIds: [] }
     | { status: "claimed"; acknowledgedAttemptIds: string[] }
+    | { status: "partial"; acknowledgedAttemptIds: string[]; error: string }
     | { status: "retryable_error"; acknowledgedAttemptIds: []; error: string };
+
+const CLAIM_CHUNK_SIZE = 100;
 
 function clean(value: unknown): string {
     return typeof value === "string" ? value.trim() : "";
@@ -47,34 +50,42 @@ export async function claimSignedGuestAttempts(
             error: "Verified student scope is incomplete",
         };
     }
-    const attemptIds = [...new Set((input.attemptIds || []).map(clean).filter(Boolean))].slice(0, 100);
+    const attemptIds = [...new Set((input.attemptIds || []).map(clean).filter(Boolean))];
+    if (attemptIds.length === 0) {
+        return { status: "claimed", acknowledgedAttemptIds: [] };
+    }
 
-    try {
-        const result = await client.rpc("omr_claim_guest_attempts_v1", {
-            p_guest_id: guestId,
-            p_student_profile_id: studentId,
-            p_organization_id: organizationId,
-            p_class_id: classId,
-            p_student_name: clean(input.student.name),
-            p_group_name: clean(input.student.groupName),
-            p_attempt_ids: attemptIds,
-        });
-        if (result.error) {
-            return {
-                status: "retryable_error",
-                acknowledgedAttemptIds: [],
-                error: clean(result.error.message) || "Guest attempt claim failed",
-            };
+    const acknowledged = new Set<string>();
+    let firstError = "";
+    for (let offset = 0; offset < attemptIds.length; offset += CLAIM_CHUNK_SIZE) {
+        const chunk = attemptIds.slice(offset, offset + CLAIM_CHUNK_SIZE);
+        try {
+            const result = await client.rpc("omr_claim_guest_attempts_v1", {
+                p_guest_id: guestId,
+                p_student_profile_id: studentId,
+                p_organization_id: organizationId,
+                p_class_id: classId,
+                p_student_name: clean(input.student.name),
+                p_group_name: clean(input.student.groupName),
+                p_attempt_ids: chunk,
+            });
+            if (result.error) {
+                firstError ||= clean(result.error.message) || "Guest attempt claim failed";
+                continue;
+            }
+            acknowledgedAttemptIds(result.data, chunk).forEach(id => acknowledged.add(id));
+        } catch (error) {
+            firstError ||= error instanceof Error ? error.message : "Guest attempt claim failed";
         }
+    }
+    const acknowledgedAttemptIdsResult = [...acknowledged];
+    if (!firstError) return { status: "claimed", acknowledgedAttemptIds: acknowledgedAttemptIdsResult };
+    if (acknowledgedAttemptIdsResult.length > 0) {
         return {
-            status: "claimed",
-            acknowledgedAttemptIds: acknowledgedAttemptIds(result.data, attemptIds),
-        };
-    } catch (error) {
-        return {
-            status: "retryable_error",
-            acknowledgedAttemptIds: [],
-            error: error instanceof Error ? error.message : "Guest attempt claim failed",
+            status: "partial",
+            acknowledgedAttemptIds: acknowledgedAttemptIdsResult,
+            error: firstError,
         };
     }
+    return { status: "retryable_error", acknowledgedAttemptIds: [], error: firstError };
 }

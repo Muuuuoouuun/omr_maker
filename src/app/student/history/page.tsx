@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import BrandLogo from "@/components/BrandLogo";
+import StudentGuestRecoveryPanel from "@/components/StudentGuestRecoveryPanel";
 import { Attempt, Exam } from "@/types/omr";
 import { attemptBelongsToSession, getSession, type StudentSession } from "@/utils/storage";
 import { readLocalExams } from "@/lib/omrPersistence";
@@ -175,6 +176,7 @@ export default function HistoryPage() {
             </header>
 
             <main className="container" style={{ padding: '2rem 1rem' }}>
+                <StudentGuestRecoveryPanel />
                 <h1 style={{ fontSize: '1.8rem', fontWeight: 700, marginBottom: '1.5rem', color: 'var(--foreground)' }}>
                     내 시험 기록
                 </h1>

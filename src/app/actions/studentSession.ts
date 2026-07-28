@@ -46,11 +46,11 @@ import {
 } from "@/lib/studentGuestClaimGateway";
 import { isSameOriginServerActionRequest } from "@/lib/serverActionSecurity";
 import {
-    createSignedGuestClaimCapability,
-    GUEST_CLAIM_CAPABILITY_COOKIE,
-    GUEST_CLAIM_CAPABILITY_MAX_ATTEMPTS,
-    GUEST_CLAIM_CAPABILITY_MAX_AGE_SECONDS,
-} from "@/lib/studentGuestClaimCapability";
+    createSignedGuestClaimOwnerProof,
+    GUEST_CLAIM_OWNER_COOKIE,
+    guestClaimOwnerMatchesStudent,
+    parseSignedGuestClaimOwnerProof,
+} from "@/lib/studentGuestClaimOwner";
 
 const WORKSPACE_ID_PATTERN = /^(?:default|teacher_[a-z0-9]{7,16})$/;
 const MAX_CODE_SYNC_ENTRIES = 500;
@@ -151,28 +151,25 @@ async function setSessionCookie(input: StudentIdentityInput): Promise<{ ok: bool
     }
 }
 
-async function setGuestClaimCapabilityCookie(input: {
-    guestId: string;
-    studentId: string;
-    organizationId: string;
-    classId: string;
-    attemptIds: string[];
-}): Promise<boolean> {
-    const value = createSignedGuestClaimCapability(input);
+async function setGuestClaimOwnerCookie(
+    guest: StudentServerIdentity,
+    student: StudentServerIdentity,
+): Promise<boolean> {
+    const value = createSignedGuestClaimOwnerProof({ guest, student });
     if (!value) return false;
     try {
         const headerStore = await headers();
         const cookieStore = await cookies();
-        cookieStore.set(GUEST_CLAIM_CAPABILITY_COOKIE, value, {
+        cookieStore.set(GUEST_CLAIM_OWNER_COOKIE, value, {
             httpOnly: true,
             sameSite: "lax",
             secure: shouldUseSecureTeacherSessionCookie(headerStore.get("host")),
             path: "/",
-            maxAge: GUEST_CLAIM_CAPABILITY_MAX_AGE_SECONDS,
+            maxAge: Math.max(1, Math.floor((Math.min(guest.expiresAt, student.expiresAt) - Date.now()) / 1000)),
         });
         return true;
     } catch (error) {
-        console.error("Guest claim capability cookie write failed", error);
+        console.error("Guest DB-owner claim cookie write failed", error);
         return false;
     }
 }
@@ -238,13 +235,6 @@ export async function issueStudentSession(input: {
     );
     const existingGuestSession = existingIdentity?.kind === "guest" ? existingIdentity : null;
     const requestedGuestAttemptIds = [...new Set((input.guestAttemptIds || []).map(clean).filter(Boolean))];
-    if (existingGuestSession && requestedGuestAttemptIds.length > GUEST_CLAIM_CAPABILITY_MAX_ATTEMPTS) {
-        return {
-            ok: false,
-            status: "error",
-            error: `한 번에 연결할 수 있는 게스트 기록은 ${GUEST_CLAIM_CAPABILITY_MAX_ATTEMPTS}건입니다.`,
-        };
-    }
     const client = adminClient();
     if (!client) {
         const studentId = clean(input.studentId);
@@ -361,37 +351,17 @@ export async function issueStudentSession(input: {
             issuedAt: now,
             expiresAt: now + STUDENT_SERVER_SESSION_MAX_AGE_SECONDS * 1000,
         };
+        // Preserve retry authority before replacing the guest session cookie.
+        // This proof carries no client attempt/exam/payload data: the claim RPC
+        // remains authoritative by requiring rows actually owned by guest:{id}.
+        if (existingGuestSession) {
+            await setGuestClaimOwnerCookie(existingGuestSession, verifiedStudent);
+        }
         const guestClaim = await claimSignedGuestAttempts(client, {
             guest: existingGuestSession,
             student: verifiedStudent,
             attemptIds: requestedGuestAttemptIds,
         });
-        if (guestClaim.status === "retryable_error") {
-            return {
-                ok: false,
-                status: "error",
-                guestClaim,
-                error: "게스트 기록을 서버에 연결하지 못했습니다. 다시 시도해주세요.",
-            };
-        }
-        if (
-            existingGuestSession
-            && requestedGuestAttemptIds.length > 0
-            && !await setGuestClaimCapabilityCookie({
-                guestId: existingGuestSession.guestId || "",
-                studentId: identity.studentId,
-                organizationId: workspaceId,
-                classId: groupId,
-                attemptIds: requestedGuestAttemptIds,
-            })
-        ) {
-            return {
-                ok: false,
-                status: "error",
-                guestClaim,
-                error: "게스트 기록 재시도 권한을 보관하지 못했습니다. 다시 시도해주세요.",
-            };
-        }
         const cookieResult = await setSessionCookie({
             kind: "student",
             ...identity,
@@ -405,6 +375,38 @@ export async function issueStudentSession(input: {
         console.error("issueStudentSession failed", error);
         return { ok: false, status: "error" };
     }
+}
+
+/**
+ * Retry only claims for rows the database already owns as guest:{guestId}.
+ * The client may select IDs to reduce work, but cannot submit an exam, score,
+ * answers, timestamps, or any new canonical payload through this boundary.
+ */
+export async function retryGuestServerClaims(attemptIds: string[]): Promise<GuestClaimResult> {
+    const headerStore = await headers();
+    if (!headerStore.get("origin") || !isSameOriginServerActionRequest(headerStore)) {
+        return { status: "retryable_error", acknowledgedAttemptIds: [], error: "Unauthenticated request" };
+    }
+    const client = adminClient();
+    if (!client) {
+        return { status: "retryable_error", acknowledgedAttemptIds: [], error: "Server storage unavailable" };
+    }
+    const cookieStore = await cookies();
+    const student = parseSignedStudentSessionCookie(cookieStore.get(STUDENT_SERVER_SESSION_COOKIE)?.value);
+    const proof = parseSignedGuestClaimOwnerProof(cookieStore.get(GUEST_CLAIM_OWNER_COOKIE)?.value);
+    if (!student || student.kind !== "student" || !proof || !guestClaimOwnerMatchesStudent(proof, student)) {
+        return { status: "retryable_error", acknowledgedAttemptIds: [], error: "Guest claim proof unavailable" };
+    }
+    const guest: StudentServerIdentity = {
+        kind: "guest",
+        guestId: proof.guestId,
+        studentId: `guest:${proof.guestId}`,
+        name: "Guest Student",
+        identityType: "guest",
+        issuedAt: proof.issuedAt,
+        expiresAt: proof.expiresAt,
+    };
+    return claimSignedGuestAttempts(client, { guest, student, attemptIds });
 }
 
 /** Refresh an already authenticated student/guest cookie without trusting localStorage identity. */
@@ -548,5 +550,6 @@ export async function issueGuestSession(name?: string): Promise<{ ok: boolean; g
 export async function clearStudentServerSession(): Promise<{ ok: boolean }> {
     const cookieStore = await cookies();
     cookieStore.delete(STUDENT_SERVER_SESSION_COOKIE);
+    cookieStore.delete(GUEST_CLAIM_OWNER_COOKIE);
     return { ok: true };
 }

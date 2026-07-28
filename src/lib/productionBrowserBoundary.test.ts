@@ -75,14 +75,14 @@ describe("canonical browser data-plane boundary", () => {
         expect(action.indexOf("await claimSignedGuestAttempts"))
             .toBeLessThan(action.indexOf("await setSessionCookie({", action.indexOf("await claimSignedGuestAttempts")));
         expect(home).toContain("result.guestClaim");
-        expect(home).toContain("guestClaim.status === \"claimed\"");
+        expect(home).toContain('guestClaim?.status === "claimed"');
         expect(home).toContain("acknowledgedAttemptIds");
-        expect(home).toContain("await reconcileGuestAttempts");
-        expect(home).toContain("if (!guestReconciliationComplete) return false");
-        expect(home.indexOf("if (!guestReconciliationComplete) return false"))
-            .toBeLessThan(home.indexOf("saveSession(session)"));
-        expect(action).toContain("GUEST_CLAIM_CAPABILITY_COOKIE");
-        expect(action).toContain("createSignedGuestClaimCapability");
+        expect(home).not.toContain("reconcileGuestAttempts");
+        expect(home).toContain("미검증 로컬 기록 분리 보관");
+        expect(action).toContain("GUEST_CLAIM_OWNER_COOKIE");
+        expect(action).toContain("createSignedGuestClaimOwnerProof");
+        expect(action.indexOf("await setGuestClaimOwnerCookie"))
+            .toBeLessThan(action.indexOf("await setSessionCookie({", action.indexOf("await setGuestClaimOwnerCookie")));
         expect(migration).toContain("omr_claim_guest_attempts_v1");
         expect(migration).toContain("for update");
         expect(migration).toContain("grant execute on function public.omr_claim_guest_attempts_v1");

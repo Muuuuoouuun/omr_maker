@@ -96,4 +96,73 @@ describe("signed guest-attempt claim gateway", () => {
             error: "database unavailable",
         });
     });
+
+    it("chunks more than 100 ids without blocking login-sized recovery sets", async () => {
+        const ids = Array.from({ length: 205 }, (_, index) => `attempt-${index}`);
+        const rpc = vi.fn(async (_name, args: Record<string, unknown>) => ({
+            data: (args.p_attempt_ids as string[]).filter(id => Number(id.split("-")[1]) % 2 === 0),
+            error: null,
+        }));
+
+        const result = await claimSignedGuestAttempts({ rpc }, {
+            guest: {
+                kind: "guest",
+                guestId: "guest-secret",
+                name: "Guest",
+                identityType: "guest",
+                issuedAt: 1,
+                expiresAt: 9e15,
+            },
+            student: {
+                kind: "student",
+                studentId: "student-1",
+                organizationId: "teacher_org",
+                name: "김학생",
+                groupId: "class-1",
+                groupName: "1반",
+                identityType: "temporary",
+                issuedAt: 2,
+                expiresAt: 9e15,
+            },
+            attemptIds: ids,
+        });
+
+        expect(result).toMatchObject({ status: "claimed" });
+        expect(result.acknowledgedAttemptIds).toHaveLength(103);
+        expect(rpc.mock.calls.map(([, args]) => (args.p_attempt_ids as string[]).length))
+            .toEqual([100, 100, 5]);
+    });
+
+    it("reports partial DB claim failure while preserving earlier exact acknowledgements", async () => {
+        const rpc = vi.fn()
+            .mockResolvedValueOnce({ data: ["attempt-1"], error: null })
+            .mockResolvedValueOnce({ data: null, error: { message: "temporary" } });
+
+        await expect(claimSignedGuestAttempts({ rpc }, {
+            guest: {
+                kind: "guest",
+                guestId: "guest-secret",
+                name: "Guest",
+                identityType: "guest",
+                issuedAt: 1,
+                expiresAt: 9e15,
+            },
+            student: {
+                kind: "student",
+                studentId: "student-1",
+                organizationId: "teacher_org",
+                name: "김학생",
+                groupId: "class-1",
+                groupName: "1반",
+                identityType: "temporary",
+                issuedAt: 2,
+                expiresAt: 9e15,
+            },
+            attemptIds: [...Array.from({ length: 100 }, (_, index) => `attempt-${index + 1}`), "attempt-101"],
+        })).resolves.toEqual({
+            status: "partial",
+            acknowledgedAttemptIds: ["attempt-1"],
+            error: "temporary",
+        });
+    });
 });
