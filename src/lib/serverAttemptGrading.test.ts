@@ -168,6 +168,49 @@ describe("server attempt grading", () => {
         expect(result).toEqual({ ok: true, attempt: completed });
     });
 
+    it("returns a completed retake unchanged before validating the current exam scope", () => {
+        const completed: Attempt = {
+            id: "attempt-retake-completed",
+            examId: exam.id,
+            examTitle: exam.title,
+            organizationId: "org-1",
+            studentName: "학생 2",
+            startedAt: "2026-07-14T00:00:00.000Z",
+            finishedAt: "2026-07-14T00:05:00.000Z",
+            score: 5,
+            totalScore: 5,
+            answers: { 2: 1 },
+            status: "completed",
+            autoSubmitted: true,
+            retake: {
+                sourceAttemptId: "attempt-source",
+                questionIds: [2],
+                mode: "wrong",
+                createdAt: "2026-07-14T00:00:00.000Z",
+            },
+            questionResults: [{
+                questionId: 2,
+                status: "correct",
+                earnedScore: 5,
+            } as NonNullable<Attempt["questionResults"]>[number]],
+        };
+        const revisedExam = {
+            ...exam,
+            questions: exam.questions.filter(question => question.id !== 2),
+        };
+
+        expect(gradeTeacherForcedAttemptOnServer(
+            revisedExam,
+            completed,
+            "2026-07-14T00:20:00.000Z",
+        )).toEqual({ ok: true, attempt: completed });
+        expect(gradeTeacherForcedAttemptOnServer(
+            revisedExam,
+            { ...completed, status: "in_progress" },
+            "2026-07-14T00:20:00.000Z",
+        )).toEqual({ ok: false, error: "invalid_retake_scope" });
+    });
+
     it("fails closed when stored answers are outside the canonical exam scope or choice range", () => {
         const base: Attempt = {
             id: "attempt-live-3",

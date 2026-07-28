@@ -230,6 +230,10 @@ export function gradeTeacherForcedAttemptOnServer(
         return { ok: false, error: "invalid_finish_time" };
     }
 
+    // A response-loss retry must return the first canonical completion without
+    // changing its timestamp or regrading against a later exam revision.
+    if (attempt.status === "completed") return { ok: true, attempt };
+
     let activeQuestions = exam.questions;
     if (attempt.retake) {
         const questionIds = attempt.retake.questionIds;
@@ -248,10 +252,6 @@ export function gradeTeacherForcedAttemptOnServer(
             return { ok: false, error: "invalid_retake_scope" };
         }
     }
-
-    // A response-loss retry must return the first canonical completion without
-    // changing its timestamp or regrading against a later exam revision.
-    if (attempt.status === "completed") return { ok: true, attempt };
 
     if (activeQuestions.length === 0) return { ok: false, error: "no_allowed_questions" };
     const activeById = new Map(activeQuestions.map(question => [question.id, question]));
