@@ -214,6 +214,18 @@ describe("service UI surface", () => {
         ).toEqual(expectedOverrides);
     });
 
+    it("targets actual dialog panels with the Balanced enter animation", () => {
+        const css = readProjectFile("src/app/globals.css");
+        const answerImportModal = readProjectFile("src/components/AnswerImportModal.tsx");
+        const createPage = readProjectFile("src/app/create/page.tsx");
+
+        expect(answerImportModal).toContain('className="balanced-dialog-panel"');
+        expect(createPage).toContain('className="balanced-dialog-panel"');
+        expect(css).toContain("@keyframes balancedDialogEnter");
+        expect(css).toContain(".balanced-dialog-panel");
+        expect(css).not.toMatch(/(?:^|\n)\[role="dialog"\]\s*\{/);
+    });
+
     it("gives the active landing content one main structure and role-level headings", () => {
         const homePage = readProjectFile("src/app/page.tsx");
 

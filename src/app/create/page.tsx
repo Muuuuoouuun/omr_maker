@@ -296,6 +296,7 @@ function CreateConfirmDialog({
         >
             <div
                 ref={dialogRef}
+                className="balanced-dialog-panel"
                 role="dialog"
                 aria-modal="true"
                 aria-labelledby={titleId}

@@ -1460,8 +1460,7 @@ html[data-motion="off"] :where(
   .btn-primary,
   .mockup-primary-action,
   .bento-card,
-  .mockup-panel,
-  [role="dialog"]
+  .mockup-panel
 ),
 html[data-motion="off"] .mockup-dashboard-tabs button::after {
   transition-duration: 1ms !important;
@@ -1472,8 +1471,7 @@ html[data-motion="off"] .mockup-dashboard-tabs button::after {
     .btn-primary,
     .mockup-primary-action,
     .bento-card,
-    .mockup-panel,
-    [role="dialog"]
+    .mockup-panel
   ),
   .mockup-dashboard-tabs button::after {
     transition-duration: 1ms !important;
@@ -1572,13 +1570,30 @@ html[data-motion="off"] .mockup-dashboard-tabs button::after {
   transform: translateY(-1px);
 }
 
-/* Dialog components share behavior through useDialogFocus; this selector gives
-   their visual panel the same restrained state-transition contract. */
-[role="dialog"] {
-  transition:
-    opacity var(--motion-panel) var(--ease-balanced),
-    transform var(--motion-panel) var(--ease-balanced),
-    box-shadow var(--motion-panel) var(--ease-balanced);
+@keyframes balancedDialogEnter {
+  from {
+    opacity: 0;
+    transform: translateY(var(--motion-distance));
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* Only the dialog surface enters; fixed backdrops and layout stay still. */
+.balanced-dialog-panel {
+  animation: balancedDialogEnter var(--motion-panel) var(--ease-balanced) both;
+}
+
+html[data-motion="off"] .balanced-dialog-panel {
+  animation-duration: 1ms !important;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .balanced-dialog-panel {
+    animation-duration: 1ms !important;
+  }
 }
 
 /* ─── Typography ─────────────────────────────────────── */

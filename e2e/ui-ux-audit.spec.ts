@@ -256,6 +256,13 @@ test.describe("UI-UX PROMAX layout audit", () => {
             timing: string;
             distance: string;
         };
+        type AnimationSnapshot = {
+            name: string;
+            duration: string;
+            timing: string;
+            distance: string;
+            activeAnimations: Array<{ playState: AnimationPlayState; duration: number | null }>;
+        };
         const readMotion = async (selector: string, pseudo?: "::after"): Promise<MotionSnapshot> => (
             page.locator(selector).first().evaluate((element, pseudoElement) => {
                 const style = window.getComputedStyle(element, pseudoElement || null);
@@ -274,6 +281,24 @@ test.describe("UI-UX PROMAX layout audit", () => {
         const expectEveryDuration = (snapshot: MotionSnapshot, duration: string) => {
             expect(snapshot.duration.split(", ").every(value => value === duration)).toBe(true);
         };
+        const readAnimation = async (selector: string): Promise<AnimationSnapshot> => (
+            page.locator(selector).first().evaluate(element => {
+                const style = window.getComputedStyle(element);
+                const rootStyle = window.getComputedStyle(document.documentElement);
+                return {
+                    name: style.animationName,
+                    duration: style.animationDuration,
+                    timing: style.animationTimingFunction,
+                    distance: rootStyle.getPropertyValue("--motion-distance").trim(),
+                    activeAnimations: element.getAnimations().map(animation => ({
+                        playState: animation.playState,
+                        duration: typeof animation.effect?.getTiming().duration === "number"
+                            ? animation.effect.getTiming().duration as number
+                            : null,
+                    })),
+                };
+            })
+        );
 
         await openTeacherPage(page, "/teacher/dashboard?showcase=1&tab=overview");
         await expect(page.locator(".mockup-dashboard-tabs")).toBeVisible();
@@ -284,28 +309,33 @@ test.describe("UI-UX PROMAX layout audit", () => {
         await openTeacherPage(page, "/create");
         await page.getByRole("button", { name: "정답 인식 마법사 열기" }).click();
         await expect(page.getByRole("dialog", { name: "정답 PDF 불러오기" })).toBeVisible();
-        const modalMotion = await readMotion('[role="dialog"]');
+        const modalAnimation = await readAnimation('[role="dialog"]');
 
         expectEveryDuration(actionMotion, "0.16s");
         expectEveryDuration(cardMotion, "0.21s");
-        expectEveryDuration(modalMotion, "0.21s");
         expectEveryDuration(tabMotion, "0.21s");
-        for (const snapshot of [actionMotion, cardMotion, modalMotion, tabMotion]) {
+        for (const snapshot of [actionMotion, cardMotion, tabMotion]) {
             expect(snapshot.timing).toContain("cubic-bezier(0.2, 0.8, 0.2, 1)");
             expect(snapshot.distance).toBe(".375rem");
             expectRestrainedProperties(snapshot);
         }
+        expect(modalAnimation.name).toBe("balancedDialogEnter");
+        expect(modalAnimation.duration).toBe("0.21s");
+        expect(modalAnimation.timing).toContain("cubic-bezier(0.2, 0.8, 0.2, 1)");
+        expect(modalAnimation.distance).toBe(".375rem");
+        expect(modalAnimation.activeAnimations).toContainEqual({
+            playState: "running",
+            duration: 210,
+        });
 
         await page.emulateMedia({ reducedMotion: "reduce" });
-        for (const [selector, pseudo] of [
-            [".btn-primary", undefined],
-            ['[role="dialog"]', undefined],
-        ] as const) {
-            const reduced = await readMotion(selector, pseudo);
-            expect(reduced.duration.split(", ").every(duration => duration === "0.001s")).toBe(true);
-            expect(reduced.distance).toBe("0rem");
-            expectRestrainedProperties(reduced);
-        }
+        const reducedAction = await readMotion(".btn-primary");
+        expect(reducedAction.duration.split(", ").every(duration => duration === "0.001s")).toBe(true);
+        expect(reducedAction.distance).toBe("0rem");
+        expectRestrainedProperties(reducedAction);
+        const reducedModal = await readAnimation('[role="dialog"]');
+        expect(reducedModal.duration).toBe("0.001s");
+        expect(reducedModal.distance).toBe("0rem");
 
         await page.emulateMedia({ reducedMotion: "no-preference" });
         await page.locator("html").evaluate(element => element.setAttribute("data-motion", "off"));
@@ -313,6 +343,94 @@ test.describe("UI-UX PROMAX layout audit", () => {
         expect(disabled.duration.split(", ").every(duration => duration === "0.001s")).toBe(true);
         expect(disabled.distance).toBe("0rem");
         expectRestrainedProperties(disabled);
+        const disabledModal = await readAnimation('[role="dialog"]');
+        expect(disabledModal.duration).toBe("0.001s");
+        expect(disabledModal.distance).toBe("0rem");
+    });
+
+    test("app motion-off renders mounted CountUp values final without an active RAF animation", async ({ page }) => {
+        await page.addInitScript(() => {
+            window.localStorage.setItem("omr_settings", JSON.stringify({
+                theme: { motion: false },
+            }));
+            const firstFrameState = window as typeof window & {
+                __omrFirstCountUpFrame?: Array<{
+                    target: string | null;
+                    motion: string | null;
+                    raf: string | null;
+                    text: string;
+                }>;
+            };
+            const observer = new MutationObserver(() => {
+                const countUps = Array.from(document.querySelectorAll("[data-count-up-value]"));
+                if (countUps.length === 0) return;
+                observer.disconnect();
+                window.requestAnimationFrame(() => {
+                    firstFrameState.__omrFirstCountUpFrame = countUps.map(element => ({
+                        target: element.getAttribute("data-count-up-value"),
+                        motion: element.getAttribute("data-count-up-motion"),
+                        raf: element.getAttribute("data-count-up-raf"),
+                        text: element.textContent?.replace(/[^\d.-]/g, "") || "",
+                    }));
+                });
+            });
+            observer.observe(document, { childList: true, subtree: true });
+        });
+        await openTeacherPage(page, "/teacher/dashboard?showcase=1&tab=overview");
+        await expect(page.locator("html")).toHaveAttribute("data-motion", "off");
+
+        const countUps = page.locator("[data-count-up-value]");
+        await expect(countUps.first()).toBeVisible();
+        const snapshots = await countUps.evaluateAll(elements => elements.map(element => ({
+            target: element.getAttribute("data-count-up-value"),
+            motion: element.getAttribute("data-count-up-motion"),
+            raf: element.getAttribute("data-count-up-raf"),
+            text: element.textContent?.replace(/[^\d.-]/g, "") || "",
+        })));
+
+        expect(snapshots.length).toBeGreaterThan(0);
+        for (const snapshot of snapshots) {
+            expect(snapshot.motion).toBe("reduced");
+            expect(snapshot.raf).toBe("idle");
+            expect(Number(snapshot.text)).toBe(Number(snapshot.target));
+        }
+        await expect.poll(() => page.evaluate(() => (
+            window as typeof window & {
+                __omrFirstCountUpFrame?: Array<{
+                    target: string | null;
+                    motion: string | null;
+                    raf: string | null;
+                    text: string;
+                }>;
+            }
+        ).__omrFirstCountUpFrame)).not.toBeUndefined();
+        const capturedFirstFrame = await page.evaluate(() => (
+            window as typeof window & {
+                __omrFirstCountUpFrame?: Array<{
+                    target: string | null;
+                    motion: string | null;
+                    raf: string | null;
+                    text: string;
+                }>;
+            }
+        ).__omrFirstCountUpFrame || []);
+        expect(capturedFirstFrame.length).toBeGreaterThan(0);
+        for (const snapshot of capturedFirstFrame) {
+            expect(snapshot.motion).toBe("reduced");
+            expect(snapshot.raf).toBe("idle");
+            expect(Number(snapshot.text)).toBe(Number(snapshot.target));
+        }
+
+        await page.locator("html").evaluate(element => element.setAttribute("data-motion", "on"));
+        await expect(countUps.first()).toHaveAttribute("data-count-up-motion", "animated");
+        await page.emulateMedia({ reducedMotion: "reduce" });
+        await expect(countUps.first()).toHaveAttribute("data-count-up-motion", "reduced");
+        await expect(countUps.first()).toHaveAttribute("data-count-up-raf", "idle");
+        await page.emulateMedia({ reducedMotion: "no-preference" });
+        await expect(countUps.first()).toHaveAttribute("data-count-up-motion", "animated");
+        await page.locator("html").evaluate(element => element.setAttribute("data-motion", "off"));
+        await expect(countUps.first()).toHaveAttribute("data-count-up-motion", "reduced");
+        await expect(countUps.first()).toHaveAttribute("data-count-up-raf", "idle");
     });
 
     test("keeps one visible landing landmark and one role-specific level-one heading", async ({ browser }) => {

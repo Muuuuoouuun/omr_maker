@@ -1,6 +1,50 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, useSyncExternalStore } from "react";
+
+const REDUCED_MOTION_QUERY = "(prefers-reduced-motion: reduce)";
+
+export function shouldReduceCountUpMotion(
+    osPrefersReducedMotion: boolean,
+    appMotionSetting: string | null,
+): boolean {
+    return osPrefersReducedMotion || appMotionSetting === "off";
+}
+
+function readReducedMotionPreference(): boolean {
+    if (typeof window === "undefined" || typeof document === "undefined") return false;
+    return shouldReduceCountUpMotion(
+        window.matchMedia?.(REDUCED_MOTION_QUERY).matches ?? false,
+        document.documentElement.getAttribute("data-motion"),
+    );
+}
+
+function subscribeToReducedMotionPreference(onStoreChange: () => void): () => void {
+    if (typeof window === "undefined" || typeof document === "undefined") return () => undefined;
+
+    const mediaQuery = window.matchMedia?.(REDUCED_MOTION_QUERY);
+    mediaQuery?.addEventListener?.("change", onStoreChange);
+    const observer = typeof MutationObserver === "undefined"
+        ? null
+        : new MutationObserver(onStoreChange);
+    observer?.observe(document.documentElement, {
+        attributes: true,
+        attributeFilter: ["data-motion"],
+    });
+
+    return () => {
+        mediaQuery?.removeEventListener?.("change", onStoreChange);
+        observer?.disconnect();
+    };
+}
+
+function useReducedCountUpMotion(): boolean {
+    return useSyncExternalStore(
+        subscribeToReducedMotionPreference,
+        readReducedMotionPreference,
+        () => false,
+    );
+}
 
 /**
  * Splits a stat value into a leading number + surrounding text so it can be
@@ -52,22 +96,30 @@ export default function CountUp({
     suffix = "",
 }: CountUpProps) {
     const [display, setDisplay] = useState(0);
+    const [rafActive, setRafActive] = useState(false);
     const rafRef = useRef<number | null>(null);
+    const rafActiveRef = useRef(false);
+    const reduceMotion = useReducedCountUpMotion();
 
     useEffect(() => {
-        const reduce =
-            typeof window !== "undefined" &&
-            window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
         // requestAnimationFrame is throttled/paused while the tab is hidden, so a
         // dashboard that loads in a background tab would otherwise sit stuck at 0.
         // Snap straight to the final value in that case (and for reduced motion).
-        if (reduce || !Number.isFinite(value) || (typeof document !== "undefined" && document.hidden)) {
-            const timeoutId = window.setTimeout(() => setDisplay(value), 0);
+        if (reduceMotion || !Number.isFinite(value) || (typeof document !== "undefined" && document.hidden)) {
+            rafActiveRef.current = false;
+            const timeoutId = window.setTimeout(() => {
+                setDisplay(value);
+                setRafActive(false);
+            }, 0);
             return () => window.clearTimeout(timeoutId);
         }
 
         const startTime = performance.now() + delayMs;
         const tick = (now: number) => {
+            if (!rafActiveRef.current) {
+                rafActiveRef.current = true;
+                setRafActive(true);
+            }
             if (now < startTime) {
                 rafRef.current = requestAnimationFrame(tick);
                 return;
@@ -79,28 +131,38 @@ export default function CountUp({
                 rafRef.current = requestAnimationFrame(tick);
             } else {
                 setDisplay(value);
+                rafActiveRef.current = false;
+                setRafActive(false);
+                rafRef.current = null;
             }
         };
         rafRef.current = requestAnimationFrame(tick);
 
         return () => {
             if (rafRef.current) cancelAnimationFrame(rafRef.current);
+            rafRef.current = null;
+            rafActiveRef.current = false;
         };
-    }, [value, durationMs, delayMs]);
+    }, [value, durationMs, delayMs, reduceMotion]);
 
-    const formatted = display.toLocaleString(undefined, {
+    const visibleValue = reduceMotion ? value : display;
+    const formatted = visibleValue.toLocaleString(undefined, {
         minimumFractionDigits: decimals,
         maximumFractionDigits: decimals,
     });
 
     return (
-        <>
+        <span
+            data-count-up-value={value}
+            data-count-up-motion={reduceMotion ? "reduced" : "animated"}
+            data-count-up-raf={reduceMotion || !rafActive ? "idle" : "active"}
+        >
             {prefix}
             {formatted}
             {/* Korean unit suffixes (점/명/개) must not inherit the parent's tight
                 tabular-digit letter-spacing (some callers use -0.045em to -0.06em) —
                 that convention is for Latin/numeric display, not Hangul. */}
             <span style={{ letterSpacing: "normal" }}>{suffix}</span>
-        </>
+        </span>
     );
 }
