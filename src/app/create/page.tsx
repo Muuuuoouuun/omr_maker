@@ -8,7 +8,7 @@ import TeacherLogoutButton from "@/components/TeacherLogoutButton";
 import TeacherSessionChip from "@/components/TeacherSessionChip";
 import ThemeToggle from "@/components/ThemeToggle";
 import CreatePdfUploadPlaceholder from "@/components/CreatePdfUploadPlaceholder";
-import { activateFilePicker } from "@/components/AnswerImportModal";
+import { activateFilePicker } from "@/lib/activateFilePicker";
 import { useRouter, useSearchParams } from "next/navigation";
 import { toast } from "@/components/Toast";
 import { getTeacherRemoteAssetUrl, uploadTeacherExamAsset } from "@/app/actions/remoteAssets";

@@ -1,20 +1,10 @@
 import { describe, expect, it } from "vitest";
 import {
-    activateFilePicker,
     takeSelectedAnswerPdf,
     validateImportedAnswers,
 } from "./AnswerImportModal";
 
 describe("AnswerImportModal file input", () => {
-    it("activates the native file picker from a semantic upload button", () => {
-        const clickCalls: string[] = [];
-        const input = {
-            click: () => clickCalls.push("clicked"),
-        };
-        activateFilePicker(input);
-        expect(clickCalls).toEqual(["clicked"]);
-    });
-
     it("clears the native input after taking a file so the same PDF can be selected again", () => {
         const file = new File(["pdf"], "answers.pdf", { type: "application/pdf" });
         const input = {

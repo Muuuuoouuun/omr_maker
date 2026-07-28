@@ -4,6 +4,7 @@ import { useState, useEffect, useId, useRef } from 'react';
 import type { ParsedAnswer } from '@/services/answerParser';
 import { readStoredGeminiApiKey } from '@/lib/geminiApiKey';
 import type { AiAnswerRecognitionMode } from '@/lib/aiAnswerModelRouting';
+import { activateFilePicker } from '@/lib/activateFilePicker';
 import { BrainCircuit, FileText, FolderOpen, RefreshCw, UploadCloud, X } from 'lucide-react';
 import {
     incrementAiRecognitionUsage,
@@ -19,10 +20,6 @@ interface AnswerImportModalProps {
 
 const LOW_CONFIDENCE_THRESHOLD = 0.65;
 type AnswerRecognitionCache = { text?: ParsedAnswer[]; ai?: ParsedAnswer[] };
-
-export function activateFilePicker(input: Pick<HTMLInputElement, "click">): void {
-    input.click();
-}
 
 export function takeSelectedAnswerPdf(
     input: Pick<HTMLInputElement, "files" | "value">,

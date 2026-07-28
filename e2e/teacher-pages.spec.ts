@@ -313,6 +313,25 @@ test.describe("Create page label memory", () => {
         await expect(page.getByText("답지 PDF 업로드됨", { exact: true })).toBeVisible();
     });
 
+    test("keyboard upload in the answer import modal opens a file chooser and shows the selected PDF", async ({ page }) => {
+        await page.goto("/create");
+        const fixturePath = path.join(process.cwd(), "e2e/fixtures/sample-problem.pdf");
+        await page.getByRole("button", { name: "정답 인식 마법사 열기" }).click();
+
+        const dialog = page.getByRole("dialog", { name: "정답 PDF 불러오기" });
+        await expect(dialog).toBeVisible();
+        const upload = dialog.getByRole("button", { name: "정답 PDF 업로드" });
+        await upload.focus();
+        await expect(upload).toBeFocused();
+
+        const chooserPromise = page.waitForEvent("filechooser");
+        await page.keyboard.press("Enter");
+        const chooser = await chooserPromise;
+        await chooser.setFiles(fixturePath);
+
+        await expect(dialog.getByText("sample-problem.pdf", { exact: true })).toBeVisible();
+    });
+
     test("remembers label presets and lets teachers hide stale candidates", async ({ page }) => {
         await page.goto("/create");
 

@@ -1514,6 +1514,10 @@ describe("service UI surface", () => {
         const createPage = readProjectFile("src/app/create/page.tsx");
         const answerImportModal = readProjectFile("src/components/AnswerImportModal.tsx");
 
+        expect(createPage).toContain('const AnswerImportModal = dynamic(() => import("@/components/AnswerImportModal")');
+        expect(createPage).not.toMatch(/^\s*import\s+.+\s+from\s+["']@\/components\/AnswerImportModal["'];?\s*$/m);
+        expect(createPage).toContain('import { activateFilePicker } from "@/lib/activateFilePicker"');
+        expect(answerImportModal).toContain("import { activateFilePicker } from '@/lib/activateFilePicker'");
         expect(createPage).toContain('import type { ParsedAnswer } from "@/services/answerParser"');
         expect(createPage).not.toContain('import { ParsedAnswer } from "@/services/answerParser"');
         expect(answerImportModal).toContain("import type { ParsedAnswer } from '@/services/answerParser'");
