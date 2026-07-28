@@ -70,9 +70,10 @@ import {
     STUDENT_CODES_STORAGE_KEY,
     findStudentStartCode,
     generateStartCode,
-    readStudentCodes,
     writeStudentCodes,
 } from "@/lib/studentCodes";
+import { loadTeacherLocalStudentCodes } from "@/lib/studentCredentialLocalState";
+import { withStudentCredentialIssuanceLock } from "@/lib/studentCredentialIssuance";
 import { hasPlanEntitlement } from "@/utils/plans";
 import { useServerPlan } from "@/lib/useServerPlan";
 import { buildStudentResultHref } from "@/lib/studentResultHub";
@@ -308,6 +309,9 @@ function ManageUsersInner() {
     const [issuingStudentCode, setIssuingStudentCode] = useState(false);
     const rosterPlanSyncRef = useRef<Promise<void>>(Promise.resolve());
     const rosterMutationVersionRef = useRef(0);
+    const studentCredentialIssuanceLocksRef = useRef(new Set<string>());
+    const studentCodeRegistryRef = useRef<Record<string, string>>({});
+    const issuedStudentCredentialIdsRef = useRef<Set<string>>(new Set());
     const { plan: currentPlan } = useServerPlan();
     const [hydrated, setHydrated] = useState(false);
     const studentGrowthReportsEnabled = hasPlanEntitlement(currentPlan, "studentGrowthReports");
@@ -350,6 +354,9 @@ function ManageUsersInner() {
         let cancelled = false;
         const hydrateRoster = async () => {
             try {
+                const productionCodes = process.env.NODE_ENV === "production"
+                    ? loadTeacherLocalStudentCodes(localStorage, process.env.NODE_ENV)
+                    : null;
                 seedLocalTestStudentAccounts(localStorage);
                 setWorkspaceId(readActiveWorkspaceContext(sessionStorage).organizationId);
                 const storedRosterExists = hasStoredRosterData(localStorage);
@@ -383,14 +390,19 @@ function ManageUsersInner() {
                         "Supabase 명단 동기화가 지연되어 현재 기기 데이터를 우선 사용했습니다."
                     );
                 }
-                const storedCodes = readStudentCodes(localStorage);
+                const storedCodes = productionCodes
+                    ?? loadTeacherLocalStudentCodes(localStorage, process.env.NODE_ENV);
+                studentCodeRegistryRef.current = storedCodes;
                 setStudentCodeRegistry(storedCodes);
-                setIssuedStudentCredentialIds(readIssuedStudentCredentialIds(localStorage));
+                const storedIssuedIds = readIssuedStudentCredentialIds(localStorage);
+                issuedStudentCredentialIdsRef.current = storedIssuedIds;
+                setIssuedStudentCredentialIds(storedIssuedIds);
             } catch {
                 if (cancelled) return;
                 setStudents([]);
                 setGroups([]);
                 setInvites([]);
+                studentCodeRegistryRef.current = {};
                 setStudentCodeRegistry({});
                 setRosterDataMode("real");
             }
@@ -720,49 +732,65 @@ function ManageUsersInner() {
             toast.info("실제 학생에서만 코드 발급", "저장된 명단의 학생을 선택한 뒤 시작 코드를 발급할 수 있습니다.");
             return;
         }
-        if (issuingStudentCode) return;
-        setIssuingStudentCode(true);
-        try {
-            const nextCode = generateStartCode();
-            const serverResult = await issueStudentStartCredential(selected.id, nextCode);
-            if (!serverResult.success && !serverResult.skipped) {
-                toast.error("코드 발급 실패", serverResult.error || "학생 시작 코드를 서버에 저장하지 못했습니다.");
-                return;
-            }
-            if (serverResult.skipped) {
-                const localOnlyRegistry = { ...studentCodeRegistry, [selected.id]: nextCode };
-                if (!writeStudentCodes(localStorage, localOnlyRegistry)) {
-                    toast.error("코드 저장 실패", "브라우저 저장소를 확인한 뒤 다시 시도해주세요.");
-                    return;
-                }
-                setStudentCodeRegistry(localOnlyRegistry);
-            } else {
-                const localOnlyRegistry = { ...studentCodeRegistry };
-                delete localOnlyRegistry[selected.id];
-                if (selectedLegacyStudentId) delete localOnlyRegistry[selectedLegacyStudentId];
-                if (!writeStudentCodes(localStorage, localOnlyRegistry)) {
-                    localStorage.removeItem(STUDENT_CODES_STORAGE_KEY);
-                }
-                setStudentCodeRegistry(localOnlyRegistry);
-                setSessionStudentCodes(current => ({ ...current, [selected.id]: nextCode }));
+        const selectedStudent = selected;
+        const legacyStudentId = selectedLegacyStudentId;
+        await withStudentCredentialIssuanceLock(
+            studentCredentialIssuanceLocksRef.current,
+            selectedStudent.id,
+            async () => {
+                setIssuingStudentCode(true);
+                try {
+                    const nextCode = generateStartCode();
+                    const serverResult = await issueStudentStartCredential(selectedStudent.id, nextCode);
+                    if (!serverResult.success && !serverResult.skipped) {
+                        toast.error("코드 발급 실패", serverResult.error || "학생 시작 코드를 서버에 저장하지 못했습니다.");
+                        return;
+                    }
+                    if (serverResult.skipped) {
+                        const localOnlyRegistry = {
+                            ...studentCodeRegistryRef.current,
+                            [selectedStudent.id]: nextCode,
+                        };
+                        if (!writeStudentCodes(localStorage, localOnlyRegistry)) {
+                            toast.error("코드 저장 실패", "브라우저 저장소를 확인한 뒤 다시 시도해주세요.");
+                            return;
+                        }
+                        studentCodeRegistryRef.current = localOnlyRegistry;
+                        setStudentCodeRegistry(localOnlyRegistry);
+                    } else {
+                        const localOnlyRegistry = { ...studentCodeRegistryRef.current };
+                        delete localOnlyRegistry[selectedStudent.id];
+                        if (legacyStudentId) delete localOnlyRegistry[legacyStudentId];
+                        if (!writeStudentCodes(localStorage, localOnlyRegistry)) {
+                            localStorage.removeItem(STUDENT_CODES_STORAGE_KEY);
+                        }
+                        studentCodeRegistryRef.current = localOnlyRegistry;
+                        setStudentCodeRegistry(localOnlyRegistry);
+                        setSessionStudentCodes(current => ({ ...current, [selectedStudent.id]: nextCode }));
 
-                const nextIssuedIds = new Set(issuedStudentCredentialIds);
-                nextIssuedIds.add(selected.id);
-                if (selectedLegacyStudentId) nextIssuedIds.delete(selectedLegacyStudentId);
-                setIssuedStudentCredentialIds(nextIssuedIds);
-                if (!writeIssuedStudentCredentialIds(localStorage, nextIssuedIds)) {
-                    toast.info(
-                        "코드는 서버에 발급됨",
-                        "이 기기의 발급 상태 표시에 실패했습니다. 코드는 지금 복사해 전달해주세요."
+                        const nextIssuedIds = new Set(issuedStudentCredentialIdsRef.current);
+                        nextIssuedIds.add(selectedStudent.id);
+                        if (legacyStudentId) nextIssuedIds.delete(legacyStudentId);
+                        issuedStudentCredentialIdsRef.current = nextIssuedIds;
+                        setIssuedStudentCredentialIds(nextIssuedIds);
+                        if (!writeIssuedStudentCredentialIds(localStorage, nextIssuedIds)) {
+                            toast.info(
+                                "코드는 서버에 발급됨",
+                                "이 기기의 발급 상태 표시에 실패했습니다. 코드는 지금 복사해 전달해주세요."
+                            );
+                        }
+                    }
+                    toast.success(
+                        selectedCredentialIssued ? "시작 코드 재발급" : "시작 코드 발급",
+                        `${selectedStudent.name}: ${nextCode}`,
                     );
+                } catch {
+                    toast.error("코드 발급 실패", "서버 연결을 확인한 뒤 다시 시도해주세요.");
+                } finally {
+                    setIssuingStudentCode(false);
                 }
-            }
-            toast.success(selectedCredentialIssued ? "시작 코드 재발급" : "시작 코드 발급", `${selected.name}: ${nextCode}`);
-        } catch {
-            toast.error("코드 발급 실패", "서버 연결을 확인한 뒤 다시 시도해주세요.");
-        } finally {
-            setIssuingStudentCode(false);
-        }
+            },
+        );
     };
 
     const handleCopyStudentStartCode = async () => {
@@ -900,9 +928,9 @@ function ManageUsersInner() {
         const idSet = new Set(ids.filter(Boolean));
         const removedEntries: Record<string, string> = {};
         if (idSet.size === 0) return removedEntries;
-        const nextIssuedIds = new Set(issuedStudentCredentialIds);
+        const nextIssuedIds = new Set(issuedStudentCredentialIdsRef.current);
         const nextSessionCodes = { ...sessionStudentCodes };
-        const nextRegistry = { ...studentCodeRegistry };
+        const nextRegistry = { ...studentCodeRegistryRef.current };
         for (const id of idSet) {
             if (nextRegistry[id]) {
                 removedEntries[id] = nextRegistry[id];
@@ -912,9 +940,11 @@ function ManageUsersInner() {
             delete nextSessionCodes[id];
         }
         if (Object.keys(removedEntries).length > 0) {
+            studentCodeRegistryRef.current = nextRegistry;
             setStudentCodeRegistry(nextRegistry);
             writeStudentCodes(localStorage, nextRegistry);
         }
+        issuedStudentCredentialIdsRef.current = nextIssuedIds;
         setIssuedStudentCredentialIds(nextIssuedIds);
         setSessionStudentCodes(nextSessionCodes);
         writeIssuedStudentCredentialIds(localStorage, nextIssuedIds);
@@ -976,7 +1006,8 @@ function ManageUsersInner() {
         }
         persistRoster(merged, recomputeGroups(merged, groups), invites);
         if (Object.keys(restored.codeEntries).length > 0) {
-            const nextRegistry = { ...studentCodeRegistry, ...restored.codeEntries };
+            const nextRegistry = { ...studentCodeRegistryRef.current, ...restored.codeEntries };
+            studentCodeRegistryRef.current = nextRegistry;
             setStudentCodeRegistry(nextRegistry);
             writeStudentCodes(localStorage, nextRegistry);
         }

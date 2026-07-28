@@ -232,6 +232,53 @@ begin
 end
 $$;
 
+insert into public.omr_student_start_credentials (
+    organization_id, student_profile_id, start_code_hash
+) values (
+    'live-org-a', 'live-student-a',
+    'pbkdf2-sha256:10000:07070707070707070707070707070707:8de12bc47d04bf0f520b627acee8c21c74b064b9f30fc943efaf7b2788e45e94'
+);
+
+select public.omr_save_roster_v1(
+    'live-org-a',
+    '[{"id":"live-class-a","organization_id":"live-org-a","name":"A반","status":"active","metadata":{}}]',
+    '[]',
+    '[]',
+    '[{"id":"live-invite-a","organization_id":"live-org-a","email":"invite@example.com","sent_at":"2026-07-14T00:00:00.000Z","status":"pending"}]'
+);
+
+do $$
+begin
+    if exists (
+        select 1 from public.omr_student_start_credentials
+         where organization_id = 'live-org-a'
+           and student_profile_id = 'live-student-a'
+    ) then
+        raise exception 'withdrawing a roster student did not revoke the start credential';
+    end if;
+end
+$$;
+
+select public.omr_save_roster_v1(
+    'live-org-a',
+    '[{"id":"live-class-a","organization_id":"live-org-a","name":"A반","status":"active","metadata":{}}]',
+    '[{"id":"live-student-a","organization_id":"live-org-a","display_name":"학생 A 재등록","external_id":"A-001","status":"active","metadata":{}}]',
+    '[{"class_id":"live-class-a","organization_id":"live-org-a","student_profile_id":"live-student-a","enrollment_status":"active"}]',
+    '[{"id":"live-invite-a","organization_id":"live-org-a","email":"invite@example.com","sent_at":"2026-07-14T00:00:00.000Z","status":"pending"}]'
+);
+
+do $$
+begin
+    if exists (
+        select 1 from public.omr_student_start_credentials
+         where organization_id = 'live-org-a'
+           and student_profile_id = 'live-student-a'
+    ) then
+        raise exception 're-adding a deterministic student id resurrected the old start credential';
+    end if;
+end
+$$;
+
 insert into public.omr_classes (id, organization_id, name) values
     ('live-class-b', 'live-org-b', 'B반');
 insert into public.omr_student_profiles (id, organization_id, display_name) values

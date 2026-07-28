@@ -23,6 +23,7 @@ import {
 } from "@/lib/teacherServerSession";
 import { workspaceContextFromTeacherSession } from "@/lib/workspaceContext";
 import type { VerifiedStudentIdentity } from "@/lib/studentExamContract";
+import { canTeacherRoleWrite } from "@/lib/teacherSession";
 
 export type StudentServerLoginResult =
     | { success: true; student: VerifiedStudentIdentity }
@@ -105,6 +106,9 @@ export async function issueStudentStartCredential(
     const cookieStore = await cookies();
     const teacherSession = parseSignedTeacherSessionCookie(cookieStore.get(TEACHER_SERVER_SESSION_COOKIE)?.value);
     if (!teacherSession) return { success: false, error: "교사 로그인이 필요합니다." };
+    if (!canTeacherRoleWrite(teacherSession.memberRole)) {
+        return { success: false, error: "학생 시작 코드를 발급할 권한이 없습니다." };
+    }
 
     try {
         const client = adminClient();

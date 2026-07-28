@@ -27,6 +27,10 @@ describe("student server authentication surface", () => {
         expect(users).toContain("STUDENT_CREDENTIAL_STATUS_STORAGE_KEY");
         expect(users).toContain("setSessionStudentCodes");
         expect(users).toContain("localStorage.removeItem(STUDENT_CODES_STORAGE_KEY)");
+        expect(users).toContain("studentCredentialIssuanceLocksRef");
+        expect(users).toContain("withStudentCredentialIssuanceLock");
+        expect(users).toContain("studentCodeRegistryRef.current");
+        expect(users).toContain("issuedStudentCredentialIdsRef.current");
         expect(users).not.toContain("const nextRegistry = { ...studentCodeRegistry, [selected.id]: nextCode }");
         expect(source("src/app/student/dashboard/page.tsx")).toContain("clearStudentServerSession()");
     });
@@ -44,6 +48,9 @@ describe("student server authentication surface", () => {
         expect(sessionAction).not.toContain("verifyStudentAccessCode");
         expect(authAction).toContain("omr_student_start_credentials");
         expect(authAction).toContain("hashStudentStartCode");
+        expect(authAction).toContain("canTeacherRoleWrite");
+        expect(authAction.indexOf("canTeacherRoleWrite"))
+            .toBeLessThan(authAction.indexOf("const client = adminClient()"));
     });
 
     it("keeps the server exam action primary and limits fallback to device-local data", () => {

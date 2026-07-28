@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 
@@ -44,6 +44,11 @@ function readFeedbackGatewayMigration(): string {
     return readFileSync(path.join(rootDir, "supabase/migrations/202607140016_feedback_gateway.sql"), "utf8");
 }
 
+function readStudentCredentialRevocationMigration(): string {
+    const migrationPath = path.join(rootDir, "supabase/migrations/202607280004_student_credential_revocation.sql");
+    return existsSync(migrationPath) ? readFileSync(migrationPath, "utf8") : "";
+}
+
 function columnExists(schema: string, table: string, column: string): boolean {
     const createPattern = new RegExp(`create table if not exists public\\.${table}\\s*\\(([\\s\\S]*?)\\n\\);`, "i");
     const createMatch = schema.match(createPattern);
@@ -73,6 +78,16 @@ describe("Supabase schema contract", () => {
     const teacherAttemptMutation = readTeacherAttemptMutationMigration();
     const teacherExamDelete = readTeacherExamDeleteMigration();
     const feedbackGateway = readFeedbackGatewayMigration();
+    const studentCredentialRevocation = readStudentCredentialRevocationMigration();
+
+    it("revokes a withdrawn student's credential before a deterministic id can be reused", () => {
+        expect(schema).toContain("omr_revoke_withdrawn_student_credential_v1");
+        expect(schema).toContain("omr_student_profile_credential_revocation");
+        expect(studentCredentialRevocation).toContain("omr_revoke_withdrawn_student_credential_v1");
+        expect(studentCredentialRevocation).toContain("before update of status");
+        expect(studentCredentialRevocation).toContain("delete from public.omr_student_start_credentials");
+        expect(studentCredentialRevocation).toContain("old.status is distinct from 'withdrawn'");
+    });
 
     it("keeps roster columns and indexes aligned with teacher user management sync", () => {
         expectColumns(schema, "omr_organizations", [

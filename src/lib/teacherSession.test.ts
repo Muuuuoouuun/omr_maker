@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
     buildTeacherSessionDisplay,
+    canTeacherRoleWrite,
     clearTeacherSession,
     createTeacherSession,
     hasTeacherSession,
@@ -29,6 +30,15 @@ function memoryStorage(initial: Record<string, string> = {}) {
 const VALID_TOKEN = "tkn_abc123_0123456789abcdef0123456789abcdef";
 
 describe("teacher session", () => {
+    it("allows only explicit write-capable organization roles to mutate canonical data", () => {
+        expect(canTeacherRoleWrite("owner")).toBe(true);
+        expect(canTeacherRoleWrite("admin")).toBe(true);
+        expect(canTeacherRoleWrite("teacher")).toBe(true);
+        expect(canTeacherRoleWrite("assistant")).toBe(true);
+        expect(canTeacherRoleWrite("viewer")).toBe(false);
+        expect(canTeacherRoleWrite(undefined)).toBe(false);
+    });
+
     it("stores and reads an active teacher session", () => {
         const storage = memoryStorage();
         expect(saveTeacherSession(VALID_TOKEN, storage, 1000)).toBe(true);

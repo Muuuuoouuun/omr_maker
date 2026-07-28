@@ -344,6 +344,33 @@ alter table public.omr_student_start_credentials enable row level security;
 alter table public.omr_student_start_credentials force row level security;
 revoke all on public.omr_student_start_credentials from anon, authenticated;
 
+create or replace function public.omr_revoke_withdrawn_student_credential_v1()
+returns trigger
+language plpgsql
+security definer
+set search_path = ''
+as $$
+begin
+    if new.status = 'withdrawn'
+       and old.status is distinct from 'withdrawn' then
+        delete from public.omr_student_start_credentials
+        where organization_id = old.organization_id
+          and student_profile_id = old.id;
+    end if;
+    return new;
+end;
+$$;
+
+revoke all on function public.omr_revoke_withdrawn_student_credential_v1()
+    from public, anon, authenticated;
+
+drop trigger if exists omr_student_profile_credential_revocation
+    on public.omr_student_profiles;
+create trigger omr_student_profile_credential_revocation
+    before update of status on public.omr_student_profiles
+    for each row
+    execute function public.omr_revoke_withdrawn_student_credential_v1();
+
 create table if not exists public.omr_classes (
     id text primary key,
     organization_id text references public.omr_organizations(id) on delete cascade,

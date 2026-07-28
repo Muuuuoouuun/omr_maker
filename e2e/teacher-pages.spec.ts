@@ -16,6 +16,7 @@ const TEACHER_IDENTITY: TeacherSessionIdentity = {
     teacherId: "admin",
     email: "admin@example.com",
     displayName: "Demo Admin",
+    memberRole: "admin",
 };
 
 const BILLING_TEACHER_IDENTITY: TeacherSessionIdentity = {
