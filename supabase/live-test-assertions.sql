@@ -1245,27 +1245,6 @@ set display_name = excluded.display_name,
     status = excluded.status,
     updated_at = now();
 
-insert into public.omr_exam_questions (
-    id, organization_id, class_id, exam_id, question_id, question_number,
-    canonical_question_id, choices, correct_answer, score, payload, updated_at
-) values
-    (
-        'live-exam-a:1', 'live-org-a', 'live-class-a', 'live-exam-a', 1, 1,
-        'live-exam-a:1', 5, 2, 4, '{"id":1,"number":1,"answer":2,"score":4}', now()
-    ),
-    (
-        'live-exam-a:2', 'live-org-a', 'live-class-a', 'live-exam-a', 2, 2,
-        'live-exam-a:2', 5, 3, 6, '{"id":2,"number":2,"answer":3,"score":6}', now()
-    )
-on conflict (exam_id, question_id) do update
-set organization_id = excluded.organization_id,
-    class_id = excluded.class_id,
-    canonical_question_id = excluded.canonical_question_id,
-    correct_answer = excluded.correct_answer,
-    score = excluded.score,
-    payload = excluded.payload,
-    updated_at = excluded.updated_at;
-
 do $$
 declare
     diagnostics jsonb;
@@ -1309,6 +1288,20 @@ begin
             raise exception 'unsafe PBKDF2 boundary fixture was accepted';
         end if;
     end loop;
+
+    begin
+        update public.omr_student_start_credentials
+           set start_code_hash = 'x:' || repeat('9', 500)
+         where organization_id = 'live-org-a'
+           and student_profile_id = 'live-student-a';
+        diagnostics := public.omr_production_boundary_preflight_v1();
+        if (diagnostics->>'students_without_credentials')::bigint <> 1 then
+            raise exception '500-digit iteration fixture was accepted';
+        end if;
+    exception
+        when others then
+            raise exception '500-digit iteration fixture raised instead of returning an invalid count: %', sqlerrm;
+    end;
 
     execute 'alter table public.omr_student_start_credentials alter column start_code_hash drop not null';
     update public.omr_student_start_credentials
@@ -1364,7 +1357,72 @@ $$;
 do $$
 declare
     diagnostics jsonb;
-    assert_message text;
+begin
+    insert into public.omr_organization_members (
+        organization_id, user_id, role, status
+    ) values
+        ('live-org-a', 'live-teacher-history-inactive', 'teacher', 'suspended'),
+        ('live-org-a', 'live-teacher-history-removed', 'teacher', 'removed'),
+        ('live-org-b', 'live-teacher-history-removed', 'teacher', 'active');
+    insert into public.omr_teacher_profiles (
+        organization_id, user_id, display_name, status
+    ) values
+        ('live-org-a', 'live-teacher-history-inactive', '이전 교사', 'inactive'),
+        ('live-org-a', 'live-teacher-history-removed', '퇴직 교사', 'removed');
+    insert into public.omr_class_teachers (
+        class_id, organization_id, teacher_user_id, class_role
+    ) values
+        ('live-class-a', 'live-org-a', 'live-teacher-history-inactive', 'viewer'),
+        ('live-class-a', 'live-org-a', 'live-teacher-history-removed', 'viewer');
+
+    diagnostics := public.omr_production_boundary_preflight_v1();
+    if (diagnostics->>'orphan_rows')::bigint <> 0 then
+        raise exception 'inactive teacher history was treated as an orphan';
+    end if;
+    if (diagnostics->>'cross_organization_rows')::bigint <> 0 then
+        raise exception 'same-scope removed membership created a false cross-organization violation';
+    end if;
+
+    delete from public.omr_class_teachers
+     where teacher_user_id in ('live-teacher-history-inactive', 'live-teacher-history-removed');
+    delete from public.omr_teacher_profiles
+     where user_id in ('live-teacher-history-inactive', 'live-teacher-history-removed');
+    delete from public.omr_organization_members
+     where user_id in ('live-teacher-history-inactive', 'live-teacher-history-removed');
+
+    insert into public.omr_organization_members (
+        organization_id, user_id, role, status
+    ) values (
+        'live-org-a', 'live-teacher-active-misaligned', 'teacher', 'suspended'
+    );
+    insert into public.omr_teacher_profiles (
+        organization_id, user_id, display_name, status
+    ) values (
+        'live-org-a', 'live-teacher-active-misaligned', '활성 교사', 'active'
+    );
+    insert into public.omr_class_teachers (
+        class_id, organization_id, teacher_user_id, class_role
+    ) values (
+        'live-class-a', 'live-org-a', 'live-teacher-active-misaligned', 'grader'
+    );
+
+    diagnostics := public.omr_production_boundary_preflight_v1();
+    if (diagnostics->>'orphan_rows')::bigint < 1 then
+        raise exception 'active teacher with inactive membership was accepted';
+    end if;
+
+    delete from public.omr_class_teachers
+     where teacher_user_id = 'live-teacher-active-misaligned';
+    delete from public.omr_teacher_profiles
+     where user_id = 'live-teacher-active-misaligned';
+    delete from public.omr_organization_members
+     where user_id = 'live-teacher-active-misaligned';
+end
+$$;
+
+do $$
+declare
+    diagnostics jsonb;
 begin
     insert into public.omr_question_results (
         id, organization_id, class_id, attempt_id, exam_id,
@@ -1372,12 +1430,12 @@ begin
         is_correct, is_wrong, is_unanswered, score, earned_score,
         finished_at, payload
     ) values (
-        'raw-live-private-result-id',
+        'live-historical-question-result',
         'live-org-a',
         'live-class-a',
         'attempt_live-ticket-1',
         'live-exam-a',
-        '김학생',
+        'Historical Student',
         999,
         999,
         'ungraded',
@@ -1391,30 +1449,12 @@ begin
     );
 
     diagnostics := public.omr_production_boundary_preflight_v1();
-    if (diagnostics->>'orphan_rows')::bigint < 1 then
-        raise exception 'missing exam-question result fixture was not detected';
+    if (diagnostics->>'orphan_rows')::bigint <> 0 then
+        raise exception 'historical question-result snapshot was treated as an orphan';
     end if;
-    if diagnostics::text like '%김학생%'
-        or diagnostics::text like '%raw-live-private-result-id%'
-    then
-        raise exception 'preflight diagnostics exposed 김학생 or a raw row identifier';
-    end if;
-
-    begin
-        perform public.omr_assert_production_boundary_preflight_v1();
-        raise exception 'missing exam-question preflight fixture unexpectedly passed';
-    exception
-        when check_violation then
-            assert_message := sqlerrm;
-            if assert_message like '%김학생%'
-                or assert_message like '%raw-live-private-result-id%'
-            then
-                raise exception 'preflight exception exposed 김학생 or a raw row identifier';
-            end if;
-    end;
 
     delete from public.omr_question_results
-     where id = 'raw-live-private-result-id';
+     where id = 'live-historical-question-result';
 end
 $$;
 

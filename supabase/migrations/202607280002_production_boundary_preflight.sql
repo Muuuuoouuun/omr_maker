@@ -135,6 +135,9 @@ orphan_violations(entity, row_id) as (
          )
      )
     union
+    -- Question results are immutable historical snapshots. Supported exam
+    -- replacement may remove current question rows while submitted results
+    -- retain their attempt/exam/scope facts.
     select 'question_result', result.id
       from public.omr_question_results result
      where not exists (
@@ -173,11 +176,6 @@ orphan_violations(entity, row_id) as (
               from public.omr_student_profiles student
              where student.id = result.student_profile_id
          )
-     ) or not exists (
-         select 1
-           from public.omr_exam_questions exam_question
-          where exam_question.exam_id = result.exam_id
-            and exam_question.question_id = result.question_id
      )
     union
     select
@@ -215,13 +213,26 @@ orphan_violations(entity, row_id) as (
            from public.omr_teacher_profiles exact_teacher_profile
           where exact_teacher_profile.organization_id = teacher_membership.organization_id
             and exact_teacher_profile.user_id = teacher_membership.teacher_user_id
-            and exact_teacher_profile.status = 'active'
      ) or not exists (
          select 1
            from public.omr_organization_members exact_organization_member
           where exact_organization_member.organization_id = teacher_membership.organization_id
             and exact_organization_member.user_id = teacher_membership.teacher_user_id
-            and exact_organization_member.status = 'active'
+     ) or (
+         exists (
+             select 1
+               from public.omr_teacher_profiles exact_active_teacher_profile
+              where exact_active_teacher_profile.organization_id = teacher_membership.organization_id
+                and exact_active_teacher_profile.user_id = teacher_membership.teacher_user_id
+                and exact_active_teacher_profile.status = 'active'
+         )
+         and not exists (
+             select 1
+               from public.omr_organization_members exact_active_organization_member
+              where exact_active_organization_member.organization_id = teacher_membership.organization_id
+                and exact_active_organization_member.user_id = teacher_membership.teacher_user_id
+                and exact_active_organization_member.status = 'active'
+         )
      )
     union
     select 'student_profile', student.id
@@ -243,7 +254,15 @@ orphan_violations(entity, row_id) as (
            from public.omr_organization_members member
           where member.organization_id = teacher.organization_id
             and member.user_id = teacher.user_id
-            and member.status = 'active'
+     ) or (
+         teacher.status = 'active'
+         and not exists (
+             select 1
+               from public.omr_organization_members active_member
+              where active_member.organization_id = teacher.organization_id
+                and active_member.user_id = teacher.user_id
+                and active_member.status = 'active'
+         )
      )
     union
     select 'organization_member', member.organization_id || ':' || member.user_id
@@ -361,7 +380,6 @@ cross_organization_violations(entity, row_id) as (
                   from public.omr_teacher_profiles exact_teacher_profile
                  where exact_teacher_profile.organization_id = teacher_membership.organization_id
                    and exact_teacher_profile.user_id = teacher_membership.teacher_user_id
-                   and exact_teacher_profile.status = 'active'
             )
             and exists (
                 select 1
@@ -377,7 +395,6 @@ cross_organization_violations(entity, row_id) as (
                   from public.omr_organization_members exact_organization_member
                  where exact_organization_member.organization_id = teacher_membership.organization_id
                    and exact_organization_member.user_id = teacher_membership.teacher_user_id
-                   and exact_organization_member.status = 'active'
             )
             and exists (
                 select 1
@@ -398,7 +415,6 @@ cross_organization_violations(entity, row_id) as (
               from public.omr_organization_members same_scope_member
              where same_scope_member.organization_id = teacher.organization_id
                and same_scope_member.user_id = teacher.user_id
-               and same_scope_member.status = 'active'
        )
     union
     select 'student_credential', credential.organization_id || ':' || credential.student_profile_id
@@ -435,6 +451,7 @@ credential_hash_validity as (
             and credential_hash_parts.raw_iterations ~ '^[0-9]+$'
             and case
                 when credential_hash_parts.raw_iterations ~ '^[0-9]+$'
+                    and length(credential_hash_parts.raw_iterations) <= 7
                 then credential_hash_parts.raw_iterations::numeric between 10000 and 1000000
                 else false
             end

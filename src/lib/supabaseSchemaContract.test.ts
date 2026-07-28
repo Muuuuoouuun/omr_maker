@@ -158,8 +158,14 @@ describe("Supabase schema contract", () => {
         );
         expect(productionBoundaryPreflight).toContain("exact_teacher_profile");
         expect(productionBoundaryPreflight).toContain("exact_organization_member");
+        expect(productionBoundaryPreflight).toContain(
+            "Question results are immutable historical snapshots",
+        );
+        expect(productionBoundaryPreflight).not.toMatch(
+            /from public\.omr_exam_questions exam_question[\s\S]{0,180}exam_question\.question_id\s*=\s*result\.question_id/i,
+        );
         expect(productionBoundaryPreflight).toMatch(
-            /exam_question\.exam_id\s*=\s*result\.exam_id[\s\S]*exam_question\.question_id\s*=\s*result\.question_id/i,
+            /when credential_hash_parts\.raw_iterations ~ '\^\[0-9\]\+\$'\s+and length\(credential_hash_parts\.raw_iterations\) <= 7\s+then credential_hash_parts\.raw_iterations::numeric/i,
         );
 
         expect(productionBoundaryPreflight).not.toMatch(
@@ -170,7 +176,11 @@ describe("Supabase schema contract", () => {
         expect(liveAssertions).toContain("unsafe PBKDF2 boundary fixture was accepted");
         expect(liveAssertions).toContain("class-student cross-organization fixture was not detected");
         expect(liveAssertions).toContain("class-teacher exact membership fixture was not detected");
-        expect(liveAssertions).toContain("missing exam-question result fixture was not detected");
+        expect(liveAssertions).toContain("historical question-result snapshot was treated as an orphan");
+        expect(liveAssertions).toContain("inactive teacher history was treated as an orphan");
+        expect(liveAssertions).toContain("same-scope removed membership created a false cross-organization violation");
+        expect(liveAssertions).toContain("active teacher with inactive membership was accepted");
+        expect(liveAssertions).toContain("500-digit iteration fixture raised instead of returning an invalid count");
         expect(liveAssertions).toContain("preflight diagnostics exposed 김학생 or a raw row identifier");
         expect(liveAssertions).toContain("preflight exception exposed 김학생 or a raw row identifier");
     });
