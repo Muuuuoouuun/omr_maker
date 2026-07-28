@@ -2133,6 +2133,29 @@ declare
     readiness jsonb;
 begin
     begin
+        execute $statement$
+            create function public.omr_save_exam_v1(text)
+            returns boolean
+            language sql
+            as 'select true'
+        $statement$;
+        readiness := public.omr_service_readiness_v1();
+        if readiness->>'serverGatewayCapabilitiesReady' <> 'false'
+            or readiness->>'ready' <> 'false'
+        then
+            raise exception 'v4 readiness accepted an extra server gateway overload';
+        end if;
+        raise exception using errcode = 'P1020', message = 'rollback v4 gateway overload drift';
+    exception when sqlstate 'P1020' then null;
+    end;
+end
+$$;
+
+do $$
+declare
+    readiness jsonb;
+begin
+    begin
         grant select (title) on public.omr_exams to public;
         readiness := public.omr_service_readiness_v1();
         if readiness->>'anonTablePrivilegesDenied' <> 'false'

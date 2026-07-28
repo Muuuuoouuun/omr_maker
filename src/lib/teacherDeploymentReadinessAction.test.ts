@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { MOCKUP_TEACHER_IDENTITY } from "./mockupAccount";
 import { createSignedTeacherSessionCookie } from "./teacherServerSession";
 
 const controls = vi.hoisted(() => ({
@@ -23,6 +24,7 @@ const authorizedSummary = vi.hoisted(() => ({
 }));
 
 const buildReadiness = vi.hoisted(() => vi.fn(() => authorizedSummary));
+const readinessRateLimitCalls = vi.hoisted(() => vi.fn());
 
 vi.mock("next/headers", () => ({
     headers: async () => controls.headers,
@@ -47,6 +49,19 @@ vi.mock("@/lib/supabaseReadinessProbe", async importOriginal => {
 vi.mock("@/lib/deploymentReadiness", () => ({
     buildDeploymentReadiness: buildReadiness,
 }));
+
+vi.mock("@/lib/deploymentReadinessActionSecurity", async importOriginal => {
+    const actual = await importOriginal<typeof import("@/lib/deploymentReadinessActionSecurity")>();
+    return {
+        ...actual,
+        consumeTeacherDeploymentReadinessRateLimit: (
+            ...args: Parameters<typeof actual.consumeTeacherDeploymentReadinessRateLimit>
+        ) => {
+            readinessRateLimitCalls(...args);
+            return actual.consumeTeacherDeploymentReadinessRateLimit(...args);
+        },
+    };
+});
 
 import { getTeacherDeploymentReadiness } from "@/app/actions/auth";
 
@@ -96,6 +111,7 @@ describe("teacher deployment readiness server action", () => {
         controls.cookieReads = 0;
         probe.mockClear();
         buildReadiness.mockClear();
+        readinessRateLimitCalls.mockClear();
     });
 
     afterEach(() => {
@@ -138,18 +154,37 @@ describe("teacher deployment readiness server action", () => {
         expect(buildReadiness).toHaveBeenCalledTimes(1);
     });
 
-    it("bounds readiness probes per signed actor and client without leaking actor data", async () => {
-        controls.headers = sameOriginHeaders("198.51.100.72");
+    it("rejects the real signed showcase identity before probing or building readiness", async () => {
+        const cookie = createSignedTeacherSessionCookie(
+            TOKEN,
+            MOCKUP_TEACHER_IDENTITY,
+            { NODE_ENV: "production", TEACHER_SESSION_SECRET: SESSION_SECRET },
+        );
+        if (!cookie) throw new Error("test showcase session was not signed");
+        controls.cookieValue = cookie;
+
+        const result = await getTeacherDeploymentReadiness();
+
+        expect(result).toEqual(BLOCKED_SUMMARY);
+        expect(JSON.stringify(result)).not.toContain(MOCKUP_TEACHER_IDENTITY.teacherId);
+        expect(readinessRateLimitCalls).not.toHaveBeenCalled();
+        expect(probe).not.toHaveBeenCalled();
+        expect(buildReadiness).not.toHaveBeenCalled();
+    });
+
+    it("bounds readiness probes by signed actor even when spoofable client headers rotate", async () => {
         controls.cookieValue = signTeacher("teacher-rate-limit-private", "viewer");
 
         for (let request = 0; request < 12; request += 1) {
+            controls.headers = sameOriginHeaders(`198.51.100.${request + 1}`);
             await expect(getTeacherDeploymentReadiness()).resolves.toEqual(authorizedSummary);
         }
+        controls.headers = sameOriginHeaders("203.0.113.250");
         const blocked = await getTeacherDeploymentReadiness();
 
         expect(blocked).toEqual(BLOCKED_SUMMARY);
         expect(JSON.stringify(blocked)).not.toContain("teacher-rate-limit-private");
-        expect(JSON.stringify(blocked)).not.toContain("198.51.100.72");
+        expect(JSON.stringify(blocked)).not.toContain("203.0.113.250");
         expect(probe).toHaveBeenCalledTimes(12);
         expect(buildReadiness).toHaveBeenCalledTimes(12);
     });

@@ -23,6 +23,7 @@ import {
 } from "@/lib/teacherLoginRateLimit";
 import {
     createSignedTeacherSessionCookie,
+    parseSignedTeacherSessionCookie,
     shouldUseSecureTeacherSessionCookie,
     TEACHER_SERVER_SESSION_COOKIE,
     TEACHER_SERVER_SESSION_MAX_AGE_SECONDS,
@@ -31,8 +32,8 @@ import { isSameOriginServerActionRequest, SERVER_ACTION_ORIGIN_ERROR } from "@/l
 import { buildDeploymentReadiness, type DeploymentReadinessSummary } from "@/lib/deploymentReadiness";
 import { workspaceContextFromIdentity } from "@/lib/workspaceContext";
 import { probeSupabaseDeploymentWithServiceRole } from "@/lib/supabaseReadinessProbe";
-import { MOCKUP_TEACHER_IDENTITY } from "@/lib/mockupAccount";
-import { authorizeTeacherDeploymentReadinessRequest } from "@/lib/deploymentReadinessActionSecurity";
+import { isMockupTeacherIdentity, MOCKUP_TEACHER_IDENTITY } from "@/lib/mockupAccount";
+import { consumeTeacherDeploymentReadinessRateLimit } from "@/lib/deploymentReadinessActionSecurity";
 
 function clientFingerprintFromHeaders(headerStore: Headers): string {
     const forwardedFor = headerStore.get("x-forwarded-for")?.split(",")[0]?.trim();
@@ -195,11 +196,11 @@ export async function getTeacherDeploymentReadiness(): Promise<DeploymentReadine
     if (!isSameOriginServerActionRequest(headerStore)) return blockedSummary();
 
     const cookieStore = await cookies();
-    const authorized = authorizeTeacherDeploymentReadinessRequest(
-        headerStore,
+    const session = parseSignedTeacherSessionCookie(
         cookieStore.get(TEACHER_SERVER_SESSION_COOKIE)?.value,
     );
-    if (!authorized) return blockedSummary();
+    if (!session || isMockupTeacherIdentity(session)) return blockedSummary();
+    if (!consumeTeacherDeploymentReadinessRateLimit(session)) return blockedSummary();
 
     const databaseProbe = await probeSupabaseDeploymentWithServiceRole();
     return buildDeploymentReadiness(process.env, databaseProbe);

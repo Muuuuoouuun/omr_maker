@@ -1,9 +1,9 @@
 import { createHash } from "node:crypto";
-import { isSameOriginServerActionRequest } from "./serverActionSecurity";
-import { parseSignedTeacherSessionCookie } from "./teacherServerSession";
+import type { TeacherSession } from "./teacherSession";
 
 export const DEPLOYMENT_READINESS_MAX_REQUESTS = 12;
 export const DEPLOYMENT_READINESS_WINDOW_MS = 60 * 1000;
+export const DEPLOYMENT_READINESS_RATE_LIMIT_MAX_ENTRIES = 1024;
 
 export interface DeploymentReadinessRateLimitState {
     count: number;
@@ -22,20 +22,34 @@ function hash(value: string): string {
     return createHash("sha256").update(value, "utf8").digest("hex");
 }
 
-function clientFingerprintFromHeaders(headerStore: Headers): string {
-    return headerStore.get("x-forwarded-for")?.split(",")[0]?.trim()
-        || headerStore.get("x-real-ip")?.trim()
-        || headerStore.get("user-agent")?.trim()
-        || "unknown-client";
+export function buildDeploymentReadinessRateLimitKey(actor: unknown): string {
+    const normalizedActor = clean(actor) || "unknown-teacher";
+    return `deployment-readiness:${hash(normalizedActor)}`;
 }
 
-export function buildDeploymentReadinessRateLimitKey(
-    actor: unknown,
-    clientFingerprint: unknown,
-): string {
-    const normalizedActor = clean(actor) || "unknown-teacher";
-    const normalizedClient = clean(clientFingerprint) || "unknown-client";
-    return `deployment-readiness:${hash(`${normalizedActor}:${normalizedClient}`)}`;
+function pruneExpiredDeploymentReadinessRateLimits(
+    store: DeploymentReadinessRateLimitStore,
+    now: number,
+): void {
+    for (const [key, state] of store) {
+        if (now - state.windowStartedAt >= DEPLOYMENT_READINESS_WINDOW_MS) {
+            store.delete(key);
+        }
+    }
+}
+
+function evictOldestDeploymentReadinessRateLimit(
+    store: DeploymentReadinessRateLimitStore,
+): void {
+    let oldestKey: string | undefined;
+    let oldestWindowStartedAt = Number.POSITIVE_INFINITY;
+    for (const [key, state] of store) {
+        if (state.windowStartedAt < oldestWindowStartedAt) {
+            oldestKey = key;
+            oldestWindowStartedAt = state.windowStartedAt;
+        }
+    }
+    if (oldestKey) store.delete(oldestKey);
 }
 
 export function consumeDeploymentReadinessRateLimit(
@@ -43,8 +57,13 @@ export function consumeDeploymentReadinessRateLimit(
     store: DeploymentReadinessRateLimitStore = defaultDeploymentReadinessRateLimitStore,
     now = Date.now(),
 ): boolean {
+    pruneExpiredDeploymentReadinessRateLimits(store, now);
+
     const current = store.get(key);
-    if (!current || now - current.windowStartedAt >= DEPLOYMENT_READINESS_WINDOW_MS) {
+    if (!current) {
+        if (store.size >= DEPLOYMENT_READINESS_RATE_LIMIT_MAX_ENTRIES) {
+            evictOldestDeploymentReadinessRateLimit(store);
+        }
         store.set(key, { count: 1, windowStartedAt: now });
         return true;
     }
@@ -54,21 +73,13 @@ export function consumeDeploymentReadinessRateLimit(
     return true;
 }
 
-export function authorizeTeacherDeploymentReadinessRequest(
-    headerStore: Headers,
-    rawSessionCookie: string | null | undefined,
-    env: Record<string, string | undefined> = process.env,
+export function consumeTeacherDeploymentReadinessRateLimit(
+    session: TeacherSession,
     store: DeploymentReadinessRateLimitStore = defaultDeploymentReadinessRateLimitStore,
     now = Date.now(),
 ): boolean {
-    if (!isSameOriginServerActionRequest(headerStore)) return false;
-
-    const session = parseSignedTeacherSessionCookie(rawSessionCookie, env, now);
-    if (!session) return false;
-
     const key = buildDeploymentReadinessRateLimitKey(
         session.teacherId || session.email || session.displayName || session.token,
-        clientFingerprintFromHeaders(headerStore),
     );
     return consumeDeploymentReadinessRateLimit(key, store, now);
 }

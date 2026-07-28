@@ -43,6 +43,29 @@ const canonicalTables = [
     "omr_remote_assets",
 ] as const;
 
+const serverGatewaySignatures = [
+    ["omr_submit_attempt_v1", "text, jsonb, jsonb"],
+    ["omr_submit_session_attempt_v1", "jsonb, jsonb"],
+    ["omr_save_exam_v1", "jsonb, jsonb"],
+    ["omr_delete_exam_v1", "text, text"],
+    ["omr_save_roster_v1", "text, jsonb, jsonb, jsonb, jsonb"],
+    ["omr_attach_attempt_handwriting_v1", "text, text, jsonb"],
+    ["omr_save_feedback_v1", "text, jsonb"],
+    [
+        "omr_return_feedback_v1",
+        "text, text, timestamp with time zone",
+    ],
+    [
+        "omr_mark_feedback_opened_v2",
+        "text, text, text, timestamp with time zone",
+    ],
+    ["omr_save_remote_asset_metadata_v1", "jsonb"],
+    [
+        "omr_claim_guest_attempts_v1",
+        "text, text, text, text, text, text, text[]",
+    ],
+] as const;
+
 function createdPolicies(sql: string): Array<{ name: string; table: string }> {
     return [...sql.matchAll(/create\s+policy\s+"([^"]+)"\s+on\s+public\.([a-z0-9_]+)/gi)]
         .map(match => ({ name: match[1], table: match[2] }));
@@ -144,6 +167,21 @@ describe("production server-only database boundary", () => {
         );
         expect(readinessV4).not.toContain(
             "'public.omr_teacher_update_attempt_v1(",
+        );
+        const expectedServerGatewayCte = readinessV4.match(
+            /with expected_server_gateways\s*\(\s*routine_name,\s*identity_arguments\s*\)\s*as\s*\(\s*values([\s\S]*?)\),\s*actual_server_gateways/i,
+        );
+        expect(expectedServerGatewayCte).not.toBeNull();
+        expect([
+            ...(expectedServerGatewayCte?.[1] || "").matchAll(
+                /\(\s*'([^']+)',\s*'([^']+)'\s*\)/g,
+            ),
+        ].map(match => [match[1], match[2]])).toEqual(serverGatewaySignatures);
+        expect(readinessV4).toMatch(
+            /select routine_name, identity_arguments\s+from expected_server_gateways\s+except\s+select routine_name, identity_arguments\s+from actual_server_gateways/i,
+        );
+        expect(readinessV4).toMatch(
+            /select routine_name, identity_arguments\s+from actual_server_gateways\s+except\s+select routine_name, identity_arguments\s+from expected_server_gateways/i,
         );
         expect(readinessV4).toContain("supabase_storage_admin");
         expect(readinessV4).toContain("OMR private assets server-only objects");
@@ -256,6 +294,9 @@ describe("production server-only database boundary", () => {
         );
         expect(liveAssertions).toContain(
             "v4 readiness accepted a missing server gateway",
+        );
+        expect(liveAssertions).toContain(
+            "v4 readiness accepted an extra server gateway overload",
         );
         expect(liveAssertions).toContain(
             "v4 readiness accepted a missing query-path index",

@@ -507,40 +507,79 @@ begin
                and bucket.public = false
         );
 
-    v_server_gateway_capabilities_ready :=
-        pg_catalog.to_regprocedure(
-            'public.omr_submit_attempt_v1(text,jsonb,jsonb)'
-        ) is not null
-        and pg_catalog.to_regprocedure(
-            'public.omr_submit_session_attempt_v1(jsonb,jsonb)'
-        ) is not null
-        and pg_catalog.to_regprocedure(
-            'public.omr_save_exam_v1(jsonb,jsonb)'
-        ) is not null
-        and pg_catalog.to_regprocedure(
-            'public.omr_delete_exam_v1(text,text)'
-        ) is not null
-        and pg_catalog.to_regprocedure(
-            'public.omr_save_roster_v1(text,jsonb,jsonb,jsonb,jsonb)'
-        ) is not null
-        and pg_catalog.to_regprocedure(
-            'public.omr_attach_attempt_handwriting_v1(text,text,jsonb)'
-        ) is not null
-        and pg_catalog.to_regprocedure(
-            'public.omr_save_feedback_v1(text,jsonb)'
-        ) is not null
-        and pg_catalog.to_regprocedure(
-            'public.omr_return_feedback_v1(text,text,timestamptz)'
-        ) is not null
-        and pg_catalog.to_regprocedure(
-            'public.omr_mark_feedback_opened_v2(text,text,text,timestamptz)'
-        ) is not null
-        and pg_catalog.to_regprocedure(
-            'public.omr_save_remote_asset_metadata_v1(jsonb)'
-        ) is not null
-        and pg_catalog.to_regprocedure(
-            'public.omr_claim_guest_attempts_v1(text,text,text,text,text,text,text[])'
-        ) is not null;
+    with expected_server_gateways(
+        routine_name,
+        identity_arguments
+    ) as (
+        values
+            ('omr_submit_attempt_v1', 'text, jsonb, jsonb'),
+            ('omr_submit_session_attempt_v1', 'jsonb, jsonb'),
+            ('omr_save_exam_v1', 'jsonb, jsonb'),
+            ('omr_delete_exam_v1', 'text, text'),
+            (
+                'omr_save_roster_v1',
+                'text, jsonb, jsonb, jsonb, jsonb'
+            ),
+            (
+                'omr_attach_attempt_handwriting_v1',
+                'text, text, jsonb'
+            ),
+            ('omr_save_feedback_v1', 'text, jsonb'),
+            (
+                'omr_return_feedback_v1',
+                'text, text, timestamp with time zone'
+            ),
+            (
+                'omr_mark_feedback_opened_v2',
+                'text, text, text, timestamp with time zone'
+            ),
+            ('omr_save_remote_asset_metadata_v1', 'jsonb'),
+            (
+                'omr_claim_guest_attempts_v1',
+                'text, text, text, text, text, text, text[]'
+            )
+    ),
+    actual_server_gateways(
+        routine_name,
+        identity_arguments
+    ) as (
+        select
+            routine.proname::text,
+            pg_catalog.oidvectortypes(routine.proargtypes)
+          from pg_catalog.pg_proc routine
+          join pg_catalog.pg_namespace namespace
+            on namespace.oid = routine.pronamespace
+         where namespace.nspname = 'public'
+           and routine.proname in (
+               'omr_submit_attempt_v1',
+               'omr_submit_session_attempt_v1',
+               'omr_save_exam_v1',
+               'omr_delete_exam_v1',
+               'omr_save_roster_v1',
+               'omr_attach_attempt_handwriting_v1',
+               'omr_save_feedback_v1',
+               'omr_return_feedback_v1',
+               'omr_mark_feedback_opened_v2',
+               'omr_save_remote_asset_metadata_v1',
+               'omr_claim_guest_attempts_v1'
+           )
+    )
+    select
+        not exists (
+            select routine_name, identity_arguments
+              from expected_server_gateways
+            except
+            select routine_name, identity_arguments
+              from actual_server_gateways
+        )
+        and not exists (
+            select routine_name, identity_arguments
+              from actual_server_gateways
+            except
+            select routine_name, identity_arguments
+              from expected_server_gateways
+        )
+      into v_server_gateway_capabilities_ready;
 
     v_query_path_indexes_ready :=
         pg_catalog.to_regclass(
