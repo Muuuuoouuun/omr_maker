@@ -67,7 +67,7 @@ describe("student official attempt read surface", () => {
         expect(flusher).toContain("flushPendingSubmissionReceipts");
         expect(flusher).toContain("submitSignedSessionAttempt: submitAttempt");
         expect(flusher).toContain("maintainAndFlushPendingSubmissionReceipts");
-        expect(flusher).toContain("window.setTimeout(flush, cleanupDelayMs)");
+        expect(flusher).toContain("window.setTimeout(flush, followUpDelayMs)");
         expect(flusher).toContain("window.clearTimeout(cleanupTimer)");
         expect(flusher).toContain(".catch(() =>");
         expect(flusher).toContain("rerunRequested = true");
@@ -76,11 +76,33 @@ describe("student official attempt read surface", () => {
         expect(flusher).toContain('window.addEventListener(STUDENT_SESSION_CHANGED_EVENT, flush)');
         expect(flusher).toContain('window.addEventListener("online", flush)');
         expect(flusher).toContain('if (document.visibilityState === "visible") flush()');
+        expect(flusher).toContain("isSubmissionReceiptStorageKey");
+        expect(flusher).toContain("const onStorage = (event: StorageEvent) =>");
+        expect(flusher).toContain('window.addEventListener("storage", onStorage)');
+        expect(flusher).toContain('window.removeEventListener("storage", onStorage)');
+        expect(flusher).toContain("queueMaintenance");
+        expect(flusher).toContain("cleanupFollowUpDelayMs");
+        expect(flusher).not.toContain("SUBMISSION_RECEIPT_ENTRY_PREFIX");
+        expect(flusher).not.toContain("SUBMISSION_RECEIPT_ALIAS_PREFIX");
         expect(orchestration).toContain("await dependencies.migrateLegacySubmissionReceipts()");
         expect(orchestration.indexOf("await dependencies.migrateLegacySubmissionReceipts()"))
             .toBeLessThan(orchestration.indexOf("dependencies.pendingSubmissionReceiptIds("));
         expect(flusher).not.toContain("flushPendingAttemptSync");
         expect(flusher).not.toContain("upsertRemoteAttempt");
+    });
+
+    it("keeps the manual submission retry control responsive when retry orchestration rejects", () => {
+        const review = source("src/app/student/review/[attemptId]/page.tsx");
+        const retryHandler = review.slice(
+            review.indexOf("const handleSubmissionRetry = async () =>"),
+            review.indexOf("const reviewQuestionIds ="),
+        );
+        expect(retryHandler).toContain("retryPendingSubmissionReceipt");
+        expect(retryHandler).toContain("} catch {");
+        expect(retryHandler).toContain(
+            'setSubmissionRetryFeedback("다시 시도 중 문제가 발생했습니다. 잠시 후 다시 시도해주세요.")',
+        );
+        expect(retryHandler).toContain("setSubmissionRetrying(false)");
     });
 
     it("marks direct server submissions and official history cache entries as locally confirmed", () => {

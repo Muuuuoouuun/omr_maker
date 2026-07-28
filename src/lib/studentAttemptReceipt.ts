@@ -74,6 +74,7 @@ const SANITIZED_LEGACY_REGISTRY = JSON.stringify({
 });
 const CONFIRMED_RETENTION_CAP = 100;
 const ALIAS_RETENTION_CAP = 100;
+const QUARANTINE_RETENTION_CAP = 50;
 const RETRY_ERROR = "서버에 아직 반영하지 못했습니다. 네트워크를 확인한 뒤 다시 시도해주세요.";
 const DURABILITY_ERROR = "서버 응답은 받았지만 확인 상태를 저장하지 못했습니다. 자동 재시도를 유지합니다.";
 const PIN_REQUIRED_ERROR = "시험 PIN을 다시 입력해야 서버 반영을 시도할 수 있습니다.";
@@ -178,6 +179,28 @@ function storageKeys(storage: Storage, prefix: string): string[] {
     return keys;
 }
 
+function pruneQuarantineMetadata(storage: Storage): void {
+    const quarantined = storageKeys(storage, SUBMISSION_RECEIPT_QUARANTINE_PREFIX)
+        .map(key => {
+            const raw = storage.getItem(key);
+            let at = 0;
+            if (raw) {
+                try {
+                    const parsed = JSON.parse(raw) as { quarantinedAt?: unknown };
+                    if (typeof parsed.quarantinedAt === "string") {
+                        at = Date.parse(parsed.quarantinedAt) || 0;
+                    }
+                } catch {}
+            }
+            const sequence = Number(key.slice(key.lastIndexOf(":") + 1)) || 0;
+            return { key, at, sequence };
+        })
+        .sort((a, b) => b.at - a.at || b.sequence - a.sequence || b.key.localeCompare(a.key));
+    quarantined.slice(QUARANTINE_RETENTION_CAP).forEach(({ key }) => {
+        try { storage.removeItem(key); } catch {}
+    });
+}
+
 function writeQuarantineMetadata(storage: Storage, key: string, raw: string): void {
     const sourceKind = key === SUBMISSION_RECEIPT_KEY
         ? "legacy"
@@ -198,6 +221,7 @@ function writeQuarantineMetadata(storage: Storage, key: string, raw: string): vo
             byteLength: raw.length,
             quarantinedAt: new Date().toISOString(),
         }));
+        pruneQuarantineMetadata(storage);
     } catch {
         // Metadata is best-effort. Corrupt submission data may contain a PIN,
         // so it is never copied into quarantine.
@@ -319,10 +343,9 @@ function v2SupersedesPending(
     if (storage.getItem(aliasKey(id)) !== null) return true;
     if (storage.getItem(receiptKey(id)) === null) return false;
     const envelope = parseReceiptEnvelope(storage, id, options);
-    // A physically present but corrupt v2 receipt still wins over legacy.
-    // The awaited maintenance path quarantines it and removes any orphan
-    // request instead of reviving an older pending submission.
-    if (!envelope) return true;
+    // A corrupt receipt is not terminal evidence. Quarantine it and preserve
+    // the idempotent request so awaited maintenance can rebuild pending state.
+    if (!envelope) return false;
     const status = envelope.receipt.status;
     return status === "confirmed" || status === "local_only";
 }
@@ -536,6 +559,10 @@ async function migrateLegacyRegistryUnlocked(
                 storage.removeItem(SUBMISSION_RECEIPT_LEGACY_CLEANUP_CANDIDATE_KEY);
                 return false;
             }
+            if (storage.getItem(SUBMISSION_RECEIPT_KEY) !== finalRaw) {
+                storage.removeItem(SUBMISSION_RECEIPT_LEGACY_CLEANUP_CANDIDATE_KEY);
+                return false;
+            }
             // This final in-lock check narrows, but cannot eliminate, the
             // unavoidable limitation of an old writer that ignores this lock.
             storage.setItem(SUBMISSION_RECEIPT_KEY, SANITIZED_LEGACY_REGISTRY);
@@ -622,14 +649,28 @@ function maintainV2Registry(storage: Storage): void {
         if (!id) return;
         const request = parseRequestEnvelope(storage, id);
         const receipt = parseReceiptEnvelope(storage, id);
+        if (!request) return;
         if (
-            request
-            && (
-                storage.getItem(aliasKey(id)) !== null
-                || receipt?.receipt.status !== "pending"
-            )
+            storage.getItem(aliasKey(id)) !== null
+            || receipt?.receipt.status === "confirmed"
+            || receipt?.receipt.status === "local_only"
         ) {
             try { storage.removeItem(key); } catch {}
+            return;
+        }
+        if (!receipt) {
+            writeReceiptEnvelope(storage, {
+                attemptId: id,
+                status: "pending",
+                updatedAt: new Date().toISOString(),
+                ...(request.request.requiresPin ? {
+                    requiresPin: true,
+                    retryMode: "manual" as const,
+                    prerequisite: "pin" as const,
+                } : {
+                    retryMode: "automatic" as const,
+                }),
+            });
         }
     });
 }
@@ -1072,7 +1113,10 @@ export function retryPendingSubmissionReceipt(
             return { status: "pending", error: DURABILITY_ERROR };
         }
         return { status: "pending", error: RETRY_ERROR };
-    }).finally(() => {
+    }).catch((): SubmissionRetryResult => ({
+        status: "pending",
+        error: RETRY_ERROR,
+    })).finally(() => {
         retryInFlight.delete(attemptId);
     });
     retryInFlight.set(attemptId, retry);

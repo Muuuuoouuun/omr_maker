@@ -4,11 +4,15 @@ import { useEffect } from "react";
 import { submitAttempt } from "@/app/actions/studentExam";
 import {
     flushPendingSubmissionReceipts,
+    isSubmissionReceiptStorageKey,
     legacySubmissionReceiptCleanupDelayMs,
     migrateLegacySubmissionReceipts,
     pendingSubmissionReceiptIds,
 } from "@/lib/studentAttemptReceipt";
-import { maintainAndFlushPendingSubmissionReceipts } from "@/lib/studentSubmissionFlush";
+import {
+    cleanupFollowUpDelayMs,
+    maintainAndFlushPendingSubmissionReceipts,
+} from "@/lib/studentSubmissionFlush";
 import { STUDENT_SESSION_CHANGED_EVENT } from "@/utils/storage";
 
 /**
@@ -23,6 +27,8 @@ export default function SyncFlusher() {
         let rerunRequested = false;
         let disposed = false;
         let cleanupTimer: number | null = null;
+        let maintenanceTimer: number | null = null;
+        let consecutiveMaintenanceFailures = 0;
         const flush = () => {
             if (running) {
                 rerunRequested = true;
@@ -39,12 +45,20 @@ export default function SyncFlusher() {
                     legacySubmissionReceiptCleanupDelayMs,
                 },
             )
-                .then(cleanupDelayMs => {
+                .then(({ cleanupDelayMs, maintenanceFailed }) => {
                     if (disposed) return;
+                    consecutiveMaintenanceFailures = maintenanceFailed
+                        ? consecutiveMaintenanceFailures + 1
+                        : 0;
                     if (cleanupTimer !== null) window.clearTimeout(cleanupTimer);
                     cleanupTimer = null;
-                    if (cleanupDelayMs !== null) {
-                        cleanupTimer = window.setTimeout(flush, cleanupDelayMs);
+                    const followUpDelayMs = cleanupFollowUpDelayMs(
+                        cleanupDelayMs,
+                        maintenanceFailed,
+                        consecutiveMaintenanceFailures,
+                    );
+                    if (followUpDelayMs !== null) {
+                        cleanupTimer = window.setTimeout(flush, followUpDelayMs);
                     }
                 })
                 .catch(() => {
@@ -62,16 +76,33 @@ export default function SyncFlusher() {
         const onVisibilityChange = () => {
             if (document.visibilityState === "visible") flush();
         };
+        const queueMaintenance = () => {
+            if (disposed || maintenanceTimer !== null) return;
+            maintenanceTimer = window.setTimeout(() => {
+                maintenanceTimer = null;
+                flush();
+            }, 0);
+        };
+        const onStorage = (event: StorageEvent) => {
+            // Native storage events are never delivered back to their source
+            // document. Ignore unrelated/synthetic events and coalesce the
+            // remaining cross-tab notification into one maintenance pass.
+            if (event.storageArea !== window.localStorage || !isSubmissionReceiptStorageKey(event.key)) return;
+            queueMaintenance();
+        };
 
         flush();
         window.addEventListener("online", flush);
         window.addEventListener(STUDENT_SESSION_CHANGED_EVENT, flush);
+        window.addEventListener("storage", onStorage);
         document.addEventListener("visibilitychange", onVisibilityChange);
         return () => {
             disposed = true;
             if (cleanupTimer !== null) window.clearTimeout(cleanupTimer);
+            if (maintenanceTimer !== null) window.clearTimeout(maintenanceTimer);
             window.removeEventListener("online", flush);
             window.removeEventListener(STUDENT_SESSION_CHANGED_EVENT, flush);
+            window.removeEventListener("storage", onStorage);
             document.removeEventListener("visibilitychange", onVisibilityChange);
         };
     }, []);

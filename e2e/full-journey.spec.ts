@@ -1168,6 +1168,7 @@ test.describe("Teacher and student full journey", () => {
                     attemptId: id,
                     status: "pending",
                     updatedAt: "2026-07-28T00:01:00.000Z",
+                    retryMode: "manual",
                 },
             }));
             window.localStorage.setItem(requestKey, JSON.stringify({

@@ -17,6 +17,7 @@ import {
     retryPendingSubmissionReceipt,
     SUBMISSION_RECEIPT_LEGACY_CLEANUP_CANDIDATE_KEY,
     SUBMISSION_RECEIPT_ENTRY_PREFIX,
+    SUBMISSION_RECEIPT_QUARANTINE_PREFIX,
     SUBMISSION_RECEIPT_REQUEST_PREFIX,
     submissionReceiptLabel,
     submissionReceiptForAttempt,
@@ -148,6 +149,50 @@ describe("student attempt receipt cache", () => {
 
         expect(await migrateLegacySubmissionReceipts({ now: 2_151, cleanupGraceMs: 100 })).toBe(true);
         expect(storage.getItem("omr_student_submission_receipts_v1")).not.toContain("attempt-after-late-write");
+    });
+
+    it("does not overwrite a late legacy write that lands while the cleanup digest is pending", async () => {
+        const originalRaw = JSON.stringify({
+            receipts: {
+                "attempt-before-digest": {
+                    attemptId: "attempt-before-digest",
+                    status: "pending",
+                    updatedAt: "2026-07-28T00:00:00.000Z",
+                },
+            },
+        });
+        const lateRaw = JSON.stringify({
+            receipts: {
+                "attempt-during-digest": {
+                    attemptId: "attempt-during-digest",
+                    status: "pending",
+                    updatedAt: "2026-07-28T00:01:00.000Z",
+                },
+            },
+        });
+        const storage = createStorage({ omr_student_submission_receipts_v1: originalRaw });
+        vi.stubGlobal("window", { localStorage: storage });
+        const digest = globalThis.crypto.subtle.digest.bind(globalThis.crypto.subtle);
+        let digestCalls = 0;
+        vi.stubGlobal("crypto", {
+            subtle: {
+                digest: async (...args: Parameters<SubtleCrypto["digest"]>) => {
+                    digestCalls += 1;
+                    if (digestCalls === 3) {
+                        storage.setItem("omr_student_submission_receipts_v1", lateRaw);
+                    }
+                    return digest(...args);
+                },
+            },
+        });
+
+        expect(await migrateLegacySubmissionReceipts({ now: 2_500, cleanupGraceMs: 100 })).toBe(true);
+        expect(await migrateLegacySubmissionReceipts({ now: 2_601, cleanupGraceMs: 100 })).toBe(false);
+        expect(storage.getItem("omr_student_submission_receipts_v1")).toBe(lateRaw);
+        expect(storage.getItem(SUBMISSION_RECEIPT_LEGACY_CLEANUP_CANDIDATE_KEY)).toBeNull();
+
+        expect(await migrateLegacySubmissionReceipts({ now: 2_602, cleanupGraceMs: 100 })).toBe(true);
+        expect(readSubmissionReceipt("attempt-during-digest")?.status).toBe("pending");
     });
 
     it("keeps malformed PIN raw through grace using metadata-only state, then redacts it", async () => {
@@ -473,6 +518,80 @@ describe("student attempt receipt cache", () => {
             expect(storage.getItem("omr_student_submission_receipts_v1")).toBeTruthy();
         },
     );
+
+    it.each(["missing", "corrupt"] as const)(
+        "repairs a %s pending receipt from a valid v2 request instead of deleting replay intent",
+        async receiptState => {
+            const id = `attempt-request-${receiptState}`;
+            const receiptStorageKey = `${SUBMISSION_RECEIPT_ENTRY_PREFIX}${encodeURIComponent(id)}`;
+            const requestStorageKey = `${SUBMISSION_RECEIPT_REQUEST_PREFIX}${encodeURIComponent(id)}`;
+            const storage = createStorage({
+                [requestStorageKey]: JSON.stringify({
+                    version: 2,
+                    revision: 1,
+                    request: {
+                        attemptId: id,
+                        input: {
+                            examId: "exam-1",
+                            submissionId: `submission-request-${receiptState}`,
+                            answers: { 1: 2 },
+                            startedAt: "2026-07-28T00:00:00.000Z",
+                        },
+                    },
+                }),
+                ...(receiptState === "corrupt" ? { [receiptStorageKey]: "{bad" } : {}),
+            });
+            vi.stubGlobal("window", { localStorage: storage });
+
+            expect(await migrateLegacySubmissionReceipts()).toBe(true);
+            expect(storage.getItem(requestStorageKey)).not.toBeNull();
+            expect(readSubmissionReceipt(id)).toMatchObject({
+                attemptId: id,
+                status: "pending",
+                retryMode: "automatic",
+            });
+            expect(pendingSubmissionReceiptIds()).toContain(id);
+        },
+    );
+
+    it("does not treat a corrupt v2 receipt as terminal when legacy data is also present", async () => {
+        const id = "attempt-corrupt-with-legacy";
+        const receiptStorageKey = `${SUBMISSION_RECEIPT_ENTRY_PREFIX}${encodeURIComponent(id)}`;
+        const requestStorageKey = `${SUBMISSION_RECEIPT_REQUEST_PREFIX}${encodeURIComponent(id)}`;
+        const request = {
+            attemptId: id,
+            input: {
+                examId: "exam-1",
+                submissionId: "submission-corrupt-with-legacy",
+                answers: { 1: 2 },
+                startedAt: "2026-07-28T00:00:00.000Z",
+            },
+        };
+        const storage = createStorage({
+            [receiptStorageKey]: "{bad",
+            [requestStorageKey]: JSON.stringify({
+                version: 2,
+                revision: 1,
+                request,
+            }),
+            omr_student_submission_receipts_v1: JSON.stringify({
+                receipts: {
+                    [id]: {
+                        attemptId: id,
+                        status: "pending",
+                        updatedAt: "2026-07-28T00:00:00.000Z",
+                    },
+                },
+                requests: { [id]: request },
+            }),
+        });
+        vi.stubGlobal("window", { localStorage: storage });
+
+        expect(await migrateLegacySubmissionReceipts()).toBe(true);
+        expect(storage.getItem(requestStorageKey)).not.toBeNull();
+        expect(readSubmissionReceipt(id)?.status).toBe("pending");
+        expect(pendingSubmissionReceiptIds()).toContain(id);
+    });
 
     it("still overlays and migrates an ordinary legacy pending pair when v2 is missing", async () => {
         const id = "attempt-ordinary-legacy";
@@ -928,7 +1047,8 @@ describe("student attempt receipt cache", () => {
         expect([...Array(storage.length)].map((_, index) => storage.key(index)))
             .not.toEqual(expect.arrayContaining([expect.stringContaining("quarantine")]));
         expect(await migrateLegacySubmissionReceipts()).toBe(true);
-        expect(storage.getItem(`${SUBMISSION_RECEIPT_REQUEST_PREFIX}${encodeURIComponent("attempt-one")}`)).toBeNull();
+        expect(storage.getItem(`${SUBMISSION_RECEIPT_REQUEST_PREFIX}${encodeURIComponent("attempt-one")}`)).not.toBeNull();
+        expect(readSubmissionReceipt("attempt-one")?.status).toBe("pending");
         expect([...Array(storage.length)].map((_, index) => storage.key(index)))
             .toEqual(expect.arrayContaining([expect.stringContaining("quarantine")]));
     });
@@ -980,6 +1100,24 @@ describe("student attempt receipt cache", () => {
             .join("");
         expect(quarantined).not.toContain(sensitiveAttemptId);
         expect(quarantined).toContain('"sourceKind":"receipt"');
+    });
+
+    it("bounds quarantine metadata retention while pruning the oldest records", async () => {
+        const storage = createStorage(Object.fromEntries(
+            [...Array(120)].map((_, index) => [
+                `${SUBMISSION_RECEIPT_ENTRY_PREFIX}${encodeURIComponent(`attempt-corrupt-${index}`)}`,
+                "{bad",
+            ]),
+        ));
+        vi.stubGlobal("window", { localStorage: storage });
+
+        expect(await migrateLegacySubmissionReceipts()).toBe(true);
+        const quarantineKeys = [...Array(storage.length)]
+            .map((_, index) => storage.key(index))
+            .filter((key): key is string => !!key?.startsWith(SUBMISSION_RECEIPT_QUARANTINE_PREFIX));
+        expect(quarantineKeys).toHaveLength(50);
+        expect(quarantineKeys.some(key => key.endsWith(":120"))).toBe(true);
+        expect(quarantineKeys.some(key => key.endsWith(":1"))).toBe(false);
     });
 
     it("keeps the v1 registry intact when migration is interrupted by quota and resumes later", async () => {

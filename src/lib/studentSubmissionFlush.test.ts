@@ -2,10 +2,17 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
     migrateLegacySubmissionReceipts,
     pendingSubmissionReceiptIds,
+    isSubmissionReceiptStorageKey,
+    SUBMISSION_RECEIPT_ALIAS_PREFIX,
+    SUBMISSION_RECEIPT_LEGACY_CLEANUP_CANDIDATE_KEY,
     SUBMISSION_RECEIPT_ENTRY_PREFIX,
+    SUBMISSION_RECEIPT_QUARANTINE_PREFIX,
     SUBMISSION_RECEIPT_REQUEST_PREFIX,
 } from "./studentAttemptReceipt";
-import { maintainAndFlushPendingSubmissionReceipts } from "./studentSubmissionFlush";
+import {
+    cleanupFollowUpDelayMs,
+    maintainAndFlushPendingSubmissionReceipts,
+} from "./studentSubmissionFlush";
 
 function createStorage(initial: Record<string, string> = {}): Storage {
     const data = new Map(Object.entries(initial));
@@ -136,7 +143,7 @@ describe("submission replay boot maintenance", () => {
                     return 25;
                 },
             },
-        )).resolves.toBe(25);
+        )).resolves.toEqual({ cleanupDelayMs: 25, maintenanceFailed: true });
 
         expect(calls).toEqual([
             "maintenance",
@@ -156,7 +163,18 @@ describe("submission replay boot maintenance", () => {
                 pendingSubmissionReceiptIds: () => ["attempt-pending"],
                 legacySubmissionReceiptCleanupDelayMs: () => 40,
             },
-        )).resolves.toBe(40);
+        )).resolves.toEqual({ cleanupDelayMs: 40, maintenanceFailed: false });
+    });
+
+    it("treats a resolved false legacy maintenance pass as a cleanup failure", async () => {
+        await expect(maintainAndFlushPendingSubmissionReceipts(
+            async () => 0,
+            {
+                migrateLegacySubmissionReceipts: async () => false,
+                pendingSubmissionReceiptIds: () => [],
+                legacySubmissionReceiptCleanupDelayMs: () => 0,
+            },
+        )).resolves.toEqual({ cleanupDelayMs: 0, maintenanceFailed: true });
     });
 
     it("still discovers and replays pending work if cleanup scheduling cannot be read", async () => {
@@ -171,8 +189,28 @@ describe("submission replay boot maintenance", () => {
                     throw new Error("bad clock");
                 },
             },
-        )).resolves.toBeNull();
+        )).resolves.toEqual({ cleanupDelayMs: null, maintenanceFailed: false });
 
         expect(flushPendingReceipts).toHaveBeenCalledOnce();
+    });
+
+    it("backs off overdue cleanup retries after maintenance failure without jitter", () => {
+        expect(cleanupFollowUpDelayMs(0, true, 1)).toBe(250);
+        expect(cleanupFollowUpDelayMs(0, true, 2)).toBe(500);
+        expect(cleanupFollowUpDelayMs(0, true, 3)).toBe(1_000);
+        expect(cleanupFollowUpDelayMs(0, true, 20)).toBe(30_000);
+        expect(cleanupFollowUpDelayMs(0, false, 0)).toBe(0);
+        expect(cleanupFollowUpDelayMs(125, true, 4)).toBe(125);
+        expect(cleanupFollowUpDelayMs(null, true, 4)).toBeNull();
+    });
+
+    it("recognizes legacy and replayable v2 keys but excludes maintenance metadata", () => {
+        expect(isSubmissionReceiptStorageKey("omr_student_submission_receipts_v1")).toBe(true);
+        expect(isSubmissionReceiptStorageKey(`${SUBMISSION_RECEIPT_ENTRY_PREFIX}attempt`)).toBe(true);
+        expect(isSubmissionReceiptStorageKey(`${SUBMISSION_RECEIPT_REQUEST_PREFIX}attempt`)).toBe(true);
+        expect(isSubmissionReceiptStorageKey(`${SUBMISSION_RECEIPT_ALIAS_PREFIX}attempt`)).toBe(true);
+        expect(isSubmissionReceiptStorageKey(SUBMISSION_RECEIPT_LEGACY_CLEANUP_CANDIDATE_KEY)).toBe(false);
+        expect(isSubmissionReceiptStorageKey(`${SUBMISSION_RECEIPT_QUARANTINE_PREFIX}attempt`)).toBe(false);
+        expect(isSubmissionReceiptStorageKey("omr_student_submission_receipts_v2_migrated")).toBe(false);
     });
 });
