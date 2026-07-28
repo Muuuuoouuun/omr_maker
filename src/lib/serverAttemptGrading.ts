@@ -1,6 +1,5 @@
 import {
     buildQuestionResults,
-    getEffectiveExamQuestionsForAttempt,
 } from "@/lib/premiumAnalytics";
 import type { StudentAttemptTicketClaims } from "@/lib/studentAttemptTicket";
 import type {
@@ -38,6 +37,7 @@ export type TeacherForcedAttemptGradeError =
     | "organization_mismatch"
     | "class_mismatch"
     | "invalid_finish_time"
+    | "invalid_retake_scope"
     | "no_allowed_questions"
     | "unexpected_question"
     | "invalid_answer";
@@ -230,11 +230,29 @@ export function gradeTeacherForcedAttemptOnServer(
         return { ok: false, error: "invalid_finish_time" };
     }
 
+    let activeQuestions = exam.questions;
+    if (attempt.retake) {
+        const questionIds = attempt.retake.questionIds;
+        const uniqueIds = new Set(questionIds);
+        const canonicalIds = new Set(exam.questions.map(question => question.id));
+        if (
+            questionIds.length === 0
+            || uniqueIds.size !== questionIds.length
+            || questionIds.some(questionId => !Number.isInteger(questionId) || !canonicalIds.has(questionId))
+        ) {
+            return { ok: false, error: "invalid_retake_scope" };
+        }
+        // Canonical exam order is the stable grading/result ordering policy.
+        activeQuestions = exam.questions.filter(question => uniqueIds.has(question.id));
+        if (activeQuestions.length !== questionIds.length) {
+            return { ok: false, error: "invalid_retake_scope" };
+        }
+    }
+
     // A response-loss retry must return the first canonical completion without
     // changing its timestamp or regrading against a later exam revision.
     if (attempt.status === "completed") return { ok: true, attempt };
 
-    const activeQuestions = getEffectiveExamQuestionsForAttempt(exam, attempt);
     if (activeQuestions.length === 0) return { ok: false, error: "no_allowed_questions" };
     const activeById = new Map(activeQuestions.map(question => [question.id, question]));
     for (const [rawQuestionId, rawAnswer] of Object.entries(attempt.answers || {})) {

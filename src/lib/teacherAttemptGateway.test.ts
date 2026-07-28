@@ -284,6 +284,7 @@ describe("teacher attempt gateway", () => {
             expect.objectContaining({
                 attempt_id: "attempt-1",
                 expected_answers: { 1: 2 },
+                expected_is_retake: false,
                 expected_exam_updated_at: canonicalExam.updatedAt,
                 score: 4,
                 total_score: 10,

@@ -190,4 +190,67 @@ describe("server attempt grading", () => {
             "2026-07-14T00:10:00.000Z",
         )).toEqual({ ok: false, error: "invalid_answer" });
     });
+
+    it.each([
+        { label: "all unknown", questionIds: [999] },
+        { label: "partially unknown", questionIds: [1, 999] },
+        { label: "duplicate", questionIds: [1, 1] },
+    ])("rejects a $label retake scope before force-finish grading", ({ questionIds }) => {
+        const retakeAttempt: Attempt = {
+            id: "attempt-retake-invalid",
+            examId: exam.id,
+            examTitle: exam.title,
+            organizationId: "org-1",
+            studentName: "학생",
+            startedAt: "2026-07-14T00:00:00.000Z",
+            finishedAt: "2026-07-14T00:00:00.000Z",
+            score: 0,
+            totalScore: 0,
+            answers: {},
+            status: "in_progress",
+            retake: {
+                sourceAttemptId: "attempt-source",
+                questionIds,
+                mode: "wrong",
+                createdAt: "2026-07-14T00:00:00.000Z",
+            },
+        };
+
+        expect(gradeTeacherForcedAttemptOnServer(
+            exam,
+            retakeAttempt,
+            "2026-07-14T00:10:00.000Z",
+        )).toEqual({ ok: false, error: "invalid_retake_scope" });
+    });
+
+    it("keeps canonical exam ordering for a valid retake scope", () => {
+        const retakeAttempt: Attempt = {
+            id: "attempt-retake-valid",
+            examId: exam.id,
+            examTitle: exam.title,
+            organizationId: "org-1",
+            studentName: "학생",
+            startedAt: "2026-07-14T00:00:00.000Z",
+            finishedAt: "2026-07-14T00:00:00.000Z",
+            score: 0,
+            totalScore: 0,
+            answers: { 1: 3, 2: 1 },
+            status: "in_progress",
+            retake: {
+                sourceAttemptId: "attempt-source",
+                questionIds: [2, 1],
+                mode: "wrong",
+                createdAt: "2026-07-14T00:00:00.000Z",
+            },
+        };
+
+        const result = gradeTeacherForcedAttemptOnServer(
+            exam,
+            retakeAttempt,
+            "2026-07-14T00:10:00.000Z",
+        );
+        expect(result.ok).toBe(true);
+        if (!result.ok) return;
+        expect(result.attempt.questionResults?.map(row => row.questionId)).toEqual([1, 2]);
+    });
 });

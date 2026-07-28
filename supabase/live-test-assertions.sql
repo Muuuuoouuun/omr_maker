@@ -876,6 +876,36 @@ begin
 end
 $$;
 
+update public.omr_class_teachers
+   set class_role = 'viewer'
+ where class_id = 'live-class-a'
+   and teacher_user_id = 'live-teacher-assigned';
+do $$
+begin
+    begin
+        perform public.omr_answer_attempt_question_v1(
+            'live-org-a',
+            'attempt_live-ticket-1',
+            '1',
+            'downgraded role',
+            'live-teacher-assigned',
+            'teacher',
+            '담당 교사'
+        );
+        raise exception 'role downgrade did not revoke teacher attempt mutation';
+    exception
+        when raise_exception then
+            if sqlerrm = 'role downgrade did not revoke teacher attempt mutation' then
+                raise;
+            end if;
+    end;
+end
+$$;
+update public.omr_class_teachers
+   set class_role = 'grader'
+ where class_id = 'live-class-a'
+   and teacher_user_id = 'live-teacher-assigned';
+
 select * from public.omr_set_subquestion_review_v1(
     'live-org-a',
     'attempt_live-ticket-1',
@@ -911,6 +941,7 @@ select * from public.omr_force_finish_attempts_v1(
     jsonb_build_array(jsonb_build_object(
         'attempt_id', 'attempt_live-ticket-1',
         'expected_answers', '{"1":2}'::jsonb,
+        'expected_is_retake', false,
         'expected_retake_question_ids', '[]'::jsonb,
         'expected_exam_updated_at', '2026-07-14T00:01:30.000Z',
         'score', 4,
@@ -1020,6 +1051,7 @@ begin
         jsonb_build_array(jsonb_build_object(
             'attempt_id', 'attempt_live-ticket-1',
             'expected_answers', '{"1":2}'::jsonb,
+            'expected_is_retake', false,
             'expected_retake_question_ids', '[]'::jsonb,
             'expected_exam_updated_at', '2026-07-14T00:01:30.000Z',
             'score', 0,

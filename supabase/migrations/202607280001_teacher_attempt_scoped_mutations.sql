@@ -26,15 +26,16 @@ begin
         return false;
     end if;
 
-    -- Hold the assignment through the enclosing mutation transaction so a
-    -- concurrent class revocation cannot race a service-role write.
+    -- Hold the exact assignment through the enclosing mutation transaction.
+    -- FOR UPDATE makes assignment revocation and class-role downgrade serialize
+    -- with authorization before the service-role mutation can proceed.
     perform 1
       from public.omr_class_teachers assignment
      where assignment.organization_id = trim(p_organization_id)
        and assignment.class_id = trim(p_class_id)
        and assignment.teacher_user_id = trim(p_actor_user_id)
        and assignment.class_role in ('lead', 'co_teacher', 'grader')
-     for key share;
+     for update;
     return found;
 end;
 $$;
@@ -271,8 +272,10 @@ set search_path = ''
 as $$
 declare
     v_attempt public.omr_attempts%rowtype;
+    v_exam public.omr_exams%rowtype;
     v_attempt_id text;
     v_exam_id text;
+    v_class_id text;
     v_expected_count integer;
     v_found_count integer;
     v_grading jsonb;
@@ -352,19 +355,24 @@ begin
     ) then
         raise exception 'attempt class scope mismatch';
     end if;
-    if exists (
-        select 1
-          from public.omr_attempts attempt
-         where attempt.id = any(p_attempt_ids)
-           and attempt.organization_id = trim(p_organization_id)
-           and not public.omr_teacher_attempt_write_allowed_v1(
-               p_organization_id,
-               p_actor_user_id,
-               p_member_role,
-               attempt.class_id
-           )
-    ) then
-        raise exception 'attempt class assignment denied';
+    if p_member_role in ('teacher', 'assistant') then
+        -- Assignment rows are locked in class-id order for overlapping batches.
+        for v_class_id in
+            select distinct attempt.class_id
+              from public.omr_attempts attempt
+             where attempt.id = any(p_attempt_ids)
+               and attempt.organization_id = trim(p_organization_id)
+             order by attempt.class_id
+        loop
+            if not public.omr_teacher_attempt_write_allowed_v1(
+                p_organization_id,
+                p_actor_user_id,
+                p_member_role,
+                v_class_id
+            ) then
+                raise exception 'attempt class assignment denied';
+            end if;
+        end loop;
     end if;
     if (
         select count(distinct grading.item ->> 'attempt_id')
@@ -376,6 +384,7 @@ begin
              where nullif(grading.item ->> 'attempt_id', '') is null
                 or not ((grading.item ->> 'attempt_id') = any(p_attempt_ids))
                 or jsonb_typeof(grading.item -> 'expected_answers') is distinct from 'object'
+                or jsonb_typeof(grading.item -> 'expected_is_retake') is distinct from 'boolean'
                 or jsonb_typeof(grading.item -> 'expected_retake_question_ids') is distinct from 'array'
                 or nullif(grading.item ->> 'expected_exam_updated_at', '') is null
                 or jsonb_typeof(grading.item -> 'score') is distinct from 'number'
@@ -408,18 +417,45 @@ begin
             raise exception 'finish time precedes attempt start';
         end if;
         if v_attempt.payload -> 'answers' is distinct from v_grading -> 'expected_answers'
+            or (v_attempt.payload ? 'retake') is distinct from (v_grading ->> 'expected_is_retake')::boolean
             or to_jsonb(v_attempt.retake_question_ids) is distinct from v_grading -> 'expected_retake_question_ids'
         then
             raise exception 'stale canonical attempt grading';
         end if;
-        if not exists (
-            select 1
-              from public.omr_exams exam
-             where exam.id = v_attempt.exam_id
-               and exam.organization_id = trim(p_organization_id)
-               and exam.updated_at = (v_grading ->> 'expected_exam_updated_at')::timestamptz
-        ) then
+        select exam.*
+          into v_exam
+          from public.omr_exams exam
+         where exam.id = v_attempt.exam_id
+           and exam.organization_id = trim(p_organization_id)
+           and exam.updated_at = (v_grading ->> 'expected_exam_updated_at')::timestamptz;
+        if not found then
             raise exception 'stale canonical exam grading';
+        end if;
+        if (v_grading ->> 'expected_is_retake')::boolean then
+            if jsonb_array_length(v_grading -> 'expected_retake_question_ids') = 0
+                or exists (
+                    select 1
+                      from jsonb_array_elements(v_grading -> 'expected_retake_question_ids') scope(item)
+                     where jsonb_typeof(scope.item) is distinct from 'number'
+                )
+                or (
+                    select count(distinct scope.item)
+                      from jsonb_array_elements(v_grading -> 'expected_retake_question_ids') scope(item)
+                ) is distinct from jsonb_array_length(v_grading -> 'expected_retake_question_ids')
+                or jsonb_typeof(v_exam.payload -> 'questions') is distinct from 'array'
+                or (
+                    select count(*)
+                      from jsonb_to_recordset(v_exam.payload -> 'questions') question(id integer)
+                     where question.id in (
+                         select (scope.item #>> '{}')::integer
+                           from jsonb_array_elements(v_grading -> 'expected_retake_question_ids') scope(item)
+                     )
+                ) is distinct from jsonb_array_length(v_grading -> 'expected_retake_question_ids')
+            then
+                raise exception 'invalid canonical retake scope';
+            end if;
+        elsif jsonb_array_length(v_grading -> 'expected_retake_question_ids') <> 0 then
+            raise exception 'invalid canonical retake scope';
         end if;
 
         v_score := (v_grading ->> 'score')::numeric;

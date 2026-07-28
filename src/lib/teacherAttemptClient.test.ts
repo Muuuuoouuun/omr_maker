@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Attempt } from "@/types/omr";
 
 const actionMocks = vi.hoisted(() => ({
@@ -27,6 +27,7 @@ vi.mock("@/lib/omrPersistence", () => persistenceMocks);
 
 import {
     answerTeacherAttemptQuestion,
+    forceFinishTeacherAttempts,
     setTeacherAttemptSubquestionReview,
 } from "./teacherAttemptClient";
 
@@ -76,8 +77,14 @@ const baseAttempt: Attempt = {
     },
 };
 
-afterEach(() => {
+beforeEach(() => {
     vi.clearAllMocks();
+    persistenceMocks.saveLocalAttempt.mockResolvedValue(true);
+    persistenceMocks.readLocalAttempts.mockReturnValue([]);
+    vi.stubGlobal("navigator", { locks: serialWebLocks() });
+});
+
+afterEach(() => {
     vi.unstubAllGlobals();
 });
 
@@ -93,8 +100,6 @@ describe("teacher attempt mutation serialization", () => {
         }>();
         actionMocks.answer.mockReturnValue(first.promise);
         actionMocks.review.mockReturnValue(second.promise);
-        vi.stubGlobal("navigator", { locks: serialWebLocks() });
-
         const answered = {
             ...baseAttempt,
             studentQuestions: [{
@@ -131,5 +136,83 @@ describe("teacher attempt mutation serialization", () => {
             answered,
             reviewed,
         ]);
+    });
+
+    it("keeps answer remote success when the local cache lock rejects", async () => {
+        const canonical = {
+            ...baseAttempt,
+            studentQuestions: [{
+                ...baseAttempt.studentQuestions![0],
+                status: "answered" as const,
+                answer: { body: "서버 답변", createdAt: "2026-07-14T00:02:00.000Z", teacherName: "서버 교사" },
+            }],
+        };
+        actionMocks.answer.mockResolvedValue({ status: "saved", attempt: canonical });
+        persistenceMocks.saveLocalAttempt.mockRejectedValueOnce(new Error("cache lock denied"));
+
+        await expect(answerTeacherAttemptQuestion(baseAttempt, 1, "서버 답변")).resolves.toMatchObject({
+            remoteSaved: true,
+            localCacheSaved: false,
+            localSaved: false,
+            cacheWarning: "cache lock denied",
+            attempt: canonical,
+        });
+        expect(actionMocks.answer).toHaveBeenCalledTimes(1);
+    });
+
+    it("keeps review remote success when the local cache lock rejects", async () => {
+        const canonical = {
+            ...baseAttempt,
+            subQuestionAnswers: {
+                1: {
+                    reason: {
+                        ...baseAttempt.subQuestionAnswers![1].reason,
+                        reviewStatus: "reviewed" as const,
+                        reviewedBy: "서버 교사",
+                    },
+                },
+            },
+        };
+        actionMocks.review.mockResolvedValue({ status: "saved", attempt: canonical });
+        persistenceMocks.saveLocalAttempt.mockRejectedValueOnce(new Error("cache lock denied"));
+
+        await expect(setTeacherAttemptSubquestionReview(
+            baseAttempt,
+            1,
+            "reason",
+            "reviewed",
+        )).resolves.toMatchObject({
+            remoteSaved: true,
+            localCacheSaved: false,
+            localSaved: false,
+            cacheWarning: "cache lock denied",
+            attempt: canonical,
+        });
+        expect(actionMocks.review).toHaveBeenCalledTimes(1);
+    });
+
+    it("uses all-settled cache writes after a successful remote force-finish batch", async () => {
+        const second = { ...baseAttempt, id: "attempt-queue-2" };
+        const completed = [
+            { ...baseAttempt, status: "completed" as const },
+            { ...second, status: "completed" as const },
+        ];
+        actionMocks.finish.mockResolvedValue({ status: "saved", attempts: completed });
+        persistenceMocks.saveLocalAttempt
+            .mockRejectedValueOnce(new Error("first cache lock denied"))
+            .mockResolvedValueOnce(true);
+
+        await expect(forceFinishTeacherAttempts(
+            [baseAttempt, second],
+            "2026-07-14T00:10:00.000Z",
+        )).resolves.toMatchObject({
+            remoteSaved: true,
+            localCacheSaved: false,
+            localSaved: false,
+            cacheWarning: "first cache lock denied",
+            attempts: completed,
+        });
+        expect(persistenceMocks.saveLocalAttempt).toHaveBeenCalledTimes(2);
+        expect(actionMocks.finish).toHaveBeenCalledTimes(1);
     });
 });

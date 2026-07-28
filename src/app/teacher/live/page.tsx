@@ -500,6 +500,14 @@ export default function LiveResultsPage() {
             setTimerSeconds(0);
             setIsPaused(true);
             setForceFinishConfirmOpen(false);
+            if ("cacheWarning" in result && typeof result.cacheWarning === "string" && result.cacheWarning) {
+                toast.info(
+                    "서버 종료 완료 · 캐시 새로고침 필요",
+                    `${result.cacheWarning}. 서버의 완료 결과를 다시 불러옵니다.`,
+                );
+                void refreshFromStorage();
+                return;
+            }
             toast.success(
                 "응시 종료 처리됨",
                 `${result.attempts.length}건을 완료 제출로 저장했습니다.${result.remoteSaved ? "" : " 개발 모드에서 이 기기에 저장했습니다."}`

@@ -249,6 +249,7 @@ export async function forceFinishTeacherAttemptsWithGateway(
         gradingByAttemptId.set(stored.attempt.id, {
             attempt_id: stored.attempt.id,
             expected_answers: stored.attempt.answers || {},
+            expected_is_retake: !!stored.attempt.retake,
             expected_retake_question_ids: stored.attempt.retake?.questionIds || [],
             expected_exam_updated_at: canonicalExam.updatedAt,
             score: graded.attempt.score,

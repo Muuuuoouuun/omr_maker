@@ -539,7 +539,11 @@ export default function TeacherAttemptPage() {
                 throw new Error(result.remoteError || '심화 응답 검토 상태를 저장하지 못했습니다.');
             }
             setAttempt(result.attempt);
-            if (!result.remoteSaved) toast.info('로컬 저장됨', '개발 모드에서 이 기기에 검토 상태를 저장했습니다.');
+            if ("cacheWarning" in result && typeof result.cacheWarning === "string" && result.cacheWarning) {
+                toast.info('서버 저장됨 · 캐시 새로고침 필요', result.cacheWarning);
+            } else if (!result.remoteSaved) {
+                toast.info('로컬 저장됨', '개발 모드에서 이 기기에 검토 상태를 저장했습니다.');
+            }
         } catch {
             if (activeAttemptIdRef.current === targetAttemptId) {
                 toast.error('검토 상태 저장 실패', '네트워크 상태를 확인하고 다시 시도해 주세요.');
@@ -566,7 +570,9 @@ export default function TeacherAttemptPage() {
             }
             setAttempt(result.attempt);
             setAnswerDrafts(prev => ({ ...prev, [questionId]: "" }));
-            if (result.remoteSaved) {
+            if ("cacheWarning" in result && typeof result.cacheWarning === "string" && result.cacheWarning) {
+                toast.info("서버 답변 저장됨 · 캐시 새로고침 필요", result.cacheWarning);
+            } else if (result.remoteSaved) {
                 toast.success("답변 전송됨", "학생 리뷰 화면에서 답변을 볼 수 있습니다.");
             } else {
                 toast.info("답변 저장됨", "서버 동기화는 다음 접속 때 재시도됩니다.");

@@ -84,6 +84,35 @@ async function withTeacherAttemptMutationLocks<T>(
     return acquire(0);
 }
 
+interface LocalCacheWriteResult {
+    localCacheSaved: boolean;
+    cacheWarning?: string;
+}
+
+async function cacheCanonicalAttempt(attempt: Attempt): Promise<LocalCacheWriteResult> {
+    try {
+        const saved = await saveLocalAttempt(attempt);
+        return saved
+            ? { localCacheSaved: true }
+            : { localCacheSaved: false, cacheWarning: "Canonical response could not be cached" };
+    } catch (error) {
+        return { localCacheSaved: false, cacheWarning: mutationLockError(error) };
+    }
+}
+
+async function cacheCanonicalAttempts(attempts: Attempt[]): Promise<LocalCacheWriteResult> {
+    const writes = await Promise.allSettled(attempts.map(saveLocalAttempt));
+    const failure = writes.find(result => result.status === "rejected")
+        || writes.find(result => result.status === "fulfilled" && !result.value);
+    if (!failure) return { localCacheSaved: true };
+    return {
+        localCacheSaved: false,
+        cacheWarning: failure.status === "rejected"
+            ? mutationLockError(failure.reason)
+            : "Canonical response could not be cached",
+    };
+}
+
 export async function answerTeacherAttemptQuestion(
     attempt: Attempt,
     questionId: number,
@@ -93,8 +122,10 @@ export async function answerTeacherAttemptQuestion(
         return await withTeacherAttemptMutationLocks([attempt.id], async () => {
             const result = await answerTeacherCanonicalAttemptQuestion(attempt.id, questionId, answer);
             if (result.status === "saved") {
+                const cache = await cacheCanonicalAttempt(result.attempt);
                 return {
-                    localSaved: await saveLocalAttempt(result.attempt),
+                    localSaved: cache.localCacheSaved,
+                    ...cache,
                     remoteSaved: true,
                     attempt: result.attempt,
                 };
@@ -141,8 +172,10 @@ export async function setTeacherAttemptSubquestionReview(
                 status,
             );
             if (result.status === "saved") {
+                const cache = await cacheCanonicalAttempt(result.attempt);
                 return {
-                    localSaved: await saveLocalAttempt(result.attempt),
+                    localSaved: cache.localCacheSaved,
+                    ...cache,
                     remoteSaved: true,
                     attempt: result.attempt,
                 };
@@ -200,9 +233,10 @@ export async function forceFinishTeacherAttempts(
                 finishedAt,
             );
             if (result.status === "saved") {
-                const localResults = await Promise.all(result.attempts.map(saveLocalAttempt));
+                const cache = await cacheCanonicalAttempts(result.attempts);
                 return {
-                    localSaved: localResults.every(Boolean),
+                    localSaved: cache.localCacheSaved,
+                    ...cache,
                     remoteSaved: true,
                     attempts: result.attempts,
                 };

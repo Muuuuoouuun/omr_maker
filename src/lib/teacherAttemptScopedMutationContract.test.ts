@@ -36,7 +36,15 @@ describe("teacher attempt scoped mutation contract", () => {
         expect(sql).toContain("omr_question_results");
         expect(sql).toContain("expected_answers");
         expect(sql).toContain("expected_exam_updated_at");
+        expect(sql).toContain("expected_is_retake");
+        expect(sql).toContain("invalid canonical retake scope");
+        expect(sql).toContain("for update");
+        expect(sql).not.toContain("for key share");
+        expect(sql).toContain("assignment revocation");
         expect(sql).not.toContain("student_id =");
+
+        const live = source("supabase/live-test-assertions.sql").toLowerCase();
+        expect(live).toContain("role downgrade did not revoke teacher attempt mutation");
     });
 
     it("authorizes same-origin signed teacher write roles before creating the admin client", () => {
@@ -93,5 +101,14 @@ describe("teacher attempt scoped mutation contract", () => {
         expect(failureBranch).not.toContain("setTimerSeconds");
         expect(failureBranch).not.toContain("setIsPaused");
         expect(failureBranch).not.toContain("setForceFinishConfirmOpen");
+    });
+
+    it("treats remote force-finish success with a cache warning as canonical success", () => {
+        const live = source("src/app/teacher/live/page.tsx");
+        expect(live).toContain("result.cacheWarning");
+        expect(live).toContain("캐시 새로고침");
+        expect(live.indexOf("result.cacheWarning")).toBeGreaterThan(
+            live.indexOf("setForceFinishConfirmOpen(false)"),
+        );
     });
 });
