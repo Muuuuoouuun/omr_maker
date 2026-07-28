@@ -8,6 +8,19 @@ function readProjectFile(filePath: string): string {
     return readFileSync(path.join(rootDir, filePath), "utf8");
 }
 
+function expectEnvOverridesAfterInherited(envSource: string, overrideKeys: readonly string[]): number {
+    const inheritedEnvIndex = envSource.indexOf("...process.env");
+    expect(inheritedEnvIndex, "webServer.env must inherit process.env before applying test overrides").toBeGreaterThanOrEqual(0);
+    for (const key of overrideKeys) {
+        const overrideIndex = envSource.indexOf(`${key}: ""`);
+        expect(
+            overrideIndex,
+            `${key} must be explicitly cleared after ...process.env`,
+        ).toBeGreaterThan(inheritedEnvIndex);
+    }
+    return inheritedEnvIndex;
+}
+
 describe("service UI surface", () => {
     it("keeps premium scrollbars on the app, PDF viewer, and dense panels", () => {
         const css = readProjectFile("src/app/globals.css");
@@ -447,16 +460,22 @@ describe("service UI surface", () => {
         )?.[1];
 
         expect(webServerEnv).toBeDefined();
-        const inheritedEnvIndex = webServerEnv?.indexOf("...process.env") ?? -1;
-        expect(inheritedEnvIndex).toBeGreaterThanOrEqual(0);
+        const supabaseOverrideKeys = [
+            "NEXT_PUBLIC_SUPABASE_URL",
+            "NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY",
+            "NEXT_PUBLIC_SUPABASE_ANON_KEY",
+            "SUPABASE_URL",
+            "SUPABASE_SERVICE_ROLE_KEY",
+            "OMR_SUPABASE_SERVICE_ROLE_KEY",
+        ] as const;
+        const reorderedFixture = 'NEXT_PUBLIC_SUPABASE_URL: "",\n...process.env,';
+        expect(() => expectEnvOverridesAfterInherited(
+            reorderedFixture,
+            ["NEXT_PUBLIC_SUPABASE_URL"],
+        )).toThrow("NEXT_PUBLIC_SUPABASE_URL must be explicitly cleared after ...process.env");
+        const inheritedEnvIndex = expectEnvOverridesAfterInherited(webServerEnv || "", supabaseOverrideKeys);
         expect(webServerEnv?.indexOf('OMR_PLAN_DEV_SIMULATION: "1"')).toBeGreaterThan(inheritedEnvIndex);
         expect(webServerEnv?.indexOf('OMR_DEV_PLAN: "free"')).toBeGreaterThan(inheritedEnvIndex);
-        expect(webServerEnv).toContain('NEXT_PUBLIC_SUPABASE_URL: ""');
-        expect(webServerEnv).toContain('NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY: ""');
-        expect(webServerEnv).toContain('NEXT_PUBLIC_SUPABASE_ANON_KEY: ""');
-        expect(webServerEnv).toContain('SUPABASE_URL: ""');
-        expect(webServerEnv).toContain('SUPABASE_SERVICE_ROLE_KEY: ""');
-        expect(webServerEnv).toContain('OMR_SUPABASE_SERVICE_ROLE_KEY: ""');
     });
 
     it("keeps installed phone and tablet app shells inside safe areas", () => {
