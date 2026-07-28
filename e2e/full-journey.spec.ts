@@ -194,6 +194,49 @@ async function ensureAnswerPaneVisible(page: Page) {
     })).toBeVisible();
 }
 
+async function setAwayTestClock(page: Page, nowMs: number) {
+    await page.evaluate((now) => {
+        Date.now = () => now;
+    }, nowMs);
+}
+
+async function setAwayTestVisibility(page: Page, state: "hidden" | "visible") {
+    await page.evaluate((visibilityState) => {
+        Object.defineProperty(document, "visibilityState", {
+            configurable: true,
+            value: visibilityState,
+        });
+        Object.defineProperty(document, "hidden", {
+            configurable: true,
+            value: visibilityState === "hidden",
+        });
+    }, state);
+}
+
+async function beginAwayWithBrowserSignals(page: Page, nowMs: number) {
+    await setAwayTestClock(page, nowMs);
+    await setAwayTestVisibility(page, "hidden");
+    await page.evaluate(() => {
+        window.dispatchEvent(new Event("blur"));
+        document.dispatchEvent(new Event("visibilitychange"));
+    });
+}
+
+async function finishAwayWithBrowserSignals(page: Page, nowMs: number) {
+    await setAwayTestClock(page, nowMs);
+    await setAwayTestVisibility(page, "visible");
+    await page.evaluate(() => {
+        document.dispatchEvent(new Event("visibilitychange"));
+        window.dispatchEvent(new Event("focus"));
+    });
+}
+
+async function readAwayCount(page: Page): Promise<number> {
+    const value = await page.locator(".solve-page").getAttribute("data-away-count");
+    if (value === null) throw new Error("Solve page did not expose its current away count");
+    return Number(value);
+}
+
 async function seedExamAndStudent(page: Page) {
     await page.evaluate((seed) => {
         const now = new Date().toISOString();
@@ -587,6 +630,57 @@ test.describe("Teacher and student full journey", () => {
         await page.getByRole("tab", { name: "학생·반" }).click();
         await expect(page.getByText("학생별 점수 및 성취도")).toBeVisible();
         await expect(page.getByRole("row", { name: new RegExp(`${TEST_STUDENT_NAME}.*20점`) })).toBeVisible();
+    });
+
+    test("debounces and deduplicates one away session, including the submission flush", async ({ page }) => {
+        await seedExamAndStudent(page);
+        await page.goto(`/solve/${TEST_EXAM_ID}`);
+        await ensureAnswerPaneVisible(page);
+
+        await beginAwayWithBrowserSignals(page, 10_000);
+        await finishAwayWithBrowserSignals(page, 11_900);
+        expect(await readAwayCount(page)).toBe(0);
+        await expect(page.getByRole("dialog", { name: "시험 화면 이탈 안내" })).toHaveCount(0);
+
+        await beginAwayWithBrowserSignals(page, 20_000);
+        await finishAwayWithBrowserSignals(page, 22_000);
+        expect(await readAwayCount(page)).toBe(1);
+        const awayDialog = page.getByRole("dialog", { name: "시험 화면 이탈 안내" });
+        await expect(awayDialog).toContainText(
+            "시험 화면을 벗어난 기록이 제출 기록과 함께 선생님 화면에 표시됩니다.",
+        );
+        await awayDialog.getByRole("button", { name: "시험으로 돌아가기" }).click();
+
+        await beginAwayWithBrowserSignals(page, 30_000);
+        await finishAwayWithBrowserSignals(page, 32_000);
+        expect(await readAwayCount(page)).toBe(2);
+        await expect(awayDialog).toContainText(
+            "시험 화면 이탈이 2회 기록되었습니다. 답안을 확인한 뒤 계속 진행해 주세요.",
+        );
+        await awayDialog.getByRole("button", { name: "시험으로 돌아가기" }).click();
+
+        await beginAwayWithBrowserSignals(page, 40_000);
+        await setAwayTestClock(page, 42_000);
+        await page.locator(".solve-submit-button").click();
+        const confirmDialog = page.getByRole("dialog", { name: "답안 제출" });
+        await expect(confirmDialog).toBeVisible();
+        await confirmDialog.getByRole("button", { name: "제출하기" }).click();
+
+        await expect(page).toHaveURL(/\/student\/review\/[^/?#]+$/, { timeout: 15_000 });
+        const storedAttempt = await page.evaluate(() => {
+            const attempts = JSON.parse(window.localStorage.getItem("omr_attempts") || "[]");
+            return attempts[0];
+        });
+        expect(storedAttempt.tabFociLostCount).toBe(3);
+        expect(storedAttempt.focusLossEvents).toHaveLength(3);
+        expect(storedAttempt.focusLossEvents.map((event: { count: number }) => event.count)).toEqual([1, 2, 3]);
+
+        await finishAwayWithBrowserSignals(page, 42_100);
+        const countAfterReturnSignals = await page.evaluate(() => {
+            const attempts = JSON.parse(window.localStorage.getItem("omr_attempts") || "[]");
+            return attempts[0]?.tabFociLostCount;
+        });
+        expect(countAfterReturnSignals).toBe(3);
     });
 
     test("skips the entry dialog and scopes questions when re-entering a retake from the student's own review", async ({ page }) => {
