@@ -327,6 +327,37 @@ describe("Supabase persistence mapping", () => {
             .toBe("2026-07-28T03:00:00.000Z");
     });
 
+    it("preserves server-confirmation provenance across same-id server refreshes", async () => {
+        const localStorage = createStorage();
+        vi.stubGlobal("window", { localStorage });
+        vi.stubGlobal("localStorage", localStorage);
+
+        expect(await saveLocalServerConfirmedAttempt(
+            attempt,
+            "2026-07-28T02:00:00.000Z",
+        )).toBe(true);
+        expect(await saveLocalAttempts([{ ...attempt, score: 9 }])).toBe(true);
+        expect(readLocalAttempts()[0]).toMatchObject({
+            score: 9,
+            localSubmissionProvenance: {
+                source: "server",
+                confirmedAt: "2026-07-28T02:00:00.000Z",
+            },
+        });
+
+        expect(await saveLocalAttempts([{
+            ...attempt,
+            localSubmissionProvenance: {
+                source: "server",
+                confirmedAt: "2026-07-28T04:00:00.000Z",
+            },
+        }])).toBe(true);
+        expect(readLocalAttempts()[0]?.localSubmissionProvenance?.confirmedAt)
+            .toBe("2026-07-28T04:00:00.000Z");
+        expect(attemptToSupabaseRow(readLocalAttempts()[0]).payload)
+            .not.toHaveProperty("localSubmissionProvenance");
+    });
+
     it("preserves teacher sub-question review status in indexed payload roundtrips", () => {
         const reviewedAttempt: Attempt = {
             ...attempt,

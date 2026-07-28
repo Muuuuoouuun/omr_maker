@@ -839,6 +839,15 @@ function sanitizeAnswers(value: unknown): Record<number, number> {
     return answers;
 }
 
+function sanitizeLocalSubmissionProvenance(
+    value: unknown,
+): Attempt["localSubmissionProvenance"] | undefined {
+    if (!isRecord(value) || value.source !== "server") return undefined;
+    const confirmedAt = stringValue(value.confirmedAt);
+    if (!confirmedAt || !Number.isFinite(Date.parse(confirmedAt))) return undefined;
+    return { source: "server", confirmedAt };
+}
+
 export function sanitizeAttemptPayload(value: unknown): Attempt | null {
     if (!isRecord(value)) return null;
     const id = stringValue(value.id);
@@ -900,6 +909,7 @@ export function sanitizeAttemptPayload(value: unknown): Attempt | null {
         questionTimings,
         questionDrawings,
         status,
+        localSubmissionProvenance: sanitizeLocalSubmissionProvenance(value.localSubmissionProvenance),
     } as Attempt;
 }
 
@@ -1358,6 +1368,37 @@ export async function replaceLocalAttemptWithCanonical(
     };
 }
 
+/**
+ * Keeps the canonical attempt replacement and its dependent durable commit in
+ * one attempt-index critical section. The commit callback may acquire the
+ * submission-receipts lock; callers must preserve that fixed lock order.
+ * A failed dependent commit is rolled back before the attempt lock is released.
+ */
+export async function replaceLocalAttemptWithCanonicalTransaction(
+    previousAttemptId: string,
+    authoritativeAttempt: Attempt,
+    commit: (replacement: LocalAttemptReplacement) => boolean | Promise<boolean>,
+): Promise<LocalAttemptReplacement> {
+    const replacement = await withBrowserStorageLock("attempt-index", async () => {
+        const current = replaceLocalAttemptWithCanonicalUnlocked(previousAttemptId, authoritativeAttempt);
+        if (!current.committed) return current;
+        try {
+            if (await commit(current)) return current;
+        } catch {
+            // The dependent durable write owns restoration of its own keys.
+        }
+        current.rollback();
+        return {
+            committed: false,
+            rollback: () => false,
+        } satisfies LocalAttemptReplacement;
+    });
+    return {
+        ...replacement,
+        rollback: () => withBrowserStorageLock("attempt-index", replacement.rollback),
+    };
+}
+
 /** Merge a batch into the local attempt index with one read and one write. */
 function saveLocalAttemptsUnlocked(attempts: Attempt[]): boolean {
     if (!hasBrowserStorage()) return false;
@@ -1365,7 +1406,13 @@ function saveLocalAttemptsUnlocked(attempts: Attempt[]): boolean {
     try {
         const nextById = new Map(readLocalAttempts().map(attempt => [attempt.id, attempt]));
         for (const attempt of attempts) {
-            nextById.set(attempt.id, stripHeavyAttemptPayload(attempt));
+            const existing = nextById.get(attempt.id);
+            const incomingProvenance = sanitizeLocalSubmissionProvenance(attempt.localSubmissionProvenance);
+            const existingProvenance = sanitizeLocalSubmissionProvenance(existing?.localSubmissionProvenance);
+            nextById.set(attempt.id, {
+                ...stripHeavyAttemptPayload(attempt),
+                localSubmissionProvenance: incomingProvenance || existingProvenance,
+            });
         }
         const next = sortByNewestActivity([...nextById.values()]);
         window.localStorage.setItem(ATTEMPTS_KEY, JSON.stringify(next));

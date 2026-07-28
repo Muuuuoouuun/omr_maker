@@ -106,6 +106,44 @@ describe("student official attempt read surface", () => {
         expect(teacherClient).toContain("await saveLocalAttempts(result.attempts)");
     });
 
+    it("keeps synchronous receipt reads writer-free and reconciliation locks in fixed order", () => {
+        const receipts = source("src/lib/studentAttemptReceipt.ts");
+        const syncReads = [
+            receipts.slice(
+                receipts.indexOf("export function readSubmissionReceipt"),
+                receipts.indexOf("export function readReconciledSubmissionAttemptId"),
+            ),
+            receipts.slice(
+                receipts.indexOf("export function readReconciledSubmissionAttemptId"),
+                receipts.indexOf("function queuePendingSubmissionReceiptUnlocked"),
+            ),
+            receipts.slice(
+                receipts.indexOf("export function pendingSubmissionReceiptIds"),
+                receipts.indexOf("function readStudentSessionGeneration"),
+            ),
+        ].join("\n");
+        expect(syncReads).toContain("{ quarantine: false }");
+        expect(syncReads).not.toContain("migrateLegacyRegistryUnlocked");
+        expect(syncReads).not.toContain("quarantineCorruptValue");
+        expect(syncReads).not.toContain(".setItem(");
+        expect(syncReads).not.toContain(".removeItem(");
+
+        const persistence = source("src/lib/omrPersistence.ts");
+        const transaction = persistence.slice(
+            persistence.indexOf("export async function replaceLocalAttemptWithCanonicalTransaction"),
+            persistence.indexOf("/** Merge a batch into the local attempt index"),
+        );
+        expect(transaction).toContain('withBrowserStorageLock("attempt-index"');
+        expect(transaction.indexOf("await commit(current)")).toBeLessThan(transaction.indexOf("current.rollback()"));
+
+        const reconciliation = receipts.slice(
+            receipts.indexOf("async function persistConfirmedReconciliationUnderAttemptLock"),
+            receipts.indexOf("export function retryPendingSubmissionReceipt"),
+        );
+        expect(reconciliation).toContain('withBrowserStorageLock("submission-receipts"');
+        expect(reconciliation).not.toContain('withBrowserStorageLock("attempt-index"');
+    });
+
     it("resets the solve submission gate when local attempt locking fails", () => {
         const solve = source("src/app/solve/[id]/page.tsx");
         const review = source("src/app/student/review/[attemptId]/page.tsx");

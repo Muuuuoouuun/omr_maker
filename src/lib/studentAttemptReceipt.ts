@@ -4,7 +4,7 @@ import type { Attempt, IdentityType, QuestionResult } from "@/types/omr";
 import { STUDENT_SESSION_GENERATION_KEY } from "@/utils/storage";
 import {
     hasLocalServerConfirmation,
-    replaceLocalAttemptWithCanonical,
+    replaceLocalAttemptWithCanonicalTransaction,
     withLocalAttemptServerConfirmationLock,
 } from "@/lib/omrPersistence";
 import { withBrowserStorageLock } from "@/lib/browserStorageLock";
@@ -56,12 +56,6 @@ export type SubmissionRetryResult =
     | { status: "pending"; error: string; requiresPin?: boolean }
     | { status: "local_only"; receipt: SubmissionReceipt; error: string }
     | { status: "missing"; error: string };
-
-export interface AuthoritativeAttemptCacheTransaction {
-    committed: boolean;
-    attempt?: Attempt;
-    rollback?: () => boolean | Promise<boolean>;
-}
 
 export const SUBMISSION_RECEIPT_KEY = "omr_student_submission_receipts_v1";
 export const SUBMISSION_RECEIPT_ENTRY_PREFIX = "omr_student_submission_receipt_v2:";
@@ -257,7 +251,11 @@ function isPendingSubmissionRequest(
         && (request.requiresPin === undefined || request.requiresPin === true);
 }
 
-function parseReceiptEnvelope(storage: Storage, id: string): ReceiptEnvelope | null {
+function parseReceiptEnvelope(
+    storage: Storage,
+    id: string,
+    options: { quarantine?: boolean } = {},
+): ReceiptEnvelope | null {
     const key = receiptKey(id);
     const raw = storage.getItem(key);
     if (!raw) return null;
@@ -267,12 +265,16 @@ function parseReceiptEnvelope(storage: Storage, id: string): ReceiptEnvelope | n
         if (parsed.version !== 2 || !Number.isInteger(parsed.revision) || !receipt) throw new Error("invalid");
         return { version: 2, revision: parsed.revision!, receipt };
     } catch {
-        quarantineCorruptValue(storage, key, raw);
+        if (options.quarantine !== false) quarantineCorruptValue(storage, key, raw);
         return null;
     }
 }
 
-function parseRequestEnvelope(storage: Storage, id: string): RequestEnvelope | null {
+function parseRequestEnvelope(
+    storage: Storage,
+    id: string,
+    options: { quarantine?: boolean } = {},
+): RequestEnvelope | null {
     const key = requestKey(id);
     const raw = storage.getItem(key);
     if (!raw) return null;
@@ -292,7 +294,7 @@ function parseRequestEnvelope(storage: Storage, id: string): RequestEnvelope | n
             },
         };
     } catch {
-        quarantineCorruptValue(storage, key, raw);
+        if (options.quarantine !== false) quarantineCorruptValue(storage, key, raw);
         return null;
     }
 }
@@ -331,60 +333,90 @@ function writeAliasEnvelope(storage: Storage, previousAttemptId: string, canonic
     storage.setItem(aliasKey(previousAttemptId), JSON.stringify(envelope));
 }
 
-function migrateLegacyRegistry(storage: Storage): void {
+interface LegacyRegistry {
+    receipts?: Record<string, unknown>;
+    requests?: Record<string, unknown>;
+    reconciliations?: Record<string, unknown>;
+}
+
+function parseLegacyRegistry(
+    storage: Storage,
+    options: { quarantine?: boolean } = {},
+): { raw: string; registry: LegacyRegistry } | null {
     const raw = storage.getItem(SUBMISSION_RECEIPT_KEY);
-    if (!raw) {
-        if (storage.getItem(MIGRATION_MARKER_KEY) === "1") return;
-        try { storage.setItem(MIGRATION_MARKER_KEY, "1"); } catch {}
-        return;
-    }
-    let parsed: {
-        receipts?: Record<string, unknown>;
-        requests?: Record<string, unknown>;
-        reconciliations?: Record<string, unknown>;
-    };
+    if (!raw) return null;
     try {
-        parsed = JSON.parse(raw) as {
-            receipts?: Record<string, unknown>;
-            requests?: Record<string, unknown>;
-            reconciliations?: Record<string, unknown>;
-        };
+        const parsed = JSON.parse(raw) as unknown;
+        if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error("invalid");
+        return { raw, registry: parsed as LegacyRegistry };
     } catch {
-        quarantineCorruptValue(storage, SUBMISSION_RECEIPT_KEY, raw);
+        if (options.quarantine !== false) {
+            quarantineCorruptValue(storage, SUBMISSION_RECEIPT_KEY, raw);
+        }
+        return null;
+    }
+}
+
+function migrateLegacyRegistryUnlocked(storage: Storage): boolean {
+    const legacy = parseLegacyRegistry(storage);
+    if (!legacy) {
+        maintainV2Registry(storage);
         try { storage.setItem(MIGRATION_MARKER_KEY, "1"); } catch {}
-        return;
+        return true;
     }
     try {
-        for (const [id, value] of Object.entries(parsed.receipts || {})) {
+        for (const [id, value] of Object.entries(legacy.registry.receipts || {})) {
             const receipt = sanitizeReceipt(id, value);
             if (receipt && !storage.getItem(receiptKey(id))) {
                 writeReceiptEnvelope(storage, receipt);
             }
         }
-        for (const [id, value] of Object.entries(parsed.requests || {})) {
+        for (const [id, value] of Object.entries(legacy.registry.requests || {})) {
             if (!isPendingSubmissionRequest(id, value)) continue;
             const legacy = value as PendingSignedSessionSubmission & { pin?: unknown };
-            writeRequestEnvelope(storage, {
-                attemptId: id,
-                input: legacy.input,
-                ...((legacy.requiresPin || typeof legacy.pin === "string") ? { requiresPin: true } : {}),
-            });
+            if (!storage.getItem(requestKey(id))) {
+                writeRequestEnvelope(storage, {
+                    attemptId: id,
+                    input: legacy.input,
+                    ...((legacy.requiresPin || typeof legacy.pin === "string") ? { requiresPin: true } : {}),
+                });
+            }
         }
-        for (const [previousId, canonicalId] of Object.entries(parsed.reconciliations || {})) {
-            if (previousId && typeof canonicalId === "string" && canonicalId && canonicalId !== previousId) {
+        for (const [previousId, canonicalId] of Object.entries(legacy.registry.reconciliations || {})) {
+            if (
+                previousId
+                && typeof canonicalId === "string"
+                && canonicalId
+                && canonicalId !== previousId
+                && !storage.getItem(aliasKey(previousId))
+            ) {
                 writeAliasEnvelope(storage, previousId, canonicalId);
             }
         }
         // Legacy confirmed receipts may predate durable local provenance.
         // Keep a bounded recovery window while all newly written confirmed
         // receipts are required to have a matching server-confirmed attempt.
-        pruneRetainedRecords(storage);
+        maintainV2Registry(storage);
+        // A legacy writer is outside this lock protocol. If it wrote a newer
+        // registry while we copied the snapshot, leave it for the next pass.
+        if (storage.getItem(SUBMISSION_RECEIPT_KEY) !== legacy.raw) return false;
         storage.removeItem(SUBMISSION_RECEIPT_KEY);
         storage.setItem(MIGRATION_MARKER_KEY, "1");
+        return true;
     } catch {
         // A quota or blocked write is not corruption. Keep the legacy registry
-        // and leave the marker unset so a later read can finish migration.
+        // and leave the marker unset so a later awaited writer can finish.
+        return false;
     }
+}
+
+export async function migrateLegacySubmissionReceipts(): Promise<boolean> {
+    const storage = browserStorage();
+    if (!storage) return false;
+    return withBrowserStorageLock(
+        "submission-receipts",
+        () => migrateLegacyRegistryUnlocked(storage),
+    );
 }
 
 function pruneRetainedRecords(storage: Storage): void {
@@ -428,6 +460,14 @@ function pruneRetainedRecords(storage: Storage): void {
     });
 }
 
+function maintainV2Registry(storage: Storage): void {
+    pruneRetainedRecords(storage);
+    storageKeys(storage, SUBMISSION_RECEIPT_REQUEST_PREFIX).forEach(key => {
+        const id = attemptIdFromKey(key, SUBMISSION_RECEIPT_REQUEST_PREFIX);
+        if (id) parseRequestEnvelope(storage, id);
+    });
+}
+
 export function submissionReceiptLabel(
     receipt: Pick<SubmissionReceipt, "status" | "retryMode" | "prerequisite" | "requiresPin">,
 ): string {
@@ -466,7 +506,7 @@ function persistSubmissionReceiptUnlocked(
 ): boolean {
     const storage = browserStorage();
     if (!storage) return false;
-    migrateLegacyRegistry(storage);
+    migrateLegacyRegistryUnlocked(storage);
     const current = parseReceiptEnvelope(storage, receipt.attemptId)?.receipt;
     if (current?.status === "confirmed" && receipt.status === "pending") return false;
     if (receipt.status === "pending" && storage.getItem(aliasKey(receipt.attemptId))) return false;
@@ -508,36 +548,47 @@ export async function persistSubmissionReceipt(receipt: SubmissionReceipt): Prom
 export function readSubmissionReceipt(attemptId: string): SubmissionReceipt | null {
     const storage = browserStorage();
     if (!storage) return null;
-    migrateLegacyRegistry(storage);
-    return parseReceiptEnvelope(storage, attemptId)?.receipt || null;
+    if (storage.getItem(receiptKey(attemptId)) !== null) {
+        return parseReceiptEnvelope(storage, attemptId, { quarantine: false })?.receipt || null;
+    }
+    const legacy = parseLegacyRegistry(storage, { quarantine: false })?.registry;
+    return sanitizeReceipt(attemptId, legacy?.receipts?.[attemptId]) || null;
 }
 
 export function readReconciledSubmissionAttemptId(attemptId: string): string | null {
     const storage = browserStorage();
     if (!storage) return null;
-    migrateLegacyRegistry(storage);
+    const legacy = parseLegacyRegistry(storage, { quarantine: false })?.registry;
     let current = attemptId;
     const visited = new Set<string>();
     while (!visited.has(current)) {
         visited.add(current);
         const key = aliasKey(current);
         const raw = storage.getItem(key);
-        if (!raw) break;
-        try {
-            const parsed = JSON.parse(raw) as Partial<AliasEnvelope>;
-            if (
-                parsed.version !== 2
-                || parsed.previousAttemptId !== current
-                || typeof parsed.canonicalAttemptId !== "string"
-                || !parsed.canonicalAttemptId
-            ) {
-                throw new Error("invalid");
+        if (raw !== null) {
+            try {
+                const parsed = JSON.parse(raw) as Partial<AliasEnvelope>;
+                if (
+                    parsed.version !== 2
+                    || parsed.previousAttemptId !== current
+                    || typeof parsed.canonicalAttemptId !== "string"
+                    || !parsed.canonicalAttemptId
+                ) {
+                    throw new Error("invalid");
+                }
+                current = parsed.canonicalAttemptId;
+                continue;
+            } catch {
+                break;
             }
-            current = parsed.canonicalAttemptId;
-        } catch {
-            quarantineCorruptValue(storage, key, raw);
-            break;
         }
+        const legacyCanonicalId = legacy?.reconciliations?.[current];
+        if (
+            typeof legacyCanonicalId !== "string"
+            || !legacyCanonicalId
+            || legacyCanonicalId === current
+        ) break;
+        current = legacyCanonicalId;
     }
     return current !== attemptId ? current : null;
 }
@@ -548,7 +599,7 @@ function queuePendingSubmissionReceiptUnlocked(
 ): boolean {
     const storage = browserStorage();
     if (!storage) return false;
-    migrateLegacyRegistry(storage);
+    migrateLegacyRegistryUnlocked(storage);
     if (parseReceiptEnvelope(storage, request.attemptId)?.receipt.status === "confirmed") return false;
     if (storage.getItem(aliasKey(request.attemptId))) return false;
     const receipt: SubmissionReceipt = {
@@ -593,12 +644,21 @@ export async function queuePendingSubmissionReceipt(
 export function pendingSubmissionReceiptIds(options: { automaticOnly?: boolean } = {}): string[] {
     const storage = browserStorage();
     if (!storage) return [];
-    migrateLegacyRegistry(storage);
-    return storageKeys(storage, SUBMISSION_RECEIPT_REQUEST_PREFIX).flatMap(key => {
-        const id = attemptIdFromKey(key, SUBMISSION_RECEIPT_REQUEST_PREFIX);
-        if (!id) return [];
-        const request = parseRequestEnvelope(storage, id)?.request;
-        const receipt = parseReceiptEnvelope(storage, id)?.receipt;
+    const legacy = parseLegacyRegistry(storage, { quarantine: false })?.registry;
+    const ids = new Set(
+        storageKeys(storage, SUBMISSION_RECEIPT_REQUEST_PREFIX)
+            .flatMap(key => attemptIdFromKey(key, SUBMISSION_RECEIPT_REQUEST_PREFIX) || []),
+    );
+    Object.keys(legacy?.requests || {}).forEach(id => ids.add(id));
+    return [...ids].flatMap(id => {
+        const request = storage.getItem(requestKey(id)) !== null
+            ? parseRequestEnvelope(storage, id, { quarantine: false })?.request
+            : isPendingSubmissionRequest(id, legacy?.requests?.[id])
+                ? legacy?.requests?.[id] as PendingSignedSessionSubmission
+                : undefined;
+        const receipt = storage.getItem(receiptKey(id)) !== null
+            ? parseReceiptEnvelope(storage, id, { quarantine: false })?.receipt
+            : sanitizeReceipt(id, legacy?.receipts?.[id]);
         if (!request || receipt?.status !== "pending") return [];
         if (options.automaticOnly) {
             if (request.requiresPin || receipt.requiresPin || receipt.prerequisite === "pin") return [];
@@ -661,38 +721,36 @@ function restoreKeys(storage: Storage, snapshots: Map<string, string | null>): v
     }
 }
 
-async function persistConfirmedReconciliation(
+async function persistConfirmedReconciliationUnderAttemptLock(
     storage: Storage,
     previousAttemptId: string,
     canonicalAttemptId: string,
     receipt: SubmissionReceipt,
 ): Promise<boolean> {
-    return withBrowserStorageLock("attempt-index", async () => {
-        if (!hasLocalServerConfirmation(canonicalAttemptId)) return false;
-        return withBrowserStorageLock("submission-receipts", () => {
-            const keys = [
-                receiptKey(previousAttemptId),
-                requestKey(previousAttemptId),
-                receiptKey(canonicalAttemptId),
-                requestKey(canonicalAttemptId),
-                aliasKey(previousAttemptId),
-            ];
-            const snapshots = new Map(keys.map(key => [key, storage.getItem(key)]));
-            try {
-                writeReceiptEnvelope(storage, receipt);
-                if (previousAttemptId !== canonicalAttemptId) {
-                    writeAliasEnvelope(storage, previousAttemptId, canonicalAttemptId);
-                    storage.removeItem(receiptKey(previousAttemptId));
-                }
-                storage.removeItem(requestKey(previousAttemptId));
-                storage.removeItem(requestKey(canonicalAttemptId));
-                pruneRetainedRecords(storage);
-                return true;
-            } catch {
-                restoreKeys(storage, snapshots);
-                return false;
+    if (!hasLocalServerConfirmation(canonicalAttemptId)) return false;
+    return withBrowserStorageLock("submission-receipts", () => {
+        const keys = [
+            receiptKey(previousAttemptId),
+            requestKey(previousAttemptId),
+            receiptKey(canonicalAttemptId),
+            requestKey(canonicalAttemptId),
+            aliasKey(previousAttemptId),
+        ];
+        const snapshots = new Map(keys.map(key => [key, storage.getItem(key)]));
+        try {
+            writeReceiptEnvelope(storage, receipt);
+            if (previousAttemptId !== canonicalAttemptId) {
+                writeAliasEnvelope(storage, previousAttemptId, canonicalAttemptId);
+                storage.removeItem(receiptKey(previousAttemptId));
             }
-        });
+            storage.removeItem(requestKey(previousAttemptId));
+            storage.removeItem(requestKey(canonicalAttemptId));
+            pruneRetainedRecords(storage);
+            return true;
+        } catch {
+            restoreKeys(storage, snapshots);
+            return false;
+        }
     });
 }
 
@@ -703,10 +761,6 @@ export function retryPendingSubmissionReceipt(
             input: SubmitAttemptInput,
             pin?: string,
         ) => Promise<SignedSessionSubmitResponse>;
-        onAuthoritativeAttempt?: (
-            previousAttemptId: string,
-            attempt: Attempt,
-        ) => AuthoritativeAttemptCacheTransaction | Promise<AuthoritativeAttemptCacheTransaction>;
         pin?: string;
     },
 ): Promise<SubmissionRetryResult> {
@@ -716,7 +770,10 @@ export function retryPendingSubmissionReceipt(
     const retry = withAttemptMutationLock(attemptId, async (): Promise<SubmissionRetryResult> => {
         const storage = browserStorage();
         if (!storage) return { status: "missing", error: "브라우저 저장소를 사용할 수 없습니다." };
-        migrateLegacyRegistry(storage);
+        await withBrowserStorageLock(
+            "submission-receipts",
+            () => migrateLegacyRegistryUnlocked(storage),
+        );
         const request = parseRequestEnvelope(storage, attemptId)?.request;
         if (!request) {
             return { status: "missing", error: "다시 시도할 제출 요청을 찾지 못했습니다." };
@@ -736,34 +793,26 @@ export function retryPendingSubmissionReceipt(
             result = { status: "error" };
         }
         if (result.status === "ok" && result.attempt) {
-            let cacheTransaction: AuthoritativeAttemptCacheTransaction | undefined;
-            if (deps.onAuthoritativeAttempt) {
-                try {
-                    cacheTransaction = await deps.onAuthoritativeAttempt(attemptId, result.attempt);
-                } catch {
-                    return { status: "pending", error: DURABILITY_ERROR };
-                }
-                if (!cacheTransaction?.committed) {
-                    return { status: "pending", error: DURABILITY_ERROR };
-                }
-            } else {
-                cacheTransaction = await replaceLocalAttemptWithCanonical(attemptId, result.attempt);
-                if (!cacheTransaction.committed) {
-                    return { status: "pending", error: DURABILITY_ERROR };
-                }
-            }
-
-            const cachedAttempt = cacheTransaction?.attempt || result.attempt;
             const canonicalAttemptId = result.attempt.id;
             const receipt: SubmissionReceipt = {
                 attemptId: canonicalAttemptId,
                 status: "confirmed",
                 updatedAt: new Date().toISOString(),
             };
-            if (!await persistConfirmedReconciliation(storage, attemptId, canonicalAttemptId, receipt)) {
-                await cacheTransaction?.rollback?.();
+            const cacheTransaction = await replaceLocalAttemptWithCanonicalTransaction(
+                attemptId,
+                result.attempt,
+                () => persistConfirmedReconciliationUnderAttemptLock(
+                    storage,
+                    attemptId,
+                    canonicalAttemptId,
+                    receipt,
+                ),
+            );
+            if (!cacheTransaction.committed) {
                 return { status: "pending", error: DURABILITY_ERROR };
             }
+            const cachedAttempt = cacheTransaction.attempt || result.attempt;
             emitSubmissionReceiptReconciled({
                 previousAttemptId: attemptId,
                 attempt: cachedAttempt,

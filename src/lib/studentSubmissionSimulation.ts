@@ -24,6 +24,7 @@ export interface StudentSubmissionSimulator {
 export interface StudentSubmissionSimulatorOptions {
     ttlMs?: number;
     maxEntries?: number;
+    maxTombstones?: number;
 }
 
 function clean(value: unknown): string {
@@ -92,11 +93,15 @@ export function createStudentSubmissionSimulator(
 ): StudentSubmissionSimulator {
     const ttlMs = Math.max(1, options.ttlMs ?? 30 * 60 * 1_000);
     const maxEntries = Math.max(1, options.maxEntries ?? 256);
+    const maxTombstones = Math.max(1, options.maxTombstones ?? 4_096);
     const attempts = new Map<string, {
         attempt: Attempt;
-        fingerprint: string;
         lastAccessedAt: number;
     }>();
+    // These fingerprints are security tombstones, not cache entries. They must
+    // survive attempt TTL/LRU removal so an id can never accept a new payload
+    // until the simulator is explicitly reset.
+    const fingerprints = new Map<string, string>();
     const simulate = ((
         input: SubmitAttemptInput,
         identity: StudentServerIdentity,
@@ -119,9 +124,16 @@ export function createStudentSubmissionSimulator(
         for (const [id, entry] of attempts) {
             if (now - entry.lastAccessedAt > ttlMs) attempts.delete(id);
         }
+        const fingerprint = submissionFingerprint(input);
+        const existingFingerprint = fingerprints.get(attemptId);
+        if (existingFingerprint !== undefined && existingFingerprint !== fingerprint) {
+            return { status: "invalid" };
+        }
+        if (existingFingerprint === undefined && fingerprints.size >= maxTombstones) {
+            return { status: "invalid" };
+        }
         const existing = attempts.get(attemptId);
         if (existing) {
-            if (existing.fingerprint !== submissionFingerprint(input)) return { status: "invalid" };
             attempts.delete(attemptId);
             attempts.set(attemptId, { ...existing, lastAccessedAt: now });
             return { status: "ok", attempt: existing.attempt };
@@ -138,14 +150,17 @@ export function createStudentSubmissionSimulator(
             if (typeof oldest !== "string") break;
             attempts.delete(oldest);
         }
+        fingerprints.set(attemptId, fingerprint);
         attempts.set(attemptId, {
             attempt,
-            fingerprint: submissionFingerprint(input),
             lastAccessedAt: now,
         });
         return { status: "ok", attempt };
     }) as StudentSubmissionSimulator;
-    simulate.reset = () => attempts.clear();
+    simulate.reset = () => {
+        attempts.clear();
+        fingerprints.clear();
+    };
     simulate.size = () => attempts.size;
     return simulate;
 }

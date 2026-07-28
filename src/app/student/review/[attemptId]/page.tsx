@@ -27,7 +27,6 @@ import {
     loadAttempt,
     loadExam,
     readLocalAttempts,
-    replaceLocalAttemptWithCanonical,
     saveAttempt,
     saveLocalAttempt,
     saveLocalServerConfirmedAttempt,
@@ -761,7 +760,6 @@ export default function ReviewPage() {
         try {
             const result = await retryPendingSubmissionReceipt(attempt.id, {
                 submitSignedSessionAttempt: submitAttempt,
-                onAuthoritativeAttempt: replaceLocalAttemptWithCanonical,
                 ...(submissionReceipt?.requiresPin && submissionRetryPin.trim()
                     ? { pin: submissionRetryPin.trim() }
                     : {}),

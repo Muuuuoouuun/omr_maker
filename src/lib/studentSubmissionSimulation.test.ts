@@ -104,4 +104,68 @@ describe("student submission development simulation", () => {
         expect(first.status).toBe("ok");
         expect(mismatch).toEqual({ status: "invalid" });
     });
+
+    it("keeps the submission fingerprint after the cached attempt expires by TTL", () => {
+        const simulate = createStudentSubmissionSimulator({ ttlMs: 100, maxEntries: 2 });
+        const first = simulate(input, identity, env, 1_000);
+        const mismatchAfterExpiry = simulate({
+            ...input,
+            answers: { ...input.answers, 1: 4 },
+        }, identity, env, 1_101);
+        const replayAfterExpiry = simulate(input, identity, env, 1_102);
+
+        expect(first.status).toBe("ok");
+        expect(mismatchAfterExpiry).toEqual({ status: "invalid" });
+        expect(replayAfterExpiry).toEqual(first);
+    });
+
+    it("keeps the submission fingerprint after LRU eviction and rebuilds the same attempt", () => {
+        const simulate = createStudentSubmissionSimulator({ ttlMs: 10_000, maxEntries: 1 });
+        const otherInput: SubmitAttemptInput = {
+            ...input,
+            submissionId: "22222222-2222-4222-8222-222222222222",
+        };
+        const first = simulate(input, identity, env, 1_000);
+        simulate(otherInput, identity, env, 1_100);
+        const mismatchAfterEviction = simulate({
+            ...input,
+            answers: { ...input.answers, 1: 4 },
+        }, identity, env, 1_200);
+        const replayAfterEviction = simulate(input, identity, env, 1_300);
+
+        expect(first.status).toBe("ok");
+        expect(mismatchAfterEviction).toEqual({ status: "invalid" });
+        expect(replayAfterEviction).toEqual(first);
+    });
+
+    it("fails closed for new submission ids when the fingerprint tombstone cap is full", () => {
+        const simulate = createStudentSubmissionSimulator({
+            ttlMs: 10_000,
+            maxEntries: 1,
+            maxTombstones: 2,
+        });
+        const withSubmission = (submissionId: string): SubmitAttemptInput => ({ ...input, submissionId });
+        const firstInput = withSubmission("11111111-1111-4111-8111-111111111111");
+        const secondInput = withSubmission("22222222-2222-4222-8222-222222222222");
+        const thirdInput = withSubmission("33333333-3333-4333-8333-333333333333");
+
+        const first = simulate(firstInput, identity, env, 1_000);
+        expect(simulate(secondInput, identity, env, 1_100).status).toBe("ok");
+        expect(simulate(firstInput, identity, env, 1_200)).toEqual(first);
+        expect(simulate(thirdInput, identity, env, 1_300)).toEqual({ status: "invalid" });
+    });
+
+    it("clears fingerprint tombstones on reset", () => {
+        const simulate = createStudentSubmissionSimulator({ maxEntries: 1, maxTombstones: 1 });
+        expect(simulate(input, identity, env, 1_000).status).toBe("ok");
+
+        simulate.reset();
+        const changedPayloadAfterReset = simulate({
+            ...input,
+            answers: { ...input.answers, 1: 4 },
+        }, identity, env, 1_100);
+
+        expect(changedPayloadAfterReset.status).toBe("ok");
+        expect(simulate.size()).toBe(1);
+    });
 });

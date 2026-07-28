@@ -6,7 +6,6 @@ import {
     flushPendingSubmissionReceipts,
     pendingSubmissionReceiptIds,
 } from "@/lib/studentAttemptReceipt";
-import { replaceLocalAttemptWithCanonical } from "@/lib/omrPersistence";
 import { STUDENT_SESSION_CHANGED_EVENT } from "@/utils/storage";
 
 /**
@@ -24,7 +23,6 @@ export default function SyncFlusher() {
             running = true;
             void flushPendingSubmissionReceipts({
                 submitSignedSessionAttempt: submitAttempt,
-                onAuthoritativeAttempt: replaceLocalAttemptWithCanonical,
             }).finally(() => {
                 running = false;
             });
