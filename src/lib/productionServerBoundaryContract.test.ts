@@ -74,6 +74,122 @@ describe("production server-only database boundary", () => {
     const supabaseReadme = read("supabase/README.md");
     const productionReadiness = read("docs/production-readiness.md");
     const ci = read(".github/workflows/ci.yml");
+    const readinessV4 = readOptional(
+        "supabase/migrations/202607280003_service_readiness_probe_v4.sql",
+    );
+
+    it("installs a v4 probe over effective runtime privileges and integrity", () => {
+        expect(readinessV4).not.toBe("");
+        expect(readinessV4).toContain("'version', '202607280003'");
+        expect(readinessV4).toContain("information_schema.role_table_grants");
+        expect(readinessV4).toContain("information_schema.routine_privileges");
+        expect(readinessV4).toContain("has_schema_privilege");
+        expect(readinessV4).toContain("has_table_privilege");
+        expect(readinessV4).toContain("has_sequence_privilege");
+        expect(readinessV4).toContain("has_function_privilege");
+        expect(readinessV4).toContain("relforcerowsecurity");
+        expect(readinessV4).toContain("pg_catalog.pg_policies");
+        expect(readinessV4).toContain(
+            "v_expected_canonical_table_count constant integer := 27",
+        );
+        expect(readinessV4).toContain("omr_production_boundary_preflight_v1");
+        expect(readinessV4).toContain("omr_answer_attempt_question_v1");
+        expect(readinessV4).toContain("omr_set_subquestion_review_v1");
+        expect(readinessV4).toContain("omr_force_finish_attempts_v1");
+        expect(readinessV4).toContain("supabase_storage_admin");
+        expect(readinessV4).toContain("OMR private assets server-only objects");
+        expect(readinessV4).toContain("OMR private assets server-only buckets");
+        for (const role of ["anon", "authenticated"]) {
+            for (const privilege of ["USAGE", "CREATE"]) {
+                expect(readinessV4).toMatch(
+                    new RegExp(
+                        `has_schema_privilege\\(\\s*'${role}',\\s*'public',\\s*'${privilege}'\\s*\\)`,
+                        "i",
+                    ),
+                );
+            }
+        }
+        for (const privilege of ["SELECT", "INSERT", "UPDATE", "DELETE"]) {
+            expect(readinessV4).toMatch(
+                new RegExp(
+                    `has_table_privilege\\(\\s*'service_role',\\s*relation\\.oid,\\s*'${privilege}'\\s*\\)`,
+                    "i",
+                ),
+            );
+        }
+        for (const privilege of ["USAGE", "SELECT", "UPDATE"]) {
+            expect(readinessV4).toMatch(
+                new RegExp(
+                    `has_sequence_privilege\\(\\s*'service_role',\\s*relation\\.oid,\\s*'${privilege}'\\s*\\)`,
+                    "i",
+                ),
+            );
+        }
+
+        for (const key of [
+            "browserSchemaPrivilegesDenied",
+            "anonTablePrivilegesDenied",
+            "authenticatedCanonicalPrivilegesDenied",
+            "browserSequencePrivilegesDenied",
+            "browserFunctionPrivilegesDenied",
+            "alphaPoliciesAbsent",
+            "canonicalTablesForceRls",
+            "canonicalPoliciesAbsent",
+            "organizationBackfillReady",
+            "serviceRolePrivilegesReady",
+            "scopedRpcPrivilegesReady",
+            "hostedStorageBoundaryReady",
+        ]) {
+            expect(readinessV4).toContain(`'${key}'`);
+        }
+        expect(readinessV4).toMatch(
+            /revoke all on function public\.omr_service_readiness_v1\(\) from public, anon, authenticated/i,
+        );
+        expect(readinessV4).toMatch(
+            /grant execute on function public\.omr_service_readiness_v1\(\) to service_role/i,
+        );
+        expect(liveAssertions).toContain(
+            "v4 readiness probe did not confirm every effective boundary",
+        );
+        expect(liveAssertions).toContain(
+            "v4 readiness accepted browser schema usage",
+        );
+        expect(liveAssertions).toContain(
+            "v4 readiness accepted browser schema create",
+        );
+        expect(liveAssertions).toContain(
+            "v4 readiness accepted an anon table grant",
+        );
+        expect(liveAssertions).toContain(
+            "v4 readiness accepted an authenticated table grant",
+        );
+        expect(liveAssertions).toContain(
+            "v4 readiness accepted a browser sequence grant",
+        );
+        expect(liveAssertions).toContain(
+            "v4 readiness accepted a browser function grant",
+        );
+        expect(liveAssertions).toContain(
+            "v4 readiness accepted a canonical policy",
+        );
+        expect(liveAssertions).toContain(
+            "v4 readiness accepted a table without FORCE RLS",
+        );
+        expect(liveAssertions).toContain(
+            "v4 readiness accepted missing service-role table access",
+        );
+        expect(liveAssertions).toContain(
+            "v4 readiness accepted missing scoped RPC execute",
+        );
+        expect(liveAssertions).toContain(
+            "v4 readiness accepted a missing target Storage policy",
+        );
+        expect(liveAssertions).toContain(
+            "v4 readiness accepted a failed organization preflight",
+        );
+        expect(supabaseReadme).toContain("202607280003");
+        expect(productionReadiness).toContain("202607280003");
+    });
 
     it("runs the organization preflight before atomically closing every public app surface", () => {
         expect(profile).not.toBe("");
@@ -142,7 +258,11 @@ describe("production server-only database boundary", () => {
     });
 
     it("proves exhaustive browser denial while retaining service-role execution and documents the gate", () => {
-        expect(liveAssertions).not.toMatch(
+        const liveAssertionsWithoutTransactionalDrift = liveAssertions.replace(
+            /-- BEGIN v4 transient readiness drift probes[\s\S]*?-- END v4 transient readiness drift probes/i,
+            "",
+        );
+        expect(liveAssertionsWithoutTransactionalDrift).not.toMatch(
             /grant\s+(?:select|insert|update|delete|all)[\s\S]{0,100}\bto\s+(?:anon|authenticated)\b/i,
         );
         expect(liveAssertions).toContain("browser roles unexpectedly retain an OMR table privilege");

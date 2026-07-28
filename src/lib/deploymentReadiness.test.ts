@@ -8,6 +8,27 @@ function teacherPasswordHash(password: string, saltHex = "00112233445566778899aa
     return `pbkdf2-sha256:${iterations}:${saltHex}:${hashHex}`;
 }
 
+const readyDatabaseProbe = {
+    ready: true,
+    version: "202607280003",
+    browserSchemaPrivilegesDenied: true,
+    anonTablePrivilegesDenied: true,
+    authenticatedCanonicalPrivilegesDenied: true,
+    browserSequencePrivilegesDenied: true,
+    browserFunctionPrivilegesDenied: true,
+    alphaPoliciesAbsent: true,
+    canonicalTablesForceRls: true,
+    canonicalPoliciesAbsent: true,
+    organizationBackfillReady: true,
+    serviceRolePrivilegesReady: true,
+    scopedRpcPrivilegesReady: true,
+    hostedStorageBoundaryReady: true,
+    serverGatewayCapabilitiesReady: true,
+    queryPathIndexesReady: true,
+    legacyBroadRpcsRemoved: true,
+    failedChecks: [],
+};
+
 describe("deployment readiness", () => {
     it("flags production teacher login when no server credentials exist", () => {
         const summary = buildDeploymentReadiness({
@@ -108,30 +129,7 @@ describe("deployment readiness", () => {
             NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY: "sb_publishable_public",
             SUPABASE_SERVICE_ROLE_KEY: "service-role",
             OMR_PRODUCTION_RLS_APPLIED: "true",
-        }, {
-            ready: true,
-            version: "202607140018",
-            attemptRpc: true,
-            sessionAttemptRpc: true,
-            teacherExamRpc: true,
-            teacherExamDeleteRpc: true,
-            teacherAttemptRpc: true,
-            teacherRosterRpc: true,
-            handwritingRpc: true,
-            feedbackSaveRpc: true,
-            feedbackReturnRpc: true,
-            feedbackOpenRpc: true,
-            remoteAssetMetadataRpc: true,
-            queryPathIndexes: true,
-            legacyFeedbackRpcRemoved: true,
-            examsForceRls: true,
-            attemptsForceRls: true,
-            questionResultsForceRls: true,
-            studentCredentialsForceRls: true,
-            remoteAssetsForceRls: true,
-            rosterInvitesForceRls: true,
-            attemptFeedbackForceRls: true,
-        });
+        }, readyDatabaseProbe);
 
         expect(summary.checks).toContainEqual(expect.objectContaining({
             key: "teacher_session_secret",
@@ -157,8 +155,41 @@ describe("deployment readiness", () => {
         expect(summary.checks).toContainEqual(expect.objectContaining({
             key: "production_rls",
             tone: "ready",
+            detail: expect.stringContaining("실효 권한"),
         }));
         expect(summary.readyCount).toBe(7);
+    });
+
+    it("reports actionable v4 boundary failures without exposing database payloads", () => {
+        const summary = buildDeploymentReadiness({
+            NODE_ENV: "production",
+            TEACHER_ACCOUNTS: JSON.stringify([{ id: "teacher-a", email: "a@example.com", passwordHash: teacherPasswordHash("pass-a") }]),
+            TEACHER_SESSION_SECRET: "session-secret",
+            STUDENT_SESSION_SECRET: "student-session-secret",
+            STUDENT_ATTEMPT_SECRET: "student-attempt-secret",
+            SUPABASE_URL: "https://example.supabase.co",
+            SUPABASE_SERVICE_ROLE_KEY: "service-role",
+            OMR_PRODUCTION_RLS_APPLIED: "true",
+        }, {
+            ...readyDatabaseProbe,
+            ready: false,
+            browserFunctionPrivilegesDenied: false,
+            organizationBackfillReady: false,
+            failedChecks: [
+                "browserFunctionPrivilegesDenied",
+                "organizationBackfillReady",
+            ],
+            error: "student 김학생 raw-private-id",
+        });
+
+        const rls = summary.checks.find(check => check.key === "production_rls");
+        expect(rls).toMatchObject({
+            tone: "error",
+        });
+        expect(rls?.detail).toContain("브라우저 함수 권한 차단");
+        expect(rls?.detail).toContain("조직 무결성 preflight");
+        expect(JSON.stringify(summary)).not.toContain("김학생");
+        expect(JSON.stringify(summary)).not.toContain("raw-private-id");
     });
 
     it("does not report public Supabase keys as production browser synchronization", () => {
@@ -194,6 +225,27 @@ describe("deployment readiness", () => {
             key: "production_rls",
             tone: "error",
             detail: expect.stringContaining("실제 DB"),
+        }));
+    });
+
+    it("does not trust a caller-provided ready bit when v4 evidence is incomplete", () => {
+        const summary = buildDeploymentReadiness({
+            NODE_ENV: "production",
+            TEACHER_ACCOUNTS: JSON.stringify([{ id: "teacher-a", email: "a@example.com", passwordHash: teacherPasswordHash("pass-a") }]),
+            TEACHER_SESSION_SECRET: "session-secret",
+            STUDENT_SESSION_SECRET: "student-session-secret",
+            STUDENT_ATTEMPT_SECRET: "student-attempt-secret",
+            SUPABASE_URL: "https://example.supabase.co",
+            SUPABASE_SERVICE_ROLE_KEY: "service-role",
+            OMR_PRODUCTION_RLS_APPLIED: "true",
+        }, {
+            ready: true,
+            version: "202607280003",
+        });
+
+        expect(summary.checks).toContainEqual(expect.objectContaining({
+            key: "production_rls",
+            tone: "error",
         }));
     });
 

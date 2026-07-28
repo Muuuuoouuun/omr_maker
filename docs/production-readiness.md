@@ -5,7 +5,8 @@
 
 > ⚠️ **현재 상태**: 프로덕션 배포는 되어 있으나, `schema.sql`의 업무 데이터 RLS 정책은
 > 알파/로컬 테스트용으로 열려 있습니다. 아래 **1. Supabase 서버 전용 핸드오프**를 완료하기 전까지는
-> 실제(민감) 학생 데이터를 저장하지 마세요.
+> 실제(민감) 학생 데이터를 저장하지 마세요. readiness 오류에는 고정된 검사 이름만 기록하고
+> preflight sample, 학생 이름, row id를 포함하지 않습니다.
 
 ## 1. Supabase 서버 전용 핸드오프 (실제 학생 데이터 전 필수)
 
@@ -31,6 +32,11 @@ service-role RPC만 유지합니다. 기존 `production-rls.sql`은 직접 authe
 5. `schema.sql` → sorted `migrations` → `production-server-boundary.sql` →
    `live-test-assertions.sql` 순서를 실행하는 `npm run test:supabase:live`와
    CI의 blocking `supabase-live-contract` 작업을 통과시킵니다.
+   service-role 전용 readiness probe 버전은 `202607280003`이어야 합니다.
+   브라우저 schema/table/sequence/function 실효 권한 차단, 전체 canonical 테이블
+   ENABLE+FORCE RLS, public 정책 0개, 조직 preflight 4개 count 0, 목적별 교사 RPC,
+   service-role 권한, private Storage owner·제한 정책을 모두 `true`로 반환해야 하며,
+   키 누락·이전 버전·`false`는 모두 배포 불가입니다.
 6. 릴리스 증거에 커밋 SHA, 정책 해시(SHA-256), CI 실행 URL, 대상 DB 프로젝트,
    실행자·시각, preflight 결과, anon/authenticated 공격 거부 결과를 기록합니다.
 7. 같은 커밋의 서버 빌드를 배포하고 교사·학생 server action 여정을 확인한 뒤 쓰기를 재개합니다.

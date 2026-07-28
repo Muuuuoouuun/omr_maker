@@ -3,7 +3,12 @@ import { resolveTeacherSessionSecret } from "./teacherServerSession";
 import { resolveStudentSessionSecret } from "./studentServerSession";
 import { getSupabaseServerConfigFromEnv } from "./supabaseServerAdmin";
 import { resolveStudentAttemptSecret } from "./studentAttemptTicket";
-import type { SupabaseDeploymentProbe } from "./supabaseReadinessProbe";
+import {
+    SUPABASE_READINESS_CHECK_KEYS,
+    SUPABASE_READINESS_VERSION,
+    type SupabaseDeploymentProbe,
+    type SupabaseReadinessFailureKey,
+} from "./supabaseReadinessProbe";
 
 type Env = Record<string, string | undefined>;
 
@@ -130,6 +135,23 @@ function isFlagEnabled(value: unknown): boolean {
     return normalized === "true" || normalized === "1" || normalized === "yes";
 }
 
+function databaseProbeFailureKeys(
+    probe?: SupabaseDeploymentProbe | null,
+): SupabaseReadinessFailureKey[] {
+    if (!probe) return [];
+    const failures: SupabaseReadinessFailureKey[] = [
+        ...(probe.failedChecks || []),
+        ...SUPABASE_READINESS_CHECK_KEYS.filter(key => probe[key] !== true),
+    ];
+    if (probe.version !== SUPABASE_READINESS_VERSION) {
+        failures.push("probeVersion");
+    }
+    if (probe.ready !== true) {
+        failures.push("databaseDeclaredReady");
+    }
+    return [...new Set(failures)];
+}
+
 function productionRlsCheck(
     env: Env,
     serverGatewayReady: boolean,
@@ -137,23 +159,49 @@ function productionRlsCheck(
 ): DeploymentReadinessCheck {
     const rlsApplied = isFlagEnabled(env.OMR_PRODUCTION_RLS_APPLIED);
     const isProduction = clean(env.NODE_ENV).toLowerCase() === "production";
+    const probeFailures = databaseProbeFailureKeys(databaseProbe);
+    const databaseReady = !!databaseProbe && probeFailures.length === 0;
 
-    if (rlsApplied && databaseProbe?.ready) {
+    if (rlsApplied && databaseReady) {
         return {
             key: "production_rls",
             label: "실사용 RLS 전환",
-            detail: `실제 DB probe${databaseProbe.version ? ` ${databaseProbe.version}` : ""}에서 제출 RPC와 핵심 테이블 FORCE RLS 적용을 확인했습니다.`,
+            detail: `실제 DB probe${databaseProbe.version ? ` ${databaseProbe.version}` : ""}에서 브라우저 실효 권한 회수, 전체 canonical FORCE RLS, 조직 무결성, scoped RPC와 private Storage 경계를 확인했습니다.`,
             tone: "ready",
         };
     }
 
-    if (isProduction && rlsApplied && !databaseProbe?.ready) {
+    if (isProduction && rlsApplied && !databaseReady) {
+        const failureLabels: Record<SupabaseReadinessFailureKey, string> = {
+            browserSchemaPrivilegesDenied: "브라우저 schema 권한 차단",
+            anonTablePrivilegesDenied: "anon 테이블 권한 차단",
+            authenticatedCanonicalPrivilegesDenied: "authenticated 테이블 권한 차단",
+            browserSequencePrivilegesDenied: "브라우저 sequence 권한 차단",
+            browserFunctionPrivilegesDenied: "브라우저 함수 권한 차단",
+            alphaPoliciesAbsent: "alpha 정책 제거",
+            canonicalTablesForceRls: "전체 canonical FORCE RLS",
+            canonicalPoliciesAbsent: "canonical 정책 제거",
+            organizationBackfillReady: "조직 무결성 preflight",
+            serviceRolePrivilegesReady: "service-role 실행 권한",
+            scopedRpcPrivilegesReady: "목적별 교사 RPC 권한",
+            hostedStorageBoundaryReady: "private Storage owner·정책",
+            serverGatewayCapabilitiesReady: "서버 gateway 함수",
+            queryPathIndexesReady: "운영 조회 인덱스",
+            legacyBroadRpcsRemoved: "legacy broad RPC 제거",
+            probeVersion: "probe 버전",
+            databaseDeclaredReady: "DB 최종 readiness 판정",
+            probeExecution: "probe 실행",
+            probePayload: "probe 응답 형식",
+        };
+        const failures = probeFailures
+            .map(key => failureLabels[key])
+            .join(", ");
         return {
             key: "production_rls",
             label: "실사용 RLS 전환",
-            detail: databaseProbe?.error
-                ? `환경변수는 적용됨으로 표시하지만 실제 DB probe가 실패했습니다: ${databaseProbe.error}`
-                : "OMR_PRODUCTION_RLS_APPLIED는 설정됐지만 실제 DB의 RPC·FORCE RLS 상태가 확인되지 않았습니다.",
+            detail: failures
+                ? `환경변수는 적용됨으로 표시하지만 실제 DB 경계가 미충족입니다: ${failures}. 동일 커밋의 migration·server-only profile·preflight를 다시 적용하고 probe를 재실행하세요.`
+                : "OMR_PRODUCTION_RLS_APPLIED는 설정됐지만 실제 DB의 실효 권한과 조직 무결성 상태가 확인되지 않았습니다.",
             tone: "error",
         };
     }
@@ -162,7 +210,7 @@ function productionRlsCheck(
         return {
             key: "production_rls",
             label: "실사용 RLS 전환",
-            detail: "Supabase 서버 게이트웨이는 설정됐지만 production-rls.sql 적용이 확인되지 않았습니다. 운영 데이터 저장 전 실제 DB 권한과 FORCE RLS를 검증하세요.",
+            detail: "Supabase 서버 게이트웨이는 설정됐지만 production-server-boundary.sql 적용이 확인되지 않았습니다. 운영 데이터 저장 전 실제 DB 권한과 FORCE RLS를 검증하세요.",
             tone: "error",
         };
     }
@@ -170,7 +218,7 @@ function productionRlsCheck(
     return {
         key: "production_rls",
         label: "실사용 RLS 전환",
-        detail: "실제 학생 데이터를 저장하기 전 Supabase Auth, 조직 멤버십, production-rls.sql 적용 여부를 확인하고 OMR_PRODUCTION_RLS_APPLIED=true로 표시하세요.",
+        detail: "실제 학생 데이터를 저장하기 전 조직 멤버십, production-server-boundary.sql 적용 여부를 확인하고 OMR_PRODUCTION_RLS_APPLIED=true로 표시하세요.",
         tone: "warning",
     };
 }

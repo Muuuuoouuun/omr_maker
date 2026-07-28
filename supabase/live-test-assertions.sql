@@ -2085,13 +2085,263 @@ declare
     readiness jsonb;
 begin
     readiness := public.omr_service_readiness_v1();
-    if readiness->>'version' <> '202607140018' or readiness->>'ready' <> 'true' then
-        raise exception 'live readiness probe did not confirm the complete production data plane: %', readiness;
+    if readiness->>'version' <> '202607280003'
+        or readiness->>'ready' <> 'true'
+        or exists (
+            select 1
+              from jsonb_each(readiness - 'version') item
+             where item.key <> 'ready'
+               and item.value is distinct from 'true'::jsonb
+        )
+    then
+        raise exception 'v4 readiness probe did not confirm every effective boundary: %', readiness;
+    end if;
+    if readiness::text like '%김학생%'
+        or readiness::text like '%raw-live-private-attempt-id%'
+        or readiness ? 'samples'
+    then
+        raise exception 'v4 readiness probe exposed tenant data';
     end if;
 end
 $$;
 
 reset role;
+
+-- BEGIN v4 transient readiness drift probes
+-- Every injected drift runs in a subtransaction. The sentinel exception rolls
+-- it back; a readiness assertion failure uses another SQLSTATE and propagates.
+do $$
+declare
+    readiness jsonb;
+begin
+    begin
+        grant usage on schema public to anon;
+        readiness := public.omr_service_readiness_v1();
+        if readiness->>'browserSchemaPrivilegesDenied' <> 'false'
+            or readiness->>'ready' <> 'false'
+        then
+            raise exception 'v4 readiness accepted browser schema usage';
+        end if;
+        raise exception using errcode = 'P1001', message = 'rollback v4 schema drift';
+    exception when sqlstate 'P1001' then null;
+    end;
+end
+$$;
+
+do $$
+declare
+    readiness jsonb;
+begin
+    begin
+        grant create on schema public to authenticated;
+        readiness := public.omr_service_readiness_v1();
+        if readiness->>'browserSchemaPrivilegesDenied' <> 'false'
+            or readiness->>'ready' <> 'false'
+        then
+            raise exception 'v4 readiness accepted browser schema create';
+        end if;
+        raise exception using errcode = 'P1011', message = 'rollback v4 schema create drift';
+    exception when sqlstate 'P1011' then null;
+    end;
+end
+$$;
+
+do $$
+declare
+    readiness jsonb;
+begin
+    begin
+        grant select on public.omr_exams to anon;
+        readiness := public.omr_service_readiness_v1();
+        if readiness->>'anonTablePrivilegesDenied' <> 'false'
+            or readiness->>'ready' <> 'false'
+        then
+            raise exception 'v4 readiness accepted an anon table grant';
+        end if;
+        raise exception using errcode = 'P1002', message = 'rollback v4 anon table drift';
+    exception when sqlstate 'P1002' then null;
+    end;
+end
+$$;
+
+do $$
+declare
+    readiness jsonb;
+begin
+    begin
+        grant select on public.omr_exams to authenticated;
+        readiness := public.omr_service_readiness_v1();
+        if readiness->>'authenticatedCanonicalPrivilegesDenied' <> 'false'
+            or readiness->>'ready' <> 'false'
+        then
+            raise exception 'v4 readiness accepted an authenticated table grant';
+        end if;
+        raise exception using errcode = 'P1003', message = 'rollback v4 authenticated table drift';
+    exception when sqlstate 'P1003' then null;
+    end;
+end
+$$;
+
+do $$
+declare
+    readiness jsonb;
+begin
+    begin
+        create sequence public.omr_v4_readiness_sequence;
+        grant usage on sequence public.omr_v4_readiness_sequence to anon;
+        readiness := public.omr_service_readiness_v1();
+        if readiness->>'browserSequencePrivilegesDenied' <> 'false'
+            or readiness->>'ready' <> 'false'
+        then
+            raise exception 'v4 readiness accepted a browser sequence grant';
+        end if;
+        raise exception using errcode = 'P1004', message = 'rollback v4 sequence drift';
+    exception when sqlstate 'P1004' then null;
+    end;
+end
+$$;
+
+do $$
+declare
+    readiness jsonb;
+begin
+    begin
+        grant execute on function public.omr_service_readiness_v1() to anon;
+        readiness := public.omr_service_readiness_v1();
+        if readiness->>'browserFunctionPrivilegesDenied' <> 'false'
+            or readiness->>'ready' <> 'false'
+        then
+            raise exception 'v4 readiness accepted a browser function grant';
+        end if;
+        raise exception using errcode = 'P1005', message = 'rollback v4 function drift';
+    exception when sqlstate 'P1005' then null;
+    end;
+end
+$$;
+
+do $$
+declare
+    readiness jsonb;
+begin
+    begin
+        create policy "v4 transient canonical policy"
+            on public.omr_exams
+            for select
+            to anon
+            using (true);
+        readiness := public.omr_service_readiness_v1();
+        if readiness->>'canonicalPoliciesAbsent' <> 'false'
+            or readiness->>'alphaPoliciesAbsent' <> 'false'
+            or readiness->>'ready' <> 'false'
+        then
+            raise exception 'v4 readiness accepted a canonical policy';
+        end if;
+        raise exception using errcode = 'P1006', message = 'rollback v4 policy drift';
+    exception when sqlstate 'P1006' then null;
+    end;
+end
+$$;
+
+do $$
+declare
+    readiness jsonb;
+begin
+    begin
+        alter table public.omr_exams no force row level security;
+        readiness := public.omr_service_readiness_v1();
+        if readiness->>'canonicalTablesForceRls' <> 'false'
+            or readiness->>'ready' <> 'false'
+        then
+            raise exception 'v4 readiness accepted a table without FORCE RLS';
+        end if;
+        raise exception using errcode = 'P1007', message = 'rollback v4 force RLS drift';
+    exception when sqlstate 'P1007' then null;
+    end;
+end
+$$;
+
+do $$
+declare
+    readiness jsonb;
+begin
+    begin
+        revoke select on public.omr_exams from service_role;
+        readiness := public.omr_service_readiness_v1();
+        if readiness->>'serviceRolePrivilegesReady' <> 'false'
+            or readiness->>'ready' <> 'false'
+        then
+            raise exception 'v4 readiness accepted missing service-role table access';
+        end if;
+        raise exception using errcode = 'P1008', message = 'rollback v4 service-role drift';
+    exception when sqlstate 'P1008' then null;
+    end;
+end
+$$;
+
+do $$
+declare
+    readiness jsonb;
+begin
+    begin
+        revoke execute on function public.omr_answer_attempt_question_v1(
+            text, text, text, text, text, text, text
+        ) from service_role;
+        readiness := public.omr_service_readiness_v1();
+        if readiness->>'scopedRpcPrivilegesReady' <> 'false'
+            or readiness->>'ready' <> 'false'
+        then
+            raise exception 'v4 readiness accepted missing scoped RPC execute';
+        end if;
+        raise exception using errcode = 'P1009', message = 'rollback v4 scoped RPC drift';
+    exception when sqlstate 'P1009' then null;
+    end;
+end
+$$;
+
+do $$
+declare
+    readiness jsonb;
+begin
+    begin
+        insert into public.omr_student_profiles (
+            id, organization_id, display_name, status
+        ) values (
+            'v4-student-without-credential',
+            'live-org-a',
+            'Readiness Fixture',
+            'active'
+        );
+        readiness := public.omr_service_readiness_v1();
+        if readiness->>'organizationBackfillReady' <> 'false'
+            or readiness->>'ready' <> 'false'
+        then
+            raise exception 'v4 readiness accepted a failed organization preflight';
+        end if;
+        raise exception using errcode = 'P1010', message = 'rollback v4 preflight drift';
+    exception when sqlstate 'P1010' then null;
+    end;
+end
+$$;
+
+-- The Storage policy must be changed as Supabase's managed owner.
+begin;
+set local role supabase_storage_admin;
+drop policy "OMR private assets server-only objects" on storage.objects;
+reset role;
+do $$
+declare
+    readiness jsonb;
+begin
+    readiness := public.omr_service_readiness_v1();
+    if readiness->>'hostedStorageBoundaryReady' <> 'false'
+        or readiness->>'ready' <> 'false'
+    then
+        raise exception 'v4 readiness accepted a missing target Storage policy';
+    end if;
+end
+$$;
+rollback;
+-- END v4 transient readiness drift probes
 
 drop function public.omr_default_acl_probe_v1();
 
