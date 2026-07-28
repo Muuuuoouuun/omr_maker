@@ -565,7 +565,7 @@ test.describe("Teacher and student full journey", () => {
         await confirmDialog.getByRole("button", { name: "제출하기" }).click();
 
         await expect(page).toHaveURL(/\/student\/review\/[^/?#]+$/, { timeout: 15_000 });
-        await expect(page.getByText("결과 리포트")).toBeVisible();
+        await expect(page.getByText("결과 리포트", { exact: true })).toBeVisible();
         await expect(page.getByText(TEST_EXAM_TITLE)).toBeVisible();
         await expect(page.getByText("20 / 30점")).toBeVisible();
 
@@ -698,7 +698,7 @@ test.describe("Teacher and student full journey", () => {
         await confirmDialog.getByRole("button", { name: "제출하기" }).click();
 
         await expect(page).toHaveURL(/\/student\/review\/[^/?#]+$/);
-        await expect(page.getByText("결과 리포트")).toBeVisible();
+        await expect(page.getByText("결과 리포트", { exact: true })).toBeVisible();
         await expect(page.getByText(CREATED_EXAM_TITLE).first()).toBeVisible();
         await expect(page.getByText("100 / 100점")).toBeVisible();
 
@@ -738,7 +738,7 @@ test.describe("Teacher and student full journey", () => {
         await confirmDialog.getByRole("button", { name: "제출하기" }).click();
 
         await expect(page).toHaveURL(/\/student\/review\/[^/?#]+$/, { timeout: 15_000 });
-        await expect(page.getByText("결과 리포트")).toBeVisible();
+        await expect(page.getByText("결과 리포트", { exact: true })).toBeVisible();
         await expect(page.getByText(TEST_EXAM_TITLE)).toBeVisible();
         await expect(page.getByText("20 / 30점")).toBeVisible();
 
@@ -914,7 +914,7 @@ test.describe("Teacher and student full journey", () => {
 
         await historyCard.click();
         await expect(page).toHaveURL(/\/student\/review\/attempt-tablet-analytics$/);
-        await expect(page.getByText("결과 리포트")).toBeVisible();
+        await expect(page.getByText("결과 리포트", { exact: true })).toBeVisible();
         await expect(page.getByRole("heading", { name: TEST_EXAM_TITLE })).toBeVisible();
         await expect(page.getByText("20 / 30점")).toBeVisible();
         await expect(page.getByText("오답 재시험")).toBeVisible();

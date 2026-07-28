@@ -11,6 +11,12 @@ const TEACHER_IDENTITY = {
     displayName: "Demo Admin",
 };
 
+const MOCKUP_TEACHER_IDENTITY = {
+    teacherId: "omr-showcase",
+    email: "showcase@example.com",
+    displayName: "OMR Showcase",
+};
+
 function cookieOrigin(baseURL?: string): string {
     try {
         return new URL(baseURL || "http://localhost:3003").origin;
@@ -20,10 +26,14 @@ function cookieOrigin(baseURL?: string): string {
 }
 
 // Each test starts with clean storage and a valid teacher session so mocks are deterministic.
-async function authenticateTeacher(page: Page, baseURL?: string) {
+async function authenticateTeacher(
+    page: Page,
+    baseURL?: string,
+    identity = TEACHER_IDENTITY,
+) {
     const token = mintTeacherToken();
-    const session = createTeacherSession(token, Date.now(), TEACHER_IDENTITY);
-    const signedCookie = createSignedTeacherSessionCookie(token, TEACHER_IDENTITY);
+    const session = createTeacherSession(token, Date.now(), identity);
+    const signedCookie = createSignedTeacherSessionCookie(token, identity);
 
     if (!signedCookie) {
         throw new Error("Failed to create teacher session cookie for e2e test");
@@ -304,12 +314,12 @@ test.describe("Create page label memory", () => {
 
         const input = page.getByLabel("문항 수 직접 입력");
         const presetButtons = page.locator(".create-count-buttons .btn");
-        await expect(presetButtons).toHaveCount(5);
-        for (let index = 0; index < 5; index += 1) {
+        await expect(presetButtons).toHaveCount(6);
+        for (let index = 0; index < 6; index += 1) {
             const box = await presetButtons.nth(index).boundingBox();
             expect(box?.height).toBeLessThanOrEqual(36);
         }
-        const lastPresetBox = await presetButtons.nth(4).boundingBox();
+        const lastPresetBox = await presetButtons.nth(5).boundingBox();
         const inputBox = await input.boundingBox();
         expect(lastPresetBox).not.toBeNull();
         expect(inputBox).not.toBeNull();
@@ -403,7 +413,7 @@ test.describe("Create page label memory", () => {
 
 test.describe("Live Results page", () => {
     test.beforeEach(async ({ page, baseURL }) => {
-        await authenticateTeacher(page, baseURL);
+        await authenticateTeacher(page, baseURL, MOCKUP_TEACHER_IDENTITY);
     });
 
     test("renders timer, stat tiles, students grid, heatmap", async ({ page }) => {
@@ -427,11 +437,8 @@ test.describe("Live Results page", () => {
 });
 
 test.describe("Manage Users page", () => {
-    test.beforeEach(async ({ page, baseURL }) => {
-        await authenticateTeacher(page, baseURL);
-    });
-
-    test("renders tabs and student table with mock data", async ({ page }) => {
+    test("renders tabs and student table with mock data", async ({ page, baseURL }) => {
+        await authenticateTeacher(page, baseURL, MOCKUP_TEACHER_IDENTITY);
         await page.goto("/teacher/users");
         await expect(page.getByRole("heading", { name: "사용자 관리" })).toBeVisible();
         // Wait for hydration (table rows seed from localStorage on mount)
@@ -439,7 +446,8 @@ test.describe("Manage Users page", () => {
         await expect.poll(() => rows.count(), { timeout: 5000 }).toBeGreaterThan(0);
     });
 
-    test("bulk selection banner appears after checking boxes", async ({ page }) => {
+    test("bulk selection banner appears after checking boxes", async ({ page, baseURL }) => {
+        await authenticateTeacher(page, baseURL);
         await seedStoredRoster(page);
         await page.goto("/teacher/users");
         const firstBox = page.locator('tbody input[type="checkbox"]').first();
@@ -447,19 +455,22 @@ test.describe("Manage Users page", () => {
         await expect(page.getByText(/\d+명 선택됨/)).toBeVisible();
     });
 
-    test("demo roster keeps bulk selection locked", async ({ page }) => {
+    test("demo roster keeps bulk selection locked", async ({ page, baseURL }) => {
+        await authenticateTeacher(page, baseURL, MOCKUP_TEACHER_IDENTITY);
         await page.goto("/teacher/users");
         const firstBox = page.locator('tbody input[type="checkbox"]').first();
         await expect(firstBox).toBeDisabled();
     });
 
-    test("switching to groups tab shows group cards", async ({ page }) => {
+    test("switching to groups tab shows group cards", async ({ page, baseURL }) => {
+        await authenticateTeacher(page, baseURL);
         await page.goto("/teacher/users");
         await page.getByRole("button", { name: /반 · 그룹/ }).click();
         await expect(page.getByRole("button", { name: "새 반 만들기" }).first()).toBeVisible();
     });
 
-    test("teacher can create, edit, and delete an empty group", async ({ page }) => {
+    test("teacher can create, edit, and delete an empty group", async ({ page, baseURL }) => {
+        await authenticateTeacher(page, baseURL);
         await page.goto("/teacher/users?tab=groups");
 
         await page.getByRole("button", { name: "새 반 만들기" }).first().click();
@@ -489,7 +500,8 @@ test.describe("Manage Users page", () => {
         await expect(page.getByRole("heading", { name: "E2E 편집반" })).not.toBeVisible();
     });
 
-    test("issued student start code gates the student portal login", async ({ page }) => {
+    test("issued student start code gates the student portal login", async ({ page, baseURL }) => {
+        await authenticateTeacher(page, baseURL);
         await seedStoredRoster(page);
         await page.goto("/teacher/users");
 
