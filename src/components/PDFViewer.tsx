@@ -138,6 +138,7 @@ export default function PDFViewer({
     const [scale, setScale] = useState<number>(1.0);
     const [isDragging, setIsDragging] = useState(false);
     const [pageRenderVersion, setPageRenderVersion] = useState(0);
+    const [pdfRenderReady, setPdfRenderReady] = useState(false);
 
     // Drawing State
     const [drawingMode, setDrawingMode] = useState<DrawingMode>('click');
@@ -262,6 +263,10 @@ export default function PDFViewer({
     }, [file]);
 
     useEffect(() => {
+        setPdfRenderReady(false);
+    }, [file, pageNumber, scale, containerWidth]);
+
+    useEffect(() => {
         if (typeof forcePage === 'number' && forcePage >= 1 && forcePage <= numPages) {
             setPageNumber(forcePage);
         }
@@ -325,6 +330,16 @@ export default function PDFViewer({
         setNumPages(numPages);
         onLoadSuccess(numPages);
     }
+
+    const handlePageRenderSuccess = () => {
+        const backingCanvas = containerRef.current?.querySelector<HTMLCanvasElement>(".react-pdf__Page__canvas");
+        const backingCanvasReady = Boolean(
+            backingCanvas && backingCanvas.width > 0 && backingCanvas.height > 0,
+        );
+        setPdfRenderReady(backingCanvasReady);
+        if (!backingCanvasReady) return;
+        setPageRenderVersion(value => value + 1);
+    };
 
     useEffect(() => {
         setInputPage(pageNumber.toString());
@@ -1292,12 +1307,13 @@ export default function PDFViewer({
                                     width={containerWidth > 0 ? containerWidth : undefined}
                                     renderTextLayer={true}
                                     renderAnnotationLayer={true}
-                                    onRenderSuccess={() => setPageRenderVersion(value => value + 1)}
+                                    onRenderSuccess={handlePageRenderSuccess}
                                 />{/* Canvas Overlay */}
                                 {shouldRenderDrawingLayer && (
                                     <canvas
                                         ref={canvasRef}
                                         data-testid="pdf-draw-overlay"
+                                        data-pdf-ready={pdfRenderReady ? "true" : "false"}
                                         onPointerDown={startDrawing}
                                         onPointerMove={handleCanvasPointerMove}
                                         onPointerUp={stopDrawing}
