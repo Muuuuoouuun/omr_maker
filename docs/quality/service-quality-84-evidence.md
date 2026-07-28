@@ -3,6 +3,7 @@
 평가일: 2026-07-29  
 브랜치: `codex/service-quality-84`  
 기준 커밋: `a04c067abd9129860fab3b8eab210169d3c98186`
+검증 대상 구현 커밋: `4a25cdfddddf7c70456080fe6e696480a17ab50f`
 
 ## 자동 검증
 
