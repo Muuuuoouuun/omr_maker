@@ -107,6 +107,31 @@ describe("Supabase deployment readiness probe", () => {
         expect(parseSupabaseDeploymentProbe(null)).toMatchObject({ ready: false });
     });
 
+    it("rejects every array shape because the RPC contract is one JSON object", () => {
+        for (const payload of [
+            [],
+            [readyV4Payload],
+            [readyV4Payload, readyV4Payload],
+        ]) {
+            expect(parseSupabaseDeploymentProbe(payload)).toEqual({
+                ready: false,
+                error: "DB readiness probe returned an invalid payload",
+                failedChecks: ["probePayload"],
+            });
+        }
+    });
+
+    it("requires the exact version string without whitespace normalization", () => {
+        expect(parseSupabaseDeploymentProbe({
+            ...readyV4Payload,
+            version: ` ${readyV4Payload.version} `,
+        })).toMatchObject({
+            ready: false,
+            version: ` ${readyV4Payload.version} `,
+            failedChecks: ["probeVersion"],
+        });
+    });
+
     it("fails closed on RPC errors without echoing database details", async () => {
         const failingClient: SupabaseProbeClient = {
             async rpc() {

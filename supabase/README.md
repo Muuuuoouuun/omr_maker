@@ -73,13 +73,17 @@ also proves an unrelated permissive bucket policy still works.
 
 The service-role-only readiness probe version `202607280003` is the runtime
 release gate. It combines direct catalog grants with effective
-`has_*_privilege` checks, requires zero public canonical policies, validates
-every OMR table's ENABLE + FORCE RLS state, reruns the four-count organization
-preflight, checks purpose-scoped teacher RPCs and legacy RPC removal, and
-verifies the hosted Storage owner plus the exact private-bucket restrictive
-policies. A missing key, false key, older version, or malformed response fails
-closed. The payload contains fixed booleans only; it never returns preflight
-samples or row data.
+`has_*_privilege` checks (including column privileges and PostgreSQL 17
+`MAINTAIN`), requires zero public canonical policies, validates the exact
+27-table allowlist plus every table's ENABLE + FORCE RLS state, reruns the
+four-count organization preflight, checks the exact purpose-scoped teacher RPC
+signatures and forbids every legacy broad-RPC overload, and verifies the hosted
+Storage owner plus the exact private-bucket restrictive policies. A missing
+key, false key, older or whitespace-normalized version, array payload, or other
+malformed response fails closed. The payload contains fixed booleans only; it
+never returns preflight samples or row data. The teacher Settings action checks
+same-origin and a valid signed teacher session before invoking this service-role
+probe, and applies a bounded per-actor request limit.
 
 Run `npm run test:supabase:live` locally when Docker is available. A machine
 without Docker cannot replace this required CI gate with source-string

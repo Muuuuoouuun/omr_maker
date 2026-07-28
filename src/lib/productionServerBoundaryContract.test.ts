@@ -79,23 +79,72 @@ describe("production server-only database boundary", () => {
     );
 
     it("installs a v4 probe over effective runtime privileges and integrity", () => {
+        const compactReadinessV4 = readinessV4.replace(/\s+/g, " ");
+        const exactCanonicalValues = canonicalTables
+            .map(table => `('${table}')`)
+            .join(", ");
+
         expect(readinessV4).not.toBe("");
         expect(readinessV4).toContain("'version', '202607280003'");
         expect(readinessV4).toContain("information_schema.role_table_grants");
+        expect(readinessV4).toContain("information_schema.role_column_grants");
         expect(readinessV4).toContain("information_schema.routine_privileges");
         expect(readinessV4).toContain("has_schema_privilege");
         expect(readinessV4).toContain("has_table_privilege");
+        expect(readinessV4).toContain("has_any_column_privilege");
         expect(readinessV4).toContain("has_sequence_privilege");
         expect(readinessV4).toContain("has_function_privilege");
+        expect(readinessV4).toContain(
+            "'SELECT,INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER,MAINTAIN'",
+        );
         expect(readinessV4).toContain("relforcerowsecurity");
         expect(readinessV4).toContain("pg_catalog.pg_policies");
-        expect(readinessV4).toContain(
-            "v_expected_canonical_table_count constant integer := 27",
+        expect(readinessV4).not.toContain(
+            "v_expected_canonical_table_count",
+        );
+        expect(compactReadinessV4).toContain(
+            `with expected_canonical_tables(table_name) as ( values ${exactCanonicalValues} )`,
+        );
+        expect(readinessV4).toMatch(
+            /select table_name\s+from expected_canonical_tables\s+except\s+select table_name\s+from actual_canonical_tables/i,
+        );
+        expect(readinessV4).toMatch(
+            /select table_name\s+from actual_canonical_tables\s+except\s+select table_name\s+from expected_canonical_tables/i,
         );
         expect(readinessV4).toContain("omr_production_boundary_preflight_v1");
-        expect(readinessV4).toContain("omr_answer_attempt_question_v1");
-        expect(readinessV4).toContain("omr_set_subquestion_review_v1");
-        expect(readinessV4).toContain("omr_force_finish_attempts_v1");
+        for (const [routineName, identityArguments] of [
+            [
+                "omr_answer_attempt_question_v1",
+                "text, text, text, text, text, text, text",
+            ],
+            [
+                "omr_set_subquestion_review_v1",
+                "text, text, text, text, text, text, text",
+            ],
+            [
+                "omr_force_finish_attempts_v1",
+                "text, text[], timestamp with time zone, text, text, text, jsonb",
+            ],
+        ]) {
+            expect(compactReadinessV4).toMatch(
+                new RegExp(
+                    `\\(\\s*'${routineName}',\\s*'${identityArguments.replaceAll("[]", "\\[\\]")}'\\s*\\)`,
+                ),
+            );
+        }
+        expect(readinessV4).toContain("pg_catalog.oidvectortypes");
+        expect(readinessV4).toMatch(
+            /select routine_name, identity_arguments\s+from expected_scoped_rpcs\s+except\s+select routine_name, identity_arguments\s+from actual_scoped_rpcs/i,
+        );
+        expect(readinessV4).toMatch(
+            /select routine_name, identity_arguments\s+from actual_scoped_rpcs\s+except\s+select routine_name, identity_arguments\s+from expected_scoped_rpcs/i,
+        );
+        expect(readinessV4).toMatch(
+            /routine\.proname\s+in\s*\(\s*'omr_teacher_update_attempt_v1',\s*'omr_mark_feedback_opened'\s*\)/i,
+        );
+        expect(readinessV4).not.toContain(
+            "'public.omr_teacher_update_attempt_v1(",
+        );
         expect(readinessV4).toContain("supabase_storage_admin");
         expect(readinessV4).toContain("OMR private assets server-only objects");
         expect(readinessV4).toContain("OMR private assets server-only buckets");
@@ -139,6 +188,9 @@ describe("production server-only database boundary", () => {
             "serviceRolePrivilegesReady",
             "scopedRpcPrivilegesReady",
             "hostedStorageBoundaryReady",
+            "serverGatewayCapabilitiesReady",
+            "queryPathIndexesReady",
+            "legacyBroadRpcsRemoved",
         ]) {
             expect(readinessV4).toContain(`'${key}'`);
         }
@@ -176,6 +228,18 @@ describe("production server-only database boundary", () => {
             "v4 readiness accepted a table without FORCE RLS",
         );
         expect(liveAssertions).toContain(
+            "v4 readiness accepted a replacement rogue canonical table",
+        );
+        expect(liveAssertions).toContain(
+            "v4 readiness accepted a PUBLIC column grant",
+        );
+        expect(liveAssertions).toContain(
+            "v4 readiness accepted a PG17 MAINTAIN grant",
+        );
+        expect(liveAssertions).toContain(
+            "v4 readiness accepted an inherited browser table grant",
+        );
+        expect(liveAssertions).toContain(
             "v4 readiness accepted missing service-role table access",
         );
         expect(liveAssertions).toContain(
@@ -185,7 +249,22 @@ describe("production server-only database boundary", () => {
             "v4 readiness accepted a missing target Storage policy",
         );
         expect(liveAssertions).toContain(
+            "v4 readiness accepted a reintroduced Storage alpha policy",
+        );
+        expect(liveAssertions).toContain(
             "v4 readiness accepted a failed organization preflight",
+        );
+        expect(liveAssertions).toContain(
+            "v4 readiness accepted a missing server gateway",
+        );
+        expect(liveAssertions).toContain(
+            "v4 readiness accepted a missing query-path index",
+        );
+        expect(liveAssertions).toContain(
+            "v4 readiness accepted a forbidden broad RPC overload",
+        );
+        expect(liveAssertions).toContain(
+            "v4 readiness accepted an extra scoped RPC overload",
         );
         expect(supabaseReadme).toContain("202607280003");
         expect(productionReadiness).toContain("202607280003");

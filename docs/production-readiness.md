@@ -33,10 +33,14 @@ service-role RPC만 유지합니다. 기존 `production-rls.sql`은 직접 authe
    `live-test-assertions.sql` 순서를 실행하는 `npm run test:supabase:live`와
    CI의 blocking `supabase-live-contract` 작업을 통과시킵니다.
    service-role 전용 readiness probe 버전은 `202607280003`이어야 합니다.
-   브라우저 schema/table/sequence/function 실효 권한 차단, 전체 canonical 테이블
-   ENABLE+FORCE RLS, public 정책 0개, 조직 preflight 4개 count 0, 목적별 교사 RPC,
-   service-role 권한, private Storage owner·제한 정책을 모두 `true`로 반환해야 하며,
-   키 누락·이전 버전·`false`는 모두 배포 불가입니다.
+   브라우저 schema/table/column/sequence/function 실효 권한과 PostgreSQL 17
+   `MAINTAIN` 차단, 정확한 canonical 27개 allowlist의 ENABLE+FORCE RLS, public
+   정책 0개, 조직 preflight 4개 count 0, 정확한 목적별 교사 RPC signature,
+   모든 legacy broad-RPC overload 제거, service-role 권한, private Storage
+   owner·제한 정책을 모두 `true`로 반환해야 합니다. 키 누락·이전 또는 공백이
+   붙은 버전·`false`·배열 응답은 모두 배포 불가입니다. 교사 설정 화면의
+   readiness Server Action은 동일 출처와 유효한 서명 세션을 먼저 확인하고
+   actor별 속도 제한을 통과한 뒤에만 service-role probe를 호출합니다.
 6. 릴리스 증거에 커밋 SHA, 정책 해시(SHA-256), CI 실행 URL, 대상 DB 프로젝트,
    실행자·시각, preflight 결과, anon/authenticated 공격 거부 결과를 기록합니다.
 7. 같은 커밋의 서버 빌드를 배포하고 교사·학생 server action 여정을 확인한 뒤 쓰기를 재개합니다.

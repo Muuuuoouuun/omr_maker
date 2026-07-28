@@ -2133,6 +2133,64 @@ declare
     readiness jsonb;
 begin
     begin
+        grant select (title) on public.omr_exams to public;
+        readiness := public.omr_service_readiness_v1();
+        if readiness->>'anonTablePrivilegesDenied' <> 'false'
+            or readiness->>'authenticatedCanonicalPrivilegesDenied' <> 'false'
+            or readiness->>'ready' <> 'false'
+        then
+            raise exception 'v4 readiness accepted a PUBLIC column grant';
+        end if;
+        raise exception using errcode = 'P1012', message = 'rollback v4 PUBLIC column drift';
+    exception when sqlstate 'P1012' then null;
+    end;
+end
+$$;
+
+do $$
+declare
+    readiness jsonb;
+begin
+    begin
+        grant maintain on public.omr_exams to authenticated;
+        readiness := public.omr_service_readiness_v1();
+        if readiness->>'authenticatedCanonicalPrivilegesDenied' <> 'false'
+            or readiness->>'ready' <> 'false'
+        then
+            raise exception 'v4 readiness accepted a PG17 MAINTAIN grant';
+        end if;
+        raise exception using errcode = 'P1013', message = 'rollback v4 MAINTAIN drift';
+    exception when sqlstate 'P1013' then null;
+    end;
+end
+$$;
+
+do $$
+declare
+    readiness jsonb;
+begin
+    begin
+        create role omr_v4_browser_parent noinherit;
+        alter role authenticated inherit;
+        grant omr_v4_browser_parent to authenticated;
+        grant select on public.omr_exams to omr_v4_browser_parent;
+        readiness := public.omr_service_readiness_v1();
+        if readiness->>'authenticatedCanonicalPrivilegesDenied' <> 'false'
+            or readiness->>'ready' <> 'false'
+        then
+            raise exception 'v4 readiness accepted an inherited browser table grant';
+        end if;
+        raise exception using errcode = 'P1014', message = 'rollback v4 inherited grant drift';
+    exception when sqlstate 'P1014' then null;
+    end;
+end
+$$;
+
+do $$
+declare
+    readiness jsonb;
+begin
+    begin
         grant create on schema public to authenticated;
         readiness := public.omr_service_readiness_v1();
         if readiness->>'browserSchemaPrivilegesDenied' <> 'false'
@@ -2151,6 +2209,29 @@ declare
     readiness jsonb;
 begin
     begin
+        alter table public.omr_comments rename to v4_hidden_comments;
+        create table public.omr_replacement_rogue (
+            id text primary key
+        );
+        alter table public.omr_replacement_rogue enable row level security;
+        alter table public.omr_replacement_rogue force row level security;
+        readiness := public.omr_service_readiness_v1();
+        if readiness->>'canonicalTablesForceRls' <> 'false'
+            or readiness->>'ready' <> 'false'
+        then
+            raise exception 'v4 readiness accepted a replacement rogue canonical table';
+        end if;
+        raise exception using errcode = 'P1015', message = 'rollback v4 canonical allowlist drift';
+    exception when sqlstate 'P1015' then null;
+    end;
+end
+$$;
+
+do $$
+declare
+    readiness jsonb;
+begin
+    begin
         grant select on public.omr_exams to anon;
         readiness := public.omr_service_readiness_v1();
         if readiness->>'anonTablePrivilegesDenied' <> 'false'
@@ -2160,6 +2241,29 @@ begin
         end if;
         raise exception using errcode = 'P1002', message = 'rollback v4 anon table drift';
     exception when sqlstate 'P1002' then null;
+    end;
+end
+$$;
+
+do $$
+declare
+    readiness jsonb;
+begin
+    begin
+        execute $statement$
+            create function public.omr_answer_attempt_question_v1(text)
+            returns boolean
+            language sql
+            as 'select true'
+        $statement$;
+        readiness := public.omr_service_readiness_v1();
+        if readiness->>'scopedRpcPrivilegesReady' <> 'false'
+            or readiness->>'ready' <> 'false'
+        then
+            raise exception 'v4 readiness accepted an extra scoped RPC overload';
+        end if;
+        raise exception using errcode = 'P1016', message = 'rollback v4 scoped overload drift';
+    exception when sqlstate 'P1016' then null;
     end;
 end
 $$;
@@ -2322,6 +2426,93 @@ begin
     end;
 end
 $$;
+
+do $$
+declare
+    readiness jsonb;
+begin
+    begin
+        alter function public.omr_save_exam_v1(jsonb, jsonb)
+            rename to omr_save_exam_v4_transient;
+        readiness := public.omr_service_readiness_v1();
+        if readiness->>'serverGatewayCapabilitiesReady' <> 'false'
+            or readiness->>'ready' <> 'false'
+        then
+            raise exception 'v4 readiness accepted a missing server gateway';
+        end if;
+        raise exception using errcode = 'P1017', message = 'rollback v4 gateway drift';
+    exception when sqlstate 'P1017' then null;
+    end;
+end
+$$;
+
+do $$
+declare
+    readiness jsonb;
+begin
+    begin
+        drop index public.omr_exams_org_updated_id_idx;
+        readiness := public.omr_service_readiness_v1();
+        if readiness->>'queryPathIndexesReady' <> 'false'
+            or readiness->>'ready' <> 'false'
+        then
+            raise exception 'v4 readiness accepted a missing query-path index';
+        end if;
+        raise exception using errcode = 'P1018', message = 'rollback v4 query index drift';
+    exception when sqlstate 'P1018' then null;
+    end;
+end
+$$;
+
+do $$
+declare
+    readiness jsonb;
+begin
+    begin
+        execute $statement$
+            create function public.omr_teacher_update_attempt_v1(text)
+            returns boolean
+            language sql
+            as 'select true'
+        $statement$;
+        readiness := public.omr_service_readiness_v1();
+        if readiness->>'legacyBroadRpcsRemoved' <> 'false'
+            or readiness->>'ready' <> 'false'
+        then
+            raise exception 'v4 readiness accepted a forbidden broad RPC overload';
+        end if;
+        raise exception using errcode = 'P1019', message = 'rollback v4 legacy RPC drift';
+    exception when sqlstate 'P1019' then null;
+    end;
+end
+$$;
+
+-- The removed alpha policy name must remain absent independently of public RLS
+-- policy checks and the exact target Storage policies.
+begin;
+set local role supabase_storage_admin;
+create policy "OMR private assets alpha access"
+    on storage.objects
+    for all
+    to anon, authenticated
+    using (true)
+    with check (true);
+reset role;
+do $$
+declare
+    readiness jsonb;
+begin
+    readiness := public.omr_service_readiness_v1();
+    if readiness->>'alphaPoliciesAbsent' <> 'false'
+        or readiness->>'canonicalPoliciesAbsent' <> 'true'
+        or readiness->>'hostedStorageBoundaryReady' <> 'true'
+        or readiness->>'ready' <> 'false'
+    then
+        raise exception 'v4 readiness accepted a reintroduced Storage alpha policy';
+    end if;
+end
+$$;
+rollback;
 
 -- The Storage policy must be changed as Supabase's managed owner.
 begin;

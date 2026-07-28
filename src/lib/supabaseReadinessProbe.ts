@@ -47,10 +47,6 @@ export interface SupabaseProbeClient {
     }>;
 }
 
-function clean(value: unknown): string {
-    return typeof value === "string" ? value.trim() : "";
-}
-
 function invalidProbePayload(): SupabaseDeploymentProbe {
     return {
         ready: false,
@@ -60,13 +56,12 @@ function invalidProbePayload(): SupabaseDeploymentProbe {
 }
 
 export function parseSupabaseDeploymentProbe(value: unknown): SupabaseDeploymentProbe {
-    const candidate = Array.isArray(value) ? value[0] : value;
-    if (!candidate || typeof candidate !== "object" || Array.isArray(candidate)) {
+    if (!value || typeof value !== "object" || Array.isArray(value)) {
         return invalidProbePayload();
     }
 
-    const row = candidate as Record<string, unknown>;
-    const version = clean(row.version);
+    const row = value as Record<string, unknown>;
+    const version = typeof row.version === "string" ? row.version : "";
     const checks = Object.fromEntries(
         SUPABASE_READINESS_CHECK_KEYS.map(key => [key, row[key] === true]),
     ) as Record<SupabaseReadinessCheckKey, boolean>;

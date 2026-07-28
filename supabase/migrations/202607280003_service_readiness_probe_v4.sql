@@ -10,7 +10,6 @@ security definer
 set search_path = ''
 as $$
 declare
-    v_expected_canonical_table_count constant integer := 27;
     v_browser_schema_privileges_denied boolean := false;
     v_anon_table_privileges_denied boolean := false;
     v_authenticated_table_privileges_denied boolean := false;
@@ -21,6 +20,7 @@ declare
     v_canonical_policies_absent boolean := false;
     v_organization_backfill_ready boolean := false;
     v_service_role_privileges_ready boolean := false;
+    v_scoped_rpc_catalog_ready boolean := false;
     v_scoped_rpc_privileges_ready boolean := false;
     v_hosted_storage_boundary_ready boolean := false;
     v_server_gateway_capabilities_ready boolean := false;
@@ -55,16 +55,30 @@ begin
         )
         and not exists (
             select 1
+              from information_schema.role_column_grants grant_row
+             where grant_row.grantee = 'anon'
+               and grant_row.table_schema = 'public'
+               and grant_row.table_name like 'omr\_%' escape '\'
+        )
+        and not exists (
+            select 1
               from pg_catalog.pg_class relation
               join pg_catalog.pg_namespace namespace
                 on namespace.oid = relation.relnamespace
              where namespace.nspname = 'public'
                and relation.relkind in ('r', 'p')
                and relation.relname like 'omr\_%' escape '\'
-               and pg_catalog.has_table_privilege(
-                   'anon',
-                   relation.oid,
-                   'SELECT,INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER'
+               and (
+                   pg_catalog.has_table_privilege(
+                       'anon',
+                       relation.oid,
+                       'SELECT,INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER,MAINTAIN'
+                   )
+                   or pg_catalog.has_any_column_privilege(
+                       'anon',
+                       relation.oid,
+                       'SELECT,INSERT,UPDATE,REFERENCES'
+                   )
                )
         );
 
@@ -78,16 +92,30 @@ begin
         )
         and not exists (
             select 1
+              from information_schema.role_column_grants grant_row
+             where grant_row.grantee = 'authenticated'
+               and grant_row.table_schema = 'public'
+               and grant_row.table_name like 'omr\_%' escape '\'
+        )
+        and not exists (
+            select 1
               from pg_catalog.pg_class relation
               join pg_catalog.pg_namespace namespace
                 on namespace.oid = relation.relnamespace
              where namespace.nspname = 'public'
                and relation.relkind in ('r', 'p')
                and relation.relname like 'omr\_%' escape '\'
-               and pg_catalog.has_table_privilege(
-                   'authenticated',
-                   relation.oid,
-                   'SELECT,INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER'
+               and (
+                   pg_catalog.has_table_privilege(
+                       'authenticated',
+                       relation.oid,
+                       'SELECT,INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER,MAINTAIN'
+                   )
+                   or pg_catalog.has_any_column_privilege(
+                       'authenticated',
+                       relation.oid,
+                       'SELECT,INSERT,UPDATE,REFERENCES'
+                   )
                )
         );
 
@@ -148,29 +176,70 @@ begin
                )
         );
 
-    v_canonical_tables_force_rls :=
-        (
-            select count(*)
-              from pg_catalog.pg_class relation
-              join pg_catalog.pg_namespace namespace
-                on namespace.oid = relation.relnamespace
-             where namespace.nspname = 'public'
-               and relation.relkind in ('r', 'p')
-               and relation.relname like 'omr\_%' escape '\'
-        ) = v_expected_canonical_table_count
+    with expected_canonical_tables(table_name) as (
+        values
+            ('omr_organizations'),
+            ('omr_plan_usage'),
+            ('omr_plan_usage_reservations'),
+            ('omr_user_profiles'),
+            ('omr_organization_members'),
+            ('omr_teacher_profiles'),
+            ('omr_student_profiles'),
+            ('omr_student_start_credentials'),
+            ('omr_classes'),
+            ('omr_roster_invites'),
+            ('omr_class_teachers'),
+            ('omr_class_students'),
+            ('omr_materials'),
+            ('omr_exams'),
+            ('omr_exam_questions'),
+            ('omr_exam_materials'),
+            ('omr_assignments'),
+            ('omr_assignment_targets'),
+            ('omr_attempts'),
+            ('omr_question_results'),
+            ('omr_assignment_submissions'),
+            ('omr_attempt_feedback'),
+            ('omr_kakao_candidate_reviews'),
+            ('omr_kakao_dispatch_logs'),
+            ('omr_comments'),
+            ('omr_audit_logs'),
+            ('omr_remote_assets')
+    ),
+    actual_canonical_tables(table_name, row_security, force_row_security) as (
+        select
+            relation.relname::text,
+            relation.relrowsecurity,
+            relation.relforcerowsecurity
+          from pg_catalog.pg_class relation
+          join pg_catalog.pg_namespace namespace
+            on namespace.oid = relation.relnamespace
+         where namespace.nspname = 'public'
+           and relation.relkind in ('r', 'p')
+           and relation.relname like 'omr\_%' escape '\'
+    )
+    select
+        not exists (
+            select table_name
+              from expected_canonical_tables
+            except
+            select table_name
+              from actual_canonical_tables
+        )
+        and not exists (
+            select table_name
+              from actual_canonical_tables
+            except
+            select table_name
+              from expected_canonical_tables
+        )
         and not exists (
             select 1
-              from pg_catalog.pg_class relation
-              join pg_catalog.pg_namespace namespace
-                on namespace.oid = relation.relnamespace
-             where namespace.nspname = 'public'
-               and relation.relkind in ('r', 'p')
-               and relation.relname like 'omr\_%' escape '\'
-               and (
-                   not relation.relrowsecurity
-                   or not relation.relforcerowsecurity
-               )
-        );
+              from actual_canonical_tables
+             where not row_security
+                or not force_row_security
+        )
+      into v_canonical_tables_force_rls;
 
     v_canonical_policies_absent := not exists (
         select 1
@@ -283,8 +352,55 @@ begin
                )
         );
 
+    with expected_scoped_rpcs(routine_name, identity_arguments) as (
+        values
+            (
+                'omr_answer_attempt_question_v1',
+                'text, text, text, text, text, text, text'
+            ),
+            (
+                'omr_set_subquestion_review_v1',
+                'text, text, text, text, text, text, text'
+            ),
+            (
+                'omr_force_finish_attempts_v1',
+                'text, text[], timestamp with time zone, text, text, text, jsonb'
+            )
+    ),
+    actual_scoped_rpcs(routine_name, identity_arguments) as (
+        select
+            routine.proname::text,
+            pg_catalog.oidvectortypes(routine.proargtypes)
+          from pg_catalog.pg_proc routine
+          join pg_catalog.pg_namespace namespace
+            on namespace.oid = routine.pronamespace
+         where namespace.nspname = 'public'
+           and routine.proname in (
+               'omr_answer_attempt_question_v1',
+               'omr_set_subquestion_review_v1',
+               'omr_force_finish_attempts_v1'
+           )
+    )
+    select
+        not exists (
+            select routine_name, identity_arguments
+              from expected_scoped_rpcs
+            except
+            select routine_name, identity_arguments
+              from actual_scoped_rpcs
+        )
+        and not exists (
+            select routine_name, identity_arguments
+              from actual_scoped_rpcs
+            except
+            select routine_name, identity_arguments
+              from expected_scoped_rpcs
+        )
+      into v_scoped_rpc_catalog_ready;
+
     v_scoped_rpc_privileges_ready :=
-        pg_catalog.to_regprocedure(
+        v_scoped_rpc_catalog_ready
+        and pg_catalog.to_regprocedure(
             'public.omr_answer_attempt_question_v1(text,text,text,text,text,text,text)'
         ) is not null
         and pg_catalog.to_regprocedure(
@@ -443,22 +559,17 @@ begin
             'public.omr_feedback_student_returned_idx'
         ) is not null;
 
-    v_legacy_broad_rpcs_removed :=
-        pg_catalog.to_regprocedure(
-            'public.omr_teacher_update_attempt_v1(text,jsonb,jsonb)'
-        ) is null
-        and pg_catalog.to_regprocedure(
-            'public.omr_mark_feedback_opened(text,timestamptz)'
-        ) is null
-        and pg_catalog.to_regprocedure(
-            'public.omr_answer_attempt_question_v1(text,text,text,text)'
-        ) is null
-        and pg_catalog.to_regprocedure(
-            'public.omr_set_subquestion_review_v1(text,text,text,text)'
-        ) is null
-        and pg_catalog.to_regprocedure(
-            'public.omr_force_finish_attempts_v1(text,text[],timestamptz)'
-        ) is null;
+    v_legacy_broad_rpcs_removed := not exists (
+        select 1
+          from pg_catalog.pg_proc routine
+          join pg_catalog.pg_namespace namespace
+            on namespace.oid = routine.pronamespace
+         where namespace.nspname = 'public'
+           and routine.proname in (
+               'omr_teacher_update_attempt_v1',
+               'omr_mark_feedback_opened'
+           )
+    );
 
     v_ready :=
         v_browser_schema_privileges_denied
