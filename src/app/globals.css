@@ -79,9 +79,12 @@
   --motion-panel: 210ms;
   --motion-distance: 0.375rem;
   --ease-balanced: cubic-bezier(0.2, 0.8, 0.2, 1);
+  --type-body-min: 1rem;
+  --type-caption-min: 0.8125rem;
+  /* Compatibility aliases for the Balanced plan; new consumers use --type-*. */
   --text-body-min: 1rem;
   --text-caption-min: 0.8125rem;
-  --shadow-action: 0 8px 18px rgb(37 99 235 / 20%);
+  --shadow-action: 0 8px 18px color-mix(in srgb, var(--primary) 20%, transparent);
 
   /* Geist (numerals/mono) is wired via next/font/google in layout.tsx, which
      exposes --font-geist-sans / --font-geist-mono as custom properties scoped
@@ -1414,6 +1417,12 @@ textarea,
   }
 }
 
+html[data-motion="off"] {
+  --motion-hover: 1ms;
+  --motion-panel: 1ms;
+  --motion-distance: 0rem;
+}
+
 html[data-motion="off"] .orb {
   display: none;
   animation: none;
@@ -1434,6 +1443,7 @@ html[data-motion="off"] *::after {
   :root {
     --motion-hover: 1ms;
     --motion-panel: 1ms;
+    --motion-distance: 0rem;
   }
 
   *,

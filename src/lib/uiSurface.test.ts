@@ -8,6 +8,73 @@ function readProjectFile(filePath: string): string {
     return readFileSync(path.join(rootDir, filePath), "utf8");
 }
 
+function stripCssComments(cssSource: string): string {
+    return cssSource.replace(/\/\*[\s\S]*?\*\//g, "");
+}
+
+function extractCssBlock(cssSource: string, blockHeader: string): string {
+    const css = stripCssComments(cssSource);
+    let searchFrom = 0;
+
+    while (searchFrom < css.length) {
+        const headerIndex = css.indexOf(blockHeader, searchFrom);
+        if (headerIndex < 0) break;
+
+        const openBraceIndex = css.indexOf("{", headerIndex + blockHeader.length);
+        if (openBraceIndex < 0) break;
+
+        const matchedHeader = css.slice(headerIndex, openBraceIndex).trim();
+        if (matchedHeader !== blockHeader) {
+            searchFrom = headerIndex + blockHeader.length;
+            continue;
+        }
+
+        let depth = 1;
+        for (let index = openBraceIndex + 1; index < css.length; index += 1) {
+            if (css[index] === "{") depth += 1;
+            if (css[index] === "}") depth -= 1;
+            if (depth === 0) return css.slice(openBraceIndex + 1, index);
+        }
+
+        throw new Error(`Unclosed CSS block: ${blockHeader}`);
+    }
+
+    throw new Error(`CSS block not found: ${blockHeader}`);
+}
+
+function extractCustomProperties(cssBlock: string): Record<string, string> {
+    const css = stripCssComments(cssBlock);
+    const declarations: Record<string, string> = {};
+    let depth = 0;
+    let declarationStart = 0;
+
+    for (let index = 0; index < css.length; index += 1) {
+        const character = css[index];
+        if (character === "{") {
+            depth += 1;
+        } else if (character === "}") {
+            depth -= 1;
+            if (depth === 0) declarationStart = index + 1;
+        } else if (character === ";" && depth === 0) {
+            const declaration = css.slice(declarationStart, index).trim();
+            declarationStart = index + 1;
+            const match = declaration.match(/^(--[\w-]+)\s*:\s*([\s\S]+)$/);
+            if (!match) continue;
+
+            const [, name, value] = match;
+            if (name in declarations) throw new Error(`Duplicate CSS declaration in block: ${name}`);
+            declarations[name] = value.trim();
+        }
+    }
+
+    return declarations;
+}
+
+function countCustomPropertyDeclarations(cssSource: string, propertyName: string): number {
+    const escapedName = propertyName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    return stripCssComments(cssSource).match(new RegExp(`${escapedName}\\s*:`, "g"))?.length ?? 0;
+}
+
 function expectEnvOverridesAfterInherited(envSource: string, overrideKeys: readonly string[]): number {
     const inheritedEnvIndex = envSource.indexOf("...process.env");
     expect(inheritedEnvIndex, "webServer.env must inherit process.env before applying test overrides").toBeGreaterThanOrEqual(0);
@@ -22,21 +89,81 @@ function expectEnvOverridesAfterInherited(envSource: string, overrideKeys: reado
 }
 
 describe("service UI surface", () => {
-    it("defines the Balanced hierarchy and motion token contract", () => {
-        const css = readProjectFile("src/app/globals.css");
+    it("extracts exact CSS scopes without accepting comments, nesting, or selector prefixes", () => {
+        const fixture = `
+            /* :root { --token: commented; } */
+            :root { --token: base; }
+            @media (prefers-reduced-motion: reduce) {
+                :root { --token: reduced; }
+            }
+            html[data-motion="off"] .orb { --token: wrong-selector; }
+        `;
 
-        expect(css).toContain("--space-related: 1rem");
-        expect(css).toContain("--space-card: 1.5rem");
-        expect(css).toContain("--space-section: 2.5rem");
-        expect(css).toContain("--motion-hover: 160ms");
-        expect(css).toContain("--motion-panel: 210ms");
-        expect(css).toContain("--motion-distance: 0.375rem");
-        expect(css).toContain("--ease-balanced: cubic-bezier(0.2, 0.8, 0.2, 1)");
-        expect(css).toContain("--text-body-min: 1rem");
-        expect(css).toContain("--text-caption-min: 0.8125rem");
-        expect(css).toContain("--shadow-action: 0 8px 18px rgb(37 99 235 / 20%)");
-        expect(css).toContain("--motion-hover: 1ms");
-        expect(css).toContain("--motion-panel: 1ms");
+        expect(extractCustomProperties(extractCssBlock(fixture, ":root"))).toEqual({
+            "--token": "base",
+        });
+        expect(
+            extractCustomProperties(
+                extractCssBlock(
+                    extractCssBlock(fixture, "@media (prefers-reduced-motion: reduce)"),
+                    ":root",
+                ),
+            ),
+        ).toEqual({ "--token": "reduced" });
+        expect(countCustomPropertyDeclarations(fixture, "--token")).toBe(3);
+        expect(() => extractCssBlock(fixture, 'html[data-motion="off"]')).toThrow(
+            'CSS block not found: html[data-motion="off"]',
+        );
+    });
+
+    it("defines exact Balanced base tokens once in the opening root", () => {
+        const css = readProjectFile("src/app/globals.css");
+        const uncommentedCss = stripCssComments(css);
+        const baseTokens = {
+            "--space-related": "1rem",
+            "--space-card": "1.5rem",
+            "--space-section": "2.5rem",
+            "--motion-hover": "160ms",
+            "--motion-panel": "210ms",
+            "--motion-distance": "0.375rem",
+            "--ease-balanced": "cubic-bezier(0.2, 0.8, 0.2, 1)",
+            "--type-body-min": "1rem",
+            "--type-caption-min": "0.8125rem",
+            "--text-body-min": "1rem",
+            "--text-caption-min": "0.8125rem",
+            "--shadow-action": "0 8px 18px color-mix(in srgb, var(--primary) 20%, transparent)",
+        } as const;
+        const openingRootDeclarations = extractCustomProperties(extractCssBlock(css, ":root"));
+
+        expect(uncommentedCss.trimStart().startsWith(":root")).toBe(true);
+        for (const [propertyName, expectedValue] of Object.entries(baseTokens)) {
+            expect(openingRootDeclarations[propertyName], propertyName).toBe(expectedValue);
+        }
+
+        for (const propertyName of Object.keys(baseTokens)) {
+            const expectedCount = propertyName.startsWith("--motion-") ? 3 : 1;
+            expect(
+                countCustomPropertyDeclarations(css, propertyName),
+                `${propertyName} global declaration count`,
+            ).toBe(expectedCount);
+        }
+    });
+
+    it("disables Balanced motion tokens for both motion controls", () => {
+        const css = readProjectFile("src/app/globals.css");
+        const reducedMotionMedia = extractCssBlock(css, "@media (prefers-reduced-motion: reduce)");
+        const expectedOverrides = {
+            "--motion-hover": "1ms",
+            "--motion-panel": "1ms",
+            "--motion-distance": "0rem",
+        };
+
+        expect(
+            extractCustomProperties(extractCssBlock(reducedMotionMedia, ":root")),
+        ).toEqual(expectedOverrides);
+        expect(
+            extractCustomProperties(extractCssBlock(css, 'html[data-motion="off"]')),
+        ).toEqual(expectedOverrides);
     });
 
     it("keeps premium scrollbars on the app, PDF viewer, and dense panels", () => {
