@@ -16,6 +16,8 @@ jobs:
         with:
           node-version: "20"
           cache: "npm"
+      - name: Production dependency audit
+        run: npm audit --package-lock-only --omit=dev --audit-level=high
       - name: Install
         run: npm ci
       - name: Lint
@@ -24,6 +26,40 @@ jobs:
         run: npx tsc --noEmit
       - name: Unit tests (Vitest)
         run: npm test
+
+  supabase-live-contract:
+    name: Live Supabase contract
+    runs-on: ubuntu-latest
+    needs: lint-and-test
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+      - name: Install
+        run: npm ci
+      - name: Verify live Supabase contract
+        run: npm run test:supabase:live
+
+  desktop-windows-smoke:
+    name: Windows packaged Electron smoke
+    runs-on: windows-latest
+    needs: lint-and-test
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+      - name: Install
+        run: npm ci
+      - name: Package unpacked desktop app
+        run: npm run desktop:pack
+      - name: Smoke-test packaged runtime
+        run: npm run desktop:smoke:packaged
 
   e2e:
     name: E2E tests (Playwright)
