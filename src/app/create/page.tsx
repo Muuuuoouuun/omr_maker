@@ -2220,6 +2220,14 @@ function CreateOMRPageInner() {
         }
     };
 
+    const handleOpenDistribution = () => {
+        if (!serviceReadiness.canOpenDistribution) {
+            toast.error("배포 전 확인 필요", serviceReadiness.detail || "시험 설정을 확인해주세요.");
+            return;
+        }
+        setIsDistributeModalOpen(true);
+    };
+
     return (
         <div className="layout-main" style={{ background: 'var(--background)', height: 'var(--app-viewport-height, 100dvh)', overflow: 'hidden' }}>
             <header className="header create-editor-shell-header" style={{ flexShrink: 0 }}>
@@ -2302,27 +2310,25 @@ function CreateOMRPageInner() {
                             <UploadCloud size={16} />
                             답지 업로드
                         </button>
-                        <button
-                            className="btn btn-secondary"
-                            style={{ padding: '0.55rem 1rem', fontSize: '0.85rem' }}
-                            onClick={handleSaveImage}
-                            disabled={isSaving}
-                        >
-                            {isSaving ? "저장 중..." : "이미지 저장"}
-                        </button>
-                        <button
-                            className="btn btn-primary"
-                            style={{ padding: '0.55rem 1.1rem', fontSize: '0.85rem' }}
-                            onClick={() => {
-                                if (!serviceReadiness.canOpenDistribution) {
-                                    toast.error("배포 전 확인 필요", serviceReadiness.detail || "시험 설정을 확인해주세요.");
-                                    return;
-                                }
-                                setIsDistributeModalOpen(true);
-                            }}
-                        >
-                            배포하기
-                        </button>
+                        <div className="create-primary-actions create-primary-actions--desktop">
+                            <button
+                                type="button"
+                                className="btn btn-secondary"
+                                style={{ padding: '0.55rem 1rem', fontSize: '0.85rem' }}
+                                onClick={handleSaveImage}
+                                disabled={isSaving}
+                            >
+                                {isSaving ? "저장 중..." : "이미지 저장"}
+                            </button>
+                            <button
+                                type="button"
+                                className="btn btn-primary"
+                                style={{ padding: '0.55rem 1.1rem', fontSize: '0.85rem' }}
+                                onClick={handleOpenDistribution}
+                            >
+                                배포하기
+                            </button>
+                        </div>
                         <TeacherSessionChip compact />
                         <TeacherLogoutButton size="small" />
                         <ThemeToggle size="small" />
@@ -3908,6 +3914,28 @@ function CreateOMRPageInner() {
                 </main>
 
             </div >
+
+            <div
+                className="create-primary-actions create-primary-actions--mobile"
+                role="group"
+                aria-label="출제 완료 작업"
+            >
+                <button
+                    type="button"
+                    className="btn btn-primary"
+                    onClick={handleOpenDistribution}
+                >
+                    배포하기
+                </button>
+                <button
+                    type="button"
+                    className="btn btn-secondary"
+                    onClick={handleSaveImage}
+                    disabled={isSaving}
+                >
+                    {isSaving ? "저장 중..." : "이미지 저장"}
+                </button>
+            </div>
         </div >
     );
 }

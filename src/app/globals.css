@@ -5290,6 +5290,16 @@ body:has(.create-workspace.is-resizing) {
   min-width: 0;
 }
 
+.create-primary-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.create-primary-actions--mobile {
+  display: none;
+}
+
 .create-editor-brand a {
   min-height: 44px;
   min-width: 44px;
@@ -5771,6 +5781,33 @@ body:has(.create-workspace.is-resizing) {
     text-align: right;
   }
 
+}
+
+@media (max-width: 640px) {
+  .create-primary-actions--desktop {
+    display: none;
+  }
+
+  .create-primary-actions--mobile {
+    position: sticky;
+    bottom: max(0.75rem, env(safe-area-inset-bottom));
+    z-index: 30;
+    display: grid;
+    grid-template-columns: 1fr auto;
+    gap: var(--space-related);
+    flex: 0 0 auto;
+    margin: 0.75rem;
+    padding: 0.75rem;
+    border: 1px solid var(--border);
+    border-radius: 1rem;
+    background: rgb(255 255 255 / 92%);
+    backdrop-filter: blur(14px);
+    box-shadow: var(--shadow-action);
+  }
+
+  .create-primary-actions--mobile .btn {
+    min-height: 2.75rem;
+  }
 }
 
 /* ─── Custom Scrollbar ───────────────────────────────── */
