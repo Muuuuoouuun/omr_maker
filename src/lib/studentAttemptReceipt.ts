@@ -135,6 +135,7 @@ function isReceiptReason(value: unknown): value is SubmissionReceiptReason {
     return value === "login_required"
         || value === "exam_ended"
         || value === "exam_archived"
+        || value === "not_started"
         || value === "access_denied"
         || value === "not_found"
         || value === "service_unavailable";

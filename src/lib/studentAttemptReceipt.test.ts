@@ -96,6 +96,27 @@ describe("student attempt receipt cache", () => {
         });
     });
 
+    it("preserves the not-started reason when a pending receipt is sanitized after reload", () => {
+        const storage = createStorage();
+        vi.stubGlobal("window", { localStorage: storage });
+
+        expect(persistSubmissionReceipt({
+            attemptId: "attempt-not-started-reload",
+            status: "pending",
+            updatedAt: "2026-07-28T00:00:00.000Z",
+            reason: "not_started",
+            retryMode: "automatic",
+            prerequisite: "exam_start",
+        })).toBe(true);
+
+        expect(readSubmissionReceipt("attempt-not-started-reload")).toMatchObject({
+            status: "pending",
+            reason: "not_started",
+            retryMode: "automatic",
+            prerequisite: "exam_start",
+        });
+    });
+
     it("keeps a failed idempotent retry pending with honest feedback", async () => {
         const storage = createStorage();
         vi.stubGlobal("window", { localStorage: storage });

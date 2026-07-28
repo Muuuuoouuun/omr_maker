@@ -443,17 +443,18 @@ export function stripHeavyAttemptPayload(attempt: Attempt): Attempt {
     return stripped;
 }
 
+function attemptPayloadForServer(attempt: Attempt): Attempt {
+    const payload = { ...stripHeavyAttemptPayload(attempt) };
+    delete payload.localSubmissionProvenance;
+    return payload;
+}
+
 export function attemptToSupabaseRow(attempt: Attempt, context?: WorkspaceContext | null): SupabaseAttemptRow {
     const score = numberValue(attempt.score) || 0;
     const totalScore = numberValue(attempt.totalScore) || 0;
     const scorePercent = totalScore > 0 ? Math.round((score / totalScore) * 100) : 0;
     const classId = scopedValue(attempt.classId) || scopedValue(attempt.groupId);
     const studentProfileId = scopedValue(attempt.studentProfileId) || scopedValue(attempt.studentId);
-
-    const {
-        localSubmissionProvenance: _localSubmissionProvenance,
-        ...serverPayload
-    } = stripHeavyAttemptPayload(attempt);
 
     return {
         id: attempt.id,
@@ -478,7 +479,7 @@ export function attemptToSupabaseRow(attempt: Attempt, context?: WorkspaceContex
         retake_question_ids: numberArray(attempt.retake?.questionIds),
         merged_from_guest_id: attempt.mergedFromGuestId || null,
         merged_at: attempt.mergedAt || null,
-        payload: serverPayload as Attempt,
+        payload: attemptPayloadForServer(attempt),
         started_at: attempt.startedAt,
         finished_at: attempt.finishedAt,
     };
