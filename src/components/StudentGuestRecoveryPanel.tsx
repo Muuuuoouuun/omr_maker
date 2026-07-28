@@ -15,6 +15,7 @@ export default function StudentGuestRecoveryPanel() {
     const [recovery, setRecovery] = useState<GuestRecoveryState | null>(null);
     const [message, setMessage] = useState("");
     const [retrying, setRetrying] = useState(false);
+    const [discarding, setDiscarding] = useState(false);
 
     const refresh = () => setRecovery(readGuestRecoveryState(window.localStorage));
     useEffect(() => { refresh(); }, []);
@@ -72,7 +73,7 @@ export default function StudentGuestRecoveryPanel() {
         }
     };
 
-    const discard = () => {
+    const discard = async () => {
         const wholeStore = recovery.status === "attempt_store_corrupt";
         const prompt = wholeStore
             ? "전체 응시 저장소가 손상되었습니다. 다른 학생의 캐시가 포함될 수 있습니다. 원문을 격리한 뒤 활성 저장소에서 제거할까요?"
@@ -80,9 +81,21 @@ export default function StudentGuestRecoveryPanel() {
                 ? "손상된 복구 표식만 이 기기에서 폐기할까요? 응시 기록 저장소는 변경하지 않습니다."
                 : "선택된 게스트의 미검증 로컬 기록을 이 기기에서 폐기할까요?";
         if (!window.confirm(prompt)) return;
-        if (discardGuestRecovery(recovery, window.localStorage, { quarantineWholeAttemptStore: wholeStore })) {
+        setDiscarding(true);
+        const result = await discardGuestRecovery(
+            recovery,
+            window.localStorage,
+            { quarantineWholeAttemptStore: wholeStore },
+        );
+        setDiscarding(false);
+        if (result.status === "discarded" || result.status === "quarantined") {
             setRecovery(null);
             setMessage("");
+        } else if (result.status === "stale") {
+            refresh();
+            setMessage("다른 탭에서 로컬 기록이 변경되었습니다. 최신 상태를 다시 확인한 뒤 재시도해주세요.");
+        } else if (result.status === "blocked") {
+            setMessage("기존 격리 데이터가 있어 현재 저장소를 변경하지 않았습니다. 먼저 복구 파일을 내보내주세요.");
         } else {
             setMessage("로컬 기록을 폐기하지 못했습니다. 브라우저 저장공간을 확인해주세요.");
         }
@@ -120,8 +133,16 @@ export default function StudentGuestRecoveryPanel() {
                 >
                     {retrying ? "확인 중…" : "서버 소유 기록 다시 확인"}
                 </button>
-                <button type="button" className="btn" onClick={discard} style={{ color: "var(--error)" }}>
-                    {recovery.status === "attempt_store_corrupt" ? "손상 저장소 격리" : "로컬 기록 폐기"}
+                <button
+                    type="button"
+                    className="btn"
+                    onClick={() => void discard()}
+                    disabled={discarding}
+                    style={{ color: "var(--error)" }}
+                >
+                    {discarding
+                        ? "처리 중…"
+                        : recovery.status === "attempt_store_corrupt" ? "손상 저장소 격리" : "로컬 기록 폐기"}
                 </button>
             </div>
             {message && <p role="status" style={{ marginTop: "0.7rem", fontSize: "0.8rem", color: "var(--muted)" }}>{message}</p>}

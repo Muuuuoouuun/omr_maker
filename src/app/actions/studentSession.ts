@@ -235,7 +235,6 @@ export async function issueStudentSession(input: {
         cookieStore.get(STUDENT_SERVER_SESSION_COOKIE)?.value,
     );
     const existingGuestSession = existingIdentity?.kind === "guest" ? existingIdentity : null;
-    const requestedGuestAttemptIds = boundGuestClaimAttemptIds(input.guestAttemptIds || []).attemptIds;
     const client = adminClient();
     if (!client) {
         const studentId = clean(input.studentId);
@@ -358,6 +357,7 @@ export async function issueStudentSession(input: {
         if (existingGuestSession) {
             await setGuestClaimOwnerCookie(existingGuestSession, verifiedStudent);
         }
+        const requestedGuestAttemptIds = boundGuestClaimAttemptIds(input.guestAttemptIds || []).attemptIds;
         const guestClaim = await claimSignedGuestAttempts(client, {
             guest: existingGuestSession,
             student: verifiedStudent,

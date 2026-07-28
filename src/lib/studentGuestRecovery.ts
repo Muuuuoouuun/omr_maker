@@ -1,3 +1,5 @@
+import { withBrowserStorageLock } from "@/lib/browserStorageLock";
+
 const ATTEMPTS_KEY = "omr_attempts";
 const PENDING_KEY = "omr_pending_guest_merge";
 
@@ -126,36 +128,51 @@ export function clearGuestRecoveryMarker(storage: Storage): void {
     storage.removeItem(PENDING_KEY);
 }
 
-export function discardGuestRecovery(
+export type GuestRecoveryMutationResult =
+    | { status: "discarded" }
+    | { status: "quarantined" }
+    | { status: "stale" }
+    | { status: "blocked" }
+    | { status: "failed" };
+
+export async function discardGuestRecovery(
     state: GuestRecoveryState,
     storage: Storage,
     options: { quarantineWholeAttemptStore?: boolean } = {},
-): boolean {
+): Promise<GuestRecoveryMutationResult> {
     try {
-        if (state.status === "marker_corrupt") {
-            storage.removeItem(PENDING_KEY);
-            return true;
-        }
-        if (state.status === "attempt_store_corrupt") {
-            if (!options.quarantineWholeAttemptStore || storage.getItem("omr_attempts_quarantine") !== null) {
-                return false;
+        return await withBrowserStorageLock("attempt-index", () => {
+            if (state.status === "marker_corrupt") {
+                if (storage.getItem(PENDING_KEY) !== state.rawPendingStorage) return { status: "stale" };
+                storage.removeItem(PENDING_KEY);
+                return { status: "discarded" };
             }
-            storage.setItem("omr_attempts_quarantine", state.rawAttemptStorage);
-            storage.removeItem(ATTEMPTS_KEY);
+            if (state.status === "attempt_store_corrupt") {
+                if (!options.quarantineWholeAttemptStore || storage.getItem("omr_attempts_quarantine") !== null) {
+                    return { status: "blocked" };
+                }
+                if (
+                    storage.getItem(ATTEMPTS_KEY) !== state.rawAttemptStorage
+                    || storage.getItem(PENDING_KEY) !== state.rawPendingStorage
+                ) return { status: "stale" };
+                storage.setItem("omr_attempts_quarantine", state.rawAttemptStorage);
+                storage.removeItem(ATTEMPTS_KEY);
+                storage.removeItem(PENDING_KEY);
+                return { status: "quarantined" };
+            }
+            if (storage.getItem(PENDING_KEY) !== state.rawPendingStorage) return { status: "stale" };
+            const parsed = JSON.parse(storage.getItem(ATTEMPTS_KEY) ?? "[]");
+            if (!Array.isArray(parsed)) return { status: "stale" };
+            const remaining = parsed.filter(value => {
+                const attempt = record(value);
+                return !attempt || !isGuestRecoveryAttempt(attempt, state.guestId);
+            });
+            if (remaining.length > 0) storage.setItem(ATTEMPTS_KEY, JSON.stringify(remaining));
+            else storage.removeItem(ATTEMPTS_KEY);
             storage.removeItem(PENDING_KEY);
-            return true;
-        }
-        const parsed = JSON.parse(storage.getItem(ATTEMPTS_KEY) ?? "[]");
-        if (!Array.isArray(parsed)) return false;
-        const remaining = parsed.filter(value => {
-            const attempt = record(value);
-            return !attempt || !isGuestRecoveryAttempt(attempt, state.guestId);
+            return { status: "discarded" };
         });
-        if (remaining.length > 0) storage.setItem(ATTEMPTS_KEY, JSON.stringify(remaining));
-        else storage.removeItem(ATTEMPTS_KEY);
-        storage.removeItem(PENDING_KEY);
-        return true;
     } catch {
-        return false;
+        return { status: "failed" };
     }
 }

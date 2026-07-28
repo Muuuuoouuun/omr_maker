@@ -1,5 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
-import { claimSignedGuestAttempts } from "./studentGuestClaimGateway";
+import {
+    boundGuestClaimAttemptIds,
+    claimSignedGuestAttempts,
+} from "./studentGuestClaimGateway";
 
 describe("signed guest-attempt claim gateway", () => {
     it("atomically moves only the signed guest owner into the verified student scope", async () => {
@@ -199,7 +202,7 @@ describe("signed guest-attempt claim gateway", () => {
         expect(result).toEqual({
             status: "partial",
             acknowledgedAttemptIds: ids.slice(0, 500),
-            deferredAttemptCount: 150,
+            hasDeferredAttempts: true,
             error: "Guest attempt claim request exceeded safe bounds",
         });
         expect(rpc).toHaveBeenCalledTimes(5);
@@ -244,11 +247,41 @@ describe("signed guest-attempt claim gateway", () => {
         const sent = rpc.mock.calls.flatMap(([, args]) => args.p_attempt_ids as string[]);
         expect(result).toMatchObject({
             status: "partial",
-            deferredAttemptCount: expect.any(Number),
+            hasDeferredAttempts: true,
         });
-        expect(result.status === "partial" && result.deferredAttemptCount).toBeGreaterThan(0);
         expect(sent).not.toContain(overlong);
         expect(new TextEncoder().encode(JSON.stringify(sent)).length).toBeLessThanOrEqual(64 * 1024);
         expect(rpc.mock.calls.length).toBeLessThanOrEqual(5);
+    });
+
+    it("validates arrays and never touches an accessor beyond the bounded prefix", () => {
+        const nonArray = {
+            get length() { throw new Error("non-array length accessed"); },
+        };
+        expect(boundGuestClaimAttemptIds(nonArray)).toEqual({
+            attemptIds: [],
+            hasDeferredAttempts: false,
+        });
+
+        const ids = Array.from({ length: 501 }, (_, index) => `attempt-${index}`);
+        Object.defineProperty(ids, 500, {
+            get() { throw new Error("tail accessed"); },
+        });
+        expect(boundGuestClaimAttemptIds(ids)).toEqual({
+            attemptIds: ids.slice(0, 500),
+            hasDeferredAttempts: true,
+        });
+    });
+
+    it("stops at the serialized-byte boundary without inspecting the remaining tail", () => {
+        const ids = Array.from({ length: 400 }, (_, index) => `${index}-`.padEnd(240, "z"));
+        Object.defineProperty(ids, 399, {
+            get() { throw new Error("byte-limit tail accessed"); },
+        });
+
+        const bounded = boundGuestClaimAttemptIds(ids);
+        expect(bounded.hasDeferredAttempts).toBe(true);
+        expect(new TextEncoder().encode(JSON.stringify(bounded.attemptIds)).length)
+            .toBeLessThanOrEqual(64 * 1024);
     });
 });

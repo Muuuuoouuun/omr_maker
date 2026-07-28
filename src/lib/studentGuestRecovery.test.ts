@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
     buildGuestRecoveryExport,
     discardGuestRecovery,
@@ -35,6 +35,19 @@ const localAttempt = {
 };
 
 describe("unverified guest recovery", () => {
+    beforeEach(() => {
+        vi.stubGlobal("navigator", {
+            locks: {
+                request: async (
+                    _name: string,
+                    _options: object,
+                    operation: () => Promise<unknown>,
+                ) => operation(),
+            },
+        });
+    });
+    afterEach(() => vi.unstubAllGlobals());
+
     it("classifies arbitrary local id/exam/payload/time as export-only, never canonical proof", () => {
         const storage = memoryStorage({
             omr_pending_guest_merge: pending,
@@ -53,7 +66,7 @@ describe("unverified guest recovery", () => {
         expect(storage.removeItem).not.toHaveBeenCalled();
     });
 
-    it("keeps corrupt attempt-store bytes quarantinable but never deletes them under generic discard", () => {
+    it("keeps corrupt attempt-store bytes quarantinable but never deletes them under generic discard", async () => {
         const raw = '[{"body":"PIN 1234","broken":';
         const storage = memoryStorage({
             omr_pending_guest_merge: pending,
@@ -71,17 +84,21 @@ describe("unverified guest recovery", () => {
         expect(storage.setItem).not.toHaveBeenCalled();
         expect(storage.removeItem).not.toHaveBeenCalled();
 
-        expect(discardGuestRecovery(state!, storage)).toBe(false);
+        await expect(discardGuestRecovery(state!, storage)).resolves.toEqual({ status: "blocked" });
         expect(storage.setItem).not.toHaveBeenCalled();
         expect(storage.removeItem).not.toHaveBeenCalled();
 
-        expect(discardGuestRecovery(state!, storage, { quarantineWholeAttemptStore: true })).toBe(true);
+        await expect(discardGuestRecovery(
+            state!,
+            storage,
+            { quarantineWholeAttemptStore: true },
+        )).resolves.toEqual({ status: "quarantined" });
         expect(storage.setItem).toHaveBeenCalledWith("omr_attempts_quarantine", expect.stringContaining(raw));
         expect(storage.removeItem).toHaveBeenCalledWith("omr_attempts");
         expect(storage.removeItem).toHaveBeenCalledWith("omr_pending_guest_merge");
     });
 
-    it("keeps marker corruption scoped away from valid unrelated student attempts", () => {
+    it("keeps marker corruption scoped away from valid unrelated student attempts", async () => {
         const rawPending = '{"legacyGuest":';
         const unrelated = {
             ...localAttempt,
@@ -109,14 +126,14 @@ describe("unverified guest recovery", () => {
         expect(storage.setItem).not.toHaveBeenCalled();
         expect(storage.removeItem).not.toHaveBeenCalled();
 
-        expect(discardGuestRecovery(state!, storage)).toBe(true);
+        await expect(discardGuestRecovery(state!, storage)).resolves.toEqual({ status: "discarded" });
         expect(storage.getItem("omr_attempts")).toBe(rawAttempts);
         expect(storage.getItem("omr_pending_guest_merge")).toBeNull();
         expect(storage.removeItem).toHaveBeenCalledTimes(1);
         expect(storage.removeItem).toHaveBeenCalledWith("omr_pending_guest_merge");
     });
 
-    it("discards only the selected guest recovery records and preserves other students", () => {
+    it("discards only the selected guest recovery records and preserves other students", async () => {
         const other = { ...localAttempt, id: "student-record", studentId: "student-2", guestId: undefined, identityType: "temporary" };
         const storage = memoryStorage({
             omr_pending_guest_merge: pending,
@@ -124,8 +141,41 @@ describe("unverified guest recovery", () => {
         });
         const state = readGuestRecoveryState(storage)!;
 
-        expect(discardGuestRecovery(state, storage)).toBe(true);
+        await expect(discardGuestRecovery(state, storage)).resolves.toEqual({ status: "discarded" });
         expect(JSON.parse(storage.getItem("omr_attempts") || "[]")).toEqual([other]);
         expect(storage.getItem("omr_pending_guest_merge")).toBeNull();
+    });
+
+    it("aborts stale quarantine inside the attempt-index lock when another tab changes the store", async () => {
+        const capturedRaw = '[{"broken":';
+        const concurrentRaw = JSON.stringify([{ ...localAttempt, id: "newer-tab-attempt" }]);
+        const storage = memoryStorage({
+            omr_pending_guest_merge: pending,
+            omr_attempts: capturedRaw,
+        });
+        const state = readGuestRecoveryState(storage)!;
+        const request = vi.fn(async (
+            _name: string,
+            _options: object,
+            operation: () => Promise<unknown>,
+        ) => {
+            storage.setItem("omr_attempts", concurrentRaw);
+            return operation();
+        });
+        vi.stubGlobal("navigator", { locks: { request } });
+
+        await expect(discardGuestRecovery(
+            state,
+            storage,
+            { quarantineWholeAttemptStore: true },
+        )).resolves.toEqual({ status: "stale" });
+        expect(request).toHaveBeenCalledWith(
+            "omr-storage:attempt-index",
+            { mode: "exclusive" },
+            expect.any(Function),
+        );
+        expect(storage.getItem("omr_attempts")).toBe(concurrentRaw);
+        expect(storage.getItem("omr_pending_guest_merge")).toBe(pending);
+        expect(storage.getItem("omr_attempts_quarantine")).toBeNull();
     });
 });

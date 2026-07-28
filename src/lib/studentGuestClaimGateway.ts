@@ -15,7 +15,7 @@ export interface GuestClaimRpcClient {
 export type GuestClaimResult =
     | { status: "not_requested"; acknowledgedAttemptIds: [] }
     | { status: "claimed"; acknowledgedAttemptIds: string[] }
-    | { status: "partial"; acknowledgedAttemptIds: string[]; error: string; deferredAttemptCount?: number }
+    | { status: "partial"; acknowledgedAttemptIds: string[]; error: string; hasDeferredAttempts?: true }
     | { status: "retryable_error"; acknowledgedAttemptIds: []; error: string };
 
 const CLAIM_CHUNK_SIZE = 100;
@@ -36,36 +36,40 @@ function acknowledgedAttemptIds(value: unknown, requested: string[]): string[] {
 }
 
 export function boundGuestClaimAttemptIds(
-    values: unknown[],
-): { attemptIds: string[]; deferredAttemptCount: number } {
+    values: unknown,
+): { attemptIds: string[]; hasDeferredAttempts: boolean } {
+    if (!Array.isArray(values)) return { attemptIds: [], hasDeferredAttempts: false };
     const attemptIds: string[] = [];
     const accepted = new Set<string>();
     let serializedBytes = 2; // JSON array brackets
-    let deferredAttemptCount = 0;
-    let saturated = false;
-    for (const value of values) {
+    let hasDeferredAttempts = false;
+    const scanLength = Math.min(values.length, GUEST_CLAIM_MAX_ATTEMPT_IDS);
+    for (let index = 0; index < scanLength; index += 1) {
+        const value = values[index];
         const id = clean(value);
-        if (!id || accepted.has(id)) continue;
+        if (!id || accepted.has(id)) {
+            hasDeferredAttempts ||= !id;
+            continue;
+        }
         const encodedIdBytes = new TextEncoder().encode(JSON.stringify(id)).length;
         if (encodedIdBytes > GUEST_CLAIM_MAX_ID_BYTES + 2) {
-            deferredAttemptCount += 1;
+            hasDeferredAttempts = true;
             continue;
         }
         const nextBytes = serializedBytes + encodedIdBytes + (attemptIds.length > 0 ? 1 : 0);
         if (
-            saturated
-            || attemptIds.length >= GUEST_CLAIM_MAX_ATTEMPT_IDS
+            attemptIds.length >= GUEST_CLAIM_MAX_ATTEMPT_IDS
             || nextBytes > GUEST_CLAIM_MAX_SERIALIZED_ID_BYTES
         ) {
-            saturated = true;
-            deferredAttemptCount += 1;
-            continue;
+            hasDeferredAttempts = true;
+            break;
         }
         accepted.add(id);
         attemptIds.push(id);
         serializedBytes = nextBytes;
     }
-    return { attemptIds, deferredAttemptCount };
+    if (values.length > scanLength) hasDeferredAttempts = true;
+    return { attemptIds, hasDeferredAttempts };
 }
 
 export async function claimSignedGuestAttempts(
@@ -88,13 +92,13 @@ export async function claimSignedGuestAttempts(
             error: "Verified student scope is incomplete",
         };
     }
-    const { attemptIds, deferredAttemptCount } = boundGuestClaimAttemptIds(input.attemptIds || []);
+    const { attemptIds, hasDeferredAttempts } = boundGuestClaimAttemptIds(input.attemptIds || []);
     if (attemptIds.length === 0) {
-        if (deferredAttemptCount > 0) {
+        if (hasDeferredAttempts) {
             return {
                 status: "partial",
                 acknowledgedAttemptIds: [],
-                deferredAttemptCount,
+                hasDeferredAttempts: true,
                 error: GUEST_CLAIM_BOUNDED_ERROR,
             };
         }
@@ -129,17 +133,17 @@ export async function claimSignedGuestAttempts(
         }
     }
     const acknowledgedAttemptIdsResult = [...acknowledged];
-    if (!firstError && deferredAttemptCount === 0) {
+    if (!firstError && !hasDeferredAttempts) {
         return { status: "claimed", acknowledgedAttemptIds: acknowledgedAttemptIdsResult };
     }
-    if (firstError && acknowledgedAttemptIdsResult.length === 0 && deferredAttemptCount === 0) {
+    if (firstError && acknowledgedAttemptIdsResult.length === 0 && !hasDeferredAttempts) {
         return { status: "retryable_error", acknowledgedAttemptIds: [], error: firstError };
     }
-    if (firstError || deferredAttemptCount > 0) {
+    if (firstError || hasDeferredAttempts) {
         return {
             status: "partial",
             acknowledgedAttemptIds: acknowledgedAttemptIdsResult,
-            ...(deferredAttemptCount > 0 ? { deferredAttemptCount } : {}),
+            ...(hasDeferredAttempts ? { hasDeferredAttempts: true as const } : {}),
             error: firstError || GUEST_CLAIM_BOUNDED_ERROR,
         };
     }
