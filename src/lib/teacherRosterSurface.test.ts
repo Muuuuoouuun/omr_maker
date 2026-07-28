@@ -34,6 +34,10 @@ describe("teacher roster server surface", () => {
         expect(migration).toContain("security definer");
         expect(migration).toContain("roster organization scope mismatch");
         expect(migration).toContain("roster enrollment target scope mismatch");
+        expect(migration).toContain("lock withdrawal targets before credential deletion");
+        expect(migration).toMatch(/for\s+update/i);
+        expect(migration.indexOf("lock withdrawal targets before credential deletion"))
+            .toBeLessThan(migration.indexOf("delete from public.omr_student_start_credentials credential"));
         expect(migration).toContain("delete from public.omr_student_start_credentials credential");
         expect(migration.indexOf("delete from public.omr_student_start_credentials credential"))
             .toBeLessThan(migration.indexOf("update public.omr_student_profiles row"));

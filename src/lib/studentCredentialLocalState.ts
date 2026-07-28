@@ -13,7 +13,7 @@ function scrub(storage: LegacyStudentCodeStorage): void {
     }
 }
 
-export function loadTeacherLocalStudentCodes(
+export function loadLocalStudentCodes(
     storage: LegacyStudentCodeStorage,
     nodeEnv: string | undefined,
 ): Record<string, string> {
@@ -35,4 +35,11 @@ export function loadTeacherLocalStudentCodes(
         scrub(storage);
         return {};
     }
+}
+
+export function loadTeacherLocalStudentCodes(
+    storage: LegacyStudentCodeStorage,
+    nodeEnv: string | undefined,
+): Record<string, string> {
+    return loadLocalStudentCodes(storage, nodeEnv);
 }

@@ -784,7 +784,11 @@ test.describe("Manage Users page", () => {
         await expect(page.getByRole("heading", { name: "E2E 편집반" })).not.toBeVisible();
     });
 
-    test("issued student start code gates the student portal login", async ({ page, baseURL }) => {
+    test("issued student start code gates the student portal login", async ({ page, baseURL }, testInfo) => {
+        test.skip(
+            testInfo.project.name.startsWith("prod-"),
+            "Production refuses the suite's no-database local credential fallback.",
+        );
         await authenticateTeacher(page, baseURL);
         await seedStoredRoster(page);
         await page.goto("/teacher/users");

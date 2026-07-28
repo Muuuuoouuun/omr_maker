@@ -49,6 +49,10 @@ function readStudentCredentialRevocationMigration(): string {
     return existsSync(migrationPath) ? readFileSync(migrationPath, "utf8") : "";
 }
 
+function readLiveAssertions(): string {
+    return readFileSync(path.join(rootDir, "supabase/live-test-assertions.sql"), "utf8");
+}
+
 function columnExists(schema: string, table: string, column: string): boolean {
     const createPattern = new RegExp(`create table if not exists public\\.${table}\\s*\\(([\\s\\S]*?)\\n\\);`, "i");
     const createMatch = schema.match(createPattern);
@@ -79,6 +83,7 @@ describe("Supabase schema contract", () => {
     const teacherExamDelete = readTeacherExamDeleteMigration();
     const feedbackGateway = readFeedbackGatewayMigration();
     const studentCredentialRevocation = readStudentCredentialRevocationMigration();
+    const liveAssertions = readLiveAssertions();
 
     it("revokes a withdrawn student's credential before a deterministic id can be reused", () => {
         expect(schema).toContain("omr_revoke_withdrawn_student_credential_v1");
@@ -87,6 +92,22 @@ describe("Supabase schema contract", () => {
         expect(studentCredentialRevocation).toContain("before update of status");
         expect(studentCredentialRevocation).toContain("delete from public.omr_student_start_credentials");
         expect(studentCredentialRevocation).toContain("old.status is distinct from 'withdrawn'");
+    });
+
+    it("serializes direct credential mutations with withdrawal on the exact profile row", () => {
+        for (const sql of [schema, studentCredentialRevocation]) {
+            expect(sql).toContain("omr_guard_student_credential_mutation_v1");
+            expect(sql).toContain("omr_student_credential_active_profile_guard");
+            expect(sql).toMatch(/before\s+insert\s+or\s+update\s+on\s+public\.omr_student_start_credentials/i);
+            expect(sql).toMatch(/student\.organization_id\s*=\s*new\.organization_id/i);
+            expect(sql).toMatch(/student\.id\s*=\s*new\.student_profile_id/i);
+            expect(sql).toMatch(/for\s+update/i);
+            expect(sql).toMatch(/profile_status\s+is\s+distinct\s+from\s+'active'/i);
+        }
+        expect(liveAssertions).toContain("post-withdraw service-role credential mutation unexpectedly succeeded");
+        expect(liveAssertions).toContain("issue-first serialized outcome retained a credential");
+        expect(liveAssertions).toContain("withdraw-first serialized outcome accepted a credential");
+        expect(liveAssertions).toContain("re-adding a deterministic student id resurrected the old start credential");
     });
 
     it("keeps roster columns and indexes aligned with teacher user management sync", () => {

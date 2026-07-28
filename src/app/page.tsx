@@ -28,11 +28,11 @@ import { TEACHER_AUTH_DEPLOYMENT_HELP, shouldShowTeacherDeploymentHelp } from "@
 import {
   hasStudentStartCode,
   normalizeStartCodeInput,
-  readStudentCodes,
   resolveStudentIdentity,
   resolveStudentStartCodeLogin,
   writeStudentCodes,
 } from "@/lib/studentCodes";
+import { loadLocalStudentCodes } from "@/lib/studentCredentialLocalState";
 import {
   consumePendingGuestMerge,
   getSession,
@@ -252,6 +252,7 @@ export default function Home() {
     let cancelled = false;
     let localGroups: RosterGroup[] = [];
     try {
+      loadLocalStudentCodes(localStorage, process.env.NODE_ENV);
       // Hydrate client-only localStorage state after mount.
       seedLocalTestStudentAccounts(localStorage);
       localGroups = readRosterGroups(localStorage);
@@ -319,7 +320,7 @@ export default function Home() {
       return;
     }
     try {
-      const codes = readStudentCodes(localStorage);
+      const codes = loadLocalStudentCodes(localStorage, process.env.NODE_ENV);
       const identity = resolveStudentIdentity({
         name: studentName,
         selectedGroupId,
@@ -560,7 +561,7 @@ export default function Home() {
       groups: loginGroups,
       students,
     });
-    const codes = readStudentCodes(localStorage);
+    const codes = loadLocalStudentCodes(localStorage, process.env.NODE_ENV);
     const attempts = readLocalAttempts();
     const hasPriorAttempt = attempts.some(a => a.studentId === identity.studentId
       || a.studentId === identity.legacyStudentId

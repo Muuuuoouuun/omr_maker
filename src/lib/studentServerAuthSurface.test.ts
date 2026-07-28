@@ -20,7 +20,12 @@ describe("student server authentication surface", () => {
     });
 
     it("connects login, teacher issuance, and logout to server actions", () => {
-        expect(source("src/app/page.tsx")).toContain("await issueStudentSession");
+        const rootPage = source("src/app/page.tsx");
+        expect(rootPage).toContain("await issueStudentSession");
+        expect(rootPage).toContain("loadLocalStudentCodes");
+        expect(rootPage).not.toContain("readStudentCodes");
+        expect(rootPage.indexOf("loadLocalStudentCodes(localStorage, process.env.NODE_ENV)"))
+            .toBeLessThan(rootPage.indexOf("seedLocalTestStudentAccounts(localStorage)"));
         const users = source("src/app/teacher/users/page.tsx");
         expect(users).toContain("await issueStudentStartCredential");
         expect(users).not.toContain("syncStudentAccessCodes");

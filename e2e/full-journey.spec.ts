@@ -487,7 +487,11 @@ async function seedCompletedAttempt(page: Page) {
 test.describe("Teacher and student full journey", () => {
     test.describe.configure({ timeout: 45_000 });
 
-    test.beforeEach(async ({ page, context }) => {
+    test.beforeEach(async ({ page, context }, testInfo) => {
+        test.skip(
+            testInfo.project.name.startsWith("prod-"),
+            "Production discards the suite's local plaintext-code fixture; remote credential journeys run with a connected test backend.",
+        );
         await resetBrowserState(page, context);
     });
 

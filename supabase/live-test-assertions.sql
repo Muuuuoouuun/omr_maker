@@ -254,8 +254,24 @@ begin
          where organization_id = 'live-org-a'
            and student_profile_id = 'live-student-a'
     ) then
-        raise exception 'withdrawing a roster student did not revoke the start credential';
+        raise exception 'issue-first serialized outcome retained a credential';
     end if;
+end
+$$;
+
+do $$
+begin
+    begin
+        insert into public.omr_student_start_credentials (
+            organization_id, student_profile_id, start_code_hash
+        ) values (
+            'live-org-a', 'live-student-a',
+            'pbkdf2-sha256:10000:08080808080808080808080808080808:9df12bc47d04bf0f520b627acee8c21c74b064b9f30fc943efaf7b2788e45e95'
+        );
+        raise exception 'post-withdraw service-role credential mutation unexpectedly succeeded';
+    exception
+        when check_violation then null;
+    end;
 end
 $$;
 
@@ -278,6 +294,38 @@ begin
     end if;
 end
 $$;
+
+select public.omr_save_roster_v1(
+    'live-org-a',
+    '[{"id":"live-class-a","organization_id":"live-org-a","name":"A반","status":"active","metadata":{}}]',
+    '[]',
+    '[]',
+    '[{"id":"live-invite-a","organization_id":"live-org-a","email":"invite@example.com","sent_at":"2026-07-14T00:00:00.000Z","status":"pending"}]'
+);
+
+do $$
+begin
+    begin
+        insert into public.omr_student_start_credentials (
+            organization_id, student_profile_id, start_code_hash
+        ) values (
+            'live-org-a', 'live-student-a',
+            'pbkdf2-sha256:10000:09090909090909090909090909090909:adf12bc47d04bf0f520b627acee8c21c74b064b9f30fc943efaf7b2788e45e96'
+        );
+        raise exception 'withdraw-first serialized outcome accepted a credential';
+    exception
+        when check_violation then null;
+    end;
+end
+$$;
+
+select public.omr_save_roster_v1(
+    'live-org-a',
+    '[{"id":"live-class-a","organization_id":"live-org-a","name":"A반","status":"active","metadata":{}}]',
+    '[{"id":"live-student-a","organization_id":"live-org-a","display_name":"학생 A 재등록","external_id":"A-001","status":"active","metadata":{}}]',
+    '[{"class_id":"live-class-a","organization_id":"live-org-a","student_profile_id":"live-student-a","enrollment_status":"active"}]',
+    '[{"id":"live-invite-a","organization_id":"live-org-a","email":"invite@example.com","sent_at":"2026-07-14T00:00:00.000Z","status":"pending"}]'
+);
 
 insert into public.omr_classes (id, organization_id, name) values
     ('live-class-b', 'live-org-b', 'B반');

@@ -344,6 +344,40 @@ alter table public.omr_student_start_credentials enable row level security;
 alter table public.omr_student_start_credentials force row level security;
 revoke all on public.omr_student_start_credentials from anon, authenticated;
 
+create or replace function public.omr_guard_student_credential_mutation_v1()
+returns trigger
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+    profile_status text;
+begin
+    select student.status
+      into profile_status
+      from public.omr_student_profiles student
+     where student.organization_id = new.organization_id
+       and student.id = new.student_profile_id
+     for update;
+
+    if profile_status is distinct from 'active' then
+        raise exception 'student credential requires an active profile'
+            using errcode = '23514';
+    end if;
+    return new;
+end;
+$$;
+
+revoke all on function public.omr_guard_student_credential_mutation_v1()
+    from public, anon, authenticated;
+
+drop trigger if exists omr_student_credential_active_profile_guard
+    on public.omr_student_start_credentials;
+create trigger omr_student_credential_active_profile_guard
+    before insert or update on public.omr_student_start_credentials
+    for each row
+    execute function public.omr_guard_student_credential_mutation_v1();
+
 create or replace function public.omr_revoke_withdrawn_student_credential_v1()
 returns trigger
 language plpgsql
