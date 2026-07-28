@@ -1106,7 +1106,8 @@ test.describe("Teacher and student full journey", () => {
                 oldRequest: state.requests?.[oldId],
                 canonicalReceipt: state.receipts?.[canonicalId],
                 reconciliation: state.reconciliations?.[oldId],
-                cachedCanonical: attempts.some((attempt: { id?: string }) => attempt.id === canonicalId),
+                cachedOld: attempts.some((attempt: { id?: string }) => attempt.id === oldId),
+                canonicalCount: attempts.filter((attempt: { id?: string }) => attempt.id === canonicalId).length,
             };
         }, { oldId: attemptId, canonicalId: manualCanonicalId });
         expect(manualState).toEqual({
@@ -1114,7 +1115,8 @@ test.describe("Teacher and student full journey", () => {
             oldRequest: undefined,
             canonicalReceipt: expect.objectContaining({ status: "confirmed" }),
             reconciliation: manualCanonicalId,
-            cachedCanonical: true,
+            cachedOld: false,
+            canonicalCount: 1,
         });
 
         const automaticLocalId = "attempt-auto-local";
@@ -1122,16 +1124,19 @@ test.describe("Teacher and student full journey", () => {
             const attempts = JSON.parse(window.localStorage.getItem("omr_attempts") || "[]");
             const source = attempts.find((attempt: { id?: string }) => attempt.id === sourceId);
             if (!source) throw new Error("source attempt missing");
+            const finishedAt = new Date(Date.now() + 1_000).toISOString();
             const automatic = {
                 ...source,
                 id: autoId,
+                finishedAt,
                 questionResults: (source.questionResults || []).map((result: object) => ({
                     ...result,
                     attemptId: autoId,
+                    finishedAt,
                 })),
             };
             window.localStorage.setItem("omr_attempts", JSON.stringify([...attempts, automatic]));
-        }, { sourceId: attemptId, autoId: automaticLocalId });
+        }, { sourceId: manualCanonicalId, autoId: automaticLocalId });
         await page.goto(`/student/review/${automaticLocalId}`);
         await expect(page.getByRole("status")).toHaveText("이 기기에만 저장됨");
 
@@ -1171,11 +1176,14 @@ test.describe("Teacher and student full journey", () => {
         ))).toBe("automatic");
         const automaticState = await page.evaluate(({ oldId, canonicalId }) => {
             const state = JSON.parse(window.localStorage.getItem("omr_student_submission_receipts_v1") || "{}");
+            const attempts = JSON.parse(window.localStorage.getItem("omr_attempts") || "[]");
             return {
                 oldReceipt: state.receipts?.[oldId],
                 oldRequest: state.requests?.[oldId],
                 canonicalReceipt: state.receipts?.[canonicalId],
                 reconciliation: state.reconciliations?.[oldId],
+                cachedOld: attempts.some((attempt: { id?: string }) => attempt.id === oldId),
+                canonicalCount: attempts.filter((attempt: { id?: string }) => attempt.id === canonicalId).length,
             };
         }, { oldId: automaticLocalId, canonicalId: automaticCanonicalId });
         expect(automaticState).toEqual({
@@ -1183,6 +1191,15 @@ test.describe("Teacher and student full journey", () => {
             oldRequest: undefined,
             canonicalReceipt: expect.objectContaining({ status: "confirmed" }),
             reconciliation: automaticCanonicalId,
+            cachedOld: false,
+            canonicalCount: 1,
         });
+
+        await page.goto("/student/history");
+        await expect(page.getByRole("heading", { name: "내 시험 기록" })).toBeVisible();
+        await expect(page.locator(`a[href="/student/review/${attemptId}"]`)).toHaveCount(0);
+        await expect(page.locator(`a[href="/student/review/${automaticLocalId}"]`)).toHaveCount(0);
+        await expect(page.locator(`a[href="/student/review/${manualCanonicalId}"]`)).toHaveCount(1);
+        await expect(page.locator(`a[href="/student/review/${automaticCanonicalId}"]`)).toHaveCount(1);
     });
 });

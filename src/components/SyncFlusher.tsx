@@ -6,7 +6,7 @@ import {
     flushPendingSubmissionReceipts,
     pendingSubmissionReceiptIds,
 } from "@/lib/studentAttemptReceipt";
-import { saveLocalAttempt } from "@/lib/omrPersistence";
+import { replaceLocalAttemptWithCanonical } from "@/lib/omrPersistence";
 
 /**
  * Invisible app-wide helper: when connectivity or tab visibility returns,
@@ -23,7 +23,7 @@ export default function SyncFlusher() {
             running = true;
             void flushPendingSubmissionReceipts({
                 submitSignedSessionAttempt: submitAttempt,
-                onAuthoritativeAttempt: saveLocalAttempt,
+                onAuthoritativeAttempt: replaceLocalAttemptWithCanonical,
             }).finally(() => {
                 running = false;
             });

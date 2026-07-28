@@ -23,7 +23,14 @@ import {
 import type { Attempt, AttemptFeedback, Exam, PdfDrawings, Question, QuestionResultStatus, QuestionTiming, StudentQuestionNote } from "@/types/omr";
 import { storedDataUrlToFile, loadJsonRecord } from "@/utils/blobStore";
 import { attemptBelongsToSession, getSession } from "@/utils/storage";
-import { loadAttempt, loadExam, readLocalAttempts, saveAttempt, saveLocalAttempt } from "@/lib/omrPersistence";
+import {
+    loadAttempt,
+    loadExam,
+    readLocalAttempts,
+    replaceLocalAttemptWithCanonical,
+    saveAttempt,
+    saveLocalAttempt,
+} from "@/lib/omrPersistence";
 import { askAttemptQuestion, loadExamForReview, loadMyAttempt, submitAttempt } from "@/app/actions/studentExam";
 import { loadMyAttemptClient, loadReviewExamClient } from "@/lib/studentExamClient";
 import { stripTeacherOnlySubQuestionFields } from "@/lib/examSolvePayload";
@@ -752,7 +759,7 @@ export default function ReviewPage() {
         try {
             const result = await retryPendingSubmissionReceipt(attempt.id, {
                 submitSignedSessionAttempt: submitAttempt,
-                onAuthoritativeAttempt: saveLocalAttempt,
+                onAuthoritativeAttempt: replaceLocalAttemptWithCanonical,
             });
             if (result.status === "confirmed") {
                 setSubmissionRetryFeedback("서버 반영을 확인했습니다.");

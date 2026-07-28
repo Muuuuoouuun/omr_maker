@@ -38,6 +38,12 @@ export type SubmissionRetryResult =
     | { status: "pending"; error: string }
     | { status: "missing"; error: string };
 
+export interface AuthoritativeAttemptCacheTransaction {
+    committed: boolean;
+    attempt?: Attempt;
+    rollback?: () => boolean | Promise<boolean>;
+}
+
 export const SUBMISSION_RECEIPT_KEY = "omr_student_submission_receipts_v1";
 export const SUBMISSION_RECEIPT_RECONCILED_EVENT = "omr:submission-receipt-reconciled";
 const RETRY_ERROR = "서버에 아직 반영하지 못했습니다. 네트워크를 확인한 뒤 다시 시도해주세요.";
@@ -214,7 +220,10 @@ export function retryPendingSubmissionReceipt(
             input: SubmitAttemptInput,
             pin?: string,
         ) => Promise<SignedSessionSubmitResponse>;
-        onAuthoritativeAttempt?: (attempt: Attempt) => boolean | void | Promise<boolean | void>;
+        onAuthoritativeAttempt?: (
+            previousAttemptId: string,
+            attempt: Attempt,
+        ) => AuthoritativeAttemptCacheTransaction | Promise<AuthoritativeAttemptCacheTransaction>;
     },
 ): Promise<SubmissionRetryResult> {
     const existing = retryInFlight.get(attemptId);
@@ -226,44 +235,56 @@ export function retryPendingSubmissionReceipt(
         if (!request) {
             return { status: "missing", error: "다시 시도할 제출 요청을 찾지 못했습니다." };
         }
+        let result: SignedSessionSubmitResponse;
         try {
-            const result = await deps.submitSignedSessionAttempt(request.input, request.pin);
-            if (result.status === "ok" && result.attempt) {
-                const cached = await deps.onAuthoritativeAttempt?.(result.attempt);
-                if (cached === false) {
-                    return { status: "pending", error: DURABILITY_ERROR };
-                }
-                const latest = readReceiptState();
-                const canonicalAttemptId = result.attempt.id;
-                const receipt: SubmissionReceipt = {
-                    attemptId: canonicalAttemptId,
-                    status: "confirmed",
-                    updatedAt: new Date().toISOString(),
-                };
-                delete latest.receipts[attemptId];
-                delete latest.requests[attemptId];
-                delete latest.requests[canonicalAttemptId];
-                latest.receipts[canonicalAttemptId] = receipt;
-                if (attemptId !== canonicalAttemptId) {
-                    latest.reconciliations[attemptId] = canonicalAttemptId;
-                }
-                if (!writeReceiptState(latest)) {
-                    return { status: "pending", error: DURABILITY_ERROR };
-                }
-                emitSubmissionReceiptReconciled({
-                    previousAttemptId: attemptId,
-                    attempt: result.attempt,
-                    receipt,
-                });
-                return {
-                    status: "confirmed",
-                    previousAttemptId: attemptId,
-                    attempt: result.attempt,
-                    receipt,
-                };
-            }
+            result = await deps.submitSignedSessionAttempt(request.input, request.pin);
         } catch {
             // Keep the exact same idempotent request queued.
+            result = { status: "error" };
+        }
+        if (result.status === "ok" && result.attempt) {
+            let cacheTransaction: AuthoritativeAttemptCacheTransaction | undefined;
+            if (deps.onAuthoritativeAttempt) {
+                try {
+                    cacheTransaction = await deps.onAuthoritativeAttempt(attemptId, result.attempt);
+                } catch {
+                    return { status: "pending", error: DURABILITY_ERROR };
+                }
+                if (!cacheTransaction?.committed) {
+                    return { status: "pending", error: DURABILITY_ERROR };
+                }
+            }
+
+            const cachedAttempt = cacheTransaction?.attempt || result.attempt;
+            const latest = readReceiptState();
+            const canonicalAttemptId = result.attempt.id;
+            const receipt: SubmissionReceipt = {
+                attemptId: canonicalAttemptId,
+                status: "confirmed",
+                updatedAt: new Date().toISOString(),
+            };
+            delete latest.receipts[attemptId];
+            delete latest.requests[attemptId];
+            delete latest.requests[canonicalAttemptId];
+            latest.receipts[canonicalAttemptId] = receipt;
+            if (attemptId !== canonicalAttemptId) {
+                latest.reconciliations[attemptId] = canonicalAttemptId;
+            }
+            if (!writeReceiptState(latest)) {
+                await cacheTransaction?.rollback?.();
+                return { status: "pending", error: DURABILITY_ERROR };
+            }
+            emitSubmissionReceiptReconciled({
+                previousAttemptId: attemptId,
+                attempt: cachedAttempt,
+                receipt,
+            });
+            return {
+                status: "confirmed",
+                previousAttemptId: attemptId,
+                attempt: cachedAttempt,
+                receipt,
+            };
         }
         const latest = readReceiptState();
         latest.receipts[attemptId] = {

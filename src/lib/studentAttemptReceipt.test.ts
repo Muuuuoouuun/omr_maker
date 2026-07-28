@@ -3,6 +3,10 @@ import { getAttemptQuestionResults } from "@/lib/premiumAnalytics";
 import type { ServerGradedAttemptReceipt } from "@/lib/studentExamContract";
 import type { Attempt, Exam } from "@/types/omr";
 import {
+    readLocalAttempts,
+    replaceLocalAttemptWithCanonical,
+} from "./omrPersistence";
+import {
     localResultCacheFromServerReceipt,
     pendingSubmissionReceiptIds,
     persistSubmissionReceipt,
@@ -142,16 +146,32 @@ describe("student attempt receipt cache", () => {
     });
 
     it("keeps the replay request pending when durable confirmation storage fails", async () => {
-        let failWrites = false;
+        const localAttempt: Attempt = {
+            id: "attempt-local-1",
+            examId: "exam-1",
+            examTitle: "시험",
+            studentName: "학생",
+            startedAt: "2026-07-28T00:00:00.000Z",
+            finishedAt: "2026-07-28T00:01:00.000Z",
+            score: 0,
+            totalScore: 10,
+            answers: { 1: 1 },
+            status: "completed",
+        };
+        let failReceiptWrites = false;
         const base = createStorage();
+        base.setItem("omr_attempts", JSON.stringify([localAttempt]));
         const storage = {
             ...base,
             setItem(key: string, value: string) {
-                if (failWrites) throw new Error("quota");
+                if (failReceiptWrites && key === "omr_student_submission_receipts_v1") {
+                    throw new Error("quota");
+                }
                 base.setItem(key, value);
             },
         } as Storage;
         vi.stubGlobal("window", { localStorage: storage });
+        vi.stubGlobal("localStorage", storage);
         queuePendingSubmissionReceipt({
             attemptId: "attempt-local-1",
             input: {
@@ -161,7 +181,7 @@ describe("student attempt receipt cache", () => {
                 startedAt: "2026-07-28T00:00:00.000Z",
             },
         });
-        failWrites = true;
+        failReceiptWrites = true;
 
         const result = await retryPendingSubmissionReceipt("attempt-local-1", {
             submitSignedSessionAttempt: async () => ({
@@ -179,6 +199,7 @@ describe("student attempt receipt cache", () => {
                     status: "completed",
                 },
             }),
+            onAuthoritativeAttempt: replaceLocalAttemptWithCanonical,
         });
 
         expect(result).toEqual({
@@ -188,6 +209,7 @@ describe("student attempt receipt cache", () => {
         expect(readSubmissionReceipt("attempt-local-1")?.status).toBe("pending");
         expect(readSubmissionReceipt("attempt-server-1")).toBeNull();
         expect(pendingSubmissionReceiptIds()).toEqual(["attempt-local-1"]);
+        expect(readLocalAttempts()).toEqual([localAttempt]);
     });
 
     it("caches and announces canonical reconciliation after durable confirmation", async () => {
@@ -219,20 +241,30 @@ describe("student attempt receipt cache", () => {
             answers: {},
             status: "completed",
         };
-        const onAuthoritativeAttempt = vi.fn(() => true);
+        const reconciledAttempt = {
+            ...authoritativeAttempt,
+            drawingStrokeCount: 4,
+        };
+        const rollback = vi.fn(() => true);
+        const onAuthoritativeAttempt = vi.fn(() => ({
+            committed: true,
+            attempt: reconciledAttempt,
+            rollback,
+        }));
 
         await retryPendingSubmissionReceipt("attempt-local-1", {
             submitSignedSessionAttempt: async () => ({ status: "ok", attempt: authoritativeAttempt }),
             onAuthoritativeAttempt,
         });
 
-        expect(onAuthoritativeAttempt).toHaveBeenCalledWith(authoritativeAttempt);
+        expect(onAuthoritativeAttempt).toHaveBeenCalledWith("attempt-local-1", authoritativeAttempt);
         expect(dispatchEvent).toHaveBeenCalledTimes(1);
         expect((dispatchedEvents[0] as CustomEvent).detail).toMatchObject({
             previousAttemptId: "attempt-local-1",
-            attempt: authoritativeAttempt,
+            attempt: reconciledAttempt,
             receipt: { attemptId: "attempt-server-1", status: "confirmed" },
         });
+        expect(rollback).not.toHaveBeenCalled();
     });
 
     it("coalesces concurrent retry triggers for the same idempotent submission", async () => {

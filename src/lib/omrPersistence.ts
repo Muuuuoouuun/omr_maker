@@ -1077,6 +1077,106 @@ export function saveLocalAttempt(attempt: Attempt): boolean {
     return saveLocalAttempts([attempt]);
 }
 
+export interface LocalAttemptReplacement {
+    committed: boolean;
+    attempt?: Attempt;
+    rollback: () => boolean;
+}
+
+function withDeviceOnlyAttemptArtifacts(authoritative: Attempt, local?: Attempt): Attempt {
+    if (!local) return authoritative;
+    return {
+        ...authoritative,
+        drawings: authoritative.drawings ?? local.drawings,
+        drawingsRef: authoritative.drawingsRef ?? local.drawingsRef,
+        handwriting: authoritative.handwriting ?? local.handwriting,
+        handwritingArchived: authoritative.handwritingArchived ?? local.handwritingArchived,
+        handwritingPlan: authoritative.handwritingPlan ?? local.handwritingPlan,
+        drawingPageCount: authoritative.drawingPageCount ?? local.drawingPageCount,
+        drawingStrokeCount: authoritative.drawingStrokeCount ?? local.drawingStrokeCount,
+        questionDrawings: authoritative.questionDrawings ?? local.questionDrawings,
+        studentQuestions: authoritative.studentQuestions ?? local.studentQuestions,
+    };
+}
+
+/**
+ * Replaces a provisional browser attempt with its authoritative server record
+ * in one localStorage write. Server-owned identity, answers, grading and timing
+ * always win; only device-local handwriting/review artifacts are carried over.
+ *
+ * The rollback is used by submission receipt reconciliation when the second
+ * durable write (the confirmed receipt) fails. It restores the exact snapshot
+ * when uncontended, and otherwise preserves concurrent attempt-index changes.
+ */
+export function replaceLocalAttemptWithCanonical(
+    previousAttemptId: string,
+    authoritativeAttempt: Attempt,
+): LocalAttemptReplacement {
+    const noRollback = () => false;
+    if (!hasBrowserStorage()) return { committed: false, rollback: noRollback };
+
+    const storage = localStorage;
+    const previousRaw = storage.getItem(ATTEMPTS_KEY);
+    let rawItems: unknown[];
+    try {
+        const parsed = previousRaw ? JSON.parse(previousRaw) : [];
+        rawItems = Array.isArray(parsed) ? parsed : [];
+    } catch {
+        rawItems = [];
+    }
+
+    const previousAttempt = rawItems
+        .map(sanitizeAttemptPayload)
+        .find(candidate => candidate?.id === previousAttemptId);
+    const mergedAttempt = stripHeavyAttemptPayload(
+        withDeviceOnlyAttemptArtifacts(authoritativeAttempt, previousAttempt || undefined),
+    );
+    const replacedIds = new Set([previousAttemptId, authoritativeAttempt.id]);
+    const removedItems = rawItems.filter(item => {
+        const candidate = sanitizeAttemptPayload(item);
+        return !!candidate && replacedIds.has(candidate.id);
+    });
+    const nextItems = rawItems.filter(item => {
+        const candidate = sanitizeAttemptPayload(item);
+        return !candidate || !replacedIds.has(candidate.id);
+    });
+    nextItems.push(mergedAttempt);
+    const committedRaw = JSON.stringify(nextItems);
+
+    try {
+        storage.setItem(ATTEMPTS_KEY, committedRaw);
+    } catch {
+        return { committed: false, rollback: noRollback };
+    }
+
+    return {
+        committed: true,
+        attempt: mergedAttempt,
+        rollback: () => {
+            try {
+                const currentRaw = storage.getItem(ATTEMPTS_KEY);
+                if (currentRaw === committedRaw) {
+                    if (previousRaw === null) storage.removeItem(ATTEMPTS_KEY);
+                    else storage.setItem(ATTEMPTS_KEY, previousRaw);
+                    return true;
+                }
+
+                const parsedCurrent = currentRaw ? JSON.parse(currentRaw) : [];
+                if (!Array.isArray(parsedCurrent)) return false;
+                const restored = parsedCurrent.filter(item => {
+                    const candidate = sanitizeAttemptPayload(item);
+                    return !candidate || !replacedIds.has(candidate.id);
+                });
+                restored.push(...removedItems);
+                storage.setItem(ATTEMPTS_KEY, JSON.stringify(restored));
+                return true;
+            } catch {
+                return false;
+            }
+        },
+    };
+}
+
 /** Merge a batch into the local attempt index with one read and one write. */
 export function saveLocalAttempts(attempts: Attempt[]): boolean {
     if (!hasBrowserStorage()) return false;

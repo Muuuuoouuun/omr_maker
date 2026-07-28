@@ -25,6 +25,7 @@ import {
     flushPendingAttemptSync,
     queueAttemptPendingSync,
     readPendingAttemptSyncIds,
+    replaceLocalAttemptWithCanonical,
     selectMergedGuestAttempts,
     sanitizeAttemptPayload,
     sanitizeExamPayload,
@@ -716,6 +717,142 @@ describe("Supabase persistence mapping", () => {
             "attempt-1",
         ]);
         expect(localStorage.getItem("omr_attempts") || "").not.toContain("points");
+    });
+
+    it("atomically replaces a superseded local attempt while preserving device-only review artifacts", () => {
+        const drawingsRef = {
+            store: "indexeddb" as const,
+            key: "attempt:attempt-local:drawings",
+            updatedAt: "2026-07-28T01:00:00.000Z",
+        };
+        const localAttempt: Attempt = {
+            ...attempt,
+            id: "attempt-local",
+            score: 0,
+            totalScore: 0,
+            answers: { 1: 1 },
+            questionResults: [{
+                schemaVersion: 1,
+                attemptId: "attempt-local",
+                examId: attempt.examId,
+                examTitle: attempt.examTitle,
+                studentName: attempt.studentName,
+                questionId: 1,
+                questionNumber: 1,
+                score: 100,
+                earnedScore: 0,
+                selectedAnswer: 1,
+                status: "wrong",
+                isCorrect: false,
+                isWrong: true,
+                isUnanswered: false,
+                finishedAt: attempt.finishedAt,
+            }],
+            drawingsRef,
+            handwritingArchived: true,
+            handwritingPlan: "pro",
+            drawingPageCount: 1,
+            drawingStrokeCount: 4,
+            questionDrawings: [{ questionId: 1, questionNumber: 1, page: 1, strokeCount: 4 }],
+            studentQuestions: [{
+                questionId: 1,
+                questionNumber: 1,
+                body: "풀이를 확인해주세요.",
+                createdAt: "2026-07-28T01:01:00.000Z",
+                status: "queued",
+            }],
+        };
+        const unrelatedAttempt = { ...attempt, id: "attempt-unrelated" };
+        const authoritativeAttempt: Attempt = {
+            ...attempt,
+            id: "attempt-server",
+            score: 100,
+            totalScore: 100,
+            answers: { 1: 3 },
+            questionResults: [{
+                ...localAttempt.questionResults![0],
+                attemptId: "attempt-server",
+                selectedAnswer: 3,
+                earnedScore: 100,
+                status: "correct",
+                isCorrect: true,
+                isWrong: false,
+            }],
+        };
+        const localStorage = createStorage({
+            omr_attempts: JSON.stringify([localAttempt, unrelatedAttempt]),
+        });
+        vi.stubGlobal("window", { localStorage });
+        vi.stubGlobal("localStorage", localStorage);
+
+        const replacement = replaceLocalAttemptWithCanonical("attempt-local", authoritativeAttempt);
+
+        expect(replacement.committed).toBe(true);
+        expect(replacement.attempt).toMatchObject({
+            id: "attempt-server",
+            score: 100,
+            totalScore: 100,
+            answers: { 1: 3 },
+            questionResults: [{
+                attemptId: "attempt-server",
+                selectedAnswer: 3,
+                earnedScore: 100,
+                status: "correct",
+            }],
+            drawingsRef,
+            handwritingArchived: true,
+            handwritingPlan: "pro",
+            drawingPageCount: 1,
+            drawingStrokeCount: 4,
+            studentQuestions: [{ body: "풀이를 확인해주세요." }],
+        });
+        expect(readLocalAttempts().map(item => item.id).sort()).toEqual([
+            "attempt-server",
+            "attempt-unrelated",
+        ]);
+    });
+
+    it("leaves the superseded record intact when canonical replacement cannot be written", () => {
+        const localAttempt = { ...attempt, id: "attempt-local" };
+        const base = createStorage({
+            omr_attempts: JSON.stringify([localAttempt]),
+        });
+        const localStorage = {
+            ...base,
+            setItem(key: string, value: string) {
+                if (key === "omr_attempts") throw new Error("quota");
+                base.setItem(key, value);
+            },
+        } as Storage;
+        vi.stubGlobal("window", { localStorage });
+        vi.stubGlobal("localStorage", localStorage);
+
+        const replacement = replaceLocalAttemptWithCanonical("attempt-local", {
+            ...attempt,
+            id: "attempt-server",
+        });
+
+        expect(replacement.committed).toBe(false);
+        expect(readLocalAttempts()).toEqual([localAttempt]);
+    });
+
+    it("can roll a committed canonical replacement back to the exact prior attempt index", () => {
+        const rawAttempts = JSON.stringify([
+            { ...attempt, id: "attempt-local" },
+            { ...attempt, id: "attempt-unrelated" },
+        ]);
+        const localStorage = createStorage({ omr_attempts: rawAttempts });
+        vi.stubGlobal("window", { localStorage });
+        vi.stubGlobal("localStorage", localStorage);
+
+        const replacement = replaceLocalAttemptWithCanonical("attempt-local", {
+            ...attempt,
+            id: "attempt-server",
+        });
+
+        expect(replacement.committed).toBe(true);
+        expect(replacement.rollback()).toBe(true);
+        expect(localStorage.getItem("omr_attempts")).toBe(rawAttempts);
     });
 
     it("bulk-saves exams and rewrites deletion markers at most once", () => {
