@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useRef, useEffect, useLayoutEffect, useCallback, useMemo } from 'react';
+import { useState, useRef, useEffect, useCallback, useMemo } from 'react';
 import { Document, Page, pdfjs } from 'react-pdf';
 import { DEFAULT_CHOICE_COUNT, normalizeChoiceCount, type PdfDrawings } from '@/types/omr';
 import { toast } from '@/components/Toast';
@@ -24,8 +24,10 @@ import 'react-pdf/dist/Page/TextLayer.css';
 import { buildPenCursor, buildHighlighterCursor } from '@/lib/drawingCursors';
 import { strokeHitTest } from '@/lib/strokeGeometry';
 import {
-    canCompletePdfRender,
+    completePdfRenderRequest,
+    createPdfRenderReadinessState,
     isPdfRenderReady,
+    updatePdfRenderRequest,
     type PdfRenderIdentity,
 } from './pdfRenderReadiness';
 
@@ -142,8 +144,6 @@ export default function PDFViewer({
     const [inputPage, setInputPage] = useState<string>("1");
     const [scale, setScale] = useState<number>(1.0);
     const [isDragging, setIsDragging] = useState(false);
-    const [pageRenderVersion, setPageRenderVersion] = useState(0);
-    const [completedPdfRenderIdentity, setCompletedPdfRenderIdentity] = useState<PdfRenderIdentity | null>(null);
 
     // Drawing State
     const [drawingMode, setDrawingMode] = useState<DrawingMode>('click');
@@ -213,11 +213,21 @@ export default function PDFViewer({
         scale,
         containerWidth,
     }), [file, pageNumber, scale, containerWidth]);
-    const currentPdfRenderIdentityRef = useRef(currentPdfRenderIdentity);
-    useLayoutEffect(() => {
-        currentPdfRenderIdentityRef.current = currentPdfRenderIdentity;
-    }, [currentPdfRenderIdentity]);
-    const pdfRenderReady = isPdfRenderReady(currentPdfRenderIdentity, completedPdfRenderIdentity);
+    const [pdfRenderState, setPdfRenderState] = useState(
+        () => createPdfRenderReadinessState(currentPdfRenderIdentity),
+    );
+    const nextPdfRenderState = updatePdfRenderRequest(pdfRenderState, currentPdfRenderIdentity);
+    if (nextPdfRenderState !== pdfRenderState) {
+        // Same-component render-phase updates are replayed immediately by React:
+        // this render is discarded, so a changed (or recurring) request gets its
+        // new generation before any DOM commit can expose stale readiness.
+        setPdfRenderState(nextPdfRenderState);
+    }
+    const pdfRenderReady = isPdfRenderReady(
+        pdfRenderState.currentRequest,
+        pdfRenderState.completedRequest,
+    );
+    const pageRenderVersion = pdfRenderState.renderVersion;
     const activeStrokeWidth = drawingMode === 'eraser'
         ? eraserWidth
         : drawingMode === 'highlighter'
@@ -344,16 +354,14 @@ export default function PDFViewer({
     }
 
     const handlePageRenderSuccess = () => {
-        const completedIdentity = currentPdfRenderIdentity;
+        const completedRequest = pdfRenderState.currentRequest;
         const backingCanvas = containerRef.current?.querySelector<HTMLCanvasElement>(".react-pdf__Page__canvas");
-        if (!canCompletePdfRender(
-            currentPdfRenderIdentityRef.current,
-            completedIdentity,
+        setPdfRenderState(currentState => completePdfRenderRequest(
+            currentState,
+            completedRequest,
             backingCanvas?.width ?? 0,
             backingCanvas?.height ?? 0,
-        )) return;
-        setCompletedPdfRenderIdentity(completedIdentity);
-        setPageRenderVersion(value => value + 1);
+        ));
     };
 
     useEffect(() => {
