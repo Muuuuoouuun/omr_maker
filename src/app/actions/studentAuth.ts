@@ -47,9 +47,9 @@ function adminClient() {
 }
 
 export async function loginStudentWithStartCode(input: {
-    studentId: string;
-    startCode: string;
-    groupId?: string;
+    organizationId: string;
+    studentProfileId: string;
+    code: string;
 }): Promise<StudentServerLoginResult> {
     try {
         const headerStore = await headers();
@@ -94,7 +94,7 @@ export async function logoutStudentServerSession(): Promise<{ success: true }> {
     return { success: true };
 }
 
-export async function issueStudentStartCodeCredential(
+export async function issueStudentStartCredential(
     studentId: string,
     startCode: string,
 ): Promise<{ success: boolean; skipped?: boolean; error?: string }> {

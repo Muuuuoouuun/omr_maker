@@ -5,7 +5,6 @@ import { randomUUID } from "node:crypto";
 import {
     createSignedStudentSessionCookie,
     parseSignedStudentSessionCookie,
-    resolveStudentSessionSecret,
     STUDENT_SERVER_SESSION_COOKIE,
     STUDENT_SERVER_SESSION_MAX_AGE_SECONDS,
     type StudentIdentityInput,
@@ -17,10 +16,9 @@ import {
     getSupabaseServerConfigFromEnv,
 } from "@/lib/supabaseServerAdmin";
 import {
-    metadataWithStudentAccessCode,
-    readStudentAccessCodeRecord,
-    verifyStudentAccessCode,
-} from "@/lib/studentAccessCode";
+    verifyStudentCredentials,
+    type StudentCredentialClient,
+} from "@/lib/studentCredentialVerifier";
 import {
     buildStudentLoginRateLimitKeys,
     checkStudentLoginRateLimit,
@@ -34,11 +32,6 @@ import {
     type StudentLoginEnrollmentRow,
     type StudentLoginProfileRow,
 } from "@/lib/studentLoginIdentity";
-import {
-    parseSignedTeacherSessionCookie,
-    TEACHER_SERVER_SESSION_COOKIE,
-} from "@/lib/teacherServerSession";
-import { workspaceContextFromTeacherSession } from "@/lib/workspaceContext";
 import {
     boundGuestClaimAttemptIds,
     claimSignedGuestAttempts,
@@ -54,13 +47,10 @@ import {
 } from "@/lib/studentGuestClaimOwner";
 
 const WORKSPACE_ID_PATTERN = /^(?:default|teacher_[a-z0-9]{7,16})$/;
-const MAX_CODE_SYNC_ENTRIES = 500;
-
 type QueryError = { message?: string } | null;
 
 interface StudentAuthFilter {
     eq(column: string, value: string): StudentAuthFilter;
-    in(column: string, values: string[]): StudentAuthFilter;
     maybeSingle(): PromiseLike<{ data: unknown; error: QueryError }>;
     order(column: string, options?: { ascending?: boolean }): PromiseLike<{ data: unknown[] | null; error: QueryError }>;
 }
@@ -68,7 +58,6 @@ interface StudentAuthFilter {
 interface StudentAuthClient extends GuestClaimRpcClient {
     from(table: string): {
         select(columns?: string): StudentAuthFilter;
-        upsert(row: unknown): PromiseLike<{ error: QueryError }>;
     };
 }
 
@@ -316,19 +305,22 @@ export async function issueStudentSession(input: {
             return { ok: false, status: "invalid_credentials" };
         }
 
-        const accessCodeRecord = readStudentAccessCodeRecord(profile.metadata);
-        if (!accessCodeRecord) {
+        const credential = await verifyStudentCredentials(
+            client as unknown as StudentCredentialClient,
+            {
+                organizationId: workspaceId,
+                studentProfileId: profile.id,
+                code: clean(input.startCode),
+            },
+        );
+        if (credential.status === "credential_not_configured") {
             recordStudentLoginFailure(rateLimitKeys);
             return { ok: false, status: "code_not_issued" };
         }
-        const secret = resolveStudentSessionSecret();
-        if (!secret) return { ok: false, status: "error" };
-        if (!verifyStudentAccessCode(profile.metadata, {
-            code: input.startCode,
-            studentId: profile.id,
-            organizationId: workspaceId,
-            secret,
-        })) {
+        if (credential.status === "service_unavailable") {
+            throw new Error(credential.error || "Student credential lookup failed");
+        }
+        if (credential.status !== "verified") {
             recordStudentLoginFailure(rateLimitKeys);
             return { ok: false, status: "invalid_credentials" };
         }
@@ -464,64 +456,6 @@ export async function validateStudentSession(): Promise<StudentSessionIssueResul
             regionName: identity.regionName,
         },
     };
-}
-
-/** Teacher-authenticated migration/write-through for locally issued start codes. */
-export async function syncStudentAccessCodes(entries: Array<{ studentId: string; code: string }>): Promise<{
-    status: "ok" | "degraded_local" | "unauthenticated" | "error";
-    syncedCount: number;
-    missingCount?: number;
-}> {
-    const cookieStore = await cookies();
-    const teacherSession = parseSignedTeacherSessionCookie(cookieStore.get(TEACHER_SERVER_SESSION_COOKIE)?.value);
-    if (!teacherSession) return { status: "unauthenticated", syncedCount: 0 };
-    const client = adminClient();
-    if (!client) return { status: "degraded_local", syncedCount: 0 };
-    const secret = resolveStudentSessionSecret();
-    if (!secret) return { status: "error", syncedCount: 0 };
-
-    const context = workspaceContextFromTeacherSession(teacherSession);
-    const codeByStudentId = new Map(entries
-        .slice(0, MAX_CODE_SYNC_ENTRIES)
-        .map(entry => [clean(entry.studentId), clean(entry.code)] as const)
-        .filter(([studentId, code]) => studentId && code));
-    if (codeByStudentId.size === 0) return { status: "ok", syncedCount: 0, missingCount: 0 };
-
-    try {
-        const result = await client.from("omr_student_profiles")
-            .select("*")
-            .eq("organization_id", context.organizationId)
-            .in("id", [...codeByStudentId.keys()])
-            .order("id", { ascending: true });
-        if (result.error) throw new Error(result.error.message || "Failed to load student profiles for code sync");
-
-        const updatedAt = new Date().toISOString();
-        const updates = (result.data || []).map(asRecord).flatMap(row => {
-            const studentId = clean(row.id);
-            const code = codeByStudentId.get(studentId);
-            if (!studentId || !code) return [];
-            const nextMetadata = metadataWithStudentAccessCode(row.metadata, {
-                code,
-                studentId,
-                organizationId: context.organizationId,
-                secret,
-                updatedAt,
-            });
-            return nextMetadata ? [{ ...row, metadata: nextMetadata, updated_at: updatedAt }] : [];
-        });
-        if (updates.length > 0) {
-            const upsertResult = await client.from("omr_student_profiles").upsert(updates);
-            if (upsertResult.error) throw new Error(upsertResult.error.message || "Failed to sync student access codes");
-        }
-        return {
-            status: "ok",
-            syncedCount: updates.length,
-            missingCount: Math.max(0, codeByStudentId.size - updates.length),
-        };
-    } catch (error) {
-        console.error("syncStudentAccessCodes failed", error);
-        return { status: "error", syncedCount: 0 };
-    }
 }
 
 /**

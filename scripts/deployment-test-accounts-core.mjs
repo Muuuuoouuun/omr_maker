@@ -1,4 +1,4 @@
-import { createHmac, pbkdf2Sync, randomBytes, timingSafeEqual } from "node:crypto";
+import { pbkdf2Sync, randomBytes, timingSafeEqual } from "node:crypto";
 
 export const SHARED_ORGANIZATION_ID = "teacher_sharedqa";
 export const SHARED_ORGANIZATION_NAME = "OMR Maker 테스트";
@@ -80,22 +80,6 @@ export function studentStartCodeHash(code) {
     return encodedPbkdf2(normalized);
 }
 
-export function studentMetadata(code, studentId, organizationId, secret, now) {
-    const normalized = typeof code === "string" ? code.replace(/\s/g, "").toUpperCase() : "";
-    if (!normalized || !studentId || !organizationId || !secret || !now) {
-        throw new Error("Student metadata inputs are required");
-    }
-    const hash = createHmac("sha256", secret)
-        .update(`${organizationId}\u0000${studentId}\u0000${normalized}`, "utf8")
-        .digest("hex");
-    return {
-        source: "deployment_test_fixture",
-        group: "테스트반",
-        region: "서울",
-        studentAccessCode: { version: 1, hash, updatedAt: now },
-    };
-}
-
 export function buildDeploymentFixture({ studentSessionSecret, now = new Date().toISOString() }) {
     if (typeof studentSessionSecret !== "string" || !studentSessionSecret.trim()) {
         throw new Error("studentSessionSecret is required");
@@ -116,7 +100,7 @@ export function buildDeploymentFixture({ studentSessionSecret, now = new Date().
         ...teacher,
         userId: `teacher_${stableWorkspaceHash(teacher.id)}`,
     }));
-    const students = Object.entries(STUDENT_START_CODES).map(([loginId, code], index) => {
+    const students = Object.keys(STUDENT_START_CODES).map((loginId, index) => {
         const id = studentProfileId(loginId);
         return {
             id,
@@ -125,7 +109,11 @@ export function buildDeploymentFixture({ studentSessionSecret, now = new Date().
             external_id: loginId,
             email: `${loginId}@omr.test`,
             status: "active",
-            metadata: studentMetadata(code, id, SHARED_ORGANIZATION_ID, studentSessionSecret, now),
+            metadata: {
+                source: "deployment_test_fixture",
+                group: "테스트반",
+                region: "서울",
+            },
             updated_at: now,
         };
     });
