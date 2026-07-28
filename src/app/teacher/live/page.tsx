@@ -14,7 +14,7 @@ import { resolveAttemptScore } from "@/lib/attemptScores";
 import { buildLiveQuestionHeatmap, dedupeLiveAttempts } from "@/lib/liveAnalytics";
 import { forceCompleteLiveAttempt, liveAttemptsNeedingForceFinish } from "@/lib/liveControls";
 import { safeRatePercent } from "@/lib/scoreUtils";
-import { awaySeverity } from "@/lib/examAwayTracker";
+import { awaySeverity, resolveAwayCount } from "@/lib/examAwayTracker";
 
 type StudentStatus = "submitted" | "in_progress" | "not_started";
 type LiveDataMode = "real" | "demo";
@@ -113,7 +113,7 @@ function attemptToStudent(a: Attempt, totalQ: number, exam?: Exam): LiveStudent 
         totalQ,
         startedAt: a.startedAt,
         score,
-        awayCount: a.focusLossEvents?.length || a.tabFociLostCount || 0,
+        awayCount: resolveAwayCount(a),
     };
 }
 

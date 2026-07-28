@@ -232,7 +232,8 @@ async function seedAwaySeverityAttempts(page: Page) {
             score: 100,
             totalScore: 100,
             answers: { 1: 2 },
-            focusLossEvents: Array.from({ length: count }, (_, index) => ({
+            tabFociLostCount: count,
+            focusLossEvents: Array.from({ length: count === 3 ? 2 : count }, (_, index) => ({
                 at: `2026-07-28T09:0${count}:0${index}.000Z`,
                 questionId: 1,
                 questionNumber: 1,

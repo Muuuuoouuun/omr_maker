@@ -891,6 +891,13 @@ describe("premium analytics", () => {
             focusLossQuestionNumbers: [2, 4],
         });
     });
+
+    it("preserves the larger cumulative focus-loss count after invalid events are removed", () => {
+        expect(summarizeAttemptBehavior({
+            ...attempt,
+            tabFociLostCount: 3,
+        }).focusLossCount).toBe(3);
+    });
 });
 
 describe("slow-but-correct (불안정 개념) recommendation signal", () => {

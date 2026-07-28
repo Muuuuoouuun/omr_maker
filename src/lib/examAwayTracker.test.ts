@@ -5,6 +5,7 @@ import {
     beginAwaySession,
     finishAwaySession,
     flushAwaySession,
+    resolveAwayCount,
 } from "./examAwayTracker";
 
 describe("exam away tracker", () => {
@@ -57,5 +58,44 @@ describe("exam away tracker", () => {
         expect(awaySeverity(1)).toBe("neutral");
         expect(awaySeverity(2)).toBe("neutral");
         expect(awaySeverity(3)).toBe("attention");
+    });
+
+    it("keeps the larger stored cumulative count when sanitization drops an event", () => {
+        expect(resolveAwayCount({
+            focusLossEvents: [
+                { at: "2026-07-28T09:00:00.000Z", count: 1, reason: "blur" },
+                { at: "2026-07-28T09:01:00.000Z", count: 2, reason: "hidden" },
+            ],
+            tabFociLostCount: 3,
+        })).toBe(3);
+    });
+
+    it("uses the largest valid cumulative event count", () => {
+        expect(resolveAwayCount({
+            focusLossEvents: [
+                { at: "2026-07-28T09:00:00.000Z", count: 1, reason: "blur" },
+                { at: "2026-07-28T09:01:00.000Z", count: 4, reason: "hidden" },
+            ],
+            tabFociLostCount: 2,
+        })).toBe(4);
+    });
+
+    it("ignores malformed, string, negative, fractional, and infinite counts", () => {
+        expect(resolveAwayCount({
+            focusLossEvents: [
+                null,
+                "not-an-event",
+                { at: "", count: 9, reason: "blur" },
+                { at: "2026-07-28T09:00:00.000Z", count: "7", reason: "blur" },
+                { at: "2026-07-28T09:01:00.000Z", count: -2, reason: "hidden" },
+                { at: "2026-07-28T09:02:00.000Z", count: 2.5, reason: "hidden" },
+                { at: "2026-07-28T09:03:00.000Z", count: Number.POSITIVE_INFINITY, reason: "hidden" },
+            ],
+            tabFociLostCount: "12",
+        })).toBe(0);
+        expect(resolveAwayCount({
+            focusLossEvents: "3",
+            tabFociLostCount: -1,
+        })).toBe(0);
     });
 });
