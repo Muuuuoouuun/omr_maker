@@ -616,10 +616,11 @@ test.describe("Billing page", () => {
     test("shows current plan hero + usage + plan grid + invoices", async ({ page }) => {
         await page.goto("/teacher/billing");
         await expect(page.getByRole("heading", { name: "결제 및 플랜" })).toBeVisible();
-        await expect(page.getByText("CURRENT PLAN")).toBeVisible();
+        await expect(page.getByText("개발 플랜 시뮬레이션", { exact: true })).toBeVisible();
+        await expect(page.getByText("SIMULATED PLAN", { exact: true })).toBeVisible();
         await expect(page.getByRole("heading", { name: "이달 사용량" })).toBeVisible();
         await expect(page.getByRole("heading", { name: "플랜 비교" })).toBeVisible();
-        await expect(page.getByRole("heading", { name: "결제/플랜 기록" })).toBeVisible();
+        await expect(page.getByRole("heading", { name: "로컬 플랜 변경 기록" })).toBeVisible();
     });
 
     test("monthly/yearly toggle changes prices", async ({ page }) => {
