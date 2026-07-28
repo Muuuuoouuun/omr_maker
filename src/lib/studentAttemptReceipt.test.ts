@@ -174,7 +174,7 @@ describe("student attempt receipt cache", () => {
 
         expect(await migrateLegacySubmissionReceipts()).toBe(true);
         expect(storage.getItem(currentReceiptKey)).toBe(currentReceipt);
-        expect(storage.getItem(currentRequestKey)).toBe(currentRequest);
+        expect(storage.getItem(currentRequestKey)).toBeNull();
         expect(storage.getItem(aliasKey)).toBe(currentAlias);
         expect(readSubmissionReceipt("attempt-missing")?.status).toBe("pending");
         expect(readReconciledSubmissionAttemptId("attempt-old")).toBe("attempt-current");
@@ -248,6 +248,151 @@ describe("student attempt receipt cache", () => {
         expect(storage.getItem(currentKey)).toBe(currentEnvelope);
         expect(storage.getItem(legacyKey)).toBeNull();
         expect(readSubmissionReceipt("attempt-late-race")?.status).toBe("pending");
+    });
+
+    it("suppresses a late-v1 pending pair when a canonical v2 alias already supersedes it", async () => {
+        const oldId = "attempt-old-superseded";
+        const canonicalId = "attempt-canonical-superseded";
+        const aliasStorageKey = `omr_student_submission_alias_v2:${encodeURIComponent(oldId)}`;
+        const aliasEnvelope = JSON.stringify({
+            version: 2,
+            previousAttemptId: oldId,
+            canonicalAttemptId: canonicalId,
+            updatedAt: "2026-07-28T06:00:00.000Z",
+        });
+        const storage = createStorage({
+            [aliasStorageKey]: aliasEnvelope,
+            omr_student_submission_receipts_v1: JSON.stringify({
+                receipts: {
+                    [oldId]: {
+                        attemptId: oldId,
+                        status: "pending",
+                        updatedAt: "2026-07-28T00:00:00.000Z",
+                    },
+                },
+                requests: {
+                    [oldId]: {
+                        attemptId: oldId,
+                        input: {
+                            examId: "exam-1",
+                            submissionId: "submission-superseded",
+                            answers: {},
+                            startedAt: "2026-07-28T00:00:00.000Z",
+                        },
+                    },
+                },
+            }),
+        });
+        vi.stubGlobal("window", { localStorage: storage });
+        const submit = vi.fn(async () => ({ status: "error" }));
+
+        expect(readSubmissionReceipt(oldId)).toBeNull();
+        expect(pendingSubmissionReceiptIds()).not.toContain(oldId);
+        expect(await migrateLegacySubmissionReceipts()).toBe(true);
+        expect(storage.getItem(aliasStorageKey)).toBe(aliasEnvelope);
+        expect(storage.getItem(`${SUBMISSION_RECEIPT_ENTRY_PREFIX}${encodeURIComponent(oldId)}`)).toBeNull();
+        expect(storage.getItem(`${SUBMISSION_RECEIPT_REQUEST_PREFIX}${encodeURIComponent(oldId)}`)).toBeNull();
+        expect(await retryPendingSubmissionReceipt(oldId, {
+            submitSignedSessionAttempt: submit,
+        })).toMatchObject({ status: "missing" });
+        expect(submit).not.toHaveBeenCalled();
+    });
+
+    it.each(["confirmed", "local_only"] as const)(
+        "removes an orphan request when a terminal v2 %s receipt supersedes late-v1 pending data",
+        async terminalStatus => {
+            const id = "attempt-terminal-superseded";
+            const receiptStorageKey = `${SUBMISSION_RECEIPT_ENTRY_PREFIX}${encodeURIComponent(id)}`;
+            const requestStorageKey = `${SUBMISSION_RECEIPT_REQUEST_PREFIX}${encodeURIComponent(id)}`;
+            const terminalReceipt = JSON.stringify({
+                version: 2,
+                revision: 3,
+                receipt: {
+                    attemptId: id,
+                    status: terminalStatus,
+                    updatedAt: "2026-07-28T06:00:00.000Z",
+                },
+            });
+            const orphanRequest = JSON.stringify({
+                version: 2,
+                revision: 2,
+                request: {
+                    attemptId: id,
+                    input: {
+                        examId: "exam-1",
+                        submissionId: "submission-orphan-v2",
+                        answers: {},
+                        startedAt: "2026-07-28T00:00:00.000Z",
+                    },
+                },
+            });
+            const storage = createStorage({
+                [receiptStorageKey]: terminalReceipt,
+                [requestStorageKey]: orphanRequest,
+                omr_student_submission_receipts_v1: JSON.stringify({
+                    receipts: {
+                        [id]: {
+                            attemptId: id,
+                            status: "pending",
+                            updatedAt: "2026-07-28T00:00:00.000Z",
+                        },
+                    },
+                    requests: {
+                        [id]: {
+                            attemptId: id,
+                            input: {
+                                examId: "exam-legacy",
+                                submissionId: "submission-orphan-legacy",
+                                answers: {},
+                                startedAt: "2026-07-28T00:00:00.000Z",
+                            },
+                        },
+                    },
+                }),
+            });
+            vi.stubGlobal("window", { localStorage: storage });
+
+            expect(readSubmissionReceipt(id)?.status).toBe(terminalStatus);
+            expect(pendingSubmissionReceiptIds()).not.toContain(id);
+            expect(storage.getItem(requestStorageKey)).toBe(orphanRequest);
+            expect(await migrateLegacySubmissionReceipts()).toBe(true);
+            expect(storage.getItem(receiptStorageKey)).toBe(terminalReceipt);
+            expect(storage.getItem(requestStorageKey)).toBeNull();
+            expect(storage.getItem("omr_student_submission_receipts_v1")).toBeNull();
+        },
+    );
+
+    it("still overlays and migrates an ordinary legacy pending pair when v2 is missing", async () => {
+        const id = "attempt-ordinary-legacy";
+        const storage = createStorage({
+            omr_student_submission_receipts_v1: JSON.stringify({
+                receipts: {
+                    [id]: {
+                        attemptId: id,
+                        status: "pending",
+                        updatedAt: "2026-07-28T00:00:00.000Z",
+                    },
+                },
+                requests: {
+                    [id]: {
+                        attemptId: id,
+                        input: {
+                            examId: "exam-1",
+                            submissionId: "submission-ordinary",
+                            answers: {},
+                            startedAt: "2026-07-28T00:00:00.000Z",
+                        },
+                    },
+                },
+            }),
+        });
+        vi.stubGlobal("window", { localStorage: storage });
+
+        expect(readSubmissionReceipt(id)?.status).toBe("pending");
+        expect(pendingSubmissionReceiptIds()).toContain(id);
+        expect(await migrateLegacySubmissionReceipts()).toBe(true);
+        expect(storage.getItem(`${SUBMISSION_RECEIPT_ENTRY_PREFIX}${encodeURIComponent(id)}`)).toBeTruthy();
+        expect(storage.getItem(`${SUBMISSION_RECEIPT_REQUEST_PREFIX}${encodeURIComponent(id)}`)).toBeTruthy();
     });
 
     it("uses the exact authoritative persistence labels", async () => {
@@ -671,6 +816,7 @@ describe("student attempt receipt cache", () => {
         expect([...Array(storage.length)].map((_, index) => storage.key(index)))
             .not.toEqual(expect.arrayContaining([expect.stringContaining("quarantine")]));
         expect(await migrateLegacySubmissionReceipts()).toBe(true);
+        expect(storage.getItem(`${SUBMISSION_RECEIPT_REQUEST_PREFIX}${encodeURIComponent("attempt-one")}`)).toBeNull();
         expect([...Array(storage.length)].map((_, index) => storage.key(index)))
             .toEqual(expect.arrayContaining([expect.stringContaining("quarantine")]));
     });

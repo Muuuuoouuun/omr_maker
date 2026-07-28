@@ -299,6 +299,22 @@ function parseRequestEnvelope(
     }
 }
 
+function v2SupersedesPending(
+    storage: Storage,
+    id: string,
+    options: { quarantine?: boolean } = {},
+): boolean {
+    if (storage.getItem(aliasKey(id)) !== null) return true;
+    if (storage.getItem(receiptKey(id)) === null) return false;
+    const envelope = parseReceiptEnvelope(storage, id, options);
+    // A physically present but corrupt v2 receipt still wins over legacy.
+    // The awaited maintenance path quarantines it and removes any orphan
+    // request instead of reviving an older pending submission.
+    if (!envelope) return true;
+    const status = envelope.receipt.status;
+    return status === "confirmed" || status === "local_only";
+}
+
 function writeReceiptEnvelope(storage: Storage, receipt: SubmissionReceipt): void {
     const current = parseReceiptEnvelope(storage, receipt.attemptId);
     const envelope: ReceiptEnvelope = {
@@ -367,12 +383,20 @@ function migrateLegacyRegistryUnlocked(storage: Storage): boolean {
     try {
         for (const [id, value] of Object.entries(legacy.registry.receipts || {})) {
             const receipt = sanitizeReceipt(id, value);
-            if (receipt && !storage.getItem(receiptKey(id))) {
+            if (
+                receipt
+                && !storage.getItem(receiptKey(id))
+                && !storage.getItem(aliasKey(id))
+            ) {
                 writeReceiptEnvelope(storage, receipt);
             }
         }
         for (const [id, value] of Object.entries(legacy.registry.requests || {})) {
             if (!isPendingSubmissionRequest(id, value)) continue;
+            if (v2SupersedesPending(storage, id)) {
+                storage.removeItem(requestKey(id));
+                continue;
+            }
             const legacy = value as PendingSignedSessionSubmission & { pin?: unknown };
             if (!storage.getItem(requestKey(id))) {
                 writeRequestEnvelope(storage, {
@@ -464,7 +488,18 @@ function maintainV2Registry(storage: Storage): void {
     pruneRetainedRecords(storage);
     storageKeys(storage, SUBMISSION_RECEIPT_REQUEST_PREFIX).forEach(key => {
         const id = attemptIdFromKey(key, SUBMISSION_RECEIPT_REQUEST_PREFIX);
-        if (id) parseRequestEnvelope(storage, id);
+        if (!id) return;
+        const request = parseRequestEnvelope(storage, id);
+        const receipt = parseReceiptEnvelope(storage, id);
+        if (
+            request
+            && (
+                storage.getItem(aliasKey(id)) !== null
+                || receipt?.receipt.status !== "pending"
+            )
+        ) {
+            try { storage.removeItem(key); } catch {}
+        }
     });
 }
 
@@ -551,6 +586,7 @@ export function readSubmissionReceipt(attemptId: string): SubmissionReceipt | nu
     if (storage.getItem(receiptKey(attemptId)) !== null) {
         return parseReceiptEnvelope(storage, attemptId, { quarantine: false })?.receipt || null;
     }
+    if (storage.getItem(aliasKey(attemptId)) !== null) return null;
     const legacy = parseLegacyRegistry(storage, { quarantine: false })?.registry;
     return sanitizeReceipt(attemptId, legacy?.receipts?.[attemptId]) || null;
 }
@@ -651,6 +687,7 @@ export function pendingSubmissionReceiptIds(options: { automaticOnly?: boolean }
     );
     Object.keys(legacy?.requests || {}).forEach(id => ids.add(id));
     return [...ids].flatMap(id => {
+        if (v2SupersedesPending(storage, id, { quarantine: false })) return [];
         const request = storage.getItem(requestKey(id)) !== null
             ? parseRequestEnvelope(storage, id, { quarantine: false })?.request
             : isPendingSubmissionRequest(id, legacy?.requests?.[id])
