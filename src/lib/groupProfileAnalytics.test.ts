@@ -74,6 +74,23 @@ function attempt(partial: Partial<Attempt>): Attempt {
 }
 
 describe("group profile analytics", () => {
+    it("keeps the group away total at the stored cumulative value", () => {
+        const insight = buildGroupProfileInsight(group, students, [
+            attempt({
+                id: "sanitized-away-events",
+                studentId: "class-a::김학생",
+                groupName: "A반",
+                focusLossEvents: [
+                    { at: "2026-06-15T10:10:00.000Z", count: 1, reason: "blur" },
+                    { at: "2026-06-15T10:20:00.000Z", count: 2, reason: "hidden" },
+                ],
+                tabFociLostCount: 3,
+            }),
+        ], new Map([[exam.id, exam]]));
+
+        expect(insight.focusLossCount).toBe(3);
+    });
+
     it("summarizes class attempts by exam, weakness type, and at-risk students", () => {
         const insight = buildGroupProfileInsight(group, students, [
             attempt({

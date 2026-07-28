@@ -690,6 +690,20 @@ test.describe("Live Results page", () => {
             await expect(page.getByText(/부정행위|cheating/i)).toHaveCount(0);
         }
 
+        await page.goto("/teacher/exam/away-severity-exam");
+        const examDetailAway = page.locator("[data-away-severity]");
+        await expect(examDetailAway).toHaveCount(3);
+        for (const count of [1, 2]) {
+            await expect(examDetailAway.filter({ hasText: `화면 이탈 ${count}회` })).toHaveAttribute(
+                "data-away-severity",
+                "neutral",
+            );
+        }
+        await expect(examDetailAway.filter({ hasText: "화면 이탈 3회" })).toHaveAttribute(
+            "data-away-severity",
+            "attention",
+        );
+
         for (const count of [1, 2, 3]) {
             await page.evaluate(value => {
                 window.localStorage.setItem("omr_away_severity_student_count", String(value));

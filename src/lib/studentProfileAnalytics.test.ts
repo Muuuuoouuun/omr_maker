@@ -54,6 +54,23 @@ function attempt(partial: Partial<Attempt>): Attempt {
 }
 
 describe("student profile analytics", () => {
+    it("keeps per-attempt and aggregate away counts at the stored cumulative value", () => {
+        const insight = buildStudentProfileInsight(student, [
+            attempt({
+                id: "sanitized-away-events",
+                studentId: student.id,
+                focusLossEvents: [
+                    { at: "2026-06-15T10:10:00.000Z", count: 1, reason: "blur" },
+                    { at: "2026-06-15T10:20:00.000Z", count: 2, reason: "hidden" },
+                ],
+                tabFociLostCount: 3,
+            }),
+        ], new Map([[exam.id, exam]]));
+
+        expect(insight.attempts[0].focusLossCount).toBe(3);
+        expect(insight.focusLossCount).toBe(3);
+    });
+
     it("builds student detail insight from attempts, weaknesses, and handwriting archives", () => {
         const insight = buildStudentProfileInsight(student, [
             attempt({

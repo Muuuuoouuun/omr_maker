@@ -2,6 +2,7 @@ import type { Attempt, Exam, QuestionResult } from "@/types/omr";
 import type { RosterGroup, RosterStudent } from "@/lib/rosterStorage";
 import { rosterGroupMatchesStudent } from "@/lib/rosterStorage";
 import { baseAttemptsOnly, resolveAttemptScore, retakeAttemptsOnly } from "@/lib/attemptScores";
+import { resolveAwayCount } from "@/lib/examAwayTracker";
 import {
     attemptElapsedTimeSec,
     buildMostMissedQuestionStats,
@@ -340,7 +341,7 @@ export function buildGroupProfileInsight(
         .filter(value => value > 0);
     const totalTrackedTimeSec = questionTimes.reduce((sum, value) => sum + value, 0);
     const focusLossCount = baseGroupAttempts.reduce((sum, attempt) => (
-        sum + (attempt.focusLossEvents?.length || attempt.tabFociLostCount || 0)
+        sum + resolveAwayCount(attempt)
     ), 0);
     const handwritingArchiveCount = baseGroupAttempts.filter(attempt => (
         !!attempt.handwritingArchived && !!(attempt.handwriting?.strokesRef || attempt.drawingsRef)
