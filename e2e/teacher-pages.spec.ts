@@ -1,20 +1,20 @@
 import { test, expect, type Page } from "@playwright/test";
 import { mintTeacherToken } from "../src/lib/teacherAuth";
+import { MOCKUP_TEACHER_IDENTITY } from "../src/lib/mockupAccount";
 import { createSignedTeacherSessionCookie, TEACHER_SERVER_SESSION_COOKIE } from "../src/lib/teacherServerSession";
-import { createTeacherSession, LEGACY_TEACHER_TOKEN_KEY, TEACHER_SESSION_KEY } from "../src/lib/teacherSession";
+import {
+    createTeacherSession,
+    LEGACY_TEACHER_TOKEN_KEY,
+    TEACHER_SESSION_KEY,
+    type TeacherSessionIdentity,
+} from "../src/lib/teacherSession";
 
 test.describe.configure({ timeout: 45_000 });
 
-const TEACHER_IDENTITY = {
+const TEACHER_IDENTITY: TeacherSessionIdentity = {
     teacherId: "admin",
     email: "admin@example.com",
     displayName: "Demo Admin",
-};
-
-const MOCKUP_TEACHER_IDENTITY = {
-    teacherId: "omr-showcase",
-    email: "showcase@example.com",
-    displayName: "OMR Showcase",
 };
 
 function cookieOrigin(baseURL?: string): string {
@@ -29,7 +29,7 @@ function cookieOrigin(baseURL?: string): string {
 async function authenticateTeacher(
     page: Page,
     baseURL?: string,
-    identity = TEACHER_IDENTITY,
+    identity: TeacherSessionIdentity = TEACHER_IDENTITY,
 ) {
     const token = mintTeacherToken();
     const session = createTeacherSession(token, Date.now(), identity);
