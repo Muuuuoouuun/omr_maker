@@ -375,6 +375,7 @@ begin
           join pg_catalog.pg_namespace namespace
             on namespace.oid = routine.pronamespace
          where namespace.nspname = 'public'
+           and routine.prokind = 'f'
            and routine.proname in (
                'omr_answer_attempt_question_v1',
                'omr_set_subquestion_review_v1',
@@ -550,6 +551,7 @@ begin
           join pg_catalog.pg_namespace namespace
             on namespace.oid = routine.pronamespace
          where namespace.nspname = 'public'
+           and routine.prokind = 'f'
            and routine.proname in (
                'omr_submit_attempt_v1',
                'omr_submit_session_attempt_v1',

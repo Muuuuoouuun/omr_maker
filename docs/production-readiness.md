@@ -43,7 +43,8 @@ service-role RPC만 유지합니다. 기존 `production-rls.sql`은 직접 authe
    readiness Server Action은 동일 출처와 유효한 서명 세션을 먼저 확인하고
    공개 쇼케이스 identity를 차단한 뒤에만 service-role probe를 호출합니다.
    속도 제한은 서명된 actor를 기준으로 하며 만료 엔트리를 정리하고 저장소
-   최대 크기를 고정합니다.
+   최대 크기를 고정합니다. 이 제한은 process-local 방어 심층 계층이므로
+   다중 instance 운영에서는 upstream 공유 rate limit도 함께 적용합니다.
 6. 릴리스 증거에 커밋 SHA, 정책 해시(SHA-256), CI 실행 URL, 대상 DB 프로젝트,
    실행자·시각, preflight 결과, anon/authenticated 공격 거부 결과를 기록합니다.
 7. 같은 커밋의 서버 빌드를 배포하고 교사·학생 server action 여정을 확인한 뒤 쓰기를 재개합니다.

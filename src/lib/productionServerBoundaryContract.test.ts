@@ -162,6 +162,13 @@ describe("production server-only database boundary", () => {
         expect(readinessV4).toMatch(
             /select routine_name, identity_arguments\s+from actual_scoped_rpcs\s+except\s+select routine_name, identity_arguments\s+from expected_scoped_rpcs/i,
         );
+        const actualScopedRpcCte = readinessV4.match(
+            /actual_scoped_rpcs\s*\(\s*routine_name,\s*identity_arguments\s*\)\s*as\s*\(([\s\S]*?)\)\s*select\s+not\s+exists/i,
+        );
+        expect(actualScopedRpcCte).not.toBeNull();
+        expect(actualScopedRpcCte?.[1]).toMatch(
+            /routine\.prokind\s*=\s*'f'/i,
+        );
         expect(readinessV4).toMatch(
             /routine\.proname\s+in\s*\(\s*'omr_teacher_update_attempt_v1',\s*'omr_mark_feedback_opened'\s*\)/i,
         );
@@ -182,6 +189,13 @@ describe("production server-only database boundary", () => {
         );
         expect(readinessV4).toMatch(
             /select routine_name, identity_arguments\s+from actual_server_gateways\s+except\s+select routine_name, identity_arguments\s+from expected_server_gateways/i,
+        );
+        const actualServerGatewayCte = readinessV4.match(
+            /actual_server_gateways\s*\(\s*routine_name,\s*identity_arguments\s*\)\s*as\s*\(([\s\S]*?)\)\s*select\s+not\s+exists/i,
+        );
+        expect(actualServerGatewayCte).not.toBeNull();
+        expect(actualServerGatewayCte?.[1]).toMatch(
+            /routine\.prokind\s*=\s*'f'/i,
         );
         expect(readinessV4).toContain("supabase_storage_admin");
         expect(readinessV4).toContain("OMR private assets server-only objects");
@@ -306,6 +320,12 @@ describe("production server-only database boundary", () => {
         );
         expect(liveAssertions).toContain(
             "v4 readiness accepted an extra scoped RPC overload",
+        );
+        expect(liveAssertions).toContain(
+            "v4 readiness accepted a scoped procedure impostor",
+        );
+        expect(liveAssertions).toContain(
+            "v4 readiness accepted a server gateway procedure impostor",
         );
         expect(supabaseReadme).toContain("202607280003");
         expect(productionReadiness).toContain("202607280003");

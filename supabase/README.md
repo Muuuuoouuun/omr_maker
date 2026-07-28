@@ -86,7 +86,8 @@ never returns preflight samples or row data. The teacher Settings action checks
 same-origin and a valid signed teacher session before invoking this service-role
 probe, explicitly excludes the signed public-showcase identity, and applies a
 signed-actor-primary request limit whose expired entries are pruned and whose
-in-memory store has a fixed cap.
+in-memory store has a fixed cap. This process-local limiter is defense in depth;
+multi-instance deployments must also enforce a shared upstream rate limit.
 
 Run `npm run test:supabase:live` locally when Docker is available. A machine
 without Docker cannot replace this required CI gate with source-string

@@ -2133,6 +2133,42 @@ declare
     readiness jsonb;
 begin
     begin
+        drop function public.omr_answer_attempt_question_v1(
+            text, text, text, text, text, text, text
+        );
+        execute $statement$
+            create procedure public.omr_answer_attempt_question_v1(
+                text, text, text, text, text, text, text
+            )
+            language sql
+            as 'select 1'
+        $statement$;
+        revoke all on procedure public.omr_answer_attempt_question_v1(
+            text, text, text, text, text, text, text
+        ) from public, anon, authenticated;
+        grant execute on procedure public.omr_answer_attempt_question_v1(
+            text, text, text, text, text, text, text
+        ) to service_role;
+        readiness := public.omr_service_readiness_v1();
+        if readiness->>'scopedRpcPrivilegesReady' <> 'false'
+            or readiness->>'serviceRolePrivilegesReady' <> 'true'
+            or readiness->>'browserFunctionPrivilegesDenied' <> 'true'
+            or readiness->>'serverGatewayCapabilitiesReady' <> 'true'
+            or readiness->>'ready' <> 'false'
+        then
+            raise exception 'v4 readiness accepted a scoped procedure impostor';
+        end if;
+        raise exception using errcode = 'P1021', message = 'rollback v4 scoped procedure drift';
+    exception when sqlstate 'P1021' then null;
+    end;
+end
+$$;
+
+do $$
+declare
+    readiness jsonb;
+begin
+    begin
         execute $statement$
             create function public.omr_save_exam_v1(text)
             returns boolean
@@ -2147,6 +2183,38 @@ begin
         end if;
         raise exception using errcode = 'P1020', message = 'rollback v4 gateway overload drift';
     exception when sqlstate 'P1020' then null;
+    end;
+end
+$$;
+
+do $$
+declare
+    readiness jsonb;
+begin
+    begin
+        drop function public.omr_save_remote_asset_metadata_v1(jsonb);
+        execute $statement$
+            create procedure public.omr_save_remote_asset_metadata_v1(jsonb)
+            language sql
+            as 'select 1'
+        $statement$;
+        revoke all on procedure
+            public.omr_save_remote_asset_metadata_v1(jsonb)
+            from public, anon, authenticated;
+        grant execute on procedure
+            public.omr_save_remote_asset_metadata_v1(jsonb)
+            to service_role;
+        readiness := public.omr_service_readiness_v1();
+        if readiness->>'serverGatewayCapabilitiesReady' <> 'false'
+            or readiness->>'serviceRolePrivilegesReady' <> 'true'
+            or readiness->>'browserFunctionPrivilegesDenied' <> 'true'
+            or readiness->>'scopedRpcPrivilegesReady' <> 'true'
+            or readiness->>'ready' <> 'false'
+        then
+            raise exception 'v4 readiness accepted a server gateway procedure impostor';
+        end if;
+        raise exception using errcode = 'P1022', message = 'rollback v4 gateway procedure drift';
+    exception when sqlstate 'P1022' then null;
     end;
 end
 $$;
