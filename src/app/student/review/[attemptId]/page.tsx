@@ -560,7 +560,7 @@ export default function ReviewPage() {
                 const storedReceipt = readSubmissionReceipt(found.id);
                 if (result.source === "server") saveLocalServerConfirmedAttempt(found);
                 const nextReceipt = submissionReceiptForAttempt(found, storedReceipt, result.source);
-                persistSubmissionReceipt(nextReceipt);
+                await persistSubmissionReceipt(nextReceipt);
                 setSubmissionReceipt(nextReceipt);
                 // Attempt-stored notes are authoritative; the legacy local queue
                 // only backfills questions never migrated onto the attempt.

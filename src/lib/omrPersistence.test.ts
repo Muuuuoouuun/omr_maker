@@ -745,7 +745,7 @@ describe("Supabase persistence mapping", () => {
         expect(localStorage.getItem("omr_attempts") || "").not.toContain("points");
     });
 
-    it("atomically replaces a superseded local attempt while preserving device-only review artifacts", () => {
+    it("atomically replaces a superseded local attempt while preserving device-only review artifacts", async () => {
         const drawingsRef = {
             store: "indexeddb" as const,
             key: "attempt:attempt-local:drawings",
@@ -811,7 +811,7 @@ describe("Supabase persistence mapping", () => {
         vi.stubGlobal("window", { localStorage });
         vi.stubGlobal("localStorage", localStorage);
 
-        const replacement = replaceLocalAttemptWithCanonical("attempt-local", authoritativeAttempt);
+        const replacement = await replaceLocalAttemptWithCanonical("attempt-local", authoritativeAttempt);
 
         expect(replacement.committed).toBe(true);
         expect(replacement.attempt).toMatchObject({
@@ -842,7 +842,7 @@ describe("Supabase persistence mapping", () => {
         ]);
     });
 
-    it("leaves the superseded record intact when canonical replacement cannot be written", () => {
+    it("leaves the superseded record intact when canonical replacement cannot be written", async () => {
         const localAttempt = { ...attempt, id: "attempt-local" };
         const base = createStorage({
             omr_attempts: JSON.stringify([localAttempt]),
@@ -857,7 +857,7 @@ describe("Supabase persistence mapping", () => {
         vi.stubGlobal("window", { localStorage });
         vi.stubGlobal("localStorage", localStorage);
 
-        const replacement = replaceLocalAttemptWithCanonical("attempt-local", {
+        const replacement = await replaceLocalAttemptWithCanonical("attempt-local", {
             ...attempt,
             id: "attempt-server",
         });
@@ -866,7 +866,34 @@ describe("Supabase persistence mapping", () => {
         expect(readLocalAttempts()).toEqual([localAttempt]);
     });
 
-    it("can roll a committed canonical replacement back to the exact prior attempt index", () => {
+    it("keeps an authoritative false handwriting entitlement over a local true value", async () => {
+        const localAttempt: Attempt = {
+            ...attempt,
+            id: "attempt-local-entitlement",
+            handwritingArchived: true,
+            handwritingPlan: "pro",
+        };
+        const localStorage = createStorage({
+            omr_attempts: JSON.stringify([localAttempt]),
+        });
+        vi.stubGlobal("window", { localStorage });
+        vi.stubGlobal("localStorage", localStorage);
+
+        const replacement = await replaceLocalAttemptWithCanonical(localAttempt.id, {
+            ...attempt,
+            id: "attempt-server-entitlement",
+            handwritingArchived: false,
+            handwritingPlan: "free",
+        });
+
+        expect(replacement.committed).toBe(true);
+        expect(replacement.attempt).toMatchObject({
+            handwritingArchived: false,
+            handwritingPlan: "free",
+        });
+    });
+
+    it("can roll a committed canonical replacement back to the exact prior attempt index", async () => {
         const rawAttempts = JSON.stringify([
             { ...attempt, id: "attempt-local" },
             { ...attempt, id: "attempt-unrelated" },
@@ -875,17 +902,17 @@ describe("Supabase persistence mapping", () => {
         vi.stubGlobal("window", { localStorage });
         vi.stubGlobal("localStorage", localStorage);
 
-        const replacement = replaceLocalAttemptWithCanonical("attempt-local", {
+        const replacement = await replaceLocalAttemptWithCanonical("attempt-local", {
             ...attempt,
             id: "attempt-server",
         });
 
         expect(replacement.committed).toBe(true);
-        expect(replacement.rollback()).toBe(true);
+        await expect(replacement.rollback()).resolves.toBe(true);
         expect(localStorage.getItem("omr_attempts")).toBe(rawAttempts);
     });
 
-    it("merges device artifacts from both provisional and existing canonical records on a second-tab reconciliation", () => {
+    it("merges device artifacts from both provisional and existing canonical records on a second-tab reconciliation", async () => {
         const provisional: Attempt = {
             ...attempt,
             id: "attempt-local",
@@ -981,7 +1008,7 @@ describe("Supabase persistence mapping", () => {
         vi.stubGlobal("window", { localStorage });
         vi.stubGlobal("localStorage", localStorage);
 
-        const replacement = replaceLocalAttemptWithCanonical("attempt-local", authoritative);
+        const replacement = await replaceLocalAttemptWithCanonical("attempt-local", authoritative);
 
         expect(replacement.attempt).toMatchObject({
             id: "attempt-server",
@@ -1052,6 +1079,36 @@ describe("Supabase persistence mapping", () => {
             failedCount: 3,
             error: "원격 재동기화 실패: exam-1: network unavailable; exam-4: network unavailable; exam-6: network unavailable",
         });
+    });
+
+    it("serializes different canonical replacements through the shared attempt-index lock", async () => {
+        const localStorage = createStorage({
+            omr_attempts: JSON.stringify([
+                { ...attempt, id: "attempt-local-a" },
+                { ...attempt, id: "attempt-local-b" },
+            ]),
+        });
+        vi.stubGlobal("window", { localStorage });
+        vi.stubGlobal("localStorage", localStorage);
+        vi.stubGlobal("navigator", {});
+
+        await Promise.all([
+            replaceLocalAttemptWithCanonical("attempt-local-a", {
+                ...attempt,
+                id: "attempt-server-a",
+                score: 91,
+            }),
+            replaceLocalAttemptWithCanonical("attempt-local-b", {
+                ...attempt,
+                id: "attempt-server-b",
+                score: 92,
+            }),
+        ]);
+
+        expect(readLocalAttempts().map(item => [item.id, item.score]).sort()).toEqual([
+            ["attempt-server-a", 91],
+            ["attempt-server-b", 92],
+        ]);
     });
 
     it("skips corrupt local exam and attempt rows instead of crashing read screens", () => {

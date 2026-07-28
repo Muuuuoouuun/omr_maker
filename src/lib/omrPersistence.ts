@@ -9,6 +9,7 @@ import {
 import { questionChoiceCount, type Attempt, type Exam, type QuestionResult, type QuestionResultStatus, type StoredDataRef } from "@/types/omr";
 import { MAX_SUB_QUESTION_LENGTH, normalizeQuestionSubQuestions } from "@/lib/subQuestions";
 import { SUPABASE_ATTEMPT_READ_COLUMNS, SUPABASE_EXAM_READ_COLUMNS } from "@/lib/supabaseReadColumns";
+import { withBrowserStorageLock } from "@/lib/browserStorageLock";
 
 type Env = Record<string, string | undefined>;
 
@@ -904,7 +905,7 @@ export function sanitizeAttemptPayload(value: unknown): Attempt | null {
 
 export function readLocalDeletedExamIds(): Record<string, string> {
     if (!hasBrowserStorage()) return {};
-    return readJson<Record<string, string>>(localStorage.getItem(DELETED_EXAMS_KEY), {});
+    return readJson<Record<string, string>>(window.localStorage.getItem(DELETED_EXAMS_KEY), {});
 }
 
 function writeLocalDeletedExamIds(index: Record<string, string>): boolean {
@@ -1072,7 +1073,7 @@ export function readLocalAttempts(): Attempt[] {
     if (!hasBrowserStorage()) return [];
     const deletedExamIds = readLocalDeletedExamIds();
     return sortByNewestActivity(
-        readJsonArray(localStorage.getItem(ATTEMPTS_KEY))
+        readJsonArray(window.localStorage.getItem(ATTEMPTS_KEY))
             .map(sanitizeAttemptPayload)
             .filter((attempt): attempt is Attempt => !!attempt)
             .filter(attempt => !deletedExamIds[attempt.examId])
@@ -1131,7 +1132,7 @@ export function hasLocalServerConfirmation(attemptId: string): boolean {
 export interface LocalAttemptReplacement {
     committed: boolean;
     attempt?: Attempt;
-    rollback: () => boolean;
+    rollback: () => boolean | Promise<boolean>;
 }
 
 function newestStoredDataRef(attempts: Attempt[]): Attempt["drawingsRef"] {
@@ -1210,8 +1211,9 @@ function withDeviceOnlyAttemptArtifacts(authoritative: Attempt, localAttempts: A
         drawings: authoritative.drawings ?? latestLocal.drawings,
         drawingsRef: newestStoredDataRef(attempts),
         handwriting: mergedAttemptHandwriting(attempts),
-        handwritingArchived: attempts.some(attempt => attempt.handwritingArchived)
-            || (attempts.some(attempt => attempt.handwritingArchived === false) ? false : undefined),
+        handwritingArchived: authoritative.handwritingArchived
+            ?? (localAttempts.some(attempt => attempt.handwritingArchived)
+                || (localAttempts.some(attempt => attempt.handwritingArchived === false) ? false : undefined)),
         handwritingPlan: authoritative.handwritingPlan ?? latestLocal.handwritingPlan
             ?? localAttempts.find(attempt => !!attempt.handwritingPlan)?.handwritingPlan,
         drawingPageCount: Math.max(0, ...attempts.map(attempt => attempt.drawingPageCount || 0)) || undefined,
@@ -1230,14 +1232,14 @@ function withDeviceOnlyAttemptArtifacts(authoritative: Attempt, localAttempts: A
  * durable write (the confirmed receipt) fails. It restores the exact snapshot
  * when uncontended, and otherwise preserves concurrent attempt-index changes.
  */
-export function replaceLocalAttemptWithCanonical(
+function replaceLocalAttemptWithCanonicalUnlocked(
     previousAttemptId: string,
     authoritativeAttempt: Attempt,
 ): LocalAttemptReplacement {
     const noRollback = () => false;
     if (!hasBrowserStorage()) return { committed: false, rollback: noRollback };
 
-    const storage = localStorage;
+    const storage = window.localStorage;
     let previousRaw: string | null;
     try {
         previousRaw = storage.getItem(ATTEMPTS_KEY);
@@ -1311,6 +1313,20 @@ export function replaceLocalAttemptWithCanonical(
     };
 }
 
+export async function replaceLocalAttemptWithCanonical(
+    previousAttemptId: string,
+    authoritativeAttempt: Attempt,
+): Promise<LocalAttemptReplacement> {
+    const replacement = await withBrowserStorageLock(
+        "attempt-index",
+        () => replaceLocalAttemptWithCanonicalUnlocked(previousAttemptId, authoritativeAttempt),
+    );
+    return {
+        ...replacement,
+        rollback: () => withBrowserStorageLock("attempt-index", replacement.rollback),
+    };
+}
+
 /** Merge a batch into the local attempt index with one read and one write. */
 export function saveLocalAttempts(attempts: Attempt[]): boolean {
     if (!hasBrowserStorage()) return false;
@@ -1321,7 +1337,7 @@ export function saveLocalAttempts(attempts: Attempt[]): boolean {
             nextById.set(attempt.id, stripHeavyAttemptPayload(attempt));
         }
         const next = sortByNewestActivity([...nextById.values()]);
-        localStorage.setItem(ATTEMPTS_KEY, JSON.stringify(next));
+        window.localStorage.setItem(ATTEMPTS_KEY, JSON.stringify(next));
         return true;
     } catch {
         return false;

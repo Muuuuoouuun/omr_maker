@@ -26,11 +26,11 @@ function storageThatFailsRequestWrites(): Storage {
 afterEach(() => vi.unstubAllGlobals());
 
 describe("student submission durability gate", () => {
-    it("reports non-durable when a large pending replay request cannot be queued", () => {
+    it("reports non-durable when a large pending replay request cannot be queued", async () => {
         const localStorage = storageThatFailsRequestWrites();
         vi.stubGlobal("window", { localStorage });
 
-        const result = persistStudentSubmissionDisposition({
+        const result = await persistStudentSubmissionDisposition({
             attemptId: "attempt-local",
             receiptStatus: "pending",
             input: {
@@ -49,7 +49,7 @@ describe("student submission durability gate", () => {
         expect(localStorage.getItem("omr_draft_exam_student_base")).toContain("submission-large");
     });
 
-    it("marks a PIN replay as pending without storing the PIN itself", () => {
+    it("marks a PIN replay as pending without storing the PIN itself", async () => {
         const data = new Map<string, string>();
         const localStorage = {
             get length() { return data.size; },
@@ -61,7 +61,7 @@ describe("student submission durability gate", () => {
         } as Storage;
         vi.stubGlobal("window", { localStorage });
 
-        expect(persistStudentSubmissionDisposition({
+        expect(await persistStudentSubmissionDisposition({
             attemptId: "attempt-pin",
             receiptStatus: "pending",
             input: {

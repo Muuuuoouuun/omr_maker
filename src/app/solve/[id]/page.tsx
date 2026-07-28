@@ -2078,7 +2078,7 @@ export default function SolvePage() {
                 retake: retakeConfig ? { ...retakeConfig, createdAt: new Date().toISOString() } : undefined,
             };
             saveLocalAttempt(cachedAttempt);
-            persistSubmissionReceipt({
+            await persistSubmissionReceipt({
                 attemptId: cachedAttempt.id,
                 status: "confirmed",
                 updatedAt: new Date().toISOString(),
@@ -2239,7 +2239,7 @@ export default function SolvePage() {
             try { saveLocalServerConfirmedAttempt(res.attempt); } catch { /* quota — server copy is canonical */ }
         }
 
-        const durability = persistStudentSubmissionDisposition({
+        const durability = await persistStudentSubmissionDisposition({
             attemptId: res.attempt.id,
             receiptStatus: res.receiptStatus || "local_only",
             input: submitInput,

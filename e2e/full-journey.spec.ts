@@ -1371,8 +1371,56 @@ test.describe("Teacher and student full journey", () => {
         await expect(page).toHaveURL(new RegExp(`/student/review/${pinLocalId}$`));
         const pinRetry = page.getByRole("button", { name: "지금 다시 시도" });
         await expect(pinRetry).toBeDisabled();
-        await page.getByLabel("시험 PIN").fill("2468");
+        let abortedPinRetry = false;
+        await page.route("**/*", async route => {
+            const request = route.request();
+            if (
+                !abortedPinRetry
+                && request.method() === "POST"
+                && !!request.headers()["next-action"]
+            ) {
+                abortedPinRetry = true;
+                await route.abort("failed");
+                return;
+            }
+            await route.continue();
+        });
+        await page.getByLabel("시험 PIN").fill("1111");
         await expect(pinRetry).toBeEnabled();
+        await pinRetry.click();
+        await expect.poll(() => abortedPinRetry).toBe(true);
+        await expect(page.getByRole("status")).toHaveText("서버 반영 대기 · PIN 입력 필요");
+        await expect(page.getByLabel("시험 PIN")).toBeVisible();
+        const retainedPinState = await page.evaluate(({ entryKey, requestKey }) => {
+            const receipt = JSON.parse(window.localStorage.getItem(entryKey) || "null")?.receipt;
+            const request = JSON.parse(window.localStorage.getItem(requestKey) || "null")?.request;
+            return {
+                status: receipt?.status,
+                requiresPin: receipt?.requiresPin,
+                retryMode: receipt?.retryMode,
+                prerequisite: receipt?.prerequisite,
+                requestRequiresPin: request?.requiresPin,
+                hasRequest: !!request,
+            };
+        }, {
+            entryKey: submissionReceiptEntryKey(pinLocalId),
+            requestKey: submissionRequestEntryKey(pinLocalId),
+        });
+        expect(retainedPinState).toEqual({
+            status: "pending",
+            requiresPin: true,
+            retryMode: "manual",
+            prerequisite: "pin",
+            requestRequiresPin: true,
+            hasRequest: true,
+        });
+        await page.evaluate(() => window.dispatchEvent(new Event("online")));
+        await page.waitForTimeout(250);
+        await expect(page).toHaveURL(new RegExp(`/student/review/${pinLocalId}$`));
+        await expect(page.getByRole("status")).toHaveText("서버 반영 대기 · PIN 입력 필요");
+
+        await page.unroute("**/*");
+        await page.getByLabel("시험 PIN").fill("2468");
         expect(await page.evaluate(() => JSON.stringify(window.localStorage))).not.toContain("2468");
         await pinRetry.click();
         await expect(page.getByRole("status")).toHaveText("서버 반영 완료");
@@ -1460,7 +1508,7 @@ test.describe("Teacher and student full journey", () => {
         const loginCanonicalId = new URL(page.url()).pathname.split("/").pop() || "";
 
         const notStartedLocalId = "attempt-not-started-local";
-        const notStartedAction = "시험 시작 전입니다. 시작 시간이 되면 서버 반영을 자동으로 다시 시도합니다.";
+        const notStartedAction = "온라인 전환 또는 화면 복귀 시 다시 시도합니다.";
         await page.evaluate(({ sourceId, localId }) => {
             const attempts = JSON.parse(window.localStorage.getItem("omr_attempts") || "[]");
             const source = attempts.find((attempt: { id?: string }) => attempt.id === sourceId);

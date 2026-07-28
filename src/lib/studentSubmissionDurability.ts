@@ -18,17 +18,17 @@ export type StudentSubmissionDurabilityResult =
 
 const STORAGE_ERROR = "제출 재시도 정보를 저장하지 못했습니다. 브라우저 저장 공간을 확보한 뒤 다시 제출해주세요.";
 
-export function persistStudentSubmissionDisposition(
+export async function persistStudentSubmissionDisposition(
     disposition: StudentSubmissionDisposition,
-): StudentSubmissionDurabilityResult {
+): Promise<StudentSubmissionDurabilityResult> {
     const updatedAt = new Date().toISOString();
     const durable = disposition.receiptStatus === "pending"
-        ? queuePendingSubmissionReceipt({
+        ? await queuePendingSubmissionReceipt({
             attemptId: disposition.attemptId,
             input: disposition.input,
             ...(disposition.requiresPin ? { requiresPin: true } : {}),
         }, updatedAt)
-        : persistSubmissionReceipt({
+        : await persistSubmissionReceipt({
             attemptId: disposition.attemptId,
             status: disposition.receiptStatus,
             updatedAt,

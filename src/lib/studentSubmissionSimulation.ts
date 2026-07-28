@@ -71,12 +71,32 @@ function inputMatchesTrustedExam(input: SubmitAttemptInput, exam: Exam): boolean
     });
 }
 
+function submissionFingerprint(input: SubmitAttemptInput): string {
+    return JSON.stringify({
+        ...input,
+        answers: Object.fromEntries(
+            Object.entries(input.answers).sort(([left], [right]) => Number(left) - Number(right)),
+        ),
+    });
+}
+
+function deterministicFinishedAt(input: SubmitAttemptInput, attemptId: string): string {
+    const startedAt = Date.parse(input.startedAt);
+    const entropy = Number.parseInt(attemptId.replace(/-/g, "").slice(0, 8), 16);
+    const elapsedSeconds = (Number.isFinite(entropy) ? entropy % 3_600 : 0) + 1;
+    return new Date(startedAt + elapsedSeconds * 1_000).toISOString();
+}
+
 export function createStudentSubmissionSimulator(
     options: StudentSubmissionSimulatorOptions = {},
 ): StudentSubmissionSimulator {
     const ttlMs = Math.max(1, options.ttlMs ?? 30 * 60 * 1_000);
     const maxEntries = Math.max(1, options.maxEntries ?? 256);
-    const attempts = new Map<string, { attempt: Attempt; lastAccessedAt: number }>();
+    const attempts = new Map<string, {
+        attempt: Attempt;
+        fingerprint: string;
+        lastAccessedAt: number;
+    }>();
     const simulate = ((
         input: SubmitAttemptInput,
         identity: StudentServerIdentity,
@@ -101,6 +121,7 @@ export function createStudentSubmissionSimulator(
         }
         const existing = attempts.get(attemptId);
         if (existing) {
+            if (existing.fingerprint !== submissionFingerprint(input)) return { status: "invalid" };
             attempts.delete(attemptId);
             attempts.set(attemptId, { ...existing, lastAccessedAt: now });
             return { status: "ok", attempt: existing.attempt };
@@ -110,14 +131,18 @@ export function createStudentSubmissionSimulator(
             exam,
             identity,
             attemptId,
-            new Date(now).toISOString(),
+            deterministicFinishedAt(input, attemptId),
         );
         while (attempts.size >= maxEntries) {
             const oldest = attempts.keys().next().value;
             if (typeof oldest !== "string") break;
             attempts.delete(oldest);
         }
-        attempts.set(attemptId, { attempt, lastAccessedAt: now });
+        attempts.set(attemptId, {
+            attempt,
+            fingerprint: submissionFingerprint(input),
+            lastAccessedAt: now,
+        });
         return { status: "ok", attempt };
     }) as StudentSubmissionSimulator;
     simulate.reset = () => attempts.clear();

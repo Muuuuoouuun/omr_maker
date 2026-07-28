@@ -82,14 +82,26 @@ describe("student submission development simulation", () => {
         const evictedReplay = simulate(withSubmission("22222222-2222-4222-8222-222222222222"), identity, env, 1_400);
         expect(evictedReplay.status).toBe("ok");
         if (second.status !== "ok" || evictedReplay.status !== "ok") throw new Error("expected attempts");
-        expect(evictedReplay.attempt.finishedAt).not.toBe(second.attempt.finishedAt);
+        expect(evictedReplay.attempt).toEqual(second.attempt);
 
         const ttlReplay = simulate(withSubmission("33333333-3333-4333-8333-333333333333"), identity, env, 2_401);
         expect(ttlReplay.status).toBe("ok");
         simulate.reset();
         const resetReplay = simulate(withSubmission("33333333-3333-4333-8333-333333333333"), identity, env, 2_500);
         if (ttlReplay.status !== "ok" || resetReplay.status !== "ok") throw new Error("expected attempts");
-        expect(resetReplay.attempt.finishedAt).not.toBe(ttlReplay.attempt.finishedAt);
+        expect(resetReplay.attempt).toEqual(ttlReplay.attempt);
         expect(simulate.size()).toBe(1);
+    });
+
+    it("rejects a mismatched payload for the same cached submission id", () => {
+        const simulate = createStudentSubmissionSimulator();
+        const first = simulate(input, identity, env, 1_000);
+        const mismatch = simulate({
+            ...input,
+            answers: { ...input.answers, 1: 4 },
+        }, identity, env, 1_100);
+
+        expect(first.status).toBe("ok");
+        expect(mismatch).toEqual({ status: "invalid" });
     });
 });

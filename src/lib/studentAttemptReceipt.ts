@@ -5,7 +5,9 @@ import { STUDENT_SESSION_GENERATION_KEY } from "@/utils/storage";
 import {
     hasLocalServerConfirmation,
     markLocalAttemptServerConfirmed,
+    replaceLocalAttemptWithCanonical,
 } from "@/lib/omrPersistence";
+import { withBrowserStorageLock } from "@/lib/browserStorageLock";
 
 export type SubmissionReceiptStatus = "confirmed" | "pending" | "local_only";
 export type SubmissionRetryMode = "automatic" | "manual";
@@ -74,10 +76,9 @@ const RETRY_ERROR = "서버에 아직 반영하지 못했습니다. 네트워크
 const DURABILITY_ERROR = "서버 응답은 받았지만 확인 상태를 저장하지 못했습니다. 자동 재시도를 유지합니다.";
 const PIN_REQUIRED_ERROR = "시험 PIN을 다시 입력해야 서버 반영을 시도할 수 있습니다.";
 const LOGIN_REQUIRED_ERROR = "학생 계정으로 다시 로그인하면 서버 반영을 자동으로 다시 시도합니다.";
-const NOT_STARTED_ERROR = "시험 시작 전입니다. 시작 시간이 되면 서버 반영을 자동으로 다시 시도합니다.";
+const NOT_STARTED_ERROR = "온라인 전환 또는 화면 복귀 시 다시 시도합니다.";
 const MISSING_SESSION_GENERATION = "__missing__";
 const retryInFlight = new Map<string, Promise<SubmissionRetryResult>>();
-const fallbackLockTails = new Map<string, Promise<void>>();
 let quarantineSequence = 0;
 
 export function isSubmissionReceiptStorageKey(key: string | null): boolean {
@@ -331,9 +332,9 @@ function writeAliasEnvelope(storage: Storage, previousAttemptId: string, canonic
 }
 
 function migrateLegacyRegistry(storage: Storage): void {
-    if (storage.getItem(MIGRATION_MARKER_KEY) === "1") return;
     const raw = storage.getItem(SUBMISSION_RECEIPT_KEY);
     if (!raw) {
+        if (storage.getItem(MIGRATION_MARKER_KEY) === "1") return;
         try { storage.setItem(MIGRATION_MARKER_KEY, "1"); } catch {}
         return;
     }
@@ -377,6 +378,10 @@ function migrateLegacyRegistry(storage: Storage): void {
                 writeAliasEnvelope(storage, previousId, canonicalId);
             }
         }
+        // Legacy confirmed receipts may predate durable local provenance.
+        // Keep a bounded recovery window while all newly written confirmed
+        // receipts are required to have a matching server-confirmed attempt.
+        pruneRetainedRecords(storage);
         storage.removeItem(SUBMISSION_RECEIPT_KEY);
         storage.setItem(MIGRATION_MARKER_KEY, "1");
     } catch {
@@ -396,8 +401,7 @@ function pruneRetainedRecords(storage: Storage): void {
                 : [];
         })
         .sort((a, b) => b.at - a.at);
-    confirmed.slice(CONFIRMED_RETENTION_CAP).forEach(({ key, id }) => {
-        if (!hasLocalServerConfirmation(id)) return;
+    confirmed.slice(CONFIRMED_RETENTION_CAP).forEach(({ key }) => {
         try { storage.removeItem(key); } catch {}
     });
 
@@ -459,7 +463,10 @@ export function submissionReceiptForAttempt(
     };
 }
 
-export function persistSubmissionReceipt(receipt: SubmissionReceipt): boolean {
+function persistSubmissionReceiptUnlocked(
+    receipt: SubmissionReceipt,
+    provenanceAttached = false,
+): boolean {
     const storage = browserStorage();
     if (!storage) return false;
     migrateLegacyRegistry(storage);
@@ -468,7 +475,13 @@ export function persistSubmissionReceipt(receipt: SubmissionReceipt): boolean {
     if (receipt.status === "pending" && storage.getItem(aliasKey(receipt.attemptId))) return false;
     try {
         if (receipt.status === "confirmed") {
-            markLocalAttemptServerConfirmed(receipt.attemptId, receipt.updatedAt);
+            if (
+                !provenanceAttached
+                && !markLocalAttemptServerConfirmed(receipt.attemptId, receipt.updatedAt)
+                && !hasLocalServerConfirmation(receipt.attemptId)
+            ) {
+                return false;
+            }
         }
         writeReceiptEnvelope(storage, receipt);
         if (receipt.status !== "pending") storage.removeItem(requestKey(receipt.attemptId));
@@ -477,6 +490,24 @@ export function persistSubmissionReceipt(receipt: SubmissionReceipt): boolean {
     } catch {
         return false;
     }
+}
+
+export async function persistSubmissionReceipt(receipt: SubmissionReceipt): Promise<boolean> {
+    if (receipt.status !== "confirmed") {
+        return withBrowserStorageLock(
+            "submission-receipts",
+            () => persistSubmissionReceiptUnlocked(receipt),
+        );
+    }
+    return withBrowserStorageLock("attempt-index", async () => {
+        const provenanceAttached = markLocalAttemptServerConfirmed(receipt.attemptId, receipt.updatedAt)
+            || hasLocalServerConfirmation(receipt.attemptId);
+        if (!provenanceAttached) return false;
+        return withBrowserStorageLock(
+            "submission-receipts",
+            () => persistSubmissionReceiptUnlocked(receipt, true),
+        );
+    });
 }
 
 export function readSubmissionReceipt(attemptId: string): SubmissionReceipt | null {
@@ -516,7 +547,7 @@ export function readReconciledSubmissionAttemptId(attemptId: string): string | n
     return current !== attemptId ? current : null;
 }
 
-export function queuePendingSubmissionReceipt(
+function queuePendingSubmissionReceiptUnlocked(
     request: PendingSignedSessionSubmission,
     updatedAt = new Date().toISOString(),
 ): boolean {
@@ -552,6 +583,16 @@ export function queuePendingSubmissionReceipt(
         } catch {}
         return false;
     }
+}
+
+export async function queuePendingSubmissionReceipt(
+    request: PendingSignedSessionSubmission,
+    updatedAt = new Date().toISOString(),
+): Promise<boolean> {
+    return withBrowserStorageLock(
+        "submission-receipts",
+        () => queuePendingSubmissionReceiptUnlocked(request, updatedAt),
+    );
 }
 
 export function pendingSubmissionReceiptIds(options: { automaticOnly?: boolean } = {}): string[] {
@@ -597,21 +638,7 @@ function isBlockedOnCurrentStudentSession(receipt: SubmissionReceipt): boolean {
 }
 
 async function withAttemptMutationLock<T>(attemptId: string, operation: () => Promise<T>): Promise<T> {
-    if (typeof navigator !== "undefined" && navigator.locks?.request) {
-        return navigator.locks.request(`omr-submission:${attemptId}`, { mode: "exclusive" }, operation);
-    }
-    const prior = fallbackLockTails.get(attemptId) || Promise.resolve();
-    let release!: () => void;
-    const next = new Promise<void>(resolve => { release = resolve; });
-    const tail = prior.then(() => next);
-    fallbackLockTails.set(attemptId, tail);
-    await prior;
-    try {
-        return await operation();
-    } finally {
-        release();
-        if (fallbackLockTails.get(attemptId) === tail) fallbackLockTails.delete(attemptId);
-    }
+    return withBrowserStorageLock(`submission:${attemptId}`, operation);
 }
 
 function permanentOutcome(status: string): { reason: SubmissionReceiptReason; actionDetail: string } | null {
@@ -639,35 +666,39 @@ function restoreKeys(storage: Storage, snapshots: Map<string, string | null>): v
     }
 }
 
-function persistConfirmedReconciliation(
+async function persistConfirmedReconciliation(
     storage: Storage,
     previousAttemptId: string,
     canonicalAttemptId: string,
     receipt: SubmissionReceipt,
-): boolean {
-    const keys = [
-        receiptKey(previousAttemptId),
-        requestKey(previousAttemptId),
-        receiptKey(canonicalAttemptId),
-        requestKey(canonicalAttemptId),
-        aliasKey(previousAttemptId),
-    ];
-    const snapshots = new Map(keys.map(key => [key, storage.getItem(key)]));
-    try {
-        markLocalAttemptServerConfirmed(canonicalAttemptId, receipt.updatedAt);
-        writeReceiptEnvelope(storage, receipt);
-        if (previousAttemptId !== canonicalAttemptId) {
-            writeAliasEnvelope(storage, previousAttemptId, canonicalAttemptId);
-            storage.removeItem(receiptKey(previousAttemptId));
-        }
-        storage.removeItem(requestKey(previousAttemptId));
-        storage.removeItem(requestKey(canonicalAttemptId));
-        pruneRetainedRecords(storage);
-        return true;
-    } catch {
-        restoreKeys(storage, snapshots);
-        return false;
-    }
+): Promise<boolean> {
+    return withBrowserStorageLock("attempt-index", async () => {
+        if (!hasLocalServerConfirmation(canonicalAttemptId)) return false;
+        return withBrowserStorageLock("submission-receipts", () => {
+            const keys = [
+                receiptKey(previousAttemptId),
+                requestKey(previousAttemptId),
+                receiptKey(canonicalAttemptId),
+                requestKey(canonicalAttemptId),
+                aliasKey(previousAttemptId),
+            ];
+            const snapshots = new Map(keys.map(key => [key, storage.getItem(key)]));
+            try {
+                writeReceiptEnvelope(storage, receipt);
+                if (previousAttemptId !== canonicalAttemptId) {
+                    writeAliasEnvelope(storage, previousAttemptId, canonicalAttemptId);
+                    storage.removeItem(receiptKey(previousAttemptId));
+                }
+                storage.removeItem(requestKey(previousAttemptId));
+                storage.removeItem(requestKey(canonicalAttemptId));
+                pruneRetainedRecords(storage);
+                return true;
+            } catch {
+                restoreKeys(storage, snapshots);
+                return false;
+            }
+        });
+    });
 }
 
 export function retryPendingSubmissionReceipt(
@@ -720,6 +751,11 @@ export function retryPendingSubmissionReceipt(
                 if (!cacheTransaction?.committed) {
                     return { status: "pending", error: DURABILITY_ERROR };
                 }
+            } else {
+                cacheTransaction = await replaceLocalAttemptWithCanonical(attemptId, result.attempt);
+                if (!cacheTransaction.committed) {
+                    return { status: "pending", error: DURABILITY_ERROR };
+                }
             }
 
             const cachedAttempt = cacheTransaction?.attempt || result.attempt;
@@ -729,7 +765,7 @@ export function retryPendingSubmissionReceipt(
                 status: "confirmed",
                 updatedAt: new Date().toISOString(),
             };
-            if (!persistConfirmedReconciliation(storage, attemptId, canonicalAttemptId, receipt)) {
+            if (!await persistConfirmedReconciliation(storage, attemptId, canonicalAttemptId, receipt)) {
                 await cacheTransaction?.rollback?.();
                 return { status: "pending", error: DURABILITY_ERROR };
             }
@@ -755,13 +791,11 @@ export function retryPendingSubmissionReceipt(
                 retryMode: "manual",
                 prerequisite: "pin",
             };
-            const persisted = queuePendingSubmissionReceipt({
+            const persisted = await queuePendingSubmissionReceipt({
                 ...request,
                 requiresPin: true,
             }, pinReceipt.updatedAt);
-            if (persisted) {
-                persistSubmissionReceipt(pinReceipt);
-            }
+            if (!persisted) return { status: "pending", error: DURABILITY_ERROR, requiresPin: true };
             return { status: "pending", error: PIN_REQUIRED_ERROR, requiresPin: true };
         }
         if (result.status === "unauthenticated" || result.status === "login_required") {
@@ -776,7 +810,7 @@ export function retryPendingSubmissionReceipt(
                 prerequisite: "login",
                 blockedSessionGeneration: readStudentSessionGeneration() || MISSING_SESSION_GENERATION,
             };
-            if (!persistSubmissionReceipt(pendingReceipt)) {
+            if (!await persistSubmissionReceipt(pendingReceipt)) {
                 return { status: "pending", error: DURABILITY_ERROR };
             }
             return { status: "pending", error: LOGIN_REQUIRED_ERROR };
@@ -792,7 +826,7 @@ export function retryPendingSubmissionReceipt(
                 retryMode: "automatic",
                 prerequisite: "exam_start",
             };
-            if (!persistSubmissionReceipt(pendingReceipt)) {
+            if (!await persistSubmissionReceipt(pendingReceipt)) {
                 return { status: "pending", error: DURABILITY_ERROR };
             }
             return { status: "pending", error: NOT_STARTED_ERROR };
@@ -806,7 +840,7 @@ export function retryPendingSubmissionReceipt(
                 reason: permanent.reason,
                 actionDetail: permanent.actionDetail,
             };
-            if (!persistSubmissionReceipt(receipt)) {
+            if (!await persistSubmissionReceipt(receipt)) {
                 return { status: "pending", error: DURABILITY_ERROR };
             }
             return { status: "local_only", receipt, error: permanent.actionDetail };
@@ -816,8 +850,13 @@ export function retryPendingSubmissionReceipt(
             status: "pending",
             updatedAt: new Date().toISOString(),
             lastError: RETRY_ERROR,
+            ...(request.requiresPin ? {
+                requiresPin: true,
+                retryMode: "manual" as const,
+                prerequisite: "pin" as const,
+            } : {}),
         };
-        if (!persistSubmissionReceipt(pendingReceipt)) {
+        if (!await persistSubmissionReceipt(pendingReceipt)) {
             return { status: "pending", error: DURABILITY_ERROR };
         }
         return { status: "pending", error: RETRY_ERROR };
