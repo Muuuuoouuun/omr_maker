@@ -10,6 +10,8 @@ export const STORAGE_KEYS = {
     GUEST_ID: "omr_guest_id",
     PENDING_GUEST_MERGE: "omr_pending_guest_merge",
 } as const;
+export const STUDENT_SESSION_GENERATION_KEY = "omr_student_session_generation";
+export const STUDENT_SESSION_CHANGED_EVENT = "omr:student-session-changed";
 
 const STUDENT_SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
 const CONSUMED_GUEST_MERGE_KEY = "omr_consumed_guest_merge";
@@ -139,6 +141,17 @@ export function saveSession(session: StudentSession) {
     } catch {
         // Keep the in-tab session even if persistent storage is unavailable.
     }
+    try {
+        sessionStorage.setItem(STUDENT_SESSION_GENERATION_KEY, generateId());
+    } catch {
+        // Retry resumption can also happen on a later login/page load.
+    }
+    try {
+        window.dispatchEvent(new Event(STUDENT_SESSION_CHANGED_EVENT));
+    } catch {
+        // Session persistence is authoritative; the event only wakes the
+        // app-wide submission flusher early.
+    }
 }
 
 function normalizeSession(raw: Partial<StudentSession> | null): StudentSession | null {
@@ -197,6 +210,7 @@ export function clearSession() {
     if (typeof window === 'undefined') return;
     try {
         sessionStorage.removeItem(STORAGE_KEYS.STUDENT_SESSION);
+        sessionStorage.removeItem(STUDENT_SESSION_GENERATION_KEY);
     } catch {
         // ignore
     }

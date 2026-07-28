@@ -450,6 +450,11 @@ export function attemptToSupabaseRow(attempt: Attempt, context?: WorkspaceContex
     const classId = scopedValue(attempt.classId) || scopedValue(attempt.groupId);
     const studentProfileId = scopedValue(attempt.studentProfileId) || scopedValue(attempt.studentId);
 
+    const {
+        localSubmissionProvenance: _localSubmissionProvenance,
+        ...serverPayload
+    } = stripHeavyAttemptPayload(attempt);
+
     return {
         id: attempt.id,
         organization_id: scopedValue(attempt.organizationId) || contextOrganizationId(context),
@@ -473,7 +478,7 @@ export function attemptToSupabaseRow(attempt: Attempt, context?: WorkspaceContex
         retake_question_ids: numberArray(attempt.retake?.questionIds),
         merged_from_guest_id: attempt.mergedFromGuestId || null,
         merged_at: attempt.mergedAt || null,
-        payload: stripHeavyAttemptPayload(attempt),
+        payload: serverPayload as Attempt,
         started_at: attempt.startedAt,
         finished_at: attempt.finishedAt,
     };
@@ -1077,6 +1082,51 @@ export function saveLocalAttempt(attempt: Attempt): boolean {
     return saveLocalAttempts([attempt]);
 }
 
+export function withLocalServerConfirmation(
+    attempt: Attempt,
+    confirmedAt = new Date().toISOString(),
+): Attempt {
+    return {
+        ...attempt,
+        localSubmissionProvenance: {
+            source: "server",
+            confirmedAt,
+        },
+    };
+}
+
+export function saveLocalServerConfirmedAttempt(
+    attempt: Attempt,
+    confirmedAt = new Date().toISOString(),
+): boolean {
+    return saveLocalAttempt(withLocalServerConfirmation(attempt, confirmedAt));
+}
+
+export function markLocalAttemptServerConfirmed(
+    attemptId: string,
+    confirmedAt = new Date().toISOString(),
+): boolean {
+    try {
+        const attempt = readLocalAttempts().find(candidate => candidate.id === attemptId);
+        if (!attempt) return false;
+        return saveLocalServerConfirmedAttempt(attempt, confirmedAt);
+    } catch {
+        return false;
+    }
+}
+
+export function hasLocalServerConfirmation(attemptId: string): boolean {
+    try {
+        return readLocalAttempts().some(attempt => (
+            attempt.id === attemptId
+            && attempt.localSubmissionProvenance?.source === "server"
+            && !!attempt.localSubmissionProvenance.confirmedAt
+        ));
+    } catch {
+        return false;
+    }
+}
+
 export interface LocalAttemptReplacement {
     committed: boolean;
     attempt?: Attempt;
@@ -1211,9 +1261,9 @@ export function replaceLocalAttemptWithCanonical(
             if (right.id === previousAttemptId && left.id !== previousAttemptId) return 1;
             return 0;
         });
-    const mergedAttempt = stripHeavyAttemptPayload(
+    const mergedAttempt = stripHeavyAttemptPayload(withLocalServerConfirmation(
         withDeviceOnlyAttemptArtifacts(authoritativeAttempt, localAttempts),
-    );
+    ));
     const replacedIds = new Set([previousAttemptId, authoritativeAttempt.id]);
     const removedItems = rawItems.filter(item => {
         const candidate = sanitizeAttemptPayload(item);

@@ -19,7 +19,7 @@ import { issueGuestSession, validateStudentSession } from "@/app/actions/student
 import { saveTeacherSessionWithIdentity } from "@/lib/teacherSession";
 import { attemptBelongsToSession, getOrCreateGuestId, getSession, guestLoginIdFor, saveSession, type StudentSession } from "@/utils/storage";
 import { canArchiveHandwriting, getPlanLabel } from "@/utils/plans";
-import { loadExam as loadPersistedExam, readLocalAttempts, readLocalExam, saveLocalAttempt, saveLocalExam } from "@/lib/omrPersistence";
+import { loadExam as loadPersistedExam, readLocalAttempts, readLocalExam, saveLocalAttempt, saveLocalExam, saveLocalServerConfirmedAttempt } from "@/lib/omrPersistence";
 import { buildQuestionResults } from "@/lib/premiumAnalytics";
 import { summarizeQuestionDrawings } from "@/lib/handwritingAnalytics";
 import { evaluateExamAccess, examRequiresPin, normalizeExamPin, verifyExamPin, type ExamAccessDecision } from "@/lib/examAccess";
@@ -2236,7 +2236,7 @@ export default function SolvePage() {
 
         if (res.source === "server") {
             // Local echo so review/history/dashboard local caches see it immediately.
-            try { saveLocalAttempt(res.attempt); } catch { /* quota — server copy is canonical */ }
+            try { saveLocalServerConfirmedAttempt(res.attempt); } catch { /* quota — server copy is canonical */ }
         }
 
         const durability = persistStudentSubmissionDisposition({

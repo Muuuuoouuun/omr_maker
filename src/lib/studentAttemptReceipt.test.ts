@@ -5,6 +5,7 @@ import type { Attempt, Exam } from "@/types/omr";
 import {
     readLocalAttempts,
     replaceLocalAttemptWithCanonical,
+    saveLocalAttempts,
 } from "./omrPersistence";
 import {
     localResultCacheFromServerReceipt,
@@ -17,6 +18,7 @@ import {
     SUBMISSION_RECEIPT_ENTRY_PREFIX,
     SUBMISSION_RECEIPT_REQUEST_PREFIX,
     submissionReceiptLabel,
+    submissionReceiptForAttempt,
 } from "./studentAttemptReceipt";
 
 function createStorage(initial: Record<string, string> = {}): Storage {
@@ -55,6 +57,25 @@ describe("student attempt receipt cache", () => {
     it("uses the exact authoritative persistence labels", () => {
         expect(submissionReceiptLabel({ status: "confirmed" })).toBe("서버 반영 완료");
         expect(submissionReceiptLabel({ status: "pending" })).toBe("서버 반영 대기 · 자동 재시도");
+        expect(submissionReceiptLabel({
+            status: "pending",
+            retryMode: "manual",
+            prerequisite: "pin",
+        })).toBe("서버 반영 대기 · PIN 입력 필요");
+        expect(submissionReceiptLabel({
+            status: "pending",
+            requiresPin: true,
+        })).toBe("서버 반영 대기 · PIN 입력 필요");
+        expect(submissionReceiptLabel({
+            status: "pending",
+            retryMode: "manual",
+            prerequisite: "login",
+        })).toBe("서버 반영 대기 · 로그인 필요");
+        expect(submissionReceiptLabel({
+            status: "pending",
+            retryMode: "automatic",
+            prerequisite: "exam_start",
+        })).toBe("서버 반영 대기 · 시험 시작 전");
         expect(submissionReceiptLabel({ status: "local_only" })).toBe("이 기기에만 저장됨");
     });
 
@@ -146,8 +167,6 @@ describe("student attempt receipt cache", () => {
     });
 
     it.each([
-        ["unauthenticated", "login_required"],
-        ["login_required", "login_required"],
         ["ended", "exam_ended"],
         ["archived", "exam_archived"],
         ["group_denied", "access_denied"],
@@ -177,6 +196,112 @@ describe("student attempt receipt cache", () => {
             actionDetail: expect.any(String),
         });
         expect(pendingSubmissionReceiptIds()).not.toContain(`attempt-${status}`);
+    });
+
+    it.each(["unauthenticated", "login_required"])(
+        "keeps recoverable %s pending until a new login session is observed, then succeeds",
+        async status => {
+            const storage = createStorage();
+            const sessionStorage = createStorage(status === "unauthenticated"
+                ? { omr_student_session_generation: "generation-before" }
+                : {});
+            vi.stubGlobal("window", { localStorage: storage, sessionStorage });
+            vi.stubGlobal("sessionStorage", sessionStorage);
+            queuePendingSubmissionReceipt({
+                attemptId: `attempt-${status}`,
+                input: {
+                    examId: "exam-1",
+                    submissionId: `submission-${status}`,
+                    answers: {},
+                    startedAt: "2026-07-28T00:00:00.000Z",
+                },
+            });
+
+            const blocked = await retryPendingSubmissionReceipt(`attempt-${status}`, {
+                submitSignedSessionAttempt: async () => ({ status }),
+            });
+
+            expect(blocked.status).toBe("pending");
+            expect(readSubmissionReceipt(`attempt-${status}`)).toMatchObject({
+                status: "pending",
+                retryMode: "manual",
+                prerequisite: "login",
+                actionDetail: expect.stringContaining("로그인"),
+            });
+            expect(pendingSubmissionReceiptIds()).toContain(`attempt-${status}`);
+            expect(pendingSubmissionReceiptIds({ automaticOnly: true })).not.toContain(`attempt-${status}`);
+
+            sessionStorage.removeItem("omr_student_session_generation");
+            expect(pendingSubmissionReceiptIds({ automaticOnly: true })).not.toContain(`attempt-${status}`);
+            sessionStorage.setItem("omr_student_session_generation", "generation-after");
+            expect(pendingSubmissionReceiptIds({ automaticOnly: true })).toContain(`attempt-${status}`);
+            const confirmed = await retryPendingSubmissionReceipt(`attempt-${status}`, {
+                submitSignedSessionAttempt: async () => ({
+                    status: "ok",
+                    attempt: {
+                        id: `attempt-server-${status}`,
+                        examId: "exam-1",
+                        examTitle: "시험",
+                        studentName: "학생",
+                        startedAt: "2026-07-28T00:00:00.000Z",
+                        finishedAt: "2026-07-28T00:02:00.000Z",
+                        score: 10,
+                        totalScore: 10,
+                        answers: {},
+                        status: "completed",
+                    },
+                }),
+            });
+            expect(confirmed.status).toBe("confirmed");
+        },
+    );
+
+    it("keeps not_started pending and automatically succeeds on a later retry", async () => {
+        const storage = createStorage();
+        vi.stubGlobal("window", { localStorage: storage });
+        queuePendingSubmissionReceipt({
+            attemptId: "attempt-not-started",
+            input: {
+                examId: "exam-1",
+                submissionId: "submission-not-started",
+                answers: {},
+                startedAt: "2026-07-28T00:00:00.000Z",
+            },
+        });
+        let calls = 0;
+        const submit = async () => {
+            calls += 1;
+            return calls === 1
+                ? { status: "not_started" }
+                : {
+                    status: "ok",
+                    attempt: {
+                        id: "attempt-server-not-started",
+                        examId: "exam-1",
+                        examTitle: "시험",
+                        studentName: "학생",
+                        startedAt: "2026-07-28T00:00:00.000Z",
+                        finishedAt: "2026-07-28T00:02:00.000Z",
+                        score: 10,
+                        totalScore: 10,
+                        answers: {},
+                        status: "completed" as const,
+                    },
+                };
+        };
+
+        expect((await retryPendingSubmissionReceipt("attempt-not-started", {
+            submitSignedSessionAttempt: submit,
+        })).status).toBe("pending");
+        expect(readSubmissionReceipt("attempt-not-started")).toMatchObject({
+            status: "pending",
+            retryMode: "automatic",
+            prerequisite: "exam_start",
+        });
+        expect(pendingSubmissionReceiptIds({ automaticOnly: true })).toContain("attempt-not-started");
+        expect((await retryPendingSubmissionReceipt("attempt-not-started", {
+            submitSignedSessionAttempt: submit,
+        })).status).toBe("confirmed");
     });
 
     it("keeps PIN retries manual across reload, skips network without a PIN, and confirms with a supplied PIN", async () => {
@@ -273,6 +398,39 @@ describe("student attempt receipt cache", () => {
         expect(readSubmissionReceipt("attempt-two")?.status).toBe("confirmed");
         expect([...Array(storage.length)].map((_, index) => storage.key(index)))
             .toEqual(expect.arrayContaining([expect.stringContaining("quarantine")]));
+    });
+
+    it("quarantines malformed legacy data without retaining its raw PIN anywhere", () => {
+        const raw = '{"requests":{"attempt-one":{"pin":"TOP-SECRET-2468"';
+        const storage = createStorage({
+            omr_student_submission_receipts_v1: raw,
+        });
+        vi.stubGlobal("window", { localStorage: storage });
+
+        expect(readSubmissionReceipt("attempt-one")).toBeNull();
+        const allValues = [...Array(storage.length)]
+            .map((_, index) => storage.getItem(storage.key(index) || "") || "")
+            .join("");
+        expect(allValues).not.toContain("TOP-SECRET-2468");
+        expect(allValues).not.toContain(raw);
+        expect(allValues).toContain("byteLength");
+    });
+
+    it("does not copy a sensitive corrupt source key into quarantine metadata", () => {
+        const sensitiveAttemptId = "TOP-SECRET-KEY-2468";
+        const sensitiveKey = `${SUBMISSION_RECEIPT_ENTRY_PREFIX}${encodeURIComponent(sensitiveAttemptId)}`;
+        const storage = createStorage({ [sensitiveKey]: "{bad" });
+        vi.stubGlobal("window", { localStorage: storage });
+
+        expect(readSubmissionReceipt(sensitiveAttemptId)).toBeNull();
+        const quarantined = [...Array(storage.length)]
+            .flatMap((_, index) => {
+                const key = storage.key(index) || "";
+                return [key, storage.getItem(key) || ""];
+            })
+            .join("");
+        expect(quarantined).not.toContain(sensitiveAttemptId);
+        expect(quarantined).toContain('"sourceKind":"receipt"');
     });
 
     it("keeps the v1 registry intact when migration is interrupted by quota and resumes later", () => {
@@ -382,6 +540,7 @@ describe("student attempt receipt cache", () => {
     it("caps confirmed receipts without ever pruning pending requests", () => {
         const storage = createStorage();
         vi.stubGlobal("window", { localStorage: storage });
+        vi.stubGlobal("localStorage", storage);
         queuePendingSubmissionReceipt({
             attemptId: "attempt-must-stay-pending",
             input: {
@@ -391,6 +550,19 @@ describe("student attempt receipt cache", () => {
                 startedAt: "2026-07-28T00:00:00.000Z",
             },
         });
+        const attempts: Attempt[] = [...Array(120)].map((_, index) => ({
+            id: `attempt-confirmed-${index}`,
+            examId: "exam-1",
+            examTitle: "시험",
+            studentName: "학생",
+            startedAt: "2026-07-28T00:00:00.000Z",
+            finishedAt: new Date(index * 1_000).toISOString(),
+            score: 10,
+            totalScore: 10,
+            answers: {},
+            status: "completed",
+        }));
+        expect(saveLocalAttempts(attempts)).toBe(true);
         for (let index = 0; index < 120; index += 1) {
             expect(persistSubmissionReceipt({
                 attemptId: `attempt-confirmed-${index}`,
@@ -405,6 +577,33 @@ describe("student attempt receipt cache", () => {
         expect(receiptKeys).toHaveLength(101);
         expect(readSubmissionReceipt("attempt-must-stay-pending")?.status).toBe("pending");
         expect(pendingSubmissionReceiptIds()).toEqual(["attempt-must-stay-pending"]);
+        expect(readSubmissionReceipt("attempt-confirmed-0")).toBeNull();
+        const oldest = readLocalAttempts().find(attempt => attempt.id === "attempt-confirmed-0")!;
+        expect(oldest.localSubmissionProvenance).toMatchObject({ source: "server" });
+        expect(submissionReceiptForAttempt(oldest, null, "local")).toMatchObject({
+            status: "confirmed",
+            attemptId: "attempt-confirmed-0",
+        });
+    });
+
+    it("does not prune a confirmed receipt when local provenance cannot be attached", () => {
+        const storage = createStorage();
+        vi.stubGlobal("window", { localStorage: storage });
+        vi.stubGlobal("localStorage", storage);
+
+        for (let index = 0; index < 101; index += 1) {
+            expect(persistSubmissionReceipt({
+                attemptId: `attempt-without-cache-${index}`,
+                status: "confirmed",
+                updatedAt: new Date(index * 1_000).toISOString(),
+            })).toBe(true);
+        }
+
+        expect(readSubmissionReceipt("attempt-without-cache-0")?.status).toBe("confirmed");
+        const receiptKeys = [...Array(storage.length)]
+            .map((_, index) => storage.key(index))
+            .filter(key => key?.startsWith(SUBMISSION_RECEIPT_ENTRY_PREFIX));
+        expect(receiptKeys).toHaveLength(101);
     });
 
     it("caps old-to-canonical aliases", async () => {

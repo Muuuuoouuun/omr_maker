@@ -7,6 +7,7 @@ import {
     pendingSubmissionReceiptIds,
 } from "@/lib/studentAttemptReceipt";
 import { replaceLocalAttemptWithCanonical } from "@/lib/omrPersistence";
+import { STUDENT_SESSION_CHANGED_EVENT } from "@/utils/storage";
 
 /**
  * Invisible app-wide helper: when connectivity or tab visibility returns,
@@ -34,9 +35,11 @@ export default function SyncFlusher() {
 
         flush();
         window.addEventListener("online", flush);
+        window.addEventListener(STUDENT_SESSION_CHANGED_EVENT, flush);
         document.addEventListener("visibilitychange", onVisibilityChange);
         return () => {
             window.removeEventListener("online", flush);
+            window.removeEventListener(STUDENT_SESSION_CHANGED_EVENT, flush);
             document.removeEventListener("visibilitychange", onVisibilityChange);
         };
     }, []);

@@ -14,6 +14,7 @@ import {
     getSupabaseConfigFromEnv,
     itemsNeedingRemoteSync,
     markLocalExamDeleted,
+    markLocalAttemptServerConfirmed,
     mergeAttemptsForPersistence,
     questionResultRowsForAttempt,
     questionResultToSupabaseRow,
@@ -32,6 +33,7 @@ import {
     saveLocalExam,
     saveLocalExams,
     saveLocalAttempt,
+    saveLocalServerConfirmedAttempt,
     saveLocalAttempts,
     sortByNewestActivity,
     storedDataRefsForExamDeletion,
@@ -269,6 +271,30 @@ describe("Supabase persistence mapping", () => {
         // attemptFromSupabaseRow always resolves studentProfileId from the indexed column;
         // even if the original attempt lacked it, it's backfilled from student_profile_id.
         expect(attemptFromSupabaseRow(row)).toEqual({ ...attempt, studentProfileId: row.student_profile_id });
+    });
+
+    it("keeps server-confirmation provenance only in the local attempt cache", () => {
+        const localStorage = createStorage();
+        vi.stubGlobal("window", { localStorage });
+        vi.stubGlobal("localStorage", localStorage);
+
+        expect(saveLocalServerConfirmedAttempt(
+            attempt,
+            "2026-07-28T02:00:00.000Z",
+        )).toBe(true);
+        expect(readLocalAttempts()[0]?.localSubmissionProvenance).toEqual({
+            source: "server",
+            confirmedAt: "2026-07-28T02:00:00.000Z",
+        });
+        expect(attemptToSupabaseRow(readLocalAttempts()[0]).payload)
+            .not.toHaveProperty("localSubmissionProvenance");
+
+        expect(markLocalAttemptServerConfirmed(
+            attempt.id,
+            "2026-07-28T03:00:00.000Z",
+        )).toBe(true);
+        expect(readLocalAttempts()[0]?.localSubmissionProvenance?.confirmedAt)
+            .toBe("2026-07-28T03:00:00.000Z");
     });
 
     it("preserves teacher sub-question review status in indexed payload roundtrips", () => {
@@ -790,6 +816,10 @@ describe("Supabase persistence mapping", () => {
         expect(replacement.committed).toBe(true);
         expect(replacement.attempt).toMatchObject({
             id: "attempt-server",
+            localSubmissionProvenance: {
+                source: "server",
+                confirmedAt: expect.any(String),
+            },
             score: 100,
             totalScore: 100,
             answers: { 1: 3 },

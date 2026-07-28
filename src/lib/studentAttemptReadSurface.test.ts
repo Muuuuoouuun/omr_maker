@@ -34,6 +34,9 @@ describe("student official attempt read surface", () => {
         expect(review).toContain("const serverExamPromise = loadExamForReview(id)");
         expect(review).toContain("loadReviewExamClient(found.id, {");
         expect(review).toContain("server: () => serverExamPromise");
+        expect(review).toContain("submissionReceiptForAttempt(found, storedReceipt, result.source)");
+        expect(review).toContain("saveLocalServerConfirmedAttempt(found)");
+        expect(review).toContain('submissionReceipt.prerequisite === "login"');
         expect(review).not.toContain("loadStudentOfficialAttempt(id, session)");
         expect(review).not.toContain("loadAttemptForStudent");
     });
@@ -62,7 +65,17 @@ describe("student official attempt read surface", () => {
         const flusher = source("src/components/SyncFlusher.tsx");
         expect(flusher).toContain("flushPendingSubmissionReceipts");
         expect(flusher).toContain("submitSignedSessionAttempt: submitAttempt");
+        expect(flusher).toContain("STUDENT_SESSION_CHANGED_EVENT");
+        expect(flusher).toContain('window.addEventListener(STUDENT_SESSION_CHANGED_EVENT, flush)');
         expect(flusher).not.toContain("flushPendingAttemptSync");
         expect(flusher).not.toContain("upsertRemoteAttempt");
+    });
+
+    it("marks direct server submissions and official history cache entries as locally confirmed", () => {
+        const solve = source("src/app/solve/[id]/page.tsx");
+        const historyClient = source("src/lib/studentAttemptClient.ts");
+        expect(solve).toContain("saveLocalServerConfirmedAttempt(res.attempt)");
+        expect(historyClient).toContain("withLocalServerConfirmation");
+        expect(historyClient).toContain("saveLocalAttempts(attempts)");
     });
 });

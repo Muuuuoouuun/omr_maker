@@ -1093,7 +1093,7 @@ test.describe("Teacher and student full journey", () => {
         await loginAsStudent(page);
         await seedExamAndStudent(page);
         await seedCompletedAttempt(page);
-        const attemptId = "attempt-tablet-analytics";
+        const confirmedAttemptId = "attempt-tablet-analytics";
 
         await page.evaluate(({ id, entryKey }) => {
             window.localStorage.setItem(entryKey, JSON.stringify({
@@ -1105,12 +1105,31 @@ test.describe("Teacher and student full journey", () => {
                     updatedAt: "2026-07-28T00:00:00.000Z",
                 },
             }));
-        }, { id: attemptId, entryKey: submissionReceiptEntryKey(attemptId) });
-        await page.goto(`/student/review/${attemptId}`);
+        }, { id: confirmedAttemptId, entryKey: submissionReceiptEntryKey(confirmedAttemptId) });
+        await page.goto(`/student/review/${confirmedAttemptId}`);
         await expect(page.getByRole("status")).toHaveText("서버 반영 완료");
         await page.reload();
         await expect(page.getByRole("status")).toHaveText("서버 반영 완료");
 
+        const attemptId = "attempt-manual-local";
+        await page.evaluate(({ sourceId, localId }) => {
+            const attempts = JSON.parse(window.localStorage.getItem("omr_attempts") || "[]");
+            const source = attempts.find((attempt: { id?: string }) => attempt.id === sourceId);
+            if (!source) throw new Error("manual source attempt missing");
+            window.localStorage.setItem("omr_attempts", JSON.stringify([
+                ...attempts,
+                {
+                    ...source,
+                    id: localId,
+                    localSubmissionProvenance: undefined,
+                    finishedAt: new Date(Date.now() + 500).toISOString(),
+                    questionResults: (source.questionResults || []).map((result: object) => ({
+                        ...result,
+                        attemptId: localId,
+                    })),
+                },
+            ]));
+        }, { sourceId: confirmedAttemptId, localId: attemptId });
         await page.evaluate(({ id, entryKey }) => {
             window.localStorage.setItem(entryKey, JSON.stringify({
                 version: 2,
@@ -1122,7 +1141,7 @@ test.describe("Teacher and student full journey", () => {
                 },
             }));
         }, { id: attemptId, entryKey: submissionReceiptEntryKey(attemptId) });
-        await page.reload();
+        await page.goto(`/student/review/${attemptId}`);
         await expect(page.getByRole("status")).toHaveText("이 기기에만 저장됨");
         await expect(page.getByText("다른 기기에서는 이 결과를 볼 수 없습니다.")).toBeVisible();
         const crossTab = await page.context().newPage();
@@ -1213,6 +1232,7 @@ test.describe("Teacher and student full journey", () => {
             const automatic = {
                 ...source,
                 id: autoId,
+                localSubmissionProvenance: undefined,
                 finishedAt,
                 questionResults: (source.questionResults || []).map((result: object) => ({
                     ...result,
@@ -1303,6 +1323,7 @@ test.describe("Teacher and student full journey", () => {
             const pendingPinAttempt = {
                 ...source,
                 id: localId,
+                localSubmissionProvenance: undefined,
                 finishedAt: new Date(Date.now() + 2_000).toISOString(),
                 questionResults: (source.questionResults || []).map((result: object) => ({
                     ...result,
@@ -1318,6 +1339,8 @@ test.describe("Teacher and student full journey", () => {
                     status: "pending",
                     updatedAt: "2026-07-28T00:04:00.000Z",
                     requiresPin: true,
+                    retryMode: "manual",
+                    prerequisite: "pin",
                 },
             }));
             window.localStorage.setItem(requestKey, JSON.stringify({
@@ -1341,7 +1364,7 @@ test.describe("Teacher and student full journey", () => {
             requestKey: submissionRequestEntryKey(pinLocalId),
         });
         await page.goto(`/student/review/${pinLocalId}`);
-        await expect(page.getByRole("status")).toHaveText("서버 반영 대기 · 자동 재시도");
+        await expect(page.getByRole("status")).toHaveText("서버 반영 대기 · PIN 입력 필요");
         await expect(page.getByText("자동 재시도하지 않습니다. 시험 PIN을 입력한 뒤 직접 다시 시도해주세요.")).toBeVisible();
         await page.evaluate(() => window.dispatchEvent(new Event("online")));
         await page.waitForTimeout(250);
@@ -1361,17 +1384,18 @@ test.describe("Teacher and student full journey", () => {
                 .join("")
         ))).not.toContain("2468");
 
-        const permanentLocalId = "attempt-permanent-local";
-        const permanentAction = "학생 계정으로 다시 로그인한 뒤 시험 기록을 확인해주세요.";
-        await page.evaluate(({ sourceId, localId, entryKey, actionDetail }) => {
+        const loginLocalId = "attempt-login-local";
+        const loginAction = "학생 계정으로 다시 로그인하면 서버 반영을 자동으로 다시 시도합니다.";
+        await page.evaluate(({ sourceId, localId }) => {
             const attempts = JSON.parse(window.localStorage.getItem("omr_attempts") || "[]");
             const source = attempts.find((attempt: { id?: string }) => attempt.id === sourceId);
-            if (!source) throw new Error("permanent source attempt missing");
+            if (!source) throw new Error("login source attempt missing");
             window.localStorage.setItem("omr_attempts", JSON.stringify([
                 ...attempts,
                 {
                     ...source,
                     id: localId,
+                    localSubmissionProvenance: undefined,
                     finishedAt: new Date(Date.now() + 3_000).toISOString(),
                     questionResults: (source.questionResults || []).map((result: object) => ({
                         ...result,
@@ -1379,26 +1403,162 @@ test.describe("Teacher and student full journey", () => {
                     })),
                 },
             ]));
+        }, {
+            sourceId: pinCanonicalId,
+            localId: loginLocalId,
+        });
+        await page.goto(`/student/review/${loginLocalId}`);
+        await expect(page.getByRole("status")).toHaveText("이 기기에만 저장됨");
+        await page.evaluate(({ localId, entryKey, requestKey, actionDetail }) => {
+            window.sessionStorage.setItem("omr_student_session_generation", "blocked-login-generation");
             window.localStorage.setItem(entryKey, JSON.stringify({
                 version: 2,
                 revision: 1,
                 receipt: {
                     attemptId: localId,
-                    status: "local_only",
+                    status: "pending",
                     updatedAt: "2026-07-28T00:05:00.000Z",
                     reason: "login_required",
                     actionDetail,
+                    retryMode: "manual",
+                    prerequisite: "login",
+                    blockedSessionGeneration: "blocked-login-generation",
                 },
             }));
+            window.localStorage.setItem(requestKey, JSON.stringify({
+                version: 2,
+                revision: 1,
+                request: {
+                    attemptId: localId,
+                    input: {
+                        examId: "e2e-korean-integrated-exam",
+                        submissionId: "44444444-4444-4444-8444-444444444444",
+                        answers: { 1: 2, 2: 3, 3: 1 },
+                        startedAt: "2026-07-28T00:00:00.000Z",
+                    },
+                },
+            }));
+            window.dispatchEvent(new StorageEvent("storage", { key: entryKey }));
         }, {
-            sourceId: pinCanonicalId,
-            localId: permanentLocalId,
-            entryKey: submissionReceiptEntryKey(permanentLocalId),
-            actionDetail: permanentAction,
+            localId: loginLocalId,
+            entryKey: submissionReceiptEntryKey(loginLocalId),
+            requestKey: submissionRequestEntryKey(loginLocalId),
+            actionDetail: loginAction,
         });
-        await page.goto(`/student/review/${permanentLocalId}`);
+        await expect(page.getByRole("status")).toHaveText("서버 반영 대기 · 로그인 필요");
+        await expect(page.getByText(loginAction)).toBeVisible();
+        await expect(page.getByRole("link", { name: "학생 로그인으로 이동" })).toBeVisible();
+        await page.evaluate(() => window.dispatchEvent(new Event("online")));
+        await page.waitForTimeout(250);
+        await expect(page).toHaveURL(new RegExp(`/student/review/${loginLocalId}$`));
+        await page.evaluate(() => {
+            window.sessionStorage.setItem("omr_student_session_generation", "restored-login-generation");
+            window.dispatchEvent(new Event("omr:student-session-changed"));
+        });
+        await expect(page.getByRole("status")).toHaveText("서버 반영 완료");
+        await expect(page).not.toHaveURL(new RegExp(`/student/review/${loginLocalId}$`));
+        const loginCanonicalId = new URL(page.url()).pathname.split("/").pop() || "";
+
+        const notStartedLocalId = "attempt-not-started-local";
+        const notStartedAction = "시험 시작 전입니다. 시작 시간이 되면 서버 반영을 자동으로 다시 시도합니다.";
+        await page.evaluate(({ sourceId, localId }) => {
+            const attempts = JSON.parse(window.localStorage.getItem("omr_attempts") || "[]");
+            const source = attempts.find((attempt: { id?: string }) => attempt.id === sourceId);
+            if (!source) throw new Error("not-started source attempt missing");
+            window.localStorage.setItem("omr_attempts", JSON.stringify([
+                ...attempts,
+                {
+                    ...source,
+                    id: localId,
+                    localSubmissionProvenance: undefined,
+                    finishedAt: new Date(Date.now() + 4_000).toISOString(),
+                    questionResults: (source.questionResults || []).map((result: object) => ({
+                        ...result,
+                        attemptId: localId,
+                    })),
+                },
+            ]));
+        }, { sourceId: loginCanonicalId, localId: notStartedLocalId });
+        await page.goto(`/student/review/${notStartedLocalId}`);
         await expect(page.getByRole("status")).toHaveText("이 기기에만 저장됨");
-        await expect(page.getByText(permanentAction)).toBeVisible();
+        await page.evaluate(({ localId, entryKey, requestKey, actionDetail }) => {
+            window.localStorage.setItem(entryKey, JSON.stringify({
+                version: 2,
+                revision: 1,
+                receipt: {
+                    attemptId: localId,
+                    status: "pending",
+                    updatedAt: "2026-07-28T00:06:00.000Z",
+                    reason: "not_started",
+                    actionDetail,
+                    retryMode: "automatic",
+                    prerequisite: "exam_start",
+                },
+            }));
+            window.localStorage.setItem(requestKey, JSON.stringify({
+                version: 2,
+                revision: 1,
+                request: {
+                    attemptId: localId,
+                    input: {
+                        examId: "e2e-korean-integrated-exam",
+                        submissionId: "55555555-5555-4555-8555-555555555555",
+                        answers: { 1: 2, 2: 3, 3: 1 },
+                        startedAt: "2026-07-28T00:00:00.000Z",
+                    },
+                },
+            }));
+            window.dispatchEvent(new StorageEvent("storage", { key: entryKey }));
+        }, {
+            localId: notStartedLocalId,
+            entryKey: submissionReceiptEntryKey(notStartedLocalId),
+            requestKey: submissionRequestEntryKey(notStartedLocalId),
+            actionDetail: notStartedAction,
+        });
+        await expect(page.getByRole("status")).toHaveText("서버 반영 대기 · 시험 시작 전");
+        await expect(page.getByText(notStartedAction)).toBeVisible();
+        await page.getByRole("button", { name: "지금 다시 시도" }).click();
+        await expect(page.getByRole("status")).toHaveText("서버 반영 완료");
+        const notStartedCanonicalId = new URL(page.url()).pathname.split("/").pop() || "";
+
+        const prunedReceiptLocalId = "attempt-pruned-confirmed";
+        await page.evaluate(({ sourceId, localId }) => {
+            const attempts = JSON.parse(window.localStorage.getItem("omr_attempts") || "[]");
+            const source = attempts.find((attempt: { id?: string }) => attempt.id === sourceId);
+            if (!source?.localSubmissionProvenance) throw new Error("confirmed provenance missing");
+            window.localStorage.setItem("omr_attempts", JSON.stringify([
+                ...attempts,
+                {
+                    ...source,
+                    id: localId,
+                    finishedAt: new Date(Date.now() + 5_000).toISOString(),
+                    questionResults: (source.questionResults || []).map((result: object) => ({
+                        ...result,
+                        attemptId: localId,
+                    })),
+                },
+            ]));
+            window.localStorage.removeItem(`omr_student_submission_receipt_v2:${encodeURIComponent(localId)}`);
+        }, { sourceId: notStartedCanonicalId, localId: prunedReceiptLocalId });
+        await page.goto(`/student/review/${prunedReceiptLocalId}`);
+        await expect(page.getByRole("status")).toHaveText("서버 반영 완료");
+
+        await page.evaluate(() => {
+            window.localStorage.removeItem("omr_student_submission_receipts_v2_migrated");
+            window.localStorage.setItem(
+                "omr_student_submission_receipts_v1",
+                '{"requests":{"attempt-one":{"pin":"BROWSER-SECRET-2468"',
+            );
+        });
+        await page.reload();
+        await expect(page.getByRole("status")).toHaveText("서버 반영 완료");
+        const quarantineValues = await page.evaluate(() => (
+            [...Array(window.localStorage.length)]
+                .map((_, index) => window.localStorage.getItem(window.localStorage.key(index) || "") || "")
+                .join("")
+        ));
+        expect(quarantineValues).not.toContain("BROWSER-SECRET-2468");
+        expect(quarantineValues).toContain("byteLength");
 
         await page.goto("/student/history");
         await expect(page.getByRole("heading", { name: "내 시험 기록" })).toBeVisible();

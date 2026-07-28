@@ -30,6 +30,7 @@ import {
     replaceLocalAttemptWithCanonical,
     saveAttempt,
     saveLocalAttempt,
+    saveLocalServerConfirmedAttempt,
 } from "@/lib/omrPersistence";
 import { askAttemptQuestion, loadExamForReview, loadMyAttempt, submitAttempt } from "@/app/actions/studentExam";
 import { loadMyAttemptClient, loadReviewExamClient } from "@/lib/studentExamClient";
@@ -72,6 +73,7 @@ import {
     retryPendingSubmissionReceipt,
     SUBMISSION_RECEIPT_RECONCILED_EVENT,
     submissionReceiptLabel,
+    submissionReceiptForAttempt,
     type SubmissionReceipt,
     type SubmissionReceiptReconciledDetail,
 } from "@/lib/studentAttemptReceipt";
@@ -556,17 +558,8 @@ export default function ReviewPage() {
                 attemptRef.current = found;
                 setAttempt(found);
                 const storedReceipt = readSubmissionReceipt(found.id);
-                const nextReceipt: SubmissionReceipt = result.source === "server"
-                    ? {
-                        attemptId: found.id,
-                        status: "confirmed",
-                        updatedAt: new Date().toISOString(),
-                    }
-                    : storedReceipt || {
-                        attemptId: found.id,
-                        status: "local_only",
-                        updatedAt: new Date().toISOString(),
-                    };
+                if (result.source === "server") saveLocalServerConfirmedAttempt(found);
+                const nextReceipt = submissionReceiptForAttempt(found, storedReceipt, result.source);
                 persistSubmissionReceipt(nextReceipt);
                 setSubmissionReceipt(nextReceipt);
                 // Attempt-stored notes are authoritative; the legacy local queue
@@ -1123,7 +1116,12 @@ export default function ReviewPage() {
                                     </span>
                                     {submissionReceipt.status === "pending" && (
                                         <>
-                                            {submissionReceipt.requiresPin && (
+                                            {submissionReceipt.actionDetail && (
+                                                <p style={{ margin: 0, color: "var(--muted)", fontSize: "var(--type-caption-min)" }}>
+                                                    {submissionReceipt.actionDetail}
+                                                </p>
+                                            )}
+                                            {(submissionReceipt.requiresPin || submissionReceipt.prerequisite === "pin") && (
                                                 <>
                                                     <p style={{ margin: 0, color: "var(--muted)", fontSize: "var(--type-caption-min)" }}>
                                                         자동 재시도하지 않습니다. 시험 PIN을 입력한 뒤 직접 다시 시도해주세요.
@@ -1140,15 +1138,21 @@ export default function ReviewPage() {
                                                     </label>
                                                 </>
                                             )}
-                                            <button
-                                                type="button"
-                                                className="btn btn-secondary"
-                                                onClick={handleSubmissionRetry}
-                                                disabled={submissionRetrying || (submissionReceipt.requiresPin && !submissionRetryPin.trim())}
-                                                style={{ justifySelf: "start" }}
-                                            >
-                                                {submissionRetrying ? "다시 시도 중…" : "지금 다시 시도"}
-                                            </button>
+                                            {submissionReceipt.prerequisite === "login" ? (
+                                                <Link href="/" className="btn btn-secondary" style={{ justifySelf: "start" }}>
+                                                    학생 로그인으로 이동
+                                                </Link>
+                                            ) : (
+                                                <button
+                                                    type="button"
+                                                    className="btn btn-secondary"
+                                                    onClick={handleSubmissionRetry}
+                                                    disabled={submissionRetrying || ((submissionReceipt.requiresPin || submissionReceipt.prerequisite === "pin") && !submissionRetryPin.trim())}
+                                                    style={{ justifySelf: "start" }}
+                                                >
+                                                    {submissionRetrying ? "다시 시도 중…" : "지금 다시 시도"}
+                                                </button>
+                                            )}
                                         </>
                                     )}
                                     {submissionReceipt.status === "local_only" && (

@@ -11,6 +11,7 @@ import {
     readLocalExams,
     saveLocalAttempt,
     saveLocalAttempts,
+    withLocalServerConfirmation,
     saveLocalExam,
 } from "@/lib/omrPersistence";
 import { attemptBelongsToSession, type StudentSession } from "@/utils/storage";
@@ -76,9 +77,9 @@ export async function loadStudentOfficialAttempts(
 
     const result = await listStudentCanonicalAttempts();
     if (result.status === "loaded") {
-        const attempts = result.attempts.map(record =>
-            withLocalStudentArtifacts(attemptFromStudentAttemptRecord(record), session)
-        );
+        const attempts = result.attempts.map(record => withLocalServerConfirmation(
+            withLocalStudentArtifacts(attemptFromStudentAttemptRecord(record), session),
+        ));
         saveLocalAttempts(attempts);
         return { items: attempts, remoteLoaded: true };
     }
@@ -103,10 +104,10 @@ export async function loadStudentOfficialAttempt(
 
     const result = await loadStudentCanonicalAttempt(attemptId);
     if (result.status === "loaded") {
-        const attempt = withLocalStudentArtifacts(
+        const attempt = withLocalServerConfirmation(withLocalStudentArtifacts(
             attemptFromStudentAttemptRecord(result.detail.attempt),
             session,
-        );
+        ));
         const exam = examFromStudentAttemptReviewExam(result.detail.exam);
         saveLocalAttempt(attempt);
         saveLocalExam(exam);

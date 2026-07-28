@@ -397,6 +397,14 @@ export interface Attempt {
     /** Guest provenance after a merge into a canonical student profile. */
     mergedFromGuestId?: string;
     mergedAt?: string;
+    /**
+     * Device-only evidence that this attempt was confirmed by the authoritative
+     * submission service. It must never be sent back in a server payload.
+     */
+    localSubmissionProvenance?: {
+        source: 'server';
+        confirmedAt: string;
+    };
 }
 
 export interface Group {

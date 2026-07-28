@@ -1,13 +1,21 @@
 import type { ServerGradedAttemptReceipt } from "@/lib/studentExamContract";
 import type { SubmitAttemptInput } from "@/lib/studentExamCore";
 import type { Attempt, IdentityType, QuestionResult } from "@/types/omr";
+import { STUDENT_SESSION_GENERATION_KEY } from "@/utils/storage";
+import {
+    hasLocalServerConfirmation,
+    markLocalAttemptServerConfirmed,
+} from "@/lib/omrPersistence";
 
 export type SubmissionReceiptStatus = "confirmed" | "pending" | "local_only";
+export type SubmissionRetryMode = "automatic" | "manual";
+export type SubmissionPrerequisite = "pin" | "login" | "exam_start";
 
 export type SubmissionReceiptReason =
     | "login_required"
     | "exam_ended"
     | "exam_archived"
+    | "not_started"
     | "access_denied"
     | "not_found"
     | "service_unavailable";
@@ -20,6 +28,9 @@ export interface SubmissionReceipt {
     reason?: SubmissionReceiptReason;
     actionDetail?: string;
     requiresPin?: boolean;
+    retryMode?: SubmissionRetryMode;
+    prerequisite?: SubmissionPrerequisite;
+    blockedSessionGeneration?: string;
 }
 
 export interface PendingSignedSessionSubmission {
@@ -62,8 +73,12 @@ const ALIAS_RETENTION_CAP = 100;
 const RETRY_ERROR = "서버에 아직 반영하지 못했습니다. 네트워크를 확인한 뒤 다시 시도해주세요.";
 const DURABILITY_ERROR = "서버 응답은 받았지만 확인 상태를 저장하지 못했습니다. 자동 재시도를 유지합니다.";
 const PIN_REQUIRED_ERROR = "시험 PIN을 다시 입력해야 서버 반영을 시도할 수 있습니다.";
+const LOGIN_REQUIRED_ERROR = "학생 계정으로 다시 로그인하면 서버 반영을 자동으로 다시 시도합니다.";
+const NOT_STARTED_ERROR = "시험 시작 전입니다. 시작 시간이 되면 서버 반영을 자동으로 다시 시도합니다.";
+const MISSING_SESSION_GENERATION = "__missing__";
 const retryInFlight = new Map<string, Promise<SubmissionRetryResult>>();
 const fallbackLockTails = new Map<string, Promise<void>>();
+let quarantineSequence = 0;
 
 export function isSubmissionReceiptStorageKey(key: string | null): boolean {
     return key === SUBMISSION_RECEIPT_KEY
@@ -160,16 +175,43 @@ function storageKeys(storage: Storage, prefix: string): string[] {
 }
 
 function quarantineCorruptValue(storage: Storage, key: string, raw: string): void {
+    const sourceKind = key === SUBMISSION_RECEIPT_KEY
+        ? "legacy"
+        : key.startsWith(SUBMISSION_RECEIPT_ENTRY_PREFIX)
+            ? "receipt"
+            : key.startsWith(SUBMISSION_RECEIPT_REQUEST_PREFIX)
+                ? "request"
+                : key.startsWith(SUBMISSION_RECEIPT_ALIAS_PREFIX)
+                    ? "alias"
+                    : "unknown";
+    quarantineSequence += 1;
+    const quarantineKey = `${SUBMISSION_RECEIPT_QUARANTINE_PREFIX}${Date.now()}:${quarantineSequence}`;
     try {
-        storage.setItem(
-            `${SUBMISSION_RECEIPT_QUARANTINE_PREFIX}${Date.now()}:${encodeURIComponent(key)}`,
-            raw,
-        );
+        storage.setItem(quarantineKey, JSON.stringify({
+            version: 1,
+            sourceKind,
+            errorCategory: "invalid_json_or_schema",
+            byteLength: raw.length,
+            quarantinedAt: new Date().toISOString(),
+        }));
+    } catch {
+        // Metadata is best-effort. Corrupt submission data may contain a PIN,
+        // so it is never copied into quarantine.
+    }
+    try {
         storage.removeItem(key);
     } catch {
-        // Keep the corrupt source isolated at its per-attempt key if storage is
-        // not writable. Other envelopes remain readable.
+        // A blocked storage implementation can prevent cleanup, but quarantine
+        // itself still never receives the sensitive raw value.
     }
+}
+
+function isRetryMode(value: unknown): value is SubmissionRetryMode {
+    return value === "automatic" || value === "manual";
+}
+
+function isSubmissionPrerequisite(value: unknown): value is SubmissionPrerequisite {
+    return value === "pin" || value === "login" || value === "exam_start";
 }
 
 function sanitizeReceipt(id: string, value: unknown): SubmissionReceipt | null {
@@ -186,6 +228,11 @@ function sanitizeReceipt(id: string, value: unknown): SubmissionReceipt | null {
         ...(isReceiptReason(receipt.reason) ? { reason: receipt.reason } : {}),
         ...(typeof receipt.actionDetail === "string" ? { actionDetail: receipt.actionDetail } : {}),
         ...(receipt.requiresPin === true ? { requiresPin: true } : {}),
+        ...(isRetryMode(receipt.retryMode) ? { retryMode: receipt.retryMode } : {}),
+        ...(isSubmissionPrerequisite(receipt.prerequisite) ? { prerequisite: receipt.prerequisite } : {}),
+        ...(typeof receipt.blockedSessionGeneration === "string"
+            ? { blockedSessionGeneration: receipt.blockedSessionGeneration }
+            : {}),
     };
 }
 
@@ -308,7 +355,12 @@ function migrateLegacyRegistry(storage: Storage): void {
     try {
         for (const [id, value] of Object.entries(parsed.receipts || {})) {
             const receipt = sanitizeReceipt(id, value);
-            if (receipt && !storage.getItem(receiptKey(id))) writeReceiptEnvelope(storage, receipt);
+            if (receipt && !storage.getItem(receiptKey(id))) {
+                if (receipt.status === "confirmed") {
+                    markLocalAttemptServerConfirmed(id, receipt.updatedAt);
+                }
+                writeReceiptEnvelope(storage, receipt);
+            }
         }
         for (const [id, value] of Object.entries(parsed.requests || {})) {
             if (!isPendingSubmissionRequest(id, value)) continue;
@@ -338,10 +390,13 @@ function pruneRetainedRecords(storage: Storage): void {
             const id = attemptIdFromKey(key, SUBMISSION_RECEIPT_ENTRY_PREFIX);
             if (!id) return [];
             const envelope = parseReceiptEnvelope(storage, id);
-            return envelope?.receipt.status === "confirmed" ? [{ key, at: Date.parse(envelope.receipt.updatedAt) || 0 }] : [];
+            return envelope?.receipt.status === "confirmed"
+                ? [{ key, id, at: Date.parse(envelope.receipt.updatedAt) || 0 }]
+                : [];
         })
         .sort((a, b) => b.at - a.at);
-    confirmed.slice(CONFIRMED_RETENTION_CAP).forEach(({ key }) => {
+    confirmed.slice(CONFIRMED_RETENTION_CAP).forEach(({ key, id }) => {
+        if (!hasLocalServerConfirmation(id)) return;
         try { storage.removeItem(key); } catch {}
     });
 
@@ -372,11 +427,35 @@ function pruneRetainedRecords(storage: Storage): void {
 }
 
 export function submissionReceiptLabel(
-    receipt: { status: SubmissionReceiptStatus },
+    receipt: Pick<SubmissionReceipt, "status" | "retryMode" | "prerequisite" | "requiresPin">,
 ): string {
     if (receipt.status === "confirmed") return "서버 반영 완료";
-    if (receipt.status === "pending") return "서버 반영 대기 · 자동 재시도";
+    if (receipt.status === "pending") {
+        if (receipt.requiresPin || receipt.prerequisite === "pin") return "서버 반영 대기 · PIN 입력 필요";
+        if (receipt.prerequisite === "login") return "서버 반영 대기 · 로그인 필요";
+        if (receipt.prerequisite === "exam_start") return "서버 반영 대기 · 시험 시작 전";
+        return "서버 반영 대기 · 자동 재시도";
+    }
     return "이 기기에만 저장됨";
+}
+
+export function submissionReceiptForAttempt(
+    attempt: Attempt,
+    storedReceipt: SubmissionReceipt | null,
+    source: "server" | "local",
+): SubmissionReceipt {
+    if (source === "server" || attempt.localSubmissionProvenance?.source === "server") {
+        return {
+            attemptId: attempt.id,
+            status: "confirmed",
+            updatedAt: attempt.localSubmissionProvenance?.confirmedAt || new Date().toISOString(),
+        };
+    }
+    return storedReceipt || {
+        attemptId: attempt.id,
+        status: "local_only",
+        updatedAt: new Date().toISOString(),
+    };
 }
 
 export function persistSubmissionReceipt(receipt: SubmissionReceipt): boolean {
@@ -387,6 +466,9 @@ export function persistSubmissionReceipt(receipt: SubmissionReceipt): boolean {
     if (current?.status === "confirmed" && receipt.status === "pending") return false;
     if (receipt.status === "pending" && storage.getItem(aliasKey(receipt.attemptId))) return false;
     try {
+        if (receipt.status === "confirmed") {
+            markLocalAttemptServerConfirmed(receipt.attemptId, receipt.updatedAt);
+        }
         writeReceiptEnvelope(storage, receipt);
         if (receipt.status !== "pending") storage.removeItem(requestKey(receipt.attemptId));
         pruneRetainedRecords(storage);
@@ -446,7 +528,11 @@ export function queuePendingSubmissionReceipt(
         attemptId: request.attemptId,
         status: "pending",
         updatedAt,
-        ...(request.requiresPin ? { requiresPin: true } : {}),
+        ...(request.requiresPin ? {
+            requiresPin: true,
+            retryMode: "manual" as const,
+            prerequisite: "pin" as const,
+        } : {}),
     };
     const requestStorageKey = requestKey(request.attemptId);
     const receiptStorageKey = receiptKey(request.attemptId);
@@ -477,9 +563,36 @@ export function pendingSubmissionReceiptIds(options: { automaticOnly?: boolean }
         const request = parseRequestEnvelope(storage, id)?.request;
         const receipt = parseReceiptEnvelope(storage, id)?.receipt;
         if (!request || receipt?.status !== "pending") return [];
-        if (options.automaticOnly && (request.requiresPin || receipt.requiresPin)) return [];
+        if (options.automaticOnly) {
+            if (request.requiresPin || receipt.requiresPin || receipt.prerequisite === "pin") return [];
+            if (receipt.retryMode === "manual") {
+                const currentSessionGeneration = readStudentSessionGeneration();
+                const restoredLogin = receipt.prerequisite === "login"
+                    && !!receipt.blockedSessionGeneration
+                    && !!currentSessionGeneration
+                    && currentSessionGeneration !== receipt.blockedSessionGeneration;
+                if (!restoredLogin) return [];
+            }
+        }
         return [id];
     });
+}
+
+function readStudentSessionGeneration(): string | null {
+    if (typeof window === "undefined") return null;
+    try {
+        return window.sessionStorage?.getItem(STUDENT_SESSION_GENERATION_KEY) || null;
+    } catch {
+        return null;
+    }
+}
+
+function isBlockedOnCurrentStudentSession(receipt: SubmissionReceipt): boolean {
+    if (receipt.prerequisite !== "login" || !receipt.blockedSessionGeneration) return false;
+    const current = readStudentSessionGeneration();
+    return receipt.blockedSessionGeneration === MISSING_SESSION_GENERATION
+        ? !current
+        : current === receipt.blockedSessionGeneration;
 }
 
 async function withAttemptMutationLock<T>(attemptId: string, operation: () => Promise<T>): Promise<T> {
@@ -501,10 +614,7 @@ async function withAttemptMutationLock<T>(attemptId: string, operation: () => Pr
 }
 
 function permanentOutcome(status: string): { reason: SubmissionReceiptReason; actionDetail: string } | null {
-    if (status === "unauthenticated" || status === "login_required") {
-        return { reason: "login_required", actionDetail: "학생 계정으로 다시 로그인한 뒤 시험 기록을 확인해주세요." };
-    }
-    if (status === "ended" || status === "not_started") {
+    if (status === "ended") {
         return { reason: "exam_ended", actionDetail: "시험 제출 가능 시간을 확인하고 선생님에게 문의해주세요." };
     }
     if (status === "archived") {
@@ -543,6 +653,7 @@ function persistConfirmedReconciliation(
     ];
     const snapshots = new Map(keys.map(key => [key, storage.getItem(key)]));
     try {
+        markLocalAttemptServerConfirmed(canonicalAttemptId, receipt.updatedAt);
         writeReceiptEnvelope(storage, receipt);
         if (previousAttemptId !== canonicalAttemptId) {
             writeAliasEnvelope(storage, previousAttemptId, canonicalAttemptId);
@@ -582,6 +693,10 @@ export function retryPendingSubmissionReceipt(
         const request = parseRequestEnvelope(storage, attemptId)?.request;
         if (!request) {
             return { status: "missing", error: "다시 시도할 제출 요청을 찾지 못했습니다." };
+        }
+        const currentReceipt = parseReceiptEnvelope(storage, attemptId)?.receipt;
+        if (currentReceipt && isBlockedOnCurrentStudentSession(currentReceipt)) {
+            return { status: "pending", error: LOGIN_REQUIRED_ERROR };
         }
         if (request.requiresPin && !deps.pin) {
             return { status: "pending", error: PIN_REQUIRED_ERROR, requiresPin: true };
@@ -636,6 +751,8 @@ export function retryPendingSubmissionReceipt(
                 updatedAt: new Date().toISOString(),
                 lastError: PIN_REQUIRED_ERROR,
                 requiresPin: true,
+                retryMode: "manual",
+                prerequisite: "pin",
             };
             const persisted = queuePendingSubmissionReceipt({
                 ...request,
@@ -645,6 +762,39 @@ export function retryPendingSubmissionReceipt(
                 persistSubmissionReceipt(pinReceipt);
             }
             return { status: "pending", error: PIN_REQUIRED_ERROR, requiresPin: true };
+        }
+        if (result.status === "unauthenticated" || result.status === "login_required") {
+            const pendingReceipt: SubmissionReceipt = {
+                attemptId,
+                status: "pending",
+                updatedAt: new Date().toISOString(),
+                lastError: LOGIN_REQUIRED_ERROR,
+                reason: "login_required",
+                actionDetail: LOGIN_REQUIRED_ERROR,
+                retryMode: "manual",
+                prerequisite: "login",
+                blockedSessionGeneration: readStudentSessionGeneration() || MISSING_SESSION_GENERATION,
+            };
+            if (!persistSubmissionReceipt(pendingReceipt)) {
+                return { status: "pending", error: DURABILITY_ERROR };
+            }
+            return { status: "pending", error: LOGIN_REQUIRED_ERROR };
+        }
+        if (result.status === "not_started") {
+            const pendingReceipt: SubmissionReceipt = {
+                attemptId,
+                status: "pending",
+                updatedAt: new Date().toISOString(),
+                lastError: NOT_STARTED_ERROR,
+                reason: "not_started",
+                actionDetail: NOT_STARTED_ERROR,
+                retryMode: "automatic",
+                prerequisite: "exam_start",
+            };
+            if (!persistSubmissionReceipt(pendingReceipt)) {
+                return { status: "pending", error: DURABILITY_ERROR };
+            }
+            return { status: "pending", error: NOT_STARTED_ERROR };
         }
         const permanent = permanentOutcome(result.status);
         if (permanent) {
