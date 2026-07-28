@@ -19,7 +19,7 @@ import { issueGuestSession, validateStudentSession } from "@/app/actions/student
 import { saveTeacherSessionWithIdentity } from "@/lib/teacherSession";
 import { attemptBelongsToSession, getOrCreateGuestId, getSession, guestLoginIdFor, saveSession, type StudentSession } from "@/utils/storage";
 import { canArchiveHandwriting, getPlanLabel } from "@/utils/plans";
-import { loadExam as loadPersistedExam, readLocalAttempts, readLocalExam, saveAttempt, saveLocalAttempt, saveLocalExam } from "@/lib/omrPersistence";
+import { loadExam as loadPersistedExam, readLocalAttempts, readLocalExam, saveLocalAttempt, saveLocalExam } from "@/lib/omrPersistence";
 import { buildQuestionResults } from "@/lib/premiumAnalytics";
 import { summarizeQuestionDrawings } from "@/lib/handwritingAnalytics";
 import { evaluateExamAccess, examRequiresPin, normalizeExamPin, verifyExamPin, type ExamAccessDecision } from "@/lib/examAccess";
@@ -32,13 +32,16 @@ import {
 import type { SubmitAttemptInput } from "@/lib/studentExamCore";
 import { remainingSecondsWithinWindow } from "@/lib/studentExamCore";
 import { findMissingRequiredSubQuestions, requiredSubQuestionProgress, sanitizeSubQuestionAnswersForQuestions } from "@/lib/subQuestions";
-import { summarizePersistenceWrite } from "@/lib/persistenceFeedback";
 import { stripTeacherOnlySubQuestionFields, type SolvableExam } from "@/lib/examSolvePayload";
 import { SOLVE_CLASS_CODE_PARAM } from "@/lib/examLinks";
 import { readRosterGroups } from "@/lib/rosterStorage";
 import { recallSolvePdf, rememberSolvePdf } from "@/lib/solvePdfCache";
 import { clientExamFromStudentExamPreview, clientExamFromStudentSolveExam } from "@/lib/studentExamContract";
-import { localResultCacheFromServerReceipt } from "@/lib/studentAttemptReceipt";
+import {
+    localResultCacheFromServerReceipt,
+    persistSubmissionReceipt,
+    queuePendingSubmissionReceipt,
+} from "@/lib/studentAttemptReceipt";
 import {
     beginAwaySession,
     finishAwaySession,
@@ -2075,6 +2078,11 @@ export default function SolvePage() {
                 retake: retakeConfig ? { ...retakeConfig, createdAt: new Date().toISOString() } : undefined,
             };
             saveLocalAttempt(cachedAttempt);
+            persistSubmissionReceipt({
+                attemptId: cachedAttempt.id,
+                status: "confirmed",
+                updatedAt: new Date().toISOString(),
+            });
             if (!shouldArchiveDrawings || handwritingUpload?.status === "uploaded") {
                 try { localStorage.removeItem(DRAFT_KEY); } catch {}
                 try { localStorage.removeItem(LEGACY_DRAFT_KEY); } catch {}
@@ -2194,22 +2202,7 @@ export default function SolvePage() {
                 { ...examData, questions: activeExamQuestions },
                 attemptData,
             );
-            try {
-                const result = await saveAttempt(attemptData);
-                const feedback = summarizePersistenceWrite(result, {
-                    target: "답안",
-                    action: "저장",
-                    failureTitle: "답안 저장 실패",
-                    failureDetail: "브라우저 저장소가 가득 찼거나 Supabase 저장에 실패했습니다.",
-                });
-                if (!feedback.ok) return null;
-                if (feedback.level === "info") {
-                    toast.info(feedback.title, feedback.detail);
-                }
-                return attemptData;
-            } catch {
-                return null;
-            }
+            return saveLocalAttempt(attemptData) ? attemptData : null;
         };
 
         const res = await submitAttemptClient(submitInput, pinRef.current || undefined, {
@@ -2244,6 +2237,27 @@ export default function SolvePage() {
         if (res.source === "server") {
             // Local echo so review/history/dashboard local caches see it immediately.
             try { saveLocalAttempt(res.attempt); } catch { /* quota — server copy is canonical */ }
+        }
+
+        if (res.receiptStatus === "confirmed") {
+            persistSubmissionReceipt({
+                attemptId: res.attempt.id,
+                status: "confirmed",
+                updatedAt: new Date().toISOString(),
+            });
+        } else if (res.receiptStatus === "pending" && !pinRef.current) {
+            queuePendingSubmissionReceipt({
+                attemptId: res.attempt.id,
+                input: submitInput,
+            });
+        } else {
+            // A development-only exam, a server-side not-found fallback, or a
+            // PIN-gated local attempt has no safely replayable server request.
+            persistSubmissionReceipt({
+                attemptId: res.attempt.id,
+                status: "local_only",
+                updatedAt: new Date().toISOString(),
+            });
         }
 
         // Clean up draft

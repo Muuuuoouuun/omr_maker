@@ -57,4 +57,12 @@ describe("student official attempt read surface", () => {
         expect(migration).toContain('drop policy if exists "OMR attempts are publicly readable"');
         expect(migration).toContain('drop policy if exists "OMR question results are publicly readable"');
     });
+
+    it("replays pending submissions through the purpose-specific server action", () => {
+        const flusher = source("src/components/SyncFlusher.tsx");
+        expect(flusher).toContain("flushPendingSubmissionReceipts");
+        expect(flusher).toContain("submitSignedSessionAttempt: submitAttempt");
+        expect(flusher).not.toContain("flushPendingAttemptSync");
+        expect(flusher).not.toContain("upsertRemoteAttempt");
+    });
 });

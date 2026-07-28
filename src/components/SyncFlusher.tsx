@@ -1,20 +1,28 @@
 "use client";
 
 import { useEffect } from "react";
-import { flushPendingAttemptSync, readPendingAttemptSyncIds } from "@/lib/omrPersistence";
+import { submitAttempt } from "@/app/actions/studentExam";
+import {
+    flushPendingSubmissionReceipts,
+    pendingSubmissionReceiptIds,
+} from "@/lib/studentAttemptReceipt";
 
 /**
  * Invisible app-wide helper: when connectivity or tab visibility returns,
- * retries attempt saves whose remote sync failed (see queueAttemptPendingSync).
+ * retries the exact idempotent student submission server request whose remote
+ * confirmation failed. Canonical grading never falls back to browser Supabase
+ * CRUD here.
  */
 export default function SyncFlusher() {
     useEffect(() => {
         let running = false;
         const flush = () => {
             if (running) return;
-            if (readPendingAttemptSyncIds().length === 0) return;
+            if (pendingSubmissionReceiptIds().length === 0) return;
             running = true;
-            void flushPendingAttemptSync().finally(() => {
+            void flushPendingSubmissionReceipts({
+                submitSignedSessionAttempt: submitAttempt,
+            }).finally(() => {
                 running = false;
             });
         };

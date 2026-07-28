@@ -1018,4 +1018,71 @@ test.describe("Teacher and student full journey", () => {
         hasBodyOverflow = await page.evaluate(() => document.documentElement.scrollWidth > document.documentElement.clientWidth + 1);
         expect(hasBodyOverflow).toBe(false);
     });
+
+    test("shows authoritative submission receipt states and persists them across reload", async ({ page }) => {
+        await seedExamAndStudent(page);
+        await seedCompletedAttempt(page);
+        const attemptId = "attempt-tablet-analytics";
+
+        await page.evaluate((id) => {
+            window.localStorage.setItem("omr_student_submission_receipts_v1", JSON.stringify({
+                receipts: {
+                    [id]: {
+                        attemptId: id,
+                        status: "confirmed",
+                        updatedAt: "2026-07-28T00:00:00.000Z",
+                    },
+                },
+                requests: {},
+            }));
+        }, attemptId);
+        await page.goto(`/student/review/${attemptId}`);
+        await expect(page.getByRole("status")).toHaveText("서버 반영 완료");
+        await page.reload();
+        await expect(page.getByRole("status")).toHaveText("서버 반영 완료");
+
+        await page.evaluate((id) => {
+            const input = {
+                examId: "e2e-korean-integrated-exam",
+                submissionId: "submission-offline-1",
+                answers: { 1: 2, 2: 3, 3: 1 },
+                startedAt: "2026-07-28T00:00:00.000Z",
+            };
+            window.localStorage.setItem("omr_student_submission_receipts_v1", JSON.stringify({
+                receipts: {
+                    [id]: {
+                        attemptId: id,
+                        status: "pending",
+                        updatedAt: "2026-07-28T00:01:00.000Z",
+                    },
+                },
+                requests: {
+                    [id]: { attemptId: id, input },
+                },
+            }));
+        }, attemptId);
+        await page.reload();
+        await expect(page.getByRole("status")).toHaveText("서버 반영 대기 · 자동 재시도");
+        const retry = page.getByRole("button", { name: "지금 다시 시도" });
+        await expect(retry).toBeVisible();
+        await retry.click();
+        await expect(page.getByRole("status")).toHaveText("서버 반영 대기 · 자동 재시도");
+        await expect(page.getByText("서버에 아직 반영하지 못했습니다. 네트워크를 확인한 뒤 다시 시도해주세요.")).toBeVisible();
+
+        await page.evaluate((id) => {
+            window.localStorage.setItem("omr_student_submission_receipts_v1", JSON.stringify({
+                receipts: {
+                    [id]: {
+                        attemptId: id,
+                        status: "local_only",
+                        updatedAt: "2026-07-28T00:02:00.000Z",
+                    },
+                },
+                requests: {},
+            }));
+        }, attemptId);
+        await page.reload();
+        await expect(page.getByRole("status")).toHaveText("이 기기에만 저장됨");
+        await expect(page.getByText("다른 기기에서는 이 결과를 볼 수 없습니다.")).toBeVisible();
+    });
 });

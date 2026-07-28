@@ -1,6 +1,7 @@
 import type { Attempt, Exam } from "@/types/omr";
 import type { SolvableExam } from "@/lib/examSolvePayload";
 import type { SubmitAttemptInput } from "@/lib/studentExamCore";
+import type { SubmissionReceiptStatus } from "@/lib/studentAttemptReceipt";
 
 /**
  * Client-side wrapper over the student exam server actions.
@@ -43,6 +44,7 @@ export interface SubmitClientResult {
     status: SolveAccessStatus | "denied";
     attempt?: Attempt;
     source: ExamSource;
+    receiptStatus?: SubmissionReceiptStatus;
 }
 
 export interface ListAttemptsClientResult {
@@ -128,17 +130,22 @@ export async function submitAttemptClient(
     },
 ): Promise<SubmitClientResult> {
     let serverStatus = "error";
+    let retryableFailure = false;
     try {
         const res = await deps.server(input, pin);
         serverStatus = res.status;
         if (res.status === "ok" && res.attempt) {
-            return { status: "ok", attempt: res.attempt, source: "server" };
+            return { status: "ok", attempt: res.attempt, source: "server", receiptStatus: "confirmed" };
         }
+        retryableFailure = res.status === "error";
         if (!shouldFallBackToLocal(res.status)) {
-            return { status: asLoadStatus(res.status), source: "server" };
+            if (!retryableFailure || !deps.allowLocalFallback) {
+                return { status: asLoadStatus(res.status), source: "server" };
+            }
         }
     } catch {
-        serverStatus = "degraded_local";
+        serverStatus = "error";
+        retryableFailure = true;
     }
 
     if (!deps.allowLocalFallback) {
@@ -146,7 +153,12 @@ export async function submitAttemptClient(
     }
     const attempt = await deps.localFallback(input);
     return attempt
-        ? { status: "ok", attempt, source: "local" }
+        ? {
+            status: "ok",
+            attempt,
+            source: "local",
+            receiptStatus: retryableFailure ? "pending" : "local_only",
+        }
         : { status: "error", source: "local" };
 }
 

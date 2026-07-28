@@ -24,7 +24,7 @@ import type { Attempt, AttemptFeedback, Exam, PdfDrawings, Question, QuestionRes
 import { storedDataUrlToFile, loadJsonRecord } from "@/utils/blobStore";
 import { attemptBelongsToSession, getSession } from "@/utils/storage";
 import { loadAttempt, loadExam, readLocalAttempts, saveAttempt, saveLocalAttempt } from "@/lib/omrPersistence";
-import { askAttemptQuestion, loadExamForReview, loadMyAttempt } from "@/app/actions/studentExam";
+import { askAttemptQuestion, loadExamForReview, loadMyAttempt, submitAttempt } from "@/app/actions/studentExam";
 import { loadMyAttemptClient, loadReviewExamClient } from "@/lib/studentExamClient";
 import { stripTeacherOnlySubQuestionFields } from "@/lib/examSolvePayload";
 import { studentQuestionsByQuestionId, upsertStudentQuestion } from "@/lib/studentQuestions";
@@ -57,6 +57,13 @@ import {
     loadStudentReturnedFeedbackForAttempt,
     markStudentFeedbackOpened,
 } from "@/lib/studentFeedbackClient";
+import {
+    persistSubmissionReceipt,
+    readSubmissionReceipt,
+    retryPendingSubmissionReceipt,
+    submissionReceiptLabel,
+    type SubmissionReceipt,
+} from "@/lib/studentAttemptReceipt";
 
 const PDFViewer = dynamic(() => import("@/components/PDFViewer"), { ssr: false });
 
@@ -398,6 +405,9 @@ export default function ReviewPage() {
 
     const [attempt, setAttempt] = useState<Attempt | null>(null);
     const [exam, setExam] = useState<Exam | null>(null);
+    const [submissionReceipt, setSubmissionReceipt] = useState<SubmissionReceipt | null>(null);
+    const [submissionRetrying, setSubmissionRetrying] = useState(false);
+    const [submissionRetryFeedback, setSubmissionRetryFeedback] = useState("");
     const [restoredDrawings, setRestoredDrawings] = useState<PdfDrawings | undefined>(undefined);
     const [pdfFile, setPdfFile] = useState<File | null>(null);
     const [pdfLoadFailed, setPdfLoadFailed] = useState(false);
@@ -488,6 +498,20 @@ export default function ReviewPage() {
                 }
                 attemptRef.current = found;
                 setAttempt(found);
+                const storedReceipt = readSubmissionReceipt(found.id);
+                const nextReceipt: SubmissionReceipt = result.source === "server"
+                    ? {
+                        attemptId: found.id,
+                        status: "confirmed",
+                        updatedAt: new Date().toISOString(),
+                    }
+                    : storedReceipt || {
+                        attemptId: found.id,
+                        status: "local_only",
+                        updatedAt: new Date().toISOString(),
+                    };
+                persistSubmissionReceipt(nextReceipt);
+                setSubmissionReceipt(nextReceipt);
                 // Attempt-stored notes are authoritative; the legacy local queue
                 // only backfills questions never migrated onto the attempt.
                 setStudentQuestions({
@@ -671,6 +695,27 @@ export default function ReviewPage() {
             </div>
         );
     }
+
+    const handleSubmissionRetry = async () => {
+        if (!attempt || submissionRetrying) return;
+        setSubmissionRetrying(true);
+        setSubmissionRetryFeedback("");
+        try {
+            const result = await retryPendingSubmissionReceipt(attempt.id, {
+                submitSignedSessionAttempt: submitAttempt,
+            });
+            const nextReceipt = readSubmissionReceipt(attempt.id);
+            if (nextReceipt) setSubmissionReceipt(nextReceipt);
+            if (result.status === "confirmed") {
+                saveLocalAttempt(result.attempt);
+                setSubmissionRetryFeedback("서버 반영을 확인했습니다.");
+            } else {
+                setSubmissionRetryFeedback(result.error);
+            }
+        } finally {
+            setSubmissionRetrying(false);
+        }
+    };
 
     const reviewQuestionIds = attempt.retake?.questionIds?.length
         ? new Set(attempt.retake.questionIds)
@@ -1000,6 +1045,44 @@ export default function ReviewPage() {
                                     <MetaChip tone="teal">재시험 {attempt.retake.questionIds.length}문항</MetaChip>
                                 )}
                             </div>
+                            {submissionReceipt && (
+                                <div
+                                    className="student-review-submission-receipt"
+                                    style={{
+                                        display: "grid",
+                                        gap: "0.45rem",
+                                        padding: "0.75rem",
+                                        borderRadius: "var(--radius-md)",
+                                        border: "1px solid var(--border)",
+                                        background: "var(--surface)",
+                                    }}
+                                >
+                                    <span role="status" style={{ fontWeight: 800 }}>
+                                        {submissionReceiptLabel(submissionReceipt)}
+                                    </span>
+                                    {submissionReceipt.status === "pending" && (
+                                        <button
+                                            type="button"
+                                            className="btn btn-secondary"
+                                            onClick={handleSubmissionRetry}
+                                            disabled={submissionRetrying}
+                                            style={{ justifySelf: "start" }}
+                                        >
+                                            {submissionRetrying ? "다시 시도 중…" : "지금 다시 시도"}
+                                        </button>
+                                    )}
+                                    {submissionReceipt.status === "local_only" && (
+                                        <p style={{ margin: 0, color: "var(--muted)", fontSize: "var(--type-caption-min)" }}>
+                                            다른 기기에서는 이 결과를 볼 수 없습니다.
+                                        </p>
+                                    )}
+                                    {submissionRetryFeedback && (
+                                        <p aria-live="polite" style={{ margin: 0, color: "var(--muted)", fontSize: "var(--type-caption-min)" }}>
+                                            {submissionRetryFeedback}
+                                        </p>
+                                    )}
+                                </div>
+                            )}
                         </section>
 
                         {returnedFeedback && (

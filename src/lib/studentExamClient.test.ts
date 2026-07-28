@@ -82,7 +82,7 @@ describe("submitAttemptClient", () => {
             SUBMISSION, "1234",
             { server, localFallback, allowLocalFallback: true },
         );
-        expect(res).toMatchObject({ status: "ok", source: "server" });
+        expect(res).toMatchObject({ status: "ok", source: "server", receiptStatus: "confirmed" });
         expect(server).toHaveBeenCalledWith(SUBMISSION, "1234");
         expect(localFallback).not.toHaveBeenCalled();
     });
@@ -94,7 +94,27 @@ describe("submitAttemptClient", () => {
             SUBMISSION, undefined,
             { server, localFallback, allowLocalFallback: true },
         );
-        expect(res).toMatchObject({ status: "ok", source: "local" });
+        expect(res).toMatchObject({ status: "ok", source: "local", receiptStatus: "local_only" });
+    });
+
+    it("grades locally and marks the receipt pending when the server request fails", async () => {
+        const server = vi.fn().mockRejectedValue(new Error("network"));
+        const localFallback = vi.fn().mockResolvedValue(ATTEMPT);
+        const res = await submitAttemptClient(
+            SUBMISSION, undefined,
+            { server, localFallback, allowLocalFallback: true },
+        );
+        expect(res).toMatchObject({ status: "ok", source: "local", receiptStatus: "pending" });
+    });
+
+    it("grades locally and marks the receipt pending on a retryable server error", async () => {
+        const server = vi.fn().mockResolvedValue({ status: "error" });
+        const localFallback = vi.fn().mockResolvedValue(ATTEMPT);
+        const res = await submitAttemptClient(
+            SUBMISSION, undefined,
+            { server, localFallback, allowLocalFallback: true },
+        );
+        expect(res).toMatchObject({ status: "ok", source: "local", receiptStatus: "pending" });
     });
 
     it("never grades locally for a server-sourced session (answers absent)", async () => {
