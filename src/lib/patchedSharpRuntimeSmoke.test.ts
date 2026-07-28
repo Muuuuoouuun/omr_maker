@@ -44,6 +44,7 @@ describe("patched sharp runtime smoke contracts", () => {
         expect(existsSync(path.join(rootDir, scriptPath))).toBe(true);
 
         const source = readProjectFile(scriptPath);
+        const logSource = readProjectFile("scripts/desktop-smoke-log.mjs");
         const packageJson = JSON.parse(readProjectFile("package.json")) as {
             scripts: Record<string, string>;
         };
@@ -57,7 +58,12 @@ describe("patched sharp runtime smoke contracts", () => {
         expect(source).toContain("OMR_DESKTOP_SMOKE_TIMEOUT_MS");
         expect(source).toContain(desktopSuccessMarker);
         expect(source).toContain("unexpectedRuntimeProblem");
-        expect(source).toMatch(/unhandledRejection[\s\S]*uncaughtException[\s\S]*OMR_DESKTOP_SMOKE_FAILED/);
+        expect(source).toContain("findDesktopSmokeFatalLog");
+        expect(logSource).toContain("UnhandledPromiseRejectionWarning");
+        expect(logSource).toContain("UnhandledPromiseRejection");
+        expect(logSource).toContain("unhandledRejection");
+        expect(logSource).toContain("uncaughtException");
+        expect(logSource).toContain("OMR_DESKTOP_SMOKE_FAILED");
         expect(packageJson.scripts["desktop:smoke:packaged"]).toBe("node scripts/desktop-package-smoke.mjs");
     });
 });

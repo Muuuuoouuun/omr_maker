@@ -2,6 +2,7 @@ import { spawn } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { findDesktopSmokeFatalLog } from "./desktop-smoke-log.mjs";
 
 const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const packageJson = JSON.parse(fs.readFileSync(path.join(rootDir, "package.json"), "utf8"));
@@ -126,8 +127,7 @@ async function runSmoke() {
   const executable = resolveExecutable();
   const result = await runExecutable(executable);
   const combinedOutput = `${result.stdout}\n${result.stderr}`;
-  const unexpectedRuntimeProblem = /unhandledRejection|uncaughtException|OMR_DESKTOP_SMOKE_FAILED/i
-    .exec(combinedOutput)?.[0];
+  const unexpectedRuntimeProblem = findDesktopSmokeFatalLog(combinedOutput);
 
   if (result.timedOut) {
     throw new Error(`Packaged desktop smoke timed out after ${timeoutMs}ms`);

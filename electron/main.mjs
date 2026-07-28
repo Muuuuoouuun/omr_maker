@@ -3,6 +3,7 @@ import http from "node:http";
 import path from "node:path";
 import fs from "node:fs";
 import next from "next";
+import { selectDesktopServerPort } from "./desktop-port.mjs";
 
 if (!process.env.NEXT_TELEMETRY_DISABLED) {
   process.env.NEXT_TELEMETRY_DISABLED = "1";
@@ -60,30 +61,6 @@ function tryListen(server, port) {
   });
 }
 
-async function listenOnStablePort(server) {
-  // Prefer the previously used port, then the fixed default, so the origin stays
-  // identical between launches. Only fall back to an ephemeral port if both are
-  // occupied (rare, and a single-instance lock already prevents our own dupes).
-  const candidates = [...new Set([readPersistedPort(), PREFERRED_DESKTOP_PORT].filter(Boolean))];
-  for (const candidate of candidates) {
-    try {
-      await tryListen(server, candidate);
-      persistPort(candidate);
-      return candidate;
-    } catch (error) {
-      if (error?.code !== "EADDRINUSE") throw error;
-    }
-  }
-  await new Promise((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(0, "127.0.0.1", resolve);
-  });
-  const address = server.address();
-  const port = address && typeof address === "object" ? address.port : PREFERRED_DESKTOP_PORT;
-  persistPort(port);
-  return port;
-}
-
 function isSameOrigin(targetUrl, baseUrl) {
   try {
     const target = new URL(targetUrl);
@@ -110,7 +87,17 @@ async function startPackagedNextServer() {
     });
   });
 
-  const port = await listenOnStablePort(nextServer);
+  const port = await selectDesktopServerPort({
+    getBoundPort: () => {
+      const address = nextServer.address();
+      return address && typeof address === "object" ? address.port : null;
+    },
+    persistPort,
+    preferredPort: PREFERRED_DESKTOP_PORT,
+    readPersistedPort,
+    smokeEnabled: DESKTOP_SMOKE_ENABLED,
+    tryListen: port => tryListen(nextServer, port),
+  });
   return `http://127.0.0.1:${port}`;
 }
 
