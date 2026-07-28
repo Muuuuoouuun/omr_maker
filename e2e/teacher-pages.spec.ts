@@ -344,14 +344,57 @@ test.describe("Create page label memory", () => {
         await expect(dialog).toBeVisible();
         await expect(firstControl).toBeFocused();
 
+        const negativeTabStop = dialog.locator('[data-negative-tab-stop="true"]');
+        await dialog.evaluate(element => {
+            const excludedButton = document.createElement("button");
+            excludedButton.textContent = "포커스 제외";
+            excludedButton.tabIndex = -1;
+            excludedButton.dataset.negativeTabStop = "true";
+            element.append(excludedButton);
+        });
         await page.keyboard.press("Shift+Tab");
         await expect(lastEnabledControl).toBeFocused();
+        await expect(negativeTabStop).not.toBeFocused();
         await page.keyboard.press("Tab");
         await expect(firstControl).toBeFocused();
 
         await page.keyboard.press("Escape");
         await expect(dialog).not.toBeVisible();
         await expect(trigger).toBeFocused();
+    });
+
+    test("dialog focus contains handled keys while ordinary keys still bubble", async ({ page }) => {
+        await page.goto("/create");
+        await page.getByRole("button", { name: "정답 인식 마법사 열기" }).click();
+
+        const dialog = page.getByRole("dialog", { name: "정답 PDF 불러오기" });
+        const firstControl = dialog.getByRole("button", { name: "정답 PDF 모달 닫기" });
+        await expect(firstControl).toBeFocused();
+        await dialog.evaluate(element => {
+            const parent = element.parentElement;
+            if (!parent) throw new Error("Dialog parent is required");
+            parent.addEventListener("keydown", event => {
+                const key = event.key === "Tab"
+                    ? "tab"
+                    : event.key === "Escape"
+                        ? "escape"
+                        : event.key === "ArrowDown"
+                            ? "arrow"
+                            : "other";
+                const current = Number(document.body.dataset[`${key}Bubbles`] || "0");
+                document.body.dataset[`${key}Bubbles`] = String(current + 1);
+            });
+        });
+
+        await page.keyboard.press("Shift+Tab");
+        await expect.poll(() => page.locator("body").getAttribute("data-tab-bubbles")).toBeNull();
+
+        await page.keyboard.press("ArrowDown");
+        await expect(page.locator("body")).toHaveAttribute("data-arrow-bubbles", "1");
+
+        await page.keyboard.press("Escape");
+        await expect(dialog).not.toBeVisible();
+        await expect.poll(() => page.locator("body").getAttribute("data-escape-bubbles")).toBeNull();
     });
 
     test("dialog focus wraps and returns to the create settings trigger", async ({ page }) => {

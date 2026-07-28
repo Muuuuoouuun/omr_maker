@@ -18,12 +18,19 @@ export interface DialogKeyState {
     atLast: boolean;
 }
 
+/** Preferred API: key direction and focus boundaries are explicit. */
+export function resolveDialogKeyAction(state: DialogKeyState): DialogKeyAction;
+/**
+ * @deprecated Legacy positional compatibility retained for the approved plan.
+ * Prefer the object overload. With two arguments, `atLast=true` wraps forward
+ * and `atLast=false` represents the legacy backward edge. With three arguments,
+ * `atFirst` is explicit, so `(key, false, false)` returns `"none"`.
+ */
 export function resolveDialogKeyAction(
     key: string,
     atLast: boolean,
     atFirst?: boolean,
 ): DialogKeyAction;
-export function resolveDialogKeyAction(state: DialogKeyState): DialogKeyAction;
 export function resolveDialogKeyAction(
     stateOrKey: DialogKeyState | string,
     ...positional: [atLast?: boolean, atFirst?: boolean]
@@ -49,7 +56,8 @@ export function resolveDialogKeyAction(
 function isRenderedFocusable(element: HTMLElement): boolean {
     if (element.closest('[hidden], [inert], [aria-hidden="true"]')) return false;
     const style = window.getComputedStyle(element);
-    return style.display !== "none"
+    return element.tabIndex >= 0
+        && style.display !== "none"
         && style.visibility !== "hidden"
         && element.getClientRects().length > 0;
 }
@@ -88,9 +96,11 @@ export function useDialogFocus(
             if (focusable.length === 0) {
                 if (event.key === "Escape") {
                     event.preventDefault();
+                    event.stopPropagation();
                     onCloseRef.current();
                 } else if (event.key === "Tab") {
                     event.preventDefault();
+                    event.stopPropagation();
                     dialog.focus({ preventScroll: true });
                 }
                 return;
@@ -107,12 +117,15 @@ export function useDialogFocus(
 
             if (action === "close") {
                 event.preventDefault();
+                event.stopPropagation();
                 onCloseRef.current();
             } else if (action === "wrap-first") {
                 event.preventDefault();
+                event.stopPropagation();
                 first.focus({ preventScroll: true });
             } else if (action === "wrap-last") {
                 event.preventDefault();
+                event.stopPropagation();
                 last.focus({ preventScroll: true });
             }
         };
