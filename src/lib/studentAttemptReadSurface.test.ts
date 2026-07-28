@@ -78,4 +78,41 @@ describe("student official attempt read surface", () => {
         expect(historyClient).toContain("withLocalServerConfirmation");
         expect(historyClient).toContain("saveLocalAttempts(attempts)");
     });
+
+    it("keeps every shared attempt-index writer behind the same awaited lock", () => {
+        const persistence = source("src/lib/omrPersistence.ts");
+        expect(persistence).toContain("function deleteLocalExamUnlocked");
+        expect(persistence).toContain(
+            'return withBrowserStorageLock("attempt-index", () => deleteLocalExamUnlocked(id));',
+        );
+        expect(persistence).toContain("function saveLocalAttemptsUnlocked");
+        expect(persistence).toContain(
+            'return withBrowserStorageLock("attempt-index", () => saveLocalAttemptsUnlocked(attempts));',
+        );
+        expect(persistence).toContain("function replaceLocalAttemptWithCanonicalUnlocked");
+        expect(persistence).toContain(
+            'rollback: () => withBrowserStorageLock("attempt-index", replacement.rollback)',
+        );
+        expect(persistence).not.toMatch(/export function (?:saveLocalAttempts|saveLocalAttempt|deleteLocalExam)\(/);
+
+        const solve = source("src/app/solve/[id]/page.tsx");
+        const review = source("src/app/student/review/[attemptId]/page.tsx");
+        const studentClient = source("src/lib/studentAttemptClient.ts");
+        const teacherClient = source("src/lib/teacherAttemptClient.ts");
+        expect(solve).toContain("await saveLocalAttempt(cachedAttempt)");
+        expect(solve).toContain("await saveLocalServerConfirmedAttempt(res.attempt)");
+        expect(review).toContain("await saveLocalServerConfirmedAttempt(found)");
+        expect(studentClient).toContain("await saveLocalAttempts(attempts)");
+        expect(teacherClient).toContain("await saveLocalAttempts(result.attempts)");
+    });
+
+    it("resets the solve submission gate when local attempt locking fails", () => {
+        const solve = source("src/app/solve/[id]/page.tsx");
+        const review = source("src/app/student/review/[attemptId]/page.tsx");
+        expect(solve).toContain("Local attempt durability failed");
+        expect(solve).toContain('"제출 임시저장 실패"');
+        expect(solve).toContain("resetFailedSubmission();");
+        expect(solve).toContain("await saveDraftSnapshot();");
+        expect(review).toContain("Review receipt persistence failed");
+    });
 });

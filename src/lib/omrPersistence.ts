@@ -1055,7 +1055,7 @@ export function saveLocalExams(exams: Exam[]): boolean {
     }
 }
 
-export function deleteLocalExam(id: string): boolean {
+function deleteLocalExamUnlocked(id: string): boolean {
     if (!hasBrowserStorage()) return false;
     try {
         localStorage.removeItem(`${EXAM_PREFIX}${id}`);
@@ -1069,6 +1069,10 @@ export function deleteLocalExam(id: string): boolean {
     }
 }
 
+export async function deleteLocalExam(id: string): Promise<boolean> {
+    return withBrowserStorageLock("attempt-index", () => deleteLocalExamUnlocked(id));
+}
+
 export function readLocalAttempts(): Attempt[] {
     if (!hasBrowserStorage()) return [];
     const deletedExamIds = readLocalDeletedExamIds();
@@ -1078,10 +1082,6 @@ export function readLocalAttempts(): Attempt[] {
             .filter((attempt): attempt is Attempt => !!attempt)
             .filter(attempt => !deletedExamIds[attempt.examId])
     );
-}
-
-export function saveLocalAttempt(attempt: Attempt): boolean {
-    return saveLocalAttempts([attempt]);
 }
 
 export function withLocalServerConfirmation(
@@ -1097,24 +1097,55 @@ export function withLocalServerConfirmation(
     };
 }
 
-export function saveLocalServerConfirmedAttempt(
+function saveLocalServerConfirmedAttemptUnlocked(
     attempt: Attempt,
     confirmedAt = new Date().toISOString(),
 ): boolean {
-    return saveLocalAttempt(withLocalServerConfirmation(attempt, confirmedAt));
+    return saveLocalAttemptsUnlocked([withLocalServerConfirmation(attempt, confirmedAt)]);
 }
 
-export function markLocalAttemptServerConfirmed(
+function markLocalAttemptServerConfirmedUnlocked(
     attemptId: string,
     confirmedAt = new Date().toISOString(),
 ): boolean {
     try {
         const attempt = readLocalAttempts().find(candidate => candidate.id === attemptId);
         if (!attempt) return false;
-        return saveLocalServerConfirmedAttempt(attempt, confirmedAt);
+        return saveLocalServerConfirmedAttemptUnlocked(attempt, confirmedAt);
     } catch {
         return false;
     }
+}
+
+export async function saveLocalServerConfirmedAttempt(
+    attempt: Attempt,
+    confirmedAt = new Date().toISOString(),
+): Promise<boolean> {
+    return withBrowserStorageLock(
+        "attempt-index",
+        () => saveLocalServerConfirmedAttemptUnlocked(attempt, confirmedAt),
+    );
+}
+
+export async function markLocalAttemptServerConfirmed(
+    attemptId: string,
+    confirmedAt = new Date().toISOString(),
+): Promise<boolean> {
+    return withBrowserStorageLock(
+        "attempt-index",
+        () => markLocalAttemptServerConfirmedUnlocked(attemptId, confirmedAt),
+    );
+}
+
+export async function withLocalAttemptServerConfirmationLock<T>(
+    attemptId: string,
+    confirmedAt: string,
+    operation: (attached: boolean) => Promise<T> | T,
+): Promise<T> {
+    return withBrowserStorageLock(
+        "attempt-index",
+        () => operation(markLocalAttemptServerConfirmedUnlocked(attemptId, confirmedAt)),
+    );
 }
 
 export function hasLocalServerConfirmation(attemptId: string): boolean {
@@ -1328,7 +1359,7 @@ export async function replaceLocalAttemptWithCanonical(
 }
 
 /** Merge a batch into the local attempt index with one read and one write. */
-export function saveLocalAttempts(attempts: Attempt[]): boolean {
+function saveLocalAttemptsUnlocked(attempts: Attempt[]): boolean {
     if (!hasBrowserStorage()) return false;
     if (attempts.length === 0) return true;
     try {
@@ -1342,6 +1373,14 @@ export function saveLocalAttempts(attempts: Attempt[]): boolean {
     } catch {
         return false;
     }
+}
+
+export async function saveLocalAttempts(attempts: Attempt[]): Promise<boolean> {
+    return withBrowserStorageLock("attempt-index", () => saveLocalAttemptsUnlocked(attempts));
+}
+
+export async function saveLocalAttempt(attempt: Attempt): Promise<boolean> {
+    return saveLocalAttempts([attempt]);
 }
 
 async function getSupabaseClient(): Promise<SupabaseClientLike | null> {
@@ -1727,9 +1766,9 @@ function refreshLocalExamFromRemote(id: string): void {
 function refreshLocalAttemptFromRemote(id: string): void {
     if (!isSupabaseConfigured()) return;
     void fetchRemoteAttempt(id)
-        .then(remoteAttempt => {
+        .then(async remoteAttempt => {
             if (remoteAttempt && !isExamLocallyDeleted(remoteAttempt.examId)) {
-                saveLocalAttempt(remoteAttempt);
+                await saveLocalAttempt(remoteAttempt);
             }
         })
         .catch(error => console.warn("Failed to refresh remote attempt", error));
@@ -1795,7 +1834,7 @@ export async function loadAttempts(): Promise<LoadResult<Attempt>> {
             : [];
         const syncResult = await syncLocalItems(syncQueue, upsertRemoteAttempt);
         const mergedItems = mergeById(localItems, remoteItems);
-        saveLocalAttempts(mergedItems);
+        await saveLocalAttempts(mergedItems);
         // syncQueue attempts already upsert their question-result rows through
         // upsertRemoteAttempt above, so only re-sync question results for
         // still-pending attempts that this run's attempt-row resync missed. An
@@ -1838,7 +1877,7 @@ export async function loadAttemptsForStudent(scope: StudentAttemptScope): Promis
             .filter(attempt => attemptMatchesStudentScope(attempt, scope));
         const mergedItems = mergeById(localItems, remoteItems)
             .filter(attempt => attemptMatchesStudentScope(attempt, scope));
-        saveLocalAttempts(mergedItems);
+        await saveLocalAttempts(mergedItems);
         return {
             items: mergedItems,
             remoteLoaded: true,
@@ -1861,7 +1900,7 @@ export async function loadAttempt(id: string): Promise<Attempt | null> {
     try {
         const remoteAttempt = await fetchRemoteAttempt(id);
         if (remoteAttempt && !isExamLocallyDeleted(remoteAttempt.examId)) {
-            saveLocalAttempt(remoteAttempt);
+            await saveLocalAttempt(remoteAttempt);
             return remoteAttempt;
         }
     } catch (error) {
@@ -1883,7 +1922,7 @@ export async function loadAttemptForStudent(id: string, scope: StudentAttemptSco
             !isExamLocallyDeleted(remoteAttempt.examId) &&
             attemptMatchesStudentScope(remoteAttempt, scope)
         ) {
-            saveLocalAttempt(remoteAttempt);
+            await saveLocalAttempt(remoteAttempt);
             return remoteAttempt;
         }
     } catch (error) {
@@ -1909,7 +1948,7 @@ export async function saveExam(exam: Exam): Promise<PersistenceResult> {
 export async function saveAttempt(attempt: Attempt): Promise<PersistenceResult> {
     const context = contextForAttempt(attempt);
     const scopedAttempt = attemptWithPersistenceContext(attempt, context);
-    const localSaved = saveLocalAttempt(scopedAttempt);
+    const localSaved = await saveLocalAttempt(scopedAttempt);
     if (!isSupabaseConfigured()) return { localSaved, remoteSaved: false };
 
     try {
@@ -2041,7 +2080,7 @@ export async function deleteExam(id: string): Promise<PersistenceResult> {
     const localAttempts = readLocalAttempts().filter(attempt => attempt.examId === id);
     const localDraftPayloads = readLocalSolveDraftPayloadsForExam(id);
     const refsToDelete = storedDataRefsForExamDeletion(localExam, localAttempts, localDraftPayloads);
-    const localSaved = deleteLocalExam(id);
+    const localSaved = await deleteLocalExam(id);
     if (localSaved) await deleteStoredDataRefs(refsToDelete);
     if (!isSupabaseConfigured()) return { localSaved, remoteSaved: false };
 

@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Attempt, Exam } from "@/types/omr";
 import {
     attemptMatchesStudentScope,
@@ -67,6 +67,36 @@ function createStorage(initial: Record<string, string> = {}): Storage {
         },
     } as Storage;
 }
+
+function createSerialWebLocks() {
+    const tails = new Map<string, Promise<void>>();
+    return {
+        request: async <T>(
+            name: string,
+            _options: object,
+            operation: () => Promise<T> | T,
+        ): Promise<T> => {
+            const prior = tails.get(name) || Promise.resolve();
+            let release!: () => void;
+            const current = new Promise<void>(resolve => {
+                release = resolve;
+            });
+            const tail = prior.then(() => current);
+            tails.set(name, tail);
+            await prior;
+            try {
+                return await operation();
+            } finally {
+                release();
+                if (tails.get(name) === tail) tails.delete(name);
+            }
+        },
+    };
+}
+
+beforeEach(() => {
+    vi.stubGlobal("navigator", { locks: createSerialWebLocks() });
+});
 
 afterEach(() => {
     vi.unstubAllGlobals();
@@ -273,12 +303,12 @@ describe("Supabase persistence mapping", () => {
         expect(attemptFromSupabaseRow(row)).toEqual({ ...attempt, studentProfileId: row.student_profile_id });
     });
 
-    it("keeps server-confirmation provenance only in the local attempt cache", () => {
+    it("keeps server-confirmation provenance only in the local attempt cache", async () => {
         const localStorage = createStorage();
         vi.stubGlobal("window", { localStorage });
         vi.stubGlobal("localStorage", localStorage);
 
-        expect(saveLocalServerConfirmedAttempt(
+        expect(await saveLocalServerConfirmedAttempt(
             attempt,
             "2026-07-28T02:00:00.000Z",
         )).toBe(true);
@@ -289,7 +319,7 @@ describe("Supabase persistence mapping", () => {
         expect(attemptToSupabaseRow(readLocalAttempts()[0]).payload)
             .not.toHaveProperty("localSubmissionProvenance");
 
-        expect(markLocalAttemptServerConfirmed(
+        expect(await markLocalAttemptServerConfirmed(
             attempt.id,
             "2026-07-28T03:00:00.000Z",
         )).toBe(true);
@@ -699,12 +729,12 @@ describe("Supabase persistence mapping", () => {
         expect(JSON.stringify(row.payload)).not.toContain("points");
     });
 
-    it("keeps handwriting payloads out of localStorage attempt indexes", () => {
+    it("keeps handwriting payloads out of localStorage attempt indexes", async () => {
         const localStorage = createStorage();
         vi.stubGlobal("window", { localStorage });
         vi.stubGlobal("localStorage", localStorage);
 
-        const saved = saveLocalAttempt({
+        const saved = await saveLocalAttempt({
             ...attempt,
             drawings: {
                 1: [JSON.stringify({ points: [{ x: 0.1, y: 0.2 }] })],
@@ -716,7 +746,7 @@ describe("Supabase persistence mapping", () => {
         expect(localStorage.getItem("omr_attempts") || "").not.toContain("points");
     });
 
-    it("bulk-saves attempts with one index write while preserving unrelated attempts and stripping drawings", () => {
+    it("bulk-saves attempts with one index write while preserving unrelated attempts and stripping drawings", async () => {
         const unrelatedAttempt = { ...attempt, id: "attempt-unrelated", studentName: "Lee" };
         const localStorage = createStorage({
             omr_attempts: JSON.stringify([unrelatedAttempt]),
@@ -725,7 +755,7 @@ describe("Supabase persistence mapping", () => {
         vi.stubGlobal("window", { localStorage });
         vi.stubGlobal("localStorage", localStorage);
 
-        const saved = saveLocalAttempts([
+        const saved = await saveLocalAttempts([
             {
                 ...attempt,
                 drawings: {
@@ -743,6 +773,75 @@ describe("Supabase persistence mapping", () => {
             "attempt-1",
         ]);
         expect(localStorage.getItem("omr_attempts") || "").not.toContain("points");
+    });
+
+    it("preserves a local-only writer forced between canonical read and write", async () => {
+        const localStorage = createStorage({
+            omr_attempts: JSON.stringify([{ ...attempt, id: "attempt-local-a" }]),
+        });
+        const originalGetItem = localStorage.getItem.bind(localStorage);
+        let injected = false;
+        let localOnlyWrite: boolean | Promise<boolean> | null = null;
+        localStorage.getItem = key => {
+            const snapshot = originalGetItem(key);
+            if (key === "omr_attempts" && !injected) {
+                injected = true;
+                localOnlyWrite = saveLocalAttempt({
+                    ...attempt,
+                    id: "attempt-local-only-b",
+                    score: 73,
+                });
+            }
+            return snapshot;
+        };
+        vi.stubGlobal("window", { localStorage });
+        vi.stubGlobal("localStorage", localStorage);
+
+        await replaceLocalAttemptWithCanonical("attempt-local-a", {
+            ...attempt,
+            id: "attempt-server-a",
+            score: 91,
+        });
+        await localOnlyWrite;
+
+        expect(readLocalAttempts().map(item => [item.id, item.score]).sort()).toEqual([
+            ["attempt-local-only-b", 73],
+            ["attempt-server-a", 91],
+        ]);
+    });
+
+    it("preserves both local writers forced to start from the same attempt-index snapshot", async () => {
+        const localStorage = createStorage();
+        const originalGetItem = localStorage.getItem.bind(localStorage);
+        let injected = false;
+        let secondWrite: boolean | Promise<boolean> | null = null;
+        localStorage.getItem = key => {
+            const snapshot = originalGetItem(key);
+            if (key === "omr_attempts" && !injected) {
+                injected = true;
+                secondWrite = saveLocalAttempt({
+                    ...attempt,
+                    id: "attempt-local-b",
+                    score: 82,
+                });
+            }
+            return snapshot;
+        };
+        vi.stubGlobal("window", { localStorage });
+        vi.stubGlobal("localStorage", localStorage);
+
+        const firstWrite = saveLocalAttempt({
+            ...attempt,
+            id: "attempt-local-a",
+            score: 81,
+        });
+        await firstWrite;
+        await secondWrite;
+
+        expect(readLocalAttempts().map(item => [item.id, item.score]).sort()).toEqual([
+            ["attempt-local-a", 81],
+            ["attempt-local-b", 82],
+        ]);
     });
 
     it("atomically replaces a superseded local attempt while preserving device-only review artifacts", async () => {
@@ -1090,8 +1189,6 @@ describe("Supabase persistence mapping", () => {
         });
         vi.stubGlobal("window", { localStorage });
         vi.stubGlobal("localStorage", localStorage);
-        vi.stubGlobal("navigator", {});
-
         await Promise.all([
             replaceLocalAttemptWithCanonical("attempt-local-a", {
                 ...attempt,

@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { getAttemptQuestionResults } from "@/lib/premiumAnalytics";
 import type { ServerGradedAttemptReceipt } from "@/lib/studentExamContract";
 import type { Attempt, Exam } from "@/types/omr";
@@ -33,6 +33,18 @@ function createStorage(initial: Record<string, string> = {}): Storage {
         setItem(key, value) { data.set(key, value); },
     } as Storage;
 }
+
+beforeEach(() => {
+    vi.stubGlobal("navigator", {
+        locks: {
+            request: async (
+                _name: string,
+                _options: object,
+                operation: () => Promise<unknown> | unknown,
+            ) => operation(),
+        },
+    });
+});
 
 afterEach(() => {
     vi.unstubAllGlobals();
@@ -611,7 +623,7 @@ describe("student attempt receipt cache", () => {
     it("keeps distinct pending submissions isolated and rejects a stale pending overwrite after confirmation", async () => {
         const storage = createStorage();
         vi.stubGlobal("window", { localStorage: storage });
-        expect(saveLocalAttempts([{
+        expect(await saveLocalAttempts([{
             id: "attempt-one",
             examId: "exam-1",
             examTitle: "시험",
@@ -661,7 +673,7 @@ describe("student attempt receipt cache", () => {
                 startedAt: "2026-07-28T00:00:00.000Z",
             },
         };
-        expect(saveLocalAttempts([{
+        expect(await saveLocalAttempts([{
             id: "attempt-interleaved",
             examId: "exam-1",
             examTitle: "시험",
@@ -782,7 +794,7 @@ describe("student attempt receipt cache", () => {
             answers: {},
             status: "completed",
         }));
-        expect(saveLocalAttempts(attempts)).toBe(true);
+        expect(await saveLocalAttempts(attempts)).toBe(true);
         for (let index = 0; index < 120; index += 1) {
             expect(await persistSubmissionReceipt({
                 attemptId: `attempt-confirmed-${index}`,
@@ -1028,8 +1040,8 @@ describe("student attempt receipt cache", () => {
             drawingStrokeCount: 4,
         };
         const rollback = vi.fn(() => true);
-        const onAuthoritativeAttempt = vi.fn(() => {
-            expect(saveLocalServerConfirmedAttempt(reconciledAttempt)).toBe(true);
+        const onAuthoritativeAttempt = vi.fn(async () => {
+            expect(await saveLocalServerConfirmedAttempt(reconciledAttempt)).toBe(true);
             return {
                 committed: true,
                 attempt: reconciledAttempt,

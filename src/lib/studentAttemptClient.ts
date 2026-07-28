@@ -80,7 +80,7 @@ export async function loadStudentOfficialAttempts(
         const attempts = result.attempts.map(record => withLocalServerConfirmation(
             withLocalStudentArtifacts(attemptFromStudentAttemptRecord(record), session),
         ));
-        saveLocalAttempts(attempts);
+        await saveLocalAttempts(attempts);
         return { items: attempts, remoteLoaded: true };
     }
     if (result.status === "local_only") {
@@ -109,7 +109,7 @@ export async function loadStudentOfficialAttempt(
             session,
         ));
         const exam = examFromStudentAttemptReviewExam(result.detail.exam);
-        saveLocalAttempt(attempt);
+        await saveLocalAttempt(attempt);
         saveLocalExam(exam);
         return { attempt, exam };
     }

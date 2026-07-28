@@ -1089,6 +1089,12 @@ test.describe("Teacher and student full journey", () => {
     });
 
     test("reconciles manual and automatic submission receipt retries through the real server action", async ({ page }) => {
+        await page.context().addInitScript(() => {
+            Object.defineProperty(navigator, "locks", {
+                configurable: true,
+                value: undefined,
+            });
+        });
         await seedStudentRoster(page);
         await loginAsStudent(page);
         await seedExamAndStudent(page);
@@ -1181,14 +1187,38 @@ test.describe("Teacher and student full journey", () => {
         await expect(page.getByRole("status")).toHaveText("서버 반영 대기 · 자동 재시도");
         await expect(crossTab.getByRole("status")).toHaveText("서버 반영 대기 · 자동 재시도");
         const retry = page.getByRole("button", { name: "지금 다시 시도" });
+        const crossTabRetry = crossTab.getByRole("button", { name: "지금 다시 시도" });
         await expect(retry).toBeVisible();
-        await retry.click();
+        await expect(crossTabRetry).toBeVisible();
+        expect(await page.evaluate(() => navigator.locks)).toBeUndefined();
+        expect(await crossTab.evaluate(() => navigator.locks)).toBeUndefined();
+        let retryActionRequests = 0;
+        const countRetryAction = (request: {
+            method(): string;
+            headers(): Record<string, string>;
+            postData(): string | null;
+        }) => {
+            if (
+                request.method() === "POST"
+                && request.headers()["next-action"]
+                && request.postData()?.includes("11111111-1111-4111-8111-111111111111")
+            ) {
+                retryActionRequests += 1;
+            }
+        };
+        page.on("request", countRetryAction);
+        crossTab.on("request", countRetryAction);
+        await Promise.all([
+            retry.dispatchEvent("click"),
+            crossTabRetry.dispatchEvent("click"),
+        ]);
         await expect(page.getByRole("status")).toHaveText("서버 반영 완료");
         await expect(page).not.toHaveURL(new RegExp(`/student/review/${attemptId}$`));
         const manualCanonicalId = new URL(page.url()).pathname.split("/").pop() || "";
         expect(manualCanonicalId).not.toBe(attemptId);
         await expect(crossTab).toHaveURL(new RegExp(`/student/review/${manualCanonicalId}$`));
         await expect(crossTab.getByRole("status")).toHaveText("서버 반영 완료");
+        expect(retryActionRequests).toBe(1);
         await crossTab.close();
         expect(await page.evaluate(() => (
             (window as typeof window & { receiptRetryNoReload?: string }).receiptRetryNoReload

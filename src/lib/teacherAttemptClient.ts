@@ -15,7 +15,7 @@ import type { Attempt } from "@/types/omr";
 export async function loadTeacherAttempt(attemptId: string): Promise<Attempt | null> {
     const result = await loadTeacherCanonicalAttempt(attemptId);
     if (result.status === "loaded") {
-        saveLocalAttempt(result.attempt);
+        await saveLocalAttempt(result.attempt);
         return result.attempt;
     }
     if (result.status === "local_only") return loadAttempt(attemptId);
@@ -26,9 +26,9 @@ export async function loadTeacherAttempts(examId?: string) {
     const result = await listTeacherCanonicalAttempts(examId);
     if (result.status === "loaded") {
         if (examId?.trim()) {
-            result.attempts.forEach(saveLocalAttempt);
+            await Promise.all(result.attempts.map(attempt => saveLocalAttempt(attempt)));
         } else {
-            saveLocalAttempts(result.attempts);
+            await saveLocalAttempts(result.attempts);
         }
         return {
             items: result.attempts,
@@ -57,13 +57,13 @@ export async function saveTeacherAttempt(attempt: Attempt) {
     const result = await saveTeacherCanonicalAttempt(attempt);
     if (result.status === "saved") {
         return {
-            localSaved: saveLocalAttempt(result.attempt),
+            localSaved: await saveLocalAttempt(result.attempt),
             remoteSaved: true,
         };
     }
     if (result.status === "local_only") {
         return {
-            localSaved: saveLocalAttempt(attempt),
+            localSaved: await saveLocalAttempt(attempt),
             remoteSaved: false,
         };
     }

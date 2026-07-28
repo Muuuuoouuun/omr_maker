@@ -4,8 +4,8 @@ import type { Attempt, IdentityType, QuestionResult } from "@/types/omr";
 import { STUDENT_SESSION_GENERATION_KEY } from "@/utils/storage";
 import {
     hasLocalServerConfirmation,
-    markLocalAttemptServerConfirmed,
     replaceLocalAttemptWithCanonical,
+    withLocalAttemptServerConfirmationLock,
 } from "@/lib/omrPersistence";
 import { withBrowserStorageLock } from "@/lib/browserStorageLock";
 
@@ -358,9 +358,6 @@ function migrateLegacyRegistry(storage: Storage): void {
         for (const [id, value] of Object.entries(parsed.receipts || {})) {
             const receipt = sanitizeReceipt(id, value);
             if (receipt && !storage.getItem(receiptKey(id))) {
-                if (receipt.status === "confirmed") {
-                    markLocalAttemptServerConfirmed(id, receipt.updatedAt);
-                }
                 writeReceiptEnvelope(storage, receipt);
             }
         }
@@ -477,7 +474,6 @@ function persistSubmissionReceiptUnlocked(
         if (receipt.status === "confirmed") {
             if (
                 !provenanceAttached
-                && !markLocalAttemptServerConfirmed(receipt.attemptId, receipt.updatedAt)
                 && !hasLocalServerConfirmation(receipt.attemptId)
             ) {
                 return false;
@@ -499,9 +495,8 @@ export async function persistSubmissionReceipt(receipt: SubmissionReceipt): Prom
             () => persistSubmissionReceiptUnlocked(receipt),
         );
     }
-    return withBrowserStorageLock("attempt-index", async () => {
-        const provenanceAttached = markLocalAttemptServerConfirmed(receipt.attemptId, receipt.updatedAt)
-            || hasLocalServerConfirmation(receipt.attemptId);
+    return withLocalAttemptServerConfirmationLock(receipt.attemptId, receipt.updatedAt, async attached => {
+        const provenanceAttached = attached || hasLocalServerConfirmation(receipt.attemptId);
         if (!provenanceAttached) return false;
         return withBrowserStorageLock(
             "submission-receipts",

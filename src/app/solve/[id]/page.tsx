@@ -2077,12 +2077,30 @@ export default function SolvePage() {
                 questionDrawings,
                 retake: retakeConfig ? { ...retakeConfig, createdAt: new Date().toISOString() } : undefined,
             };
-            saveLocalAttempt(cachedAttempt);
-            await persistSubmissionReceipt({
-                attemptId: cachedAttempt.id,
-                status: "confirmed",
-                updatedAt: new Date().toISOString(),
-            });
+            try {
+                const localSaved = await saveLocalAttempt(cachedAttempt);
+                const receiptSaved = localSaved && await persistSubmissionReceipt({
+                    attemptId: cachedAttempt.id,
+                    status: "confirmed",
+                    updatedAt: new Date().toISOString(),
+                });
+                if (!receiptSaved) {
+                    resetFailedSubmission();
+                    toast.error(
+                        "제출 확인 저장 실패",
+                        "서버 제출은 완료됐지만 이 기기의 확인 정보를 저장하지 못했습니다. 저장 공간을 확인한 뒤 다시 시도해주세요.",
+                    );
+                    return;
+                }
+            } catch (error) {
+                console.error("Secure submission receipt persistence failed", error);
+                resetFailedSubmission();
+                toast.error(
+                    "제출 확인 저장 실패",
+                    "서버 제출은 완료됐지만 이 기기의 확인 정보를 저장하지 못했습니다. 저장 공간을 확인한 뒤 다시 시도해주세요.",
+                );
+                return;
+            }
             if (!shouldArchiveDrawings || handwritingUpload?.status === "uploaded") {
                 try { localStorage.removeItem(DRAFT_KEY); } catch {}
                 try { localStorage.removeItem(LEGACY_DRAFT_KEY); } catch {}
@@ -2202,14 +2220,26 @@ export default function SolvePage() {
                 { ...examData, questions: activeExamQuestions },
                 attemptData,
             );
-            return saveLocalAttempt(attemptData) ? attemptData : null;
+            return await saveLocalAttempt(attemptData) ? attemptData : null;
         };
 
-        const res = await submitAttemptClient(submitInput, pinRef.current || undefined, {
-            server: (input, pin) => submitAttempt(input, pin),
-            localFallback: buildLocalGradedAttempt,
-            allowLocalFallback: examSource === "local",
-        });
+        let res: Awaited<ReturnType<typeof submitAttemptClient>>;
+        try {
+            res = await submitAttemptClient(submitInput, pinRef.current || undefined, {
+                server: (input, pin) => submitAttempt(input, pin),
+                localFallback: buildLocalGradedAttempt,
+                allowLocalFallback: examSource === "local",
+            });
+        } catch (error) {
+            console.error("Local attempt durability failed", error);
+            resetFailedSubmission();
+            await saveDraftSnapshot();
+            toast.error(
+                "제출 임시저장 실패",
+                "브라우저 저장소를 사용할 수 없습니다. 답안은 화면에 유지되며 저장 공간을 확인한 뒤 다시 제출할 수 있습니다.",
+            );
+            return;
+        }
 
         if (res.status !== "ok" || !res.attempt) {
             resetFailedSubmission();
@@ -2236,7 +2266,7 @@ export default function SolvePage() {
 
         if (res.source === "server") {
             // Local echo so review/history/dashboard local caches see it immediately.
-            try { saveLocalServerConfirmedAttempt(res.attempt); } catch { /* quota — server copy is canonical */ }
+            try { await saveLocalServerConfirmedAttempt(res.attempt); } catch { /* durability helper reports a recoverable failure below */ }
         }
 
         const durability = await persistStudentSubmissionDisposition({

@@ -558,9 +558,17 @@ export default function ReviewPage() {
                 attemptRef.current = found;
                 setAttempt(found);
                 const storedReceipt = readSubmissionReceipt(found.id);
-                if (result.source === "server") saveLocalServerConfirmedAttempt(found);
                 const nextReceipt = submissionReceiptForAttempt(found, storedReceipt, result.source);
-                await persistSubmissionReceipt(nextReceipt);
+                try {
+                    if (result.source === "server") await saveLocalServerConfirmedAttempt(found);
+                    await persistSubmissionReceipt(nextReceipt);
+                } catch (error) {
+                    console.warn("Review receipt persistence failed", error);
+                    toast.info(
+                        "기기 확인 저장 실패",
+                        "공식 결과는 서버에 보관되어 있습니다. 브라우저 저장 공간을 확인해주세요.",
+                    );
+                }
                 setSubmissionReceipt(nextReceipt);
                 // Attempt-stored notes are authoritative; the legacy local queue
                 // only backfills questions never migrated onto the attempt.
@@ -937,7 +945,7 @@ export default function ReviewPage() {
                         updated.studentQuestions,
                     ),
                 };
-                try { saveLocalAttempt(updated); } catch { /* quota — server copy is canonical */ }
+                try { await saveLocalAttempt(updated); } catch { /* quota — server copy is canonical */ }
             } else {
                 // Merge onto the freshest local attempt (ref, not stale closure).
                 updated = upsertStudentQuestion(attemptRef.current || base, input, new Date().toISOString());

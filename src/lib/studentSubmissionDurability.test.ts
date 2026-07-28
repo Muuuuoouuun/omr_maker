@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
     SUBMISSION_RECEIPT_REQUEST_PREFIX,
 } from "./studentAttemptReceipt";
@@ -22,6 +22,18 @@ function storageThatFailsRequestWrites(): Storage {
         },
     } as Storage;
 }
+
+beforeEach(() => {
+    vi.stubGlobal("navigator", {
+        locks: {
+            request: async (
+                _name: string,
+                _options: object,
+                operation: () => Promise<unknown>,
+            ) => operation(),
+        },
+    });
+});
 
 afterEach(() => vi.unstubAllGlobals());
 
@@ -73,5 +85,29 @@ describe("student submission durability gate", () => {
             requiresPin: true,
         })).toEqual({ durable: true });
         expect([...data.values()].join("")).not.toContain("2468");
+    });
+
+    it("turns an injected lock acquisition failure into an honest non-durable result", async () => {
+        const queuePending = vi.fn(async () => {
+            throw new Error("Unable to acquire browser storage lock");
+        });
+
+        await expect(persistStudentSubmissionDisposition({
+            attemptId: "attempt-lock-failure",
+            receiptStatus: "pending",
+            input: {
+                examId: "exam-1",
+                submissionId: "submission-lock-failure",
+                answers: { 1: 2 },
+                startedAt: "2026-07-28T00:00:00.000Z",
+            },
+        }, {
+            queuePendingSubmissionReceipt: queuePending,
+            persistSubmissionReceipt: async () => true,
+        })).resolves.toEqual({
+            durable: false,
+            error: "제출 재시도 정보를 저장하지 못했습니다. 브라우저 저장 공간을 확보한 뒤 다시 제출해주세요.",
+        });
+        expect(queuePending).toHaveBeenCalledTimes(1);
     });
 });

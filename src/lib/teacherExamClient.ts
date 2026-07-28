@@ -46,10 +46,10 @@ export async function saveTeacherExamMutation(exam: Exam): Promise<TeacherExamMu
 export async function deleteTeacherExamMutation(examId: string): Promise<TeacherExamMutationResult> {
     const result = await deleteTeacherCanonicalExam(examId);
     if (result.status === "deleted") {
-        deleteLocalExam(examId);
+        await deleteLocalExam(examId);
         return { ok: true };
     }
-    if (result.status === "local_only") return { ok: deleteLocalExam(examId), localOnly: true };
+    if (result.status === "local_only") return { ok: await deleteLocalExam(examId), localOnly: true };
     return {
         ok: false,
         error: result.status === "unauthorized"
