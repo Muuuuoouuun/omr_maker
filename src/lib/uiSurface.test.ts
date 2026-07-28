@@ -14,29 +14,67 @@ function stripCssComments(cssSource: string): string {
 
 function extractCssBlock(cssSource: string, blockHeader: string): string {
     const css = stripCssComments(cssSource);
-    let searchFrom = 0;
+    let headerStart = 0;
+    let parenthesisDepth = 0;
+    let bracketDepth = 0;
+    let quote: string | null = null;
 
-    while (searchFrom < css.length) {
-        const headerIndex = css.indexOf(blockHeader, searchFrom);
-        if (headerIndex < 0) break;
-
-        const openBraceIndex = css.indexOf("{", headerIndex + blockHeader.length);
-        if (openBraceIndex < 0) break;
-
-        const matchedHeader = css.slice(headerIndex, openBraceIndex).trim();
-        if (matchedHeader !== blockHeader) {
-            searchFrom = headerIndex + blockHeader.length;
+    for (let index = 0; index < css.length; index += 1) {
+        const character = css[index];
+        if (quote) {
+            if (character === "\\") {
+                index += 1;
+            } else if (character === quote) {
+                quote = null;
+            }
             continue;
         }
 
-        let depth = 1;
-        for (let index = openBraceIndex + 1; index < css.length; index += 1) {
-            if (css[index] === "{") depth += 1;
-            if (css[index] === "}") depth -= 1;
-            if (depth === 0) return css.slice(openBraceIndex + 1, index);
-        }
+        if (character === '"' || character === "'") {
+            quote = character;
+        } else if (character === "(") {
+            parenthesisDepth += 1;
+        } else if (character === ")") {
+            parenthesisDepth -= 1;
+        } else if (character === "[") {
+            bracketDepth += 1;
+        } else if (character === "]") {
+            bracketDepth -= 1;
+        } else if (character === ";" && parenthesisDepth === 0 && bracketDepth === 0) {
+            headerStart = index + 1;
+        } else if (character === "{" && parenthesisDepth === 0 && bracketDepth === 0) {
+            const matchedHeader = css.slice(headerStart, index).trim();
+            const bodyStart = index + 1;
+            let braceDepth = 1;
+            let bodyQuote: string | null = null;
 
-        throw new Error(`Unclosed CSS block: ${blockHeader}`);
+            for (index += 1; index < css.length; index += 1) {
+                const bodyCharacter = css[index];
+                if (bodyQuote) {
+                    if (bodyCharacter === "\\") {
+                        index += 1;
+                    } else if (bodyCharacter === bodyQuote) {
+                        bodyQuote = null;
+                    }
+                    continue;
+                }
+
+                if (bodyCharacter === '"' || bodyCharacter === "'") {
+                    bodyQuote = bodyCharacter;
+                } else if (bodyCharacter === "{") {
+                    braceDepth += 1;
+                } else if (bodyCharacter === "}") {
+                    braceDepth -= 1;
+                    if (braceDepth === 0) {
+                        if (matchedHeader === blockHeader) return css.slice(bodyStart, index);
+                        headerStart = index + 1;
+                        break;
+                    }
+                }
+            }
+
+            if (braceDepth !== 0) throw new Error(`Unclosed CSS block: ${matchedHeader}`);
+        }
     }
 
     throw new Error(`CSS block not found: ${blockHeader}`);
@@ -98,6 +136,10 @@ describe("service UI surface", () => {
             }
             html[data-motion="off"] .orb { --token: wrong-selector; }
         `;
+        const prefixedSelectorFixture = `
+            .scope :root { --token: prefixed-root; }
+            .scope html[data-motion="off"] { --token: prefixed-motion-control; }
+        `;
 
         expect(extractCustomProperties(extractCssBlock(fixture, ":root"))).toEqual({
             "--token": "base",
@@ -112,6 +154,12 @@ describe("service UI surface", () => {
         ).toEqual({ "--token": "reduced" });
         expect(countCustomPropertyDeclarations(fixture, "--token")).toBe(3);
         expect(() => extractCssBlock(fixture, 'html[data-motion="off"]')).toThrow(
+            'CSS block not found: html[data-motion="off"]',
+        );
+        expect(() => extractCssBlock(prefixedSelectorFixture, ":root")).toThrow(
+            "CSS block not found: :root",
+        );
+        expect(() => extractCssBlock(prefixedSelectorFixture, 'html[data-motion="off"]')).toThrow(
             'CSS block not found: html[data-motion="off"]',
         );
     });
