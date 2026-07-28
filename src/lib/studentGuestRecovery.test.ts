@@ -53,7 +53,7 @@ describe("unverified guest recovery", () => {
         expect(storage.removeItem).not.toHaveBeenCalled();
     });
 
-    it("keeps corrupt storage byte-for-byte during login/read and offers explicit export/discard", () => {
+    it("keeps corrupt attempt-store bytes quarantinable but never deletes them under generic discard", () => {
         const raw = '[{"body":"PIN 1234","broken":';
         const storage = memoryStorage({
             omr_pending_guest_merge: pending,
@@ -62,7 +62,7 @@ describe("unverified guest recovery", () => {
 
         const state = readGuestRecoveryState(storage);
         expect(state).toMatchObject({
-            status: "corrupt",
+            status: "attempt_store_corrupt",
             guestId: "guest-1",
             byteLength: expect.any(Number),
             canRetryDbClaim: false,
@@ -71,14 +71,26 @@ describe("unverified guest recovery", () => {
         expect(storage.setItem).not.toHaveBeenCalled();
         expect(storage.removeItem).not.toHaveBeenCalled();
 
-        expect(discardGuestRecovery(state!, storage)).toBe(true);
+        expect(discardGuestRecovery(state!, storage)).toBe(false);
+        expect(storage.setItem).not.toHaveBeenCalled();
+        expect(storage.removeItem).not.toHaveBeenCalled();
+
+        expect(discardGuestRecovery(state!, storage, { quarantineWholeAttemptStore: true })).toBe(true);
+        expect(storage.setItem).toHaveBeenCalledWith("omr_attempts_quarantine", expect.stringContaining(raw));
         expect(storage.removeItem).toHaveBeenCalledWith("omr_attempts");
         expect(storage.removeItem).toHaveBeenCalledWith("omr_pending_guest_merge");
     });
 
-    it("keeps a corrupt or legacy pending marker visible without mutating either raw value", () => {
+    it("keeps marker corruption scoped away from valid unrelated student attempts", () => {
         const rawPending = '{"legacyGuest":';
-        const rawAttempts = JSON.stringify([localAttempt]);
+        const unrelated = {
+            ...localAttempt,
+            id: "unrelated-student-secret",
+            studentId: "student-99",
+            guestId: undefined,
+            identityType: "temporary",
+        };
+        const rawAttempts = JSON.stringify([unrelated]);
         const storage = memoryStorage({
             omr_pending_guest_merge: rawPending,
             omr_attempts: rawAttempts,
@@ -86,15 +98,22 @@ describe("unverified guest recovery", () => {
 
         const state = readGuestRecoveryState(storage);
         expect(state).toMatchObject({
-            status: "corrupt",
+            status: "marker_corrupt",
             guestId: "",
             canRetryDbClaim: false,
         });
         const exported = buildGuestRecoveryExport(state!);
         expect(exported).toContain(rawPending);
-        expect(exported).toContain(rawAttempts);
+        expect(exported).not.toContain("unrelated-student-secret");
+        expect(exported).not.toContain(rawAttempts);
         expect(storage.setItem).not.toHaveBeenCalled();
         expect(storage.removeItem).not.toHaveBeenCalled();
+
+        expect(discardGuestRecovery(state!, storage)).toBe(true);
+        expect(storage.getItem("omr_attempts")).toBe(rawAttempts);
+        expect(storage.getItem("omr_pending_guest_merge")).toBeNull();
+        expect(storage.removeItem).toHaveBeenCalledTimes(1);
+        expect(storage.removeItem).toHaveBeenCalledWith("omr_pending_guest_merge");
     });
 
     it("discards only the selected guest recovery records and preserves other students", () => {

@@ -73,8 +73,14 @@ export default function StudentGuestRecoveryPanel() {
     };
 
     const discard = () => {
-        if (!window.confirm("미검증 로컬 기록을 이 기기에서 폐기할까요? 내보내지 않은 데이터는 복구할 수 없습니다.")) return;
-        if (discardGuestRecovery(recovery, window.localStorage)) {
+        const wholeStore = recovery.status === "attempt_store_corrupt";
+        const prompt = wholeStore
+            ? "전체 응시 저장소가 손상되었습니다. 다른 학생의 캐시가 포함될 수 있습니다. 원문을 격리한 뒤 활성 저장소에서 제거할까요?"
+            : recovery.status === "marker_corrupt"
+                ? "손상된 복구 표식만 이 기기에서 폐기할까요? 응시 기록 저장소는 변경하지 않습니다."
+                : "선택된 게스트의 미검증 로컬 기록을 이 기기에서 폐기할까요?";
+        if (!window.confirm(prompt)) return;
+        if (discardGuestRecovery(recovery, window.localStorage, { quarantineWholeAttemptStore: wholeStore })) {
             setRecovery(null);
             setMessage("");
         } else {
@@ -100,7 +106,9 @@ export default function StudentGuestRecoveryPanel() {
                 이 기기의 기록은 서버가 발급한 제출 증명이 없어 공식 학생 기록과 분리되어 있습니다.
                 {recovery.status === "unverified"
                     ? ` 서버 소유권 확인 대기 ${recovery.attemptIds.length}건`
-                    : ` 저장 데이터 손상 감지 (${recovery.byteLength}바이트)`}
+                    : recovery.status === "marker_corrupt"
+                        ? ` 복구 표식 손상 감지 (${recovery.byteLength}바이트). 응시 저장소는 이 작업에 포함되지 않습니다.`
+                        : ` 전체 응시 저장소 손상 감지 (${recovery.byteLength}바이트). 다른 학생의 캐시가 포함될 수 있습니다.`}
             </p>
             <div style={{ display: "flex", flexWrap: "wrap", gap: "0.55rem", marginTop: "0.85rem" }}>
                 <button type="button" className="btn" onClick={exportRecovery}>복구 파일 내보내기</button>
@@ -108,12 +116,12 @@ export default function StudentGuestRecoveryPanel() {
                     type="button"
                     className="btn btn-primary"
                     onClick={() => void retryServerClaims()}
-                    disabled={retrying || recovery.status === "corrupt" || recovery.attemptIds.length === 0}
+                    disabled={retrying || recovery.status !== "unverified" || recovery.attemptIds.length === 0}
                 >
                     {retrying ? "확인 중…" : "서버 소유 기록 다시 확인"}
                 </button>
                 <button type="button" className="btn" onClick={discard} style={{ color: "var(--error)" }}>
-                    로컬 기록 폐기
+                    {recovery.status === "attempt_store_corrupt" ? "손상 저장소 격리" : "로컬 기록 폐기"}
                 </button>
             </div>
             {message && <p role="status" style={{ marginTop: "0.7rem", fontSize: "0.8rem", color: "var(--muted)" }}>{message}</p>}

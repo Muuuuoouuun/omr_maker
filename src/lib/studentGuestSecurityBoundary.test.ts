@@ -23,6 +23,8 @@ describe("guest recovery security boundary", () => {
         expect(sessionAction).not.toContain('error: "게스트 기록을 서버에 연결하지 못했습니다. 다시 시도해주세요."');
         expect(sessionAction.indexOf("setGuestClaimOwnerCookie"))
             .toBeLessThan(sessionAction.indexOf("setSessionCookie({", sessionAction.indexOf("setGuestClaimOwnerCookie")));
+        expect(sessionAction).toContain("boundGuestClaimAttemptIds");
+        expect(sessionAction).not.toContain("new Set((input.guestAttemptIds || []).map");
     });
 
     it("exposes unverified recovery, export, retry, and explicit discard on dashboard and history", () => {

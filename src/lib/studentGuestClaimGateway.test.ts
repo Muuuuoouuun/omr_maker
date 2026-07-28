@@ -165,4 +165,90 @@ describe("signed guest-attempt claim gateway", () => {
             error: "temporary",
         });
     });
+
+    it("caps a huge claim at five RPC chunks and leaves the remainder pending", async () => {
+        const ids = Array.from({ length: 650 }, (_, index) => `attempt-${index}`);
+        const rpc = vi.fn(async (_name, args: Record<string, unknown>) => ({
+            data: args.p_attempt_ids,
+            error: null,
+        }));
+
+        const result = await claimSignedGuestAttempts({ rpc }, {
+            guest: {
+                kind: "guest",
+                guestId: "guest-secret",
+                name: "Guest",
+                identityType: "guest",
+                issuedAt: 1,
+                expiresAt: 9e15,
+            },
+            student: {
+                kind: "student",
+                studentId: "student-1",
+                organizationId: "teacher_org",
+                name: "김학생",
+                groupId: "class-1",
+                groupName: "1반",
+                identityType: "temporary",
+                issuedAt: 2,
+                expiresAt: 9e15,
+            },
+            attemptIds: ids,
+        });
+
+        expect(result).toEqual({
+            status: "partial",
+            acknowledgedAttemptIds: ids.slice(0, 500),
+            deferredAttemptCount: 150,
+            error: "Guest attempt claim request exceeded safe bounds",
+        });
+        expect(rpc).toHaveBeenCalledTimes(5);
+        expect(rpc.mock.calls.map(([, args]) => (args.p_attempt_ids as string[]).length))
+            .toEqual([100, 100, 100, 100, 100]);
+    });
+
+    it("never sends overlong ids or more than 64KB of serialized ids", async () => {
+        const overlong = "x".repeat(2_000);
+        const ids = ["attempt-safe", overlong, ...Array.from(
+            { length: 400 },
+            (_, index) => `${index}-`.padEnd(240, "z"),
+        )];
+        const rpc = vi.fn(async (_name, args: Record<string, unknown>) => ({
+            data: args.p_attempt_ids,
+            error: null,
+        }));
+
+        const result = await claimSignedGuestAttempts({ rpc }, {
+            guest: {
+                kind: "guest",
+                guestId: "guest-secret",
+                name: "Guest",
+                identityType: "guest",
+                issuedAt: 1,
+                expiresAt: 9e15,
+            },
+            student: {
+                kind: "student",
+                studentId: "student-1",
+                organizationId: "teacher_org",
+                name: "김학생",
+                groupId: "class-1",
+                groupName: "1반",
+                identityType: "temporary",
+                issuedAt: 2,
+                expiresAt: 9e15,
+            },
+            attemptIds: ids,
+        });
+
+        const sent = rpc.mock.calls.flatMap(([, args]) => args.p_attempt_ids as string[]);
+        expect(result).toMatchObject({
+            status: "partial",
+            deferredAttemptCount: expect.any(Number),
+        });
+        expect(result.status === "partial" && result.deferredAttemptCount).toBeGreaterThan(0);
+        expect(sent).not.toContain(overlong);
+        expect(new TextEncoder().encode(JSON.stringify(sent)).length).toBeLessThanOrEqual(64 * 1024);
+        expect(rpc.mock.calls.length).toBeLessThanOrEqual(5);
+    });
 });

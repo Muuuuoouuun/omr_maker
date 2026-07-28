@@ -40,6 +40,7 @@ import {
 } from "@/lib/teacherServerSession";
 import { workspaceContextFromTeacherSession } from "@/lib/workspaceContext";
 import {
+    boundGuestClaimAttemptIds,
     claimSignedGuestAttempts,
     type GuestClaimResult,
     type GuestClaimRpcClient,
@@ -234,7 +235,7 @@ export async function issueStudentSession(input: {
         cookieStore.get(STUDENT_SERVER_SESSION_COOKIE)?.value,
     );
     const existingGuestSession = existingIdentity?.kind === "guest" ? existingIdentity : null;
-    const requestedGuestAttemptIds = [...new Set((input.guestAttemptIds || []).map(clean).filter(Boolean))];
+    const requestedGuestAttemptIds = boundGuestClaimAttemptIds(input.guestAttemptIds || []).attemptIds;
     const client = adminClient();
     if (!client) {
         const studentId = clean(input.studentId);
@@ -406,7 +407,8 @@ export async function retryGuestServerClaims(attemptIds: string[]): Promise<Gues
         issuedAt: proof.issuedAt,
         expiresAt: proof.expiresAt,
     };
-    return claimSignedGuestAttempts(client, { guest, student, attemptIds });
+    const boundedAttemptIds = boundGuestClaimAttemptIds(attemptIds).attemptIds;
+    return claimSignedGuestAttempts(client, { guest, student, attemptIds: boundedAttemptIds });
 }
 
 /** Refresh an already authenticated student/guest cookie without trusting localStorage identity. */

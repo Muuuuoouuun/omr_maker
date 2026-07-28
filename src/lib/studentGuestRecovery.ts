@@ -6,7 +6,7 @@ interface PendingGuestMerge {
     queuedAt: string;
 }
 
-interface RecoveryBase {
+interface UnverifiedRecoveryBase {
     guestId: string;
     queuedAt: string;
     rawPendingStorage: string;
@@ -14,14 +14,22 @@ interface RecoveryBase {
 }
 
 export type GuestRecoveryState =
-    | RecoveryBase & {
+    | UnverifiedRecoveryBase & {
         status: "unverified";
         attemptIds: string[];
         attempts: Record<string, unknown>[];
         canRetryDbClaim: true;
     }
-    | RecoveryBase & {
-        status: "corrupt";
+    | {
+        status: "marker_corrupt";
+        guestId: "";
+        queuedAt: "";
+        rawPendingStorage: string;
+        byteLength: number;
+        canRetryDbClaim: false;
+    }
+    | UnverifiedRecoveryBase & {
+        status: "attempt_store_corrupt";
         byteLength: number;
         canRetryDbClaim: false;
     };
@@ -57,19 +65,18 @@ function isGuestRecoveryAttempt(attempt: Record<string, unknown>, guestId: strin
 export function readGuestRecoveryState(storage: Storage): GuestRecoveryState | null {
     const rawPendingStorage = storage.getItem(PENDING_KEY);
     if (!rawPendingStorage) return null;
-    const rawAttemptStorage = storage.getItem(ATTEMPTS_KEY) ?? "[]";
     const pending = parsePendingGuestMerge(rawPendingStorage);
     if (!pending) {
         return {
-            status: "corrupt",
+            status: "marker_corrupt",
             guestId: "",
             queuedAt: "",
             rawPendingStorage,
-            rawAttemptStorage,
-            byteLength: new TextEncoder().encode(rawPendingStorage + rawAttemptStorage).length,
+            byteLength: new TextEncoder().encode(rawPendingStorage).length,
             canRetryDbClaim: false,
         };
     }
+    const rawAttemptStorage = storage.getItem(ATTEMPTS_KEY) ?? "[]";
     try {
         const parsed = JSON.parse(rawAttemptStorage);
         if (!Array.isArray(parsed)) throw new Error("attempt storage is not an array");
@@ -89,7 +96,7 @@ export function readGuestRecoveryState(storage: Storage): GuestRecoveryState | n
         };
     } catch {
         return {
-            status: "corrupt",
+            status: "attempt_store_corrupt",
             guestId: pending.guestId,
             queuedAt: pending.queuedAt,
             rawPendingStorage,
@@ -110,18 +117,30 @@ export function buildGuestRecoveryExport(state: GuestRecoveryState): string {
         ...(state.status === "unverified" ? { attempts: state.attempts } : { byteLength: state.byteLength }),
     };
     const json = JSON.stringify(header);
-    return state.status === "corrupt"
-        ? `${json}\n${state.rawPendingStorage}\n${state.rawAttemptStorage}`
-        : json;
+    if (state.status === "marker_corrupt") return `${json}\n${state.rawPendingStorage}`;
+    if (state.status === "attempt_store_corrupt") return `${json}\n${state.rawAttemptStorage}`;
+    return json;
 }
 
 export function clearGuestRecoveryMarker(storage: Storage): void {
     storage.removeItem(PENDING_KEY);
 }
 
-export function discardGuestRecovery(state: GuestRecoveryState, storage: Storage): boolean {
+export function discardGuestRecovery(
+    state: GuestRecoveryState,
+    storage: Storage,
+    options: { quarantineWholeAttemptStore?: boolean } = {},
+): boolean {
     try {
-        if (state.status === "corrupt") {
+        if (state.status === "marker_corrupt") {
+            storage.removeItem(PENDING_KEY);
+            return true;
+        }
+        if (state.status === "attempt_store_corrupt") {
+            if (!options.quarantineWholeAttemptStore || storage.getItem("omr_attempts_quarantine") !== null) {
+                return false;
+            }
+            storage.setItem("omr_attempts_quarantine", state.rawAttemptStorage);
             storage.removeItem(ATTEMPTS_KEY);
             storage.removeItem(PENDING_KEY);
             return true;
