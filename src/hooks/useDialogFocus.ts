@@ -26,14 +26,16 @@ export function resolveDialogKeyAction(
 export function resolveDialogKeyAction(state: DialogKeyState): DialogKeyAction;
 export function resolveDialogKeyAction(
     stateOrKey: DialogKeyState | string,
-    atLast = false,
-    atFirst = false,
+    ...positional: [atLast?: boolean, atFirst?: boolean]
 ): DialogKeyAction {
+    const [atLast = false, atFirst = false] = positional;
     if (typeof stateOrKey === "string") {
         if (stateOrKey === "Escape") return "close";
         if (stateOrKey !== "Tab") return "none";
         if (atLast) return "wrap-first";
-        if (atFirst) return "wrap-last";
+        // The approved two-argument contract uses `false` for the backward edge;
+        // three arguments provide the explicit atFirst value.
+        if (positional.length === 1 || atFirst) return "wrap-last";
         return "none";
     }
     const state = stateOrKey;
