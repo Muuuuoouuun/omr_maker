@@ -125,7 +125,7 @@ describe("production server-only database boundary", () => {
             );
         }
 
-        expect(profile).not.toMatch(/\bcreate\s+policy\b/i);
+        expect(profile).not.toMatch(/\bcreate\s+policy\b[\s\S]{0,160}\bon\s+public\./i);
     });
 
     it("applies migrations, the server-only profile, and assertions in release-gate order", () => {
@@ -174,30 +174,60 @@ describe("production server-only database boundary", () => {
         );
     });
 
-    it("closes the effective Storage table boundary and exercises browser and service-role CRUD", () => {
+    it("uses the hosted Storage owner to install restrictive target-bucket policies without managed ACL mutations", () => {
+        expect(livePrelude).toContain("create role supabase_storage_admin");
+        expect(livePrelude).toContain("grant supabase_storage_admin to postgres with set true");
         expect(livePrelude).toContain("create table if not exists storage.objects");
+        expect(livePrelude).toContain("alter table storage.objects owner to supabase_storage_admin");
+        expect(livePrelude).toContain("alter table storage.buckets owner to supabase_storage_admin");
         expect(livePrelude).toContain('create policy "OMR private assets alpha access"');
+        expect(livePrelude).toContain('create policy "Third-party browser object access"');
+        expect(livePrelude).toContain('create policy "Third-party browser bucket access"');
 
-        expect(profile).toContain("to_regclass('storage.objects')");
-        expect(profile).toContain(
-            "revoke all on table storage.objects from public, anon, authenticated",
+        expect(profile).toMatch(
+            /pg_has_role\(\s*session_user,\s*'supabase_storage_admin',\s*'SET'\s*\)/i,
         );
-        expect(profile).toContain("grant all on table storage.objects to service_role");
-        expect(profile).toContain(
-            "revoke all on table storage.buckets from public, anon, authenticated",
+        expect(profile).toContain("set local role supabase_storage_admin");
+        const storageOwnerIndex = profile.indexOf("set local role supabase_storage_admin");
+        const resetRoleIndex = profile.indexOf("reset role;", storageOwnerIndex);
+        const publicRevokeIndex = profile.indexOf(
+            "revoke all on schema public from public, anon, authenticated;",
         );
-        expect(profile).toContain("grant all on table storage.buckets to service_role");
-        expect(profile).toContain("omr-private-assets");
+        expect(resetRoleIndex).toBeGreaterThan(storageOwnerIndex);
+        expect(publicRevokeIndex).toBeGreaterThan(resetRoleIndex);
+        expect(profile).toContain(
+            'drop policy if exists "OMR private assets alpha access" on storage.objects',
+        );
+        expect(profile).toMatch(
+            /create policy "OMR private assets server-only objects"\s+on storage\.objects\s+as restrictive\s+for all\s+to anon, authenticated\s+using \(bucket_id <> 'omr-private-assets'\)\s+with check \(bucket_id <> 'omr-private-assets'\);/i,
+        );
+        expect(profile).toMatch(
+            /create policy "OMR private assets server-only buckets"\s+on storage\.buckets\s+as restrictive\s+for all\s+to anon, authenticated\s+using \(id <> 'omr-private-assets'\)\s+with check \(id <> 'omr-private-assets'\);/i,
+        );
+        expect(profile).toContain("reset role;");
+        expect(profile).not.toMatch(
+            /\b(?:revoke|grant)\b[^;]*\bon\s+(?:table\s+)?storage\.(?:objects|buckets)\b/i,
+        );
+        expect(profile).not.toMatch(
+            /\balter\s+table\s+storage\.(?:objects|buckets)\s+owner\s+to\b/i,
+        );
+        expect(profile).not.toMatch(/\bpolicyname\s+ilike\b/i);
+        expect(profile).not.toContain("for app_policy in");
 
-        expect(liveAssertions).toContain("browser roles unexpectedly retain a Storage table privilege");
-        expect(liveAssertions).toContain("service_role lost a Storage table privilege");
-        expect(liveAssertions).toContain("anon Storage SELECT unexpectedly succeeded");
-        expect(liveAssertions).toContain("authenticated Storage DELETE unexpectedly succeeded");
+        expect(liveAssertions).toContain("Storage relation owner drifted from supabase_storage_admin");
+        expect(liveAssertions).toContain("OMR restrictive Storage policy contract mismatch");
+        expect(liveAssertions).toContain("unrelated third-party Storage policy was changed");
+        expect(liveAssertions).toContain("anon target Storage SELECT unexpectedly succeeded");
+        expect(liveAssertions).toContain("authenticated target Storage DELETE unexpectedly succeeded");
+        expect(liveAssertions).toContain("other-bucket Storage policy no longer permits browser access");
         expect(liveAssertions).toContain("service_role Storage CRUD probe failed");
 
         for (const document of [supabaseReadme, productionReadiness]) {
+            expect(document).toContain("supabase_storage_admin");
             expect(document).toContain("storage.objects");
-            expect(document).toMatch(/모든 브라우저 Storage API|all browser Storage API/i);
+            expect(document).toMatch(/AS RESTRICTIVE|제한 정책/i);
+            expect(document).toContain("https://supabase.com/docs/guides/platform/permissions");
+            expect(document).toContain("https://supabase.com/docs/guides/storage/security/access-control");
         }
     });
 

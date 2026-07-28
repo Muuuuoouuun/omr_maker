@@ -26,12 +26,73 @@ begin
             errcode = '42704',
             message = 'production boundary requires anon, authenticated, and service_role roles';
     end if;
+    if not exists (
+        select 1 from pg_roles where rolname = 'supabase_storage_admin'
+    ) or not pg_has_role(
+        session_user,
+        'supabase_storage_admin',
+        'SET'
+    ) then
+        raise exception using
+            errcode = '42501',
+            message = 'postgres must be able to SET ROLE supabase_storage_admin';
+    end if;
+    if to_regclass('storage.objects') is null
+        or to_regclass('storage.buckets') is null
+    then
+        raise exception using
+            errcode = '42P01',
+            message = 'production boundary requires hosted Storage relations';
+    end if;
+    if exists (
+        select 1
+          from pg_class relation
+          join pg_namespace namespace on namespace.oid = relation.relnamespace
+         where namespace.nspname = 'storage'
+           and relation.relname in ('objects', 'buckets')
+           and (
+               relation.relowner <> 'supabase_storage_admin'::regrole
+               or not relation.relrowsecurity
+           )
+    ) then
+        raise exception using
+            errcode = '42501',
+            message = 'Storage relations must retain supabase_storage_admin ownership and RLS';
+    end if;
 end
 $$;
 
 -- Fail before changing privileges. The assertion is SECURITY DEFINER,
 -- service-role-only, bounded, and reports no PII or raw row identifiers.
 select public.omr_assert_production_boundary_preflight_v1();
+
+-- Supabase requires every managed Storage entity to retain
+-- supabase_storage_admin ownership. Enter that owner only for the supported RLS
+-- policy phase, remove exact repository-owned policies, then restore postgres
+-- before changing the public application boundary. Restrictive policies combine
+-- with unrelated permissive policies and only subtract the OMR private bucket.
+set local role supabase_storage_admin;
+
+drop policy if exists "OMR private assets alpha access" on storage.objects;
+drop policy if exists "OMR private assets server-only objects" on storage.objects;
+create policy "OMR private assets server-only objects"
+    on storage.objects
+    as restrictive
+    for all
+    to anon, authenticated
+    using (bucket_id <> 'omr-private-assets')
+    with check (bucket_id <> 'omr-private-assets');
+
+drop policy if exists "OMR private assets server-only buckets" on storage.buckets;
+create policy "OMR private assets server-only buckets"
+    on storage.buckets
+    as restrictive
+    for all
+    to anon, authenticated
+    using (id <> 'omr-private-assets')
+    with check (id <> 'omr-private-assets');
+
+reset role;
 
 -- Close current objects and the schema itself to browser roles. PUBLIC must be
 -- revoked as well because function EXECUTE is granted to PUBLIC by default.
@@ -46,44 +107,6 @@ grant usage on schema public to service_role;
 grant all on all tables in schema public to service_role;
 grant all on all sequences in schema public to service_role;
 grant all on all functions in schema public to service_role;
-
--- Storage table privileges are relation-wide. Closing storage.objects and
--- storage.buckets therefore intentionally disables every browser Storage API
--- path, not only omr-private-assets; trusted storage gateways use service_role.
--- The conditional form also supports the lightweight local verifier and
--- projects where the Storage extension has not yet provisioned its tables.
-do $$
-declare
-    app_policy record;
-begin
-    if to_regclass('storage.objects') is not null then
-        execute 'revoke all on table storage.objects from public, anon, authenticated';
-        execute 'grant all on table storage.objects to service_role';
-
-        for app_policy in
-            select policyname
-              from pg_policies
-             where schemaname = 'storage'
-               and tablename = 'objects'
-               and (
-                   policyname ilike 'OMR%'
-                   or coalesce(qual, '') ilike '%omr-private-assets%'
-                   or coalesce(with_check, '') ilike '%omr-private-assets%'
-               )
-        loop
-            execute format(
-                'drop policy if exists %I on storage.objects',
-                app_policy.policyname
-            );
-        end loop;
-    end if;
-
-    if to_regclass('storage.buckets') is not null then
-        execute 'revoke all on table storage.buckets from public, anon, authenticated';
-        execute 'grant all on table storage.buckets to service_role';
-    end if;
-end
-$$;
 
 -- Keep future public-schema objects fail-closed when migrations run as the
 -- profile owner. Reapplying this file is safe.
@@ -189,8 +212,8 @@ drop policy if exists "prod audit logs read by admins" on public.omr_audit_logs;
 -- FORCE RLS even though browser roles have no direct relation privileges.
 -- This is the complete set of 27 public.omr_* app tables created by schema.sql
 -- plus migrations. Supabase-managed storage.objects/storage.buckets stay
--- outside this FORCE RLS list, but their effective privileges are closed and
--- verified separately above and by live assertions.
+-- outside this FORCE RLS list; their managed-owner restrictive policies are
+-- installed above and verified separately by live assertions.
 alter table if exists public.omr_organizations enable row level security;
 alter table if exists public.omr_organizations force row level security;
 alter table if exists public.omr_plan_usage enable row level security;

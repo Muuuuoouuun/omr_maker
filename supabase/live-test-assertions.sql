@@ -210,48 +210,82 @@ begin
     then
         raise exception 'live production boundary requires Storage relation fixtures';
     end if;
-    if has_table_privilege('anon', 'storage.objects', 'SELECT')
-        or has_table_privilege('anon', 'storage.objects', 'INSERT')
-        or has_table_privilege('anon', 'storage.objects', 'UPDATE')
-        or has_table_privilege('anon', 'storage.objects', 'DELETE')
-        or has_table_privilege('authenticated', 'storage.objects', 'SELECT')
-        or has_table_privilege('authenticated', 'storage.objects', 'INSERT')
-        or has_table_privilege('authenticated', 'storage.objects', 'UPDATE')
-        or has_table_privilege('authenticated', 'storage.objects', 'DELETE')
-        or has_table_privilege('anon', 'storage.buckets', 'SELECT')
-        or has_table_privilege('anon', 'storage.buckets', 'INSERT')
-        or has_table_privilege('anon', 'storage.buckets', 'UPDATE')
-        or has_table_privilege('anon', 'storage.buckets', 'DELETE')
-        or has_table_privilege('authenticated', 'storage.buckets', 'SELECT')
-        or has_table_privilege('authenticated', 'storage.buckets', 'INSERT')
-        or has_table_privilege('authenticated', 'storage.buckets', 'UPDATE')
-        or has_table_privilege('authenticated', 'storage.buckets', 'DELETE')
-    then
-        raise exception 'browser roles unexpectedly retain a Storage table privilege';
+    if (
+        select count(*)
+          from pg_class relation
+          join pg_namespace namespace on namespace.oid = relation.relnamespace
+         where namespace.nspname = 'storage'
+           and relation.relname in ('objects', 'buckets')
+           and relation.relowner = 'supabase_storage_admin'::regrole
+    ) <> 2 then
+        raise exception 'Storage relation owner drifted from supabase_storage_admin';
     end if;
-    if not has_table_privilege('service_role', 'storage.objects', 'SELECT')
-        or not has_table_privilege('service_role', 'storage.objects', 'INSERT')
-        or not has_table_privilege('service_role', 'storage.objects', 'UPDATE')
-        or not has_table_privilege('service_role', 'storage.objects', 'DELETE')
-        or not has_table_privilege('service_role', 'storage.buckets', 'SELECT')
-        or not has_table_privilege('service_role', 'storage.buckets', 'INSERT')
-        or not has_table_privilege('service_role', 'storage.buckets', 'UPDATE')
-        or not has_table_privilege('service_role', 'storage.buckets', 'DELETE')
-    then
-        raise exception 'service_role lost a Storage table privilege';
+    if not exists (
+        select 1
+          from pg_roles
+         where rolname = 'service_role'
+           and rolbypassrls
+    ) then
+        raise exception 'service_role lost Storage RLS bypass';
+    end if;
+
+    if (
+        select count(*)
+          from pg_policies policy
+         where policy.schemaname = 'storage'
+           and (
+               (
+                   policy.tablename = 'objects'
+                   and policy.policyname = 'OMR private assets server-only objects'
+                   and policy.qual = '(bucket_id <> ''omr-private-assets''::text)'
+                   and policy.with_check = '(bucket_id <> ''omr-private-assets''::text)'
+               )
+               or (
+                   policy.tablename = 'buckets'
+                   and policy.policyname = 'OMR private assets server-only buckets'
+                   and policy.qual = '(id <> ''omr-private-assets''::text)'
+                   and policy.with_check = '(id <> ''omr-private-assets''::text)'
+               )
+           )
+           and policy.permissive = 'RESTRICTIVE'
+           and policy.cmd = 'ALL'
+           and policy.roles @> array['anon', 'authenticated']::name[]
+           and policy.roles <@ array['anon', 'authenticated']::name[]
+           and cardinality(policy.roles) = 2
+    ) <> 2 then
+        raise exception 'OMR restrictive Storage policy contract mismatch';
     end if;
     if exists (
         select 1
           from pg_policies policy
          where policy.schemaname = 'storage'
-           and policy.tablename = 'objects'
-           and (
-               policy.policyname ilike 'OMR%'
-               or coalesce(policy.qual, '') ilike '%omr-private-assets%'
-               or coalesce(policy.with_check, '') ilike '%omr-private-assets%'
-           )
+           and policy.policyname = 'OMR private assets alpha access'
     ) then
-        raise exception 'production server boundary left an OMR Storage policy';
+        raise exception 'production server boundary left the alpha OMR Storage policy';
+    end if;
+    if (
+        select count(*)
+          from pg_policies policy
+         where policy.schemaname = 'storage'
+           and (
+               (
+                   policy.tablename = 'objects'
+                   and policy.policyname = 'Third-party browser object access'
+               )
+               or (
+                   policy.tablename = 'buckets'
+                   and policy.policyname = 'Third-party browser bucket access'
+               )
+           )
+           and policy.permissive = 'PERMISSIVE'
+           and policy.cmd = 'ALL'
+           and policy.qual = 'true'
+           and policy.with_check = 'true'
+           and policy.roles @> array['anon', 'authenticated']::name[]
+           and policy.roles <@ array['anon', 'authenticated']::name[]
+           and cardinality(policy.roles) = 2
+    ) <> 2 then
+        raise exception 'unrelated third-party Storage policy was changed';
     end if;
 
     if not exists (
@@ -284,6 +318,22 @@ begin
 end
 $$;
 
+set role service_role;
+
+insert into storage.buckets (id, name, public)
+values ('third-party-browser-assets', 'third-party-browser-assets', false)
+on conflict (id) do update
+set name = excluded.name,
+    public = excluded.public;
+
+insert into storage.objects (bucket_id, name)
+values
+    ('omr-private-assets', 'target-browser-denial-seed'),
+    ('third-party-browser-assets', 'third-party-visible-seed')
+on conflict (bucket_id, name) do nothing;
+
+reset role;
+
 insert into public.omr_organizations (id, name) values
     ('live-org-a', 'Live Org A'),
     ('live-org-b', 'Live Org B');
@@ -303,6 +353,9 @@ insert into public.omr_exams (
 set role authenticated;
 
 do $$
+declare
+    affected_rows integer;
+    probe_name text;
 begin
     begin
         perform 1 from public.omr_exams;
@@ -333,32 +386,84 @@ begin
         raise exception 'browser role executed a default-ACL probe function';
     exception when insufficient_privilege then null;
     end;
-    begin
-        perform 1
+    if exists (
+        select 1
           from storage.objects
-         where bucket_id = 'omr-private-assets';
-        raise exception 'authenticated Storage SELECT unexpectedly succeeded';
-    exception when insufficient_privilege then null;
-    end;
+         where bucket_id = 'omr-private-assets'
+    ) or exists (
+        select 1
+          from storage.buckets
+         where id = 'omr-private-assets'
+    ) then
+        raise exception 'authenticated target Storage SELECT unexpectedly succeeded';
+    end if;
     begin
         insert into storage.objects (bucket_id, name)
         values ('omr-private-assets', 'authenticated-forbidden');
-        raise exception 'authenticated Storage INSERT unexpectedly succeeded';
+        raise exception 'authenticated target Storage INSERT unexpectedly succeeded';
     exception when insufficient_privilege then null;
     end;
     begin
-        update storage.objects
-           set name = name
-         where bucket_id = 'omr-private-assets';
-        raise exception 'authenticated Storage UPDATE unexpectedly succeeded';
+        insert into storage.buckets (id, name, public)
+        values ('omr-private-assets', 'authenticated-forbidden', false);
+        raise exception 'authenticated target Storage bucket INSERT unexpectedly succeeded';
     exception when insufficient_privilege then null;
     end;
-    begin
-        delete from storage.objects
-         where bucket_id = 'omr-private-assets';
-        raise exception 'authenticated Storage DELETE unexpectedly succeeded';
-    exception when insufficient_privilege then null;
-    end;
+
+    update storage.objects
+       set name = name
+     where bucket_id = 'omr-private-assets';
+    get diagnostics affected_rows = row_count;
+    if affected_rows <> 0 then
+        raise exception 'authenticated target Storage UPDATE unexpectedly succeeded';
+    end if;
+    delete from storage.objects
+     where bucket_id = 'omr-private-assets';
+    get diagnostics affected_rows = row_count;
+    if affected_rows <> 0 then
+        raise exception 'authenticated target Storage DELETE unexpectedly succeeded';
+    end if;
+    update storage.buckets
+       set name = name
+     where id = 'omr-private-assets';
+    get diagnostics affected_rows = row_count;
+    if affected_rows <> 0 then
+        raise exception 'authenticated target Storage bucket UPDATE unexpectedly succeeded';
+    end if;
+    delete from storage.buckets where id = 'omr-private-assets';
+    get diagnostics affected_rows = row_count;
+    if affected_rows <> 0 then
+        raise exception 'authenticated target Storage bucket DELETE unexpectedly succeeded';
+    end if;
+
+    if not exists (
+        select 1 from storage.buckets where id = 'third-party-browser-assets'
+    ) or not exists (
+        select 1
+          from storage.objects
+         where bucket_id = 'third-party-browser-assets'
+           and name = 'third-party-visible-seed'
+    ) then
+        raise exception 'other-bucket Storage policy no longer permits browser access';
+    end if;
+    insert into storage.objects (bucket_id, name)
+    values ('third-party-browser-assets', 'authenticated-other-bucket-probe')
+    returning name into probe_name;
+    update storage.objects
+       set name = 'authenticated-other-bucket-probe-updated'
+     where bucket_id = 'third-party-browser-assets'
+       and name = 'authenticated-other-bucket-probe'
+    returning name into probe_name;
+    if probe_name is distinct from 'authenticated-other-bucket-probe-updated' then
+        raise exception 'other-bucket Storage policy no longer permits browser access';
+    end if;
+    delete from storage.objects
+     where bucket_id = 'third-party-browser-assets'
+       and name = 'authenticated-other-bucket-probe-updated';
+    get diagnostics affected_rows = row_count;
+    if affected_rows <> 1 then
+        raise exception 'other-bucket Storage policy no longer permits browser access';
+    end if;
 end
 $$;
 
@@ -366,6 +471,9 @@ reset role;
 set role anon;
 
 do $$
+declare
+    affected_rows integer;
+    probe_name text;
 begin
     begin
         perform 1 from public.omr_exams;
@@ -396,32 +504,84 @@ begin
         raise exception 'browser role executed a default-ACL probe function';
     exception when insufficient_privilege then null;
     end;
-    begin
-        perform 1
+    if exists (
+        select 1
           from storage.objects
-         where bucket_id = 'omr-private-assets';
-        raise exception 'anon Storage SELECT unexpectedly succeeded';
-    exception when insufficient_privilege then null;
-    end;
+         where bucket_id = 'omr-private-assets'
+    ) or exists (
+        select 1
+          from storage.buckets
+         where id = 'omr-private-assets'
+    ) then
+        raise exception 'anon target Storage SELECT unexpectedly succeeded';
+    end if;
     begin
         insert into storage.objects (bucket_id, name)
         values ('omr-private-assets', 'anon-forbidden');
-        raise exception 'anon Storage INSERT unexpectedly succeeded';
+        raise exception 'anon target Storage INSERT unexpectedly succeeded';
     exception when insufficient_privilege then null;
     end;
     begin
-        update storage.objects
-           set name = name
-         where bucket_id = 'omr-private-assets';
-        raise exception 'anon Storage UPDATE unexpectedly succeeded';
+        insert into storage.buckets (id, name, public)
+        values ('omr-private-assets', 'anon-forbidden', false);
+        raise exception 'anon target Storage bucket INSERT unexpectedly succeeded';
     exception when insufficient_privilege then null;
     end;
-    begin
-        delete from storage.objects
-         where bucket_id = 'omr-private-assets';
-        raise exception 'anon Storage DELETE unexpectedly succeeded';
-    exception when insufficient_privilege then null;
-    end;
+
+    update storage.objects
+       set name = name
+     where bucket_id = 'omr-private-assets';
+    get diagnostics affected_rows = row_count;
+    if affected_rows <> 0 then
+        raise exception 'anon target Storage UPDATE unexpectedly succeeded';
+    end if;
+    delete from storage.objects
+     where bucket_id = 'omr-private-assets';
+    get diagnostics affected_rows = row_count;
+    if affected_rows <> 0 then
+        raise exception 'anon target Storage DELETE unexpectedly succeeded';
+    end if;
+    update storage.buckets
+       set name = name
+     where id = 'omr-private-assets';
+    get diagnostics affected_rows = row_count;
+    if affected_rows <> 0 then
+        raise exception 'anon target Storage bucket UPDATE unexpectedly succeeded';
+    end if;
+    delete from storage.buckets where id = 'omr-private-assets';
+    get diagnostics affected_rows = row_count;
+    if affected_rows <> 0 then
+        raise exception 'anon target Storage bucket DELETE unexpectedly succeeded';
+    end if;
+
+    if not exists (
+        select 1 from storage.buckets where id = 'third-party-browser-assets'
+    ) or not exists (
+        select 1
+          from storage.objects
+         where bucket_id = 'third-party-browser-assets'
+           and name = 'third-party-visible-seed'
+    ) then
+        raise exception 'other-bucket Storage policy no longer permits browser access';
+    end if;
+    insert into storage.objects (bucket_id, name)
+    values ('third-party-browser-assets', 'anon-other-bucket-probe')
+    returning name into probe_name;
+    update storage.objects
+       set name = 'anon-other-bucket-probe-updated'
+     where bucket_id = 'third-party-browser-assets'
+       and name = 'anon-other-bucket-probe'
+    returning name into probe_name;
+    if probe_name is distinct from 'anon-other-bucket-probe-updated' then
+        raise exception 'other-bucket Storage policy no longer permits browser access';
+    end if;
+    delete from storage.objects
+     where bucket_id = 'third-party-browser-assets'
+       and name = 'anon-other-bucket-probe-updated';
+    get diagnostics affected_rows = row_count;
+    if affected_rows <> 1 then
+        raise exception 'other-bucket Storage policy no longer permits browser access';
+    end if;
 end
 $$;
 

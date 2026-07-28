@@ -62,12 +62,14 @@ The server-only profile first calls
 `omr_assert_production_boundary_preflight_v1`, then removes browser table,
 sequence, and function privileges, removes alpha/legacy browser policies, and
 keeps service-role RPC execution available. It also closes `storage.objects` and
-`storage.buckets`; because Storage grants are table-wide, this intentionally
-disables all browser Storage API CRUD, including buckets unrelated to OMR.
-Uploads/downloads must use trusted service-role gateways. The assertions enumerate every
+`storage.buckets` for `omr-private-assets` through owner-installed
+`AS RESTRICTIVE` policies. It does not revoke managed Storage table ACLs, change
+managed ownership, or disable browser Storage access to other buckets. The
+assertions enumerate every
 `public.omr_*` table, public sequence, and public function from PostgreSQL
 catalogs, verify ENABLE + FORCE RLS, perform actual denied browser CRUD, and
-exercise the service-role workflows and Storage CRUD.
+exercise the service-role workflows and Storage CRUD. The live-only fixture
+also proves an unrelated permissive bucket policy still works.
 
 Run `npm run test:supabase:live` locally when Docker is available. A machine
 without Docker cannot replace this required CI gate with source-string
@@ -160,12 +162,24 @@ idempotent, but its preflight is intentionally fail-closed. Use this order:
 7. Deploy the matching server build and verify teacher/student server-action
    journeys before reopening writes.
 
-The profile covers all 27 `public.omr_*` app tables and conditionally closes the
-effective privileges on Supabase-managed `storage.objects` and
-`storage.buckets`. It removes repository-known OMR/`omr-private-assets` Storage
-policies but does not rewrite unrelated policy definitions. The table-level
-revocation still disables all browser Storage API CRUD globally; service-role
-gateways remain available.
+The profile covers all 27 `public.omr_*` app tables. Supabase requires entities
+under `storage` to remain owned by `supabase_storage_admin`; see
+[Supabase platform permissions](https://supabase.com/docs/guides/platform/permissions).
+Still in the `postgres` transaction, the profile verifies that `postgres` can
+`SET ROLE supabase_storage_admin`, enters that managed owner for the Storage
+policy phase, and resets to `postgres` before continuing the public-schema
+profile. It never revokes/grants managed table ACLs or changes ownership.
+
+For `omr-private-assets`, exact repository-owned policy names are replaced with
+`AS RESTRICTIVE` policies on `storage.objects` and `storage.buckets`. They deny
+`anon`/`authenticated` rows whose `bucket_id`/`id` is
+`omr-private-assets`, while evaluating true for other buckets so unrelated
+permissive policies keep their existing behavior. The service role bypasses RLS
+and remains server-only. This follows the supported
+[Storage access-control](https://supabase.com/docs/guides/storage/security/access-control)
+policy path; managed Storage metadata should otherwise be treated as read-only
+as described by the
+[Storage schema guide](https://supabase.com/docs/guides/storage/schema/design).
 
 Rollback must not restore browser canonical CRUD. First stop application writes
 and roll back the server deployment. Any database privilege loosening requires

@@ -36,12 +36,25 @@ service-role RPC만 유지합니다. 기존 `production-rls.sql`은 직접 authe
 7. 같은 커밋의 서버 빌드를 배포하고 교사·학생 server action 여정을 확인한 뒤 쓰기를 재개합니다.
 
 현재 public 앱 테이블은 `public.omr_*` 27개입니다. 별도의 Supabase 관리 관계인
-`storage.objects`와 `storage.buckets`도 존재할 때 effective table privilege를 회수하고
-service role만 유지합니다. 테이블 privilege는 bucket별로 나눌 수 없으므로 이 조치는
-OMR 외 bucket을 포함한 **모든 브라우저 Storage API CRUD를 의도적으로 중단**합니다.
-파일 작업은 service-role 서버 gateway만 사용해야 합니다. 프로필은 repository가 아는
-OMR/`omr-private-assets` 정책을 제거하되 다른 앱의 정책 정의를 임의로 삭제하지 않습니다.
-라이브 검증은 actual anon/authenticated 공격과 service-role Storage CRUD를 모두 수행합니다.
+`storage.objects`와 `storage.buckets`는
+[Supabase 플랫폼 권한 문서](https://supabase.com/docs/guides/platform/permissions)의
+요구대로 `supabase_storage_admin` 소유권을 유지합니다. 프로필은 managed table ACL이나
+소유권을 변경하지 않습니다. 대신 `postgres`가 해당 역할을 `SET ROLE`할 수 있는지
+fail-closed로 검사하고, Storage 정책 단계에서만 그 owner로 전환했다가 public 프로필을
+계속하기 전에 `RESET ROLE`합니다.
+
+`omr-private-assets`에는 `anon`/`authenticated`의 target row만 거부하는
+`AS RESTRICTIVE` 제한 정책을 `storage.objects`와 `storage.buckets`에 설치합니다.
+다른 bucket에서는 조건이 true이므로 기존 permissive 정책이 그대로 작동하며 전역 브라우저
+Storage API를 중단하지 않습니다. service role은 RLS를 우회하는 서버 전용 경로입니다.
+이는 Supabase가 안내하는
+[Storage access control](https://supabase.com/docs/guides/storage/security/access-control)
+경로입니다. 정책 외 managed Storage metadata는
+[Storage schema 가이드](https://supabase.com/docs/guides/storage/schema/design)처럼
+read-only로 취급합니다. 프로필은 exact repository-owned 정책 이름만 교체하고 unrelated
+정책을 삭제하지 않습니다. 라이브 검증은 owner/policy catalog, actual
+anon/authenticated target CRUD 거부, unrelated bucket 접근 유지, service-role target
+CRUD 성공을 모두 확인합니다.
 
 ### 롤백
 
