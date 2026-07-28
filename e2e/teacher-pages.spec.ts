@@ -17,6 +17,12 @@ const TEACHER_IDENTITY: TeacherSessionIdentity = {
     displayName: "Demo Admin",
 };
 
+const BILLING_TEACHER_IDENTITY: TeacherSessionIdentity = {
+    teacherId: "billing-teacher",
+    email: "billing-teacher@example.com",
+    displayName: "Billing Teacher",
+};
+
 function cookieOrigin(baseURL?: string): string {
     try {
         return new URL(baseURL || "http://localhost:3003").origin;
@@ -610,7 +616,7 @@ test.describe("Settings page", () => {
 
 test.describe("Billing page", () => {
     test.beforeEach(async ({ page, baseURL }) => {
-        await authenticateTeacher(page, baseURL);
+        await authenticateTeacher(page, baseURL, BILLING_TEACHER_IDENTITY);
     });
 
     test("shows current plan hero + usage + plan grid + invoices", async ({ page }) => {
@@ -618,6 +624,9 @@ test.describe("Billing page", () => {
         await expect(page.getByRole("heading", { name: "결제 및 플랜" })).toBeVisible();
         await expect(page.getByText("개발 플랜 시뮬레이션", { exact: true })).toBeVisible();
         await expect(page.getByText("SIMULATED PLAN", { exact: true })).toBeVisible();
+        await expect(
+            page.locator(".billing-current-plan-card").getByRole("heading", { name: "Free", exact: true }),
+        ).toBeVisible();
         await expect(page.getByRole("heading", { name: "이달 사용량" })).toBeVisible();
         await expect(page.getByRole("heading", { name: "플랜 비교" })).toBeVisible();
         await expect(page.getByRole("heading", { name: "로컬 플랜 변경 기록" })).toBeVisible();
