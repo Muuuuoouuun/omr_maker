@@ -13,16 +13,15 @@ const CLEANUP_FAILURE_INITIAL_BACKOFF_MS = 250;
 const CLEANUP_FAILURE_MAX_BACKOFF_MS = 30_000;
 
 /**
- * An overdue cleanup has a zero-delay follow-up under normal operation. If
- * maintenance itself failed, use a bounded deterministic delay so a rejected
- * lock cannot spin the app in a zero-ms timer loop.
+ * If maintenance failed, use a bounded deterministic delay even before a
+ * cleanup candidate exists so boot-time lock or crypto failures are retried.
  */
 export function cleanupFollowUpDelayMs(
     cleanupDelayMs: number | null,
     maintenanceFailed: boolean,
     consecutiveMaintenanceFailures: number,
 ): number | null {
-    if (cleanupDelayMs === null || cleanupDelayMs > 0 || !maintenanceFailed) {
+    if (!maintenanceFailed || (cleanupDelayMs !== null && cleanupDelayMs > 0)) {
         return cleanupDelayMs;
     }
     const exponent = Math.max(0, consecutiveMaintenanceFailures - 1);

@@ -201,7 +201,9 @@ describe("submission replay boot maintenance", () => {
         expect(cleanupFollowUpDelayMs(0, true, 20)).toBe(30_000);
         expect(cleanupFollowUpDelayMs(0, false, 0)).toBe(0);
         expect(cleanupFollowUpDelayMs(125, true, 4)).toBe(125);
-        expect(cleanupFollowUpDelayMs(null, true, 4)).toBeNull();
+        expect(cleanupFollowUpDelayMs(null, true, 1)).toBe(250);
+        expect(cleanupFollowUpDelayMs(null, true, 20)).toBe(30_000);
+        expect(cleanupFollowUpDelayMs(null, false, 0)).toBeNull();
     });
 
     it("recognizes legacy and replayable v2 keys but excludes maintenance metadata", () => {
