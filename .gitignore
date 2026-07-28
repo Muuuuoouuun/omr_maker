@@ -59,6 +59,7 @@ lint*.txt
 *.tsbuildinfo
 next-env.d.ts
 .gstack/
+.superpowers/
 .worktrees/
 
 # Android platform dropped — this app ships iOS(Capacitor)/web/desktop only.
