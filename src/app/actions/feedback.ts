@@ -21,6 +21,7 @@ import {
     parseSignedTeacherSessionCookie,
     TEACHER_SERVER_SESSION_COOKIE,
 } from "@/lib/teacherServerSession";
+import { isTeacherMutationAuthorized } from "@/lib/teacherMutationAuthorization";
 import {
     createSupabaseAdminClient,
     getSupabaseServerConfigFromEnv,
@@ -49,11 +50,12 @@ function unavailable(): ActionFailure {
         : { status: "local_only" };
 }
 
-async function teacherContext(): Promise<TeacherActionContext> {
+async function teacherContext(requireWrite = false): Promise<TeacherActionContext> {
     if (!isSameOriginServerActionRequest(await headers())) return { status: "unauthorized" };
     const cookieStore = await cookies();
     const session = parseSignedTeacherSessionCookie(cookieStore.get(TEACHER_SERVER_SESSION_COOKIE)?.value);
     if (!session) return { status: "unauthorized" };
+    if (requireWrite && !isTeacherMutationAuthorized(session)) return { status: "unauthorized" };
     const config = getSupabaseServerConfigFromEnv();
     if (!config) return unavailable();
     return {
@@ -92,7 +94,7 @@ export async function saveTeacherCanonicalFeedback(
     markupDrawings?: PdfDrawings,
 ): Promise<{ status: "saved"; item: FeedbackEnvelope } | ActionFailure> {
     try {
-        const gateway = await teacherContext();
+        const gateway = await teacherContext(true);
         if ("status" in gateway) return gateway;
         return saveTeacherFeedbackWithGateway(gateway.client, feedback, gateway.context, markupDrawings);
     } catch (error) {
@@ -104,7 +106,7 @@ export async function returnTeacherCanonicalFeedback(feedbackId: string): Promis
     { status: "returned"; item: FeedbackEnvelope } | ActionFailure
 > {
     try {
-        const gateway = await teacherContext();
+        const gateway = await teacherContext(true);
         if ("status" in gateway) return gateway;
         return returnTeacherFeedbackWithGateway(gateway.client, feedbackId, gateway.context);
     } catch (error) {

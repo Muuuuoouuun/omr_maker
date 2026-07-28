@@ -4,6 +4,7 @@ import path from "node:path";
 import fs from "node:fs";
 import next from "next";
 import { selectDesktopServerPort } from "./desktop-port.mjs";
+import { isSafeExternalUrl } from "./navigation-policy.mjs";
 
 if (!process.env.NEXT_TELEMETRY_DISABLED) {
   process.env.NEXT_TELEMETRY_DISABLED = "1";
@@ -195,14 +196,18 @@ async function createWindow() {
       return { action: "allow" };
     }
 
-    shell.openExternal(url);
+    if (isSafeExternalUrl(url)) {
+      void shell.openExternal(url);
+    }
     return { action: "deny" };
   });
 
   window.webContents.on("will-navigate", (event, url) => {
     if (url !== "about:blank" && !isSameOrigin(url, startUrl)) {
       event.preventDefault();
-      shell.openExternal(url);
+      if (isSafeExternalUrl(url)) {
+        void shell.openExternal(url);
+      }
     }
   });
 

@@ -6,6 +6,8 @@ import {
     mintTeacherToken,
     resolveTeacherCredentials,
     resolveTeacherPassword,
+    TEACHER_PASSWORD_HASH_MAX_ITERATIONS,
+    TEACHER_PASSWORD_HASH_MIN_ITERATIONS,
     TEACHER_AUTH_DEPLOYMENT_CONFIG_ERROR,
     TEACHER_AUTH_ERROR,
     verifyTeacherLogin,
@@ -13,7 +15,7 @@ import {
 } from "./teacherAuth";
 
 function teacherPasswordHash(password: string, saltHex = "00112233445566778899aabbccddeeff"): string {
-    const iterations = 1_000;
+    const iterations = TEACHER_PASSWORD_HASH_MIN_ITERATIONS;
     const hashHex = pbkdf2Sync(password, Buffer.from(saltHex, "hex"), iterations, 32, "sha256").toString("hex");
     return `pbkdf2-sha256:${iterations}:${saltHex}:${hashHex}`;
 }
@@ -364,6 +366,30 @@ describe("teacher auth", () => {
                 expect.objectContaining({ key: "missing-production-teacher-account" }),
             ]),
         });
+    });
+
+    it("rejects PBKDF2 hashes with unsafe work factors or noncanonical salt and hash lengths", () => {
+        const salt = "a".repeat(32);
+        const hash = "b".repeat(64);
+        const invalidHashes = [
+            `pbkdf2-sha256:${TEACHER_PASSWORD_HASH_MIN_ITERATIONS - 1}:${salt}:${hash}`,
+            `pbkdf2-sha256:${TEACHER_PASSWORD_HASH_MAX_ITERATIONS + 1}:${salt}:${hash}`,
+            `pbkdf2-sha256:${TEACHER_PASSWORD_HASH_MIN_ITERATIONS}:${"a".repeat(30)}:${hash}`,
+            `pbkdf2-sha256:${TEACHER_PASSWORD_HASH_MIN_ITERATIONS}:${salt}:${"b".repeat(62)}`,
+        ];
+
+        for (const passwordHash of invalidHashes) {
+            expect(inspectTeacherAuthConfig({
+                NODE_ENV: "production",
+                TEACHER_PASSWORD_HASH: passwordHash,
+            }).issues).toContainEqual(expect.objectContaining({
+                key: "invalid-teacher-password-hash",
+            }));
+            expect(verifyTeacherPasswordValue("secret", {
+                NODE_ENV: "production",
+                TEACHER_PASSWORD_HASH: passwordHash,
+            })).toBe(false);
+        }
     });
 
     it("flags duplicate teacher ids or emails before they can shadow each other", () => {

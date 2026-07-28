@@ -466,6 +466,69 @@ test.describe("UI-UX PROMAX layout audit", () => {
         }
     });
 
+    test("keeps the landing role choices balanced on desktop and compact on mobile", async ({ browser }) => {
+        for (const viewport of [
+            { name: "desktop", width: 1440, height: 900, minimumCardWidth: 400 },
+            { name: "mobile", width: 390, height: 844, minimumCardWidth: 160 },
+        ]) {
+            const page = await visitTarget(browser, {
+                name: `landing-${viewport.name}`,
+                path: "/",
+                expectedText: "OMR Maker",
+                viewport,
+            });
+            const cards = page.locator(".home-role-card");
+            await expect(cards).toHaveCount(2);
+            const boxes = await cards.evaluateAll(elements => elements.map(element => {
+                const rect = element.getBoundingClientRect();
+                return { width: Math.round(rect.width), x: Math.round(rect.x), y: Math.round(rect.y) };
+            }));
+            const pageWidth = await page.evaluate(() => ({
+                clientWidth: document.documentElement.clientWidth,
+                scrollWidth: document.documentElement.scrollWidth,
+            }));
+
+            expect(Math.abs(boxes[0].y - boxes[1].y), `${viewport.name} role cards should share one row`).toBeLessThanOrEqual(2);
+            expect(boxes.every(box => box.width >= viewport.minimumCardWidth), `${viewport.name} role cards should use the available width`).toBe(true);
+            expect(boxes[1].x, `${viewport.name} teacher card should follow the student card horizontally`).toBeGreaterThan(boxes[0].x);
+            expect(pageWidth.scrollWidth, `${viewport.name} landing should not overflow horizontally`).toBeLessThanOrEqual(pageWidth.clientWidth);
+
+            await page.context().close();
+        }
+    });
+
+    test("lets keyboard users bypass repeated teacher header controls", async ({ browser }) => {
+        const page = await visitTarget(browser, {
+            name: "teacher-settings-skip-link",
+            path: "/teacher/settings",
+            expectedText: "프로필 상태",
+            viewport: { width: 1440, height: 900 },
+            teacher: true,
+        });
+        const skipLink = page.getByRole("link", { name: "본문으로 건너뛰기", exact: true });
+        const main = page.locator("main#main-content");
+
+        await expect(skipLink).toHaveAttribute("href", "#main-content");
+        await expect(main).toHaveCount(1);
+        await expect(main).toHaveAttribute("tabindex", "-1");
+        const restingSkipLink = await skipLink.evaluate(element => {
+            const rect = element.getBoundingClientRect();
+            return { bottom: Math.round(rect.bottom), opacity: getComputedStyle(element).opacity };
+        });
+        expect(restingSkipLink.opacity).toBe("0");
+        expect(restingSkipLink.bottom).toBeLessThanOrEqual(0);
+
+        await page.keyboard.press("Tab");
+        await expect(skipLink).toBeFocused();
+        await expect(skipLink).toBeVisible();
+        await expect(skipLink).toHaveCSS("opacity", "1");
+        await page.keyboard.press("Enter");
+        await expect(page).toHaveURL(/#main-content$/);
+        await expect(main).toBeFocused();
+
+        await page.context().close();
+    });
+
     test("keeps key student, teacher, and admin surfaces readable and touch-safe", async ({ browser }) => {
         const results: Array<{ name: string; result: Awaited<ReturnType<typeof auditPage>> }> = [];
         for (const target of TARGETS) {

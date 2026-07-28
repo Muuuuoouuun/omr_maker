@@ -261,7 +261,7 @@ export default function ExamDetailPage() {
                 </div>
             </div>
 
-            <main className="container animate-fade-in" style={{ padding: '2rem 1rem' }}>
+            <main id="main-content" tabIndex={-1} className="container animate-fade-in" style={{ padding: '2rem 1rem' }}>
 
                 {/* Stats Row */}
                 <div className="bento-grid" style={{ marginBottom: '2rem', gridTemplateColumns: 'repeat(4, 1fr)', gridAutoRows: 'auto' }}>

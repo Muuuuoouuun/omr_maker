@@ -397,6 +397,17 @@ describe("production server-only database boundary", () => {
         expect(ci).toContain("node scripts/verify-supabase-live.mjs");
     });
 
+    it("runs transient credential DDL as the migration owner before restoring service role", () => {
+        const credentialDdl = liveAssertions.indexOf(
+            "alter table public.omr_student_start_credentials alter column start_code_hash drop not null",
+        );
+        expect(credentialDdl).toBeGreaterThan(-1);
+        expect(liveAssertions.lastIndexOf("reset role;", credentialDdl))
+            .toBeGreaterThan(liveAssertions.lastIndexOf("set role service_role;", credentialDdl));
+        expect(liveAssertions.indexOf("set role service_role;", credentialDdl))
+            .toBeGreaterThan(credentialDdl);
+    });
+
     it("proves exhaustive browser denial while retaining service-role execution and documents the gate", () => {
         const liveAssertionsWithoutTransactionalDrift = liveAssertions.replace(
             /-- BEGIN v4 transient readiness drift probes[\s\S]*?-- END v4 transient readiness drift probes/i,

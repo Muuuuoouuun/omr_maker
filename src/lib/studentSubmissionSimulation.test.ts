@@ -69,6 +69,39 @@ describe("student submission development simulation", () => {
         expect(first.attempt.questionResults).toHaveLength(3);
     });
 
+    it("accepts an idempotent question only for the cached attempt owner", () => {
+        const simulate = createStudentSubmissionSimulator();
+        const submitted = simulate(input, identity, env, 1_000);
+        if (submitted.status !== "ok") throw new Error("expected simulation attempt");
+
+        const asked = simulate.askQuestion(
+            submitted.attempt.id,
+            { questionId: 1, questionNumber: 1, body: "자동 복구 질문" },
+            identity,
+            env,
+            1_100,
+        );
+        expect(asked).toMatchObject({
+            status: "ok",
+            attempt: {
+                id: submitted.attempt.id,
+                studentQuestions: [{
+                    questionId: 1,
+                    questionNumber: 1,
+                    body: "자동 복구 질문",
+                    status: "queued",
+                }],
+            },
+        });
+        expect(simulate.askQuestion(
+            submitted.attempt.id,
+            { questionId: 1, questionNumber: 1, body: "다른 학생 질문" },
+            { ...identity, studentId: "student-b" },
+            env,
+            1_200,
+        )).toEqual({ status: "denied" });
+    });
+
     it("expires idle entries, evicts the least-recently-used entry at the cap, and supports deterministic reset", () => {
         const simulate = createStudentSubmissionSimulator({ ttlMs: 1_000, maxEntries: 2 });
         const withSubmission = (submissionId: string): SubmitAttemptInput => ({ ...input, submissionId });

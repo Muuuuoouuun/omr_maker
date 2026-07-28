@@ -102,7 +102,7 @@ begin
                     )
                 )
             else '{}'::jsonb
-        )
+        end
     where attempt.organization_id = p_organization_id
       and attempt.student_id = 'guest:' || p_guest_id
       and attempt.identity_type = 'guest'

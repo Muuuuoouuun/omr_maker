@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect } from "react";
-import { submitAttempt } from "@/app/actions/studentExam";
+import { askAttemptQuestion, submitAttempt } from "@/app/actions/studentExam";
 import {
     flushPendingSubmissionReceipts,
     isSubmissionReceiptStorageKey,
@@ -13,7 +13,11 @@ import {
     cleanupFollowUpDelayMs,
     maintainAndFlushPendingSubmissionReceipts,
 } from "@/lib/studentSubmissionFlush";
-import { STUDENT_SESSION_CHANGED_EVENT } from "@/utils/storage";
+import {
+    flushPendingStudentQuestionsForStudent,
+    isStudentQuestionOutboxStorageKey,
+} from "@/lib/studentQuestionOutbox";
+import { getSession, STUDENT_SESSION_CHANGED_EVENT } from "@/utils/storage";
 
 /**
  * Invisible app-wide helper: when connectivity or tab visibility returns,
@@ -35,7 +39,7 @@ export default function SyncFlusher() {
                 return;
             }
             running = true;
-            void maintainAndFlushPendingSubmissionReceipts(
+            const receiptMaintenance = maintainAndFlushPendingSubmissionReceipts(
                 () => flushPendingSubmissionReceipts({
                     submitSignedSessionAttempt: submitAttempt,
                 }),
@@ -44,8 +48,16 @@ export default function SyncFlusher() {
                     pendingSubmissionReceiptIds,
                     legacySubmissionReceiptCleanupDelayMs,
                 },
-            )
-                .then(({ cleanupDelayMs, maintenanceFailed }) => {
+            );
+            const session = getSession();
+            const questionRecovery = session?.studentId
+                ? flushPendingStudentQuestionsForStudent(session.studentId, askAttemptQuestion)
+                : Promise.resolve({ status: "empty" as const, sentCount: 0 as const });
+            void Promise.all([
+                receiptMaintenance,
+                questionRecovery.catch(() => ({ status: "retryable_error" as const, sentCount: 0 })),
+            ])
+                .then(([{ cleanupDelayMs, maintenanceFailed }]) => {
                     if (disposed) return;
                     consecutiveMaintenanceFailures = maintenanceFailed
                         ? consecutiveMaintenanceFailures + 1
@@ -87,7 +99,13 @@ export default function SyncFlusher() {
             // Native storage events are never delivered back to their source
             // document. Ignore unrelated/synthetic events and coalesce the
             // remaining cross-tab notification into one maintenance pass.
-            if (event.storageArea !== window.localStorage || !isSubmissionReceiptStorageKey(event.key)) return;
+            if (
+                event.storageArea !== window.localStorage
+                || (
+                    !isSubmissionReceiptStorageKey(event.key)
+                    && !isStudentQuestionOutboxStorageKey(event.key)
+                )
+            ) return;
             queueMaintenance();
         };
 

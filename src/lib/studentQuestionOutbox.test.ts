@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import {
     flushPendingStudentQuestions,
+    flushPendingStudentQuestionsForStudent,
     pendingStudentQuestionNotesById,
     queuePendingStudentQuestion,
     readPendingStudentQuestions,
@@ -25,15 +26,16 @@ function serializedLock(): {
     lock: StudentQuestionOutboxLock;
     names: string[];
 } {
-    let tail = Promise.resolve();
+    const tails = new Map<string, Promise<void>>();
     const names: string[] = [];
     return {
         names,
         lock: async <T>(name: string, operation: () => Promise<T> | T) => {
             names.push(name);
-            const prior = tail;
+            const prior = tails.get(name) || Promise.resolve();
             let release!: () => void;
-            tail = new Promise<void>(resolve => { release = resolve; });
+            const next = new Promise<void>(resolve => { release = resolve; });
+            tails.set(name, prior.then(() => next));
             await prior;
             try {
                 await Promise.resolve();
@@ -46,6 +48,90 @@ function serializedLock(): {
 }
 
 describe("student question outbox", () => {
+    it("automatically flushes only the active student's scoped questions", async () => {
+        const storage = memoryStorage();
+        await queuePendingStudentQuestion({
+            attemptId: "attempt-student-a",
+            ownerStudentId: "student-a",
+            questionId: 1,
+            questionNumber: 1,
+            body: "A 학생 질문",
+            queuedAt: "2026-07-28T12:00:00.000Z",
+        }, storage);
+        await queuePendingStudentQuestion({
+            attemptId: "attempt-student-b",
+            ownerStudentId: "student-b",
+            questionId: 2,
+            questionNumber: 2,
+            body: "B 학생 질문",
+            queuedAt: "2026-07-28T12:01:00.000Z",
+        }, storage);
+        const submit = vi.fn(async (attemptId: string) => ({
+            status: "ok",
+            attempt: { id: attemptId },
+        }));
+
+        await expect(flushPendingStudentQuestionsForStudent("student-a", submit, storage))
+            .resolves.toEqual({ status: "sent", sentCount: 1 });
+
+        expect(submit).toHaveBeenCalledOnce();
+        expect(submit).toHaveBeenCalledWith("attempt-student-a", expect.objectContaining({
+            body: "A 학생 질문",
+        }));
+        expect(readPendingStudentQuestions("attempt-student-a", storage)).toEqual([]);
+        expect(readPendingStudentQuestions("attempt-student-b", storage)).toEqual([
+            expect.objectContaining({ ownerStudentId: "student-b", body: "B 학생 질문" }),
+        ]);
+    });
+
+    it("does not automatically send legacy unscoped questions under a different active session", async () => {
+        const storage = memoryStorage();
+        await queuePendingStudentQuestion({
+            attemptId: "attempt-legacy",
+            questionId: 1,
+            questionNumber: 1,
+            body: "소유자 정보가 없는 기존 질문",
+            queuedAt: "2026-07-28T12:00:00.000Z",
+        }, storage);
+        const submit = vi.fn();
+
+        await expect(flushPendingStudentQuestionsForStudent("student-b", submit, storage))
+            .resolves.toEqual({ status: "empty", sentCount: 0 });
+
+        expect(submit).not.toHaveBeenCalled();
+        expect(readPendingStudentQuestions("attempt-legacy", storage)).toHaveLength(1);
+    });
+
+    it("serializes concurrent automatic flushes so one queued question is acknowledged once", async () => {
+        const storage = memoryStorage();
+        const { lock } = serializedLock();
+        await queuePendingStudentQuestion({
+            attemptId: "attempt-student-a",
+            ownerStudentId: "student-a",
+            questionId: 1,
+            questionNumber: 1,
+            body: "한 번만 전송할 질문",
+            queuedAt: "2026-07-28T12:00:00.000Z",
+        }, storage, lock);
+        let releaseSubmit!: () => void;
+        const submitGate = new Promise<void>(resolve => { releaseSubmit = resolve; });
+        const submit = vi.fn(async (attemptId: string) => {
+            await submitGate;
+            return { status: "ok", attempt: { id: attemptId } };
+        });
+
+        const first = flushPendingStudentQuestionsForStudent("student-a", submit, storage, lock);
+        const second = flushPendingStudentQuestionsForStudent("student-a", submit, storage, lock);
+        await vi.waitFor(() => expect(submit).toHaveBeenCalledOnce());
+        releaseSubmit();
+
+        await expect(Promise.all([first, second])).resolves.toEqual([
+            { status: "sent", sentCount: 1 },
+            { status: "empty", sentCount: 0 },
+        ]);
+        expect(submit).toHaveBeenCalledOnce();
+    });
+
     it("persists a normalized pending question before a server retry", async () => {
         const storage = memoryStorage();
 

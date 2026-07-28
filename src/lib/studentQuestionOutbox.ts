@@ -7,9 +7,12 @@ const STUDENT_QUESTION_QUARANTINE_KEY = "omr_pending_student_questions_quarantin
 export const STUDENT_QUESTION_OUTBOX_LIMIT = 100;
 const STUDENT_QUESTION_QUARANTINE_LIMIT = 20;
 const OUTBOX_LOCK_NAME = "student-question-outbox";
+const AUTO_FLUSH_LOCK_NAME = "student-question-auto-flush";
 
 export interface PendingStudentQuestion extends StudentQuestionInput {
     attemptId: string;
+    /** Local session owner used only to prevent cross-student automatic retries. */
+    ownerStudentId?: string;
     queuedAt: string;
 }
 
@@ -28,19 +31,22 @@ export type StudentQuestionOutboxLock = <T>(
 type StorageReader = Pick<Storage, "getItem">;
 type StorageWriter = Pick<Storage, "getItem" | "setItem" | "removeItem">;
 
-let serverTail = Promise.resolve();
+const serverTails = new Map<string, Promise<void>>();
 const serverProcessLock: StudentQuestionOutboxLock = async <T>(
-    _name: string,
+    name: string,
     operation: () => Promise<T> | T,
 ) => {
-    const prior = serverTail;
+    const prior = serverTails.get(name) || Promise.resolve();
     let release!: () => void;
-    serverTail = new Promise<void>(resolve => { release = resolve; });
+    const next = new Promise<void>(resolve => { release = resolve; });
+    const tail = prior.then(() => next);
+    serverTails.set(name, tail);
     await prior;
     try {
         return await operation();
     } finally {
         release();
+        if (serverTails.get(name) === tail) serverTails.delete(name);
     }
 };
 
@@ -60,6 +66,7 @@ function normalizeEntry(value: unknown): PendingStudentQuestion | null {
     if (!value || typeof value !== "object" || Array.isArray(value)) return null;
     const record = value as Record<string, unknown>;
     const attemptId = clean(record.attemptId);
+    const ownerStudentId = clean(record.ownerStudentId) || undefined;
     const body = normalizeStudentQuestionBody(clean(record.body));
     const questionId = Number(record.questionId);
     const questionNumber = Number(record.questionNumber);
@@ -71,7 +78,7 @@ function normalizeEntry(value: unknown): PendingStudentQuestion | null {
         || !Number.isSafeInteger(questionNumber)
         || !Number.isFinite(Date.parse(queuedAt))
     ) return null;
-    return { attemptId, questionId, questionNumber, body, queuedAt };
+    return { attemptId, ownerStudentId, questionId, questionNumber, body, queuedAt };
 }
 
 function parseEntries(raw: string | null): {
@@ -172,10 +179,18 @@ function writeAll(entries: PendingStudentQuestion[], storage: StorageWriter): bo
 export function readPendingStudentQuestions(
     attemptId: string,
     storage: StorageReader | null = defaultStorage(),
+    ownerStudentId?: string,
 ): PendingStudentQuestion[] {
     return readAll(storage)
-        .filter(entry => entry.attemptId === attemptId)
+        .filter(entry => (
+            entry.attemptId === attemptId
+            && (!ownerStudentId || entry.ownerStudentId === ownerStudentId)
+        ))
         .sort((a, b) => Date.parse(a.queuedAt) - Date.parse(b.queuedAt) || a.questionId - b.questionId);
+}
+
+export function isStudentQuestionOutboxStorageKey(key: string | null): boolean {
+    return key === STUDENT_QUESTION_OUTBOX_KEY;
 }
 
 export async function queuePendingStudentQuestion(
@@ -237,6 +252,7 @@ export async function flushPendingStudentQuestions<TAttempt extends Pick<Attempt
     ) => Promise<{ status: string; attempt?: TAttempt }>,
     storage: StorageWriter | null = defaultStorage(),
     lock: StudentQuestionOutboxLock = defaultLock(),
+    ownerStudentId?: string,
 ): Promise<
     | { status: "empty" }
     | { status: "sent"; attempt: TAttempt }
@@ -245,7 +261,10 @@ export async function flushPendingStudentQuestions<TAttempt extends Pick<Attempt
     if (!storage) return { status: "retryable_error" };
     let pending: PendingStudentQuestion[];
     try {
-        pending = await lock(OUTBOX_LOCK_NAME, () => readPendingStudentQuestions(attemptId, storage));
+        pending = await lock(
+            OUTBOX_LOCK_NAME,
+            () => readPendingStudentQuestions(attemptId, storage, ownerStudentId),
+        );
     } catch {
         return { status: "retryable_error", error: "storage_lock_failed" };
     }
@@ -268,6 +287,7 @@ export async function flushPendingStudentQuestions<TAttempt extends Pick<Attempt
                 if (!current) return false;
                 const remaining = current.filter(candidate => (
                     candidate.attemptId !== entry.attemptId
+                    || candidate.ownerStudentId !== entry.ownerStudentId
                     || candidate.questionId !== entry.questionId
                     || candidate.queuedAt !== entry.queuedAt
                     || candidate.body !== entry.body
@@ -285,4 +305,52 @@ export async function flushPendingStudentQuestions<TAttempt extends Pick<Attempt
 
     if (!latestAttempt) return { status: "retryable_error" };
     return { status: "sent", attempt: latestAttempt };
+}
+
+export async function flushPendingStudentQuestionsForStudent<TAttempt extends Pick<Attempt, "id">>(
+    ownerStudentId: string,
+    submit: (
+        attemptId: string,
+        question: StudentQuestionInput,
+    ) => Promise<{ status: string; attempt?: TAttempt }>,
+    storage: StorageWriter | null = defaultStorage(),
+    lock: StudentQuestionOutboxLock = defaultLock(),
+): Promise<
+    | { status: "empty"; sentCount: 0 }
+    | { status: "sent"; sentCount: number }
+    | { status: "retryable_error"; sentCount: number; error?: string }
+> {
+    const owner = clean(ownerStudentId);
+    if (!owner || !storage) return { status: "empty", sentCount: 0 };
+    try {
+        return await lock(AUTO_FLUSH_LOCK_NAME, async () => {
+            const pending = await lock(
+                OUTBOX_LOCK_NAME,
+                () => readAll(storage).filter(entry => entry.ownerStudentId === owner),
+            );
+            if (pending.length === 0) return { status: "empty" as const, sentCount: 0 as const };
+
+            const attemptIds = [...new Set(pending.map(entry => entry.attemptId))];
+            let sentCount = 0;
+            for (const attemptId of attemptIds) {
+                const attemptCount = pending.filter(entry => entry.attemptId === attemptId).length;
+                const result = await flushPendingStudentQuestions(
+                    attemptId,
+                    submit,
+                    storage,
+                    lock,
+                    owner,
+                );
+                if (result.status === "retryable_error") {
+                    return { status: "retryable_error" as const, sentCount, error: result.error };
+                }
+                if (result.status === "sent") sentCount += attemptCount;
+            }
+            return sentCount > 0
+                ? { status: "sent" as const, sentCount }
+                : { status: "empty" as const, sentCount: 0 as const };
+        });
+    } catch {
+        return { status: "retryable_error", sentCount: 0, error: "storage_lock_failed" };
+    }
 }

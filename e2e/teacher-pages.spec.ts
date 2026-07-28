@@ -57,7 +57,10 @@ async function authenticateTeacher(
         secure: false,
     }]);
 
-    await page.goto("/");
+    // Session seeding only needs the document and Storage APIs. Waiting for
+    // every development asset to reach `load` can stall WebKit after a long
+    // serial matrix even though the document is already interactive.
+    await page.goto("/", { waitUntil: "domcontentloaded" });
     await page.evaluate(() => {
         try { window.localStorage.clear(); } catch {}
         try { window.sessionStorage.clear(); } catch {}
@@ -336,6 +339,15 @@ test.describe("Create page label memory", () => {
         await authenticateTeacher(page, baseURL);
     });
 
+    const revealAnswerImportTrigger = async (page: Page) => {
+        const trigger = page.getByRole("button", { name: "정답 인식 마법사 열기" });
+        if (!await trigger.isVisible()) {
+            await page.getByRole("tab", { name: /^설정/ }).click();
+        }
+        await expect(trigger).toBeVisible();
+        return trigger;
+    };
+
     test("keyboard upload buttons activate problem and answer-key PDF inputs", async ({ page }) => {
         await page.goto("/create");
         const fixturePath = path.join(process.cwd(), "e2e/fixtures/sample-problem.pdf");
@@ -372,7 +384,7 @@ test.describe("Create page label memory", () => {
     test("keyboard upload in the answer import modal opens a file chooser and shows the selected PDF", async ({ page }) => {
         await page.goto("/create");
         const fixturePath = path.join(process.cwd(), "e2e/fixtures/sample-problem.pdf");
-        await page.getByRole("button", { name: "정답 인식 마법사 열기" }).click();
+        await (await revealAnswerImportTrigger(page)).click();
 
         const dialog = page.getByRole("dialog", { name: "정답 PDF 불러오기" });
         await expect(dialog).toBeVisible();
@@ -380,9 +392,13 @@ test.describe("Create page label memory", () => {
         await upload.focus();
         await expect(upload).toBeFocused();
 
-        const chooserPromise = page.waitForEvent("filechooser");
-        await page.keyboard.press("Enter");
-        const chooser = await chooserPromise;
+        const [chooser] = await Promise.all([
+            page.waitForEvent("filechooser"),
+            // Keep the interaction keyboard-only while binding it to the
+            // asserted control so a dialog re-render cannot move page focus
+            // between the focus check and the key dispatch.
+            upload.press("Enter"),
+        ]);
         await chooser.setFiles(fixturePath);
 
         await expect(dialog.getByText("sample-problem.pdf", { exact: true })).toBeVisible();
@@ -390,7 +406,7 @@ test.describe("Create page label memory", () => {
 
     test("dialog focus wraps and returns to the answer import trigger", async ({ page }) => {
         await page.goto("/create");
-        const trigger = page.getByRole("button", { name: "정답 인식 마법사 열기" });
+        const trigger = await revealAnswerImportTrigger(page);
         await trigger.focus();
         await trigger.press("Enter");
 
@@ -421,7 +437,7 @@ test.describe("Create page label memory", () => {
 
     test("dialog focus contains handled keys while ordinary keys still bubble", async ({ page }) => {
         await page.goto("/create");
-        await page.getByRole("button", { name: "정답 인식 마법사 열기" }).click();
+        await (await revealAnswerImportTrigger(page)).click();
 
         const dialog = page.getByRole("dialog", { name: "정답 PDF 불러오기" });
         const firstControl = dialog.getByRole("button", { name: "정답 PDF 모달 닫기" });
@@ -455,6 +471,9 @@ test.describe("Create page label memory", () => {
 
     test("dialog focus wraps and returns to the create settings trigger", async ({ page }) => {
         await page.goto("/create");
+        if (!await page.getByLabel("빠른 정답 입력").isVisible()) {
+            await page.getByRole("tab", { name: /^설정/ }).click();
+        }
         await page.getByLabel("빠른 정답 입력").fill("5");
 
         const trigger = page.getByRole("button", { name: "4지선다", exact: true });
@@ -577,6 +596,9 @@ test.describe("Create page label memory", () => {
         await page.goto("/create");
 
         const input = page.getByLabel("문항 수 직접 입력");
+        if (!await input.isVisible()) {
+            await page.getByRole("tab", { name: /^설정/ }).click();
+        }
         await input.fill("45");
         await input.press("Enter");
         await expect(input).toHaveValue("45");

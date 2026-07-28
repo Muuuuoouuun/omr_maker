@@ -558,7 +558,7 @@ export default function LiveResultsPage() {
             <div className="orb orb-secondary" />
             <TeacherHeader badge="LIVE" badgeColor="#ef4444" />
 
-            <main className="container animate-fade-in" style={{ paddingBottom: '4rem', position: 'relative', zIndex: 1 }}>
+            <main id="main-content" tabIndex={-1} className="container animate-fade-in" style={{ paddingBottom: '4rem', position: 'relative', zIndex: 1 }}>
                 {/* Header row */}
                 <div style={{ margin: '3rem 0 2rem', display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end', gap: '2rem', flexWrap: 'wrap' }}>
                     <div>

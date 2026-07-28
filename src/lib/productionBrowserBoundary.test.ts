@@ -86,6 +86,9 @@ describe("canonical browser data-plane boundary", () => {
         expect(migration).toContain("omr_claim_guest_attempts_v1");
         expect(migration).toContain("for update");
         expect(migration).toContain("grant execute on function public.omr_claim_guest_attempts_v1");
+        expect(migration).toMatch(
+            /\|\| case[\s\S]*else '\{\}'::jsonb\s+end\s+where attempt\.organization_id/i,
+        );
     });
 
     it("keeps failed student questions visible and retries the durable full union", () => {

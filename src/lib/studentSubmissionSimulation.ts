@@ -1,6 +1,16 @@
-import { buildServerAttempt, ownerStudentId, type SubmitAttemptInput } from "@/lib/studentExamCore";
+import {
+    attemptOwnedBy,
+    buildServerAttempt,
+    ownerStudentId,
+    type SubmitAttemptInput,
+} from "@/lib/studentExamCore";
 import { resolveStudentSessionSecret, type StudentServerIdentity } from "@/lib/studentServerSession";
 import { attemptIdForStudentSubmission } from "@/lib/studentSubmissionId";
+import {
+    upsertStudentQuestion,
+    validateStudentQuestionForAttempt,
+    type StudentQuestionInput,
+} from "@/lib/studentQuestions";
 import type { Attempt, Exam } from "@/types/omr";
 
 type Env = Record<string, string | undefined>;
@@ -17,6 +27,15 @@ export interface StudentSubmissionSimulator {
         env?: Env,
         now?: number,
     ): StudentSubmissionSimulationResult;
+    askQuestion(
+        attemptId: string,
+        question: StudentQuestionInput,
+        identity: StudentServerIdentity,
+        env?: Env,
+        now?: number,
+    ):
+        | { status: "disabled" | "invalid" | "not_found" | "denied" }
+        | { status: "ok"; attempt: Attempt };
     reset(): void;
     size(): number;
 }
@@ -157,6 +176,27 @@ export function createStudentSubmissionSimulator(
         });
         return { status: "ok", attempt };
     }) as StudentSubmissionSimulator;
+    simulate.askQuestion = (
+        attemptId,
+        question,
+        identity,
+        env: Env = process.env,
+        now: number = Date.now(),
+    ) => {
+        if (env.NODE_ENV === "production" || !enabled(env.OMR_E2E_STUDENT_SUBMISSION_SIMULATION)) {
+            return { status: "disabled" };
+        }
+        const entry = attempts.get(clean(attemptId));
+        if (!entry) return { status: "not_found" };
+        if (!attemptOwnedBy(entry.attempt, identity)) return { status: "denied" };
+        const validated = validateStudentQuestionForAttempt(entry.attempt, question);
+        if (!validated) return { status: "invalid" };
+        const updated = upsertStudentQuestion(entry.attempt, validated, new Date(now).toISOString());
+        if (!updated) return { status: "invalid" };
+        attempts.delete(entry.attempt.id);
+        attempts.set(entry.attempt.id, { attempt: updated, lastAccessedAt: now });
+        return { status: "ok", attempt: updated };
+    };
     simulate.reset = () => {
         attempts.clear();
         fingerprints.clear();

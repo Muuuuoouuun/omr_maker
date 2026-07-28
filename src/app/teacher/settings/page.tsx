@@ -512,7 +512,7 @@ export default function SettingsPage() {
         <div className="layout-main">
             <TeacherHeader badge="SETTINGS" badgeColor="#6366f1" />
 
-            <main className="container animate-fade-in" style={{ paddingBottom: '4rem', position: 'relative', zIndex: 1 }}>
+            <main id="main-content" tabIndex={-1} className="container animate-fade-in" style={{ paddingBottom: '4rem', position: 'relative', zIndex: 1 }}>
                 <div style={{ margin: '3rem 0 2rem' }}>
                     <h1 className="title-gradient" style={{ fontSize: '2.5rem', marginBottom: '0.5rem', lineHeight: 1.2 }}>설정</h1>
                     <p className="text-muted" style={{ fontSize: '1.05rem' }}>프로필, 알림, 시험 기본값을 관리하세요.</p>

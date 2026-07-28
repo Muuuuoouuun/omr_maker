@@ -1787,6 +1787,8 @@ set display_name = excluded.display_name,
     status = excluded.status,
     updated_at = now();
 
+reset role;
+
 do $$
 declare
     diagnostics jsonb;
@@ -1883,6 +1885,8 @@ begin
     execute 'alter table public.omr_student_start_credentials alter column start_code_hash set not null';
 end
 $$;
+
+set role service_role;
 
 do $$
 declare

@@ -1092,6 +1092,96 @@ test.describe("Teacher and student full journey", () => {
         expect(durableState.requestKeys).toEqual([]);
     });
 
+    test("automatically sends an offline queued question after connectivity recovers", async ({ page }) => {
+        await seedStudentRoster(page);
+        await loginAsStudent(page);
+        await seedExamAndStudent(page);
+        await page.goto(`/solve/${TEST_EXAM_ID}`);
+        await ensureAnswerPaneVisible(page);
+        await page.getByRole("radio", { name: "문제 1번 보기 2" }).click();
+        await page.getByRole("radio", { name: "문제 2번 보기 3" }).click();
+        await page.getByRole("radio", { name: "문제 3번 보기 1" }).click();
+        await page.locator(".solve-submit-button").click();
+        await page.getByRole("dialog", { name: "답안 제출" })
+            .getByRole("button", { name: "제출하기" })
+            .click();
+        await expect(page).toHaveURL(/\/student\/review\/[^/?#]+$/, { timeout: 15_000 });
+        const attemptId = new URL(page.url()).pathname.split("/").pop() || "";
+        const questionBody = "연결 복구 후 자동 전송할 질문";
+
+        await page.getByRole("button", { name: "질문", exact: true }).first().click();
+        await page.getByLabel("선생님께 남길 질문").first().fill(questionBody);
+        let initialQuestionRequestAborted = false;
+        await page.route("**/*", async route => {
+            const request = route.request();
+            if (
+                !initialQuestionRequestAborted
+                && request.method() === "POST"
+                && !!request.headers()["next-action"]
+                && request.postData()?.includes(questionBody)
+            ) {
+                initialQuestionRequestAborted = true;
+                await route.abort("internetdisconnected");
+                return;
+            }
+            await route.continue();
+        });
+        await page.getByRole("button", { name: "질문 저장" }).first().click();
+        await expect(page.getByText("질문 전송 보류")).toBeVisible();
+        expect(initialQuestionRequestAborted).toBe(true);
+
+        const queuedBeforeRecovery = await page.evaluate(({ activeAttemptId, body }) => {
+            const key = "omr_pending_student_questions_v1";
+            const entries = JSON.parse(window.localStorage.getItem(key) || "[]");
+            entries.push({
+                attemptId: "attempt-student-b",
+                ownerStudentId: "student-b",
+                questionId: 2,
+                questionNumber: 2,
+                body: "다른 학생의 보류 질문",
+                queuedAt: "2026-07-28T12:01:00.000Z",
+            });
+            window.localStorage.setItem(key, JSON.stringify(entries));
+            return entries.find((entry: { attemptId?: string; body?: string }) => (
+                entry.attemptId === activeAttemptId && entry.body === body
+            ));
+        }, { activeAttemptId: attemptId, body: questionBody });
+        expect(queuedBeforeRecovery).toMatchObject({
+            attemptId,
+            ownerStudentId: TEST_STUDENT_ID,
+            body: questionBody,
+        });
+
+        await page.unroute("**/*");
+        let recoveryQuestionRequests = 0;
+        page.on("request", request => {
+            if (
+                request.method() === "POST"
+                && !!request.headers()["next-action"]
+                && request.postData()?.includes(questionBody)
+            ) recoveryQuestionRequests += 1;
+        });
+        await page.evaluate(() => window.dispatchEvent(new Event("online")));
+
+        await expect.poll(async () => page.evaluate((body) => {
+            const entries = JSON.parse(
+                window.localStorage.getItem("omr_pending_student_questions_v1") || "[]",
+            );
+            return entries.some((entry: { body?: string }) => entry.body === body);
+        }, questionBody)).toBe(false);
+        expect(recoveryQuestionRequests).toBe(1);
+        const remaining = await page.evaluate(() => JSON.parse(
+            window.localStorage.getItem("omr_pending_student_questions_v1") || "[]",
+        ));
+        expect(remaining).toEqual([
+            expect.objectContaining({
+                attemptId: "attempt-student-b",
+                ownerStudentId: "student-b",
+                body: "다른 학생의 보류 질문",
+            }),
+        ]);
+    });
+
     test("reconciles manual and automatic submission receipt retries through the real server action", async ({ page }) => {
         await page.context().addInitScript(() => {
             Object.defineProperty(navigator, "locks", {

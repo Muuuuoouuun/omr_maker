@@ -1,9 +1,10 @@
 import { pbkdf2Sync } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import { buildDeploymentReadiness } from "./deploymentReadiness";
+import { TEACHER_PASSWORD_HASH_MIN_ITERATIONS } from "./teacherAuth";
 
 function teacherPasswordHash(password: string, saltHex = "00112233445566778899aabbccddeeff"): string {
-    const iterations = 1_000;
+    const iterations = TEACHER_PASSWORD_HASH_MIN_ITERATIONS;
     const hashHex = pbkdf2Sync(password, Buffer.from(saltHex, "hex"), iterations, 32, "sha256").toString("hex");
     return `pbkdf2-sha256:${iterations}:${saltHex}:${hashHex}`;
 }

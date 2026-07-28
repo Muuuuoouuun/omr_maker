@@ -14,6 +14,7 @@ import TeacherLogoutButton from "@/components/TeacherLogoutButton";
 import NotificationBell from "@/components/NotificationBell";
 import TeacherSessionChip from "@/components/TeacherSessionChip";
 import GlobalSearch from "@/components/GlobalSearch";
+import SkipToMainContent from "@/components/SkipToMainContent";
 import { AnalyticsTabSkeleton, DashboardPageSkeleton } from "@/components/dashboard/DashboardLoadingSkeleton";
 
 // Analytics tabs statically import recharts + thousands of lines of analytics code
@@ -588,6 +589,7 @@ function TeacherDashboard() {
 
     return (
         <div className={`layout-main${isMockupAccount ? " mockup-dashboard-shell" : ""}`}>
+            <SkipToMainContent />
             <header className="header teacher-header">
                 <div className="container header-content">
                     <div className="teacher-header-brand" style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
@@ -657,7 +659,7 @@ function TeacherDashboard() {
             </header>
             <GlobalSearch />
 
-            <main className={`container dashboard-main animate-fade-in${isMockupAccount ? " mockup-dashboard-main" : ""}${isMockupAccount && activeTab !== "overview" ? " mockup-dashboard-subview" : ""}`}>
+            <main id="main-content" tabIndex={-1} className={`container dashboard-main animate-fade-in${isMockupAccount ? " mockup-dashboard-main" : ""}${isMockupAccount && activeTab !== "overview" ? " mockup-dashboard-subview" : ""}`}>
                 {/* Welcome Section */}
                 <div className="dashboard-welcome">
                     <div style={{ minWidth: 0 }}>

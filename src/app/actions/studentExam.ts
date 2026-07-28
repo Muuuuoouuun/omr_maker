@@ -393,6 +393,19 @@ export async function askAttemptQuestion(
     if (!headerStore.get("origin") || !isSameOriginServerActionRequest(headerStore)) {
         return { status: "error" };
     }
+    if (
+        process.env.NODE_ENV !== "production"
+        && process.env.OMR_E2E_STUDENT_SUBMISSION_SIMULATION === "1"
+    ) {
+        const cookieStore = await cookies();
+        const identity = parseSignedStudentSessionCookie(cookieStore.get(STUDENT_SERVER_SESSION_COOKIE)?.value);
+        if (identity) {
+            const simulated = simulateStudentSubmission.askQuestion(attemptId, question, identity);
+            if (simulated.status === "ok") return simulated;
+            if (simulated.status === "denied") return { status: "denied" };
+            if (simulated.status === "invalid") return { status: "error" };
+        }
+    }
     const ctx = await resolveCtx();
     if (!isCtx(ctx)) return ctx;
     try {

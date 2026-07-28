@@ -4,6 +4,7 @@ import { cookies, headers } from "next/headers";
 import { createSupabaseAdminClient, getSupabaseServerConfigFromEnv } from "@/lib/supabaseServerAdmin";
 import { isSameOriginServerActionRequest } from "@/lib/serverActionSecurity";
 import { parseSignedTeacherSessionCookie, TEACHER_SERVER_SESSION_COOKIE } from "@/lib/teacherServerSession";
+import { isTeacherMutationAuthorized } from "@/lib/teacherMutationAuthorization";
 import { workspaceContextFromTeacherSession } from "@/lib/workspaceContext";
 
 type Result = { status: "saved" } | { status: "local_only" | "unauthorized" | "service_unavailable"; error?: string };
@@ -26,6 +27,7 @@ async function context(): Promise<Context> {
     if (!isSameOriginServerActionRequest(headerStore)) return { status: "unauthorized" as const };
     const session = parseSignedTeacherSessionCookie((await cookies()).get(TEACHER_SERVER_SESSION_COOKIE)?.value);
     if (!session) return { status: "unauthorized" as const };
+    if (!isTeacherMutationAuthorized(session)) return { status: "unauthorized" as const };
     return { client: createSupabaseAdminClient(config) as unknown as Client, workspace: workspaceContextFromTeacherSession(session) };
 }
 

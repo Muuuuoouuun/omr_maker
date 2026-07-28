@@ -2009,6 +2009,10 @@ html[data-motion="off"] :where(
 }
 
 /* ─── Home App Entry ─────────────────────────────────── */
+.landing-main {
+  width: 100%;
+}
+
 .home-logo {
   display: flex;
   justify-content: center;
@@ -2049,6 +2053,30 @@ html[data-motion="off"] :where(
 .home-role-home-link:focus-visible {
   outline: 3px solid color-mix(in srgb, var(--primary), transparent 55%);
   outline-offset: 3px;
+}
+
+.skip-to-main {
+  position: fixed;
+  top: max(0.75rem, env(safe-area-inset-top));
+  left: max(0.75rem, env(safe-area-inset-left));
+  z-index: 10050;
+  padding: 0.7rem 1rem;
+  border: 2px solid var(--primary);
+  border-radius: var(--radius-md);
+  background: var(--surface);
+  color: var(--foreground);
+  box-shadow: var(--shadow-lg);
+  font-size: 0.9rem;
+  font-weight: 800;
+  opacity: 0;
+  pointer-events: none;
+  transform: translateY(calc(-100% - 1rem));
+}
+
+.skip-to-main:focus-visible {
+  opacity: 1;
+  pointer-events: auto;
+  transform: translateY(0);
 }
 
 .home-page:not([data-home-role="none"]) .home-hero {
@@ -5639,7 +5667,9 @@ body:has(.create-workspace.is-resizing) {
   .dashboard-data-health {
     grid-template-columns: 1fr !important;
   }
+}
 
+@media (max-width: 1024px), (max-width: 1280px) and (pointer: coarse) {
   .create-workspace {
     flex-direction: column !important;
     height: auto !important;

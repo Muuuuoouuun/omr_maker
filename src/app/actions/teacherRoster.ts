@@ -9,6 +9,7 @@ import {
     type TeacherRosterGatewayClient,
 } from "@/lib/teacherRosterGateway";
 import { parseSignedTeacherSessionCookie, TEACHER_SERVER_SESSION_COOKIE } from "@/lib/teacherServerSession";
+import { isTeacherMutationAuthorized } from "@/lib/teacherMutationAuthorization";
 import { workspaceContextFromTeacherSession } from "@/lib/workspaceContext";
 import { authorizeRosterStudentSet } from "@/app/actions/premiumAccess";
 import type { RosterSnapshot } from "@/lib/rosterPersistence";
@@ -18,12 +19,13 @@ type ActionContext = {
     context: ReturnType<typeof workspaceContextFromTeacherSession>;
 } | { status: "local_only" | "unauthorized" | "service_unavailable" };
 
-async function actionContext(): Promise<ActionContext> {
+async function actionContext(requireWrite = false): Promise<ActionContext> {
     const headerStore = await headers();
     if (!isSameOriginServerActionRequest(headerStore)) return { status: "unauthorized" };
     const cookieStore = await cookies();
     const session = parseSignedTeacherSessionCookie(cookieStore.get(TEACHER_SERVER_SESSION_COOKIE)?.value);
     if (!session) return { status: "unauthorized" };
+    if (requireWrite && !isTeacherMutationAuthorized(session)) return { status: "unauthorized" };
     const config = getSupabaseServerConfigFromEnv();
     if (!config) return { status: process.env.NODE_ENV === "production" ? "service_unavailable" : "local_only" };
     return {
@@ -50,7 +52,7 @@ export async function saveTeacherCanonicalRoster(snapshot: RosterSnapshot): Prom
     | { status: "invalid_roster" | "local_only" | "unauthorized" | "service_unavailable" | "plan_denied"; error?: string }
 > {
     try {
-        const gateway = await actionContext();
+        const gateway = await actionContext(true);
         if ("status" in gateway) return gateway;
         const previous = await loadTeacherRosterWithGateway(gateway.client, gateway.context);
         if (previous.status !== "loaded") return previous;

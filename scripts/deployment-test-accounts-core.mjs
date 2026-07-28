@@ -40,7 +40,8 @@ function parseEncodedPbkdf2(encoded) {
         rest.length > 0
         || algorithm !== HASH_ALGORITHM
         || !Number.isSafeInteger(iterations)
-        || iterations < 1_000
+        || iterations < HASH_ITERATIONS
+        || iterations > 1_000_000
         || !/^[a-f0-9]{32}$/i.test(saltHex || "")
         || !/^[a-f0-9]{64}$/i.test(hashHex || "")
     ) {

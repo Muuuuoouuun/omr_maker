@@ -942,7 +942,13 @@ export default function ReviewPage() {
         questionSaveInFlightRef.current = true;
         try {
             const queuedAt = new Date().toISOString();
-            const queued = await queuePendingStudentQuestion({ attemptId: base.id, ...input, queuedAt });
+            const ownerStudentId = base.studentId || getSession()?.studentId;
+            const queued = await queuePendingStudentQuestion({
+                attemptId: base.id,
+                ownerStudentId,
+                ...input,
+                queuedAt,
+            });
             if (queued.status !== "queued") {
                 toast.error(
                     "질문 저장 실패",

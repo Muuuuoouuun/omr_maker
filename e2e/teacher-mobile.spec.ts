@@ -335,7 +335,13 @@ test.describe("Teacher phone and tablet app surfaces", () => {
         expect(viewerBox).not.toBeNull();
         expect(viewerBox!.width).toBeGreaterThanOrEqual(300);
         expect(viewerBox!.width).toBeGreaterThanOrEqual(sidebarBox!.width - 2);
-        expect(viewerBox!.y).toBeGreaterThanOrEqual(sidebarBox!.y + sidebarBox!.height);
+        const stacksHandwritingPanels = await page.evaluate(() => window.matchMedia("(max-width: 760px)").matches);
+        if (stacksHandwritingPanels) {
+            expect(viewerBox!.y).toBeGreaterThanOrEqual(sidebarBox!.y + sidebarBox!.height);
+        } else {
+            expect(viewerBox!.x).toBeGreaterThanOrEqual(sidebarBox!.x + sidebarBox!.width);
+            expect(Math.abs(viewerBox!.y - sidebarBox!.y)).toBeLessThanOrEqual(2);
+        }
     });
 
     test("lays out the mobile student result tabs as touch-friendly rows", async ({ page }) => {
