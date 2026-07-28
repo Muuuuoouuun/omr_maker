@@ -214,6 +214,17 @@ describe("service UI surface", () => {
         ).toEqual(expectedOverrides);
     });
 
+    it("gives the active landing content one main structure and role-level headings", () => {
+        const homePage = readProjectFile("src/app/page.tsx");
+
+        expect(homePage.match(/<main(?:\s|>)/g) ?? []).toHaveLength(1);
+        expect(homePage.match(/<\/main>/g) ?? []).toHaveLength(1);
+        expect(homePage).toContain('<main id="main-content" className="landing-main">');
+        expect(homePage).toMatch(/<h1[^>]*>/);
+        expect(homePage).toContain("교사 포털 로그인");
+        expect(homePage).toContain("학생 포털 로그인");
+    });
+
     it("keeps premium scrollbars on the app, PDF viewer, and dense panels", () => {
         const css = readProjectFile("src/app/globals.css");
         const pdfViewer = readProjectFile("src/components/PDFViewer.tsx");

@@ -184,6 +184,39 @@ async function auditPage(page: Page, target: AuditTarget) {
 test.describe("UI-UX PROMAX layout audit", () => {
     test.skip(({ browserName }) => browserName !== "chromium", "Layout audit runs on Chromium only.");
 
+    test("keeps one visible landing landmark and one role-specific level-one heading", async ({ browser }) => {
+        const landingStates = [
+            { name: "initial", path: "/", expectedText: "OMR Maker", heading: "OMR Maker" },
+            { name: "teacher", path: "/?role=teacher", expectedText: "교사 포털", heading: "교사 포털 로그인" },
+            { name: "student", path: "/?role=student", expectedText: "학생 포털", heading: "학생 포털 로그인" },
+        ] as const;
+
+        for (const state of landingStates) {
+            const page = await visitTarget(browser, {
+                name: state.name,
+                path: state.path,
+                expectedText: state.expectedText,
+                viewport: { width: 1440, height: 900 },
+            });
+            const main = page.locator("main");
+            const levelOneHeadings = page.locator("h1");
+            const activeHeading = page.getByRole("heading", { level: 1, name: state.heading, exact: true });
+
+            await expect(main, `${state.name} should have exactly one main landmark in the DOM`).toHaveCount(1);
+            await expect(page.locator("main:visible"), `${state.name} should have exactly one visible main landmark`).toHaveCount(1);
+            await expect(levelOneHeadings, `${state.name} should not retain a hidden duplicate h1`).toHaveCount(1);
+            await expect(page.locator("h1:visible"), `${state.name} should have exactly one visible h1`).toHaveCount(1);
+            await expect(activeHeading, `${state.name} should expose its active role heading`).toBeVisible();
+            await expect(main.filter({ has: activeHeading }), `${state.name} h1 should belong to main content`).toHaveCount(1);
+            expect(
+                await page.locator(".brand-logo").evaluateAll(logos => logos.every(logo => logo.tagName !== "H1")),
+                `${state.name} decorative product branding should not compete as a heading`,
+            ).toBe(true);
+
+            await page.context().close();
+        }
+    });
+
     test("keeps key student, teacher, and admin surfaces readable and touch-safe", async ({ browser }) => {
         const results: Array<{ name: string; result: Awaited<ReturnType<typeof auditPage>> }> = [];
         for (const target of TARGETS) {

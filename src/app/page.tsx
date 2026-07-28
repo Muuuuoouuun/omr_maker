@@ -771,65 +771,68 @@ export default function Home() {
         </div>
       )}
 
-      <div
-        className="container animate-fade-in home-container"
-        style={{ maxWidth: "960px", position: "relative", zIndex: 1, padding: "3rem 1.5rem" }}
-      >
-        {/* ── Hero ───────────────────────────── */}
-        <div className="home-hero" style={{ textAlign: "center", marginBottom: "4rem" }}>
-          <div
-            className="stagger-1 animate-fade-in home-logo"
-            style={{ marginBottom: "1.4rem", opacity: 0 }}
-          >
-            <BrandLogo
-              markOnly
-              className="brand-logo--hero"
-              priorityLabel="역할 선택 홈으로"
-              onClick={handleHomeNavigation}
-            />
-          </div>
+      <main id="main-content" className="landing-main">
+        <div
+          className="container animate-fade-in home-container"
+          style={{ maxWidth: "960px", position: "relative", zIndex: 1, padding: "3rem 1.5rem" }}
+        >
+          {/* ── Hero ───────────────────────────── */}
+          {role === "none" && (
+            <div className="home-hero" style={{ textAlign: "center", marginBottom: "4rem" }}>
+              <div
+                className="stagger-1 animate-fade-in home-logo"
+                style={{ marginBottom: "1.4rem", opacity: 0 }}
+              >
+                <BrandLogo
+                  markOnly
+                  className="brand-logo--hero"
+                  priorityLabel="역할 선택 홈으로"
+                  onClick={handleHomeNavigation}
+                />
+              </div>
 
-          <h1
-            className="title-gradient stagger-2 animate-fade-in home-title"
-            style={{
-              fontSize: "clamp(3.2rem, 8vw, 5.5rem)",
-              lineHeight: 1.04,
-              letterSpacing: 0,
-              fontWeight: 900,
-              marginBottom: "1rem",
-              opacity: 0,
-            }}
-          >
-            OMR Maker
-          </h1>
+              <h1
+                className="title-gradient stagger-2 animate-fade-in home-title"
+                style={{
+                  fontSize: "clamp(3.2rem, 8vw, 5.5rem)",
+                  lineHeight: 1.04,
+                  letterSpacing: 0,
+                  fontWeight: 900,
+                  marginBottom: "1rem",
+                  opacity: 0,
+                }}
+              >
+                OMR Maker
+              </h1>
 
-          <div
-            className="badge badge-primary stagger-3 animate-fade-in home-eyebrow"
-            style={{ marginBottom: "1.15rem", opacity: 0 }}
-          >
-            <svg width="8" height="8" viewBox="0 0 8 8" fill="currentColor" aria-hidden="true">
-              <circle cx="4" cy="4" r="4" />
-            </svg>
-            Smart Evaluation Platform
-          </div>
+              <div
+                className="badge badge-primary stagger-3 animate-fade-in home-eyebrow"
+                style={{ marginBottom: "1.15rem", opacity: 0 }}
+              >
+                <svg width="8" height="8" viewBox="0 0 8 8" fill="currentColor" aria-hidden="true">
+                  <circle cx="4" cy="4" r="4" />
+                </svg>
+                Smart Evaluation Platform
+              </div>
 
-          <p
-            className="stagger-4 animate-fade-in home-subtitle"
-            style={{
-              fontSize: "1.15rem",
-              color: "var(--muted)",
-              fontWeight: 400,
-              lineHeight: 1.65,
-              maxWidth: "480px",
-              margin: "0 auto",
-              opacity: 0,
-              wordBreak: "keep-all",
-              wordWrap: "break-word",
-            }}
-          >
-            교사와 학생을 위한 스마트 평가 플랫폼.
-          </p>
-        </div>
+              <p
+                className="stagger-4 animate-fade-in home-subtitle"
+                style={{
+                  fontSize: "1.15rem",
+                  color: "var(--muted)",
+                  fontWeight: 400,
+                  lineHeight: 1.65,
+                  maxWidth: "480px",
+                  margin: "0 auto",
+                  opacity: 0,
+                  wordBreak: "keep-all",
+                  wordWrap: "break-word",
+                }}
+              >
+                교사와 학생을 위한 스마트 평가 플랫폼.
+              </p>
+            </div>
+          )}
 
         {/* ── Role Selection ─────────────────── */}
         {role === "none" && (
@@ -1072,7 +1075,7 @@ export default function Home() {
                     <TeacherIcon size={12} />
                     교사 포털
                   </span>
-                  <h2
+                  <h1
                     style={{
                       fontSize: "1.85rem",
                       fontWeight: 800,
@@ -1081,8 +1084,8 @@ export default function Home() {
                       letterSpacing: 0,
                     }}
                   >
-                    환영합니다
-                  </h2>
+                    교사 포털 로그인
+                  </h1>
                 </div>
 
                 <form
@@ -1214,7 +1217,7 @@ export default function Home() {
                     <StudentIcon size={12} />
                     학생 포털
                   </span>
-                  <h2
+                  <h1
                     style={{
                       fontSize: "1.85rem",
                       fontWeight: 800,
@@ -1223,8 +1226,8 @@ export default function Home() {
                       letterSpacing: 0,
                     }}
                   >
-                    학습 시작
-                  </h2>
+                    학생 포털 로그인
+                  </h1>
                 </div>
 
                 <div style={{ marginBottom: "1.1rem" }}>
@@ -1499,8 +1502,9 @@ export default function Home() {
               </>
             )}
           </div>
-        )}
-      </div>
+          )}
+        </div>
+      </main>
     </div>
   );
 }
