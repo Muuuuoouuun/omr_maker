@@ -13,15 +13,15 @@ import { safeScorePercent } from "@/lib/scoreUtils";
 import { awaySeverity } from "@/lib/examAwayTracker";
 import { readActiveWorkspaceContext } from "@/lib/workspaceContext";
 import {
+    answerTeacherAttemptQuestion,
     loadTeacherAttempt as loadTeacherAttemptRecord,
     loadTeacherAttempts,
-    saveTeacherAttempt,
+    setTeacherAttemptSubquestionReview,
 } from "@/lib/teacherAttemptClient";
 import { loadTeacherExam, loadTeacherExams } from "@/lib/teacherExamClient";
 import { loadTeacherRosterSnapshot } from "@/lib/teacherRosterClient";
 import type { RosterStudent } from "@/lib/rosterStorage";
 import { buildStudentProfileInsight } from "@/lib/studentProfileAnalytics";
-import { answerStudentQuestion } from "@/lib/studentQuestions";
 import { toast } from "@/components/Toast";
 import {
     buildLearningRecommendations,
@@ -527,28 +527,19 @@ export default function TeacherAttemptPage() {
         if (activeAttemptIdRef.current !== targetAttemptId) return;
         const key = `${questionId}:${subQuestionId}`;
         setSavingSubQuestionKey(key);
-        const next: Attempt = {
-            ...attempt,
-            subQuestionAnswers: {
-                ...(attempt.subQuestionAnswers || {}),
-                [questionId]: {
-                    ...(attempt.subQuestionAnswers?.[questionId] || {}),
-                    [subQuestionId]: {
-                        ...currentAnswer,
-                        reviewStatus: reviewed ? 'reviewed' : 'needs_review',
-                        reviewedAt: reviewed ? new Date().toISOString() : undefined,
-                        reviewedBy: reviewed ? readTeacherSession()?.displayName : undefined,
-                    },
-                },
-            },
-        };
         try {
-            const result = await saveTeacherAttempt(next);
+            const result = await setTeacherAttemptSubquestionReview(
+                attempt,
+                questionId,
+                subQuestionId,
+                reviewed ? "reviewed" : "needs_review",
+                readTeacherSession()?.displayName,
+            );
             if (activeAttemptIdRef.current !== targetAttemptId) return;
-            if (!result.localSaved && !result.remoteSaved) {
+            if ((!result.localSaved && !result.remoteSaved) || !result.attempt) {
                 throw new Error(result.remoteError || '심화 응답 검토 상태를 저장하지 못했습니다.');
             }
-            setAttempt(next);
+            setAttempt(result.attempt);
             if (!result.remoteSaved) toast.info('로컬 저장됨', '개발 모드에서 이 기기에 검토 상태를 저장했습니다.');
         } catch {
             if (activeAttemptIdRef.current === targetAttemptId) {
@@ -565,53 +556,18 @@ export default function TeacherAttemptPage() {
         if (activeAttemptIdRef.current !== targetAttemptId) return;
         const teacherName = readTeacherSession()?.displayName;
         setSavingAnswerFor(questionId);
-        // Merge the reply onto the freshest server row, not the local-first cache
-        // this page loaded. The canonical mutation writes the full payload last-writer-wins,
-        // so replying against a stale snapshot would silently drop any question the
-        // student asked after this device cached the attempt.
-        const nowIso = new Date().toISOString();
-        let base = attempt;
         try {
-            // The server gateway scopes this fresh fetch to the signed-in teacher's workspace.
-            const fresh = await loadTeacherAttemptRecord(targetAttemptId);
+            const result = await answerTeacherAttemptQuestion(
+                attempt,
+                questionId,
+                body,
+                teacherName,
+            );
             if (activeAttemptIdRef.current !== targetAttemptId) return;
-            if (fresh) base = fresh;
-        } catch {
-            // Offline or Supabase unavailable — fall back to the cached attempt.
-            if (activeAttemptIdRef.current !== targetAttemptId) return;
-        }
-        if (activeAttemptIdRef.current !== targetAttemptId) return;
-        let updated = answerStudentQuestion(base, questionId, body, nowIso, teacherName);
-        if (!updated && base !== attempt) {
-            // F5: the fresh remote row can be missing this question note (the
-            // student asked it after this device cached, or the remote copy
-            // predates it). Union the locally-loaded note onto the fresh row so
-            // the reply attaches without dropping the fresh copy's other notes.
-            const localNote = (attempt.studentQuestions || []).find(note => note.questionId === questionId);
-            if (localNote) {
-                const mergedBase: Attempt = {
-                    ...base,
-                    studentQuestions: [
-                        ...(base.studentQuestions || []).filter(note => note.questionId !== questionId),
-                        localNote,
-                    ],
-                };
-                updated = answerStudentQuestion(mergedBase, questionId, body, nowIso, teacherName);
-            }
-        }
-        if (!updated) {
-            // Never silent: tell the teacher why the reply couldn't attach.
-            setSavingAnswerFor(null);
-            toast.error("답변 전송 실패", "질문을 찾지 못했습니다. 화면을 새로고침한 뒤 다시 시도해주세요.");
-            return;
-        }
-        try {
-            const result = await saveTeacherAttempt(updated);
-            if (activeAttemptIdRef.current !== targetAttemptId) return;
-            if (!result.localSaved && !result.remoteSaved) {
+            if ((!result.localSaved && !result.remoteSaved) || !result.attempt) {
                 throw new Error(result.remoteError || "attempt save failed");
             }
-            setAttempt(updated);
+            setAttempt(result.attempt);
             setAnswerDrafts(prev => ({ ...prev, [questionId]: "" }));
             if (result.remoteSaved) {
                 toast.success("답변 전송됨", "학생 리뷰 화면에서 답변을 볼 수 있습니다.");

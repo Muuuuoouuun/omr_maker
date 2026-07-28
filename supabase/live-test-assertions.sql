@@ -166,13 +166,23 @@ begin
     then
         raise exception 'browser roles unexpectedly have handwriting RPC execute privilege';
     end if;
-    if has_function_privilege('anon', 'public.omr_teacher_update_attempt_v1(text,jsonb,jsonb)', 'execute')
-        or has_function_privilege('authenticated', 'public.omr_teacher_update_attempt_v1(text,jsonb,jsonb)', 'execute')
-    then
-        raise exception 'browser roles unexpectedly have teacher attempt RPC execute privilege';
+    if pg_catalog.to_regprocedure('public.omr_teacher_update_attempt_v1(text,jsonb,jsonb)') is not null then
+        raise exception 'legacy broad teacher attempt RPC still exists';
     end if;
-    if not has_function_privilege('service_role', 'public.omr_teacher_update_attempt_v1(text,jsonb,jsonb)', 'execute') then
-        raise exception 'service_role must have teacher attempt RPC execute privilege';
+    if has_function_privilege('anon', 'public.omr_answer_attempt_question_v1(text,text,text,text)', 'execute')
+        or has_function_privilege('authenticated', 'public.omr_answer_attempt_question_v1(text,text,text,text)', 'execute')
+        or has_function_privilege('anon', 'public.omr_set_subquestion_review_v1(text,text,text,text)', 'execute')
+        or has_function_privilege('authenticated', 'public.omr_set_subquestion_review_v1(text,text,text,text)', 'execute')
+        or has_function_privilege('anon', 'public.omr_force_finish_attempts_v1(text,text[],timestamptz)', 'execute')
+        or has_function_privilege('authenticated', 'public.omr_force_finish_attempts_v1(text,text[],timestamptz)', 'execute')
+    then
+        raise exception 'browser roles unexpectedly have scoped teacher attempt RPC execute privilege';
+    end if;
+    if not has_function_privilege('service_role', 'public.omr_answer_attempt_question_v1(text,text,text,text)', 'execute')
+        or not has_function_privilege('service_role', 'public.omr_set_subquestion_review_v1(text,text,text,text)', 'execute')
+        or not has_function_privilege('service_role', 'public.omr_force_finish_attempts_v1(text,text[],timestamptz)', 'execute')
+    then
+        raise exception 'service_role must have scoped teacher attempt RPC execute privilege';
     end if;
     if has_function_privilege('anon', 'public.omr_save_roster_v1(text,jsonb,jsonb,jsonb,jsonb)', 'execute')
         or has_function_privilege('authenticated', 'public.omr_save_roster_v1(text,jsonb,jsonb,jsonb,jsonb)', 'execute')
@@ -722,43 +732,114 @@ begin
 end
 $$;
 
-select * from public.omr_teacher_update_attempt_v1(
+update public.omr_attempts
+   set status = 'in_progress',
+       payload = payload || '{
+           "status":"in_progress",
+           "studentQuestions":[{
+               "questionId":1,
+               "questionNumber":1,
+               "body":"왜 정답인가요?",
+               "createdAt":"2026-07-14T00:01:00.000Z",
+               "status":"queued"
+           }],
+           "subQuestionAnswers":{
+               "1":{
+                   "reason":{
+                       "schemaVersion":1,
+                       "body":"근거",
+                       "reviewStatus":"needs_review"
+                   }
+               }
+           }
+       }'::jsonb
+ where id = 'attempt_live-ticket-1'
+   and organization_id = 'live-org-a';
+
+select * from public.omr_answer_attempt_question_v1(
     'live-org-a',
-    '{
-        "id":"attempt_live-ticket-1",
-        "organization_id":"live-org-a",
-        "exam_id":"live-exam-a",
-        "status":"completed",
-        "score":0,
-        "total_score":1,
-        "score_percent":0,
-        "payload":{"id":"attempt_live-ticket-1","examId":"live-exam-a","studentName":"Live Student","score":0,"totalScore":1,"startedAt":"2026-07-14T00:00:00.000Z","finishedAt":"2026-07-14T00:02:00.000Z"},
-        "finished_at":"2026-07-14T00:02:00.000Z"
-    }',
-    '[]'
+    'attempt_live-ticket-1',
+    '1',
+    '첫 답변'
+);
+
+do $$
+declare
+    v_answered_at jsonb;
+begin
+    select payload #> '{studentQuestions,0,answer,createdAt}'
+      into v_answered_at
+      from public.omr_attempts
+     where id = 'attempt_live-ticket-1';
+
+    perform public.omr_answer_attempt_question_v1(
+        'live-org-a',
+        'attempt_live-ticket-1',
+        '1',
+        '첫 답변'
+    );
+    if (select payload #> '{studentQuestions,0,answer,createdAt}'
+          from public.omr_attempts
+         where id = 'attempt_live-ticket-1') is distinct from v_answered_at
+    then
+        raise exception 'answer retry changed the authoritative timestamp';
+    end if;
+    if (select payload #>> '{studentQuestions,0,answer,body}'
+          from public.omr_attempts
+         where id = 'attempt_live-ticket-1') <> '첫 답변'
+    then
+        raise exception 'scoped answer RPC did not update the selected question';
+    end if;
+    begin
+        perform public.omr_answer_attempt_question_v1(
+            'live-org-b',
+            'attempt_live-ticket-1',
+            '1',
+            'cross organization'
+        );
+        raise exception 'cross-organization teacher answer unexpectedly succeeded';
+    exception
+        when raise_exception then
+            if sqlerrm = 'cross-organization teacher answer unexpectedly succeeded' then
+                raise;
+            end if;
+    end;
+end
+$$;
+
+select * from public.omr_set_subquestion_review_v1(
+    'live-org-a',
+    'attempt_live-ticket-1',
+    '1:reason',
+    'reviewed'
+);
+
+select * from public.omr_force_finish_attempts_v1(
+    'live-org-a',
+    array['attempt_live-ticket-1'],
+    '2026-07-14T00:02:00.000Z'
 );
 
 do $$
 begin
-    if (select score from public.omr_attempts where id = 'attempt_live-ticket-1') <> 0 then
-        raise exception 'teacher attempt RPC did not update the canonical attempt';
+    if (select status from public.omr_attempts where id = 'attempt_live-ticket-1') <> 'completed' then
+        raise exception 'force finish did not complete the selected attempt';
     end if;
-    if exists (select 1 from public.omr_question_results where attempt_id = 'attempt_live-ticket-1') then
-        raise exception 'empty teacher replacement left stale question results';
+    if (select score from public.omr_attempts where id = 'attempt_live-ticket-1') <> 1 then
+        raise exception 'scoped teacher mutation changed the canonical score';
     end if;
-    begin
-        perform public.omr_teacher_update_attempt_v1(
-            'live-org-b',
-            '{"id":"attempt_live-ticket-1","organization_id":"live-org-b","exam_id":"live-exam-a"}',
-            '[]'
-        );
-        raise exception 'cross-organization teacher attempt update unexpectedly succeeded';
-    exception
-        when raise_exception then
-            if sqlerrm = 'cross-organization teacher attempt update unexpectedly succeeded' then
-                raise;
-            end if;
-    end;
+    if (select student_id from public.omr_attempts where id = 'attempt_live-ticket-1') <> 'live-student-owner' then
+        raise exception 'scoped teacher mutation changed the canonical student';
+    end if;
+    if (select count(*) from public.omr_question_results where attempt_id = 'attempt_live-ticket-1') <> 1 then
+        raise exception 'scoped teacher mutation changed canonical question results';
+    end if;
+    if (select payload #>> '{subQuestionAnswers,1,reason,reviewStatus}'
+          from public.omr_attempts
+         where id = 'attempt_live-ticket-1') <> 'reviewed'
+    then
+        raise exception 'subquestion review RPC did not update the selected response';
+    end if;
 end
 $$;
 

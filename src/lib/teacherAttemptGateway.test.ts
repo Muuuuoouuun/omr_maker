@@ -1,9 +1,9 @@
 import { describe, expect, it } from "vitest";
 import type { Attempt } from "@/types/omr";
+import * as teacherAttemptGateway from "./teacherAttemptGateway";
 import {
     listTeacherAttemptsWithGateway,
     loadTeacherAttemptWithGateway,
-    saveTeacherAttemptWithGateway,
     type TeacherAttemptGatewayClient,
 } from "./teacherAttemptGateway";
 
@@ -75,27 +75,174 @@ describe("teacher attempt gateway", () => {
         ]);
     });
 
-    it("saves only through the organization-scoped atomic RPC", async () => {
-        let rpcName = "";
-        let rpcArgs: Record<string, unknown> = {};
+    it("does not expose the superseded full-attempt mutation gateway", () => {
+        expect("saveTeacherAttemptWithGateway" in teacherAttemptGateway).toBe(false);
+    });
+
+    it("answers one student question without forwarding tampered canonical fields", async () => {
+        const calls: Array<{ name: string; args: Record<string, unknown> }> = [];
         const client = {
             async rpc(name: string, args: Record<string, unknown>) {
-                rpcName = name;
-                rpcArgs = args;
-                return { data: [{ payload: { ...attempt, organizationId: "org-a" } }], error: null };
+                calls.push({ name, args });
+                return {
+                    data: [{
+                        payload: {
+                            ...attempt,
+                            score: 1,
+                            studentId: "student-original",
+                            questionResults: [{ questionId: 1, score: 1 }],
+                        },
+                    }],
+                    error: null,
+                };
             },
         } as unknown as TeacherAttemptGatewayClient;
+        const scoped = teacherAttemptGateway as unknown as {
+            answerTeacherAttemptQuestionWithGateway?: (
+                client: TeacherAttemptGatewayClient,
+                input: Record<string, unknown>,
+                context: Record<string, unknown>,
+            ) => Promise<unknown>;
+        };
+        expect(scoped.answerTeacherAttemptQuestionWithGateway).toBeTypeOf("function");
+        if (!scoped.answerTeacherAttemptQuestionWithGateway) return;
 
-        await expect(saveTeacherAttemptWithGateway(client, {
-            ...attempt,
-            organizationId: "org-client-spoof",
+        await expect(scoped.answerTeacherAttemptQuestionWithGateway(client, {
+            attemptId: "attempt-1",
+            questionId: "1",
+            answer: "  설명입니다.  ",
+            score: 999,
+            studentId: "student-attacker",
+            questionResults: [{ questionId: 1, score: 999 }],
         }, {
             organizationId: "org-a",
             organizationName: "Org A",
-        })).resolves.toMatchObject({ status: "saved", attempt: { id: "attempt-1" } });
+            actorUserId: "teacher-1",
+            memberRole: "teacher",
+        })).resolves.toMatchObject({
+            status: "saved",
+            attempt: {
+                score: 1,
+                studentId: "student-original",
+                questionResults: [{ questionId: 1, score: 1 }],
+            },
+        });
+        expect(calls).toEqual([{
+            name: "omr_answer_attempt_question_v1",
+            args: {
+                p_organization_id: "org-a",
+                p_attempt_id: "attempt-1",
+                p_question_id: "1",
+                p_answer: "설명입니다.",
+            },
+        }]);
+    });
 
-        expect(rpcName).toBe("omr_teacher_update_attempt_v1");
-        expect(rpcArgs.p_organization_id).toBe("org-a");
-        expect(rpcArgs.p_attempt).toMatchObject({ organization_id: "org-a" });
+    it("updates one subquestion review status with an unambiguous parent path", async () => {
+        const calls: Array<{ name: string; args: Record<string, unknown> }> = [];
+        const client = {
+            async rpc(name: string, args: Record<string, unknown>) {
+                calls.push({ name, args });
+                return { data: [{ payload: attempt }], error: null };
+            },
+        } as unknown as TeacherAttemptGatewayClient;
+        const scoped = teacherAttemptGateway as unknown as {
+            setTeacherAttemptSubquestionReviewWithGateway?: (
+                client: TeacherAttemptGatewayClient,
+                input: Record<string, unknown>,
+                context: Record<string, unknown>,
+            ) => Promise<unknown>;
+        };
+        expect(scoped.setTeacherAttemptSubquestionReviewWithGateway).toBeTypeOf("function");
+        if (!scoped.setTeacherAttemptSubquestionReviewWithGateway) return;
+
+        await scoped.setTeacherAttemptSubquestionReviewWithGateway(client, {
+            attemptId: "attempt-1",
+            questionId: 7,
+            subquestionId: "reason",
+            status: "reviewed",
+            score: 999,
+        }, {
+            organizationId: "org-a",
+            organizationName: "Org A",
+            actorUserId: "teacher-1",
+            memberRole: "teacher",
+        });
+        expect(calls).toEqual([{
+            name: "omr_set_subquestion_review_v1",
+            args: {
+                p_organization_id: "org-a",
+                p_attempt_id: "attempt-1",
+                p_subquestion_id: "7:reason",
+                p_status: "reviewed",
+            },
+        }]);
+    });
+
+    it("force-finishes only selected IDs and never forwards score or question results", async () => {
+        const calls: Array<{ name: string; args: Record<string, unknown> }> = [];
+        const client = {
+            async rpc(name: string, args: Record<string, unknown>) {
+                calls.push({ name, args });
+                return { data: [{ payload: attempt }], error: null };
+            },
+        } as unknown as TeacherAttemptGatewayClient;
+        const scoped = teacherAttemptGateway as unknown as {
+            forceFinishTeacherAttemptsWithGateway?: (
+                client: TeacherAttemptGatewayClient,
+                input: Record<string, unknown>,
+                context: Record<string, unknown>,
+            ) => Promise<unknown>;
+        };
+        expect(scoped.forceFinishTeacherAttemptsWithGateway).toBeTypeOf("function");
+        if (!scoped.forceFinishTeacherAttemptsWithGateway) return;
+
+        await scoped.forceFinishTeacherAttemptsWithGateway(client, {
+            attemptIds: ["attempt-1", "attempt-1", " attempt-2 "],
+            finishedAt: "2026-07-14T00:02:00.000Z",
+            score: 999,
+            questionResults: [{ questionId: 1, score: 999 }],
+        }, {
+            organizationId: "org-a",
+            organizationName: "Org A",
+            actorUserId: "teacher-1",
+            memberRole: "admin",
+        });
+        expect(calls).toEqual([{
+            name: "omr_force_finish_attempts_v1",
+            args: {
+                p_organization_id: "org-a",
+                p_attempt_ids: ["attempt-1", "attempt-2"],
+                p_finished_at: "2026-07-14T00:02:00.000Z",
+            },
+        }]);
+    });
+
+    it("rejects viewer mutations before calling the service-role RPC", async () => {
+        const client = {
+            async rpc() {
+                throw new Error("must not be called");
+            },
+        } as unknown as TeacherAttemptGatewayClient;
+        const scoped = teacherAttemptGateway as unknown as {
+            answerTeacherAttemptQuestionWithGateway?: (
+                client: TeacherAttemptGatewayClient,
+                input: Record<string, unknown>,
+                context: Record<string, unknown>,
+            ) => Promise<unknown>;
+        };
+        expect(scoped.answerTeacherAttemptQuestionWithGateway).toBeTypeOf("function");
+        if (!scoped.answerTeacherAttemptQuestionWithGateway) return;
+
+        await expect(scoped.answerTeacherAttemptQuestionWithGateway(client, {
+            attemptId: "attempt-1",
+            questionId: "1",
+            answer: "설명",
+        }, {
+            organizationId: "org-a",
+            organizationName: "Org A",
+            actorUserId: "viewer-1",
+            memberRole: "viewer",
+        })).resolves.toMatchObject({ status: "forbidden" });
     });
 });

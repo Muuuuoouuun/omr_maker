@@ -8,11 +8,11 @@ import { toast } from "@/components/Toast";
 import type { Exam, Attempt } from "@/types/omr";
 import { shouldUseDemoData } from "@/lib/demoData";
 import { readTeacherSession } from "@/lib/teacherSession";
-import { loadTeacherAttempts, saveTeacherAttempt } from "@/lib/teacherAttemptClient";
+import { forceFinishTeacherAttempts, loadTeacherAttempts } from "@/lib/teacherAttemptClient";
 import { loadTeacherExam, loadTeacherExams, saveTeacherExamMutation } from "@/lib/teacherExamClient";
 import { resolveAttemptScore } from "@/lib/attemptScores";
 import { buildLiveQuestionHeatmap, dedupeLiveAttempts } from "@/lib/liveAnalytics";
-import { forceCompleteLiveAttempt, liveAttemptsNeedingForceFinish } from "@/lib/liveControls";
+import { liveAttemptsNeedingForceFinish } from "@/lib/liveControls";
 import { safeRatePercent } from "@/lib/scoreUtils";
 import { awaySeverity, resolveAwayCount } from "@/lib/examAwayTracker";
 
@@ -489,29 +489,23 @@ export default function LiveResultsPage() {
             }
 
             const finishedAt = new Date().toISOString();
-            const completedAttempts = targets.map(attempt => (
-                forceCompleteLiveAttempt(attempt, exam.sourceExam, finishedAt)
-            ));
-            const completedById = new Map(completedAttempts.map(attempt => [attempt.id, attempt]));
+            const result = await forceFinishTeacherAttempts(targets, finishedAt);
+            const completedById = new Map(result.attempts.map(attempt => [attempt.id, attempt]));
             setAttempts(prev => prev.map(attempt => completedById.get(attempt.id) ?? attempt));
-
-            const results = await Promise.all(completedAttempts.map(attempt => saveTeacherAttempt(attempt)));
-            const failedLocalCount = results.filter(result => !result.localSaved).length;
-            const remoteIssueCount = results.filter(result => result.remoteError).length;
 
             setTimerSeconds(0);
             setIsPaused(true);
             setForceFinishConfirmOpen(false);
 
-            if (failedLocalCount > 0) {
-                toast.error("종료 처리 일부 실패", `${failedLocalCount}건을 저장하지 못했습니다. 다시 시도해주세요.`);
+            if (!result.localSaved && !result.remoteSaved) {
+                toast.error("종료 처리 실패", result.remoteError || "응시를 종료하지 못했습니다. 다시 시도해주세요.");
                 void refreshFromStorage();
                 return;
             }
 
             toast.success(
                 "응시 종료 처리됨",
-                `${completedAttempts.length}건을 완료 제출로 저장했습니다.${remoteIssueCount ? " 서버 동기화는 다음 로드에서 재시도됩니다." : ""}`
+                `${result.attempts.length}건을 완료 제출로 저장했습니다.${result.remoteSaved ? "" : " 개발 모드에서 이 기기에 저장했습니다."}`
             );
             return;
         }

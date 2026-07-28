@@ -1752,8 +1752,9 @@ describe("service UI surface", () => {
         expect(livePage).toContain('return { exams: loaded, mode: "real" }');
         expect(livePage).toContain("const isDemoLive = liveDataMode === \"demo\"");
         expect(livePage).toContain("allowSynthetic: isDemoLive");
-        expect(livePage).toContain("saveTeacherAttempt(attempt)");
-        expect(livePage).toContain("forceCompleteLiveAttempt");
+        expect(livePage).toContain("forceFinishTeacherAttempts(targets, finishedAt)");
+        expect(livePage).not.toMatch(/\bsaveTeacherAttempt\(/);
+        expect(livePage).not.toContain("forceCompleteLiveAttempt");
         expect(livePage).toContain("카카오 알림 연동 전");
         expect(livePage).toContain("데모 실시간 모드");
         expect(livePage).toContain("응시 결과 확인");

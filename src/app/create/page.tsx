@@ -2708,6 +2708,7 @@ function CreateOMRPageInner() {
                                         type="button"
                                         className={`btn ${questionsCount === count ? 'btn-primary' : 'btn-secondary'}`}
                                         style={{ minWidth: 0, minHeight: 34, padding: '0.28rem 0.12rem', fontSize: '0.72rem' }}
+                                        disabled={!initialDefaultsReady}
                                         onClick={() => {
                                             setQuestionCountInput(String(count));
                                             handleQuestionCountChange(count);
@@ -2726,6 +2727,7 @@ function CreateOMRPageInner() {
                                 aria-label="문항 수 직접 입력"
                                 title={`${MIN_QUESTION_COUNT}~${MAX_QUESTION_COUNT}문항 직접 입력`}
                                 value={questionCountInput}
+                                disabled={!initialDefaultsReady}
                                 onChange={event => setQuestionCountInput(event.target.value)}
                                 onBlur={commitQuestionCountInput}
                                 onKeyDown={event => {
@@ -2747,6 +2749,7 @@ function CreateOMRPageInner() {
                             <button
                                 className={`btn ${defaultChoices === 5 ? 'btn-primary' : 'btn-secondary'}`}
                                 style={{ padding: '0.5rem 0.35rem' }}
+                                disabled={!initialDefaultsReady}
                                 onClick={() => handleDefaultChoicesChange(5)}
                             >
                                 5지선다
@@ -2754,6 +2757,7 @@ function CreateOMRPageInner() {
                             <button
                                 className={`btn ${defaultChoices === 4 ? 'btn-primary' : 'btn-secondary'}`}
                                 style={{ padding: '0.5rem 0.35rem' }}
+                                disabled={!initialDefaultsReady}
                                 onClick={() => handleDefaultChoicesChange(4)}
                             >
                                 4지선다
@@ -2866,6 +2870,7 @@ function CreateOMRPageInner() {
                                 aria-label="빠른 정답 입력"
                                 placeholder={defaultChoices === 4 ? "예: 3124..." : "예: 31251..."}
                                 value={fastAnswer}
+                                disabled={!initialDefaultsReady}
                                 onChange={handleFastAnswerChange}
                                 className="input-field"
                                 style={{ width: '100%', padding: '0.6rem', borderRadius: 'var(--radius-md)', border: '1px solid var(--border)', background: 'var(--background)', fontSize: '1rem', letterSpacing: '2px' }}
