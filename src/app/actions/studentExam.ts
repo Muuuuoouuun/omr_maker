@@ -1,6 +1,6 @@
 "use server";
 
-import { cookies } from "next/headers";
+import { cookies, headers } from "next/headers";
 import { parseSignedStudentSessionCookie, resolveStudentSessionSecret, STUDENT_SERVER_SESSION_COOKIE, type StudentServerIdentity } from "@/lib/studentServerSession";
 import { getSupabaseServerConfigFromEnv, createSupabaseAdminClient, fetchAttemptRowByOwnerAndId, fetchAttemptRowsByOwner, fetchExamRowById, fetchExamRowsByOrganization, type SupabaseAdminClientLike, type SupabaseAdminReadClientLike } from "@/lib/supabaseServerAdmin";
 import { attemptFromSupabaseRow, examFromSupabaseRow, attemptToSupabaseRow, questionResultRowsForAttempt } from "@/lib/omrPersistence";
@@ -31,6 +31,8 @@ import {
     createStudentProblemPdfSignedUrlWithGateway,
     type RemoteAssetSupabaseGatewayClient,
 } from "@/lib/remoteAssetGateway.server";
+import { isSameOriginServerActionRequest } from "@/lib/serverActionSecurity";
+import { createStudentSubmissionSimulator } from "@/lib/studentSubmissionSimulation";
 
 type Status = "ok" | "unauthenticated" | "degraded_local" | "denied" | "not_found" | "error";
 type AccessStatus = "pin_required" | "pin_rate_limited" | "login_required" | "group_denied" | "not_started" | "ended" | "archived";
@@ -43,6 +45,7 @@ type AccessStatus = "pin_required" | "pin_rate_limited" | "login_required" | "gr
  * grace already applied when persisting startedAt.
  */
 const SUBMIT_ENDAT_GRACE_MS = 2 * 60 * 1000;
+const simulateStudentSubmission = createStudentSubmissionSimulator();
 
 /**
  * PIN gate with brute-force protection. The PIN itself stays stateless (sent
@@ -231,6 +234,20 @@ export async function loadExamForSolving(examId: string, pin?: string): Promise<
 }
 
 export async function submitAttempt(input: SubmitAttemptInput, pin?: string): Promise<{ status: Status | AccessStatus; attempt?: Attempt }> {
+    const headerStore = await headers();
+    if (!headerStore.get("origin") || !isSameOriginServerActionRequest(headerStore)) return { status: "error" };
+    if (
+        process.env.NODE_ENV !== "production"
+        && process.env.OMR_E2E_STUDENT_SUBMISSION_SIMULATION === "1"
+    ) {
+        const cookieStore = await cookies();
+        const identity = parseSignedStudentSessionCookie(cookieStore.get(STUDENT_SERVER_SESSION_COOKIE)?.value);
+        if (identity) {
+            const simulated = simulateStudentSubmission(input, identity);
+            if (simulated.status === "ok") return { status: "ok", attempt: simulated.attempt };
+            if (simulated.status === "invalid") return { status: "error" };
+        }
+    }
     const ctx = await resolveCtx();
     if (!isCtx(ctx)) return ctx;
     try {

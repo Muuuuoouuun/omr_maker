@@ -20,6 +20,7 @@ export interface PendingSignedSessionSubmission {
 interface StoredSubmissionReceiptState {
     receipts: Record<string, SubmissionReceipt>;
     requests: Record<string, PendingSignedSessionSubmission>;
+    reconciliations: Record<string, string>;
 }
 
 type SignedSessionSubmitResponse = {
@@ -28,16 +29,35 @@ type SignedSessionSubmitResponse = {
 };
 
 export type SubmissionRetryResult =
-    | { status: "confirmed"; attempt: Attempt }
+    | {
+        status: "confirmed";
+        previousAttemptId: string;
+        attempt: Attempt;
+        receipt: SubmissionReceipt;
+    }
     | { status: "pending"; error: string }
     | { status: "missing"; error: string };
 
-const SUBMISSION_RECEIPT_KEY = "omr_student_submission_receipts_v1";
+export const SUBMISSION_RECEIPT_KEY = "omr_student_submission_receipts_v1";
+export const SUBMISSION_RECEIPT_RECONCILED_EVENT = "omr:submission-receipt-reconciled";
 const RETRY_ERROR = "서버에 아직 반영하지 못했습니다. 네트워크를 확인한 뒤 다시 시도해주세요.";
+const DURABILITY_ERROR = "서버 응답은 받았지만 확인 상태를 저장하지 못했습니다. 자동 재시도를 유지합니다.";
 const retryInFlight = new Map<string, Promise<SubmissionRetryResult>>();
 
+export interface SubmissionReceiptReconciledDetail {
+    previousAttemptId: string;
+    attempt: Attempt;
+    receipt: SubmissionReceipt;
+}
+
+declare global {
+    interface WindowEventMap {
+        [SUBMISSION_RECEIPT_RECONCILED_EVENT]: CustomEvent<SubmissionReceiptReconciledDetail>;
+    }
+}
+
 function emptyReceiptState(): StoredSubmissionReceiptState {
-    return { receipts: {}, requests: {} };
+    return { receipts: {}, requests: {}, reconciliations: {} };
 }
 
 function browserStorage(): Storage | null {
@@ -79,6 +99,7 @@ function readReceiptState(): StoredSubmissionReceiptState {
         const parsed = JSON.parse(storage.getItem(SUBMISSION_RECEIPT_KEY) || "{}") as {
             receipts?: unknown;
             requests?: unknown;
+            reconciliations?: unknown;
         };
         const rawReceipts = parsed.receipts && typeof parsed.receipts === "object" && !Array.isArray(parsed.receipts)
             ? parsed.receipts as Record<string, unknown>
@@ -106,7 +127,21 @@ function readReceiptState(): StoredSubmissionReceiptState {
             },
             {},
         );
-        return { receipts, requests };
+        const rawReconciliations = parsed.reconciliations
+            && typeof parsed.reconciliations === "object"
+            && !Array.isArray(parsed.reconciliations)
+            ? parsed.reconciliations as Record<string, unknown>
+            : {};
+        const reconciliations = Object.entries(rawReconciliations).reduce<Record<string, string>>(
+            (acc, [previousId, nextId]) => {
+                if (previousId && typeof nextId === "string" && nextId && nextId !== previousId) {
+                    acc[previousId] = nextId;
+                }
+                return acc;
+            },
+            {},
+        );
+        return { receipts, requests, reconciliations };
     } catch {
         return emptyReceiptState();
     }
@@ -142,6 +177,17 @@ export function readSubmissionReceipt(attemptId: string): SubmissionReceipt | nu
     return readReceiptState().receipts[attemptId] || null;
 }
 
+export function readReconciledSubmissionAttemptId(attemptId: string): string | null {
+    const aliases = readReceiptState().reconciliations;
+    let current = attemptId;
+    const visited = new Set<string>();
+    while (aliases[current] && !visited.has(current)) {
+        visited.add(current);
+        current = aliases[current];
+    }
+    return current !== attemptId ? current : null;
+}
+
 export function queuePendingSubmissionReceipt(
     request: PendingSignedSessionSubmission,
     updatedAt = new Date().toISOString(),
@@ -168,6 +214,7 @@ export function retryPendingSubmissionReceipt(
             input: SubmitAttemptInput,
             pin?: string,
         ) => Promise<SignedSessionSubmitResponse>;
+        onAuthoritativeAttempt?: (attempt: Attempt) => boolean | void | Promise<boolean | void>;
     },
 ): Promise<SubmissionRetryResult> {
     const existing = retryInFlight.get(attemptId);
@@ -182,15 +229,38 @@ export function retryPendingSubmissionReceipt(
         try {
             const result = await deps.submitSignedSessionAttempt(request.input, request.pin);
             if (result.status === "ok" && result.attempt) {
+                const cached = await deps.onAuthoritativeAttempt?.(result.attempt);
+                if (cached === false) {
+                    return { status: "pending", error: DURABILITY_ERROR };
+                }
                 const latest = readReceiptState();
-                latest.receipts[attemptId] = {
-                    attemptId,
+                const canonicalAttemptId = result.attempt.id;
+                const receipt: SubmissionReceipt = {
+                    attemptId: canonicalAttemptId,
                     status: "confirmed",
                     updatedAt: new Date().toISOString(),
                 };
+                delete latest.receipts[attemptId];
                 delete latest.requests[attemptId];
-                writeReceiptState(latest);
-                return { status: "confirmed", attempt: result.attempt };
+                delete latest.requests[canonicalAttemptId];
+                latest.receipts[canonicalAttemptId] = receipt;
+                if (attemptId !== canonicalAttemptId) {
+                    latest.reconciliations[attemptId] = canonicalAttemptId;
+                }
+                if (!writeReceiptState(latest)) {
+                    return { status: "pending", error: DURABILITY_ERROR };
+                }
+                emitSubmissionReceiptReconciled({
+                    previousAttemptId: attemptId,
+                    attempt: result.attempt,
+                    receipt,
+                });
+                return {
+                    status: "confirmed",
+                    previousAttemptId: attemptId,
+                    attempt: result.attempt,
+                    receipt,
+                };
             }
         } catch {
             // Keep the exact same idempotent request queued.
@@ -209,6 +279,22 @@ export function retryPendingSubmissionReceipt(
     });
     retryInFlight.set(attemptId, retry);
     return retry;
+}
+
+function emitSubmissionReceiptReconciled(detail: SubmissionReceiptReconciledDetail): void {
+    if (typeof window === "undefined" || typeof window.dispatchEvent !== "function") return;
+    const event = typeof CustomEvent === "function"
+        ? new CustomEvent<SubmissionReceiptReconciledDetail>(
+            SUBMISSION_RECEIPT_RECONCILED_EVENT,
+            { detail },
+        )
+        : { type: SUBMISSION_RECEIPT_RECONCILED_EVENT, detail } as CustomEvent<SubmissionReceiptReconciledDetail>;
+    try {
+        window.dispatchEvent(event);
+    } catch {
+        // The durable receipt and cache are already committed. A mounted view
+        // can still reconcile through the storage event or its next load.
+    }
 }
 
 export async function flushPendingSubmissionReceipts(

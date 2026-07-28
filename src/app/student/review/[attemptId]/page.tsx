@@ -59,10 +59,14 @@ import {
 } from "@/lib/studentFeedbackClient";
 import {
     persistSubmissionReceipt,
+    readReconciledSubmissionAttemptId,
     readSubmissionReceipt,
     retryPendingSubmissionReceipt,
+    SUBMISSION_RECEIPT_KEY,
+    SUBMISSION_RECEIPT_RECONCILED_EVENT,
     submissionReceiptLabel,
     type SubmissionReceipt,
+    type SubmissionReceiptReconciledDetail,
 } from "@/lib/studentAttemptReceipt";
 
 const PDFViewer = dynamic(() => import("@/components/PDFViewer"), { ssr: false });
@@ -433,6 +437,46 @@ export default function ReviewPage() {
     const [returnedFeedback, setReturnedFeedback] = useState<AttemptFeedback | null>(null);
     const [teacherMarkupDrawings, setTeacherMarkupDrawings] = useState<PdfDrawings | undefined>(undefined);
     const [annotationDownloading, setAnnotationDownloading] = useState(false);
+
+    useEffect(() => {
+        const applyReconciliation = (detail: SubmissionReceiptReconciledDetail) => {
+            if (detail.previousAttemptId !== id && detail.attempt.id !== id) return;
+            attemptRef.current = detail.attempt;
+            setAttempt(detail.attempt);
+            setSubmissionReceipt(detail.receipt);
+            setSubmissionRetryFeedback("서버 반영을 확인했습니다.");
+            if (detail.attempt.id !== id) {
+                router.replace(`/student/review/${detail.attempt.id}`);
+            }
+        };
+        const onReconciled = (event: WindowEventMap[typeof SUBMISSION_RECEIPT_RECONCILED_EVENT]) => {
+            applyReconciliation(event.detail);
+        };
+        const onStorage = (event: StorageEvent) => {
+            if (event.key !== SUBMISSION_RECEIPT_KEY) return;
+            const canonicalAttemptId = readReconciledSubmissionAttemptId(id);
+            if (canonicalAttemptId) {
+                const canonicalAttempt = readLocalAttempts().find(candidate => candidate.id === canonicalAttemptId);
+                const canonicalReceipt = readSubmissionReceipt(canonicalAttemptId);
+                if (canonicalAttempt && canonicalReceipt) {
+                    applyReconciliation({
+                        previousAttemptId: id,
+                        attempt: canonicalAttempt,
+                        receipt: canonicalReceipt,
+                    });
+                }
+                return;
+            }
+            const refreshedReceipt = readSubmissionReceipt(id);
+            if (refreshedReceipt) setSubmissionReceipt(refreshedReceipt);
+        };
+        window.addEventListener(SUBMISSION_RECEIPT_RECONCILED_EVENT, onReconciled);
+        window.addEventListener("storage", onStorage);
+        return () => {
+            window.removeEventListener(SUBMISSION_RECEIPT_RECONCILED_EVENT, onReconciled);
+            window.removeEventListener("storage", onStorage);
+        };
+    }, [id, router]);
     // Latest attempt for the local Q&A merge path — reading `attempt` state
     // directly in an async handler risks a stale closure dropping a concurrent
     // question. A ref + a submission mutex keep local writes serialized.
@@ -474,6 +518,11 @@ export default function ReviewPage() {
         let cancelled = false;
         const loadReview = async () => {
             if (!id || cancelled) return;
+            const canonicalAttemptId = readReconciledSubmissionAttemptId(id);
+            if (canonicalAttemptId) {
+                router.replace(`/student/review/${canonicalAttemptId}`);
+                return;
+            }
             // Reset the error flag so a retry starts clean.
             setLoadError(false);
             // Both server round-trips key off the route attemptId, so start the
@@ -624,7 +673,7 @@ export default function ReviewPage() {
         };
         void loadReview();
         return () => { cancelled = true; };
-    }, [id, reloadKey]);
+    }, [id, reloadKey, router]);
 
     if (accessDenied) {
         return (
@@ -703,13 +752,13 @@ export default function ReviewPage() {
         try {
             const result = await retryPendingSubmissionReceipt(attempt.id, {
                 submitSignedSessionAttempt: submitAttempt,
+                onAuthoritativeAttempt: saveLocalAttempt,
             });
-            const nextReceipt = readSubmissionReceipt(attempt.id);
-            if (nextReceipt) setSubmissionReceipt(nextReceipt);
             if (result.status === "confirmed") {
-                saveLocalAttempt(result.attempt);
                 setSubmissionRetryFeedback("서버 반영을 확인했습니다.");
             } else {
+                const nextReceipt = readSubmissionReceipt(attempt.id);
+                if (nextReceipt) setSubmissionReceipt(nextReceipt);
                 setSubmissionRetryFeedback(result.error);
             }
         } finally {

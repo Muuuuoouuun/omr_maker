@@ -142,6 +142,11 @@ export default defineConfig({
             OMR_SUPABASE_SERVICE_ROLE_KEY: "",
             STUDENT_ATTEMPT_SECRET: "",
             OMR_STUDENT_ATTEMPT_SECRET: "",
+            STUDENT_SESSION_SECRET: "omr-maker-e2e-student-session-secret-2026",
+            OMR_E2E_STUDENT_SUBMISSION_SIMULATION: "1",
+            OMR_E2E_STUDENT_SUBMISSION_EXAM_ID: "e2e-korean-integrated-exam",
+            OMR_E2E_STUDENT_SUBMISSION_EXAM_TITLE: "E2E 국어 통합 시험",
+            OMR_E2E_STUDENT_SUBMISSION_ANSWER_KEY: "2,3,4",
         },
     },
 });

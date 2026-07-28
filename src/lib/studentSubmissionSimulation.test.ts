@@ -1,0 +1,71 @@
+import { describe, expect, it } from "vitest";
+import type { SubmitAttemptInput } from "@/lib/studentExamCore";
+import type { StudentServerIdentity } from "@/lib/studentServerSession";
+import { createStudentSubmissionSimulator } from "./studentSubmissionSimulation";
+
+const identity: StudentServerIdentity = {
+    kind: "student",
+    studentId: "class-a::김학생",
+    name: "김학생",
+    groupId: "class-a",
+    groupName: "A반",
+    identityType: "temporary",
+    issuedAt: 1_000,
+    expiresAt: 100_000,
+};
+
+const input: SubmitAttemptInput = {
+    examId: "e2e-korean-integrated-exam",
+    submissionId: "11111111-1111-4111-8111-111111111111",
+    answers: { 1: 2, 2: 3, 3: 1 },
+    startedAt: "2026-07-28T00:00:00.000Z",
+};
+
+const env = {
+    NODE_ENV: "test",
+    OMR_E2E_STUDENT_SUBMISSION_SIMULATION: "1",
+    OMR_E2E_STUDENT_SUBMISSION_EXAM_ID: "e2e-korean-integrated-exam",
+    OMR_E2E_STUDENT_SUBMISSION_EXAM_TITLE: "E2E 국어 통합 시험",
+    OMR_E2E_STUDENT_SUBMISSION_ANSWER_KEY: "2,3,4",
+    STUDENT_SESSION_SECRET: "test-student-session-secret",
+};
+
+describe("student submission development simulation", () => {
+    it("is impossible to enable in production", () => {
+        const simulate = createStudentSubmissionSimulator();
+        expect(simulate(input, identity, { ...env, NODE_ENV: "production" }, Date.now()))
+            .toEqual({ status: "disabled" });
+    });
+
+    it("rejects exams and answers outside the server allowlist", () => {
+        const simulate = createStudentSubmissionSimulator();
+        expect(simulate({ ...input, examId: "another-exam" }, identity, env, Date.now()))
+            .toEqual({ status: "invalid" });
+        expect(simulate({ ...input, answers: { ...input.answers, 99: 1 } }, identity, env, Date.now()))
+            .toEqual({ status: "invalid" });
+        expect(simulate({ ...input, answers: { 1: 9 } }, identity, env, Date.now()))
+            .toEqual({ status: "invalid" });
+    });
+
+    it("returns one owner-bound canonical graded attempt for every idempotent replay", () => {
+        const simulate = createStudentSubmissionSimulator();
+        const first = simulate(input, identity, env, Date.parse("2026-07-28T00:02:00.000Z"));
+        const second = simulate(input, identity, env, Date.parse("2026-07-28T00:03:00.000Z"));
+
+        expect(first.status).toBe("ok");
+        expect(second).toEqual(first);
+        if (first.status !== "ok") throw new Error("expected simulation attempt");
+        expect(first.attempt).toMatchObject({
+            examId: input.examId,
+            examTitle: "E2E 국어 통합 시험",
+            studentId: identity.studentId,
+            studentName: identity.name,
+            score: 20,
+            totalScore: 30,
+            answers: input.answers,
+            status: "completed",
+        });
+        expect(first.attempt.id).not.toBe(input.submissionId);
+        expect(first.attempt.questionResults).toHaveLength(3);
+    });
+});

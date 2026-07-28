@@ -1019,7 +1019,9 @@ test.describe("Teacher and student full journey", () => {
         expect(hasBodyOverflow).toBe(false);
     });
 
-    test("shows authoritative submission receipt states and persists them across reload", async ({ page }) => {
+    test("reconciles manual and automatic submission receipt retries through the real server action", async ({ page }) => {
+        await seedStudentRoster(page);
+        await loginAsStudent(page);
         await seedExamAndStudent(page);
         await seedCompletedAttempt(page);
         const attemptId = "attempt-tablet-analytics";
@@ -1034,6 +1036,7 @@ test.describe("Teacher and student full journey", () => {
                     },
                 },
                 requests: {},
+                reconciliations: {},
             }));
         }, attemptId);
         await page.goto(`/student/review/${attemptId}`);
@@ -1042,9 +1045,26 @@ test.describe("Teacher and student full journey", () => {
         await expect(page.getByRole("status")).toHaveText("서버 반영 완료");
 
         await page.evaluate((id) => {
+            window.localStorage.setItem("omr_student_submission_receipts_v1", JSON.stringify({
+                receipts: {
+                    [id]: {
+                        attemptId: id,
+                        status: "local_only",
+                        updatedAt: "2026-07-28T00:00:30.000Z",
+                    },
+                },
+                requests: {},
+                reconciliations: {},
+            }));
+        }, attemptId);
+        await page.reload();
+        await expect(page.getByRole("status")).toHaveText("이 기기에만 저장됨");
+        await expect(page.getByText("다른 기기에서는 이 결과를 볼 수 없습니다.")).toBeVisible();
+
+        await page.evaluate((id) => {
             const input = {
                 examId: "e2e-korean-integrated-exam",
-                submissionId: "submission-offline-1",
+                submissionId: "11111111-1111-4111-8111-111111111111",
                 answers: { 1: 2, 2: 3, 3: 1 },
                 startedAt: "2026-07-28T00:00:00.000Z",
             };
@@ -1059,30 +1079,110 @@ test.describe("Teacher and student full journey", () => {
                 requests: {
                     [id]: { attemptId: id, input },
                 },
+                reconciliations: {},
             }));
+            window.dispatchEvent(new StorageEvent("storage", {
+                key: "omr_student_submission_receipts_v1",
+            }));
+            (window as typeof window & { receiptRetryNoReload?: string }).receiptRetryNoReload = "manual";
         }, attemptId);
-        await page.reload();
         await expect(page.getByRole("status")).toHaveText("서버 반영 대기 · 자동 재시도");
         const retry = page.getByRole("button", { name: "지금 다시 시도" });
         await expect(retry).toBeVisible();
         await retry.click();
-        await expect(page.getByRole("status")).toHaveText("서버 반영 대기 · 자동 재시도");
-        await expect(page.getByText("서버에 아직 반영하지 못했습니다. 네트워크를 확인한 뒤 다시 시도해주세요.")).toBeVisible();
+        await expect(page.getByRole("status")).toHaveText("서버 반영 완료");
+        await expect(page).not.toHaveURL(new RegExp(`/student/review/${attemptId}$`));
+        const manualCanonicalId = new URL(page.url()).pathname.split("/").pop() || "";
+        expect(manualCanonicalId).not.toBe(attemptId);
+        expect(await page.evaluate(() => (
+            (window as typeof window & { receiptRetryNoReload?: string }).receiptRetryNoReload
+        ))).toBe("manual");
+        await expect(page.getByText("20 / 30점")).toBeVisible();
+        const manualState = await page.evaluate(({ oldId, canonicalId }) => {
+            const state = JSON.parse(window.localStorage.getItem("omr_student_submission_receipts_v1") || "{}");
+            const attempts = JSON.parse(window.localStorage.getItem("omr_attempts") || "[]");
+            return {
+                oldReceipt: state.receipts?.[oldId],
+                oldRequest: state.requests?.[oldId],
+                canonicalReceipt: state.receipts?.[canonicalId],
+                reconciliation: state.reconciliations?.[oldId],
+                cachedCanonical: attempts.some((attempt: { id?: string }) => attempt.id === canonicalId),
+            };
+        }, { oldId: attemptId, canonicalId: manualCanonicalId });
+        expect(manualState).toEqual({
+            oldReceipt: undefined,
+            oldRequest: undefined,
+            canonicalReceipt: expect.objectContaining({ status: "confirmed" }),
+            reconciliation: manualCanonicalId,
+            cachedCanonical: true,
+        });
+
+        const automaticLocalId = "attempt-auto-local";
+        await page.evaluate(({ sourceId, autoId }) => {
+            const attempts = JSON.parse(window.localStorage.getItem("omr_attempts") || "[]");
+            const source = attempts.find((attempt: { id?: string }) => attempt.id === sourceId);
+            if (!source) throw new Error("source attempt missing");
+            const automatic = {
+                ...source,
+                id: autoId,
+                questionResults: (source.questionResults || []).map((result: object) => ({
+                    ...result,
+                    attemptId: autoId,
+                })),
+            };
+            window.localStorage.setItem("omr_attempts", JSON.stringify([...attempts, automatic]));
+        }, { sourceId: attemptId, autoId: automaticLocalId });
+        await page.goto(`/student/review/${automaticLocalId}`);
+        await expect(page.getByRole("status")).toHaveText("이 기기에만 저장됨");
 
         await page.evaluate((id) => {
-            window.localStorage.setItem("omr_student_submission_receipts_v1", JSON.stringify({
-                receipts: {
-                    [id]: {
-                        attemptId: id,
-                        status: "local_only",
-                        updatedAt: "2026-07-28T00:02:00.000Z",
-                    },
+            const state = JSON.parse(window.localStorage.getItem("omr_student_submission_receipts_v1") || "{}");
+            state.receipts ||= {};
+            state.requests ||= {};
+            state.reconciliations ||= {};
+            state.receipts[id] = {
+                attemptId: id,
+                status: "pending",
+                updatedAt: "2026-07-28T00:03:00.000Z",
+            };
+            state.requests[id] = {
+                attemptId: id,
+                input: {
+                    examId: "e2e-korean-integrated-exam",
+                    submissionId: "22222222-2222-4222-8222-222222222222",
+                    answers: { 1: 2, 2: 3, 3: 1 },
+                    startedAt: "2026-07-28T00:00:00.000Z",
                 },
-                requests: {},
+            };
+            window.localStorage.setItem("omr_student_submission_receipts_v1", JSON.stringify(state));
+            window.dispatchEvent(new StorageEvent("storage", {
+                key: "omr_student_submission_receipts_v1",
             }));
-        }, attemptId);
-        await page.reload();
-        await expect(page.getByRole("status")).toHaveText("이 기기에만 저장됨");
-        await expect(page.getByText("다른 기기에서는 이 결과를 볼 수 없습니다.")).toBeVisible();
+            (window as typeof window & { receiptRetryNoReload?: string }).receiptRetryNoReload = "automatic";
+        }, automaticLocalId);
+        await expect(page.getByRole("status")).toHaveText("서버 반영 대기 · 자동 재시도");
+        await page.evaluate(() => window.dispatchEvent(new Event("online")));
+        await expect(page.getByRole("status")).toHaveText("서버 반영 완료");
+        await expect(page).not.toHaveURL(new RegExp(`/student/review/${automaticLocalId}$`));
+        const automaticCanonicalId = new URL(page.url()).pathname.split("/").pop() || "";
+        expect(automaticCanonicalId).not.toBe(automaticLocalId);
+        expect(await page.evaluate(() => (
+            (window as typeof window & { receiptRetryNoReload?: string }).receiptRetryNoReload
+        ))).toBe("automatic");
+        const automaticState = await page.evaluate(({ oldId, canonicalId }) => {
+            const state = JSON.parse(window.localStorage.getItem("omr_student_submission_receipts_v1") || "{}");
+            return {
+                oldReceipt: state.receipts?.[oldId],
+                oldRequest: state.requests?.[oldId],
+                canonicalReceipt: state.receipts?.[canonicalId],
+                reconciliation: state.reconciliations?.[oldId],
+            };
+        }, { oldId: automaticLocalId, canonicalId: automaticCanonicalId });
+        expect(automaticState).toEqual({
+            oldReceipt: undefined,
+            oldRequest: undefined,
+            canonicalReceipt: expect.objectContaining({ status: "confirmed" }),
+            reconciliation: automaticCanonicalId,
+        });
     });
 });

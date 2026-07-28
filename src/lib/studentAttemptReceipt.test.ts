@@ -7,6 +7,7 @@ import {
     pendingSubmissionReceiptIds,
     persistSubmissionReceipt,
     queuePendingSubmissionReceipt,
+    readReconciledSubmissionAttemptId,
     readSubmissionReceipt,
     retryPendingSubmissionReceipt,
     submissionReceiptLabel,
@@ -125,9 +126,113 @@ describe("student attempt receipt cache", () => {
             },
         });
 
-        expect(result).toEqual({ status: "confirmed", attempt: authoritativeAttempt });
-        expect(readSubmissionReceipt("attempt-local-1")?.status).toBe("confirmed");
+        expect(result).toEqual({
+            status: "confirmed",
+            previousAttemptId: "attempt-local-1",
+            attempt: authoritativeAttempt,
+            receipt: expect.objectContaining({
+                attemptId: "attempt-server-1",
+                status: "confirmed",
+            }),
+        });
+        expect(readSubmissionReceipt("attempt-local-1")).toBeNull();
+        expect(readSubmissionReceipt("attempt-server-1")?.status).toBe("confirmed");
+        expect(readReconciledSubmissionAttemptId("attempt-local-1")).toBe("attempt-server-1");
         expect(pendingSubmissionReceiptIds()).toEqual([]);
+    });
+
+    it("keeps the replay request pending when durable confirmation storage fails", async () => {
+        let failWrites = false;
+        const base = createStorage();
+        const storage = {
+            ...base,
+            setItem(key: string, value: string) {
+                if (failWrites) throw new Error("quota");
+                base.setItem(key, value);
+            },
+        } as Storage;
+        vi.stubGlobal("window", { localStorage: storage });
+        queuePendingSubmissionReceipt({
+            attemptId: "attempt-local-1",
+            input: {
+                examId: "exam-1",
+                submissionId: "submission-1",
+                answers: { 1: 2 },
+                startedAt: "2026-07-28T00:00:00.000Z",
+            },
+        });
+        failWrites = true;
+
+        const result = await retryPendingSubmissionReceipt("attempt-local-1", {
+            submitSignedSessionAttempt: async () => ({
+                status: "ok",
+                attempt: {
+                    id: "attempt-server-1",
+                    examId: "exam-1",
+                    examTitle: "시험",
+                    studentName: "학생",
+                    startedAt: "2026-07-28T00:00:00.000Z",
+                    finishedAt: "2026-07-28T00:02:00.000Z",
+                    score: 10,
+                    totalScore: 10,
+                    answers: { 1: 2 },
+                    status: "completed",
+                },
+            }),
+        });
+
+        expect(result).toEqual({
+            status: "pending",
+            error: "서버 응답은 받았지만 확인 상태를 저장하지 못했습니다. 자동 재시도를 유지합니다.",
+        });
+        expect(readSubmissionReceipt("attempt-local-1")?.status).toBe("pending");
+        expect(readSubmissionReceipt("attempt-server-1")).toBeNull();
+        expect(pendingSubmissionReceiptIds()).toEqual(["attempt-local-1"]);
+    });
+
+    it("caches and announces canonical reconciliation after durable confirmation", async () => {
+        const storage = createStorage();
+        const dispatchedEvents: Event[] = [];
+        const dispatchEvent = vi.fn((event: Event) => {
+            dispatchedEvents.push(event);
+            return true;
+        });
+        vi.stubGlobal("window", { localStorage: storage, dispatchEvent });
+        queuePendingSubmissionReceipt({
+            attemptId: "attempt-local-1",
+            input: {
+                examId: "exam-1",
+                submissionId: "submission-1",
+                answers: {},
+                startedAt: "2026-07-28T00:00:00.000Z",
+            },
+        });
+        const authoritativeAttempt: Attempt = {
+            id: "attempt-server-1",
+            examId: "exam-1",
+            examTitle: "시험",
+            studentName: "학생",
+            startedAt: "2026-07-28T00:00:00.000Z",
+            finishedAt: "2026-07-28T00:02:00.000Z",
+            score: 10,
+            totalScore: 10,
+            answers: {},
+            status: "completed",
+        };
+        const onAuthoritativeAttempt = vi.fn(() => true);
+
+        await retryPendingSubmissionReceipt("attempt-local-1", {
+            submitSignedSessionAttempt: async () => ({ status: "ok", attempt: authoritativeAttempt }),
+            onAuthoritativeAttempt,
+        });
+
+        expect(onAuthoritativeAttempt).toHaveBeenCalledWith(authoritativeAttempt);
+        expect(dispatchEvent).toHaveBeenCalledTimes(1);
+        expect((dispatchedEvents[0] as CustomEvent).detail).toMatchObject({
+            previousAttemptId: "attempt-local-1",
+            attempt: authoritativeAttempt,
+            receipt: { attemptId: "attempt-server-1", status: "confirmed" },
+        });
     });
 
     it("coalesces concurrent retry triggers for the same idempotent submission", async () => {

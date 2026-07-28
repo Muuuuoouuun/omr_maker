@@ -83,4 +83,18 @@ describe("student server authentication surface", () => {
         expect(solveAction.indexOf('if (access !== "allowed") return { status: access }'))
             .toBeLessThan(solveAction.indexOf("createStudentProblemPdfSignedUrlWithGateway"));
     });
+
+    it("rejects cross-origin submissions before resolving a database gateway", () => {
+        const action = source("src/app/actions/studentExam.ts");
+        const submitStart = action.indexOf("export async function submitAttempt");
+        const submitEnd = action.indexOf("export async function listMyAssignments", submitStart);
+        const submitAction = action.slice(submitStart, submitEnd);
+
+        expect(action).toContain('import { cookies, headers } from "next/headers"');
+        expect(action).toContain("isSameOriginServerActionRequest");
+        expect(submitAction).toContain("const headerStore = await headers()");
+        expect(submitAction).toContain('if (!headerStore.get("origin") || !isSameOriginServerActionRequest(headerStore)) return { status: "error" }');
+        expect(submitAction.indexOf("isSameOriginServerActionRequest"))
+            .toBeLessThan(submitAction.indexOf("resolveCtx()"));
+    });
 });
