@@ -166,6 +166,11 @@ async function runLocalVerification() {
         throw new Error(`Local fallback requires PostgreSQL 17; found: ${version.stdout.trim()}`);
     }
 
+    // Declared before the cluster is created so the shutdown in `finally` runs
+    // with the same pinned locale, and so the mkdtemp/try pair below stays
+    // adjacent — supabaseLiveVerifier.test.ts asserts on that exact shape to
+    // prove the cluster is isolated and unconditionally cleaned up.
+    const localeEnv = { LC_ALL: "C", LANG: "C" };
     const temporaryDirectory = mkdtempSync(resolve(tmpdir(), "omr-postgres-verify-"));
     try {
         const dataDirectory = resolve(temporaryDirectory, "data");
@@ -173,7 +178,15 @@ async function runLocalVerification() {
         const logPath = resolve(temporaryDirectory, "postgres.log");
         const passwordPath = resolve(temporaryDirectory, "pwfile");
         const port = await getFreePort("127.0.0.1");
-        const localEnv = { ...process.env, PGPASSWORD: password };
+        // LC_ALL/LANG are pinned to C for the whole local cluster. Without it,
+        // macOS resolves an unset or non-POSIX locale through Core Foundation,
+        // which spawns threads inside the postmaster before it forks — Postgres
+        // then refuses to start with "postmaster became multithreaded during
+        // startup". The Docker path never sees this, so the local fallback that
+        // exists precisely for machines without Docker failed 100% of the time
+        // on macOS. initdb already runs --no-locale, so pinning C changes no
+        // collation behaviour; it only keeps the runtime single-threaded.
+        const localEnv = { ...process.env, PGPASSWORD: password, ...localeEnv };
         mkdirSync(socketDirectory, { mode: 0o700 });
         writeFileSync(passwordPath, `${password}\n`, { mode: 0o600 });
 
@@ -197,7 +210,7 @@ async function runLocalVerification() {
             "--encoding=UTF8",
             "--no-locale",
             "--no-instructions",
-        ]);
+        ], { env: localEnv });
         rmSync(passwordPath, { force: true });
 
         run(postgresBinary(postgresBin, "pg_ctl"), [
@@ -205,7 +218,7 @@ async function runLocalVerification() {
             "-l", logPath,
             "-o", `-h 127.0.0.1 -p ${port} -k ${socketDirectory}`,
             "-w", "start",
-        ]);
+        ], { env: localEnv });
         run(postgresBinary(postgresBin, "createdb"), [
             "-h", "127.0.0.1",
             "-p", String(port),
@@ -219,7 +232,7 @@ async function runLocalVerification() {
             "-D", resolve(temporaryDirectory, "data"),
             "-m", "immediate",
             "-w", "stop",
-        ], { capture: true, allowFailure: true });
+        ], { capture: true, allowFailure: true, env: { ...process.env, ...localeEnv } });
         rmSync(temporaryDirectory, { recursive: true, force: true });
     }
 }
