@@ -67,6 +67,8 @@ export function initialStudentGroupId(student: RosterStudent | null, groups: Ros
     return rosterGroupForStudentInput(student.group, student.region || "", groups)?.id || groups.find(group => group.name === student.group)?.id || "";
 }
 
+export const ALL_REGION_KEY = "__all_regions__";
+
 export type StudentFormData = { name: string; email: string; group: string; groupId: string; region: string };
 
 export type GroupFormData = { name: string; color: string; region: string };
