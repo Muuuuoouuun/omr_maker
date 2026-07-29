@@ -39,7 +39,7 @@
   - [ ] 학생 리뷰에서는 이탈 횟수를 행동 기록으로만 표시하고 부정행위로 단정하지 않는다.
   - [ ] 2초 미만 제외, 2초 이상 집계, 중복 방지, 학생 경고 단계, 교사 3회 강조를 자동화 테스트로 검증한다.
 - [ ] Real per-student authentication (accounts, not name/group).
-- [ ] Enable Supabase RLS in production. **No longer blocked on beta1** — the teacher server migration it waited for now exists on `main` as the gateway RPCs (`202607140007_teacher_exam_gateway`, `…0011_teacher_roster_gateway`, `…0012_teacher_attempt_mutation`) plus `…0019_service_role_rls_hardening`, and `supabase/production-rls.sql` is written. What is left is an operational decision, not a code one: staging rehearsal, rollback SQL, and a read/write smoke pass per role. See `docs/production-readiness.md`.
+- [ ] Enable the production data boundary. **Code side is done.** Apply `supabase/production-server-boundary.sql` — the server-only profile that revokes browser access outright rather than gating it on Supabase Auth, which this app does not use. Its preflight (`omr_assert_production_boundary_preflight_v1`) refuses to apply while any null-organization, orphan, cross-organization, or credential-less row exists, so the data audit is enforced rather than remembered. `supabase/production-server-boundary-rollback.sql` reverses it in three stages, verified end to end against PostgreSQL 17. What is left is operational: staging rehearsal, then a read/write smoke pass per role. `supabase/production-rls.sql` is the older Auth-gated profile — keep it only if per-user Supabase Auth ever lands. See `docs/production-readiness.md`.
 - [ ] Row-level roster upsert with `updated_at` optimistic concurrency (draft migration exists once infra pass lands).
 - [ ] Printable OMR PDF generation / physical OMR scanning (future).
 - [ ] Excel export (CSV exists; XLSX pending).
