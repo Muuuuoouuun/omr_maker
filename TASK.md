@@ -22,9 +22,9 @@
 - [ ] **Handoff/transition hardening**: create→distribute→dashboard, submit→review, export/import roundtrip, guest→student merge — error surfacing and latency (in progress).
 - [ ] **Management UX round 2**: CSV import dry-run preview with conflict detail, roster pagination, Toast action API + undo unification, bulk-move region policy (in progress).
 - [ ] **Analytics round 2**: per-group score comparison (min/median/avg/max), point-biserial discrimination, large-workspace CSV export performance (in progress).
-- [ ] **Infra**: Supabase RLS org-scoping audit + draft policies (do NOT enable before beta1 B1–B4 server migration), roster save concurrency improvements (in progress).
+- [ ] **Infra**: roster save concurrency improvements (in progress). The RLS org-scoping audit that used to sit here is done — see the production-RLS item under Backlog for what is actually left.
 - [ ] **UI sweep**: text overflow/truncation, panel spacing, usability pass (queued after the above).
-- [ ] **Beta1 selective integration** (separate worktree `../omr_beta1`): port premier0.1_cle server modules to beta1 per `docs/superpowers/specs/2026-07-13-beta1-integration-design.md` (Step 0–1 in progress).
+- [x] ~~**Beta1 selective integration**~~ — **closed 2026-07-29, superseded by `main`.** `main` independently rebuilt the whole server trust boundary over the 155 commits since the `e0d05b9` fork, and its version is stronger everywhere the two overlap. Details in `docs/superpowers/specs/2026-07-13-beta1-integration-design.md` §13. The branch is archived at tag `archive/beta1-2026-07-14`; nothing remains to port.
 - [ ] **Android/Capacitor shell** (separate session): dev-shell live-reload landed; release pipeline pending.
 
 ## 4. Backlog / Future
@@ -39,7 +39,7 @@
   - [ ] 학생 리뷰에서는 이탈 횟수를 행동 기록으로만 표시하고 부정행위로 단정하지 않는다.
   - [ ] 2초 미만 제외, 2초 이상 집계, 중복 방지, 학생 경고 단계, 교사 3회 강조를 자동화 테스트로 검증한다.
 - [ ] Real per-student authentication (accounts, not name/group).
-- [ ] Enable Supabase RLS in production (blocked on beta1 teacher server migration B1–B4).
+- [ ] Enable Supabase RLS in production. **No longer blocked on beta1** — the teacher server migration it waited for now exists on `main` as the gateway RPCs (`202607140007_teacher_exam_gateway`, `…0011_teacher_roster_gateway`, `…0012_teacher_attempt_mutation`) plus `…0019_service_role_rls_hardening`, and `supabase/production-rls.sql` is written. What is left is an operational decision, not a code one: staging rehearsal, rollback SQL, and a read/write smoke pass per role. See `docs/production-readiness.md`.
 - [ ] Row-level roster upsert with `updated_at` optimistic concurrency (draft migration exists once infra pass lands).
 - [ ] Printable OMR PDF generation / physical OMR scanning (future).
 - [ ] Excel export (CSV exists; XLSX pending).
