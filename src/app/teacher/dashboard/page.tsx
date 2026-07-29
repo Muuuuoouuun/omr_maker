@@ -4,17 +4,11 @@ import { Suspense, useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import dynamic from "next/dynamic";
 import { useRouter, useSearchParams } from "next/navigation";
-import BrandLogo from "@/components/BrandLogo";
+import TeacherHeader from "@/components/TeacherHeader";
 import { Exam, Attempt } from "@/types/omr";
 import OverviewTab from "@/components/dashboard/tabs/OverviewTab";
 import StatusPill from "@/components/dashboard/StatusPill";
-import { Activity, AlertTriangle, BarChart2, CheckCircle2, CloudOff, Database, GraduationCap, LayoutDashboard, RefreshCw, Search } from "lucide-react";
-import ThemeToggle from "@/components/ThemeToggle";
-import TeacherLogoutButton from "@/components/TeacherLogoutButton";
-import NotificationBell from "@/components/NotificationBell";
-import TeacherSessionChip from "@/components/TeacherSessionChip";
-import GlobalSearch from "@/components/GlobalSearch";
-import SkipToMainContent from "@/components/SkipToMainContent";
+import { AlertTriangle, BarChart2, CheckCircle2, CloudOff, Database, GraduationCap, LayoutDashboard, RefreshCw } from "lucide-react";
 import { AnalyticsTabSkeleton, DashboardPageSkeleton } from "@/components/dashboard/DashboardLoadingSkeleton";
 
 // Analytics tabs statically import recharts + thousands of lines of analytics code
@@ -96,10 +90,7 @@ function TeacherDashboard() {
     const showcaseRequested = searchParams.get("showcase") === "1";
     const [isMockupAccount, setIsMockupAccount] = useState(showcaseRequested);
     const [isAccountModeResolved, setIsAccountModeResolved] = useState(showcaseRequested);
-    // Deferred to post-mount to avoid SSR/CSR hydration mismatch on the ⌘/Ctrl label.
-    const [isMac, setIsMac] = useState(false);
     useEffect(() => {
-        setIsMac(typeof navigator !== "undefined" && /Mac|iPhone|iPad/.test(navigator.platform));
         setIsMockupAccount(previous => previous || isMockupTeacherIdentity(readTeacherSession()));
         setIsAccountModeResolved(true);
     }, []);
@@ -589,75 +580,16 @@ function TeacherDashboard() {
 
     return (
         <div className={`layout-main${isMockupAccount ? " mockup-dashboard-shell" : ""}`}>
-            <SkipToMainContent />
-            <header className="header teacher-header">
-                <div className="container header-content">
-                    <div className="teacher-header-brand" style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
-                        <BrandLogo />
-                        <span style={{
-                            fontSize: '0.75rem', fontWeight: 700,
-                            background: isMockupAccount ? '#e7f0ff' : 'rgba(99, 102, 241, 0.1)', color: isMockupAccount ? '#1769e0' : 'var(--primary)',
-                            padding: '4px 10px', borderRadius: 'var(--radius-full)',
-                            border: '1px solid rgba(99, 102, 241, 0.2)'
-                        }}>
-                            {isMockupAccount ? "데모 계정" : "교사"}
-                        </span>
-                    </div>
-                    <div className="teacher-header-actions" style={{ display: 'flex', alignItems: 'center', gap: '0.65rem' }}>
-                        {/* Search trigger — opens the global palette (also Cmd/Ctrl+K) */}
-                        <button
-                            type="button"
-                            onClick={() => window.dispatchEvent(new Event('omr:open-search'))}
-                            aria-label="빠른 검색"
-                            className="header-search-btn"
-                            style={{
-                                display: 'flex', alignItems: 'center', gap: '0.6rem',
-                                padding: '0.45rem 0.8rem',
-                                background: 'var(--background)',
-                                border: '1px solid var(--border)',
-                                borderRadius: 'var(--radius-full)',
-                                color: 'var(--muted)',
-                                fontSize: '0.82rem',
-                                transition: 'var(--transition-base)',
-                                minHeight: '2.75rem',
-                                minWidth: 160,
-                            }}
-                            onMouseEnter={(e) => {
-                                e.currentTarget.style.borderColor = 'rgba(99,102,241,0.4)';
-                                e.currentTarget.style.color = 'var(--primary)';
-                            }}
-                            onMouseLeave={(e) => {
-                                e.currentTarget.style.borderColor = 'var(--border)';
-                                e.currentTarget.style.color = 'var(--muted)';
-                            }}
-                        >
-                            <Search size={14} />
-                            <span style={{ flex: 1, textAlign: 'left' }}>검색...</span>
-                            <kbd style={{
-                                padding: '1px 6px', background: 'var(--surface)', border: '1px solid var(--border)',
-                                borderRadius: 4, fontFamily: 'var(--font-mono)', fontSize: '0.7rem', fontWeight: 600
-                            }}>{isMac ? '⌘K' : 'Ctrl K'}</kbd>
-                        </button>
-                        {!isMockupAccount && <Link href="/teacher/live" style={{
-                            display: 'inline-flex', alignItems: 'center', gap: '0.35rem',
-                            fontSize: '0.82rem', fontWeight: 700,
-                            color: 'var(--success)',
-                            padding: '0.45rem 0.85rem', borderRadius: 'var(--radius-full)',
-                            border: '1px solid rgba(16,185,129,0.28)',
-                            background: 'rgba(16,185,129,0.08)',
-                            minHeight: '2.75rem',
-                        }} className="nav-link-live" aria-label="실시간 모니터링">
-                            <Activity size={14} />
-                            <span>실시간</span>
-                        </Link>}
-                        <TeacherSessionChip />
-                        <NotificationBell />
-                        <TeacherLogoutButton />
-                        {!isMockupAccount && <ThemeToggle />}
-                    </div>
-                </div>
-            </header>
-            <GlobalSearch />
+            {/* TeacherHeader also renders SkipToMainContent and GlobalSearch;
+                this replaced a hand-rolled copy of the same header that had
+                drifted from the shared one in search width and badge shape. */}
+            <TeacherHeader
+                badge={isMockupAccount ? "데모 계정" : "교사"}
+                badgeColor={isMockupAccount ? "#1769e0" : undefined}
+                showDashboardLink={false}
+                showLiveLink={!isMockupAccount}
+                showThemeToggle={!isMockupAccount}
+            />
 
             <main id="main-content" tabIndex={-1} className={`container dashboard-main animate-fade-in${isMockupAccount ? " mockup-dashboard-main" : ""}${isMockupAccount && activeTab !== "overview" ? " mockup-dashboard-subview" : ""}`}>
                 {/* Welcome Section */}

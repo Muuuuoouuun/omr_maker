@@ -15,9 +15,20 @@ import SkipToMainContent from "./SkipToMainContent";
 interface TeacherHeaderProps {
     badge?: string;
     badgeColor?: string;
+    /** The dashboard hosts this header itself and must not link to itself. */
+    showDashboardLink?: boolean;
+    /** The ?showcase=1 demo account hides live monitoring and theme switching. */
+    showLiveLink?: boolean;
+    showThemeToggle?: boolean;
 }
 
-export default function TeacherHeader({ badge = "TEACHER", badgeColor }: TeacherHeaderProps) {
+export default function TeacherHeader({
+    badge = "TEACHER",
+    badgeColor,
+    showDashboardLink = true,
+    showLiveLink = true,
+    showThemeToggle = true,
+}: TeacherHeaderProps) {
     const color = badgeColor || "var(--primary)";
     // Defer mac detection to post-mount to avoid SSR/CSR hydration mismatch
     // (navigator.platform differs between server and client and would mismatch
@@ -87,12 +98,12 @@ export default function TeacherHeader({ badge = "TEACHER", badgeColor }: Teacher
                                 borderRadius: 4, fontFamily: 'var(--font-mono)', fontSize: '0.7rem', fontWeight: 600
                             }}>{isMac ? '⌘K' : 'Ctrl K'}</kbd>
                         </button>
-                        <Link href="/teacher/dashboard" style={{
+                        {showDashboardLink && <Link href="/teacher/dashboard" style={{
                             fontSize: '0.85rem', fontWeight: 600, color: 'var(--muted)',
                             padding: '0.5rem 0.9rem', borderRadius: 'var(--radius-full)',
                             transition: 'var(--transition-base)'
-                        }} className="nav-link">대시보드</Link>
-                        <Link href="/teacher/live" style={{
+                        }} className="nav-link">대시보드</Link>}
+                        {showLiveLink && <Link href="/teacher/live" style={{
                             display: 'inline-flex', alignItems: 'center',
                             transition: 'var(--transition-base)',
                             minHeight: '2.75rem',
@@ -104,11 +115,11 @@ export default function TeacherHeader({ badge = "TEACHER", badgeColor }: Teacher
                                 className="nav-link-live-pill"
                                 style={{ minHeight: '2.75rem' }}
                             />
-                        </Link>
+                        </Link>}
                         <TeacherSessionChip />
                         <NotificationBell />
                         <TeacherLogoutButton />
-                        <ThemeToggle />
+                        {showThemeToggle && <ThemeToggle />}
                     </div>
                 </div>
             </header>

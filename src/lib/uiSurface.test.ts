@@ -645,8 +645,10 @@ describe("service UI surface", () => {
         expect(notificationBell).toContain("minHeight: 44");
         expect(teacherHeader).toContain('className="header teacher-header"');
         expect(teacherHeader).toContain("minHeight: '2.75rem'");
-        expect(teacherDashboard).toContain('className="header teacher-header"');
-        expect(teacherDashboard).toContain('className="nav-link-live"');
+        expect(teacherHeader).toContain('className="nav-link-live"');
+        // The dashboard used to carry its own copy of this header; it now gets
+        // the chrome (and these touch targets) through the shared TeacherHeader.
+        expect(teacherDashboard).toContain("<TeacherHeader");
         expect(css).toContain(".teacher-header-actions");
         expect(css).toContain(".teacher-header .nav-link");
         expect(css).toContain(".nav-link-live");
@@ -861,7 +863,8 @@ describe("service UI surface", () => {
         expect(sessionChip).toContain("display.actorLabel");
         expect(sessionChip).toContain("visibilitychange");
         expect(teacherHeader).toContain("<TeacherSessionChip");
-        expect(dashboardPage).toContain("<TeacherSessionChip");
+        // Dashboard renders the chip through the shared TeacherHeader.
+        expect(dashboardPage).toContain("<TeacherHeader");
         expect(createPage).toContain("<TeacherSessionChip compact");
         expect(homePage).toContain("아이디 또는 이메일");
         expect(homePage).toContain('type="button"');
@@ -1051,7 +1054,8 @@ describe("service UI surface", () => {
         expect(dashboardPage).toContain("rosterStudents={rosterStudents}");
         expect(dashboardPage).toContain("rosterGroups={rosterGroups}");
         expect(dashboardPage).toContain('currentPlan={isMockupAccount ? "academy" : currentPlan}');
-        expect(dashboardPage).toContain("NotificationBell");
+        // The bell reaches the dashboard through the shared TeacherHeader.
+        expect(readProjectFile("src/components/TeacherHeader.tsx")).toContain("NotificationBell");
         expect(examAnalyticsTab).toContain("advancedAnalyticsEnabled");
         expect(examAnalyticsTab).toContain("retakeAssignmentsEnabled");
         expect(examAnalyticsTab).toContain("시험 분석 지역 필터");
