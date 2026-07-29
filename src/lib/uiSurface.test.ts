@@ -1033,7 +1033,11 @@ describe("service UI surface", () => {
         const dashboardPage = readProjectFile("src/app/teacher/dashboard/page.tsx");
         const examAnalyticsTab = readProjectFile("src/components/dashboard/tabs/ExamAnalyticsTab.tsx");
         const studentAnalyticsTab = readProjectFile("src/components/dashboard/tabs/StudentAnalyticsTab.tsx");
-        const usersPage = readProjectFile("src/app/teacher/users/page.tsx");
+        const usersPage = readProjectFile("src/app/teacher/users/page.tsx")
+            // The modals and leaf components this test inspects were extracted
+            // verbatim to parts.tsx (Phase 2 decomposition); the user-visible
+            // surface is the page plus its extracted parts.
+            + readProjectFile("src/components/teacher/users/parts.tsx");
         const teacherAttemptPage = readProjectFile("src/app/teacher/attempt/[attemptId]/page.tsx");
         const reportPanel = readProjectFile("src/components/teacher/student-results/ReportPanel.tsx");
         const premiumGate = readProjectFile("src/components/PremiumFeatureGate.tsx");
@@ -1292,7 +1296,11 @@ describe("service UI surface", () => {
 
     it("deep-links result entry points to the intended hub views", () => {
         const examPage = readProjectFile("src/app/teacher/exam/[id]/page.tsx");
-        const usersPage = readProjectFile("src/app/teacher/users/page.tsx");
+        const usersPage = readProjectFile("src/app/teacher/users/page.tsx")
+            // The modals and leaf components this test inspects were extracted
+            // verbatim to parts.tsx (Phase 2 decomposition); the user-visible
+            // surface is the page plus its extracted parts.
+            + readProjectFile("src/components/teacher/users/parts.tsx");
         const analytics = readProjectFile("src/components/dashboard/tabs/StudentAnalyticsTab.tsx");
 
         expect(examPage).toContain("학생 결과 보기");
@@ -1400,7 +1408,11 @@ describe("service UI surface", () => {
     it("keeps the dashboard overview bento grid usable on mobile", () => {
         const css = readProjectFile("src/app/globals.css");
         const overviewTab = readProjectFile("src/components/dashboard/tabs/OverviewTab.tsx");
-        const usersPage = readProjectFile("src/app/teacher/users/page.tsx");
+        const usersPage = readProjectFile("src/app/teacher/users/page.tsx")
+            // The modals and leaf components this test inspects were extracted
+            // verbatim to parts.tsx (Phase 2 decomposition); the user-visible
+            // surface is the page plus its extracted parts.
+            + readProjectFile("src/components/teacher/users/parts.tsx");
 
         expect(overviewTab).toContain("overview-quick-actions-grid");
         expect(overviewTab).toContain("overview-exam-summary-card");
@@ -1428,7 +1440,11 @@ describe("service UI surface", () => {
         const studentDashboard = readProjectFile("src/app/student/dashboard/page.tsx");
         const studentHistory = readProjectFile("src/app/student/history/page.tsx");
         const studentAnalyticsTab = readProjectFile("src/components/dashboard/tabs/StudentAnalyticsTab.tsx");
-        const usersPage = readProjectFile("src/app/teacher/users/page.tsx");
+        const usersPage = readProjectFile("src/app/teacher/users/page.tsx")
+            // The modals and leaf components this test inspects were extracted
+            // verbatim to parts.tsx (Phase 2 decomposition); the user-visible
+            // surface is the page plus its extracted parts.
+            + readProjectFile("src/components/teacher/users/parts.tsx");
 
         expect(studentDashboard).toContain("나의 원시험 평균");
         expect(studentDashboard).toContain("완료한 원시험");
@@ -1593,7 +1609,11 @@ describe("service UI surface", () => {
     it("keeps Kakao notifications planned without implying live sending", () => {
         const settingsPage = readProjectFile("src/app/teacher/settings/page.tsx");
         const overviewTab = readProjectFile("src/components/dashboard/tabs/OverviewTab.tsx");
-        const usersPage = readProjectFile("src/app/teacher/users/page.tsx");
+        const usersPage = readProjectFile("src/app/teacher/users/page.tsx")
+            // The modals and leaf components this test inspects were extracted
+            // verbatim to parts.tsx (Phase 2 decomposition); the user-visible
+            // surface is the page plus its extracted parts.
+            + readProjectFile("src/components/teacher/users/parts.tsx");
         const notificationBell = readProjectFile("src/components/NotificationBell.tsx");
 
         expect(settingsPage).toContain("NOTIFICATION_STATUS_ITEMS");
@@ -1722,7 +1742,11 @@ describe("service UI surface", () => {
     });
 
     it("keeps roster demo data display-only", () => {
-        const usersPage = readProjectFile("src/app/teacher/users/page.tsx");
+        const usersPage = readProjectFile("src/app/teacher/users/page.tsx")
+            // The modals and leaf components this test inspects were extracted
+            // verbatim to parts.tsx (Phase 2 decomposition); the user-visible
+            // surface is the page plus its extracted parts.
+            + readProjectFile("src/components/teacher/users/parts.tsx");
 
         expect(usersPage).toContain('type RosterDataMode = "real" | "demo"');
         expect(usersPage).toContain("hasStoredRosterData(localStorage)");
