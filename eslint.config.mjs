@@ -18,6 +18,10 @@ const eslintConfig = defineConfig([
     // Capacitor native shell (generated Android/Gradle project + web-dir fallback).
     "android/**",
     "mobile/**",
+    // Linked git worktrees carry their own .next/ build output, and the ".next/**"
+    // entry above only anchors at the repo root — so a single active worktree was
+    // enough to bury `npm run lint` under ~40k findings from minified chunks.
+    ".worktrees/**",
   ]),
 ]);
 

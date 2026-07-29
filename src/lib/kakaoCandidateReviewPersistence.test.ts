@@ -65,9 +65,12 @@ describe("kakao candidate review persistence", () => {
 
         const row = kakaoCandidateReviewToSupabaseRow(result.record, candidate(), "2026-06-16T10:01:00.000Z");
 
+        // organization_id is deliberately absent: actions/kakaoReview.ts stamps it
+        // from the signed teacher session, so a client-built row must not carry a
+        // value a caller could have chosen.
+        expect(row).not.toHaveProperty("organization_id");
         expect(row).toMatchObject({
             id: "kakao:missing:exam-1",
-            organization_id: null,
             exam_id: "exam-1",
             candidate_kind: "missing_exam",
             channel: "kakao",
@@ -85,7 +88,9 @@ describe("kakao candidate review persistence", () => {
             updated_at: "2026-06-16T10:01:00.000Z",
         });
         expect(row.payload.review.status).toBe("ready");
-        expect(kakaoCandidateReviewFromSupabaseRow(row)).toEqual(result.record);
+        // Round-trip through the shape the DB actually holds — the server action
+        // stamps organization_id on the way in, so read-back gets a full row.
+        expect(kakaoCandidateReviewFromSupabaseRow({ ...row, organization_id: "org-1" })).toEqual(result.record);
     });
 
     it("keeps local review state when Supabase is not configured", async () => {
@@ -179,9 +184,9 @@ describe("kakao candidate review persistence", () => {
 
         const row = kakaoDispatchLogToSupabaseRow(queued.log, review.record, selectedCandidate);
 
+        expect(row).not.toHaveProperty("organization_id");
         expect(row).toMatchObject({
             id: "kakao:dispatch:kakao:class-retake:exam-1:A:grammar:2026-06-16T10:05:00.000Z",
-            organization_id: null,
             review_id: "kakao:class-retake:exam-1:A:grammar",
             exam_id: "exam-1",
             channel: "kakao",
@@ -197,7 +202,7 @@ describe("kakao candidate review persistence", () => {
         });
         expect(row.payload.review.status).toBe("ready");
         expect(row.payload.log.status).toBe("queued");
-        expect(kakaoDispatchLogFromSupabaseRow(row)).toEqual(queued.log);
+        expect(kakaoDispatchLogFromSupabaseRow({ ...row, organization_id: "org-1" })).toEqual(queued.log);
     });
 
     it("updates queued dispatch logs to sent, failed, or cancelled states", async () => {

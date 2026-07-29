@@ -9,12 +9,18 @@
 --   organization-scoped table currently have organization_id IS NULL.
 --
 --   PART 2 (commented out on purpose): the NOT NULL constraints themselves.
---   Do not uncomment/run PART 2 until PART 1 reports zero for every table
---   AND the known client-side gap below is fixed — adding NOT NULL while
---   rows are still null, or before the write path is fixed, will not error
---   destructively (existing rows aren't touched by ALTER ... SET NOT NULL
---   unless you also backfill), but it WILL start rejecting new inserts from
---   the one write path that is known to violate it today.
+--   Do not uncomment/run PART 2 until PART 1 reports zero for every table.
+--   Adding NOT NULL while rows are still null is not destructive (existing
+--   rows aren't touched by ALTER ... SET NOT NULL unless you also backfill),
+--   but it WILL start rejecting new inserts from any write path that still
+--   sends null.
+--
+--   UPDATE 2026-07-29: the client-side Kakao gap this file used to warn about
+--   is closed. It was real when written (2026-07-14 15:20) and was fixed four
+--   hours later the same day, when actions/kakaoReview.ts started stamping
+--   organization_id from the signed teacher session — so the warning below was
+--   stale, not wrong. Every current write path scopes correctly; see the
+--   "write paths" note under PART 1.
 --
 -- ---------------------------------------------------------------------------
 -- PART 1 — verification (read-only, safe to run against production now)
@@ -42,14 +48,21 @@ select 'omr_audit_logs', count(*) from public.omr_audit_logs where organization_
 -- is null), so a null there does not lock rows out the way it does for the
 -- tables listed above.
 
--- Known client-side gap that will keep PART 1's omr_kakao_* counts nonzero
--- until fixed (out of scope for this migration — application code, not SQL):
--- src/lib/kakaoCandidateReviewPersistence.ts hardcodes `organization_id: null`
--- on every row it builds (kakaoCandidateReviewToSupabaseRow /
--- kakaoDispatchLogToSupabaseRow), so every write through that module violates
--- the constraint below today. Route it through the same workspace-context
--- scoping src/lib/omrPersistence.ts and src/lib/rosterPersistence.ts already
--- use before enabling NOT NULL on these two tables.
+-- Write paths (verified 2026-07-29) — all organization-scoped, none send null:
+--   omr_exams / omr_attempts / omr_question_results / omr_classes
+--     src/lib/omrPersistence.ts, src/lib/rosterPersistence.ts — workspace context
+--     applied at row-build time.
+--   omr_kakao_candidate_reviews / omr_kakao_dispatch_logs
+--     src/app/actions/kakaoReview.ts is the only writer, and it stamps
+--     organization_id from the signed teacher session, overriding whatever the
+--     caller sent. The client builders in
+--     src/lib/kakaoCandidateReviewPersistence.ts no longer emit the column at
+--     all (KakaoRowDraft<Row> = Omit<Row, "organization_id">), so there is no
+--     placeholder value left to leak into a row.
+--
+-- What PART 1 can still find is HISTORY, not a live bug: rows written before
+-- the fixes above may carry null. Those need a backfill, not a code change.
+-- Backfill first, re-run PART 1, then consider PART 2.
 
 -- ---------------------------------------------------------------------------
 -- PART 2 — enforcement (DO NOT RUN until PART 1 is all zeros and the Kakao

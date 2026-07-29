@@ -56,9 +56,16 @@ export interface KakaoDispatchSummary {
     latestByReviewId: Record<string, KakaoDispatchLog>;
 }
 
+/**
+ * Shape of a persisted row. `organization_id` is owned by the server: the two
+ * writers below never emit it, and `saveTeacherKakaoReview` /
+ * `saveTeacherKakaoDispatch` stamp it from the signed teacher session so a
+ * caller can't choose someone else's organization. It is non-null because every
+ * write goes through that path — see `KakaoRowDraft`.
+ */
 export interface SupabaseKakaoCandidateReviewRow {
     id: string;
-    organization_id: string | null;
+    organization_id: string;
     exam_id: string;
     candidate_kind: KakaoNotificationCandidate["kind"];
     channel: "kakao";
@@ -82,7 +89,7 @@ export interface SupabaseKakaoCandidateReviewRow {
 
 export interface SupabaseKakaoDispatchLogRow {
     id: string;
-    organization_id: string | null;
+    organization_id: string;
     review_id: string;
     exam_id: string;
     channel: "kakao";
@@ -102,6 +109,18 @@ export interface SupabaseKakaoDispatchLogRow {
     sent_at: string | null;
 }
 
+
+/**
+ * What a client-side builder is allowed to produce: everything except the
+ * organization scope. Omitting the column rather than sending a placeholder is
+ * the point — a row that carries `organization_id: null` reads as "this module
+ * writes null rows", which is how it was described in
+ * `supabase/drafts/0002_organization_id_not_null_readiness_gate.draft.sql`. The
+ * server has stamped the real organization since the same day that draft was
+ * written; leaving the field out makes the ownership legible and keeps a future
+ * write path from trusting a caller-supplied value.
+ */
+export type KakaoRowDraft<Row> = Omit<Row, "organization_id">;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
     return !!value && typeof value === "object" && !Array.isArray(value);
@@ -157,10 +176,9 @@ export function kakaoCandidateReviewToSupabaseRow(
     record: KakaoCandidateReviewRecord,
     candidate: KakaoNotificationCandidate,
     updatedAt = record.updatedAt,
-): SupabaseKakaoCandidateReviewRow {
+): KakaoRowDraft<SupabaseKakaoCandidateReviewRow> {
     return {
         id: record.candidateId,
-        organization_id: null,
         exam_id: record.examId,
         candidate_kind: record.kind,
         channel: "kakao",
@@ -311,10 +329,9 @@ export function kakaoDispatchLogToSupabaseRow(
     log: KakaoDispatchLog,
     record: KakaoCandidateReviewRecord,
     candidate: KakaoNotificationCandidate,
-): SupabaseKakaoDispatchLogRow {
+): KakaoRowDraft<SupabaseKakaoDispatchLogRow> {
     return {
         id: log.id,
-        organization_id: null,
         review_id: record.candidateId,
         exam_id: record.examId,
         channel: "kakao",
