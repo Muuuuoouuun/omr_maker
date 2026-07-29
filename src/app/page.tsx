@@ -11,11 +11,12 @@ import {
   issueGuestSession,
   issueStudentSession,
   loadStudentLoginDirectory,
+  type StudentSessionIssueResult,
   type StudentSessionIssueStatus,
 } from "@/app/actions/studentSession";
 import { formatRegionScopedLabel } from "@/lib/dashboardSelection";
 import { seedLocalTestStudentAccounts } from "@/lib/localTestAccounts";
-import { readLocalAttempts, syncMergedGuestAttempts } from "@/lib/omrPersistence";
+import { readLocalAttempts } from "@/lib/omrPersistence";
 import {
   readRosterGroups,
   readRosterStudents,
@@ -27,11 +28,11 @@ import { TEACHER_AUTH_DEPLOYMENT_HELP, shouldShowTeacherDeploymentHelp } from "@
 import {
   hasStudentStartCode,
   normalizeStartCodeInput,
-  readStudentCodes,
   resolveStudentIdentity,
   resolveStudentStartCodeLogin,
   writeStudentCodes,
 } from "@/lib/studentCodes";
+import { loadLocalStudentCodes } from "@/lib/studentCredentialLocalState";
 import {
   consumePendingGuestMerge,
   getSession,
@@ -47,6 +48,7 @@ import {
 import { normalizeStudentRedirectPath } from "@/lib/studentRedirect";
 import { normalizeTeacherRedirectPath, saveTeacherSessionWithIdentity } from "@/lib/teacherSession";
 import { setCurrentPlan } from "@/utils/plans";
+import { readGuestRecoveryState } from "@/lib/studentGuestRecovery";
 
 /* ─── SVG Icons ──────────────────────────────────────── */
 
@@ -197,6 +199,17 @@ function studentLoginErrorMessage(status: StudentSessionIssueStatus): string {
   return "학생 계정을 확인하지 못했습니다. 잠시 후 다시 시도해주세요.";
 }
 
+function pendingGuestAttemptIds(): string[] {
+  const pending = readPendingGuestMerge();
+  if (!pending) return [];
+  return readLocalAttempts()
+    .filter(attempt => (
+      attempt.guestId === pending.guestId
+      || attempt.studentId === `guest:${pending.guestId}`
+    ))
+    .map(attempt => attempt.id);
+}
+
 export default function Home() {
   const router = useRouter();
   const [role, setRole] = useState<"none" | "teacher" | "student">("none");
@@ -239,6 +252,7 @@ export default function Home() {
     let cancelled = false;
     let localGroups: RosterGroup[] = [];
     try {
+      loadLocalStudentCodes(localStorage, process.env.NODE_ENV);
       // Hydrate client-only localStorage state after mount.
       seedLocalTestStudentAccounts(localStorage);
       localGroups = readRosterGroups(localStorage);
@@ -306,7 +320,7 @@ export default function Home() {
       return;
     }
     try {
-      const codes = readStudentCodes(localStorage);
+      const codes = loadLocalStudentCodes(localStorage, process.env.NODE_ENV);
       const identity = resolveStudentIdentity({
         name: studentName,
         selectedGroupId,
@@ -398,10 +412,16 @@ export default function Home() {
     }
   };
 
-  const finishStudentLogin = async (session: StudentSession, next: string, issuedCode?: string) => {
-    const pendingGuestMerge = consumePendingGuestMerge();
+  const finishStudentLogin = async (
+    session: StudentSession,
+    next: string,
+    issuedCode?: string,
+    guestClaim?: StudentSessionIssueResult["guestClaim"],
+  ) => {
+    const pendingGuestMerge = readPendingGuestMerge();
     if (pendingGuestMerge) {
-      const mergedCount = mergeGuestAttempts(pendingGuestMerge.guestId, {
+      const preview = previewGuestMerge(pendingGuestMerge.guestId);
+      const target = {
         studentId: session.studentId,
         name: session.name,
         groupId: session.groupId,
@@ -409,16 +429,28 @@ export default function Home() {
         regionId: session.regionId,
         regionName: session.regionName,
         identityType: session.identityType,
-      });
-      if (mergedCount > 0) {
-        toast.success("게스트 기록 연결됨", `${mergedCount}개의 시험 기록을 학생 기록으로 저장했습니다.`);
-        // Push reassigned attempts in the background. Local ownership has
-        // already moved, and the dashboard/SyncFlusher retries remote failures,
-        // so a slow sync must not hold the student on the login screen.
-        void syncMergedGuestAttempts(session.studentId, { guestId: pendingGuestMerge.guestId })
-          .catch(() => { /* dashboard reconciliation retries this later */ });
+      };
+      const acknowledgedAttemptIds = new Set(
+        guestClaim?.status === "claimed" || guestClaim?.status === "partial"
+          ? guestClaim.acknowledgedAttemptIds
+          : [],
+      );
+      const confirmedIds = preview.attemptIds.filter(id => acknowledgedAttemptIds.has(id));
+      if (confirmedIds.length > 0) {
+        mergeGuestAttempts(pendingGuestMerge.guestId, target, { attemptIds: confirmedIds });
+      }
+      const recovery = readGuestRecoveryState(window.localStorage);
+      if (recovery?.status === "unverified" && recovery.attemptIds.length === 0) {
+        consumePendingGuestMerge();
+        toast.success(
+          "게스트 기록 서버 연결됨",
+          `${confirmedIds.length}개의 서버 소유 기록을 학생 기록으로 저장했습니다.`,
+        );
       } else {
-        toast.info("연결할 새 게스트 기록 없음", "이후 제출 기록은 학생 기록으로 저장됩니다.");
+        toast.info(
+          "미검증 로컬 기록 분리 보관",
+          "확인되지 않은 기록은 학생 기록에 합치지 않았습니다. 대시보드에서 내보내거나 서버 소유 기록을 다시 확인할 수 있습니다.",
+        );
       }
     }
 
@@ -426,9 +458,10 @@ export default function Home() {
     if (issuedCode) {
       setCopiedIssuedCode(false);
       setIssuedCodeModal({ code: issuedCode, next });
-      return;
+      return true;
     }
     router.push(next);
+    return true;
   };
 
   const handleStudentLogin = async () => {
@@ -468,9 +501,10 @@ export default function Home() {
           groupId: selectedGroupId,
           studentLookup,
           startCode,
+          guestAttemptIds: pendingGuestAttemptIds(),
         });
         if (!result.ok || !result.identity) {
-          setError(studentLoginErrorMessage(result.status));
+          setError(result.error || studentLoginErrorMessage(result.status));
           return;
         }
         const identity = result.identity;
@@ -486,7 +520,7 @@ export default function Home() {
           isGuest: false,
           identityType: "temporary",
         };
-        await finishStudentLogin(session, next);
+        await finishStudentLogin(session, next, undefined, result.guestClaim);
       } catch {
         setError("학생 인증 서버에 연결하지 못했습니다. 네트워크를 확인한 뒤 다시 시도해주세요.");
       } finally {
@@ -527,7 +561,7 @@ export default function Home() {
       groups: loginGroups,
       students,
     });
-    const codes = readStudentCodes(localStorage);
+    const codes = loadLocalStudentCodes(localStorage, process.env.NODE_ENV);
     const attempts = readLocalAttempts();
     const hasPriorAttempt = attempts.some(a => a.studentId === identity.studentId
       || a.studentId === identity.legacyStudentId
@@ -569,9 +603,10 @@ export default function Home() {
         groupId: selectedGroupId,
         groupName: identity.groupName,
         ...regionSnapshot,
+        guestAttemptIds: pendingGuestAttemptIds(),
       });
       if (!result.ok) {
-        setError(studentLoginErrorMessage(result.status));
+        setError(result.error || studentLoginErrorMessage(result.status));
         return;
       }
       const session: StudentSession = {
@@ -589,6 +624,7 @@ export default function Home() {
         session,
         next,
         codeDecision.status === "new_code_issued" ? codeDecision.code : undefined,
+        result.guestClaim,
       );
     } catch {
       setError("학생 세션을 시작하지 못했습니다. 브라우저와 네트워크 상태를 확인해주세요.");
@@ -771,65 +807,68 @@ export default function Home() {
         </div>
       )}
 
-      <div
-        className="container animate-fade-in home-container"
-        style={{ maxWidth: "960px", position: "relative", zIndex: 1, padding: "3rem 1.5rem" }}
-      >
-        {/* ── Hero ───────────────────────────── */}
-        <div className="home-hero" style={{ textAlign: "center", marginBottom: "4rem" }}>
-          <div
-            className="stagger-1 animate-fade-in home-logo"
-            style={{ marginBottom: "1.4rem", opacity: 0 }}
-          >
-            <BrandLogo
-              markOnly
-              className="brand-logo--hero"
-              priorityLabel="역할 선택 홈으로"
-              onClick={handleHomeNavigation}
-            />
-          </div>
+      <main id="main-content" className="landing-main">
+        <div
+          className="container animate-fade-in home-container"
+          style={{ maxWidth: "960px", position: "relative", zIndex: 1, padding: "3rem 1.5rem" }}
+        >
+          {/* ── Hero ───────────────────────────── */}
+          {role === "none" && (
+            <div className="home-hero" style={{ textAlign: "center", marginBottom: "4rem" }}>
+              <div
+                className="stagger-1 animate-fade-in home-logo"
+                style={{ marginBottom: "1.4rem", opacity: 0 }}
+              >
+                <BrandLogo
+                  markOnly
+                  className="brand-logo--hero"
+                  priorityLabel="역할 선택 홈으로"
+                  onClick={handleHomeNavigation}
+                />
+              </div>
 
-          <h1
-            className="title-gradient stagger-2 animate-fade-in home-title"
-            style={{
-              fontSize: "clamp(3.2rem, 8vw, 5.5rem)",
-              lineHeight: 1.04,
-              letterSpacing: 0,
-              fontWeight: 900,
-              marginBottom: "1rem",
-              opacity: 0,
-            }}
-          >
-            OMR Maker
-          </h1>
+              <h1
+                className="title-gradient stagger-2 animate-fade-in home-title"
+                style={{
+                  fontSize: "clamp(3.2rem, 8vw, 5.5rem)",
+                  lineHeight: 1.04,
+                  letterSpacing: 0,
+                  fontWeight: 900,
+                  marginBottom: "1rem",
+                  opacity: 0,
+                }}
+              >
+                OMR Maker
+              </h1>
 
-          <div
-            className="badge badge-primary stagger-3 animate-fade-in home-eyebrow"
-            style={{ marginBottom: "1.15rem", opacity: 0 }}
-          >
-            <svg width="8" height="8" viewBox="0 0 8 8" fill="currentColor" aria-hidden="true">
-              <circle cx="4" cy="4" r="4" />
-            </svg>
-            Smart Evaluation Platform
-          </div>
+              <div
+                className="badge badge-primary stagger-3 animate-fade-in home-eyebrow"
+                style={{ marginBottom: "1.15rem", opacity: 0 }}
+              >
+                <svg width="8" height="8" viewBox="0 0 8 8" fill="currentColor" aria-hidden="true">
+                  <circle cx="4" cy="4" r="4" />
+                </svg>
+                Smart Evaluation Platform
+              </div>
 
-          <p
-            className="stagger-4 animate-fade-in home-subtitle"
-            style={{
-              fontSize: "1.15rem",
-              color: "var(--muted)",
-              fontWeight: 400,
-              lineHeight: 1.65,
-              maxWidth: "480px",
-              margin: "0 auto",
-              opacity: 0,
-              wordBreak: "keep-all",
-              wordWrap: "break-word",
-            }}
-          >
-            교사와 학생을 위한 스마트 평가 플랫폼.
-          </p>
-        </div>
+              <p
+                className="stagger-4 animate-fade-in home-subtitle"
+                style={{
+                  fontSize: "1.15rem",
+                  color: "var(--muted)",
+                  fontWeight: 400,
+                  lineHeight: 1.65,
+                  maxWidth: "480px",
+                  margin: "0 auto",
+                  opacity: 0,
+                  wordBreak: "keep-all",
+                  wordWrap: "break-word",
+                }}
+              >
+                교사와 학생을 위한 스마트 평가 플랫폼.
+              </p>
+            </div>
+          )}
 
         {/* ── Role Selection ─────────────────── */}
         {role === "none" && (
@@ -1072,7 +1111,7 @@ export default function Home() {
                     <TeacherIcon size={12} />
                     교사 포털
                   </span>
-                  <h2
+                  <h1
                     style={{
                       fontSize: "1.85rem",
                       fontWeight: 800,
@@ -1082,7 +1121,7 @@ export default function Home() {
                     }}
                   >
                     환영합니다
-                  </h2>
+                  </h1>
                 </div>
 
                 <form
@@ -1214,7 +1253,7 @@ export default function Home() {
                     <StudentIcon size={12} />
                     학생 포털
                   </span>
-                  <h2
+                  <h1
                     style={{
                       fontSize: "1.85rem",
                       fontWeight: 800,
@@ -1224,7 +1263,7 @@ export default function Home() {
                     }}
                   >
                     학습 시작
-                  </h2>
+                  </h1>
                 </div>
 
                 <div style={{ marginBottom: "1.1rem" }}>
@@ -1499,8 +1538,9 @@ export default function Home() {
               </>
             )}
           </div>
-        )}
-      </div>
+          )}
+        </div>
+      </main>
     </div>
   );
 }

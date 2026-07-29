@@ -1,7 +1,9 @@
 import {
+    answerTeacherCanonicalAttemptQuestion,
+    forceFinishTeacherCanonicalAttempts,
     listTeacherCanonicalAttempts,
     loadTeacherCanonicalAttempt,
-    saveTeacherCanonicalAttempt,
+    setTeacherCanonicalSubquestionReview,
 } from "@/app/actions/teacherAttempts";
 import {
     loadAttempt,
@@ -10,12 +12,14 @@ import {
     saveLocalAttempt,
     saveLocalAttempts,
 } from "@/lib/omrPersistence";
+import { answerStudentQuestion } from "@/lib/studentQuestions";
+import { withBrowserStorageLock } from "@/lib/browserStorageLock";
 import type { Attempt } from "@/types/omr";
 
 export async function loadTeacherAttempt(attemptId: string): Promise<Attempt | null> {
     const result = await loadTeacherCanonicalAttempt(attemptId);
     if (result.status === "loaded") {
-        saveLocalAttempt(result.attempt);
+        await saveLocalAttempt(result.attempt);
         return result.attempt;
     }
     if (result.status === "local_only") return loadAttempt(attemptId);
@@ -26,9 +30,9 @@ export async function loadTeacherAttempts(examId?: string) {
     const result = await listTeacherCanonicalAttempts(examId);
     if (result.status === "loaded") {
         if (examId?.trim()) {
-            result.attempts.forEach(saveLocalAttempt);
+            await Promise.all(result.attempts.map(attempt => saveLocalAttempt(attempt)));
         } else {
-            saveLocalAttempts(result.attempts);
+            await saveLocalAttempts(result.attempts);
         }
         return {
             items: result.attempts,
@@ -53,25 +57,218 @@ export async function loadTeacherAttempts(examId?: string) {
     };
 }
 
-export async function saveTeacherAttempt(attempt: Attempt) {
-    const result = await saveTeacherCanonicalAttempt(attempt);
-    if (result.status === "saved") {
-        return {
-            localSaved: saveLocalAttempt(result.attempt),
-            remoteSaved: true,
-        };
-    }
-    if (result.status === "local_only") {
-        return {
-            localSaved: saveLocalAttempt(attempt),
-            remoteSaved: false,
-        };
-    }
-    return {
-        localSaved: false,
-        remoteSaved: false,
-        remoteError: result.status === "unauthorized"
-            ? "Teacher server session is missing"
-            : result.error || "Canonical attempt gateway unavailable",
+function remoteMutationError(result: { status: string; error?: string }): string {
+    if (result.status === "unauthorized") return "Teacher server session is missing";
+    if (result.status === "forbidden") return "Teacher role cannot change attempts";
+    if (result.status === "not_found") return "Canonical attempt was not found";
+    if (result.status === "invalid_request") return "Attempt mutation was invalid";
+    return result.error || "Canonical attempt gateway unavailable";
+}
+
+function mutationLockError(error: unknown): string {
+    return error instanceof Error ? error.message : "Attempt mutation lock failed";
+}
+
+async function withTeacherAttemptMutationLocks<T>(
+    attemptIds: string[],
+    operation: () => Promise<T>,
+): Promise<T> {
+    const ids = [...new Set(attemptIds.map(id => id.trim()).filter(Boolean))].sort();
+    const acquire = (index: number): Promise<T> => {
+        if (index >= ids.length) return operation();
+        return withBrowserStorageLock(
+            `teacher-attempt-mutation:${ids[index]}`,
+            () => acquire(index + 1),
+        );
     };
+    return acquire(0);
+}
+
+interface LocalCacheWriteResult {
+    localCacheSaved: boolean;
+    cacheWarning?: string;
+}
+
+async function cacheCanonicalAttempt(attempt: Attempt): Promise<LocalCacheWriteResult> {
+    try {
+        const saved = await saveLocalAttempt(attempt);
+        return saved
+            ? { localCacheSaved: true }
+            : { localCacheSaved: false, cacheWarning: "Canonical response could not be cached" };
+    } catch (error) {
+        return { localCacheSaved: false, cacheWarning: mutationLockError(error) };
+    }
+}
+
+async function cacheCanonicalAttempts(attempts: Attempt[]): Promise<LocalCacheWriteResult> {
+    const writes = await Promise.allSettled(attempts.map(saveLocalAttempt));
+    const failure = writes.find(result => result.status === "rejected")
+        || writes.find(result => result.status === "fulfilled" && !result.value);
+    if (!failure) return { localCacheSaved: true };
+    return {
+        localCacheSaved: false,
+        cacheWarning: failure.status === "rejected"
+            ? mutationLockError(failure.reason)
+            : "Canonical response could not be cached",
+    };
+}
+
+export async function answerTeacherAttemptQuestion(
+    attempt: Attempt,
+    questionId: number,
+    answer: string,
+) {
+    try {
+        return await withTeacherAttemptMutationLocks([attempt.id], async () => {
+            const result = await answerTeacherCanonicalAttemptQuestion(attempt.id, questionId, answer);
+            if (result.status === "saved") {
+                const cache = await cacheCanonicalAttempt(result.attempt);
+                return {
+                    localSaved: cache.localCacheSaved,
+                    ...cache,
+                    remoteSaved: true,
+                    attempt: result.attempt,
+                };
+            }
+            if (result.status === "local_only") {
+                const latest = readLocalAttempts().find(item => item.id === attempt.id) || attempt;
+                const updated = answerStudentQuestion(latest, questionId, answer, new Date().toISOString());
+                if (!updated) {
+                    return { localSaved: false, remoteSaved: false, remoteError: "Student question was not found" };
+                }
+                return {
+                    localSaved: await saveLocalAttempt(updated),
+                    remoteSaved: false,
+                    attempt: updated,
+                };
+            }
+            return {
+                localSaved: false,
+                remoteSaved: false,
+                remoteError: remoteMutationError(result),
+            };
+        });
+    } catch (error) {
+        return {
+            localSaved: false,
+            remoteSaved: false,
+            remoteError: mutationLockError(error),
+        };
+    }
+}
+
+export async function setTeacherAttemptSubquestionReview(
+    attempt: Attempt,
+    questionId: number,
+    subquestionId: string,
+    status: "needs_review" | "reviewed",
+) {
+    try {
+        return await withTeacherAttemptMutationLocks([attempt.id], async () => {
+            const result = await setTeacherCanonicalSubquestionReview(
+                attempt.id,
+                questionId,
+                subquestionId,
+                status,
+            );
+            if (result.status === "saved") {
+                const cache = await cacheCanonicalAttempt(result.attempt);
+                return {
+                    localSaved: cache.localCacheSaved,
+                    ...cache,
+                    remoteSaved: true,
+                    attempt: result.attempt,
+                };
+            }
+            if (result.status === "local_only") {
+                const latest = readLocalAttempts().find(item => item.id === attempt.id) || attempt;
+                const current = latest.subQuestionAnswers?.[questionId]?.[subquestionId];
+                if (!current) {
+                    return { localSaved: false, remoteSaved: false, remoteError: "Subquestion answer was not found" };
+                }
+                const updated: Attempt = {
+                    ...latest,
+                    subQuestionAnswers: {
+                        ...(latest.subQuestionAnswers || {}),
+                        [questionId]: {
+                            ...(latest.subQuestionAnswers?.[questionId] || {}),
+                            [subquestionId]: {
+                                ...current,
+                                reviewStatus: status,
+                                reviewedAt: status === "reviewed" ? new Date().toISOString() : undefined,
+                                reviewedBy: undefined,
+                            },
+                        },
+                    },
+                };
+                return {
+                    localSaved: await saveLocalAttempt(updated),
+                    remoteSaved: false,
+                    attempt: updated,
+                };
+            }
+            return {
+                localSaved: false,
+                remoteSaved: false,
+                remoteError: remoteMutationError(result),
+            };
+        });
+    } catch (error) {
+        return {
+            localSaved: false,
+            remoteSaved: false,
+            remoteError: mutationLockError(error),
+        };
+    }
+}
+
+export async function forceFinishTeacherAttempts(
+    attempts: Attempt[],
+    finishedAt: string,
+) {
+    try {
+        return await withTeacherAttemptMutationLocks(attempts.map(attempt => attempt.id), async () => {
+            const result = await forceFinishTeacherCanonicalAttempts(
+                attempts.map(attempt => attempt.id),
+                finishedAt,
+            );
+            if (result.status === "saved") {
+                const cache = await cacheCanonicalAttempts(result.attempts);
+                return {
+                    localSaved: cache.localCacheSaved,
+                    ...cache,
+                    remoteSaved: true,
+                    attempts: result.attempts,
+                };
+            }
+            if (result.status === "local_only") {
+                const latestById = new Map(readLocalAttempts().map(item => [item.id, item]));
+                const completed = attempts.map(attempt => ({
+                    ...(latestById.get(attempt.id) || attempt),
+                    status: "completed" as const,
+                    finishedAt,
+                    autoSubmitted: true,
+                }));
+                const localResults = await Promise.all(completed.map(saveLocalAttempt));
+                return {
+                    localSaved: localResults.every(Boolean),
+                    remoteSaved: false,
+                    attempts: completed,
+                };
+            }
+            return {
+                localSaved: false,
+                remoteSaved: false,
+                attempts,
+                remoteError: remoteMutationError(result),
+            };
+        });
+    } catch (error) {
+        return {
+            localSaved: false,
+            remoteSaved: false,
+            attempts,
+            remoteError: mutationLockError(error),
+        };
+    }
 }

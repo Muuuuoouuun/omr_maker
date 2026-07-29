@@ -137,6 +137,20 @@ async function expectNoCriticalOverflow(page: Page) {
 }
 
 test.describe("tablet layout", () => {
+    test("orientation contract allows the installed app to follow tablet landscape without overflow", async ({ page }) => {
+        await page.setViewportSize({ width: 1180, height: 820 });
+        await seedTabletStorage(page);
+        await page.goto("/solve/tablet-exam");
+        await continueSolveEntryIfPresent(page);
+        await expect(page.locator(".solve-body")).toBeVisible();
+
+        const manifestResponse = await page.request.get("/manifest.webmanifest");
+        expect(manifestResponse.ok()).toBe(true);
+        const currentManifest = await manifestResponse.json() as { orientation?: string };
+        expect(currentManifest.orientation).toBe("any");
+        await expectNoCriticalOverflow(page);
+    });
+
     for (const viewport of tabletViewports) {
         for (const route of layoutRoutes) {
             test(`${viewport.name} keeps ${route} inside the viewport`, async ({ page }) => {

@@ -4,24 +4,77 @@
 개별 절차의 상세는 각 원본 문서를 참조하고, 이 문서는 "무엇을 언제 확인하는가"의 단일 진입점 역할을 합니다.
 
 > ⚠️ **현재 상태**: 프로덕션 배포는 되어 있으나, `schema.sql`의 업무 데이터 RLS 정책은
-> 알파/로컬 테스트용으로 열려 있습니다. 아래 **1. Supabase RLS 핸드오프**를 완료하기 전까지는
-> 실제(민감) 학생 데이터를 저장하지 마세요.
+> 알파/로컬 테스트용으로 열려 있습니다. 아래 **1. Supabase 서버 전용 핸드오프**를 완료하기 전까지는
+> 실제(민감) 학생 데이터를 저장하지 마세요. readiness 오류에는 고정된 검사 이름만 기록하고
+> preflight sample, 학생 이름, row id를 포함하지 않습니다.
 
-## 1. Supabase RLS 핸드오프 (실제 학생 데이터 전 필수)
+## 1. Supabase 서버 전용 핸드오프 (실제 학생 데이터 전 필수)
 
-`supabase/production-rls.sql`은 알파 공개 정책을 제거하고, 익명 테이블 접근을 회수하며,
-RLS를 강제하고 Supabase Auth + `omr_organization_members`로 데이터를 게이트합니다.
+`supabase/production-server-boundary.sql`은 canonical/PII 데이터 평면을
+서버 전용으로 전환합니다. `public`, `anon`, `authenticated`의 테이블·시퀀스·함수 권한과
+alpha/기존 브라우저 정책을 제거하고, 모든 `public.omr_*` 테이블에 RLS를 강제하면서
+service-role RPC만 유지합니다. 기존 `production-rls.sql`은 직접 authenticated 브라우저
+접근을 허용하는 이전 프로필이므로 새 컷오버에 적용하지 않습니다.
 
-- **선행 조건과 적용 순서**: [supabase/README.md](../supabase/README.md)의 `Production RLS Handoff` 7단계.
-  (Auth 활성화 → `organization_id` 백필 → 멤버 행 생성 → 조직 생성/부트스트랩/감사로그를 서버·서비스롤로 이전 →
-  `production-rls.sql` 실행 → Pro/Academy 서버측 권한 검사 → 보관 필기 데이터 보존 규칙.)
-- **자동 적용을 하지 않는 이유**: 위 선행 조건(특히 Auth·org 백필)이 충족되지 않은 상태에서
-  정책만 강제하면 정상 트래픽이 차단됩니다. 그래서 프로비저닝 스크립트는 이 파일을 자동 실행하지 않습니다.
-- **자동 검증(회귀)**: `npm run test:supabase:live` 는 로컬 Postgres 컨테이너에
-  `schema.sql` → 마이그레이션 → `production-rls.sql` → `live-test-assertions.sql`을 순서대로 적용해
-  정책이 의도대로 동작하는지 검증합니다. 스키마/정책을 바꾸면 이 명령으로 먼저 회귀를 확인하세요.
-- **적용 후**: 익명 quick-entry 학생은 publishable 키로 직접 쓸 수 없습니다.
-  학생 Auth 계정 또는 서명된 과제 토큰이 준비될 때까지 학생 제출은 서버 경유로 유지하세요.
+### 적용 순서
+
+1. 쓰기를 유지보수 모드로 전환하고 복구 가능한 DB 스냅샷을 생성합니다.
+2. 단일 migration owner인 `postgres`로 접속해 동일한 커밋의 `schema.sql`과 모든
+   `migrations`를 파일명 순으로 적용합니다. PostgreSQL default privilege는 소유자별이므로
+   실행자를 섞지 않습니다.
+3. 같은 `postgres` 세션에서
+   `select public.omr_assert_production_boundary_preflight_v1();`을 실행합니다.
+   조직 null·고아·교차 조직·학생 credential 누락 중 하나라도 0이 아니면 중단합니다.
+4. 계속 `postgres`로 `supabase/production-server-boundary.sql`을 적용합니다. 다른
+   `current_user`는 프로필이 거부하며, service-role API key만으로는 grant·RLS·`postgres`
+   default ACL을 바꿀 수 없습니다. 이 트랜잭션도 가장 먼저 같은 preflight assertion을
+   실행하므로 검사와 권한 회수 사이의 잘못된 수동 순서를 막습니다.
+5. `schema.sql` → sorted `migrations` → `production-server-boundary.sql` →
+   `live-test-assertions.sql` 순서를 실행하는 `npm run test:supabase:live`와
+   CI의 blocking `supabase-live-contract` 작업을 통과시킵니다.
+   service-role 전용 readiness probe 버전은 `202607280003`이어야 합니다.
+   브라우저 schema/table/column/sequence/function 실효 권한과 PostgreSQL 17
+   `MAINTAIN` 차단, 정확한 canonical 27개 allowlist의 ENABLE+FORCE RLS, public
+   정책 0개, 조직 preflight 4개 count 0, 정확한 목적별 교사 RPC signature,
+   추가 overload 없는 정확한 서버 gateway 11개 signature, 모든 legacy
+   broad-RPC overload 제거, service-role 권한, private Storage owner·제한
+   정책을 모두 `true`로 반환해야 합니다. 키 누락·이전 또는 공백이
+   붙은 버전·`false`·배열 응답은 모두 배포 불가입니다. 교사 설정 화면의
+   readiness Server Action은 동일 출처와 유효한 서명 세션을 먼저 확인하고
+   공개 쇼케이스 identity를 차단한 뒤에만 service-role probe를 호출합니다.
+   속도 제한은 서명된 actor를 기준으로 하며 만료 엔트리를 정리하고 저장소
+   최대 크기를 고정합니다. 이 제한은 process-local 방어 심층 계층이므로
+   다중 instance 운영에서는 upstream 공유 rate limit도 함께 적용합니다.
+6. 릴리스 증거에 커밋 SHA, 정책 해시(SHA-256), CI 실행 URL, 대상 DB 프로젝트,
+   실행자·시각, preflight 결과, anon/authenticated 공격 거부 결과를 기록합니다.
+7. 같은 커밋의 서버 빌드를 배포하고 교사·학생 server action 여정을 확인한 뒤 쓰기를 재개합니다.
+
+현재 public 앱 테이블은 `public.omr_*` 27개입니다. 별도의 Supabase 관리 관계인
+`storage.objects`와 `storage.buckets`는
+[Supabase 플랫폼 권한 문서](https://supabase.com/docs/guides/platform/permissions)의
+요구대로 `supabase_storage_admin` 소유권을 유지합니다. 프로필은 managed table ACL이나
+소유권을 변경하지 않습니다. 대신 `postgres`가 해당 역할을 `SET ROLE`할 수 있는지
+fail-closed로 검사하고, Storage 정책 단계에서만 그 owner로 전환했다가 public 프로필을
+계속하기 전에 `RESET ROLE`합니다.
+
+`omr-private-assets`에는 `anon`/`authenticated`의 target row만 거부하는
+`AS RESTRICTIVE` 제한 정책을 `storage.objects`와 `storage.buckets`에 설치합니다.
+다른 bucket에서는 조건이 true이므로 기존 permissive 정책이 그대로 작동하며 전역 브라우저
+Storage API를 중단하지 않습니다. service role은 RLS를 우회하는 서버 전용 경로입니다.
+이는 Supabase가 안내하는
+[Storage access control](https://supabase.com/docs/guides/storage/security/access-control)
+경로입니다. 정책 외 managed Storage metadata는
+[Storage schema 가이드](https://supabase.com/docs/guides/storage/schema/design)처럼
+read-only로 취급합니다. 프로필은 exact repository-owned 정책 이름만 교체하고 unrelated
+정책을 삭제하지 않습니다. 라이브 검증은 owner/policy catalog, actual
+anon/authenticated target CRUD 거부, unrelated bucket 접근 유지, service-role target
+CRUD 성공을 모두 확인합니다.
+
+### 롤백
+
+브라우저 canonical CRUD를 다시 열어 롤백하지 않습니다. 먼저 앱 쓰기를 중단하고 서버 배포를
+되돌립니다. DB 권한 완화는 보안 책임자의 별도 승인, 명시적 검토 SQL, 새 라이브 검증 로그가
+있을 때만 허용하며 alpha 정책이나 `production-rls.sql`을 긴급 롤백으로 사용하지 않습니다.
 
 ## 2. Vercel 프리뷰 배포 보호(SSO)와 QA 우회
 

@@ -1,4 +1,6 @@
-import { buildQuestionResults } from "@/lib/premiumAnalytics";
+import {
+    buildQuestionResults,
+} from "@/lib/premiumAnalytics";
 import type { StudentAttemptTicketClaims } from "@/lib/studentAttemptTicket";
 import type {
     ServerGradedAttemptReceipt,
@@ -29,6 +31,20 @@ export type ServerAttemptGradeError =
 export type ServerAttemptGradeResult =
     | { ok: true; attempt: Attempt; receipt: ServerGradedAttemptReceipt }
     | { ok: false; error: ServerAttemptGradeError };
+
+export type TeacherForcedAttemptGradeError =
+    | "exam_mismatch"
+    | "organization_mismatch"
+    | "class_mismatch"
+    | "invalid_finish_time"
+    | "invalid_retake_scope"
+    | "no_allowed_questions"
+    | "unexpected_question"
+    | "invalid_answer";
+
+export type TeacherForcedAttemptGradeResult =
+    | { ok: true; attempt: Attempt }
+    | { ok: false; error: TeacherForcedAttemptGradeError };
 
 export function serverGradedAttemptReceiptFromAttempt(
     attempt: Attempt,
@@ -181,4 +197,89 @@ export function gradeStudentAttemptOnServer(
         attempt,
         receipt: serverGradedAttemptReceiptFromAttempt(attempt),
     };
+}
+
+/**
+ * Grades an existing canonical attempt for a teacher-triggered timeout.
+ * Identity, class, review, handwriting, and audit fields are preserved from the
+ * stored attempt; only completion and grading fields are derived here.
+ */
+export function gradeTeacherForcedAttemptOnServer(
+    exam: Exam,
+    attempt: Attempt,
+    finishedAt: string,
+): TeacherForcedAttemptGradeResult {
+    if (clean(exam.id) !== clean(attempt.examId)) {
+        return { ok: false, error: "exam_mismatch" };
+    }
+    if (
+        !clean(exam.organizationId)
+        || clean(exam.organizationId) !== clean(attempt.organizationId)
+    ) {
+        return { ok: false, error: "organization_mismatch" };
+    }
+    if (
+        clean(exam.classId)
+        && clean(exam.classId) !== clean(attempt.classId || attempt.groupId)
+    ) {
+        return { ok: false, error: "class_mismatch" };
+    }
+    const finishMs = validDateMs(finishedAt);
+    const startMs = validDateMs(attempt.startedAt);
+    if (finishMs === null || (startMs !== null && finishMs < startMs)) {
+        return { ok: false, error: "invalid_finish_time" };
+    }
+
+    // A response-loss retry must return the first canonical completion without
+    // changing its timestamp or regrading against a later exam revision.
+    if (attempt.status === "completed") return { ok: true, attempt };
+
+    let activeQuestions = exam.questions;
+    if (attempt.retake) {
+        const questionIds = attempt.retake.questionIds;
+        const uniqueIds = new Set(questionIds);
+        const canonicalIds = new Set(exam.questions.map(question => question.id));
+        if (
+            questionIds.length === 0
+            || uniqueIds.size !== questionIds.length
+            || questionIds.some(questionId => !Number.isInteger(questionId) || !canonicalIds.has(questionId))
+        ) {
+            return { ok: false, error: "invalid_retake_scope" };
+        }
+        // Canonical exam order is the stable grading/result ordering policy.
+        activeQuestions = exam.questions.filter(question => uniqueIds.has(question.id));
+        if (activeQuestions.length !== questionIds.length) {
+            return { ok: false, error: "invalid_retake_scope" };
+        }
+    }
+
+    if (activeQuestions.length === 0) return { ok: false, error: "no_allowed_questions" };
+    const activeById = new Map(activeQuestions.map(question => [question.id, question]));
+    for (const [rawQuestionId, rawAnswer] of Object.entries(attempt.answers || {})) {
+        const questionId = Number(rawQuestionId);
+        if (!Number.isInteger(questionId) || !activeById.has(questionId)) {
+            return { ok: false, error: "unexpected_question" };
+        }
+        const question = activeById.get(questionId);
+        if (
+            !question
+            || !Number.isInteger(rawAnswer)
+            || rawAnswer < 1
+            || rawAnswer > questionChoiceCount(question)
+        ) {
+            return { ok: false, error: "invalid_answer" };
+        }
+    }
+
+    const graded = gradeAttempt(activeQuestions, attempt.answers || {});
+    const completed: Attempt = {
+        ...attempt,
+        status: "completed",
+        finishedAt: new Date(finishMs).toISOString(),
+        autoSubmitted: true,
+        score: graded.earnedScore,
+        totalScore: graded.totalScore,
+    };
+    completed.questionResults = buildQuestionResults(exam, completed);
+    return { ok: true, attempt: completed };
 }

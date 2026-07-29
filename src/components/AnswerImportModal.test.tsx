@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { takeSelectedAnswerPdf, validateImportedAnswers } from "./AnswerImportModal";
+import {
+    takeSelectedAnswerPdf,
+    validateImportedAnswers,
+} from "./AnswerImportModal";
 
 describe("AnswerImportModal file input", () => {
     it("clears the native input after taking a file so the same PDF can be selected again", () => {

@@ -8,6 +8,7 @@ import { Exam } from "@/types/omr";
 import AssignmentBlock from "@/components/dashboard/AssignmentBlock";
 import { createDashboardRevalidationGate, isStudentDashboardStorageKey } from "@/components/dashboard/dashboardRevalidation";
 import ThemeToggle from "@/components/ThemeToggle";
+import StudentGuestRecoveryPanel from "@/components/StudentGuestRecoveryPanel";
 import { toast } from "@/components/Toast";
 import { Award, LogIn, Sparkles } from "lucide-react";
 
@@ -15,14 +16,12 @@ import {
     attemptBelongsToSession,
     clearSession,
     getSession,
-    mergeGuestAttempts,
     previewGuestMerge,
     queueGuestMerge,
-    readStoredGuestId,
     type GuestMergePreview,
     type StudentSession,
 } from "@/utils/storage";
-import { readLocalAttempts, readLocalExams, syncMergedGuestAttempts } from "@/lib/omrPersistence";
+import { readLocalAttempts, readLocalExams } from "@/lib/omrPersistence";
 import { averageResolvedAttemptPercent, baseAttemptsOnly, retakeAttemptsOnly } from "@/lib/attemptScores";
 import { evaluateExamAccess } from "@/lib/examAccess";
 import { listMyAssignments } from "@/app/actions/studentExam";
@@ -112,19 +111,6 @@ export default function StudentDashboard() {
                 ? myAttemptsResult.attempts
                 : myAttemptsResult.attempts.filter(a => attemptBelongsToSession(a, currentUser));
 
-            // A guest→student merge (here or on the login screen) reassigns
-            // attempt ownership in localStorage only, so the server list still
-            // owns those attempts as the guest and omits them here. When the
-            // server path is active, re-push any reassigned-but-missing attempts
-            // so they reappear, then refresh once they land. Self-terminating:
-            // once synced they show up in the server list and are skipped.
-            if (attemptSource === "server" && !currentUser.isGuest && currentUser.studentId) {
-                const serverIds = myAttempts.map(a => a.id);
-                void syncMergedGuestAttempts(currentUser.studentId, { skipAttemptIds: serverIds })
-                    .then(synced => { if (synced > 0 && !cancelled) setRefreshKey(key => key + 1); })
-                    .catch(() => { /* offline — local path already shows them */ });
-            }
-
             const myBaseAttempts = baseAttemptsOnly(myAttempts);
             const myRetakeAttempts = retakeAttemptsOnly(myAttempts);
             const returnedFeedback = currentUser.isGuest
@@ -136,7 +122,7 @@ export default function StudentDashboard() {
                     .filter(feedback => !feedback.delivery.firstOpenedAt)
                     .map(feedback => feedback.attemptId),
             );
-            const guestIdForMerge = currentUser.isGuest ? currentUser.guestId : readStoredGuestId();
+            const guestIdForMerge = currentUser.isGuest ? currentUser.guestId : undefined;
             const mergePreview = guestIdForMerge
                 ? previewGuestMerge(guestIdForMerge, currentUser.isGuest ? undefined : {
                     studentId: currentUser.studentId,
@@ -285,36 +271,6 @@ export default function StudentDashboard() {
         router.push("/?role=student");
     };
 
-    const handleMergeGuestIntoCurrentStudent = async () => {
-        if (!user || user.isGuest) return;
-        const guestId = guestMergePreview?.guestId || readStoredGuestId();
-        if (!guestId) {
-            toast.info("연결할 게스트 기록 없음", "현재 기기에서 연결 가능한 게스트 기록을 찾지 못했습니다.");
-            return;
-        }
-        const mergedCount = mergeGuestAttempts(guestId, {
-            studentId: user.studentId,
-            name: user.name,
-            groupId: user.groupId,
-            groupName: user.groupName,
-            regionId: user.regionId,
-            regionName: user.regionName,
-            identityType: user.identityType,
-        });
-        if (mergedCount > 0) {
-            // Push the reassigned attempts to the server before refreshing so the
-            // authoritative server list returns them under the student instead of
-            // silently dropping them (they stay owned by the guest remotely until
-            // re-upserted). Offline failures queue for the SyncFlusher retry.
-            await syncMergedGuestAttempts(user.studentId, { guestId }).catch(() => 0);
-            toast.success("게스트 기록 연결됨", `${mergedCount}개의 시험 기록을 학생 기록으로 저장했습니다.`);
-            setRefreshKey(key => key + 1);
-            return;
-        }
-        toast.info("새로 연결할 기록 없음", "이미 이 학생 기록에 연결했거나 연결 가능한 게스트 제출이 없습니다.");
-        setGuestMergePreview(null);
-    };
-
     const handleLogout = () => {
         const workspaceId = user?.workspaceId;
         clearSession();
@@ -454,6 +410,7 @@ export default function StudentDashboard() {
             </header>
 
             <main className="container animate-fade-in" style={{ paddingBottom: '4rem' }}>
+                {!user.isGuest && <StudentGuestRecoveryPanel />}
 
                 {/* Guest Banner */}
                 {user.isGuest && (
@@ -495,40 +452,6 @@ export default function StudentDashboard() {
                             }}
                         >
                             학생 로그인으로 저장
-                        </button>
-                    </div>
-                )}
-
-                {!user.isGuest && guestMergePreview && (
-                    <div style={{
-                        margin: '2rem 0 1rem', padding: '1.5rem',
-                        background: 'linear-gradient(135deg, rgba(99,102,241,0.08), rgba(16,185,129,0.07))',
-                        borderRadius: 'var(--radius-lg)', color: 'var(--foreground)',
-                        border: '1px solid rgba(99,102,241,0.18)', borderLeft: '4px solid var(--success)',
-                        display: 'flex', justifyContent: 'space-between', alignItems: 'center',
-                        gap: '1rem', flexWrap: 'wrap',
-                        boxShadow: 'var(--shadow-sm)'
-                    }}>
-                        <div>
-                            <h3 style={{ fontSize: '1.1rem', fontWeight: 800, marginBottom: '0.25rem' }}>
-                                연결하지 않은 게스트 기록 {guestMergePreview.mergeableCount}건
-                            </h3>
-                            <p style={{ color: 'var(--muted)', fontSize: '0.92rem', lineHeight: 1.6, wordBreak: "keep-all" }}>
-                                같은 기기에서 게스트로 제출한 시험 기록을 현재 학생 계정에 합칠 수 있습니다.
-                            </p>
-                            {guestMergePreview.examTitles.length > 0 && (
-                                <div style={{ marginTop: '0.4rem', color: 'var(--muted)', fontSize: '0.8rem', fontWeight: 700 }}>
-                                    대상: {guestMergePreview.examTitles.join(", ")}
-                                </div>
-                            )}
-                        </div>
-                        <button
-                            type="button"
-                            onClick={() => void handleMergeGuestIntoCurrentStudent()}
-                            className="btn btn-primary"
-                            style={{ fontWeight: 800, padding: '0.72rem 1.25rem', fontSize: '0.9rem', flexShrink: 0 }}
-                        >
-                            지금 연결
                         </button>
                     </div>
                 )}

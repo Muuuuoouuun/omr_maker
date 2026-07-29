@@ -23,17 +23,30 @@ import {
 import type { Attempt, AttemptFeedback, Exam, PdfDrawings, Question, QuestionResultStatus, QuestionTiming, StudentQuestionNote } from "@/types/omr";
 import { storedDataUrlToFile, loadJsonRecord } from "@/utils/blobStore";
 import { attemptBelongsToSession, getSession } from "@/utils/storage";
-import { loadAttempt, loadExam, readLocalAttempts, saveAttempt, saveLocalAttempt } from "@/lib/omrPersistence";
-import { askAttemptQuestion, loadExamForReview, loadMyAttempt } from "@/app/actions/studentExam";
+import {
+    loadAttempt,
+    loadExam,
+    readLocalAttempts,
+    saveLocalAttempt,
+    saveLocalServerConfirmedAttempt,
+} from "@/lib/omrPersistence";
+import { askAttemptQuestion, loadExamForReview, loadMyAttempt, submitAttempt } from "@/app/actions/studentExam";
 import { loadMyAttemptClient, loadReviewExamClient } from "@/lib/studentExamClient";
 import { stripTeacherOnlySubQuestionFields } from "@/lib/examSolvePayload";
 import { studentQuestionsByQuestionId, upsertStudentQuestion } from "@/lib/studentQuestions";
+import {
+    flushPendingStudentQuestions,
+    pendingStudentQuestionNotesById,
+    queuePendingStudentQuestion,
+    readPendingStudentQuestions,
+} from "@/lib/studentQuestionOutbox";
 import { buildAttemptRetakeRecovery, buildSourceAttemptRecovery } from "@/lib/retakeRecovery";
 import { toast } from "@/components/Toast";
 import ThemeToggle from "@/components/ThemeToggle";
 import CountUp from "@/components/dashboard/CountUp";
 import { formatKoreanDateTime } from "@/lib/pure";
 import { safeScorePercent } from "@/lib/scoreUtils";
+import { awaySeverity } from "@/lib/examAwayTracker";
 import {
     buildLearningRecommendations,
     buildRetakeQuestionIds,
@@ -56,6 +69,18 @@ import {
     loadStudentReturnedFeedbackForAttempt,
     markStudentFeedbackOpened,
 } from "@/lib/studentFeedbackClient";
+import {
+    persistSubmissionReceipt,
+    isSubmissionReceiptStorageKey,
+    readReconciledSubmissionAttemptId,
+    readSubmissionReceipt,
+    retryPendingSubmissionReceipt,
+    SUBMISSION_RECEIPT_RECONCILED_EVENT,
+    submissionReceiptLabel,
+    submissionReceiptForAttempt,
+    type SubmissionReceipt,
+    type SubmissionReceiptReconciledDetail,
+} from "@/lib/studentAttemptReceipt";
 
 const PDFViewer = dynamic(() => import("@/components/PDFViewer"), { ssr: false });
 
@@ -397,6 +422,10 @@ export default function ReviewPage() {
 
     const [attempt, setAttempt] = useState<Attempt | null>(null);
     const [exam, setExam] = useState<Exam | null>(null);
+    const [submissionReceipt, setSubmissionReceipt] = useState<SubmissionReceipt | null>(null);
+    const [submissionRetrying, setSubmissionRetrying] = useState(false);
+    const [submissionRetryFeedback, setSubmissionRetryFeedback] = useState("");
+    const [submissionRetryPin, setSubmissionRetryPin] = useState("");
     const [restoredDrawings, setRestoredDrawings] = useState<PdfDrawings | undefined>(undefined);
     const [pdfFile, setPdfFile] = useState<File | null>(null);
     const [pdfLoadFailed, setPdfLoadFailed] = useState(false);
@@ -422,6 +451,46 @@ export default function ReviewPage() {
     const [returnedFeedback, setReturnedFeedback] = useState<AttemptFeedback | null>(null);
     const [teacherMarkupDrawings, setTeacherMarkupDrawings] = useState<PdfDrawings | undefined>(undefined);
     const [annotationDownloading, setAnnotationDownloading] = useState(false);
+
+    useEffect(() => {
+        const applyReconciliation = (detail: SubmissionReceiptReconciledDetail) => {
+            if (detail.previousAttemptId !== id && detail.attempt.id !== id) return;
+            attemptRef.current = detail.attempt;
+            setAttempt(detail.attempt);
+            setSubmissionReceipt(detail.receipt);
+            setSubmissionRetryFeedback("서버 반영을 확인했습니다.");
+            if (detail.attempt.id !== id) {
+                router.replace(`/student/review/${detail.attempt.id}`);
+            }
+        };
+        const onReconciled = (event: WindowEventMap[typeof SUBMISSION_RECEIPT_RECONCILED_EVENT]) => {
+            applyReconciliation(event.detail);
+        };
+        const onStorage = (event: StorageEvent) => {
+            if (!isSubmissionReceiptStorageKey(event.key)) return;
+            const canonicalAttemptId = readReconciledSubmissionAttemptId(id);
+            if (canonicalAttemptId) {
+                const canonicalAttempt = readLocalAttempts().find(candidate => candidate.id === canonicalAttemptId);
+                const canonicalReceipt = readSubmissionReceipt(canonicalAttemptId);
+                if (canonicalAttempt && canonicalReceipt) {
+                    applyReconciliation({
+                        previousAttemptId: id,
+                        attempt: canonicalAttempt,
+                        receipt: canonicalReceipt,
+                    });
+                }
+                return;
+            }
+            const refreshedReceipt = readSubmissionReceipt(id);
+            if (refreshedReceipt) setSubmissionReceipt(refreshedReceipt);
+        };
+        window.addEventListener(SUBMISSION_RECEIPT_RECONCILED_EVENT, onReconciled);
+        window.addEventListener("storage", onStorage);
+        return () => {
+            window.removeEventListener(SUBMISSION_RECEIPT_RECONCILED_EVENT, onReconciled);
+            window.removeEventListener("storage", onStorage);
+        };
+    }, [id, router]);
     // Latest attempt for the local Q&A merge path — reading `attempt` state
     // directly in an async handler risks a stale closure dropping a concurrent
     // question. A ref + a submission mutex keep local writes serialized.
@@ -463,6 +532,11 @@ export default function ReviewPage() {
         let cancelled = false;
         const loadReview = async () => {
             if (!id || cancelled) return;
+            const canonicalAttemptId = readReconciledSubmissionAttemptId(id);
+            if (canonicalAttemptId) {
+                router.replace(`/student/review/${canonicalAttemptId}`);
+                return;
+            }
             // Reset the error flag so a retry starts clean.
             setLoadError(false);
             // Both server round-trips key off the route attemptId, so start the
@@ -487,12 +561,37 @@ export default function ReviewPage() {
                 }
                 attemptRef.current = found;
                 setAttempt(found);
+                const storedReceipt = readSubmissionReceipt(found.id);
+                const nextReceipt = submissionReceiptForAttempt(found, storedReceipt, result.source);
+                try {
+                    if (result.source === "server") await saveLocalServerConfirmedAttempt(found);
+                    await persistSubmissionReceipt(nextReceipt);
+                } catch (error) {
+                    console.warn("Review receipt persistence failed", error);
+                    toast.info(
+                        "기기 확인 저장 실패",
+                        "공식 결과는 서버에 보관되어 있습니다. 브라우저 저장 공간을 확인해주세요.",
+                    );
+                }
+                setSubmissionReceipt(nextReceipt);
                 // Attempt-stored notes are authoritative; the legacy local queue
                 // only backfills questions never migrated onto the attempt.
                 setStudentQuestions({
                     ...readStudentQuestionQueue(found.id),
+                    ...pendingStudentQuestionNotesById(found.id),
                     ...studentQuestionsByQuestionId(found),
                 });
+                const pendingQuestions = readPendingStudentQuestions(found.id);
+                if (pendingQuestions.length > 0) {
+                    setQuestionDrafts(previous => ({
+                        ...previous,
+                        ...Object.fromEntries(pendingQuestions.map(question => [question.questionId, question.body])),
+                    }));
+                    setOpenQuestionBoxes(previous => ({
+                        ...previous,
+                        ...Object.fromEntries(pendingQuestions.map(question => [question.questionId, true])),
+                    }));
+                }
 
                 if (session?.studentId) {
                     try {
@@ -599,7 +698,7 @@ export default function ReviewPage() {
         };
         void loadReview();
         return () => { cancelled = true; };
-    }, [id, reloadKey]);
+    }, [id, reloadKey, router]);
 
     if (accessDenied) {
         return (
@@ -670,6 +769,32 @@ export default function ReviewPage() {
             </div>
         );
     }
+
+    const handleSubmissionRetry = async () => {
+        if (!attempt || submissionRetrying) return;
+        setSubmissionRetrying(true);
+        setSubmissionRetryFeedback("");
+        try {
+            const result = await retryPendingSubmissionReceipt(attempt.id, {
+                submitSignedSessionAttempt: submitAttempt,
+                ...(submissionReceipt?.requiresPin && submissionRetryPin.trim()
+                    ? { pin: submissionRetryPin.trim() }
+                    : {}),
+            });
+            if (result.status === "confirmed") {
+                setSubmissionRetryFeedback("서버 반영을 확인했습니다.");
+            } else {
+                const nextReceipt = readSubmissionReceipt(attempt.id);
+                if (nextReceipt) setSubmissionReceipt(nextReceipt);
+                setSubmissionRetryFeedback(result.error);
+            }
+        } catch {
+            setSubmissionRetryFeedback("다시 시도 중 문제가 발생했습니다. 잠시 후 다시 시도해주세요.");
+        } finally {
+            setSubmissionRetryPin("");
+            setSubmissionRetrying(false);
+        }
+    };
 
     const reviewQuestionIds = attempt.retake?.questionIds?.length
         ? new Set(attempt.retake.questionIds)
@@ -816,43 +941,63 @@ export default function ReviewPage() {
         const input = { questionId: question.id, questionNumber: question.number, body };
         questionSaveInFlightRef.current = true;
         try {
-            // Server-first: the action verifies ownership via the session cookie
-            // and merges the note into the attempt row server-side.
-            let updated: Attempt | null = null;
-            try {
-                const res = await askAttemptQuestion(base.id, input);
-                if (res.status === "ok" && res.attempt) updated = res.attempt;
-            } catch {
-                // offline/dev — fall back to the local attempt write below
-            }
-            if (updated) {
-                // F7: the server row can be missing notes queued offline on this
-                // device (not yet synced). Union the freshest local notes with the
-                // server copy — server wins on conflict — so submitting online never
-                // drops a locally-queued question.
-                updated = {
-                    ...updated,
-                    studentQuestions: mergeStudentQuestionNotes(
-                        attemptRef.current?.studentQuestions,
-                        updated.studentQuestions,
-                    ),
-                };
-                try { saveLocalAttempt(updated); } catch { /* quota — server copy is canonical */ }
-            } else {
-                // Merge onto the freshest local attempt (ref, not stale closure).
-                updated = upsertStudentQuestion(attemptRef.current || base, input, new Date().toISOString());
-                if (!updated) return false;
-                const result = await saveAttempt(updated).catch(() => null);
-                if (!result?.localSaved) {
-                    toast.error("질문 저장 실패", "브라우저 저장소를 확인한 뒤 다시 시도해주세요.");
-                    return false;
-                }
+            const queuedAt = new Date().toISOString();
+            const ownerStudentId = base.studentId || getSession()?.studentId;
+            const queued = await queuePendingStudentQuestion({
+                attemptId: base.id,
+                ownerStudentId,
+                ...input,
+                queuedAt,
+            });
+            if (queued.status !== "queued") {
+                toast.error(
+                    "질문 저장 실패",
+                    queued.status === "capacity_exceeded"
+                        ? "전송 대기 질문이 100건에 도달했습니다. 네트워크 연결 후 기존 질문을 전송하고 다시 시도해주세요."
+                        : "브라우저 저장소를 확인한 뒤 다시 시도해주세요.",
+                );
+                return false;
             }
 
+            const localUpdated = upsertStudentQuestion(attemptRef.current || base, input, queuedAt);
+            if (!localUpdated) return false;
+            const localSaved = await saveLocalAttempt(localUpdated).catch(() => false);
+            attemptRef.current = localUpdated;
+            setAttempt(localUpdated);
+            setStudentQuestions(previous => ({
+                ...previous,
+                ...pendingStudentQuestionNotesById(base.id),
+                ...studentQuestionsByQuestionId(localUpdated),
+            }));
+            setOpenQuestionBoxes(prev => ({ ...prev, [question.id]: true }));
+            if (!localSaved) {
+                toast.error(
+                    "질문 전송 보류",
+                    "질문 재전송 정보는 보관했지만 결과 캐시 저장에 실패했습니다. 저장 공간을 확인한 뒤 다시 눌러주세요.",
+                );
+                return false;
+            }
+
+            const flushed = await flushPendingStudentQuestions(base.id, askAttemptQuestion);
+            if (flushed.status !== "sent") {
+                toast.error(
+                    "질문 전송 보류",
+                    "질문 내용은 이 기기에 보관했습니다. 네트워크와 로그인 상태를 확인한 뒤 질문 저장을 다시 눌러주세요.",
+                );
+                return false;
+            }
+
+            const updated: Attempt = {
+                ...flushed.attempt,
+                studentQuestions: mergeStudentQuestionNotes(
+                    localUpdated.studentQuestions,
+                    flushed.attempt.studentQuestions,
+                ),
+            };
+            await saveLocalAttempt(updated).catch(() => false);
             attemptRef.current = updated;
             setAttempt(updated);
-            setStudentQuestions(prev => ({ ...prev, ...studentQuestionsByQuestionId(updated) }));
-            setOpenQuestionBoxes(prev => ({ ...prev, [question.id]: true }));
+            setStudentQuestions(previous => ({ ...previous, ...studentQuestionsByQuestionId(updated) }));
             return true;
         } finally {
             questionSaveInFlightRef.current = false;
@@ -999,6 +1144,74 @@ export default function ReviewPage() {
                                     <MetaChip tone="teal">재시험 {attempt.retake.questionIds.length}문항</MetaChip>
                                 )}
                             </div>
+                            {submissionReceipt && (
+                                <div
+                                    className="student-review-submission-receipt"
+                                    style={{
+                                        display: "grid",
+                                        gap: "0.45rem",
+                                        padding: "0.75rem",
+                                        borderRadius: "var(--radius-md)",
+                                        border: "1px solid var(--border)",
+                                        background: "var(--surface)",
+                                    }}
+                                >
+                                    <span role="status" style={{ fontWeight: 800 }}>
+                                        {submissionReceiptLabel(submissionReceipt)}
+                                    </span>
+                                    {submissionReceipt.status === "pending" && (
+                                        <>
+                                            {submissionReceipt.actionDetail && (
+                                                <p style={{ margin: 0, color: "var(--muted)", fontSize: "var(--type-caption-min)" }}>
+                                                    {submissionReceipt.actionDetail}
+                                                </p>
+                                            )}
+                                            {(submissionReceipt.requiresPin || submissionReceipt.prerequisite === "pin") && (
+                                                <>
+                                                    <p style={{ margin: 0, color: "var(--muted)", fontSize: "var(--type-caption-min)" }}>
+                                                        자동 재시도하지 않습니다. 시험 PIN을 입력한 뒤 직접 다시 시도해주세요.
+                                                    </p>
+                                                    <label style={{ display: "grid", gap: "0.3rem", maxWidth: "16rem" }}>
+                                                        <span style={{ fontWeight: 700 }}>시험 PIN</span>
+                                                        <input
+                                                            type="password"
+                                                            value={submissionRetryPin}
+                                                            onChange={event => setSubmissionRetryPin(event.target.value)}
+                                                            autoComplete="off"
+                                                            inputMode="numeric"
+                                                        />
+                                                    </label>
+                                                </>
+                                            )}
+                                            {submissionReceipt.prerequisite === "login" ? (
+                                                <Link href="/" className="btn btn-secondary" style={{ justifySelf: "start" }}>
+                                                    학생 로그인으로 이동
+                                                </Link>
+                                            ) : (
+                                                <button
+                                                    type="button"
+                                                    className="btn btn-secondary"
+                                                    onClick={handleSubmissionRetry}
+                                                    disabled={submissionRetrying || ((submissionReceipt.requiresPin || submissionReceipt.prerequisite === "pin") && !submissionRetryPin.trim())}
+                                                    style={{ justifySelf: "start" }}
+                                                >
+                                                    {submissionRetrying ? "다시 시도 중…" : "지금 다시 시도"}
+                                                </button>
+                                            )}
+                                        </>
+                                    )}
+                                    {submissionReceipt.status === "local_only" && (
+                                        <p style={{ margin: 0, color: "var(--muted)", fontSize: "var(--type-caption-min)" }}>
+                                            {submissionReceipt.actionDetail || "다른 기기에서는 이 결과를 볼 수 없습니다."}
+                                        </p>
+                                    )}
+                                    {submissionRetryFeedback && (
+                                        <p aria-live="polite" style={{ margin: 0, color: "var(--muted)", fontSize: "var(--type-caption-min)" }}>
+                                            {submissionRetryFeedback}
+                                        </p>
+                                    )}
+                                </div>
+                            )}
                         </section>
 
                         {returnedFeedback && (
@@ -1193,7 +1406,14 @@ export default function ReviewPage() {
                                     <MiniStat label="추적" value={formatSeconds(behaviorSummary.totalTrackedTimeSec)} color="var(--foreground)" />
                                     <MiniStat label="평균" value={formatSeconds(behaviorSummary.averageTimeSec)} color="var(--foreground)" />
                                     <MiniStat label="재방문" value={behaviorSummary.revisitedQuestionNumbers.length ? `${behaviorSummary.revisitedQuestionNumbers.join(", ")}번` : "없음"} color="var(--foreground)" />
-                                    <MiniStat label="이탈" value={`${behaviorSummary.focusLossCount}회`} color="var(--foreground)" />
+                                    {behaviorSummary.focusLossCount > 0 && (
+                                        <span
+                                            className="away-severity-badge"
+                                            data-away-severity={awaySeverity(behaviorSummary.focusLossCount)}
+                                        >
+                                            시험 중 화면을 벗어난 기록 {behaviorSummary.focusLossCount}회
+                                        </span>
+                                    )}
                                 </div>
                             </section>
                         )}

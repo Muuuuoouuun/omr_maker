@@ -8,6 +8,8 @@ import TeacherLogoutButton from "@/components/TeacherLogoutButton";
 import TeacherSessionChip from "@/components/TeacherSessionChip";
 import ThemeToggle from "@/components/ThemeToggle";
 import CreatePdfUploadPlaceholder from "@/components/CreatePdfUploadPlaceholder";
+import { useDialogFocus } from "@/hooks/useDialogFocus";
+import { activateFilePicker } from "@/lib/activateFilePicker";
 import { useRouter, useSearchParams } from "next/navigation";
 import { toast } from "@/components/Toast";
 import { getTeacherRemoteAssetUrl, uploadTeacherExamAsset } from "@/app/actions/remoteAssets";
@@ -35,7 +37,7 @@ const PDFViewer = dynamic(() => import("@/components/PDFViewer"), {
 });
 const AnswerImportModal = dynamic(() => import("@/components/AnswerImportModal"), { ssr: false });
 const DistributeModal = dynamic(() => import("@/components/DistributeModal"), { ssr: false });
-import { Suspense, useState, useEffect, useRef, useCallback, useMemo, type CSSProperties } from "react";
+import { Suspense, useState, useEffect, useId, useRef, useCallback, useMemo, type CSSProperties } from "react";
 import { DEFAULT_CHOICE_COUNT, questionChoiceCount, type Exam, type Question, type QuestionSubQuestion, type QuestionSubQuestionTemplateId } from "@/types/omr";
 import type { ParsedAnswer } from "@/services/answerParser";
 import { saveFileDataUrl, storedDataUrlToFile } from "@/utils/blobStore";
@@ -237,13 +239,8 @@ function CreateConfirmDialog({
 }) {
     // Backdrop / Escape must never be the destructive path (esp. deleting a
     // recovered draft): they resolve to the safe, non-destructive action.
-    useEffect(() => {
-        const onKey = (e: KeyboardEvent) => {
-            if (e.key === "Escape") onDismiss();
-        };
-        window.addEventListener("keydown", onKey);
-        return () => window.removeEventListener("keydown", onKey);
-    }, [onDismiss]);
+    const titleId = useId();
+    const dialogRef = useDialogFocus(true, onDismiss);
     const copy = (() => {
         if (state.kind === "restoreDraft") {
             return {
@@ -298,9 +295,12 @@ function CreateConfirmDialog({
             }}
         >
             <div
+                ref={dialogRef}
+                className="balanced-dialog-panel"
                 role="dialog"
                 aria-modal="true"
-                aria-label={copy.title}
+                aria-labelledby={titleId}
+                tabIndex={-1}
                 onClick={(e) => e.stopPropagation()}
                 style={{
                     width: '100%',
@@ -313,7 +313,7 @@ function CreateConfirmDialog({
                     padding: '1.5rem',
                 }}
             >
-                <h2 style={{ fontSize: '1.15rem', fontWeight: 800, marginBottom: '0.65rem' }}>
+                <h2 id={titleId} style={{ fontSize: '1.15rem', fontWeight: 800, marginBottom: '0.65rem' }}>
                     {copy.title}
                 </h2>
                 <p style={{ color: 'var(--muted)', lineHeight: 1.7, fontSize: '0.95rem', wordBreak: 'keep-all', marginBottom: '1.25rem' }}>
@@ -696,6 +696,8 @@ function CreateOMRPageInner() {
     const [answerKeyPdf, setAnswerKeyPdf] = useState<File | null>(null); // Teacher reference answer key
     const problemPdfFileRef = useRef<File | null>(null);
     const answerKeyPdfFileRef = useRef<File | null>(null);
+    const problemPdfInputRef = useRef<HTMLInputElement>(null);
+    const answerKeyPdfInputRef = useRef<HTMLInputElement>(null);
     const problemPdfReplacedRef = useRef(false);
     const answerKeyPdfReplacedRef = useRef(false);
     const [activeViewTab, setActiveViewTab] = useState<'problem' | 'answer'>('problem');
@@ -2219,6 +2221,14 @@ function CreateOMRPageInner() {
         }
     };
 
+    const handleOpenDistribution = () => {
+        if (!serviceReadiness.canOpenDistribution) {
+            toast.error("배포 전 확인 필요", serviceReadiness.detail || "시험 설정을 확인해주세요.");
+            return;
+        }
+        setIsDistributeModalOpen(true);
+    };
+
     return (
         <div className="layout-main" style={{ background: 'var(--background)', height: 'var(--app-viewport-height, 100dvh)', overflow: 'hidden' }}>
             <header className="header create-editor-shell-header" style={{ flexShrink: 0 }}>
@@ -2250,40 +2260,76 @@ function CreateOMRPageInner() {
                         >
                             <Redo2 size={16} />
                         </button>
-                        <label className="btn btn-secondary" style={{ cursor: 'pointer', padding: '0.55rem 1rem', fontSize: '0.85rem' }}>
+                        <input
+                            ref={problemPdfInputRef}
+                            id="pdf-upload-input"
+                            type="file"
+                            accept={PDF_ACCEPT}
+                            onChange={handleFileChange}
+                            className="sr-only"
+                            tabIndex={-1}
+                            aria-hidden="true"
+                        />
+                        <button
+                            type="button"
+                            className="btn btn-secondary"
+                            aria-label="문제지 PDF 업로드"
+                            onClick={() => {
+                                if (problemPdfInputRef.current) {
+                                    activateFilePicker(problemPdfInputRef.current);
+                                }
+                            }}
+                            style={{ cursor: 'pointer', padding: '0.55rem 1rem', fontSize: '0.85rem' }}
+                        >
                             <UploadCloud size={16} />
                             문제지 업로드
-                            <input id="pdf-upload-input" type="file" accept={PDF_ACCEPT} onChange={handleFileChange} style={{ display: 'none' }} />
-                        </label>
-                        <label className="btn btn-secondary" style={{ cursor: 'pointer', padding: '0.55rem 1rem', fontSize: '0.85rem' }}>
-                            <UploadCloud size={16} />
-                            답지 업로드
-                            <input type="file" accept={PDF_ACCEPT} onChange={(e) => {
+                        </button>
+                        <input
+                            ref={answerKeyPdfInputRef}
+                            id="answer-key-pdf-upload-input"
+                            type="file"
+                            accept={PDF_ACCEPT}
+                            onChange={(e) => {
                                 handleAnswerKeyPdfFile(e.currentTarget.files?.[0]);
                                 e.currentTarget.value = "";
-                            }} style={{ display: 'none' }} />
-                        </label>
-                        <button
-                            className="btn btn-secondary"
-                            style={{ padding: '0.55rem 1rem', fontSize: '0.85rem' }}
-                            onClick={handleSaveImage}
-                            disabled={isSaving}
-                        >
-                            {isSaving ? "저장 중..." : "이미지 저장"}
-                        </button>
-                        <button
-                            className="btn btn-primary"
-                            style={{ padding: '0.55rem 1.1rem', fontSize: '0.85rem' }}
-                            onClick={() => {
-                                if (!serviceReadiness.canOpenDistribution) {
-                                    toast.error("배포 전 확인 필요", serviceReadiness.detail || "시험 설정을 확인해주세요.");
-                                    return;
-                                }
-                                setIsDistributeModalOpen(true);
                             }}
+                            className="sr-only"
+                            tabIndex={-1}
+                            aria-hidden="true"
+                        />
+                        <button
+                            type="button"
+                            className="btn btn-secondary"
+                            aria-label="답지 PDF 업로드"
+                            onClick={() => {
+                                if (answerKeyPdfInputRef.current) {
+                                    activateFilePicker(answerKeyPdfInputRef.current);
+                                }
+                            }}
+                            style={{ cursor: 'pointer', padding: '0.55rem 1rem', fontSize: '0.85rem' }}
                         >
-                            배포하기
+                            <UploadCloud size={16} />
+                            답지 업로드
                         </button>
+                        <div className="create-primary-actions create-primary-actions--desktop">
+                            <button
+                                type="button"
+                                className="btn btn-secondary"
+                                style={{ padding: '0.55rem 1rem', fontSize: '0.85rem' }}
+                                onClick={handleSaveImage}
+                                disabled={isSaving}
+                            >
+                                {isSaving ? "저장 중..." : "이미지 저장"}
+                            </button>
+                            <button
+                                type="button"
+                                className="btn btn-primary"
+                                style={{ padding: '0.55rem 1.1rem', fontSize: '0.85rem' }}
+                                onClick={handleOpenDistribution}
+                            >
+                                배포하기
+                            </button>
+                        </div>
                         <TeacherSessionChip compact />
                         <TeacherLogoutButton size="small" />
                         <ThemeToggle size="small" />
@@ -2662,6 +2708,7 @@ function CreateOMRPageInner() {
                                         type="button"
                                         className={`btn ${questionsCount === count ? 'btn-primary' : 'btn-secondary'}`}
                                         style={{ minWidth: 0, minHeight: 34, padding: '0.28rem 0.12rem', fontSize: '0.72rem' }}
+                                        disabled={!initialDefaultsReady}
                                         onClick={() => {
                                             setQuestionCountInput(String(count));
                                             handleQuestionCountChange(count);
@@ -2680,6 +2727,7 @@ function CreateOMRPageInner() {
                                 aria-label="문항 수 직접 입력"
                                 title={`${MIN_QUESTION_COUNT}~${MAX_QUESTION_COUNT}문항 직접 입력`}
                                 value={questionCountInput}
+                                disabled={!initialDefaultsReady}
                                 onChange={event => setQuestionCountInput(event.target.value)}
                                 onBlur={commitQuestionCountInput}
                                 onKeyDown={event => {
@@ -2701,6 +2749,7 @@ function CreateOMRPageInner() {
                             <button
                                 className={`btn ${defaultChoices === 5 ? 'btn-primary' : 'btn-secondary'}`}
                                 style={{ padding: '0.5rem 0.35rem' }}
+                                disabled={!initialDefaultsReady}
                                 onClick={() => handleDefaultChoicesChange(5)}
                             >
                                 5지선다
@@ -2708,6 +2757,7 @@ function CreateOMRPageInner() {
                             <button
                                 className={`btn ${defaultChoices === 4 ? 'btn-primary' : 'btn-secondary'}`}
                                 style={{ padding: '0.5rem 0.35rem' }}
+                                disabled={!initialDefaultsReady}
                                 onClick={() => handleDefaultChoicesChange(4)}
                             >
                                 4지선다
@@ -2820,6 +2870,7 @@ function CreateOMRPageInner() {
                                 aria-label="빠른 정답 입력"
                                 placeholder={defaultChoices === 4 ? "예: 3124..." : "예: 31251..."}
                                 value={fastAnswer}
+                                disabled={!initialDefaultsReady}
                                 onChange={handleFastAnswerChange}
                                 className="input-field"
                                 style={{ width: '100%', padding: '0.6rem', borderRadius: 'var(--radius-md)', border: '1px solid var(--border)', background: 'var(--background)', fontSize: '1rem', letterSpacing: '2px' }}
@@ -3869,6 +3920,28 @@ function CreateOMRPageInner() {
                 </main>
 
             </div >
+
+            <div
+                className="create-primary-actions create-primary-actions--mobile"
+                role="group"
+                aria-label="출제 완료 작업"
+            >
+                <button
+                    type="button"
+                    className="btn btn-primary"
+                    onClick={handleOpenDistribution}
+                >
+                    배포하기
+                </button>
+                <button
+                    type="button"
+                    className="btn btn-secondary"
+                    onClick={handleSaveImage}
+                    disabled={isSaving}
+                >
+                    {isSaving ? "저장 중..." : "이미지 저장"}
+                </button>
+            </div>
         </div >
     );
 }

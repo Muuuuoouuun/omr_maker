@@ -4,7 +4,6 @@ import type { VerifiedStudentIdentity } from "@/lib/studentExamContract";
 export const STUDENT_START_CODE_HASH_ITERATIONS = 120_000;
 export const STUDENT_LOGIN_IDENTIFIER_MAX_LENGTH = 254;
 export const STUDENT_START_CODE_MAX_LENGTH = 64;
-export const STUDENT_GROUP_ID_MAX_LENGTH = 128;
 
 const STUDENT_START_CODE_HASH_MAX_ITERATIONS = 1_000_000;
 const STUDENT_START_CODE_HASH_MAX_ENCODED_LENGTH = 512;
@@ -35,6 +34,12 @@ interface StudentCredentialProfileRow {
 
 interface StudentStartCredentialRow {
     start_code_hash?: string | null;
+}
+
+export interface StudentCredentialLookup {
+    organizationId: string;
+    studentProfileId: string;
+    code: string;
 }
 
 export type StudentCredentialVerificationResult =
@@ -98,42 +103,27 @@ export function verifyStudentStartCode(startCode: string, encodedHash: string | 
 
 export async function verifyStudentCredentials(
     client: StudentCredentialClient,
-    input: { studentId: string; startCode: string; groupId?: string },
+    input: StudentCredentialLookup,
 ): Promise<StudentCredentialVerificationResult> {
-    const studentId = clean(input.studentId);
-    const groupId = clean(input.groupId);
-    const rawStartCode = clean(input.startCode);
+    const organizationId = clean(input.organizationId);
+    const studentProfileId = clean(input.studentProfileId);
+    const rawStartCode = clean(input.code);
     if (
-        !studentId
-        || studentId.length > STUDENT_LOGIN_IDENTIFIER_MAX_LENGTH
+        !organizationId
+        || !studentProfileId
+        || studentProfileId.length > STUDENT_LOGIN_IDENTIFIER_MAX_LENGTH
         || rawStartCode.length > STUDENT_START_CODE_MAX_LENGTH
-        || groupId.length > STUDENT_GROUP_ID_MAX_LENGTH
     ) {
         return { status: "invalid_credentials" };
     }
-    const startCode = normalizedStartCode(input.startCode);
+    const startCode = normalizedStartCode(input.code);
     if (!startCode) return { status: "invalid_credentials" };
-
-    let profile: StudentCredentialProfileRow | null = null;
-    for (const loginColumn of ["id", "external_id", "email"] as const) {
-        const profileResult = await client
-            .from("omr_student_profiles")
-            .select("id, organization_id, display_name, status")
-            .eq(loginColumn, studentId)
-            .maybeSingle();
-        if (profileResult.error) {
-            return { status: "service_unavailable", error: profileResult.error.message };
-        }
-        profile = profileResult.data as StudentCredentialProfileRow | null;
-        if (profile) break;
-    }
-    if (!profile || !["invited", "active"].includes(profile.status)) return { status: "invalid_credentials" };
 
     const credentialResult = await client
         .from("omr_student_start_credentials")
         .select("start_code_hash")
-        .eq("organization_id", clean(profile.organization_id))
-        .eq("student_profile_id", clean(profile.id))
+        .eq("organization_id", organizationId)
+        .eq("student_profile_id", studentProfileId)
         .maybeSingle();
     if (credentialResult.error) {
         return { status: "service_unavailable", error: credentialResult.error.message };
@@ -142,29 +132,32 @@ export async function verifyStudentCredentials(
     if (!clean(credential?.start_code_hash)) return { status: "credential_not_configured" };
     if (!verifyStudentStartCode(startCode, credential?.start_code_hash)) return { status: "invalid_credentials" };
 
-    if (groupId) {
-        const enrollmentResult = await client
-            .from("omr_class_students")
-            .select("class_id")
-            .eq("organization_id", clean(profile.organization_id))
-            .eq("student_profile_id", clean(profile.id))
-            .eq("class_id", groupId)
-            .eq("enrollment_status", "active")
-            .maybeSingle();
-        if (enrollmentResult.error) {
-            return { status: "service_unavailable", error: enrollmentResult.error.message };
-        }
-        if (!enrollmentResult.data) return { status: "invalid_credentials" };
+    const profileResult = await client
+        .from("omr_student_profiles")
+        .select("id, organization_id, display_name, status")
+        .eq("organization_id", organizationId)
+        .eq("id", studentProfileId)
+        .maybeSingle();
+    if (profileResult.error) {
+        return { status: "service_unavailable", error: profileResult.error.message };
+    }
+    const profile = profileResult.data as StudentCredentialProfileRow | null;
+    if (
+        !profile
+        || clean(profile.organization_id) !== organizationId
+        || clean(profile.id) !== studentProfileId
+        || !["invited", "active"].includes(profile.status)
+    ) {
+        return { status: "invalid_credentials" };
     }
 
     return {
         status: "verified",
         identity: {
-            organizationId: clean(profile.organization_id),
-            studentId: clean(profile.id),
+            organizationId,
+            studentId: studentProfileId,
             studentName: clean(profile.display_name),
             identityType: "registered",
-            ...(groupId ? { groupId } : {}),
         },
     };
 }

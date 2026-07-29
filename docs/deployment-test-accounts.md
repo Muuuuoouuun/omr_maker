@@ -13,7 +13,7 @@ Vercel Preview와 Production에서 하나의 Supabase 테스트 워크스페이�
 
 네 계정은 모두 `teacher_sharedqa` 조직의 `테스트반`과 학생 3명을 함께 봅니다. 조직의 서버 권위 요금제는 Academy이고, 서명된 계정 요금제는 권한 상한으로 작동합니다. 따라서 `teacher1`은 Free, `teacher2`는 Pro까지만 사용할 수 있으며 계정 상한으로 조직 권한을 높일 수 없습니다.
 
-교사 비밀번호는 Vercel의 `TEACHER_ACCOUNTS`에 원문이 아닌 PBKDF2-SHA256 해시로 저장합니다.
+교사 비밀번호는 Vercel의 `TEACHER_ACCOUNTS`에 원문이 아닌 PBKDF2-SHA256 해시로 저장합니다. 서버는 120,000~1,000,000회 반복, 16~64바이트 salt, 32바이트 hash만 허용하며, 프로비저닝 스크립트는 120,000회와 16바이트 무작위 salt를 사용합니다.
 
 ## 학생 계정
 

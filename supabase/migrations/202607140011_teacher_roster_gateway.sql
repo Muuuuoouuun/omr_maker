@@ -87,6 +87,42 @@ begin
         updated_at = excluded.updated_at
     where public.omr_classes.organization_id = p_organization_id;
 
+    -- lock withdrawal targets before credential deletion so issuance and
+    -- withdrawal always acquire profile -> credential locks in the same order.
+    perform 1
+    from public.omr_student_profiles student
+    where student.organization_id = p_organization_id
+      and (
+          not exists (
+              select 1 from jsonb_array_elements(p_students) item
+              where item->>'id' = student.id
+          )
+          or exists (
+              select 1 from jsonb_array_elements(p_students) item
+              where item->>'id' = student.id
+                and item->>'status' = 'withdrawn'
+          )
+      )
+    order by student.id
+    for update;
+
+    delete from public.omr_student_start_credentials credential
+    using public.omr_student_profiles student
+    where credential.organization_id = p_organization_id
+      and credential.organization_id = student.organization_id
+      and credential.student_profile_id = student.id
+      and (
+          not exists (
+              select 1 from jsonb_array_elements(p_students) item
+              where item->>'id' = student.id
+          )
+          or exists (
+              select 1 from jsonb_array_elements(p_students) item
+              where item->>'id' = student.id
+                and item->>'status' = 'withdrawn'
+          )
+      );
+
     update public.omr_student_profiles row
     set status = 'withdrawn', updated_at = v_now
     where row.organization_id = p_organization_id

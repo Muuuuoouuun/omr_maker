@@ -170,6 +170,18 @@ test.describe("PDF drawing toolbar + eraser 부분/획 toggle", () => {
     test("획 stroke-erase removes a drawn stroke and Ctrl/Cmd+Z restores it", async ({ page }) => {
         const overlay = page.getByTestId("pdf-draw-overlay");
         await expect(overlay).toBeVisible();
+        await expect(overlay).toHaveAttribute("data-pdf-ready", "true");
+        await expect.poll(async () => overlay.evaluate((element) => {
+            const pdfPage = element.closest(".react-pdf__Page") ?? element.parentElement;
+            const backingCanvas = pdfPage?.querySelector(".react-pdf__Page__canvas");
+            return backingCanvas instanceof HTMLCanvasElement
+                ? backingCanvas.width * backingCanvas.height
+                : 0;
+        })).toBeGreaterThan(0);
+        await expect.poll(async () => overlay.evaluate((element) => {
+            const canvas = element as HTMLCanvasElement;
+            return canvas.width * canvas.height;
+        })).toBeGreaterThan(0);
 
         // --- Draw a horizontal pen stroke across the middle of the overlay ---
         await page.getByLabel("펜", { exact: true }).click();
@@ -178,9 +190,40 @@ test.describe("PDF drawing toolbar + eraser 부분/획 toggle", () => {
         expect(box).not.toBeNull();
         if (!box) throw new Error("overlay has no bounding box");
 
-        const midY = box.y + box.height * 0.5;
-        const startX = box.x + box.width * 0.25;
-        const endX = box.x + box.width * 0.75;
+        const scrollBox = await overlay.evaluate((element) => {
+            const scrollViewport = element.closest(".pdf-viewer-scroll");
+            const rect = scrollViewport?.getBoundingClientRect();
+            return rect
+                ? { x: rect.x, y: rect.y, width: rect.width, height: rect.height }
+                : null;
+        });
+        const viewport = page.viewportSize();
+        expect(scrollBox).not.toBeNull();
+        expect(viewport).not.toBeNull();
+        if (!scrollBox || !viewport) throw new Error("PDF or browser viewport is unavailable");
+
+        const visibleLeft = Math.max(box.x, scrollBox.x, 0);
+        const visibleTop = Math.max(box.y, scrollBox.y, 0);
+        const visibleRight = Math.min(
+            box.x + box.width,
+            scrollBox.x + scrollBox.width,
+            viewport.width,
+        );
+        const visibleBottom = Math.min(
+            box.y + box.height,
+            scrollBox.y + scrollBox.height,
+            viewport.height,
+        );
+        expect(visibleRight - visibleLeft).toBeGreaterThan(100);
+        expect(visibleBottom - visibleTop).toBeGreaterThan(100);
+
+        const startX = visibleLeft + (visibleRight - visibleLeft) * 0.25;
+        const endX = visibleLeft + (visibleRight - visibleLeft) * 0.75;
+        const midY = visibleTop + (visibleBottom - visibleTop) * 0.5;
+        expect(startX).toBeGreaterThanOrEqual(Math.max(box.x, scrollBox.x, 0));
+        expect(endX).toBeLessThanOrEqual(visibleRight);
+        expect(midY).toBeGreaterThanOrEqual(Math.max(box.y, scrollBox.y, 0));
+        expect(midY).toBeLessThanOrEqual(visibleBottom);
 
         await page.mouse.move(startX, midY);
         await page.mouse.down();
@@ -203,10 +246,30 @@ test.describe("PDF drawing toolbar + eraser 부분/획 toggle", () => {
         const { stroke } = eraserModeButtons(page);
         await expect(stroke).toHaveAttribute("aria-pressed", "true");
 
+        // Narrow viewports reflow the toolbar when the eraser controls appear,
+        // moving the PDF on screen. Preserve the stroke's canvas-local position
+        // and resolve fresh screen coordinates after that reflow.
+        const eraseBox = await overlay.boundingBox();
+        expect(eraseBox).not.toBeNull();
+        if (!eraseBox) throw new Error("overlay has no erase-time bounding box");
+        const normalizedStartX = (startX - box.x) / box.width;
+        const normalizedEndX = (endX - box.x) / box.width;
+        const normalizedY = (midY - box.y) / box.height;
+        const eraseStartX = eraseBox.x + normalizedStartX * eraseBox.width;
+        const eraseEndX = eraseBox.x + normalizedEndX * eraseBox.width;
+        const eraseMidY = eraseBox.y + normalizedY * eraseBox.height;
+        expect(eraseStartX).toBeGreaterThanOrEqual(Math.max(eraseBox.x, 0));
+        expect(eraseEndX).toBeLessThanOrEqual(Math.min(eraseBox.x + eraseBox.width, viewport.width));
+        expect(eraseMidY).toBeGreaterThanOrEqual(Math.max(eraseBox.y, 0));
+        expect(eraseMidY).toBeLessThanOrEqual(Math.min(eraseBox.y + eraseBox.height, viewport.height));
+        await expect.poll(async () => overlay.evaluate((element, point) => (
+            document.elementFromPoint(point.x, point.y) === element
+        ), { x: eraseStartX, y: eraseMidY })).toBe(true);
+
         // Drag along the same horizontal line, crossing the stroke.
-        await page.mouse.move(startX, midY);
+        await page.mouse.move(eraseStartX, eraseMidY);
         await page.mouse.down();
-        await page.mouse.move(endX, midY, { steps: 30 });
+        await page.mouse.move(eraseEndX, eraseMidY, { steps: 30 });
         await page.mouse.up();
 
         let erased = drawn;

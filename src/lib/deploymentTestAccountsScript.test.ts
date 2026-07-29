@@ -37,16 +37,18 @@ describe("deployment test account fixture", () => {
         expect(verifyStudentStartCodeHash("ABC234", fixture.studentCredentials[0].start_code_hash)).toBe(true);
     });
 
-    it("binds metadata hashes to the configured student secret", () => {
+    it("keeps student authentication truth only in the PBKDF2 credential rows", () => {
         const first = buildDeploymentFixture({ studentSessionSecret: "secret-a", now: "2026-07-22T00:00:00.000Z" });
         const second = buildDeploymentFixture({ studentSessionSecret: "secret-b", now: "2026-07-22T00:00:00.000Z" });
 
-        expect(first.students[0].metadata.studentAccessCode.hash)
-            .not.toBe(second.students[0].metadata.studentAccessCode.hash);
-        expect(first.students[0].metadata.studentAccessCode).toMatchObject({
-            version: 1,
-            updatedAt: "2026-07-22T00:00:00.000Z",
+        expect(first.students[0].metadata).toEqual({
+            source: "deployment_test_fixture",
+            group: "테스트반",
+            region: "서울",
         });
+        expect(second.students[0].metadata).toEqual(first.students[0].metadata);
+        expect(first.studentCredentials[0].start_code_hash)
+            .not.toBe(second.studentCredentials[0].start_code_hash);
     });
 
     it("redacts secrets and hashes from dry-run output", () => {

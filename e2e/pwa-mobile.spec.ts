@@ -1,7 +1,6 @@
 import { expect, test, type Locator, type Page } from "@playwright/test";
 
 const VALID_PROOF_EPOCH = Date.now();
-const MOBILE_SOLVE_DRAFT_KEY = "omr_draft_mobile-qa-exam_mobile-qa-student_base";
 
 async function clearStorage(page: Page) {
     await page.addInitScript(() => {
@@ -88,8 +87,18 @@ async function continueSolveEntryAsStudentIfPresent(page: Page) {
 
     const entryDialog = page.getByRole("dialog", { name: "시험 입장 확인" });
     if (await entryDialog.isVisible().catch(() => false)) {
-        await expectTouchTarget(entryDialog.getByRole("button", { name: "학생으로 시험 보기" }));
-        await entryDialog.getByRole("button", { name: "학생으로 시험 보기" }).click();
+        const studentButton = entryDialog.getByRole("button", { name: "학생으로 시험 보기" });
+        if (await studentButton.isVisible().catch(() => false)) {
+            await expectTouchTarget(studentButton);
+            await studentButton.click();
+        } else {
+            const guestButton = entryDialog.getByRole("button", { name: "게스트로 시험 보기" });
+            const studentLoginLink = entryDialog.getByRole("link", { name: "학생 로그인으로 보기" });
+            await expectTouchTarget(guestButton);
+            await expectTouchTarget(studentLoginLink);
+            await entryDialog.getByRole("textbox", { name: "게스트 이름" }).fill("모바일학생");
+            await guestButton.click();
+        }
         await expect(entryDialog).toBeHidden();
     }
 }
@@ -290,6 +299,17 @@ async function seedMobileSolveExam(page: Page) {
     });
 }
 
+async function readMobileSolveDraft(page: Page) {
+    return page.evaluate(() => {
+        const keys = Object.keys(window.localStorage)
+            .filter(key => key.startsWith("omr_draft_mobile-qa-exam_") && key.endsWith("_base"));
+        const draft = keys.length === 1
+            ? JSON.parse(window.localStorage.getItem(keys[0]) || "{}")
+            : {};
+        return { draft, keys };
+    });
+}
+
 test.describe("Mobile PWA entry", () => {
     test.beforeEach(async ({ page }) => {
         await clearStorage(page);
@@ -401,6 +421,34 @@ test.describe("Mobile PWA entry", () => {
         await expectNoHorizontalOverflow(page);
     });
 
+    test("offers the current guest and student entry choices", async ({ page }) => {
+        await seedMobileSolveExam(page);
+
+        await page.goto("/solve/mobile-qa-exam");
+
+        const entryDialog = page.getByRole("dialog", { name: "시험 입장 확인" });
+        await expect(entryDialog).toBeVisible();
+        const studentButton = entryDialog.getByRole("button", { name: "학생으로 시험 보기" });
+        if (await studentButton.isVisible().catch(() => false)) {
+            await expectTouchTarget(studentButton);
+        } else {
+            await expectTouchTarget(entryDialog.getByRole("button", { name: "게스트로 시험 보기" }));
+            await expectTouchTarget(entryDialog.getByRole("link", { name: "학생 로그인으로 보기" }));
+        }
+
+        await continueSolveEntryAsStudentIfPresent(page);
+
+        await expect(entryDialog).toBeHidden();
+        const answerSheetTitle = page.locator(".solve-omr-scroll .omr-cardview-title").getByText("모바일 실전 시험");
+        if (!(await answerSheetTitle.isVisible().catch(() => false))) {
+            const floatingRailButton = page.locator(".solve-omr-rail-button");
+            await expectTouchTarget(floatingRailButton);
+            await floatingRailButton.click();
+        }
+        await expect(answerSheetTitle).toBeVisible();
+        await expectNoHorizontalOverflow(page);
+    });
+
     test("lets students answer and submit an exam in the phone and tablet app shell", async ({ page }) => {
         const consoleProblems = collectConsoleProblems(page);
         await seedMobileSolveExam(page);
@@ -431,32 +479,72 @@ test.describe("Mobile PWA entry", () => {
         await expect(firstAnswer).toHaveAttribute("tabindex", "-1");
         await expectNoHorizontalOverflow(page);
         expect(await smallTargets(page, ".solve-controls button, .solve-controls label, .solve-omr-scroll .q-bubble, .solve-omr-next-button, .solve-omr-pane-close")).toEqual([]);
-        const solveLayout = await page.evaluate(() => {
+        const solveLayout = await page.evaluate(async () => {
             const body = document.querySelector<HTMLElement>(".solve-body");
-            const bodyRect = body?.getBoundingClientRect();
-            const pdf = document.querySelector<HTMLElement>(".solve-pdf-pane")?.getBoundingClientRect();
             const paneElement = document.querySelector<HTMLElement>("#solve-omr-pane");
-            const pane = document.querySelector<HTMLElement>("#solve-omr-pane")?.getBoundingClientRect();
-            const title = document.querySelector<HTMLElement>(".solve-title")?.getBoundingClientRect();
-            return {
-                isTablet: window.matchMedia("(min-width: 600px) and (max-width: 1180px)").matches,
-                direction: body ? getComputedStyle(body).flexDirection : null,
-                panePosition: paneElement ? getComputedStyle(paneElement).position : null,
-                paneBackdrop: paneElement ? getComputedStyle(paneElement).backdropFilter : null,
-                paneWidth: pane?.width ?? null,
-                paneRight: pane?.right ?? null,
-                bodyWidth: bodyRect?.width ?? null,
-                bodyRight: bodyRect?.right ?? null,
-                pdfWidth: pdf?.width ?? null,
-                titleWidth: title?.width ?? null,
+            const isTablet = window.matchMedia("(min-width: 600px) and (max-width: 1180px)").matches;
+            const readLayout = () => {
+                const bodyRect = body?.getBoundingClientRect();
+                const pdf = document.querySelector<HTMLElement>(".solve-pdf-pane")?.getBoundingClientRect();
+                const pane = paneElement?.getBoundingClientRect();
+                const title = document.querySelector<HTMLElement>(".solve-title")?.getBoundingClientRect();
+                return {
+                    isTablet,
+                    direction: body ? getComputedStyle(body).flexDirection : null,
+                    panePosition: paneElement ? getComputedStyle(paneElement).position : null,
+                    paneBackdrop: paneElement ? getComputedStyle(paneElement).backdropFilter : null,
+                    paneCollapsed: paneElement?.classList.contains("is-collapsed") ?? null,
+                    paneWidth: pane?.width ?? null,
+                    paneRight: pane?.right ?? null,
+                    bodyWidth: bodyRect?.width ?? null,
+                    bodyRight: bodyRect?.right ?? null,
+                    pdfWidth: pdf?.width ?? null,
+                    titleWidth: title?.width ?? null,
+                };
             };
+
+            if (isTablet && paneElement) {
+                // The tablet pane slides in with a CSS transition. In a long
+                // browser matrix, a single geometry poll can catch a transient
+                // frame before a later style/layout pass. First await the
+                // browser's actual transitions, then require four consecutive
+                // animation-free frames with stable, anchored geometry.
+                await Promise.allSettled(
+                    paneElement.getAnimations({ subtree: false }).map(animation => animation.finished),
+                );
+
+                let previousRight: number | null = null;
+                let stableFrames = 0;
+                for (let frame = 0; frame < 180; frame += 1) {
+                    await new Promise<void>(resolve => window.requestAnimationFrame(() => resolve()));
+                    const layout = readLayout();
+                    const animationsActive = paneElement
+                        .getAnimations({ subtree: false })
+                        .some(animation => animation.pending || animation.playState === "running");
+                    const rightGap = Math.abs((layout.bodyRight ?? 0) - (layout.paneRight ?? 0));
+                    const positionStable = previousRight !== null
+                        && Math.abs((layout.paneRight ?? 0) - previousRight) <= 0.25;
+                    const paneOpen = layout.paneCollapsed === false && paneElement.getAttribute("aria-hidden") === "false";
+
+                    stableFrames = paneOpen && !animationsActive && rightGap <= 32 && positionStable
+                        ? stableFrames + 1
+                        : 0;
+                    if (stableFrames >= 4) return layout;
+                    previousRight = layout.paneRight;
+                }
+
+                throw new Error(`Tablet answer pane did not settle: ${JSON.stringify(readLayout())}`);
+            }
+
+            return readLayout();
         });
         if (solveLayout.isTablet) {
             expect(solveLayout.direction).toBe("row");
             expect(solveLayout.panePosition).toBe("absolute");
             expect(solveLayout.paneBackdrop).toContain("blur");
-            expect(solveLayout.paneWidth).toBeGreaterThanOrEqual(280);
-            expect(solveLayout.paneWidth).toBeLessThanOrEqual(320);
+            expect(solveLayout.paneCollapsed).toBe(false);
+            expect(Math.round(solveLayout.paneWidth ?? 0)).toBeGreaterThanOrEqual(280);
+            expect(Math.round(solveLayout.paneWidth ?? 0)).toBeLessThanOrEqual(320);
             expect(Math.abs((solveLayout.bodyWidth ?? 0) - (solveLayout.pdfWidth ?? 0))).toBeLessThanOrEqual(2);
             // iPad WebKit reserves roughly one scrollbar/safe-area gutter in
             // addition to the 12px visual inset; keep the panel anchored within
@@ -513,20 +601,16 @@ test.describe("Mobile PWA entry", () => {
         await expect(firstAnswer).toHaveAttribute("tabindex", "-1");
         await firstQuestionGroup.getByRole("radio", { name: "문제 1번 보기 3" }).press("ArrowLeft");
         await expect(firstAnswer).toHaveAttribute("aria-checked", "true");
-        await expect.poll(async () => page.evaluate((draftKey) => {
-            const draft = JSON.parse(window.localStorage.getItem(draftKey) || "{}");
-            return draft.answers?.["1"];
-        }, MOBILE_SOLVE_DRAFT_KEY)).toBe(2);
+        await expect.poll(async () => (await readMobileSolveDraft(page)).draft.answers?.["1"]).toBe(2);
 
         await page.getByRole("radio", { name: "문제 2번 보기 4" }).click();
         await page.evaluate(() => {
             window.dispatchEvent(new Event("pagehide"));
         });
-        const backgroundDraft = await page.evaluate((draftKey) => (
-            JSON.parse(window.localStorage.getItem(draftKey) || "{}")
-        ), MOBILE_SOLVE_DRAFT_KEY);
-        expect(backgroundDraft.answers).toMatchObject({ "1": 2, "2": 4 });
-        expect(backgroundDraft.drawings).toBeUndefined();
+        const backgroundDraftState = await readMobileSolveDraft(page);
+        expect(backgroundDraftState.keys).toHaveLength(1);
+        expect(backgroundDraftState.draft.answers).toMatchObject({ "1": 2, "2": 4 });
+        expect(backgroundDraftState.draft.drawings).toBeUndefined();
 
         await page.reload();
         await continueSolveEntryAsStudentIfPresent(page);
@@ -537,25 +621,14 @@ test.describe("Mobile PWA entry", () => {
         await expectNoHorizontalOverflow(page);
 
         await page.getByRole("radio", { name: "문제 3번 보기 1" }).click();
-        await page.evaluate(() => {
-            Object.defineProperty(document, "visibilityState", {
-                configurable: true,
-                value: "hidden",
-            });
-            document.dispatchEvent(new Event("visibilitychange"));
-        });
-        await expect.poll(async () => page.evaluate((draftKey) => {
-            const draft = JSON.parse(window.localStorage.getItem(draftKey) || "{}");
-            return draft.answers?.["3"];
-        }, MOBILE_SOLVE_DRAFT_KEY)).toBe(1);
-        await page.evaluate(() => {
-            Object.defineProperty(document, "visibilityState", {
-                configurable: true,
-                value: "visible",
-            });
-            document.dispatchEvent(new Event("visibilitychange"));
-        });
-        const focusWarning = page.getByRole("dialog", { name: /시험 이탈 경고/ });
+        await page.evaluate(() => window.dispatchEvent(new Event("blur")));
+        await expect.poll(async () => (await readMobileSolveDraft(page)).draft.answers?.["3"]).toBe(1);
+        // The production away tracker intentionally ignores switches shorter
+        // than two seconds. Exercise the real warning path instead of racing
+        // the threshold with an immediate blur -> focus transition.
+        await page.waitForTimeout(2_100);
+        await page.evaluate(() => window.dispatchEvent(new Event("focus")));
+        const focusWarning = page.getByRole("dialog", { name: "시험 화면 이탈 안내" });
         await expect(focusWarning).toBeVisible();
         await expect(focusWarning).toContainText(/현재 이탈 횟수:\s*\d+회/);
         const returnToExamButton = focusWarning.getByRole("button", { name: "시험으로 돌아가기" });
@@ -631,10 +704,11 @@ test.describe("Mobile PWA entry", () => {
             examId: "mobile-qa-exam",
             score: 100,
             status: "completed",
-            studentId: "mobile-qa-student",
             studentName: "모바일학생",
             totalScore: 100,
         });
+        expect(savedAttempt.guestId).toEqual(expect.any(String));
+        expect(savedAttempt.studentId).toBe(`guest:${savedAttempt.guestId}`);
         expect(consoleProblems).toEqual([]);
     });
 
@@ -683,6 +757,8 @@ test.describe("Mobile PWA entry", () => {
 
         await expect(page.getByRole("heading", { name: "PWA 디바이스 체크" })).toBeVisible();
         await expect(page.getByTestId("pwa-device-verdict")).toContainText("설치 실행 전");
+        await expect(page.getByTestId("pwa-device-check-manifest")).toContainText("standalone / any");
+        await expect(page.getByTestId("pwa-device-report")).toContainText("manifest=pass:standalone / any");
         await expect(page.getByTestId("pwa-device-check-secure-context")).toBeVisible();
         await expect(page.getByTestId("pwa-device-check-display-mode")).toBeVisible();
         await expect(page.getByTestId("pwa-device-check-launch-proof")).toContainText("대기");

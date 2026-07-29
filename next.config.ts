@@ -1,3 +1,26 @@
+const isProduction = process.env.NODE_ENV === "production";
+const contentSecurityPolicy = [
+  "default-src 'self'",
+  "base-uri 'self'",
+  "object-src 'none'",
+  "frame-ancestors 'none'",
+  "form-action 'self'",
+  // Next.js emits inline bootstrap scripts and the UI uses inline component
+  // styles. Development additionally needs eval for source maps/HMR.
+  `script-src 'self' 'unsafe-inline'${isProduction ? "" : " 'unsafe-eval'"}`,
+  "style-src 'self' 'unsafe-inline'",
+  // Remote API/storage traffic is HTTPS/WSS. PDF.js also reads locally
+  // generated data/blob URLs without granting another network origin.
+  "connect-src 'self' https: wss: data: blob:",
+  "img-src 'self' data: blob:",
+  "font-src 'self' data:",
+  // pdf.js and generated previews use blob-backed workers/resources.
+  "worker-src 'self' blob:",
+  "frame-src 'self' blob:",
+  "media-src 'self' data: blob:",
+  "manifest-src 'self'",
+].join("; ");
+
 const baselineSecurityHeaders = [
   { key: "Cross-Origin-Opener-Policy", value: "same-origin" },
   { key: "Cross-Origin-Resource-Policy", value: "same-origin" },
@@ -7,7 +30,7 @@ const baselineSecurityHeaders = [
   { key: "Permissions-Policy", value: "camera=(), microphone=(), geolocation=(), payment=(), usb=()" },
   {
     key: "Content-Security-Policy",
-    value: "frame-ancestors 'none'; base-uri 'self'; object-src 'none'; form-action 'self'",
+    value: contentSecurityPolicy,
   },
 ];
 
@@ -18,11 +41,21 @@ const baselineSecurityHeaders = [
 const deploymentId = process.env.VERCEL_DEPLOYMENT_ID
   ?.replace(/^dpl_/, "")
   .slice(0, 32);
+const isDesktopRuntime = process.env.OMR_DESKTOP_RUNTIME === "1";
 
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   poweredByHeader: false,
   ...(deploymentId ? { deploymentId } : {}),
+  ...(isDesktopRuntime
+    ? {
+        images: {
+          // Electron serves from a read-only ASAR, so retain optimization without
+          // attempting to create `.next/cache/images` inside the archive.
+          maximumDiskCacheSize: 0,
+        },
+      }
+    : {}),
   turbopack: {
     root: process.cwd(),
   },
@@ -35,7 +68,7 @@ const nextConfig = {
   async headers() {
     const globalHeaders = [
       ...baselineSecurityHeaders,
-      ...(process.env.NODE_ENV === "production"
+      ...(isProduction
         ? [{ key: "Strict-Transport-Security", value: "max-age=31536000; includeSubDomains" }]
         : []),
     ];
@@ -53,8 +86,9 @@ const nextConfig = {
         // student solve pages authenticate with signed session cookies, so
         // block framing (clickjacking against force-finish/delete/distribute
         // buttons), MIME sniffing, unsafe base/object/form targets, and Referer
-        // leakage of exam ids. script-src/connect-src still need nonce and pdf.js
-        // worker validation before they can be tightened safely.
+        // leakage of exam ids. Next bootstrap/component styles require inline
+        // allowances until nonce-based rendering is adopted; remote data
+        // traffic is limited to HTTPS/WSS and workers to same-origin/blob.
         source: "/:path*",
         headers: globalHeaders,
       },

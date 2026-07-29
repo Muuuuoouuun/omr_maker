@@ -498,7 +498,7 @@ th { background: #f8fafc; font-size: 12px; color: #64748b; text-transform: upper
         <div className="layout-main">
             <TeacherHeader badge="BILLING" badgeColor="#a855f7" />
 
-            <main className="container animate-fade-in" style={{ paddingBottom: '4rem', position: 'relative', zIndex: 1 }}>
+            <main id="main-content" tabIndex={-1} className="container animate-fade-in" style={{ paddingBottom: '4rem', position: 'relative', zIndex: 1 }}>
                 <div style={{ margin: '3rem 0 2rem' }}>
                     <h1 className="title-gradient" style={{ fontSize: '2.5rem', marginBottom: '0.5rem', lineHeight: 1.2 }}>결제 및 플랜</h1>
                     <p className="text-muted" style={{ fontSize: '1.05rem' }}>플랜 변경, 사용량 확인, 결제/플랜 기록을 한 곳에서.</p>

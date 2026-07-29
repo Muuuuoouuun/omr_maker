@@ -10,6 +10,7 @@ import NotificationBell from "./NotificationBell";
 import TeacherLogoutButton from "./TeacherLogoutButton";
 import TeacherSessionChip from "./TeacherSessionChip";
 import StatusPill from "./dashboard/StatusPill";
+import SkipToMainContent from "./SkipToMainContent";
 
 interface TeacherHeaderProps {
     badge?: string;
@@ -30,6 +31,7 @@ export default function TeacherHeader({ badge = "TEACHER", badgeColor }: Teacher
     }, []);
     return (
         <>
+            <SkipToMainContent />
             <header className="header teacher-header">
                 <div className="container header-content">
                     <div className="teacher-header-brand" style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>

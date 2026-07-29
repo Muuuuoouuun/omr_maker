@@ -13,6 +13,7 @@ import type {
     QuestionResultStatus,
     QuestionTiming,
 } from "@/types/omr";
+import { resolveAwayCount } from "@/lib/examAwayTracker";
 
 export interface WeaknessGroup {
     key: string;
@@ -1580,7 +1581,7 @@ export function summarizeAttemptBehavior(attempt: Attempt): AttemptBehaviorSumma
             .filter(timing => timing.answerChangeCount > 0)
             .map(timing => timing.questionNumber)
             .sort((a, b) => a - b),
-        focusLossCount: focusLossEvents.length || attempt.tabFociLostCount || 0,
+        focusLossCount: resolveAwayCount(attempt),
         focusLossQuestionNumbers: uniqueQuestionNumbers(focusLossEvents),
     };
 }

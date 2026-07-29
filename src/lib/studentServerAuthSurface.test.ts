@@ -20,21 +20,42 @@ describe("student server authentication surface", () => {
     });
 
     it("connects login, teacher issuance, and logout to server actions", () => {
-        expect(source("src/app/page.tsx")).toContain("await issueStudentSession");
-        expect(source("src/app/teacher/users/page.tsx")).toContain("await syncStudentAccessCodes");
+        const rootPage = source("src/app/page.tsx");
+        expect(rootPage).toContain("await issueStudentSession");
+        expect(rootPage).toContain("loadLocalStudentCodes");
+        expect(rootPage).not.toContain("readStudentCodes");
+        expect(rootPage.indexOf("loadLocalStudentCodes(localStorage, process.env.NODE_ENV)"))
+            .toBeLessThan(rootPage.indexOf("seedLocalTestStudentAccounts(localStorage)"));
+        const users = source("src/app/teacher/users/page.tsx");
+        expect(users).toContain("await issueStudentStartCredential");
+        expect(users).not.toContain("syncStudentAccessCodes");
+        expect(users).toContain("STUDENT_CREDENTIAL_STATUS_STORAGE_KEY");
+        expect(users).toContain("setSessionStudentCodes");
+        expect(users).toContain("localStorage.removeItem(STUDENT_CODES_STORAGE_KEY)");
+        expect(users).toContain("studentCredentialIssuanceLocksRef");
+        expect(users).toContain("withStudentCredentialIssuanceLock");
+        expect(users).toContain("studentCodeRegistryRef.current");
+        expect(users).toContain("issuedStudentCredentialIdsRef.current");
+        expect(users).not.toContain("const nextRegistry = { ...studentCodeRegistry, [selected.id]: nextCode }");
         expect(source("src/app/student/dashboard/page.tsx")).toContain("clearStudentServerSession()");
     });
 
-    it("hashes teacher-issued start codes behind a teacher-authenticated service-role action", () => {
+    it("uses only the organization-bound PBKDF2 credential row for student authentication", () => {
         const sessionAction = source("src/app/actions/studentSession.ts");
-        const accessCode = source("src/lib/studentAccessCode.ts");
+        const authAction = source("src/app/actions/studentAuth.ts");
 
-        expect(sessionAction).toContain("parseSignedTeacherSessionCookie");
-        expect(sessionAction).toContain("createSupabaseAdminClient");
-        expect(sessionAction).toContain("metadataWithStudentAccessCode");
-        expect(accessCode).toContain('createHmac("sha256", secret)');
-        expect(accessCode).toContain("timingSafeEqual");
-        expect(accessCode).not.toContain("localStorage");
+        expect(authAction).toContain("parseSignedTeacherSessionCookie");
+        expect(sessionAction).toContain("verifyStudentCredentials");
+        expect(sessionAction).toContain("organizationId: workspaceId");
+        expect(sessionAction).toContain("studentProfileId: profile.id");
+        expect(sessionAction).not.toContain("metadataWithStudentAccessCode");
+        expect(sessionAction).not.toContain("readStudentAccessCodeRecord");
+        expect(sessionAction).not.toContain("verifyStudentAccessCode");
+        expect(authAction).toContain("omr_student_start_credentials");
+        expect(authAction).toContain("hashStudentStartCode");
+        expect(authAction).toContain("canTeacherRoleWrite");
+        expect(authAction.indexOf("canTeacherRoleWrite"))
+            .toBeLessThan(authAction.indexOf("const client = adminClient()"));
     });
 
     it("keeps the server exam action primary and limits fallback to device-local data", () => {
@@ -82,5 +103,19 @@ describe("student server authentication surface", () => {
         expect(solveAction).toContain("pdfData: signed.signedUrl");
         expect(solveAction.indexOf('if (access !== "allowed") return { status: access }'))
             .toBeLessThan(solveAction.indexOf("createStudentProblemPdfSignedUrlWithGateway"));
+    });
+
+    it("rejects cross-origin submissions before resolving a database gateway", () => {
+        const action = source("src/app/actions/studentExam.ts");
+        const submitStart = action.indexOf("export async function submitAttempt");
+        const submitEnd = action.indexOf("export async function listMyAssignments", submitStart);
+        const submitAction = action.slice(submitStart, submitEnd);
+
+        expect(action).toContain('import { cookies, headers } from "next/headers"');
+        expect(action).toContain("isSameOriginServerActionRequest");
+        expect(submitAction).toContain("const headerStore = await headers()");
+        expect(submitAction).toContain('if (!headerStore.get("origin") || !isSameOriginServerActionRequest(headerStore)) return { status: "error" }');
+        expect(submitAction.indexOf("isSameOriginServerActionRequest"))
+            .toBeLessThan(submitAction.indexOf("resolveCtx()"));
     });
 });

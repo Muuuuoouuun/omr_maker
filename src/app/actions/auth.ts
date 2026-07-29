@@ -23,6 +23,7 @@ import {
 } from "@/lib/teacherLoginRateLimit";
 import {
     createSignedTeacherSessionCookie,
+    parseSignedTeacherSessionCookie,
     shouldUseSecureTeacherSessionCookie,
     TEACHER_SERVER_SESSION_COOKIE,
     TEACHER_SERVER_SESSION_MAX_AGE_SECONDS,
@@ -31,7 +32,8 @@ import { isSameOriginServerActionRequest, SERVER_ACTION_ORIGIN_ERROR } from "@/l
 import { buildDeploymentReadiness, type DeploymentReadinessSummary } from "@/lib/deploymentReadiness";
 import { workspaceContextFromIdentity } from "@/lib/workspaceContext";
 import { probeSupabaseDeploymentWithServiceRole } from "@/lib/supabaseReadinessProbe";
-import { MOCKUP_TEACHER_IDENTITY } from "@/lib/mockupAccount";
+import { isMockupTeacherIdentity, MOCKUP_TEACHER_IDENTITY } from "@/lib/mockupAccount";
+import { consumeTeacherDeploymentReadinessRateLimit } from "@/lib/deploymentReadinessActionSecurity";
 
 function clientFingerprintFromHeaders(headerStore: Headers): string {
     const forwardedFor = headerStore.get("x-forwarded-for")?.split(",")[0]?.trim();
@@ -176,6 +178,30 @@ export async function clearTeacherAuthSession(): Promise<{ success: true }> {
 }
 
 export async function getTeacherDeploymentReadiness(): Promise<DeploymentReadinessSummary> {
+    const blockedSummary = (): DeploymentReadinessSummary => ({
+        label: "배포 상태 확인 불가",
+        detail: "인증된 교사 세션에서만 배포 상태를 확인할 수 있습니다.",
+        credentialCount: 0,
+        readyCount: 0,
+        totalCount: 1,
+        checks: [{
+            key: "deployment_readiness_access",
+            label: "배포 상태 접근",
+            detail: "요청 권한을 확인한 뒤 다시 시도하세요.",
+            tone: "error",
+        }],
+    });
+
+    const headerStore = await headers();
+    if (!isSameOriginServerActionRequest(headerStore)) return blockedSummary();
+
+    const cookieStore = await cookies();
+    const session = parseSignedTeacherSessionCookie(
+        cookieStore.get(TEACHER_SERVER_SESSION_COOKIE)?.value,
+    );
+    if (!session || isMockupTeacherIdentity(session)) return blockedSummary();
+    if (!consumeTeacherDeploymentReadinessRateLimit(session)) return blockedSummary();
+
     const databaseProbe = await probeSupabaseDeploymentWithServiceRole();
     return buildDeploymentReadiness(process.env, databaseProbe);
 }

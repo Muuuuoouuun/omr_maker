@@ -4,6 +4,8 @@ import { useState, useEffect, useId, useRef } from 'react';
 import type { ParsedAnswer } from '@/services/answerParser';
 import { readStoredGeminiApiKey } from '@/lib/geminiApiKey';
 import type { AiAnswerRecognitionMode } from '@/lib/aiAnswerModelRouting';
+import { activateFilePicker } from '@/lib/activateFilePicker';
+import { useDialogFocus } from '@/hooks/useDialogFocus';
 import { BrainCircuit, FileText, FolderOpen, RefreshCw, UploadCloud, X } from 'lucide-react';
 import {
     incrementAiRecognitionUsage,
@@ -65,12 +67,14 @@ export default function AnswerImportModal({
     const titleId = useId();
     const analysisRunRef = useRef(0);
     const analysisCacheRef = useRef<WeakMap<File, AnswerRecognitionCache>>(new WeakMap());
+    const answerPdfInputRef = useRef<HTMLInputElement>(null);
     const [file, setFile] = useState<File | null>(null);
     const [parsedData, setParsedData] = useState<ParsedAnswer[]>([]);
     const [isProcessing, setIsProcessing] = useState(false);
     const [error, setError] = useState<string | null>(null);
     const [useAI, setUseAI] = useState(false);
     const [reviewedQuestions, setReviewedQuestions] = useState<Set<number>>(() => new Set());
+    const dialogRef = useDialogFocus(isOpen, onClose);
 
     const expectedNumbers = Number.isInteger(expectedQuestionCount) && (expectedQuestionCount || 0) > 0
         ? Array.from({ length: expectedQuestionCount || 0 }, (_, index) => index + 1)
@@ -206,9 +210,12 @@ export default function AnswerImportModal({
             padding: '1rem'
         }}>
             <div
+                ref={dialogRef}
+                className="balanced-dialog-panel"
                 role="dialog"
                 aria-modal="true"
                 aria-labelledby={titleId}
+                tabIndex={-1}
                 style={{
                 background: 'var(--surface)',
                 color: 'var(--foreground)',
@@ -232,11 +239,30 @@ export default function AnswerImportModal({
 
                 <div style={{ padding: '1.5rem', overflowY: 'auto', flex: 1 }}>
                     <div style={{ marginBottom: '1.5rem', textAlign: 'center', padding: '2rem', border: '2px dashed var(--border)', borderRadius: '8px', background: 'var(--background)' }}>
-                        <input type="file" accept=".pdf" onChange={handleFileChange} style={{ display: 'none' }} id="answer-pdf-upload" />
-                        <label htmlFor="answer-pdf-upload" className="btn btn-primary" style={{ cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: '0.5rem' }}>
+                        <input
+                            ref={answerPdfInputRef}
+                            type="file"
+                            accept=".pdf"
+                            onChange={handleFileChange}
+                            className="sr-only"
+                            tabIndex={-1}
+                            aria-hidden="true"
+                            id="answer-pdf-upload"
+                        />
+                        <button
+                            type="button"
+                            className="btn btn-primary"
+                            aria-label="정답 PDF 업로드"
+                            onClick={() => {
+                                if (answerPdfInputRef.current) {
+                                    activateFilePicker(answerPdfInputRef.current);
+                                }
+                            }}
+                            style={{ cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: '0.5rem' }}
+                        >
                             <UploadCloud size={17} />
                             {file ? "PDF 변경하기" : "PDF 업로드하여 정답 추출"}
-                        </label>
+                        </button>
                         {file && <p style={{ marginTop: '0.5rem', fontSize: '0.9rem', color: 'var(--muted)' }}>{file.name}</p>}
                     </div>
 

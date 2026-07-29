@@ -5,33 +5,40 @@ import {
 
 type Env = Record<string, string | undefined>;
 
-export const SUPABASE_READINESS_VERSION = "202607140018";
+export const SUPABASE_READINESS_VERSION = "202607280003";
 
-export interface SupabaseDeploymentProbe {
+export const SUPABASE_READINESS_CHECK_KEYS = [
+    "browserSchemaPrivilegesDenied",
+    "anonTablePrivilegesDenied",
+    "authenticatedCanonicalPrivilegesDenied",
+    "browserSequencePrivilegesDenied",
+    "browserFunctionPrivilegesDenied",
+    "alphaPoliciesAbsent",
+    "canonicalTablesForceRls",
+    "canonicalPoliciesAbsent",
+    "organizationBackfillReady",
+    "serviceRolePrivilegesReady",
+    "scopedRpcPrivilegesReady",
+    "hostedStorageBoundaryReady",
+    "serverGatewayCapabilitiesReady",
+    "queryPathIndexesReady",
+    "legacyBroadRpcsRemoved",
+] as const;
+
+export type SupabaseReadinessCheckKey = typeof SUPABASE_READINESS_CHECK_KEYS[number];
+export type SupabaseReadinessFailureKey =
+    | SupabaseReadinessCheckKey
+    | "probeVersion"
+    | "databaseDeclaredReady"
+    | "probeExecution"
+    | "probePayload";
+
+export type SupabaseDeploymentProbe = {
     ready: boolean;
     version?: string;
-    attemptRpc?: boolean;
-    sessionAttemptRpc?: boolean;
-    teacherExamRpc?: boolean;
-    teacherExamDeleteRpc?: boolean;
-    teacherAttemptRpc?: boolean;
-    teacherRosterRpc?: boolean;
-    handwritingRpc?: boolean;
-    feedbackSaveRpc?: boolean;
-    feedbackReturnRpc?: boolean;
-    feedbackOpenRpc?: boolean;
-    remoteAssetMetadataRpc?: boolean;
-    queryPathIndexes?: boolean;
-    legacyFeedbackRpcRemoved?: boolean;
-    examsForceRls?: boolean;
-    attemptsForceRls?: boolean;
-    questionResultsForceRls?: boolean;
-    studentCredentialsForceRls?: boolean;
-    remoteAssetsForceRls?: boolean;
-    rosterInvitesForceRls?: boolean;
-    attemptFeedbackForceRls?: boolean;
+    failedChecks?: SupabaseReadinessFailureKey[];
     error?: string;
-}
+} & Partial<Record<SupabaseReadinessCheckKey, boolean>>;
 
 export interface SupabaseProbeClient {
     rpc(name: string): Promise<{
@@ -40,45 +47,39 @@ export interface SupabaseProbeClient {
     }>;
 }
 
-function clean(value: unknown): string {
-    return typeof value === "string" ? value.trim() : "";
+function invalidProbePayload(): SupabaseDeploymentProbe {
+    return {
+        ready: false,
+        error: "DB readiness probe returned an invalid payload",
+        failedChecks: ["probePayload"],
+    };
 }
 
 export function parseSupabaseDeploymentProbe(value: unknown): SupabaseDeploymentProbe {
-    const candidate = Array.isArray(value) ? value[0] : value;
-    if (!candidate || typeof candidate !== "object") {
-        return { ready: false, error: "DB readiness probe returned an invalid payload" };
+    if (!value || typeof value !== "object" || Array.isArray(value)) {
+        return invalidProbePayload();
     }
-    const row = candidate as Record<string, unknown>;
-    const version = clean(row.version);
-    const checks = {
-        attemptRpc: row.attemptRpc === true,
-        sessionAttemptRpc: row.sessionAttemptRpc === true,
-        teacherExamRpc: row.teacherExamRpc === true,
-        teacherExamDeleteRpc: row.teacherExamDeleteRpc === true,
-        teacherAttemptRpc: row.teacherAttemptRpc === true,
-        teacherRosterRpc: row.teacherRosterRpc === true,
-        handwritingRpc: row.handwritingRpc === true,
-        feedbackSaveRpc: row.feedbackSaveRpc === true,
-        feedbackReturnRpc: row.feedbackReturnRpc === true,
-        feedbackOpenRpc: row.feedbackOpenRpc === true,
-        remoteAssetMetadataRpc: row.remoteAssetMetadataRpc === true,
-        queryPathIndexes: row.queryPathIndexes === true,
-        legacyFeedbackRpcRemoved: row.legacyFeedbackRpcRemoved === true,
-        examsForceRls: row.examsForceRls === true,
-        attemptsForceRls: row.attemptsForceRls === true,
-        questionResultsForceRls: row.questionResultsForceRls === true,
-        studentCredentialsForceRls: row.studentCredentialsForceRls === true,
-        remoteAssetsForceRls: row.remoteAssetsForceRls === true,
-        rosterInvitesForceRls: row.rosterInvitesForceRls === true,
-        attemptFeedbackForceRls: row.attemptFeedbackForceRls === true,
-    };
+
+    const row = value as Record<string, unknown>;
+    const version = typeof row.version === "string" ? row.version : "";
+    const checks = Object.fromEntries(
+        SUPABASE_READINESS_CHECK_KEYS.map(key => [key, row[key] === true]),
+    ) as Record<SupabaseReadinessCheckKey, boolean>;
+    const failedChecks: SupabaseReadinessFailureKey[] = SUPABASE_READINESS_CHECK_KEYS
+        .filter(key => !checks[key]);
+
+    if (version !== SUPABASE_READINESS_VERSION) {
+        failedChecks.push("probeVersion");
+    }
+    if (row.ready !== true) {
+        failedChecks.push("databaseDeclaredReady");
+    }
+
     return {
-        ready: row.ready === true
-            && version === SUPABASE_READINESS_VERSION
-            && Object.values(checks).every(Boolean),
+        ready: failedChecks.length === 0,
         ...(version ? { version } : {}),
         ...checks,
+        failedChecks,
     };
 }
 
@@ -88,13 +89,18 @@ export async function probeSupabaseDeployment(
     try {
         const result = await client.rpc("omr_service_readiness_v1");
         if (result.error) {
-            return { ready: false, error: result.error.message || "DB readiness probe failed" };
+            return {
+                ready: false,
+                error: "DB readiness probe execution failed",
+                failedChecks: ["probeExecution"],
+            };
         }
         return parseSupabaseDeploymentProbe(result.data);
-    } catch (error) {
+    } catch {
         return {
             ready: false,
-            error: error instanceof Error ? error.message : "DB readiness probe failed",
+            error: "DB readiness probe execution failed",
+            failedChecks: ["probeExecution"],
         };
     }
 }

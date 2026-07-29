@@ -16,6 +16,7 @@ import { resolveAttemptScore, type ResolvedAttemptScore } from "@/lib/attemptSco
 import { serializeCsvRows } from "@/lib/csv";
 import { getAttemptQuestionResults } from "@/lib/premiumAnalytics";
 import { buildStudentResultHref } from "@/lib/studentResultHub";
+import { awaySeverity, resolveAwayCount } from "@/lib/examAwayTracker";
 
 type SortKey = "name" | "percent" | "finishedAt";
 type SortDir = "asc" | "desc";
@@ -151,7 +152,7 @@ export default function ExamDetailPage() {
                 summary?.unansweredCount ?? 0,
                 score.source,
                 a.finishedAt,
-                a.tabFociLostCount ?? 0,
+                resolveAwayCount(a),
             ];
         });
         const csv = serializeCsvRows([
@@ -260,7 +261,7 @@ export default function ExamDetailPage() {
                 </div>
             </div>
 
-            <main className="container animate-fade-in" style={{ padding: '2rem 1rem' }}>
+            <main id="main-content" tabIndex={-1} className="container animate-fade-in" style={{ padding: '2rem 1rem' }}>
 
                 {/* Stats Row */}
                 <div className="bento-grid" style={{ marginBottom: '2rem', gridTemplateColumns: 'repeat(4, 1fr)', gridAutoRows: 'auto' }}>
@@ -368,6 +369,7 @@ export default function ExamDetailPage() {
                                         const summary = attemptSummaryById.get(attempt.id);
                                         const score = summary?.score ?? resolveAttemptScore(attempt, exam);
                                         const p = score.scorePercent;
+                                        const awayCount = resolveAwayCount(attempt);
                                         return (
                                             <tr key={attempt.id} style={{ borderBottom: '1px solid var(--border)' }}>
                                                 <td style={{ padding: '1rem', fontWeight: 600 }}>
@@ -404,8 +406,13 @@ export default function ExamDetailPage() {
                                                     />
                                                 </td>
                                                 <td style={{ padding: '1rem' }}>
-                                                    {attempt.tabFociLostCount && attempt.tabFociLostCount > 0 ? (
-                                                        <StatusPill tone="error" size="sm" label={`⚠️ ${attempt.tabFociLostCount}회 이탈`} />
+                                                    {awayCount > 0 ? (
+                                                        <span
+                                                            className="away-severity-badge"
+                                                            data-away-severity={awaySeverity(awayCount)}
+                                                        >
+                                                            화면 이탈 {awayCount}회
+                                                        </span>
                                                     ) : (
                                                         <StatusPill tone="muted" size="sm" label="정상 (0회)" />
                                                     )}

@@ -14,6 +14,7 @@ import TeacherLogoutButton from "@/components/TeacherLogoutButton";
 import NotificationBell from "@/components/NotificationBell";
 import TeacherSessionChip from "@/components/TeacherSessionChip";
 import GlobalSearch from "@/components/GlobalSearch";
+import SkipToMainContent from "@/components/SkipToMainContent";
 import { AnalyticsTabSkeleton, DashboardPageSkeleton } from "@/components/dashboard/DashboardLoadingSkeleton";
 
 // Analytics tabs statically import recharts + thousands of lines of analytics code
@@ -38,8 +39,8 @@ import { toast } from "@/components/Toast";
 import { createDashboardRevalidationGate, isTeacherDashboardStorageKey } from "@/components/dashboard/dashboardRevalidation";
 import { buildDemoDashboardData } from "@/lib/demoData";
 import { buildQuestionResultRepairPlan } from "@/lib/analyticsDataRepair";
-import { readLocalAttempts, readLocalExams } from "@/lib/omrPersistence";
-import { loadTeacherAttempts, saveTeacherAttempt } from "@/lib/teacherAttemptClient";
+import { readLocalAttempts, readLocalExams, saveLocalAttempt } from "@/lib/omrPersistence";
+import { loadTeacherAttempts } from "@/lib/teacherAttemptClient";
 import { loadTeacherExams } from "@/lib/teacherExamClient";
 import { summarizeAnalyticsDataHealth, summarizePersistenceHealth, type PersistenceHealth } from "@/lib/persistenceHealth";
 import { readLocalRosterSnapshot } from "@/lib/rosterPersistence";
@@ -342,8 +343,8 @@ function TeacherDashboard() {
             const repairedAttempts: Attempt[] = [];
             let failedCount = 0;
             for (const item of questionResultRepairPlan.items) {
-                const result = await saveTeacherAttempt(item.repairedAttempt);
-                if (result.localSaved || result.remoteSaved) {
+                const localSaved = await saveLocalAttempt(item.repairedAttempt);
+                if (localSaved) {
                     repairedAttempts.push(item.repairedAttempt);
                 } else {
                     failedCount += 1;
@@ -359,8 +360,8 @@ function TeacherDashboard() {
                 toast.error("일부 복구 실패", `${failedCount}건은 저장하지 못했습니다. 저장소 권한과 용량을 확인하세요.`);
             } else {
                 toast.success(
-                    "문항 결과 복구 완료",
-                    `${repairedAttempts.length}개 제출, ${questionResultRepairPlan.repairedQuestionResultCount}개 문항 결과를 정리했습니다.`
+                    "로컬 분석 캐시 복구 완료",
+                    `${repairedAttempts.length}개 제출, ${questionResultRepairPlan.repairedQuestionResultCount}개 문항 결과를 이 기기의 분석 캐시에 정리했습니다. 공식 제출 점수는 변경하지 않았습니다.`
                 );
             }
         } finally {
@@ -588,6 +589,7 @@ function TeacherDashboard() {
 
     return (
         <div className={`layout-main${isMockupAccount ? " mockup-dashboard-shell" : ""}`}>
+            <SkipToMainContent />
             <header className="header teacher-header">
                 <div className="container header-content">
                     <div className="teacher-header-brand" style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
@@ -657,7 +659,7 @@ function TeacherDashboard() {
             </header>
             <GlobalSearch />
 
-            <main className={`container dashboard-main animate-fade-in${isMockupAccount ? " mockup-dashboard-main" : ""}${isMockupAccount && activeTab !== "overview" ? " mockup-dashboard-subview" : ""}`}>
+            <main id="main-content" tabIndex={-1} className={`container dashboard-main animate-fade-in${isMockupAccount ? " mockup-dashboard-main" : ""}${isMockupAccount && activeTab !== "overview" ? " mockup-dashboard-subview" : ""}`}>
                 {/* Welcome Section */}
                 <div className="dashboard-welcome">
                     <div style={{ minWidth: 0 }}>

@@ -1,14 +1,28 @@
 import { test, expect, type Page } from "@playwright/test";
+import path from "node:path";
 import { mintTeacherToken } from "../src/lib/teacherAuth";
+import { MOCKUP_TEACHER_IDENTITY } from "../src/lib/mockupAccount";
 import { createSignedTeacherSessionCookie, TEACHER_SERVER_SESSION_COOKIE } from "../src/lib/teacherServerSession";
-import { createTeacherSession, LEGACY_TEACHER_TOKEN_KEY, TEACHER_SESSION_KEY } from "../src/lib/teacherSession";
+import {
+    createTeacherSession,
+    LEGACY_TEACHER_TOKEN_KEY,
+    TEACHER_SESSION_KEY,
+    type TeacherSessionIdentity,
+} from "../src/lib/teacherSession";
 
 test.describe.configure({ timeout: 45_000 });
 
-const TEACHER_IDENTITY = {
+const TEACHER_IDENTITY: TeacherSessionIdentity = {
     teacherId: "admin",
     email: "admin@example.com",
     displayName: "Demo Admin",
+    memberRole: "admin",
+};
+
+const BILLING_TEACHER_IDENTITY: TeacherSessionIdentity = {
+    teacherId: "billing-teacher",
+    email: "billing-teacher@example.com",
+    displayName: "Billing Teacher",
 };
 
 function cookieOrigin(baseURL?: string): string {
@@ -20,10 +34,14 @@ function cookieOrigin(baseURL?: string): string {
 }
 
 // Each test starts with clean storage and a valid teacher session so mocks are deterministic.
-async function authenticateTeacher(page: Page, baseURL?: string) {
+async function authenticateTeacher(
+    page: Page,
+    baseURL?: string,
+    identity: TeacherSessionIdentity = TEACHER_IDENTITY,
+) {
     const token = mintTeacherToken();
-    const session = createTeacherSession(token, Date.now(), TEACHER_IDENTITY);
-    const signedCookie = createSignedTeacherSessionCookie(token, TEACHER_IDENTITY);
+    const session = createTeacherSession(token, Date.now(), identity);
+    const signedCookie = createSignedTeacherSessionCookie(token, identity);
 
     if (!signedCookie) {
         throw new Error("Failed to create teacher session cookie for e2e test");
@@ -39,7 +57,10 @@ async function authenticateTeacher(page: Page, baseURL?: string) {
         secure: false,
     }]);
 
-    await page.goto("/");
+    // Session seeding only needs the document and Storage APIs. Waiting for
+    // every development asset to reach `load` can stall WebKit after a long
+    // serial matrix even though the document is already interactive.
+    await page.goto("/", { waitUntil: "domcontentloaded" });
     await page.evaluate(() => {
         try { window.localStorage.clear(); } catch {}
         try { window.sessionStorage.clear(); } catch {}
@@ -191,6 +212,61 @@ async function seedStudentResultHub(page: Page) {
     });
 }
 
+async function seedAwaySeverityAttempts(page: Page) {
+    await page.addInitScript(() => {
+        const exam = {
+            id: "away-severity-exam",
+            title: "화면 이탈 표시 시험",
+            createdAt: "2026-07-28T00:00:00.000Z",
+            updatedAt: "2026-07-28T00:00:00.000Z",
+            durationMin: 60,
+            questions: [
+                { id: 1, number: 1, answer: 2, choices: 4, score: 100, label: "개념" },
+            ],
+            accessConfig: { type: "public" },
+        };
+        const attempts = [1, 2, 3].map(count => ({
+            id: `away-severity-${count}`,
+            examId: exam.id,
+            examTitle: exam.title,
+            studentName: `이탈 ${count}회 학생`,
+            studentId: `away-severity-student-${count}`,
+            startedAt: `2026-07-28T09:0${count}:00.000Z`,
+            finishedAt: `2026-07-28T09:1${count}:00.000Z`,
+            score: 100,
+            totalScore: 100,
+            answers: { 1: 2 },
+            tabFociLostCount: count,
+            focusLossEvents: Array.from({ length: count === 3 ? 2 : count }, (_, index) => ({
+                at: `2026-07-28T09:0${count}:0${index}.000Z`,
+                questionId: 1,
+                questionNumber: 1,
+                count: index + 1,
+                reason: index % 2 === 0 ? "blur" : "hidden",
+            })),
+            status: "completed",
+        }));
+        const requestedStudentCount = Number(
+            window.localStorage.getItem("omr_away_severity_student_count") || "1",
+        );
+        const studentAttempt = attempts.find(attempt => attempt.id === `away-severity-${requestedStudentCount}`)
+            || attempts[0];
+        const studentSession = {
+            studentId: studentAttempt.studentId,
+            loginId: studentAttempt.studentId,
+            name: studentAttempt.studentName,
+            isGuest: false,
+            identityType: "temporary",
+            createdAt: "2026-07-28T00:00:00.000Z",
+        };
+
+        window.localStorage.setItem(`omr_exam_${exam.id}`, JSON.stringify(exam));
+        window.localStorage.setItem("omr_attempts", JSON.stringify(attempts));
+        window.localStorage.setItem("omr_student_session_backup", JSON.stringify(studentSession));
+        window.sessionStorage.setItem("omr_student_session", JSON.stringify(studentSession));
+    });
+}
+
 test("opens one student result hub and preserves the selected view across attempts", async ({ page, baseURL }) => {
     await authenticateTeacher(page, baseURL);
     await seedStudentResultHub(page);
@@ -263,6 +339,163 @@ test.describe("Create page label memory", () => {
         await authenticateTeacher(page, baseURL);
     });
 
+    const revealAnswerImportTrigger = async (page: Page) => {
+        const trigger = page.getByRole("button", { name: "정답 인식 마법사 열기" });
+        if (!await trigger.isVisible()) {
+            await page.getByRole("tab", { name: /^설정/ }).click();
+        }
+        await expect(trigger).toBeVisible();
+        return trigger;
+    };
+
+    test("keyboard upload buttons activate problem and answer-key PDF inputs", async ({ page }) => {
+        await page.goto("/create");
+        const fixturePath = path.join(process.cwd(), "e2e/fixtures/sample-problem.pdf");
+        const uploadToolbar = page.getByRole("toolbar", { name: "출제 도구 모음" });
+        const problemUpload = uploadToolbar.getByRole("button", { name: "문제지 PDF 업로드" });
+        const answerUpload = uploadToolbar.getByRole("button", { name: "답지 PDF 업로드" });
+        const problemInput = page.locator("#pdf-upload-input");
+        const answerInput = page.locator("#answer-key-pdf-upload-input");
+
+        for (const input of [problemInput, answerInput]) {
+            await input.evaluate(element => {
+                element.addEventListener("click", () => {
+                    const current = Number(element.getAttribute("data-keyboard-activations") || "0");
+                    element.setAttribute("data-keyboard-activations", String(current + 1));
+                });
+            });
+        }
+
+        await problemUpload.focus();
+        await expect(problemUpload).toBeFocused();
+        await page.keyboard.press("Enter");
+        await expect(problemInput).toHaveAttribute("data-keyboard-activations", "1");
+        await problemInput.setInputFiles(fixturePath);
+        await expect(page.getByText("문제지 PDF 업로드됨", { exact: true })).toBeVisible();
+
+        await answerUpload.focus();
+        await expect(answerUpload).toBeFocused();
+        await page.keyboard.press("Space");
+        await expect(answerInput).toHaveAttribute("data-keyboard-activations", "1");
+        await answerInput.setInputFiles(fixturePath);
+        await expect(page.getByText("답지 PDF 업로드됨", { exact: true })).toBeVisible();
+    });
+
+    test("keyboard upload in the answer import modal opens a file chooser and shows the selected PDF", async ({ page }) => {
+        await page.goto("/create");
+        const fixturePath = path.join(process.cwd(), "e2e/fixtures/sample-problem.pdf");
+        await (await revealAnswerImportTrigger(page)).click();
+
+        const dialog = page.getByRole("dialog", { name: "정답 PDF 불러오기" });
+        await expect(dialog).toBeVisible();
+        const upload = dialog.getByRole("button", { name: "정답 PDF 업로드" });
+        await upload.focus();
+        await expect(upload).toBeFocused();
+
+        const [chooser] = await Promise.all([
+            page.waitForEvent("filechooser"),
+            // Keep the interaction keyboard-only while binding it to the
+            // asserted control so a dialog re-render cannot move page focus
+            // between the focus check and the key dispatch.
+            upload.press("Enter"),
+        ]);
+        await chooser.setFiles(fixturePath);
+
+        await expect(dialog.getByText("sample-problem.pdf", { exact: true })).toBeVisible();
+    });
+
+    test("dialog focus wraps and returns to the answer import trigger", async ({ page }) => {
+        await page.goto("/create");
+        const trigger = await revealAnswerImportTrigger(page);
+        await trigger.focus();
+        await trigger.press("Enter");
+
+        const dialog = page.getByRole("dialog", { name: "정답 PDF 불러오기" });
+        const firstControl = dialog.getByRole("button", { name: "정답 PDF 모달 닫기" });
+        const lastEnabledControl = dialog.getByRole("button", { name: "취소" });
+        await expect(dialog).toBeVisible();
+        await expect(firstControl).toBeFocused();
+
+        const negativeTabStop = dialog.locator('[data-negative-tab-stop="true"]');
+        await dialog.evaluate(element => {
+            const excludedButton = document.createElement("button");
+            excludedButton.textContent = "포커스 제외";
+            excludedButton.tabIndex = -1;
+            excludedButton.dataset.negativeTabStop = "true";
+            element.append(excludedButton);
+        });
+        await page.keyboard.press("Shift+Tab");
+        await expect(lastEnabledControl).toBeFocused();
+        await expect(negativeTabStop).not.toBeFocused();
+        await page.keyboard.press("Tab");
+        await expect(firstControl).toBeFocused();
+
+        await page.keyboard.press("Escape");
+        await expect(dialog).not.toBeVisible();
+        await expect(trigger).toBeFocused();
+    });
+
+    test("dialog focus contains handled keys while ordinary keys still bubble", async ({ page }) => {
+        await page.goto("/create");
+        await (await revealAnswerImportTrigger(page)).click();
+
+        const dialog = page.getByRole("dialog", { name: "정답 PDF 불러오기" });
+        const firstControl = dialog.getByRole("button", { name: "정답 PDF 모달 닫기" });
+        await expect(firstControl).toBeFocused();
+        await dialog.evaluate(element => {
+            const parent = element.parentElement;
+            if (!parent) throw new Error("Dialog parent is required");
+            parent.addEventListener("keydown", event => {
+                const key = event.key === "Tab"
+                    ? "tab"
+                    : event.key === "Escape"
+                        ? "escape"
+                        : event.key === "ArrowDown"
+                            ? "arrow"
+                            : "other";
+                const current = Number(document.body.dataset[`${key}Bubbles`] || "0");
+                document.body.dataset[`${key}Bubbles`] = String(current + 1);
+            });
+        });
+
+        await page.keyboard.press("Shift+Tab");
+        await expect.poll(() => page.locator("body").getAttribute("data-tab-bubbles")).toBeNull();
+
+        await page.keyboard.press("ArrowDown");
+        await expect(page.locator("body")).toHaveAttribute("data-arrow-bubbles", "1");
+
+        await page.keyboard.press("Escape");
+        await expect(dialog).not.toBeVisible();
+        await expect.poll(() => page.locator("body").getAttribute("data-escape-bubbles")).toBeNull();
+    });
+
+    test("dialog focus wraps and returns to the create settings trigger", async ({ page }) => {
+        await page.goto("/create");
+        if (!await page.getByLabel("빠른 정답 입력").isVisible()) {
+            await page.getByRole("tab", { name: /^설정/ }).click();
+        }
+        await page.getByLabel("빠른 정답 입력").fill("5");
+
+        const trigger = page.getByRole("button", { name: "4지선다", exact: true });
+        await trigger.focus();
+        await trigger.press("Enter");
+
+        const dialog = page.getByRole("dialog", { name: "4지선다로 변경" });
+        const firstControl = dialog.getByRole("button", { name: "유지" });
+        const lastControl = dialog.getByRole("button", { name: "변경" });
+        await expect(dialog).toBeVisible();
+        await expect(firstControl).toBeFocused();
+
+        await page.keyboard.press("Shift+Tab");
+        await expect(lastControl).toBeFocused();
+        await page.keyboard.press("Tab");
+        await expect(firstControl).toBeFocused();
+
+        await page.keyboard.press("Escape");
+        await expect(dialog).not.toBeVisible();
+        await expect(trigger).toBeFocused();
+    });
+
     test("remembers label presets and lets teachers hide stale candidates", async ({ page }) => {
         await page.goto("/create");
 
@@ -304,12 +537,12 @@ test.describe("Create page label memory", () => {
 
         const input = page.getByLabel("문항 수 직접 입력");
         const presetButtons = page.locator(".create-count-buttons .btn");
-        await expect(presetButtons).toHaveCount(5);
-        for (let index = 0; index < 5; index += 1) {
+        await expect(presetButtons).toHaveCount(6);
+        for (let index = 0; index < 6; index += 1) {
             const box = await presetButtons.nth(index).boundingBox();
             expect(box?.height).toBeLessThanOrEqual(36);
         }
-        const lastPresetBox = await presetButtons.nth(4).boundingBox();
+        const lastPresetBox = await presetButtons.nth(5).boundingBox();
         const inputBox = await input.boundingBox();
         expect(lastPresetBox).not.toBeNull();
         expect(inputBox).not.toBeNull();
@@ -363,6 +596,9 @@ test.describe("Create page label memory", () => {
         await page.goto("/create");
 
         const input = page.getByLabel("문항 수 직접 입력");
+        if (!await input.isVisible()) {
+            await page.getByRole("tab", { name: /^설정/ }).click();
+        }
         await input.fill("45");
         await input.press("Enter");
         await expect(input).toHaveValue("45");
@@ -403,7 +639,7 @@ test.describe("Create page label memory", () => {
 
 test.describe("Live Results page", () => {
     test.beforeEach(async ({ page, baseURL }) => {
-        await authenticateTeacher(page, baseURL);
+        await authenticateTeacher(page, baseURL, MOCKUP_TEACHER_IDENTITY);
     });
 
     test("renders timer, stat tiles, students grid, heatmap", async ({ page }) => {
@@ -424,14 +660,91 @@ test.describe("Live Results page", () => {
         await pauseBtn.click();
         await expect(page.getByRole("button", { name: "재개" })).toBeVisible();
     });
+
+    test("away severity stays factual and escalates from neutral to attention", async ({ page }) => {
+        await seedAwaySeverityAttempts(page);
+        await page.goto("/teacher/live");
+
+        const liveAway = page.locator("[data-away-severity]");
+        await expect(liveAway).toHaveCount(3);
+        for (const count of [1, 2]) {
+            await expect(liveAway.filter({ hasText: `화면 이탈 ${count}회` })).toHaveAttribute(
+                "data-away-severity",
+                "neutral",
+            );
+        }
+        await expect(liveAway.filter({ hasText: "화면 이탈 3회" })).toHaveAttribute(
+            "data-away-severity",
+            "attention",
+        );
+        const liveTones = await liveAway.evaluateAll(elements => elements.map(element => {
+            const styles = getComputedStyle(element);
+            return {
+                severity: element.getAttribute("data-away-severity"),
+                backgroundColor: styles.backgroundColor,
+                color: styles.color,
+            };
+        }));
+        expect(liveTones.filter(tone => tone.severity === "neutral")).toEqual([
+            {
+                severity: "neutral",
+                backgroundColor: "rgb(241, 245, 249)",
+                color: "rgb(71, 85, 105)",
+            },
+            {
+                severity: "neutral",
+                backgroundColor: "rgb(241, 245, 249)",
+                color: "rgb(71, 85, 105)",
+            },
+        ]);
+        expect(liveTones.filter(tone => tone.severity === "attention")).toEqual([{
+            severity: "attention",
+            backgroundColor: "rgb(254, 243, 199)",
+            color: "rgb(146, 64, 14)",
+        }]);
+
+        for (const count of [1, 2, 3]) {
+            await page.goto(`/teacher/attempt/away-severity-${count}`);
+            const detailAway = page.getByText(`화면 이탈 ${count}회`, { exact: true });
+            await expect(detailAway).toHaveAttribute(
+                "data-away-severity",
+                count >= 3 ? "attention" : "neutral",
+            );
+            await expect(page.getByText(/부정행위|cheating/i)).toHaveCount(0);
+        }
+
+        await page.goto("/teacher/exam/away-severity-exam");
+        const examDetailAway = page.locator("[data-away-severity]");
+        await expect(examDetailAway).toHaveCount(3);
+        for (const count of [1, 2]) {
+            await expect(examDetailAway.filter({ hasText: `화면 이탈 ${count}회` })).toHaveAttribute(
+                "data-away-severity",
+                "neutral",
+            );
+        }
+        await expect(examDetailAway.filter({ hasText: "화면 이탈 3회" })).toHaveAttribute(
+            "data-away-severity",
+            "attention",
+        );
+
+        for (const count of [1, 2, 3]) {
+            await page.evaluate(value => {
+                window.localStorage.setItem("omr_away_severity_student_count", String(value));
+            }, count);
+            await page.goto(`/student/review/away-severity-${count}`);
+            const studentAway = page.getByText(`시험 중 화면을 벗어난 기록 ${count}회`, { exact: true });
+            await expect(studentAway).toHaveAttribute(
+                "data-away-severity",
+                count >= 3 ? "attention" : "neutral",
+            );
+            await expect(page.getByText(/부정행위|cheating/i)).toHaveCount(0);
+        }
+    });
 });
 
 test.describe("Manage Users page", () => {
-    test.beforeEach(async ({ page, baseURL }) => {
-        await authenticateTeacher(page, baseURL);
-    });
-
-    test("renders tabs and student table with mock data", async ({ page }) => {
+    test("renders tabs and student table with mock data", async ({ page, baseURL }) => {
+        await authenticateTeacher(page, baseURL, MOCKUP_TEACHER_IDENTITY);
         await page.goto("/teacher/users");
         await expect(page.getByRole("heading", { name: "사용자 관리" })).toBeVisible();
         // Wait for hydration (table rows seed from localStorage on mount)
@@ -439,7 +752,8 @@ test.describe("Manage Users page", () => {
         await expect.poll(() => rows.count(), { timeout: 5000 }).toBeGreaterThan(0);
     });
 
-    test("bulk selection banner appears after checking boxes", async ({ page }) => {
+    test("bulk selection banner appears after checking boxes", async ({ page, baseURL }) => {
+        await authenticateTeacher(page, baseURL);
         await seedStoredRoster(page);
         await page.goto("/teacher/users");
         const firstBox = page.locator('tbody input[type="checkbox"]').first();
@@ -447,19 +761,22 @@ test.describe("Manage Users page", () => {
         await expect(page.getByText(/\d+명 선택됨/)).toBeVisible();
     });
 
-    test("demo roster keeps bulk selection locked", async ({ page }) => {
+    test("demo roster keeps bulk selection locked", async ({ page, baseURL }) => {
+        await authenticateTeacher(page, baseURL, MOCKUP_TEACHER_IDENTITY);
         await page.goto("/teacher/users");
         const firstBox = page.locator('tbody input[type="checkbox"]').first();
         await expect(firstBox).toBeDisabled();
     });
 
-    test("switching to groups tab shows group cards", async ({ page }) => {
+    test("switching to groups tab shows group cards", async ({ page, baseURL }) => {
+        await authenticateTeacher(page, baseURL);
         await page.goto("/teacher/users");
         await page.getByRole("button", { name: /반 · 그룹/ }).click();
         await expect(page.getByRole("button", { name: "새 반 만들기" }).first()).toBeVisible();
     });
 
-    test("teacher can create, edit, and delete an empty group", async ({ page }) => {
+    test("teacher can create, edit, and delete an empty group", async ({ page, baseURL }) => {
+        await authenticateTeacher(page, baseURL);
         await page.goto("/teacher/users?tab=groups");
 
         await page.getByRole("button", { name: "새 반 만들기" }).first().click();
@@ -489,7 +806,12 @@ test.describe("Manage Users page", () => {
         await expect(page.getByRole("heading", { name: "E2E 편집반" })).not.toBeVisible();
     });
 
-    test("issued student start code gates the student portal login", async ({ page }) => {
+    test("issued student start code gates the student portal login", async ({ page, baseURL }, testInfo) => {
+        test.skip(
+            testInfo.project.name.startsWith("prod-"),
+            "Production refuses the suite's no-database local credential fallback.",
+        );
+        await authenticateTeacher(page, baseURL);
         await seedStoredRoster(page);
         await page.goto("/teacher/users");
 
@@ -584,7 +906,8 @@ test.describe("Settings page", () => {
         await page.getByRole("button", { name: "보안", exact: true }).click();
         await expect(page.getByText("배포 로그인 진단")).toBeVisible();
         await expect(page.getByText("교사 계정 환경변수")).toBeVisible();
-        await expect(page.getByText("Supabase 클라이언트 동기화")).toBeVisible();
+        await expect(page.getByText("브라우저 데이터 경계")).toBeVisible();
+        await expect(page.getByText("Supabase 서버 게이트웨이")).toBeVisible();
         await expect(page.getByRole("button", { name: "배포 로그인 진단 새로고침" })).toBeVisible();
     });
 
@@ -598,16 +921,20 @@ test.describe("Settings page", () => {
 
 test.describe("Billing page", () => {
     test.beforeEach(async ({ page, baseURL }) => {
-        await authenticateTeacher(page, baseURL);
+        await authenticateTeacher(page, baseURL, BILLING_TEACHER_IDENTITY);
     });
 
     test("shows current plan hero + usage + plan grid + invoices", async ({ page }) => {
         await page.goto("/teacher/billing");
         await expect(page.getByRole("heading", { name: "결제 및 플랜" })).toBeVisible();
-        await expect(page.getByText("CURRENT PLAN")).toBeVisible();
+        await expect(page.getByText("개발 플랜 시뮬레이션", { exact: true })).toBeVisible();
+        await expect(page.getByText("SIMULATED PLAN", { exact: true })).toBeVisible();
+        await expect(
+            page.locator(".billing-current-plan-card").getByRole("heading", { name: "Free", exact: true }),
+        ).toBeVisible();
         await expect(page.getByRole("heading", { name: "이달 사용량" })).toBeVisible();
         await expect(page.getByRole("heading", { name: "플랜 비교" })).toBeVisible();
-        await expect(page.getByRole("heading", { name: "결제/플랜 기록" })).toBeVisible();
+        await expect(page.getByRole("heading", { name: "로컬 플랜 변경 기록" })).toBeVisible();
     });
 
     test("monthly/yearly toggle changes prices", async ({ page }) => {

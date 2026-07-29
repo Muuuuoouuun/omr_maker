@@ -1,11 +1,293 @@
 \set ON_ERROR_STOP on
 
-grant usage on schema public to anon, authenticated, service_role;
-grant select, insert, update, delete on all tables in schema public to anon, authenticated;
-grant select, insert, update, delete on all tables in schema public to service_role;
+-- Created after the production profile under the single migration owner. Its
+-- effective grants prove future public functions inherit the intended defaults.
+create or replace function public.omr_default_acl_probe_v1()
+returns text
+language sql
+set search_path = ''
+as $$
+    select 'server-only'::text
+$$;
 
 do $$
 begin
+    if not exists (
+        select 1
+          from pg_default_acl default_acl
+         where default_acl.defaclrole = 'postgres'::regrole
+           and default_acl.defaclnamespace = 0
+           and default_acl.defaclobjtype = 'f'
+    ) or exists (
+        select 1
+          from pg_default_acl default_acl
+          cross join lateral aclexplode(default_acl.defaclacl) privilege
+         where default_acl.defaclrole = 'postgres'::regrole
+           and default_acl.defaclnamespace = 0
+           and default_acl.defaclobjtype = 'f'
+           and privilege.grantee = 0
+           and privilege.privilege_type = 'EXECUTE'
+    ) then
+        raise exception 'pg_default_acl retained PUBLIC function execute';
+    end if;
+
+    if not exists (
+        select 1
+          from pg_default_acl default_acl
+          cross join lateral aclexplode(default_acl.defaclacl) privilege
+         where default_acl.defaclrole = 'postgres'::regrole
+           and default_acl.defaclnamespace = 'public'::regnamespace
+           and default_acl.defaclobjtype = 'f'
+           and privilege.grantee = 'service_role'::regrole
+           and privilege.privilege_type = 'EXECUTE'
+    ) then
+        raise exception 'pg_default_acl lost service_role public function execute';
+    end if;
+
+    if not exists (
+        select 1
+          from pg_default_acl default_acl
+          cross join lateral aclexplode(default_acl.defaclacl) privilege
+         where default_acl.defaclrole = 'postgres'::regrole
+           and default_acl.defaclnamespace = 'public'::regnamespace
+           and default_acl.defaclobjtype = 'r'
+           and privilege.grantee = 'service_role'::regrole
+           and privilege.privilege_type = 'INSERT'
+    ) or not exists (
+        select 1
+          from pg_default_acl default_acl
+          cross join lateral aclexplode(default_acl.defaclacl) privilege
+         where default_acl.defaclrole = 'postgres'::regrole
+           and default_acl.defaclnamespace = 'public'::regnamespace
+           and default_acl.defaclobjtype = 'S'
+           and privilege.grantee = 'service_role'::regrole
+           and privilege.privilege_type = 'USAGE'
+    ) then
+        raise exception 'pg_default_acl lost service_role public table or sequence privilege';
+    end if;
+
+    if exists (
+        select 1
+          from pg_default_acl default_acl
+          cross join lateral aclexplode(default_acl.defaclacl) privilege
+         where default_acl.defaclrole = 'postgres'::regrole
+           and default_acl.defaclnamespace = 'public'::regnamespace
+           and privilege.grantee in ('anon'::regrole, 'authenticated'::regrole)
+    ) then
+        raise exception 'pg_default_acl granted a public object privilege to a browser role';
+    end if;
+
+    if has_function_privilege(
+        'anon',
+        'public.omr_default_acl_probe_v1()',
+        'EXECUTE'
+    ) or has_function_privilege(
+        'authenticated',
+        'public.omr_default_acl_probe_v1()',
+        'EXECUTE'
+    ) then
+        raise exception 'browser role executed a default-ACL probe function';
+    end if;
+    if not has_function_privilege(
+        'service_role',
+        'public.omr_default_acl_probe_v1()',
+        'EXECUTE'
+    ) then
+        raise exception 'service_role could not execute the default-ACL probe function';
+    end if;
+
+    if has_schema_privilege('anon', 'public', 'usage')
+        or has_schema_privilege('authenticated', 'public', 'usage')
+    then
+        raise exception 'browser roles unexpectedly retain public schema usage';
+    end if;
+    if not has_schema_privilege('service_role', 'public', 'usage') then
+        raise exception 'service_role lost public schema usage';
+    end if;
+
+    if exists (
+        select 1
+          from pg_class relation
+          join pg_namespace namespace on namespace.oid = relation.relnamespace
+         where namespace.nspname = 'public'
+           and relation.relkind in ('r', 'p')
+           and relation.relname like 'omr\_%' escape '\'
+           and (
+               has_table_privilege('anon', relation.oid, 'SELECT')
+               or has_table_privilege('anon', relation.oid, 'INSERT')
+               or has_table_privilege('anon', relation.oid, 'UPDATE')
+               or has_table_privilege('anon', relation.oid, 'DELETE')
+               or has_table_privilege('authenticated', relation.oid, 'SELECT')
+               or has_table_privilege('authenticated', relation.oid, 'INSERT')
+               or has_table_privilege('authenticated', relation.oid, 'UPDATE')
+               or has_table_privilege('authenticated', relation.oid, 'DELETE')
+           )
+    ) then
+        raise exception 'browser roles unexpectedly retain an OMR table privilege';
+    end if;
+
+    if exists (
+        select 1
+          from pg_class relation
+          join pg_namespace namespace on namespace.oid = relation.relnamespace
+         where namespace.nspname = 'public'
+           and relation.relkind in ('r', 'p')
+           and relation.relname like 'omr\_%' escape '\'
+           and (
+               not has_table_privilege('service_role', relation.oid, 'SELECT')
+               or not has_table_privilege('service_role', relation.oid, 'INSERT')
+               or not has_table_privilege('service_role', relation.oid, 'UPDATE')
+               or not has_table_privilege('service_role', relation.oid, 'DELETE')
+           )
+    ) then
+        raise exception 'service_role lost an OMR table privilege';
+    end if;
+
+    if exists (
+        select 1
+          from pg_class relation
+          join pg_namespace namespace on namespace.oid = relation.relnamespace
+         where namespace.nspname = 'public'
+           and relation.relkind = 'S'
+           and (
+               has_sequence_privilege('anon', relation.oid, 'USAGE')
+               or has_sequence_privilege('anon', relation.oid, 'SELECT')
+               or has_sequence_privilege('anon', relation.oid, 'UPDATE')
+               or has_sequence_privilege('authenticated', relation.oid, 'USAGE')
+               or has_sequence_privilege('authenticated', relation.oid, 'SELECT')
+               or has_sequence_privilege('authenticated', relation.oid, 'UPDATE')
+           )
+    ) then
+        raise exception 'browser roles unexpectedly retain an OMR sequence privilege';
+    end if;
+
+    if exists (
+        select 1
+          from pg_proc routine
+          join pg_namespace namespace on namespace.oid = routine.pronamespace
+         where namespace.nspname = 'public'
+           and (
+               has_function_privilege('anon', routine.oid, 'EXECUTE')
+               or has_function_privilege('authenticated', routine.oid, 'EXECUTE')
+           )
+    ) then
+        raise exception 'browser roles unexpectedly retain a public function privilege';
+    end if;
+
+    if exists (
+        select 1
+          from pg_proc routine
+          join pg_namespace namespace on namespace.oid = routine.pronamespace
+         where namespace.nspname = 'public'
+           and not has_function_privilege('service_role', routine.oid, 'EXECUTE')
+    ) then
+        raise exception 'service_role lost a public function execute privilege';
+    end if;
+
+    if exists (
+        select 1
+          from pg_policies policy
+         where policy.schemaname = 'public'
+           and policy.tablename like 'omr\_%' escape '\'
+    ) then
+        raise exception 'production server boundary left an alpha or browser policy';
+    end if;
+
+    if exists (
+        select 1
+          from pg_class relation
+          join pg_namespace namespace on namespace.oid = relation.relnamespace
+         where namespace.nspname = 'public'
+           and relation.relkind in ('r', 'p')
+           and relation.relname like 'omr\_%' escape '\'
+           and (not relation.relrowsecurity or not relation.relforcerowsecurity)
+    ) then
+        raise exception 'production server boundary must ENABLE and FORCE RLS on every OMR table';
+    end if;
+
+    if to_regclass('storage.objects') is null
+        or to_regclass('storage.buckets') is null
+    then
+        raise exception 'live production boundary requires Storage relation fixtures';
+    end if;
+    if (
+        select count(*)
+          from pg_class relation
+          join pg_namespace namespace on namespace.oid = relation.relnamespace
+         where namespace.nspname = 'storage'
+           and relation.relname in ('objects', 'buckets')
+           and relation.relowner = 'supabase_storage_admin'::regrole
+    ) <> 2 then
+        raise exception 'Storage relation owner drifted from supabase_storage_admin';
+    end if;
+    if not exists (
+        select 1
+          from pg_roles
+         where rolname = 'service_role'
+           and rolbypassrls
+    ) then
+        raise exception 'service_role lost Storage RLS bypass';
+    end if;
+
+    if (
+        select count(*)
+          from pg_policies policy
+         where policy.schemaname = 'storage'
+           and (
+               (
+                   policy.tablename = 'objects'
+                   and policy.policyname = 'OMR private assets server-only objects'
+                   and policy.qual = '(bucket_id <> ''omr-private-assets''::text)'
+                   and policy.with_check = '(bucket_id <> ''omr-private-assets''::text)'
+               )
+               or (
+                   policy.tablename = 'buckets'
+                   and policy.policyname = 'OMR private assets server-only buckets'
+                   and policy.qual = '(id <> ''omr-private-assets''::text)'
+                   and policy.with_check = '(id <> ''omr-private-assets''::text)'
+               )
+           )
+           and policy.permissive = 'RESTRICTIVE'
+           and policy.cmd = 'ALL'
+           and policy.roles @> array['anon', 'authenticated']::name[]
+           and policy.roles <@ array['anon', 'authenticated']::name[]
+           and cardinality(policy.roles) = 2
+    ) <> 2 then
+        raise exception 'OMR restrictive Storage policy contract mismatch';
+    end if;
+    if exists (
+        select 1
+          from pg_policies policy
+         where policy.schemaname = 'storage'
+           and policy.policyname = 'OMR private assets alpha access'
+    ) then
+        raise exception 'production server boundary left the alpha OMR Storage policy';
+    end if;
+    if (
+        select count(*)
+          from pg_policies policy
+         where policy.schemaname = 'storage'
+           and (
+               (
+                   policy.tablename = 'objects'
+                   and policy.policyname = 'Third-party browser object access'
+               )
+               or (
+                   policy.tablename = 'buckets'
+                   and policy.policyname = 'Third-party browser bucket access'
+               )
+           )
+           and policy.permissive = 'PERMISSIVE'
+           and policy.cmd = 'ALL'
+           and policy.qual = 'true'
+           and policy.with_check = 'true'
+           and policy.roles @> array['anon', 'authenticated']::name[]
+           and policy.roles <@ array['anon', 'authenticated']::name[]
+           and cardinality(policy.roles) = 2
+    ) <> 2 then
+        raise exception 'unrelated third-party Storage policy was changed';
+    end if;
+
     if not exists (
         select 1
           from pg_class relation
@@ -36,6 +318,22 @@ begin
 end
 $$;
 
+set role service_role;
+
+insert into storage.buckets (id, name, public)
+values ('third-party-browser-assets', 'third-party-browser-assets', false)
+on conflict (id) do update
+set name = excluded.name,
+    public = excluded.public;
+
+insert into storage.objects (bucket_id, name)
+values
+    ('omr-private-assets', 'target-browser-denial-seed'),
+    ('third-party-browser-assets', 'third-party-visible-seed')
+on conflict (bucket_id, name) do nothing;
+
+reset role;
+
 insert into public.omr_organizations (id, name) values
     ('live-org-a', 'Live Org A'),
     ('live-org-b', 'Live Org B');
@@ -53,41 +351,119 @@ insert into public.omr_exams (
     ('live-exam-b', 'live-org-b', 'Org B Exam', '{"id":"live-exam-b","title":"Org B Exam","questions":[],"createdAt":"2026-07-14T00:00:00.000Z"}', now(), now());
 
 set role authenticated;
-select set_config('request.jwt.claim.sub', '11111111-1111-4111-8111-111111111111', false);
 
 do $$
 declare
-    visible_exam_count integer;
+    affected_rows integer;
+    probe_name text;
 begin
-    select count(*) into visible_exam_count from public.omr_exams;
-    if visible_exam_count <> 1 then
-        raise exception 'teacher A must see exactly one organization exam, saw %', visible_exam_count;
-    end if;
-end
-$$;
-
-insert into public.omr_exams (
-    id, organization_id, title, payload, created_at, updated_at
-) values (
-    'live-exam-a-created', 'live-org-a', 'Teacher A Exam',
-    '{"id":"live-exam-a-created","title":"Teacher A Exam","questions":[],"createdAt":"2026-07-14T00:00:00.000Z"}',
-    now(), now()
-);
-
-do $$
-begin
+    begin
+        perform 1 from public.omr_exams;
+        raise exception 'authenticated SELECT unexpectedly reached canonical tables';
+    exception when insufficient_privilege then null;
+    end;
     begin
         insert into public.omr_exams (
             id, organization_id, title, payload, created_at, updated_at
         ) values (
-            'live-cross-org-write', 'live-org-b', 'Forbidden',
-            '{"id":"live-cross-org-write","title":"Forbidden","questions":[],"createdAt":"2026-07-14T00:00:00.000Z"}',
-            now(), now()
+            'live-auth-forbidden', 'live-org-a', 'Forbidden', '{}', now(), now()
         );
-        raise exception 'cross-organization insert unexpectedly succeeded';
-    exception
-        when insufficient_privilege then null;
+        raise exception 'authenticated INSERT unexpectedly reached canonical tables';
+    exception when insufficient_privilege then null;
     end;
+    begin
+        update public.omr_exams set title = title where id = 'live-exam-a';
+        raise exception 'authenticated UPDATE unexpectedly reached canonical tables';
+    exception when insufficient_privilege then null;
+    end;
+    begin
+        delete from public.omr_exams where id = 'live-exam-a';
+        raise exception 'authenticated DELETE unexpectedly reached canonical tables';
+    exception when insufficient_privilege then null;
+    end;
+    begin
+        perform public.omr_default_acl_probe_v1();
+        raise exception 'browser role executed a default-ACL probe function';
+    exception when insufficient_privilege then null;
+    end;
+    if exists (
+        select 1
+          from storage.objects
+         where bucket_id = 'omr-private-assets'
+    ) or exists (
+        select 1
+          from storage.buckets
+         where id = 'omr-private-assets'
+    ) then
+        raise exception 'authenticated target Storage SELECT unexpectedly succeeded';
+    end if;
+    begin
+        insert into storage.objects (bucket_id, name)
+        values ('omr-private-assets', 'authenticated-forbidden');
+        raise exception 'authenticated target Storage INSERT unexpectedly succeeded';
+    exception when insufficient_privilege then null;
+    end;
+    begin
+        insert into storage.buckets (id, name, public)
+        values ('omr-private-assets', 'authenticated-forbidden', false);
+        raise exception 'authenticated target Storage bucket INSERT unexpectedly succeeded';
+    exception when insufficient_privilege then null;
+    end;
+
+    update storage.objects
+       set name = name
+     where bucket_id = 'omr-private-assets';
+    get diagnostics affected_rows = row_count;
+    if affected_rows <> 0 then
+        raise exception 'authenticated target Storage UPDATE unexpectedly succeeded';
+    end if;
+    delete from storage.objects
+     where bucket_id = 'omr-private-assets';
+    get diagnostics affected_rows = row_count;
+    if affected_rows <> 0 then
+        raise exception 'authenticated target Storage DELETE unexpectedly succeeded';
+    end if;
+    update storage.buckets
+       set name = name
+     where id = 'omr-private-assets';
+    get diagnostics affected_rows = row_count;
+    if affected_rows <> 0 then
+        raise exception 'authenticated target Storage bucket UPDATE unexpectedly succeeded';
+    end if;
+    delete from storage.buckets where id = 'omr-private-assets';
+    get diagnostics affected_rows = row_count;
+    if affected_rows <> 0 then
+        raise exception 'authenticated target Storage bucket DELETE unexpectedly succeeded';
+    end if;
+
+    if not exists (
+        select 1 from storage.buckets where id = 'third-party-browser-assets'
+    ) or not exists (
+        select 1
+          from storage.objects
+         where bucket_id = 'third-party-browser-assets'
+           and name = 'third-party-visible-seed'
+    ) then
+        raise exception 'other-bucket Storage policy no longer permits browser access';
+    end if;
+    insert into storage.objects (bucket_id, name)
+    values ('third-party-browser-assets', 'authenticated-other-bucket-probe')
+    returning name into probe_name;
+    update storage.objects
+       set name = 'authenticated-other-bucket-probe-updated'
+     where bucket_id = 'third-party-browser-assets'
+       and name = 'authenticated-other-bucket-probe'
+    returning name into probe_name;
+    if probe_name is distinct from 'authenticated-other-bucket-probe-updated' then
+        raise exception 'other-bucket Storage policy no longer permits browser access';
+    end if;
+    delete from storage.objects
+     where bucket_id = 'third-party-browser-assets'
+       and name = 'authenticated-other-bucket-probe-updated';
+    get diagnostics affected_rows = row_count;
+    if affected_rows <> 1 then
+        raise exception 'other-bucket Storage policy no longer permits browser access';
+    end if;
 end
 $$;
 
@@ -96,11 +472,162 @@ set role anon;
 
 do $$
 declare
-    visible_exam_count integer;
+    affected_rows integer;
+    probe_name text;
 begin
-    select count(*) into visible_exam_count from public.omr_exams;
-    if visible_exam_count <> 0 then
-        raise exception 'anonymous role must not read canonical exams, saw %', visible_exam_count;
+    begin
+        perform 1 from public.omr_exams;
+        raise exception 'anon SELECT unexpectedly reached canonical tables';
+    exception when insufficient_privilege then null;
+    end;
+    begin
+        insert into public.omr_exams (
+            id, organization_id, title, payload, created_at, updated_at
+        ) values (
+            'live-anon-forbidden', 'live-org-a', 'Forbidden', '{}', now(), now()
+        );
+        raise exception 'anon INSERT unexpectedly reached canonical tables';
+    exception when insufficient_privilege then null;
+    end;
+    begin
+        update public.omr_exams set title = title where id = 'live-exam-a';
+        raise exception 'anon UPDATE unexpectedly reached canonical tables';
+    exception when insufficient_privilege then null;
+    end;
+    begin
+        delete from public.omr_exams where id = 'live-exam-a';
+        raise exception 'anon DELETE unexpectedly reached canonical tables';
+    exception when insufficient_privilege then null;
+    end;
+    begin
+        perform public.omr_default_acl_probe_v1();
+        raise exception 'browser role executed a default-ACL probe function';
+    exception when insufficient_privilege then null;
+    end;
+    if exists (
+        select 1
+          from storage.objects
+         where bucket_id = 'omr-private-assets'
+    ) or exists (
+        select 1
+          from storage.buckets
+         where id = 'omr-private-assets'
+    ) then
+        raise exception 'anon target Storage SELECT unexpectedly succeeded';
+    end if;
+    begin
+        insert into storage.objects (bucket_id, name)
+        values ('omr-private-assets', 'anon-forbidden');
+        raise exception 'anon target Storage INSERT unexpectedly succeeded';
+    exception when insufficient_privilege then null;
+    end;
+    begin
+        insert into storage.buckets (id, name, public)
+        values ('omr-private-assets', 'anon-forbidden', false);
+        raise exception 'anon target Storage bucket INSERT unexpectedly succeeded';
+    exception when insufficient_privilege then null;
+    end;
+
+    update storage.objects
+       set name = name
+     where bucket_id = 'omr-private-assets';
+    get diagnostics affected_rows = row_count;
+    if affected_rows <> 0 then
+        raise exception 'anon target Storage UPDATE unexpectedly succeeded';
+    end if;
+    delete from storage.objects
+     where bucket_id = 'omr-private-assets';
+    get diagnostics affected_rows = row_count;
+    if affected_rows <> 0 then
+        raise exception 'anon target Storage DELETE unexpectedly succeeded';
+    end if;
+    update storage.buckets
+       set name = name
+     where id = 'omr-private-assets';
+    get diagnostics affected_rows = row_count;
+    if affected_rows <> 0 then
+        raise exception 'anon target Storage bucket UPDATE unexpectedly succeeded';
+    end if;
+    delete from storage.buckets where id = 'omr-private-assets';
+    get diagnostics affected_rows = row_count;
+    if affected_rows <> 0 then
+        raise exception 'anon target Storage bucket DELETE unexpectedly succeeded';
+    end if;
+
+    if not exists (
+        select 1 from storage.buckets where id = 'third-party-browser-assets'
+    ) or not exists (
+        select 1
+          from storage.objects
+         where bucket_id = 'third-party-browser-assets'
+           and name = 'third-party-visible-seed'
+    ) then
+        raise exception 'other-bucket Storage policy no longer permits browser access';
+    end if;
+    insert into storage.objects (bucket_id, name)
+    values ('third-party-browser-assets', 'anon-other-bucket-probe')
+    returning name into probe_name;
+    update storage.objects
+       set name = 'anon-other-bucket-probe-updated'
+     where bucket_id = 'third-party-browser-assets'
+       and name = 'anon-other-bucket-probe'
+    returning name into probe_name;
+    if probe_name is distinct from 'anon-other-bucket-probe-updated' then
+        raise exception 'other-bucket Storage policy no longer permits browser access';
+    end if;
+    delete from storage.objects
+     where bucket_id = 'third-party-browser-assets'
+       and name = 'anon-other-bucket-probe-updated';
+    get diagnostics affected_rows = row_count;
+    if affected_rows <> 1 then
+        raise exception 'other-bucket Storage policy no longer permits browser access';
+    end if;
+end
+$$;
+
+reset role;
+
+set role service_role;
+
+do $$
+declare
+    probe_name text;
+begin
+    if public.omr_default_acl_probe_v1() is distinct from 'server-only' then
+        raise exception 'service_role could not execute the default-ACL probe function';
+    end if;
+
+    insert into storage.objects (bucket_id, name)
+    values ('omr-private-assets', 'service-role-storage-probe')
+    returning name into probe_name;
+    if probe_name is distinct from 'service-role-storage-probe' then
+        raise exception 'service_role Storage CRUD probe failed';
+    end if;
+
+    select name
+      into probe_name
+      from storage.objects
+     where bucket_id = 'omr-private-assets'
+       and name = 'service-role-storage-probe';
+    if probe_name is distinct from 'service-role-storage-probe' then
+        raise exception 'service_role Storage CRUD probe failed';
+    end if;
+
+    update storage.objects
+       set name = 'service-role-storage-probe-updated'
+     where bucket_id = 'omr-private-assets'
+       and name = 'service-role-storage-probe'
+    returning name into probe_name;
+    if probe_name is distinct from 'service-role-storage-probe-updated' then
+        raise exception 'service_role Storage CRUD probe failed';
+    end if;
+
+    delete from storage.objects
+     where bucket_id = 'omr-private-assets'
+       and name = 'service-role-storage-probe-updated'
+    returning name into probe_name;
+    if probe_name is distinct from 'service-role-storage-probe-updated' then
+        raise exception 'service_role Storage CRUD probe failed';
     end if;
 end
 $$;
@@ -125,6 +652,14 @@ begin
     end if;
     if not has_function_privilege('service_role', 'public.omr_submit_session_attempt_v1(jsonb,jsonb)', 'execute') then
         raise exception 'service_role must have session attempt RPC execute privilege';
+    end if;
+    if has_function_privilege('anon', 'public.omr_claim_guest_attempts_v1(text,text,text,text,text,text,text[])', 'execute')
+        or has_function_privilege('authenticated', 'public.omr_claim_guest_attempts_v1(text,text,text,text,text,text,text[])', 'execute')
+    then
+        raise exception 'browser roles unexpectedly have guest claim RPC execute privilege';
+    end if;
+    if not has_function_privilege('service_role', 'public.omr_claim_guest_attempts_v1(text,text,text,text,text,text,text[])', 'execute') then
+        raise exception 'service_role must have guest claim RPC execute privilege';
     end if;
     if has_function_privilege('anon', 'public.omr_save_remote_asset_metadata_v1(jsonb)', 'execute')
         or has_function_privilege('authenticated', 'public.omr_save_remote_asset_metadata_v1(jsonb)', 'execute')
@@ -158,13 +693,23 @@ begin
     then
         raise exception 'browser roles unexpectedly have handwriting RPC execute privilege';
     end if;
-    if has_function_privilege('anon', 'public.omr_teacher_update_attempt_v1(text,jsonb,jsonb)', 'execute')
-        or has_function_privilege('authenticated', 'public.omr_teacher_update_attempt_v1(text,jsonb,jsonb)', 'execute')
-    then
-        raise exception 'browser roles unexpectedly have teacher attempt RPC execute privilege';
+    if pg_catalog.to_regprocedure('public.omr_teacher_update_attempt_v1(text,jsonb,jsonb)') is not null then
+        raise exception 'legacy broad teacher attempt RPC still exists';
     end if;
-    if not has_function_privilege('service_role', 'public.omr_teacher_update_attempt_v1(text,jsonb,jsonb)', 'execute') then
-        raise exception 'service_role must have teacher attempt RPC execute privilege';
+    if has_function_privilege('anon', 'public.omr_answer_attempt_question_v1(text,text,text,text,text,text,text)', 'execute')
+        or has_function_privilege('authenticated', 'public.omr_answer_attempt_question_v1(text,text,text,text,text,text,text)', 'execute')
+        or has_function_privilege('anon', 'public.omr_set_subquestion_review_v1(text,text,text,text,text,text,text)', 'execute')
+        or has_function_privilege('authenticated', 'public.omr_set_subquestion_review_v1(text,text,text,text,text,text,text)', 'execute')
+        or has_function_privilege('anon', 'public.omr_force_finish_attempts_v1(text,text[],timestamptz,text,text,text,jsonb)', 'execute')
+        or has_function_privilege('authenticated', 'public.omr_force_finish_attempts_v1(text,text[],timestamptz,text,text,text,jsonb)', 'execute')
+    then
+        raise exception 'browser roles unexpectedly have scoped teacher attempt RPC execute privilege';
+    end if;
+    if not has_function_privilege('service_role', 'public.omr_answer_attempt_question_v1(text,text,text,text,text,text,text)', 'execute')
+        or not has_function_privilege('service_role', 'public.omr_set_subquestion_review_v1(text,text,text,text,text,text,text)', 'execute')
+        or not has_function_privilege('service_role', 'public.omr_force_finish_attempts_v1(text,text[],timestamptz,text,text,text,jsonb)', 'execute')
+    then
+        raise exception 'service_role must have scoped teacher attempt RPC execute privilege';
     end if;
     if has_function_privilege('anon', 'public.omr_save_roster_v1(text,jsonb,jsonb,jsonb,jsonb)', 'execute')
         or has_function_privilege('authenticated', 'public.omr_save_roster_v1(text,jsonb,jsonb,jsonb,jsonb)', 'execute')
@@ -197,6 +742,18 @@ begin
     if not has_function_privilege('service_role', 'public.omr_service_readiness_v1()', 'execute') then
         raise exception 'service_role must have readiness RPC execute privilege';
     end if;
+    if has_function_privilege('anon', 'public.omr_production_boundary_preflight_v1()', 'execute')
+        or has_function_privilege('authenticated', 'public.omr_production_boundary_preflight_v1()', 'execute')
+        or has_function_privilege('anon', 'public.omr_assert_production_boundary_preflight_v1()', 'execute')
+        or has_function_privilege('authenticated', 'public.omr_assert_production_boundary_preflight_v1()', 'execute')
+    then
+        raise exception 'browser roles unexpectedly have production-boundary preflight execute privilege';
+    end if;
+    if not has_function_privilege('service_role', 'public.omr_production_boundary_preflight_v1()', 'execute')
+        or not has_function_privilege('service_role', 'public.omr_assert_production_boundary_preflight_v1()', 'execute')
+    then
+        raise exception 'service_role must have production-boundary preflight execute privilege';
+    end if;
 end
 $$;
 
@@ -223,6 +780,101 @@ begin
     end if;
 end
 $$;
+
+insert into public.omr_student_start_credentials (
+    organization_id, student_profile_id, start_code_hash
+) values (
+    'live-org-a', 'live-student-a',
+    'pbkdf2-sha256:10000:07070707070707070707070707070707:8de12bc47d04bf0f520b627acee8c21c74b064b9f30fc943efaf7b2788e45e94'
+);
+
+select public.omr_save_roster_v1(
+    'live-org-a',
+    '[{"id":"live-class-a","organization_id":"live-org-a","name":"A반","status":"active","metadata":{}}]',
+    '[]',
+    '[]',
+    '[{"id":"live-invite-a","organization_id":"live-org-a","email":"invite@example.com","sent_at":"2026-07-14T00:00:00.000Z","status":"pending"}]'
+);
+
+do $$
+begin
+    if exists (
+        select 1 from public.omr_student_start_credentials
+         where organization_id = 'live-org-a'
+           and student_profile_id = 'live-student-a'
+    ) then
+        raise exception 'issue-first serialized outcome retained a credential';
+    end if;
+end
+$$;
+
+do $$
+begin
+    begin
+        insert into public.omr_student_start_credentials (
+            organization_id, student_profile_id, start_code_hash
+        ) values (
+            'live-org-a', 'live-student-a',
+            'pbkdf2-sha256:10000:08080808080808080808080808080808:9df12bc47d04bf0f520b627acee8c21c74b064b9f30fc943efaf7b2788e45e95'
+        );
+        raise exception 'post-withdraw service-role credential mutation unexpectedly succeeded';
+    exception
+        when check_violation then null;
+    end;
+end
+$$;
+
+select public.omr_save_roster_v1(
+    'live-org-a',
+    '[{"id":"live-class-a","organization_id":"live-org-a","name":"A반","status":"active","metadata":{}}]',
+    '[{"id":"live-student-a","organization_id":"live-org-a","display_name":"학생 A 재등록","external_id":"A-001","status":"active","metadata":{}}]',
+    '[{"class_id":"live-class-a","organization_id":"live-org-a","student_profile_id":"live-student-a","enrollment_status":"active"}]',
+    '[{"id":"live-invite-a","organization_id":"live-org-a","email":"invite@example.com","sent_at":"2026-07-14T00:00:00.000Z","status":"pending"}]'
+);
+
+do $$
+begin
+    if exists (
+        select 1 from public.omr_student_start_credentials
+         where organization_id = 'live-org-a'
+           and student_profile_id = 'live-student-a'
+    ) then
+        raise exception 're-adding a deterministic student id resurrected the old start credential';
+    end if;
+end
+$$;
+
+select public.omr_save_roster_v1(
+    'live-org-a',
+    '[{"id":"live-class-a","organization_id":"live-org-a","name":"A반","status":"active","metadata":{}}]',
+    '[]',
+    '[]',
+    '[{"id":"live-invite-a","organization_id":"live-org-a","email":"invite@example.com","sent_at":"2026-07-14T00:00:00.000Z","status":"pending"}]'
+);
+
+do $$
+begin
+    begin
+        insert into public.omr_student_start_credentials (
+            organization_id, student_profile_id, start_code_hash
+        ) values (
+            'live-org-a', 'live-student-a',
+            'pbkdf2-sha256:10000:09090909090909090909090909090909:adf12bc47d04bf0f520b627acee8c21c74b064b9f30fc943efaf7b2788e45e96'
+        );
+        raise exception 'withdraw-first serialized outcome accepted a credential';
+    exception
+        when check_violation then null;
+    end;
+end
+$$;
+
+select public.omr_save_roster_v1(
+    'live-org-a',
+    '[{"id":"live-class-a","organization_id":"live-org-a","name":"A반","status":"active","metadata":{}}]',
+    '[{"id":"live-student-a","organization_id":"live-org-a","display_name":"학생 A 재등록","external_id":"A-001","status":"active","metadata":{}}]',
+    '[{"class_id":"live-class-a","organization_id":"live-org-a","student_profile_id":"live-student-a","enrollment_status":"active"}]',
+    '[{"id":"live-invite-a","organization_id":"live-org-a","email":"invite@example.com","sent_at":"2026-07-14T00:00:00.000Z","status":"pending"}]'
+);
 
 insert into public.omr_classes (id, organization_id, name) values
     ('live-class-b', 'live-org-b', 'B반');
@@ -259,6 +911,93 @@ begin
 end
 $$;
 
+insert into public.omr_attempts (
+    id, organization_id, exam_id, student_name, student_id, identity_type,
+    payload, started_at, finished_at
+) values (
+    'live-guest-attempt-a', 'live-org-a', 'live-exam-a', 'Guest A',
+    'guest:live-guest-a', 'guest',
+    '{
+        "id":"live-guest-attempt-a",
+        "guestId":"live-guest-a",
+        "studentId":"guest:live-guest-a",
+        "custom":{"preserved":true},
+        "questionResults":[{
+            "questionId":1,
+            "studentId":"guest:live-guest-a",
+            "status":"wrong",
+            "analytics":{"skill":"fraction"}
+        }]
+    }',
+    '2026-07-28T00:00:00.000Z', '2026-07-28T00:10:00.000Z'
+);
+
+insert into public.omr_question_results (
+    id, organization_id, attempt_id, exam_id, student_name, student_id,
+    identity_type, question_id, question_number, status, finished_at, payload
+) values (
+    'live-guest-attempt-a:1', 'live-org-a', 'live-guest-attempt-a',
+    'live-exam-a', 'Guest A', 'guest:live-guest-a', 'guest', 1, 1, 'wrong',
+    '2026-07-28T00:10:00.000Z',
+    '{"questionId":1,"studentId":"guest:live-guest-a","analytics":{"skill":"fraction"}}'
+);
+
+do $$
+declare
+    acknowledged text[];
+    attempt_payload jsonb;
+    result_payload jsonb;
+begin
+    select public.omr_claim_guest_attempts_v1(
+        'live-guest-a',
+        'live-student-a',
+        'live-org-a',
+        'live-class-a',
+        '학생 A',
+        'A반',
+        array['live-guest-attempt-a', 'live-local-only-a']
+    ) into acknowledged;
+
+    if acknowledged is distinct from array['live-guest-attempt-a']::text[] then
+        raise exception 'guest claim must ACK only canonical attempt ids, got %', acknowledged;
+    end if;
+
+    select payload into attempt_payload
+      from public.omr_attempts
+     where id = 'live-guest-attempt-a';
+    select payload into result_payload
+      from public.omr_question_results
+     where id = 'live-guest-attempt-a:1';
+
+    if attempt_payload->>'studentId' <> 'live-student-a'
+        or attempt_payload ? 'guestId'
+        or attempt_payload#>>'{questionResults,0,studentId}' <> 'live-student-a'
+        or attempt_payload#>>'{questionResults,0,analytics,skill}' <> 'fraction'
+        or attempt_payload#>>'{custom,preserved}' <> 'true'
+    then
+        raise exception 'guest claim did not preserve and rewrite nested attempt payload: %', attempt_payload;
+    end if;
+    if result_payload->>'studentId' <> 'live-student-a'
+        or result_payload#>>'{analytics,skill}' <> 'fraction'
+    then
+        raise exception 'guest claim did not preserve and rewrite result payload: %', result_payload;
+    end if;
+
+    select public.omr_claim_guest_attempts_v1(
+        'live-guest-a',
+        'live-student-a',
+        'live-org-a',
+        'live-class-a',
+        '학생 A',
+        'A반',
+        array['live-guest-attempt-a']
+    ) into acknowledged;
+    if acknowledged is distinct from array['live-guest-attempt-a']::text[] then
+        raise exception 'guest claim retry must remain idempotently acknowledged';
+    end if;
+end
+$$;
+
 update public.omr_student_profiles
    set user_id = '33333333-3333-4333-8333-333333333333'
  where id = 'live-student-a'
@@ -286,18 +1025,33 @@ select set_config('request.jwt.claim.sub', '33333333-3333-4333-8333-333333333333
 
 do $$
 begin
-    update public.omr_assignment_submissions
-       set score = 999,
-           status = 'graded'
-     where id = 'live-submission-a';
-    if found then
-        raise exception 'student unexpectedly mutated a canonical gradebook row';
-    end if;
+    begin
+        update public.omr_assignment_submissions
+           set score = 999,
+               status = 'submitted'
+         where id = 'live-submission-a';
+        raise exception 'authenticated assignment submission UPDATE unexpectedly succeeded';
+    exception when insufficient_privilege then null;
+    end;
 end
 $$;
 
 reset role;
 set role service_role;
+
+do $$
+begin
+    if not exists (
+        select 1
+          from public.omr_assignment_submissions
+         where id = 'live-submission-a'
+           and score = 1
+           and status = 'graded'
+    ) then
+        raise exception 'authenticated assignment submission denial mutated canonical gradebook row';
+    end if;
+end
+$$;
 
 select public.omr_save_exam_v1(
     '{
@@ -532,43 +1286,340 @@ begin
 end
 $$;
 
-select * from public.omr_teacher_update_attempt_v1(
-    'live-org-a',
-    '{
-        "id":"attempt_live-ticket-1",
-        "organization_id":"live-org-a",
-        "exam_id":"live-exam-a",
-        "status":"completed",
-        "score":0,
-        "total_score":1,
-        "score_percent":0,
-        "payload":{"id":"attempt_live-ticket-1","examId":"live-exam-a","studentName":"Live Student","score":0,"totalScore":1,"startedAt":"2026-07-14T00:00:00.000Z","finishedAt":"2026-07-14T00:02:00.000Z"},
-        "finished_at":"2026-07-14T00:02:00.000Z"
-    }',
-    '[]'
-);
+update public.omr_attempts
+   set status = 'in_progress',
+       class_id = 'live-class-a',
+       score = 0,
+       total_score = 0,
+       score_percent = 0,
+       payload = payload || '{
+           "status":"in_progress",
+           "classId":"live-class-a",
+           "answers":{"1":2},
+           "score":0,
+           "totalScore":0,
+           "questionResults":[],
+           "studentQuestions":[{
+               "questionId":1,
+               "questionNumber":1,
+               "body":"왜 정답인가요?",
+               "createdAt":"2026-07-14T00:01:00.000Z",
+               "status":"queued"
+           }],
+           "subQuestionAnswers":{
+               "1":{
+                   "reason":{
+                       "schemaVersion":1,
+                       "body":"근거",
+                       "reviewStatus":"needs_review"
+                   }
+               }
+           }
+       }'::jsonb
+ where id = 'attempt_live-ticket-1'
+   and organization_id = 'live-org-a';
+
+insert into public.omr_class_teachers (
+    class_id, organization_id, teacher_user_id, class_role
+) values
+    ('live-class-a', 'live-org-a', 'live-teacher-assigned', 'grader'),
+    ('live-class-b', 'live-org-b', 'live-teacher-cross-class', 'grader');
 
 do $$
 begin
-    if (select score from public.omr_attempts where id = 'attempt_live-ticket-1') <> 0 then
-        raise exception 'teacher attempt RPC did not update the canonical attempt';
-    end if;
-    if exists (select 1 from public.omr_question_results where attempt_id = 'attempt_live-ticket-1') then
-        raise exception 'empty teacher replacement left stale question results';
-    end if;
     begin
-        perform public.omr_teacher_update_attempt_v1(
-            'live-org-b',
-            '{"id":"attempt_live-ticket-1","organization_id":"live-org-b","exam_id":"live-exam-a"}',
-            '[]'
+        perform public.omr_answer_attempt_question_v1(
+            'live-org-a',
+            'attempt_live-ticket-1',
+            '1',
+            'unassigned',
+            'live-teacher-unassigned',
+            'teacher',
+            '미배정 교사'
         );
-        raise exception 'cross-organization teacher attempt update unexpectedly succeeded';
+        raise exception 'unassigned teacher mutation unexpectedly succeeded';
     exception
         when raise_exception then
-            if sqlerrm = 'cross-organization teacher attempt update unexpectedly succeeded' then
+            if sqlerrm = 'unassigned teacher mutation unexpectedly succeeded' then
                 raise;
             end if;
     end;
+    begin
+        perform public.omr_answer_attempt_question_v1(
+            'live-org-a',
+            'attempt_live-ticket-1',
+            '1',
+            'cross class',
+            'live-teacher-cross-class',
+            'teacher',
+            '다른 반 교사'
+        );
+        raise exception 'cross-class teacher mutation unexpectedly succeeded';
+    exception
+        when raise_exception then
+            if sqlerrm = 'cross-class teacher mutation unexpectedly succeeded' then
+                raise;
+            end if;
+    end;
+end
+$$;
+
+select * from public.omr_answer_attempt_question_v1(
+    'live-org-a',
+    'attempt_live-ticket-1',
+    '1',
+    '첫 답변',
+    'live-teacher-assigned',
+    'teacher',
+    '담당 교사'
+);
+
+do $$
+declare
+    v_answered_at jsonb;
+begin
+    select payload #> '{studentQuestions,0,answer,createdAt}'
+      into v_answered_at
+      from public.omr_attempts
+     where id = 'attempt_live-ticket-1';
+
+    perform public.omr_answer_attempt_question_v1(
+        'live-org-a',
+        'attempt_live-ticket-1',
+        '1',
+        '첫 답변',
+        'live-teacher-assigned',
+        'teacher',
+        '담당 교사'
+    );
+    if (select payload #> '{studentQuestions,0,answer,createdAt}'
+          from public.omr_attempts
+         where id = 'attempt_live-ticket-1') is distinct from v_answered_at
+    then
+        raise exception 'answer retry changed the authoritative timestamp';
+    end if;
+    if (select payload #>> '{studentQuestions,0,answer,body}'
+          from public.omr_attempts
+         where id = 'attempt_live-ticket-1') <> '첫 답변'
+    then
+        raise exception 'scoped answer RPC did not update the selected question';
+    end if;
+    if (select payload #>> '{studentQuestions,0,answer,teacherName}'
+          from public.omr_attempts
+         where id = 'attempt_live-ticket-1') <> '담당 교사'
+    then
+        raise exception 'scoped answer RPC did not persist trusted attribution';
+    end if;
+    begin
+        perform public.omr_answer_attempt_question_v1(
+            'live-org-b',
+            'attempt_live-ticket-1',
+            '1',
+            'cross organization',
+            '22222222-2222-4222-8222-222222222222',
+            'owner',
+            'Org B Owner'
+        );
+        raise exception 'cross-organization teacher answer unexpectedly succeeded';
+    exception
+        when raise_exception then
+            if sqlerrm = 'cross-organization teacher answer unexpectedly succeeded' then
+                raise;
+            end if;
+    end;
+end
+$$;
+
+update public.omr_class_teachers
+   set class_role = 'viewer'
+ where class_id = 'live-class-a'
+   and teacher_user_id = 'live-teacher-assigned';
+do $$
+begin
+    begin
+        perform public.omr_answer_attempt_question_v1(
+            'live-org-a',
+            'attempt_live-ticket-1',
+            '1',
+            'downgraded role',
+            'live-teacher-assigned',
+            'teacher',
+            '담당 교사'
+        );
+        raise exception 'role downgrade did not revoke teacher attempt mutation';
+    exception
+        when raise_exception then
+            if sqlerrm = 'role downgrade did not revoke teacher attempt mutation' then
+                raise;
+            end if;
+    end;
+end
+$$;
+update public.omr_class_teachers
+   set class_role = 'grader'
+ where class_id = 'live-class-a'
+   and teacher_user_id = 'live-teacher-assigned';
+
+select * from public.omr_set_subquestion_review_v1(
+    'live-org-a',
+    'attempt_live-ticket-1',
+    '1:reason',
+    'reviewed',
+    'live-teacher-assigned',
+    'teacher',
+    '담당 교사'
+);
+
+update public.omr_exams
+   set payload = '{
+       "id":"live-exam-a",
+       "organizationId":"live-org-a",
+       "title":"Org A Exam",
+       "questions":[
+           {"id":1,"number":1,"answer":2,"score":4,"choices":5},
+           {"id":2,"number":2,"answer":3,"score":6,"choices":5}
+       ],
+       "createdAt":"2026-07-14T00:00:00.000Z"
+   }'::jsonb,
+       updated_at = '2026-07-14T00:01:30.000Z'
+ where id = 'live-exam-a'
+   and organization_id = 'live-org-a';
+
+select * from public.omr_force_finish_attempts_v1(
+    'live-org-a',
+    array['attempt_live-ticket-1'],
+    '2026-07-14T00:02:00.000Z',
+    'live-teacher-assigned',
+    'teacher',
+    '담당 교사',
+    jsonb_build_array(jsonb_build_object(
+        'attempt_id', 'attempt_live-ticket-1',
+        'expected_answers', '{"1":2}'::jsonb,
+        'expected_is_retake', false,
+        'expected_retake_question_ids', '[]'::jsonb,
+        'expected_exam_updated_at', '2026-07-14T00:01:30.000Z',
+        'score', 4,
+        'total_score', 10,
+        'question_results', '[
+            {"questionId":1,"questionNumber":1,"status":"correct","score":4,"earnedScore":4},
+            {"questionId":2,"questionNumber":2,"status":"unanswered","score":6,"earnedScore":0}
+        ]'::jsonb,
+        'question_result_rows', '[
+            {
+                "id":"attempt_live-ticket-1:1",
+                "organization_id":"live-org-a",
+                "class_id":"live-class-a",
+                "attempt_id":"attempt_live-ticket-1",
+                "exam_id":"live-exam-a",
+                "student_name":"Live Student",
+                "student_id":"live-student-owner",
+                "question_id":1,
+                "question_number":1,
+                "mistake_types":[],
+                "prerequisites":[],
+                "selected_answer":2,
+                "correct_answer":2,
+                "status":"correct",
+                "is_correct":true,
+                "is_wrong":false,
+                "is_unanswered":false,
+                "score":4,
+                "earned_score":4,
+                "finished_at":"2026-07-14T00:02:00.000Z",
+                "payload":{"questionId":1,"status":"correct"},
+                "created_at":"2026-07-14T00:02:00.000Z",
+                "updated_at":"2026-07-14T00:02:00.000Z"
+            },
+            {
+                "id":"attempt_live-ticket-1:2",
+                "organization_id":"live-org-a",
+                "class_id":"live-class-a",
+                "attempt_id":"attempt_live-ticket-1",
+                "exam_id":"live-exam-a",
+                "student_name":"Live Student",
+                "student_id":"live-student-owner",
+                "question_id":2,
+                "question_number":2,
+                "mistake_types":[],
+                "prerequisites":[],
+                "correct_answer":3,
+                "status":"unanswered",
+                "is_correct":false,
+                "is_wrong":false,
+                "is_unanswered":true,
+                "score":6,
+                "earned_score":0,
+                "finished_at":"2026-07-14T00:02:00.000Z",
+                "payload":{"questionId":2,"status":"unanswered"},
+                "created_at":"2026-07-14T00:02:00.000Z",
+                "updated_at":"2026-07-14T00:02:00.000Z"
+            }
+        ]'::jsonb
+    ))
+);
+
+do $$
+declare
+    v_first_finished_at timestamptz;
+begin
+    if (select status from public.omr_attempts where id = 'attempt_live-ticket-1') <> 'completed' then
+        raise exception 'force finish did not complete the selected attempt';
+    end if;
+    if (select score from public.omr_attempts where id = 'attempt_live-ticket-1') <> 4
+        or (select total_score from public.omr_attempts where id = 'attempt_live-ticket-1') <> 10
+    then
+        raise exception 'force finish did not persist canonical grading';
+    end if;
+    if (select student_id from public.omr_attempts where id = 'attempt_live-ticket-1') <> 'live-student-owner' then
+        raise exception 'scoped teacher mutation changed the canonical student';
+    end if;
+    if (select count(*) from public.omr_question_results where attempt_id = 'attempt_live-ticket-1') <> 2
+        or (select status from public.omr_question_results where id = 'attempt_live-ticket-1:1') <> 'correct'
+        or (select status from public.omr_question_results where id = 'attempt_live-ticket-1:2') <> 'unanswered'
+    then
+        raise exception 'force finish did not replace canonical question results';
+    end if;
+    if (select payload #>> '{subQuestionAnswers,1,reason,reviewStatus}'
+          from public.omr_attempts
+         where id = 'attempt_live-ticket-1') <> 'reviewed'
+    then
+        raise exception 'subquestion review RPC did not update the selected response';
+    end if;
+    if (select payload #>> '{subQuestionAnswers,1,reason,reviewedBy}'
+          from public.omr_attempts
+         where id = 'attempt_live-ticket-1') <> '담당 교사'
+    then
+        raise exception 'subquestion review RPC did not persist trusted attribution';
+    end if;
+
+    select finished_at into v_first_finished_at
+      from public.omr_attempts
+     where id = 'attempt_live-ticket-1';
+    perform public.omr_force_finish_attempts_v1(
+        'live-org-a',
+        array['attempt_live-ticket-1'],
+        '2026-07-14T00:03:00.000Z',
+        'live-teacher-assigned',
+        'teacher',
+        '담당 교사',
+        jsonb_build_array(jsonb_build_object(
+            'attempt_id', 'attempt_live-ticket-1',
+            'expected_answers', '{"1":2}'::jsonb,
+            'expected_is_retake', false,
+            'expected_retake_question_ids', '[]'::jsonb,
+            'expected_exam_updated_at', '2026-07-14T00:01:30.000Z',
+            'score', 0,
+            'total_score', 0,
+            'question_results', '[]'::jsonb,
+            'question_result_rows', '[]'::jsonb
+        ))
+    );
+    if (select finished_at from public.omr_attempts where id = 'attempt_live-ticket-1') is distinct from v_first_finished_at
+        or (select score from public.omr_attempts where id = 'attempt_live-ticket-1') <> 4
+        or (select count(*) from public.omr_question_results where attempt_id = 'attempt_live-ticket-1') <> 2
+    then
+        raise exception 'force finish retry changed canonical completion';
+    end if;
 end
 $$;
 
@@ -699,17 +1750,885 @@ begin
 end
 $$;
 
+insert into public.omr_student_start_credentials (
+    organization_id, student_profile_id, start_code_hash
+) values
+    (
+        'live-org-a',
+        'live-student-a',
+        'pbkdf2-sha256:10000:0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
+    ),
+    (
+        'live-org-b',
+        'live-student-b',
+        'pbkdf2-sha256:10000:0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'
+    )
+on conflict (organization_id, student_profile_id) do update
+set start_code_hash = excluded.start_code_hash,
+    updated_at = now();
+
+insert into public.omr_organization_members (
+    organization_id, user_id, role, status
+) values
+    ('live-org-a', 'live-teacher-assigned', 'teacher', 'active'),
+    ('live-org-b', 'live-teacher-cross-class', 'teacher', 'active')
+on conflict (organization_id, user_id) do update
+set role = excluded.role,
+    status = excluded.status,
+    updated_at = now();
+
+insert into public.omr_teacher_profiles (
+    organization_id, user_id, display_name, status
+) values
+    ('live-org-a', 'live-teacher-assigned', '담당 교사', 'active'),
+    ('live-org-b', 'live-teacher-cross-class', '다른 반 교사', 'active')
+on conflict (organization_id, user_id) do update
+set display_name = excluded.display_name,
+    status = excluded.status,
+    updated_at = now();
+
+reset role;
+
+do $$
+declare
+    diagnostics jsonb;
+    candidate_hash text;
+    original_hash text;
+begin
+    select start_code_hash
+      into original_hash
+      from public.omr_student_start_credentials
+     where organization_id = 'live-org-a'
+       and student_profile_id = 'live-student-a';
+
+    update public.omr_student_start_credentials
+       set start_code_hash =
+           'pbkdf2-sha256:00010000:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA:BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB'
+     where organization_id = 'live-org-a'
+       and student_profile_id = 'live-student-a';
+    diagnostics := public.omr_production_boundary_preflight_v1();
+    if (diagnostics->>'students_without_credentials')::bigint <> 0 then
+        raise exception 'uppercase PBKDF2 credential was rejected';
+    end if;
+
+    update public.omr_student_start_credentials
+       set start_code_hash =
+           'pbkdf2-sha256:' || repeat('0', 395) || '10000:'
+           || repeat('a', 32) || ':' || repeat('b', 64)
+     where organization_id = 'live-org-a'
+       and student_profile_id = 'live-student-a';
+    diagnostics := public.omr_production_boundary_preflight_v1();
+    if (diagnostics->>'students_without_credentials')::bigint <> 0 then
+        raise exception 'maximum-length leading-zero PBKDF2 credential was rejected';
+    end if;
+
+    update public.omr_student_start_credentials
+       set start_code_hash =
+           'pbkdf2-sha256:' || repeat('0', 400) || ':'
+           || repeat('a', 32) || ':' || repeat('b', 64)
+     where organization_id = 'live-org-a'
+       and student_profile_id = 'live-student-a';
+    diagnostics := public.omr_production_boundary_preflight_v1();
+    if (diagnostics->>'students_without_credentials')::bigint <> 1 then
+        raise exception 'all-zero PBKDF2 iteration fixture was accepted';
+    end if;
+
+    foreach candidate_hash in array array[
+        'pbkdf2-sha256:9999:' || repeat('a', 32) || ':' || repeat('b', 64),
+        'pbkdf2-sha256:1000001:' || repeat('a', 32) || ':' || repeat('b', 64),
+        'pbkdf2-sha256:999999999999999999999999:' || repeat('a', 32) || ':' || repeat('b', 64),
+        'pbkdf2-sha256:10000:' || repeat('a', 33) || ':' || repeat('b', 64),
+        'pbkdf2-sha256:10000:' || repeat('a', 129) || ':' || repeat('b', 64),
+        'pbkdf2-sha256:10000:' || repeat('a', 130) || ':' || repeat('b', 64),
+        'pbkdf2-sha256:10000:' || repeat('a', 32) || ':' || repeat('b', 63),
+        'pbkdf2-sha512:10000:' || repeat('a', 32) || ':' || repeat('b', 64),
+        'pbkdf2-sha256:10000:' || repeat('a', 32) || ':' || repeat('b', 64) || ':extra'
+    ]
+    loop
+        update public.omr_student_start_credentials
+           set start_code_hash = candidate_hash
+         where organization_id = 'live-org-a'
+           and student_profile_id = 'live-student-a';
+        diagnostics := public.omr_production_boundary_preflight_v1();
+        if (diagnostics->>'students_without_credentials')::bigint <> 1 then
+            raise exception 'unsafe PBKDF2 boundary fixture was accepted';
+        end if;
+    end loop;
+
+    begin
+        update public.omr_student_start_credentials
+           set start_code_hash = 'x:' || repeat('9', 500)
+         where organization_id = 'live-org-a'
+           and student_profile_id = 'live-student-a';
+        diagnostics := public.omr_production_boundary_preflight_v1();
+        if (diagnostics->>'students_without_credentials')::bigint <> 1 then
+            raise exception '500-digit iteration fixture was accepted';
+        end if;
+    exception
+        when others then
+            raise exception '500-digit iteration fixture raised instead of returning an invalid count: %', sqlerrm;
+    end;
+
+    execute 'alter table public.omr_student_start_credentials alter column start_code_hash drop not null';
+    update public.omr_student_start_credentials
+       set start_code_hash = null
+     where organization_id = 'live-org-a'
+       and student_profile_id = 'live-student-a';
+    diagnostics := public.omr_production_boundary_preflight_v1();
+    if (diagnostics->>'students_without_credentials')::bigint <> 1 then
+        raise exception 'NULL PBKDF2 boundary fixture was accepted';
+    end if;
+    update public.omr_student_start_credentials
+       set start_code_hash = original_hash
+     where organization_id = 'live-org-a'
+       and student_profile_id = 'live-student-a';
+    execute 'alter table public.omr_student_start_credentials alter column start_code_hash set not null';
+end
+$$;
+
+set role service_role;
+
+do $$
+declare
+    diagnostics jsonb;
+begin
+    insert into public.omr_class_students (
+        class_id, organization_id, student_profile_id, enrollment_status
+    ) values (
+        'live-class-b', 'live-org-a', 'live-student-a', 'active'
+    );
+    diagnostics := public.omr_production_boundary_preflight_v1();
+    if (diagnostics->>'cross_organization_rows')::bigint < 1 then
+        raise exception 'class-student cross-organization fixture was not detected';
+    end if;
+    delete from public.omr_class_students
+     where class_id = 'live-class-b'
+       and student_profile_id = 'live-student-a';
+
+    insert into public.omr_class_teachers (
+        class_id, organization_id, teacher_user_id, class_role
+    ) values (
+        'live-class-a', 'live-org-a', 'live-teacher-cross-class', 'grader'
+    );
+    diagnostics := public.omr_production_boundary_preflight_v1();
+    if (diagnostics->>'orphan_rows')::bigint < 1
+        or (diagnostics->>'cross_organization_rows')::bigint < 1
+    then
+        raise exception 'class-teacher exact membership fixture was not detected';
+    end if;
+    delete from public.omr_class_teachers
+     where class_id = 'live-class-a'
+       and teacher_user_id = 'live-teacher-cross-class';
+end
+$$;
+
+do $$
+declare
+    diagnostics jsonb;
+begin
+    insert into public.omr_organization_members (
+        organization_id, user_id, role, status
+    ) values
+        ('live-org-a', 'live-teacher-history-inactive', 'teacher', 'suspended'),
+        ('live-org-a', 'live-teacher-history-removed', 'teacher', 'removed'),
+        ('live-org-b', 'live-teacher-history-removed', 'teacher', 'active');
+    insert into public.omr_teacher_profiles (
+        organization_id, user_id, display_name, status
+    ) values
+        ('live-org-a', 'live-teacher-history-inactive', '이전 교사', 'inactive'),
+        ('live-org-a', 'live-teacher-history-removed', '퇴직 교사', 'removed');
+    insert into public.omr_class_teachers (
+        class_id, organization_id, teacher_user_id, class_role
+    ) values
+        ('live-class-a', 'live-org-a', 'live-teacher-history-inactive', 'viewer'),
+        ('live-class-a', 'live-org-a', 'live-teacher-history-removed', 'viewer');
+
+    diagnostics := public.omr_production_boundary_preflight_v1();
+    if (diagnostics->>'orphan_rows')::bigint <> 0 then
+        raise exception 'inactive teacher history was treated as an orphan';
+    end if;
+    if (diagnostics->>'cross_organization_rows')::bigint <> 0 then
+        raise exception 'same-scope removed membership created a false cross-organization violation';
+    end if;
+
+    delete from public.omr_class_teachers
+     where teacher_user_id in ('live-teacher-history-inactive', 'live-teacher-history-removed');
+    delete from public.omr_teacher_profiles
+     where user_id in ('live-teacher-history-inactive', 'live-teacher-history-removed');
+    delete from public.omr_organization_members
+     where user_id in ('live-teacher-history-inactive', 'live-teacher-history-removed');
+
+    insert into public.omr_organization_members (
+        organization_id, user_id, role, status
+    ) values (
+        'live-org-a', 'live-teacher-active-misaligned', 'teacher', 'suspended'
+    );
+    insert into public.omr_teacher_profiles (
+        organization_id, user_id, display_name, status
+    ) values (
+        'live-org-a', 'live-teacher-active-misaligned', '활성 교사', 'active'
+    );
+    insert into public.omr_class_teachers (
+        class_id, organization_id, teacher_user_id, class_role
+    ) values (
+        'live-class-a', 'live-org-a', 'live-teacher-active-misaligned', 'grader'
+    );
+
+    diagnostics := public.omr_production_boundary_preflight_v1();
+    if (diagnostics->>'orphan_rows')::bigint < 1 then
+        raise exception 'active teacher with inactive membership was accepted';
+    end if;
+
+    delete from public.omr_class_teachers
+     where teacher_user_id = 'live-teacher-active-misaligned';
+    delete from public.omr_teacher_profiles
+     where user_id = 'live-teacher-active-misaligned';
+    delete from public.omr_organization_members
+     where user_id = 'live-teacher-active-misaligned';
+end
+$$;
+
+do $$
+declare
+    diagnostics jsonb;
+begin
+    insert into public.omr_question_results (
+        id, organization_id, class_id, attempt_id, exam_id,
+        student_name, question_id, question_number, status,
+        is_correct, is_wrong, is_unanswered, score, earned_score,
+        finished_at, payload
+    ) values (
+        'live-historical-question-result',
+        'live-org-a',
+        'live-class-a',
+        'attempt_live-ticket-1',
+        'live-exam-a',
+        'Historical Student',
+        999,
+        999,
+        'ungraded',
+        false,
+        false,
+        false,
+        0,
+        0,
+        now(),
+        '{}'
+    );
+
+    diagnostics := public.omr_production_boundary_preflight_v1();
+    if (diagnostics->>'orphan_rows')::bigint <> 0 then
+        raise exception 'historical question-result snapshot was treated as an orphan';
+    end if;
+
+    delete from public.omr_question_results
+     where id = 'live-historical-question-result';
+end
+$$;
+
+do $$
+declare
+    diagnostics jsonb;
+begin
+    diagnostics := public.omr_production_boundary_preflight_v1();
+    if (diagnostics->>'null_organization_rows')::bigint <> 0
+        or (diagnostics->>'orphan_rows')::bigint <> 0
+        or (diagnostics->>'cross_organization_rows')::bigint <> 0
+        or (diagnostics->>'students_without_credentials')::bigint <> 0
+    then
+        raise exception 'preflight must report zero organization-integrity violations: %', diagnostics;
+    end if;
+
+    begin
+        insert into public.omr_attempts (
+            id, organization_id, exam_id, student_name, identity_type,
+            payload, started_at, finished_at
+        ) values (
+            'raw-live-private-attempt-id',
+            'live-org-a',
+            'live-exam-b',
+            '김학생',
+            'temporary',
+            '{"id":"raw-live-private-attempt-id"}',
+            '2026-07-14T00:00:00.000Z',
+            '2026-07-14T00:01:00.000Z'
+        );
+
+        diagnostics := public.omr_production_boundary_preflight_v1();
+        if diagnostics::text like '%김학생%'
+            or diagnostics::text like '%raw-live-private-attempt-id%'
+        then
+            raise exception 'preflight diagnostics exposed 김학생 or a raw row identifier';
+        end if;
+        perform public.omr_assert_production_boundary_preflight_v1();
+        raise exception 'cross-organization preflight fixture unexpectedly passed';
+    exception
+        when check_violation then
+            if sqlerrm not like 'production boundary preflight failed:%' then
+                raise;
+            end if;
+            if sqlerrm like '%김학생%'
+                or sqlerrm like '%raw-live-private-attempt-id%'
+            then
+                raise exception 'preflight exception exposed 김학생 or a raw row identifier';
+            end if;
+    end;
+
+    if exists (
+        select 1
+          from public.omr_attempts
+         where id = 'raw-live-private-attempt-id'
+    ) then
+        raise exception 'failed preflight fixture was not rolled back';
+    end if;
+end
+$$;
+
 do $$
 declare
     readiness jsonb;
 begin
     readiness := public.omr_service_readiness_v1();
-    if readiness->>'version' <> '202607140018' or readiness->>'ready' <> 'true' then
-        raise exception 'live readiness probe did not confirm the complete production data plane: %', readiness;
+    if readiness->>'version' <> '202607280003'
+        or readiness->>'ready' <> 'true'
+        or exists (
+            select 1
+              from jsonb_each(readiness - 'version') item
+             where item.key <> 'ready'
+               and item.value is distinct from 'true'::jsonb
+        )
+    then
+        raise exception 'v4 readiness probe did not confirm every effective boundary: %', readiness;
+    end if;
+    if readiness::text like '%김학생%'
+        or readiness::text like '%raw-live-private-attempt-id%'
+        or readiness ? 'samples'
+    then
+        raise exception 'v4 readiness probe exposed tenant data';
     end if;
 end
 $$;
 
 reset role;
+
+-- BEGIN v4 transient readiness drift probes
+-- Every injected drift runs in a subtransaction. The sentinel exception rolls
+-- it back; a readiness assertion failure uses another SQLSTATE and propagates.
+do $$
+declare
+    readiness jsonb;
+begin
+    begin
+        grant usage on schema public to anon;
+        readiness := public.omr_service_readiness_v1();
+        if readiness->>'browserSchemaPrivilegesDenied' <> 'false'
+            or readiness->>'ready' <> 'false'
+        then
+            raise exception 'v4 readiness accepted browser schema usage';
+        end if;
+        raise exception using errcode = 'P1001', message = 'rollback v4 schema drift';
+    exception when sqlstate 'P1001' then null;
+    end;
+end
+$$;
+
+do $$
+declare
+    readiness jsonb;
+begin
+    begin
+        drop function public.omr_answer_attempt_question_v1(
+            text, text, text, text, text, text, text
+        );
+        execute $statement$
+            create procedure public.omr_answer_attempt_question_v1(
+                text, text, text, text, text, text, text
+            )
+            language sql
+            as 'select 1'
+        $statement$;
+        revoke all on procedure public.omr_answer_attempt_question_v1(
+            text, text, text, text, text, text, text
+        ) from public, anon, authenticated;
+        grant execute on procedure public.omr_answer_attempt_question_v1(
+            text, text, text, text, text, text, text
+        ) to service_role;
+        readiness := public.omr_service_readiness_v1();
+        if readiness->>'scopedRpcPrivilegesReady' <> 'false'
+            or readiness->>'serviceRolePrivilegesReady' <> 'true'
+            or readiness->>'browserFunctionPrivilegesDenied' <> 'true'
+            or readiness->>'serverGatewayCapabilitiesReady' <> 'true'
+            or readiness->>'ready' <> 'false'
+        then
+            raise exception 'v4 readiness accepted a scoped procedure impostor';
+        end if;
+        raise exception using errcode = 'P1021', message = 'rollback v4 scoped procedure drift';
+    exception when sqlstate 'P1021' then null;
+    end;
+end
+$$;
+
+do $$
+declare
+    readiness jsonb;
+begin
+    begin
+        execute $statement$
+            create function public.omr_save_exam_v1(text)
+            returns boolean
+            language sql
+            as 'select true'
+        $statement$;
+        readiness := public.omr_service_readiness_v1();
+        if readiness->>'serverGatewayCapabilitiesReady' <> 'false'
+            or readiness->>'ready' <> 'false'
+        then
+            raise exception 'v4 readiness accepted an extra server gateway overload';
+        end if;
+        raise exception using errcode = 'P1020', message = 'rollback v4 gateway overload drift';
+    exception when sqlstate 'P1020' then null;
+    end;
+end
+$$;
+
+do $$
+declare
+    readiness jsonb;
+begin
+    begin
+        drop function public.omr_save_remote_asset_metadata_v1(jsonb);
+        execute $statement$
+            create procedure public.omr_save_remote_asset_metadata_v1(jsonb)
+            language sql
+            as 'select 1'
+        $statement$;
+        revoke all on procedure
+            public.omr_save_remote_asset_metadata_v1(jsonb)
+            from public, anon, authenticated;
+        grant execute on procedure
+            public.omr_save_remote_asset_metadata_v1(jsonb)
+            to service_role;
+        readiness := public.omr_service_readiness_v1();
+        if readiness->>'serverGatewayCapabilitiesReady' <> 'false'
+            or readiness->>'serviceRolePrivilegesReady' <> 'true'
+            or readiness->>'browserFunctionPrivilegesDenied' <> 'true'
+            or readiness->>'scopedRpcPrivilegesReady' <> 'true'
+            or readiness->>'ready' <> 'false'
+        then
+            raise exception 'v4 readiness accepted a server gateway procedure impostor';
+        end if;
+        raise exception using errcode = 'P1022', message = 'rollback v4 gateway procedure drift';
+    exception when sqlstate 'P1022' then null;
+    end;
+end
+$$;
+
+do $$
+declare
+    readiness jsonb;
+begin
+    begin
+        grant select (title) on public.omr_exams to public;
+        readiness := public.omr_service_readiness_v1();
+        if readiness->>'anonTablePrivilegesDenied' <> 'false'
+            or readiness->>'authenticatedCanonicalPrivilegesDenied' <> 'false'
+            or readiness->>'ready' <> 'false'
+        then
+            raise exception 'v4 readiness accepted a PUBLIC column grant';
+        end if;
+        raise exception using errcode = 'P1012', message = 'rollback v4 PUBLIC column drift';
+    exception when sqlstate 'P1012' then null;
+    end;
+end
+$$;
+
+do $$
+declare
+    readiness jsonb;
+begin
+    begin
+        grant maintain on public.omr_exams to authenticated;
+        readiness := public.omr_service_readiness_v1();
+        if readiness->>'authenticatedCanonicalPrivilegesDenied' <> 'false'
+            or readiness->>'ready' <> 'false'
+        then
+            raise exception 'v4 readiness accepted a PG17 MAINTAIN grant';
+        end if;
+        raise exception using errcode = 'P1013', message = 'rollback v4 MAINTAIN drift';
+    exception when sqlstate 'P1013' then null;
+    end;
+end
+$$;
+
+do $$
+declare
+    readiness jsonb;
+begin
+    begin
+        create role omr_v4_browser_parent noinherit;
+        alter role authenticated inherit;
+        grant omr_v4_browser_parent to authenticated;
+        grant select on public.omr_exams to omr_v4_browser_parent;
+        readiness := public.omr_service_readiness_v1();
+        if readiness->>'authenticatedCanonicalPrivilegesDenied' <> 'false'
+            or readiness->>'ready' <> 'false'
+        then
+            raise exception 'v4 readiness accepted an inherited browser table grant';
+        end if;
+        raise exception using errcode = 'P1014', message = 'rollback v4 inherited grant drift';
+    exception when sqlstate 'P1014' then null;
+    end;
+end
+$$;
+
+do $$
+declare
+    readiness jsonb;
+begin
+    begin
+        grant create on schema public to authenticated;
+        readiness := public.omr_service_readiness_v1();
+        if readiness->>'browserSchemaPrivilegesDenied' <> 'false'
+            or readiness->>'ready' <> 'false'
+        then
+            raise exception 'v4 readiness accepted browser schema create';
+        end if;
+        raise exception using errcode = 'P1011', message = 'rollback v4 schema create drift';
+    exception when sqlstate 'P1011' then null;
+    end;
+end
+$$;
+
+do $$
+declare
+    readiness jsonb;
+begin
+    begin
+        alter table public.omr_comments rename to v4_hidden_comments;
+        create table public.omr_replacement_rogue (
+            id text primary key
+        );
+        alter table public.omr_replacement_rogue enable row level security;
+        alter table public.omr_replacement_rogue force row level security;
+        readiness := public.omr_service_readiness_v1();
+        if readiness->>'canonicalTablesForceRls' <> 'false'
+            or readiness->>'ready' <> 'false'
+        then
+            raise exception 'v4 readiness accepted a replacement rogue canonical table';
+        end if;
+        raise exception using errcode = 'P1015', message = 'rollback v4 canonical allowlist drift';
+    exception when sqlstate 'P1015' then null;
+    end;
+end
+$$;
+
+do $$
+declare
+    readiness jsonb;
+begin
+    begin
+        grant select on public.omr_exams to anon;
+        readiness := public.omr_service_readiness_v1();
+        if readiness->>'anonTablePrivilegesDenied' <> 'false'
+            or readiness->>'ready' <> 'false'
+        then
+            raise exception 'v4 readiness accepted an anon table grant';
+        end if;
+        raise exception using errcode = 'P1002', message = 'rollback v4 anon table drift';
+    exception when sqlstate 'P1002' then null;
+    end;
+end
+$$;
+
+do $$
+declare
+    readiness jsonb;
+begin
+    begin
+        execute $statement$
+            create function public.omr_answer_attempt_question_v1(text)
+            returns boolean
+            language sql
+            as 'select true'
+        $statement$;
+        readiness := public.omr_service_readiness_v1();
+        if readiness->>'scopedRpcPrivilegesReady' <> 'false'
+            or readiness->>'ready' <> 'false'
+        then
+            raise exception 'v4 readiness accepted an extra scoped RPC overload';
+        end if;
+        raise exception using errcode = 'P1016', message = 'rollback v4 scoped overload drift';
+    exception when sqlstate 'P1016' then null;
+    end;
+end
+$$;
+
+do $$
+declare
+    readiness jsonb;
+begin
+    begin
+        grant select on public.omr_exams to authenticated;
+        readiness := public.omr_service_readiness_v1();
+        if readiness->>'authenticatedCanonicalPrivilegesDenied' <> 'false'
+            or readiness->>'ready' <> 'false'
+        then
+            raise exception 'v4 readiness accepted an authenticated table grant';
+        end if;
+        raise exception using errcode = 'P1003', message = 'rollback v4 authenticated table drift';
+    exception when sqlstate 'P1003' then null;
+    end;
+end
+$$;
+
+do $$
+declare
+    readiness jsonb;
+begin
+    begin
+        create sequence public.omr_v4_readiness_sequence;
+        grant usage on sequence public.omr_v4_readiness_sequence to anon;
+        readiness := public.omr_service_readiness_v1();
+        if readiness->>'browserSequencePrivilegesDenied' <> 'false'
+            or readiness->>'ready' <> 'false'
+        then
+            raise exception 'v4 readiness accepted a browser sequence grant';
+        end if;
+        raise exception using errcode = 'P1004', message = 'rollback v4 sequence drift';
+    exception when sqlstate 'P1004' then null;
+    end;
+end
+$$;
+
+do $$
+declare
+    readiness jsonb;
+begin
+    begin
+        grant execute on function public.omr_service_readiness_v1() to anon;
+        readiness := public.omr_service_readiness_v1();
+        if readiness->>'browserFunctionPrivilegesDenied' <> 'false'
+            or readiness->>'ready' <> 'false'
+        then
+            raise exception 'v4 readiness accepted a browser function grant';
+        end if;
+        raise exception using errcode = 'P1005', message = 'rollback v4 function drift';
+    exception when sqlstate 'P1005' then null;
+    end;
+end
+$$;
+
+do $$
+declare
+    readiness jsonb;
+begin
+    begin
+        create policy "v4 transient canonical policy"
+            on public.omr_exams
+            for select
+            to anon
+            using (true);
+        readiness := public.omr_service_readiness_v1();
+        if readiness->>'canonicalPoliciesAbsent' <> 'false'
+            or readiness->>'alphaPoliciesAbsent' <> 'false'
+            or readiness->>'ready' <> 'false'
+        then
+            raise exception 'v4 readiness accepted a canonical policy';
+        end if;
+        raise exception using errcode = 'P1006', message = 'rollback v4 policy drift';
+    exception when sqlstate 'P1006' then null;
+    end;
+end
+$$;
+
+do $$
+declare
+    readiness jsonb;
+begin
+    begin
+        alter table public.omr_exams no force row level security;
+        readiness := public.omr_service_readiness_v1();
+        if readiness->>'canonicalTablesForceRls' <> 'false'
+            or readiness->>'ready' <> 'false'
+        then
+            raise exception 'v4 readiness accepted a table without FORCE RLS';
+        end if;
+        raise exception using errcode = 'P1007', message = 'rollback v4 force RLS drift';
+    exception when sqlstate 'P1007' then null;
+    end;
+end
+$$;
+
+do $$
+declare
+    readiness jsonb;
+begin
+    begin
+        revoke select on public.omr_exams from service_role;
+        readiness := public.omr_service_readiness_v1();
+        if readiness->>'serviceRolePrivilegesReady' <> 'false'
+            or readiness->>'ready' <> 'false'
+        then
+            raise exception 'v4 readiness accepted missing service-role table access';
+        end if;
+        raise exception using errcode = 'P1008', message = 'rollback v4 service-role drift';
+    exception when sqlstate 'P1008' then null;
+    end;
+end
+$$;
+
+do $$
+declare
+    readiness jsonb;
+begin
+    begin
+        revoke execute on function public.omr_answer_attempt_question_v1(
+            text, text, text, text, text, text, text
+        ) from service_role;
+        readiness := public.omr_service_readiness_v1();
+        if readiness->>'scopedRpcPrivilegesReady' <> 'false'
+            or readiness->>'ready' <> 'false'
+        then
+            raise exception 'v4 readiness accepted missing scoped RPC execute';
+        end if;
+        raise exception using errcode = 'P1009', message = 'rollback v4 scoped RPC drift';
+    exception when sqlstate 'P1009' then null;
+    end;
+end
+$$;
+
+do $$
+declare
+    readiness jsonb;
+begin
+    begin
+        insert into public.omr_student_profiles (
+            id, organization_id, display_name, status
+        ) values (
+            'v4-student-without-credential',
+            'live-org-a',
+            'Readiness Fixture',
+            'active'
+        );
+        readiness := public.omr_service_readiness_v1();
+        if readiness->>'organizationBackfillReady' <> 'false'
+            or readiness->>'ready' <> 'false'
+        then
+            raise exception 'v4 readiness accepted a failed organization preflight';
+        end if;
+        raise exception using errcode = 'P1010', message = 'rollback v4 preflight drift';
+    exception when sqlstate 'P1010' then null;
+    end;
+end
+$$;
+
+do $$
+declare
+    readiness jsonb;
+begin
+    begin
+        alter function public.omr_save_exam_v1(jsonb, jsonb)
+            rename to omr_save_exam_v4_transient;
+        readiness := public.omr_service_readiness_v1();
+        if readiness->>'serverGatewayCapabilitiesReady' <> 'false'
+            or readiness->>'ready' <> 'false'
+        then
+            raise exception 'v4 readiness accepted a missing server gateway';
+        end if;
+        raise exception using errcode = 'P1017', message = 'rollback v4 gateway drift';
+    exception when sqlstate 'P1017' then null;
+    end;
+end
+$$;
+
+do $$
+declare
+    readiness jsonb;
+begin
+    begin
+        drop index public.omr_exams_org_updated_id_idx;
+        readiness := public.omr_service_readiness_v1();
+        if readiness->>'queryPathIndexesReady' <> 'false'
+            or readiness->>'ready' <> 'false'
+        then
+            raise exception 'v4 readiness accepted a missing query-path index';
+        end if;
+        raise exception using errcode = 'P1018', message = 'rollback v4 query index drift';
+    exception when sqlstate 'P1018' then null;
+    end;
+end
+$$;
+
+do $$
+declare
+    readiness jsonb;
+begin
+    begin
+        execute $statement$
+            create function public.omr_teacher_update_attempt_v1(text)
+            returns boolean
+            language sql
+            as 'select true'
+        $statement$;
+        readiness := public.omr_service_readiness_v1();
+        if readiness->>'legacyBroadRpcsRemoved' <> 'false'
+            or readiness->>'ready' <> 'false'
+        then
+            raise exception 'v4 readiness accepted a forbidden broad RPC overload';
+        end if;
+        raise exception using errcode = 'P1019', message = 'rollback v4 legacy RPC drift';
+    exception when sqlstate 'P1019' then null;
+    end;
+end
+$$;
+
+-- The removed alpha policy name must remain absent independently of public RLS
+-- policy checks and the exact target Storage policies.
+begin;
+set local role supabase_storage_admin;
+create policy "OMR private assets alpha access"
+    on storage.objects
+    for all
+    to anon, authenticated
+    using (true)
+    with check (true);
+reset role;
+do $$
+declare
+    readiness jsonb;
+begin
+    readiness := public.omr_service_readiness_v1();
+    if readiness->>'alphaPoliciesAbsent' <> 'false'
+        or readiness->>'canonicalPoliciesAbsent' <> 'true'
+        or readiness->>'hostedStorageBoundaryReady' <> 'true'
+        or readiness->>'ready' <> 'false'
+    then
+        raise exception 'v4 readiness accepted a reintroduced Storage alpha policy';
+    end if;
+end
+$$;
+rollback;
+
+-- The Storage policy must be changed as Supabase's managed owner.
+begin;
+set local role supabase_storage_admin;
+drop policy "OMR private assets server-only objects" on storage.objects;
+reset role;
+do $$
+declare
+    readiness jsonb;
+begin
+    readiness := public.omr_service_readiness_v1();
+    if readiness->>'hostedStorageBoundaryReady' <> 'false'
+        or readiness->>'ready' <> 'false'
+    then
+        raise exception 'v4 readiness accepted a missing target Storage policy';
+    end if;
+end
+$$;
+rollback;
+-- END v4 transient readiness drift probes
+
+drop function public.omr_default_acl_probe_v1();
 
 select 'OMR live PostgreSQL verification passed' as result;

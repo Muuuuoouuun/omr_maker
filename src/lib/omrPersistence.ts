@@ -9,6 +9,8 @@ import {
 import { questionChoiceCount, type Attempt, type Exam, type QuestionResult, type QuestionResultStatus, type StoredDataRef } from "@/types/omr";
 import { MAX_SUB_QUESTION_LENGTH, normalizeQuestionSubQuestions } from "@/lib/subQuestions";
 import { SUPABASE_ATTEMPT_READ_COLUMNS, SUPABASE_EXAM_READ_COLUMNS } from "@/lib/supabaseReadColumns";
+import { withBrowserStorageLock } from "@/lib/browserStorageLock";
+import { canUseCanonicalBrowserDataPlane } from "@/lib/productionBrowserBoundary";
 
 type Env = Record<string, string | undefined>;
 
@@ -209,11 +211,6 @@ function clean(value: unknown): string {
     return typeof value === "string" ? value.trim() : "";
 }
 
-function isProductionRlsApplied(value: unknown): boolean {
-    const normalized = clean(value).toLowerCase();
-    return normalized === "true" || normalized === "1" || normalized === "yes";
-}
-
 function scopedValue(value: unknown): string | null {
     return clean(value) || null;
 }
@@ -318,12 +315,10 @@ export function getSupabaseConfigFromEnv(env: Env): SupabaseConfig | null {
     )?.trim();
 
     if (!url || !publishableKey) return null;
-    if (
-        clean(env.NODE_ENV).toLowerCase() === "production" &&
-        !isProductionRlsApplied(env.OMR_PRODUCTION_RLS_APPLIED)
-    ) {
-        return null;
-    }
+    if (!canUseCanonicalBrowserDataPlane({
+        nodeEnv: clean(env.NODE_ENV).toLowerCase() || undefined,
+        hasPublicSupabase: true,
+    })) return null;
     return { url, publishableKey };
 }
 
@@ -443,6 +438,12 @@ export function stripHeavyAttemptPayload(attempt: Attempt): Attempt {
     return stripped;
 }
 
+function attemptPayloadForServer(attempt: Attempt): Attempt {
+    const payload = { ...stripHeavyAttemptPayload(attempt) };
+    delete payload.localSubmissionProvenance;
+    return payload;
+}
+
 export function attemptToSupabaseRow(attempt: Attempt, context?: WorkspaceContext | null): SupabaseAttemptRow {
     const score = numberValue(attempt.score) || 0;
     const totalScore = numberValue(attempt.totalScore) || 0;
@@ -473,7 +474,7 @@ export function attemptToSupabaseRow(attempt: Attempt, context?: WorkspaceContex
         retake_question_ids: numberArray(attempt.retake?.questionIds),
         merged_from_guest_id: attempt.mergedFromGuestId || null,
         merged_at: attempt.mergedAt || null,
-        payload: stripHeavyAttemptPayload(attempt),
+        payload: attemptPayloadForServer(attempt),
         started_at: attempt.startedAt,
         finished_at: attempt.finishedAt,
     };
@@ -832,6 +833,15 @@ function sanitizeAnswers(value: unknown): Record<number, number> {
     return answers;
 }
 
+function sanitizeLocalSubmissionProvenance(
+    value: unknown,
+): Attempt["localSubmissionProvenance"] | undefined {
+    if (!isRecord(value) || value.source !== "server") return undefined;
+    const confirmedAt = stringValue(value.confirmedAt);
+    if (!confirmedAt || !Number.isFinite(Date.parse(confirmedAt))) return undefined;
+    return { source: "server", confirmedAt };
+}
+
 export function sanitizeAttemptPayload(value: unknown): Attempt | null {
     if (!isRecord(value)) return null;
     const id = stringValue(value.id);
@@ -893,12 +903,13 @@ export function sanitizeAttemptPayload(value: unknown): Attempt | null {
         questionTimings,
         questionDrawings,
         status,
+        localSubmissionProvenance: sanitizeLocalSubmissionProvenance(value.localSubmissionProvenance),
     } as Attempt;
 }
 
 export function readLocalDeletedExamIds(): Record<string, string> {
     if (!hasBrowserStorage()) return {};
-    return readJson<Record<string, string>>(localStorage.getItem(DELETED_EXAMS_KEY), {});
+    return readJson<Record<string, string>>(window.localStorage.getItem(DELETED_EXAMS_KEY), {});
 }
 
 function writeLocalDeletedExamIds(index: Record<string, string>): boolean {
@@ -1048,7 +1059,7 @@ export function saveLocalExams(exams: Exam[]): boolean {
     }
 }
 
-export function deleteLocalExam(id: string): boolean {
+function deleteLocalExamUnlocked(id: string): boolean {
     if (!hasBrowserStorage()) return false;
     try {
         localStorage.removeItem(`${EXAM_PREFIX}${id}`);
@@ -1062,41 +1073,363 @@ export function deleteLocalExam(id: string): boolean {
     }
 }
 
+export async function deleteLocalExam(id: string): Promise<boolean> {
+    return withBrowserStorageLock("attempt-index", () => deleteLocalExamUnlocked(id));
+}
+
 export function readLocalAttempts(): Attempt[] {
     if (!hasBrowserStorage()) return [];
     const deletedExamIds = readLocalDeletedExamIds();
     return sortByNewestActivity(
-        readJsonArray(localStorage.getItem(ATTEMPTS_KEY))
+        readJsonArray(window.localStorage.getItem(ATTEMPTS_KEY))
             .map(sanitizeAttemptPayload)
             .filter((attempt): attempt is Attempt => !!attempt)
             .filter(attempt => !deletedExamIds[attempt.examId])
     );
 }
 
-export function saveLocalAttempt(attempt: Attempt): boolean {
-    return saveLocalAttempts([attempt]);
+export function withLocalServerConfirmation(
+    attempt: Attempt,
+    confirmedAt = new Date().toISOString(),
+): Attempt {
+    return {
+        ...attempt,
+        localSubmissionProvenance: {
+            source: "server",
+            confirmedAt,
+        },
+    };
+}
+
+function saveLocalServerConfirmedAttemptUnlocked(
+    attempt: Attempt,
+    confirmedAt = new Date().toISOString(),
+): boolean {
+    return saveLocalAttemptsUnlocked([withLocalServerConfirmation(attempt, confirmedAt)]);
+}
+
+function markLocalAttemptServerConfirmedUnlocked(
+    attemptId: string,
+    confirmedAt = new Date().toISOString(),
+): boolean {
+    try {
+        const attempt = readLocalAttempts().find(candidate => candidate.id === attemptId);
+        if (!attempt) return false;
+        return saveLocalServerConfirmedAttemptUnlocked(attempt, confirmedAt);
+    } catch {
+        return false;
+    }
+}
+
+export async function saveLocalServerConfirmedAttempt(
+    attempt: Attempt,
+    confirmedAt = new Date().toISOString(),
+): Promise<boolean> {
+    return withBrowserStorageLock(
+        "attempt-index",
+        () => saveLocalServerConfirmedAttemptUnlocked(attempt, confirmedAt),
+    );
+}
+
+export async function markLocalAttemptServerConfirmed(
+    attemptId: string,
+    confirmedAt = new Date().toISOString(),
+): Promise<boolean> {
+    return withBrowserStorageLock(
+        "attempt-index",
+        () => markLocalAttemptServerConfirmedUnlocked(attemptId, confirmedAt),
+    );
+}
+
+export async function withLocalAttemptServerConfirmationLock<T>(
+    attemptId: string,
+    confirmedAt: string,
+    operation: (attached: boolean) => Promise<T> | T,
+): Promise<T> {
+    return withBrowserStorageLock(
+        "attempt-index",
+        () => operation(markLocalAttemptServerConfirmedUnlocked(attemptId, confirmedAt)),
+    );
+}
+
+export function hasLocalServerConfirmation(attemptId: string): boolean {
+    try {
+        return readLocalAttempts().some(attempt => (
+            attempt.id === attemptId
+            && attempt.localSubmissionProvenance?.source === "server"
+            && !!attempt.localSubmissionProvenance.confirmedAt
+        ));
+    } catch {
+        return false;
+    }
+}
+
+export interface LocalAttemptReplacement {
+    committed: boolean;
+    attempt?: Attempt;
+    rollback: () => boolean | Promise<boolean>;
+}
+
+function newestStoredDataRef(attempts: Attempt[]): Attempt["drawingsRef"] {
+    return attempts
+        .flatMap(attempt => attempt.drawingsRef ? [attempt.drawingsRef] : [])
+        .sort((left, right) => (
+            (Date.parse(right.updatedAt || "") || 0) - (Date.parse(left.updatedAt || "") || 0)
+        ))[0];
+}
+
+function mergedAttemptHandwriting(attempts: Attempt[]): Attempt["handwriting"] {
+    const items = attempts.flatMap(attempt => attempt.handwriting ? [attempt.handwriting] : []);
+    if (items.length === 0) return undefined;
+    const latest = items[items.length - 1];
+    const questions = items.reduce<NonNullable<Attempt["handwriting"]>["questions"]>((merged, handwriting) => {
+        for (const [questionId, summary] of Object.entries(handwriting.questions)) {
+            const current = merged[Number(questionId)];
+            if (!current || summary.strokeCount > current.strokeCount) {
+                merged[Number(questionId)] = summary;
+            }
+        }
+        return merged;
+    }, {});
+    const strokesRef = items
+        .flatMap(handwriting => handwriting.strokesRef ? [handwriting.strokesRef] : [])
+        .sort((left, right) => (
+            (Date.parse(right.updatedAt || "") || 0) - (Date.parse(left.updatedAt || "") || 0)
+        ))[0];
+    return {
+        schemaVersion: 1,
+        status: items.some(handwriting => handwriting.status === "saved") ? "saved" : latest.status,
+        strokesRef,
+        plan: latest.plan,
+        summary: {
+            pageCount: Math.max(...items.map(handwriting => handwriting.summary.pageCount)),
+            strokeCount: Math.max(...items.map(handwriting => handwriting.summary.strokeCount)),
+            questionCount: Object.keys(questions).length,
+        },
+        questions,
+    };
+}
+
+function unionQuestionDrawings(attempts: Attempt[]): Attempt["questionDrawings"] {
+    const merged = new Map<string, NonNullable<Attempt["questionDrawings"]>[number]>();
+    for (const item of attempts.flatMap(attempt => attempt.questionDrawings || [])) {
+        const key = `${item.questionId}:${item.page}`;
+        const current = merged.get(key);
+        if (!current || item.strokeCount > current.strokeCount) merged.set(key, item);
+    }
+    const items = [...merged.values()].sort((left, right) => (
+        left.questionId - right.questionId || left.page - right.page
+    ));
+    return items.length > 0 ? items : undefined;
+}
+
+function unionStudentQuestions(attempts: Attempt[]): Attempt["studentQuestions"] {
+    const merged = new Map<string, NonNullable<Attempt["studentQuestions"]>[number]>();
+    for (const item of attempts.flatMap(attempt => attempt.studentQuestions || [])) {
+        const key = `${item.questionId}:${item.createdAt}:${item.body}`;
+        merged.set(key, item);
+    }
+    const items = [...merged.values()].sort((left, right) => (
+        left.createdAt.localeCompare(right.createdAt)
+        || left.questionId - right.questionId
+        || left.body.localeCompare(right.body)
+    ));
+    return items.length > 0 ? items : undefined;
+}
+
+function withDeviceOnlyAttemptArtifacts(authoritative: Attempt, localAttempts: Attempt[]): Attempt {
+    if (localAttempts.length === 0) return authoritative;
+    const attempts = [...localAttempts, authoritative];
+    const latestLocal = localAttempts[localAttempts.length - 1];
+    return {
+        ...authoritative,
+        drawings: authoritative.drawings ?? latestLocal.drawings,
+        drawingsRef: newestStoredDataRef(attempts),
+        handwriting: mergedAttemptHandwriting(attempts),
+        handwritingArchived: authoritative.handwritingArchived
+            ?? (localAttempts.some(attempt => attempt.handwritingArchived)
+                || (localAttempts.some(attempt => attempt.handwritingArchived === false) ? false : undefined)),
+        handwritingPlan: authoritative.handwritingPlan ?? latestLocal.handwritingPlan
+            ?? localAttempts.find(attempt => !!attempt.handwritingPlan)?.handwritingPlan,
+        drawingPageCount: Math.max(0, ...attempts.map(attempt => attempt.drawingPageCount || 0)) || undefined,
+        drawingStrokeCount: Math.max(0, ...attempts.map(attempt => attempt.drawingStrokeCount || 0)) || undefined,
+        questionDrawings: unionQuestionDrawings(attempts),
+        studentQuestions: unionStudentQuestions(attempts),
+    };
+}
+
+/**
+ * Replaces a provisional browser attempt with its authoritative server record
+ * in one localStorage write. Server-owned identity, answers, grading and timing
+ * always win; only device-local handwriting/review artifacts are carried over.
+ *
+ * The rollback is used by submission receipt reconciliation when the second
+ * durable write (the confirmed receipt) fails. It restores the exact snapshot
+ * when uncontended, and otherwise preserves concurrent attempt-index changes.
+ */
+function replaceLocalAttemptWithCanonicalUnlocked(
+    previousAttemptId: string,
+    authoritativeAttempt: Attempt,
+): LocalAttemptReplacement {
+    const noRollback = () => false;
+    if (!hasBrowserStorage()) return { committed: false, rollback: noRollback };
+
+    const storage = window.localStorage;
+    let previousRaw: string | null;
+    try {
+        previousRaw = storage.getItem(ATTEMPTS_KEY);
+    } catch {
+        return { committed: false, rollback: noRollback };
+    }
+    let rawItems: unknown[];
+    try {
+        const parsed = previousRaw ? JSON.parse(previousRaw) : [];
+        rawItems = Array.isArray(parsed) ? parsed : [];
+    } catch {
+        rawItems = [];
+    }
+
+    const localAttempts = rawItems
+        .map(sanitizeAttemptPayload)
+        .filter((candidate): candidate is Attempt => (
+            !!candidate && (candidate.id === previousAttemptId || candidate.id === authoritativeAttempt.id)
+        ))
+        .sort((left, right) => {
+            if (left.id === previousAttemptId && right.id !== previousAttemptId) return -1;
+            if (right.id === previousAttemptId && left.id !== previousAttemptId) return 1;
+            return 0;
+        });
+    const mergedAttempt = stripHeavyAttemptPayload(withLocalServerConfirmation(
+        withDeviceOnlyAttemptArtifacts(authoritativeAttempt, localAttempts),
+    ));
+    const replacedIds = new Set([previousAttemptId, authoritativeAttempt.id]);
+    const removedItems = rawItems.filter(item => {
+        const candidate = sanitizeAttemptPayload(item);
+        return !!candidate && replacedIds.has(candidate.id);
+    });
+    const nextItems = rawItems.filter(item => {
+        const candidate = sanitizeAttemptPayload(item);
+        return !candidate || !replacedIds.has(candidate.id);
+    });
+    nextItems.push(mergedAttempt);
+    const committedRaw = JSON.stringify(nextItems);
+
+    try {
+        storage.setItem(ATTEMPTS_KEY, committedRaw);
+    } catch {
+        return { committed: false, rollback: noRollback };
+    }
+
+    return {
+        committed: true,
+        attempt: mergedAttempt,
+        rollback: () => {
+            try {
+                const currentRaw = storage.getItem(ATTEMPTS_KEY);
+                if (currentRaw === committedRaw) {
+                    if (previousRaw === null) storage.removeItem(ATTEMPTS_KEY);
+                    else storage.setItem(ATTEMPTS_KEY, previousRaw);
+                    return true;
+                }
+
+                const parsedCurrent = currentRaw ? JSON.parse(currentRaw) : [];
+                if (!Array.isArray(parsedCurrent)) return false;
+                const restored = parsedCurrent.filter(item => {
+                    const candidate = sanitizeAttemptPayload(item);
+                    return !candidate || !replacedIds.has(candidate.id);
+                });
+                restored.push(...removedItems);
+                storage.setItem(ATTEMPTS_KEY, JSON.stringify(restored));
+                return true;
+            } catch {
+                return false;
+            }
+        },
+    };
+}
+
+export async function replaceLocalAttemptWithCanonical(
+    previousAttemptId: string,
+    authoritativeAttempt: Attempt,
+): Promise<LocalAttemptReplacement> {
+    const replacement = await withBrowserStorageLock(
+        "attempt-index",
+        () => replaceLocalAttemptWithCanonicalUnlocked(previousAttemptId, authoritativeAttempt),
+    );
+    return {
+        ...replacement,
+        rollback: () => withBrowserStorageLock("attempt-index", replacement.rollback),
+    };
+}
+
+/**
+ * Keeps the canonical attempt replacement and its dependent durable commit in
+ * one attempt-index critical section. The commit callback may acquire the
+ * submission-receipts lock; callers must preserve that fixed lock order.
+ * A failed dependent commit is rolled back before the attempt lock is released.
+ */
+export async function replaceLocalAttemptWithCanonicalTransaction(
+    previousAttemptId: string,
+    authoritativeAttempt: Attempt,
+    commit: (replacement: LocalAttemptReplacement) => boolean | Promise<boolean>,
+): Promise<LocalAttemptReplacement> {
+    const replacement = await withBrowserStorageLock("attempt-index", async () => {
+        const current = replaceLocalAttemptWithCanonicalUnlocked(previousAttemptId, authoritativeAttempt);
+        if (!current.committed) return current;
+        try {
+            if (await commit(current)) return current;
+        } catch {
+            // The dependent durable write owns restoration of its own keys.
+        }
+        current.rollback();
+        return {
+            committed: false,
+            rollback: () => false,
+        } satisfies LocalAttemptReplacement;
+    });
+    return {
+        ...replacement,
+        rollback: () => withBrowserStorageLock("attempt-index", replacement.rollback),
+    };
 }
 
 /** Merge a batch into the local attempt index with one read and one write. */
-export function saveLocalAttempts(attempts: Attempt[]): boolean {
+function saveLocalAttemptsUnlocked(attempts: Attempt[]): boolean {
     if (!hasBrowserStorage()) return false;
     if (attempts.length === 0) return true;
     try {
         const nextById = new Map(readLocalAttempts().map(attempt => [attempt.id, attempt]));
         for (const attempt of attempts) {
-            nextById.set(attempt.id, stripHeavyAttemptPayload(attempt));
+            const existing = nextById.get(attempt.id);
+            const incomingProvenance = sanitizeLocalSubmissionProvenance(attempt.localSubmissionProvenance);
+            const existingProvenance = sanitizeLocalSubmissionProvenance(existing?.localSubmissionProvenance);
+            nextById.set(attempt.id, {
+                ...stripHeavyAttemptPayload(attempt),
+                localSubmissionProvenance: incomingProvenance || existingProvenance,
+            });
         }
         const next = sortByNewestActivity([...nextById.values()]);
-        localStorage.setItem(ATTEMPTS_KEY, JSON.stringify(next));
+        window.localStorage.setItem(ATTEMPTS_KEY, JSON.stringify(next));
         return true;
     } catch {
         return false;
     }
 }
 
+export async function saveLocalAttempts(attempts: Attempt[]): Promise<boolean> {
+    return withBrowserStorageLock("attempt-index", () => saveLocalAttemptsUnlocked(attempts));
+}
+
+export async function saveLocalAttempt(attempt: Attempt): Promise<boolean> {
+    return saveLocalAttempts([attempt]);
+}
+
 async function getSupabaseClient(): Promise<SupabaseClientLike | null> {
     const config = getSupabaseConfig();
-    if (!config) return null;
+    if (!canUseCanonicalBrowserDataPlane({
+        nodeEnv: process.env.NODE_ENV,
+        hasPublicSupabase: !!config,
+    }) || !config) return null;
     if (supabaseClientPromise) return supabaseClientPromise;
 
     supabaseClientPromise = import("@supabase/supabase-js")
@@ -1477,9 +1810,9 @@ function refreshLocalExamFromRemote(id: string): void {
 function refreshLocalAttemptFromRemote(id: string): void {
     if (!isSupabaseConfigured()) return;
     void fetchRemoteAttempt(id)
-        .then(remoteAttempt => {
+        .then(async remoteAttempt => {
             if (remoteAttempt && !isExamLocallyDeleted(remoteAttempt.examId)) {
-                saveLocalAttempt(remoteAttempt);
+                await saveLocalAttempt(remoteAttempt);
             }
         })
         .catch(error => console.warn("Failed to refresh remote attempt", error));
@@ -1545,7 +1878,7 @@ export async function loadAttempts(): Promise<LoadResult<Attempt>> {
             : [];
         const syncResult = await syncLocalItems(syncQueue, upsertRemoteAttempt);
         const mergedItems = mergeById(localItems, remoteItems);
-        saveLocalAttempts(mergedItems);
+        await saveLocalAttempts(mergedItems);
         // syncQueue attempts already upsert their question-result rows through
         // upsertRemoteAttempt above, so only re-sync question results for
         // still-pending attempts that this run's attempt-row resync missed. An
@@ -1588,7 +1921,7 @@ export async function loadAttemptsForStudent(scope: StudentAttemptScope): Promis
             .filter(attempt => attemptMatchesStudentScope(attempt, scope));
         const mergedItems = mergeById(localItems, remoteItems)
             .filter(attempt => attemptMatchesStudentScope(attempt, scope));
-        saveLocalAttempts(mergedItems);
+        await saveLocalAttempts(mergedItems);
         return {
             items: mergedItems,
             remoteLoaded: true,
@@ -1611,7 +1944,7 @@ export async function loadAttempt(id: string): Promise<Attempt | null> {
     try {
         const remoteAttempt = await fetchRemoteAttempt(id);
         if (remoteAttempt && !isExamLocallyDeleted(remoteAttempt.examId)) {
-            saveLocalAttempt(remoteAttempt);
+            await saveLocalAttempt(remoteAttempt);
             return remoteAttempt;
         }
     } catch (error) {
@@ -1633,7 +1966,7 @@ export async function loadAttemptForStudent(id: string, scope: StudentAttemptSco
             !isExamLocallyDeleted(remoteAttempt.examId) &&
             attemptMatchesStudentScope(remoteAttempt, scope)
         ) {
-            saveLocalAttempt(remoteAttempt);
+            await saveLocalAttempt(remoteAttempt);
             return remoteAttempt;
         }
     } catch (error) {
@@ -1659,7 +1992,7 @@ export async function saveExam(exam: Exam): Promise<PersistenceResult> {
 export async function saveAttempt(attempt: Attempt): Promise<PersistenceResult> {
     const context = contextForAttempt(attempt);
     const scopedAttempt = attemptWithPersistenceContext(attempt, context);
-    const localSaved = saveLocalAttempt(scopedAttempt);
+    const localSaved = await saveLocalAttempt(scopedAttempt);
     if (!isSupabaseConfigured()) return { localSaved, remoteSaved: false };
 
     try {
@@ -1791,7 +2124,7 @@ export async function deleteExam(id: string): Promise<PersistenceResult> {
     const localAttempts = readLocalAttempts().filter(attempt => attempt.examId === id);
     const localDraftPayloads = readLocalSolveDraftPayloadsForExam(id);
     const refsToDelete = storedDataRefsForExamDeletion(localExam, localAttempts, localDraftPayloads);
-    const localSaved = deleteLocalExam(id);
+    const localSaved = await deleteLocalExam(id);
     if (localSaved) await deleteStoredDataRefs(refsToDelete);
     if (!isSupabaseConfigured()) return { localSaved, remoteSaved: false };
 

@@ -19,7 +19,7 @@ import { issueGuestSession, validateStudentSession } from "@/app/actions/student
 import { saveTeacherSessionWithIdentity } from "@/lib/teacherSession";
 import { attemptBelongsToSession, getOrCreateGuestId, getSession, guestLoginIdFor, saveSession, type StudentSession } from "@/utils/storage";
 import { canArchiveHandwriting, getPlanLabel } from "@/utils/plans";
-import { loadExam as loadPersistedExam, readLocalAttempts, readLocalExam, saveAttempt, saveLocalAttempt, saveLocalExam } from "@/lib/omrPersistence";
+import { loadExam as loadPersistedExam, readLocalAttempts, readLocalExam, saveLocalAttempt, saveLocalExam, saveLocalServerConfirmedAttempt } from "@/lib/omrPersistence";
 import { buildQuestionResults } from "@/lib/premiumAnalytics";
 import { summarizeQuestionDrawings } from "@/lib/handwritingAnalytics";
 import { evaluateExamAccess, examRequiresPin, normalizeExamPin, verifyExamPin, type ExamAccessDecision } from "@/lib/examAccess";
@@ -32,13 +32,22 @@ import {
 import type { SubmitAttemptInput } from "@/lib/studentExamCore";
 import { remainingSecondsWithinWindow } from "@/lib/studentExamCore";
 import { findMissingRequiredSubQuestions, requiredSubQuestionProgress, sanitizeSubQuestionAnswersForQuestions } from "@/lib/subQuestions";
-import { summarizePersistenceWrite } from "@/lib/persistenceFeedback";
 import { stripTeacherOnlySubQuestionFields, type SolvableExam } from "@/lib/examSolvePayload";
 import { SOLVE_CLASS_CODE_PARAM } from "@/lib/examLinks";
 import { readRosterGroups } from "@/lib/rosterStorage";
 import { recallSolvePdf, rememberSolvePdf } from "@/lib/solvePdfCache";
 import { clientExamFromStudentExamPreview, clientExamFromStudentSolveExam } from "@/lib/studentExamContract";
-import { localResultCacheFromServerReceipt } from "@/lib/studentAttemptReceipt";
+import {
+    localResultCacheFromServerReceipt,
+    persistSubmissionReceipt,
+} from "@/lib/studentAttemptReceipt";
+import { persistStudentSubmissionDisposition } from "@/lib/studentSubmissionDurability";
+import {
+    beginAwaySession,
+    finishAwaySession,
+    flushAwaySession,
+    type AwaySession,
+} from "@/lib/examAwayTracker";
 import {
     SUBMISSION_DELAY_NOTICE_MS,
     submissionProgressCopy,
@@ -101,6 +110,12 @@ interface QuestionTimingDraft {
     firstVisitedAt?: string;
     lastVisitedAt?: string;
     lastAnsweredAt?: string;
+}
+
+interface AwaySessionContext {
+    reason: FocusLossEvent["reason"];
+    questionId?: number;
+    questionNumber?: number;
 }
 
 type RetakeConfig = Omit<RetakeMetadata, "createdAt">;
@@ -970,6 +985,9 @@ export default function SolvePage() {
     const activeQuestionRef = useRef<{ questionId: number; startedAtMs: number } | null>(null);
     const questionTimingRef = useRef<Record<number, QuestionTimingDraft>>({});
     const focusLossEventsRef = useRef<FocusLossEvent[]>([]);
+    const awaySessionRef = useRef<AwaySession | null>(null);
+    const awaySessionContextRef = useRef<AwaySessionContext | null>(null);
+    const tabFociLostCountRef = useRef(0);
     const pdfFocusRequestIdRef = useRef(0);
     const [hydratedOMRPanelKey, setHydratedOMRPanelKey] = useState("");
 
@@ -985,9 +1003,10 @@ export default function SolvePage() {
             : evaluateExamAccess(examData, { session: user, pinVerified }).status === "allowed"
     );
 
-    // Focus Warning States (Anti-cheat)
+    // Factual away-session notice state
     const [tabFociLostCount, setTabFociLostCount] = useState(0);
     const [showFocusWarning, setShowFocusWarning] = useState(false);
+    const [focusWarningMessage, setFocusWarningMessage] = useState("");
 
     // Stable per-device student/guest id
     const [persistId] = useState(() => {
@@ -1090,52 +1109,77 @@ export default function SolvePage() {
         : solveStatus;
     const solveAllowed = solveAccess === "ok" && interactionAllowed;
 
-    // Anti-cheat Window Focus/Visibility Monitoring
+    const beginActiveAwaySession = useCallback((reason: FocusLossEvent["reason"], nowMs = Date.now()) => {
+        if (submittedRef.current) return;
+
+        const currentAwaySession = awaySessionRef.current;
+        awaySessionRef.current = beginAwaySession(currentAwaySession, nowMs);
+        if (currentAwaySession) return;
+        const questionId = activeQuestionRef.current?.questionId || currentQuestionIdRef.current || undefined;
+        const question = questionId ? getQuestionById(questionId) : undefined;
+        settleActiveQuestion(nowMs);
+        awaySessionContextRef.current = {
+            reason,
+            questionId,
+            questionNumber: question?.number,
+        };
+    }, [getQuestionById, settleActiveQuestion]);
+
+    const completeActiveAwaySession = useCallback((nowMs = Date.now(), flush = false): number => {
+        const awaySession = awaySessionRef.current;
+        const context = awaySessionContextRef.current;
+
+        // Clear synchronously before any React update or duplicate return signal.
+        awaySessionRef.current = null;
+        awaySessionContextRef.current = null;
+
+        const result = flush
+            ? flushAwaySession(awaySession, nowMs)
+            : finishAwaySession(awaySession, nowMs);
+        if (result.count === 0 || !awaySession || !context) {
+            return tabFociLostCountRef.current;
+        }
+
+        const nextCount = tabFociLostCountRef.current + 1;
+        tabFociLostCountRef.current = nextCount;
+        focusLossEventsRef.current.push({
+            at: new Date(awaySession.startedAt).toISOString(),
+            questionId: context.questionId,
+            questionNumber: context.questionNumber,
+            count: nextCount,
+            reason: context.reason,
+        });
+        const message = nextCount === 1
+            ? "시험 화면을 벗어난 기록이 제출 기록과 함께 선생님 화면에 표시됩니다."
+            : `시험 화면 이탈이 ${nextCount}회 기록되었습니다. 답안을 확인한 뒤 계속 진행해 주세요.`;
+        setTabFociLostCount(nextCount);
+        setFocusWarningMessage(message);
+        setShowFocusWarning(true);
+        return nextCount;
+    }, []);
+
+    // Window focus and document visibility are two signals for one away session.
     useEffect(() => {
         if (submittedRef.current) return;
         if (!solveAllowed) return;
 
-        let isFocused = true;
-
-        const triggerWarning = (reason: FocusLossEvent["reason"]) => {
-            if (submittedRef.current) return;
-            const nowMs = Date.now();
-            const questionId = activeQuestionRef.current?.questionId || currentQuestionIdRef.current || undefined;
-            const question = questionId ? getQuestionById(questionId) : undefined;
-            settleActiveQuestion(nowMs);
-            const nextCount = focusLossEventsRef.current.length + 1;
-            focusLossEventsRef.current.push({
-                at: new Date(nowMs).toISOString(),
-                questionId,
-                questionNumber: question?.number,
-                count: nextCount,
-                reason,
-            });
-            setTabFociLostCount(c => {
-                setShowFocusWarning(true);
-                return Math.max(c + 1, nextCount);
-            });
-        };
-
         const handleWindowBlur = () => {
-            if (isFocused) {
-                isFocused = false;
-                triggerWarning("blur");
-            }
+            beginActiveAwaySession("blur");
         };
 
         const handleWindowFocus = () => {
-            isFocused = true;
-            if (currentQuestionIdRef.current) beginQuestionVisit(currentQuestionIdRef.current);
+            const nowMs = Date.now();
+            completeActiveAwaySession(nowMs);
+            if (currentQuestionIdRef.current) beginQuestionVisit(currentQuestionIdRef.current, nowMs);
         };
 
         const handleVisibilityChange = () => {
-            if (document.visibilityState === "hidden" && isFocused) {
-                isFocused = false;
-                triggerWarning("hidden");
+            if (document.visibilityState === "hidden") {
+                beginActiveAwaySession("hidden");
             } else if (document.visibilityState === "visible") {
-                isFocused = true;
-                if (currentQuestionIdRef.current) beginQuestionVisit(currentQuestionIdRef.current);
+                const nowMs = Date.now();
+                completeActiveAwaySession(nowMs);
+                if (currentQuestionIdRef.current) beginQuestionVisit(currentQuestionIdRef.current, nowMs);
             }
         };
 
@@ -1148,7 +1192,7 @@ export default function SolvePage() {
             window.removeEventListener("focus", handleWindowFocus);
             document.removeEventListener("visibilitychange", handleVisibilityChange);
         };
-    }, [beginQuestionVisit, getQuestionById, settleActiveQuestion, solveAllowed]);
+    }, [beginActiveAwaySession, beginQuestionVisit, completeActiveAwaySession, solveAllowed]);
 
     useEffect(() => {
         currentQuestionIdRef.current = currentQuestionId;
@@ -1935,6 +1979,10 @@ export default function SolvePage() {
             setSubmissionDelayed(false);
         };
 
+        // A timer submission can happen while the page is still hidden. Flush
+        // before building either server or local attempt metadata, and use the
+        // synchronously derived count instead of waiting for React state.
+        const submissionAwayCount = completeActiveAwaySession(Date.now(), true);
         const activeExamQuestions = getActiveExamQuestions();
         const questionTimings = buildQuestionTimingSnapshot(activeExamQuestions);
 
@@ -1959,7 +2007,7 @@ export default function SolvePage() {
                     ticket: secureAttemptTicket,
                     answers: studentAnswersRef.current,
                     autoSubmitted,
-                    tabFociLostCount,
+                    tabFociLostCount: submissionAwayCount,
                     questionTimings,
                     focusLossEvents: focusLossEventsRef.current,
                 });
@@ -2020,7 +2068,7 @@ export default function SolvePage() {
                 questionResults: officialResultCache.questionResults,
                 status: "completed",
                 autoSubmitted,
-                tabFociLostCount,
+                tabFociLostCount: submissionAwayCount,
                 questionTimings,
                 focusLossEvents: focusLossEventsRef.current,
                 drawingsRef: handwritingUpload?.status === "uploaded" ? handwritingUpload.ref : undefined,
@@ -2029,7 +2077,30 @@ export default function SolvePage() {
                 questionDrawings,
                 retake: retakeConfig ? { ...retakeConfig, createdAt: new Date().toISOString() } : undefined,
             };
-            saveLocalAttempt(cachedAttempt);
+            try {
+                const localSaved = await saveLocalAttempt(cachedAttempt);
+                const receiptSaved = localSaved && await persistSubmissionReceipt({
+                    attemptId: cachedAttempt.id,
+                    status: "confirmed",
+                    updatedAt: new Date().toISOString(),
+                });
+                if (!receiptSaved) {
+                    resetFailedSubmission();
+                    toast.error(
+                        "제출 확인 저장 실패",
+                        "서버 제출은 완료됐지만 이 기기의 확인 정보를 저장하지 못했습니다. 저장 공간을 확인한 뒤 다시 시도해주세요.",
+                    );
+                    return;
+                }
+            } catch (error) {
+                console.error("Secure submission receipt persistence failed", error);
+                resetFailedSubmission();
+                toast.error(
+                    "제출 확인 저장 실패",
+                    "서버 제출은 완료됐지만 이 기기의 확인 정보를 저장하지 못했습니다. 저장 공간을 확인한 뒤 다시 시도해주세요.",
+                );
+                return;
+            }
             if (!shouldArchiveDrawings || handwritingUpload?.status === "uploaded") {
                 try { localStorage.removeItem(DRAFT_KEY); } catch {}
                 try { localStorage.removeItem(LEGACY_DRAFT_KEY); } catch {}
@@ -2086,7 +2157,7 @@ export default function SolvePage() {
             subQuestionAnswers,
             startedAt,
             autoSubmitted,
-            tabFociLostCount,
+            tabFociLostCount: submissionAwayCount,
             questionTimings,
             focusLossEvents: focusLossEventsRef.current,
             drawings: canStoreHandwriting && hasDrawings(activeDrawings) ? activeDrawings : undefined,
@@ -2149,29 +2220,26 @@ export default function SolvePage() {
                 { ...examData, questions: activeExamQuestions },
                 attemptData,
             );
-            try {
-                const result = await saveAttempt(attemptData);
-                const feedback = summarizePersistenceWrite(result, {
-                    target: "답안",
-                    action: "저장",
-                    failureTitle: "답안 저장 실패",
-                    failureDetail: "브라우저 저장소가 가득 찼거나 Supabase 저장에 실패했습니다.",
-                });
-                if (!feedback.ok) return null;
-                if (feedback.level === "info") {
-                    toast.info(feedback.title, feedback.detail);
-                }
-                return attemptData;
-            } catch {
-                return null;
-            }
+            return await saveLocalAttempt(attemptData) ? attemptData : null;
         };
 
-        const res = await submitAttemptClient(submitInput, pinRef.current || undefined, {
-            server: (input, pin) => submitAttempt(input, pin),
-            localFallback: buildLocalGradedAttempt,
-            allowLocalFallback: examSource === "local",
-        });
+        let res: Awaited<ReturnType<typeof submitAttemptClient>>;
+        try {
+            res = await submitAttemptClient(submitInput, pinRef.current || undefined, {
+                server: (input, pin) => submitAttempt(input, pin),
+                localFallback: buildLocalGradedAttempt,
+                allowLocalFallback: examSource === "local",
+            });
+        } catch (error) {
+            console.error("Local attempt durability failed", error);
+            resetFailedSubmission();
+            await saveDraftSnapshot();
+            toast.error(
+                "제출 임시저장 실패",
+                "브라우저 저장소를 사용할 수 없습니다. 답안은 화면에 유지되며 저장 공간을 확인한 뒤 다시 제출할 수 있습니다.",
+            );
+            return;
+        }
 
         if (res.status !== "ok" || !res.attempt) {
             resetFailedSubmission();
@@ -2198,7 +2266,20 @@ export default function SolvePage() {
 
         if (res.source === "server") {
             // Local echo so review/history/dashboard local caches see it immediately.
-            try { saveLocalAttempt(res.attempt); } catch { /* quota — server copy is canonical */ }
+            try { await saveLocalServerConfirmedAttempt(res.attempt); } catch { /* durability helper reports a recoverable failure below */ }
+        }
+
+        const durability = await persistStudentSubmissionDisposition({
+            attemptId: res.attempt.id,
+            receiptStatus: res.receiptStatus || "local_only",
+            input: submitInput,
+            requiresPin: res.receiptStatus === "pending" && !!pinRef.current,
+        });
+        if (!durability.durable) {
+            resetFailedSubmission();
+            await saveDraftSnapshot();
+            toast.error("제출 재시도 저장 실패", durability.error);
+            return;
         }
 
         // Clean up draft
@@ -2524,7 +2605,7 @@ export default function SolvePage() {
         : null;
 
     return (
-        <div className="layout-main solve-page" style={{
+        <div className="layout-main solve-page" data-away-count={tabFociLostCount} style={{
             background: 'var(--background)',
             height: 'var(--app-viewport-height, 100dvh)',
             overflow: 'hidden',
@@ -3034,7 +3115,7 @@ export default function SolvePage() {
                 />
             )}
 
-            {/* Focus warning overlay modal (Anti-cheat) */}
+            {/* Factual away-session notice */}
             {showFocusWarning && (
                 <div style={{
                     position: 'fixed',
@@ -3074,7 +3155,7 @@ export default function SolvePage() {
                             color: '#ef4444',
                             marginBottom: '0.75rem'
                         }}>
-                            시험 이탈 경고!
+                            시험 화면 이탈 안내
                         </h2>
                         <p style={{
                             fontSize: '0.95rem',
@@ -3082,8 +3163,7 @@ export default function SolvePage() {
                             lineHeight: 1.6,
                             marginBottom: '1.5rem'
                         }}>
-                            시험 도중 다른 탭으로 이동하거나 브라우저 화면 포커스를 이탈한 내역이 감지되었습니다.<br />
-                            <strong style={{ color: '#ef4444' }}>이탈 기록은 선생님의 감독 대시보드에 실시간으로 기록됩니다.</strong>
+                            {focusWarningMessage}
                         </p>
                         <div style={{
                             background: 'rgba(239, 68, 68, 0.1)',

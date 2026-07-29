@@ -1,6 +1,12 @@
+import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import type { Attempt, Exam } from "@/types/omr";
 import { forceCompleteLiveAttempt, liveAttemptsNeedingForceFinish } from "./liveControls";
+
+const solvePageSource = readFileSync(
+    new URL("../app/solve/[id]/page.tsx", import.meta.url),
+    "utf8",
+);
 
 const exam: Exam = {
     id: "exam-1",
@@ -87,5 +93,15 @@ describe("live controls", () => {
             attempt({ id: "in-progress", status: "in_progress" }),
             attempt({ id: "done", status: "completed" }),
         ]).map(item => item.id)).toEqual(["in-progress"]);
+    });
+
+    it("uses factual progressive student copy for recorded away sessions", () => {
+        expect(solvePageSource).toContain(
+            "시험 화면을 벗어난 기록이 제출 기록과 함께 선생님 화면에 표시됩니다.",
+        );
+        expect(solvePageSource).toContain(
+            "시험 화면 이탈이 ${nextCount}회 기록되었습니다. 답안을 확인한 뒤 계속 진행해 주세요.",
+        );
+        expect(solvePageSource).not.toContain("부정행위");
     });
 });

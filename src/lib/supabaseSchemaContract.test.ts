@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 
@@ -44,6 +44,20 @@ function readFeedbackGatewayMigration(): string {
     return readFileSync(path.join(rootDir, "supabase/migrations/202607140016_feedback_gateway.sql"), "utf8");
 }
 
+function readStudentCredentialRevocationMigration(): string {
+    const migrationPath = path.join(rootDir, "supabase/migrations/202607280004_student_credential_revocation.sql");
+    return existsSync(migrationPath) ? readFileSync(migrationPath, "utf8") : "";
+}
+
+function readProductionBoundaryPreflightMigration(): string {
+    const migrationPath = path.join(rootDir, "supabase/migrations/202607280002_production_boundary_preflight.sql");
+    return existsSync(migrationPath) ? readFileSync(migrationPath, "utf8") : "";
+}
+
+function readLiveAssertions(): string {
+    return readFileSync(path.join(rootDir, "supabase/live-test-assertions.sql"), "utf8");
+}
+
 function columnExists(schema: string, table: string, column: string): boolean {
     const createPattern = new RegExp(`create table if not exists public\\.${table}\\s*\\(([\\s\\S]*?)\\n\\);`, "i");
     const createMatch = schema.match(createPattern);
@@ -73,6 +87,133 @@ describe("Supabase schema contract", () => {
     const teacherAttemptMutation = readTeacherAttemptMutationMigration();
     const teacherExamDelete = readTeacherExamDeleteMigration();
     const feedbackGateway = readFeedbackGatewayMigration();
+    const studentCredentialRevocation = readStudentCredentialRevocationMigration();
+    const productionBoundaryPreflight = readProductionBoundaryPreflightMigration();
+    const liveAssertions = readLiveAssertions();
+
+    it("fails production-boundary deployment on bounded organization-integrity diagnostics", () => {
+        expect(productionBoundaryPreflight).toContain(
+            "create or replace function public.omr_production_boundary_preflight_v1()",
+        );
+        expect(productionBoundaryPreflight).toContain("security definer");
+        expect(productionBoundaryPreflight).toContain("set search_path = ''");
+
+        for (const key of [
+            "null_organization_rows",
+            "orphan_rows",
+            "cross_organization_rows",
+            "students_without_credentials",
+        ]) {
+            expect(productionBoundaryPreflight).toContain(`'${key}'`);
+        }
+
+        for (const table of [
+            "omr_organizations",
+            "omr_exams",
+            "omr_exam_questions",
+            "omr_attempts",
+            "omr_question_results",
+            "omr_classes",
+            "omr_class_students",
+            "omr_class_teachers",
+            "omr_student_profiles",
+            "omr_teacher_profiles",
+            "omr_organization_members",
+            "omr_student_start_credentials",
+        ]) {
+            expect(productionBoundaryPreflight).toContain(`public.${table}`);
+        }
+
+        expect(productionBoundaryPreflight).toMatch(/order\s+by[\s\S]*limit\s+10/i);
+        expect(productionBoundaryPreflight).toContain("omr_assert_production_boundary_preflight_v1");
+        expect(productionBoundaryPreflight).toContain("production boundary preflight failed");
+        expect(productionBoundaryPreflight).toMatch(
+            /revoke all on function public\.omr_production_boundary_preflight_v1\(\)\s+from public, anon, authenticated/i,
+        );
+        expect(productionBoundaryPreflight).toMatch(
+            /grant execute on function public\.omr_production_boundary_preflight_v1\(\)\s+to service_role/i,
+        );
+        expect(liveAssertions).toContain("preflight must report zero organization-integrity violations");
+        expect(liveAssertions).toContain("cross-organization preflight fixture unexpectedly passed");
+    });
+
+    it("matches credential parsing and relationship integrity without leaking row identifiers", () => {
+        expect(productionBoundaryPreflight).toContain("credential_hash_parts");
+        expect(productionBoundaryPreflight).toMatch(/credential_hash_parts\.algorithm\s*=\s*'pbkdf2-sha256'/i);
+        expect(productionBoundaryPreflight).toMatch(/raw_iterations\s*~\s*'\^\[0-9\]\+\$'/i);
+        expect(productionBoundaryPreflight).toContain("between 10000 and 1000000");
+        expect(productionBoundaryPreflight).toMatch(/salt_hex\s*~\*\s*'\^\[a-f0-9\]\+\$'/i);
+        expect(productionBoundaryPreflight).toMatch(/length\(credential_hash_parts\.salt_hex\)\s+between 32 and 128/i);
+        expect(productionBoundaryPreflight).toMatch(/length\(credential_hash_parts\.salt_hex\)\s*%\s*2\s*=\s*0/i);
+        expect(productionBoundaryPreflight).toMatch(/hash_hex\s*~\*\s*'\^\[a-f0-9\]\{64\}\$'/i);
+
+        expect(productionBoundaryPreflight).toMatch(
+            /student_membership\.organization_id\s+is distinct from\s+class_row\.organization_id/i,
+        );
+        expect(productionBoundaryPreflight).toMatch(
+            /student_membership\.organization_id\s+is distinct from\s+student\.organization_id/i,
+        );
+        expect(productionBoundaryPreflight).toMatch(
+            /teacher_membership\.organization_id\s+is distinct from\s+class_row\.organization_id/i,
+        );
+        expect(productionBoundaryPreflight).toContain("exact_teacher_profile");
+        expect(productionBoundaryPreflight).toContain("exact_organization_member");
+        expect(productionBoundaryPreflight).toContain(
+            "Question results are immutable historical snapshots",
+        );
+        expect(productionBoundaryPreflight).not.toMatch(
+            /from public\.omr_exam_questions exam_question[\s\S]{0,180}exam_question\.question_id\s*=\s*result\.question_id/i,
+        );
+        expect(productionBoundaryPreflight).toMatch(
+            /coalesce\(\s*nullif\(ltrim\(credential_hash_raw_parts\.raw_iterations, '0'\), ''\),\s*'0'\s*\) as normalized_iterations/i,
+        );
+        expect(productionBoundaryPreflight).toMatch(
+            /when credential_hash_parts\.raw_iterations ~ '\^\[0-9\]\+\$'\s+and length\(credential_hash_parts\.normalized_iterations\) <= 7\s+then credential_hash_parts\.normalized_iterations::numeric/i,
+        );
+
+        expect(productionBoundaryPreflight).not.toMatch(
+            /jsonb_agg\(\s*entity\s*\|\|\s*':'\s*\|\|\s*row_id/i,
+        );
+        expect(productionBoundaryPreflight).toContain("'ordinal'");
+        expect(liveAssertions).toContain("uppercase PBKDF2 credential was rejected");
+        expect(liveAssertions).toContain("unsafe PBKDF2 boundary fixture was accepted");
+        expect(liveAssertions).toContain("class-student cross-organization fixture was not detected");
+        expect(liveAssertions).toContain("class-teacher exact membership fixture was not detected");
+        expect(liveAssertions).toContain("historical question-result snapshot was treated as an orphan");
+        expect(liveAssertions).toContain("inactive teacher history was treated as an orphan");
+        expect(liveAssertions).toContain("same-scope removed membership created a false cross-organization violation");
+        expect(liveAssertions).toContain("active teacher with inactive membership was accepted");
+        expect(liveAssertions).toContain("500-digit iteration fixture raised instead of returning an invalid count");
+        expect(liveAssertions).toContain("maximum-length leading-zero PBKDF2 credential was rejected");
+        expect(liveAssertions).toContain("all-zero PBKDF2 iteration fixture was accepted");
+        expect(liveAssertions).toContain("preflight diagnostics exposed 김학생 or a raw row identifier");
+        expect(liveAssertions).toContain("preflight exception exposed 김학생 or a raw row identifier");
+    });
+
+    it("revokes a withdrawn student's credential before a deterministic id can be reused", () => {
+        expect(schema).toContain("omr_revoke_withdrawn_student_credential_v1");
+        expect(schema).toContain("omr_student_profile_credential_revocation");
+        expect(studentCredentialRevocation).toContain("omr_revoke_withdrawn_student_credential_v1");
+        expect(studentCredentialRevocation).toContain("before update of status");
+        expect(studentCredentialRevocation).toContain("delete from public.omr_student_start_credentials");
+        expect(studentCredentialRevocation).toContain("old.status is distinct from 'withdrawn'");
+    });
+
+    it("serializes direct credential mutations with withdrawal on the exact profile row", () => {
+        for (const sql of [schema, studentCredentialRevocation]) {
+            expect(sql).toContain("omr_guard_student_credential_mutation_v1");
+            expect(sql).toContain("omr_student_credential_active_profile_guard");
+            expect(sql).toMatch(/before\s+insert\s+or\s+update\s+on\s+public\.omr_student_start_credentials/i);
+            expect(sql).toMatch(/student\.organization_id\s*=\s*new\.organization_id/i);
+            expect(sql).toMatch(/student\.id\s*=\s*new\.student_profile_id/i);
+            expect(sql).toMatch(/for\s+update/i);
+            expect(sql).toMatch(/profile_status\s+is\s+distinct\s+from\s+'active'/i);
+        }
+        expect(liveAssertions).toContain("post-withdraw service-role credential mutation unexpectedly succeeded");
+        expect(liveAssertions).toContain("issue-first serialized outcome retained a credential");
+        expect(liveAssertions).toContain("withdraw-first serialized outcome accepted a credential");
+        expect(liveAssertions).toContain("re-adding a deterministic student id resurrected the old start credential");
+    });
 
     it("keeps roster columns and indexes aligned with teacher user management sync", () => {
         expectColumns(schema, "omr_organizations", [

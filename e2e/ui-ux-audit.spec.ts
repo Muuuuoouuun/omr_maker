@@ -85,8 +85,27 @@ async function auditPage(page: Page, target: AuditTarget) {
         const normalizedPageText = pageText.replace(/\s+/g, " ").trim();
         const currentPath = window.location.pathname;
 
-        const smallTargets = Array.from(document.querySelectorAll("button,a,input,select,textarea,[role='button']"))
+        const interactiveTargets = Array.from(
+            document.querySelectorAll("button,a,input,select,textarea,[role='button']"),
+        );
+        const isNonInteractiveFileUploadProxy = (element: Element) => (
+            element instanceof HTMLInputElement
+            && element.type === "file"
+            && element.getAttribute("aria-hidden") === "true"
+            && element.getAttribute("tabindex") === "-1"
+            && element.tabIndex < 0
+        );
+        const excludedFileUploadProxies = interactiveTargets
+            .filter(isNonInteractiveFileUploadProxy)
+            .map(element => ({
+                tag: element.tagName.toLowerCase(),
+                type: (element as HTMLInputElement).type,
+                ariaHidden: element.getAttribute("aria-hidden"),
+                tabIndex: (element as HTMLElement).tabIndex,
+            }));
+        const smallTargets = interactiveTargets
             .filter(isVisible)
+            .filter(element => !isNonInteractiveFileUploadProxy(element))
             .map(element => {
                 const rect = element.getBoundingClientRect();
                 return {
@@ -172,6 +191,7 @@ async function auditPage(page: Page, target: AuditTarget) {
             clientWidth: root.clientWidth,
             mojibake: mojibakePattern.test(pageText),
             smallTargets,
+            excludedFileUploadProxies,
             clippedText,
             offViewportSurfaces,
         };
@@ -183,6 +203,331 @@ async function auditPage(page: Page, target: AuditTarget) {
 
 test.describe("UI-UX PROMAX layout audit", () => {
     test.skip(({ browserName }) => browserName !== "chromium", "Layout audit runs on Chromium only.");
+
+    test("keeps aria-hidden interactive controls in the touch target audit", async ({ page }) => {
+        await page.setContent(`
+            <main>
+                <h1>Audit fixture</h1>
+                <button
+                    type="button"
+                    aria-hidden="true"
+                    style="width: 12px; height: 12px; min-width: 0; min-height: 0"
+                >
+                    Hidden interactive target
+                </button>
+                <input
+                    type="file"
+                    aria-hidden="true"
+                    tabindex="-1"
+                    style="position: absolute; width: 1px; height: 1px"
+                />
+            </main>
+        `);
+
+        const result = await auditPage(page, {
+            name: "aria-hidden-interactive-fixture",
+            path: "/",
+            expectedText: "Audit fixture",
+            viewport: { width: 390, height: 844 },
+        });
+
+        expect(result.smallTargets).toEqual([
+            expect.objectContaining({
+                label: "Hidden interactive target",
+                tag: "button",
+                height: 12,
+            }),
+        ]);
+        expect(result.smallTargets[0]?.width).toBeLessThan(44);
+        expect(result.excludedFileUploadProxies).toEqual([
+            {
+                tag: "input",
+                type: "file",
+                ariaHidden: "true",
+                tabIndex: -1,
+            },
+        ]);
+    });
+
+    test("uses balanced motion for primary actions, cards, modal panels, and tab indicators", async ({ page }) => {
+        type MotionSnapshot = {
+            duration: string;
+            property: string;
+            timing: string;
+            distance: string;
+        };
+        type AnimationSnapshot = {
+            name: string;
+            duration: string;
+            timing: string;
+            distance: string;
+            activeAnimations: Array<{ playState: AnimationPlayState; duration: number | null }>;
+        };
+        const readMotion = async (selector: string, pseudo?: "::after"): Promise<MotionSnapshot> => (
+            page.locator(selector).first().evaluate((element, pseudoElement) => {
+                const style = window.getComputedStyle(element, pseudoElement || null);
+                const rootStyle = window.getComputedStyle(document.documentElement);
+                return {
+                    duration: style.transitionDuration,
+                    property: style.transitionProperty,
+                    timing: style.transitionTimingFunction,
+                    distance: rootStyle.getPropertyValue("--motion-distance").trim(),
+                };
+            }, pseudo)
+        );
+        const expectRestrainedProperties = (snapshot: MotionSnapshot) => {
+            expect(snapshot.property).not.toMatch(/(^|, )all(,|$)|width|height|margin|padding|flex-basis/);
+        };
+        const expectEveryDuration = (snapshot: MotionSnapshot, duration: string) => {
+            expect(snapshot.duration.split(", ").every(value => value === duration)).toBe(true);
+        };
+        const readAnimation = async (selector: string): Promise<AnimationSnapshot> => (
+            page.locator(selector).first().evaluate(element => {
+                const style = window.getComputedStyle(element);
+                const rootStyle = window.getComputedStyle(document.documentElement);
+                return {
+                    name: style.animationName,
+                    duration: style.animationDuration,
+                    timing: style.animationTimingFunction,
+                    distance: rootStyle.getPropertyValue("--motion-distance").trim(),
+                    activeAnimations: element.getAnimations().map(animation => ({
+                        playState: animation.playState,
+                        duration: typeof animation.effect?.getTiming().duration === "number"
+                            ? animation.effect.getTiming().duration as number
+                            : null,
+                    })),
+                };
+            })
+        );
+
+        await openTeacherPage(page, "/teacher/dashboard?showcase=1&tab=overview");
+        await expect(page.locator(".mockup-dashboard-tabs")).toBeVisible();
+        const actionMotion = await readMotion(".mockup-primary-action");
+        const cardMotion = await readMotion(".mockup-panel");
+        const tabMotion = await readMotion('.mockup-dashboard-tabs button[aria-selected="true"]', "::after");
+
+        await openTeacherPage(page, "/create");
+        await page.getByRole("button", { name: "정답 인식 마법사 열기" }).click();
+        await expect(page.getByRole("dialog", { name: "정답 PDF 불러오기" })).toBeVisible();
+        const modalAnimation = await readAnimation('[role="dialog"]');
+
+        expectEveryDuration(actionMotion, "0.16s");
+        expectEveryDuration(cardMotion, "0.21s");
+        expectEveryDuration(tabMotion, "0.21s");
+        for (const snapshot of [actionMotion, cardMotion, tabMotion]) {
+            expect(snapshot.timing).toContain("cubic-bezier(0.2, 0.8, 0.2, 1)");
+            expect(snapshot.distance).toBe(".375rem");
+            expectRestrainedProperties(snapshot);
+        }
+        expect(modalAnimation.name).toBe("balancedDialogEnter");
+        expect(modalAnimation.duration).toBe("0.21s");
+        expect(modalAnimation.timing).toContain("cubic-bezier(0.2, 0.8, 0.2, 1)");
+        expect(modalAnimation.distance).toBe(".375rem");
+        expect(modalAnimation.activeAnimations).toContainEqual({
+            playState: "running",
+            duration: 210,
+        });
+
+        await page.emulateMedia({ reducedMotion: "reduce" });
+        const reducedAction = await readMotion(".btn-primary");
+        expect(reducedAction.duration.split(", ").every(duration => duration === "0.001s")).toBe(true);
+        expect(reducedAction.distance).toBe("0rem");
+        expectRestrainedProperties(reducedAction);
+        const reducedModal = await readAnimation('[role="dialog"]');
+        expect(reducedModal.duration).toBe("0.001s");
+        expect(reducedModal.distance).toBe("0rem");
+
+        await page.emulateMedia({ reducedMotion: "no-preference" });
+        await page.locator("html").evaluate(element => element.setAttribute("data-motion", "off"));
+        const disabled = await readMotion(".btn-primary");
+        expect(disabled.duration.split(", ").every(duration => duration === "0.001s")).toBe(true);
+        expect(disabled.distance).toBe("0rem");
+        expectRestrainedProperties(disabled);
+        const disabledModal = await readAnimation('[role="dialog"]');
+        expect(disabledModal.duration).toBe("0.001s");
+        expect(disabledModal.distance).toBe("0rem");
+    });
+
+    test("app motion-off renders mounted CountUp values final without an active RAF animation", async ({ page }) => {
+        await page.addInitScript(() => {
+            window.localStorage.setItem("omr_settings", JSON.stringify({
+                theme: { motion: false },
+            }));
+            const firstFrameState = window as typeof window & {
+                __omrFirstCountUpFrame?: Array<{
+                    target: string | null;
+                    motion: string | null;
+                    raf: string | null;
+                    text: string;
+                }>;
+            };
+            const observer = new MutationObserver(() => {
+                const countUps = Array.from(document.querySelectorAll("[data-count-up-value]"));
+                if (countUps.length === 0) return;
+                observer.disconnect();
+                window.requestAnimationFrame(() => {
+                    firstFrameState.__omrFirstCountUpFrame = countUps.map(element => ({
+                        target: element.getAttribute("data-count-up-value"),
+                        motion: element.getAttribute("data-count-up-motion"),
+                        raf: element.getAttribute("data-count-up-raf"),
+                        text: element.textContent?.replace(/[^\d.-]/g, "") || "",
+                    }));
+                });
+            });
+            observer.observe(document, { childList: true, subtree: true });
+        });
+        await openTeacherPage(page, "/teacher/dashboard?showcase=1&tab=overview");
+        await expect(page.locator("html")).toHaveAttribute("data-motion", "off");
+
+        const countUps = page.locator("[data-count-up-value]");
+        await expect(countUps.first()).toBeVisible();
+        const snapshots = await countUps.evaluateAll(elements => elements.map(element => ({
+            target: element.getAttribute("data-count-up-value"),
+            motion: element.getAttribute("data-count-up-motion"),
+            raf: element.getAttribute("data-count-up-raf"),
+            text: element.textContent?.replace(/[^\d.-]/g, "") || "",
+        })));
+
+        expect(snapshots.length).toBeGreaterThan(0);
+        for (const snapshot of snapshots) {
+            expect(snapshot.motion).toBe("reduced");
+            expect(snapshot.raf).toBe("idle");
+            expect(Number(snapshot.text)).toBe(Number(snapshot.target));
+        }
+        await expect.poll(() => page.evaluate(() => (
+            window as typeof window & {
+                __omrFirstCountUpFrame?: Array<{
+                    target: string | null;
+                    motion: string | null;
+                    raf: string | null;
+                    text: string;
+                }>;
+            }
+        ).__omrFirstCountUpFrame)).not.toBeUndefined();
+        const capturedFirstFrame = await page.evaluate(() => (
+            window as typeof window & {
+                __omrFirstCountUpFrame?: Array<{
+                    target: string | null;
+                    motion: string | null;
+                    raf: string | null;
+                    text: string;
+                }>;
+            }
+        ).__omrFirstCountUpFrame || []);
+        expect(capturedFirstFrame.length).toBeGreaterThan(0);
+        for (const snapshot of capturedFirstFrame) {
+            expect(snapshot.motion).toBe("reduced");
+            expect(snapshot.raf).toBe("idle");
+            expect(Number(snapshot.text)).toBe(Number(snapshot.target));
+        }
+
+        await page.locator("html").evaluate(element => element.setAttribute("data-motion", "on"));
+        await expect(countUps.first()).toHaveAttribute("data-count-up-motion", "animated");
+        await page.emulateMedia({ reducedMotion: "reduce" });
+        await expect(countUps.first()).toHaveAttribute("data-count-up-motion", "reduced");
+        await expect(countUps.first()).toHaveAttribute("data-count-up-raf", "idle");
+        await page.emulateMedia({ reducedMotion: "no-preference" });
+        await expect(countUps.first()).toHaveAttribute("data-count-up-motion", "animated");
+        await page.locator("html").evaluate(element => element.setAttribute("data-motion", "off"));
+        await expect(countUps.first()).toHaveAttribute("data-count-up-motion", "reduced");
+        await expect(countUps.first()).toHaveAttribute("data-count-up-raf", "idle");
+    });
+
+    test("keeps one visible landing landmark and one role-specific level-one heading", async ({ browser }) => {
+        const landingStates = [
+            { name: "initial", path: "/", expectedText: "OMR Maker", heading: "OMR Maker" },
+            { name: "teacher", path: "/?role=teacher", expectedText: "교사 포털", heading: "환영합니다" },
+            { name: "student", path: "/?role=student", expectedText: "학생 포털", heading: "학습 시작" },
+        ] as const;
+
+        for (const state of landingStates) {
+            const page = await visitTarget(browser, {
+                name: state.name,
+                path: state.path,
+                expectedText: state.expectedText,
+                viewport: { width: 1440, height: 900 },
+            });
+            const main = page.locator("main");
+            const levelOneHeadings = page.locator("h1");
+            const activeHeading = page.getByRole("heading", { level: 1, name: state.heading, exact: true });
+
+            await expect(main, `${state.name} should have exactly one main landmark in the DOM`).toHaveCount(1);
+            await expect(page.locator("main:visible"), `${state.name} should have exactly one visible main landmark`).toHaveCount(1);
+            await expect(levelOneHeadings, `${state.name} should not retain a hidden duplicate h1`).toHaveCount(1);
+            await expect(page.locator("h1:visible"), `${state.name} should have exactly one visible h1`).toHaveCount(1);
+            await expect(activeHeading, `${state.name} should expose its active role heading`).toBeVisible();
+            await expect(main.filter({ has: activeHeading }), `${state.name} h1 should belong to main content`).toHaveCount(1);
+            expect(
+                await page.locator(".brand-logo").evaluateAll(logos => logos.every(logo => logo.tagName !== "H1")),
+                `${state.name} decorative product branding should not compete as a heading`,
+            ).toBe(true);
+
+            await page.context().close();
+        }
+    });
+
+    test("keeps the landing role choices balanced on desktop and compact on mobile", async ({ browser }) => {
+        for (const viewport of [
+            { name: "desktop", width: 1440, height: 900, minimumCardWidth: 400 },
+            { name: "mobile", width: 390, height: 844, minimumCardWidth: 160 },
+        ]) {
+            const page = await visitTarget(browser, {
+                name: `landing-${viewport.name}`,
+                path: "/",
+                expectedText: "OMR Maker",
+                viewport,
+            });
+            const cards = page.locator(".home-role-card");
+            await expect(cards).toHaveCount(2);
+            const boxes = await cards.evaluateAll(elements => elements.map(element => {
+                const rect = element.getBoundingClientRect();
+                return { width: Math.round(rect.width), x: Math.round(rect.x), y: Math.round(rect.y) };
+            }));
+            const pageWidth = await page.evaluate(() => ({
+                clientWidth: document.documentElement.clientWidth,
+                scrollWidth: document.documentElement.scrollWidth,
+            }));
+
+            expect(Math.abs(boxes[0].y - boxes[1].y), `${viewport.name} role cards should share one row`).toBeLessThanOrEqual(2);
+            expect(boxes.every(box => box.width >= viewport.minimumCardWidth), `${viewport.name} role cards should use the available width`).toBe(true);
+            expect(boxes[1].x, `${viewport.name} teacher card should follow the student card horizontally`).toBeGreaterThan(boxes[0].x);
+            expect(pageWidth.scrollWidth, `${viewport.name} landing should not overflow horizontally`).toBeLessThanOrEqual(pageWidth.clientWidth);
+
+            await page.context().close();
+        }
+    });
+
+    test("lets keyboard users bypass repeated teacher header controls", async ({ browser }) => {
+        const page = await visitTarget(browser, {
+            name: "teacher-settings-skip-link",
+            path: "/teacher/settings",
+            expectedText: "프로필 상태",
+            viewport: { width: 1440, height: 900 },
+            teacher: true,
+        });
+        const skipLink = page.getByRole("link", { name: "본문으로 건너뛰기", exact: true });
+        const main = page.locator("main#main-content");
+
+        await expect(skipLink).toHaveAttribute("href", "#main-content");
+        await expect(main).toHaveCount(1);
+        await expect(main).toHaveAttribute("tabindex", "-1");
+        const restingSkipLink = await skipLink.evaluate(element => {
+            const rect = element.getBoundingClientRect();
+            return { bottom: Math.round(rect.bottom), opacity: getComputedStyle(element).opacity };
+        });
+        expect(restingSkipLink.opacity).toBe("0");
+        expect(restingSkipLink.bottom).toBeLessThanOrEqual(0);
+
+        await page.keyboard.press("Tab");
+        await expect(skipLink).toBeFocused();
+        await expect(skipLink).toBeVisible();
+        await expect(skipLink).toHaveCSS("opacity", "1");
+        await page.keyboard.press("Enter");
+        await expect(page).toHaveURL(/#main-content$/);
+        await expect(main).toBeFocused();
+
+        await page.context().close();
+    });
 
     test("keeps key student, teacher, and admin surfaces readable and touch-safe", async ({ browser }) => {
         const results: Array<{ name: string; result: Awaited<ReturnType<typeof auditPage>> }> = [];

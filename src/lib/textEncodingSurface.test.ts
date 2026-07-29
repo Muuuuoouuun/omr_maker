@@ -70,6 +70,7 @@ const coreJourneyFiles = [
     "src/app/create/page.tsx",
     "src/app/solve/[id]/page.tsx",
     "src/app/student/dashboard/page.tsx",
+    "src/components/StudentGuestRecoveryPanel.tsx",
     "src/app/student/review/[attemptId]/page.tsx",
     "src/components/dashboard/AssignmentBlock.tsx",
     "src/app/teacher/dashboard/page.tsx",
@@ -133,8 +134,13 @@ const requiredStringsByFile: Record<string, string[]> = {
     ],
     "src/app/student/dashboard/page.tsx": [
         "학생 로그인",
-        "연결하지 않은 게스트 기록",
         "완료한 원시험",
+    ],
+    "src/components/StudentGuestRecoveryPanel.tsx": [
+        "미검증 로컬 기록 복구",
+        "복구 파일 내보내기",
+        "서버 소유 기록 다시 확인",
+        "로컬 기록 폐기",
     ],
     "src/components/dashboard/AssignmentBlock.tsx": [
         "미완료 과제",

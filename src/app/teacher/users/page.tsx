@@ -15,7 +15,7 @@ import { loadTeacherAttempts } from "@/lib/teacherAttemptClient";
 import { loadTeacherExams } from "@/lib/teacherExamClient";
 import { loadTeacherRosterSnapshot, saveTeacherRosterSnapshot } from "@/lib/teacherRosterClient";
 import { seedLocalTestStudentAccounts } from "@/lib/localTestAccounts";
-import { issueStudentStartCodeCredential } from "@/app/actions/studentAuth";
+import { issueStudentStartCredential } from "@/app/actions/studentAuth";
 import { authorizeRosterStudentSet } from "@/app/actions/premiumAccess";
 import { resolveAttemptScore } from "@/lib/attemptScores";
 import {
@@ -66,12 +66,18 @@ import {
 import { buildRetakeHref } from "@/lib/retakeLinks";
 import { buildRegionScopedAnalyticsHref } from "@/lib/dashboardSelection";
 import { PremiumActionLink } from "@/components/PremiumFeatureGate";
-import { findStudentStartCode, generateStartCode, readStudentCodes, writeStudentCodes } from "@/lib/studentCodes";
+import {
+    STUDENT_CODES_STORAGE_KEY,
+    findStudentStartCode,
+    generateStartCode,
+    writeStudentCodes,
+} from "@/lib/studentCodes";
+import { loadTeacherLocalStudentCodes } from "@/lib/studentCredentialLocalState";
+import { withStudentCredentialIssuanceLock } from "@/lib/studentCredentialIssuance";
 import { hasPlanEntitlement } from "@/utils/plans";
 import { useServerPlan } from "@/lib/useServerPlan";
 import { buildStudentResultHref } from "@/lib/studentResultHub";
 import { studentIdFor } from "@/utils/storage";
-import { syncStudentAccessCodes } from "@/app/actions/studentSession";
 import { readActiveWorkspaceContext } from "@/lib/workspaceContext";
 
 type TabType = "students" | "groups" | "invites";
@@ -95,6 +101,29 @@ type SortDirection = "asc" | "desc";
 
 const ALL_REGION_KEY = "__all_regions__";
 const DELETE_UNDO_WINDOW_MS = 6000;
+const STUDENT_CREDENTIAL_STATUS_STORAGE_KEY = "omr_student_credential_status_v1";
+
+function readIssuedStudentCredentialIds(storage: Pick<Storage, "getItem">): Set<string> {
+    try {
+        const parsed = JSON.parse(storage.getItem(STUDENT_CREDENTIAL_STATUS_STORAGE_KEY) || "[]") as unknown;
+        if (!Array.isArray(parsed)) return new Set();
+        return new Set(parsed.filter((value): value is string => typeof value === "string" && !!value.trim()));
+    } catch {
+        return new Set();
+    }
+}
+
+function writeIssuedStudentCredentialIds(
+    storage: Pick<Storage, "setItem">,
+    studentIds: Set<string>,
+): boolean {
+    try {
+        storage.setItem(STUDENT_CREDENTIAL_STATUS_STORAGE_KEY, JSON.stringify([...studentIds]));
+        return true;
+    } catch {
+        return false;
+    }
+}
 
 const MOCK_STUDENTS: RosterStudent[] = Array.from({ length: 24 }).map((_, i) => {
     const names = ["김민준", "이서연", "박도윤", "최예은", "정하준", "강지우", "조시우", "윤수아", "장재윤", "임유나", "한건우", "오하윤", "서지호", "신서아", "권선우", "황지민", "안윤서", "송태호", "류예준", "홍채원", "전주원", "고은서", "문이준", "양리아"];
@@ -274,10 +303,15 @@ function ManageUsersInner() {
     const [allAttempts, setAllAttempts] = useState<Attempt[]>([]);
     const [exams, setExams] = useState<Exam[]>([]);
     const [studentCodeRegistry, setStudentCodeRegistry] = useState<Record<string, string>>({});
+    const [issuedStudentCredentialIds, setIssuedStudentCredentialIds] = useState<Set<string>>(new Set());
+    const [sessionStudentCodes, setSessionStudentCodes] = useState<Record<string, string>>({});
     const [workspaceId, setWorkspaceId] = useState("");
     const [issuingStudentCode, setIssuingStudentCode] = useState(false);
     const rosterPlanSyncRef = useRef<Promise<void>>(Promise.resolve());
     const rosterMutationVersionRef = useRef(0);
+    const studentCredentialIssuanceLocksRef = useRef(new Set<string>());
+    const studentCodeRegistryRef = useRef<Record<string, string>>({});
+    const issuedStudentCredentialIdsRef = useRef<Set<string>>(new Set());
     const { plan: currentPlan } = useServerPlan();
     const [hydrated, setHydrated] = useState(false);
     const studentGrowthReportsEnabled = hasPlanEntitlement(currentPlan, "studentGrowthReports");
@@ -320,6 +354,9 @@ function ManageUsersInner() {
         let cancelled = false;
         const hydrateRoster = async () => {
             try {
+                const productionCodes = process.env.NODE_ENV === "production"
+                    ? loadTeacherLocalStudentCodes(localStorage, process.env.NODE_ENV)
+                    : null;
                 seedLocalTestStudentAccounts(localStorage);
                 setWorkspaceId(readActiveWorkspaceContext(sessionStorage).organizationId);
                 const storedRosterExists = hasStoredRosterData(localStorage);
@@ -353,23 +390,19 @@ function ManageUsersInner() {
                         "Supabase 명단 동기화가 지연되어 현재 기기 데이터를 우선 사용했습니다."
                     );
                 }
-                const storedCodes = readStudentCodes(localStorage);
+                const storedCodes = productionCodes
+                    ?? loadTeacherLocalStudentCodes(localStorage, process.env.NODE_ENV);
+                studentCodeRegistryRef.current = storedCodes;
                 setStudentCodeRegistry(storedCodes);
-                const codeEntries = Object.entries(storedCodes).map(([studentId, code]) => ({ studentId, code }));
-                if (codeEntries.length > 0) {
-                    void syncStudentAccessCodes(codeEntries).then(result => {
-                        if (cancelled || result.status === "ok" || result.status === "degraded_local") return;
-                        toast.info(
-                            "시작 코드는 이 기기에 보관 중",
-                            "서버 동기화가 지연되어 다음 명단 로드 때 다시 연결합니다."
-                        );
-                    });
-                }
+                const storedIssuedIds = readIssuedStudentCredentialIds(localStorage);
+                issuedStudentCredentialIdsRef.current = storedIssuedIds;
+                setIssuedStudentCredentialIds(storedIssuedIds);
             } catch {
                 if (cancelled) return;
                 setStudents([]);
                 setGroups([]);
                 setInvites([]);
+                studentCodeRegistryRef.current = {};
                 setStudentCodeRegistry({});
                 setRosterDataMode("real");
             }
@@ -614,7 +647,15 @@ function ManageUsersInner() {
         ? displayGroups.find(group => group.name === selected.group && (!selected.region || group.region === selected.region))
         : null;
     const selectedLegacyStudentId = selected ? studentIdForRoster(selected.name, selected.group, rosterGroups) : "";
-    const selectedStartCode = selected ? findStudentStartCode(studentCodeRegistry, selected.id, selectedLegacyStudentId) : "";
+    const selectedStartCode = selected
+        ? sessionStudentCodes[selected.id] || findStudentStartCode(studentCodeRegistry, selected.id, selectedLegacyStudentId)
+        : "";
+    const selectedCredentialIssued = !!selected && (
+        !!selectedStartCode
+        || issuedStudentCredentialIds.has(selected.id)
+        || (!!selectedLegacyStudentId && issuedStudentCredentialIds.has(selectedLegacyStudentId))
+    );
+    const selectedCodeLabel = selectedStartCode || (selectedCredentialIssued ? "발급됨" : "미발급");
 
     // The shared roster performance index already applies strict stable-id and
     // unambiguous legacy matching, and stores each bucket newest first.
@@ -691,38 +732,65 @@ function ManageUsersInner() {
             toast.info("실제 학생에서만 코드 발급", "저장된 명단의 학생을 선택한 뒤 시작 코드를 발급할 수 있습니다.");
             return;
         }
-        if (issuingStudentCode) return;
-        setIssuingStudentCode(true);
-        try {
-            const nextCode = generateStartCode();
-            const serverResult = await issueStudentStartCodeCredential(selected.id, nextCode);
-            if (!serverResult.success && !serverResult.skipped) {
-                toast.error("코드 발급 실패", serverResult.error || "학생 시작 코드를 서버에 저장하지 못했습니다.");
-                return;
-            }
-            const nextRegistry = { ...studentCodeRegistry, [selected.id]: nextCode };
-            if (!writeStudentCodes(localStorage, nextRegistry)) {
-                toast.error("코드 저장 실패", "브라우저 저장소를 확인한 뒤 다시 시도해주세요.");
-                return;
-            }
-            setStudentCodeRegistry(nextRegistry);
-            const result = await syncStudentAccessCodes([{ studentId: selected.id, code: nextCode }]);
-            if (result.status === "error" || result.status === "unauthenticated" || result.missingCount) {
-                toast.info(
-                    "코드는 이 기기에 발급됨",
-                    "학생 서버 계정 연결이 지연되었습니다. 명단 동기화 후 다시 발급해주세요."
-                );
-                return;
-            }
-            toast.success(selectedStartCode ? "시작 코드 재발급" : "시작 코드 발급", `${selected.name}: ${nextCode}`);
-        } catch {
-            toast.info(
-                "코드는 이 기기에 발급됨",
-                "서버 연결이 지연되었습니다. 온라인 학생 로그인 전 다시 발급해주세요."
-            );
-        } finally {
-            setIssuingStudentCode(false);
-        }
+        const selectedStudent = selected;
+        const legacyStudentId = selectedLegacyStudentId;
+        await withStudentCredentialIssuanceLock(
+            studentCredentialIssuanceLocksRef.current,
+            selectedStudent.id,
+            async () => {
+                setIssuingStudentCode(true);
+                try {
+                    const nextCode = generateStartCode();
+                    const serverResult = await issueStudentStartCredential(selectedStudent.id, nextCode);
+                    if (!serverResult.success && !serverResult.skipped) {
+                        toast.error("코드 발급 실패", serverResult.error || "학생 시작 코드를 서버에 저장하지 못했습니다.");
+                        return;
+                    }
+                    if (serverResult.skipped) {
+                        const localOnlyRegistry = {
+                            ...studentCodeRegistryRef.current,
+                            [selectedStudent.id]: nextCode,
+                        };
+                        if (!writeStudentCodes(localStorage, localOnlyRegistry)) {
+                            toast.error("코드 저장 실패", "브라우저 저장소를 확인한 뒤 다시 시도해주세요.");
+                            return;
+                        }
+                        studentCodeRegistryRef.current = localOnlyRegistry;
+                        setStudentCodeRegistry(localOnlyRegistry);
+                    } else {
+                        const localOnlyRegistry = { ...studentCodeRegistryRef.current };
+                        delete localOnlyRegistry[selectedStudent.id];
+                        if (legacyStudentId) delete localOnlyRegistry[legacyStudentId];
+                        if (!writeStudentCodes(localStorage, localOnlyRegistry)) {
+                            localStorage.removeItem(STUDENT_CODES_STORAGE_KEY);
+                        }
+                        studentCodeRegistryRef.current = localOnlyRegistry;
+                        setStudentCodeRegistry(localOnlyRegistry);
+                        setSessionStudentCodes(current => ({ ...current, [selectedStudent.id]: nextCode }));
+
+                        const nextIssuedIds = new Set(issuedStudentCredentialIdsRef.current);
+                        nextIssuedIds.add(selectedStudent.id);
+                        if (legacyStudentId) nextIssuedIds.delete(legacyStudentId);
+                        issuedStudentCredentialIdsRef.current = nextIssuedIds;
+                        setIssuedStudentCredentialIds(nextIssuedIds);
+                        if (!writeIssuedStudentCredentialIds(localStorage, nextIssuedIds)) {
+                            toast.info(
+                                "코드는 서버에 발급됨",
+                                "이 기기의 발급 상태 표시에 실패했습니다. 코드는 지금 복사해 전달해주세요."
+                            );
+                        }
+                    }
+                    toast.success(
+                        selectedCredentialIssued ? "시작 코드 재발급" : "시작 코드 발급",
+                        `${selectedStudent.name}: ${nextCode}`,
+                    );
+                } catch {
+                    toast.error("코드 발급 실패", "서버 연결을 확인한 뒤 다시 시도해주세요.");
+                } finally {
+                    setIssuingStudentCode(false);
+                }
+            },
+        );
     };
 
     const handleCopyStudentStartCode = async () => {
@@ -754,7 +822,7 @@ function ManageUsersInner() {
             `반 코드: ${selectedStudentGroup?.id || selected.group}`,
             `로그인 ID(학생번호): ${selected.id}`,
             `이메일 로그인 ID: ${selected.email}`,
-            `시작 코드: ${selectedStartCode || "미발급 - 선생님에게 발급 요청"}`,
+            `시작 코드: ${selectedStartCode || (selectedCredentialIssued ? "보안상 숨김 - 재발급 후 전달" : "미발급 - 선생님에게 발급 요청")}`,
         ].join("\n");
 
         try {
@@ -860,17 +928,26 @@ function ManageUsersInner() {
         const idSet = new Set(ids.filter(Boolean));
         const removedEntries: Record<string, string> = {};
         if (idSet.size === 0) return removedEntries;
-        const nextRegistry = { ...studentCodeRegistry };
+        const nextIssuedIds = new Set(issuedStudentCredentialIdsRef.current);
+        const nextSessionCodes = { ...sessionStudentCodes };
+        const nextRegistry = { ...studentCodeRegistryRef.current };
         for (const id of idSet) {
             if (nextRegistry[id]) {
                 removedEntries[id] = nextRegistry[id];
                 delete nextRegistry[id];
             }
+            nextIssuedIds.delete(id);
+            delete nextSessionCodes[id];
         }
         if (Object.keys(removedEntries).length > 0) {
+            studentCodeRegistryRef.current = nextRegistry;
             setStudentCodeRegistry(nextRegistry);
             writeStudentCodes(localStorage, nextRegistry);
         }
+        issuedStudentCredentialIdsRef.current = nextIssuedIds;
+        setIssuedStudentCredentialIds(nextIssuedIds);
+        setSessionStudentCodes(nextSessionCodes);
+        writeIssuedStudentCredentialIds(localStorage, nextIssuedIds);
         return removedEntries;
     };
 
@@ -929,7 +1006,8 @@ function ManageUsersInner() {
         }
         persistRoster(merged, recomputeGroups(merged, groups), invites);
         if (Object.keys(restored.codeEntries).length > 0) {
-            const nextRegistry = { ...studentCodeRegistry, ...restored.codeEntries };
+            const nextRegistry = { ...studentCodeRegistryRef.current, ...restored.codeEntries };
+            studentCodeRegistryRef.current = nextRegistry;
             setStudentCodeRegistry(nextRegistry);
             writeStudentCodes(localStorage, nextRegistry);
         }
@@ -1291,7 +1369,7 @@ function ManageUsersInner() {
             <div className="orb orb-accent" />
             <TeacherHeader badge="USERS" badgeColor="#22c55e" />
 
-            <main className="container animate-fade-in" style={{ paddingBottom: '4rem', position: 'relative', zIndex: 1 }}>
+            <main id="main-content" tabIndex={-1} className="container animate-fade-in" style={{ paddingBottom: '4rem', position: 'relative', zIndex: 1 }}>
                 <div style={{ margin: '3rem 0 2rem', display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end', gap: '2rem', flexWrap: 'wrap' }}>
                     <div>
                         <h1 className="title-gradient" style={{ fontSize: '2.5rem', marginBottom: '0.5rem', lineHeight: 1.2 }}>
@@ -1913,10 +1991,10 @@ function ManageUsersInner() {
                                                 overflow: 'hidden',
                                                 textOverflow: 'ellipsis',
                                                 whiteSpace: 'nowrap',
-                                                color: selectedStartCode ? '#047857' : '#b45309',
+                                                color: selectedCredentialIssued ? '#047857' : '#b45309',
                                                 fontWeight: 850,
                                                 letterSpacing: selectedStartCode ? '0.08em' : 0,
-                                            }}>{selectedStartCode || '미발급'}</code>
+                                            }}>{selectedCodeLabel}</code>
                                         </div>
                                     </div>
                                     <p style={{ fontSize: '0.74rem', color: 'var(--muted)', lineHeight: 1.55, marginTop: '0.75rem', wordBreak: 'keep-all' }}>
@@ -1931,8 +2009,8 @@ function ManageUsersInner() {
                                         </div>
                                         <span data-testid="student-start-code-value">
                                             <StatusPill
-                                                tone={selectedStartCode ? 'success' : 'warning'}
-                                                label={selectedStartCode || '미발급'}
+                                                tone={selectedCredentialIssued ? 'success' : 'warning'}
+                                                label={selectedCodeLabel}
                                                 size="sm"
                                                 style={{
                                                     minWidth: 86,
@@ -1944,12 +2022,12 @@ function ManageUsersInner() {
                                         </span>
                                     </div>
                                     <p style={{ fontSize: '0.76rem', color: 'var(--muted)', lineHeight: 1.55, marginBottom: '0.75rem', wordBreak: 'keep-all' }}>
-                                        학생 포털 재로그인과 반 제한 시험 입장에 쓰는 6자리 코드입니다.
+                                        학생 포털 재로그인과 반 제한 시험 입장에 쓰는 6자리 코드입니다. 새 코드는 발급한 현재 화면에서만 확인할 수 있습니다.
                                     </p>
                                     <div style={{ display: 'flex', gap: '0.5rem' }}>
                                         <button
                                             type="button"
-                                            aria-label={selectedStartCode ? '학생 시작 코드 재발급' : '학생 시작 코드 발급'}
+                                            aria-label={selectedCredentialIssued ? '학생 시작 코드 재발급' : '학생 시작 코드 발급'}
                                             data-testid="issue-student-start-code"
                                             onClick={handleIssueStudentStartCode}
                                             disabled={isDemoRoster || issuingStudentCode}
@@ -1970,7 +2048,7 @@ function ManageUsersInner() {
                                             }}
                                         >
                                             <RefreshCw size={13} className={issuingStudentCode ? 'animate-spin' : undefined} />
-                                            {issuingStudentCode ? '연결 중' : selectedStartCode ? '재발급' : '발급'}
+                                            {issuingStudentCode ? '연결 중' : selectedCredentialIssued ? '재발급' : '발급'}
                                         </button>
                                         <button
                                             type="button"

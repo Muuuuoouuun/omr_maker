@@ -8,6 +8,11 @@ const ORGANIZATION_ID_PATTERN = /^(?:default|teacher_[a-z0-9]{7,16})$/;
 
 export type TeacherMemberRole = "owner" | "admin" | "teacher" | "assistant" | "viewer";
 export type TeacherPlanCeiling = "free" | "pro" | "academy";
+const TEACHER_WRITE_ROLES = new Set<TeacherMemberRole>(["owner", "admin", "teacher", "assistant"]);
+
+export function canTeacherRoleWrite(role: TeacherMemberRole | null | undefined): boolean {
+    return !!role && TEACHER_WRITE_ROLES.has(role);
+}
 
 function normalizeMemberRole(value: unknown): TeacherMemberRole | undefined {
     return typeof value === "string" && ["owner", "admin", "teacher", "assistant", "viewer"].includes(value.trim())

@@ -49,16 +49,49 @@ npm test -- --run src/lib/supabaseSchemaContract.test.ts src/lib/workspaceContex
 
 The contract test checks that the SQL schema still exposes the roster, fact, region, retake, guest-merge, and Kakao pre-send columns/indexes used by the app. The workspace-context tests check that app-managed teacher sessions create stable interim `teacher_<hash>` organization/user scopes without exposing raw email addresses in row ids.
 
-Under the current alpha public-policy sync model, remote roster/exam/attempt saves also bootstrap:
+## Live PostgreSQL CI gate
 
-- `omr_organizations`
-- `omr_user_profiles`
-- `omr_organization_members`
-- `omr_teacher_profiles`
+SQL migration semantics are release-blocking in `.github/workflows/ci.yml` under
+`supabase-live-contract`. The job runs `scripts/verify-supabase-live.mjs` against
+PostgreSQL 17 with `postgres` as the single migration owner and applies:
 
-Teacher login also attempts the same bootstrap through a server action when `SUPABASE_SERVICE_ROLE_KEY` or `OMR_SUPABASE_SERVICE_ROLE_KEY` is configured. Service role keys must stay server-only and must never use a `NEXT_PUBLIC_` prefix.
+`schema.sql` → sorted `migrations` → `production-server-boundary.sql` →
+`live-test-assertions.sql`
 
-Those bootstrap writes must move fully to trusted server/service-role code before `production-rls.sql` is applied.
+The server-only profile first calls
+`omr_assert_production_boundary_preflight_v1`, then removes browser table,
+sequence, and function privileges, removes alpha/legacy browser policies, and
+keeps service-role RPC execution available. It also closes `storage.objects` and
+`storage.buckets` for `omr-private-assets` through owner-installed
+`AS RESTRICTIVE` policies. It does not revoke managed Storage table ACLs, change
+managed ownership, or disable browser Storage access to other buckets. The
+assertions enumerate every
+`public.omr_*` table, public sequence, and public function from PostgreSQL
+catalogs, verify ENABLE + FORCE RLS, perform actual denied browser CRUD, and
+exercise the service-role workflows and Storage CRUD. The live-only fixture
+also proves an unrelated permissive bucket policy still works.
+
+The service-role-only readiness probe version `202607280003` is the runtime
+release gate. It combines direct catalog grants with effective
+`has_*_privilege` checks (including column privileges and PostgreSQL 17
+`MAINTAIN`), requires zero public canonical policies, validates the exact
+27-table allowlist plus every table's ENABLE + FORCE RLS state, reruns the
+four-count organization preflight, checks the exact purpose-scoped teacher RPC
+signatures, requires the exact 11 server-gateway signatures with no extra
+overload, forbids every legacy broad-RPC overload, and verifies the hosted
+Storage owner plus the exact private-bucket restrictive policies. A missing
+key, false key, older or whitespace-normalized version, array payload, or other
+malformed response fails closed. The payload contains fixed booleans only; it
+never returns preflight samples or row data. The teacher Settings action checks
+same-origin and a valid signed teacher session before invoking this service-role
+probe, explicitly excludes the signed public-showcase identity, and applies a
+signed-actor-primary request limit whose expired entries are pruned and whose
+in-memory store has a fixed cap. This process-local limiter is defense in depth;
+multi-instance deployments must also enforce a shared upstream rate limit.
+
+Run `npm run test:supabase:live` locally when Docker is available. A machine
+without Docker cannot replace this required CI gate with source-string
+assertions.
 
 ## Data Model
 
@@ -118,20 +151,56 @@ For large assets, keep metadata in Postgres and binary data in Supabase Storage:
 - File location: `storage_bucket` + `storage_path`
 - External resources: `source_url`
 
-## Production RLS Handoff
+## Production server-only handoff
 
-The current policies in `schema.sql` are intentionally open for alpha/local testing because the app does not have real Supabase Auth yet. Do not store real student data with these policies.
+The policies in `schema.sql` remain intentionally open only for alpha/local testing.
+They are not a Supabase Auth or server-only production boundary. Do not store real student data
+until the server-only handoff is complete. `production-rls.sql` is the superseded
+direct authenticated-browser profile; do not use it for a new production cutover.
 
-`production-rls.sql` is the production policy handoff file. It removes the alpha public policies, revokes anonymous table access, forces RLS, and gates data through Supabase Auth plus `omr_organization_members`.
+`production-server-boundary.sql` is the production handoff profile. It is
+idempotent, but its preflight is intentionally fail-closed. Use this order:
 
-Before running `production-rls.sql` or using sensitive real student data:
+1. Put writes into maintenance mode and take a restorable database snapshot.
+2. Connect as `postgres`, the single migration owner, and deploy the matching
+   `schema.sql` and all `migrations` in filename order. Do not mix owners: default
+   privileges are owner-specific.
+3. In that `postgres` session, run
+   `select public.omr_assert_production_boundary_preflight_v1();`. Stop unless
+   every bounded organization-integrity count is zero.
+4. Still as `postgres`, apply `supabase/production-server-boundary.sql`. The
+   profile rejects another `current_user`; a service-role API key cannot alter
+   grants, RLS, or `postgres` default ACLs. Do not separately apply
+   `production-rls.sql`.
+5. Run `npm run test:supabase:live` for the same commit and require the
+   `supabase-live-contract` CI job to pass.
+6. Record the commit SHA, SHA-256 policy hash, CI run URL, database project,
+   operator, timestamp, preflight result, and attack/assertion result in the
+   release evidence.
+7. Deploy the matching server build and verify teacher/student server-action
+   journeys before reopening writes.
 
-1. Enable Supabase Auth for teachers and students.
-2. Backfill every production row with the correct `organization_id`.
-3. Create `omr_organization_members` rows for each active staff account.
-4. Move organization creation, first-owner bootstrap, and audit-log writes to trusted server/service-role code.
-5. Run `supabase/production-rls.sql` in the Supabase SQL Editor.
-6. Add server-side entitlement checks for Pro and Academy features.
-7. Add data retention rules for archived handwriting.
+The profile covers all 27 `public.omr_*` app tables. Supabase requires entities
+under `storage` to remain owned by `supabase_storage_admin`; see
+[Supabase platform permissions](https://supabase.com/docs/guides/platform/permissions).
+Still in the `postgres` transaction, the profile verifies that `postgres` can
+`SET ROLE supabase_storage_admin`, enters that managed owner for the Storage
+policy phase, and resets to `postgres` before continuing the public-schema
+profile. It never revokes/grants managed table ACLs or changes ownership.
 
-After this handoff, anonymous quick-entry students can no longer write directly through the publishable Supabase key. Keep student submissions server-mediated until student Auth accounts or signed assignment tokens are implemented.
+For `omr-private-assets`, exact repository-owned policy names are replaced with
+`AS RESTRICTIVE` policies on `storage.objects` and `storage.buckets`. They deny
+`anon`/`authenticated` rows whose `bucket_id`/`id` is
+`omr-private-assets`, while evaluating true for other buckets so unrelated
+permissive policies keep their existing behavior. The service role bypasses RLS
+and remains server-only. This follows the supported
+[Storage access-control](https://supabase.com/docs/guides/storage/security/access-control)
+policy path; managed Storage metadata should otherwise be treated as read-only
+as described by the
+[Storage schema guide](https://supabase.com/docs/guides/storage/schema/design).
+
+Rollback must not restore browser canonical CRUD. First stop application writes
+and roll back the server deployment. Any database privilege loosening requires
+security-owner approval, an explicit reviewed policy, and a new live-gate log;
+never use the alpha schema policies or `production-rls.sql` as an emergency
+rollback.

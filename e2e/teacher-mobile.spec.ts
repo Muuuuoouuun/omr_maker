@@ -213,10 +213,11 @@ test.describe("Teacher phone and tablet app surfaces", () => {
         await expect(toolbar).toBeVisible();
         await expectTouchTarget(toolbar.getByRole("button", { name: /되돌리기/ }));
         await expectTouchTarget(toolbar.getByRole("button", { name: /다시 실행/ }));
-        await expectTouchTarget(toolbar.locator("label", { hasText: "문제지 업로드" }));
-        await expectTouchTarget(toolbar.locator("label", { hasText: "답지 업로드" }));
-        await expectTouchTarget(toolbar.getByRole("button", { name: /이미지 저장/ }));
-        await expectTouchTarget(toolbar.getByRole("button", { name: "배포하기" }));
+        await expectTouchTarget(toolbar.getByRole("button", { name: "문제지 PDF 업로드" }));
+        await expectTouchTarget(toolbar.getByRole("button", { name: "답지 PDF 업로드" }));
+        const completionActions = page.locator(".create-primary-actions:visible");
+        await expectTouchTarget(completionActions.getByRole("button", { name: /이미지 저장/ }));
+        await expectTouchTarget(completionActions.getByRole("button", { name: "배포하기" }));
         await expectTouchTarget(toolbar.getByRole("button", { name: "교사 로그아웃" }));
         await expectTouchTarget(toolbar.getByRole("button", { name: /모드로 전환/ }));
         expect(await smallTargets(page, ".create-editor-actions button, .create-editor-actions label")).toEqual([]);
@@ -250,7 +251,7 @@ test.describe("Teacher phone and tablet app surfaces", () => {
         }
         await page.getByLabel("시험 제목").fill("모바일 배포 접근성 시험");
         await page.getByLabel("빠른 정답 입력").fill("1".repeat(20));
-        const distributeButton = toolbar.getByRole("button", { name: "배포하기" });
+        const distributeButton = completionActions.getByRole("button", { name: "배포하기" });
         await distributeButton.focus();
         await distributeButton.press("Enter");
         const distributeDialog = page.getByRole("dialog", { name: "시험 배포하기" });
@@ -259,6 +260,57 @@ test.describe("Teacher phone and tablet app surfaces", () => {
         await page.keyboard.press("Escape");
         await expect(distributeDialog).toBeHidden();
         await expect(distributeButton).toBeFocused();
+        await expectNoHorizontalOverflow(page);
+    });
+
+    test("keeps the primary create action visible above mobile content", async ({ page }) => {
+        await page.setViewportSize({ width: 390, height: 844 });
+        await loginAsTeacher(page, "/create");
+
+        const workspaceTabs = page.getByRole("tablist", { name: "출제 작업 화면" });
+        await workspaceTabs.getByRole("tab", { name: /설정/ }).click();
+        await page.getByLabel("시험 제목").fill("모바일 배포 액션 시험");
+        await page.getByLabel("빠른 정답 입력").fill("1".repeat(20));
+
+        const actionRail = page.locator(".create-primary-actions:visible");
+        const distribute = actionRail.getByRole("button", { name: "배포하기" });
+        await expect(actionRail).toHaveCount(1);
+        await expect(distribute).toBeInViewport();
+
+        const [railBox, distributeBox, viewport, railPosition] = await Promise.all([
+            actionRail.boundingBox(),
+            distribute.boundingBox(),
+            page.evaluate(() => ({
+                width: document.documentElement.clientWidth,
+                height: document.documentElement.clientHeight,
+            })),
+            actionRail.evaluate(element => getComputedStyle(element).position),
+        ]);
+        expect(railBox).not.toBeNull();
+        expect(distributeBox).not.toBeNull();
+        expect(railPosition).toBe("sticky");
+        expect(distributeBox!.height).toBeGreaterThanOrEqual(44);
+        expect(railBox!.x).toBeGreaterThanOrEqual(0);
+        expect(railBox!.x + railBox!.width).toBeLessThanOrEqual(viewport.width);
+        expect(railBox!.y + railBox!.height).toBeLessThanOrEqual(viewport.height);
+
+        for (const requiredField of [
+            page.getByLabel("시험 제목"),
+            page.getByLabel("빠른 정답 입력"),
+        ]) {
+            await requiredField.scrollIntoViewIfNeeded();
+            const [fieldBox, settledRailBox] = await Promise.all([
+                requiredField.boundingBox(),
+                actionRail.boundingBox(),
+            ]);
+            expect(fieldBox).not.toBeNull();
+            expect(settledRailBox).not.toBeNull();
+            expect(
+                fieldBox!.y + fieldBox!.height <= settledRailBox!.y
+                || fieldBox!.y >= settledRailBox!.y + settledRailBox!.height
+            ).toBe(true);
+        }
+
         await expectNoHorizontalOverflow(page);
     });
 
@@ -283,7 +335,13 @@ test.describe("Teacher phone and tablet app surfaces", () => {
         expect(viewerBox).not.toBeNull();
         expect(viewerBox!.width).toBeGreaterThanOrEqual(300);
         expect(viewerBox!.width).toBeGreaterThanOrEqual(sidebarBox!.width - 2);
-        expect(viewerBox!.y).toBeGreaterThanOrEqual(sidebarBox!.y + sidebarBox!.height);
+        const stacksHandwritingPanels = await page.evaluate(() => window.matchMedia("(max-width: 760px)").matches);
+        if (stacksHandwritingPanels) {
+            expect(viewerBox!.y).toBeGreaterThanOrEqual(sidebarBox!.y + sidebarBox!.height);
+        } else {
+            expect(viewerBox!.x).toBeGreaterThanOrEqual(sidebarBox!.x + sidebarBox!.width);
+            expect(Math.abs(viewerBox!.y - sidebarBox!.y)).toBeLessThanOrEqual(2);
+        }
     });
 
     test("lays out the mobile student result tabs as touch-friendly rows", async ({ page }) => {

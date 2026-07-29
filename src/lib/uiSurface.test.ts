@@ -8,7 +8,235 @@ function readProjectFile(filePath: string): string {
     return readFileSync(path.join(rootDir, filePath), "utf8");
 }
 
+function stripCssComments(cssSource: string): string {
+    return cssSource.replace(/\/\*[\s\S]*?\*\//g, "");
+}
+
+function extractCssBlock(cssSource: string, blockHeader: string): string {
+    const css = stripCssComments(cssSource);
+    let headerStart = 0;
+    let parenthesisDepth = 0;
+    let bracketDepth = 0;
+    let quote: string | null = null;
+
+    for (let index = 0; index < css.length; index += 1) {
+        const character = css[index];
+        if (quote) {
+            if (character === "\\") {
+                index += 1;
+            } else if (character === quote) {
+                quote = null;
+            }
+            continue;
+        }
+
+        if (character === '"' || character === "'") {
+            quote = character;
+        } else if (character === "(") {
+            parenthesisDepth += 1;
+        } else if (character === ")") {
+            parenthesisDepth -= 1;
+        } else if (character === "[") {
+            bracketDepth += 1;
+        } else if (character === "]") {
+            bracketDepth -= 1;
+        } else if (character === ";" && parenthesisDepth === 0 && bracketDepth === 0) {
+            headerStart = index + 1;
+        } else if (character === "{" && parenthesisDepth === 0 && bracketDepth === 0) {
+            const matchedHeader = css.slice(headerStart, index).trim();
+            const bodyStart = index + 1;
+            let braceDepth = 1;
+            let bodyQuote: string | null = null;
+
+            for (index += 1; index < css.length; index += 1) {
+                const bodyCharacter = css[index];
+                if (bodyQuote) {
+                    if (bodyCharacter === "\\") {
+                        index += 1;
+                    } else if (bodyCharacter === bodyQuote) {
+                        bodyQuote = null;
+                    }
+                    continue;
+                }
+
+                if (bodyCharacter === '"' || bodyCharacter === "'") {
+                    bodyQuote = bodyCharacter;
+                } else if (bodyCharacter === "{") {
+                    braceDepth += 1;
+                } else if (bodyCharacter === "}") {
+                    braceDepth -= 1;
+                    if (braceDepth === 0) {
+                        if (matchedHeader === blockHeader) return css.slice(bodyStart, index);
+                        headerStart = index + 1;
+                        break;
+                    }
+                }
+            }
+
+            if (braceDepth !== 0) throw new Error(`Unclosed CSS block: ${matchedHeader}`);
+        }
+    }
+
+    throw new Error(`CSS block not found: ${blockHeader}`);
+}
+
+function extractCustomProperties(cssBlock: string): Record<string, string> {
+    const css = stripCssComments(cssBlock);
+    const declarations: Record<string, string> = {};
+    let depth = 0;
+    let declarationStart = 0;
+
+    for (let index = 0; index < css.length; index += 1) {
+        const character = css[index];
+        if (character === "{") {
+            depth += 1;
+        } else if (character === "}") {
+            depth -= 1;
+            if (depth === 0) declarationStart = index + 1;
+        } else if (character === ";" && depth === 0) {
+            const declaration = css.slice(declarationStart, index).trim();
+            declarationStart = index + 1;
+            const match = declaration.match(/^(--[\w-]+)\s*:\s*([\s\S]+)$/);
+            if (!match) continue;
+
+            const [, name, value] = match;
+            if (name in declarations) throw new Error(`Duplicate CSS declaration in block: ${name}`);
+            declarations[name] = value.trim();
+        }
+    }
+
+    return declarations;
+}
+
+function countCustomPropertyDeclarations(cssSource: string, propertyName: string): number {
+    const escapedName = propertyName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    return stripCssComments(cssSource).match(new RegExp(`${escapedName}\\s*:`, "g"))?.length ?? 0;
+}
+
+function expectEnvOverridesAfterInherited(envSource: string, overrideKeys: readonly string[]): number {
+    const inheritedEnvIndex = envSource.indexOf("...process.env");
+    expect(inheritedEnvIndex, "webServer.env must inherit process.env before applying test overrides").toBeGreaterThanOrEqual(0);
+    for (const key of overrideKeys) {
+        const overrideIndex = envSource.indexOf(`${key}: ""`);
+        expect(
+            overrideIndex,
+            `${key} must be explicitly cleared after ...process.env`,
+        ).toBeGreaterThan(inheritedEnvIndex);
+    }
+    return inheritedEnvIndex;
+}
+
 describe("service UI surface", () => {
+    it("extracts exact CSS scopes without accepting comments, nesting, or selector prefixes", () => {
+        const fixture = `
+            /* :root { --token: commented; } */
+            :root { --token: base; }
+            @media (prefers-reduced-motion: reduce) {
+                :root { --token: reduced; }
+            }
+            html[data-motion="off"] .orb { --token: wrong-selector; }
+        `;
+        const prefixedSelectorFixture = `
+            .scope :root { --token: prefixed-root; }
+            .scope html[data-motion="off"] { --token: prefixed-motion-control; }
+        `;
+
+        expect(extractCustomProperties(extractCssBlock(fixture, ":root"))).toEqual({
+            "--token": "base",
+        });
+        expect(
+            extractCustomProperties(
+                extractCssBlock(
+                    extractCssBlock(fixture, "@media (prefers-reduced-motion: reduce)"),
+                    ":root",
+                ),
+            ),
+        ).toEqual({ "--token": "reduced" });
+        expect(countCustomPropertyDeclarations(fixture, "--token")).toBe(3);
+        expect(() => extractCssBlock(fixture, 'html[data-motion="off"]')).toThrow(
+            'CSS block not found: html[data-motion="off"]',
+        );
+        expect(() => extractCssBlock(prefixedSelectorFixture, ":root")).toThrow(
+            "CSS block not found: :root",
+        );
+        expect(() => extractCssBlock(prefixedSelectorFixture, 'html[data-motion="off"]')).toThrow(
+            'CSS block not found: html[data-motion="off"]',
+        );
+    });
+
+    it("defines exact Balanced base tokens once in the opening root", () => {
+        const css = readProjectFile("src/app/globals.css");
+        const uncommentedCss = stripCssComments(css);
+        const baseTokens = {
+            "--space-related": "1rem",
+            "--space-card": "1.5rem",
+            "--space-section": "2.5rem",
+            "--motion-hover": "160ms",
+            "--motion-panel": "210ms",
+            "--motion-distance": "0.375rem",
+            "--ease-balanced": "cubic-bezier(0.2, 0.8, 0.2, 1)",
+            "--type-body-min": "1rem",
+            "--type-caption-min": "0.8125rem",
+            "--text-body-min": "1rem",
+            "--text-caption-min": "0.8125rem",
+            "--shadow-action": "0 8px 18px color-mix(in srgb, var(--primary) 20%, transparent)",
+        } as const;
+        const openingRootDeclarations = extractCustomProperties(extractCssBlock(css, ":root"));
+
+        expect(uncommentedCss.trimStart().startsWith(":root")).toBe(true);
+        for (const [propertyName, expectedValue] of Object.entries(baseTokens)) {
+            expect(openingRootDeclarations[propertyName], propertyName).toBe(expectedValue);
+        }
+
+        for (const propertyName of Object.keys(baseTokens)) {
+            const expectedCount = propertyName.startsWith("--motion-") ? 3 : 1;
+            expect(
+                countCustomPropertyDeclarations(css, propertyName),
+                `${propertyName} global declaration count`,
+            ).toBe(expectedCount);
+        }
+    });
+
+    it("disables Balanced motion tokens for both motion controls", () => {
+        const css = readProjectFile("src/app/globals.css");
+        const reducedMotionMedia = extractCssBlock(css, "@media (prefers-reduced-motion: reduce)");
+        const expectedOverrides = {
+            "--motion-hover": "1ms",
+            "--motion-panel": "1ms",
+            "--motion-distance": "0rem",
+        };
+
+        expect(
+            extractCustomProperties(extractCssBlock(reducedMotionMedia, ":root")),
+        ).toEqual(expectedOverrides);
+        expect(
+            extractCustomProperties(extractCssBlock(css, 'html[data-motion="off"]')),
+        ).toEqual(expectedOverrides);
+    });
+
+    it("targets actual dialog panels with the Balanced enter animation", () => {
+        const css = readProjectFile("src/app/globals.css");
+        const answerImportModal = readProjectFile("src/components/AnswerImportModal.tsx");
+        const createPage = readProjectFile("src/app/create/page.tsx");
+
+        expect(answerImportModal).toContain('className="balanced-dialog-panel"');
+        expect(createPage).toContain('className="balanced-dialog-panel"');
+        expect(css).toContain("@keyframes balancedDialogEnter");
+        expect(css).toContain(".balanced-dialog-panel");
+        expect(css).not.toMatch(/(?:^|\n)\[role="dialog"\]\s*\{/);
+    });
+
+    it("gives the active landing content one main structure and role-level headings", () => {
+        const homePage = readProjectFile("src/app/page.tsx");
+
+        expect(homePage.match(/<main(?:\s|>)/g) ?? []).toHaveLength(1);
+        expect(homePage.match(/<\/main>/g) ?? []).toHaveLength(1);
+        expect(homePage).toContain('<main id="main-content" className="landing-main">');
+        expect(homePage).toMatch(/<h1[^>]*>/);
+        expect(homePage).toContain("환영합니다");
+        expect(homePage).toContain("학습 시작");
+    });
+
     it("keeps premium scrollbars on the app, PDF viewer, and dense panels", () => {
         const css = readProjectFile("src/app/globals.css");
         const pdfViewer = readProjectFile("src/components/PDFViewer.tsx");
@@ -440,6 +668,31 @@ describe("service UI surface", () => {
         expect(teacherMobileE2e).toContain(".create-editor-actions button, .create-editor-actions label");
     });
 
+    it("pins the Playwright-owned billing plan simulation without Supabase", () => {
+        const playwrightConfig = readProjectFile("playwright.config.ts");
+        const webServerEnv = playwrightConfig.match(
+            /webServer:[\s\S]*?env:\s*{([\s\S]*?)\n\s{8}},\n\s{4}},\n}\);/,
+        )?.[1];
+
+        expect(webServerEnv).toBeDefined();
+        const supabaseOverrideKeys = [
+            "NEXT_PUBLIC_SUPABASE_URL",
+            "NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY",
+            "NEXT_PUBLIC_SUPABASE_ANON_KEY",
+            "SUPABASE_URL",
+            "SUPABASE_SERVICE_ROLE_KEY",
+            "OMR_SUPABASE_SERVICE_ROLE_KEY",
+        ] as const;
+        const reorderedFixture = 'NEXT_PUBLIC_SUPABASE_URL: "",\n...process.env,';
+        expect(() => expectEnvOverridesAfterInherited(
+            reorderedFixture,
+            ["NEXT_PUBLIC_SUPABASE_URL"],
+        )).toThrow("NEXT_PUBLIC_SUPABASE_URL must be explicitly cleared after ...process.env");
+        const inheritedEnvIndex = expectEnvOverridesAfterInherited(webServerEnv || "", supabaseOverrideKeys);
+        expect(webServerEnv?.indexOf('OMR_PLAN_DEV_SIMULATION: "1"')).toBeGreaterThan(inheritedEnvIndex);
+        expect(webServerEnv?.indexOf('OMR_DEV_PLAN: "free"')).toBeGreaterThan(inheritedEnvIndex);
+    });
+
     it("keeps installed phone and tablet app shells inside safe areas", () => {
         const css = readProjectFile("src/app/globals.css");
         const layout = readProjectFile("src/app/layout.tsx");
@@ -570,9 +823,10 @@ describe("service UI surface", () => {
         expect(solvePage).toContain('Link href="/?role=student"');
     });
 
-    it("keeps guest attempt merging visible and idempotent in the student flow", () => {
+    it("keeps guest recovery visible and merges only server-acknowledged rows", () => {
         const homePage = readProjectFile("src/app/page.tsx");
         const studentDashboard = readProjectFile("src/app/student/dashboard/page.tsx");
+        const recoveryPanel = readProjectFile("src/components/StudentGuestRecoveryPanel.tsx");
         const storage = readProjectFile("src/utils/storage.ts");
 
         expect(storage).toContain("previewGuestMerge");
@@ -584,9 +838,11 @@ describe("service UI surface", () => {
         expect(homePage).toContain("recentStudentSession");
         expect(homePage).toContain("최근 학생");
         expect(homePage).toContain("handleContinueRecentStudent");
-        expect(studentDashboard).toContain("연결하지 않은 게스트 기록");
-        expect(studentDashboard).toContain("handleMergeGuestIntoCurrentStudent");
+        expect(studentDashboard).toContain("<StudentGuestRecoveryPanel");
         expect(studentDashboard).toContain("previewGuestMerge");
+        expect(recoveryPanel).toContain("미검증 로컬 기록 복구");
+        expect(recoveryPanel).toContain("acknowledgedAttemptIds");
+        expect(recoveryPanel).not.toContain("handleMergeGuestIntoCurrentStudent");
     });
 
     it("keeps teacher session health visible in operational headers", () => {
@@ -1273,6 +1529,10 @@ describe("service UI surface", () => {
         const createPage = readProjectFile("src/app/create/page.tsx");
         const answerImportModal = readProjectFile("src/components/AnswerImportModal.tsx");
 
+        expect(createPage).toContain('const AnswerImportModal = dynamic(() => import("@/components/AnswerImportModal")');
+        expect(createPage).not.toMatch(/^\s*import\s+.+\s+from\s+["']@\/components\/AnswerImportModal["'];?\s*$/m);
+        expect(createPage).toContain('import { activateFilePicker } from "@/lib/activateFilePicker"');
+        expect(answerImportModal).toContain("import { activateFilePicker } from '@/lib/activateFilePicker'");
         expect(createPage).toContain('import type { ParsedAnswer } from "@/services/answerParser"');
         expect(createPage).not.toContain('import { ParsedAnswer } from "@/services/answerParser"');
         expect(answerImportModal).toContain("import type { ParsedAnswer } from '@/services/answerParser'");
@@ -1492,8 +1752,9 @@ describe("service UI surface", () => {
         expect(livePage).toContain('return { exams: loaded, mode: "real" }');
         expect(livePage).toContain("const isDemoLive = liveDataMode === \"demo\"");
         expect(livePage).toContain("allowSynthetic: isDemoLive");
-        expect(livePage).toContain("saveTeacherAttempt(attempt)");
-        expect(livePage).toContain("forceCompleteLiveAttempt");
+        expect(livePage).toContain("forceFinishTeacherAttempts(targets, finishedAt)");
+        expect(livePage).not.toMatch(/\bsaveTeacherAttempt\(/);
+        expect(livePage).not.toContain("forceCompleteLiveAttempt");
         expect(livePage).toContain("카카오 알림 연동 전");
         expect(livePage).toContain("데모 실시간 모드");
         expect(livePage).toContain("응시 결과 확인");

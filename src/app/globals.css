@@ -71,6 +71,21 @@
   --transition-smooth: all 0.5s cubic-bezier(0.25, 1, 0.5, 1);
   --transition-spring: all 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275);
 
+  /* Balanced hierarchy and motion */
+  --space-related: 1rem;
+  --space-card: 1.5rem;
+  --space-section: 2.5rem;
+  --motion-hover: 160ms;
+  --motion-panel: 210ms;
+  --motion-distance: 0.375rem;
+  --ease-balanced: cubic-bezier(0.2, 0.8, 0.2, 1);
+  --type-body-min: 1rem;
+  --type-caption-min: 0.8125rem;
+  /* Compatibility aliases for the Balanced plan; new consumers use --type-*. */
+  --text-body-min: 1rem;
+  --text-caption-min: 0.8125rem;
+  --shadow-action: 0 8px 18px color-mix(in srgb, var(--primary) 20%, transparent);
+
   /* Geist (numerals/mono) is wired via next/font/google in layout.tsx, which
      exposes --font-geist-sans / --font-geist-mono as custom properties scoped
      to <body>'s className. Do NOT compose those two into a --font-sans-style
@@ -880,6 +895,31 @@
 .tone-error   { color: #dc2626; background: #fef2f2; border-color: #fecaca; }
 .tone-text-teal { color: #0f766e; }
 
+.away-severity-badge {
+  display: inline-flex;
+  align-items: center;
+  width: fit-content;
+  margin-block: 0.25rem;
+  padding: 0.25rem 0.55rem;
+  border: 1px solid transparent;
+  border-radius: var(--radius-full);
+  font-size: var(--type-caption-min);
+  font-weight: 700;
+  line-height: 1.35;
+}
+
+[data-away-severity="neutral"] {
+  color: #475569;
+  background: #f1f5f9;
+  border-color: #cbd5e1;
+}
+
+[data-away-severity="attention"] {
+  color: #92400e;
+  background: #fef3c7;
+  border-color: #fcd34d;
+}
+
 [data-theme="dark"] .tone-primary { color: #a5b4fc; background: color-mix(in srgb, #6366f1 18%, transparent); border-color: color-mix(in srgb, #6366f1 42%, transparent); }
 [data-theme="dark"] .tone-teal    { color: #5eead4; background: color-mix(in srgb, #14b8a6 15%, transparent); border-color: color-mix(in srgb, #14b8a6 38%, transparent); }
 [data-theme="dark"] .tone-amber   { color: #fdba74; background: color-mix(in srgb, #f97316 15%, transparent); border-color: color-mix(in srgb, #f97316 36%, transparent); }
@@ -887,6 +927,8 @@
 [data-theme="dark"] .tone-success { color: #86efac; background: color-mix(in srgb, #22c55e 14%, transparent); border-color: color-mix(in srgb, #22c55e 36%, transparent); }
 [data-theme="dark"] .tone-error   { color: #fca5a5; background: color-mix(in srgb, #ef4444 14%, transparent); border-color: color-mix(in srgb, #ef4444 38%, transparent); }
 [data-theme="dark"] .tone-text-teal { color: #2dd4bf; }
+[data-theme="dark"] [data-away-severity="neutral"] { color: #cbd5e1; background: color-mix(in srgb, #334155 60%, transparent); border-color: #475569; }
+[data-theme="dark"] [data-away-severity="attention"] { color: #fcd34d; background: color-mix(in srgb, #78350f 50%, transparent); border-color: #b45309; }
 
 /* Dark variants for the review question map + link buttons — these previously
    kept their light pastel palette and glared on the dark theme. */
@@ -1402,6 +1444,12 @@ textarea,
   }
 }
 
+html[data-motion="off"] {
+  --motion-hover: 1ms;
+  --motion-panel: 1ms;
+  --motion-distance: 0rem;
+}
+
 html[data-motion="off"] .orb {
   display: none;
   animation: none;
@@ -1419,6 +1467,12 @@ html[data-motion="off"] *::after {
 }
 
 @media (prefers-reduced-motion: reduce) {
+  :root {
+    --motion-hover: 1ms;
+    --motion-panel: 1ms;
+    --motion-distance: 0rem;
+  }
+
   *,
   *::before,
   *::after {
@@ -1426,6 +1480,28 @@ html[data-motion="off"] *::after {
     animation-duration: 0.01ms !important;
     animation-iteration-count: 1 !important;
     transition-duration: 0.01ms !important;
+  }
+}
+
+html[data-motion="off"] :where(
+  .btn-primary,
+  .mockup-primary-action,
+  .bento-card,
+  .mockup-panel
+),
+html[data-motion="off"] .mockup-dashboard-tabs button::after {
+  transition-duration: 1ms !important;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :where(
+    .btn-primary,
+    .mockup-primary-action,
+    .bento-card,
+    .mockup-panel
+  ),
+  .mockup-dashboard-tabs button::after {
+    transition-duration: 1ms !important;
   }
 }
 
@@ -1491,12 +1567,19 @@ html[data-motion="off"] *::after {
   background: linear-gradient(135deg, var(--primary), var(--primary-dark));
   color: white;
   box-shadow: 0 1px 2px rgba(15, 23, 42, 0.08), 0 4px 14px rgba(79, 70, 229, 0.32);
+  transition:
+    transform var(--motion-hover) var(--ease-balanced),
+    box-shadow var(--motion-hover) var(--ease-balanced);
 }
 
 .btn-primary:hover {
   background: linear-gradient(135deg, var(--primary-light), var(--primary));
   box-shadow: 0 2px 4px rgba(15, 23, 42, 0.08), 0 8px 22px rgba(79, 70, 229, 0.42);
-  transform: translateY(-1px);
+  transform: translateY(calc(-1 * var(--motion-distance)));
+}
+
+.btn-primary:active {
+  transition-duration: var(--motion-hover);
 }
 
 .btn-secondary {
@@ -1512,6 +1595,32 @@ html[data-motion="off"] *::after {
   border-color: color-mix(in srgb, var(--border), var(--muted) 45%);
   box-shadow: var(--shadow-md);
   transform: translateY(-1px);
+}
+
+@keyframes balancedDialogEnter {
+  from {
+    opacity: 0;
+    transform: translateY(var(--motion-distance));
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* Only the dialog surface enters; fixed backdrops and layout stay still. */
+.balanced-dialog-panel {
+  animation: balancedDialogEnter var(--motion-panel) var(--ease-balanced) both;
+}
+
+html[data-motion="off"] .balanced-dialog-panel {
+  animation-duration: 1ms !important;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .balanced-dialog-panel {
+    animation-duration: 1ms !important;
+  }
 }
 
 /* ─── Typography ─────────────────────────────────────── */
@@ -1900,6 +2009,10 @@ html[data-motion="off"] :where(
 }
 
 /* ─── Home App Entry ─────────────────────────────────── */
+.landing-main {
+  width: 100%;
+}
+
 .home-logo {
   display: flex;
   justify-content: center;
@@ -1940,6 +2053,30 @@ html[data-motion="off"] :where(
 .home-role-home-link:focus-visible {
   outline: 3px solid color-mix(in srgb, var(--primary), transparent 55%);
   outline-offset: 3px;
+}
+
+.skip-to-main {
+  position: fixed;
+  top: max(0.75rem, env(safe-area-inset-top));
+  left: max(0.75rem, env(safe-area-inset-left));
+  z-index: 10050;
+  padding: 0.7rem 1rem;
+  border: 2px solid var(--primary);
+  border-radius: var(--radius-md);
+  background: var(--surface);
+  color: var(--foreground);
+  box-shadow: var(--shadow-lg);
+  font-size: 0.9rem;
+  font-weight: 800;
+  opacity: 0;
+  pointer-events: none;
+  transform: translateY(calc(-100% - 1rem));
+}
+
+.skip-to-main:focus-visible {
+  opacity: 1;
+  pointer-events: auto;
+  transform: translateY(0);
 }
 
 .home-page:not([data-home-role="none"]) .home-hero {
@@ -2158,7 +2295,10 @@ html[data-motion="off"] :where(
   border: 1px solid var(--border);
   /* Only the properties hover actually changes — `all` invites accidental
      transitions (e.g. theme swaps animating text color card-by-card). */
-  transition: box-shadow 0.3s cubic-bezier(0.4, 0, 0.2, 1), border-color 0.3s cubic-bezier(0.4, 0, 0.2, 1), transform 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+  transition:
+    box-shadow var(--motion-panel) var(--ease-balanced),
+    border-color var(--motion-panel) var(--ease-balanced),
+    transform var(--motion-panel) var(--ease-balanced);
   overflow: hidden;
   display: flex;
   flex-direction: column;
@@ -2540,6 +2680,13 @@ html[data-motion="off"] :where(
   height: 3px;
   border-radius: 3px 3px 0 0;
   background: transparent;
+  opacity: 0;
+  transform: scaleX(0);
+  transform-origin: center;
+  transition:
+    transform var(--motion-panel) var(--ease-balanced),
+    opacity var(--motion-panel) var(--ease-balanced),
+    background-color var(--motion-panel) var(--ease-balanced);
 }
 
 .mockup-dashboard-tabs button[aria-selected="true"] {
@@ -2548,6 +2695,8 @@ html[data-motion="off"] :where(
 
 .mockup-dashboard-tabs button[aria-selected="true"]::after {
   background: #1769e0;
+  opacity: 1;
+  transform: scaleX(1);
 }
 
 .mockup-login-divider {
@@ -2708,6 +2857,13 @@ html[data-motion="off"] :where(
   border: 1px solid #e2e8f1;
   border-radius: 0.85rem;
   box-shadow: 0 3px 12px rgba(25, 55, 94, 0.035);
+}
+
+.mockup-panel {
+  transition:
+    box-shadow var(--motion-panel) var(--ease-balanced),
+    border-color var(--motion-panel) var(--ease-balanced),
+    transform var(--motion-panel) var(--ease-balanced);
 }
 
 .mockup-metric {
@@ -3120,11 +3276,15 @@ html[data-motion="off"] :where(
   color: #fff;
   background: var(--mockup-blue);
   box-shadow: 0 8px 18px rgba(23, 105, 224, 0.2);
+  transition:
+    transform var(--motion-hover) var(--ease-balanced),
+    box-shadow var(--motion-hover) var(--ease-balanced);
 }
 
 .mockup-primary-action:hover {
   background: #1058c3;
-  transform: translateY(-1px);
+  box-shadow: 0 10px 22px rgba(23, 105, 224, 0.28);
+  transform: translateY(calc(-1 * var(--motion-distance)));
 }
 
 @media (max-width: 1100px) {
@@ -5263,6 +5423,16 @@ body:has(.create-workspace.is-resizing) {
   min-width: 0;
 }
 
+.create-primary-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.create-primary-actions--mobile {
+  display: none;
+}
+
 .create-editor-brand a {
   min-height: 44px;
   min-width: 44px;
@@ -5497,7 +5667,9 @@ body:has(.create-workspace.is-resizing) {
   .dashboard-data-health {
     grid-template-columns: 1fr !important;
   }
+}
 
+@media (max-width: 1024px), (max-width: 1280px) and (pointer: coarse) {
   .create-workspace {
     flex-direction: column !important;
     height: auto !important;
@@ -5744,6 +5916,33 @@ body:has(.create-workspace.is-resizing) {
     text-align: right;
   }
 
+}
+
+@media (max-width: 640px) {
+  .create-primary-actions--desktop {
+    display: none;
+  }
+
+  .create-primary-actions--mobile {
+    position: sticky;
+    bottom: max(0.75rem, env(safe-area-inset-bottom));
+    z-index: 30;
+    display: grid;
+    grid-template-columns: 1fr auto;
+    gap: var(--space-related);
+    flex: 0 0 auto;
+    margin: 0.75rem;
+    padding: 0.75rem;
+    border: 1px solid var(--border);
+    border-radius: 1rem;
+    background: rgb(255 255 255 / 92%);
+    backdrop-filter: blur(14px);
+    box-shadow: var(--shadow-action);
+  }
+
+  .create-primary-actions--mobile .btn {
+    min-height: 2.75rem;
+  }
 }
 
 /* ─── Custom Scrollbar ───────────────────────────────── */

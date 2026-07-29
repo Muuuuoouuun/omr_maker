@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Attempt, Exam } from "@/types/omr";
 import {
     attemptMatchesStudentScope,
@@ -14,6 +14,7 @@ import {
     getSupabaseConfigFromEnv,
     itemsNeedingRemoteSync,
     markLocalExamDeleted,
+    markLocalAttemptServerConfirmed,
     mergeAttemptsForPersistence,
     questionResultRowsForAttempt,
     questionResultToSupabaseRow,
@@ -25,12 +26,14 @@ import {
     flushPendingAttemptSync,
     queueAttemptPendingSync,
     readPendingAttemptSyncIds,
+    replaceLocalAttemptWithCanonical,
     selectMergedGuestAttempts,
     sanitizeAttemptPayload,
     sanitizeExamPayload,
     saveLocalExam,
     saveLocalExams,
     saveLocalAttempt,
+    saveLocalServerConfirmedAttempt,
     saveLocalAttempts,
     sortByNewestActivity,
     storedDataRefsForExamDeletion,
@@ -64,6 +67,36 @@ function createStorage(initial: Record<string, string> = {}): Storage {
         },
     } as Storage;
 }
+
+function createSerialWebLocks() {
+    const tails = new Map<string, Promise<void>>();
+    return {
+        request: async <T>(
+            name: string,
+            _options: object,
+            operation: () => Promise<T> | T,
+        ): Promise<T> => {
+            const prior = tails.get(name) || Promise.resolve();
+            let release!: () => void;
+            const current = new Promise<void>(resolve => {
+                release = resolve;
+            });
+            const tail = prior.then(() => current);
+            tails.set(name, tail);
+            await prior;
+            try {
+                return await operation();
+            } finally {
+                release();
+                if (tails.get(name) === tail) tails.delete(name);
+            }
+        },
+    };
+}
+
+beforeEach(() => {
+    vi.stubGlobal("navigator", { locks: createSerialWebLocks() });
+});
 
 afterEach(() => {
     vi.unstubAllGlobals();
@@ -268,6 +301,61 @@ describe("Supabase persistence mapping", () => {
         // attemptFromSupabaseRow always resolves studentProfileId from the indexed column;
         // even if the original attempt lacked it, it's backfilled from student_profile_id.
         expect(attemptFromSupabaseRow(row)).toEqual({ ...attempt, studentProfileId: row.student_profile_id });
+    });
+
+    it("keeps server-confirmation provenance only in the local attempt cache", async () => {
+        const localStorage = createStorage();
+        vi.stubGlobal("window", { localStorage });
+        vi.stubGlobal("localStorage", localStorage);
+
+        expect(await saveLocalServerConfirmedAttempt(
+            attempt,
+            "2026-07-28T02:00:00.000Z",
+        )).toBe(true);
+        expect(readLocalAttempts()[0]?.localSubmissionProvenance).toEqual({
+            source: "server",
+            confirmedAt: "2026-07-28T02:00:00.000Z",
+        });
+        expect(attemptToSupabaseRow(readLocalAttempts()[0]).payload)
+            .not.toHaveProperty("localSubmissionProvenance");
+
+        expect(await markLocalAttemptServerConfirmed(
+            attempt.id,
+            "2026-07-28T03:00:00.000Z",
+        )).toBe(true);
+        expect(readLocalAttempts()[0]?.localSubmissionProvenance?.confirmedAt)
+            .toBe("2026-07-28T03:00:00.000Z");
+    });
+
+    it("preserves server-confirmation provenance across same-id server refreshes", async () => {
+        const localStorage = createStorage();
+        vi.stubGlobal("window", { localStorage });
+        vi.stubGlobal("localStorage", localStorage);
+
+        expect(await saveLocalServerConfirmedAttempt(
+            attempt,
+            "2026-07-28T02:00:00.000Z",
+        )).toBe(true);
+        expect(await saveLocalAttempts([{ ...attempt, score: 9 }])).toBe(true);
+        expect(readLocalAttempts()[0]).toMatchObject({
+            score: 9,
+            localSubmissionProvenance: {
+                source: "server",
+                confirmedAt: "2026-07-28T02:00:00.000Z",
+            },
+        });
+
+        expect(await saveLocalAttempts([{
+            ...attempt,
+            localSubmissionProvenance: {
+                source: "server",
+                confirmedAt: "2026-07-28T04:00:00.000Z",
+            },
+        }])).toBe(true);
+        expect(readLocalAttempts()[0]?.localSubmissionProvenance?.confirmedAt)
+            .toBe("2026-07-28T04:00:00.000Z");
+        expect(attemptToSupabaseRow(readLocalAttempts()[0]).payload)
+            .not.toHaveProperty("localSubmissionProvenance");
     });
 
     it("preserves teacher sub-question review status in indexed payload roundtrips", () => {
@@ -672,12 +760,12 @@ describe("Supabase persistence mapping", () => {
         expect(JSON.stringify(row.payload)).not.toContain("points");
     });
 
-    it("keeps handwriting payloads out of localStorage attempt indexes", () => {
+    it("keeps handwriting payloads out of localStorage attempt indexes", async () => {
         const localStorage = createStorage();
         vi.stubGlobal("window", { localStorage });
         vi.stubGlobal("localStorage", localStorage);
 
-        const saved = saveLocalAttempt({
+        const saved = await saveLocalAttempt({
             ...attempt,
             drawings: {
                 1: [JSON.stringify({ points: [{ x: 0.1, y: 0.2 }] })],
@@ -689,7 +777,7 @@ describe("Supabase persistence mapping", () => {
         expect(localStorage.getItem("omr_attempts") || "").not.toContain("points");
     });
 
-    it("bulk-saves attempts with one index write while preserving unrelated attempts and stripping drawings", () => {
+    it("bulk-saves attempts with one index write while preserving unrelated attempts and stripping drawings", async () => {
         const unrelatedAttempt = { ...attempt, id: "attempt-unrelated", studentName: "Lee" };
         const localStorage = createStorage({
             omr_attempts: JSON.stringify([unrelatedAttempt]),
@@ -698,7 +786,7 @@ describe("Supabase persistence mapping", () => {
         vi.stubGlobal("window", { localStorage });
         vi.stubGlobal("localStorage", localStorage);
 
-        const saved = saveLocalAttempts([
+        const saved = await saveLocalAttempts([
             {
                 ...attempt,
                 drawings: {
@@ -716,6 +804,368 @@ describe("Supabase persistence mapping", () => {
             "attempt-1",
         ]);
         expect(localStorage.getItem("omr_attempts") || "").not.toContain("points");
+    });
+
+    it("preserves a local-only writer forced between canonical read and write", async () => {
+        const localStorage = createStorage({
+            omr_attempts: JSON.stringify([{ ...attempt, id: "attempt-local-a" }]),
+        });
+        const originalGetItem = localStorage.getItem.bind(localStorage);
+        let injected = false;
+        let localOnlyWrite: boolean | Promise<boolean> | null = null;
+        localStorage.getItem = key => {
+            const snapshot = originalGetItem(key);
+            if (key === "omr_attempts" && !injected) {
+                injected = true;
+                localOnlyWrite = saveLocalAttempt({
+                    ...attempt,
+                    id: "attempt-local-only-b",
+                    score: 73,
+                });
+            }
+            return snapshot;
+        };
+        vi.stubGlobal("window", { localStorage });
+        vi.stubGlobal("localStorage", localStorage);
+
+        await replaceLocalAttemptWithCanonical("attempt-local-a", {
+            ...attempt,
+            id: "attempt-server-a",
+            score: 91,
+        });
+        await localOnlyWrite;
+
+        expect(readLocalAttempts().map(item => [item.id, item.score]).sort()).toEqual([
+            ["attempt-local-only-b", 73],
+            ["attempt-server-a", 91],
+        ]);
+    });
+
+    it("preserves both local writers forced to start from the same attempt-index snapshot", async () => {
+        const localStorage = createStorage();
+        const originalGetItem = localStorage.getItem.bind(localStorage);
+        let injected = false;
+        let secondWrite: boolean | Promise<boolean> | null = null;
+        localStorage.getItem = key => {
+            const snapshot = originalGetItem(key);
+            if (key === "omr_attempts" && !injected) {
+                injected = true;
+                secondWrite = saveLocalAttempt({
+                    ...attempt,
+                    id: "attempt-local-b",
+                    score: 82,
+                });
+            }
+            return snapshot;
+        };
+        vi.stubGlobal("window", { localStorage });
+        vi.stubGlobal("localStorage", localStorage);
+
+        const firstWrite = saveLocalAttempt({
+            ...attempt,
+            id: "attempt-local-a",
+            score: 81,
+        });
+        await firstWrite;
+        await secondWrite;
+
+        expect(readLocalAttempts().map(item => [item.id, item.score]).sort()).toEqual([
+            ["attempt-local-a", 81],
+            ["attempt-local-b", 82],
+        ]);
+    });
+
+    it("atomically replaces a superseded local attempt while preserving device-only review artifacts", async () => {
+        const drawingsRef = {
+            store: "indexeddb" as const,
+            key: "attempt:attempt-local:drawings",
+            updatedAt: "2026-07-28T01:00:00.000Z",
+        };
+        const localAttempt: Attempt = {
+            ...attempt,
+            id: "attempt-local",
+            score: 0,
+            totalScore: 0,
+            answers: { 1: 1 },
+            questionResults: [{
+                schemaVersion: 1,
+                attemptId: "attempt-local",
+                examId: attempt.examId,
+                examTitle: attempt.examTitle,
+                studentName: attempt.studentName,
+                questionId: 1,
+                questionNumber: 1,
+                score: 100,
+                earnedScore: 0,
+                selectedAnswer: 1,
+                status: "wrong",
+                isCorrect: false,
+                isWrong: true,
+                isUnanswered: false,
+                finishedAt: attempt.finishedAt,
+            }],
+            drawingsRef,
+            handwritingArchived: true,
+            handwritingPlan: "pro",
+            drawingPageCount: 1,
+            drawingStrokeCount: 4,
+            questionDrawings: [{ questionId: 1, questionNumber: 1, page: 1, strokeCount: 4 }],
+            studentQuestions: [{
+                questionId: 1,
+                questionNumber: 1,
+                body: "풀이를 확인해주세요.",
+                createdAt: "2026-07-28T01:01:00.000Z",
+                status: "queued",
+            }],
+        };
+        const unrelatedAttempt = { ...attempt, id: "attempt-unrelated" };
+        const authoritativeAttempt: Attempt = {
+            ...attempt,
+            id: "attempt-server",
+            score: 100,
+            totalScore: 100,
+            answers: { 1: 3 },
+            questionResults: [{
+                ...localAttempt.questionResults![0],
+                attemptId: "attempt-server",
+                selectedAnswer: 3,
+                earnedScore: 100,
+                status: "correct",
+                isCorrect: true,
+                isWrong: false,
+            }],
+        };
+        const localStorage = createStorage({
+            omr_attempts: JSON.stringify([localAttempt, unrelatedAttempt]),
+        });
+        vi.stubGlobal("window", { localStorage });
+        vi.stubGlobal("localStorage", localStorage);
+
+        const replacement = await replaceLocalAttemptWithCanonical("attempt-local", authoritativeAttempt);
+
+        expect(replacement.committed).toBe(true);
+        expect(replacement.attempt).toMatchObject({
+            id: "attempt-server",
+            localSubmissionProvenance: {
+                source: "server",
+                confirmedAt: expect.any(String),
+            },
+            score: 100,
+            totalScore: 100,
+            answers: { 1: 3 },
+            questionResults: [{
+                attemptId: "attempt-server",
+                selectedAnswer: 3,
+                earnedScore: 100,
+                status: "correct",
+            }],
+            drawingsRef,
+            handwritingArchived: true,
+            handwritingPlan: "pro",
+            drawingPageCount: 1,
+            drawingStrokeCount: 4,
+            studentQuestions: [{ body: "풀이를 확인해주세요." }],
+        });
+        expect(readLocalAttempts().map(item => item.id).sort()).toEqual([
+            "attempt-server",
+            "attempt-unrelated",
+        ]);
+    });
+
+    it("leaves the superseded record intact when canonical replacement cannot be written", async () => {
+        const localAttempt = { ...attempt, id: "attempt-local" };
+        const base = createStorage({
+            omr_attempts: JSON.stringify([localAttempt]),
+        });
+        const localStorage = {
+            ...base,
+            setItem(key: string, value: string) {
+                if (key === "omr_attempts") throw new Error("quota");
+                base.setItem(key, value);
+            },
+        } as Storage;
+        vi.stubGlobal("window", { localStorage });
+        vi.stubGlobal("localStorage", localStorage);
+
+        const replacement = await replaceLocalAttemptWithCanonical("attempt-local", {
+            ...attempt,
+            id: "attempt-server",
+        });
+
+        expect(replacement.committed).toBe(false);
+        expect(readLocalAttempts()).toEqual([localAttempt]);
+    });
+
+    it("keeps an authoritative false handwriting entitlement over a local true value", async () => {
+        const localAttempt: Attempt = {
+            ...attempt,
+            id: "attempt-local-entitlement",
+            handwritingArchived: true,
+            handwritingPlan: "pro",
+        };
+        const localStorage = createStorage({
+            omr_attempts: JSON.stringify([localAttempt]),
+        });
+        vi.stubGlobal("window", { localStorage });
+        vi.stubGlobal("localStorage", localStorage);
+
+        const replacement = await replaceLocalAttemptWithCanonical(localAttempt.id, {
+            ...attempt,
+            id: "attempt-server-entitlement",
+            handwritingArchived: false,
+            handwritingPlan: "free",
+        });
+
+        expect(replacement.committed).toBe(true);
+        expect(replacement.attempt).toMatchObject({
+            handwritingArchived: false,
+            handwritingPlan: "free",
+        });
+    });
+
+    it("can roll a committed canonical replacement back to the exact prior attempt index", async () => {
+        const rawAttempts = JSON.stringify([
+            { ...attempt, id: "attempt-local" },
+            { ...attempt, id: "attempt-unrelated" },
+        ]);
+        const localStorage = createStorage({ omr_attempts: rawAttempts });
+        vi.stubGlobal("window", { localStorage });
+        vi.stubGlobal("localStorage", localStorage);
+
+        const replacement = await replaceLocalAttemptWithCanonical("attempt-local", {
+            ...attempt,
+            id: "attempt-server",
+        });
+
+        expect(replacement.committed).toBe(true);
+        await expect(replacement.rollback()).resolves.toBe(true);
+        expect(localStorage.getItem("omr_attempts")).toBe(rawAttempts);
+    });
+
+    it("merges device artifacts from both provisional and existing canonical records on a second-tab reconciliation", async () => {
+        const provisional: Attempt = {
+            ...attempt,
+            id: "attempt-local",
+            score: 0,
+            answers: { 1: 1 },
+            drawingsRef: {
+                store: "indexeddb",
+                key: "provisional-drawings",
+                updatedAt: "2026-07-28T00:01:00.000Z",
+            },
+            handwriting: {
+                schemaVersion: 1,
+                status: "saved",
+                strokesRef: {
+                    store: "indexeddb",
+                    key: "provisional-handwriting",
+                    updatedAt: "2026-07-28T00:01:00.000Z",
+                },
+                plan: "pro",
+                summary: { pageCount: 1, strokeCount: 4, questionCount: 1 },
+                questions: {
+                    1: { questionId: 1, questionNumber: 1, page: 1, strokeCount: 4 },
+                },
+            },
+            drawingStrokeCount: 4,
+            questionDrawings: [{ questionId: 1, questionNumber: 1, page: 1, strokeCount: 4 }],
+            studentQuestions: [{
+                questionId: 1,
+                questionNumber: 1,
+                body: "첫 질문",
+                createdAt: "2026-07-28T00:01:00.000Z",
+                status: "queued",
+            }],
+        };
+        const existingCanonical: Attempt = {
+            ...attempt,
+            id: "attempt-server",
+            score: 10,
+            answers: { 1: 2 },
+            drawingsRef: {
+                store: "indexeddb",
+                key: "canonical-drawings",
+                updatedAt: "2026-07-28T00:02:00.000Z",
+            },
+            handwriting: {
+                schemaVersion: 1,
+                status: "saved",
+                strokesRef: {
+                    store: "indexeddb",
+                    key: "canonical-handwriting",
+                    updatedAt: "2026-07-28T00:02:00.000Z",
+                },
+                plan: "pro",
+                summary: { pageCount: 2, strokeCount: 7, questionCount: 1 },
+                questions: {
+                    2: { questionId: 2, questionNumber: 2, page: 2, strokeCount: 7 },
+                },
+            },
+            drawingStrokeCount: 7,
+            questionDrawings: [{ questionId: 2, questionNumber: 2, page: 2, strokeCount: 7 }],
+            studentQuestions: [
+                {
+                    questionId: 1,
+                    questionNumber: 1,
+                    body: "첫 질문",
+                    createdAt: "2026-07-28T00:01:00.000Z",
+                    status: "queued",
+                },
+                {
+                    questionId: 2,
+                    questionNumber: 2,
+                    body: "둘째 질문",
+                    createdAt: "2026-07-28T00:02:00.000Z",
+                    status: "answered",
+                },
+            ],
+        };
+        const authoritative: Attempt = {
+            ...attempt,
+            id: "attempt-server",
+            score: 100,
+            totalScore: 100,
+            answers: { 1: 3 },
+            questionResults: [],
+            drawingStrokeCount: undefined,
+            drawingsRef: undefined,
+            questionDrawings: undefined,
+            studentQuestions: undefined,
+        };
+        const localStorage = createStorage({
+            omr_attempts: JSON.stringify([provisional, existingCanonical]),
+        });
+        vi.stubGlobal("window", { localStorage });
+        vi.stubGlobal("localStorage", localStorage);
+
+        const replacement = await replaceLocalAttemptWithCanonical("attempt-local", authoritative);
+
+        expect(replacement.attempt).toMatchObject({
+            id: "attempt-server",
+            score: 100,
+            totalScore: 100,
+            answers: { 1: 3 },
+            drawingsRef: existingCanonical.drawingsRef,
+            drawingStrokeCount: 7,
+        });
+        expect(replacement.attempt?.questionDrawings).toEqual([
+            provisional.questionDrawings![0],
+            existingCanonical.questionDrawings![0],
+        ]);
+        expect(replacement.attempt?.studentQuestions).toEqual([
+            provisional.studentQuestions![0],
+            existingCanonical.studentQuestions![1],
+        ]);
+        expect(replacement.attempt?.handwriting).toMatchObject({
+            status: "saved",
+            strokesRef: existingCanonical.handwriting!.strokesRef,
+            summary: { pageCount: 2, strokeCount: 7, questionCount: 2 },
+            questions: {
+                1: provisional.handwriting!.questions[1],
+                2: existingCanonical.handwriting!.questions[2],
+            },
+        });
+        expect(readLocalAttempts().map(candidate => candidate.id)).toEqual(["attempt-server"]);
     });
 
     it("bulk-saves exams and rewrites deletion markers at most once", () => {
@@ -759,6 +1209,34 @@ describe("Supabase persistence mapping", () => {
             failedCount: 3,
             error: "원격 재동기화 실패: exam-1: network unavailable; exam-4: network unavailable; exam-6: network unavailable",
         });
+    });
+
+    it("serializes different canonical replacements through the shared attempt-index lock", async () => {
+        const localStorage = createStorage({
+            omr_attempts: JSON.stringify([
+                { ...attempt, id: "attempt-local-a" },
+                { ...attempt, id: "attempt-local-b" },
+            ]),
+        });
+        vi.stubGlobal("window", { localStorage });
+        vi.stubGlobal("localStorage", localStorage);
+        await Promise.all([
+            replaceLocalAttemptWithCanonical("attempt-local-a", {
+                ...attempt,
+                id: "attempt-server-a",
+                score: 91,
+            }),
+            replaceLocalAttemptWithCanonical("attempt-local-b", {
+                ...attempt,
+                id: "attempt-server-b",
+                score: 92,
+            }),
+        ]);
+
+        expect(readLocalAttempts().map(item => [item.id, item.score]).sort()).toEqual([
+            ["attempt-server-a", 91],
+            ["attempt-server-b", 92],
+        ]);
     });
 
     it("skips corrupt local exam and attempt rows instead of crashing read screens", () => {
@@ -916,17 +1394,14 @@ describe("Supabase config", () => {
     });
 
     it.each(["true", "1", "yes"])(
-        "allows production browser Supabase sync when OMR_PRODUCTION_RLS_APPLIED=%s",
+        "keeps production browser Supabase sync disabled when OMR_PRODUCTION_RLS_APPLIED=%s",
         flag => {
             expect(getSupabaseConfigFromEnv({
                 NODE_ENV: "production",
                 NEXT_PUBLIC_SUPABASE_URL: "https://wqhiajvisirxdjivhmlt.supabase.co",
                 NEXT_PUBLIC_SUPABASE_ANON_KEY: "anon-public-key",
                 OMR_PRODUCTION_RLS_APPLIED: flag,
-            })).toEqual({
-                url: "https://wqhiajvisirxdjivhmlt.supabase.co",
-                publishableKey: "anon-public-key",
-            });
+            })).toBeNull();
         },
     );
 

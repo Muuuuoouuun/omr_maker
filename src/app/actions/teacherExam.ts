@@ -17,6 +17,7 @@ import {
     parseSignedTeacherSessionCookie,
     TEACHER_SERVER_SESSION_COOKIE,
 } from "@/lib/teacherServerSession";
+import { isTeacherMutationAuthorized } from "@/lib/teacherMutationAuthorization";
 import { isSameOriginServerActionRequest } from "@/lib/serverActionSecurity";
 import { workspaceContextFromTeacherSession } from "@/lib/workspaceContext";
 import {
@@ -38,7 +39,7 @@ export type TeacherCanonicalExamListResult =
     | { status: "loaded"; exams: Exam[] }
     | { status: "local_only" | "unauthorized" | "service_unavailable"; error?: string };
 
-async function teacherGatewayContext(): Promise<{
+async function teacherGatewayContext(requireWrite = false): Promise<{
     client: TeacherExamGatewayClient;
     context: ReturnType<typeof workspaceContextFromTeacherSession>;
 } | { status: "local_only" | "unauthorized" | "service_unavailable" }> {
@@ -47,6 +48,7 @@ async function teacherGatewayContext(): Promise<{
     const cookieStore = await cookies();
     const session = parseSignedTeacherSessionCookie(cookieStore.get(TEACHER_SERVER_SESSION_COOKIE)?.value);
     if (!session) return { status: "unauthorized" };
+    if (requireWrite && !isTeacherMutationAuthorized(session)) return { status: "unauthorized" };
     const config = getSupabaseServerConfigFromEnv();
     if (!config) {
         return { status: process.env.NODE_ENV === "production" ? "service_unavailable" : "local_only" };
@@ -69,6 +71,7 @@ export async function saveTeacherCanonicalExam(
             cookieStore.get(TEACHER_SERVER_SESSION_COOKIE)?.value,
         );
         if (!session) return { status: "unauthorized" };
+        if (!isTeacherMutationAuthorized(session)) return { status: "unauthorized" };
 
         const config = getSupabaseServerConfigFromEnv();
         if (!config) {
@@ -153,7 +156,7 @@ export async function deleteTeacherCanonicalExam(examId: string): Promise<
     | { status: "not_found" | "local_only" | "unauthorized" | "service_unavailable"; error?: string }
 > {
     try {
-        const gateway = await teacherGatewayContext();
+        const gateway = await teacherGatewayContext(true);
         if ("status" in gateway) return gateway;
         return deleteTeacherExamWithGateway(gateway.client, examId, gateway.context);
     } catch (error) {

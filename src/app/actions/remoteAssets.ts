@@ -25,6 +25,7 @@ import {
     parseSignedTeacherSessionCookie,
     TEACHER_SERVER_SESSION_COOKIE,
 } from "@/lib/teacherServerSession";
+import { isTeacherMutationAuthorized } from "@/lib/teacherMutationAuthorization";
 import { workspaceContextFromTeacherSession } from "@/lib/workspaceContext";
 
 export type TeacherRemoteAssetUploadResult =
@@ -47,6 +48,7 @@ export async function uploadTeacherExamAsset(
         cookieStore.get(TEACHER_SERVER_SESSION_COOKIE)?.value,
     );
     if (!teacherSession) return { status: "unauthorized" };
+    if (!isTeacherMutationAuthorized(teacherSession)) return { status: "unauthorized" };
 
     const config = getSupabaseServerConfigFromEnv();
     if (!config) {

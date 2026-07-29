@@ -78,6 +78,11 @@ type TeacherAuthEnv = {
 };
 
 const PASSWORD_HASH_ALGORITHM = "pbkdf2-sha256";
+export const TEACHER_PASSWORD_HASH_MIN_ITERATIONS = 120_000;
+export const TEACHER_PASSWORD_HASH_MAX_ITERATIONS = 1_000_000;
+export const TEACHER_PASSWORD_HASH_MIN_SALT_BYTES = 16;
+export const TEACHER_PASSWORD_HASH_MAX_SALT_BYTES = 64;
+export const TEACHER_PASSWORD_HASH_BYTES = 32;
 export const TEACHER_ORGANIZATION_ID_PATTERN = /^(?:default|teacher_[a-z0-9]{7,16})$/;
 const MEMBER_ROLES = new Set<TeacherMemberRole>(["owner", "admin", "teacher", "assistant", "viewer"]);
 
@@ -108,8 +113,18 @@ function parsePasswordHash(raw: string): ParsedPasswordHash | null {
     if (rest.length > 0 || algorithm !== PASSWORD_HASH_ALGORITHM) return null;
 
     const iterations = Number(iterationsRaw);
-    if (!Number.isSafeInteger(iterations) || iterations <= 0) return null;
+    if (
+        !Number.isSafeInteger(iterations)
+        || iterations < TEACHER_PASSWORD_HASH_MIN_ITERATIONS
+        || iterations > TEACHER_PASSWORD_HASH_MAX_ITERATIONS
+    ) return null;
     if (!isHex(saltHex) || !isHex(hashHex)) return null;
+    const saltBytes = saltHex.length / 2;
+    if (
+        saltBytes < TEACHER_PASSWORD_HASH_MIN_SALT_BYTES
+        || saltBytes > TEACHER_PASSWORD_HASH_MAX_SALT_BYTES
+        || hashHex.length !== TEACHER_PASSWORD_HASH_BYTES * 2
+    ) return null;
 
     return {
         iterations,
@@ -344,7 +359,7 @@ export function inspectTeacherAuthConfig(env: TeacherAuthEnv = process.env): Tea
         issues.push({
             key: "invalid-teacher-password-hash",
             label: "교사 비밀번호 해시 형식 오류",
-            detail: "비밀번호 해시는 pbkdf2-sha256:<iterations>:<salt_hex>:<hash_hex> 형식이어야 합니다.",
+            detail: `비밀번호 해시는 pbkdf2-sha256:<iterations>:<salt_hex>:<hash_hex> 형식, ${TEACHER_PASSWORD_HASH_MIN_ITERATIONS.toLocaleString("en-US")}~${TEACHER_PASSWORD_HASH_MAX_ITERATIONS.toLocaleString("en-US")}회, 16~64바이트 salt, 32바이트 hash여야 합니다.`,
         });
     }
 

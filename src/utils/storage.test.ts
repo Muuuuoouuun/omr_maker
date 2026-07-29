@@ -14,6 +14,8 @@ import {
     readStoredGuestId,
     saveSession,
     STORAGE_KEYS,
+    STUDENT_SESSION_CHANGED_EVENT,
+    STUDENT_SESSION_GENERATION_KEY,
     type StudentSession,
 } from "./storage";
 
@@ -69,6 +71,31 @@ afterEach(() => {
 });
 
 describe("student storage helpers", () => {
+    it("announces a new opaque session generation whenever login is restored", () => {
+        const localStorage = createStorage();
+        const sessionStorage = createStorage({
+            [STUDENT_SESSION_GENERATION_KEY]: "generation-before",
+        });
+        const dispatchEvent = vi.fn(() => true);
+        vi.stubGlobal("window", { localStorage, sessionStorage, dispatchEvent });
+        vi.stubGlobal("localStorage", localStorage);
+        vi.stubGlobal("sessionStorage", sessionStorage);
+
+        saveSession({
+            studentId: "class-a::김학생",
+            name: "김학생",
+            groupId: "class-a",
+            isGuest: false,
+            identityType: "temporary",
+        });
+
+        expect(sessionStorage.getItem(STUDENT_SESSION_GENERATION_KEY))
+            .not.toBe("generation-before");
+        expect(dispatchEvent).toHaveBeenCalledWith(expect.objectContaining({
+            type: STUDENT_SESSION_CHANGED_EVENT,
+        }));
+    });
+
     it("preserves normalized region snapshots in student sessions", () => {
         const localStorage = createStorage();
         const sessionStorage = createStorage();

@@ -8,12 +8,13 @@ import { toast } from "@/components/Toast";
 import type { Exam, Attempt } from "@/types/omr";
 import { shouldUseDemoData } from "@/lib/demoData";
 import { readTeacherSession } from "@/lib/teacherSession";
-import { loadTeacherAttempts, saveTeacherAttempt } from "@/lib/teacherAttemptClient";
+import { forceFinishTeacherAttempts, loadTeacherAttempts } from "@/lib/teacherAttemptClient";
 import { loadTeacherExam, loadTeacherExams, saveTeacherExamMutation } from "@/lib/teacherExamClient";
 import { resolveAttemptScore } from "@/lib/attemptScores";
 import { buildLiveQuestionHeatmap, dedupeLiveAttempts } from "@/lib/liveAnalytics";
-import { forceCompleteLiveAttempt, liveAttemptsNeedingForceFinish } from "@/lib/liveControls";
+import { liveAttemptsNeedingForceFinish } from "@/lib/liveControls";
 import { safeRatePercent } from "@/lib/scoreUtils";
+import { awaySeverity, resolveAwayCount } from "@/lib/examAwayTracker";
 
 type StudentStatus = "submitted" | "in_progress" | "not_started";
 type LiveDataMode = "real" | "demo";
@@ -28,6 +29,7 @@ interface LiveStudent {
     totalQ: number;
     startedAt?: string;
     score?: number;
+    awayCount: number;
 }
 
 interface LiveExam {
@@ -111,6 +113,7 @@ function attemptToStudent(a: Attempt, totalQ: number, exam?: Exam): LiveStudent 
         totalQ,
         startedAt: a.startedAt,
         score,
+        awayCount: resolveAwayCount(a),
     };
 }
 
@@ -136,6 +139,7 @@ function genSyntheticStudents(count: number, totalQ: number, startIdx: number): 
             totalQ,
             startedAt: status !== "not_started" ? new Date(Date.now() - (seed % 1800) * 1000).toISOString() : undefined,
             score: status === "submitted" ? Math.round(50 + (seed % 50)) : undefined,
+            awayCount: 0,
         });
     }
     return out;
@@ -485,29 +489,28 @@ export default function LiveResultsPage() {
             }
 
             const finishedAt = new Date().toISOString();
-            const completedAttempts = targets.map(attempt => (
-                forceCompleteLiveAttempt(attempt, exam.sourceExam, finishedAt)
-            ));
-            const completedById = new Map(completedAttempts.map(attempt => [attempt.id, attempt]));
-            setAttempts(prev => prev.map(attempt => completedById.get(attempt.id) ?? attempt));
-
-            const results = await Promise.all(completedAttempts.map(attempt => saveTeacherAttempt(attempt)));
-            const failedLocalCount = results.filter(result => !result.localSaved).length;
-            const remoteIssueCount = results.filter(result => result.remoteError).length;
-
-            setTimerSeconds(0);
-            setIsPaused(true);
-            setForceFinishConfirmOpen(false);
-
-            if (failedLocalCount > 0) {
-                toast.error("종료 처리 일부 실패", `${failedLocalCount}건을 저장하지 못했습니다. 다시 시도해주세요.`);
-                void refreshFromStorage();
+            const result = await forceFinishTeacherAttempts(targets, finishedAt);
+            if (!result.localSaved && !result.remoteSaved) {
+                toast.error("종료 처리 실패", result.remoteError || "응시를 종료하지 못했습니다. 다시 시도해주세요.");
                 return;
             }
 
+            const completedById = new Map(result.attempts.map(attempt => [attempt.id, attempt]));
+            setAttempts(prev => prev.map(attempt => completedById.get(attempt.id) ?? attempt));
+            setTimerSeconds(0);
+            setIsPaused(true);
+            setForceFinishConfirmOpen(false);
+            if ("cacheWarning" in result && typeof result.cacheWarning === "string" && result.cacheWarning) {
+                toast.info(
+                    "서버 종료 완료 · 캐시 새로고침 필요",
+                    `${result.cacheWarning}. 서버의 완료 결과를 다시 불러옵니다.`,
+                );
+                void refreshFromStorage();
+                return;
+            }
             toast.success(
                 "응시 종료 처리됨",
-                `${completedAttempts.length}건을 완료 제출로 저장했습니다.${remoteIssueCount ? " 서버 동기화는 다음 로드에서 재시도됩니다." : ""}`
+                `${result.attempts.length}건을 완료 제출로 저장했습니다.${result.remoteSaved ? "" : " 개발 모드에서 이 기기에 저장했습니다."}`
             );
             return;
         }
@@ -555,7 +558,7 @@ export default function LiveResultsPage() {
             <div className="orb orb-secondary" />
             <TeacherHeader badge="LIVE" badgeColor="#ef4444" />
 
-            <main className="container animate-fade-in" style={{ paddingBottom: '4rem', position: 'relative', zIndex: 1 }}>
+            <main id="main-content" tabIndex={-1} className="container animate-fade-in" style={{ paddingBottom: '4rem', position: 'relative', zIndex: 1 }}>
                 {/* Header row */}
                 <div style={{ margin: '3rem 0 2rem', display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end', gap: '2rem', flexWrap: 'wrap' }}>
                     <div>
@@ -880,6 +883,14 @@ function StudentCard({ student, delay }: { student: LiveStudent; delay: number }
                     <div style={{ fontSize: '0.95rem', fontWeight: 800, color: meta.color }}>{student.score}</div>
                 )}
             </div>
+            {student.awayCount > 0 && (
+                <span
+                    className="away-severity-badge"
+                    data-away-severity={awaySeverity(student.awayCount)}
+                >
+                    화면 이탈 {student.awayCount}회
+                </span>
+            )}
             <div style={{ height: 5, background: 'var(--border)', borderRadius: 'var(--radius-full)', overflow: 'hidden' }}>
                 <div style={{ width: `${student.progress}%`, height: '100%', background: meta.color, borderRadius: 'var(--radius-full)', transition: 'width 0.6s ease-out' }} />
             </div>

@@ -1,6 +1,7 @@
 import type { Attempt, Exam, QuestionResult } from "@/types/omr";
 import type { RosterStudent } from "@/lib/rosterStorage";
 import { baseAttemptsOnly, resolveAttemptScore, retakeAttemptsOnly } from "@/lib/attemptScores";
+import { resolveAwayCount } from "@/lib/examAwayTracker";
 import {
     attemptElapsedTimeSec,
     buildMostMissedQuestionStats,
@@ -295,7 +296,7 @@ export function buildStudentProfileInsight(
         .filter(value => value > 0);
     const totalTrackedTimeSec = questionTimes.reduce((sum, value) => sum + value, 0);
     const focusLossCount = baseMatchedAttempts.reduce((sum, attempt) => (
-        sum + (attempt.focusLossEvents?.length || attempt.tabFociLostCount || 0)
+        sum + resolveAwayCount(attempt)
     ), 0);
 
     return {
