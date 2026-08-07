@@ -153,4 +153,62 @@ describe("dashboard summary rows", () => {
 
         expect(rows[0]).toMatchObject({ total: 8 });
     });
+
+    it("uses the persisted individual-assignment target count instead of the whole roster", () => {
+        const rows = buildExamSummaryRows([
+            exam({ id: "exam-targeted", accessConfig: { type: "targeted" } }),
+        ], [
+            attempt({ id: "target-1", examId: "exam-targeted", studentId: "s1" }),
+        ], 100, {
+            individualAssignmentTargetCounts: new Map([["exam-targeted", 3]]),
+        });
+
+        expect(rows[0]).toMatchObject({
+            completedCount: 1,
+            total: 3,
+            targetCountVerified: true,
+            isCompleted: false,
+        });
+    });
+
+    it("marks a targeted denominator unverified instead of silently using the whole roster", () => {
+        const rows = buildExamSummaryRows([
+            exam({ id: "exam-targeted", accessConfig: { type: "targeted" } }),
+        ], [
+            attempt({ id: "target-1", examId: "exam-targeted", studentId: "s1" }),
+        ], 100);
+
+        expect(rows[0]).toMatchObject({
+            completedCount: 1,
+            targetCountVerified: false,
+            isCompleted: false,
+        });
+        expect(rows[0].total).not.toBe(100);
+    });
+
+    it("measures a targeted retake assignment from unique retake submitters", () => {
+        const rows = buildExamSummaryRows([
+            exam({ id: "exam-targeted", accessConfig: { type: "targeted" } }),
+        ], [
+            attempt({ id: "base-s1", examId: "exam-targeted", studentId: "s1" }),
+            attempt({ id: "base-s2", examId: "exam-targeted", studentId: "s2" }),
+            attempt({
+                id: "retake-s1-a",
+                examId: "exam-targeted",
+                studentId: "s1",
+                retake: { sourceAttemptId: "base-s1", questionIds: [1], mode: "wrong", createdAt: "2026-06-15T10:00:00.000Z" },
+            }),
+            attempt({
+                id: "retake-s1-b",
+                examId: "exam-targeted",
+                studentId: "s1",
+                retake: { sourceAttemptId: "base-s1", questionIds: [1], mode: "wrong", createdAt: "2026-06-15T10:05:00.000Z" },
+            }),
+        ], 100, {
+            individualAssignmentTargetCounts: new Map([["exam-targeted", 2]]),
+            individualAssignmentModes: new Map([["exam-targeted", "retake"]]),
+        });
+
+        expect(rows[0]).toMatchObject({ completedCount: 1, total: 2, isCompleted: false });
+    });
 });

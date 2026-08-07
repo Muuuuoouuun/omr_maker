@@ -6,7 +6,7 @@ This document tracks the baseline product logic needed before OMR Maker handles 
 
 - Teacher access now requires a teacher identifier plus password through local/server env credentials.
 - Teacher sessions store `teacherId`, `email`, and `displayName` when available, but they are still app-managed browser sessions rather than Supabase Auth sessions.
-- Local/server env supports a single teacher via `TEACHER_LOGIN_ID`/`TEACHER_PASSWORD` or multiple teachers via `TEACHER_ACCOUNTS` JSON.
+- Local development supports plaintext fixture credentials, while production accepts only PBKDF2 `TEACHER_PASSWORD_HASH` or `TEACHER_ACCOUNTS[].passwordHash` values.
 - Teacher login also issues an HttpOnly signed server session cookie so `/teacher/*` and `/create` can be blocked before client hydration.
 - Teacher login has an in-process failure limiter keyed by hashed identifier/client fingerprint; this is an interim guard until Supabase Auth or a shared rate-limit store owns it.
 - Supabase is currently used for roster/exam/attempt sync only; it is not the source of teacher login credentials yet.
@@ -21,9 +21,9 @@ This document tracks the baseline product logic needed before OMR Maker handles 
 
 - If production login says the ID or password is invalid, first check the deployment provider env vars, not Supabase.
 - If production login says the teacher account is not configured, the app found zero valid server-side teacher credentials; adding Supabase env vars alone will not fix teacher login.
-- For one teacher, set `TEACHER_LOGIN_ID=admin` and `TEACHER_PASSWORD=<strong password>`; optionally add `TEACHER_NAME` and `TEACHER_EMAIL`.
-- For multiple teachers, set `TEACHER_ACCOUNTS` to a JSON array with unique `id` values and per-teacher passwords.
-- Add `TEACHER_SESSION_SECRET` so signed route-guard cookies do not depend on a password value.
+- For one teacher, set `TEACHER_LOGIN_ID=admin` and a supported PBKDF2 value in `TEACHER_PASSWORD_HASH`; optionally add `TEACHER_NAME` and `TEACHER_EMAIL`.
+- For multiple teachers, set `TEACHER_ACCOUNTS` to a JSON array with unique `id` values and `passwordHash` values. Production rejects plaintext `password` fields.
+- Set `TEACHER_SESSION_SECRET`, `STUDENT_SESSION_SECRET`, and `STUDENT_ATTEMPT_SECRET` to independent random values of at least 32 UTF-8 bytes. Production rejects shorter signing secrets.
 - Add `SUPABASE_SERVICE_ROLE_KEY` only to server-side deployment env vars if server-side workspace bootstrap is enabled. Never expose it as `NEXT_PUBLIC_*`.
 - Redeploy after changing env vars; Next.js server actions read these values from the running deployment.
 

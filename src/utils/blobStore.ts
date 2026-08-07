@@ -38,13 +38,29 @@ function runStore<T>(
     return openDb().then(db => new Promise<T>((resolve, reject) => {
         const tx = db.transaction(STORE_NAME, mode);
         const request = fn(tx.objectStore(STORE_NAME));
-        request.onsuccess = () => resolve(request.result);
-        request.onerror = () => reject(request.error);
-        tx.oncomplete = () => db.close();
-        tx.onerror = () => {
+        let requestCompleted = false;
+        let requestResult: T;
+        let settled = false;
+        const rejectOnce = (error: unknown) => {
+            if (settled) return;
+            settled = true;
             db.close();
-            reject(tx.error);
+            reject(error);
         };
+        request.onsuccess = () => {
+            requestCompleted = true;
+            requestResult = request.result;
+        };
+        request.onerror = () => rejectOnce(request.error);
+        tx.oncomplete = () => {
+            if (settled) return;
+            settled = true;
+            db.close();
+            if (requestCompleted) resolve(requestResult);
+            else reject(new Error("IndexedDB transaction completed before its request"));
+        };
+        tx.onerror = () => rejectOnce(tx.error || new Error("IndexedDB transaction failed"));
+        tx.onabort = () => rejectOnce(tx.error || new Error("IndexedDB transaction aborted"));
     }));
 }
 

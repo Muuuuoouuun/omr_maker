@@ -3,6 +3,10 @@ import { resolveTeacherSessionSecret } from "./teacherServerSession";
 import { resolveStudentSessionSecret } from "./studentServerSession";
 import { getSupabaseServerConfigFromEnv } from "./supabaseServerAdmin";
 import { resolveStudentAttemptSecret } from "./studentAttemptTicket";
+import { isRemoteAssetCleanupScheduled } from "./remoteAssetCleanup.server";
+import { operationalEventSinkConfiguration } from "./operationalEventSink.server";
+import { PRODUCTION_SIGNING_SECRET_MIN_BYTES } from "./serverSigningSecret";
+import { resolveTeacherAccountDeliveryAdapter } from "./teacherAccountDelivery";
 import {
     SUPABASE_READINESS_CHECK_KEYS,
     SUPABASE_READINESS_VERSION,
@@ -74,12 +78,21 @@ function sessionSecretCheck(env: Env): DeploymentReadinessCheck {
     const explicitSecret = clean(env.TEACHER_SESSION_SECRET) || clean(env.OMR_TEACHER_SESSION_SECRET);
     const resolvedSecret = resolveTeacherSessionSecret(env);
 
-    if (explicitSecret) {
+    if (explicitSecret && resolvedSecret) {
         return {
             key: "teacher_session_secret",
             label: "교사 세션 secret",
             detail: "TEACHER_SESSION_SECRET 또는 OMR_TEACHER_SESSION_SECRET이 설정되어 서버 보호 쿠키를 안정적으로 서명합니다.",
             tone: "ready",
+        };
+    }
+
+    if (explicitSecret) {
+        return {
+            key: "teacher_session_secret",
+            label: "교사 세션 secret",
+            detail: `운영 TEACHER_SESSION_SECRET 또는 OMR_TEACHER_SESSION_SECRET은 ${PRODUCTION_SIGNING_SECRET_MIN_BYTES}바이트 이상의 임의 비밀값이어야 합니다. 짧은 secret으로는 세션을 발급하거나 검증하지 않습니다.`,
+            tone: "error",
         };
     }
 
@@ -104,12 +117,21 @@ function studentSessionSecretCheck(env: Env): DeploymentReadinessCheck {
     const explicitSecret = clean(env.STUDENT_SESSION_SECRET) || clean(env.OMR_STUDENT_SESSION_SECRET);
     const resolvedSecret = resolveStudentSessionSecret(env);
 
-    if (explicitSecret) {
+    if (explicitSecret && resolvedSecret) {
         return {
             key: "student_session_secret",
             label: "학생 세션 secret",
             detail: "STUDENT_SESSION_SECRET 또는 OMR_STUDENT_SESSION_SECRET이 설정되어 학생·게스트 본인 확인 쿠키를 서명합니다.",
             tone: "ready",
+        };
+    }
+
+    if (explicitSecret) {
+        return {
+            key: "student_session_secret",
+            label: "학생 세션 secret",
+            detail: `운영 STUDENT_SESSION_SECRET 또는 OMR_STUDENT_SESSION_SECRET은 ${PRODUCTION_SIGNING_SECRET_MIN_BYTES}바이트 이상의 임의 비밀값이어야 합니다. 짧은 secret으로는 세션을 발급하거나 검증하지 않습니다.`,
+            tone: "error",
         };
     }
 
@@ -130,9 +152,60 @@ function studentSessionSecretCheck(env: Env): DeploymentReadinessCheck {
     };
 }
 
+function rateLimitHashSecretCheck(env: Env): DeploymentReadinessCheck {
+    const secret = clean(env.OMR_RATE_LIMIT_HASH_SECRET);
+    const strong = Buffer.byteLength(secret, "utf8") >= 32;
+    const production = clean(env.NODE_ENV).toLowerCase() === "production";
+    return {
+        key: "rate_limit_hash_secret",
+        label: "요청 제한 해시 secret",
+        detail: strong
+            ? "OMR_RATE_LIMIT_HASH_SECRET이 32바이트 이상으로 설정되어 공유 요청 제한 버킷을 비식별 HMAC으로 저장합니다."
+            : "OMR_RATE_LIMIT_HASH_SECRET은 32바이트 이상의 임의 비밀값이어야 합니다. 운영에서는 누락되거나 짧으면 로그인·시험 PIN·AI 요청 제한이 안전하게 차단됩니다.",
+        tone: strong ? "ready" : production ? "error" : "warning",
+    };
+}
+
 function isFlagEnabled(value: unknown): boolean {
     const normalized = clean(value).toLowerCase();
     return normalized === "true" || normalized === "1" || normalized === "yes";
+}
+
+function operationalEventSinkCheck(env: Env): DeploymentReadinessCheck {
+    const configuration = operationalEventSinkConfiguration(env);
+    const production = clean(env.NODE_ENV).toLowerCase() === "production";
+    if (configuration.status === "configured") return {
+        key: "operational_event_sink",
+        label: "중앙 운영 이벤트 수집",
+        detail: "서버 전용 HTTPS 운영 이벤트 sink가 설정되어 오류와 작업 heartbeat를 중앙 수집할 수 있습니다. 실제 전달 가능 여부는 /api/readyz가 확인합니다.",
+        tone: "ready",
+    };
+    return {
+        key: "operational_event_sink",
+        label: "중앙 운영 이벤트 수집",
+        detail: configuration.status === "invalid_configuration"
+            ? "OMR_OPERATIONAL_SINK_URL은 운영에서 HTTPS여야 하고, OMR_OPERATIONAL_SINK_TOKEN은 공백 없는 32~512자 서버 전용 값이어야 합니다."
+            : "OMR_OPERATIONAL_SINK_URL과 32자 이상의 OMR_OPERATIONAL_SINK_TOKEN을 서버 환경변수에 설정하세요.",
+        tone: production ? "error" : "warning",
+    };
+}
+
+function teacherAccountDeliveryCheck(env: Env): DeploymentReadinessCheck {
+    let configured = false;
+    try {
+        configured = !!resolveTeacherAccountDeliveryAdapter(env);
+    } catch {
+        configured = false;
+    }
+    const production = clean(env.NODE_ENV).toLowerCase() === "production";
+    return {
+        key: "teacher_account_delivery",
+        label: "교사 계정 이메일 전달",
+        detail: configured
+            ? "교사 가입 확인과 비밀번호 복구용 HMAC 서명 HTTPS delivery adapter가 설정되어 있습니다. /api/readyz가 서명된 무부작용 HEAD로 도달 가능성을 확인하며, 실제 이메일 수신은 배포 후 canary로 확인해야 합니다."
+            : "교사 가입 확인과 비밀번호 복구용 이메일 delivery adapter가 연결되지 않아 토큰 요청은 DB 변경 전에 안전하게 거부됩니다.",
+        tone: configured ? "ready" : production ? "error" : "warning",
+    };
 }
 
 function databaseProbeFailureKeys(
@@ -188,6 +261,35 @@ function productionRlsCheck(
             serverGatewayCapabilitiesReady: "서버 gateway 함수",
             queryPathIndexesReady: "운영 조회 인덱스",
             legacyBroadRpcsRemoved: "legacy broad RPC 제거",
+            directUploadIntentLifecycleReady: "직접 업로드 intent 수명주기",
+            teacherUploadCleanupQueueReady: "원격 자산 정리 큐 수명주기",
+            teacherAssetFinalizePreauthorizationReady: "교사 자산 finalize 사전 권한 확인",
+            examReservationLeaseReady: "시험 한도 예약 lease",
+            teacherAssetCleanupBacklogHealthy: "원격 자산 정리 backlog",
+            studentAttemptSessionsReady: "학생 다중 기기 응시 세션",
+            durableRateLimitsReady: "공유 요청 제한 저장소",
+            examRevisionReady: "시험 revision 무결성",
+            teacherExamCasReady: "시험 CAS 저장 gateway",
+            teacherNotificationSummaryReady: "교사 알림 경량 집계 gateway",
+            teacherNotificationStateReady: "교사 알림 다중 기기 상태 gateway",
+            feedbackRevisionReady: "피드백 revision 무결성",
+            feedbackCasReady: "피드백 CAS 저장 gateway",
+            workspaceBootstrapPlanSafe: "워크스페이스 플랜 보존 bootstrap",
+            sessionCleanupOptimizationReady: "세션·자산 정리 최적화",
+            feedbackReplayHardeningReady: "피드백 재전송 안전성",
+            feedbackCoreFreeReady: "무료 텍스트 피드백 경계",
+            examEntryInvitesReady: "시험별 opaque 학생 초대 경계",
+            sessionCleanupFencingReady: "세션·자산 정리 generation fence",
+            attemptCheckpointNullCasReady: "응시 체크포인트 NULL CAS 차단",
+            rosterSnapshotCasReady: "명단 스냅샷 다중 기기 CAS",
+            attemptMutationCasReady: "응시 세션 변경 NULL·범위 CAS 차단",
+            examDeleteSessionSafe: "제출 세션 안전 시험 삭제",
+            studentQuestionAtomicReady: "학생 질문 원자 저장 gateway",
+            teacherLiveSessionsReady: "교사 실시간 응시 세션 gateway",
+            teacherAccountLifecycleReady: "교사 계정 수명주기 gateway",
+            initialOperationsLoadControlReady: "초기 운영 부하 제어 gateway",
+            individualStudentAssignmentsReady: "개별 학생 배정·응시 결속 gateway",
+            teacherAttemptReportingReady: "전체 제출 정확 집계·커서 내보내기 gateway",
             probeVersion: "probe 버전",
             databaseDeclaredReady: "DB 최종 readiness 판정",
             probeExecution: "probe 실행",
@@ -225,7 +327,8 @@ function productionRlsCheck(
 
 function studentAttemptSecretCheck(env: Env): DeploymentReadinessCheck {
     const explicitSecret = clean(env.STUDENT_ATTEMPT_SECRET) || clean(env.OMR_STUDENT_ATTEMPT_SECRET);
-    if (explicitSecret) {
+    const resolvedSecret = resolveStudentAttemptSecret(env);
+    if (explicitSecret && resolvedSecret) {
         return {
             key: "student_attempt_secret",
             label: "학생 응시 티켓 secret",
@@ -233,10 +336,18 @@ function studentAttemptSecretCheck(env: Env): DeploymentReadinessCheck {
             tone: "ready",
         };
     }
+    if (explicitSecret) {
+        return {
+            key: "student_attempt_secret",
+            label: "학생 응시 티켓 secret",
+            detail: `운영 STUDENT_ATTEMPT_SECRET 또는 OMR_STUDENT_ATTEMPT_SECRET은 ${PRODUCTION_SIGNING_SECRET_MIN_BYTES}바이트 이상의 임의 비밀값이어야 합니다. 짧은 secret으로는 응시 티켓을 발급하거나 검증하지 않습니다.`,
+            tone: "error",
+        };
+    }
     return {
         key: "student_attempt_secret",
         label: "학생 응시 티켓 secret",
-        detail: resolveStudentAttemptSecret(env)
+        detail: resolvedSecret
             ? "개발 기본 secret은 로컬 연습에만 사용할 수 있습니다. 운영에는 STUDENT_ATTEMPT_SECRET을 별도로 설정하세요."
             : "운영 서버 채점에는 STUDENT_ATTEMPT_SECRET 또는 OMR_STUDENT_ATTEMPT_SECRET이 필요합니다.",
         tone: clean(env.NODE_ENV).toLowerCase() === "production" ? "error" : "warning",
@@ -251,7 +362,16 @@ export function buildDeploymentReadiness(
     const supabasePublicReady = publicSupabaseConfigured(env);
     const serviceRoleReady = !!getSupabaseServerConfigFromEnv(env);
     const isProduction = clean(env.NODE_ENV).toLowerCase() === "production";
-    const teacherCredentialsTone: DeploymentReadinessTone = !authConfig.ready
+    const cleanupScheduleReady = isRemoteAssetCleanupScheduled(env);
+    const databaseTeacherLifecycleReady = serviceRoleReady
+        && !!databaseProbe
+        && databaseProbeFailureKeys(databaseProbe).length === 0
+        && databaseProbe.teacherAccountLifecycleReady === true;
+    const bootstrapLoginEnabled = !isProduction || isFlagEnabled(env.OMR_ALLOW_TEACHER_BOOTSTRAP_LOGIN);
+    const bootstrapTeacherReady = bootstrapLoginEnabled && authConfig.ready;
+    const teacherCredentialsTone: DeploymentReadinessTone = databaseTeacherLifecycleReady
+        ? "ready"
+        : !bootstrapTeacherReady
         ? "error"
         : authConfig.warnings.length > 0
             ? "warning"
@@ -260,15 +380,21 @@ export function buildDeploymentReadiness(
     const checks: DeploymentReadinessCheck[] = [
         {
             key: "teacher_credentials",
-            label: "교사 계정 환경변수",
-            detail: authConfig.ready
-                ? `${authConfig.credentialCount}개 교사 계정이 서버 환경변수에서 인식됩니다. 로그인 판별은 Supabase가 아니라 이 값으로 수행됩니다.${authConfig.warnings.length > 0 ? ` ${describeIssues(authConfig.warnings)}` : ""}`
-                : describeIssues(authConfig.issues) || "운영 배포에는 TEACHER_ACCOUNTS 또는 TEACHER_LOGIN_ID/TEACHER_PASSWORD_HASH가 필요합니다.",
+            label: "교사 계정 수명주기",
+            detail: databaseTeacherLifecycleReady
+                ? `DB 교사 계정 수명주기와 서비스롤 전용 RPC가 readiness ${databaseProbe?.version || ""}에서 확인됐습니다.${bootstrapTeacherReady ? ` 환경변수 부트스트랩 계정 ${authConfig.credentialCount}개도 명시적으로 활성화되어 있습니다.` : ""}`
+                : bootstrapTeacherReady
+                    ? `${authConfig.credentialCount}개 교사 부트스트랩 계정이 서버 환경변수에서 인식됩니다.${isProduction ? " OMR_ALLOW_TEACHER_BOOTSTRAP_LOGIN=true로 운영 사용이 명시적으로 허용되었습니다." : " 개발 환경에서만 기본 활성화됩니다."}${authConfig.warnings.length > 0 ? ` ${describeIssues(authConfig.warnings)}` : ""}`
+                    : isProduction && authConfig.ready
+                        ? "DB 교사 계정 수명주기가 확인되지 않았고 환경변수 계정도 운영에서 비활성입니다. 임시 부트스트랩 로그인이 꼭 필요할 때만 OMR_ALLOW_TEACHER_BOOTSTRAP_LOGIN=true를 명시하세요."
+                        : describeIssues(authConfig.issues) || "운영 배포에는 readiness가 확인된 DB 교사 계정 수명주기가 필요합니다.",
             tone: teacherCredentialsTone,
         },
+        teacherAccountDeliveryCheck(env),
         sessionSecretCheck(env),
         studentSessionSecretCheck(env),
         studentAttemptSecretCheck(env),
+        rateLimitHashSecretCheck(env),
         canonicalBrowserBoundaryCheck(env, supabasePublicReady),
         {
             key: "supabase_service_role",
@@ -278,6 +404,15 @@ export function buildDeploymentReadiness(
                 : "서비스롤 키가 없으면 안전한 원격 시험·서버 채점 게이트웨이가 비활성입니다. SUPABASE_SERVICE_ROLE_KEY는 서버 환경변수에만 설정하세요.",
             tone: serviceRoleReady ? "ready" : isProduction ? "error" : "warning",
         },
+        {
+            key: "remote_asset_cleanup_schedule",
+            label: "원격 자산 정리 스케줄",
+            detail: cleanupScheduleReady
+                ? "인증된 내부 정리 작업과 배포 스케줄이 명시적으로 설정되어 만료·교체·삭제된 원격 자산을 회수할 수 있습니다."
+                : "OMR_ASSET_GC_SCHEDULED=1과 32자 이상의 CRON_SECRET을 함께 설정하고 배포 스케줄이 실제 활성화됐는지 확인하세요.",
+            tone: cleanupScheduleReady ? "ready" : isProduction ? "error" : "warning",
+        },
+        operationalEventSinkCheck(env),
         productionRlsCheck(env, serviceRoleReady, databaseProbe),
     ];
 
@@ -288,10 +423,10 @@ export function buildDeploymentReadiness(
     return {
         label: hasError ? "배포 확인 필요" : hasWarning ? "배포 보강 권장" : "배포 준비됨",
         detail: hasError
-            ? "교사 계정, 서버 세션, 학생 티켓, Supabase 서버 게이트웨이 설정을 먼저 고쳐야 합니다."
+            ? "교사 계정, 서버 세션, 학생 티켓, 요청 제한 해시 secret, Supabase 서버 게이트웨이, 원격 자산 정리 스케줄과 중앙 운영 이벤트 수집 설정을 먼저 고쳐야 합니다."
             : hasWarning
                 ? "핵심 흐름은 실행 가능하지만 운영 데이터 전에는 남은 보안/DB 항목을 확인하세요."
-                : "교사 계정, 서버 세션, 학생 응시 티켓, 브라우저 데이터 경계, 서버 게이트웨이와 RLS가 모두 준비됐습니다.",
+                : "교사 계정, 서버 세션, 학생 응시 티켓, 요청 제한 해시 secret, 브라우저 데이터 경계, 서버 게이트웨이, 원격 자산 정리 스케줄, 중앙 운영 이벤트 수집과 RLS가 모두 준비됐습니다.",
         credentialCount: authConfig.credentialCount,
         readyCount,
         totalCount: checks.length,

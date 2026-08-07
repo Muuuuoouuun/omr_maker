@@ -4,7 +4,12 @@ import { useEffect, useState } from "react";
 
 type Theme = "light" | "dark";
 
-export default function ThemeToggle({ size = "default" }: { size?: "small" | "default" }) {
+interface ThemeToggleProps {
+  size?: "small" | "default";
+  role?: "menuitem";
+}
+
+export default function ThemeToggle({ size = "default", role }: ThemeToggleProps) {
   const [theme, setTheme] = useState<Theme>("light");
   const [mounted, setMounted] = useState(false);
 
@@ -36,20 +41,21 @@ export default function ThemeToggle({ size = "default" }: { size?: "small" | "de
     return (
       <div
         style={{
-          width: size === "small" ? "40px" : "44px",
-          height: size === "small" ? "40px" : "44px",
+          width: "44px",
+          height: "44px",
         }}
       />
     );
   }
 
   const isDark = theme === "dark";
-  const btnSize = size === "small" ? 40 : 44;
+  const btnSize = 44;
   const iconSize = size === "small" ? 16 : 18;
 
   return (
     <button
       onClick={toggle}
+      role={role}
       aria-label={isDark ? "라이트 모드로 전환" : "다크 모드로 전환"}
       title={isDark ? "라이트 모드" : "다크 모드"}
       style={{
@@ -63,7 +69,7 @@ export default function ThemeToggle({ size = "default" }: { size?: "small" | "de
         border: "1px solid var(--border)",
         color: "var(--foreground)",
         cursor: "pointer",
-        transition: "all 0.2s",
+        transition: "border-color 0.2s, color 0.2s, background-color 0.2s, transform 0.2s",
         flexShrink: 0,
       }}
       onMouseEnter={(e) => {

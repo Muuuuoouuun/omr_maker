@@ -7,9 +7,50 @@ const source = (path: string) => readFileSync(join(process.cwd(), path), "utf8")
 describe("teacher exam mutation surface", () => {
     it("routes overview mutations through teacher server clients", () => {
         const overview = source("src/components/dashboard/tabs/OverviewTab.tsx");
-        expect(overview).toContain("saveTeacherExamMutation");
+        expect(overview).not.toContain("duplicateTeacherExamFromSummary");
+        expect(overview).toContain("setTeacherExamArchivedFromSummary");
         expect(overview).toContain("deleteTeacherExamMutation");
+        expect(overview).toContain("const desiredArchived = !target.archived");
+        expect(overview).toContain("mutationExamIds");
         expect(overview).not.toContain('from "@/lib/omrPersistence"');
+    });
+
+    it("removes exam duplication from the initial release surface", () => {
+        const overview = source("src/components/dashboard/tabs/OverviewTab.tsx");
+        const menu = source("src/components/dashboard/ExamActionsMenu.tsx");
+        const client = source("src/lib/teacherExamClient.ts");
+        const combined = `${overview}\n${menu}\n${client}`;
+        for (const marker of [
+            '"duplicate"',
+            "duplicateTeacherExamFromSummary",
+            "authorizeExamCreation",
+            "releaseExamCreationAuthorization",
+            "copyStoredData",
+            "cleanupCreatedExamAsset",
+        ]) {
+            expect(combined).not.toContain(marker);
+        }
+    });
+
+    it("renders a truthful detail-page fallback for redacted list question bodies", () => {
+        const overview = source("src/components/dashboard/tabs/OverviewTab.tsx");
+        expect(overview).toContain('entry.note.body || "질문 내용은 응시 상세에서 확인하세요."');
+    });
+
+    it("has no provisional clone target action or gateway surface", () => {
+        const action = source("src/app/actions/teacherExam.ts");
+        const gateway = source("src/lib/teacherExamGateway.ts");
+        const schema = source("supabase/schema.sql");
+        for (const marker of [
+            "createTeacherCanonicalExamCloneTarget",
+            "cleanupTeacherCanonicalExamCloneTarget",
+            "createTeacherExamCloneTargetWithGateway",
+            "cleanupTeacherExamCloneTargetWithGateway",
+            "omr_create_exam_clone_target_v1",
+            "omr_cleanup_exam_clone_target_v1",
+        ]) {
+            expect(`${action}\n${gateway}\n${schema}`).not.toContain(marker);
+        }
     });
 
     it("keeps delete scoped and atomic behind service role", () => {

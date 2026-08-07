@@ -11,7 +11,11 @@ vi.mock("@/app/actions/teacherRoster", () => ({
     saveTeacherCanonicalRoster: actions.save,
 }));
 
-import { loadTeacherRosterSnapshot, saveTeacherRosterSnapshot } from "./teacherRosterClient";
+import {
+    loadTeacherRosterSnapshot,
+    ROSTER_REVISION_CONFLICT_ERROR,
+    saveTeacherRosterSnapshot,
+} from "./teacherRosterClient";
 
 function storage(): Storage {
     const values = new Map<string, string>();
@@ -42,13 +46,66 @@ beforeEach(() => {
 describe("teacher roster client", () => {
     it("caches a canonical server load locally", async () => {
         const local = storage();
-        actions.load.mockResolvedValue({ status: "loaded", snapshot });
+        actions.load.mockResolvedValue({ status: "loaded", snapshot, revision: 7 });
         await expect(loadTeacherRosterSnapshot(local)).resolves.toMatchObject({
             ...snapshot,
             remoteLoaded: true,
             remoteSynced: true,
         });
         expect(JSON.parse(local.getItem("omr_students") || "[]")).toHaveLength(1);
+        expect(local.getItem("omr_roster_revision")).toBe("7");
+    });
+
+    it("passes the last loaded revision and advances it only after a canonical save", async () => {
+        const local = storage();
+        local.setItem("omr_roster_revision", "7");
+        actions.save.mockResolvedValue({ status: "saved", snapshot, revision: 8 });
+
+        await expect(saveTeacherRosterSnapshot(local, snapshot)).resolves.toEqual({
+            localSaved: true,
+            remoteSaved: true,
+        });
+        expect(actions.save).toHaveBeenCalledWith(snapshot, 7);
+        expect(local.getItem("omr_roster_revision")).toBe("8");
+    });
+
+    it("uses a null expected revision for the first canonical save", async () => {
+        const local = storage();
+        actions.save.mockResolvedValue({ status: "saved", snapshot, revision: 1 });
+
+        await saveTeacherRosterSnapshot(local, snapshot);
+
+        expect(actions.save).toHaveBeenCalledWith(snapshot, null);
+    });
+
+    it("reports a local cache failure without losing a successful canonical save", async () => {
+        const local = storage();
+        const setItem = local.setItem.bind(local);
+        local.setItem = (key, value) => {
+            if (key === "omr_roster_revision") throw new Error("storage blocked");
+            setItem(key, value);
+        };
+        actions.save.mockResolvedValue({ status: "saved", snapshot, revision: 1 });
+
+        await expect(saveTeacherRosterSnapshot(local, snapshot)).resolves.toEqual({
+            localSaved: false,
+            remoteSaved: true,
+        });
+    });
+
+    it("does not replace the cached revision when a second device has already saved", async () => {
+        const local = storage();
+        local.setItem("omr_roster_revision", "7");
+        actions.save.mockResolvedValue({ status: "conflict", error: "roster revision conflict" });
+
+        await expect(saveTeacherRosterSnapshot(local, snapshot)).resolves.toEqual({
+            localSaved: false,
+            remoteSaved: false,
+            remoteError: ROSTER_REVISION_CONFLICT_ERROR,
+        });
+        expect(actions.save).toHaveBeenCalledWith(snapshot, 7);
+        expect(local.getItem("omr_roster_revision")).toBe("7");
+        expect(local.getItem("omr_students")).toBeNull();
     });
 
     it("fails closed without writing local state on a production-style server error", async () => {

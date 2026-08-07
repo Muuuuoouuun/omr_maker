@@ -41,6 +41,18 @@ describe("student official attempt read surface", () => {
         expect(review).not.toContain("loadAttemptForStudent");
     });
 
+    it("restores remote handwriting through an owner-scoped server action instead of IndexedDB", () => {
+        const review = source("src/app/student/review/[attemptId]/page.tsx");
+        expect(review).toContain("loadMyAttemptHandwriting(found.id)");
+        expect(review).toContain("downloadRemoteStudentHandwriting(handwriting.signedUrl)");
+    });
+
+    it("shows a specific capacity message for the stable assignment-list error", () => {
+        const dashboard = source("src/app/student/dashboard/page.tsx");
+        expect(dashboard).toContain('myAttemptsResult.error === "initial_capacity_exceeded"');
+        expect(dashboard).toContain("INITIAL_CAPACITY_REMEDIATION_KO");
+    });
+
     it("allows local fallback only for guests or explicit development local_only status", () => {
         const client = source("src/lib/studentAttemptClient.ts");
         expect(client).toContain("if (session.isGuest)");
@@ -48,6 +60,18 @@ describe("student official attempt read surface", () => {
         expect(client).toContain("items: []");
         expect(client).not.toContain("loadAttemptsForStudent");
         expect(client).not.toContain("loadAttemptForStudent");
+    });
+
+    it("confirms the server cookie is cleared before reporting a student logout", () => {
+        const dashboard = source("src/app/student/dashboard/page.tsx");
+        const handler = dashboard.slice(
+            dashboard.indexOf("const handleLogout ="),
+            dashboard.indexOf("if (!user)"),
+        );
+        expect(handler).toContain("await clearStudentServerSession()");
+        expect(handler.indexOf("await clearStudentServerSession()"))
+            .toBeLessThan(handler.indexOf("clearSession()"));
+        expect(handler).not.toContain("clearStudentServerSession().catch");
     });
 
     it("removes publishable-key access to canonical exams and grading tables", () => {
@@ -105,12 +129,12 @@ describe("student official attempt read surface", () => {
         expect(retryHandler).toContain("setSubmissionRetrying(false)");
     });
 
-    it("marks direct server submissions and official history cache entries as locally confirmed", () => {
+    it("marks direct server submissions and official list values as confirmed without caching summaries", () => {
         const solve = source("src/app/solve/[id]/page.tsx");
         const historyClient = source("src/lib/studentAttemptClient.ts");
         expect(solve).toContain("saveLocalServerConfirmedAttempt(res.attempt)");
         expect(historyClient).toContain("withLocalServerConfirmation");
-        expect(historyClient).toContain("saveLocalAttempts(attempts)");
+        expect(historyClient).not.toContain("saveLocalAttempts(attempts)");
     });
 
     it("keeps every shared attempt-index writer behind the same awaited lock", () => {
@@ -133,11 +157,11 @@ describe("student official attempt read surface", () => {
         const review = source("src/app/student/review/[attemptId]/page.tsx");
         const studentClient = source("src/lib/studentAttemptClient.ts");
         const teacherClient = source("src/lib/teacherAttemptClient.ts");
-        expect(solve).toContain("await saveLocalAttempt(cachedAttempt)");
-        expect(solve).toContain("await saveLocalServerConfirmedAttempt(res.attempt)");
+        expect(solve).toContain("await withSubmissionTimeout(saveLocalAttempt(cachedAttempt))");
+        expect(solve).toContain("await withSubmissionTimeout(saveLocalServerConfirmedAttempt(res.attempt))");
         expect(review).toContain("await saveLocalServerConfirmedAttempt(found)");
-        expect(studentClient).toContain("await saveLocalAttempts(attempts)");
-        expect(teacherClient).toContain("await saveLocalAttempts(result.attempts)");
+        expect(studentClient).not.toContain("saveLocalAttempts(attempts)");
+        expect(teacherClient).not.toContain("saveLocalAttempts(cacheAttempts)");
     });
 
     it("keeps synchronous receipt reads writer-free and reconciliation locks in fixed order", () => {
@@ -181,7 +205,7 @@ describe("student official attempt read surface", () => {
     it("resets the solve submission gate when local attempt locking fails", () => {
         const solve = source("src/app/solve/[id]/page.tsx");
         const review = source("src/app/student/review/[attemptId]/page.tsx");
-        expect(solve).toContain("Local attempt durability failed");
+        expect(solve).toContain("Student submission failed before confirmation");
         expect(solve).toContain('"제출 임시저장 실패"');
         expect(solve).toContain("resetFailedSubmission();");
         expect(solve).toContain("await saveDraftSnapshot();");

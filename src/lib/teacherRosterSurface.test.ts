@@ -22,6 +22,13 @@ describe("teacher roster server surface", () => {
         expect(users).not.toContain('from "@/lib/rosterPersistence"');
     });
 
+    it("tells stale-device writers to refresh instead of blaming connectivity", () => {
+        const users = source("src/app/teacher/users/page.tsx");
+        expect(users).toContain("ROSTER_REVISION_CONFLICT_ERROR");
+        expect(users).toContain("다른 기기에서 명단이 변경됨");
+        expect(users).toContain("새로고침");
+    });
+
     it("contains no browser publishable Supabase client in roster persistence", () => {
         const persistence = source("src/lib/rosterPersistence.ts");
         expect(persistence).not.toContain("NEXT_PUBLIC_SUPABASE");

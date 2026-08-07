@@ -39,7 +39,7 @@ describe("teacher auth", () => {
 
     it("gives an explicitly configured admin account the highest plan when no plan is specified", () => {
         const env = {
-            NODE_ENV: "production",
+            NODE_ENV: "development",
             TEACHER_LOGIN_ID: "admin",
             TEACHER_PASSWORD: "secret-pass",
         };
@@ -55,9 +55,9 @@ describe("teacher auth", () => {
     });
 
     it("prefers configured teacher credentials and trims accidental whitespace", () => {
-        expect(resolveTeacherPassword({ NODE_ENV: "production", TEACHER_PASSWORD: "  secret-pass  " })).toBe("secret-pass");
+        expect(resolveTeacherPassword({ NODE_ENV: "development", TEACHER_PASSWORD: "  secret-pass  " })).toBe("secret-pass");
         expect(resolveTeacherCredentials({
-            NODE_ENV: "production",
+            NODE_ENV: "development",
             TEACHER_LOGIN_ID: " director ",
             TEACHER_EMAIL: " Director@School.test ",
             TEACHER_NAME: " 김선생 ",
@@ -69,11 +69,11 @@ describe("teacher auth", () => {
             password: "secret-pass",
         }]);
         expect(verifyTeacherPasswordValue("secret-pass", {
-            NODE_ENV: "production",
+            NODE_ENV: "development",
             TEACHER_PASSWORD: "  secret-pass  ",
         })).toBe(true);
         expect(verifyTeacherPasswordValue("admin123", {
-            NODE_ENV: "production",
+            NODE_ENV: "development",
             TEACHER_PASSWORD: "secret-pass",
         })).toBe(false);
     });
@@ -104,6 +104,26 @@ describe("teacher auth", () => {
         expect(verifyTeacherLogin("director", "wrong", env)).toEqual({ success: false });
     });
 
+    it("preserves supported bootstrap work factors while applying constant-work lookup misses", () => {
+        const iterations = TEACHER_PASSWORD_HASH_MIN_ITERATIONS + 1;
+        const saltHex = "00112233445566778899aabbccddeeff";
+        const hashHex = pbkdf2Sync(
+            "secret-pass",
+            Buffer.from(saltHex, "hex"),
+            iterations,
+            32,
+            "sha256",
+        ).toString("hex");
+        const env = {
+            NODE_ENV: "production",
+            TEACHER_LOGIN_ID: "director",
+            TEACHER_PASSWORD_HASH: `pbkdf2-sha256:${iterations}:${saltHex}:${hashHex}`,
+        };
+
+        expect(verifyTeacherLogin("director", "secret-pass", env)).toMatchObject({ success: true });
+        expect(verifyTeacherLogin("unknown", "secret-pass", env)).toEqual({ success: false });
+    });
+
     it("supports OMR_TEACHER_PASSWORD_HASH for single-teacher env config", () => {
         const env = {
             NODE_ENV: "production",
@@ -118,7 +138,7 @@ describe("teacher auth", () => {
 
     it("verifies teacher id or email without revealing which side failed", () => {
         const env = {
-            NODE_ENV: "production",
+            NODE_ENV: "development",
             TEACHER_LOGIN_ID: "director",
             TEACHER_EMAIL: "director@school.test",
             TEACHER_NAME: "김선생",
@@ -140,7 +160,7 @@ describe("teacher auth", () => {
 
     it("supports multiple teacher accounts from JSON env", () => {
         const env = {
-            NODE_ENV: "production",
+            NODE_ENV: "development",
             TEACHER_ACCOUNTS: JSON.stringify([
                 { id: "teacher-a", email: "a@example.com", name: "A Teacher", password: "pass-a" },
                 { id: "teacher-b", email: "b@example.com", name: "B Teacher", password: "pass-b" },
@@ -157,7 +177,7 @@ describe("teacher auth", () => {
 
     it("binds a plan to each teacher account from JSON env and returns it on login", () => {
         const env = {
-            NODE_ENV: "production",
+            NODE_ENV: "development",
             TEACHER_ACCOUNTS: JSON.stringify([
                 { id: "admin", email: "admin@omr.test", name: "관리자", password: "admin1234", plan: "academy" },
                 { id: "test1", email: "t1@omr.test", name: "테스트1", password: "test1234", plan: "free" },
@@ -179,7 +199,7 @@ describe("teacher auth", () => {
 
     it("returns signed shared-workspace metadata for a deployment account", () => {
         const env = {
-            NODE_ENV: "production",
+            NODE_ENV: "development",
             TEACHER_ACCOUNTS: JSON.stringify([{
                 id: "teacher2",
                 email: "teacher2@omr.test",
@@ -211,9 +231,9 @@ describe("teacher auth", () => {
         const credentials = resolveTeacherCredentials({
             NODE_ENV: "production",
             TEACHER_ACCOUNTS: JSON.stringify([
-                { id: "bad-org", password: "pass", organizationId: "../../escape", memberRole: "teacher" },
-                { id: "bad-role", password: "pass", organizationId: "teacher_sharedqa", memberRole: "superadmin" },
-                { id: "bad-plan", password: "pass", organizationId: "teacher_sharedqa", memberRole: "teacher", plan: "ultra" },
+                { id: "bad-org", passwordHash: teacherPasswordHash("pass"), organizationId: "../../escape", memberRole: "teacher" },
+                { id: "bad-role", passwordHash: teacherPasswordHash("pass"), organizationId: "teacher_sharedqa", memberRole: "superadmin" },
+                { id: "bad-plan", passwordHash: teacherPasswordHash("pass"), organizationId: "teacher_sharedqa", memberRole: "teacher", plan: "ultra" },
             ]),
         });
 
@@ -222,7 +242,7 @@ describe("teacher auth", () => {
 
     it("normalizes legacy 'school' plan to academy, rejects invalid plans, and allows a missing plan", () => {
         const env = {
-            NODE_ENV: "production",
+            NODE_ENV: "development",
             TEACHER_ACCOUNTS: JSON.stringify([
                 { id: "legacy", password: "pass", plan: "school" },
                 { id: "bogus", password: "pass", plan: "ultra" },
@@ -238,7 +258,7 @@ describe("teacher auth", () => {
 
     it("binds a plan to a single teacher via the TEACHER_PLAN env", () => {
         const env = {
-            NODE_ENV: "production",
+            NODE_ENV: "development",
             TEACHER_LOGIN_ID: "solo",
             TEACHER_PASSWORD: "pass",
             TEACHER_PLAN: "pro",
@@ -295,13 +315,34 @@ describe("teacher auth", () => {
             TEACHER_LOGIN_ID: "director",
             TEACHER_PASSWORD: "secret-pass",
         })).toMatchObject({
-            ready: true,
-            credentialCount: 1,
-            issues: [],
-            warnings: [
+            ready: false,
+            credentialCount: 0,
+            issues: expect.arrayContaining([
                 expect.objectContaining({ key: "plaintext-production-teacher-password" }),
-            ],
+            ]),
+            warnings: [],
         });
+        expect(verifyTeacherLogin("director", "secret-pass", {
+            NODE_ENV: "production",
+            TEACHER_LOGIN_ID: "director",
+            TEACHER_PASSWORD: "secret-pass",
+        })).toEqual({ success: false });
+
+        expect(inspectTeacherAuthConfig({
+            NODE_ENV: "production",
+            TEACHER_ACCOUNTS: JSON.stringify([{ id: "director", password: "secret-pass" }]),
+        })).toMatchObject({
+            ready: false,
+            credentialCount: 0,
+            issues: expect.arrayContaining([
+                expect.objectContaining({ key: "plaintext-production-teacher-password" }),
+            ]),
+            warnings: [],
+        });
+        expect(verifyTeacherLogin("director", "secret-pass", {
+            NODE_ENV: "production",
+            TEACHER_ACCOUNTS: JSON.stringify([{ id: "director", password: "secret-pass" }]),
+        })).toEqual({ success: false });
 
         expect(inspectTeacherAuthConfig({
             NODE_ENV: "production",
@@ -394,7 +435,7 @@ describe("teacher auth", () => {
 
     it("flags duplicate teacher ids or emails before they can shadow each other", () => {
         expect(inspectTeacherAuthConfig({
-            NODE_ENV: "production",
+            NODE_ENV: "development",
             TEACHER_ACCOUNTS: JSON.stringify([
                 { id: "teacher-a", email: "shared@example.com", password: "pass-a" },
                 { id: "teacher-a", email: "b@example.com", password: "pass-b" },

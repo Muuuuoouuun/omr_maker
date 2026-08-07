@@ -2,7 +2,7 @@
 
 import { randomUUID } from "node:crypto";
 import { cookies } from "next/headers";
-import { parseSignedTeacherSessionCookie, TEACHER_SERVER_SESSION_COOKIE } from "@/lib/teacherServerSession";
+import { resolveAuthorizedTeacherSessionCookie, TEACHER_SERVER_SESSION_COOKIE } from "@/lib/teacherServerSession";
 import {
     createDevServerPlanStore,
     createServerPlanStoreFromEnv,
@@ -33,7 +33,7 @@ export interface PremiumMutationGuardResult {
 }
 
 async function signedTeacherSession() {
-    return parseSignedTeacherSessionCookie(
+    return resolveAuthorizedTeacherSessionCookie(
         (await cookies()).get(TEACHER_SERVER_SESSION_COOKIE)?.value,
     );
 }

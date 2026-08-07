@@ -62,7 +62,10 @@ const nextConfig = {
   allowedDevOrigins: ["127.0.0.1"],
   experimental: {
     serverActions: {
-      bodySizeLimit: '52mb', // 비공개 Storage에 전달할 최대 50MB PDF + multipart 여유
+      // PDF bytes use browser-to-storage signed uploads. Keep only enough room
+      // for the largest legal action payload (10 MiB handwriting JSON) plus
+      // React Action serialization overhead.
+      bodySizeLimit: "12mb",
     },
   },
   async headers() {

@@ -48,11 +48,18 @@ export function rosterGroupForStudentInput(groupName: string, region: string, gr
 }
 
 export function hasArchivedHandwriting(attempt: Attempt): boolean {
-    return !!attempt.handwritingArchived && !!(attempt.handwriting?.strokesRef || attempt.drawingsRef);
+    const summaryStrokesRef = "handwritingStrokesRef" in attempt
+        ? attempt.handwritingStrokesRef
+        : undefined;
+    return !!attempt.handwritingArchived && !!(attempt.handwriting?.strokesRef || summaryStrokesRef || attempt.drawingsRef);
 }
 
 export function handwritingLabel(attempt: Attempt): string {
-    const questionCount = attempt.questionDrawings?.length || 0;
+    const summaryQuestionCount = "handwritingQuestionCount" in attempt
+        && typeof attempt.handwritingQuestionCount === "number"
+        ? attempt.handwritingQuestionCount
+        : 0;
+    const questionCount = attempt.questionDrawings?.length || summaryQuestionCount;
     if (questionCount > 0) return `${questionCount}문항`;
     if (attempt.drawingPageCount) return `${attempt.drawingPageCount}쪽`;
     return "저장됨";
@@ -1521,4 +1528,3 @@ export function ConfirmModal({
         </ModalShell>
     );
 }
-

@@ -1,6 +1,7 @@
 export interface ShareBaseUrlOptions {
     envBaseUrl?: string | null;
     origin?: string | null;
+    inviteToken?: string | null;
 }
 
 function normalizeBaseUrl(value: string | null | undefined): string | null {
@@ -31,7 +32,12 @@ export function resolveShareBaseUrl(options: ShareBaseUrlOptions = {}): string {
 }
 
 export function buildSolveShareUrl(examId: string, options: ShareBaseUrlOptions = {}): string {
-    return `${resolveShareBaseUrl(options)}/solve/${examId}`;
+    const path = `/solve/${encodeURIComponent(examId)}`;
+    const invite = options.inviteToken?.trim() || "";
+    const query = /^[A-Za-z0-9_-]{43}$/.test(invite)
+        ? `#invite=${encodeURIComponent(invite)}`
+        : "";
+    return `${resolveShareBaseUrl(options)}${path}${query}`;
 }
 
 export function isShareUrlReachableByStudents(shareUrl: string): boolean {

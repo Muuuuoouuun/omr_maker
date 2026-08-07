@@ -6,11 +6,18 @@ import BrandLogo from "@/components/BrandLogo";
 import ThemeToggle from "@/components/ThemeToggle";
 import { toast } from "@/components/Toast";
 import { startMockupTeacherSession, verifyTeacherPassword } from "@/app/actions/auth";
+import {
+  confirmTeacherSignupEmail,
+  finishTeacherPasswordReset,
+  requestTeacherPasswordReset,
+  requestTeacherSignup,
+} from "@/app/actions/teacherAccount";
 import { BarChart3, Sparkles, Users } from "lucide-react";
 import {
   issueGuestSession,
   issueStudentSession,
   loadStudentLoginDirectory,
+  refreshStudentSession,
   type StudentSessionIssueResult,
   type StudentSessionIssueStatus,
 } from "@/app/actions/studentSession";
@@ -49,6 +56,7 @@ import { normalizeStudentRedirectPath } from "@/lib/studentRedirect";
 import { normalizeTeacherRedirectPath, saveTeacherSessionWithIdentity } from "@/lib/teacherSession";
 import { setCurrentPlan } from "@/utils/plans";
 import { readGuestRecoveryState } from "@/lib/studentGuestRecovery";
+import { readExamEntryInviteHandoff } from "@/lib/examEntryInviteHandoff";
 
 /* ─── SVG Icons ──────────────────────────────────────── */
 
@@ -221,6 +229,10 @@ export default function Home() {
   const [rosterStudents, setRosterStudents] = useState<RosterStudent[]>([]);
   const [teacherIdentifier, setTeacherIdentifier] = useState("");
   const [password, setPassword] = useState("");
+  const [teacherDisplayName, setTeacherDisplayName] = useState("");
+  const [teacherAccountMode, setTeacherAccountMode] = useState<"login" | "signup" | "reset" | "reset_complete">("login");
+  const [teacherResetToken, setTeacherResetToken] = useState("");
+  const [teacherLifecyclePending, setTeacherLifecyclePending] = useState(false);
   const [mockupLoginPending, setMockupLoginPending] = useState(false);
   const [error, setError] = useState("");
   const studentNameInputRef = useRef<HTMLInputElement>(null);
@@ -234,14 +246,40 @@ export default function Home() {
   const [issuedCodeModal, setIssuedCodeModal] = useState<{ code: string; next: string } | null>(null);
   const [copiedIssuedCode, setCopiedIssuedCode] = useState(false);
   const [needsStudentLookup, setNeedsStudentLookup] = useState(false);
-  const [workspaceId, setWorkspaceId] = useState("");
-  const [studentDirectoryStatus, setStudentDirectoryStatus] = useState<"local" | "loading" | "remote" | "degraded_local" | "error">("local");
+  const [inviteToken, setInviteToken] = useState("");
+  const [inviteExamId, setInviteExamId] = useState("");
+  const [studentDirectoryStatus, setStudentDirectoryStatus] = useState<"local" | "loading" | "remote" | "signed_guest" | "degraded_local" | "error">("local");
   const [studentLoginPending, setStudentLoginPending] = useState(false);
+  const [rememberStudentOnDevice, setRememberStudentOnDevice] = useState(false);
+  const clearLoginError = () => setError("");
+  const teacherIdentifierInvalid = Boolean(error && (error.includes("아이디") || error.includes("계정")));
+  const teacherPasswordInvalid = Boolean(error && error.includes("비밀번호"));
+  const teacherAccountFormLabel = teacherAccountMode === "signup"
+    ? "교사 계정 만들기"
+    : teacherAccountMode === "reset"
+      ? "비밀번호 재설정"
+      : teacherAccountMode === "reset_complete"
+        ? "새 비밀번호 설정"
+        : "교사 로그인";
+  const teacherAccountHeading = teacherAccountMode === "login" ? "환영합니다" : teacherAccountFormLabel;
+  const teacherAccountSubmitLabel = teacherAccountMode === "signup" ? "가입 이메일 요청"
+    : teacherAccountMode === "reset" ? "재설정 이메일 요청"
+      : teacherAccountMode === "reset_complete" ? "새 비밀번호 저장"
+        : "대시보드 입장";
+  const teacherAccountPendingLabel = teacherAccountMode === "signup" ? "가입 요청 중…"
+    : teacherAccountMode === "reset" ? "요청 중…"
+      : teacherAccountMode === "reset_complete" ? "저장 중…"
+        : teacherAccountSubmitLabel;
   const studentGroupOptions = useMemo(
     () => buildStudentLoginGroupOptions(groups, rosterStudents),
     [groups, rosterStudents],
   );
-  const requiresServerStudentVerification = !!workspaceId && studentDirectoryStatus !== "degraded_local";
+  const requiresServerStudentVerification = (
+    (!!inviteToken && !!inviteExamId) || studentDirectoryStatus === "signed_guest"
+  ) && studentDirectoryStatus !== "degraded_local";
+  const productionStudentRecoveryRequired = (
+    process.env.NODE_ENV === "production" && !requiresServerStudentVerification
+  );
 
   const studentRedirectPath = () => {
     if (typeof window === "undefined") return "/student/dashboard";
@@ -269,12 +307,36 @@ export default function Home() {
     if (requestedRole === "student" || requestedRole === "teacher") {
       setRole(requestedRole);
     }
-    const requestedWorkspace = query.get("workspace")?.trim() || "";
-    setWorkspaceId(requestedWorkspace);
-    if (requestedWorkspace) {
+    const resetToken = query.get("teacherResetToken")?.trim() || "";
+    const verifyToken = query.get("teacherVerifyToken")?.trim() || "";
+    if (resetToken) {
+      setRole("teacher");
+      setTeacherResetToken(resetToken);
+      setTeacherAccountMode("reset_complete");
+    } else if (verifyToken) {
+      setRole("teacher");
+      setTeacherLifecyclePending(true);
+      void confirmTeacherSignupEmail(verifyToken).then(result => {
+        if (!cancelled) setError(result.status === "verified"
+          ? "이메일 확인이 완료되었습니다. 이제 로그인할 수 있습니다."
+          : "확인 링크가 만료되었거나 이미 사용되었습니다.");
+      }).catch(() => {
+        if (!cancelled) setError("이메일 확인 서비스를 사용할 수 없습니다.");
+      }).finally(() => {
+        if (!cancelled) setTeacherLifecyclePending(false);
+      });
+    }
+    const requestedExam = query.get("exam")?.trim() || "";
+    const requestedInvite = requestedExam
+      ? readExamEntryInviteHandoff(sessionStorage, requestedExam)
+      : null;
+    setInviteToken(requestedInvite || "");
+    setInviteExamId(requestedExam);
+    if (requestedInvite && requestedExam) {
+      setRole("student");
       setGroups([]);
       setStudentDirectoryStatus("loading");
-      void loadStudentLoginDirectory(requestedWorkspace).then(result => {
+      void loadStudentLoginDirectory({ examId: requestedExam, inviteToken: requestedInvite }).then(result => {
         if (cancelled) return;
         if (result.status === "ok") {
           const remoteGroups = (result.groups || []).map((group, index) => ({
@@ -302,9 +364,40 @@ export default function Home() {
         setSelectedGroupId("");
         setStudentDirectoryStatus("error");
       });
+    } else if (requestedRole === "student") {
+      // A guest account connection can resume without exposing organization
+      // scope only when the signed HttpOnly cookie already carries both the
+      // organization and class. A signed student cookie can restore the local
+      // view model and continue directly to the requested student page.
+      const restoreSignedStudentScope = async () => {
+        const restored = await refreshStudentSession();
+        if (cancelled || !restored.ok || !restored.session) return;
+        const session = restored.session;
+        if (!session.isGuest) {
+          saveSession(session);
+          setRecentStudentSession(session);
+          router.replace(normalizeStudentRedirectPath(query.get("next")));
+          return;
+        }
+        if (!restored.canLoginWithCurrentScope || !session.groupId || !session.groupName) return;
+        setGroups([{
+          id: session.groupId,
+          name: session.groupName,
+          region: session.regionName,
+          count: 0,
+          avgScore: 0,
+          color: "#4f46e5",
+        }]);
+        setSelectedGroupId(session.groupId);
+        setStudentDirectoryStatus("signed_guest");
+      };
+      void restoreSignedStudentScope().catch(() => {
+        // Keep the recovery guidance visible. Never fall back to a client-
+        // supplied organization or raw workspace identifier.
+      });
     }
     return () => { cancelled = true; };
-  }, []);
+  }, [router]);
 
   // Surface the start-code field proactively for returning students.
   useEffect(() => {
@@ -360,9 +453,8 @@ export default function Home() {
     try {
       const identifier = teacherIdentifier.trim();
       if (!identifier || !password.trim()) {
-        setError("아이디와 비밀번호를 모두 입력해주세요.");
-        setTimeout(() => setError(""), 2000);
-        return;
+      setError("아이디와 비밀번호를 모두 입력해주세요.");
+      return;
       }
 
       const res = await verifyTeacherPassword(identifier, password);
@@ -370,7 +462,6 @@ export default function Home() {
         const saved = saveTeacherSessionWithIdentity(res.token, res.teacher);
         if (!saved) {
           setError("브라우저 세션 저장을 사용할 수 없습니다.");
-          setTimeout(() => setError(""), 2000);
           return;
         }
         // Apply the account's bound plan only when one is configured, so accounts
@@ -380,12 +471,79 @@ export default function Home() {
         router.push(next);
       } else {
         setError(res.error || "잘못된 비밀번호입니다.");
-        setTimeout(() => setError(""), 2000);
       }
     } catch {
       setError("서버 인증 도중 오류가 발생했습니다.");
-      setTimeout(() => setError(""), 2000);
     }
+  };
+
+  const teacherLifecycleMessage = (status: string): string => {
+    if (status === "delivery_unavailable") return "이메일 전송 기능이 아직 연결되지 않았습니다. 운영자에게 계정 발급 또는 복구를 요청해주세요.";
+    if (status === "invalid_input") return "이메일, 이름, 비밀번호 형식을 확인해주세요. 비밀번호는 12자 이상이어야 합니다.";
+    if (status === "rate_limited") return "요청이 많습니다. 잠시 후 다시 시도해주세요.";
+    if (status === "accepted") return "요청을 접수했습니다. 계정 존재 여부와 관계없이 같은 안내가 표시됩니다.";
+    if (status === "completed") return "비밀번호를 변경했습니다. 새 비밀번호로 로그인해주세요.";
+    if (status === "verified") return "이메일 확인이 완료되었습니다. 이제 로그인할 수 있습니다.";
+    if (status === "invalid_or_expired") return "링크가 만료되었거나 이미 사용되었습니다. 새 링크를 요청해주세요.";
+    return "계정 서비스를 사용할 수 없습니다. 잠시 후 다시 시도해주세요.";
+  };
+
+  const handleTeacherSignup = async () => {
+    if (teacherLifecyclePending) return;
+    setTeacherLifecyclePending(true);
+    setError("");
+    try {
+      const result = await requestTeacherSignup({
+        email: teacherIdentifier,
+        displayName: teacherDisplayName,
+        password,
+      });
+      setError(teacherLifecycleMessage(result.status));
+    } catch {
+      setError("계정 서비스를 사용할 수 없습니다. 잠시 후 다시 시도해주세요.");
+    } finally {
+      setTeacherLifecyclePending(false);
+    }
+  };
+
+  const handleTeacherPasswordReset = async () => {
+    if (teacherLifecyclePending) return;
+    setTeacherLifecyclePending(true);
+    setError("");
+    try {
+      const result = await requestTeacherPasswordReset(teacherIdentifier);
+      setError(teacherLifecycleMessage(result.status));
+    } catch {
+      setError("계정 서비스를 사용할 수 없습니다. 잠시 후 다시 시도해주세요.");
+    } finally {
+      setTeacherLifecyclePending(false);
+    }
+  };
+
+  const handleTeacherPasswordResetCompletion = async () => {
+    if (teacherLifecyclePending) return;
+    setTeacherLifecyclePending(true);
+    setError("");
+    try {
+      const result = await finishTeacherPasswordReset({ token: teacherResetToken, password });
+      setError(teacherLifecycleMessage(result.status));
+      if (result.status === "completed") {
+        setTeacherAccountMode("login");
+        setTeacherResetToken("");
+        setPassword("");
+      }
+    } catch {
+      setError("비밀번호 재설정 서비스를 사용할 수 없습니다.");
+    } finally {
+      setTeacherLifecyclePending(false);
+    }
+  };
+
+  const handleTeacherAccountSubmit = () => {
+    if (teacherAccountMode === "signup") return handleTeacherSignup();
+    if (teacherAccountMode === "reset") return handleTeacherPasswordReset();
+    if (teacherAccountMode === "reset_complete") return handleTeacherPasswordResetCompletion();
+    return handleTeacherLogin();
   };
 
   const handleMockupLogin = async () => {
@@ -454,7 +612,7 @@ export default function Home() {
       }
     }
 
-    saveSession(session);
+    saveSession(session, { rememberDevice: rememberStudentOnDevice });
     if (issuedCode) {
       setCopiedIssuedCode(false);
       setIssuedCodeModal({ code: issuedCode, next });
@@ -471,12 +629,10 @@ export default function Home() {
     if (!trimmedName) {
       setError("이름을 입력해주세요.");
       studentNameInputRef.current?.focus();
-      setTimeout(() => setError(""), 2000);
       return;
     }
     if (!selectedGroupId) {
       setError("반을 선택해주세요.");
-      setTimeout(() => setError(""), 2000);
       return;
     }
 
@@ -489,14 +645,14 @@ export default function Home() {
         setNeedsStudentLookup(true);
         setNeedsCode(true);
         setError("학생번호(또는 이메일)와 시작 코드를 모두 입력해주세요.");
-        setTimeout(() => setError(""), 2500);
         return;
       }
 
       setStudentLoginPending(true);
       try {
         const result = await issueStudentSession({
-          workspaceId,
+          examId: inviteExamId,
+          inviteToken,
           name: trimmedName,
           groupId: selectedGroupId,
           studentLookup,
@@ -508,6 +664,11 @@ export default function Home() {
           return;
         }
         const identity = result.identity;
+        if (inviteExamId && inviteToken
+          && !readExamEntryInviteHandoff(sessionStorage, inviteExamId, Date.now(), identity.studentId)) {
+          setError("시험 링크가 만료되었거나 다른 학생 계정에 연결되었습니다. 선생님에게 새 링크를 요청해주세요.");
+          return;
+        }
         const session: StudentSession = {
           name: identity.name,
           studentId: identity.studentId,
@@ -516,7 +677,6 @@ export default function Home() {
           groupName: identity.groupName,
           regionId: identity.regionId,
           regionName: identity.regionName,
-          workspaceId,
           isGuest: false,
           identityType: "temporary",
         };
@@ -542,7 +702,6 @@ export default function Home() {
     if (identity.lookupMismatch) {
       setNeedsStudentLookup(true);
       setError("학생번호 또는 이메일이 명단과 일치하지 않습니다.");
-      setTimeout(() => setError(""), 2500);
       return;
     }
     if (identity.requiresStudentLookup) {
@@ -550,7 +709,6 @@ export default function Home() {
       setError(identity.rosterMatchCount > 1
         ? "동명이인이 있습니다. 선생님이 알려준 학생번호 또는 이메일을 입력해주세요."
         : "명단 학생은 선생님이 알려준 학생번호 또는 이메일을 입력해주세요.");
-      setTimeout(() => setError(""), 3000);
       return;
     }
     const regionSnapshot = resolveSessionRegion({
@@ -579,25 +737,21 @@ export default function Home() {
     });
     if (codeDecision.codesChanged && !writeStudentCodes(localStorage, codeDecision.codes)) {
       setError("시작 코드 저장에 실패했습니다. 브라우저 저장소를 확인해주세요.");
-      setTimeout(() => setError(""), 2500);
       return;
     }
     if (codeDecision.status === "code_required") {
       setNeedsCode(true);
       setError("이미 등록된 학생입니다. 선생님이 발급한 시작 코드를 입력해주세요.");
-      setTimeout(() => setError(""), 2500);
       return;
     }
     if (codeDecision.status === "code_mismatch") {
       setError("시작 코드가 일치하지 않습니다.");
-      setTimeout(() => setError(""), 2500);
       return;
     }
 
     setStudentLoginPending(true);
     try {
       const result = await issueStudentSession({
-        workspaceId: workspaceId || undefined,
         studentId: identity.studentId,
         name: trimmedName,
         groupId: selectedGroupId,
@@ -616,7 +770,6 @@ export default function Home() {
         groupId: selectedGroupId,
         groupName: identity.groupName,
         ...regionSnapshot,
-        workspaceId: workspaceId || undefined,
         isGuest: false,
         identityType: "temporary",
       };
@@ -644,6 +797,10 @@ export default function Home() {
       // offline/dev — fall back to the device-local guest id below
     }
     if (!guestId) guestId = getOrCreateGuestId();
+    if (!guestId) {
+      setError("게스트 세션을 안전하게 시작하지 못했습니다. 네트워크를 확인한 뒤 다시 시도해주세요.");
+      return;
+    }
     const session: StudentSession = {
       studentId: `guest:${guestId}`,
       loginId: guestLoginIdFor(guestId),
@@ -668,7 +825,6 @@ export default function Home() {
     const guestGroup = resolveGuestGroupCode(guestGroupCode, studentGroupOptions);
     if (!guestGroup) {
       setError("반 코드를 입력해주세요.");
-      setTimeout(() => setError(""), 2000);
       return;
     }
 
@@ -718,7 +874,8 @@ export default function Home() {
   const handleHomeNavigation = (event: MouseEvent<HTMLAnchorElement>) => {
     event.preventDefault();
     handleBack();
-    setWorkspaceId("");
+    setInviteToken("");
+    setInviteExamId("");
     setStudentDirectoryStatus("local");
     setStudentLoginPending(false);
     try {
@@ -809,7 +966,7 @@ export default function Home() {
 
       <main id="main-content" className="landing-main">
         <div
-          className="container animate-fade-in home-container"
+          className="container animate-fade-in home-container mobile-inline-surface mobile-section-stack"
           style={{ maxWidth: "960px", position: "relative", zIndex: 1, padding: "3rem 1.5rem" }}
         >
           {/* ── Hero ───────────────────────────── */}
@@ -1078,7 +1235,7 @@ export default function Home() {
         {/* ── Login Forms ────────────────────── */}
         {role !== "none" && (
           <div
-            className="glass-panel animate-slide-up home-login-card"
+            className="glass-panel animate-slide-up home-login-card mobile-section-stack"
             style={{ maxWidth: role === "teacher" ? "500px" : "440px", margin: "0 auto", padding: "2.75rem 2.5rem" }}
           >
             <button
@@ -1120,103 +1277,193 @@ export default function Home() {
                       letterSpacing: 0,
                     }}
                   >
-                    환영합니다
+                    {teacherAccountHeading}
                   </h1>
                 </div>
 
                 <form
-                  aria-label="교사 로그인"
+                  aria-label={teacherAccountFormLabel}
                   noValidate
                   onSubmit={(event) => {
                     event.preventDefault();
-                    void handleTeacherLogin();
+                    void handleTeacherAccountSubmit();
                   }}
                 >
-                <div style={{ marginBottom: "1.05rem" }}>
-                  <label
-                    htmlFor="teacher-identifier"
-                    style={{
-                      display: "block",
-                      marginBottom: "0.55rem",
-                      fontSize: "var(--type-label)",
-                      fontWeight: 700,
-                      color: "var(--muted)",
-                      textTransform: "uppercase",
-                      letterSpacing: "0.07em",
-                    }}
-                  >
-                    아이디 또는 이메일
-                  </label>
-                  <input
-                    id="teacher-identifier"
-                    type="text"
-                    className="input-field"
-                    value={teacherIdentifier}
-                    onChange={(e) => setTeacherIdentifier(e.target.value)}
-                    placeholder="admin 또는 teacher@example.com"
-                    autoFocus
-                    autoComplete="username"
-                    autoCapitalize="none"
-                    spellCheck={false}
-                    aria-invalid={Boolean(error)}
-                    aria-describedby="teacher-login-feedback"
-                  />
-                </div>
+                  {teacherAccountMode !== "reset_complete" && (
+                    <div style={{ marginBottom: "1.05rem" }}>
+                      <label
+                        htmlFor="teacher-identifier"
+                        style={{
+                          display: "block",
+                          marginBottom: "0.55rem",
+                          fontSize: "var(--type-label)",
+                          fontWeight: 700,
+                          color: "var(--muted)",
+                          textTransform: "uppercase",
+                          letterSpacing: "0.07em",
+                        }}
+                      >
+                        {teacherAccountMode === "login" ? "아이디 또는 이메일" : "이메일"}
+                      </label>
+                      <input
+                        id="teacher-identifier"
+                        type={teacherAccountMode === "login" ? "text" : "email"}
+                        className="input-field"
+                        value={teacherIdentifier}
+                        onChange={(event) => {
+                          setTeacherIdentifier(event.target.value);
+                          clearLoginError();
+                        }}
+                        placeholder={teacherAccountMode === "login" ? "admin 또는 teacher@example.com" : "teacher@example.com"}
+                        autoFocus
+                        autoComplete={teacherAccountMode === "login" ? "username" : "email"}
+                        inputMode={teacherAccountMode === "login" ? undefined : "email"}
+                        autoCapitalize="none"
+                        spellCheck={false}
+                        aria-invalid={teacherIdentifierInvalid}
+                        aria-describedby="teacher-login-feedback"
+                      />
+                    </div>
+                  )}
 
-                <div style={{ marginBottom: "1.75rem" }}>
-                  <label
-                    htmlFor="teacher-password"
-                    style={{
-                      display: "block",
-                      marginBottom: "0.55rem",
-                      fontSize: "var(--type-label)",
-                      fontWeight: 700,
-                      color: "var(--muted)",
-                      textTransform: "uppercase",
-                      letterSpacing: "0.07em",
-                    }}
-                  >
-                    비밀번호
-                  </label>
-                  <input
-                    id="teacher-password"
-                    type="password"
-                    className="input-field"
-                    value={password}
-                    onChange={(e) => setPassword(e.target.value)}
-                    placeholder="비밀번호 입력"
-                    autoComplete="current-password"
-                    aria-invalid={Boolean(error)}
-                    aria-describedby="teacher-login-feedback"
-                  />
+                  {teacherAccountMode === "signup" && (
+                    <div style={{ marginBottom: "1.05rem" }}>
+                      <label
+                        htmlFor="teacher-display-name"
+                        style={{
+                          display: "block",
+                          marginBottom: "0.55rem",
+                          fontSize: "var(--type-label)",
+                          fontWeight: 700,
+                          color: "var(--muted)",
+                          textTransform: "uppercase",
+                          letterSpacing: "0.07em",
+                        }}
+                      >
+                        교사 이름
+                      </label>
+                      <input
+                        id="teacher-display-name"
+                        type="text"
+                        className="input-field"
+                        value={teacherDisplayName}
+                        onChange={(event) => {
+                          setTeacherDisplayName(event.target.value);
+                          clearLoginError();
+                        }}
+                        placeholder="교사 이름"
+                        autoComplete="name"
+                      />
+                    </div>
+                  )}
+
+                  {teacherAccountMode !== "reset" && (
+                    <div style={{ marginBottom: "1.05rem" }}>
+                      <label
+                        htmlFor="teacher-password"
+                        style={{
+                          display: "block",
+                          marginBottom: "0.55rem",
+                          fontSize: "var(--type-label)",
+                          fontWeight: 700,
+                          color: "var(--muted)",
+                          textTransform: "uppercase",
+                          letterSpacing: "0.07em",
+                        }}
+                      >
+                        {teacherAccountMode === "reset_complete" ? "새 비밀번호" : "비밀번호"}
+                      </label>
+                      <input
+                        id="teacher-password"
+                        type="password"
+                        className="input-field"
+                        value={password}
+                        onChange={(event) => {
+                          setPassword(event.target.value);
+                          clearLoginError();
+                        }}
+                        placeholder={teacherAccountMode === "reset_complete" ? "12자 이상의 새 비밀번호" : "비밀번호 입력"}
+                        autoFocus={teacherAccountMode === "reset_complete"}
+                        autoComplete={teacherAccountMode === "login" ? "current-password" : "new-password"}
+                        aria-invalid={teacherPasswordInvalid}
+                        aria-describedby="teacher-login-feedback"
+                      />
+                    </div>
+                  )}
+
+                  {teacherAccountMode === "signup" && (
+                    <p style={{ color: "var(--muted)", fontSize: "var(--type-label)", lineHeight: 1.5, marginBottom: "1.05rem" }}>
+                      위 이메일과 12자 이상의 비밀번호로 가입합니다. 이메일 확인 전에는 로그인할 수 없습니다.
+                    </p>
+                  )}
+                  {teacherAccountMode === "reset" && (
+                    <p style={{ color: "var(--muted)", fontSize: "var(--type-label)", lineHeight: 1.5, marginBottom: "1.05rem" }}>
+                      위 이메일로 재설정 링크를 요청합니다. 계정 존재 여부는 화면에 표시하지 않습니다.
+                    </p>
+                  )}
+                  {teacherAccountMode === "reset_complete" && (
+                    <p style={{ color: "var(--muted)", fontSize: "var(--type-label)", lineHeight: 1.5, marginBottom: "1.05rem" }}>
+                      12자 이상의 새 비밀번호를 입력하세요. 링크는 한 번만 사용할 수 있습니다.
+                    </p>
+                  )}
+
                   <div
                     id="teacher-login-feedback"
                     aria-live="polite"
-                    style={{ marginTop: "0.5rem", display: "grid", gap: "0.35rem" }}
+                    style={{ marginBottom: "1.25rem", display: "grid", gap: "0.35rem" }}
                   >
                     {error ? (
                       <>
-                      <p role="alert" style={{ fontSize: "var(--type-label)", color: "var(--error)", fontWeight: 600 }}>
-                        {error}
-                      </p>
-                      {shouldShowTeacherDeploymentHelp(error) && (
-                        <p style={{ fontSize: "var(--type-label)", color: "var(--muted)", lineHeight: 1.5, wordBreak: "keep-all" }}>
-                          {TEACHER_AUTH_DEPLOYMENT_HELP}
+                        <p role="alert" style={{ fontSize: "var(--type-label)", color: "var(--error)", fontWeight: 600 }}>
+                          {error}
                         </p>
-                      )}
+                        {shouldShowTeacherDeploymentHelp(error) && (
+                          <p style={{ fontSize: "var(--type-label)", color: "var(--muted)", lineHeight: 1.5, wordBreak: "keep-all" }}>
+                            {TEACHER_AUTH_DEPLOYMENT_HELP}
+                          </p>
+                        )}
                       </>
                     ) : (
-                    <p style={{ fontSize: "var(--type-label)", color: "var(--muted)", opacity: 0.82 }}>
-                      교사용 계정 정보를 입력하세요.
-                    </p>
+                      <p style={{ fontSize: "var(--type-label)", color: "var(--muted)", opacity: 0.82 }}>
+                        {teacherAccountMode === "login" ? "교사용 계정 정보를 입력하세요." : "요청 결과가 여기에 표시됩니다."}
+                      </p>
                     )}
                   </div>
-                </div>
 
-                <button type="submit" className="btn btn-primary" style={{ width: "100%" }}>
-                  대시보드 입장
-                </button>
+                  <button type="submit" className="btn btn-primary" style={{ width: "100%" }} disabled={teacherLifecyclePending}>
+                    {teacherLifecyclePending ? teacherAccountPendingLabel : teacherAccountSubmitLabel}
+                  </button>
                 </form>
+
+                <div style={{ marginTop: "0.85rem", display: "grid", gap: "0.65rem" }}>
+                  {teacherAccountMode !== "reset_complete" && (
+                    <div style={{ display: "flex", gap: "0.55rem", flexWrap: "wrap" }}>
+                      <button
+                        type="button"
+                        className="btn"
+                        onClick={() => {
+                          setTeacherAccountMode(mode => mode === "signup" ? "login" : "signup");
+                          setError("");
+                        }}
+                      >
+                        {teacherAccountMode === "signup" ? "로그인으로 돌아가기" : "교사 계정 만들기"}
+                      </button>
+                      <button
+                        type="button"
+                        className="btn"
+                        onClick={() => {
+                          setTeacherAccountMode(mode => mode === "reset" ? "login" : "reset");
+                          setError("");
+                        }}
+                      >
+                        {teacherAccountMode === "reset" ? "로그인으로 돌아가기" : "비밀번호 재설정"}
+                      </button>
+                    </div>
+                  )}
+                  <p style={{ color: "var(--muted)", fontSize: "var(--type-caption)", lineHeight: 1.5 }}>
+                    부트스트랩 계정은 초기 운영자가 명시적으로 허용한 경우에만 사용됩니다.
+                  </p>
+                </div>
 
                 <div className="mockup-login-divider" aria-hidden="true"><span>또는 바로 체험하기</span></div>
                 <section className="mockup-login-card" aria-label="데모 계정 체험">
@@ -1249,10 +1496,6 @@ export default function Home() {
               <>
                 {/* Student form */}
                 <div style={{ marginBottom: "2.25rem" }}>
-                  <span className="badge badge-secondary" style={{ marginBottom: "1rem" }}>
-                    <StudentIcon size={12} />
-                    학생 포털
-                  </span>
                   <h1
                     style={{
                       fontSize: "1.85rem",
@@ -1266,8 +1509,38 @@ export default function Home() {
                   </h1>
                 </div>
 
+                {productionStudentRecoveryRequired ? (
+                  <section
+                    className="student-login-recovery-guidance"
+                    role="note"
+                    style={{
+                      padding: "1rem",
+                      marginBottom: "1.25rem",
+                      borderRadius: "var(--radius-md)",
+                      border: "1px solid var(--border)",
+                      background: "var(--surface)",
+                      color: "var(--muted)",
+                      fontSize: "var(--type-label)",
+                      lineHeight: 1.6,
+                    }}
+                  >
+                    <strong style={{ display: "block", color: "var(--foreground)", marginBottom: "0.25rem" }}>
+                      학생 계정 로그인에는 선생님이 보낸 최신 초대 링크가 필요합니다.
+                    </strong>
+                    초대 링크를 다시 열어 이름과 시작 코드로 로그인해주세요. 링크나 시작 코드를 잃어버렸다면 선생님에게 재전송 또는 재발급을 요청해주세요.
+                  </section>
+                ) : (
+                <form
+                  className="student-account-login-form"
+                  onSubmit={(event) => {
+                    event.preventDefault();
+                    void handleStudentLogin();
+                  }}
+                  noValidate
+                >
                 <div style={{ marginBottom: "1.1rem" }}>
                   <label
+                    htmlFor="student-name"
                     style={{
                       display: "block",
                       marginBottom: "0.55rem",
@@ -1289,7 +1562,10 @@ export default function Home() {
                     aria-invalid={error === "이름을 입력해주세요."}
                     aria-describedby={error === "이름을 입력해주세요." ? "student-name-error" : undefined}
                     value={studentName}
-                    onChange={(e) => setStudentName(e.target.value)}
+                    onChange={(e) => {
+                      setStudentName(e.target.value);
+                      clearLoginError();
+                    }}
                     placeholder="이름을 입력하세요"
                     autoFocus
                     autoComplete="name"
@@ -1298,7 +1574,7 @@ export default function Home() {
                     <p
                       id="student-name-error"
                       role="alert"
-                      style={{ fontSize: "var(--type-label)", color: "var(--error)", marginTop: "0.45rem", fontWeight: 700 }}
+                      style={{ fontSize: "var(--type-label)", color: "var(--text-error)", marginTop: "0.45rem", fontWeight: 700 }}
                     >
                       {error}
                     </p>
@@ -1307,12 +1583,13 @@ export default function Home() {
 
                 <div style={{ marginBottom: "1.1rem" }}>
                   <label
+                    htmlFor="student-lookup"
                     style={{
                       display: "block",
                       marginBottom: "0.55rem",
                       fontSize: "var(--type-label)",
                       fontWeight: 700,
-                      color: needsStudentLookup ? "var(--warning)" : "var(--muted)",
+                      color: needsStudentLookup ? "var(--text-warning)" : "var(--muted)",
                       textTransform: "uppercase",
                       letterSpacing: "0.07em",
                     }}
@@ -1320,12 +1597,15 @@ export default function Home() {
                     학생번호 또는 이메일
                   </label>
                   <input
+                    id="student-lookup"
                     type="text"
                     className="input-field"
                     aria-label="학생번호 또는 이메일"
                     value={studentLookup}
-                    onChange={(e) => setStudentLookup(e.target.value)}
-                    onKeyDown={(e) => e.key === "Enter" && handleStudentLogin()}
+                    onChange={(e) => {
+                      setStudentLookup(e.target.value);
+                      clearLoginError();
+                    }}
                     placeholder="선생님이 알려준 학생번호 또는 이메일"
                     autoComplete="email"
                     autoCapitalize="none"
@@ -1337,7 +1617,7 @@ export default function Home() {
                   />
                   <p style={{
                     fontSize: "var(--type-label)",
-                    color: needsStudentLookup ? "var(--warning)" : "var(--muted)",
+                    color: needsStudentLookup ? "var(--text-warning)" : "var(--muted)",
                     marginTop: "0.45rem",
                     lineHeight: 1.45,
                     wordBreak: "keep-all",
@@ -1350,6 +1630,7 @@ export default function Home() {
 
                 <div style={{ marginBottom: "1.35rem" }}>
                   <label
+                    htmlFor="student-group"
                     style={{
                       display: "block",
                       marginBottom: "0.55rem",
@@ -1364,9 +1645,13 @@ export default function Home() {
                   </label>
                   {studentGroupOptions.length > 0 ? (
                     <select
+                      id="student-group"
                       aria-label="반 선택"
                       value={selectedGroupId}
-                      onChange={(e) => setSelectedGroupId(e.target.value)}
+                      onChange={(e) => {
+                        setSelectedGroupId(e.target.value);
+                        clearLoginError();
+                      }}
                       className="input-field"
                       style={{ cursor: "pointer" }}
                     >
@@ -1379,11 +1664,15 @@ export default function Home() {
                     </select>
                   ) : (
                     <input
+                      id="student-group"
                       type="text"
                       className="input-field"
                       aria-label="반 코드"
                       value={selectedGroupId}
-                      onChange={(e) => setSelectedGroupId(e.target.value.trim())}
+                      onChange={(e) => {
+                        setSelectedGroupId(e.target.value.trim());
+                        clearLoginError();
+                      }}
                       placeholder="선생님이 알려준 반 코드"
                       autoCapitalize="none"
                       spellCheck={false}
@@ -1391,16 +1680,20 @@ export default function Home() {
                   )}
                   {studentGroupOptions.length === 0 && (
                     <p style={{ fontSize: "var(--type-label)", color: "var(--muted)", marginTop: "0.45rem", lineHeight: 1.5 }}>
-                      등록된 반이 없으면 아래 반 코드로 게스트 시험을 시작할 수 있습니다.
+                      {requiresServerStudentVerification
+                        ? "초대된 반을 찾을 수 없습니다. 선생님에게 최신 초대 링크를 요청해주세요."
+                        : "등록된 반이 없으면 아래 반 코드로 게스트 시험을 시작할 수 있습니다."}
                     </p>
                   )}
                 </div>
 
-                {error && error !== "이름을 입력해주세요." && (
-                  <p role="alert" style={{ fontSize: "var(--type-label)", color: "var(--error)", marginTop: "-0.35rem", marginBottom: "1.35rem", fontWeight: 600 }}>
-                    {error}
-                  </p>
-                )}
+                <div id="student-login-feedback" aria-live="polite">
+                  {error && error !== "이름을 입력해주세요." && (
+                    <p role="alert" style={{ fontSize: "var(--type-label)", color: "var(--text-error)", marginTop: "-0.35rem", marginBottom: "1.35rem", fontWeight: 650 }}>
+                      {error}
+                    </p>
+                  )}
+                </div>
 
                 {pendingGuestPreview && (
                   <div
@@ -1426,12 +1719,13 @@ export default function Home() {
                 {(needsCode || requiresServerStudentVerification) && (
                   <div style={{ marginBottom: "1.75rem" }}>
                     <label
+                      htmlFor="student-start-code"
                       style={{
                         display: "block",
                         marginBottom: "0.55rem",
                         fontSize: "var(--type-label)",
                         fontWeight: 700,
-                        color: needsCode ? "var(--warning)" : "var(--muted)",
+                        color: needsCode ? "var(--text-warning)" : "var(--muted)",
                         textTransform: "uppercase",
                         letterSpacing: "0.07em",
                       }}
@@ -1439,12 +1733,15 @@ export default function Home() {
                       시작 코드
                     </label>
                     <input
+                      id="student-start-code"
                       type="text"
                       className="input-field"
                       aria-label="시작 코드"
                       value={startCode}
-                      onChange={(e) => setStartCode(normalizeStartCodeInput(e.target.value))}
-                      onKeyDown={(e) => e.key === "Enter" && handleStudentLogin()}
+                      onChange={(e) => {
+                        setStartCode(normalizeStartCodeInput(e.target.value));
+                        clearLoginError();
+                      }}
                       placeholder="6자리 코드 입력"
                       autoComplete="one-time-code"
                       autoCapitalize="characters"
@@ -1459,7 +1756,7 @@ export default function Home() {
                 )}
 
                 <button
-                  onClick={handleStudentLogin}
+                  type="submit"
                   disabled={studentLoginPending || studentDirectoryStatus === "loading"}
                   className="btn btn-primary"
                   style={{
@@ -1472,69 +1769,113 @@ export default function Home() {
                   {studentLoginPending ? "계정 확인 중…" : "시험 시작하기"}
                 </button>
 
+                <label
+                  htmlFor="remember-student-device"
+                  style={{
+                    minHeight: 44,
+                    display: "flex",
+                    alignItems: "center",
+                    gap: "0.65rem",
+                    margin: "0.35rem 0 0.75rem",
+                    color: "var(--foreground)",
+                    fontSize: "var(--type-label)",
+                    fontWeight: 700,
+                    cursor: "pointer",
+                  }}
+                >
+                  <input
+                    id="remember-student-device"
+                    type="checkbox"
+                    checked={rememberStudentOnDevice}
+                    onChange={(event) => setRememberStudentOnDevice(event.target.checked)}
+                  />
+                  <span>
+                    이 기기에서 로그인 유지
+                    <small style={{ display: "block", marginTop: "0.15rem", color: "var(--muted)", fontWeight: 550 }}>
+                      공용 기기에서는 선택하지 마세요.
+                    </small>
+                  </span>
+                </label>
+
                 <p style={{ fontSize: "var(--type-caption)", color: "var(--muted)", margin: "0 0 0.75rem", lineHeight: 1.5, wordBreak: "keep-all" }}>
                   {requiresServerStudentVerification
                     ? "* 선생님이 발급한 초대 링크와 시작 코드로 서버 명단을 확인합니다."
                     : "* 현재 기기에 저장된 명단과 시작 코드로 로그인합니다."}
                 </p>
+                </form>
+                )}
 
-                <div className="divider-label">
-                  <span>또는</span>
-                </div>
-
-                <div style={{ marginBottom: "0.75rem" }}>
-                  <label
+                {requiresServerStudentVerification ? (
+                  <section
+                    className="student-invite-guest-restriction"
+                    role="note"
                     style={{
-                      display: "block",
-                      marginBottom: "0.55rem",
-                      fontSize: "var(--type-label)",
-                      fontWeight: 700,
+                      padding: "0.9rem 1rem",
+                      borderRadius: "var(--radius-md)",
+                      border: "1px solid var(--border)",
+                      background: "var(--surface)",
                       color: "var(--muted)",
-                      textTransform: "uppercase",
-                      letterSpacing: "0.07em",
+                      fontSize: "var(--type-label)",
+                      lineHeight: 1.6,
                     }}
                   >
-                    반 코드
-                  </label>
-                  <input
-                    type="text"
-                    className="input-field"
-                    value={guestGroupCode}
-                    onChange={(e) => setGuestGroupCode(e.target.value)}
-                    onKeyDown={(e) => e.key === "Enter" && handleGuestWithGroupCode()}
-                    placeholder="선생님이 알려준 코드"
-                    autoCapitalize="characters"
-                    spellCheck={false}
-                  />
-                </div>
+                    <strong style={{ display: "block", color: "var(--foreground)", marginBottom: "0.2rem" }}>
+                      그룹 초대 시험은 등록된 학생만 참여할 수 있습니다.
+                    </strong>
+                    게스트로 시험을 볼 수 없는 링크입니다. 계정 정보가 없거나 시작 코드를 잃어버렸다면 선생님이 보낸 최신 초대 링크를 확인하고 코드 재발급을 요청해주세요.
+                  </section>
+                ) : (
+                  <details className="student-alternate-entry">
+                  <summary>다른 방법으로 참여</summary>
+                  <div className="student-alternate-entry-content">
+                    <div>
+                      <label htmlFor="guest-group-code">반 코드</label>
+                      <input
+                        id="guest-group-code"
+                        type="text"
+                        className="input-field"
+                        value={guestGroupCode}
+                        onChange={(e) => {
+                          setGuestGroupCode(e.target.value);
+                          clearLoginError();
+                        }}
+                        onKeyDown={(e) => e.key === "Enter" && handleGuestWithGroupCode()}
+                        placeholder="선생님이 알려준 코드"
+                        autoCapitalize="characters"
+                        spellCheck={false}
+                      />
+                    </div>
 
-                <button
-                  type="button"
-                  onClick={handleGuestWithGroupCode}
-                  className="btn btn-primary"
-                  style={{
-                    width: "100%",
-                    background: "linear-gradient(135deg, #6366f1, #14b8a6)",
-                    boxShadow: "0 4px 18px rgba(20,184,166,0.25)",
-                    marginBottom: "0.75rem",
-                  }}
-                >
-                  반 코드로 게스트 시험보기
-                </button>
+                    <button
+                      type="button"
+                      onClick={handleGuestWithGroupCode}
+                      className="btn btn-primary"
+                      style={{
+                        width: "100%",
+                        background: "linear-gradient(135deg, #6366f1, #14b8a6)",
+                        boxShadow: "0 4px 18px rgba(20,184,166,0.25)",
+                      }}
+                    >
+                      반 코드로 게스트 시험보기
+                    </button>
 
-                <button
-                  onClick={handleGuest}
-                  className="btn"
-                  style={{
-                    width: "100%",
-                    background: "transparent",
-                    border: "1px solid var(--border)",
-                    color: "var(--muted)",
-                    fontSize: "0.92rem",
-                  }}
-                >
-                  코드 없이 게스트로 계속하기
-                </button>
+                    <button
+                      type="button"
+                      onClick={handleGuest}
+                      className="btn"
+                      style={{
+                        width: "100%",
+                        background: "transparent",
+                        border: "1px solid var(--border)",
+                        color: "var(--muted)",
+                        fontSize: "0.92rem",
+                      }}
+                    >
+                      코드 없이 게스트로 계속하기
+                    </button>
+                  </div>
+                  </details>
+                )}
               </>
             )}
           </div>

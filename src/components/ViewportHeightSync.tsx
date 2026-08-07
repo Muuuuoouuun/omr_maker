@@ -21,7 +21,10 @@ function isIOSLikeDevice() {
 }
 
 function enableSupportedKeyboardViewportMode() {
-  if (isIOSLikeDevice()) return;
+  // interactive-widget is currently a Chromium keyboard viewport extension.
+  // Avoid asking Safari/WebKit to parse it, where it emits a console error and
+  // ignores the value anyway.
+  if (isIOSLikeDevice() || !("virtualKeyboard" in window.navigator)) return;
 
   const viewportMeta = document.querySelector<HTMLMetaElement>('meta[name="viewport"]');
   if (!viewportMeta) return;

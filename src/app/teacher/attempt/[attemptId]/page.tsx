@@ -14,7 +14,7 @@ import { awaySeverity } from "@/lib/examAwayTracker";
 import { readActiveWorkspaceContext } from "@/lib/workspaceContext";
 import {
     answerTeacherAttemptQuestion,
-    loadTeacherAttempt as loadTeacherAttemptRecord,
+    loadTeacherAttemptDetail as loadTeacherAttemptRecord,
     loadTeacherAttempts,
     setTeacherAttemptSubquestionReview,
 } from "@/lib/teacherAttemptClient";
@@ -31,7 +31,8 @@ import {
     summarizeAttemptBehavior,
     summarizeAttemptScore,
 } from "@/lib/premiumAnalytics";
-import { hasTeacherSession } from "@/lib/teacherSession";
+import { hasTeacherSession, readTeacherSession } from "@/lib/teacherSession";
+import { resolveDemoAttemptDetail } from "@/lib/demoData";
 import ThemeToggle from "@/components/ThemeToggle";
 import {
     DEFAULT_FEEDBACK_DOWNLOAD_POLICY,
@@ -57,6 +58,8 @@ import HandwritingPanel from "@/components/teacher/student-results/HandwritingPa
 import ReportPanel from "@/components/teacher/student-results/ReportPanel";
 import type { CumulativeLoadStatus } from "@/components/teacher/student-results/CumulativeGrowthPanel";
 import styles from "@/components/teacher/student-results/StudentResultHub.module.css";
+
+type AttemptDetailLoadStatus = "loading" | "ready" | "not_found" | "error";
 
 function hasTeacherAccess(): boolean {
     return hasTeacherSession();
@@ -116,7 +119,8 @@ export default function TeacherAttemptPage() {
     const [feedbackViewMode, setFeedbackViewMode] = useState<"student" | "markup" | "combined">("student");
     const [feedbackNotice, setFeedbackNotice] = useState("");
     const [feedbackSaving, setFeedbackSaving] = useState(false);
-    const [loaded, setLoaded] = useState(false);
+    const [detailLoadStatus, setDetailLoadStatus] = useState<AttemptDetailLoadStatus>("loading");
+    const [detailLoadRequest, setDetailLoadRequest] = useState(0);
     const [answerDrafts, setAnswerDrafts] = useState<Record<number, string>>({});
     const [savingAnswerFor, setSavingAnswerFor] = useState<number | null>(null);
     const [cumulativeAttempts, setCumulativeAttempts] = useState<Attempt[]>([]);
@@ -130,13 +134,13 @@ export default function TeacherAttemptPage() {
     const [savingSubQuestionKey, setSavingSubQuestionKey] = useState<string | null>(null);
     const pdfExportEnabled = hasPlanEntitlement(currentPlan, "pdfExport");
     const handwritingArchiveEnabled = hasPlanEntitlement(currentPlan, "handwritingArchive");
-    const feedbackEnabled = hasPlanEntitlement(currentPlan, "feedbackMarkup");
+    const feedbackMarkupEnabled = hasPlanEntitlement(currentPlan, "feedbackMarkup");
     const studentGrowthReportsEnabled = hasPlanEntitlement(currentPlan, "studentGrowthReports");
 
     useEffect(() => {
         let cancelled = false;
         const loadTeacherAttempt = async () => {
-            setLoaded(false);
+            setDetailLoadStatus("loading");
             setAccessDenied(false);
             setAttempt(null);
             setExam(null);
@@ -168,17 +172,42 @@ export default function TeacherAttemptPage() {
 
             if (!hasTeacherAccess()) {
                 setAccessDenied(true);
-                setLoaded(true);
+                setDetailLoadStatus("ready");
                 return;
             }
 
+            let attemptResolved = false;
             try {
-                const found = await loadTeacherAttemptRecord(id);
-                if (cancelled) return;
-                if (!found) {
-                    setLoaded(true);
+                const demoDetail = resolveDemoAttemptDetail(readTeacherSession(), id);
+                if (demoDetail) {
+                    setAttempt(demoDetail.attempt);
+                    setPeerAttempts(demoDetail.peerAttempts);
+                    setExam(demoDetail.exam);
+                    const nextFeedback = createAttemptFeedbackDraft(demoDetail.attempt);
+                    setFeedback(nextFeedback);
+                    setFeedbackSummary(nextFeedback.summary || "");
+                    setFeedbackPolicy(nextFeedback.downloadPolicy);
+                    setDetailLoadStatus("ready");
                     return;
                 }
+
+                const detailResult = await loadTeacherAttemptRecord(id);
+                if (cancelled) return;
+                if (detailResult.status === "not_found") {
+                    setDetailLoadStatus("not_found");
+                    return;
+                }
+                if (detailResult.status === "unauthorized") {
+                    setAccessDenied(true);
+                    setDetailLoadStatus("ready");
+                    return;
+                }
+                if (detailResult.status === "service_unavailable") {
+                    setDetailLoadStatus("error");
+                    return;
+                }
+                const found = detailResult.attempt;
+                attemptResolved = true;
 
                 // Keep a client-side defense in depth on top of the canonical,
                 // organization-scoped teacher gateway. Legacy rows without an
@@ -187,7 +216,7 @@ export default function TeacherAttemptPage() {
                 const attemptOrganizationId = found.organizationId?.trim();
                 if (attemptOrganizationId && activeOrganizationId && attemptOrganizationId !== activeOrganizationId) {
                     setAccessDenied(true);
-                    setLoaded(true);
+                    setDetailLoadStatus("ready");
                     return;
                 }
 
@@ -210,16 +239,16 @@ export default function TeacherAttemptPage() {
                 const parsedExam = await loadTeacherExam(found.examId);
                 if (cancelled) return;
                 if (parsedExam) setExam(parsedExam);
-                setLoaded(true);
+                setDetailLoadStatus("ready");
             } catch {
-                if (!cancelled) setLoaded(true);
+                if (!cancelled) setDetailLoadStatus(attemptResolved ? "ready" : "error");
             }
         };
 
         void loadTeacherAttempt();
 
         return () => { cancelled = true; };
-    }, [id]);
+    }, [detailLoadRequest, id]);
 
     const loadHandwritingResources = useCallback(async () => {
         if (!attempt || handwritingStatus === "loading" || handwritingStatus === "ready") return;
@@ -265,14 +294,14 @@ export default function TeacherAttemptPage() {
     }, [attempt, exam, feedback, handwritingStatus]);
 
     useEffect(() => {
-        if (activeView === "handwriting" && handwritingArchiveEnabled && attempt?.handwritingArchived) {
-            if (!loaded || handwritingStatus !== "idle") return;
+        if (activeView === "handwriting" && (handwritingArchiveEnabled || feedback?.status === "returned") && attempt?.handwritingArchived) {
+            if (detailLoadStatus !== "ready" || handwritingStatus !== "idle") return;
             const timeoutId = window.setTimeout(() => {
                 void loadHandwritingResources();
             }, 0);
             return () => window.clearTimeout(timeoutId);
         }
-    }, [activeView, attempt, handwritingArchiveEnabled, handwritingStatus, loadHandwritingResources, loaded]);
+    }, [activeView, attempt, detailLoadStatus, feedback?.status, handwritingArchiveEnabled, handwritingStatus, loadHandwritingResources]);
 
     const retryCumulativeLoad = useCallback(() => {
         const targetAttemptId = attempt?.id;
@@ -286,7 +315,7 @@ export default function TeacherAttemptPage() {
     useEffect(() => {
         if (!studentGrowthReportsEnabled) return;
         if (activeView !== "report" && activeView !== "analytics") return;
-        if (!loaded || !attempt) return;
+        if (detailLoadStatus !== "ready" || !attempt) return;
         const targetAttemptId = attempt.id;
         if (activeAttemptIdRef.current !== targetAttemptId) return;
         if (cumulativeLoadingAttemptRef.current === targetAttemptId) return;
@@ -299,6 +328,17 @@ export default function TeacherAttemptPage() {
 
         void (async () => {
             try {
+                const demoDetail = resolveDemoAttemptDetail(readTeacherSession(), targetAttemptId);
+                if (demoDetail) {
+                    if (activeAttemptIdRef.current !== targetAttemptId) return;
+                    setCumulativeAttempts(demoDetail.cumulativeAttempts);
+                    setCumulativeExams(demoDetail.exams);
+                    setRosterStudent(demoDetail.rosterStudent);
+                    cumulativeSettledAttemptIdRef.current = targetAttemptId;
+                    setCumulativeStatus("ready");
+                    return;
+                }
+
                 const [attemptResult, examResult, rosterResult] = await Promise.all([
                     loadTeacherAttempts(),
                     loadTeacherExams(),
@@ -334,7 +374,7 @@ export default function TeacherAttemptPage() {
                 }
             }
         })();
-    }, [activeView, attempt, cumulativeLoadRequest, loaded, studentGrowthReportsEnabled]);
+    }, [activeView, attempt, cumulativeLoadRequest, detailLoadStatus, studentGrowthReportsEnabled]);
 
     const analytics = useMemo(() => {
         if (!attempt || !exam) return null;
@@ -422,7 +462,7 @@ export default function TeacherAttemptPage() {
     };
 
     const saveFeedback = async (returnAfterSave = false) => {
-        if (!attempt || !feedbackEnabled) return;
+        if (!attempt) return;
         const targetAttemptId = attempt.id;
         if (activeAttemptIdRef.current !== targetAttemptId) return;
         setFeedbackSaving(true);
@@ -431,14 +471,17 @@ export default function TeacherAttemptPage() {
         const nextFeedback: AttemptFeedback = {
             ...base,
             summary: feedbackSummary.trim() || undefined,
-            downloadPolicy: feedbackPolicy,
+            downloadPolicy: {
+                ...feedbackPolicy,
+                allowAnnotatedPdfDownload: feedbackMarkupEnabled
+                    && feedbackPolicy.allowAnnotatedPdfDownload,
+            },
         };
-        const markupDrawingsForSave = handwritingStatus === "ready"
+        const markupDrawingsForSave = feedbackMarkupEnabled && handwritingStatus === "ready"
             && handwritingReadyAttemptIdRef.current === targetAttemptId
             && activeAttemptIdRef.current === targetAttemptId
             ? teacherMarkupDrawings
             : undefined;
-
         try {
             const saveResult = await saveTeacherAttemptFeedbackDraft(nextFeedback, markupDrawingsForSave);
             if (activeAttemptIdRef.current !== targetAttemptId) return;
@@ -450,7 +493,7 @@ export default function TeacherAttemptPage() {
             let latest = await loadTeacherAttemptFeedback(targetAttemptId);
             if (activeAttemptIdRef.current !== targetAttemptId) return;
             if (returnAfterSave && latest) {
-                const returnResult = await returnTeacherAttemptFeedback(latest.id);
+                const returnResult = await returnTeacherAttemptFeedback(latest);
                 if (activeAttemptIdRef.current !== targetAttemptId) return;
                 if (!returnResult.localSaved && !returnResult.remoteSaved) {
                     setFeedbackNotice(returnResult.remoteError || "초안은 저장됐지만 학생에게 반환하지 못했습니다.");
@@ -487,11 +530,52 @@ export default function TeacherAttemptPage() {
         );
     }
 
-    if (!loaded || (attempt !== null && attempt.id !== id)) {
-        return <div style={{ padding: '2rem', textAlign: 'center' }}>Loading...</div>;
+    if (detailLoadStatus === "loading" || (attempt !== null && attempt.id !== id)) {
+        return (
+            <main
+                role="status"
+                aria-live="polite"
+                aria-busy="true"
+                style={{ minHeight: '100vh', display: 'grid', placeItems: 'center', padding: '2rem', textAlign: 'center' }}
+            >
+                <div>
+                    <div className="loading-spinner" aria-hidden="true" style={{ margin: '0 auto 0.85rem' }} />
+                    <p style={{ color: 'var(--muted)', fontWeight: 700 }}>응시 기록을 불러오는 중입니다…</p>
+                </div>
+            </main>
+        );
     }
 
-    if (!attempt) {
+    if (detailLoadStatus === "error") {
+        return (
+            <div
+                data-testid="teacher-attempt-load-error"
+                role="alert"
+                style={{ minHeight: '100vh', display: 'grid', placeItems: 'center', padding: '2rem', textAlign: 'center' }}
+            >
+                <div>
+                    <h1 style={{ fontSize: '1.4rem', fontWeight: 800, marginBottom: '0.5rem' }}>
+                        응시 기록을 서버에서 불러오지 못했습니다.
+                    </h1>
+                    <p style={{ color: 'var(--muted)', marginBottom: '1rem' }}>
+                        네트워크 상태를 확인한 뒤 다시 시도해 주세요.
+                    </p>
+                    <div style={{ display: 'flex', justifyContent: 'center', gap: '0.6rem', flexWrap: 'wrap' }}>
+                        <button
+                            type="button"
+                            className="btn btn-primary"
+                            onClick={() => setDetailLoadRequest(request => request + 1)}
+                        >
+                            다시 시도
+                        </button>
+                        <Link href="/teacher/dashboard" className="btn btn-secondary">대시보드로 이동</Link>
+                    </div>
+                </div>
+            </div>
+        );
+    }
+
+    if (detailLoadStatus === "not_found" || !attempt) {
         // F3: loaded but no attempt (deleted, never synced, or wrong id) previously
         // spun forever. Show a real "not found" screen instead.
         return (
@@ -703,7 +787,7 @@ export default function TeacherAttemptPage() {
                             <HandwritingPanel
                                 attempt={attempt}
                                 handwritingArchiveEnabled={handwritingArchiveEnabled}
-                                feedbackEnabled={feedbackEnabled}
+                                feedbackMarkupEnabled={feedbackMarkupEnabled}
                                 handwritingStatus={handwritingStatus}
                                 pdfFile={pdfFile}
                                 drawings={drawings}

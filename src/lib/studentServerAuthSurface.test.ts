@@ -44,7 +44,7 @@ describe("student server authentication surface", () => {
         const sessionAction = source("src/app/actions/studentSession.ts");
         const authAction = source("src/app/actions/studentAuth.ts");
 
-        expect(authAction).toContain("parseSignedTeacherSessionCookie");
+        expect(authAction).toContain("resolveAuthorizedTeacherSessionCookie");
         expect(sessionAction).toContain("verifyStudentCredentials");
         expect(sessionAction).toContain("organizationId: workspaceId");
         expect(sessionAction).toContain("studentProfileId: profile.id");
@@ -66,7 +66,7 @@ describe("student server authentication surface", () => {
         expect(client).toContain("readLocalExam: (examId: string) => Exam | null");
         expect(client).toContain("must never fetch the");
         expect(client).toContain("full exam (with answers) from Supabase");
-        expect(solvePage).toContain("server: (examId, pin) => loadExamForSolving(examId, pin)");
+        expect(solvePage).toContain("server: (examId, pin) => loadExamForSolving(examId, pin, linkInviteToken, linkAssignmentId)");
         expect(solvePage).toContain("readLocalExam");
     });
 
@@ -77,7 +77,20 @@ describe("student server authentication surface", () => {
         expect(action).toContain('process.env.NODE_ENV === "production" ? "error" : "degraded_local"');
         expect(action.indexOf("const config = getSupabaseServerConfigFromEnv()"))
             .toBeLessThan(action.indexOf("const cookieStore = await cookies()"));
-        expect(solvePage).toContain("session.studentId && session.workspaceId");
+        expect(solvePage).toContain("session.studentId && (session.workspaceId || linkInviteToken)");
+        expect(solvePage).toContain("readExamEntryInviteHandoff");
+    });
+
+    it("never signs a client-supplied student identity when production database config is missing", () => {
+        const action = source("src/app/actions/studentSession.ts");
+        const missingClient = action.slice(
+            action.indexOf("if (!client) {", action.indexOf("export async function issueStudentSession")),
+            action.indexOf("const inviteInput =", action.indexOf("export async function issueStudentSession")),
+        );
+        expect(missingClient).toContain('if (process.env.NODE_ENV === "production")');
+        expect(missingClient).toContain('return { ok: false, status: "error" }');
+        expect(missingClient.indexOf('process.env.NODE_ENV === "production"'))
+            .toBeLessThan(missingClient.indexOf("clean(input.studentId)"));
     });
 
     it("signs a private problem PDF only after authorizing the owned review attempt", () => {

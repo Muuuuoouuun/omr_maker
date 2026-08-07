@@ -14,7 +14,10 @@ const STUDENT: StudentIdentityInput = {
     organizationId: "teacher_abc", groupId: "grp1", groupName: "1반", identityType: "temporary",
 };
 const ENV = { STUDENT_SESSION_SECRET: "test-secret", NODE_ENV: "test" } as Record<string, string>;
-const productionEnv = { NODE_ENV: "production", STUDENT_SESSION_SECRET: "student-session-test-secret" };
+const productionEnv = {
+    NODE_ENV: "production",
+    STUDENT_SESSION_SECRET: "student-session-secret-at-least-32-bytes",
+};
 const registeredIdentity = {
     organizationId: "org-1",
     studentId: "student-1",
@@ -30,6 +33,18 @@ describe("studentServerSession", () => {
         expect(resolveStudentSessionSecret({ STUDENT_ATTEMPT_SECRET: " attempt " })).toBe("attempt");
         expect(resolveStudentSessionSecret({ NODE_ENV: "development" })).toBe("dev-student-session-secret");
         expect(resolveStudentSessionSecret({ NODE_ENV: "production" })).toBeNull();
+        expect(resolveStudentSessionSecret({
+            NODE_ENV: "production",
+            STUDENT_SESSION_SECRET: "short-student-secret",
+        })).toBeNull();
+        expect(resolveStudentSessionSecret({
+            NODE_ENV: "production",
+            STUDENT_ATTEMPT_SECRET: "short-attempt-secret",
+        })).toBeNull();
+        expect(resolveStudentSessionSecret({
+            NODE_ENV: "production",
+            STUDENT_ATTEMPT_SECRET: "student-attempt-secret-at-least-32-bytes",
+        })).toBeNull();
     });
 
     it("round-trips guest, temporary, and registered identities", () => {

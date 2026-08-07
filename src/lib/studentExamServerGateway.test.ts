@@ -1,5 +1,5 @@
-import { describe, expect, it } from "vitest";
-import type { Exam } from "@/types/omr";
+import { describe, expect, it, vi } from "vitest";
+import type { Attempt, Exam } from "@/types/omr";
 import type { StudentAttemptSubmission } from "./studentExamContract";
 import { parseStudentAttemptTicket } from "./studentAttemptTicket";
 import {
@@ -8,8 +8,12 @@ import {
     submitStudentAttemptWithGateway,
     type StudentExamGatewayClient,
 } from "./studentExamServerGateway";
+import * as studentExamGatewayModule from "./studentExamServerGateway";
 
-const env = { NODE_ENV: "production", STUDENT_ATTEMPT_SECRET: "gateway-test-secret" };
+const env = {
+    NODE_ENV: "production",
+    STUDENT_ATTEMPT_SECRET: "gateway-student-attempt-secret-at-least-32-bytes",
+};
 const exam: Exam = {
     id: "exam-1",
     title: "원격 시험",
@@ -75,6 +79,201 @@ async function openAllowedExam(client: StudentExamGatewayClient) {
 }
 
 describe("student exam server gateway", () => {
+    it("requires an authorized opaque assignment for targeted exams and binds it into the ticket", async () => {
+        const targetedExam = { ...exam, accessConfig: { type: "targeted" as const } };
+        const resolver = vi.fn(async (name: string) => name === "omr_resolve_student_assignment_v1"
+            ? {
+                data: {
+                    status: "authorized", assignmentId: "assignment-1", examId: exam.id,
+                    mode: "base", questionIds: [],
+                },
+                error: null,
+            }
+            : { data: null, error: { message: "unexpected rpc" } });
+        const targetedClient: StudentExamGatewayClient = {
+            from() {
+                const query = {
+                    eq() { return query; },
+                    async maybeSingle() {
+                        return { data: { id: exam.id, organization_id: "org-1", payload: targetedExam }, error: null };
+                    },
+                };
+                return { select: () => query };
+            },
+            rpc: resolver,
+        };
+        const verified = {
+            organizationId: "org-1", studentId: "student-1", studentName: "학생 1", identityType: "registered" as const,
+        };
+        const student = { studentId: "student-1", studentName: "학생 1", identityType: "registered" as const };
+
+        await expect(openStudentExamWithGateway(targetedClient, {
+            examId: exam.id, student,
+        }, env, 1_000, verified)).resolves.toEqual({ status: "group_denied" });
+        await expect(openStudentExamWithGateway(targetedClient, {
+            examId: exam.id, assignmentId: "assignment-1", student,
+        }, env, 1_000, {
+            organizationId: "org-1", studentId: "guest:guest-1", studentName: "게스트",
+            identityType: "guest", guestId: "guest-1",
+        })).resolves.toEqual({ status: "login_required" });
+
+        const opened = await openStudentExamWithGateway(targetedClient, {
+            examId: exam.id, assignmentId: "assignment-1", student,
+        }, env, 1_000, verified);
+        expect(opened.status).toBe("allowed");
+        if (opened.status !== "allowed") return;
+        expect(parseStudentAttemptTicket(opened.ticket, env, 1_000)).toMatchObject({
+            assignmentId: "assignment-1", studentId: "student-1", examId: exam.id,
+        });
+        expect(resolver).toHaveBeenCalledWith("omr_resolve_student_assignment_v1", expect.objectContaining({
+            p_assignment_id: "assignment-1", p_owner_student_id: "student-1",
+        }));
+    });
+
+    it("writes one owned student question through the atomic RPC with a stable mutation id", async () => {
+        const upsertStudentQuestionWithGateway = (
+            studentExamGatewayModule as unknown as {
+                upsertStudentQuestionWithGateway?: (
+                    client: StudentExamGatewayClient,
+                    input: Record<string, unknown>,
+                ) => Promise<unknown>;
+            }
+        ).upsertStudentQuestionWithGateway;
+        expect(upsertStudentQuestionWithGateway).toBeTypeOf("function");
+        if (!upsertStudentQuestionWithGateway) return;
+
+        const rpcCalls: Array<{ name: string; params: Record<string, unknown> }> = [];
+        const storedAttempt: Attempt = {
+            id: "attempt-1",
+            organizationId: "org-1",
+            examId: "exam-1",
+            examTitle: "시험",
+            studentProfileId: "student-1",
+            studentId: "student-1",
+            studentName: "학생",
+            startedAt: "2026-08-07T00:00:00.000Z",
+            finishedAt: "2026-08-07T00:10:00.000Z",
+            score: 1,
+            totalScore: 1,
+            answers: { 1: 2 },
+            status: "completed",
+            questionResults: [{
+                schemaVersion: 1,
+                attemptId: "attempt-1",
+                examId: "exam-1",
+                examTitle: "시험",
+                studentId: "student-1",
+                studentName: "학생",
+                questionId: 1,
+                questionNumber: 1,
+                score: 1,
+                earnedScore: 1,
+                status: "correct",
+                isCorrect: true,
+                isWrong: false,
+                isUnanswered: false,
+                finishedAt: "2026-08-07T00:10:00.000Z",
+            }],
+            studentQuestions: [{
+                questionId: 1,
+                questionNumber: 1,
+                body: "왜 정답인가요?",
+                createdAt: "2026-08-07T00:11:00.000Z",
+                status: "queued",
+            }],
+        };
+        const client: StudentExamGatewayClient = {
+            from() { throw new Error("question mutation must not read the attempt first"); },
+            async rpc(name, params) {
+                rpcCalls.push({ name, params });
+                return { data: [{ payload: storedAttempt }], error: null };
+            },
+        };
+
+        await expect(upsertStudentQuestionWithGateway(client, {
+            organizationId: " org-1 ",
+            studentId: " student-1 ",
+            attemptId: " attempt-1 ",
+            question: {
+                questionId: 1,
+                questionNumber: 999,
+                body: " 왜 정답인가요? ",
+                clientMutationId: "2026-08-07T00:11:00.000Z",
+            },
+        })).resolves.toEqual({ status: "saved", attempt: storedAttempt });
+        expect(rpcCalls).toHaveLength(1);
+        expect(rpcCalls[0]).toMatchObject({
+            name: "omr_upsert_student_attempt_question_v1",
+            params: {
+                p_organization_id: "org-1",
+                p_owner_student_id: "student-1",
+                p_attempt_id: "attempt-1",
+                p_question_id: 1,
+                p_body: "왜 정답인가요?",
+            },
+        });
+        expect(rpcCalls[0].params.p_mutation_id).toMatch(/^student-question:[a-f0-9]{64}$/);
+        expect(rpcCalls[0].params).not.toHaveProperty("p_question_number");
+    });
+
+    it("rejects invalid question payloads before RPC and fails closed on returned scope drift", async () => {
+        const upsertStudentQuestionWithGateway = (
+            studentExamGatewayModule as unknown as {
+                upsertStudentQuestionWithGateway?: (
+                    client: StudentExamGatewayClient,
+                    input: Record<string, unknown>,
+                ) => Promise<unknown>;
+            }
+        ).upsertStudentQuestionWithGateway;
+        expect(upsertStudentQuestionWithGateway).toBeTypeOf("function");
+        if (!upsertStudentQuestionWithGateway) return;
+
+        let rpcCalls = 0;
+        const client: StudentExamGatewayClient = {
+            from() { throw new Error("unexpected read"); },
+            async rpc() {
+                rpcCalls += 1;
+                return {
+                    data: [{ payload: {
+                        id: "attempt-1",
+                        organizationId: "other-org",
+                        examId: "exam-1",
+                        examTitle: "시험",
+                        studentId: "student-1",
+                        studentName: "학생",
+                        startedAt: "2026-08-07T00:00:00.000Z",
+                        finishedAt: "2026-08-07T00:10:00.000Z",
+                        score: 0,
+                        totalScore: 1,
+                        answers: {},
+                        status: "completed",
+                    } }],
+                    error: null,
+                };
+            },
+        };
+        const base = {
+            organizationId: "org-1",
+            studentId: "student-1",
+            attemptId: "attempt-1",
+        };
+
+        await expect(upsertStudentQuestionWithGateway(client, {
+            ...base,
+            question: { questionId: 1, questionNumber: 1, body: "x".repeat(501) },
+        })).resolves.toEqual({ status: "invalid_request" });
+        expect(rpcCalls).toBe(0);
+
+        await expect(upsertStudentQuestionWithGateway(client, {
+            ...base,
+            question: { questionId: 1, questionNumber: 1, body: "질문" },
+        })).resolves.toEqual({
+            status: "service_unavailable",
+            error: "stored_attempt_scope_mismatch",
+        });
+        expect(rpcCalls).toBe(1);
+    });
+
     it("does not expose questions or PDF content before access is granted", async () => {
         const { client } = mockClient();
         const preview = await previewStudentExamWithGateway(client, exam.id);
@@ -108,6 +307,134 @@ describe("student exam server gateway", () => {
         });
     });
 
+    it("preserves a signed organization-less guest across public exam entry", async () => {
+        const { client } = mockClient();
+        const opened = await openStudentExamWithGateway(client, {
+            examId: exam.id,
+            pin: "4321",
+            student: {
+                studentId: "guest:client-choice",
+                studentName: "클라이언트 사칭 이름",
+                identityType: "guest",
+                guestId: "client-choice",
+            },
+        }, env, 1_000, {
+            organizationId: "",
+            studentId: "guest:guest-cookie-1",
+            studentName: "게스트 학생",
+            identityType: "guest",
+            guestId: "guest-cookie-1",
+        });
+
+        expect(opened.status).toBe("allowed");
+        if (opened.status !== "allowed") return;
+        expect(parseStudentAttemptTicket(opened.ticket, env, 1_000)).toMatchObject({
+            organizationId: "org-1",
+            studentId: "guest:guest-cookie-1",
+            studentName: "게스트 학생",
+            identityType: "guest",
+            guestId: "guest-cookie-1",
+        });
+    });
+
+    it("rejects a guest session scoped to another organization", async () => {
+        const { client } = mockClient();
+        await expect(openStudentExamWithGateway(client, {
+            examId: exam.id,
+            pin: "4321",
+            student: {
+                studentId: "guest:guest-cookie-1",
+                studentName: "게스트 학생",
+                identityType: "guest",
+                guestId: "guest-cookie-1",
+            },
+        }, env, 1_000, {
+            organizationId: "other-org",
+            studentId: "guest:guest-cookie-1",
+            studentName: "게스트 학생",
+            identityType: "guest",
+            guestId: "guest-cookie-1",
+        })).resolves.toEqual({ status: "group_denied" });
+    });
+
+    it("rejects a signed guest whose canonical student id and guest id disagree", async () => {
+        const { client } = mockClient();
+        await expect(openStudentExamWithGateway(client, {
+            examId: exam.id,
+            pin: "4321",
+            student: {
+                studentId: "guest:client-choice",
+                studentName: "클라이언트 이름",
+                identityType: "guest",
+                guestId: "client-choice",
+            },
+        }, env, 1_000, {
+            organizationId: "",
+            studentId: "guest:signed-student-id",
+            studentName: "서명된 이름",
+            identityType: "guest",
+            guestId: "different-signed-guest-id",
+        })).resolves.toEqual({ status: "login_required" });
+    });
+
+    it("enforces the PIN reservation limit on the compatibility gateway path", async () => {
+        const { client } = mockClient();
+        const pinExam = { ...exam, id: "exam-compat-pin-limit" };
+        const pinClient: StudentExamGatewayClient = {
+            ...client,
+            from() {
+                const query = {
+                    eq() { return query; },
+                    async maybeSingle() {
+                        return { data: { id: pinExam.id, organization_id: pinExam.organizationId, payload: pinExam }, error: null };
+                    },
+                };
+                return { select: () => query };
+            },
+        };
+        const input = {
+            examId: pinExam.id,
+            pin: "0000",
+            student: { studentId: "student-rate-limit", studentName: "학생", identityType: "registered" as const },
+        };
+        const verifiedStudent = {
+            organizationId: "org-1",
+            studentId: "student-rate-limit",
+            studentName: "학생",
+            identityType: "registered" as const,
+        };
+
+        for (let attempt = 0; attempt < 5; attempt += 1) {
+            await expect(openStudentExamWithGateway(pinClient, input, env, 1_000, verifiedStudent)).resolves.toEqual({ status: "pin_required" });
+        }
+        await expect(openStudentExamWithGateway(pinClient, input, env, 1_000, verifiedStudent)).resolves.toEqual({ status: "pin_rate_limited" });
+    });
+
+    it("atomically caps a concurrent fresh-guest PIN sweep at the global budget", async () => {
+        const { client } = mockClient();
+        const pinExam = { ...exam, id: "exam-compat-concurrent-global-pin-limit" };
+        const pinClient: StudentExamGatewayClient = {
+            ...client,
+            from() {
+                const query = {
+                    eq() { return query; },
+                    async maybeSingle() {
+                        return { data: { id: pinExam.id, organization_id: pinExam.organizationId, payload: pinExam }, error: null };
+                    },
+                };
+                return { select: () => query };
+            },
+        };
+        const attempts = await Promise.all(Array.from({ length: 75 }, (_, index) => openStudentExamWithGateway(pinClient, {
+            examId: pinExam.id,
+            pin: "0000",
+            student: { studentId: `claimed-${index}`, studentName: "학생", identityType: "guest" },
+        }, env, 1_000, null, `fresh-guest-${index}`)));
+
+        expect(attempts.filter(result => result.status === "pin_required")).toHaveLength(60);
+        expect(attempts.filter(result => result.status === "pin_rate_limited")).toHaveLength(15);
+    });
+
     it("does not trust a client-asserted registered identity for group exams", async () => {
         const { client } = mockClient();
         const groupExam = {
@@ -139,6 +466,13 @@ describe("student exam server gateway", () => {
         await expect(openStudentExamWithGateway(groupClient, input, env, 1_000)).resolves.toEqual({
             status: "login_required",
         });
+        await expect(openStudentExamWithGateway(groupClient, input, env, 1_000, {
+            organizationId: "",
+            studentId: "guest:guest-cookie-1",
+            studentName: "게스트 학생",
+            identityType: "guest",
+            guestId: "guest-cookie-1",
+        })).resolves.toEqual({ status: "login_required" });
         const verified = await openStudentExamWithGateway(groupClient, input, env, 1_000, {
             organizationId: "org-1",
             studentId: "server-student",
@@ -167,16 +501,42 @@ describe("student exam server gateway", () => {
 
     it("binds retake question subsets into both the DTO and signed ticket", async () => {
         const { client } = mockClient();
-        const opened = await openStudentExamWithGateway(client, {
+        const sourceAttempt: Attempt = {
+            id: "source-1", examId: exam.id, examTitle: exam.title,
+            organizationId: "org-1", studentId: "student-1", studentName: "학생 1",
+            identityType: "registered", startedAt: "2026-08-05T00:00:00.000Z",
+            finishedAt: "2026-08-05T00:10:00.000Z", score: 5, totalScore: 10,
+            answers: { 1: 3, 2: 2 }, status: "completed",
+            questionResults: [
+                { schemaVersion: 1, attemptId: "source-1", examId: exam.id, examTitle: exam.title, studentId: "student-1", studentName: "학생 1", questionId: 1, questionNumber: 1, score: 5, earnedScore: 5, status: "correct", isCorrect: true, isWrong: false, isUnanswered: false, finishedAt: "2026-08-05T00:10:00.000Z" },
+                { schemaVersion: 1, attemptId: "source-1", examId: exam.id, examTitle: exam.title, studentId: "student-1", studentName: "학생 1", questionId: 2, questionNumber: 2, score: 5, earnedScore: 0, status: "wrong", isCorrect: false, isWrong: true, isUnanswered: false, finishedAt: "2026-08-05T00:10:00.000Z" },
+            ],
+        };
+        const retakeClient: StudentExamGatewayClient = {
+            ...client,
+            from(table) {
+                if (table !== "omr_attempts") return client.from(table);
+                const query = {
+                    eq() { return query; },
+                    async maybeSingle() { return { data: { payload: sourceAttempt }, error: null }; },
+                };
+                return { select: () => query };
+            },
+        };
+        const opened = await openStudentExamWithGateway(retakeClient, {
             examId: exam.id,
             pin: "4321",
-            questionIds: [2],
+            retake: { sourceAttemptId: "source-1", mode: "wrong", questionIds: [2] },
             student: { studentId: "student-1", studentName: "학생 1", identityType: "registered" },
-        }, env, 1_000);
+        }, env, 1_000, {
+            organizationId: "org-1", studentId: "student-1", studentName: "학생 1", identityType: "registered",
+        });
         expect(opened.status).toBe("allowed");
         if (opened.status !== "allowed") return;
         expect(opened.exam.questions.map(question => question.id)).toEqual([2]);
-        expect(parseStudentAttemptTicket(opened.ticket, env, 1_000)?.allowedQuestionIds).toEqual([2]);
+        expect(parseStudentAttemptTicket(opened.ticket, env, 1_000)).toMatchObject({
+            allowedQuestionIds: [2], retakeSourceAttemptId: "source-1", retakeMode: "wrong",
+        });
 
         await expect(openStudentExamWithGateway(client, {
             examId: exam.id,

@@ -14,7 +14,7 @@ type AuditTarget = {
 
 const TARGETS: AuditTarget[] = [
     { name: "teacher-login-desktop", path: "/?role=teacher", expectedText: "교사 포털", viewport: { width: 1440, height: 900 } },
-    { name: "student-login-mobile", path: "/?role=student", expectedText: "학생 포털", viewport: { width: 390, height: 844 } },
+    { name: "student-login-mobile", path: "/?role=student", expectedText: "학습 시작", viewport: { width: 390, height: 844 } },
     { name: "admin-route-mobile", path: "/admin", expectedText: "관리자 기능은 교사 포털에서 관리합니다", viewport: { width: 390, height: 844 } },
     { name: "teacher-dashboard-desktop", path: "/teacher/dashboard", expectedText: "분석 센터", viewport: { width: 1440, height: 900 }, teacher: true },
     { name: "teacher-showcase-mobile-dark-preference", path: "/teacher/dashboard?showcase=1&tab=exam", expectedText: "시험별 통계", viewport: { width: 390, height: 844 }, teacher: true, initialTheme: "dark" },
@@ -304,7 +304,7 @@ test.describe("UI-UX PROMAX layout audit", () => {
         await expect(page.locator(".mockup-dashboard-tabs")).toBeVisible();
         const actionMotion = await readMotion(".mockup-primary-action");
         const cardMotion = await readMotion(".mockup-panel");
-        const tabMotion = await readMotion('.mockup-dashboard-tabs button[aria-selected="true"]', "::after");
+        const tabMotion = await readMotion('.mockup-dashboard-tabs button[aria-pressed="true"]', "::after");
 
         await openTeacherPage(page, "/create");
         await page.getByRole("button", { name: "정답 인식 마법사 열기" }).click();
@@ -437,7 +437,7 @@ test.describe("UI-UX PROMAX layout audit", () => {
         const landingStates = [
             { name: "initial", path: "/", expectedText: "OMR Maker", heading: "OMR Maker" },
             { name: "teacher", path: "/?role=teacher", expectedText: "교사 포털", heading: "환영합니다" },
-            { name: "student", path: "/?role=student", expectedText: "학생 포털", heading: "학습 시작" },
+            { name: "student", path: "/?role=student", expectedText: "학습 시작", heading: "학습 시작" },
         ] as const;
 
         for (const state of landingStates) {

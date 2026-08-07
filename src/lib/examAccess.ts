@@ -62,6 +62,12 @@ export function evaluateExamAccess(
     if (endAt !== null && endAt < now) return { status: "ended", at: exam.endAt };
 
     const config = exam.accessConfig;
+    if (config?.type === "targeted") {
+        const session = context.session;
+        return !session || session.isGuest || session.identityType === "guest"
+            ? { status: "login_required" }
+            : { status: "allowed" };
+    }
     if (config?.type === "group") {
         const session = context.session;
         if (!session) {

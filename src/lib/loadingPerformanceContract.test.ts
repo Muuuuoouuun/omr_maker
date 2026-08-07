@@ -57,6 +57,10 @@ function aliasFor(relativePath: string): string {
 
 describe("loading performance contract", () => {
     describe("Pretendard loads as unicode-range subsets, not one 2MB file", () => {
+        it("does not make production builds depend on downloading Google fonts", () => {
+            expect(read("src/app/layout.tsx")).not.toMatch(/from\s+["']next\/font\/google["']/);
+        });
+
         it("imports the dynamic-subset stylesheet in the root layout", () => {
             expect(read("src/app/layout.tsx")).toContain(
                 'import "pretendard/dist/web/variable/pretendardvariable-dynamic-subset.css"',

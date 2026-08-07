@@ -3,6 +3,7 @@ import { test, expect, type Page } from "@playwright/test";
 import { continueSolveEntryIfPresent, loginAsTeacher, resetBrowserState } from "./helpers";
 import { parseCsvRows } from "../src/lib/csv";
 import { formatKoreanDate } from "../src/lib/pure";
+import { mayRunMutatingE2E } from "./mutationSafety";
 
 const TEST_EXAM_ID = "e2e-korean-integrated-exam";
 const TEST_EXAM_TITLE = "E2E 국어 통합 시험";
@@ -145,7 +146,7 @@ async function seedSameNameRosterWithProtectedHistory(page: Page) {
 
 async function loginAsStudent(page: Page) {
     await page.goto("/?role=student");
-    await expect(page.getByText("학생 포털")).toBeVisible();
+    await expect(page.getByRole("heading", { name: "학습 시작" })).toBeVisible();
     await page.getByLabel("이름").fill(TEST_STUDENT_NAME);
     await page.getByLabel("학생번호 또는 이메일").fill("kim.student@example.com");
     await page.getByLabel("반 선택").selectOption(TEST_GROUP_ID);
@@ -252,6 +253,8 @@ async function seedExamAndStudent(page: Page) {
         const exam = {
             id: seed.examId,
             title: seed.examTitle,
+            organizationId: "default",
+            createdByUserId: "admin",
             createdAt: now,
             updatedAt: now,
             durationMin: 30,
@@ -314,6 +317,7 @@ async function seedExamAndStudent(page: Page) {
         const group = {
             id: seed.groupId,
             name: seed.groupName,
+            organizationId: "default",
             region: "서울",
             count: 1,
             avgScore: 0,
@@ -322,6 +326,7 @@ async function seedExamAndStudent(page: Page) {
         const student = {
             id: seed.studentId,
             name: seed.studentName,
+            organizationId: "default",
             email: "kim.student@example.com",
             group: seed.groupName,
             region: "서울",
@@ -451,6 +456,8 @@ async function seedCompletedAttempt(page: Page) {
             id: "attempt-tablet-analytics",
             examId: seed.examId,
             examTitle: seed.examTitle,
+            organizationId: "default",
+            createdByUserId: "admin",
             studentProfileId: seed.studentId,
             studentName: seed.studentName,
             studentId: seed.studentId,
@@ -487,10 +494,11 @@ async function seedCompletedAttempt(page: Page) {
 test.describe("Teacher and student full journey", () => {
     test.describe.configure({ timeout: 45_000 });
 
-    test.beforeEach(async ({ page, context }, testInfo) => {
+    test.beforeEach(async ({ page, context, baseURL }, testInfo) => {
         test.skip(
-            testInfo.project.name.startsWith("prod-"),
-            "Production discards the suite's local plaintext-code fixture; remote credential journeys run with a connected test backend.",
+            testInfo.project.name.startsWith("prod-")
+                || !mayRunMutatingE2E(baseURL, process.env.PLAYWRIGHT_ALLOW_EXTERNAL_MUTATIONS),
+            "Mutating journeys run only on localhost unless PLAYWRIGHT_ALLOW_EXTERNAL_MUTATIONS=1 explicitly opts into a dedicated fixture environment.",
         );
         await resetBrowserState(page, context);
     });
@@ -498,7 +506,7 @@ test.describe("Teacher and student full journey", () => {
     test("requires student ID or email before opening a roster-backed student account", async ({ page }) => {
         await seedStudentRoster(page);
         await page.goto("/?role=student");
-        await expect(page.getByText("학생 포털")).toBeVisible();
+        await expect(page.getByRole("heading", { name: "학습 시작" })).toBeVisible();
 
         await page.getByLabel("이름").fill(TEST_STUDENT_NAME);
         await page.getByLabel("반 선택").selectOption(TEST_GROUP_ID);
@@ -533,7 +541,7 @@ test.describe("Teacher and student full journey", () => {
     test("requires lookup and start code before opening a same-name student account with history", async ({ page }) => {
         await seedSameNameRosterWithProtectedHistory(page);
         await page.goto("/?role=student");
-        await expect(page.getByText("학생 포털")).toBeVisible();
+        await expect(page.getByRole("heading", { name: "학습 시작" })).toBeVisible();
 
         await page.getByLabel("이름").fill(SAME_NAME_STUDENT_NAME);
         await page.getByLabel("반 선택").selectOption(SAME_NAME_GROUP_ID);
@@ -578,7 +586,7 @@ test.describe("Teacher and student full journey", () => {
         await requireStartCodeForSeedStudent(page);
 
         await page.goto("/?role=student");
-        await expect(page.getByText("학생 포털")).toBeVisible();
+        await expect(page.getByRole("heading", { name: "학습 시작" })).toBeVisible();
         await page.getByLabel("이름").fill(TEST_STUDENT_NAME);
         await page.getByLabel("학생번호 또는 이메일").fill("kim.student@example.com");
         await page.getByLabel("반 선택").selectOption(TEST_GROUP_ID);
@@ -640,9 +648,10 @@ test.describe("Teacher and student full journey", () => {
 
         await loginAsTeacher(page, "/teacher/dashboard?tab=exam");
         await expect(page.getByRole("heading", { name: "분석 센터" })).toBeVisible();
-        await page.getByRole("tab", { name: "학생·반" }).click();
-        await expect(page.getByText("학생별 점수 및 성취도")).toBeVisible();
-        await expect(page.getByRole("row", { name: new RegExp(`${TEST_STUDENT_NAME}.*20점`) })).toBeVisible();
+        await page.getByRole("button", { name: "학생 성취도", exact: true }).click();
+        await expect(page.getByRole("heading", { name: new RegExp(`${TEST_STUDENT_NAME}.*성취도 추이`) })).toBeVisible();
+        const detailRow = page.getByRole("row").filter({ hasText: TEST_EXAM_TITLE });
+        await expect(detailRow).toContainText("20 / 30");
     });
 
     test("debounces and deduplicates one away session, including the submission flush", async ({ page }) => {
@@ -739,7 +748,7 @@ test.describe("Teacher and student full journey", () => {
 
     test("creates an exam through the teacher UI before student submission and analytics", async ({ page }) => {
         await loginAsTeacher(page, "/create");
-        await expect(page.getByText("스마트 에디터")).toBeVisible();
+        await expect(page.getByRole("heading", { name: "새 시험 만들기" })).toBeVisible();
 
         const examTitleInput = page.getByLabel("시험 제목");
         if (!(await examTitleInput.isVisible().catch(() => false))) {
@@ -760,18 +769,19 @@ test.describe("Teacher and student full journey", () => {
         ).toHaveCount(2);
 
         await page.getByRole("button", { name: "링크 생성하기" }).click();
-        await expect(page.getByRole("button", { name: "링크 복사" })).toBeVisible();
         await expect(page).toHaveURL(/\/create\?edit=/);
+        await expect(examTitleInput).toHaveValue(CREATED_EXAM_TITLE);
+        await expect(
+            page.locator("#create-settings-panel .create-design-check-pill", { hasText: "20/20 정답" })
+        ).toBeVisible();
+        await expect(page.getByRole("button", { name: "링크 복사" })).toBeVisible();
 
-        const createdExamHandle = await page.waitForFunction((title) => {
-            for (let index = 0; index < window.localStorage.length; index += 1) {
-                const key = window.localStorage.key(index);
-                if (!key?.startsWith("omr_exam_")) continue;
-                const exam = JSON.parse(window.localStorage.getItem(key) || "null");
-                if (exam?.title === title) return exam;
-            }
-            return null;
-        }, CREATED_EXAM_TITLE);
+        const createdExamId = new URL(page.url()).searchParams.get("edit");
+        expect(createdExamId).toBeTruthy();
+        const createdExamHandle = await page.waitForFunction((examId) => {
+            if (!examId) return null;
+            return JSON.parse(window.localStorage.getItem(`omr_exam_${examId}`) || "null");
+        }, createdExamId);
         const createdExam = await createdExamHandle.jsonValue() as {
             id: string;
             title: string;
@@ -811,18 +821,20 @@ test.describe("Teacher and student full journey", () => {
 
         await loginAsTeacher(page, "/teacher/dashboard");
         await expect(page.getByRole("heading", { name: "분석 센터" })).toBeVisible();
+        await page.getByRole("tab", { name: "완료", exact: true }).click();
         await expect(page.getByText(CREATED_EXAM_TITLE).first()).toBeVisible();
         await expect(page.getByRole("button", { name: "통계 CSV" })).toBeVisible();
 
         await page.getByRole("button", { name: "시험 분석", exact: true }).click();
-        await page.getByRole("tab", { name: "학생·반" }).click();
-        await expect(page.getByText("학생별 점수 및 성취도")).toBeVisible();
-        await expect(page.getByRole("row", { name: new RegExp(`${TEST_STUDENT_NAME}.*100점`) })).toBeVisible();
+        await page.getByRole("button", { name: "학생 성취도", exact: true }).click();
+        await expect(page.getByRole("heading", { name: new RegExp(`${TEST_STUDENT_NAME}.*성취도 추이`) })).toBeVisible();
+        const detailRow = page.getByRole("row").filter({ hasText: CREATED_EXAM_TITLE });
+        await expect(detailRow).toContainText("100 / 100");
     });
 
     test("covers creation entry, student submission, teacher analytics, and statistics CSV", async ({ page }) => {
         await loginAsTeacher(page, "/create");
-        await expect(page.getByText("스마트 에디터")).toBeVisible();
+        await expect(page.getByRole("heading", { name: "새 시험 만들기" })).toBeVisible();
         await expect(page.getByRole("button", { name: "배포하기" })).toBeVisible();
 
         await seedExamAndStudent(page);
@@ -868,7 +880,8 @@ test.describe("Teacher and student full journey", () => {
 
         await loginAsTeacher(page, "/teacher/dashboard");
         await expect(page.getByRole("heading", { name: "분석 센터" })).toBeVisible();
-        await expect(page.getByText(TEST_EXAM_TITLE)).toBeVisible();
+        await page.getByRole("tab", { name: "완료", exact: true }).click();
+        await expect(page.getByRole("button", { name: `${TEST_EXAM_TITLE} 분석 보기` })).toBeVisible();
         await expect(page.getByRole("button", { name: "통계 CSV" })).toBeVisible();
         const dashboardRosterCount = await page.evaluate(() => (
             JSON.parse(localStorage.getItem("omr_students") || "[]").length
@@ -892,11 +905,9 @@ test.describe("Teacher and student full journey", () => {
         expect(csvRows).toContainEqual(["완료", TEST_EXAM_TITLE, formatKoreanDate(expectedExamDate), "1", "1", "100", "0", "N"]);
 
         await page.getByRole("button", { name: "시험 분석", exact: true }).click();
-        await page.getByRole("tab", { name: "학생·반" }).click();
-        await expect(page.getByText("학생별 점수 및 성취도")).toBeVisible();
-        const studentScoreRow = page.getByRole("row", { name: new RegExp(`${TEST_STUDENT_NAME}.*20점`) });
-        await expect(studentScoreRow).toBeVisible();
-        const correctionCsvButton = studentScoreRow.getByRole("button", { name: "정오표(CSV)" });
+        await page.getByRole("tab", { name: "학생·반", exact: true }).click();
+        const examStudentRow = page.getByRole("row").filter({ hasText: TEST_STUDENT_NAME });
+        const correctionCsvButton = examStudentRow.getByRole("button", { name: "정오표(CSV)" });
         await expect(correctionCsvButton).toBeVisible();
 
         const [correctionDownload] = await Promise.all([
@@ -914,6 +925,12 @@ test.describe("Teacher and student full journey", () => {
         expect(correctionRows).toContainEqual(["2", "독해", "10", "3", "3", "O"]);
         expect(correctionRows).toContainEqual(["3", "어휘", "10", "1", "4", "X"]);
         expect(correctionRows).toContainEqual(["장르별 통계"]);
+
+        await page.getByRole("button", { name: "학생 성취도", exact: true }).click();
+        await expect(page.getByRole("heading", { name: new RegExp(`${TEST_STUDENT_NAME}.*성취도 추이`) })).toBeVisible();
+        const detailRow = page.getByRole("row").filter({ hasText: TEST_EXAM_TITLE });
+        await expect(detailRow).toContainText("20 / 30");
+        await expect(detailRow.getByRole("link", { name: `${TEST_EXAM_TITLE} 결과 분석 열기` })).toBeVisible();
     });
 
     test("keeps the tablet solve rail usable for answer entry", async ({ page }) => {
@@ -977,12 +994,13 @@ test.describe("Teacher and student full journey", () => {
 
         await loginAsTeacher(page, "/teacher/dashboard?tab=exam");
         await expect(page.getByRole("heading", { name: "분석 센터" })).toBeVisible();
-        await page.getByRole("tab", { name: "학생·반" }).click();
-        await expect(page.getByText("학생별 점수 및 성취도")).toBeVisible();
+        await page.getByRole("button", { name: "학생 성취도", exact: true }).click();
+        await expect(page.getByRole("heading", { name: new RegExp(`${TEST_STUDENT_NAME}.*성취도 추이`) })).toBeVisible();
 
-        const studentScoreRow = page.getByRole("row", { name: new RegExp(`${TEST_STUDENT_NAME}.*20점`) });
-        await expect(studentScoreRow).toBeVisible();
-        const tableScroller = page.getByTestId("exam-analytics-student-table-scroll");
+        const studentScoreRow = page.getByRole("row").filter({ hasText: TEST_EXAM_TITLE });
+        await expect(studentScoreRow).toContainText("20 / 30");
+        const tableScroller = page.getByRole("heading", { name: "세부 시험 분석 내역" })
+            .locator("..").locator(":scope > div").last();
         await expect(tableScroller).toBeVisible();
         await expect(tableScroller).toHaveJSProperty("scrollLeft", 0);
 
@@ -995,7 +1013,7 @@ test.describe("Teacher and student full journey", () => {
         await tableScroller.evaluate(element => {
             element.scrollLeft = element.scrollWidth;
         });
-        await expect(studentScoreRow.getByRole("button", { name: "정오표(CSV)" })).toBeVisible();
+        await expect(studentScoreRow.getByRole("link", { name: `${TEST_EXAM_TITLE} 결과 분석 열기` })).toBeVisible();
 
         const hasBodyOverflow = await page.evaluate(() => document.documentElement.scrollWidth > document.documentElement.clientWidth + 1);
         expect(hasBodyOverflow).toBe(false);
@@ -1008,8 +1026,9 @@ test.describe("Teacher and student full journey", () => {
 
         await page.goto("/student/history");
         await expect(page.getByRole("heading", { name: "내 시험 기록" })).toBeVisible();
-        await expect(page.getByText("원시험 응시")).toBeVisible();
-        await expect(page.getByText("1회")).toBeVisible();
+        const historySummary = page.getByRole("region", { name: "시험 기록 요약" });
+        await expect(historySummary.getByText("원시험 응시", { exact: true })).toBeVisible();
+        await expect(historySummary.getByText("1회", { exact: true })).toBeVisible();
 
         const historyCard = page.locator('a[href="/student/review/attempt-tablet-analytics"]');
         await expect(historyCard).toBeVisible();

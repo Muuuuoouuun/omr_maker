@@ -53,6 +53,21 @@ describe("persistence integration", () => {
         expect(source).not.toContain("readRosterGroups(localStorage)");
     });
 
+    it("distribution refreshes the canonical roster when opened on a fresh device", () => {
+        const source = readProjectFile("src/components/DistributeModal.tsx");
+
+        expect(source).toContain("loadTeacherRosterSnapshot");
+        expect(source).toContain("void loadTeacherRosterSnapshot(localStorage)");
+        expect(source).toContain("if (rosterLoadGenerationRef.current !== loadGeneration) return;");
+        expect(source).toContain("setGroups(snapshot.groups)");
+        expect(source).toContain("setStudents(snapshot.students)");
+        expect(source).toContain('role="status"');
+        expect(source).toContain("서버 명단을 불러오는 중입니다.");
+        expect(source).toContain("서버 명단을 불러오지 못해 이 기기에 저장된 명단을 표시합니다.");
+        expect(source.match(/if \(isRosterLoading\) \{/g)).toHaveLength(2);
+        expect(source.match(/disabled=\{isRosterLoading\}/g)?.length).toBeGreaterThanOrEqual(3);
+    });
+
     it("teacher settings checks exam, attempt, roster, and deletion persistence together", () => {
         const source = readProjectFile("src/app/teacher/settings/page.tsx");
 
@@ -61,7 +76,7 @@ describe("persistence integration", () => {
         expect(source).toContain("@/lib/dataDbReadiness");
         expect(source).toContain("Promise.all");
         expect(source).toContain("loadTeacherExams()");
-        expect(source).toContain("loadTeacherAttempts()");
+        expect(source).toContain("loadTeacherAttemptSummaries()");
         expect(source).toContain("loadTeacherRosterSnapshot(window.localStorage)");
         expect(source).toContain("readRosterTombstones(window.localStorage)");
         expect(source).toContain('sourceKey: "exams"');
@@ -80,13 +95,13 @@ describe("persistence integration", () => {
         const groupsPage = readProjectFile("src/app/groups/page.tsx");
 
         expect(teacherLayout).toContain("TeacherAuthGate");
-        expect(teacherLayout).toContain("parseSignedTeacherSessionCookie");
+        expect(teacherLayout).toContain("resolveAuthorizedTeacherSessionCookie");
         expect(teacherLayout).toContain("TEACHER_SERVER_SESSION_COOKIE");
         expect(teacherLayout).toContain("bootstrapWorkspaceWithServiceRole");
         expect(teacherLayout).toContain("workspaceContextFromTeacherSession(serverSession)");
         expect(teacherLayout).toContain("initialSession={serverSession}");
         expect(teacherLayout).toContain("requireServerSession");
-        expect(createLayout).toContain("parseSignedTeacherSessionCookie");
+        expect(createLayout).toContain("resolveAuthorizedTeacherSessionCookie");
         expect(createLayout).toContain("requireServerSession");
         expect(createLayout).toContain("bootstrapWorkspaceWithServiceRole");
         expect(createLayout).toContain("workspaceContextFromTeacherSession(serverSession)");
@@ -140,7 +155,8 @@ describe("persistence integration", () => {
         expect(source).toContain("workspaceContextFromIdentity(result.teacher)");
         expect(limiter).toContain("TEACHER_LOGIN_MAX_FAILURES");
         expect(limiter).toContain("TEACHER_LOGIN_LOCKOUT_MS");
-        expect(limiter).toContain("teacher-login:client");
+        expect(limiter).toContain("teacher-login:identifier");
+        expect(limiter).not.toContain("teacher-login:client:");
     });
 
     it("connects teacher-issued student access to a server-verified login flow", () => {
@@ -159,23 +175,28 @@ describe("persistence integration", () => {
         expect(action).toContain("organizationId: workspaceId");
         expect(users).toContain("issueStudentStartCredential");
         expect(users).not.toContain("syncStudentAccessCodes");
-        expect(users).toContain('query.set("workspace", workspaceId)');
-        expect(home).toContain("loadStudentLoginDirectory(requestedWorkspace)");
+        expect(users).not.toContain('query.set("workspace", workspaceId)');
+        expect(home).toContain("readExamEntryInviteHandoff(sessionStorage, requestedExam)");
+        expect(home).toContain("loadStudentLoginDirectory({ examId: requestedExam, inviteToken: requestedInvite })");
         expect(home).toContain("requiresServerStudentVerification");
-        expect(home).toContain("workspaceId,");
+        expect(home).toContain("inviteToken,");
         expect(home).toContain("studentLookup,");
         expect(home).toContain("startCode,");
         expect(solve).toContain("validateStudentSession");
+        expect(solve).toContain("captureExamEntryInviteFragment");
         expect(solve).not.toContain("issueStudentSession");
     });
 
     it("loads the student dashboard catalog from the signed organization without answer keys", () => {
         const action = readProjectFile("src/app/actions/studentExam.ts");
+        const gateway = readProjectFile("src/lib/studentTargetedAssignmentGateway.server.ts");
         const dashboard = readProjectFile("src/app/student/dashboard/page.tsx");
 
-        expect(action).toContain("fetchExamRowsByOrganization");
-        expect(action).toContain("ctx.identity.organizationId");
-        expect(action).toContain("stripExamForSolving(exam");
+        expect(action).toContain("listStudentAssignmentsWithGateway(ctx.admin, ctx.identity)");
+        expect(gateway).toContain('rpc("omr_list_student_assignments_v1"');
+        expect(gateway).toContain("satisfies StudentAssignmentPreview");
+        expect(gateway).toContain("retake_question_ids");
+        expect(gateway).not.toContain("correctAnswer");
         expect(dashboard).toContain('myAttemptsResult.source === "server"');
         expect(dashboard).toContain("myAttemptsResult.exams || []");
         expect(dashboard).not.toContain("loadExams()");

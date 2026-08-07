@@ -1152,6 +1152,14 @@ export default function PwaCheckPage() {
   }, [proofBundleState]);
 
   const summary = useMemo(() => snapshot ? checkSummary(snapshot.checks) : { fails: 0, passes: 0, warnings: 0 }, [snapshot]);
+  const attentionChecks = useMemo(
+    () => snapshot ? snapshot.checks.filter(check => check.tone !== "pass") : [],
+    [snapshot],
+  );
+  const passedChecks = useMemo(
+    () => snapshot ? snapshot.checks.filter(check => check.tone === "pass") : [],
+    [snapshot],
+  );
   const verdict = useMemo(() => deviceVerdict(snapshot, summary), [snapshot, summary]);
   const reportText = useMemo(() => snapshot ? buildDeviceReport(snapshot, summary) : "", [snapshot, summary]);
   const proofResults = useMemo(() => ({
@@ -1298,7 +1306,7 @@ export default function PwaCheckPage() {
             padding: "1rem 0",
           }}
         >
-          <header style={{ display: "grid", gap: "0.9rem" }}>
+          <header className="pwa-check-header" style={{ display: "grid", gap: "0.9rem" }}>
             <Link
               href="/"
               style={{
@@ -1351,6 +1359,7 @@ export default function PwaCheckPage() {
           </header>
 
           <section
+            className="pwa-check-verdict"
             aria-label="PWA 실행 상태"
             data-testid="pwa-device-verdict"
             style={{
@@ -1474,33 +1483,154 @@ export default function PwaCheckPage() {
                 {copyState === "copied" ? "복사됨" : copyState === "shared" ? "공유됨" : copyState === "failed" ? "직접 복사" : ""}
               </span>
             </div>
-            <div style={{ color: "var(--muted)", fontSize: "0.72rem", lineHeight: 1.35, overflowWrap: "anywhere" }}>
-              {snapshot?.userAgent || "user agent"}
-            </div>
-            <pre
-              aria-label="PWA 진단 보고서"
-              data-testid="pwa-device-report"
-              style={{
-                background: "var(--background)",
-                border: "1px solid var(--border)",
-                borderRadius: "8px",
-                color: "var(--muted)",
-                fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
-                fontSize: "0.68rem",
-                lineHeight: 1.45,
-                margin: 0,
-                maxHeight: "9rem",
-                overflow: "auto",
-                padding: "0.8rem",
-                whiteSpace: "pre-wrap",
-                wordBreak: "break-word",
-              }}
-            >
-              {reportText || "검사 결과 준비 중"}
-            </pre>
           </section>
 
           <section
+            className="pwa-check-list"
+            aria-label="PWA 체크 목록"
+            data-testid="pwa-preflight-checklist"
+            style={{ display: "grid", gap: "0.7rem" }}
+          >
+            <div style={{ display: "grid", gap: "0.25rem", padding: "0 0.1rem" }}>
+              <strong style={{ color: "var(--foreground)", fontSize: "0.95rem", fontWeight: 900 }}>
+                확인할 항목
+              </strong>
+              <span style={{ color: "var(--muted)", fontSize: "0.76rem", lineHeight: 1.4 }}>
+                {snapshot
+                  ? attentionChecks.length > 0
+                    ? `${attentionChecks.length}개 항목에 확인 또는 조치가 필요합니다.`
+                    : "확인 또는 조치가 필요한 항목이 없습니다."
+                  : "호환성에 영향을 주는 항목을 확인하고 있습니다."}
+              </span>
+            </div>
+            {snapshot
+              ? attentionChecks.map(check => <CheckRow key={check.id} check={check} />)
+              : Array.from({ length: 3 }, (_, index) => (
+                <article
+                  key={index}
+                  style={{
+                    background: "var(--surface)",
+                    border: "1px solid var(--border)",
+                    borderRadius: "8px",
+                    minHeight: "4.5rem",
+                    opacity: 0.55,
+                  }}
+                />
+              ))}
+            {snapshot ? (
+              <details
+                data-testid="pwa-passed-checks"
+                style={{
+                  background: "var(--surface)",
+                  border: "1px solid var(--border)",
+                  borderRadius: "8px",
+                  overflow: "hidden",
+                }}
+              >
+                <summary
+                  data-testid="pwa-passed-checks-summary"
+                  style={{
+                    color: "var(--foreground)",
+                    cursor: "pointer",
+                    fontSize: "0.84rem",
+                    fontWeight: 850,
+                    minHeight: "3.25rem",
+                    padding: "0.85rem 1rem",
+                  }}
+                >
+                  {passedChecks.length}개 항목 통과
+                </summary>
+                <div
+                  style={{
+                    borderTop: "1px solid var(--border)",
+                    display: "grid",
+                    gap: "0.7rem",
+                    padding: "0.7rem",
+                  }}
+                >
+                  {passedChecks.map(check => <CheckRow key={check.id} check={check} />)}
+                </div>
+              </details>
+            ) : null}
+          </section>
+
+          <details
+            className="pwa-check-diagnostics"
+            data-testid="pwa-advanced-diagnostics"
+            style={{
+              background: "var(--surface)",
+              border: "1px solid var(--border)",
+              borderRadius: "8px",
+              overflow: "hidden",
+            }}
+          >
+            <summary
+              data-testid="pwa-advanced-diagnostics-summary"
+              style={{
+                color: "var(--foreground)",
+                cursor: "pointer",
+                minHeight: "3.75rem",
+                padding: "0.85rem 1rem",
+              }}
+            >
+              <span style={{ display: "inline-grid", gap: "0.2rem", marginLeft: "0.35rem", verticalAlign: "middle" }}>
+                <strong style={{ fontSize: "0.9rem", fontWeight: 900 }}>설치·전달·증빙 진단</strong>
+                <span style={{ color: "var(--muted)", fontSize: "0.74rem", lineHeight: 1.35 }}>
+                  실기기 검증이나 결과 전달이 필요할 때만 열어보세요.
+                </span>
+              </span>
+            </summary>
+            <div
+              style={{
+                background: "var(--background)",
+                borderTop: "1px solid var(--border)",
+                display: "grid",
+                gap: "1rem",
+                padding: "1rem",
+              }}
+            >
+              <section
+                aria-label="진단 원본"
+                style={{
+                  background: "var(--surface)",
+                  border: "1px solid var(--border)",
+                  borderRadius: "8px",
+                  display: "grid",
+                  gap: "0.65rem",
+                  padding: "0.85rem",
+                }}
+              >
+                <strong style={{ color: "var(--foreground)", fontSize: "0.84rem", fontWeight: 900 }}>
+                  진단 원본
+                </strong>
+                <div style={{ color: "var(--muted)", fontSize: "0.72rem", lineHeight: 1.35, overflowWrap: "anywhere" }}>
+                  {snapshot?.userAgent || "user agent"}
+                </div>
+                <pre
+                  aria-label="PWA 진단 보고서"
+                  data-testid="pwa-device-report"
+                  style={{
+                    background: "var(--background)",
+                    border: "1px solid var(--border)",
+                    borderRadius: "8px",
+                    color: "var(--muted)",
+                    fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
+                    fontSize: "0.68rem",
+                    lineHeight: 1.45,
+                    margin: 0,
+                    maxHeight: "9rem",
+                    overflow: "auto",
+                    padding: "0.8rem",
+                    whiteSpace: "pre-wrap",
+                    wordBreak: "break-word",
+                  }}
+                >
+                  {reportText || "검사 결과 준비 중"}
+                </pre>
+              </section>
+
+          <section
+            className="pwa-check-install-guide"
             aria-label="실기기 설치 확인"
             data-testid="pwa-install-proof-guide"
             style={{
@@ -1602,6 +1732,7 @@ export default function PwaCheckPage() {
           </section>
 
           <section
+            className="pwa-check-handoff"
             aria-label="기기 전달"
             data-testid="pwa-device-handoff"
             style={{
@@ -1710,6 +1841,7 @@ export default function PwaCheckPage() {
           </section>
 
           <section
+            className="pwa-check-proof"
             aria-label="실기기 리포트 판정"
             data-testid="pwa-proof-verifier"
             style={{
@@ -1987,22 +2119,8 @@ export default function PwaCheckPage() {
             ) : null}
           </section>
 
-          <section aria-label="PWA 체크 목록" style={{ display: "grid", gap: "0.7rem" }}>
-            {snapshot
-              ? snapshot.checks.map(check => <CheckRow key={check.id} check={check} />)
-              : Array.from({ length: 5 }, (_, index) => (
-                <article
-                  key={index}
-                  style={{
-                    background: "var(--surface)",
-                    border: "1px solid var(--border)",
-                    borderRadius: "8px",
-                    minHeight: "4.5rem",
-                    opacity: 0.55,
-                  }}
-                />
-              ))}
-          </section>
+            </div>
+          </details>
 
           <footer style={{ display: "grid", gap: "0.7rem", gridTemplateColumns: "repeat(2, minmax(0, 1fr))" }}>
             <Link

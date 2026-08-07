@@ -87,6 +87,6 @@ describe("Korean 45-question PDF detection", () => {
             }
         }
 
-        await pdf.destroy();
+        await pdf.loadingTask.destroy();
     }, 20_000);
 });

@@ -135,19 +135,66 @@ grant all on all functions in schema public to service_role;
 -- those revokes here.
 revoke all on public.omr_student_start_credentials from anon, authenticated;
 revoke all on public.omr_roster_invites from anon, authenticated;
+revoke all on public.omr_remote_asset_upload_intents from anon, authenticated;
+revoke all on public.omr_remote_asset_cleanup_queue from anon, authenticated;
+revoke all on sequence public.omr_remote_asset_cleanup_queue_id_seq from anon, authenticated;
+revoke all on table public.omr_attempt_sessions from public, anon, authenticated;
+revoke all on table public.omr_rate_limit_buckets from public, anon, authenticated, service_role;
+revoke all on table public.omr_exam_mutations from public, anon, authenticated, service_role;
+revoke all on table public.omr_feedback_mutations from public, anon, authenticated, service_role;
+revoke all on table public.omr_exam_entry_invites from public, anon, authenticated, service_role;
+revoke all on table public.omr_initial_ops_metrics from public, anon, authenticated, service_role;
+revoke all on table public.omr_teacher_accounts from public, anon, authenticated, service_role;
+revoke all on table public.omr_teacher_account_tokens from public, anon, authenticated, service_role;
+revoke all on table public.omr_teacher_notification_states from public, anon, authenticated, service_role;
 
 do $$
 declare
     guarded_function text;
     guarded_functions text[] := array[
         'omr_answer_attempt_question_v1',
+        'omr_upsert_student_attempt_question_v1',
         'omr_assert_production_boundary_preflight_v1',
         'omr_attach_attempt_handwriting_v1',
+        'omr_prepare_attempt_handwriting_asset_v1',
+        'omr_discard_attempt_handwriting_asset_v1',
         'omr_claim_guest_attempts_v1',
+        'omr_claim_remote_asset_cleanup_v1',
+        'omr_gc_attempt_sessions_v1',
+        'omr_requeue_dead_remote_asset_cleanup_v1',
+        'omr_authorize_remote_asset_cleanup_delete_v1',
+        'omr_ack_remote_asset_cleanup_v1',
+        'omr_fail_remote_asset_cleanup_v1',
+        'omr_authorize_teacher_asset_finalize_v1',
+        'omr_enqueue_remote_asset_cleanup_v1',
+        'omr_enqueue_exam_asset_cleanup_v1',
+        'omr_remote_assets_enqueue_cleanup_v1',
+        'omr_exams_enqueue_asset_cleanup_v1',
+        'omr_mark_exam_reservation_durable_v1',
+        'omr_prepare_teacher_asset_upload_v6_snapshot',
+        'omr_save_exam_v6_snapshot',
+        'omr_save_exam_v10_snapshot',
+        'omr_release_plan_usage_v10_snapshot',
+        'omr_normalize_exam_save_request_v10',
+        'omr_bootstrap_workspace_organization_v1',
+        'omr_save_feedback_v2',
+        'omr_return_feedback_v2',
+        'omr_save_feedback_v3',
+        'omr_return_feedback_v3',
+        'omr_save_feedback_v12_snapshot',
+        'omr_return_feedback_v12_snapshot',
         'omr_delete_exam_v1',
         'omr_force_finish_attempts_v1',
         'omr_guard_student_credential_mutation_v1',
         'omr_mark_feedback_opened_v2',
+        'omr_open_attempt_session_v1',
+        'omr_checkpoint_attempt_session_v1',
+        'omr_heartbeat_attempt_session_v1',
+        'omr_takeover_attempt_session_v1',
+        'omr_prepare_attempt_session_submit_v1',
+        'omr_commit_attempt_session_submit_v1',
+        'omr_prepare_teacher_asset_upload_v1',
+        'omr_finalize_teacher_asset_upload_v1',
         'omr_production_boundary_preflight_v1',
         'omr_release_plan_usage',
         'omr_reserve_plan_usage',
@@ -155,18 +202,57 @@ declare
         'omr_revoke_withdrawn_student_credential_v1',
         'omr_save_exam_plan_unlocked_v1',
         'omr_save_exam_v1',
+        'omr_save_exam_v2',
         'omr_save_feedback_v1',
         'omr_save_remote_asset_metadata_v1',
         'omr_save_roster_plan_unlocked_v1',
         'omr_save_roster_unlocked_v1',
         'omr_save_roster_v1',
         'omr_service_readiness_v1',
+        'omr_service_readiness_v6_snapshot',
+        'omr_service_readiness_v7_snapshot',
+        'omr_service_readiness_v10_snapshot',
         'omr_set_subquestion_review_v1',
         'omr_submit_attempt_v1',
         'omr_submit_session_attempt_v1',
         'omr_sync_student_plan_usage',
         'omr_teacher_attempt_write_allowed_v1',
-        'omr_teacher_update_attempt_v1'
+        'omr_teacher_update_attempt_v1',
+        'omr_consume_rate_limit_v1',
+        'omr_teacher_notification_summary_v1',
+        'omr_load_teacher_notification_state_v1',
+        'omr_mutate_teacher_notification_state_v1',
+        'omr_list_active_attempt_sessions_v1',
+        'omr_prepare_teacher_force_finish_sessions_v1',
+        'omr_force_finish_attempt_sessions_v1',
+        'omr_prepare_teacher_force_finish_sessions_compact_v1',
+        'omr_force_finish_attempt_sessions_compact_v1',
+        'omr_teacher_force_finish_fingerprint_v1',
+        'omr_begin_teacher_signup_v1',
+        'omr_begin_teacher_password_reset_v1',
+        'omr_complete_teacher_password_reset_v1',
+        'omr_verify_teacher_email_v1',
+        'omr_lookup_teacher_account_v1',
+        'omr_validate_teacher_session_v1',
+        'omr_advance_teacher_session_on_disable_v1',
+        'omr_initial_ops_fixture_v1',
+        'omr_initial_ops_reserve_upload_v1',
+        'omr_initial_ops_operation_v1',
+        'omr_initial_ops_database_snapshot_v1',
+        'omr_rotate_exam_entry_invite_v1',
+        'omr_resolve_exam_entry_invite_v1',
+        'omr_assign_students_v1',
+        'omr_clear_student_assignment_v1',
+        'omr_load_teacher_student_assignment_v1',
+        'omr_list_student_assignments_v1',
+        'omr_resolve_student_assignment_v1',
+        'omr_assert_targeted_assignment_scope_v1',
+        'omr_validate_targeted_attempt_session_v1',
+        'omr_validate_targeted_attempt_v1',
+        'omr_guard_targeted_exam_access_v1',
+        'omr_teacher_attempt_aggregate_v1',
+        'omr_teacher_attempt_export_v1',
+        'omr_teacher_attempt_export_page_v1'
     ];
 begin
     -- Revoke every overload by identity so a signature change cannot silently
@@ -189,6 +275,67 @@ begin
     end loop;
 end
 $$;
+
+revoke all on function public.omr_teacher_force_finish_fingerprint_v1(bigint,jsonb,jsonb,integer[],jsonb)
+    from public, anon, authenticated, service_role;
+revoke all on function public.omr_advance_teacher_session_on_disable_v1()
+    from public, anon, authenticated, service_role;
+revoke all on function public.omr_assert_targeted_assignment_scope_v1(text,text,text,text,text,text,integer[])
+    from public, anon, authenticated, service_role;
+revoke all on function public.omr_validate_targeted_attempt_session_v1()
+    from public, anon, authenticated, service_role;
+revoke all on function public.omr_validate_targeted_attempt_v1()
+    from public, anon, authenticated, service_role;
+revoke all on function public.omr_guard_targeted_exam_access_v1()
+    from public, anon, authenticated, service_role;
+
+-- Preserve the latest protocol boundary after the intentionally broad alpha
+-- grants. Old cleanup workers and blind exam writers fail closed; only the
+-- epoch-fenced, rate-limit, and CAS signatures remain callable by the server.
+revoke execute on function public.omr_ack_remote_asset_cleanup_v1(text,text)
+    from service_role;
+revoke execute on function public.omr_fail_remote_asset_cleanup_v1(text,text,text)
+    from service_role;
+revoke execute on function public.omr_save_exam_v1(jsonb,jsonb,jsonb,text)
+    from service_role;
+revoke execute on function public.omr_save_feedback_v1(text,jsonb)
+    from service_role;
+revoke execute on function public.omr_return_feedback_v1(text,text,timestamptz)
+    from service_role;
+revoke all on function public.omr_save_exam_v10_snapshot(jsonb,jsonb,jsonb,text)
+    from public, anon, authenticated, service_role;
+revoke all on function public.omr_release_plan_usage_v10_snapshot(text,text,date,text)
+    from public, anon, authenticated, service_role;
+revoke all on function public.omr_normalize_exam_save_request_v10(jsonb)
+    from public, anon, authenticated, service_role;
+revoke all on function public.omr_save_feedback_v12_snapshot(text,jsonb)
+    from public, anon, authenticated, service_role;
+revoke all on function public.omr_return_feedback_v12_snapshot(text,text,timestamptz)
+    from public, anon, authenticated, service_role;
+grant execute on function public.omr_authorize_remote_asset_cleanup_delete_v1(text,text,integer)
+    to service_role;
+grant execute on function public.omr_ack_remote_asset_cleanup_v1(text,text,integer)
+    to service_role;
+grant execute on function public.omr_fail_remote_asset_cleanup_v1(text,text,integer,text)
+    to service_role;
+grant execute on function public.omr_consume_rate_limit_v1(text,text,integer,integer,integer)
+    to service_role;
+grant execute on function public.omr_save_exam_v2(jsonb,jsonb,jsonb,text,bigint,text)
+    to service_role;
+grant execute on function public.omr_bootstrap_workspace_organization_v1(text,text,jsonb,timestamptz)
+    to service_role;
+grant execute on function public.omr_save_feedback_v2(text,jsonb,bigint,text)
+    to service_role;
+grant execute on function public.omr_return_feedback_v2(text,text,bigint,text)
+    to service_role;
+grant execute on function public.omr_save_feedback_v3(text,jsonb,bigint,text)
+    to service_role;
+grant execute on function public.omr_return_feedback_v3(text,text,bigint,text)
+    to service_role;
+grant execute on function public.omr_gc_attempt_sessions_v1(integer,integer)
+    to service_role;
+grant execute on function public.omr_requeue_dead_remote_asset_cleanup_v1(text,text,integer,text,text)
+    to service_role;
 
 commit;
 
@@ -247,6 +394,8 @@ alter table if exists public.omr_kakao_dispatch_logs no force row level security
 alter table if exists public.omr_comments no force row level security;
 alter table if exists public.omr_audit_logs no force row level security;
 alter table if exists public.omr_remote_assets no force row level security;
+-- The service-only upload intent and cleanup outbox remain FORCE RLS because
+-- schema.sql already forces them in the pre-boundary baseline.
 
 -- omr_student_start_credentials and omr_roster_invites keep FORCE RLS: schema.sql
 -- sets it, so leaving it on is the correct alpha state, not an oversight.
@@ -304,5 +453,133 @@ drop policy if exists "OMR comments are publicly writable" on public.omr_comment
 create policy "OMR comments are publicly writable" on public.omr_comments for all using (true) with check (true);
 drop policy if exists "OMR audit logs are publicly writable" on public.omr_audit_logs;
 create policy "OMR audit logs are publicly writable" on public.omr_audit_logs for all using (true) with check (true);
+
+-- Durable student sessions did not exist in the alpha browser-access baseline.
+-- Keep their table and every RPC overload service-only even after the rollback's
+-- intentionally broad grants above.
+alter table if exists public.omr_attempt_sessions enable row level security;
+alter table if exists public.omr_attempt_sessions force row level security;
+revoke all on table public.omr_attempt_sessions from public, anon, authenticated;
+alter table if exists public.omr_rate_limit_buckets enable row level security;
+alter table if exists public.omr_rate_limit_buckets force row level security;
+revoke all on table public.omr_rate_limit_buckets from public, anon, authenticated, service_role;
+alter table if exists public.omr_exam_mutations enable row level security;
+alter table if exists public.omr_exam_mutations force row level security;
+revoke all on table public.omr_exam_mutations from public, anon, authenticated, service_role;
+alter table if exists public.omr_feedback_mutations enable row level security;
+alter table if exists public.omr_feedback_mutations force row level security;
+revoke all on table public.omr_feedback_mutations from public, anon, authenticated, service_role;
+alter table if exists public.omr_exam_entry_invites enable row level security;
+alter table if exists public.omr_exam_entry_invites force row level security;
+revoke all on table public.omr_exam_entry_invites from public, anon, authenticated, service_role;
+alter table if exists public.omr_initial_ops_metrics enable row level security;
+alter table if exists public.omr_initial_ops_metrics force row level security;
+revoke all on table public.omr_initial_ops_metrics from public, anon, authenticated, service_role;
+alter table if exists public.omr_teacher_accounts enable row level security;
+alter table if exists public.omr_teacher_accounts force row level security;
+revoke all on table public.omr_teacher_accounts from public, anon, authenticated, service_role;
+alter table if exists public.omr_teacher_account_tokens enable row level security;
+alter table if exists public.omr_teacher_account_tokens force row level security;
+revoke all on table public.omr_teacher_account_tokens from public, anon, authenticated, service_role;
+alter table if exists public.omr_teacher_notification_states enable row level security;
+alter table if exists public.omr_teacher_notification_states force row level security;
+revoke all on table public.omr_teacher_notification_states from public, anon, authenticated, service_role;
+do $$
+declare
+    guarded_function text;
+begin
+    foreach guarded_function in array array[
+        'omr_open_attempt_session_v1',
+        'omr_checkpoint_attempt_session_v1',
+        'omr_heartbeat_attempt_session_v1',
+        'omr_takeover_attempt_session_v1',
+        'omr_prepare_attempt_session_submit_v1',
+        'omr_commit_attempt_session_submit_v1',
+        'omr_delete_exam_v1',
+        'omr_prepare_attempt_handwriting_asset_v1',
+        'omr_discard_attempt_handwriting_asset_v1',
+        'omr_gc_attempt_sessions_v1',
+        'omr_requeue_dead_remote_asset_cleanup_v1',
+        'omr_prepare_teacher_force_finish_sessions_compact_v1',
+        'omr_force_finish_attempt_sessions_compact_v1',
+        'omr_validate_teacher_session_v1',
+        'omr_load_teacher_notification_state_v1',
+        'omr_mutate_teacher_notification_state_v1',
+        'omr_assign_students_v1',
+        'omr_clear_student_assignment_v1',
+        'omr_load_teacher_student_assignment_v1',
+        'omr_list_student_assignments_v1',
+        'omr_resolve_student_assignment_v1',
+        'omr_teacher_attempt_aggregate_v1',
+        'omr_teacher_attempt_export_v1',
+        'omr_teacher_attempt_export_page_v1'
+    ] loop
+        execute (
+            select coalesce(string_agg(
+                format(
+                    'revoke all on function public.%I(%s) from public, anon, authenticated; grant execute on function public.%I(%s) to service_role;',
+                    proc.proname,
+                    pg_get_function_identity_arguments(proc.oid),
+                    proc.proname,
+                    pg_get_function_identity_arguments(proc.oid)
+                ),
+                ' '
+            ), 'select 1;')
+              from pg_proc proc
+              join pg_namespace namespace on namespace.oid = proc.pronamespace
+             where namespace.nspname = 'public'
+               and proc.proname = guarded_function
+        );
+    end loop;
+end
+$$;
+
+revoke all on function public.omr_assert_targeted_assignment_scope_v1(text,text,text,text,text,text,integer[])
+    from public, anon, authenticated, service_role;
+revoke all on function public.omr_validate_targeted_attempt_session_v1()
+    from public, anon, authenticated, service_role;
+revoke all on function public.omr_validate_targeted_attempt_v1()
+    from public, anon, authenticated, service_role;
+revoke all on function public.omr_guard_targeted_exam_access_v1()
+    from public, anon, authenticated, service_role;
+
+revoke execute on function public.omr_ack_remote_asset_cleanup_v1(text,text)
+    from service_role;
+revoke execute on function public.omr_fail_remote_asset_cleanup_v1(text,text,text)
+    from service_role;
+revoke execute on function public.omr_save_exam_v1(jsonb,jsonb,jsonb,text)
+    from service_role;
+revoke execute on function public.omr_save_feedback_v1(text,jsonb)
+    from service_role;
+revoke execute on function public.omr_return_feedback_v1(text,text,timestamptz)
+    from service_role;
+revoke all on function public.omr_save_feedback_v12_snapshot(text,jsonb)
+    from public, anon, authenticated, service_role;
+revoke all on function public.omr_return_feedback_v12_snapshot(text,text,timestamptz)
+    from public, anon, authenticated, service_role;
+grant execute on function public.omr_authorize_remote_asset_cleanup_delete_v1(text,text,integer)
+    to service_role;
+grant execute on function public.omr_ack_remote_asset_cleanup_v1(text,text,integer)
+    to service_role;
+grant execute on function public.omr_fail_remote_asset_cleanup_v1(text,text,integer,text)
+    to service_role;
+grant execute on function public.omr_consume_rate_limit_v1(text,text,integer,integer,integer)
+    to service_role;
+grant execute on function public.omr_save_exam_v2(jsonb,jsonb,jsonb,text,bigint,text)
+    to service_role;
+grant execute on function public.omr_bootstrap_workspace_organization_v1(text,text,jsonb,timestamptz)
+    to service_role;
+grant execute on function public.omr_save_feedback_v2(text,jsonb,bigint,text)
+    to service_role;
+grant execute on function public.omr_return_feedback_v2(text,text,bigint,text)
+    to service_role;
+grant execute on function public.omr_save_feedback_v3(text,jsonb,bigint,text)
+    to service_role;
+grant execute on function public.omr_return_feedback_v3(text,text,bigint,text)
+    to service_role;
+grant execute on function public.omr_gc_attempt_sessions_v1(integer,integer)
+    to service_role;
+grant execute on function public.omr_requeue_dead_remote_asset_cleanup_v1(text,text,integer,text,text)
+    to service_role;
 
 commit;

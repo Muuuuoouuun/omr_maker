@@ -63,6 +63,7 @@ describe("examPinRateLimit", () => {
         recordExamPinSuccess(keys, store);
         expect(store.has(keys.identityKey)).toBe(false);
         expect(store.has(keys.globalKey)).toBe(true);
+        expect(store.get(keys.globalKey)?.failedCount).toBe(1);
     });
 
     it("forgets stale per-identity failures outside the window", () => {

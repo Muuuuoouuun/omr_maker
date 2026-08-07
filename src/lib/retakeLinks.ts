@@ -1,5 +1,15 @@
 import type { RetakeMetadata } from "@/types/omr";
 
+export type ReviewAttemptSource = "server" | "local" | null;
+
+export function supportedReviewRetakeModes(
+    source: ReviewAttemptSource,
+): RetakeMetadata["mode"][] {
+    return source === "local"
+        ? ["wrong", "custom", "similar"]
+        : ["wrong"];
+}
+
 export interface RetakeLinkMetadata {
     labels?: string[];
     concepts?: string[];

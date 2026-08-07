@@ -35,6 +35,11 @@ grant supabase_storage_admin to postgres with set true;
 
 create schema if not exists auth;
 
+-- Kept outside public so rollback's intentionally broad alpha grants cannot
+-- expose the verifier-only cross-session concurrency helper.
+create schema if not exists extensions;
+create extension if not exists dblink with schema extensions;
+
 create or replace function auth.uid()
 returns uuid
 language sql

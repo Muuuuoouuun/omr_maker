@@ -1,4 +1,6 @@
 import { describe, expect, it } from "vitest";
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import {
     REMOTE_ASSET_MAX_SIGNED_URL_TTL_SECONDS,
     REMOTE_ASSET_SIGNED_URL_TTL_SECONDS,
@@ -9,6 +11,8 @@ import {
     normalizeRemoteAssetSignedUrlTtl,
     remoteAssetRecordFromRow,
     validateRemoteAssetUpload,
+    buildTeacherRemoteAssetUploadIdentity,
+    validateTeacherRemoteAssetUploadDeclaration,
 } from "./remoteAssetContract.server";
 
 describe("remote asset server contract", () => {
@@ -111,5 +115,77 @@ describe("remote asset server contract", () => {
             ...base,
             object_path: "organizations/org-2/exams/exam-1/problem/asset-1.pdf",
         })).toBeNull();
+    });
+
+    it("does not expose the removed remote clone/delete lifecycle while preserving upload and signing", () => {
+        const action = readFileSync(resolve(process.cwd(), "src/app/actions/remoteAssets.ts"), "utf8");
+        const gateway = readFileSync(resolve(process.cwd(), "src/lib/remoteAssetGateway.server.ts"), "utf8");
+        expect(action).not.toContain("cloneTeacherExamAsset");
+        expect(action).not.toContain("deleteTeacherExamAssetClone");
+        expect(gateway).not.toContain("cloneRemoteExamAssetWithGateway");
+        expect(gateway).not.toContain("deleteRemoteExamAssetCloneWithGateway");
+        expect(action).not.toContain("uploadTeacherExamAsset(");
+        expect(action).not.toContain("formData: FormData");
+        expect(action).not.toContain("file.arrayBuffer()");
+        expect(action).not.toContain("error instanceof Error ? error.message");
+        expect(action).toContain('errorCode: "upload_unavailable"');
+        expect(action).toContain("prepareTeacherExamAssetUpload");
+        expect(action).toContain("finalizeTeacherExamAssetUpload");
+        expect(action).toContain("getTeacherRemoteAssetUrl");
+        expect(gateway).toContain("uploadRemoteAssetWithGateway");
+        expect(gateway).toContain("createStaffRemoteAssetSignedUrlWithGateway");
+    });
+});
+
+describe("teacher direct remote asset declarations", () => {
+    it("binds an idempotency key to one stable asset id and immutable path", () => {
+        const declaration = {
+            organizationId: "org-1",
+            examId: "exam-1",
+            kind: "problem_pdf" as const,
+            byteSize: 7 * 1024 * 1024,
+            mimeType: "application/pdf" as const,
+            sha256Hex: "a".repeat(64),
+            originalName: "중간고사.pdf",
+            idempotencyKey: "upload-01JABCDEF0123456789",
+            createdByUserId: "teacher-1",
+        };
+
+        expect(validateTeacherRemoteAssetUploadDeclaration(declaration)).toMatchObject({
+            ok: true,
+            byteSize: declaration.byteSize,
+            sha256Hex: declaration.sha256Hex,
+        });
+        const first = buildTeacherRemoteAssetUploadIdentity(declaration);
+        const retry = buildTeacherRemoteAssetUploadIdentity({ ...declaration });
+        expect(retry).toEqual(first);
+        expect(buildTeacherRemoteAssetUploadIdentity({
+            ...declaration,
+            createdByUserId: "teacher-2",
+        }).assetId).not.toBe(first.assetId);
+        expect(first.assetId).toMatch(/^asset_[a-f0-9]{32}$/);
+        expect(first.objectPath).toBe(
+            `organizations/org-1/exams/exam-1/problem/${first.assetId}.pdf`,
+        );
+    });
+
+    it("rejects non-PDF declarations, invalid hashes, unsafe idempotency keys, and oversized files", () => {
+        const valid = {
+            organizationId: "org-1",
+            examId: "exam-1",
+            kind: "answer_key_pdf" as const,
+            byteSize: 123,
+            mimeType: "application/pdf" as const,
+            sha256Hex: "b".repeat(64),
+            idempotencyKey: "upload-01JABCDEF0123456789",
+        };
+        expect(validateTeacherRemoteAssetUploadDeclaration({ ...valid, mimeType: "text/plain" as never }))
+            .toEqual({ ok: false, error: "invalid_mime_type" });
+        expect(validateTeacherRemoteAssetUploadDeclaration({ ...valid, sha256Hex: "bad" }))
+            .toEqual({ ok: false, error: "invalid_sha256" });
+        expect(validateTeacherRemoteAssetUploadDeclaration({ ...valid, idempotencyKey: "../escape" }))
+            .toEqual({ ok: false, error: "invalid_idempotency_key" });
+        expect(validateTeacherRemoteAssetUploadDeclaration({ ...valid, byteSize: REMOTE_PDF_MAX_BYTES + 1 }))
+            .toEqual({ ok: false, error: "asset_too_large" });
     });
 });

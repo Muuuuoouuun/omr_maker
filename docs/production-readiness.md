@@ -32,24 +32,70 @@ service-role RPC만 유지합니다. 기존 `production-rls.sql`은 직접 authe
 5. `schema.sql` → sorted `migrations` → `production-server-boundary.sql` →
    `live-test-assertions.sql` 순서를 실행하는 `npm run test:supabase:live`와
    CI의 blocking `supabase-live-contract` 작업을 통과시킵니다.
-   service-role 전용 readiness probe 버전은 `202607280003`이어야 합니다.
+   service-role 전용 readiness probe 버전은 `202608060029`이어야 합니다.
    브라우저 schema/table/column/sequence/function 실효 권한과 PostgreSQL 17
-   `MAINTAIN` 차단, 정확한 canonical 27개 allowlist의 ENABLE+FORCE RLS, public
+   `MAINTAIN` 차단, 정확한 canonical 38개 allowlist의 ENABLE+FORCE RLS, public
    정책 0개, 조직 preflight 4개 count 0, 정확한 목적별 교사 RPC signature,
-   추가 overload 없는 정확한 서버 gateway 11개 signature, 모든 legacy
+   추가 overload 없는 정확한 서버 gateway 17개 signature, 직접 업로드 intent와
+   lease 기반 Storage 정리 outbox
+   수명주기, 모든 legacy
    broad-RPC overload 제거, service-role 권한, private Storage owner·제한
-   정책을 모두 `true`로 반환해야 합니다. 키 누락·이전 또는 공백이
+   정책과 명단 원자 조회·revision CAS(`rosterSnapshotCasReady`), 학생 세션
+   변경 CAS(`attemptMutationCasReady`), 제출 세션 안전 시험 삭제
+   (`examDeleteSessionSafe`), 학생 질문 원자 저장
+   (`studentQuestionAtomicReady`), 브라우저·service-role 직접 테이블 접근 없이
+   해시만 저장하는 교사 가입·이메일 확인·비밀번호 복구 RPC
+   (`teacherAccountLifecycleReady`)와 service-role 전용 초기 운영 부하 제어
+   (`initialOperationsLoadControlReady`), secure submission replay marker와 브라우저가
+   조직 ID를 받지 않는 시험별 opaque 초대 경계(`examEntryInvitesReady`)를 모두
+   `true`로 반환해야 합니다. 키 누락·이전 또는 공백이
    붙은 버전·`false`·배열 응답은 모두 배포 불가입니다. 교사 설정 화면의
    readiness Server Action은 동일 출처와 유효한 서명 세션을 먼저 확인하고
    공개 쇼케이스 identity를 차단한 뒤에만 service-role probe를 호출합니다.
    속도 제한은 서명된 actor를 기준으로 하며 만료 엔트리를 정리하고 저장소
    최대 크기를 고정합니다. 이 제한은 process-local 방어 심층 계층이므로
    다중 instance 운영에서는 upstream 공유 rate limit도 함께 적용합니다.
+   교사 계정 이메일은 HTTPS delivery webhook URL과 공백 없는 32~512바이트
+   HMAC secret을 모두 설정해야 합니다. 수신기는 `x-omr-delivery-timestamp`와
+   `<timestamp>.<raw JSON body>`의 HMAC-SHA256을 검증한 뒤 메일을 보내야 하며,
+   응답이 제한 시간 안에 JSON `{ "accepted": true }`를 반환하지 않으면 요청은
+   실패합니다. 실제 전달 실패·재시도 증거를 확인하기 전에는 가입 확인과
+   비밀번호 복구가 준비됐다고 표시하지 않습니다.
 6. 릴리스 증거에 커밋 SHA, 정책 해시(SHA-256), CI 실행 URL, 대상 DB 프로젝트,
    실행자·시각, preflight 결과, anon/authenticated 공격 거부 결과를 기록합니다.
 7. 같은 커밋의 서버 빌드를 배포하고 교사·학생 server action 여정을 확인한 뒤 쓰기를 재개합니다.
 
-현재 public 앱 테이블은 `public.omr_*` 27개입니다. 별도의 Supabase 관리 관계인
+호스팅 상태는 수동 `curl`만으로 승인하지 않습니다. GitHub의 `Production readiness` workflow를
+production environment 승인 뒤 실행하고, 배포 SHA를 입력합니다. 이 작업은 `/healthz` build,
+`/readyz`의 exact version·DB·관측성·전달 설정, 대상 Supabase service-role readiness RPC,
+anon/authenticated canonical table 직접 접근 거부를 함께 검사합니다. credential이 비어 있거나
+하나라도 추정할 수 없으면 `unverified`와 exit 1로 끝납니다. 생성된 artifact는
+[`operations/release-evidence-template.md`](./operations/release-evidence-template.md)에 연결합니다.
+
+DB와 private Storage 복원 승인은 [`operations/backup-restore-runbook.md`](./operations/backup-restore-runbook.md)를
+따릅니다. source와 production을 모두 피한 격리 staging에서 exact table count와 모든 object 본문
+SHA-256을 비교하고, 선언한 RPO/RTO 안에서 `verified` 증거가 생성되기 전에는 복구 가능성을 통과로
+기록하지 않습니다.
+
+교사 PDF는 파일 본문을 Next Server Action에 싣지 않습니다. 6 MiB 이하는 signed
+upload, 초과분은 6 MiB chunk의 signed TUS로 브라우저에서 private Storage에 직접
+전송합니다. finalize는 Storage `info`의 크기·content type·업로드 metadata와
+`Range: bytes=0-4`의 `%PDF-` magic을 확인하며 전체 파일을 서버로 다시 받지
+않습니다. 이때 SHA-256은 브라우저 선언과 Storage metadata의 일치성 검사이지,
+서버가 파일 전체를 다시 해시한 독립적인 무결성 증명은 아닙니다. 업로드 admission은
+24시간 기준 actor 20개/1 GiB, 조직 100개/5 GiB와 전역 100개/5 GiB를 트랜잭션 잠금으로
+직렬화합니다. 만료 `pending`/`uploaded` intent, canonical 시험에서 참조되지 않은 만료
+`finalized` intent와 교체·삭제된 원격 자산 경로는 service-role 전용
+정리 outbox에 먼저 보존됩니다. claim은 호출당 1~100개, lease는 15~900초로 제한되고
+실패는 최대 10회까지 지수 backoff 후 `dead`로 격리됩니다. 작업자는 Storage object
+삭제가 성공한 뒤에만 ack해야 합니다. readiness는 이 테이블·인덱스·RPC 권한을
+검증하고 아직 outbox에 materialize되지 않은 정리 대상까지 합산해 100개 이하이며
+`dead`가 0개인지 확인합니다. canonical 저장은 intent 행을 정리 sweep과 같은 순서로
+잠가 이미 만료·queue된 자산의 부활을 거부합니다. 운영 환경의 cron 등록 여부는
+readiness가 주장하지 않으므로, 별도 스케줄러를 반드시 구성하고 `dead` 항목을 알림
+대상으로 삼아야 합니다.
+
+현재 public 앱 테이블은 `public.omr_*` 37개입니다. 별도의 Supabase 관리 관계인
 `storage.objects`와 `storage.buckets`는
 [Supabase 플랫폼 권한 문서](https://supabase.com/docs/guides/platform/permissions)의
 요구대로 `supabase_storage_admin` 소유권을 유지합니다. 프로필은 managed table ACL이나
@@ -98,8 +144,54 @@ CRUD 성공을 모두 확인합니다.
   Supabase CLI 로그인용으로 두려면 정식 이름 `SUPABASE_ACCESS_TOKEN`으로 정정하고, 아니면 삭제하세요.
 - 배포 권한이 있는 액세스 토큰이 로그·명령 출력에 노출됐다면 즉시 폐기·재발급하세요.
 
+### 운영 상태 확인
+
+- `OMR_READINESS_TOKEN`에는 외부에 공개하지 않는 충분히 긴 임의 값을 설정합니다.
+  `GET /api/healthz`는 로드밸런서용 공개 생존 확인이며 빌드 식별자와 시각만 반환합니다.
+- `GET /api/readyz`는 `Authorization: Bearer <OMR_READINESS_TOKEN>`이 정확히 일치할 때만
+  service-role DB readiness와 중앙 운영 이벤트 sink의 부작용 없는 인증 `HEAD` probe를 실행합니다.
+  토큰이 없거나 틀리면 `401`, Supabase 설정 누락·제한 시간 초과·DB 경계 검사 실패는 `503`입니다.
+  DB는 준비됐지만 sink가 누락되거나 도달 불가하면 앱을 함께 내리지 않고 `200`과
+  `status=degraded`, `observability=<원인>`을 반환합니다. 배포 승인은 반드시
+  `status=ready`, `observability=ready`를 모두 확인하고, 운영 모니터는 degraded를 경보로 처리합니다.
+- 중앙 수집기는 `OMR_OPERATIONAL_SINK_URL`의 HTTPS endpoint와 공백 없는 32~512자
+  `OMR_OPERATIONAL_SINK_TOKEN`으로 설정합니다. endpoint는 `Authorization: Bearer ...`가 포함된
+  요청을 받고 `x-omr-event-id`를 멱등 키로 중복 제거해야 합니다. 애플리케이션은 일시적인
+  408/425/429/5xx 또는 전송 오류에 동일 이벤트 ID로 한 번 재시도합니다.
+  readiness용 `HEAD`와 `application/json` 이벤트 `POST`를 받고 2xx를 반환해야 합니다. 앱은
+  redirect를 따라가지 않으며 원본 오류, 학생 식별자, 쿠키, 토큰과 payload를 보내지 않습니다.
+- 자산 GC cron은 매 실행 결과를 `omr.job_heartbeat`로 중앙 수집기에 전달합니다. 실제 정리 실패가
+  하나라도 있으면 `503`이고, 정리는 깨끗하지만 heartbeat 전달만 실패하면 작업 결과는 `200`을
+  유지하되 `observability=degraded`를 반환합니다. 운영 수집기에서는 heartbeat 부재와
+  degraded 응답을 별도 경보 조건으로 설정합니다.
+- 두 응답 모두 `Cache-Control: no-store`입니다. 준비 상태 응답과 오류 로그에는 원본 DB 오류,
+  학생 이름·이메일, 쿠키, 토큰, 답안/PDF payload를 넣지 않습니다. `OMR_READINESS_TIMEOUT_MS`는
+  별도 probe 제한 시간이며 100~10,000ms 범위로 제한됩니다(기본 5,000ms).
+- 배포 직후 다음과 같이 확인하고 결과에 커밋 SHA와 시각을 남깁니다.
+
+```sh
+curl -i https://<deployment>/api/healthz
+curl -i -H "Authorization: Bearer $OMR_READINESS_TOKEN" https://<deployment>/api/readyz
+```
+
 ## 4. 배포 참고
 
 - 프리뷰 배포: `vercel deploy` (기본).
 - 프로덕션: 검증한 프리뷰 빌드를 `vercel promote <preview-url>`로 승격하거나 `vercel deploy --prod`.
   승격은 재빌드 없이 동일 빌드를 올리므로 프리뷰에서 확인한 코드와 100% 동일합니다.
+- production build의 `postbuild`는 홈, 학생 대시보드·응시·리뷰, 시험 생성,
+  강사 대시보드·라이브·명단 라우트의 first-load JS raw/gzip 예산을 검사합니다.
+  초기 운영 검증은 배포 URL의 immutable 정적 JS가 실제 `Content-Encoding`으로 압축되는지도 확인합니다.
+
+### 초기 100명 부하의 RSS 증거
+
+Vercel에서는 라우트가 서로 다른 함수 번들/프로세스로 실행될 수 있으므로 별도 RSS API의
+`process.memoryUsage()`를 workload 함수의 메모리로 간주하지 않습니다. 부하 드라이버는 실제
+`operations/[operation]` 응답의 boot-instance ID, RSS, 서버 시각을 원시 요청과 함께 수집하고,
+주기 probe도 같은 dynamic operations route의 `instance-rss-read`로 보냅니다. 이 probe는 DB
+gateway와 workload request 목록을 거치지 않으므로 RPC 호출 수와 latency percentile을 오염시키지
+않습니다. 실제 workload를 처리한 모든 instance에 대해 ramp 전 baseline, steady-window 표본,
+cooldown 종료 표본이 같은 boot ID로 연결될 때만 RSS gate를 평가합니다. Vercel은 특정 warm
+instance로의 affinity를 보장하지 않으므로 bounded probe가 모든 instance를 다시 만나지 못하면
+성공으로 추정하지 않고 `memory_instrumentation`/`unverified`로 종료합니다. 안정적인 반복 통과가
+필요하면 provider-level instance/container memory telemetry를 연결해야 합니다.

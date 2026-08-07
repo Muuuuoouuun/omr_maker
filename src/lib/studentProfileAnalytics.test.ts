@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { Attempt, Exam } from "@/types/omr";
 import type { RosterStudent } from "@/lib/rosterStorage";
+import type { TeacherAttemptSummary } from "@/lib/teacherAttemptSummary";
 import { buildStudentProfileInsight } from "./studentProfileAnalytics";
 
 const exam: Exam = {
@@ -54,6 +55,32 @@ function attempt(partial: Partial<Attempt>): Attempt {
 }
 
 describe("student profile analytics", () => {
+    it("counts archived handwriting from lightweight teacher attempt summaries", () => {
+        const summaryAttempt: TeacherAttemptSummary = {
+            ...attempt({
+                id: "summary-handwriting",
+                studentId: student.id,
+                handwritingArchived: true,
+            }),
+            detailLevel: "summary",
+            answers: {},
+            handwritingStrokesRef: { store: "remote", key: "summary-strokes" },
+            handwritingQuestionCount: 2,
+        };
+
+        const insight = buildStudentProfileInsight(
+            student,
+            [summaryAttempt],
+            new Map([[exam.id, exam]]),
+        );
+
+        expect(insight.handwritingArchiveCount).toBe(1);
+        expect(insight.attempts[0]).toMatchObject({
+            handwritingArchived: true,
+            handwritingLabel: "2문항",
+        });
+    });
+
     it("keeps per-attempt and aggregate away counts at the stored cumulative value", () => {
         const insight = buildStudentProfileInsight(student, [
             attempt({

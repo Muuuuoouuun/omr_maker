@@ -109,7 +109,13 @@ function activityTime(attempt: Attempt): number {
 }
 
 function handwritingLabel(attempt: Attempt): string {
-    const questionCount = attempt.questionDrawings?.length || attempt.handwriting?.summary.questionCount || 0;
+    const summaryQuestionCount = "handwritingQuestionCount" in attempt
+        && typeof attempt.handwritingQuestionCount === "number"
+        ? attempt.handwritingQuestionCount
+        : 0;
+    const questionCount = attempt.questionDrawings?.length
+        || attempt.handwriting?.summary.questionCount
+        || summaryQuestionCount;
     if (questionCount > 0) return `${questionCount}문항`;
     const pageCount = attempt.drawingPageCount || attempt.handwriting?.summary.pageCount || 0;
     if (pageCount > 0) return `${pageCount}쪽`;
@@ -117,7 +123,11 @@ function handwritingLabel(attempt: Attempt): string {
 }
 
 function hasArchivedHandwriting(attempt: Attempt): boolean {
-    return !!attempt.handwritingArchived && !!(attempt.handwriting?.strokesRef || attempt.drawingsRef);
+    const summaryStrokesRef = "handwritingStrokesRef" in attempt
+        ? attempt.handwritingStrokesRef
+        : undefined;
+    return !!attempt.handwritingArchived
+        && !!(attempt.handwriting?.strokesRef || summaryStrokesRef || attempt.drawingsRef);
 }
 
 function sortedUniqueQuestionNumbers(values: number[]): number[] {

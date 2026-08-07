@@ -48,12 +48,14 @@ function hasIssue(issues: ExamValidationIssue[], codes: Set<string>): boolean {
 
 function distributionValue(accessConfig?: Exam["accessConfig"]): string {
     if (!accessConfig) return "선택 대기";
+    if (accessConfig.type === "targeted") return "개별 학생";
     if (accessConfig.type === "group") return `${accessConfig.groupIds?.length || 0}개 그룹`;
     return accessConfig.pin ? "공개 링크 · PIN" : "공개 링크";
 }
 
 function distributionMessage(accessConfig?: Exam["accessConfig"]): string {
     if (!accessConfig) return "배포하기에서 공개 링크 또는 그룹 배포를 선택하면 최종 링크를 만들 수 있습니다.";
+    if (accessConfig.type === "targeted") return "선택한 활성 학생 계정만 응시할 수 있습니다.";
     if (accessConfig.type === "group") return "대상 그룹 기준으로 응시 링크가 제한됩니다.";
     return accessConfig.pin ? "공개 링크에 PIN 접근 보호가 적용됩니다." : "PIN 없는 공개 링크로 배포됩니다.";
 }

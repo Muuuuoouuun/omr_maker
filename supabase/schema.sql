@@ -38,8 +38,127 @@ create table if not exists public.omr_plan_usage_reservations (
     resource_key text not null,
     amount integer not null default 1 check (amount > 0),
     created_at timestamptz not null default now(),
+    expires_at timestamptz,
     primary key (organization_id, metric, period_start, resource_key)
 );
+
+create index if not exists omr_plan_usage_exam_reservation_expiry_idx
+    on public.omr_plan_usage_reservations
+        (organization_id, period_start, expires_at, resource_key)
+    where metric = 'exams' and expires_at is not null;
+
+-- Service-only ledger for direct browser-to-Storage teacher PDF uploads. The
+-- exam FK is deliberately deferred until final canonical save, so prepare does
+-- not expose a provisional exam skeleton.
+create table if not exists public.omr_remote_asset_upload_intents (
+    id text primary key,
+    organization_id text not null references public.omr_organizations(id) on delete cascade,
+    exam_id text not null,
+    kind text not null,
+    created_by_user_id text not null,
+    idempotency_key text not null,
+    storage_bucket text not null default 'omr-private-assets',
+    object_path text not null,
+    mime_type text not null,
+    byte_size bigint not null,
+    sha256_hex text not null,
+    original_name text,
+    status text not null default 'pending',
+    expires_at timestamptz not null,
+    uploaded_at timestamptz,
+    finalized_at timestamptz,
+    created_at timestamptz not null default now(),
+    updated_at timestamptz not null default now(),
+    constraint omr_remote_asset_upload_intents_kind_check
+        check (kind in ('problem_pdf', 'answer_key_pdf')),
+    constraint omr_remote_asset_upload_intents_status_check
+        check (status in ('pending', 'uploaded', 'finalized', 'expired')),
+    constraint omr_remote_asset_upload_intents_id_check
+        check (id ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'),
+    constraint omr_remote_asset_upload_intents_exam_id_check
+        check (exam_id ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'),
+    constraint omr_remote_asset_upload_intents_actor_check
+        check (btrim(created_by_user_id) <> '' and length(created_by_user_id) <= 200),
+    constraint omr_remote_asset_upload_intents_idempotency_check
+        check (btrim(idempotency_key) <> '' and length(idempotency_key) <= 200),
+    constraint omr_remote_asset_upload_intents_bucket_check
+        check (storage_bucket = 'omr-private-assets'),
+    constraint omr_remote_asset_upload_intents_mime_check
+        check (mime_type = 'application/pdf'),
+    constraint omr_remote_asset_upload_intents_size_check
+        check (byte_size > 0 and byte_size <= 52428800),
+    constraint omr_remote_asset_upload_intents_sha_check
+        check (sha256_hex ~ '^[a-f0-9]{64}$'),
+    constraint omr_remote_asset_upload_intents_expiry_check
+        check (expires_at > created_at and expires_at <= created_at + interval '2 hours'),
+    constraint omr_remote_asset_upload_intents_path_check check (
+        object_path = (
+            'organizations/' || organization_id || '/exams/' || exam_id
+            || case
+                when kind = 'problem_pdf' then '/problem/'
+                else '/answer-key/'
+            end
+            || id || '.pdf'
+        )
+        and position('..' in object_path) = 0
+        and position(chr(92) in object_path) = 0
+    ),
+    constraint omr_remote_asset_upload_intents_idempotency_uidx
+        unique (organization_id, created_by_user_id, idempotency_key),
+    constraint omr_remote_asset_upload_intents_object_path_uidx
+        unique (storage_bucket, object_path)
+);
+
+create index if not exists omr_remote_asset_upload_intents_cleanup_eligibility_idx
+    on public.omr_remote_asset_upload_intents (expires_at, id)
+    where status in ('pending', 'uploaded', 'finalized', 'expired');
+
+alter table public.omr_remote_asset_upload_intents enable row level security;
+alter table public.omr_remote_asset_upload_intents force row level security;
+revoke all on table public.omr_remote_asset_upload_intents from public, anon, authenticated;
+grant select, insert, update, delete on table public.omr_remote_asset_upload_intents to service_role;
+
+create table if not exists public.omr_remote_asset_cleanup_queue (
+    id bigint generated always as identity primary key,
+    organization_id text not null,
+    exam_id text,
+    asset_kind text,
+    source_type text not null check (source_type in ('upload_intent', 'remote_asset')),
+    source_id text not null,
+    storage_bucket text not null check (storage_bucket = 'omr-private-assets'),
+    object_path text not null,
+    reason text not null check (reason in ('expired_upload', 'exam_deleted', 'asset_replaced')),
+    status text not null default 'pending'
+        check (status in ('pending', 'leased', 'done', 'dead')),
+    attempts integer not null default 0 check (attempts between 0 and 10),
+    available_at timestamptz not null default now(),
+    lease_owner text,
+    lease_until timestamptz,
+    last_error text,
+    created_at timestamptz not null default now(),
+    updated_at timestamptz not null default now(),
+    completed_at timestamptz,
+    constraint omr_remote_asset_cleanup_path_check check (
+        object_path like ('organizations/' || organization_id || '/%')
+        and position('..' in object_path) = 0
+        and position(chr(92) in object_path) = 0
+    ),
+    constraint omr_remote_asset_cleanup_lease_check check (
+        (status = 'leased' and lease_owner is not null and lease_until is not null)
+        or (status <> 'leased' and lease_owner is null and lease_until is null)
+    ),
+    constraint omr_remote_asset_cleanup_object_uidx unique (storage_bucket, object_path)
+);
+
+create index if not exists omr_remote_asset_cleanup_claim_idx
+    on public.omr_remote_asset_cleanup_queue (status, available_at, lease_until, id)
+    where status in ('pending', 'leased');
+
+alter table public.omr_remote_asset_cleanup_queue enable row level security;
+alter table public.omr_remote_asset_cleanup_queue force row level security;
+revoke all on table public.omr_remote_asset_cleanup_queue from public, anon, authenticated;
+grant select, insert, update, delete on table public.omr_remote_asset_cleanup_queue to service_role;
+grant usage, select on sequence public.omr_remote_asset_cleanup_queue_id_seq to service_role;
 
 -- Atomically raises the observed floor, checks the limit, and records a
 -- resource-key reservation. A short row lock prevents concurrent requests from
@@ -1113,6 +1232,19 @@ create index if not exists omr_attempts_student_completed_idx
     on public.omr_attempts (organization_id, student_profile_id, student_id, finished_at desc, id)
     where status = 'completed';
 
+create index if not exists omr_attempts_org_id_idx
+    on public.omr_attempts (organization_id, id);
+
+create index if not exists omr_attempts_org_exam_id_idx
+    on public.omr_attempts (organization_id, exam_id, id);
+
+create index if not exists omr_attempts_owner_id_idx
+    on public.omr_attempts (organization_id, student_id, id);
+
+create index if not exists omr_attempts_student_completed_id_idx
+    on public.omr_attempts (organization_id, student_profile_id, student_id, id)
+    where status = 'completed';
+
 create index if not exists omr_attempts_finished_at_idx
     on public.omr_attempts (finished_at desc);
 
@@ -1424,3 +1556,122 @@ create policy "OMR audit logs are publicly writable"
     for all
     using (true)
     with check (true);
+
+create or replace function public.omr_student_question_summaries_v1(p_payload jsonb)
+returns jsonb
+language sql immutable parallel safe
+set search_path = ''
+as $$
+    select coalesce(
+        jsonb_agg(
+            jsonb_strip_nulls(jsonb_build_object(
+                'questionId', note -> 'questionId',
+                'questionNumber', note -> 'questionNumber',
+                'body', '',
+                'createdAt', case
+                    when jsonb_typeof(note -> 'createdAt') = 'string' then note ->> 'createdAt'
+                    else ''
+                end,
+                'status', case when note ->> 'status' = 'answered' then 'answered' else 'queued' end,
+                'answer', case
+                    when jsonb_typeof(note -> 'answer') = 'object' then
+                        jsonb_strip_nulls(jsonb_build_object(
+                            'body', '',
+                            'createdAt', case
+                                when jsonb_typeof(note #> '{answer,createdAt}') = 'string'
+                                    then note #>> '{answer,createdAt}'
+                                else ''
+                            end
+                        ))
+                    else null
+                end
+            )) order by ordinal
+        ),
+        '[]'::jsonb
+    )
+    from jsonb_array_elements(
+        case
+            when jsonb_typeof(p_payload -> 'studentQuestions') = 'array'
+                then p_payload -> 'studentQuestions'
+            else '[]'::jsonb
+        end
+    ) with ordinality as questions(note, ordinal)
+    where jsonb_typeof(note) = 'object'
+      and jsonb_typeof(note -> 'questionId') = 'number'
+      and jsonb_typeof(note -> 'questionNumber') = 'number';
+$$;
+
+create or replace function public.omr_exam_question_summaries_v1(p_payload jsonb)
+returns jsonb
+language sql immutable parallel safe
+set search_path = ''
+as $$
+    select coalesce(
+        jsonb_agg(
+            jsonb_strip_nulls(jsonb_build_object(
+                'id', case when jsonb_typeof(question -> 'id') = 'number' then question -> 'id' else null end,
+                'number', case when jsonb_typeof(question -> 'number') = 'number' then question -> 'number' else null end,
+                'label', case when jsonb_typeof(question -> 'label') = 'string' then question ->> 'label' else null end,
+                'score', case when jsonb_typeof(question -> 'score') = 'number' then question -> 'score' else null end,
+                'answer', case when jsonb_typeof(question -> 'answer') = 'number' then question -> 'answer' else null end,
+                'choices', case when jsonb_typeof(question -> 'choices') = 'number' then question -> 'choices' else null end,
+                'tags', case
+                    when jsonb_typeof(question -> 'tags') = 'object' then
+                        jsonb_strip_nulls(jsonb_build_object(
+                            'subject', case when jsonb_typeof(question #> '{tags,subject}') = 'string' then question #>> '{tags,subject}' else null end,
+                            'unit', case when jsonb_typeof(question #> '{tags,unit}') = 'string' then question #>> '{tags,unit}' else null end,
+                            'concept', case when jsonb_typeof(question #> '{tags,concept}') = 'string' then question #>> '{tags,concept}' else null end,
+                            'skill', case when jsonb_typeof(question #> '{tags,skill}') = 'string' then question #>> '{tags,skill}' else null end,
+                            'difficulty', case when jsonb_typeof(question #> '{tags,difficulty}') = 'string' then question #>> '{tags,difficulty}' else null end,
+                            'cognitiveLevel', case when jsonb_typeof(question #> '{tags,cognitiveLevel}') = 'string' then question #>> '{tags,cognitiveLevel}' else null end,
+                            'source', case when jsonb_typeof(question #> '{tags,source}') = 'string' then question #>> '{tags,source}' else null end,
+                            'expectedTimeSec', case when jsonb_typeof(question #> '{tags,expectedTimeSec}') = 'number' then question #> '{tags,expectedTimeSec}' else null end,
+                            'mistakeTypes', case
+                                when jsonb_typeof(question #> '{tags,mistakeTypes}') = 'array' then (
+                                    select coalesce(jsonb_agg(item order by ordinal), '[]'::jsonb)
+                                      from jsonb_array_elements(question #> '{tags,mistakeTypes}') with ordinality as elements(item, ordinal)
+                                     where jsonb_typeof(item) = 'string'
+                                )
+                                else null
+                            end,
+                            'prerequisites', case
+                                when jsonb_typeof(question #> '{tags,prerequisites}') = 'array' then (
+                                    select coalesce(jsonb_agg(item order by ordinal), '[]'::jsonb)
+                                      from jsonb_array_elements(question #> '{tags,prerequisites}') with ordinality as elements(item, ordinal)
+                                     where jsonb_typeof(item) = 'string'
+                                )
+                                else null
+                            end
+                        ))
+                    else null
+                end
+            )) order by ordinal
+        ),
+        '[]'::jsonb
+    )
+    from jsonb_array_elements(
+        case
+            when jsonb_typeof(p_payload -> 'questions') = 'array'
+                then p_payload -> 'questions'
+            else '[]'::jsonb
+        end
+    ) with ordinality as questions(question, ordinal)
+    where jsonb_typeof(question) = 'object'
+      and jsonb_typeof(question -> 'id') = 'number'
+      and jsonb_typeof(question -> 'number') = 'number';
+$$;
+
+alter table public.omr_attempts
+    add column if not exists student_question_summaries jsonb generated always as
+        (public.omr_student_question_summaries_v1(payload)) stored;
+
+alter table public.omr_exams
+    add column if not exists question_summaries jsonb generated always as
+        (public.omr_exam_question_summaries_v1(payload)) stored;
+
+-- Alpha/local direct browser writers need generated-expression helper execute
+-- permission. Migration 003 narrows both helpers back to service_role only.
+revoke all on function public.omr_student_question_summaries_v1(jsonb) from public;
+grant execute on function public.omr_student_question_summaries_v1(jsonb) to anon, authenticated, service_role;
+revoke all on function public.omr_exam_question_summaries_v1(jsonb) from public;
+grant execute on function public.omr_exam_question_summaries_v1(jsonb) to anon, authenticated, service_role;

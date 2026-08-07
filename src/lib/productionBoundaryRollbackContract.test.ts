@@ -58,6 +58,8 @@ describe("production boundary rollback contract", () => {
         // database MORE exposed than before the boundary was applied.
         expect(rollback).toContain("revoke all on public.omr_student_start_credentials from anon, authenticated");
         expect(rollback).toContain("revoke all on public.omr_roster_invites from anon, authenticated");
+        expect(rollback).toContain("revoke all on public.omr_remote_asset_cleanup_queue from anon, authenticated");
+        expect(rollback).toContain("revoke all on sequence public.omr_remote_asset_cleanup_queue_id_seq from anon, authenticated");
         for (const fn of ["omr_submit_attempt_v1", "omr_save_exam_v1", "omr_return_feedback_v1", "omr_service_readiness_v1"]) {
             expect(rollback).toContain(`'${fn}'`);
         }
@@ -89,14 +91,70 @@ describe("production boundary rollback contract", () => {
         for (const table of forcedBySchema) {
             expect(unforced.has(table)).toBe(false);
         }
-        // Everything the boundary forces and schema.sql does not must be unforced.
+        // Everything the boundary forces and schema.sql does not must be
+        // unforced, except post-alpha service-only state that must never reopen.
+        const permanentlyForced = new Set([
+            "omr_attempt_sessions",
+            "omr_rate_limit_buckets",
+            "omr_exam_mutations",
+            "omr_feedback_mutations",
+            "omr_initial_ops_metrics",
+            "omr_teacher_accounts",
+            "omr_teacher_account_tokens",
+            "omr_exam_entry_invites",
+            "omr_teacher_notification_states",
+        ]);
         const forcedByBoundary = new Set(
             [...boundary.matchAll(/alter table if exists public\.(omr_\w+) force row level security/g)]
                 .map(match => match[1]),
         );
         for (const table of forcedByBoundary) {
-            if (!forcedBySchema.has(table)) expect(unforced.has(table)).toBe(true);
+            if (!forcedBySchema.has(table) && !permanentlyForced.has(table)) {
+                expect(unforced.has(table)).toBe(true);
+            }
         }
+        expect(rollback).toContain("alter table if exists public.omr_attempt_sessions force row level security");
+        expect(rollback).toContain("revoke all on table public.omr_attempt_sessions from public, anon, authenticated");
+        expect(rollback).toContain("alter table if exists public.omr_rate_limit_buckets force row level security");
+        expect(rollback).toContain("alter table if exists public.omr_exam_mutations force row level security");
+        expect(rollback).toContain("revoke all on table public.omr_rate_limit_buckets from public, anon, authenticated, service_role");
+        expect(rollback).toContain("revoke all on table public.omr_exam_mutations from public, anon, authenticated, service_role");
+        expect(rollback).toContain("alter table if exists public.omr_feedback_mutations force row level security");
+        expect(rollback).toContain("revoke all on table public.omr_feedback_mutations from public, anon, authenticated, service_role");
+        expect(rollback).toContain("revoke all on table public.omr_initial_ops_metrics from public, anon, authenticated, service_role");
+        expect(rollback).toContain("revoke all on table public.omr_teacher_accounts from public, anon, authenticated, service_role");
+        expect(rollback).toContain("revoke all on table public.omr_teacher_account_tokens from public, anon, authenticated, service_role");
+        expect(rollback).toContain("revoke all on table public.omr_teacher_notification_states from public, anon, authenticated, service_role");
+    });
+
+    it("keeps post-alpha gateways exact and fail-closed after rollback", () => {
+        for (const name of [
+            "omr_authorize_remote_asset_cleanup_delete_v1",
+            "omr_consume_rate_limit_v1",
+            "omr_save_exam_v2",
+            "omr_save_exam_v10_snapshot",
+            "omr_release_plan_usage_v10_snapshot",
+            "omr_normalize_exam_save_request_v10",
+            "omr_teacher_notification_summary_v1",
+            "omr_bootstrap_workspace_organization_v1",
+            "omr_save_feedback_v2",
+            "omr_return_feedback_v2",
+            "omr_save_feedback_v3",
+            "omr_return_feedback_v3",
+            "omr_save_feedback_v12_snapshot",
+            "omr_return_feedback_v12_snapshot",
+            "omr_rotate_exam_entry_invite_v1",
+            "omr_resolve_exam_entry_invite_v1",
+        ]) {
+            expect(rollback).toContain(`'${name}'`);
+        }
+        expect(rollback).toContain("omr_ack_remote_asset_cleanup_v1(text,text,integer)");
+        expect(rollback).toContain("omr_fail_remote_asset_cleanup_v1(text,text,integer,text)");
+        expect(rollback).toContain("omr_save_exam_v2(jsonb,jsonb,jsonb,text,bigint,text)");
+        expect(rollback).toContain("omr_save_feedback_v2(text,jsonb,bigint,text)");
+        expect(rollback).toContain("omr_return_feedback_v2(text,text,bigint,text)");
+        expect(rollback).toContain("omr_save_feedback_v3(text,jsonb,bigint,text)");
+        expect(rollback).toContain("omr_return_feedback_v3(text,text,bigint,text)");
     });
 
     it("drops both storage policies the boundary installs", () => {

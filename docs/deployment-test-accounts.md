@@ -44,7 +44,7 @@ npm run accounts:deploy:verify
 `accounts:deploy:apply`는 다음 작업을 멱등적으로 수행합니다.
 
 - Preview와 Production의 `TEACHER_ACCOUNTS`를 해시된 네 계정으로 설정
-- 누락된 `TEACHER_SESSION_SECRET`과 `STUDENT_SESSION_SECRET` 생성
+- 누락되었거나 짧은 `OMR_RATE_LIMIT_HASH_SECRET`을 포함해 `TEACHER_SESSION_SECRET`, `STUDENT_SESSION_SECRET`, `STUDENT_ATTEMPT_SECRET`을 각각 32바이트 이상의 임의값으로 생성
 - Academy 테스트 조직과 교사 회원 4명 생성
 - 테스트반, 학생 3명, 반 등록 관계, 학생 시작 코드 해시 생성
 - 적용 직후 Vercel 구성과 Supabase 행 개수 재검증

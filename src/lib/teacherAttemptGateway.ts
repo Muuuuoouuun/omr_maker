@@ -6,24 +6,38 @@ import {
     type SupabaseExamRow,
 } from "@/lib/omrPersistence";
 import {
+    SUPABASE_ATTEMPT_LIST_READ_COLUMNS,
     SUPABASE_ATTEMPT_READ_COLUMNS,
     SUPABASE_EXAM_READ_COLUMNS,
+    SUPABASE_TEACHER_ATTEMPT_SUMMARY_READ_COLUMNS,
 } from "@/lib/supabaseReadColumns";
+import {
+    attemptFromSupabaseListRow,
+    teacherAttemptSummaryFromSupabaseListRow,
+} from "@/lib/supabaseListProjection";
 import { gradeTeacherForcedAttemptOnServer } from "@/lib/serverAttemptGrading";
 import { STUDENT_QUESTION_MAX_LENGTH } from "@/lib/studentQuestions";
 import { canTeacherRoleWrite } from "@/lib/teacherSession";
+import {
+    INITIAL_CAPACITY_EXCEEDED_ERROR,
+    INITIAL_OPERATIONS_LIMITS,
+} from "@/lib/initialOperationsPolicy";
 import type { WorkspaceContext } from "@/lib/workspaceContext";
 import type { Attempt, SubQuestionReviewStatus } from "@/types/omr";
+import type { TeacherAttemptSummary } from "@/lib/teacherAttemptSummary";
 
 interface AttemptQueryResult<T> {
     data: T | null;
     error: { message?: string } | null;
 }
 
-interface AttemptSelectQuery {
+interface AttemptSelectQuery extends PromiseLike<AttemptQueryResult<unknown[]>> {
     eq(column: string, value: string): AttemptSelectQuery;
+    gt(column: string, value: string): AttemptSelectQuery;
     in(column: string, values: string[]): AttemptSelectQuery;
-    order(column: string, options: { ascending: boolean }): Promise<AttemptQueryResult<unknown[]>>;
+    order(column: string, options: { ascending: boolean }): AttemptSelectQuery;
+    limit(value: number): PromiseLike<AttemptQueryResult<unknown[]>>;
+    range?(from: number, to: number): PromiseLike<AttemptQueryResult<unknown[]>>;
     maybeSingle(): Promise<AttemptQueryResult<unknown>>;
 }
 
@@ -38,11 +52,57 @@ export interface TeacherAttemptGatewayClient {
             | "omr_force_finish_attempts_v1",
         args: Record<string, unknown>,
     ): Promise<AttemptQueryResult<Array<{ payload: Attempt }> | { payload: Attempt }>>;
+    rpc(
+        name:
+            | "omr_list_active_attempt_sessions_v1"
+            | "omr_prepare_teacher_force_finish_sessions_v1"
+            | "omr_prepare_teacher_force_finish_sessions_compact_v1"
+            | "omr_force_finish_attempt_sessions_v1"
+            | "omr_force_finish_attempt_sessions_compact_v1",
+        args: Record<string, unknown>,
+    ): Promise<AttemptQueryResult<unknown>>;
 }
 
+export interface TeacherActiveAttemptSession {
+    sessionId: string;
+    attemptId: string;
+    examId: string;
+    classId?: string;
+    assignmentId?: string;
+    ownerStudentId: string;
+    studentProfileId?: string;
+    studentName: string;
+    identityType: "guest" | "temporary" | "registered";
+    startedAt: string;
+    deadlineAt: string;
+    lastHeartbeatAt: string;
+    revision: number;
+    answeredCount: number;
+    totalQuestionCount: number;
+    currentQuestionId?: number;
+}
+
+export type TeacherActiveAttemptSessionListResult =
+    | { status: "loaded"; sessions: TeacherActiveAttemptSession[] }
+    | { status: "forbidden" | "service_unavailable"; error?: string };
+
 export type TeacherAttemptListResult =
-    | { status: "loaded"; attempts: Attempt[] }
+    | { status: "loaded"; attempts: Attempt[]; page: TeacherAttemptPage }
     | { status: "service_unavailable"; error?: string };
+
+export type TeacherAttemptSummaryListResult =
+    | { status: "loaded"; attempts: TeacherAttemptSummary[]; page: TeacherAttemptPage }
+    | { status: "service_unavailable"; error?: string };
+
+export interface TeacherAttemptPage {
+    partial: boolean;
+    hasMore: boolean;
+    itemCount: number;
+    nextCursor?: {
+        finishedAt: string;
+        id: string;
+    };
+}
 
 export type TeacherAttemptLoadResult =
     | { status: "loaded"; attempt: Attempt }
@@ -76,6 +136,11 @@ export interface ForceFinishTeacherAttemptsInput {
     finishedAt: string;
 }
 
+export interface ForceFinishTeacherAttemptSessionsInput {
+    sessionIds: string[];
+    finishedAt: string;
+}
+
 function clean(value: unknown): string {
     return typeof value === "string" ? value.trim() : "";
 }
@@ -93,6 +158,168 @@ function actorRpcArgs(context: WorkspaceContext) {
         p_member_role: context.memberRole,
         p_actor_label: clean(context.actorLabel),
     };
+}
+
+function safePositiveInteger(value: unknown): number | null {
+    const parsed = typeof value === "number" ? value : Number(value);
+    return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : null;
+}
+
+function safeNonNegativeInteger(value: unknown): number | null {
+    const parsed = typeof value === "number" ? value : Number(value);
+    return Number.isSafeInteger(parsed) && parsed >= 0 ? parsed : null;
+}
+
+function safeIso(value: unknown): string {
+    const normalized = clean(value);
+    return normalized && Number.isFinite(Date.parse(normalized)) ? normalized : "";
+}
+
+function attemptPageCursor(value: unknown): TeacherAttemptPage["nextCursor"] | undefined {
+    if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+    const row = value as { id?: unknown; finished_at?: unknown };
+    const id = clean(row.id);
+    const finishedAt = safeIso(row.finished_at);
+    return id && finishedAt ? { finishedAt, id } : undefined;
+}
+
+function followsDescendingAttemptCursor(
+    previous: NonNullable<TeacherAttemptPage["nextCursor"]>,
+    current: NonNullable<TeacherAttemptPage["nextCursor"]>,
+): boolean {
+    const previousTime = Date.parse(previous.finishedAt);
+    const currentTime = Date.parse(current.finishedAt);
+    return currentTime < previousTime
+        || (currentTime === previousTime && current.id < previous.id);
+}
+
+async function listRecentTeacherAttemptRows(
+    client: TeacherAttemptGatewayClient,
+    context: WorkspaceContext,
+    columns: string,
+    examId?: string,
+): Promise<
+    | { status: "loaded"; rows: unknown[]; hasMore: boolean }
+    | { status: "service_unavailable"; error?: string }
+> {
+    const ceiling = INITIAL_OPERATIONS_LIMITS.teacherAttempts;
+    const pageSize = INITIAL_OPERATIONS_LIMITS.listPageSize;
+    const normalizedExamId = examId?.trim();
+    const rows: unknown[] = [];
+    let previousCursor: NonNullable<TeacherAttemptPage["nextCursor"]> | undefined;
+
+    while (rows.length <= ceiling) {
+        const requestSize = Math.min(pageSize, (ceiling + 1) - rows.length);
+        const from = rows.length;
+        let query = client
+            .from("omr_attempts")
+            .select(columns)
+            .eq("organization_id", context.organizationId);
+        if (normalizedExamId) query = query.eq("exam_id", normalizedExamId);
+        const ordered = query
+            .order("finished_at", { ascending: false })
+            .order("id", { ascending: false });
+        const result = ordered.range
+            ? await ordered.range(from, from + requestSize - 1)
+            : await ordered.limit(requestSize);
+        if (result.error) return { status: "service_unavailable", error: result.error.message };
+        const page = result.data || [];
+        if (page.length > requestSize) {
+            return { status: "service_unavailable", error: "Invalid canonical attempt pagination" };
+        }
+        for (const row of page) {
+            const cursor = attemptPageCursor(row);
+            if (!cursor || (previousCursor && !followsDescendingAttemptCursor(previousCursor, cursor))) {
+                return { status: "service_unavailable", error: "Invalid canonical attempt pagination" };
+            }
+            previousCursor = cursor;
+        }
+        rows.push(...page);
+        if (page.length < requestSize) break;
+    }
+
+    return {
+        status: "loaded",
+        rows: rows.slice(0, ceiling),
+        hasMore: rows.length > ceiling,
+    };
+}
+
+function optionalClean(value: unknown): string | undefined {
+    return clean(value) || undefined;
+}
+
+function activeSessionFromProjection(value: unknown): TeacherActiveAttemptSession | null {
+    if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+    const row = value as Record<string, unknown>;
+    const sessionId = clean(row.session_id);
+    const attemptId = clean(row.attempt_id);
+    const examId = clean(row.exam_id);
+    const ownerStudentId = clean(row.owner_student_id);
+    const studentName = clean(row.student_name);
+    const identityType = row.identity_type;
+    const startedAt = safeIso(row.started_at);
+    const deadlineAt = safeIso(row.deadline_at);
+    const lastHeartbeatAt = safeIso(row.last_heartbeat_at);
+    const revision = safePositiveInteger(row.revision);
+    const answeredCount = safeNonNegativeInteger(row.answered_count);
+    const totalQuestionCount = safePositiveInteger(row.total_question_count);
+    const currentQuestionId = safePositiveInteger(row.current_question_id);
+    if (
+        !sessionId || !attemptId || !examId || !ownerStudentId || !studentName
+        || (identityType !== "guest" && identityType !== "temporary" && identityType !== "registered")
+        || !startedAt || !deadlineAt || !lastHeartbeatAt || !revision
+        || answeredCount === null || !totalQuestionCount || answeredCount > totalQuestionCount
+    ) return null;
+    return {
+        sessionId,
+        attemptId,
+        examId,
+        ...(optionalClean(row.class_id) ? { classId: optionalClean(row.class_id) } : {}),
+        ...(optionalClean(row.assignment_id) ? { assignmentId: optionalClean(row.assignment_id) } : {}),
+        ownerStudentId,
+        ...(optionalClean(row.student_profile_id) ? { studentProfileId: optionalClean(row.student_profile_id) } : {}),
+        studentName,
+        identityType,
+        startedAt,
+        deadlineAt,
+        lastHeartbeatAt,
+        revision,
+        answeredCount,
+        totalQuestionCount,
+        ...(currentQuestionId ? { currentQuestionId } : {}),
+    };
+}
+
+export async function listTeacherActiveAttemptSessionsWithGateway(
+    client: TeacherAttemptGatewayClient,
+    context: WorkspaceContext,
+    examId: string,
+): Promise<TeacherActiveAttemptSessionListResult> {
+    if (!mutationContextIsAuthorized(context)) return { status: "forbidden" };
+    const normalizedExamId = clean(examId);
+    if (!normalizedExamId) return { status: "service_unavailable", error: "Invalid exam scope" };
+    const result = await client.rpc("omr_list_active_attempt_sessions_v1", {
+        p_organization_id: clean(context.organizationId),
+        p_exam_id: normalizedExamId,
+        p_actor_user_id: clean(context.actorUserId),
+        p_member_role: context.memberRole,
+        p_limit: INITIAL_OPERATIONS_LIMITS.activeStudents + 1,
+    });
+    if (result.error) return { status: "service_unavailable", error: result.error.message };
+    const rows = Array.isArray(result.data) ? result.data : [];
+    if (rows.length > INITIAL_OPERATIONS_LIMITS.activeStudents) {
+        return { status: "service_unavailable", error: INITIAL_CAPACITY_EXCEEDED_ERROR };
+    }
+    const sessions = rows.map(activeSessionFromProjection);
+    if (
+        sessions.some(session => !session)
+        || new Set(sessions.map(session => session?.sessionId)).size !== sessions.length
+        || sessions.some(session => session?.examId !== normalizedExamId)
+    ) {
+        return { status: "service_unavailable", error: "Invalid active session projection" };
+    }
+    return { status: "loaded", sessions: sessions as TeacherActiveAttemptSession[] };
 }
 
 function attemptFromMutationResult(
@@ -288,26 +515,177 @@ export async function forceFinishTeacherAttemptsWithGateway(
     }
 }
 
+interface PreparedTeacherAttemptSession {
+    sessionId: string;
+    revision: number;
+    gradingFingerprint: string;
+}
+
+function safeRecord(value: unknown): Record<string, unknown> | null {
+    return value && typeof value === "object" && !Array.isArray(value)
+        ? value as Record<string, unknown>
+        : null;
+}
+
+function preparedTeacherSession(value: unknown, organizationId: string): PreparedTeacherAttemptSession | null {
+    const row = safeRecord(value);
+    if (!row || (row.status !== "in_progress" && row.status !== "submitted")) return null;
+    const sessionId = clean(row.session_id);
+    const revision = safePositiveInteger(row.revision);
+    const gradingFingerprint = clean(row.grading_fingerprint);
+    if (
+        !sessionId || !revision
+        || !/^[a-f0-9]{64}$/.test(gradingFingerprint)
+        || clean(row.organization_id) !== organizationId
+    ) return null;
+    return {
+        sessionId,
+        revision,
+        gradingFingerprint,
+    };
+}
+
+export async function forceFinishTeacherAttemptSessionsWithGateway(
+    client: TeacherAttemptGatewayClient,
+    input: ForceFinishTeacherAttemptSessionsInput,
+    context: WorkspaceContext,
+): Promise<TeacherAttemptBatchMutationResult> {
+    if (!mutationContextIsAuthorized(context)) return { status: "forbidden" };
+    const sessionIds = [...new Set((input.sessionIds || []).map(clean).filter(Boolean))];
+    const finishedAt = clean(input.finishedAt);
+    if (
+        sessionIds.length === 0
+        || sessionIds.length > INITIAL_OPERATIONS_LIMITS.activeStudents
+        || !Number.isFinite(Date.parse(finishedAt))
+    ) return { status: "invalid_request" };
+
+    const preparedResult = await client.rpc("omr_prepare_teacher_force_finish_sessions_compact_v1", {
+        p_organization_id: clean(context.organizationId),
+        p_session_ids: sessionIds,
+        p_actor_user_id: clean(context.actorUserId),
+        p_member_role: context.memberRole,
+    });
+    if (preparedResult.error) {
+        return { status: "service_unavailable", error: preparedResult.error.message };
+    }
+    const preparedRows = Array.isArray(preparedResult.data) ? preparedResult.data : [];
+    const sessions = preparedRows.map(row => preparedTeacherSession(row, clean(context.organizationId)));
+    if (
+        sessions.length !== sessionIds.length
+        || sessions.some(session => !session)
+        || new Set(sessions.map(session => session?.sessionId)).size !== sessionIds.length
+        || sessions.some(session => !sessionIds.includes(session?.sessionId || ""))
+    ) return { status: "not_found" };
+
+    const expectationBySessionId = new Map<string, Record<string, unknown>>();
+    for (const session of sessions as PreparedTeacherAttemptSession[]) {
+        expectationBySessionId.set(session.sessionId, {
+            session_id: session.sessionId,
+            expected_revision: session.revision,
+            expected_fingerprint: session.gradingFingerprint,
+        });
+    }
+    const expectations = sessionIds.map(sessionId => expectationBySessionId.get(sessionId));
+    if (expectations.some(expectation => !expectation)) {
+        return { status: "service_unavailable", error: "Missing session grading CAS" };
+    }
+    const result = await client.rpc("omr_force_finish_attempt_sessions_compact_v1", {
+        p_organization_id: clean(context.organizationId),
+        p_session_ids: sessionIds,
+        p_finished_at: finishedAt,
+        ...actorRpcArgs(context),
+        p_expectations: expectations,
+    });
+    if (result.error) return { status: "service_unavailable", error: result.error.message };
+    const records = Array.isArray(result.data) ? result.data : [];
+    if (records.length !== sessionIds.length) return { status: "not_found" };
+    try {
+        const attempts = records.map(record => attemptFromSupabaseRow(record as { payload: Attempt }));
+        if (
+            attempts.some(attempt => clean(attempt.organizationId) !== clean(context.organizationId))
+            || attempts.some(attempt => attempt.status !== "completed")
+            || new Set(attempts.map(attempt => attempt.id)).size !== attempts.length
+        ) return { status: "service_unavailable", error: "Invalid canonical attempt scope" };
+        return { status: "saved", attempts };
+    } catch {
+        return { status: "service_unavailable", error: "Invalid canonical attempt payload" };
+    }
+}
+
 export async function listTeacherAttemptsWithGateway(
     client: TeacherAttemptGatewayClient,
     context: WorkspaceContext,
     examId?: string,
 ): Promise<TeacherAttemptListResult> {
-    let query = client
-        .from("omr_attempts")
-        .select(SUPABASE_ATTEMPT_READ_COLUMNS)
-        .eq("organization_id", context.organizationId);
-    if (examId?.trim()) query = query.eq("exam_id", examId.trim());
-    const result = await query.order("finished_at", { ascending: false });
-    if (result.error) return { status: "service_unavailable", error: result.error.message };
-    const attempts = (result.data || []).flatMap(row => {
+    const result = await listRecentTeacherAttemptRows(
+        client,
+        context,
+        SUPABASE_ATTEMPT_LIST_READ_COLUMNS,
+        examId,
+    );
+    if (result.status === "service_unavailable") return result;
+    const { rows, hasMore } = result;
+
+    const attempts = rows.flatMap(row => {
         try {
-            return [attemptFromSupabaseRow(row as SupabaseAttemptRow)];
+            return [attemptFromSupabaseListRow(row)];
         } catch {
             return [];
         }
     });
-    return { status: "loaded", attempts };
+    attempts.sort((left, right) => {
+        const byFinishedAt = Date.parse(right.finishedAt) - Date.parse(left.finishedAt);
+        return byFinishedAt || left.id.localeCompare(right.id);
+    });
+    const nextCursor = attemptPageCursor(rows.at(-1));
+    return {
+        status: "loaded",
+        attempts,
+        page: {
+            partial: hasMore,
+            hasMore,
+            itemCount: attempts.length,
+            ...(nextCursor ? { nextCursor } : {}),
+        },
+    };
+}
+
+export async function listTeacherAttemptSummariesWithGateway(
+    client: TeacherAttemptGatewayClient,
+    context: WorkspaceContext,
+    examId?: string,
+): Promise<TeacherAttemptSummaryListResult> {
+    const result = await listRecentTeacherAttemptRows(
+        client,
+        context,
+        SUPABASE_TEACHER_ATTEMPT_SUMMARY_READ_COLUMNS,
+        examId,
+    );
+    if (result.status === "service_unavailable") return result;
+    const { rows, hasMore } = result;
+
+    const attempts = rows.flatMap(row => {
+        try {
+            return [teacherAttemptSummaryFromSupabaseListRow(row)];
+        } catch {
+            return [];
+        }
+    });
+    attempts.sort((left, right) => {
+        const byFinishedAt = Date.parse(right.finishedAt) - Date.parse(left.finishedAt);
+        return byFinishedAt || left.id.localeCompare(right.id);
+    });
+    const nextCursor = attemptPageCursor(rows.at(-1));
+    return {
+        status: "loaded",
+        attempts,
+        page: {
+            partial: hasMore,
+            hasMore,
+            itemCount: attempts.length,
+            ...(nextCursor ? { nextCursor } : {}),
+        },
+    };
 }
 
 export async function loadTeacherAttemptWithGateway(

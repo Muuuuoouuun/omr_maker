@@ -52,11 +52,10 @@ export function buildTeacherLoginRateLimitKeys(
     clientFingerprint: unknown,
 ): string[] {
     const normalizedIdentifier = normalizePart(identifier, "blank-identifier");
-    const normalizedClient = normalizePart(clientFingerprint, "unknown-client");
+    void clientFingerprint;
 
     return [
-        `teacher-login:identifier-client:${hashPart(`${normalizedIdentifier}:${normalizedClient}`)}`,
-        `teacher-login:client:${hashPart(normalizedClient)}`,
+        `teacher-login:identifier:${hashPart(normalizedIdentifier)}`,
     ];
 }
 

@@ -10,11 +10,13 @@ async function loadComponent() {
 }
 
 describe("CreatePdfUploadPlaceholder", () => {
-    it("recognizes PDFs by MIME type or a case-insensitive file extension", async () => {
+    it("lets legacy blank and x-pdf MIME files reach the magic-byte validator", async () => {
         const { isPdfUploadFile } = await loadComponent();
 
         expect(isPdfUploadFile({ name: "exam.bin", type: "application/pdf" })).toBe(true);
         expect(isPdfUploadFile({ name: "answer-key.PDF", type: "" })).toBe(true);
+        expect(isPdfUploadFile({ name: "legacy-upload", type: "application/x-pdf" })).toBe(true);
+        expect(isPdfUploadFile({ name: "legacy-upload", type: "" })).toBe(true);
         expect(isPdfUploadFile({ name: "notes.txt", type: "text/plain" })).toBe(false);
     });
 

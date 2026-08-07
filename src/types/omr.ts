@@ -109,6 +109,8 @@ export function questionChoiceCount(question: Pick<Question, "choices">, fallbac
 export interface Exam {
     id: string; // generated ID
     title: string;
+    /** Canonical server revision used for optimistic-concurrency saves. New unsaved exams omit it. */
+    revision?: number;
     /** App workspace/organization scope for remote persistence. */
     organizationId?: string;
     /** Optional class scope when an exam belongs to one class. */
@@ -135,7 +137,7 @@ export interface Exam {
     answerKeyPdfRef?: StoredDataRef;
     // Distribution
     accessConfig?: {
-        type: 'public' | 'group';
+        type: 'public' | 'group' | 'targeted';
         groupIds?: string[];
         pin?: string;
     };
@@ -191,6 +193,8 @@ export interface AttemptFeedback {
     studentProfileId?: string;
     teacherUserId?: string;
     status: FeedbackStatus;
+    /** Server-owned optimistic-concurrency revision. New rows start at 0 locally. */
+    revision?: number;
     summary?: string;
     questionComments: QuestionFeedbackComment[];
     markup?: FeedbackMarkup;

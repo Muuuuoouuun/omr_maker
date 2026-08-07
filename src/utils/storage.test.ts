@@ -5,6 +5,7 @@ import {
     attemptMatchesStudentProfile,
     clearSession,
     consumePendingGuestMerge,
+    getOrCreateGuestId,
     getSession,
     guestLoginIdFor,
     mergeGuestAttempts,
@@ -71,6 +72,14 @@ afterEach(() => {
 });
 
 describe("student storage helpers", () => {
+    it("never invents a device-only guest identity in production", () => {
+        const localStorage = createStorage();
+        stubBrowserStorage(localStorage);
+
+        expect(getOrCreateGuestId("production")).toBe("");
+        expect(localStorage.getItem(STORAGE_KEYS.GUEST_ID)).toBeNull();
+    });
+
     it("announces a new opaque session generation whenever login is restored", () => {
         const localStorage = createStorage();
         const sessionStorage = createStorage({
@@ -118,10 +127,33 @@ describe("student storage helpers", () => {
             regionId: "서울",
             regionName: "서울",
         });
-        expect(JSON.parse(localStorage.getItem(STORAGE_KEYS.STUDENT_SESSION_BACKUP) || "{}")).toMatchObject({
+        expect(JSON.parse(sessionStorage.getItem(STORAGE_KEYS.STUDENT_SESSION) || "{}")).toMatchObject({
             studentId: "class-a::김학생",
             name: "김학생",
         });
+    });
+
+    it("keeps student identity tab-scoped unless the learner explicitly remembers this device", () => {
+        const localStorage = createStorage();
+        const sessionStorage = createStorage();
+        stubBrowserStorage(localStorage, sessionStorage);
+        const session: StudentSession = {
+            studentId: "class-a::김학생",
+            name: "김학생",
+            groupId: "class-a",
+            isGuest: false,
+            identityType: "temporary",
+        };
+
+        saveSession(session);
+        expect(sessionStorage.getItem(STORAGE_KEYS.STUDENT_SESSION)).not.toBeNull();
+        expect(localStorage.getItem(STORAGE_KEYS.STUDENT_SESSION_BACKUP)).toBeNull();
+
+        saveSession(session, { rememberDevice: true });
+        expect(localStorage.getItem(STORAGE_KEYS.STUDENT_SESSION_BACKUP)).not.toBeNull();
+
+        saveSession(session, { rememberDevice: false });
+        expect(localStorage.getItem(STORAGE_KEYS.STUDENT_SESSION_BACKUP)).toBeNull();
     });
 
     it("restores a same-device student session backup after tab session storage is gone", () => {
@@ -139,7 +171,7 @@ describe("student storage helpers", () => {
             isGuest: false,
             identityType: "temporary",
         };
-        saveSession(session);
+        saveSession(session, { rememberDevice: true });
         sessionStorage.removeItem(STORAGE_KEYS.STUDENT_SESSION);
 
         expect(getSession()).toMatchObject({

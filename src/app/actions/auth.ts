@@ -13,17 +13,24 @@ import {
     TEACHER_AUTH_SESSION_CONFIG_ERROR,
     TEACHER_AUTH_SESSION_COOKIE_ERROR,
 } from "@/lib/teacherAuthMessages";
-import { bootstrapWorkspaceWithServiceRole } from "@/lib/supabaseServerAdmin";
+import {
+    bootstrapWorkspaceWithServiceRole,
+    createSupabaseAdminClient,
+    getSupabaseServerConfigFromEnv,
+} from "@/lib/supabaseServerAdmin";
 import {
     buildTeacherLoginRateLimitKeys,
     checkTeacherLoginRateLimit,
     recordTeacherLoginFailure,
     recordTeacherLoginSuccess,
     TEACHER_LOGIN_RATE_LIMIT_ERROR,
+    TEACHER_LOGIN_LOCKOUT_MS,
+    TEACHER_LOGIN_MAX_FAILURES,
+    TEACHER_LOGIN_WINDOW_MS,
 } from "@/lib/teacherLoginRateLimit";
 import {
     createSignedTeacherSessionCookie,
-    parseSignedTeacherSessionCookie,
+    resolveAuthorizedTeacherSessionCookie,
     shouldUseSecureTeacherSessionCookie,
     TEACHER_SERVER_SESSION_COOKIE,
     TEACHER_SERVER_SESSION_MAX_AGE_SECONDS,
@@ -33,7 +40,23 @@ import { buildDeploymentReadiness, type DeploymentReadinessSummary } from "@/lib
 import { workspaceContextFromIdentity } from "@/lib/workspaceContext";
 import { probeSupabaseDeploymentWithServiceRole } from "@/lib/supabaseReadinessProbe";
 import { isMockupTeacherIdentity, MOCKUP_TEACHER_IDENTITY } from "@/lib/mockupAccount";
-import { consumeTeacherDeploymentReadinessRateLimit } from "@/lib/deploymentReadinessActionSecurity";
+import {
+    buildDeploymentReadinessRateLimitKey,
+    consumeTeacherDeploymentReadinessRateLimit,
+} from "@/lib/deploymentReadinessActionSecurity";
+import { applyDurableRateLimit, applyDurableRateLimitToSubjects } from "@/lib/durableRateLimit";
+import { findActiveTeacherAccount, type TeacherAccountGatewayClient } from "@/lib/teacherAccountGateway";
+import {
+    isTeacherBootstrapLoginEnabled,
+    verifyTeacherAccountPasswordConstantWorkAsync,
+} from "@/lib/teacherAccountLifecycle";
+
+const TEACHER_LOGIN_DURABLE_POLICY = {
+    limit: TEACHER_LOGIN_MAX_FAILURES,
+    windowMs: TEACHER_LOGIN_WINDOW_MS,
+    lockoutMs: TEACHER_LOGIN_LOCKOUT_MS,
+};
+const READINESS_DURABLE_POLICY = { limit: 12, windowMs: 60 * 1000 };
 
 function clientFingerprintFromHeaders(headerStore: Headers): string {
     const forwardedFor = headerStore.get("x-forwarded-for")?.split(",")[0]?.trim();
@@ -51,7 +74,9 @@ export async function verifyTeacherPassword(
     password: string,
 ): Promise<{ success: boolean; token?: string; teacher?: TeacherLoginIdentity; error?: string }> {
     const authConfig = inspectTeacherAuthConfig();
-    if (authConfig.credentialCount === 0) {
+    const serverConfig = getSupabaseServerConfigFromEnv();
+    const bootstrapLoginEnabled = isTeacherBootstrapLoginEnabled();
+    if (!serverConfig && (!bootstrapLoginEnabled || authConfig.credentialCount === 0)) {
         return {
             success: false,
             error: TEACHER_AUTH_DEPLOYMENT_CONFIG_ERROR,
@@ -74,11 +99,55 @@ export async function verifyTeacherPassword(
             error: TEACHER_LOGIN_RATE_LIMIT_ERROR,
         };
     }
+    if (!(await applyDurableRateLimitToSubjects({
+        namespace: "teacher-login",
+        subjects: rateLimitKeys,
+        operation: "consume",
+        policy: TEACHER_LOGIN_DURABLE_POLICY,
+    })).allowed) {
+        return { success: false, error: TEACHER_LOGIN_RATE_LIMIT_ERROR };
+    }
 
-    const result = verifyTeacherLogin(identifier, password);
+    let result: {
+        success: boolean;
+        teacher?: TeacherLoginIdentity;
+        accountSessionGeneration?: number;
+    } = { success: false };
+    if (serverConfig) {
+        const account = await findActiveTeacherAccount(
+            createSupabaseAdminClient(serverConfig) as unknown as TeacherAccountGatewayClient,
+            identifier,
+        );
+        const databasePasswordMatches = await verifyTeacherAccountPasswordConstantWorkAsync(
+            password,
+            account?.passwordHash,
+        );
+        if (account && databasePasswordMatches) {
+            result = {
+                success: true,
+                teacher: {
+                    teacherId: account.id,
+                    email: account.email,
+                    displayName: account.displayName,
+                    plan: "free",
+                    memberRole: "owner",
+                },
+                accountSessionGeneration: account.sessionGeneration,
+            };
+        }
+    }
+    // Environment credentials are deployment bootstrap/demo credentials only.
+    // Production must opt in explicitly with OMR_ALLOW_TEACHER_BOOTSTRAP_LOGIN=true.
+    if (!result.success && bootstrapLoginEnabled) {
+        result = verifyTeacherLogin(identifier, password);
+    }
     if (result.success && result.teacher) {
         const token = mintTeacherToken();
-        const serverSession = createSignedTeacherSessionCookie(token, result.teacher);
+        const serverSession = createSignedTeacherSessionCookie(token, {
+            ...result.teacher,
+            sessionAuthority: result.accountSessionGeneration ? "account" : "bootstrap",
+            accountSessionGeneration: result.accountSessionGeneration,
+        });
         if (!serverSession) {
             return {
                 success: false,
@@ -104,6 +173,12 @@ export async function verifyTeacherPassword(
         }
 
         recordTeacherLoginSuccess(rateLimitKeys);
+        await applyDurableRateLimitToSubjects({
+            namespace: "teacher-login",
+            subjects: rateLimitKeys,
+            operation: "success",
+            policy: TEACHER_LOGIN_DURABLE_POLICY,
+        });
         const bootstrapResult = await bootstrapWorkspaceWithServiceRole(workspaceContextFromIdentity(result.teacher));
         if (!bootstrapResult.ok && !bootstrapResult.skipped) {
             console.warn("Teacher workspace bootstrap failed", bootstrapResult.error);
@@ -178,16 +253,20 @@ export async function clearTeacherAuthSession(): Promise<{ success: true }> {
 }
 
 export async function getTeacherDeploymentReadiness(): Promise<DeploymentReadinessSummary> {
-    const blockedSummary = (): DeploymentReadinessSummary => ({
+    const blockedSummary = (rateLimitConfigError = false): DeploymentReadinessSummary => ({
         label: "배포 상태 확인 불가",
-        detail: "인증된 교사 세션에서만 배포 상태를 확인할 수 있습니다.",
+        detail: rateLimitConfigError
+            ? "배포 환경의 요청 제한 비밀값을 설정한 뒤 다시 확인하세요."
+            : "인증된 교사 세션에서만 배포 상태를 확인할 수 있습니다.",
         credentialCount: 0,
         readyCount: 0,
         totalCount: 1,
         checks: [{
-            key: "deployment_readiness_access",
-            label: "배포 상태 접근",
-            detail: "요청 권한을 확인한 뒤 다시 시도하세요.",
+            key: rateLimitConfigError ? "deployment_readiness_rate_limit_config" : "deployment_readiness_access",
+            label: rateLimitConfigError ? "요청 제한 설정" : "배포 상태 접근",
+            detail: rateLimitConfigError
+                ? "OMR_RATE_LIMIT_HASH_SECRET은 32바이트 이상의 비밀값이어야 합니다."
+                : "요청 권한을 확인한 뒤 다시 시도하세요.",
             tone: "error",
         }],
     });
@@ -196,11 +275,24 @@ export async function getTeacherDeploymentReadiness(): Promise<DeploymentReadine
     if (!isSameOriginServerActionRequest(headerStore)) return blockedSummary();
 
     const cookieStore = await cookies();
-    const session = parseSignedTeacherSessionCookie(
+    const session = await resolveAuthorizedTeacherSessionCookie(
         cookieStore.get(TEACHER_SERVER_SESSION_COOKIE)?.value,
     );
     if (!session || isMockupTeacherIdentity(session)) return blockedSummary();
+    if (
+        process.env.NODE_ENV === "production"
+        && Buffer.byteLength(process.env.OMR_RATE_LIMIT_HASH_SECRET || "", "utf8") < 32
+    ) return blockedSummary(true);
     if (!consumeTeacherDeploymentReadinessRateLimit(session)) return blockedSummary();
+    const durableReadiness = await applyDurableRateLimit({
+        namespace: "deployment-readiness",
+        subject: buildDeploymentReadinessRateLimitKey(
+            session.teacherId || session.email || session.displayName || session.token,
+        ),
+        operation: "consume",
+        policy: READINESS_DURABLE_POLICY,
+    });
+    if (!durableReadiness.allowed) return blockedSummary();
 
     const databaseProbe = await probeSupabaseDeploymentWithServiceRole();
     return buildDeploymentReadiness(process.env, databaseProbe);

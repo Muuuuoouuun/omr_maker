@@ -110,7 +110,7 @@ const mojibakeFragments = [
 const requiredStringsByFile: Record<string, string[]> = {
     "src/app/page.tsx": [
         "교사 포털",
-        "학생 포털",
+        "학습 시작",
         "아이디 또는 이메일",
         "학생번호 또는 이메일",
         "계정 ID처럼 사용합니다",
@@ -121,7 +121,7 @@ const requiredStringsByFile: Record<string, string[]> = {
         "동명이인이 있습니다",
     ],
     "src/app/create/page.tsx": [
-        "스마트 에디터",
+        "새 시험 만들기",
         "배포하기",
         "OMR 미리보기 접기",
     ],

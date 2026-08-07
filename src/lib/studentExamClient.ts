@@ -1,7 +1,9 @@
 import type { Attempt, Exam } from "@/types/omr";
 import type { SolvableExam } from "@/lib/examSolvePayload";
+import { studentAttemptSummaryFromAttempt, type StudentAssignmentPreview, type StudentAttemptSummary } from "@/lib/studentExamContract";
 import type { SubmitAttemptInput } from "@/lib/studentExamCore";
 import type { SubmissionReceiptStatus } from "@/lib/studentAttemptReceipt";
+import { INITIAL_CAPACITY_EXCEEDED_ERROR } from "@/lib/initialOperationsPolicy";
 
 /**
  * Client-side wrapper over the student exam server actions.
@@ -49,9 +51,10 @@ export interface SubmitClientResult {
 
 export interface ListAttemptsClientResult {
     status: "ok" | "unauthenticated" | "error";
-    attempts: Attempt[];
-    exams?: SolvableExam[];
+    attempts: StudentAttemptSummary[];
+    exams?: StudentAssignmentPreview[];
     source: ExamSource;
+    error?: typeof INITIAL_CAPACITY_EXCEEDED_ERROR;
 }
 
 export interface LoadAttemptClientResult {
@@ -143,7 +146,8 @@ export async function submitAttemptClient(
                 return { status: asLoadStatus(res.status), source: "server" };
             }
         }
-    } catch {
+    } catch (error) {
+        if (!deps.allowLocalFallback) throw error;
         serverStatus = "error";
         retryableFailure = true;
     }
@@ -163,7 +167,12 @@ export async function submitAttemptClient(
 }
 
 export async function listMyAssignmentsClient(deps: {
-    server: () => Promise<{ status: string; attempts?: Attempt[]; exams?: SolvableExam[] }>;
+    server: () => Promise<{
+        status: string;
+        attempts?: StudentAttemptSummary[];
+        exams?: StudentAssignmentPreview[];
+        error?: typeof INITIAL_CAPACITY_EXCEEDED_ERROR;
+    }>;
     localFallback: () => Promise<Attempt[]>;
 }): Promise<ListAttemptsClientResult> {
     try {
@@ -174,11 +183,24 @@ export async function listMyAssignmentsClient(deps: {
         if (res.status === "unauthenticated") {
             return { status: "unauthenticated", attempts: [], exams: [], source: "server" };
         }
+        if (res.status === "error" && res.error === INITIAL_CAPACITY_EXCEEDED_ERROR) {
+            return {
+                status: "error",
+                attempts: [],
+                exams: [],
+                source: "server",
+                error: INITIAL_CAPACITY_EXCEEDED_ERROR,
+            };
+        }
     } catch {
         // fall through to local
     }
     try {
-        return { status: "ok", attempts: await deps.localFallback(), source: "local" };
+        return {
+            status: "ok",
+            attempts: (await deps.localFallback()).map(studentAttemptSummaryFromAttempt),
+            source: "local",
+        };
     } catch {
         return { status: "error", attempts: [], source: "local" };
     }

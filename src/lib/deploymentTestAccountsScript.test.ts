@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
     buildDeploymentFixture,
@@ -8,6 +10,38 @@ import {
 } from "../../scripts/deployment-test-accounts-core.mjs";
 
 describe("deployment test account fixture", () => {
+    it("provisions and verifies the durable limiter secret before applying database fixtures", () => {
+        const source = readFileSync(resolve(process.cwd(), "scripts/setup-deployment-test-accounts.mjs"), "utf8");
+        const addSecret = source.indexOf('addEnvironmentValue("OMR_RATE_LIMIT_HASH_SECRET"');
+        const applyFixture = source.indexOf("await applyFixtureToSupabase", addSecret);
+
+        expect(addSecret).toBeGreaterThan(0);
+        expect(applyFixture).toBeGreaterThan(addSecret);
+        expect(source).toContain('configuredStrongSecret(environments[target], "OMR_RATE_LIMIT_HASH_SECRET"');
+        expect(source).toContain("is missing OMR_RATE_LIMIT_HASH_SECRET");
+    });
+
+    it("rotates and verifies every short production signing secret", () => {
+        const source = readFileSync(resolve(process.cwd(), "scripts/setup-deployment-test-accounts.mjs"), "utf8");
+
+        for (const [name, alternate] of [
+            ["TEACHER_SESSION_SECRET", "OMR_TEACHER_SESSION_SECRET"],
+            ["STUDENT_SESSION_SECRET", "OMR_STUDENT_SESSION_SECRET"],
+            ["STUDENT_ATTEMPT_SECRET", "OMR_STUDENT_ATTEMPT_SECRET"],
+        ]) {
+            expect(source).toContain(`configuredStrongSecret(environments[target], "${name}", "${alternate}")`);
+            expect(source).toContain(`addEnvironmentValue("${name}", target`);
+            expect(source).toContain(`is missing ${name} or it is shorter than 32 bytes`);
+        }
+    });
+
+    it("documents the required durable limiter secret in every environment setup surface", () => {
+        for (const path of [".env.example", "README.md", "supabase/README.md"]) {
+            expect(readFileSync(resolve(process.cwd(), path), "utf8"), path)
+                .toContain("OMR_RATE_LIMIT_HASH_SECRET");
+        }
+    });
+
     it("keeps provisioned Vercel values readable for authenticated verification", () => {
         expect(vercelReadableEnvArgs("TEACHER_ACCOUNTS", "production")).toEqual([
             "env",

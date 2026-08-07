@@ -9,15 +9,22 @@ import ThemeToggle from "@/components/ThemeToggle";
 import dynamic from "next/dynamic";
 import { toast } from "@/components/Toast";
 import { AlertTriangle, Clock, LoaderCircle, PanelRightClose, PanelRightOpen, PenLine, Save } from "lucide-react";
-import { storedDataUrlToFile, saveJsonRecord, loadJsonRecord } from "@/utils/blobStore";
+import { deleteStoredData, storedDataUrlToFile, saveJsonRecord, loadJsonRecord } from "@/utils/blobStore";
 import { resolveDraftDrawings } from "@/lib/draftRecovery";
 import { verifyTeacherPassword } from "@/app/actions/auth";
 import { loadExamForSolving, submitAttempt } from "@/app/actions/studentExam";
-import { openStudentExam, previewStudentExam, submitStudentAttempt } from "@/app/actions/studentAttempt";
+import { openStudentExam, previewStudentExam } from "@/app/actions/studentAttempt";
+import {
+    checkpointDurableStudentAttemptSession,
+    heartbeatDurableStudentAttemptSession,
+    openDurableStudentAttemptSession,
+    submitDurableStudentAttemptSession,
+    takeoverDurableStudentAttemptSession,
+} from "@/app/actions/studentAttemptSession";
 import { uploadStudentAttemptHandwriting } from "@/app/actions/remoteAssets";
 import { issueGuestSession, validateStudentSession } from "@/app/actions/studentSession";
 import { saveTeacherSessionWithIdentity } from "@/lib/teacherSession";
-import { attemptBelongsToSession, getOrCreateGuestId, getSession, guestLoginIdFor, saveSession, type StudentSession } from "@/utils/storage";
+import { attemptBelongsToSession, getOrCreateGuestId, getSession, guestLoginIdFor, saveSession, STUDENT_SESSION_CHANGED_EVENT, type StudentSession } from "@/utils/storage";
 import { canArchiveHandwriting, getPlanLabel } from "@/utils/plans";
 import { loadExam as loadPersistedExam, readLocalAttempts, readLocalExam, saveLocalAttempt, saveLocalExam, saveLocalServerConfirmedAttempt } from "@/lib/omrPersistence";
 import { buildQuestionResults } from "@/lib/premiumAnalytics";
@@ -33,7 +40,14 @@ import type { SubmitAttemptInput } from "@/lib/studentExamCore";
 import { remainingSecondsWithinWindow } from "@/lib/studentExamCore";
 import { findMissingRequiredSubQuestions, requiredSubQuestionProgress, sanitizeSubQuestionAnswersForQuestions } from "@/lib/subQuestions";
 import { stripTeacherOnlySubQuestionFields, type SolvableExam } from "@/lib/examSolvePayload";
-import { SOLVE_CLASS_CODE_PARAM } from "@/lib/examLinks";
+import {
+    SOLVE_CLASS_CODE_PARAM,
+    buildStudentExamLoginHref as buildOpaqueStudentExamLoginHref,
+} from "@/lib/examLinks";
+import {
+    captureExamEntryInviteFragment,
+    readExamEntryInviteHandoff,
+} from "@/lib/examEntryInviteHandoff";
 import { readRosterGroups } from "@/lib/rosterStorage";
 import { recallSolvePdf, rememberSolvePdf } from "@/lib/solvePdfCache";
 import { clientExamFromStudentExamPreview, clientExamFromStudentSolveExam } from "@/lib/studentExamContract";
@@ -41,7 +55,11 @@ import {
     localResultCacheFromServerReceipt,
     persistSubmissionReceipt,
 } from "@/lib/studentAttemptReceipt";
-import { persistStudentSubmissionDisposition } from "@/lib/studentSubmissionDurability";
+import {
+    persistStudentSubmissionDisposition,
+    shouldBlockSubmissionCompletion,
+    type StudentSubmissionDurabilityResult,
+} from "@/lib/studentSubmissionDurability";
 import {
     beginAwaySession,
     finishAwaySession,
@@ -50,9 +68,53 @@ import {
 } from "@/lib/examAwayTracker";
 import {
     SUBMISSION_DELAY_NOTICE_MS,
+    runSubmissionWithConfirmationRetry,
+    submissionCompletionNotice,
     submissionProgressCopy,
+    withSubmissionTimeout,
     type SubmitProgressPhase,
 } from "@/lib/submissionProgress";
+import {
+    remainingAttemptSeconds,
+    type StudentAttemptSessionState,
+} from "@/lib/studentAttemptSessionContract";
+import {
+    buildStudentAttemptProgressPayload,
+    handwritingCheckpointDrawings,
+    STUDENT_ATTEMPT_HANDWRITING_CHECKPOINT_MS,
+} from "@/lib/studentAttemptHandwritingCheckpoint";
+import {
+    leaseRenewedAtAfterSyncResult,
+    shouldDeferHeartbeatForCheckpoint,
+    shouldSendStudentAttemptHeartbeat,
+    studentAttemptSyncDelayMs,
+} from "@/lib/studentAttemptSyncSchedule";
+import {
+    clearDurableAttemptResumeCredential,
+    durableAttemptResumeKey,
+    readDurableAttemptResumeCredential,
+    writeDurableAttemptResumeCredential,
+} from "@/lib/studentAttemptLeaseStorage";
+import { observeLatestAttemptSession, takeoverRequestFromLatestSession } from "@/lib/studentAttemptConflictRecovery";
+import {
+    SECURE_SUBMISSION_OUTBOX_EVENT,
+    queueSecureSubmission,
+    readSecureSubmission,
+    replaySecureSubmissionsForOwner,
+    retryBlockedSecureSubmission,
+    secureSubmissionOwnerFingerprint,
+} from "@/lib/studentSecureSubmissionOutbox";
+import {
+    HANDWRITING_UPLOAD_MAX_BYTES,
+    clearHandwritingUploadRecovery,
+    fingerprintHandwritingUploadOwner,
+    handwritingUploadSourceKey,
+    persistHandwritingUploadRecovery,
+    runHandwritingUploadRecovery,
+    shouldDeleteHandwritingUploadRecovery,
+    updateHandwritingUploadRecovery,
+    type HandwritingUploadRecoveryManifest,
+} from "@/lib/studentHandwritingUploadRecovery";
 
 const PDFViewer = dynamic(() => import("@/components/PDFViewer"), { ssr: false });
 import { DEFAULT_CHOICE_COUNT, gradeAttempt, questionChoiceCount } from "@/types/omr";
@@ -133,6 +195,23 @@ interface ExamGuestEntryGroup {
 interface SolveLoadError {
     title: string;
     body: string;
+}
+
+interface DurableSolveAttempt {
+    session: StudentAttemptSessionState;
+    leaseToken: string;
+    observedAtClientMs: number;
+}
+
+function checkpointFingerprint(
+    answers: Record<number, number>,
+    subQuestionAnswers: SubQuestionAnswers,
+): string {
+    return JSON.stringify([answers, subQuestionAnswers]);
+}
+
+function handwritingCheckpointFingerprint(drawings: PdfDrawings): string {
+    return JSON.stringify(drawings);
 }
 
 function SolveDialogShell({
@@ -270,6 +349,32 @@ function SolveDialogShell({
                 {children}
             </div>
         </div>
+    );
+}
+
+function LeaseTakeoverDialog({
+    busy,
+    onTakeover,
+    onCancel,
+}: {
+    busy: boolean;
+    onTakeover: () => void;
+    onCancel: () => void;
+}) {
+    return (
+        <SolveDialogShell title="다른 기기에서 응시 중입니다" onClose={onCancel}>
+            <p style={{ color: 'var(--muted)', lineHeight: 1.65, marginBottom: '1rem' }}>
+                이 시험은 다른 브라우저나 기기에서 열려 있습니다. 계속하면 기존 기기의 저장 권한이 즉시 종료됩니다.
+            </p>
+            <div style={{ display: 'grid', gap: '0.6rem' }}>
+                <button type="button" className="btn btn-primary" disabled={busy} onClick={onTakeover}>
+                    {busy ? "전환 중..." : "다른 기기에서 계속하기"}
+                </button>
+                <button type="button" className="btn btn-secondary" disabled={busy} onClick={onCancel}>
+                    이 기기에서는 나가기
+                </button>
+            </div>
+        </SolveDialogShell>
     );
 }
 
@@ -451,10 +556,8 @@ function accessDecisionCopy(decision: ExamAccessDecision): { title: string; body
 function buildStudentLoginHref(): string {
     if (typeof window === "undefined") return "/?role=student";
     const next = `${window.location.pathname}${window.location.search}`;
-    const query = new URLSearchParams({ role: "student", next });
-    const workspaceId = getSession()?.workspaceId;
-    if (workspaceId) query.set("workspace", workspaceId);
-    return `/?${query.toString()}`;
+    const examId = window.location.pathname.split("/").filter(Boolean).at(-1) || "";
+    return buildOpaqueStudentExamLoginHref(next, examId);
 }
 
 function buildRetakeDraftSegment(config: RetakeConfig | null): string {
@@ -575,6 +678,9 @@ function ExamEntryConfirmDialog({
                             앱에 학생 로그인이 되어 있으면 학생 기록으로 응시할 수 있습니다. 로그인하지 않은 기기에서는 게스트 기록으로 저장됩니다.
                         </p>
                     )}
+                    <p style={{ color: 'var(--warning)', fontSize: '0.78rem', lineHeight: 1.55, wordBreak: 'keep-all' }}>
+                        게스트 응시는 브라우저 쿠키를 지우거나 다른 브라우저를 사용하면 기존 시험을 이어서 볼 수 없습니다. 여러 기기에서 응시하려면 학생 로그인을 권장합니다.
+                    </p>
                     {needsGroupCode && (
                         <label style={{ display: 'grid', gap: '0.45rem' }}>
                             <span style={{ fontSize: '0.78rem', fontWeight: 850, color: 'var(--muted)' }}>반 코드</span>
@@ -733,23 +839,89 @@ function SubmitConfirmDialog({
 function SubmissionProgressOverlay({
     phase,
     delayed,
+    onRetry,
 }: {
     phase: SubmitProgressPhase;
     delayed: boolean;
+    onRetry: () => void;
 }) {
     const copy = submissionProgressCopy(phase, delayed);
+    const requiresConfirmation = phase === "confirmation_required";
+    const allowsRetry = requiresConfirmation || phase === "queued" || phase === "blocked";
+    const confirmationDialogRef = useRef<HTMLDivElement>(null);
+
+    useEffect(() => {
+        if (!allowsRetry) return;
+        const dialog = confirmationDialogRef.current;
+        if (!dialog) return;
+        const focusableSelector = [
+            "button:not([disabled])",
+            "a[href]",
+            "input:not([disabled])",
+            "[tabindex]:not([tabindex='-1'])",
+        ].join(",");
+        const focusableElements = () => Array.from(dialog.querySelectorAll<HTMLElement>(focusableSelector));
+        const animationFrame = window.requestAnimationFrame(() => {
+            (focusableElements()[0] || dialog).focus();
+        });
+        const handleConfirmationKeyDown = (event: KeyboardEvent) => {
+            if (event.key === "Escape") {
+                event.preventDefault();
+                event.stopPropagation();
+                return;
+            }
+            if (event.key !== "Tab") return;
+            const focusable = focusableElements();
+            if (focusable.length === 0) {
+                event.preventDefault();
+                dialog.focus();
+                return;
+            }
+            const first = focusable[0];
+            const last = focusable[focusable.length - 1];
+            const active = document.activeElement;
+            if (event.shiftKey && (active === first || !dialog.contains(active))) {
+                event.preventDefault();
+                last.focus();
+            } else if (!event.shiftKey && (active === last || !dialog.contains(active))) {
+                event.preventDefault();
+                first.focus();
+            }
+        };
+        document.addEventListener("keydown", handleConfirmationKeyDown, true);
+        return () => {
+            window.cancelAnimationFrame(animationFrame);
+            document.removeEventListener("keydown", handleConfirmationKeyDown, true);
+        };
+    }, [allowsRetry]);
+
     return (
         <div className="solve-submission-overlay" role="presentation">
             <div
+                ref={confirmationDialogRef}
                 className="solve-submission-card"
-                role="status"
+                role={allowsRetry ? "dialog" : "status"}
+                aria-modal={allowsRetry || undefined}
+                aria-labelledby="solve-submission-title"
                 aria-live="polite"
                 aria-atomic="true"
+                tabIndex={-1}
             >
-                <LoaderCircle className="solve-submission-spinner" size={42} aria-hidden="true" />
-                <h2>{copy.title}</h2>
+                {allowsRetry
+                    ? <AlertTriangle size={42} aria-hidden="true" style={{ color: "var(--warning)" }} />
+                    : <LoaderCircle className="solve-submission-spinner" size={42} aria-hidden="true" />}
+                <h2 id="solve-submission-title">{copy.title}</h2>
                 <p>{copy.detail}</p>
-                <span>중복 제출을 막기 위해 이 화면에서 잠시 기다려 주세요.</span>
+                {allowsRetry ? (
+                    <>
+                        <button type="button" className="btn btn-primary" autoFocus onClick={onRetry}>
+                            {requiresConfirmation ? "같은 답안으로 제출 상태 확인" : "지금 다시 시도"}
+                        </button>
+                        <span>확인이 끝날 때까지 답안과 필기는 변경할 수 없습니다.</span>
+                    </>
+                ) : (
+                    <span>중복 제출을 막기 위해 이 화면에서 잠시 기다려 주세요.</span>
+                )}
             </div>
         </div>
     );
@@ -889,7 +1061,9 @@ function TeacherPasswordDialog({
 
 function compactDrawings(drawings: PdfDrawings): PdfDrawings {
     return Object.fromEntries(
-        Object.entries(drawings).filter(([, paths]) => paths.length > 0)
+        Object.entries(drawings)
+            .filter(([, paths]) => paths.length > 0)
+            .map(([page, paths]) => [page, [...paths]])
     ) as PdfDrawings;
 }
 
@@ -927,6 +1101,7 @@ export default function SolvePage() {
     const [drawings, setDrawings] = useState<PdfDrawings>({});
     const handwritingNoticeShownRef = useRef(false);
     const [pdfFile, setPdfFile] = useState<File | null>(null);
+    const studentPdfUploadInputRef = useRef<HTMLInputElement>(null);
     const [currentPlan, setCurrentPlan] = useState<PlanKey>("free");
     const [retakeConfig, setRetakeConfig] = useState<RetakeConfig | null>(null);
 
@@ -957,6 +1132,10 @@ export default function SolvePage() {
     const [entryConfirmed, setEntryConfirmed] = useState(false);
     const [secureRemoteMode, setSecureRemoteMode] = useState(false);
     const [secureAttemptTicket, setSecureAttemptTicket] = useState("");
+    const [durableAttempt, setDurableAttempt] = useState<DurableSolveAttempt | null>(null);
+    const [leaseConflict, setLeaseConflict] = useState<DurableSolveAttempt | null>(null);
+    const [takeoverPending, setTakeoverPending] = useState(false);
+    const [durableSyncError, setDurableSyncError] = useState("");
     const [secureRequiresPin, setSecureRequiresPin] = useState(false);
     const [entryGuestName, setEntryGuestName] = useState("");
     const [entryGroupCode, setEntryGroupCode] = useState("");
@@ -975,9 +1154,20 @@ export default function SolvePage() {
     /** Verified PIN, threaded into server submit (incl. timer auto-submit). */
     const pinRef = useRef("");
     const submittedRef = useRef(false);
+    const submissionConfirmationRetryRef = useRef<(() => void) | null>(null);
+    const secureSubmissionReplayOwnedRef = useRef(false);
     const submissionIdRef = useRef("");
     const studentAnswersRef = useRef<Record<number, number>>({});
     const subQuestionAnswersRef = useRef<SubQuestionAnswers>({});
+    const durableAttemptRef = useRef<DurableSolveAttempt | null>(null);
+    const durableResumeKeyRef = useRef("");
+    const lastCheckpointFingerprintRef = useRef("");
+    const lastHandwritingCheckpointFingerprintRef = useRef("");
+    const lastHandwritingCheckpointAtRef = useRef(0);
+    const lastCheckpointLeaseRenewedAtRef = useRef<number | null>(null);
+    const checkpointInFlightRef = useRef(false);
+    const checkpointStartedAtRef = useRef<number | null>(null);
+    const heartbeatInFlightRef = useRef(false);
     const latestDraftRef = useRef<SolveDraft | null>(null);
     const autosaveErrorShownRef = useRef(false);
     const examQuestionsRef = useRef<Question[]>([]);
@@ -996,6 +1186,81 @@ export default function SolvePage() {
         const timeout = window.setTimeout(() => setSubmissionDelayed(true), SUBMISSION_DELAY_NOTICE_MS);
         return () => window.clearTimeout(timeout);
     }, [submissionProgress]);
+
+    const waitForSubmissionConfirmation = useCallback(() => new Promise<void>(resolve => {
+        submissionConfirmationRetryRef.current = resolve;
+        setSubmissionDelayed(false);
+        setSubmissionProgress("confirmation_required");
+    }), []);
+
+    const retryUncertainSubmission = useCallback(async () => {
+        const retry = submissionConfirmationRetryRef.current;
+        if (retry) {
+            submissionConfirmationRetryRef.current = null;
+            setSubmissionDelayed(false);
+            setSubmissionProgress("submitting");
+            retry();
+            return;
+        }
+        if (submissionProgress !== "queued" && submissionProgress !== "blocked") return;
+        const current = durableAttemptRef.current;
+        const activeSession = getSession();
+        if (!current || !activeSession?.studentId) {
+            setSubmissionProgress("blocked");
+            return;
+        }
+        setSubmissionDelayed(false);
+        setSubmissionProgress("submitting");
+        try {
+            const ownerFingerprint = await secureSubmissionOwnerFingerprint(activeSession.studentId);
+            secureSubmissionReplayOwnedRef.current = true;
+            const replay = await withSubmissionTimeout(retryBlockedSecureSubmission(
+                current.session.sessionId,
+                ownerFingerprint,
+                {
+                    checkpoint: checkpointDurableStudentAttemptSession,
+                    submit: submitDurableStudentAttemptSession,
+                },
+                { sessionId: current.session.sessionId },
+            ));
+            if (replay.status === "submitted" && replay.submitted[0]) {
+                setSubmissionProgress("opening_review");
+                if (durableResumeKeyRef.current) {
+                    clearDurableAttemptResumeCredential(window.sessionStorage, durableResumeKeyRef.current);
+                    durableResumeKeyRef.current = "";
+                }
+                router.push(`/student/review/${replay.submitted[0].attemptId}`);
+                return;
+            }
+            setSubmissionProgress(replay.status === "blocked" ? "blocked" : "queued");
+        } catch {
+            setSubmissionProgress("queued");
+        } finally {
+            secureSubmissionReplayOwnedRef.current = false;
+        }
+    }, [router, submissionProgress]);
+
+    useEffect(() => {
+        const onSecureSubmissionOutbox = (event: Event) => {
+            if (secureSubmissionReplayOwnedRef.current) return;
+            const detail = (event as CustomEvent<Record<string, unknown>>).detail;
+            const currentSessionId = durableAttemptRef.current?.session.sessionId;
+            if (!detail || detail.sessionId !== currentSessionId) return;
+            if (detail.status === "submitted" && typeof detail.attemptId === "string") {
+                setSubmissionProgress("opening_review");
+                submittedRef.current = true;
+                router.push(`/student/review/${detail.attemptId}`);
+            } else if (detail.status === "blocked" || detail.status === "expired") {
+                submittedRef.current = true;
+                setSubmissionProgress("blocked");
+            } else if (detail.status === "queued") {
+                submittedRef.current = true;
+                setSubmissionProgress("queued");
+            }
+        };
+        window.addEventListener(SECURE_SUBMISSION_OUTBOX_EVENT, onSecureSubmissionOutbox);
+        return () => window.removeEventListener(SECURE_SUBMISSION_OUTBOX_EVENT, onSecureSubmissionOutbox);
+    }, [router]);
 
     const interactionAllowed = !!examData && entryConfirmed && (
         secureRemoteMode
@@ -1473,11 +1738,41 @@ export default function SolvePage() {
     );
 
     useEffect(() => {
+        const syncStudentSession = () => {
+            const next = getSession();
+            if (!next && durableResumeKeyRef.current) {
+                clearDurableAttemptResumeCredential(window.sessionStorage, durableResumeKeyRef.current);
+                durableResumeKeyRef.current = "";
+            }
+            setUser(next);
+        };
+        window.addEventListener(STUDENT_SESSION_CHANGED_EVENT, syncStudentSession);
+        return () => window.removeEventListener(STUDENT_SESSION_CHANGED_EVENT, syncStudentSession);
+    }, []);
+
+    useEffect(() => {
         const currentSession = getSession();
         if (currentSession) setUser(currentSession);
         const currentSearch = typeof window !== "undefined" ? window.location.search : "";
         const currentPath = typeof window !== "undefined" ? `${window.location.pathname}${currentSearch}` : "";
         const currentParams = new URLSearchParams(currentSearch);
+        const linkAssignmentId = currentParams.get("assignment")?.trim() || "";
+        const capturedInviteToken = captureExamEntryInviteFragment({
+            examId: id,
+            hash: window.location.hash,
+            pathname: window.location.pathname,
+            search: currentSearch,
+            storage: window.sessionStorage,
+            replaceUrl: url => window.history.replaceState(window.history.state, "", url),
+        });
+        const linkInviteToken = capturedInviteToken
+            || readExamEntryInviteHandoff(
+                window.sessionStorage,
+                id,
+                Date.now(),
+                currentSession && !currentSession.isGuest ? currentSession.studentId : undefined,
+            )
+            || "";
         setCurrentSolvePath(currentPath);
         setLinkClassCode(
             currentParams.get(SOLVE_CLASS_CODE_PARAM)
@@ -1503,6 +1798,10 @@ export default function SolvePage() {
             // cookie. Never rebuild a student cookie from localStorage fields.
             let session = currentSession;
             try {
+                if ((linkInviteToken || linkAssignmentId) && (!session || session.isGuest)) {
+                    router.replace(buildOpaqueStudentExamLoginHref(currentPath, id));
+                    return;
+                }
                 if (!session || session.isGuest) {
                     const issued = await issueGuestSession(session?.name);
                     if (issued.ok && issued.guestId && issued.guestId !== session?.guestId) {
@@ -1520,15 +1819,10 @@ export default function SolvePage() {
                         localStorage.setItem("omr_guest_id", issued.guestId);
                         session = guestSession;
                     }
-                } else if (session.studentId && session.workspaceId) {
+                } else if (session.studentId && (session.workspaceId || linkInviteToken)) {
                     const validated = await validateStudentSession();
                     if (!validated.ok) {
-                        const query = new URLSearchParams({
-                            role: "student",
-                            next: `/solve/${id}`,
-                        });
-                        if (session.workspaceId) query.set("workspace", session.workspaceId);
-                        router.replace(`/?${query.toString()}`);
+                        router.replace(buildOpaqueStudentExamLoginHref(currentPath, id));
                         return;
                     }
                 }
@@ -1537,7 +1831,7 @@ export default function SolvePage() {
             }
 
             const res = await loadExamForSolvingClient(id, undefined, {
-                server: (examId, pin) => loadExamForSolving(examId, pin),
+                server: (examId, pin) => loadExamForSolving(examId, pin, linkInviteToken, linkAssignmentId),
                 readLocalExam,
                 evaluateLocalAccess: (exam) => {
                     const requiresPin = examRequiresPin(exam);
@@ -1548,6 +1842,14 @@ export default function SolvePage() {
 
             if (res.exam) {
                 // Local-blocked states (PIN, schedule window) re-derive live from examData.
+                if (res.source === "server") {
+                    setSecureRemoteMode(true);
+                    setSecureRequiresPin(!!res.exam.accessConfig && (
+                        "hasPin" in res.exam.accessConfig
+                            ? res.exam.accessConfig.hasPin
+                            : !!res.exam.accessConfig.pin
+                    ));
+                }
                 await applyLoadedExam(res.exam as Exam, res.source, session);
                 return;
             }
@@ -1647,6 +1949,209 @@ export default function SolvePage() {
         };
     }, [studentAnswers, subQuestionAnswers, drawings, timeRemaining, startedAt]);
 
+    // The database revision is the cross-device source of truth. Only changed
+    // answer snapshots are checkpointed; heartbeat renewals do not increment it.
+    const reconcileDurableConflict = useCallback(async (current: DurableSolveAttempt) => {
+        const result = await observeLatestAttemptSession(current.leaseToken, currentLeaseToken => (
+            openDurableStudentAttemptSession({
+                examId: id,
+                attemptTicket: secureAttemptTicket,
+                pin: pinRef.current || undefined,
+                currentLeaseToken,
+                requestedAssignmentId: new URLSearchParams(window.location.search).get("assignment") || undefined,
+                requestedRetake: retakeConfig || undefined,
+            })
+        ));
+        if (result.status === "active") {
+            const next = {
+                session: result.session,
+                leaseToken: result.leaseToken,
+                observedAtClientMs: Date.now(),
+            };
+            durableAttemptRef.current = next;
+            setDurableAttempt(next);
+            setLeaseConflict(null);
+            return;
+        }
+        if (result.status === "lease_conflict") {
+            setLeaseConflict({
+                session: result.session,
+                leaseToken: "",
+                observedAtClientMs: Date.now(),
+            });
+            return;
+        }
+        if (result.status === "submitted") {
+            const attemptId = result.session.submittedAttemptId;
+            if (attemptId) router.push(`/student/review/${attemptId}`);
+            return;
+        }
+        setDurableSyncError("다른 기기의 최신 응시 상태를 확인하지 못했습니다. 잠시 후 다시 시도해주세요.");
+    }, [id, retakeConfig, router, secureAttemptTicket]);
+
+    useEffect(() => {
+        if (!durableAttempt || !entryConfirmed || submittedRef.current) return;
+        let cancelled = false;
+        let timeoutId: number | null = null;
+        const scheduleNext = () => {
+            const current = durableAttemptRef.current;
+            if (cancelled || !current) return;
+            timeoutId = window.setTimeout(
+                runCheckpoint,
+                studentAttemptSyncDelayMs(current.session.sessionId, "checkpoint"),
+            );
+        };
+        const runCheckpoint = async () => {
+            try {
+                const current = durableAttemptRef.current;
+                if (
+                    !current
+                    || checkpointInFlightRef.current
+                    || submittedRef.current
+                ) return;
+                const answerFingerprint = checkpointFingerprint(
+                    studentAnswersRef.current,
+                    subQuestionAnswersRef.current,
+                );
+                const activeCheckpointDrawings = compactDrawings(rawDrawingsRef.current || {});
+                const handwritingFingerprint = handwritingCheckpointFingerprint(activeCheckpointDrawings);
+                const answerChanged = answerFingerprint !== lastCheckpointFingerprintRef.current;
+                const nowMs = Date.now();
+                const handwritingDue = handwritingFingerprint !== lastHandwritingCheckpointFingerprintRef.current
+                    && nowMs - lastHandwritingCheckpointAtRef.current >= STUDENT_ATTEMPT_HANDWRITING_CHECKPOINT_MS;
+                if (!answerChanged && !handwritingDue) return;
+                const progress = buildStudentAttemptProgressPayload(
+                    currentQuestionIdRef.current,
+                    activeCheckpointDrawings,
+                    handwritingDue,
+                );
+                checkpointInFlightRef.current = true;
+                checkpointStartedAtRef.current = Date.now();
+                try {
+                    const result = await checkpointDurableStudentAttemptSession({
+                        sessionId: current.session.sessionId,
+                        expectedRevision: current.session.revision,
+                        expectedLeaseEpoch: current.session.leaseEpoch,
+                        leaseToken: current.leaseToken,
+                        answers: studentAnswersRef.current,
+                        subQuestionAnswers: subQuestionAnswersRef.current,
+                        progressPayload: progress.payload,
+                    });
+                    const observedAtClientMs = Date.now();
+                    lastCheckpointLeaseRenewedAtRef.current = leaseRenewedAtAfterSyncResult(
+                        lastCheckpointLeaseRenewedAtRef.current,
+                        result.status,
+                        observedAtClientMs,
+                    );
+                    if (result.status === "active") {
+                        const next = { ...current, session: result.session, observedAtClientMs };
+                        durableAttemptRef.current = next;
+                        setDurableAttempt(next);
+                        if (answerChanged) lastCheckpointFingerprintRef.current = answerFingerprint;
+                        if (handwritingDue) {
+                            lastHandwritingCheckpointFingerprintRef.current = handwritingFingerprint;
+                            lastHandwritingCheckpointAtRef.current = observedAtClientMs;
+                        }
+                        setDurableSyncError(progress.status === "too_large"
+                            ? "필기량이 기기 전환 동기화 한도를 넘었습니다. 이 기기의 필기는 유지되지만 다른 기기에서는 마지막 안전 저장본까지만 복원됩니다."
+                            : "");
+                    } else if (result.status === "lease_conflict") {
+                        await reconcileDurableConflict(current);
+                    } else if (result.status === "expired") {
+                        setTimeRemaining(0);
+                        setDurableSyncError("응시 시간이 종료되어 서버가 세션을 닫았습니다.");
+                    } else {
+                        setDurableSyncError("답안 동기화가 중단되었습니다. 새로고침해 서버 답안을 다시 불러오세요.");
+                    }
+                } catch {
+                    setDurableSyncError("네트워크 문제로 답안 동기화가 지연되고 있습니다. 이 화면을 닫지 마세요.");
+                } finally {
+                    checkpointInFlightRef.current = false;
+                    checkpointStartedAtRef.current = null;
+                }
+            } finally {
+                scheduleNext();
+            }
+        };
+        scheduleNext();
+        return () => {
+            cancelled = true;
+            if (timeoutId !== null) window.clearTimeout(timeoutId);
+        };
+    }, [durableAttempt, entryConfirmed, reconcileDurableConflict]);
+
+    useEffect(() => {
+        if (!durableAttempt || !entryConfirmed || submittedRef.current) return;
+        let cancelled = false;
+        let timeoutId: number | null = null;
+        const scheduleNext = () => {
+            const current = durableAttemptRef.current;
+            if (cancelled || !current) return;
+            timeoutId = window.setTimeout(
+                runHeartbeat,
+                studentAttemptSyncDelayMs(current.session.sessionId, "heartbeat"),
+            );
+        };
+        const runHeartbeat = async () => {
+            try {
+                const current = durableAttemptRef.current;
+                const nowMs = Date.now();
+                if (
+                    !current
+                    || heartbeatInFlightRef.current
+                    || submittedRef.current
+                    || shouldDeferHeartbeatForCheckpoint(checkpointStartedAtRef.current, nowMs)
+                    || !shouldSendStudentAttemptHeartbeat(lastCheckpointLeaseRenewedAtRef.current, nowMs)
+                ) return;
+                heartbeatInFlightRef.current = true;
+                try {
+                    const result = await heartbeatDurableStudentAttemptSession({
+                        sessionId: current.session.sessionId,
+                        expectedLeaseEpoch: current.session.leaseEpoch,
+                        leaseToken: current.leaseToken,
+                    });
+                    if (result.status === "active" && result.serverNow && result.deadlineAt) {
+                        const observedAtClientMs = Date.now();
+                        const next = {
+                            ...current,
+                            observedAtClientMs,
+                            session: {
+                                ...current.session,
+                                revision: result.revision || current.session.revision,
+                                leaseEpoch: result.leaseEpoch || current.session.leaseEpoch,
+                                serverNow: result.serverNow,
+                                deadlineAt: result.deadlineAt,
+                            },
+                        };
+                        durableAttemptRef.current = next;
+                        setDurableAttempt(next);
+                        setTimeRemaining(remainingAttemptSeconds(
+                            result.deadlineAt,
+                            result.serverNow,
+                            observedAtClientMs,
+                            observedAtClientMs,
+                        ));
+                    } else if (result.status === "lease_conflict") {
+                        await reconcileDurableConflict(current);
+                    } else if (result.status === "expired") {
+                        setTimeRemaining(0);
+                    }
+                } catch {
+                    setDurableSyncError("서버 연결을 다시 확인하고 있습니다. 답안은 화면과 기기에 유지됩니다.");
+                } finally {
+                    heartbeatInFlightRef.current = false;
+                }
+            } finally {
+                scheduleNext();
+            }
+        };
+        scheduleNext();
+        return () => {
+            cancelled = true;
+            if (timeoutId !== null) window.clearTimeout(timeoutId);
+        };
+    }, [durableAttempt, entryConfirmed, reconcileDurableConflict]);
+
     // Autosave draft every 3s. Keep this interval independent from the ticking timer.
     useEffect(() => {
         if (!DRAFT_KEY) return;
@@ -1683,6 +2188,7 @@ export default function SolvePage() {
     }, [studentAnswers, subQuestionAnswers, drawings]);
 
     const handleAnswerClick = (qId: number, optionIndex: number) => {
+        if (submittedRef.current) return;
         const nowMs = Date.now();
         beginQuestionVisit(qId, nowMs);
         const previousAnswers = studentAnswersRef.current;
@@ -1721,6 +2227,7 @@ export default function SolvePage() {
     };
 
     const handleSubQuestionAnswer = (questionId: number, subQuestionId: string, body: string, maxLength: number) => {
+        if (submittedRef.current) return;
         const trimmedToLimit = body.slice(0, maxLength);
         const current = subQuestionAnswersRef.current;
         const questionAnswers = { ...(current[questionId] || {}) };
@@ -1778,6 +2285,7 @@ export default function SolvePage() {
     };
 
     const handleDrawingsChange = (page: number, newPaths: string[]) => {
+        if (submittedRef.current) return;
         if (!handwritingNoticeShownRef.current && newPaths.length > 0 && !canArchiveHandwriting(currentPlan)) {
             handwritingNoticeShownRef.current = true;
             toast.info("필기는 임시로만 유지됩니다", "Free 플랜에서는 제출 후 필기 원본이 보관되지 않습니다. 답안 채점에는 영향이 없습니다.");
@@ -1792,7 +2300,7 @@ export default function SolvePage() {
     const createGuestSubmitter = useCallback(async (
         name: string,
         group?: ExamGuestEntryGroup | null,
-    ): Promise<StudentSession> => {
+    ): Promise<StudentSession | null> => {
         // Server-issued guest identity: reuses a valid guest cookie (keeping the
         // guestId stable) and refreshes its display name. Device-local id only
         // as the offline/dev fallback.
@@ -1804,6 +2312,10 @@ export default function SolvePage() {
             // offline/dev — fall back to the device-local guest id
         }
         if (!guestId) guestId = getOrCreateGuestId();
+        if (!guestId) {
+            setEntryError("게스트 세션을 안전하게 시작하지 못했습니다. 네트워크를 확인한 뒤 다시 시도해주세요.");
+            return null;
+        }
         const submitter: StudentSession = {
             studentId: `guest:${guestId}`,
             loginId: guestLoginIdFor(guestId),
@@ -1848,12 +2360,68 @@ export default function SolvePage() {
         beginConfirmedEntry();
     }, [beginConfirmedEntry, entryConfirmed, examData, secureRemoteMode, solveAccess, user]);
 
+    const applyDurableAttempt = useCallback((
+        session: StudentAttemptSessionState,
+        leaseToken: string,
+        snapshotExam?: Exam,
+    ) => {
+        const observedAtClientMs = Date.now();
+        const next = { session, leaseToken, observedAtClientMs };
+        durableAttemptRef.current = next;
+        setDurableAttempt(next);
+        setLeaseConflict(null);
+        studentAnswersRef.current = session.answers;
+        subQuestionAnswersRef.current = session.subQuestionAnswers;
+        const restoredDrawings = handwritingCheckpointDrawings(
+            session.progressPayload.handwritingCheckpoint,
+        ) || {};
+        rawDrawingsRef.current = restoredDrawings;
+        setStudentAnswers(session.answers);
+        setSubQuestionAnswers(session.subQuestionAnswers);
+        setDrawings(restoredDrawings);
+        const allowedQuestionIds = new Set(session.allowedQuestionIds);
+        setExamData(currentExam => {
+            const sourceExam = snapshotExam || currentExam;
+            if (!sourceExam) return currentExam;
+            const scopedExam = {
+                ...sourceExam,
+                questions: sourceExam.questions.filter(question => allowedQuestionIds.has(question.id)),
+            };
+            examQuestionsRef.current = scopedExam.questions;
+            return scopedExam;
+        });
+        setStartedAt(session.startedAt);
+        setTimeRemaining(remainingAttemptSeconds(
+            session.deadlineAt,
+            session.serverNow,
+            observedAtClientMs,
+            observedAtClientMs,
+        ));
+        lastCheckpointFingerprintRef.current = checkpointFingerprint(
+            session.answers,
+            session.subQuestionAnswers,
+        );
+        lastHandwritingCheckpointFingerprintRef.current = handwritingCheckpointFingerprint(restoredDrawings);
+        lastHandwritingCheckpointAtRef.current = observedAtClientMs;
+        setHasResumed(
+            Object.keys(session.answers).length > 0
+            || Object.keys(session.subQuestionAnswers).length > 0
+            || hasDrawings(restoredDrawings),
+        );
+        setDurableSyncError("");
+    }, []);
+
     const beginSecureEntry = async (submitter: StudentSession) => {
         if (!examData) return false;
         const result = await openStudentExam({
             examId: examData.id,
+            assignmentId: new URLSearchParams(window.location.search).get("assignment") || undefined,
             pin: pinInput,
-            questionIds: retakeConfig?.questionIds,
+            retake: retakeConfig ? {
+                sourceAttemptId: retakeConfig.sourceAttemptId,
+                mode: retakeConfig.mode,
+                questionIds: retakeConfig.questionIds,
+            } : undefined,
             student: {
                 studentId: submitter.studentId || submitter.guestId || persistId,
                 studentName: submitter.name,
@@ -1874,6 +2442,8 @@ export default function SolvePage() {
                         ? "학생 로그인이 필요합니다."
                         : result.status === "invalid_questions"
                             ? "재시험 링크의 문항 범위가 올바르지 않습니다. 선생님에게 새 링크를 요청해주세요."
+                        : result.status === "unsupported_retake"
+                            ? "유사·선택 재시험은 아직 서버에서 지원되지 않습니다. 오답 재시험을 이용해주세요."
                         : result.status === "not_started"
                             ? "아직 응시 시작 전입니다."
                             : result.status === "ended"
@@ -1890,12 +2460,116 @@ export default function SolvePage() {
         setExamData(safeExam);
         examQuestionsRef.current = safeExam.questions;
         saveLocalExam(safeExam);
-        setSecureAttemptTicket(result.ticket);
         setSecureRequiresPin(result.exam.access.requiresPin);
         setPinVerified(true);
         setEntryError("");
-        beginConfirmedEntry();
+        const actorId = submitter.studentId || submitter.guestId || persistId;
+        const scopeKey = retakeConfig
+            ? `${retakeConfig.mode}:${retakeConfig.sourceAttemptId}:${retakeConfig.questionIds.join(",")}`
+            : "base";
+        const resumeKey = durableAttemptResumeKey(result.exam.id, actorId, scopeKey);
+        durableResumeKeyRef.current = resumeKey;
+        const storedResume = readDurableAttemptResumeCredential(window.sessionStorage, resumeKey);
+        let attemptTicket = storedResume?.ticket || result.ticket;
+        let durable = await openDurableStudentAttemptSession({
+            examId: result.exam.id,
+            attemptTicket,
+            pin: pinInput,
+            currentLeaseToken: storedResume?.leaseToken,
+            requestedAssignmentId: new URLSearchParams(window.location.search).get("assignment") || undefined,
+            requestedRetake: retakeConfig || undefined,
+        });
+        if (durable.status === "invalid" && storedResume) {
+            clearDurableAttemptResumeCredential(window.sessionStorage, resumeKey);
+            attemptTicket = result.ticket;
+            durable = await openDurableStudentAttemptSession({
+                examId: result.exam.id,
+                attemptTicket,
+                pin: pinInput,
+                requestedAssignmentId: new URLSearchParams(window.location.search).get("assignment") || undefined,
+                requestedRetake: retakeConfig || undefined,
+            });
+        }
+        setSecureAttemptTicket(attemptTicket);
+        if (durable.status === "submitted" && "session" in durable) {
+            clearDurableAttemptResumeCredential(window.sessionStorage, resumeKey);
+            const attemptId = durable.session.submittedAttemptId;
+            if (attemptId) router.push(`/student/review/${attemptId}`);
+            return false;
+        }
+        if (durable.status === "lease_conflict" && "session" in durable) {
+            if ("exam" in durable) {
+                const conflictExam = durable.exam as Exam;
+                setExamData(conflictExam);
+                examQuestionsRef.current = conflictExam.questions;
+            }
+            const conflictSession = durable.session as StudentAttemptSessionState;
+            const conflict = {
+                session: conflictSession,
+                leaseToken: "",
+                observedAtClientMs: Date.now(),
+            };
+            setLeaseConflict(conflict);
+            return false;
+        }
+        if (durable.status !== "active") {
+            setEntryError("서버 응시 세션을 시작하지 못했습니다. 잠시 후 다시 시도해주세요.");
+            return false;
+        }
+        const durableExam = durable.exam as Exam;
+        writeDurableAttemptResumeCredential(window.sessionStorage, resumeKey, {
+            ticket: attemptTicket,
+            leaseToken: durable.leaseToken,
+        });
+        applyDurableAttempt(durable.session, durable.leaseToken, durableExam);
+        setEntryConfirmed(true);
+        try {
+            const ownerFingerprint = await secureSubmissionOwnerFingerprint(actorId);
+            const queuedSubmission = await readSecureSubmission(durable.session.sessionId);
+            if (
+                queuedSubmission?.ownerFingerprint === ownerFingerprint
+                && Date.parse(queuedSubmission.expiresAt) > Date.now()
+            ) {
+                submittedRef.current = true;
+                setSubmissionProgress(queuedSubmission.state === "blocked" ? "blocked" : "queued");
+            }
+        } catch {
+            // The secure outbox is checked again by the app-wide recovery loop.
+        }
+        const progressQuestionId = Number(durable.session.progressPayload.currentQuestionId);
+        const firstQuestionId = durable.session.allowedQuestionIds.includes(progressQuestionId)
+            ? progressQuestionId
+            : durable.session.allowedQuestionIds[0] || safeExam.questions[0]?.id;
+        if (firstQuestionId) beginQuestionVisit(firstQuestionId);
         return true;
+    };
+
+    const continueWithLeaseTakeover = async () => {
+        const conflict = leaseConflict;
+        if (!conflict || takeoverPending) return;
+        setTakeoverPending(true);
+        const result = await takeoverDurableStudentAttemptSession(
+            takeoverRequestFromLatestSession(conflict.session),
+        );
+        setTakeoverPending(false);
+        if (result.status !== "active") {
+            setEntryError("다른 기기의 상태가 변경되었습니다. 시험 입장을 다시 시도해주세요.");
+            setLeaseConflict(null);
+            return;
+        }
+        if (durableResumeKeyRef.current && secureAttemptTicket) {
+            writeDurableAttemptResumeCredential(window.sessionStorage, durableResumeKeyRef.current, {
+                ticket: secureAttemptTicket,
+                leaseToken: result.leaseToken,
+            });
+        }
+        applyDurableAttempt(result.session, result.leaseToken);
+        setEntryConfirmed(true);
+        const progressQuestionId = Number(result.session.progressPayload.currentQuestionId);
+        const firstQuestionId = result.session.allowedQuestionIds.includes(progressQuestionId)
+            ? progressQuestionId
+            : result.session.allowedQuestionIds[0] || examQuestionsRef.current[0]?.id;
+        if (firstQuestionId) beginQuestionVisit(firstQuestionId);
     };
 
     const continueEntryAsStudent = async () => {
@@ -1930,6 +2604,7 @@ export default function SolvePage() {
         }
 
         const submitter = await createGuestSubmitter(entryGuestName, guestGroup);
+        if (!submitter) return;
         if (secureRemoteMode) {
             await beginSecureEntry(submitter);
             return;
@@ -1962,6 +2637,7 @@ export default function SolvePage() {
         if (!submitter) {
             if (autoSubmitted) {
                 submitter = await createGuestSubmitter("Guest Student");
+                if (!submitter) return;
             } else {
                 setGuestName("");
                 setGuestSubmitPending({ autoSubmitted });
@@ -1974,6 +2650,7 @@ export default function SolvePage() {
         setSubmissionProgress("submitting");
 
         const resetFailedSubmission = () => {
+            submissionConfirmationRetryRef.current = null;
             submittedRef.current = false;
             setSubmissionProgress(null);
             setSubmissionDelayed(false);
@@ -1985,6 +2662,18 @@ export default function SolvePage() {
         const submissionAwayCount = completeActiveAwaySession(Date.now(), true);
         const activeExamQuestions = getActiveExamQuestions();
         const questionTimings = buildQuestionTimingSnapshot(activeExamQuestions);
+        const submissionAnswers = { ...studentAnswersRef.current };
+        const submissionSubQuestionAnswers = Object.fromEntries(
+            Object.entries(subQuestionAnswersRef.current).map(([questionId, answers]) => [
+                questionId,
+                Object.fromEntries(
+                    Object.entries(answers).map(([subQuestionId, answer]) => [subQuestionId, { ...answer }]),
+                ),
+            ]),
+        ) as SubQuestionAnswers;
+        const submissionQuestionTimings = questionTimings.map(timing => ({ ...timing }));
+        const submissionFocusLossEvents = focusLossEventsRef.current.map(event => ({ ...event }));
+        const submissionPin = pinRef.current || undefined;
 
         const submissionId = submissionIdRef.current || createSubmissionId();
         submissionIdRef.current = submissionId;
@@ -2001,30 +2690,95 @@ export default function SolvePage() {
                 toast.error("응시 세션 만료", "시험 입장 정보를 다시 확인해주세요.");
                 return;
             }
-            let result: Awaited<ReturnType<typeof submitStudentAttempt>>;
-            try {
-                result = await submitStudentAttempt({
-                    ticket: secureAttemptTicket,
-                    answers: studentAnswersRef.current,
-                    autoSubmitted,
-                    tabFociLostCount: submissionAwayCount,
-                    questionTimings,
-                    focusLossEvents: focusLossEventsRef.current,
-                });
-            } catch (error) {
-                console.error("Secure student submission failed", error);
+            let result: Awaited<ReturnType<typeof submitDurableStudentAttemptSession>>;
+            const current = durableAttemptRef.current;
+            const ownerId = submitter.studentId || submitter.guestId || "";
+            if (!current || !ownerId) {
                 resetFailedSubmission();
-                toast.error("서버 제출 실패", "네트워크를 확인한 뒤 다시 제출해주세요. 답안은 이 기기에 임시저장되어 있습니다.");
+                await saveDraftSnapshot();
+                toast.error("제출 보관 실패", "안전한 응시 세션을 확인하지 못했습니다. 시험에 다시 입장한 뒤 제출해주세요.");
                 return;
             }
+            let durablyQueued = false;
+            try {
+                const submissionProgress = buildStudentAttemptProgressPayload(
+                    currentQuestionIdRef.current,
+                    activeDrawings,
+                );
+                const ownerFingerprint = await secureSubmissionOwnerFingerprint(ownerId);
+                const queued = await queueSecureSubmission(
+                    ownerFingerprint,
+                    {
+                        sessionId: current.session.sessionId,
+                        expectedRevision: current.session.revision,
+                        expectedLeaseEpoch: current.session.leaseEpoch,
+                        leaseToken: current.leaseToken,
+                        answers: submissionAnswers,
+                        subQuestionAnswers: submissionSubQuestionAnswers,
+                        progressPayload: submissionProgress.payload,
+                        autoSubmitted,
+                        tabFociLostCount: submissionAwayCount,
+                        questionTimings: submissionQuestionTimings,
+                        focusLossEvents: submissionFocusLossEvents,
+                        finishedAt: new Date().toISOString(),
+                    },
+                );
+                if (queued.status !== "queued") {
+                    resetFailedSubmission();
+                    await saveDraftSnapshot();
+                    const detail = queued.status === "record_too_large"
+                        ? "답안 크기가 안전한 보관 한도를 초과했습니다. 답안은 잠금 해제되었으며 선생님에게 문의해주세요."
+                        : queued.status === "capacity_exceeded"
+                            ? "이 기기의 제출 재시도 보관함이 가득 찼습니다. 기존 대기 제출을 확인한 뒤 다시 시도해주세요."
+                            : queued.status === "conflict"
+                                ? "이미 보관된 제출 답안과 현재 답안이 다릅니다. 기존 제출 상태를 먼저 확인해주세요."
+                                : "답안을 안전하게 보관하지 못했습니다. 브라우저 저장 공간을 확인한 뒤 다시 제출해주세요.";
+                    toast.error("제출 보관 실패", detail);
+                    return;
+                }
+                durablyQueued = true;
+                setSubmissionProgress("queued");
+                secureSubmissionReplayOwnedRef.current = true;
+                const replay = await withSubmissionTimeout(replaySecureSubmissionsForOwner(
+                    ownerFingerprint,
+                    {
+                        checkpoint: checkpointDurableStudentAttemptSession,
+                        submit: submitDurableStudentAttemptSession,
+                    },
+                    { sessionId: current.session.sessionId },
+                ));
+                if (replay.status === "blocked") {
+                    setSubmissionProgress("blocked");
+                    toast.error("제출 확인 필요", "응시 세션 상태가 달라 자동으로 가져오지 않았습니다. 직접 다시 시도하거나 선생님에게 문의해주세요.");
+                    return;
+                }
+                if (replay.status !== "submitted" || !replay.submitted[0]) {
+                    setSubmissionProgress("queued");
+                    toast.info("제출 재시도 대기", "답안은 이 기기에 안전하게 보관되었고 온라인 복귀 시 자동으로 다시 시도합니다.");
+                    return;
+                }
+                result = { status: "submitted", receipt: replay.submitted[0] };
+                lastCheckpointFingerprintRef.current = checkpointFingerprint(
+                    submissionAnswers,
+                    submissionSubQuestionAnswers,
+                );
+                lastHandwritingCheckpointFingerprintRef.current = handwritingCheckpointFingerprint(activeDrawings);
+                lastHandwritingCheckpointAtRef.current = Date.now();
+            } catch {
+                if (durablyQueued) {
+                    setSubmissionProgress("queued");
+                    toast.info("제출 재시도 대기", "답안은 이 기기에 안전하게 보관되었고 온라인 복귀 시 자동으로 다시 시도합니다.");
+                } else {
+                    resetFailedSubmission();
+                    await saveDraftSnapshot();
+                    toast.error("제출 보관 실패", "답안을 안전하게 보관하지 못했습니다. 브라우저 저장 공간을 확인한 뒤 다시 제출해주세요.");
+                }
+                return;
+            } finally {
+                secureSubmissionReplayOwnedRef.current = false;
+            }
             if (result.status !== "submitted") {
-                resetFailedSubmission();
-                const detail = result.status === "invalid_ticket"
-                    ? "응시 세션이 만료됐거나 위조된 요청입니다. 시험에 다시 입장해주세요."
-                    : result.status === "invalid_submission"
-                        ? "허용되지 않은 문항 또는 답안이 포함됐습니다. 답안을 확인해주세요."
-                        : "서버에 답안을 저장하지 못했습니다. 네트워크를 확인한 뒤 다시 제출해주세요.";
-                toast.error("서버 제출 실패", detail);
+                setSubmissionProgress("queued");
                 return;
             }
 
@@ -2032,12 +2786,78 @@ export default function SolvePage() {
             let handwritingUpload: Awaited<ReturnType<typeof uploadStudentAttemptHandwriting>> | null = null;
             if (shouldArchiveDrawings) {
                 setSubmissionProgress("saving_handwriting");
+                let recoveryManifest: HandwritingUploadRecoveryManifest | null = null;
+                let recoverySourceRef: StoredDataRef | undefined;
                 try {
-                    handwritingUpload = await uploadStudentAttemptHandwriting({
-                        ticket: secureAttemptTicket,
-                        attemptId: result.receipt.attemptId,
-                        drawings: activeDrawings,
-                    });
+                    const serializedDrawings = JSON.stringify(activeDrawings);
+                    const handwritingByteSize = new TextEncoder().encode(serializedDrawings).byteLength;
+                    const recoverySessionId = durableAttemptRef.current?.session.sessionId;
+                    const recoveryOwnerId = submitter.studentId || submitter.guestId || persistId;
+                    if (
+                        handwritingByteSize > 0
+                        && handwritingByteSize <= HANDWRITING_UPLOAD_MAX_BYTES
+                        && recoverySessionId
+                        && examData.id
+                        && recoveryOwnerId
+                    ) {
+                        const sourceKey = handwritingUploadSourceKey(result.receipt.attemptId);
+                        const ownerFingerprint = await fingerprintHandwritingUploadOwner({
+                            examId: examData.id,
+                            ownerId: recoveryOwnerId,
+                        });
+                        recoverySourceRef = {
+                            store: "indexeddb",
+                            key: sourceKey,
+                            mimeType: "application/json",
+                            size: handwritingByteSize,
+                            updatedAt: new Date().toISOString(),
+                        };
+                        recoveryManifest = persistHandwritingUploadRecovery(window.localStorage, {
+                            attemptId: result.receipt.attemptId,
+                            sessionId: recoverySessionId,
+                            ownerFingerprint,
+                            sourceRef: recoverySourceRef,
+                        });
+                        if (recoveryManifest) {
+                            const savedSource = await withSubmissionTimeout(saveJsonRecord(sourceKey, activeDrawings));
+                            if (!savedSource) {
+                                await clearHandwritingUploadRecovery(window.localStorage, recoveryManifest, deleteStoredData);
+                                recoveryManifest = null;
+                                recoverySourceRef = undefined;
+                            }
+                        }
+                    }
+                    handwritingUpload = await runHandwritingUploadRecovery(result.receipt.attemptId,
+                        () => withSubmissionTimeout(uploadStudentAttemptHandwriting({
+                            sessionId: recoverySessionId,
+                            attemptId: result.receipt.attemptId,
+                            drawings: activeDrawings,
+                        })),
+                        {
+                            onProgress: progress => {
+                                if (!recoveryManifest) return;
+                                recoveryManifest = updateHandwritingUploadRecovery(window.localStorage, recoveryManifest, {
+                                    retryCount: Math.min(progress.attempt, 3),
+                                    nextRetryAt: progress.phase === "waiting"
+                                        ? new Date(Date.now() + progress.delayMs).toISOString()
+                                        : null,
+                                    failureCategory: progress.phase === "failed" ? progress.status : recoveryManifest.failureCategory,
+                                });
+                            },
+                        },
+                    );
+                    if (handwritingUpload.status === "uploaded") {
+                        if (recoveryManifest) {
+                            await clearHandwritingUploadRecovery(window.localStorage, recoveryManifest, deleteStoredData);
+                        } else if (recoverySourceRef) {
+                            await deleteStoredData(recoverySourceRef);
+                        }
+                    } else if (
+                        recoveryManifest
+                        && shouldDeleteHandwritingUploadRecovery(handwritingUpload.status)
+                    ) {
+                        await clearHandwritingUploadRecovery(window.localStorage, recoveryManifest, deleteStoredData);
+                    }
                 } catch (error) {
                     console.error("Student handwriting upload failed after answer submission", error);
                 }
@@ -2069,46 +2889,52 @@ export default function SolvePage() {
                 status: "completed",
                 autoSubmitted,
                 tabFociLostCount: submissionAwayCount,
-                questionTimings,
-                focusLossEvents: focusLossEventsRef.current,
+                questionTimings: submissionQuestionTimings,
+                focusLossEvents: submissionFocusLossEvents,
                 drawingsRef: handwritingUpload?.status === "uploaded" ? handwritingUpload.ref : undefined,
                 handwritingArchived: handwritingUpload?.status === "uploaded",
                 handwritingPlan: currentPlan,
                 questionDrawings,
                 retake: retakeConfig ? { ...retakeConfig, createdAt: new Date().toISOString() } : undefined,
             };
+            let deviceConfirmationDurable = false;
             try {
-                const localSaved = await saveLocalAttempt(cachedAttempt);
-                const receiptSaved = localSaved && await persistSubmissionReceipt({
+                const localSaved = await withSubmissionTimeout(saveLocalAttempt(cachedAttempt));
+                deviceConfirmationDurable = localSaved && await withSubmissionTimeout(persistSubmissionReceipt({
                     attemptId: cachedAttempt.id,
                     status: "confirmed",
                     updatedAt: new Date().toISOString(),
-                });
-                if (!receiptSaved) {
-                    resetFailedSubmission();
-                    toast.error(
-                        "제출 확인 저장 실패",
-                        "서버 제출은 완료됐지만 이 기기의 확인 정보를 저장하지 못했습니다. 저장 공간을 확인한 뒤 다시 시도해주세요.",
-                    );
-                    return;
-                }
+                }));
             } catch (error) {
                 console.error("Secure submission receipt persistence failed", error);
+            }
+            const devicePersistenceBlocksCompletion = shouldBlockSubmissionCompletion({
+                source: "server",
+                receiptStatus: "confirmed",
+                durable: deviceConfirmationDurable,
+            });
+            if (devicePersistenceBlocksCompletion) {
                 resetFailedSubmission();
-                toast.error(
-                    "제출 확인 저장 실패",
-                    "서버 제출은 완료됐지만 이 기기의 확인 정보를 저장하지 못했습니다. 저장 공간을 확인한 뒤 다시 시도해주세요.",
-                );
+                toast.error("제출 저장 실패", "답안 또는 재시도 정보를 안전하게 저장하지 못했습니다. 저장 공간을 확인한 뒤 다시 제출해주세요.");
                 return;
             }
             if (!shouldArchiveDrawings || handwritingUpload?.status === "uploaded") {
                 try { localStorage.removeItem(DRAFT_KEY); } catch {}
                 try { localStorage.removeItem(LEGACY_DRAFT_KEY); } catch {}
             }
-            if (shouldArchiveDrawings && handwritingUpload?.status !== "uploaded") {
-                toast.info("답안 제출 완료 · 필기 재시도 필요", "답안은 공식 저장됐지만 필기 업로드가 실패했습니다. 이 기기의 임시저장은 유지됩니다.");
+            const completionNotice = submissionCompletionNotice({
+                autoSubmitted,
+                handwritingUploadFailed: shouldArchiveDrawings && handwritingUpload?.status !== "uploaded",
+                deviceCacheFailed: !deviceConfirmationDurable,
+            });
+            if (completionNotice) {
+                toast.info(completionNotice.title, completionNotice.detail);
             } else {
                 toast.success("서버 제출 완료", "서버에서 채점하고 공식 결과를 저장했습니다.");
+            }
+            if (durableResumeKeyRef.current) {
+                clearDurableAttemptResumeCredential(window.sessionStorage, durableResumeKeyRef.current);
+                durableResumeKeyRef.current = "";
             }
             setSubmissionProgress("opening_review");
             router.push(`/student/review/${result.receipt.attemptId}`);
@@ -2118,14 +2944,17 @@ export default function SolvePage() {
         let drawingsRef: Attempt["drawingsRef"] | undefined = undefined;
         if (hasDrawings(activeDrawings) && canStoreHandwriting) {
             try {
-                const stored = await saveJsonRecord(`attempt:${attemptId}:drawings`, activeDrawings);
+                const stored = await withSubmissionTimeout(saveJsonRecord(`attempt:${attemptId}:drawings`, activeDrawings));
                 drawingsRef = stored;
             } catch (e) {
                 console.error("Failed to save drawings to IndexedDB", e);
             }
             if (!drawingsRef) {
                 resetFailedSubmission();
-                toast.error("필기 저장 실패", "답안 제출 전 필기 저장에 실패했습니다. 잠시 후 다시 제출해주세요.");
+                toast.error(
+                    "필기 저장 실패",
+                    "답안 제출 전 필기 저장에 실패했습니다. 답안과 임시저장은 유지되며 잠시 후 다시 제출할 수 있습니다.",
+                );
                 return;
             }
         }
@@ -2153,13 +2982,13 @@ export default function SolvePage() {
         const submitInput: SubmitAttemptInput = {
             examId: id,
             submissionId,
-            answers: studentAnswers,
-            subQuestionAnswers,
+            answers: submissionAnswers,
+            subQuestionAnswers: submissionSubQuestionAnswers,
             startedAt,
             autoSubmitted,
             tabFociLostCount: submissionAwayCount,
-            questionTimings,
-            focusLossEvents: focusLossEventsRef.current,
+            questionTimings: submissionQuestionTimings,
+            focusLossEvents: submissionFocusLossEvents,
             drawings: canStoreHandwriting && hasDrawings(activeDrawings) ? activeDrawings : undefined,
             drawingsRef,
             handwriting,
@@ -2225,13 +3054,16 @@ export default function SolvePage() {
 
         let res: Awaited<ReturnType<typeof submitAttemptClient>>;
         try {
-            res = await submitAttemptClient(submitInput, pinRef.current || undefined, {
-                server: (input, pin) => submitAttempt(input, pin),
-                localFallback: buildLocalGradedAttempt,
-                allowLocalFallback: examSource === "local",
-            });
+            res = await runSubmissionWithConfirmationRetry(
+                () => submitAttemptClient(submitInput, submissionPin, {
+                    server: (input, pin) => submitAttempt(input, pin),
+                    localFallback: buildLocalGradedAttempt,
+                    allowLocalFallback: examSource === "local",
+                }),
+                waitForSubmissionConfirmation,
+            );
         } catch (error) {
-            console.error("Local attempt durability failed", error);
+            console.error("Student submission failed before confirmation", error);
             resetFailedSubmission();
             await saveDraftSnapshot();
             toast.error(
@@ -2264,18 +3096,39 @@ export default function SolvePage() {
             return;
         }
 
+        let serverAttemptCached = true;
         if (res.source === "server") {
             // Local echo so review/history/dashboard local caches see it immediately.
-            try { await saveLocalServerConfirmedAttempt(res.attempt); } catch { /* durability helper reports a recoverable failure below */ }
+            try {
+                serverAttemptCached = await withSubmissionTimeout(saveLocalServerConfirmedAttempt(res.attempt));
+            } catch (error) {
+                serverAttemptCached = false;
+                console.error("Server-confirmed attempt cache failed", error);
+            }
         }
 
-        const durability = await persistStudentSubmissionDisposition({
-            attemptId: res.attempt.id,
-            receiptStatus: res.receiptStatus || "local_only",
-            input: submitInput,
-            requiresPin: res.receiptStatus === "pending" && !!pinRef.current,
+        const receiptStatus = res.receiptStatus || "local_only";
+        let durability: StudentSubmissionDurabilityResult;
+        try {
+            durability = await withSubmissionTimeout(persistStudentSubmissionDisposition({
+                attemptId: res.attempt.id,
+                receiptStatus,
+                input: submitInput,
+                requiresPin: receiptStatus === "pending" && !!submissionPin,
+            }));
+        } catch (error) {
+            console.error("Submission receipt persistence timed out", error);
+            durability = {
+                durable: false,
+                error: "제출 재시도 정보를 제시간에 저장하지 못했습니다. 브라우저 저장 공간을 확인한 뒤 다시 제출해주세요.",
+            };
+        }
+        const durabilityBlocksCompletion = shouldBlockSubmissionCompletion({
+            source: res.source,
+            receiptStatus,
+            durable: durability.durable,
         });
-        if (!durability.durable) {
+        if (durabilityBlocksCompletion && !durability.durable) {
             resetFailedSubmission();
             await saveDraftSnapshot();
             toast.error("제출 재시도 저장 실패", durability.error);
@@ -2286,8 +3139,13 @@ export default function SolvePage() {
         try { localStorage.removeItem(DRAFT_KEY); } catch {}
         try { localStorage.removeItem(LEGACY_DRAFT_KEY); } catch {}
 
-        if (autoSubmitted) {
-            toast.info("시간 종료", "답안이 자동으로 제출되었습니다.");
+        const completionNotice = submissionCompletionNotice({
+            autoSubmitted,
+            handwritingUploadFailed: false,
+            deviceCacheFailed: res.source === "server" && (!serverAttemptCached || !durability.durable),
+        });
+        if (completionNotice) {
+            toast.info(completionNotice.title, completionNotice.detail);
         }
         setSubmissionProgress("opening_review");
         router.push(`/student/review/${res.attempt.id}`);
@@ -2323,6 +3181,7 @@ export default function SolvePage() {
         const trimmedName = guestName.trim();
         if (!pending || !trimmedName) return;
         const submitter = await createGuestSubmitter(trimmedName);
+        if (!submitter) return;
         setGuestSubmitPending(null);
         setGuestName("");
         void handleSubmitInternal(pending.autoSubmitted, submitter);
@@ -2419,7 +3278,19 @@ export default function SolvePage() {
             return;
         }
         const res = await loadExamForSolvingClient(id, pinInput, {
-            server: (examId, pin) => loadExamForSolving(examId, pin),
+            server: (examId, pin) => loadExamForSolving(
+                examId,
+                pin,
+                typeof window === "undefined" ? undefined : readExamEntryInviteHandoff(
+                    window.sessionStorage,
+                    examId,
+                    Date.now(),
+                    user && !user.isGuest ? user.studentId : undefined,
+                ) || undefined,
+                typeof window === "undefined"
+                    ? undefined
+                    : new URLSearchParams(window.location.search).get("assignment") || undefined,
+            ),
             readLocalExam,
             evaluateLocalAccess: (exam) => {
                 const decision = evaluateExamAccess(exam, { session: user, pinVerified: verifyExamPin(exam, pinInput) });
@@ -2429,6 +3300,10 @@ export default function SolvePage() {
         if (res.status === "ok" && res.exam) {
             pinRef.current = pinInput;
             setPinError("");
+            if (res.source === "server") {
+                setSecureRemoteMode(true);
+                setSecureRequiresPin(true);
+            }
             // The PIN just passed — tell applyLoadedExam not to re-gate a local exam.
             await applyLoadedExam(res.exam as Exam, res.source, user, res.source === "local");
             return;
@@ -2517,6 +3392,18 @@ export default function SolvePage() {
     const studentLoginHref = currentSolvePath
         ? `/?role=student&next=${encodeURIComponent(currentSolvePath)}`
         : "/?role=student";
+
+    if (leaseConflict) {
+        return (
+            <div className="layout-main solve-page" style={{ minHeight: 'var(--app-viewport-height, 100dvh)' }}>
+                <LeaseTakeoverDialog
+                    busy={takeoverPending}
+                    onTakeover={() => { void continueWithLeaseTakeover(); }}
+                    onCancel={() => router.push("/student/dashboard")}
+                />
+            </div>
+        );
+    }
 
     if (canShowEntryConfirm) {
         return (
@@ -2613,6 +3500,14 @@ export default function SolvePage() {
             flexDirection: 'column'
         }}>
             {/* Header */}
+            {durableSyncError && (
+                <div role="alert" style={{ padding: '0.55rem 1rem', background: 'rgba(245,158,11,0.14)', color: 'var(--warning)', display: 'flex', justifyContent: 'center', alignItems: 'center', gap: '0.75rem', fontSize: '0.78rem', fontWeight: 750 }}>
+                    <span>{durableSyncError}</span>
+                    <button type="button" className="btn btn-secondary" onClick={() => window.location.reload()} style={{ minHeight: 32, padding: '0.3rem 0.65rem' }}>
+                        서버 상태 다시 불러오기
+                    </button>
+                </div>
+            )}
             <header className="header solve-header" style={{
                 flexShrink: 0,
                 height: 'auto',
@@ -2627,7 +3522,7 @@ export default function SolvePage() {
                             background: 'var(--border)',
                             flexShrink: 0
                         }} />
-                        <span className="solve-title" style={{
+                        <span className="solve-title" title={`${examData.title}${retakeConfig ? ` · 재시험 ${retakeConfig.questionIds.length}문항` : ''}`} style={{
                             fontSize: '0.9rem',
                             fontWeight: 700,
                             color: 'var(--foreground)',
@@ -2640,6 +3535,7 @@ export default function SolvePage() {
                         </span>
                     </div>
 
+                    <div className="solve-status-row">
                     {/* Timer */}
                     {timeRemaining !== null && (
                         (() => {
@@ -2735,84 +3631,49 @@ export default function SolvePage() {
                                 : '필기 임시'}
                         </span>
                     )}
+                    </div>
 
                     <div className="solve-controls" style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', flexShrink: 0 }}>
-                        <label className="solve-teacher-toggle" style={{
-                            display: 'flex',
-                            alignItems: 'center',
-                            gap: '0.4rem',
-                            fontSize: '0.78rem',
-                            cursor: 'pointer',
-                            background: 'var(--background)',
-                            border: '1px solid var(--border)',
-                            padding: '0.35rem 0.7rem',
-                            borderRadius: 'var(--radius-full)',
-                            fontWeight: 600,
-                            color: 'var(--muted)'
-                        }}>
-                            <input
-                                type="checkbox"
-                                aria-label="선생님 모드"
-                                checked={isTeacherMode}
-                                onChange={(e) => toggleTeacherMode(e.target.checked)}
-                                style={{ margin: 0 }}
-                            />
-                            <span className="solve-teacher-toggle-label">선생님 모드</span>
-                        </label>
+                        <details className="solve-tools-disclosure">
+                            <summary className="btn btn-secondary" aria-label="풀이 도구">도구</summary>
+                            <div className="solve-tools-panel">
+                                <label className="solve-teacher-toggle">
+                                    <input
+                                        type="checkbox"
+                                        aria-label="선생님 모드"
+                                        checked={isTeacherMode}
+                                        onChange={(e) => toggleTeacherMode(e.target.checked)}
+                                    />
+                                    <span className="solve-teacher-toggle-label">선생님 모드</span>
+                                </label>
 
-                        {isTeacherMode ? (
-                            <div className="solve-tab-toggle" style={{
-                                display: 'flex',
-                                background: 'var(--background)',
-                                border: '1px solid var(--border)',
-                                borderRadius: 'var(--radius-full)',
-                                padding: '3px'
-                            }}>
-                                <button
-                                    className="solve-tab-button"
-                                    onClick={() => setActiveTab('problem')}
-                                    style={{
-                                        padding: '0.3rem 0.8rem',
-                                        fontSize: '0.78rem',
-                                        borderRadius: 'var(--radius-full)',
-                                        border: 'none',
-                                        background: activeTab === 'problem' ? 'var(--primary)' : 'transparent',
-                                        color: activeTab === 'problem' ? 'white' : 'var(--muted)',
-                                        fontWeight: 700,
-                                        cursor: 'pointer',
-                                        transition: 'all 0.2s'
-                                    }}
-                                >
-                                    문제지
-                                </button>
-                                <button
-                                    className="solve-tab-button"
-                                    onClick={() => setActiveTab('answer')}
-                                    style={{
-                                        padding: '0.3rem 0.8rem',
-                                        fontSize: '0.78rem',
-                                        borderRadius: 'var(--radius-full)',
-                                        border: 'none',
-                                        background: activeTab === 'answer' ? 'var(--primary)' : 'transparent',
-                                        color: activeTab === 'answer' ? 'white' : 'var(--muted)',
-                                        fontWeight: 700,
-                                        cursor: 'pointer',
-                                        transition: 'all 0.2s'
-                                    }}
-                                >
-                                    정답/해설
-                                </button>
+                                {isTeacherMode ? (
+                                    <div className="solve-tab-toggle">
+                                        <button className="solve-tab-button" onClick={() => setActiveTab('problem')} aria-pressed={activeTab === 'problem'}>문제지</button>
+                                        <button className="solve-tab-button" onClick={() => setActiveTab('answer')} aria-pressed={activeTab === 'answer'}>정답/해설</button>
+                                    </div>
+                                ) : (
+                                    <>
+                                        <button
+                                            type="button"
+                                            className="btn btn-secondary solve-pdf-button"
+                                            onClick={() => studentPdfUploadInputRef.current?.click()}
+                                        >
+                                            PDF 열기
+                                        </button>
+                                        <input
+                                            ref={studentPdfUploadInputRef}
+                                            id="pdf-upload-input"
+                                            type="file"
+                                            accept=".pdf"
+                                            onChange={(e) => e.target.files && handleStudentPdfUpload(e.target.files[0])}
+                                            style={{ display: 'none' }}
+                                        />
+                                    </>
+                                )}
+                                <ThemeToggle />
                             </div>
-                        ) : (
-                            <label className="btn btn-secondary solve-pdf-button" style={{
-                                cursor: 'pointer',
-                                fontSize: '0.8rem',
-                                padding: '0.45rem 0.85rem'
-                            }}>
-                                PDF 열기
-                                <input id="pdf-upload-input" type="file" accept=".pdf" onChange={(e) => e.target.files && handleStudentPdfUpload(e.target.files[0])} style={{ display: 'none' }} />
-                            </label>
-                        )}
+                        </details>
 
                         <button
                             onClick={toggleOMRPanel}
@@ -2835,7 +3696,6 @@ export default function SolvePage() {
                         <button className="btn btn-primary solve-submit-button" style={{ padding: '0.5rem 1rem', fontSize: '0.85rem' }} onClick={handleSubmit} disabled={submissionProgress !== null}>
                             {submissionProgress ? "제출 중" : "제출하기"}
                         </button>
-                        <ThemeToggle />
                     </div>
                 </div>
             </header>
@@ -3081,7 +3941,11 @@ export default function SolvePage() {
             )}
 
             {submissionProgress && (
-                <SubmissionProgressOverlay phase={submissionProgress} delayed={submissionDelayed} />
+                <SubmissionProgressOverlay
+                    phase={submissionProgress}
+                    delayed={submissionDelayed}
+                    onRetry={retryUncertainSubmission}
+                />
             )}
 
             {guestSubmitPending && (

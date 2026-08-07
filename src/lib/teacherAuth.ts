@@ -2,6 +2,7 @@ import { createHash, pbkdf2Sync, randomBytes, timingSafeEqual } from "node:crypt
 import type { TeacherMemberRole } from "@/lib/teacherSession";
 import type { PlanKey } from "@/types/omr";
 import { normalizePlan } from "@/utils/plans";
+import { verifyTeacherAccountPasswordConstantWork } from "./teacherAccountLifecycle";
 
 export { TEACHER_AUTH_DEPLOYMENT_CONFIG_ERROR, TEACHER_AUTH_ERROR } from "./teacherAuthMessages";
 
@@ -37,7 +38,8 @@ export type TeacherAuthConfigIssueKey =
     | "invalid-teacher-accounts-json"
     | "empty-teacher-accounts"
     | "duplicate-teacher-identifier"
-    | "invalid-teacher-password-hash";
+    | "invalid-teacher-password-hash"
+    | "plaintext-production-teacher-password";
 
 export type TeacherAuthConfigWarningKey =
     | "plaintext-production-teacher-password";
@@ -295,7 +297,7 @@ function duplicateCredentialIdentifiers(credentials: TeacherCredential[]): strin
 
 export function resolveTeacherPassword(env: TeacherAuthEnv = process.env): string | null {
     const configuredPassword = clean(env.TEACHER_PASSWORD);
-    if (configuredPassword) return configuredPassword;
+    if (configuredPassword) return env.NODE_ENV === "production" ? null : configuredPassword;
     if (resolveTeacherPasswordHash(env)) return null;
     return env.NODE_ENV === "production" ? null : "admin123";
 }
@@ -304,11 +306,11 @@ export function resolveTeacherCredentials(env: TeacherAuthEnv = process.env): Te
     const configuredAccounts = [
         ...parseTeacherAccounts(env.TEACHER_ACCOUNTS),
         ...parseTeacherAccounts(env.OMR_TEACHER_ACCOUNTS),
-    ];
+    ].filter(credential => env.NODE_ENV !== "production" || !!credential.passwordHash);
     if (configuredAccounts.length > 0) return configuredAccounts;
 
     const configuredPasswordHash = resolveTeacherPasswordHash(env);
-    const configuredPassword = clean(env.TEACHER_PASSWORD);
+    const configuredPassword = env.NODE_ENV === "production" ? "" : clean(env.TEACHER_PASSWORD);
     if (configuredPasswordHash || configuredPassword) {
         const email = clean(env.TEACHER_EMAIL).toLowerCase();
         const id = clean(env.TEACHER_LOGIN_ID) || email || "admin";
@@ -340,6 +342,7 @@ export function inspectTeacherAuthConfig(env: TeacherAuthEnv = process.env): Tea
     const issues: TeacherAuthConfigIssue[] = [];
     const warnings: TeacherAuthConfigWarning[] = [];
     const accountsInputConfigured = hasTeacherAccountsInput(env);
+    const plaintextProductionCredential = hasProductionPlaintextCredentialInput(env);
 
     if (teacherAccountsInputHasInvalidJson(env.TEACHER_ACCOUNTS) || teacherAccountsInputHasInvalidJson(env.OMR_TEACHER_ACCOUNTS)) {
         issues.push({
@@ -347,7 +350,12 @@ export function inspectTeacherAuthConfig(env: TeacherAuthEnv = process.env): Tea
             label: "교사 계정 JSON 오류",
             detail: "TEACHER_ACCOUNTS 또는 OMR_TEACHER_ACCOUNTS 값이 올바른 JSON 배열이 아닙니다.",
         });
-    } else if (accountsInputConfigured && credentials.length === 0 && !hasSingleTeacherCredentialInput(env)) {
+    } else if (
+        accountsInputConfigured
+        && credentials.length === 0
+        && !hasSingleTeacherCredentialInput(env)
+        && !plaintextProductionCredential
+    ) {
         issues.push({
             key: "empty-teacher-accounts",
             label: "유효한 교사 계정 없음",
@@ -380,11 +388,11 @@ export function inspectTeacherAuthConfig(env: TeacherAuthEnv = process.env): Tea
         });
     }
 
-    if (hasProductionPlaintextCredentialInput(env)) {
-        warnings.push({
+    if (plaintextProductionCredential) {
+        issues.push({
             key: "plaintext-production-teacher-password",
             label: "운영 교사 비밀번호 plaintext 사용",
-            detail: "운영 배포에서는 TEACHER_PASSWORD 또는 TEACHER_ACCOUNTS의 password 대신 passwordHash/TEACHER_PASSWORD_HASH 사용을 권장합니다.",
+            detail: "운영 배포에서는 TEACHER_PASSWORD 또는 TEACHER_ACCOUNTS의 password를 사용할 수 없습니다. passwordHash/TEACHER_PASSWORD_HASH로 교체하세요.",
         });
     }
 
@@ -413,9 +421,11 @@ function passwordHashMatches(providedPassword: string, expectedPasswordHash: str
 }
 
 function credentialPasswordMatches(providedPassword: string, credential: TeacherCredential): boolean {
-    if (credential.passwordHash) return passwordHashMatches(providedPassword, credential.passwordHash);
-    if (credential.password) return passwordMatches(providedPassword, credential.password);
-    return false;
+    if (credential.passwordHash) {
+        return passwordHashMatches(providedPassword, credential.passwordHash);
+    }
+    verifyTeacherAccountPasswordConstantWork(providedPassword, undefined);
+    return !!credential.password && passwordMatches(providedPassword, credential.password);
 }
 
 function credentialMatchesIdentifier(credential: TeacherCredential, identifier: unknown): boolean {
@@ -433,7 +443,15 @@ export function verifyTeacherLogin(
     if (typeof password !== "string") return { success: false };
     const credentials = resolveTeacherCredentials(env);
     const credential = credentials.find(item => credentialMatchesIdentifier(item, identifier));
-    if (!credential) return { success: false };
+    if (!credential) {
+        const representativeHash = credentials.find(item => item.passwordHash)?.passwordHash;
+        if (representativeHash) {
+            passwordHashMatches(password, representativeHash);
+        } else {
+            verifyTeacherAccountPasswordConstantWork(password, undefined);
+        }
+        return { success: false };
+    }
     if (!credentialPasswordMatches(password, credential)) return { success: false };
 
     return {

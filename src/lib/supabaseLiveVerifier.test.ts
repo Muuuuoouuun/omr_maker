@@ -8,6 +8,17 @@ const verifier = readFileSync(
 );
 
 describe("Supabase live verifier local PostgreSQL fallback", () => {
+    it("rehearses boundary rollback and then restores the production boundary", () => {
+        expect(verifier).toContain('psqlFile("supabase/production-server-boundary.sql")');
+        expect(verifier).toContain('psqlFile("supabase/teacher-force-finish-compact-assertions.sql")');
+        expect(verifier).toContain('psqlFile("supabase/teacher-session-revocation-assertions.sql")');
+        expect(verifier).toContain('psqlFile("supabase/live-test-assertions.sql")');
+        expect(verifier).toContain('psqlFile("supabase/production-server-boundary-rollback.sql",');
+        expect(verifier).toContain('psqlFile("supabase/live-test-rollback-assertions.sql")');
+        expect(verifier.match(/psqlFile\("supabase\/production-server-boundary\.sql"\)/g)).toHaveLength(2);
+        expect(verifier.match(/psqlFile\("supabase\/live-test-boundary-assertions\.sql"\)/g)).toHaveLength(2);
+    });
+
     it("uses an isolated loopback-only PostgreSQL 17 cluster and always cleans it up", () => {
         expect(verifier).toContain("OMR_SUPABASE_LIVE_BACKEND");
         expect(verifier).toContain("OMR_POSTGRES_BIN");

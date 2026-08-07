@@ -346,7 +346,7 @@ describe("service UI surface", () => {
         expect(distributeModal).toContain("const wasOpenRef = useRef(false)");
         expect(distributeModal).toContain("if (wasOpenRef.current)");
         expect(distributeModal).toContain("wasOpenRef.current = true");
-        expect(distributeModal).toContain("const initialType = initialAccessConfig?.type === 'group' ? 'group' : 'public'");
+        expect(distributeModal).toContain("initialAccessConfig?.type === 'targeted' ? 'student'");
         expect(distributeModal).toContain("setAccessType(initialType)");
         expect(distributeModal).toContain("setSelectedGroups(initialType === 'group' ? [...(initialAccessConfig?.groupIds || [])] : [])");
         expect(distributeModal).toContain('setPin(initialType === \'public\' ? normalizeExamPin(initialAccessConfig?.pin || "") : "")');
@@ -358,8 +358,9 @@ describe("service UI surface", () => {
         expect(distributeModal).toContain('role="dialog"');
         expect(distributeModal).toContain('aria-modal="true"');
         expect(distributeModal).toContain("aria-labelledby={dialogTitleId}");
-        expect(distributeModal).toContain("event.key === 'Escape'");
-        expect(distributeModal).toContain("previouslyFocusedRef.current?.focus()");
+        expect(distributeModal).toContain("useDialogFocus(isOpen, onClose)");
+        expect(createPage).toContain("distributeTriggerRef.current = event.currentTarget");
+        expect(createPage).toContain("trigger.focus({ preventScroll: true })");
     });
 
     it("keeps teacher result sorting keyboard accessible and exposes sort state", () => {
@@ -404,7 +405,8 @@ describe("service UI surface", () => {
         const solvePage = readProjectFile("src/app/solve/[id]/page.tsx");
 
         expect(solvePage).toContain("SubmissionProgressOverlay");
-        expect(solvePage).toContain('role="status"');
+        expect(solvePage).toContain('role={allowsRetry ? "dialog" : "status"}');
+        expect(solvePage).toContain("aria-modal={allowsRetry || undefined}");
         expect(solvePage).toContain('aria-live="polite"');
         expect(solvePage).toContain("SUBMISSION_DELAY_NOTICE_MS");
         expect(solvePage).toContain('setSubmissionProgress("saving_handwriting")');
@@ -424,7 +426,7 @@ describe("service UI surface", () => {
         expect(omrCardView).toContain('role="progressbar"');
         expect(omrCardView).toContain("aria-valuenow={answeredCount}");
         expect(omrCardView).toContain("q-card-select-button");
-        expect(homePage).toContain('aria-label="교사 로그인"');
+        expect(homePage).toContain('aria-label={teacherAccountFormLabel}');
         expect(homePage).toContain('htmlFor="teacher-identifier"');
         expect(homePage).toContain('htmlFor="teacher-password"');
         expect(homePage).toContain('id="teacher-login-feedback"');
@@ -605,8 +607,47 @@ describe("service UI surface", () => {
         expect(pwaCheck).toContain("설치 실행 전");
         expect(pwaCheck).toContain('minHeight: "2.75rem"');
         expect(pwaCheck).toContain('minWidth: "2.75rem"');
-        expect(themeToggle).toContain('size === "small" ? "40px" : "44px"');
-        expect(themeToggle).toContain("const btnSize = size === \"small\" ? 40 : 44");
+        expect(themeToggle).toContain('width: "44px"');
+        expect(themeToggle).toContain("const btnSize = 44");
+    });
+
+    it("keeps the PWA verdict and preflight visible while progressively disclosing advanced diagnostics", () => {
+        const pwaCheck = readProjectFile("src/app/pwa-check/page.tsx");
+        const verdictIndex = pwaCheck.indexOf('data-testid="pwa-device-verdict"');
+        const preflightIndex = pwaCheck.indexOf('data-testid="pwa-preflight-checklist"');
+        const diagnosticsIndex = pwaCheck.indexOf('data-testid="pwa-advanced-diagnostics"');
+        const installIndex = pwaCheck.indexOf('data-testid="pwa-install-proof-guide"');
+        const handoffIndex = pwaCheck.indexOf('data-testid="pwa-device-handoff"');
+        const proofIndex = pwaCheck.indexOf('data-testid="pwa-proof-verifier"');
+
+        expect(pwaCheck).toContain("<details");
+        expect(pwaCheck).toContain("<summary");
+        expect(pwaCheck).toContain('data-testid="pwa-advanced-diagnostics-summary"');
+        expect(pwaCheck).toContain("설치·전달·증빙 진단");
+        expect(verdictIndex).toBeGreaterThan(-1);
+        expect(preflightIndex).toBeGreaterThan(verdictIndex);
+        expect(diagnosticsIndex).toBeGreaterThan(preflightIndex);
+        expect(installIndex).toBeGreaterThan(diagnosticsIndex);
+        expect(handoffIndex).toBeGreaterThan(installIndex);
+        expect(proofIndex).toBeGreaterThan(handoffIndex);
+        expect(pwaCheck.slice(diagnosticsIndex, installIndex)).not.toContain(" open=");
+    });
+
+    it("promotes only PWA checks needing attention and collapses passed checks behind an honest count", () => {
+        const pwaCheck = readProjectFile("src/app/pwa-check/page.tsx");
+
+        expect(pwaCheck).toContain('snapshot.checks.filter(check => check.tone !== "pass")');
+        expect(pwaCheck).toContain('snapshot.checks.filter(check => check.tone === "pass")');
+        expect(pwaCheck).toContain('data-testid="pwa-passed-checks"');
+        expect(pwaCheck).toContain('data-testid="pwa-passed-checks-summary"');
+        expect(pwaCheck).toContain("{passedChecks.length}개 항목 통과");
+        expect(pwaCheck).toContain("passedChecks.map(check => <CheckRow key={check.id} check={check} />)");
+
+        const passedDisclosureIndex = pwaCheck.indexOf('data-testid="pwa-passed-checks"');
+        const advancedDiagnosticsIndex = pwaCheck.indexOf('data-testid="pwa-advanced-diagnostics"');
+        expect(passedDisclosureIndex).toBeGreaterThan(-1);
+        expect(advancedDiagnosticsIndex).toBeGreaterThan(passedDisclosureIndex);
+        expect(pwaCheck.slice(passedDisclosureIndex, advancedDiagnosticsIndex)).not.toContain(" open=");
     });
 
     it("keeps student app chrome controls comfortable on touch devices", () => {
@@ -631,6 +672,24 @@ describe("service UI surface", () => {
         expect(css).toContain(".home-role-home-link");
     });
 
+    it("stacks the student dashboard mobile header without truncating identity actions", () => {
+        const studentDashboard = readProjectFile("src/app/student/dashboard/page.tsx");
+        const css = readProjectFile("src/app/globals.css");
+
+        expect(studentDashboard).toContain('student-dashboard-group-label${user.isGuest ? " is-redundant" : ""}');
+        expect(studentDashboard).toContain('className="student-dashboard-login-id"');
+        expect(studentDashboard).toContain('className="student-dashboard-controls"');
+        expect(css).toContain(".student-dashboard-brand");
+        expect(css).toContain(".student-dashboard-identity");
+        expect(css).toContain("grid-template-columns: minmax(0, 1fr) auto");
+        expect(css).toContain(".student-dashboard-group-label.is-redundant");
+        expect(css).toContain("display: none");
+        expect(css).toContain(".student-dashboard-login-id");
+        expect(css).toContain("overflow-wrap: anywhere");
+        expect(css).toContain(".student-dashboard-controls");
+        expect(css).toContain("flex-shrink: 0");
+    });
+
     it("keeps teacher app chrome controls comfortable on touch devices", () => {
         const css = readProjectFile("src/app/globals.css");
         const notificationBell = readProjectFile("src/components/NotificationBell.tsx");
@@ -644,14 +703,14 @@ describe("service UI surface", () => {
         expect(notificationBell).toContain("width: 44, height: 44");
         expect(notificationBell).toContain("minHeight: 44");
         expect(teacherHeader).toContain('className="header teacher-header"');
-        expect(teacherHeader).toContain("minHeight: '2.75rem'");
-        expect(teacherHeader).toContain('className="nav-link-live"');
+        expect(teacherHeader).toContain("minHeight: 44");
+        expect(teacherHeader).toContain('className="teacher-header-live-action"');
+        expect(teacherHeader).toContain('aria-label="교사 계정 메뉴"');
         // The dashboard used to carry its own copy of this header; it now gets
         // the chrome (and these touch targets) through the shared TeacherHeader.
         expect(teacherDashboard).toContain("<TeacherHeader");
         expect(css).toContain(".teacher-header-actions");
-        expect(css).toContain(".teacher-header .nav-link");
-        expect(css).toContain(".nav-link-live");
+        expect(teacherHeader).toContain(".teacher-header-live-action { display: none !important; }");
         expect(css).toContain(".create-editor-actions .btn");
         expect(css).toContain("min-height: 2.75rem");
         expect(css).toContain("min-width: 2.75rem");
@@ -710,6 +769,7 @@ describe("service UI surface", () => {
         expect(layout).toContain("<ViewportHeightSync />");
         expect(viewportHeightSync).toContain('"interactive-widget=resizes-content"');
         expect(viewportHeightSync).toContain("isIOSLikeDevice");
+        expect(viewportHeightSync).toContain('"virtualKeyboard" in window.navigator');
         expect(viewportHeightSync).toContain('"--app-viewport-height"');
         expect(viewportHeightSync).toContain('"--app-viewport-width"');
         expect(viewportHeightSync).toContain('"--app-visual-viewport-offset-top"');
@@ -773,8 +833,8 @@ describe("service UI surface", () => {
         const homePage = readProjectFile("src/app/page.tsx");
         const solvePage = readProjectFile("src/app/solve/[id]/page.tsx");
 
-        expect(homePage).toContain('autoComplete="username"');
-        expect(homePage).toContain('autoComplete="current-password"');
+        expect(homePage).toContain('autoComplete={teacherAccountMode === "login" ? "username" : "email"}');
+        expect(homePage).toContain('autoComplete={teacherAccountMode === "login" ? "current-password" : "new-password"}');
         expect(homePage).toContain('autoComplete="name"');
         expect(homePage).toContain('autoComplete="email"');
         expect(homePage).toContain('inputMode="email"');
@@ -1015,6 +1075,31 @@ describe("service UI surface", () => {
         expect(billingPage).toContain("토스페이먼츠");
         expect(billingPage).toContain("네이버페이");
         expect(billingPage).toContain("카카오페이");
+    });
+
+    it("subtracts secondary billing detail on phones without hiding the current and Pro comparison", () => {
+        const billingPage = readProjectFile("src/app/teacher/billing/page.tsx");
+        const css = readProjectFile("src/app/globals.css");
+
+        expect(billingPage).toContain('className="bento-card billing-current-plan-card"');
+        expect(billingPage).toContain('className="billing-current-plan-main"');
+        expect(billingPage).toContain('className="plans-grid"');
+        expect(billingPage).toContain('className="billing-academy-disclosure"');
+        expect(billingPage).toContain("billing-academy-disclosure-content");
+        expect(billingPage).toContain('className="bento-card billing-invoices-card billing-history-disclosure"');
+        expect(billingPage).toContain('className="billing-history-disclosure-content"');
+        expect(billingPage).toContain('className="billing-mobile-disclosure-action"');
+        expect(billingPage).not.toContain('<details open className="billing-academy-disclosure"');
+        expect(billingPage).not.toContain('<details open className="bento-card billing-invoices-card billing-history-disclosure"');
+
+        expect(css).toContain("@media (max-width: 640px)");
+        expect(css).toContain(".billing-current-plan-card");
+        expect(css).toContain(".billing-academy-disclosure > summary");
+        expect(css).toContain(".billing-history-disclosure > summary");
+        expect(css).toContain(".billing-academy-disclosure:not([open]) > .billing-academy-disclosure-content");
+        expect(css).toContain(".billing-history-disclosure:not([open]) > .billing-history-disclosure-content");
+        expect(css).toContain("[open] > summary .billing-mobile-disclosure-action::after");
+        expect(css).toContain("overflow-x: hidden");
     });
 
     it("keeps dashboard statistics exportable as CSV", () => {
@@ -1346,7 +1431,7 @@ describe("service UI surface", () => {
         const resetBlock = teacherAttemptPage.slice(loaderStart, authCheck);
 
         for (const reset of [
-            "setLoaded(false);",
+            'setDetailLoadStatus("loading");',
             "setAccessDenied(false);",
             "setAttempt(null);",
             "setExam(null);",
@@ -1373,7 +1458,8 @@ describe("service UI surface", () => {
             expect(resetBlock).toContain(reset);
         }
         expect(resetBlock).not.toContain("setPeerAttempts");
-        expect(teacherAttemptPage).toContain("if (cancelled) return;\n                if (!found) {");
+        expect(teacherAttemptPage).toContain('if (detailResult.status === "not_found") {');
+        expect(teacherAttemptPage).toContain('if (detailResult.status === "service_unavailable") {');
         expect(teacherAttemptPage).toContain("if (cancelled) return;\n\n                const parsedExam");
         expect(teacherAttemptPage).toContain(".catch(() => undefined);");
         expect(teacherAttemptPage).not.toContain("setPeerAttempts([])");
@@ -1456,7 +1542,8 @@ describe("service UI surface", () => {
 
         expect(studentDashboard).toContain("나의 원시험 평균");
         expect(studentDashboard).toContain("완료한 원시험");
-        expect(studentDashboard).toContain("retakeAttemptsOnly(myAttempts)");
+        expect(studentDashboard).toContain("attempt => !attempt.retakeSourceAttemptId");
+        expect(studentDashboard).toContain("attempt => !!attempt.retakeSourceAttemptId");
         expect(studentHistory).toContain("원시험 응시");
         expect(studentHistory).toContain("재시험 회복");
         expect(studentHistory).toContain("재시험 {attempt.retake.questionIds.length}문항");
@@ -1614,6 +1701,17 @@ describe("service UI surface", () => {
         expect(pwaMobileE2e).toContain("reviewStatSizing.cardHeight + 2");
     });
 
+    it("keeps student review reading order aligned without CSS reordering on phones", () => {
+        const css = readProjectFile("src/app/globals.css");
+        const pwaMobileE2e = readProjectFile("e2e/pwa-mobile.spec.ts");
+
+        expect(css).toContain('"summary content"');
+        expect(css).toContain('"secondary content"');
+        expect(css).not.toContain("display: contents");
+        expect(css).not.toMatch(/\.student-review-(?:content|side-card|next-action)\s*{\s*order\s*:/);
+        expect(pwaMobileE2e).toContain("expect(reviewFlow.contentTop).toBeLessThan(reviewFlow.secondaryTop)");
+    });
+
     it("keeps Kakao notifications planned without implying live sending", () => {
         const settingsPage = readProjectFile("src/app/teacher/settings/page.tsx");
         const overviewTab = readProjectFile("src/components/dashboard/tabs/OverviewTab.tsx");
@@ -1709,7 +1807,7 @@ describe("service UI surface", () => {
         expect(settingsPage).toContain("DataDbSection");
         expect(settingsPage).toContain("buildDataDbReadiness");
         expect(settingsPage).toContain("loadTeacherExams()");
-        expect(settingsPage).toContain("loadTeacherAttempts()");
+        expect(settingsPage).toContain("loadTeacherAttemptSummaries()");
         expect(settingsPage).toContain("loadTeacherRosterSnapshot(window.localStorage)");
         expect(settingsPage).toContain("readRosterTombstones(window.localStorage)");
         expect(settingsPage).toContain('aria-label="데이터 DB 상태 새로고침"');
@@ -1773,7 +1871,7 @@ describe("service UI surface", () => {
         expect(usersPage).toContain("const rosterStudents = isDemoRoster ? MOCK_STUDENTS : students");
         expect(usersPage).toContain("const rosterInvites = isDemoRoster ? MOCK_INVITES : invites");
         expect(usersPage).toContain("buildRegionalLearningScopes");
-        expect(usersPage).toContain("지역별 현황");
+        expect(usersPage).toContain("전체 지역");
         expect(usersPage).toContain("학생 지역 필터");
         expect(usersPage).toContain('"name", "email", "group", "region"');
         expect(usersPage).toContain("WeaknessRetakeLink");
@@ -1806,5 +1904,54 @@ describe("service UI surface", () => {
         expect(livePage).not.toContain("학생들의 시험 진행 상황을 실시간으로 모니터링하세요.");
         expect(livePage).not.toContain("Math.random");
         expect(livePage).toContain("shouldUseDemoData(readTeacherSession())");
+    });
+
+    it("keeps the live force-finish confirmation inside the shared dialog focus lifecycle", () => {
+        const livePage = readProjectFile("src/app/teacher/live/page.tsx");
+
+        expect(livePage).toContain('import { useDialogFocus } from "@/hooks/useDialogFocus"');
+        expect(livePage).toContain("const dialogRef = useDialogFocus(true, onCancel)");
+        expect(livePage).toContain("ref={dialogRef}");
+        expect(livePage).toContain('tabIndex={-1}');
+    });
+
+    it("keeps warning, print, and view-switching affordances accessible", () => {
+        const createPage = readProjectFile("src/app/create/page.tsx");
+        const dashboardPage = readProjectFile("src/app/teacher/dashboard/page.tsx");
+        const usersPage = readProjectFile("src/app/teacher/users/page.tsx");
+        const settingsPage = readProjectFile("src/app/teacher/settings/page.tsx");
+        const livePage = readProjectFile("src/app/teacher/live/page.tsx");
+        const studentDashboardPage = readProjectFile("src/app/student/dashboard/page.tsx");
+        const historyPage = readProjectFile("src/app/student/history/page.tsx");
+        const groupsTab = readProjectFile("src/components/teacher/users/GroupsTab.tsx");
+        const css = readProjectFile("src/app/globals.css");
+
+        expect(createPage).toContain("const hasValidationIssues = validationSummary.errors.length > 0 || validationSummary.warnings.length > 0");
+        expect(createPage).toContain("{hasValidationIssues && <div className=\"create-design-check-compact\"");
+        expect(createPage).toContain("validationSummary.warnings.length > 0 ? '경고 확인'");
+        expect(dashboardPage).toContain('role="group" aria-label="대시보드 보기"');
+        expect(dashboardPage).toContain("aria-pressed={activeTab === 'overview'}");
+        expect(dashboardPage).not.toContain('role="tab"');
+        expect(usersPage).toContain('role="group" aria-label="명단 보기"');
+        expect(usersPage).toContain("aria-pressed={tab === t.key}");
+        expect(usersPage).not.toContain('role="tab"');
+        expect(css).toContain(".student-review-page details:not([open]) > :not(summary)");
+        expect(css).toContain(".student-review-page details > summary::marker");
+        expect(css).not.toContain(".student-review-page details > summary {\n    display: none !important;");
+        expect(settingsPage).toContain('className="bento-card settings-section-nav"');
+        expect(livePage).toContain("classifyTeacherLiveExamPhase");
+        expect(livePage).toContain("teacherLiveExamPresentation");
+        expect(livePage).toContain('aria-label={isScreenRefreshPaused ? "화면 갱신 재개" : "화면 갱신 일시정지"}');
+        expect(livePage).toContain('aria-pressed={isScreenRefreshPaused}');
+        expect(livePage).toContain("교사 화면의 자동 갱신만 멈춥니다. 학생 응시와 시험 시간은 계속됩니다.");
+        expect(livePage).toContain("var(--warning)");
+        expect(livePage).toContain("var(--grade-red)");
+        expect(livePage).toContain("var(--error)");
+        expect(livePage.match(/<PlusCircle size=\{18\} \/> 시험 만들기/g)).toHaveLength(1);
+        expect(studentDashboardPage).toContain('className="student-guest-merge-disclosure"');
+        expect(historyPage).toContain('className="student-history-empty-state"');
+        expect(groupsTab).toContain("teacher-groups-empty-state");
+        expect(settingsPage).toContain(".settings-section-nav");
+        expect(css).toContain(".student-dashboard-header");
     });
 });

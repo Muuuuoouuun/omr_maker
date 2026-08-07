@@ -4,47 +4,71 @@ import { cookies, headers } from "next/headers";
 import {
     createSupabaseAdminClient,
     getSupabaseServerConfigFromEnv,
+    type SupabaseAdminReadClientLike,
 } from "@/lib/supabaseServerAdmin";
 import {
     isRemoteAssetStoredDataRef,
-    isRemoteAssetUploadByteSizeAllowed,
     remoteAssetStoredDataRef,
-    type RemoteAssetKind,
     type RemoteAssetStoredDataRef,
+    type TeacherRemoteAssetUploadDeclaration,
 } from "@/lib/remoteAssetContract.server";
 import {
     createStaffRemoteAssetSignedUrlWithGateway,
-    uploadRemoteAssetWithGateway,
+    finalizeTeacherRemoteAssetUploadWithGateway,
+    prepareTeacherRemoteAssetUploadWithGateway,
     type RemoteAssetSupabaseGatewayClient,
+    type TeacherRemoteAssetFinalizeInput,
+    type TeacherRemoteAssetPreparedUpload,
+    type TeacherUploadPublicErrorCode,
 } from "@/lib/remoteAssetGateway.server";
 import type { StoredDataRef } from "@/types/omr";
-import { parseStudentAttemptTicket } from "@/lib/studentAttemptTicket";
 import type { PdfDrawings } from "@/types/omr";
 import { isSameOriginServerActionRequest } from "@/lib/serverActionSecurity";
 import {
-    parseSignedTeacherSessionCookie,
+    resolveAuthorizedTeacherSessionCookie,
     TEACHER_SERVER_SESSION_COOKIE,
 } from "@/lib/teacherServerSession";
 import { isTeacherMutationAuthorized } from "@/lib/teacherMutationAuthorization";
 import { workspaceContextFromTeacherSession } from "@/lib/workspaceContext";
+import {
+    parseSignedStudentSessionCookie,
+    STUDENT_SERVER_SESSION_COOKIE,
+} from "@/lib/studentServerSession";
+import { ownerStudentId } from "@/lib/studentExamCore";
+import { hasPlanEntitlement, normalizePlan } from "@/utils/plans";
+import { archiveStudentAttemptHandwritingWithGateway } from "@/lib/studentAttemptHandwritingGateway.server";
 
-export type TeacherRemoteAssetUploadResult =
-    | { status: "uploaded"; ref: RemoteAssetStoredDataRef }
+export type TeacherRemoteAssetPrepareActionResult =
+    | TeacherRemoteAssetPreparedUpload
     | { status: "local_only" }
-    | { status: "unauthorized" | "invalid_asset" | "service_unavailable"; error?: string };
+    | {
+        status: "unauthorized" | "invalid_asset" | "service_unavailable";
+        error?: string;
+        errorCode?: TeacherUploadPublicErrorCode;
+    };
 
-function uploadKind(value: FormDataEntryValue | null): RemoteAssetKind | null {
-    return value === "problem_pdf" || value === "answer_key_pdf" ? value : null;
-}
+export type TeacherRemoteAssetFinalizeActionResult =
+    | { status: "uploaded"; ref: RemoteAssetStoredDataRef }
+    | {
+        status: "unauthorized" | "invalid_asset" | "service_unavailable";
+        error?: string;
+        errorCode?: TeacherUploadPublicErrorCode;
+    };
 
-export async function uploadTeacherExamAsset(
-    formData: FormData,
-): Promise<TeacherRemoteAssetUploadResult> {
+type TeacherPrepareInput = Omit<TeacherRemoteAssetUploadDeclaration, "organizationId" | "createdByUserId">;
+type TeacherFinalizeInput = Omit<TeacherRemoteAssetFinalizeInput, "organizationId" | "createdByUserId">;
+
+async function authorizedTeacherAssetGateway(): Promise<
+    | {
+        client: RemoteAssetSupabaseGatewayClient;
+        context: ReturnType<typeof workspaceContextFromTeacherSession>;
+    }
+    | { status: "local_only" | "unauthorized" | "service_unavailable"; error?: string }
+> {
     const headerStore = await headers();
     if (!isSameOriginServerActionRequest(headerStore)) return { status: "unauthorized" };
-
     const cookieStore = await cookies();
-    const teacherSession = parseSignedTeacherSessionCookie(
+    const teacherSession = await resolveAuthorizedTeacherSessionCookie(
         cookieStore.get(TEACHER_SERVER_SESSION_COOKIE)?.value,
     );
     if (!teacherSession) return { status: "unauthorized" };
@@ -56,41 +80,70 @@ export async function uploadTeacherExamAsset(
             ? { status: "service_unavailable", error: "Remote asset storage is not configured" }
             : { status: "local_only" };
     }
+    return {
+        client: createSupabaseAdminClient(config) as unknown as RemoteAssetSupabaseGatewayClient,
+        context: workspaceContextFromTeacherSession(teacherSession),
+    };
+}
 
-    const file = formData.get("file");
-    const kind = uploadKind(formData.get("kind"));
-    const examId = String(formData.get("examId") || "").trim();
-    if (
-        !(file instanceof File)
-        || !kind
-        || !examId
-        || !isRemoteAssetUploadByteSizeAllowed(kind, file.size)
-    ) return { status: "invalid_asset" };
-
+export async function prepareTeacherExamAssetUpload(
+    input: TeacherPrepareInput,
+): Promise<TeacherRemoteAssetPrepareActionResult> {
     try {
-        const context = workspaceContextFromTeacherSession(teacherSession);
-        const result = await uploadRemoteAssetWithGateway(
-            createSupabaseAdminClient(config) as unknown as RemoteAssetSupabaseGatewayClient,
+        const gateway = await authorizedTeacherAssetGateway();
+        if ("status" in gateway) return gateway;
+        const result = await prepareTeacherRemoteAssetUploadWithGateway(
+            gateway.client,
             {
-                organizationId: context.organizationId,
-                kind,
-                examId,
-                body: new Uint8Array(await file.arrayBuffer()),
-                originalName: file.name,
-                createdByUserId: context.actorUserId,
+                ...input,
+                organizationId: gateway.context.organizationId,
+                createdByUserId: gateway.context.actorUserId,
             },
         );
-        if (result.status !== "uploaded") {
-            return {
+        return result.status === "prepared"
+            ? result
+            : {
                 status: result.status === "invalid_asset" ? "invalid_asset" : "service_unavailable",
                 error: result.error,
+                errorCode: result.errorCode,
             };
-        }
-        return { status: "uploaded", ref: remoteAssetStoredDataRef(result.asset) };
-    } catch (error) {
+    } catch {
         return {
             status: "service_unavailable",
-            error: error instanceof Error ? error.message : "Remote asset upload failed",
+            error: "Teacher upload service unavailable",
+            errorCode: "upload_unavailable",
+        };
+    }
+}
+
+export async function finalizeTeacherExamAssetUpload(
+    input: TeacherFinalizeInput,
+): Promise<TeacherRemoteAssetFinalizeActionResult> {
+    try {
+        const gateway = await authorizedTeacherAssetGateway();
+        if ("status" in gateway) {
+            return {
+                status: gateway.status === "local_only" ? "service_unavailable" : gateway.status,
+                error: gateway.error,
+            };
+        }
+        const result = await finalizeTeacherRemoteAssetUploadWithGateway(gateway.client, {
+            ...input,
+            organizationId: gateway.context.organizationId,
+            createdByUserId: gateway.context.actorUserId,
+        });
+        return result.status === "finalized"
+            ? { status: "uploaded", ref: remoteAssetStoredDataRef(result.asset) }
+            : {
+                status: result.status === "invalid_object" ? "invalid_asset" : "service_unavailable",
+                error: result.error,
+                errorCode: result.errorCode,
+            };
+    } catch {
+        return {
+            status: "service_unavailable",
+            error: "Teacher upload service unavailable",
+            errorCode: "upload_unavailable",
         };
     }
 }
@@ -103,7 +156,7 @@ export async function getTeacherRemoteAssetUrl(
         return { status: "unauthorized" };
     }
     const cookieStore = await cookies();
-    const teacherSession = parseSignedTeacherSessionCookie(
+    const teacherSession = await resolveAuthorizedTeacherSessionCookie(
         cookieStore.get(TEACHER_SERVER_SESSION_COOKIE)?.value,
     );
     if (!teacherSession) return { status: "unauthorized" };
@@ -128,7 +181,7 @@ export async function getTeacherRemoteAssetUrl(
 }
 
 export async function uploadStudentAttemptHandwriting(input: {
-    ticket: string;
+    sessionId?: string;
     attemptId: string;
     drawings: PdfDrawings;
 }): Promise<
@@ -137,37 +190,68 @@ export async function uploadStudentAttemptHandwriting(input: {
 > {
     const headerStore = await headers();
     if (!isSameOriginServerActionRequest(headerStore)) return { status: "invalid_ticket" };
-    const ticket = parseStudentAttemptTicket(input.ticket);
-    if (!ticket || input.attemptId !== `attempt_${ticket.ticketId}`) return { status: "invalid_ticket" };
     const config = getSupabaseServerConfigFromEnv();
     if (!config) return { status: "service_unavailable" };
 
     try {
+        const client = createSupabaseAdminClient(config) as unknown as RemoteAssetSupabaseGatewayClient
+            & SupabaseAdminReadClientLike
+            & {
+                rpc(name: string, params: Record<string, unknown>): Promise<{
+                    data: unknown;
+                    error: { message?: string } | null;
+                }>;
+            };
+        let organizationId = "";
+        let attachmentTicketId = "";
+        if (input.sessionId) {
+            const cookieStore = await cookies();
+            const identity = parseSignedStudentSessionCookie(
+                cookieStore.get(STUDENT_SERVER_SESSION_COOKIE)?.value,
+            );
+            if (!identity?.organizationId) return { status: "invalid_ticket" };
+            const sessionRead = await client.from("omr_attempt_sessions")
+                .select("organization_id,owner_student_id,status,submission_id,submitted_attempt_id")
+                .eq("id", input.sessionId.trim())
+                .eq("organization_id", identity.organizationId)
+                .eq("owner_student_id", ownerStudentId(identity))
+                .maybeSingle();
+            const session = sessionRead.data as {
+                organization_id?: unknown;
+                status?: unknown;
+                submission_id?: unknown;
+                submitted_attempt_id?: unknown;
+            } | null;
+            if (
+                sessionRead.error || !session
+                || session.status !== "submitted"
+                || session.submitted_attempt_id !== input.attemptId
+                || typeof session.organization_id !== "string"
+                || typeof session.submission_id !== "string"
+            ) return { status: "invalid_ticket" };
+            organizationId = session.organization_id;
+            attachmentTicketId = session.submission_id;
+        } else return { status: "invalid_ticket" };
+        const organizationRead = await client.from("omr_organizations")
+            .select("plan")
+            .eq("id", organizationId)
+            .maybeSingle();
+        const plan = !organizationRead.error && organizationRead.data
+            ? normalizePlan((organizationRead.data as { plan?: unknown }).plan) || "free"
+            : "free";
+        if (!hasPlanEntitlement(plan, "remoteHandwritingArchive")) {
+            return { status: "invalid_asset" };
+        }
         const body = new TextEncoder().encode(JSON.stringify(input.drawings));
-        const client = createSupabaseAdminClient(config) as unknown as RemoteAssetSupabaseGatewayClient & {
-            rpc(name: string, params: Record<string, unknown>): Promise<{
-                data: unknown;
-                error: { message?: string } | null;
-            }>;
-        };
-        const uploaded = await uploadRemoteAssetWithGateway(client, {
-            organizationId: ticket.organizationId,
-            kind: "attempt_handwriting",
+        const archived = await archiveStudentAttemptHandwritingWithGateway(client, {
+            sessionId: input.sessionId,
+            organizationId,
             attemptId: input.attemptId,
+            attachmentTicketId,
             body,
             originalName: `${input.attemptId}-handwriting.json`,
         });
-        if (uploaded.status !== "uploaded") {
-            return { status: uploaded.status === "invalid_asset" ? "invalid_asset" : "service_unavailable" };
-        }
-        const ref = remoteAssetStoredDataRef(uploaded.asset);
-        const attached = await client.rpc("omr_attach_attempt_handwriting_v1", {
-            p_ticket_id: ticket.ticketId,
-            p_asset_id: uploaded.asset.id,
-            p_ref: ref,
-        });
-        if (attached.error) return { status: "service_unavailable" };
-        return { status: "uploaded", ref };
+        return archived;
     } catch {
         return { status: "service_unavailable" };
     }

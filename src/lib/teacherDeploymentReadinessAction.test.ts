@@ -50,6 +50,11 @@ vi.mock("@/lib/deploymentReadiness", () => ({
     buildDeploymentReadiness: buildReadiness,
 }));
 
+vi.mock("@/lib/durableRateLimit", () => ({
+    applyDurableRateLimit: async () => ({ allowed: true, retryAfterMs: 0 }),
+    applyDurableRateLimitToSubjects: async () => ({ allowed: true, retryAfterMs: 0 }),
+}));
+
 vi.mock("@/lib/deploymentReadinessActionSecurity", async importOriginal => {
     const actual = await importOriginal<typeof import("@/lib/deploymentReadinessActionSecurity")>();
     return {
@@ -66,7 +71,7 @@ vi.mock("@/lib/deploymentReadinessActionSecurity", async importOriginal => {
 import { getTeacherDeploymentReadiness } from "@/app/actions/auth";
 
 const TOKEN = "tkn_readiness_0123456789abcdef0123456789abcdef";
-const SESSION_SECRET = "readiness-action-test-secret";
+const SESSION_SECRET = "readiness-action-teacher-session-secret-at-least-32-bytes";
 const BLOCKED_SUMMARY = {
     label: "배포 상태 확인 불가",
     detail: "인증된 교사 세션에서만 배포 상태를 확인할 수 있습니다.",
@@ -106,6 +111,7 @@ describe("teacher deployment readiness server action", () => {
     beforeEach(() => {
         vi.stubEnv("NODE_ENV", "production");
         vi.stubEnv("TEACHER_SESSION_SECRET", SESSION_SECRET);
+        vi.stubEnv("OMR_RATE_LIMIT_HASH_SECRET", "readiness-rate-limit-test-secret-at-least-32-bytes");
         controls.headers = sameOriginHeaders();
         controls.cookieValue = undefined;
         controls.cookieReads = 0;
@@ -152,6 +158,17 @@ describe("teacher deployment readiness server action", () => {
 
         expect(probe).toHaveBeenCalledTimes(1);
         expect(buildReadiness).toHaveBeenCalledTimes(1);
+    });
+
+    it("reports a production rate-limit secret configuration error without probing", async () => {
+        controls.cookieValue = signTeacher("viewer-readiness", "viewer");
+        vi.stubEnv("OMR_RATE_LIMIT_HASH_SECRET", "");
+
+        const result = await getTeacherDeploymentReadiness();
+
+        expect(result.checks[0]).toMatchObject({ key: "deployment_readiness_rate_limit_config", tone: "error" });
+        expect(probe).not.toHaveBeenCalled();
+        expect(buildReadiness).not.toHaveBeenCalled();
     });
 
     it("rejects the real signed showcase identity before probing or building readiness", async () => {

@@ -8,30 +8,52 @@ import { formatRegionScopedLabel } from '@/lib/dashboardSelection';
 import type { ExamValidationSummary } from '@/lib/examValidation';
 import { isValidExamPin, normalizeExamPin } from '@/lib/examAccess';
 import { readRosterGroups, readRosterInvites, readRosterStudents, type RosterGroup, type RosterInvite, type RosterStudent } from '@/lib/rosterStorage';
-import { summarizeDistributionTargets } from '@/lib/distributionTargets';
+import { countDistributionGroupMembers, summarizeDistributionTargets } from '@/lib/distributionTargets';
 import { isShareUrlReachableByStudents } from '@/lib/shareLink';
 import { addRosterGroup, addRosterStudent } from '@/lib/rosterMutations';
-import { saveTeacherRosterSnapshot } from '@/lib/teacherRosterClient';
+import { loadTeacherRosterSnapshot, saveTeacherRosterSnapshot } from '@/lib/teacherRosterClient';
 import { toast } from '@/components/Toast';
+import { useDialogFocus } from '@/hooks/useDialogFocus';
+import {
+    confirmExistingGroupInviteRotation,
+    normalizeDistributionShareResult,
+    type DistributionShareResultLike,
+} from '@/lib/distributionInviteRotation';
+import type {
+    ClearTeacherIndividualAssignmentInput,
+    ClearTeacherIndividualAssignmentResult,
+    LoadTeacherIndividualAssignmentResult,
+    SaveTeacherIndividualAssignmentInput,
+    SaveTeacherIndividualAssignmentResult,
+} from '@/lib/individualAssignmentGateway';
+import { reloadLatestAssignmentAfterConflict } from '@/lib/studentAssignmentClassification';
 
 type AccessConfig = NonNullable<Exam["accessConfig"]>;
 
 interface DistributeModalProps {
     isOpen: boolean;
     onClose: () => void;
-    onSaveAndShare: (config: AccessConfig) => Promise<string>; // Returns share URL
+    onSaveAndShare: (config: AccessConfig) => Promise<DistributionShareResultLike>;
+    onAssignStudents: (input: SaveTeacherIndividualAssignmentInput) => Promise<SaveTeacherIndividualAssignmentResult | { status: "local_only" }>;
+    onClearStudentAssignment: (input: ClearTeacherIndividualAssignmentInput) => Promise<ClearTeacherIndividualAssignmentResult | { status: "local_only" }>;
+    onLoadStudentAssignment: (examId: string) => Promise<LoadTeacherIndividualAssignmentResult | { status: "local_only" }>;
+    retakeAssignmentsEnabled: boolean;
     onAutoMatchRegions?: () => void;
     validationSummary?: ExamValidationSummary;
     initialAccessConfig?: AccessConfig;
+    initialShareUrl?: string;
+    initialShareExpiresAt?: string;
     examId?: string;
+    isExistingExam?: boolean;
 }
 
-export default function DistributeModal({ isOpen, onClose, onSaveAndShare, onAutoMatchRegions, validationSummary, initialAccessConfig, examId }: DistributeModalProps) {
-    const [accessType, setAccessType] = useState<'public' | 'group'>('public');
+export default function DistributeModal({ isOpen, onClose, onSaveAndShare, onAssignStudents, onClearStudentAssignment, onLoadStudentAssignment, retakeAssignmentsEnabled, onAutoMatchRegions, validationSummary, initialAccessConfig, initialShareUrl, initialShareExpiresAt, examId, isExistingExam = false }: DistributeModalProps) {
+    const [accessType, setAccessType] = useState<'public' | 'group' | 'student'>('public');
     const [selectedGroups, setSelectedGroups] = useState<string[]>([]);
     const [groups, setGroups] = useState<RosterGroup[]>([]);
     const [students, setStudents] = useState<RosterStudent[]>([]);
-    const [shareUrl, setShareUrl] = useState<string | null>(null);
+    const [shareUrl, setShareUrl] = useState<string | null>(initialShareUrl || null);
+    const [shareExpiresAt, setShareExpiresAt] = useState<string | null>(initialShareExpiresAt || null);
     const [isSaving, setIsSaving] = useState(false);
     const [pin, setPin] = useState("");
     const [formError, setFormError] = useState("");
@@ -43,23 +65,69 @@ export default function DistributeModal({ isOpen, onClose, onSaveAndShare, onAut
     const [studentFormGroupId, setStudentFormGroupId] = useState<string | null>(null);
     const [newStudentName, setNewStudentName] = useState("");
     const [newStudentEmail, setNewStudentEmail] = useState("");
+    const [isRosterLoading, setIsRosterLoading] = useState(false);
+    const [rosterLoadError, setRosterLoadError] = useState("");
+    const [selectedStudentIds, setSelectedStudentIds] = useState<string[]>([]);
+    const [studentSearch, setStudentSearch] = useState("");
+    const [assignmentMode, setAssignmentMode] = useState<"base" | "retake">("base");
+    const [assignmentRevision, setAssignmentRevision] = useState(0);
+    const [assignmentLoadError, setAssignmentLoadError] = useState("");
+    const [isAssignmentLoading, setIsAssignmentLoading] = useState(false);
     const wasOpenRef = useRef(false);
-    const dialogRef = useRef<HTMLDivElement>(null);
-    const closeButtonRef = useRef<HTMLButtonElement>(null);
-    const previouslyFocusedRef = useRef<HTMLElement | null>(null);
+    const rosterLoadGenerationRef = useRef(0);
     const copyResetTimerRef = useRef<number | undefined>(undefined);
-    const onCloseRef = useRef(onClose);
+    const dialogRef = useDialogFocus(isOpen, onClose);
     const dialogTitleId = useId();
-
-    useEffect(() => {
-        onCloseRef.current = onClose;
-    }, [onClose]);
 
     useEffect(() => () => {
         if (copyResetTimerRef.current !== undefined) {
             window.clearTimeout(copyResetTimerRef.current);
         }
     }, []);
+
+    useEffect(() => {
+        const loadGeneration = ++rosterLoadGenerationRef.current;
+        if (!isOpen) {
+            setIsRosterLoading(false);
+            setRosterLoadError("");
+            return;
+        }
+
+        try {
+            setGroups(readRosterGroups(localStorage));
+            setStudents(readRosterStudents(localStorage));
+        } catch {
+            setGroups([]);
+            setStudents([]);
+        }
+
+        setIsRosterLoading(true);
+        setRosterLoadError("");
+        void loadTeacherRosterSnapshot(localStorage)
+            .then(snapshot => {
+                if (rosterLoadGenerationRef.current !== loadGeneration) return;
+                setGroups(snapshot.groups);
+                setStudents(snapshot.students);
+                if (snapshot.remoteError) {
+                    setRosterLoadError("서버 명단을 불러오지 못해 이 기기에 저장된 명단을 표시합니다.");
+                }
+            })
+            .catch(() => {
+                if (rosterLoadGenerationRef.current !== loadGeneration) return;
+                setRosterLoadError("서버 명단을 불러오지 못해 이 기기에 저장된 명단을 표시합니다.");
+            })
+            .finally(() => {
+                if (rosterLoadGenerationRef.current === loadGeneration) {
+                    setIsRosterLoading(false);
+                }
+            });
+
+        return () => {
+            if (rosterLoadGenerationRef.current === loadGeneration) {
+                rosterLoadGenerationRef.current += 1;
+            }
+        };
+    }, [isOpen]);
 
     useEffect(() => {
         if (!isOpen) {
@@ -75,16 +143,10 @@ export default function DistributeModal({ isOpen, onClose, onSaveAndShare, onAut
         }
         wasOpenRef.current = true;
 
-        try {
-            setGroups(readRosterGroups(localStorage));
-            setStudents(readRosterStudents(localStorage));
-        } catch {
-            setGroups([]);
-            setStudents([]);
-        }
-        const initialType = initialAccessConfig?.type === 'group' ? 'group' : 'public';
+        const initialType = initialAccessConfig?.type === 'targeted' ? 'student' : initialAccessConfig?.type === 'group' ? 'group' : 'public';
 
-        setShareUrl(null);
+        setShareUrl(initialShareUrl || null);
+        setShareExpiresAt(initialShareExpiresAt || null);
         setAccessType(initialType);
         setSelectedGroups(initialType === 'group' ? [...(initialAccessConfig?.groupIds || [])] : []);
         setIsSaving(false);
@@ -97,58 +159,66 @@ export default function DistributeModal({ isOpen, onClose, onSaveAndShare, onAut
         setStudentFormGroupId(null);
         setNewStudentName("");
         setNewStudentEmail("");
-    }, [isOpen, initialAccessConfig]);
+        setSelectedStudentIds([]);
+        setStudentSearch("");
+        setAssignmentMode("base");
+        setAssignmentRevision(0);
+        setAssignmentLoadError("");
+        setIsAssignmentLoading(Boolean(examId));
+    }, [examId, isOpen, initialAccessConfig, initialShareUrl, initialShareExpiresAt]);
 
     useEffect(() => {
-        if (!isOpen) return;
-        previouslyFocusedRef.current = document.activeElement instanceof HTMLElement
-            ? document.activeElement
-            : null;
-        const focusTimer = window.setTimeout(() => closeButtonRef.current?.focus(), 0);
-
-        const handleKeyDown = (event: KeyboardEvent) => {
-            if (event.key === 'Escape') {
-                event.preventDefault();
-                onCloseRef.current();
-                return;
+        if (!isOpen || !examId) {
+            setIsAssignmentLoading(false);
+            return;
+        }
+        let cancelled = false;
+        setIsAssignmentLoading(true);
+        void onLoadStudentAssignment(examId).then(result => {
+            if (cancelled) return;
+            if (result.status === "loaded") {
+                setAccessType("student");
+                setSelectedStudentIds(result.targetStudentIds);
+                setAssignmentMode(result.mode === "retake" && !retakeAssignmentsEnabled ? "base" : result.mode);
+                setAssignmentRevision(result.revision);
+            } else if (result.status !== "not_found" && result.status !== "local_only") {
+                setAssignmentLoadError("기존 개별 배정 상태를 불러오지 못했습니다. 다시 시도해주세요.");
             }
-            if (event.key !== 'Tab') return;
-
-            const focusable = Array.from(dialogRef.current?.querySelectorAll<HTMLElement>(
-                'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
-            ) || []).filter(element => !element.hasAttribute('hidden'));
-            if (focusable.length === 0) {
-                event.preventDefault();
-                dialogRef.current?.focus();
-                return;
-            }
-
-            const first = focusable[0];
-            const last = focusable[focusable.length - 1];
-            if (event.shiftKey && document.activeElement === first) {
-                event.preventDefault();
-                last.focus();
-            } else if (!event.shiftKey && document.activeElement === last) {
-                event.preventDefault();
-                first.focus();
-            }
-        };
-
-        document.addEventListener('keydown', handleKeyDown);
-        return () => {
-            window.clearTimeout(focusTimer);
-            document.removeEventListener('keydown', handleKeyDown);
-            previouslyFocusedRef.current?.focus();
-        };
-    }, [isOpen]);
+        }).catch(() => {
+            if (!cancelled) setAssignmentLoadError("기존 개별 배정 상태를 불러오지 못했습니다. 다시 시도해주세요.");
+        }).finally(() => {
+            if (!cancelled) setIsAssignmentLoading(false);
+        });
+        return () => { cancelled = true; };
+    }, [examId, isOpen, onLoadStudentAssignment, retakeAssignmentsEnabled]);
 
     const targetSummary = useMemo(() => summarizeDistributionTargets({
         selectedGroupIds: selectedGroups,
         groups,
         students,
     }), [groups, selectedGroups, students]);
+    const visibleStudents = useMemo(() => {
+        const query = studentSearch.trim().toLocaleLowerCase("ko-KR");
+        return students.filter(student => student.status === "active" && (!query || [student.name, student.group, student.region, student.email]
+            .some(value => (value || "").toLocaleLowerCase("ko-KR").includes(query))));
+    }, [studentSearch, students]);
+    const isRotatingExistingGroupInvite = isExistingExam
+        && initialAccessConfig?.type === 'group'
+        && accessType === 'group';
 
     if (!isOpen) return null;
+
+    const reloadConflictedAssignment = async (targetExamId: string) => {
+        const latest = await reloadLatestAssignmentAfterConflict(targetExamId, onLoadStudentAssignment);
+        if (latest.status !== "loaded") {
+            setAssignmentLoadError("최신 개별 배정 상태를 불러오지 못했습니다. 창을 닫고 다시 열어주세요.");
+            return false;
+        }
+        setSelectedStudentIds(latest.targetStudentIds);
+        setAssignmentMode(latest.mode === "retake" && !retakeAssignmentsEnabled ? "base" : latest.mode);
+        setAssignmentRevision(latest.revision);
+        return true;
+    };
 
     const handleShareClick = async () => {
         setFormError("");
@@ -162,25 +232,131 @@ export default function DistributeModal({ isOpen, onClose, onSaveAndShare, onAut
             return;
         }
 
+        if (accessType === 'group' && isRosterLoading) {
+            setFormError("서버 명단을 불러온 뒤 다시 시도해주세요.");
+            return;
+        }
+
+        if (accessType === 'student' && (isRosterLoading || selectedStudentIds.length < 1 || selectedStudentIds.length > 100)) {
+            setFormError(isRosterLoading
+                ? "서버 명단을 불러온 뒤 다시 시도해주세요."
+                : "개별 배포할 학생을 1명 이상 100명 이하로 선택해주세요.");
+            return;
+        }
+
+        if (isAssignmentLoading) {
+            setFormError("최신 개별 배정 상태를 확인한 뒤 다시 시도해주세요.");
+            return;
+        }
+
+        if (accessType === "student" && assignmentMode === "retake" && !retakeAssignmentsEnabled) {
+            setAssignmentMode("base");
+            setFormError("재시험 배정은 Pro 플랜에서 사용할 수 있습니다.");
+            return;
+        }
+
         if (accessType === 'public' && pin && !isValidExamPin(pin)) {
             setFormError("PIN은 4~6자리 숫자여야 합니다.");
             return;
         }
 
-        const config = {
-            type: accessType,
+        const config: AccessConfig = {
+            type: accessType === 'student' ? 'targeted' : accessType,
             groupIds: accessType === 'group' ? selectedGroups : undefined,
             pin: accessType === 'public' && pin ? pin : undefined,
         };
 
-        setIsSaving(true);
         try {
-            const url = await onSaveAndShare(config);
-            if (!url) {
+            if (accessType === "student") {
+                setIsSaving(true);
+                let shareResult = examId ? null : normalizeDistributionShareResult(await onSaveAndShare(config));
+                const targetExamId = examId || shareResult?.examId || "";
+                if (!targetExamId) {
+                    setFormError("시험 저장 결과를 확인하지 못했습니다. 다시 시도해주세요.");
+                    return;
+                }
+                const assigned = await onAssignStudents({
+                    examId: targetExamId,
+                    targetStudentIds: selectedStudentIds,
+                    mode: assignmentMode,
+                    expectedRevision: assignmentRevision,
+                });
+                if (assigned.status !== "saved") {
+                    if (assigned.status === "conflict") {
+                        const reloaded = await reloadConflictedAssignment(targetExamId);
+                        setFormError(reloaded
+                            ? "다른 기기에서 배정이 변경되어 최신 학생과 유형을 다시 불러왔습니다. 확인 후 다시 시도해주세요."
+                            : "다른 기기에서 배정이 변경되었습니다. 창을 닫고 다시 열어주세요.");
+                    } else if (assigned.status === "retake_unavailable") {
+                        setFormError("선택한 학생 중 제출했거나 오답이 있는 원시험 기록이 없는 학생이 있습니다.");
+                    } else if (assigned.status === "plan_denied") {
+                        setAssignmentMode("base");
+                        setFormError("현재 서버 플랜에서는 재시험을 배정할 수 없습니다.");
+                    } else if (assigned.status === "active_sessions") {
+                        setFormError("현재 응시 중인 학생이 있어 배정 대상을 변경할 수 없습니다.");
+                    } else if (assigned.status === "invalid_targets") {
+                        setFormError("선택한 학생의 활성 명단 상태가 변경되었습니다. 명단을 새로고침한 뒤 다시 시도해주세요.");
+                    } else {
+                        setFormError("개별 학생 배정에 실패했습니다. 네트워크를 확인하고 다시 시도해주세요.");
+                    }
+                    return;
+                }
+                setAssignmentRevision(assigned.revision);
+                // For existing exams the assignment RPC owns the public/group → targeted
+                // transition atomically. Persist any editor changes only after that scope exists.
+                if (!shareResult) shareResult = normalizeDistributionShareResult(await onSaveAndShare(config));
+                if (!shareResult.shareUrl) {
+                    setFormError("개별 배정은 저장됐지만 시험 편집 내용 저장에 실패했습니다. 다시 시도해주세요.");
+                    return;
+                }
+                const targetedUrl = new URL(shareResult.shareUrl, window.location.origin);
+                targetedUrl.searchParams.set("assignment", assigned.assignmentId);
+                setShareUrl(targetedUrl.toString());
+                setShareExpiresAt(null);
+                return;
+            }
+            if (assignmentRevision > 0 && examId) {
+                setIsSaving(true);
+                const cleared = await onClearStudentAssignment({
+                    examId,
+                    expectedRevision: assignmentRevision,
+                    accessType,
+                    groupIds: accessType === "group" ? selectedGroups : undefined,
+                });
+                if (cleared.status !== "cleared") {
+                    if (cleared.status === "conflict") {
+                        const reloaded = await reloadConflictedAssignment(examId);
+                        if (reloaded) setAccessType("student");
+                        setFormError(reloaded
+                            ? "다른 기기에서 배정이 변경되어 최신 학생과 유형을 다시 불러왔습니다. 확인 후 다시 시도해주세요."
+                            : "다른 기기에서 배정이 변경되었습니다. 창을 닫고 다시 열어주세요.");
+                    } else if (cleared.status === "active_sessions") {
+                        setFormError("현재 응시 중인 학생이 있어 개별 배정을 해제할 수 없습니다.");
+                    } else {
+                        setFormError("개별 배정을 안전하게 해제하지 못했습니다. 기존 배정은 유지됩니다.");
+                    }
+                    return;
+                }
+                setAssignmentRevision(0);
+                setSelectedStudentIds([]);
+                setAssignmentMode("base");
+            }
+            const outcome = await confirmExistingGroupInviteRotation({
+                needsConfirmation: isRotatingExistingGroupInvite,
+                confirm: message => window.confirm(message),
+                rotateAndSave: async () => {
+                    setIsSaving(true);
+                    return onSaveAndShare(config);
+                },
+            });
+            if (outcome.status === "cancelled") return;
+            const shareResult = normalizeDistributionShareResult(outcome.result);
+            if (!shareResult.shareUrl) {
                 setFormError("링크 생성에 실패했습니다. 배포 체크와 저장 상태를 확인한 뒤 다시 시도해주세요.");
                 return;
             }
-            setShareUrl(url);
+            setShareUrl(shareResult.shareUrl);
+            setShareExpiresAt(shareResult.expiresAt || null);
         } catch {
             setFormError("링크 생성에 실패했습니다. 시험 저장 상태를 확인한 뒤 다시 시도해주세요.");
         } finally {
@@ -251,6 +427,10 @@ export default function DistributeModal({ isOpen, onClose, onSaveAndShare, onAut
     };
 
     const handleCreateGroup = () => {
+        if (isRosterLoading) {
+            setFormError("서버 명단을 불러온 뒤 반을 추가해주세요.");
+            return;
+        }
         const result = addRosterGroup(students, groups, { name: newGroupName, region: newGroupRegion });
         if (!result.ok) {
             if (result.reason === "duplicate" && result.group) {
@@ -277,6 +457,10 @@ export default function DistributeModal({ isOpen, onClose, onSaveAndShare, onAut
     };
 
     const handleAddStudent = (groupId: string) => {
+        if (isRosterLoading) {
+            setFormError("서버 명단을 불러온 뒤 학생을 추가해주세요.");
+            return;
+        }
         const result = addRosterStudent(students, groups, { name: newStudentName, email: newStudentEmail, groupId });
         if (!result.ok) {
             const message = result.reason === "invalid-email"
@@ -301,18 +485,25 @@ export default function DistributeModal({ isOpen, onClose, onSaveAndShare, onAut
 
     return (
         <div
+            className="distribute-dialog-backdrop"
             role="presentation"
             onMouseDown={(event) => {
                 if (event.target === event.currentTarget) onClose();
             }}
             style={{
-            position: 'fixed', inset: 0,
+            position: 'fixed',
+            top: 'var(--app-visual-viewport-offset-top)',
+            left: 'var(--app-visual-viewport-offset-left)',
+            width: 'var(--app-viewport-width, 100vw)',
+            height: 'var(--app-viewport-height, 100dvh)',
             background: 'rgba(0,0,0,0.5)',
             display: 'flex', alignItems: 'center', justifyContent: 'center',
-            zIndex: 1000
+            zIndex: 1000,
+            padding: 'max(0.5rem, var(--app-safe-area-top)) max(0.5rem, var(--app-safe-area-right)) max(0.5rem, var(--app-safe-area-bottom)) max(0.5rem, var(--app-safe-area-left))'
         }}>
             <div
                 ref={dialogRef}
+                className="balanced-dialog-panel distribute-dialog"
                 role="dialog"
                 aria-modal="true"
                 aria-labelledby={dialogTitleId}
@@ -320,8 +511,6 @@ export default function DistributeModal({ isOpen, onClose, onSaveAndShare, onAut
                 style={{
                 background: 'var(--surface)',
                 color: 'var(--foreground)',
-                width: '500px',
-                maxWidth: 'calc(100vw - 2rem)',
                 borderRadius: '8px',
                 display: 'flex', flexDirection: 'column',
                 border: '1px solid var(--border)',
@@ -330,7 +519,6 @@ export default function DistributeModal({ isOpen, onClose, onSaveAndShare, onAut
                 <header style={{ padding: '1.5rem', borderBottom: '1px solid var(--border)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                     <h2 id={dialogTitleId} style={{ fontSize: '1.25rem', fontWeight: 600 }}>시험 배포하기</h2>
                     <button
-                        ref={closeButtonRef}
                         type="button"
                         onClick={onClose}
                         aria-label="닫기"
@@ -348,7 +536,7 @@ export default function DistributeModal({ isOpen, onClose, onSaveAndShare, onAut
                     </button>
                 </header>
 
-                <div style={{ padding: '2rem' }}>
+                <div className="distribute-dialog-body">
                     {!shareUrl ? (
                         <>
                             {validationSummary && (
@@ -410,14 +598,18 @@ export default function DistributeModal({ isOpen, onClose, onSaveAndShare, onAut
 
                             <div style={{ marginBottom: '1.5rem' }}>
                                 <label style={{ display: 'block', marginBottom: '0.5rem', fontWeight: 600 }}>접근 권한 설정</label>
-                                <div style={{ display: 'flex', gap: '1rem' }}>
-                                    <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer' }}>
+                                <div className="distribute-access-options">
+                                    <label className="distribute-access-option">
                                         <input type="radio" name="access" checked={accessType === 'public'} onChange={() => setAccessType('public')} />
                                         전체 공개 (링크 공유)
                                     </label>
-                                    <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer' }}>
+                                    <label className="distribute-access-option">
                                         <input type="radio" name="access" checked={accessType === 'group'} onChange={() => setAccessType('group')} />
                                         특정 그룹만
+                                    </label>
+                                    <label className="distribute-access-option">
+                                        <input type="radio" name="access" checked={accessType === 'student'} onChange={() => setAccessType('student')} />
+                                        개별 학생
                                     </label>
                                 </div>
                             </div>
@@ -454,16 +646,33 @@ export default function DistributeModal({ isOpen, onClose, onSaveAndShare, onAut
 
                             {accessType === 'group' && (
                                 <div style={{ marginBottom: '1.5rem', background: 'var(--background)', border: '1px solid var(--border)', padding: '1rem', borderRadius: '8px' }}>
+                                    {isRotatingExistingGroupInvite && (
+                                        <div role="status" style={{ marginBottom: '0.85rem', padding: '0.75rem', borderRadius: '8px', border: '1px solid #fcd34d', background: '#fffbeb', color: '#92400e', fontSize: '0.8rem', fontWeight: 750, lineHeight: 1.5, wordBreak: 'keep-all' }}>
+                                            새 링크를 발급하면 기존 링크와 QR은 즉시 무효화됩니다. 학생에게 새 링크와 QR을 다시 전달해야 합니다.
+                                        </div>
+                                    )}
                                     <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '0.5rem', marginBottom: '0.6rem' }}>
                                         <p style={{ fontSize: '0.9rem', color: 'var(--muted)', margin: 0 }}>응시할 그룹 선택:</p>
                                         <button
                                             type="button"
                                             onClick={() => { setShowNewGroup(v => !v); setFormError(""); }}
+                                            disabled={isRosterLoading}
                                             style={{ display: 'inline-flex', alignItems: 'center', gap: '0.3rem', padding: '0.3rem 0.6rem', fontSize: '0.78rem', fontWeight: 700, borderRadius: '6px', border: '1px solid var(--border)', background: 'var(--surface)', color: 'var(--foreground)', cursor: 'pointer' }}
                                         >
                                             <Plus size={13} /> 새 반
                                         </button>
                                     </div>
+
+                                    {isRosterLoading && (
+                                        <div role="status" style={{ marginBottom: '0.65rem', fontSize: '0.8rem', color: 'var(--muted)' }}>
+                                            서버 명단을 불러오는 중입니다.
+                                        </div>
+                                    )}
+                                    {rosterLoadError && (
+                                        <div role="status" style={{ marginBottom: '0.65rem', fontSize: '0.78rem', color: 'var(--warning)', lineHeight: 1.45 }}>
+                                            {rosterLoadError}
+                                        </div>
+                                    )}
 
                                     {showNewGroup && (
                                         <div style={{ marginBottom: '0.75rem', padding: '0.75rem', borderRadius: '8px', border: '1px dashed var(--border)', background: 'var(--surface)' }}>
@@ -506,6 +715,7 @@ export default function DistributeModal({ isOpen, onClose, onSaveAndShare, onAut
                                             {groups.map(g => {
                                                 const isSelected = selectedGroups.includes(g.id);
                                                 const isAddingStudent = studentFormGroupId === g.id;
+                                                const memberCount = countDistributionGroupMembers(g, students);
                                                 return (
                                                     <div key={g.id} style={{ borderRadius: '8px', border: isSelected ? '1px solid rgba(99,102,241,0.35)' : '1px solid transparent', background: isSelected ? 'rgba(99,102,241,0.05)' : 'transparent', padding: '0.35rem 0.45rem' }}>
                                                         <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontSize: '0.9rem' }}>
@@ -518,10 +728,11 @@ export default function DistributeModal({ isOpen, onClose, onSaveAndShare, onAut
                                                                 <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                                                                     {formatRegionScopedLabel(g.name, g.region)}
                                                                 </span>
-                                                                <span style={{ fontSize: '0.72rem', color: 'var(--muted)', flexShrink: 0 }}>{g.count}명</span>
+                                                                <span style={{ fontSize: '0.72rem', color: 'var(--muted)', flexShrink: 0 }}>{memberCount}명</span>
                                                             </label>
                                                             <button
                                                                 type="button"
+                                                                disabled={isRosterLoading}
                                                                 onClick={() => {
                                                                     setStudentFormGroupId(prev => prev === g.id ? null : g.id);
                                                                     setNewStudentName("");
@@ -555,6 +766,7 @@ export default function DistributeModal({ isOpen, onClose, onSaveAndShare, onAut
                                                                 />
                                                                 <button
                                                                     type="button"
+                                                                    disabled={isRosterLoading}
                                                                     onClick={() => handleAddStudent(g.id)}
                                                                     style={{ padding: '0.45rem 0.7rem', fontSize: '0.78rem', fontWeight: 700, borderRadius: '6px', border: 'none', background: 'var(--primary)', color: 'white', cursor: 'pointer', flexShrink: 0 }}
                                                                 >
@@ -599,13 +811,81 @@ export default function DistributeModal({ isOpen, onClose, onSaveAndShare, onAut
                                 </div>
                             )}
 
+                            {accessType === 'student' && (
+                                <div style={{ marginBottom: '1.5rem', background: 'var(--background)', border: '1px solid var(--border)', padding: '1rem', borderRadius: '8px' }}>
+                                    <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '0.75rem' }}>
+                                        <label style={{ flex: 1, fontSize: '0.82rem', fontWeight: 700 }}>
+                                            배정 유형
+                                            <select
+                                                aria-label="배정 유형"
+                                                value={assignmentMode}
+                                                onChange={event => setAssignmentMode(
+                                                    retakeAssignmentsEnabled && event.target.value === "retake" ? "retake" : "base"
+                                                )}
+                                                style={{ width: '100%', marginTop: '0.35rem', padding: '0.55rem', border: '1px solid var(--border)', borderRadius: '6px', background: 'var(--surface)', color: 'var(--foreground)' }}
+                                            >
+                                                <option value="base">시험 배정</option>
+                                                {retakeAssignmentsEnabled && <option value="retake">재시험 배정</option>}
+                                            </select>
+                                        </label>
+                                    </div>
+                                    {!retakeAssignmentsEnabled && (
+                                        <p style={{ margin: '-0.35rem 0 0.75rem', color: 'var(--muted)', fontSize: '0.76rem' }}>
+                                            재시험 배정은 Pro 플랜에서 사용할 수 있습니다.
+                                        </p>
+                                    )}
+                                    <label htmlFor="individual-student-search" style={{ display: 'block', fontSize: '0.82rem', fontWeight: 700, marginBottom: '0.35rem' }}>학생 검색</label>
+                                    <input
+                                        id="individual-student-search"
+                                        value={studentSearch}
+                                        onChange={event => setStudentSearch(event.target.value)}
+                                        placeholder="이름, 반, 지역, 이메일"
+                                        style={{ width: '100%', padding: '0.6rem 0.7rem', border: '1px solid var(--border)', borderRadius: '6px', background: 'var(--surface)', color: 'var(--foreground)', marginBottom: '0.7rem' }}
+                                    />
+                                    {(rosterLoadError || assignmentLoadError) && (
+                                        <div role="status" style={{ color: 'var(--warning)', fontSize: '0.78rem', marginBottom: '0.6rem' }}>
+                                            {assignmentLoadError || rosterLoadError}
+                                        </div>
+                                    )}
+                                    <div style={{ maxHeight: 220, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '0.35rem' }}>
+                                        {visibleStudents.map(student => (
+                                            <label key={student.id} style={{ display: 'flex', alignItems: 'center', gap: '0.55rem', padding: '0.55rem', border: '1px solid var(--border)', borderRadius: '6px', cursor: 'pointer' }}>
+                                                <input
+                                                    type="checkbox"
+                                                    checked={selectedStudentIds.includes(student.id)}
+                                                    onChange={() => setSelectedStudentIds(current => current.includes(student.id)
+                                                        ? current.filter(id => id !== student.id)
+                                                        : [...current, student.id])}
+                                                />
+                                                <span style={{ flex: 1, minWidth: 0 }}>
+                                                    <strong>{student.name}</strong>
+                                                    <span style={{ marginLeft: '0.4rem', color: 'var(--muted)', fontSize: '0.75rem' }}>{formatRegionScopedLabel(student.group, student.region)}</span>
+                                                </span>
+                                            </label>
+                                        ))}
+                                        {!isRosterLoading && visibleStudents.length === 0 && (
+                                            <div style={{ color: 'var(--muted)', fontSize: '0.8rem' }}>검색 조건에 맞는 활성 학생이 없습니다.</div>
+                                        )}
+                                    </div>
+                                    <div aria-label="선택한 학생 요약" style={{ marginTop: '0.75rem', padding: '0.65rem', borderRadius: '6px', background: 'rgba(99,102,241,0.08)', color: 'var(--foreground)', fontSize: '0.8rem', fontWeight: 800 }}>
+                                        선택한 학생 {selectedStudentIds.length}명 · 최대 100명
+                                    </div>
+                                </div>
+                            )}
+
                             <button
                                 onClick={handleShareClick}
-                                className="btn btn-primary"
+                                className="btn btn-primary distribute-dialog-primary-action"
                                 style={{ width: '100%', padding: '0.8rem' }}
-                                disabled={isSaving || (validationSummary ? !validationSummary.isPublishable : false)}
+                                disabled={isSaving || isAssignmentLoading || (validationSummary ? !validationSummary.isPublishable : false)}
                             >
-                                {isSaving ? "생성 중..." : "링크 생성하기"}
+                                {isSaving
+                                    ? "생성 중..."
+                                    : accessType === "student"
+                                        ? assignmentMode === "retake" ? "재시험 배정하기" : "선택한 학생에게 배정하기"
+                                    : isRotatingExistingGroupInvite
+                                        ? "새 링크 발급하기"
+                                        : "링크 생성하기"}
                             </button>
                             {formError && (
                                 <div
@@ -623,6 +903,11 @@ export default function DistributeModal({ isOpen, onClose, onSaveAndShare, onAut
                                     }}
                                 >
                                     {formError}
+                                    {accessType === "student" && (
+                                        <button type="button" onClick={handleShareClick} style={{ marginLeft: '0.5rem', border: 0, background: 'transparent', color: 'inherit', fontWeight: 900, textDecoration: 'underline', cursor: 'pointer' }}>
+                                            다시 시도
+                                        </button>
+                                    )}
                                 </div>
                             )}
                         </>
@@ -637,7 +922,7 @@ export default function DistributeModal({ isOpen, onClose, onSaveAndShare, onAut
                                 <QRCodeCanvas id="qr-code-canvas" value={shareUrl} size={200} level={"H"} includeMargin={true} />
                             </div>
 
-                            <div style={{ display: 'flex', gap: '0.5rem', justifyContent: 'center', marginBottom: '1.5rem' }}>
+                            <div className="distribute-share-actions">
                                 <button onClick={downloadQR} className="btn btn-secondary">QR 저장</button>
                                 <button onClick={copyShareLink} className="btn btn-primary">
                                     {copyStatus || "링크 복사"}
@@ -647,6 +932,12 @@ export default function DistributeModal({ isOpen, onClose, onSaveAndShare, onAut
                             <div style={{ background: 'var(--background)', border: '1px solid var(--border)', padding: '0.5rem', borderRadius: '4px', fontSize: '0.8rem', wordBreak: 'break-all', color: 'var(--muted)', marginBottom: '1.25rem' }}>
                                 {shareUrl}
                             </div>
+
+                            {shareExpiresAt && (
+                                <div role="status" style={{ background: '#fffbeb', border: '1px solid #fcd34d', padding: '0.7rem 0.85rem', borderRadius: '6px', color: '#92400e', fontSize: '0.82rem', fontWeight: 700, lineHeight: 1.5, marginBottom: '1.25rem' }}>
+                                    링크 만료 시각: {new Date(shareExpiresAt).toLocaleString('ko-KR')}
+                                </div>
+                            )}
 
                             <p style={{ fontSize: '0.82rem', color: 'var(--muted)', lineHeight: 1.55, marginBottom: '1rem', wordBreak: 'keep-all' }}>
                                 설치 앱 또는 웹 브라우저에서 열리는 응시 링크입니다. 학생 앱 로그인이 있으면 학생으로, 없으면 확인 화면에서 게스트로 입장합니다.
@@ -667,7 +958,7 @@ export default function DistributeModal({ isOpen, onClose, onSaveAndShare, onAut
                                         borderRadius: 'var(--radius-full)',
                                         border: '1px solid rgba(99,102,241,0.28)',
                                         background: 'rgba(99,102,241,0.07)',
-                                        transition: 'all 0.15s',
+                                        transition: 'border-color 0.15s, background-color 0.15s, color 0.15s, transform 0.15s',
                                     }}
                                 >
                                     결과 분석 보러 가기 →

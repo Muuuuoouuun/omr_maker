@@ -30,6 +30,7 @@ import {
     selectMergedGuestAttempts,
     sanitizeAttemptPayload,
     sanitizeExamPayload,
+    saveAttempt,
     saveLocalExam,
     saveLocalExams,
     saveLocalAttempt,
@@ -303,6 +304,94 @@ describe("Supabase persistence mapping", () => {
         expect(attemptFromSupabaseRow(row)).toEqual({ ...attempt, studentProfileId: row.student_profile_id });
     });
 
+    it("keeps a guest id out of local and remote roster-profile fields", async () => {
+        const guestAttempt: Attempt = {
+            ...attempt,
+            studentId: "guest:guest-cookie-1",
+            studentProfileId: "guest:guest-cookie-1",
+            studentName: "게스트 학생",
+            identityType: undefined,
+            guestId: "guest-cookie-1",
+            questionResults: [{
+                schemaVersion: 1,
+                attemptId: "attempt-1",
+                examId: "exam-1",
+                examTitle: "Final OMR",
+                studentName: "게스트 학생",
+                studentId: "guest:guest-cookie-1",
+                identityType: undefined,
+                questionId: 1,
+                questionNumber: 1,
+                score: 5,
+                earnedScore: 5,
+                selectedAnswer: 3,
+                correctAnswer: 3,
+                status: "correct",
+                isCorrect: true,
+                isWrong: false,
+                isUnanswered: false,
+                finishedAt: attempt.finishedAt,
+            }],
+        };
+
+        const row = attemptToSupabaseRow(guestAttempt);
+        expect(row.student_id).toBe("guest:guest-cookie-1");
+        expect(row.student_profile_id).toBeNull();
+        expect(row.identity_type).toBe("guest");
+        expect(row.payload).not.toHaveProperty("studentProfileId");
+        expect(row.payload.questionResults?.[0]).not.toHaveProperty("studentProfileId");
+        const questionRow = questionResultRowsForAttempt(guestAttempt)[0];
+        expect(questionRow).toMatchObject({
+            student_profile_id: null,
+            identity_type: "guest",
+        });
+        expect(questionRow?.payload).not.toHaveProperty("studentProfileId");
+        expect(attemptFromSupabaseRow(row)).not.toHaveProperty("studentProfileId");
+        expect(attemptFromSupabaseRow(row).questionResults?.[0]).not.toHaveProperty("studentProfileId");
+
+        const localStorage = createStorage();
+        vi.stubGlobal("window", { localStorage });
+        vi.stubGlobal("localStorage", localStorage);
+        await expect(saveAttempt(guestAttempt)).resolves.toMatchObject({ localSaved: true });
+        const savedGuest = readLocalAttempts()[0];
+        expect(savedGuest).toMatchObject({ identityType: "guest", studentId: "guest:guest-cookie-1" });
+        expect(savedGuest).not.toHaveProperty("studentProfileId");
+        expect(savedGuest?.questionResults?.[0]).not.toHaveProperty("studentProfileId");
+
+        const authoritativeTemporary = attemptFromSupabaseRow({
+            ...row,
+            identity_type: "temporary",
+            student_id: "guest:legacy-label",
+            student_profile_id: "profile-authoritative",
+            payload: {
+                ...guestAttempt,
+                identityType: undefined,
+                studentId: "guest:legacy-label",
+                questionResults: guestAttempt.questionResults?.map(result => ({
+                    ...result,
+                    identityType: "guest" as const,
+                    studentProfileId: "guest:legacy-label",
+                })),
+            },
+        });
+        expect(authoritativeTemporary).toMatchObject({
+            identityType: "temporary",
+            studentProfileId: "profile-authoritative",
+        });
+        expect(authoritativeTemporary.questionResults?.[0]).toMatchObject({
+            identityType: "temporary",
+            studentProfileId: "profile-authoritative",
+        });
+        expect(attemptToSupabaseRow(authoritativeTemporary)).toMatchObject({
+            identity_type: "temporary",
+            student_profile_id: "profile-authoritative",
+        });
+        expect(questionResultRowsForAttempt(authoritativeTemporary)[0]).toMatchObject({
+            identity_type: "temporary",
+            student_profile_id: "profile-authoritative",
+        });
+    });
+
     it("keeps server-confirmation provenance only in the local attempt cache", async () => {
         const localStorage = createStorage();
         vi.stubGlobal("window", { localStorage });
@@ -456,6 +545,38 @@ describe("Supabase persistence mapping", () => {
             organizationId: `teacher_${stableWorkspaceHash("teacher-a")}`,
             createdByUserId: `teacher_${stableWorkspaceHash("teacher-a")}`,
         });
+    });
+
+    it("only exposes local exam and attempt caches from the active teacher workspace", () => {
+        const activeOrganizationId = "teacher_accounta";
+        const otherOrganizationId = "teacher_accountb";
+        const teacherSession = createTeacherSession("tkn_test_0123456789abcdef0123456789abcdef", Date.now(), {
+            teacherId: "teacher-a",
+            displayName: "Teacher A",
+            organizationId: activeOrganizationId,
+        });
+        const localStorage = createStorage({
+            "omr_exam_active": JSON.stringify({ ...exam, id: "active", organizationId: activeOrganizationId }),
+            "omr_exam_other": JSON.stringify({ ...exam, id: "other", organizationId: otherOrganizationId }),
+            "omr_exam_legacy": JSON.stringify({ ...exam, id: "legacy" }),
+            omr_attempts: JSON.stringify([
+                { ...attempt, id: "attempt-active", examId: "active", organizationId: activeOrganizationId },
+                { ...attempt, id: "attempt-other", examId: "other", organizationId: otherOrganizationId },
+                { ...attempt, id: "attempt-linked-active", examId: "active", organizationId: undefined },
+                { ...attempt, id: "attempt-legacy", examId: "legacy", organizationId: undefined },
+            ]),
+        });
+        const sessionStorage = createStorage({
+            omr_teacher_session: JSON.stringify(teacherSession),
+        });
+        vi.stubGlobal("window", { localStorage, sessionStorage });
+        vi.stubGlobal("localStorage", localStorage);
+
+        expect(readLocalExams().map(item => item.id)).toEqual(["active"]);
+        expect(readLocalAttempts().map(item => item.id).sort()).toEqual([
+            "attempt-active",
+            "attempt-linked-active",
+        ]);
     });
 
     it("promotes retake and guest merge metadata into attempt fact columns", () => {

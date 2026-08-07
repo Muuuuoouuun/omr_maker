@@ -84,10 +84,15 @@ function secureSecret() {
     return randomBytes(32).toString("base64url");
 }
 
+function configuredStrongSecret(env, primary, alternate) {
+    const value = configuredSecret(env, primary, alternate);
+    return Buffer.byteLength(value, "utf8") >= 32 ? value : "";
+}
+
 function chooseStudentSecrets(environments) {
     const secrets = Object.fromEntries(targets.map(target => [
         target,
-        configuredSecret(environments[target], "STUDENT_SESSION_SECRET", "OMR_STUDENT_SESSION_SECRET") || secureSecret(),
+        configuredStrongSecret(environments[target], "STUDENT_SESSION_SECRET", "OMR_STUDENT_SESSION_SECRET") || secureSecret(),
     ]));
     const productionConfig = serverConfig(environments.production, "production");
     const previewConfig = serverConfig(environments.preview, "preview");
@@ -189,11 +194,15 @@ async function apply(environments) {
     const studentSecrets = chooseStudentSecrets(environments);
     const appliedDatabases = new Set();
     for (const target of targets) {
-        const teacherSessionSecret = configuredSecret(environments[target], "TEACHER_SESSION_SECRET", "OMR_TEACHER_SESSION_SECRET") || secureSecret();
+        const teacherSessionSecret = configuredStrongSecret(environments[target], "TEACHER_SESSION_SECRET", "OMR_TEACHER_SESSION_SECRET") || secureSecret();
+        const studentAttemptSecret = configuredStrongSecret(environments[target], "STUDENT_ATTEMPT_SECRET", "OMR_STUDENT_ATTEMPT_SECRET") || secureSecret();
+        const rateLimitHashSecret = configuredStrongSecret(environments[target], "OMR_RATE_LIMIT_HASH_SECRET") || secureSecret();
         const fixture = buildDeploymentFixture({ studentSessionSecret: studentSecrets[target] });
         addEnvironmentValue("TEACHER_ACCOUNTS", target, JSON.stringify(fixture.teacherAccounts));
         addEnvironmentValue("TEACHER_SESSION_SECRET", target, teacherSessionSecret);
         addEnvironmentValue("STUDENT_SESSION_SECRET", target, studentSecrets[target]);
+        addEnvironmentValue("STUDENT_ATTEMPT_SECRET", target, studentAttemptSecret);
+        addEnvironmentValue("OMR_RATE_LIMIT_HASH_SECRET", target, rateLimitHashSecret);
 
         const config = serverConfig(environments[target], target);
         const databaseKey = `${config.url}\u0000${studentSecrets[target]}`;
@@ -209,11 +218,17 @@ async function verify(environments) {
     const verifiedDatabases = new Set();
     for (const target of targets) {
         verifyTeacherAccounts(environments[target], target);
-        if (!configuredSecret(environments[target], "TEACHER_SESSION_SECRET", "OMR_TEACHER_SESSION_SECRET")) {
-            throw new Error(`${target} is missing TEACHER_SESSION_SECRET`);
+        if (!configuredStrongSecret(environments[target], "TEACHER_SESSION_SECRET", "OMR_TEACHER_SESSION_SECRET")) {
+            throw new Error(`${target} is missing TEACHER_SESSION_SECRET or it is shorter than 32 bytes`);
         }
-        if (!configuredSecret(environments[target], "STUDENT_SESSION_SECRET", "OMR_STUDENT_SESSION_SECRET")) {
-            throw new Error(`${target} is missing STUDENT_SESSION_SECRET`);
+        if (!configuredStrongSecret(environments[target], "STUDENT_SESSION_SECRET", "OMR_STUDENT_SESSION_SECRET")) {
+            throw new Error(`${target} is missing STUDENT_SESSION_SECRET or it is shorter than 32 bytes`);
+        }
+        if (!configuredStrongSecret(environments[target], "STUDENT_ATTEMPT_SECRET", "OMR_STUDENT_ATTEMPT_SECRET")) {
+            throw new Error(`${target} is missing STUDENT_ATTEMPT_SECRET or it is shorter than 32 bytes`);
+        }
+        if (!configuredStrongSecret(environments[target], "OMR_RATE_LIMIT_HASH_SECRET")) {
+            throw new Error(`${target} is missing OMR_RATE_LIMIT_HASH_SECRET or it is shorter than 32 bytes`);
         }
         const config = serverConfig(environments[target], target);
         if (!verifiedDatabases.has(config.url)) {

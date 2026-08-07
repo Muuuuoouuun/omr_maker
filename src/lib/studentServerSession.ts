@@ -1,6 +1,7 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
 import type { IdentityType } from "@/types/omr";
 import type { VerifiedStudentIdentity } from "@/lib/studentExamContract";
+import { resolveServerSigningSecret } from "@/lib/serverSigningSecret";
 
 export const STUDENT_SERVER_SESSION_COOKIE = "omr_student_server_session";
 export const STUDENT_SERVER_SESSION_MAX_AGE_SECONDS = 12 * 60 * 60;
@@ -42,11 +43,13 @@ function clean(value: unknown): string {
 
 export function resolveStudentSessionSecret(env: Env = process.env): string | null {
     const explicit = clean(env.STUDENT_SESSION_SECRET) || clean(env.OMR_STUDENT_SESSION_SECRET);
-    if (explicit) return explicit;
+    if (explicit) return resolveServerSigningSecret(explicit, env.NODE_ENV);
+
+    if (clean(env.NODE_ENV).toLowerCase() === "production") return null;
 
     const attemptSecret = clean(env.STUDENT_ATTEMPT_SECRET) || clean(env.OMR_STUDENT_ATTEMPT_SECRET);
-    if (attemptSecret) return attemptSecret;
-    return env.NODE_ENV === "production" ? null : "dev-student-session-secret";
+    if (attemptSecret) return resolveServerSigningSecret(attemptSecret, env.NODE_ENV);
+    return "dev-student-session-secret";
 }
 
 function sign(payload: string, secret: string): string {

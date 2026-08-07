@@ -1,7 +1,10 @@
 import { describe, expect, it } from "vitest";
+import { INITIAL_OPERATIONS_LIMITS } from "@/lib/initialOperationsPolicy";
+import { attemptToSupabaseRow } from "@/lib/omrPersistence";
 import type { Attempt } from "@/types/omr";
 import * as teacherAttemptGateway from "./teacherAttemptGateway";
 import {
+    listTeacherAttemptSummariesWithGateway,
     listTeacherAttemptsWithGateway,
     loadTeacherAttemptWithGateway,
     type TeacherAttemptGatewayClient,
@@ -21,29 +24,104 @@ const attempt: Attempt = {
     status: "completed",
 };
 
+function attemptListRow(item: Attempt) {
+    const row = { ...attemptToSupabaseRow(item) };
+    Reflect.deleteProperty(row, "payload");
+    return {
+        ...row,
+        exam_title: item.examTitle,
+        guest_id: item.guestId,
+        answers: item.answers,
+        question_results: item.questionResults,
+        question_timings: item.questionTimings,
+        focus_loss_events: item.focusLossEvents,
+        student_questions: item.studentQuestions,
+        auto_submitted: item.autoSubmitted,
+        tab_foci_lost_count: item.tabFociLostCount,
+        drawings_ref: item.drawingsRef,
+        handwriting: item.handwriting,
+        handwriting_archived: item.handwritingArchived,
+        handwriting_plan: item.handwritingPlan,
+        drawing_page_count: item.drawingPageCount,
+        drawing_stroke_count: item.drawingStrokeCount,
+        question_drawings: item.questionDrawings,
+        retake: item.retake,
+    };
+}
+
 function clientWithRows(rows: unknown[]): { client: TeacherAttemptGatewayClient; filters: Array<[string, string]> } {
     const filters: Array<[string, string]> = [];
-    const query = {
-        eq(column: string, value: string) {
-            filters.push([column, value]);
-            return query;
-        },
-        async maybeSingle() {
-            return { data: rows[0] || null, error: null };
-        },
-        async order() {
-            return { data: rows, error: null };
-        },
-    };
     return {
         filters,
-        client: { from: () => ({ select: () => query }) } as unknown as TeacherAttemptGatewayClient,
+        client: {
+            from: () => ({
+                select: () => {
+                    let afterId = "";
+                    const query = {
+                        eq(column: string, value: string) {
+                            filters.push([column, value]);
+                            return query;
+                        },
+                        gt(_column: string, value: string) {
+                            afterId = value;
+                            return query;
+                        },
+                        async maybeSingle() {
+                            return { data: rows[0] || null, error: null };
+                        },
+                        order() { return query; },
+                        async limit(value: number) {
+                            return {
+                                data: rows.filter(row => {
+                                    const record = row as { id?: string; payload?: { id?: string } };
+                                    return (record.id || record.payload?.id || "") > afterId;
+                                }).slice(0, value),
+                                error: null,
+                            };
+                        },
+                    };
+                    return query;
+                },
+            }),
+        } as unknown as TeacherAttemptGatewayClient,
     };
 }
 
 describe("teacher attempt gateway", () => {
+    it("lists lightweight summaries through the same organization/exam keyset boundary", async () => {
+        const selected: string[] = [];
+        const filters: Array<[string, string]> = [];
+        const row = attemptListRow(attempt);
+        const client = {
+            from() {
+                const query = {
+                    eq(column: string, value: string) { filters.push([column, value]); return query; },
+                    gt() { return query; },
+                    order() { return query; },
+                    async limit() { return { data: [row], error: null }; },
+                };
+                return { select(columns: string) { selected.push(columns); return query; } };
+            },
+        } as unknown as TeacherAttemptGatewayClient;
+
+        const result = await listTeacherAttemptSummariesWithGateway(client, {
+            organizationId: "org-a",
+            organizationName: "Org A",
+        }, "exam-1");
+
+        expect(filters).toEqual([
+            ["organization_id", "org-a"],
+            ["exam_id", "exam-1"],
+        ]);
+        expect(selected[0]).not.toMatch(/answers:|question_results:|question_timings:|focus_loss_events:|handwriting:payload|question_drawings:/);
+        expect(result).toMatchObject({
+            status: "loaded",
+            attempts: [{ id: "attempt-1", detailLevel: "summary", answers: {} }],
+        });
+    });
+
     it("lists attempts only through the server-owned organization filter", async () => {
-        const { client, filters } = clientWithRows([{ payload: attempt }]);
+        const { client, filters } = clientWithRows([attemptListRow(attempt)]);
         await expect(listTeacherAttemptsWithGateway(client, {
             organizationId: "org-a",
             organizationName: "Org A",
@@ -52,7 +130,7 @@ describe("teacher attempt gateway", () => {
     });
 
     it("narrows live polling to the selected exam", async () => {
-        const { client, filters } = clientWithRows([{ payload: attempt }]);
+        const { client, filters } = clientWithRows([attemptListRow(attempt)]);
         await expect(listTeacherAttemptsWithGateway(client, {
             organizationId: "org-a",
             organizationName: "Org A",
@@ -61,6 +139,169 @@ describe("teacher attempt gateway", () => {
             ["organization_id", "org-a"],
             ["exam_id", "exam-1"],
         ]);
+    });
+
+    it("uses the indexed newest-first boundary after organization and exam scopes", async () => {
+        const calls: Array<[string, ...unknown[]]> = [];
+        const rows = Array.from({ length: INITIAL_OPERATIONS_LIMITS.listPageSize + 1 }, (_, index) => attemptListRow({
+                ...attempt,
+                id: `attempt-${String(index).padStart(4, "0")}`,
+                finishedAt: index % 2 === 0 ? "2026-07-14T00:02:00.000Z" : "2026-07-14T00:01:00.000Z",
+        }));
+        const client = {
+            from() {
+                const query = {
+                    eq(column: string, value: string) {
+                        calls.push(["eq", column, value]);
+                        return query;
+                    },
+                    gt() { return query; },
+                    order(column: string, options: { ascending: boolean }) {
+                        calls.push(["order", column, options]);
+                        return query;
+                    },
+                    async limit(value: number) {
+                        calls.push(["limit", value]);
+                        return {
+                            data: rows.slice(0, value),
+                            error: null,
+                        };
+                    },
+                    async range(from: number, to: number) {
+                        calls.push(["range", from, to]);
+                        return {
+                            data: [...rows]
+                                .sort((left, right) => right.finished_at.localeCompare(left.finished_at)
+                                    || right.id.localeCompare(left.id))
+                                .slice(from, to + 1),
+                            error: null,
+                        };
+                    },
+                };
+                return { select: () => query };
+            },
+        } as unknown as TeacherAttemptGatewayClient;
+
+        await expect(listTeacherAttemptsWithGateway(client, {
+            organizationId: "org-a",
+            organizationName: "Org A",
+        }, "exam-1")).resolves.toMatchObject({ status: "loaded", attempts: { length: rows.length } });
+
+        expect(calls.slice(0, 3)).toEqual([
+            ["eq", "organization_id", "org-a"],
+            ["eq", "exam_id", "exam-1"],
+            ["order", "finished_at", { ascending: false }],
+        ]);
+        expect(calls.filter(([method]) => method === "order").slice(0, 2)).toEqual([
+            ["order", "finished_at", { ascending: false }],
+            ["order", "id", { ascending: false }],
+        ]);
+        expect(calls.filter(([method]) => method === "range")).toEqual([
+            ["range", 0, INITIAL_OPERATIONS_LIMITS.listPageSize - 1],
+            ["range", INITIAL_OPERATIONS_LIMITS.listPageSize, (INITIAL_OPERATIONS_LIMITS.listPageSize * 2) - 1],
+        ]);
+
+        const result = await listTeacherAttemptsWithGateway(client, {
+            organizationId: "org-a",
+            organizationName: "Org A",
+        }, "exam-1");
+        expect(result.status).toBe("loaded");
+        if (result.status === "loaded") {
+            expect(result.attempts.slice(0, 3).map(item => item.id)).toEqual([
+                "attempt-0000",
+                "attempt-0002",
+                "attempt-0004",
+            ]);
+        }
+    });
+
+    it("reads at most the teacher attempt ceiling plus one and reports a usable partial page", async () => {
+        const ranges: Array<[number, number]> = [];
+        const total = INITIAL_OPERATIONS_LIMITS.teacherAttempts + 1;
+        const rows = Array.from({ length: total }, (_, index) => attemptListRow({
+            ...attempt,
+            id: `attempt-${String(index).padStart(5, "0")}`,
+        }));
+        const client = {
+            from() {
+                const query = {
+                    eq() { return query; },
+                    gt() { return query; },
+                    order() { return query; },
+                    async limit(value: number) {
+                        return { data: rows.slice(0, value), error: null };
+                    },
+                    async range(from: number, to: number) {
+                        ranges.push([from, to]);
+                        return {
+                            data: [...rows]
+                                .sort((left, right) => right.id.localeCompare(left.id))
+                                .slice(from, to + 1),
+                            error: null,
+                        };
+                    },
+                };
+                return { select: () => query };
+            },
+        } as unknown as TeacherAttemptGatewayClient;
+
+        await expect(listTeacherAttemptsWithGateway(client, {
+            organizationId: "org-a",
+            organizationName: "Org A",
+        })).resolves.toMatchObject({
+            status: "loaded",
+            attempts: { length: INITIAL_OPERATIONS_LIMITS.teacherAttempts },
+            page: { partial: true, hasMore: true },
+        });
+        expect(ranges).toHaveLength(9);
+        expect(ranges.at(-1)).toEqual([
+            INITIAL_OPERATIONS_LIMITS.teacherAttempts,
+            INITIAL_OPERATIONS_LIMITS.teacherAttempts,
+        ]);
+    });
+
+    it("preserves deterministic ordering without skip or duplicate across bounded ranges", async () => {
+        const dataset = Array.from({ length: 300 }, (_, index) => attemptListRow({
+            ...attempt,
+            id: `attempt-${String(index).padStart(4, "0")}`,
+        }));
+        let requests = 0;
+        const client = {
+            from() {
+                const query = {
+                    eq() { return query; },
+                    gt() { return query; },
+                    order() { return query; },
+                    async limit(value: number) {
+                        requests += 1;
+                        return { data: dataset.slice(0, value), error: null };
+                    },
+                    async range(from: number, to: number) {
+                        requests += 1;
+                        return {
+                            data: [...dataset]
+                                .sort((left, right) => right.id.localeCompare(left.id))
+                                .slice(from, to + 1),
+                            error: null,
+                        };
+                    },
+                };
+                return { select: () => query };
+            },
+        } as unknown as TeacherAttemptGatewayClient;
+
+        const result = await listTeacherAttemptsWithGateway(client, {
+            organizationId: "org-a",
+            organizationName: "Org A",
+        });
+        expect(result.status).toBe("loaded");
+        if (result.status === "loaded") {
+            const ids = result.attempts.map(item => item.id);
+            expect(new Set(ids).size).toBe(ids.length);
+            expect(ids).toContain("attempt-0250");
+            expect(ids).toHaveLength(300);
+            expect(requests).toBe(2);
+        }
     });
 
     it("loads an attempt with both organization and attempt id filters", async () => {

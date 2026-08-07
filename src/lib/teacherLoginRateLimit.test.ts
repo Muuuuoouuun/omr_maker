@@ -14,11 +14,34 @@ describe("teacher login rate limit", () => {
     it("builds hashed keys without storing raw identifiers or client fingerprints", () => {
         const keys = buildTeacherLoginRateLimitKeys("Director@School.test", "203.0.113.9");
 
-        expect(keys).toHaveLength(2);
-        expect(keys[0]).toMatch(/^teacher-login:identifier-client:[a-f0-9]{64}$/);
-        expect(keys[1]).toMatch(/^teacher-login:client:[a-f0-9]{64}$/);
+        expect(keys).toHaveLength(1);
+        expect(keys[0]).toMatch(/^teacher-login:identifier:[a-f0-9]{64}$/);
         expect(keys.join(" ")).not.toContain("Director");
         expect(keys.join(" ")).not.toContain("203.0.113.9");
+    });
+
+    it("locks one teacher identifier even when the client fingerprint rotates", () => {
+        const store: TeacherLoginRateLimitStore = new Map();
+        for (let attempt = 0; attempt < TEACHER_LOGIN_MAX_FAILURES; attempt += 1) {
+            recordTeacherLoginFailure(
+                buildTeacherLoginRateLimitKeys("admin", `rotating-client-${attempt}`),
+                store,
+                1_000 + attempt,
+            );
+        }
+
+        expect(checkTeacherLoginRateLimit(
+            buildTeacherLoginRateLimitKeys("admin", "fresh-client"),
+            store,
+            2_000,
+        ).allowed).toBe(false);
+    });
+
+    it("does not share a five-attempt budget across different teachers behind one NAT", () => {
+        const firstTeacher = new Set(buildTeacherLoginRateLimitKeys("teacher-a", "academy-nat"));
+        const secondTeacher = buildTeacherLoginRateLimitKeys("teacher-b", "academy-nat");
+
+        expect(secondTeacher.filter(key => firstTeacher.has(key))).toEqual([]);
     });
 
     it("allows the first failures and then locks the same identifier/client window", () => {
@@ -41,7 +64,7 @@ describe("teacher login rate limit", () => {
         const keys = buildTeacherLoginRateLimitKeys("admin", "client-a");
 
         recordTeacherLoginFailure(keys, store, 1_000);
-        expect(store.size).toBe(2);
+        expect(store.size).toBe(1);
 
         recordTeacherLoginSuccess(keys, store);
         expect(store.size).toBe(0);

@@ -5,6 +5,7 @@ import {
     AI_ACTION_RATE_LIMIT_ERROR,
     AI_ACTION_UNAUTHORIZED_ERROR,
     authorizeTeacherAiActionRequest,
+    buildAiActionAccountRateLimitKey,
     buildAiActionRateLimitKey,
     consumeAiActionRateLimit,
     type AiActionRateLimitStore,
@@ -14,6 +15,10 @@ import { createSignedTeacherSessionCookie } from "./teacherServerSession";
 
 describe("AI action security", () => {
     const teacherToken = "tkn_abc123_0123456789abcdef0123456789abcdef";
+    const env = {
+        NODE_ENV: "production",
+        TEACHER_SESSION_SECRET: "ai-action-teacher-session-secret-at-least-32-bytes",
+    };
 
     it("builds stable, non-plaintext keys per teacher and client", () => {
         const first = buildAiActionRateLimitKey("Teacher-A", "203.0.113.4");
@@ -37,6 +42,27 @@ describe("AI action security", () => {
         });
     });
 
+    it("shares the AI allowance across rotating client fingerprints", () => {
+        const cookie = createSignedTeacherSessionCookie(teacherToken, { teacherId: "teacher-a" }, env, 1_000);
+        const store: AiActionRateLimitStore = new Map();
+
+        for (let request = 0; request < AI_ACTION_MAX_REQUESTS; request += 1) {
+            const rotatingHeaders = new Headers({
+                host: "app.example.com",
+                origin: "https://app.example.com",
+                "x-forwarded-for": `203.0.113.${request + 1}`,
+            });
+            expect(authorizeTeacherAiActionRequest(rotatingHeaders, cookie, env, store, 1_000).allowed).toBe(true);
+        }
+
+        expect(authorizeTeacherAiActionRequest(new Headers({
+            host: "app.example.com",
+            origin: "https://app.example.com",
+            "x-forwarded-for": "198.51.100.99",
+        }), cookie, env, store, 1_000)).toMatchObject({ allowed: false });
+        expect(store.has(buildAiActionAccountRateLimitKey("teacher-a"))).toBe(true);
+    });
+
     it("starts a fresh allowance after the window expires", () => {
         const store: AiActionRateLimitStore = new Map();
         const key = buildAiActionRateLimitKey("teacher-a", "client-a");
@@ -51,7 +77,6 @@ describe("AI action security", () => {
     });
 
     it("rejects cross-origin and unsigned requests before consuming AI quota", () => {
-        const env = { NODE_ENV: "production", TEACHER_SESSION_SECRET: "test-secret" };
         const cookie = createSignedTeacherSessionCookie(teacherToken, { teacherId: "teacher-a" }, env, 1_000);
         const store: AiActionRateLimitStore = new Map();
 
@@ -73,7 +98,6 @@ describe("AI action security", () => {
     });
 
     it("authorizes a signed same-origin teacher and enforces the request limit", () => {
-        const env = { NODE_ENV: "production", TEACHER_SESSION_SECRET: "test-secret" };
         const cookie = createSignedTeacherSessionCookie(teacherToken, { teacherId: "teacher-a" }, env, 1_000);
         const headers = new Headers({
             host: "app.example.com",

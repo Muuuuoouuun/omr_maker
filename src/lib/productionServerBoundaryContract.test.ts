@@ -43,6 +43,21 @@ const canonicalTables = [
     "omr_remote_assets",
 ] as const;
 
+const currentCanonicalTables = [
+    ...canonicalTables,
+    "omr_attempt_sessions",
+    "omr_rate_limit_buckets",
+    "omr_exam_mutations",
+    "omr_feedback_mutations",
+    "omr_remote_asset_upload_intents",
+    "omr_remote_asset_cleanup_queue",
+    "omr_initial_ops_metrics",
+    "omr_teacher_accounts",
+    "omr_teacher_account_tokens",
+    "omr_exam_entry_invites",
+    "omr_teacher_notification_states",
+] as const;
+
 const serverGatewaySignatures = [
     ["omr_submit_attempt_v1", "text, jsonb, jsonb"],
     ["omr_submit_session_attempt_v1", "jsonb, jsonb"],
@@ -327,8 +342,17 @@ describe("production server-only database boundary", () => {
         expect(liveAssertions).toContain(
             "v4 readiness accepted a server gateway procedure impostor",
         );
-        expect(supabaseReadme).toContain("202607280003");
-        expect(productionReadiness).toContain("202607280003");
+        expect(supabaseReadme).toContain("202608060029");
+        expect(supabaseReadme).toContain("rosterSnapshotCasReady");
+        expect(supabaseReadme).toContain("attemptMutationCasReady");
+        expect(supabaseReadme).toContain("examDeleteSessionSafe");
+        expect(supabaseReadme).toContain("teacherAccountLifecycleReady");
+        expect(productionReadiness).toContain("202608060029");
+        expect(productionReadiness).toContain("rosterSnapshotCasReady");
+        expect(productionReadiness).toContain("attemptMutationCasReady");
+        expect(productionReadiness).toContain("examDeleteSessionSafe");
+        expect(productionReadiness).toContain("teacherAccountLifecycleReady");
+        expect(productionReadiness).toContain("initialOperationsLoadControlReady");
     });
 
     it("runs the organization preflight before atomically closing every public app surface", () => {
@@ -357,8 +381,8 @@ describe("production server-only database boundary", () => {
         expect(profile).toMatch(/grant all on all sequences in schema public to service_role;/i);
         expect(profile).toMatch(/grant all on all functions in schema public to service_role;/i);
 
-        expect([...canonicalTables].sort()).toEqual(discoveredPublicAppTables());
-        for (const table of canonicalTables) {
+        expect([...currentCanonicalTables].sort()).toEqual(discoveredPublicAppTables());
+        for (const table of currentCanonicalTables) {
             expect(profile, `${table} must ENABLE RLS`).toMatch(
                 new RegExp(`alter table(?: if exists)? public\\.${table} enable row level security;`, "i"),
             );
@@ -366,6 +390,54 @@ describe("production server-only database boundary", () => {
                 new RegExp(`alter table(?: if exists)? public\\.${table} force row level security;`, "i"),
             );
         }
+    });
+
+    it("integrates durable rate limits, cleanup epochs, revisioned exams, and feedback CAS into the exact boundary", () => {
+        for (const table of ["omr_rate_limit_buckets", "omr_exam_mutations", "omr_feedback_mutations"]) {
+            expect(profile).toContain(`revoke all on table public.${table} from public, anon, authenticated, service_role`);
+        }
+        for (const signature of [
+            "public.omr_authorize_remote_asset_cleanup_delete_v1(text,text,integer)",
+            "public.omr_ack_remote_asset_cleanup_v1(text,text,integer)",
+            "public.omr_fail_remote_asset_cleanup_v1(text,text,integer,text)",
+            "public.omr_consume_rate_limit_v1(text,text,integer,integer,integer)",
+            "public.omr_save_exam_v2(jsonb,jsonb,jsonb,text,bigint,text)",
+            "public.omr_bootstrap_workspace_organization_v1(text,text,jsonb,timestamptz)",
+            "public.omr_save_feedback_v2(text,jsonb,bigint,text)",
+            "public.omr_return_feedback_v2(text,text,bigint,text)",
+            "public.omr_save_feedback_v3(text,jsonb,bigint,text)",
+            "public.omr_return_feedback_v3(text,text,bigint,text)",
+        ]) {
+            expect(profile).toContain(signature);
+        }
+        for (const legacySignature of [
+            "public.omr_ack_remote_asset_cleanup_v1(text,text)",
+            "public.omr_fail_remote_asset_cleanup_v1(text,text,text)",
+            "public.omr_save_exam_v1(jsonb,jsonb,jsonb,text)",
+            "public.omr_save_feedback_v1(text,jsonb)",
+            "public.omr_return_feedback_v1(text,text,timestamptz)",
+        ]) {
+            expect(profile).toContain(`revoke execute on function ${legacySignature} from service_role`);
+        }
+        expect(profile).toContain(
+            "revoke all on function public.omr_normalize_exam_save_request_v10(jsonb)",
+        );
+        expect(profile).toContain("'version', '202608060029'");
+        expect(profile).toContain("'durableRateLimitsReady'");
+        expect(profile).toContain("'teacherExamCasReady'");
+        expect(profile).toContain("'examRevisionReady'");
+        expect(profile).toContain("'feedbackCasReady'");
+        expect(profile).toContain("'workspaceBootstrapPlanSafe'");
+        expect(profile).toContain("'feedbackReplayHardeningReady'");
+        expect(profile).toContain("'feedbackCoreFreeReady'");
+        expect(profile).toContain("'sessionCleanupFencingReady'");
+        expect(profile).toContain("'attemptCheckpointNullCasReady'");
+        expect(profile).toContain("'rosterSnapshotCasReady'");
+        expect(profile).toContain(
+            "revoke all on table public.omr_initial_ops_metrics from public, anon, authenticated, service_role",
+        );
+        expect(profile).toContain("'initialOperationsLoadControlReady'");
+        expect(profile).toContain("'omr_initial_ops_reserve_upload_v1'");
     });
 
     it("removes every known alpha and browser-auth policy by explicit name", () => {

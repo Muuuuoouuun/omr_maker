@@ -22,19 +22,47 @@ import {
     type AiAnswerModelRoutingOptions,
 } from "@/lib/aiAnswerModelRouting";
 import {
+    authorizedTeacherAiRateLimitSubject,
     authorizeTeacherAiActionRequest,
 } from "@/lib/aiActionSecurity";
-import { TEACHER_SERVER_SESSION_COOKIE } from "@/lib/teacherServerSession";
+import {
+    resolveAuthorizedTeacherSessionCookie,
+    TEACHER_SERVER_SESSION_COOKIE,
+} from "@/lib/teacherServerSession";
+import { applyDurableRateLimit } from "@/lib/durableRateLimit";
+
+const AI_ACTION_DURABLE_POLICY = { limit: 6, windowMs: 60 * 1000 };
 
 async function requireTeacherAiAccess(): Promise<void> {
     const headerStore = await headers();
     const cookieStore = await cookies();
+    const rawSessionCookie = cookieStore.get(TEACHER_SERVER_SESSION_COOKIE)?.value;
+    const serverSession = await resolveAuthorizedTeacherSessionCookie(rawSessionCookie);
+    if (!serverSession) {
+        throw new Error("교사 로그인이 필요한 기능입니다. 다시 로그인해주세요.");
+    }
     const authorization = authorizeTeacherAiActionRequest(
         headerStore,
-        cookieStore.get(TEACHER_SERVER_SESSION_COOKIE)?.value,
+        rawSessionCookie,
     );
     if (!authorization.allowed) {
         throw new Error(authorization.error);
+    }
+    const subject = authorizedTeacherAiRateLimitSubject(
+        headerStore,
+        rawSessionCookie,
+    );
+    if (!subject) {
+        throw new Error("교사 로그인이 필요한 기능입니다. 다시 로그인해주세요.");
+    }
+    const durable = await applyDurableRateLimit({
+        namespace: "ai-answer",
+        subject,
+        operation: "consume",
+        policy: AI_ACTION_DURABLE_POLICY,
+    });
+    if (!durable.allowed) {
+        throw new Error("AI 분석 요청이 많습니다. 잠시 후 다시 시도해주세요.");
     }
 }
 

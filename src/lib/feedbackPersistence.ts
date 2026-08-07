@@ -30,6 +30,7 @@ export interface SupabaseAttemptFeedbackRow {
     student_profile_id: string | null;
     teacher_user_id: string | null;
     status: AttemptFeedback["status"];
+    revision?: number;
     summary: string | null;
     question_comments: QuestionFeedbackComment[];
     markup: FeedbackMarkup | null;
@@ -106,6 +107,21 @@ function numberValue(value: unknown): number | undefined {
 
 function booleanValue(value: unknown, fallback = false): boolean {
     return typeof value === "boolean" ? value : fallback;
+}
+
+function deterministicCommentId(
+    questionId: number,
+    questionNumber: number,
+    body: string,
+    visibility: QuestionFeedbackComment["visibility"],
+): string {
+    const input = `${questionId}\u001f${questionNumber}\u001f${visibility}\u001f${body}`;
+    let hash = 0x811c9dc5;
+    for (let index = 0; index < input.length; index += 1) {
+        hash ^= input.charCodeAt(index);
+        hash = Math.imul(hash, 0x01000193);
+    }
+    return `comment:${questionId}:${(hash >>> 0).toString(16).padStart(8, "0")}`;
 }
 
 function isoValue(value: unknown): string | undefined {
@@ -199,7 +215,7 @@ function normalizeQuestionComment(value: unknown): QuestionFeedbackComment | nul
     if (questionId === undefined || questionNumber === undefined || !body) return null;
     const visibility = value.visibility === "teacher_only" ? "teacher_only" : "student_visible";
     return {
-        id: stringValue(value.id) || `comment:${questionId}:${Date.now()}`,
+        id: stringValue(value.id) || deterministicCommentId(questionId, questionNumber, body, visibility),
         questionId,
         questionNumber,
         body,
@@ -254,6 +270,7 @@ export function sanitizeAttemptFeedbackPayload(value: unknown): AttemptFeedback 
         studentProfileId: stringValue(value.studentProfileId),
         teacherUserId: stringValue(value.teacherUserId),
         status,
+        revision: Math.max(0, Math.floor(numberValue(value.revision) || 0)),
         summary: stringValue(value.summary),
         questionComments,
         markup: normalizeFeedbackMarkup(value.markup),
@@ -320,6 +337,7 @@ export function feedbackToSupabaseRow(
         student_profile_id: scopedValue(normalized.studentProfileId),
         teacher_user_id: scopedValue(normalized.teacherUserId),
         status: normalized.status,
+        revision: normalized.revision,
         summary: scopedValue(normalized.summary),
         question_comments: normalized.questionComments,
         markup: normalized.markup || null,
@@ -364,6 +382,7 @@ export function feedbackFromSupabaseRow(row: SupabaseAttemptFeedbackRow | { payl
         studentProfileId: row.student_profile_id || undefined,
         teacherUserId: row.teacher_user_id || undefined,
         status: row.status,
+        revision: row.revision,
         summary: row.summary || undefined,
         questionComments: row.question_comments,
         markup: row.markup || undefined,
@@ -389,6 +408,7 @@ export function feedbackFromSupabaseRow(row: SupabaseAttemptFeedbackRow | { payl
         studentProfileId: row.student_profile_id || feedback.studentProfileId,
         teacherUserId: row.teacher_user_id || feedback.teacherUserId,
         status: row.status || feedback.status,
+        revision: typeof row.revision === "number" ? row.revision : feedback.revision,
         summary: row.summary || feedback.summary,
         questionComments: Array.isArray(row.question_comments) ? row.question_comments : feedback.questionComments,
         markup: row.markup || feedback.markup,

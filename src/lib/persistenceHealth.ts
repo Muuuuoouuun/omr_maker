@@ -12,6 +12,9 @@ export interface PersistenceHealthSource {
     remoteSynced?: boolean;
     pendingSyncCount?: number;
     remoteError?: string;
+    /** A bounded canonical read succeeded but older rows exist beyond this page. */
+    remotePartial?: boolean;
+    remoteItemCount?: number;
 }
 
 export interface PersistenceHealth {
@@ -82,6 +85,13 @@ export function summarizePersistenceHealth(sources: PersistenceHealthSource[]): 
         .map(source => source.remoteError?.trim())
         .filter((message): message is string => !!message)
         .join(" / ") || undefined;
+    const partialSources = sources.filter(source => source.remotePartial === true);
+    const partialItemCount = partialSources.reduce((maximum, source) => {
+        const count = Number.isFinite(source.remoteItemCount) && (source.remoteItemCount || 0) > 0
+            ? Math.floor(source.remoteItemCount || 0)
+            : 0;
+        return Math.max(maximum, count);
+    }, 0);
 
     if (sources.length === 0) {
         return {
@@ -119,6 +129,18 @@ export function summarizePersistenceHealth(sources: PersistenceHealthSource[]): 
             kind: "pending",
             label: "동기화 대기",
             detail: `${pendingCount}건 재시도 대기`,
+            pendingCount,
+            remoteLoaded,
+        };
+    }
+
+    if (partialSources.length > 0) {
+        return {
+            kind: "pending",
+            label: "일부 기록 표시",
+            detail: partialItemCount > 0
+                ? `최근 ${partialItemCount.toLocaleString("ko-KR")}건 기준 · 전체 통계 아님`
+                : "최근 기록 기준 · 전체 통계 아님",
             pendingCount,
             remoteLoaded,
         };

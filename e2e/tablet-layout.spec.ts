@@ -22,6 +22,8 @@ const layoutRoutes = [
 function tabletExam(): Exam {
     return {
         id: "tablet-exam",
+        organizationId: "default",
+        createdByUserId: "admin",
         title: "Tablet Layout Exam",
         createdAt: "2026-04-23T00:00:00.000Z",
         durationMin: 45,
@@ -45,6 +47,7 @@ function tabletAttempts(): Attempt[] {
     return [
         {
             id: "tablet-attempt",
+            organizationId: "default",
             examId: "tablet-exam",
             examTitle: "Tablet Layout Exam",
             studentName: "Tablet Student",

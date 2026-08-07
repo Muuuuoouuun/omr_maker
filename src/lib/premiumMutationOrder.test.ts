@@ -23,14 +23,55 @@ describe("premium mutation authorization order", () => {
         expect(createPage).toContain("await releaseExamCreationAuthorization(reservedExamId)");
     });
 
-    it("creates the canonical exam owner before uploading new remote PDF metadata", () => {
+    it("keeps a new exam as an upload intent until the final atomic canonical save", () => {
         const createPage = source("src/app/create/page.tsx");
-        const skeletonSave = createPage.indexOf("const skeletonSave = await saveTeacherCanonicalExam(");
-        const firstAssetUpload = createPage.indexOf("const remote = await uploadTeacherExamAsset(formData)");
-        expect(skeletonSave).toBeGreaterThan(-1);
-        expect(firstAssetUpload).toBeGreaterThan(skeletonSave);
-        expect(createPage).toContain("await deleteTeacherCanonicalExam(id)");
-        expect(createPage).toContain("createdCanonicalSkeleton");
+        const firstAssetUpload = createPage.indexOf("await uploadTeacherPdfDirect(");
+        const finalSave = createPage.indexOf("await saveTeacherCanonicalExam(examData)");
+        expect(firstAssetUpload).toBeGreaterThan(-1);
+        expect(finalSave).toBeGreaterThan(firstAssetUpload);
+        expect(createPage).not.toContain("skeletonSave");
+        expect(createPage).not.toContain("createdCanonicalSkeleton");
+        expect(createPage).not.toContain("deleteTeacherCanonicalExam");
+    });
+
+    it("persists the new publish target before quota/upload and keeps it after ambiguous save failure", () => {
+        const createPage = source("src/app/create/page.tsx");
+        const target = createPage.indexOf("getOrCreateNewExamPublishTarget(");
+        const quota = createPage.indexOf("await authorizeExamCreation(id)");
+        const upload = createPage.indexOf("await uploadTeacherPdfDirect(");
+        const saveAttempt = createPage.indexOf("canonicalSaveAttempted = true");
+        const save = createPage.indexOf("await saveTeacherCanonicalExam(examData)");
+        const confirmed = createPage.indexOf('serverSave.status === "saved"');
+        const clear = createPage.indexOf("clearNewExamPublishTarget(localStore");
+        expect(target).toBeGreaterThan(-1);
+        expect(quota).toBeGreaterThan(target);
+        expect(upload).toBeGreaterThan(quota);
+        expect(saveAttempt).toBeGreaterThan(upload);
+        expect(save).toBeGreaterThan(saveAttempt);
+        expect(clear).toBeGreaterThan(confirmed);
+        expect(createPage).toContain("reservedExamId && !canonicalSaveAttempted");
+    });
+
+    it("gates legacy asset hydration and serializes a workspace-scoped publish across tabs", () => {
+        const createPage = source("src/app/create/page.tsx");
+        const hydrationGuard = createPage.indexOf("if (isAssetHydrating)");
+        const scopedDraft = createPage.indexOf("scopedExamDraftStorageKey(");
+        const lock = createPage.indexOf("await withExclusiveExamPublishLock(");
+        const target = createPage.indexOf("getOrCreateNewExamPublishTarget(");
+        const quota = createPage.indexOf("await authorizeExamCreation(id)");
+        expect(createPage).toContain("resolveExamEditorLoad(");
+        expect(createPage).toContain("readLocalExam");
+        expect(createPage).toContain("requiresCanonicalReservation");
+        expect(createPage).toContain("requiresCanonicalReservation\n                ? getOrCreateNewExamPublishTarget(");
+        expect(createPage).toContain("safeBrowserStorage(() => window.sessionStorage)");
+        expect(createPage).toContain("safeBrowserStorage(() => window.localStorage)");
+        expect(scopedDraft).toBeGreaterThan(-1);
+        expect(lock).toBeGreaterThan(scopedDraft);
+        expect(target).toBeGreaterThan(lock);
+        expect(hydrationGuard).toBeGreaterThan(-1);
+        expect(quota).toBeGreaterThan(target);
+        expect(createPage).not.toContain("tryAcquireNewExamPublishLock");
+        expect(createPage).not.toContain("releaseNewExamPublishLock");
     });
 
     it("only compensates shared-AI reservations before provider cost can begin", () => {

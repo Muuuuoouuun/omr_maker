@@ -12,8 +12,14 @@ import {
     type SupabaseAttemptRow,
     type SupabaseExamRow,
 } from "@/lib/omrPersistence";
-import { SUPABASE_ATTEMPT_READ_COLUMNS } from "@/lib/supabaseReadColumns";
+import { SUPABASE_ATTEMPT_LIST_READ_COLUMNS, SUPABASE_ATTEMPT_READ_COLUMNS } from "@/lib/supabaseReadColumns";
+import { attemptFromSupabaseListRow } from "@/lib/supabaseListProjection";
+import {
+    INITIAL_CAPACITY_EXCEEDED_ERROR,
+    INITIAL_OPERATIONS_LIMITS,
+} from "@/lib/initialOperationsPolicy";
 import type { Attempt } from "@/types/omr";
+import { isRemoteAssetStoredDataRef } from "@/lib/remoteAssetContract.server";
 
 interface StudentAttemptReadResult<T> {
     data: T | null;
@@ -22,7 +28,9 @@ interface StudentAttemptReadResult<T> {
 
 interface StudentAttemptReadQuery {
     eq(column: string, value: string): StudentAttemptReadQuery;
-    order(column: string, options: { ascending: false }): PromiseLike<StudentAttemptReadResult<unknown[]>>;
+    gt(column: string, value: string): StudentAttemptReadQuery;
+    order(column: string, options: { ascending: boolean }): StudentAttemptReadQuery;
+    limit(value: number): PromiseLike<StudentAttemptReadResult<unknown[]>>;
     maybeSingle(): PromiseLike<StudentAttemptReadResult<unknown>>;
 }
 
@@ -60,9 +68,11 @@ function attemptMatchesSession(attempt: Attempt, session: StudentServerSession):
     });
 }
 
-function parseScopedAttempt(row: unknown, session: StudentServerSession): Attempt | null {
+function parseScopedAttempt(row: unknown, session: StudentServerSession, listProjection = false): Attempt | null {
     try {
-        const attempt = attemptFromSupabaseRow(row as SupabaseAttemptRow);
+        const attempt = listProjection
+            ? attemptFromSupabaseListRow(row)
+            : attemptFromSupabaseRow(row as SupabaseAttemptRow);
         return attemptMatchesSession(attempt, session) ? attempt : null;
     } catch {
         return null;
@@ -83,29 +93,72 @@ function fallbackReviewExam(attempt: Attempt): StudentAttemptReviewExam {
     };
 }
 
+function ownedRemoteHandwritingRef(attempt: Attempt, session: StudentServerSession) {
+    const candidate = attempt.handwriting?.strokesRef || attempt.drawingsRef;
+    if (
+        !isRemoteAssetStoredDataRef(candidate)
+        || candidate.kind !== "attempt_handwriting"
+        || candidate.organizationId !== session.organizationId
+        || candidate.attemptId !== attempt.id
+    ) return undefined;
+    return candidate;
+}
+
 export async function listStudentAttemptsWithGateway(
     client: StudentAttemptReadGatewayClient,
     session: StudentServerSession,
 ): Promise<StudentAttemptListResult> {
-    const result = await client
-        .from("omr_attempts")
-        .select(SUPABASE_ATTEMPT_READ_COLUMNS)
-        .eq("organization_id", session.organizationId)
-        .eq("student_profile_id", session.studentId)
-        .eq("student_id", session.studentId)
-        .eq("status", "completed")
-        .order("finished_at", { ascending: false });
-    if (result.error) return { status: "service_unavailable", error: result.error.message };
+    const rows: unknown[] = [];
+    const ceiling = INITIAL_OPERATIONS_LIMITS.studentAttempts;
+    const pageSize = INITIAL_OPERATIONS_LIMITS.listPageSize;
+    let cursorId = "";
+    while (rows.length <= ceiling) {
+        const requestSize = Math.min(pageSize, (ceiling + 1) - rows.length);
+        let query = client
+            .from("omr_attempts")
+            .select(SUPABASE_ATTEMPT_LIST_READ_COLUMNS)
+            .eq("organization_id", session.organizationId)
+            .eq("student_profile_id", session.studentId)
+            .eq("student_id", session.studentId)
+            .eq("status", "completed");
+        if (cursorId) query = query.gt("id", cursorId);
+        const result = await query
+            .order("id", { ascending: true })
+            .limit(requestSize);
+        if (result.error) return { status: "service_unavailable", error: result.error.message };
+        const page = result.data || [];
+        if (page.length === 0) break;
+        const pageIds = page.map(row => {
+            const record = row as { id?: unknown; payload?: { id?: unknown } };
+            return clean(record.id) || clean(record.payload?.id);
+        });
+        if (
+            pageIds.some(id => !id || (cursorId && id <= cursorId))
+            || pageIds.some((id, index) => index > 0 && id <= pageIds[index - 1])
+        ) {
+            return { status: "service_unavailable", error: "Invalid canonical attempt pagination" };
+        }
+        rows.push(...page);
+        if (rows.length > ceiling) {
+            return { status: "service_unavailable", error: INITIAL_CAPACITY_EXCEEDED_ERROR };
+        }
+        cursorId = pageIds[pageIds.length - 1];
+        if (page.length < requestSize) break;
+    }
 
     const attempts = [];
-    for (const row of result.data || []) {
-        const attempt = parseScopedAttempt(row, session);
+    for (const row of rows) {
+        const attempt = parseScopedAttempt(row, session, true);
         const safeAttempt = attempt ? studentAttemptRecordFromAttempt(attempt) : null;
         if (!safeAttempt) {
             return { status: "service_unavailable", error: "Invalid scoped student attempt" };
         }
         attempts.push(safeAttempt);
     }
+    attempts.sort((left, right) => {
+        const byFinishedAt = Date.parse(right.finishedAt) - Date.parse(left.finishedAt);
+        return byFinishedAt || left.id.localeCompare(right.id);
+    });
     return { status: "loaded", attempts };
 }
 
@@ -159,8 +212,13 @@ export async function loadStudentAttemptWithGateway(
         }
     }
 
+    const handwritingRef = ownedRemoteHandwritingRef(attempt, session);
     return {
         status: "loaded",
-        detail: { attempt: safeAttempt, exam: reviewExam },
+        detail: {
+            attempt: safeAttempt,
+            exam: reviewExam,
+            ...(handwritingRef ? { handwritingRef } : {}),
+        },
     };
 }

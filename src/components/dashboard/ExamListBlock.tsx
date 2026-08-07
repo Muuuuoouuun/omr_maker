@@ -263,13 +263,15 @@ export default function ExamListBlock({ exams }: ExamListBlockProps) {
                     </span>
                     <span
                       className={
-                        exam.accessConfig?.type === "group"
+                        exam.accessConfig?.type === "group" || exam.accessConfig?.type === "targeted"
                           ? "badge badge-primary"
                           : "badge badge-success"
                       }
                       style={{ padding: "1px 7px", fontSize: "0.68rem" }}
                     >
-                      {exam.accessConfig?.type === "group" ? "클래스" : "공개"}
+                      {exam.accessConfig?.type === "targeted"
+                        ? "개별 배정"
+                        : exam.accessConfig?.type === "group" ? "클래스" : "공개"}
                     </span>
                   </div>
 

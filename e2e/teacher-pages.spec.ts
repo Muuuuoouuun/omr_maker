@@ -16,6 +16,8 @@ const TEACHER_IDENTITY: TeacherSessionIdentity = {
     teacherId: "admin",
     email: "admin@example.com",
     displayName: "Demo Admin",
+    organizationId: "default",
+    organizationName: "E2E Workspace",
     memberRole: "admin",
 };
 
@@ -133,11 +135,59 @@ async function seedStoredRoster(page: Page) {
     });
 }
 
+async function seedDistributionCountRegressionRoster(page: Page) {
+    await page.addInitScript(({ groups, students }) => {
+        window.localStorage.setItem("omr_groups", JSON.stringify(groups));
+        window.localStorage.setItem("omr_students", JSON.stringify(students));
+    }, {
+        groups: [{
+            id: "distribution-count-regression-group",
+            name: "배포 집계 검증반",
+            region: "서울",
+            // This stale cached value previously leaked into the modal even
+            // though the matching roster below has two current members.
+            count: 0,
+            avgScore: 0,
+            color: "#4f46e5",
+        }],
+        students: [
+            {
+                id: "distribution-count-regression-group::김학생",
+                name: "김학생",
+                email: "distribution-kim@example.com",
+                group: "배포 집계 검증반",
+                region: "서울",
+                avatar: "#4f46e5",
+                avgScore: 0,
+                examsTaken: 0,
+                lastActive: "기록 없음",
+                trend: "flat" as const,
+                status: "active" as const,
+            },
+            {
+                id: "distribution-count-regression-group::이학생",
+                name: "이학생",
+                email: "distribution-lee@example.com",
+                group: "배포 집계 검증반",
+                region: "서울",
+                avatar: "#10b981",
+                avgScore: 0,
+                examsTaken: 0,
+                lastActive: "기록 없음",
+                trend: "flat" as const,
+                status: "active" as const,
+            },
+        ],
+    });
+}
+
 async function seedStudentResultHub(page: Page) {
     await page.addInitScript(() => {
         const exam = {
             id: "result-hub-exam",
             title: "학생 결과 허브 시험",
+            organizationId: "default",
+            createdByUserId: "admin",
             createdAt: "2026-07-22T00:00:00.000Z",
             updatedAt: "2026-07-22T00:00:00.000Z",
             questions: [
@@ -150,6 +200,8 @@ async function seedStudentResultHub(page: Page) {
             id: "result-hub-original",
             examId: exam.id,
             examTitle: exam.title,
+            organizationId: "default",
+            createdByUserId: "admin",
             studentName: "결과 허브 학생",
             studentId: "result-hub-student",
             studentProfileId: "result-hub-student",
@@ -188,6 +240,8 @@ async function seedStudentResultHub(page: Page) {
             id: "result-hub-retake",
             examId: exam.id,
             examTitle: exam.title,
+            organizationId: "default",
+            createdByUserId: "admin",
             studentName: "결과 허브 학생",
             studentId: "result-hub-student",
             studentProfileId: "result-hub-student",
@@ -217,6 +271,8 @@ async function seedAwaySeverityAttempts(page: Page) {
         const exam = {
             id: "away-severity-exam",
             title: "화면 이탈 표시 시험",
+            organizationId: "default",
+            createdByUserId: "admin",
             createdAt: "2026-07-28T00:00:00.000Z",
             updatedAt: "2026-07-28T00:00:00.000Z",
             durationMin: 60,
@@ -229,6 +285,8 @@ async function seedAwaySeverityAttempts(page: Page) {
             id: `away-severity-${count}`,
             examId: exam.id,
             examTitle: exam.title,
+            organizationId: "default",
+            createdByUserId: "admin",
             studentName: `이탈 ${count}회 학생`,
             studentId: `away-severity-student-${count}`,
             startedAt: `2026-07-28T09:0${count}:00.000Z`,
@@ -316,19 +374,18 @@ test.describe("Teacher dashboard", () => {
         await authenticateTeacher(page, baseURL);
     });
 
-    test("loads and shows quick action tiles", async ({ page }) => {
+    test("shows focused onboarding when the real workspace is empty", async ({ page }) => {
         await page.goto("/teacher/dashboard");
         await expect(page.getByRole("heading", { name: "분석 센터" })).toBeVisible();
-        await expect(page.getByText("빠른 작업", { exact: false })).toBeVisible();
-        // 6 quick action tiles
-        for (const label of ["시험 제작", "실시간 응시", "학생 관리", "시험 분석", "설정", "요금제"]) {
-            await expect(page.getByText(label, { exact: true }).first()).toBeVisible();
-        }
+        const onboarding = page.getByRole("region", { name: "첫 시험부터 시작해보세요" });
+        await expect(onboarding).toBeVisible();
+        await expect(onboarding.getByRole("link", { name: "첫 시험 만들기" })).toBeVisible();
+        await expect(page.getByText("빠른 작업", { exact: false })).toHaveCount(0);
     });
 
-    test("quick action live results navigates to /teacher/live", async ({ page }) => {
+    test("header live shortcut navigates to /teacher/live", async ({ page }) => {
         await page.goto("/teacher/dashboard");
-        await page.getByRole("link", { name: /실시간 응시/ }).click();
+        await page.getByRole("link", { name: "실시간 모니터링" }).click();
         await expect(page).toHaveURL(/\/teacher\/live$/);
         await expect(page.getByRole("heading", { name: "응시 결과 확인" })).toBeVisible();
     });
@@ -352,8 +409,7 @@ test.describe("Create page label memory", () => {
         await page.goto("/create");
         const fixturePath = path.join(process.cwd(), "e2e/fixtures/sample-problem.pdf");
         const uploadToolbar = page.getByRole("toolbar", { name: "출제 도구 모음" });
-        const problemUpload = uploadToolbar.getByRole("button", { name: "문제지 PDF 업로드" });
-        const answerUpload = uploadToolbar.getByRole("button", { name: "답지 PDF 업로드" });
+        const pdfMenuTrigger = uploadToolbar.getByRole("button", { name: "PDF 관리" });
         const problemInput = page.locator("#pdf-upload-input");
         const answerInput = page.locator("#answer-key-pdf-upload-input");
 
@@ -366,19 +422,27 @@ test.describe("Create page label memory", () => {
             });
         }
 
-        await problemUpload.focus();
-        await expect(problemUpload).toBeFocused();
+        await pdfMenuTrigger.focus();
+        await expect(pdfMenuTrigger).toBeFocused();
         await page.keyboard.press("Enter");
+        const pdfMenu = page.getByRole("menu", { name: "PDF 관리" });
+        const problemUpload = pdfMenu.getByRole("menuitem", { name: "문제지 PDF 선택" });
+        await expect(problemUpload).toBeFocused();
+        await problemUpload.press("Enter");
         await expect(problemInput).toHaveAttribute("data-keyboard-activations", "1");
         await problemInput.setInputFiles(fixturePath);
-        await expect(page.getByText("문제지 PDF 업로드됨", { exact: true })).toBeVisible();
+        await expect(page.getByText("문제지 PDF 파일 수신됨", { exact: true })).toBeVisible();
 
-        await answerUpload.focus();
+        await pdfMenuTrigger.focus();
+        await pdfMenuTrigger.press("Space");
+        const answerUpload = pdfMenu.getByRole("menuitem", { name: "답지 PDF 선택" });
+        await expect(problemUpload).toBeFocused();
+        await page.keyboard.press("ArrowDown");
         await expect(answerUpload).toBeFocused();
-        await page.keyboard.press("Space");
+        await answerUpload.press("Space");
         await expect(answerInput).toHaveAttribute("data-keyboard-activations", "1");
         await answerInput.setInputFiles(fixturePath);
-        await expect(page.getByText("답지 PDF 업로드됨", { exact: true })).toBeVisible();
+        await expect(page.getByText("답지 PDF 파일 수신됨", { exact: true })).toBeVisible();
     });
 
     test("keyboard upload in the answer import modal opens a file chooser and shows the selected PDF", async ({ page }) => {
@@ -407,6 +471,7 @@ test.describe("Create page label memory", () => {
     test("dialog focus wraps and returns to the answer import trigger", async ({ page }) => {
         await page.goto("/create");
         const trigger = await revealAnswerImportTrigger(page);
+        await expect(trigger).toBeEnabled();
         await trigger.focus();
         await trigger.press("Enter");
 
@@ -530,17 +595,17 @@ test.describe("Create page label memory", () => {
         expect(storedMemory).toContain("화자의 태도");
     });
 
-    test("keeps presets compact and clear of the custom input on narrow screens", async ({ page }) => {
+    test("keeps presets touch sized and clear of the custom input on narrow screens", async ({ page }) => {
         await page.setViewportSize({ width: 320, height: 800 });
         await page.goto("/create");
-        await page.getByRole("tab", { name: "설정 0/20 정답" }).click();
+        await page.getByRole("tab", { name: "설정", exact: true }).click();
 
         const input = page.getByLabel("문항 수 직접 입력");
         const presetButtons = page.locator(".create-count-buttons .btn");
         await expect(presetButtons).toHaveCount(6);
         for (let index = 0; index < 6; index += 1) {
             const box = await presetButtons.nth(index).boundingBox();
-            expect(box?.height).toBeLessThanOrEqual(36);
+            expect(box?.height).toBeGreaterThanOrEqual(44);
         }
         const lastPresetBox = await presetButtons.nth(5).boundingBox();
         const inputBox = await input.boundingBox();
@@ -555,29 +620,43 @@ test.describe("Create page label memory", () => {
         await expect(page.getByText("새 시험 · 45문항 · 5지선다")).toBeVisible();
     });
 
-    test("keeps settings actions in one compact non-overlapping icon row", async ({ page }) => {
+    test("keeps settings view options touch sized without crowding the summary row", async ({ page }) => {
         await page.setViewportSize({ width: 320, height: 800 });
         await page.goto("/create");
-        await page.getByRole("tab", { name: "설정 0/20 정답" }).click();
+        await page.getByRole("tab", { name: "설정", exact: true }).click();
 
         const toolbar = page.locator(".create-settings-toolbar");
         const toolbarBox = await toolbar.boundingBox();
         expect(toolbarBox).not.toBeNull();
-        expect(toolbarBox!.height).toBeLessThanOrEqual(40);
+        expect(toolbarBox!.height).toBeGreaterThanOrEqual(44);
 
-        const iconButtons = toolbar.locator(".create-settings-tool-button");
+        const viewOptions = toolbar.locator(".create-settings-view-options");
+        const summary = viewOptions.locator("summary");
+        const summaryBox = await summary.boundingBox();
+        expect(summaryBox?.height).toBeGreaterThanOrEqual(44);
+        await summary.click();
+
+        const optionsMenu = viewOptions.locator(".create-settings-view-options-menu");
+        const [optionsBox, viewportWidth] = await Promise.all([
+            optionsMenu.boundingBox(),
+            page.evaluate(() => document.documentElement.clientWidth),
+        ]);
+        expect(optionsBox).not.toBeNull();
+        expect(optionsBox!.x).toBeGreaterThanOrEqual(0);
+        expect(optionsBox!.x + optionsBox!.width).toBeLessThanOrEqual(viewportWidth);
+
+        const iconButtons = viewOptions.locator(".create-settings-tool-button");
         await expect(iconButtons).toHaveCount(4);
         for (let index = 0; index < 4; index += 1) {
             const box = await iconButtons.nth(index).boundingBox();
-            expect(box?.width).toBeGreaterThanOrEqual(32);
-            expect(box?.width).toBeLessThanOrEqual(36);
-            expect(box?.height).toBeLessThanOrEqual(36);
+            expect(box?.width).toBeGreaterThanOrEqual(44);
+            expect(box?.height).toBeGreaterThanOrEqual(44);
         }
 
-        const toolbarItems = toolbar.locator(":scope > *");
-        await expect(toolbarItems).toHaveCount(4);
+        const toolbarItems = viewOptions.locator(".create-settings-view-options-menu > *");
+        await expect(toolbarItems).toHaveCount(3);
         const boxes = await Promise.all(
-            Array.from({ length: 4 }, (_, index) => toolbarItems.nth(index).boundingBox()),
+            Array.from({ length: 3 }, (_, index) => toolbarItems.nth(index).boundingBox()),
         );
         for (let left = 0; left < boxes.length; left += 1) {
             for (let right = left + 1; right < boxes.length; right += 1) {
@@ -589,6 +668,17 @@ test.describe("Create page label memory", () => {
                     && a.y + a.height > b.y;
                 expect(overlaps).toBe(false);
             }
+        }
+
+        const labelCard = page.locator(".create-label-batch-card");
+        await labelCard.scrollIntoViewIfNeeded();
+        const labelActions = labelCard.locator(".create-label-memory-actions button, .create-label-batch-presets button:visible");
+        const labelActionCount = await labelActions.count();
+        expect(labelActionCount).toBeGreaterThan(0);
+        for (let index = 0; index < labelActionCount; index += 1) {
+            const box = await labelActions.nth(index).boundingBox();
+            expect(box?.width).toBeGreaterThanOrEqual(44);
+            expect(box?.height).toBeGreaterThanOrEqual(44);
         }
     });
 
@@ -635,6 +725,50 @@ test.describe("Create page label memory", () => {
         await expect(page.locator("#create-region-calibration-anchor > div > span")).toHaveText("0/45");
         await expect(page.locator(".create-preview-status")).toHaveText("0/45 정답 입력");
     });
+
+    test("derives group distribution counts from the matching roster", async ({ page }) => {
+        await page.setViewportSize({ width: 320, height: 800 });
+        await seedDistributionCountRegressionRoster(page);
+        await page.goto("/create");
+
+        const title = page.getByLabel("시험 제목");
+        if (!await title.isVisible()) {
+            await page.getByRole("tab", { name: /^설정/ }).click();
+        }
+        await title.fill("배포 명단 집계 회귀 시험");
+        await page.getByLabel("빠른 정답 입력").fill("1".repeat(20));
+
+        const createActions = page.locator(".create-primary-actions:visible");
+        await createActions.getByRole("button", { name: "저장하고 배포하기" }).click();
+
+        const dialog = page.getByRole("dialog", { name: "시험 배포하기" });
+        await expect(dialog).toBeVisible();
+        const dialogBox = await dialog.boundingBox();
+        expect(dialogBox).not.toBeNull();
+        expect(dialogBox!.x).toBeGreaterThanOrEqual(0);
+        expect(dialogBox!.x + dialogBox!.width).toBeLessThanOrEqual(320);
+        expect(dialogBox!.y).toBeGreaterThanOrEqual(0);
+        expect(dialogBox!.y + dialogBox!.height).toBeLessThanOrEqual(800);
+        await expect(dialog.locator(".distribute-dialog-body")).toHaveCSS("overflow-y", "auto");
+        await expect(dialog.locator(".distribute-access-options")).toHaveCSS("flex-direction", "column");
+        await dialog.getByRole("radio", { name: "특정 그룹만" }).check();
+
+        const groupCheckbox = dialog.getByRole("checkbox", { name: /배포 집계 검증반 · 서울/ });
+        await expect(groupCheckbox).toHaveCount(1);
+        expect(await groupCheckbox.evaluate(element => element.closest("label")?.textContent || "")).toContain("2명");
+        await groupCheckbox.check();
+        await expect(dialog.getByLabel("그룹 배포 대상 요약")).toContainText("명단 기준 대상 2명");
+        const createLinkButton = dialog.getByRole("button", { name: "링크 생성하기" });
+        await createLinkButton.scrollIntoViewIfNeeded();
+        await expect(createLinkButton).toBeInViewport();
+        const [ctaBox, settledDialogBox] = await Promise.all([createLinkButton.boundingBox(), dialog.boundingBox()]);
+        expect(ctaBox).not.toBeNull();
+        expect(settledDialogBox).not.toBeNull();
+        expect(ctaBox!.y).toBeGreaterThanOrEqual(settledDialogBox!.y);
+        expect(ctaBox!.y + ctaBox!.height).toBeLessThanOrEqual(settledDialogBox!.y + settledDialogBox!.height);
+        // The regression only exercises the rendered target calculation; it
+        // deliberately leaves link creation and persistence untouched.
+    });
 });
 
 test.describe("Live Results page", () => {
@@ -653,17 +787,27 @@ test.describe("Live Results page", () => {
         await expect(page.getByRole("heading", { name: "문항별 정답률" })).toBeVisible();
     });
 
-    test("pause button toggles label", async ({ page }) => {
+    test("screen refresh pause is explicitly scoped and exposes its pressed state", async ({ page }) => {
         await page.goto("/teacher/live");
-        const pauseBtn = page.getByRole("button", { name: "일시정지" });
+        const pauseBtn = page.getByRole("button", { name: "화면 갱신 일시정지" });
         await expect(pauseBtn).toBeVisible();
+        await expect(pauseBtn).toHaveAttribute("aria-pressed", "false");
+        await expect(pauseBtn).toHaveAttribute("aria-describedby", "live-refresh-control-help");
+        await expect(page.locator("#live-refresh-control-help")).toHaveText("교사 화면의 자동 갱신만 멈춥니다. 학생 응시와 시험 시간은 계속됩니다.");
         await pauseBtn.click();
-        await expect(page.getByRole("button", { name: "재개" })).toBeVisible();
+        await expect(page.getByRole("button", { name: "화면 갱신 재개" })).toHaveAttribute("aria-pressed", "true");
     });
 
-    test("away severity stays factual and escalates from neutral to attention", async ({ page }) => {
+    test("away severity stays factual and escalates from neutral to attention", async ({ page, baseURL }) => {
+        await authenticateTeacher(page, baseURL, TEACHER_IDENTITY);
         await seedAwaySeverityAttempts(page);
         await page.goto("/teacher/live");
+        await expect.poll(() => page.evaluate(() => (
+            JSON.parse(window.localStorage.getItem("omr_exam_away-severity-exam") || "null")?.title
+        ))).toBe("화면 이탈 표시 시험");
+        await expect.poll(() => page.evaluate(() => (
+            JSON.parse(window.localStorage.getItem("omr_attempts") || "[]").length
+        ))).toBe(3);
 
         const liveAway = page.locator("[data-away-severity]");
         await expect(liveAway).toHaveCount(3);
@@ -714,7 +858,7 @@ test.describe("Live Results page", () => {
         }
 
         await page.goto("/teacher/exam/away-severity-exam");
-        const examDetailAway = page.locator("[data-away-severity]");
+        const examDetailAway = page.locator("[data-away-severity]:visible");
         await expect(examDetailAway).toHaveCount(3);
         for (const count of [1, 2]) {
             await expect(examDetailAway.filter({ hasText: `화면 이탈 ${count}회` })).toHaveAttribute(
@@ -759,6 +903,30 @@ test.describe("Manage Users page", () => {
         const firstBox = page.locator('tbody input[type="checkbox"]').first();
         await firstBox.check();
         await expect(page.getByText(/\d+명 선택됨/)).toBeVisible();
+    });
+
+    test("Escape closes the mobile student action menu and restores its trigger focus", async ({ page, baseURL }) => {
+        await page.setViewportSize({ width: 320, height: 568 });
+        await authenticateTeacher(page, baseURL);
+        await seedStoredRoster(page);
+        await page.goto("/teacher/users");
+
+        const trigger = page.locator(
+            '.teacher-users-mobile-menu-trigger[aria-label="김학생 작업 메뉴 열기"]',
+        );
+        await expect(trigger).toBeVisible();
+        await trigger.click();
+
+        const menu = page.getByRole("menu", { name: "김학생 작업" });
+        const editMenuItem = menu.getByRole("menuitem", { name: "편집" });
+        await expect(menu).toBeVisible();
+        await editMenuItem.focus();
+        await expect(editMenuItem).toBeFocused();
+
+        await page.keyboard.press("Escape");
+
+        await expect(menu).not.toBeVisible();
+        await expect(trigger).toBeFocused();
     });
 
     test("demo roster keeps bulk selection locked", async ({ page, baseURL }) => {
@@ -851,7 +1019,7 @@ test.describe("Manage Users page", () => {
         expect(storedCodes["e2e-class-a::김학생"]).toBe(issuedCode);
 
         await page.goto("/?role=student");
-        await expect(page.getByText("학생 포털")).toBeVisible();
+        await expect(page.getByRole("heading", { name: "학습 시작" })).toBeVisible();
         await page.getByLabel("이름").fill("김학생");
         await page.getByLabel("학생번호 또는 이메일").fill("kim.student@example.com");
         await page.getByLabel("반 선택").selectOption("e2e-class-a");
@@ -887,10 +1055,16 @@ test.describe("Settings page", () => {
     test("sidebar + profile section renders", async ({ page }) => {
         await page.goto("/teacher/settings");
         await expect(page.getByRole("heading", { name: "설정" })).toBeVisible();
-        for (const label of ["프로필", "알림", "시험 기본값", "채점", "API 키", "테마", "보안"]) {
+        for (const label of ["알림", "시험 기본값", "채점", "테마"]) {
             await expect(page.getByRole("button", { name: label, exact: true })).toBeVisible();
         }
+        await page.getByText("고급 · 운영", { exact: true }).click();
+        for (const label of ["프로필", "API 키", "데이터 · DB", "보안"]) {
+            await expect(page.getByRole("button", { name: label, exact: true })).toBeVisible();
+        }
+        await page.getByRole("button", { name: "프로필", exact: true }).click();
         await expect(page.getByText("프로필 상태")).toBeVisible();
+        await page.getByText("계정은 서버에서 안전하게 관리 중", { exact: true }).click();
         await expect(page.getByText("로그인 계정과 권한")).toBeVisible();
     });
 
@@ -903,6 +1077,7 @@ test.describe("Settings page", () => {
 
     test("security tab shows deployment login diagnostics", async ({ page }) => {
         await page.goto("/teacher/settings");
+        await page.getByText("고급 · 운영", { exact: true }).click();
         await page.getByRole("button", { name: "보안", exact: true }).click();
         await expect(page.getByText("배포 로그인 진단")).toBeVisible();
         await expect(page.getByText("교사 계정 환경변수")).toBeVisible();
@@ -913,6 +1088,7 @@ test.describe("Settings page", () => {
 
     test("backup card shows export/import/reset buttons", async ({ page }) => {
         await page.goto("/teacher/settings");
+        await page.locator("details.settings-backup-disclosure > summary").click();
         await expect(page.getByRole("button", { name: /내보내기/ })).toBeVisible();
         await expect(page.getByRole("button", { name: /가져오기/ })).toBeVisible();
         await expect(page.getByRole("button", { name: /전체 초기화/ })).toBeVisible();
@@ -924,17 +1100,19 @@ test.describe("Billing page", () => {
         await authenticateTeacher(page, baseURL, BILLING_TEACHER_IDENTITY);
     });
 
-    test("shows current plan hero + usage + plan grid + invoices", async ({ page }) => {
+    test("shows current plan hero + usage + plan grid without inventing invoice history", async ({ page }) => {
         await page.goto("/teacher/billing");
         await expect(page.getByRole("heading", { name: "결제 및 플랜" })).toBeVisible();
+        await page.locator("details.billing-operations-details > summary").click();
         await expect(page.getByText("개발 플랜 시뮬레이션", { exact: true })).toBeVisible();
-        await expect(page.getByText("SIMULATED PLAN", { exact: true })).toBeVisible();
+        await expect(page.getByText("개발 미리보기", { exact: true })).toBeVisible();
+        await expect(page.getByText("실결제 연동 전", { exact: true })).toBeVisible();
         await expect(
             page.locator(".billing-current-plan-card").getByRole("heading", { name: "Free", exact: true }),
         ).toBeVisible();
         await expect(page.getByRole("heading", { name: "이달 사용량" })).toBeVisible();
         await expect(page.getByRole("heading", { name: "플랜 비교" })).toBeVisible();
-        await expect(page.getByRole("heading", { name: "로컬 플랜 변경 기록" })).toBeVisible();
+        await expect(page.getByRole("heading", { name: "로컬 플랜 변경 기록" })).toHaveCount(0);
     });
 
     test("monthly/yearly toggle changes prices", async ({ page }) => {
@@ -957,7 +1135,12 @@ test.describe("Global Search", () => {
     // (and therefore GlobalSearch) being fully hydrated before pressing Cmd+K.
     test("Cmd+K opens modal and Escape closes", async ({ page }) => {
         await page.goto("/teacher/live");
-        await expect(page.getByRole("button", { name: "빠른 검색" })).toBeVisible();
+        const searchButton = page.getByRole("button", { name: "빠른 검색" });
+        await searchButton.click();
+        await expect(page.getByPlaceholder(/빠른 검색/)).toBeVisible();
+        await page.keyboard.press("Escape");
+        await expect(page.getByPlaceholder(/빠른 검색/)).not.toBeVisible();
+
         await page.keyboard.press("Meta+K");
         await expect(page.getByPlaceholder(/빠른 검색/)).toBeVisible();
         await page.keyboard.press("Escape");
@@ -966,8 +1149,7 @@ test.describe("Global Search", () => {
 
     test("typing filters results and Enter navigates", async ({ page }) => {
         await page.goto("/teacher/live");
-        await expect(page.getByRole("button", { name: "빠른 검색" })).toBeVisible();
-        await page.keyboard.press("Meta+K");
+        await page.getByRole("button", { name: "빠른 검색" }).click();
         await page.getByPlaceholder(/빠른 검색/).fill("결제");
         await expect(page.getByText("결제 및 플랜").first()).toBeVisible();
         await page.keyboard.press("Enter");

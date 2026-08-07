@@ -9,15 +9,20 @@ import {
 } from "./teacherServerSession";
 
 const TOKEN = "tkn_abc123_0123456789abcdef0123456789abcdef";
-const env = { NODE_ENV: "production", TEACHER_SESSION_SECRET: "server-secret" };
+const PRODUCTION_SECRET = "teacher-session-secret-at-least-32-bytes";
+const env = { NODE_ENV: "production", TEACHER_SESSION_SECRET: PRODUCTION_SECRET };
 
 describe("teacher server session", () => {
     it("resolves an explicit session secret and fails closed in production", () => {
         expect(resolveTeacherSessionSecret({
             NODE_ENV: "production",
-            TEACHER_SESSION_SECRET: " session-secret ",
+            TEACHER_SESSION_SECRET: ` ${PRODUCTION_SECRET} `,
             TEACHER_PASSWORD: "password-secret",
-        })).toBe("session-secret");
+        })).toBe(PRODUCTION_SECRET);
+        expect(resolveTeacherSessionSecret({
+            NODE_ENV: "production",
+            TEACHER_SESSION_SECRET: "short-session-secret",
+        })).toBeNull();
         // Production requires a dedicated secret: it must never fall back to a
         // credential value (password / accounts JSON) — that would let anyone
         // who learns the password forge a session cookie.
@@ -69,7 +74,10 @@ describe("teacher server session", () => {
         const [payload, signature] = cookie!.split(".");
 
         expect(parseSignedTeacherSessionCookie(`${payload}x.${signature}`, env, 1000)).toBeNull();
-        expect(parseSignedTeacherSessionCookie(cookie, { NODE_ENV: "production", TEACHER_SESSION_SECRET: "other" }, 1000)).toBeNull();
+        expect(parseSignedTeacherSessionCookie(cookie, {
+            NODE_ENV: "production",
+            TEACHER_SESSION_SECRET: "other-teacher-session-secret-at-least-32-bytes",
+        }, 1000)).toBeNull();
         expect(parseSignedTeacherSessionCookie(cookie, env, 1000 + TEACHER_SERVER_SESSION_MAX_AGE_SECONDS * 1000 + 1)).toBeNull();
     });
 

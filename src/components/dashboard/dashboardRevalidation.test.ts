@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { INITIAL_OPERATIONS_LIMITS } from "@/lib/initialOperationsPolicy";
 import {
     DASHBOARD_REVALIDATE_MIN_INTERVAL_MS,
     createDashboardRevalidationGate,
@@ -48,6 +49,10 @@ describe("createDashboardRevalidationGate", () => {
         const gate = createDashboardRevalidationGate({ now: () => current });
         return { gate, advance: (ms: number) => { current += ms; } };
     }
+
+    it("uses a 30 second background revalidation window for the launch capacity", () => {
+        expect(DASHBOARD_REVALIDATE_MIN_INTERVAL_MS).toBe(INITIAL_OPERATIONS_LIMITS.backgroundRevalidationMs);
+    });
 
     it("starts hot: a trigger right after mount is deferred, not refreshed", () => {
         const { gate } = gateAt(1_000);

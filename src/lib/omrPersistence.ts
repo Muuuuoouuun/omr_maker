@@ -8,9 +8,23 @@ import {
 } from "@/lib/workspaceContext";
 import { questionChoiceCount, type Attempt, type Exam, type QuestionResult, type QuestionResultStatus, type StoredDataRef } from "@/types/omr";
 import { MAX_SUB_QUESTION_LENGTH, normalizeQuestionSubQuestions } from "@/lib/subQuestions";
-import { SUPABASE_ATTEMPT_READ_COLUMNS, SUPABASE_EXAM_READ_COLUMNS } from "@/lib/supabaseReadColumns";
+import {
+    SUPABASE_ATTEMPT_LIST_READ_COLUMNS,
+    SUPABASE_ATTEMPT_READ_COLUMNS,
+    SUPABASE_EXAM_LIST_READ_COLUMNS,
+    SUPABASE_EXAM_READ_COLUMNS,
+} from "@/lib/supabaseReadColumns";
+import {
+    attemptFromSupabaseListRow,
+    examFromSupabaseListRow,
+} from "@/lib/supabaseListProjection";
 import { withBrowserStorageLock } from "@/lib/browserStorageLock";
 import { canUseCanonicalBrowserDataPlane } from "@/lib/productionBrowserBoundary";
+import { readTeacherSession } from "@/lib/teacherSession";
+import {
+    INITIAL_CAPACITY_EXCEEDED_ERROR,
+    INITIAL_OPERATIONS_LIMITS,
+} from "@/lib/initialOperationsPolicy";
 
 type Env = Record<string, string | undefined>;
 
@@ -20,6 +34,7 @@ export interface SupabaseConfig {
 }
 
 export interface StudentAttemptScope {
+    organizationId?: string;
     studentId: string;
     name?: string;
     groupId?: string;
@@ -179,16 +194,19 @@ interface SupabaseQueryResult<T> {
 type SupabaseSelectQuery = {
     eq(column: string, value: string): SupabaseSelectQuery;
     maybeSingle(): Promise<SupabaseQueryResult<unknown>>;
-    order(column: string, options?: { ascending?: boolean }): Promise<SupabaseQueryResult<unknown[]>>;
+    order(column: string, options?: { ascending?: boolean }): SupabaseSelectQuery;
+    limit(value: number): Promise<SupabaseQueryResult<unknown[]>>;
+};
+
+type SupabaseDeleteQuery = PromiseLike<SupabaseQueryResult<unknown>> & {
+    eq(column: string, value: string): SupabaseDeleteQuery;
 };
 
 type SupabaseClientLike = {
     from(table: string): {
         select(columns?: string): SupabaseSelectQuery;
         upsert(row: unknown): Promise<SupabaseQueryResult<unknown>>;
-        delete(): {
-            eq(column: string, value: string): Promise<SupabaseQueryResult<unknown>>;
-        };
+        delete(): SupabaseDeleteQuery;
     };
 };
 
@@ -240,12 +258,17 @@ function activePersistenceContext(): WorkspaceContext {
     return readActiveWorkspaceContext();
 }
 
-function shouldFilterRemoteByOrganization(): boolean {
-    // Always scope Supabase queries by organization_id — even for the DEFAULT
-    // workspace — so multiple teachers sharing a Supabase project can never
-    // read each other's data. DEFAULT users stored with organization_id='default'
-    // are still correctly isolated from teacher-specific workspaces.
-    return true;
+function activeTeacherOrganizationId(): string | null {
+    if (!readTeacherSession()) return null;
+    return contextOrganizationId(activePersistenceContext());
+}
+
+function matchesActiveTeacherOrganization(
+    item: { organizationId?: string } | null | undefined,
+    activeOrganizationId: string | null,
+): boolean {
+    if (!activeOrganizationId) return true;
+    return scopedValue(item?.organizationId) === activeOrganizationId;
 }
 
 function examWithPersistenceContext(exam: Exam, context = activePersistenceContext()): Exam {
@@ -268,13 +291,49 @@ function contextForAttempt(attempt: Attempt): WorkspaceContext {
     return activePersistenceContext();
 }
 
-function attemptWithPersistenceContext(attempt: Attempt, context = contextForAttempt(attempt)): Attempt {
-    const organizationId = scopedValue(attempt.organizationId) || contextOrganizationId(context);
-    const classId = scopedValue(attempt.classId) || scopedValue(attempt.groupId);
-    const assignmentId = scopedValue(attempt.assignmentId);
-    const studentProfileId = scopedValue(attempt.studentProfileId) || scopedValue(attempt.studentId);
+function isGuestIdentitySnapshot(
+    identityType: unknown,
+    studentId: unknown,
+    guestId?: unknown,
+): boolean {
+    const explicitIdentityType = identityTypeValue(identityType);
+    if (explicitIdentityType) return explicitIdentityType === "guest";
+    return !!scopedValue(guestId) || (scopedValue(studentId) || "").startsWith("guest:");
+}
+
+function withoutGuestProfileLinks(attempt: Attempt, forceGuest = false): Attempt {
+    if (!forceGuest && !isGuestIdentitySnapshot(attempt.identityType, attempt.studentId, attempt.guestId)) {
+        return attempt;
+    }
+
+    const { studentProfileId: _ignoredGuestProfile, ...guestAttempt } = attempt;
+    void _ignoredGuestProfile;
+    const questionResults = guestAttempt.questionResults?.map(result => {
+        const { studentProfileId: _ignoredQuestionProfile, ...guestResult } = result;
+        void _ignoredQuestionProfile;
+        return { ...guestResult, identityType: "guest" as const };
+    });
     return {
-        ...attempt,
+        ...guestAttempt,
+        identityType: "guest",
+        ...(questionResults ? { questionResults } : {}),
+    };
+}
+
+function attemptWithPersistenceContext(attempt: Attempt, context = contextForAttempt(attempt)): Attempt {
+    const normalizedAttempt = withoutGuestProfileLinks(attempt);
+    const organizationId = scopedValue(normalizedAttempt.organizationId) || contextOrganizationId(context);
+    const classId = scopedValue(normalizedAttempt.classId) || scopedValue(normalizedAttempt.groupId);
+    const assignmentId = scopedValue(normalizedAttempt.assignmentId);
+    const studentProfileId = isGuestIdentitySnapshot(
+        normalizedAttempt.identityType,
+        normalizedAttempt.studentId,
+        normalizedAttempt.guestId,
+    )
+        ? null
+        : scopedValue(normalizedAttempt.studentProfileId) || scopedValue(normalizedAttempt.studentId);
+    return {
+        ...normalizedAttempt,
         ...(organizationId ? { organizationId } : {}),
         ...(classId ? { classId } : {}),
         ...(assignmentId ? { assignmentId } : {}),
@@ -439,7 +498,7 @@ export function stripHeavyAttemptPayload(attempt: Attempt): Attempt {
 }
 
 function attemptPayloadForServer(attempt: Attempt): Attempt {
-    const payload = { ...stripHeavyAttemptPayload(attempt) };
+    const payload = withoutGuestProfileLinks({ ...stripHeavyAttemptPayload(attempt) });
     delete payload.localSubmissionProvenance;
     return payload;
 }
@@ -449,7 +508,11 @@ export function attemptToSupabaseRow(attempt: Attempt, context?: WorkspaceContex
     const totalScore = numberValue(attempt.totalScore) || 0;
     const scorePercent = totalScore > 0 ? Math.round((score / totalScore) * 100) : 0;
     const classId = scopedValue(attempt.classId) || scopedValue(attempt.groupId);
-    const studentProfileId = scopedValue(attempt.studentProfileId) || scopedValue(attempt.studentId);
+    const guestIdentity = isGuestIdentitySnapshot(attempt.identityType, attempt.studentId, attempt.guestId);
+    const identityType = guestIdentity ? "guest" : identityTypeValue(attempt.identityType);
+    const studentProfileId = guestIdentity
+        ? null
+        : scopedValue(attempt.studentProfileId) || scopedValue(attempt.studentId);
 
     return {
         id: attempt.id,
@@ -464,7 +527,7 @@ export function attemptToSupabaseRow(attempt: Attempt, context?: WorkspaceContex
         group_name: attempt.groupName || null,
         region_id: attempt.regionId || null,
         region_name: attempt.regionName || null,
-        identity_type: identityTypeValue(attempt.identityType),
+        identity_type: identityType,
         status: attempt.status,
         score,
         total_score: totalScore,
@@ -487,13 +550,46 @@ export function attemptFromSupabaseRow(row: SupabaseAttemptRow | { payload: Atte
         const organizationId = scopedValue(row.organization_id);
         const classId = scopedValue(row.class_id);
         const assignmentId = scopedValue(row.assignment_id);
-        // Prefer the row's explicit column, fall back to the payload's studentProfileId,
-        // then to studentId so analytics joins never lose the profile link.
-        const studentProfileId = scopedValue(row.student_profile_id)
-            || scopedValue(attempt.studentProfileId)
-            || scopedValue(attempt.studentId);
+        const rowIdentityType = identityTypeValue(row.identity_type);
+        const guestIdentity = rowIdentityType === "guest" || (
+            !rowIdentityType
+            && isGuestIdentitySnapshot(attempt.identityType, row.student_id || attempt.studentId, attempt.guestId)
+        );
+        const identityType = guestIdentity
+            ? "guest"
+            : rowIdentityType || identityTypeValue(attempt.identityType);
+        // Guests deliberately have no roster profile row. Other identities keep
+        // the legacy student-id fallback so class-issued students retain joins.
+        const studentProfileId = identityType === "guest"
+            ? ""
+            : scopedValue(row.student_profile_id)
+                || scopedValue(attempt.studentProfileId)
+                || scopedValue(attempt.studentId);
+        const normalizedAttempt = guestIdentity
+            ? withoutGuestProfileLinks(attempt, true)
+            : attempt;
+        const canonicalAttempt = identityType && identityType !== "guest"
+            ? {
+                ...normalizedAttempt,
+                identityType,
+                ...(normalizedAttempt.questionResults
+                    ? {
+                        questionResults: normalizedAttempt.questionResults.map(result => {
+                            const { studentProfileId: _staleQuestionProfile, ...canonicalResult } = result;
+                            void _staleQuestionProfile;
+                            return {
+                                ...canonicalResult,
+                                identityType,
+                                ...(studentProfileId ? { studentProfileId } : {}),
+                            };
+                        }),
+                    }
+                    : {}),
+            }
+            : normalizedAttempt;
         return {
-            ...attempt,
+            ...canonicalAttempt,
+            ...(identityType ? { identityType } : {}),
             ...(organizationId ? { organizationId } : {}),
             ...(classId && classId !== attempt.groupId ? { classId } : {}),
             ...(assignmentId ? { assignmentId } : {}),
@@ -555,14 +651,22 @@ export function questionResultToSupabaseRow(
     const groupName = nullableString(result.groupName) || nullableString(attempt?.groupName);
     const classId = scopedValue(result.classId) || scopedValue(attempt?.classId) || groupId;
     const assignmentId = scopedValue(result.assignmentId) || scopedValue(attempt?.assignmentId);
-    const studentProfileId = scopedValue(result.studentProfileId) || scopedValue(attempt?.studentProfileId) || studentId;
+    const explicitIdentityType = identityTypeValue(result.identityType) || identityTypeValue(attempt?.identityType);
+    const guestIdentity = isGuestIdentitySnapshot(
+        explicitIdentityType,
+        studentId,
+        attempt?.guestId,
+    );
+    const identityType = guestIdentity ? "guest" : explicitIdentityType;
+    const studentProfileId = guestIdentity
+        ? null
+        : scopedValue(result.studentProfileId) || scopedValue(attempt?.studentProfileId) || studentId;
     const organizationId = scopedValue(result.organizationId)
         || scopedValue(attempt?.organizationId)
         || contextOrganizationId(context);
     const regionId = nullableString(result.regionId) || nullableString(attempt?.regionId);
     const regionName = nullableString(result.regionName) || nullableString(attempt?.regionName);
     const canonicalQuestionId = nullableString(result.canonicalQuestionId) || canonicalQuestionIdFor(examId, questionId);
-    const identityType = identityTypeValue(result.identityType) || identityTypeValue(attempt?.identityType);
     const retakeSourceAttemptId = nullableString(result.retakeSourceAttemptId)
         || nullableString(attempt?.retake?.sourceAttemptId);
     const retakeMode = retakeModeValue(result.retakeMode) || retakeModeValue(attempt?.retake?.mode);
@@ -592,6 +696,7 @@ export function questionResultToSupabaseRow(
         retakeMode: retakeMode || undefined,
         finishedAt,
     };
+    if (guestIdentity) delete payload.studentProfileId;
 
     return {
         id: `${attemptId}:${questionId}`,
@@ -948,19 +1053,25 @@ export function isExamLocallyDeleted(id: string): boolean {
 export function readLocalExam(id: string): Exam | null {
     if (!hasBrowserStorage()) return null;
     if (isExamLocallyDeleted(id)) return null;
-    return sanitizeExamPayload(readJson<unknown>(localStorage.getItem(`${EXAM_PREFIX}${id}`), null));
+    const exam = sanitizeExamPayload(readJson<unknown>(localStorage.getItem(`${EXAM_PREFIX}${id}`), null));
+    return matchesActiveTeacherOrganization(exam, activeTeacherOrganizationId()) ? exam : null;
 }
 
 export function readLocalExams(): Exam[] {
     if (!hasBrowserStorage()) return [];
 
     const deletedExamIds = readLocalDeletedExamIds();
+    const activeOrganizationId = activeTeacherOrganizationId();
     const exams: Exam[] = [];
     for (let i = 0; i < localStorage.length; i++) {
         const key = localStorage.key(i);
         if (!key?.startsWith(EXAM_PREFIX)) continue;
         const exam = sanitizeExamPayload(readJson<unknown>(localStorage.getItem(key), null));
-        if (exam?.id && !deletedExamIds[exam.id]) exams.push(exam);
+        if (
+            exam?.id
+            && !deletedExamIds[exam.id]
+            && matchesActiveTeacherOrganization(exam, activeOrganizationId)
+        ) exams.push(exam);
     }
 
     return sortByNewestActivity(exams);
@@ -1063,7 +1174,7 @@ function deleteLocalExamUnlocked(id: string): boolean {
     if (!hasBrowserStorage()) return false;
     try {
         localStorage.removeItem(`${EXAM_PREFIX}${id}`);
-        const attempts = readLocalAttempts().filter(attempt => attempt.examId !== id);
+        const attempts = readAllLocalAttempts().filter(attempt => attempt.examId !== id);
         localStorage.setItem(ATTEMPTS_KEY, JSON.stringify(attempts));
         deleteLocalSolveDraftsForExam(id);
         markLocalExamDeleted(id);
@@ -1077,7 +1188,7 @@ export async function deleteLocalExam(id: string): Promise<boolean> {
     return withBrowserStorageLock("attempt-index", () => deleteLocalExamUnlocked(id));
 }
 
-export function readLocalAttempts(): Attempt[] {
+function readAllLocalAttempts(): Attempt[] {
     if (!hasBrowserStorage()) return [];
     const deletedExamIds = readLocalDeletedExamIds();
     return sortByNewestActivity(
@@ -1086,6 +1197,22 @@ export function readLocalAttempts(): Attempt[] {
             .filter((attempt): attempt is Attempt => !!attempt)
             .filter(attempt => !deletedExamIds[attempt.examId])
     );
+}
+
+export function readLocalAttempts(): Attempt[] {
+    const attempts = readAllLocalAttempts();
+    const activeOrganizationId = activeTeacherOrganizationId();
+    if (!activeOrganizationId) return attempts;
+
+    return attempts.filter(attempt => {
+        if (scopedValue(attempt.organizationId)) {
+            return matchesActiveTeacherOrganization(attempt, activeOrganizationId);
+        }
+        const linkedExam = sanitizeExamPayload(
+            readJson<unknown>(localStorage.getItem(`${EXAM_PREFIX}${attempt.examId}`), null),
+        );
+        return matchesActiveTeacherOrganization(linkedExam, activeOrganizationId);
+    });
 }
 
 export function withLocalServerConfirmation(
@@ -1398,7 +1525,7 @@ function saveLocalAttemptsUnlocked(attempts: Attempt[]): boolean {
     if (!hasBrowserStorage()) return false;
     if (attempts.length === 0) return true;
     try {
-        const nextById = new Map(readLocalAttempts().map(attempt => [attempt.id, attempt]));
+        const nextById = new Map(readAllLocalAttempts().map(attempt => [attempt.id, attempt]));
         for (const attempt of attempts) {
             const existing = nextById.get(attempt.id);
             const incomingProvenance = sanitizeLocalSubmissionProvenance(attempt.localSubmissionProvenance);
@@ -1568,12 +1695,15 @@ async function retryDeletedRemoteExams(deletedExamIds: string[]): Promise<{ fail
 }
 
 async function fetchRemoteExam(id: string): Promise<Exam | null> {
+    const organizationId = activeTeacherOrganizationId();
+    if (!organizationId) return null;
     const client = await getAvailableSupabaseClient();
     if (!client) return null;
 
     const { data, error } = await client
         .from("omr_exams")
         .select(SUPABASE_EXAM_READ_COLUMNS)
+        .eq("organization_id", organizationId)
         .eq("id", id)
         .maybeSingle();
 
@@ -1587,21 +1717,24 @@ async function fetchRemoteExam(id: string): Promise<Exam | null> {
 }
 
 async function fetchRemoteExams(): Promise<Exam[]> {
+    const organizationId = activeTeacherOrganizationId();
+    if (!organizationId) return [];
     const client = await getAvailableSupabaseClient();
     if (!client) return [];
-    const context = activePersistenceContext();
-    const query = client.from("omr_exams").select(SUPABASE_EXAM_READ_COLUMNS);
-    const scopedQuery = shouldFilterRemoteByOrganization()
-        ? query.eq("organization_id", context.organizationId)
-        : query;
-
-    const { data, error } = await scopedQuery.order("updated_at", { ascending: false });
+    const { data, error } = await client.from("omr_exams")
+        .select(SUPABASE_EXAM_LIST_READ_COLUMNS)
+        .eq("organization_id", organizationId)
+        .order("updated_at", { ascending: false })
+        .limit(INITIAL_OPERATIONS_LIMITS.teacherExams + 1);
 
     if (error) throw new Error(error.message || "Failed to load exams from Supabase");
+    if ((data?.length || 0) > INITIAL_OPERATIONS_LIMITS.teacherExams) {
+        throw new Error(INITIAL_CAPACITY_EXCEEDED_ERROR);
+    }
     return (data || [])
         .map(row => {
             try {
-                return examFromSupabaseRow(row as SupabaseExamRow);
+                return examFromSupabaseListRow(row);
             } catch {
                 return null;
             }
@@ -1610,21 +1743,24 @@ async function fetchRemoteExams(): Promise<Exam[]> {
 }
 
 async function fetchRemoteAttempts(): Promise<Attempt[]> {
+    const organizationId = activeTeacherOrganizationId();
+    if (!organizationId) return [];
     const client = await getAvailableSupabaseClient();
     if (!client) return [];
-    const context = activePersistenceContext();
-    const query = client.from("omr_attempts").select(SUPABASE_ATTEMPT_READ_COLUMNS);
-    const scopedQuery = shouldFilterRemoteByOrganization()
-        ? query.eq("organization_id", context.organizationId)
-        : query;
-
-    const { data, error } = await scopedQuery.order("finished_at", { ascending: false });
+    const { data, error } = await client.from("omr_attempts")
+        .select(SUPABASE_ATTEMPT_LIST_READ_COLUMNS)
+        .eq("organization_id", organizationId)
+        .order("finished_at", { ascending: false })
+        .limit(INITIAL_OPERATIONS_LIMITS.teacherAttempts + 1);
 
     if (error) throw new Error(error.message || "Failed to load attempts from Supabase");
+    if ((data?.length || 0) > INITIAL_OPERATIONS_LIMITS.teacherAttempts) {
+        throw new Error(INITIAL_CAPACITY_EXCEEDED_ERROR);
+    }
     return (data || [])
         .map(row => {
             try {
-                return attemptFromSupabaseRow(row as SupabaseAttemptRow);
+                return attemptFromSupabaseListRow(row);
             } catch {
                 return null;
             }
@@ -1632,24 +1768,33 @@ async function fetchRemoteAttempts(): Promise<Attempt[]> {
         .filter((attempt): attempt is Attempt => !!attempt);
 }
 
-async function fetchRemoteAttemptsForStudent(studentProfileId: string): Promise<Attempt[]> {
+async function fetchRemoteAttemptsForStudent(
+    studentProfileId: string,
+    organizationScope?: string,
+): Promise<Attempt[]> {
     const normalizedStudentId = scopedValue(studentProfileId);
-    if (!normalizedStudentId) return [];
+    const organizationId = scopedValue(organizationScope);
+    if (!normalizedStudentId || !organizationId) return [];
 
     const client = await getAvailableSupabaseClient();
     if (!client) return [];
 
     const { data, error } = await client
         .from("omr_attempts")
-        .select(SUPABASE_ATTEMPT_READ_COLUMNS)
+        .select(SUPABASE_ATTEMPT_LIST_READ_COLUMNS)
+        .eq("organization_id", organizationId)
         .eq("student_profile_id", normalizedStudentId)
-        .order("finished_at", { ascending: false });
+        .order("finished_at", { ascending: false })
+        .limit(INITIAL_OPERATIONS_LIMITS.studentAttempts + 1);
 
     if (error) throw new Error(error.message || "Failed to load student attempts from Supabase");
+    if ((data?.length || 0) > INITIAL_OPERATIONS_LIMITS.studentAttempts) {
+        throw new Error(INITIAL_CAPACITY_EXCEEDED_ERROR);
+    }
     return (data || [])
         .map(row => {
             try {
-                return attemptFromSupabaseRow(row as SupabaseAttemptRow);
+                return attemptFromSupabaseListRow(row);
             } catch {
                 return null;
             }
@@ -1661,20 +1806,18 @@ export async function fetchRemoteAttempt(
     id: string,
     options?: { organizationId?: string },
 ): Promise<Attempt | null> {
+    const organizationId = activeTeacherOrganizationId();
+    if (!organizationId) return null;
+    const requestedOrganizationId = scopedValue(options?.organizationId);
+    if (requestedOrganizationId && requestedOrganizationId !== organizationId) return null;
     const client = await getAvailableSupabaseClient();
     if (!client) return null;
 
-    // Unlike fetchRemoteAttempts (the list read), a single-id fetch has no org
-    // filter by default so the shared local-cache refresh and the student
-    // fallback path keep working across the default/teacher workspace split.
-    // When a caller knows the workspace it expects (e.g. the teacher review
-    // page merging a reply), it passes organizationId to prevent reading a
-    // row that belongs to another teacher's workspace.
-    const organizationId = scopedValue(options?.organizationId);
-    let query = client.from("omr_attempts").select(SUPABASE_ATTEMPT_READ_COLUMNS).eq("id", id);
-    if (organizationId) query = query.eq("organization_id", organizationId);
-
-    const { data, error } = await query.maybeSingle();
+    const { data, error } = await client.from("omr_attempts")
+        .select(SUPABASE_ATTEMPT_READ_COLUMNS)
+        .eq("organization_id", organizationId)
+        .eq("id", id)
+        .maybeSingle();
 
     if (error) throw new Error(error.message || "Failed to load attempt from Supabase");
     if (!data) return null;
@@ -1685,9 +1828,14 @@ export async function fetchRemoteAttempt(
     }
 }
 
-async function fetchRemoteAttemptForStudent(id: string, studentProfileId: string): Promise<Attempt | null> {
+async function fetchRemoteAttemptForStudent(
+    id: string,
+    studentProfileId: string,
+    organizationScope?: string,
+): Promise<Attempt | null> {
     const normalizedStudentId = scopedValue(studentProfileId);
-    if (!normalizedStudentId) return null;
+    const organizationId = scopedValue(organizationScope);
+    if (!normalizedStudentId || !organizationId) return null;
 
     const client = await getAvailableSupabaseClient();
     if (!client) return null;
@@ -1695,6 +1843,7 @@ async function fetchRemoteAttemptForStudent(id: string, studentProfileId: string
     const { data, error } = await client
         .from("omr_attempts")
         .select(SUPABASE_ATTEMPT_READ_COLUMNS)
+        .eq("organization_id", organizationId)
         .eq("id", id)
         .eq("student_profile_id", normalizedStudentId)
         .maybeSingle();
@@ -1709,6 +1858,10 @@ async function fetchRemoteAttemptForStudent(id: string, studentProfileId: string
 }
 
 async function upsertRemoteExam(exam: Exam): Promise<void> {
+    const organizationId = activeTeacherOrganizationId();
+    if (!organizationId || scopedValue(exam.organizationId) !== organizationId) {
+        throw new Error("Trusted teacher organization is required for remote exam writes");
+    }
     const client = await getAvailableSupabaseClient();
     if (!client) return;
     const context = activePersistenceContext();
@@ -1722,10 +1875,21 @@ async function upsertRemoteExam(exam: Exam): Promise<void> {
 }
 
 async function replaceRemoteExamQuestions(exam: Exam, context = activePersistenceContext()): Promise<void> {
+    const organizationId = activeTeacherOrganizationId();
+    if (
+        !organizationId
+        || contextOrganizationId(context) !== organizationId
+        || scopedValue(exam.organizationId) !== organizationId
+    ) {
+        throw new Error("Trusted teacher organization is required for remote question writes");
+    }
     const client = await getAvailableSupabaseClient();
     if (!client) return;
 
-    const deleteResult = await client.from("omr_exam_questions").delete().eq("exam_id", exam.id);
+    const deleteResult = await client.from("omr_exam_questions")
+        .delete()
+        .eq("organization_id", organizationId)
+        .eq("exam_id", exam.id);
     if (deleteResult.error) {
         throw new Error(deleteResult.error.message || "Failed to replace exam questions in Supabase");
     }
@@ -1740,6 +1904,10 @@ async function replaceRemoteExamQuestions(exam: Exam, context = activePersistenc
 }
 
 async function upsertRemoteAttempt(attempt: Attempt): Promise<void> {
+    const organizationId = activeTeacherOrganizationId();
+    if (!organizationId || scopedValue(attempt.organizationId) !== organizationId) {
+        throw new Error("Trusted teacher organization is required for remote attempt writes");
+    }
     const client = await getAvailableSupabaseClient();
     if (!client) return;
     const context = contextForAttempt(attempt);
@@ -1753,6 +1921,14 @@ async function upsertRemoteAttempt(attempt: Attempt): Promise<void> {
 }
 
 async function upsertRemoteQuestionResults(attempt: Attempt, context = contextForAttempt(attempt)): Promise<void> {
+    const organizationId = activeTeacherOrganizationId();
+    if (
+        !organizationId
+        || contextOrganizationId(context) !== organizationId
+        || scopedValue(attempt.organizationId) !== organizationId
+    ) {
+        throw new Error("Trusted teacher organization is required for remote result writes");
+    }
     const client = await getAvailableSupabaseClient();
     if (!client) return;
     const scopedAttempt = attemptWithPersistenceContext(attempt, context);
@@ -1772,25 +1948,41 @@ async function syncQuestionResultsForAttempts(attempts: Attempt[]): Promise<{ fa
 }
 
 async function deleteRemoteExam(id: string): Promise<void> {
+    const organizationId = activeTeacherOrganizationId();
+    if (!organizationId) {
+        throw new Error("Trusted teacher organization is required for remote exam deletion");
+    }
     const client = await getAvailableSupabaseClient();
     if (!client) return;
 
-    const questionResult = await client.from("omr_question_results").delete().eq("exam_id", id);
+    const questionResult = await client.from("omr_question_results")
+        .delete()
+        .eq("organization_id", organizationId)
+        .eq("exam_id", id);
     if (questionResult.error) {
         throw new Error(questionResult.error.message || "Failed to delete exam question results from Supabase");
     }
 
-    const examQuestionResult = await client.from("omr_exam_questions").delete().eq("exam_id", id);
+    const examQuestionResult = await client.from("omr_exam_questions")
+        .delete()
+        .eq("organization_id", organizationId)
+        .eq("exam_id", id);
     if (examQuestionResult.error) {
         throw new Error(examQuestionResult.error.message || "Failed to delete exam questions from Supabase");
     }
 
-    const attemptResult = await client.from("omr_attempts").delete().eq("exam_id", id);
+    const attemptResult = await client.from("omr_attempts")
+        .delete()
+        .eq("organization_id", organizationId)
+        .eq("exam_id", id);
     if (attemptResult.error) {
         throw new Error(attemptResult.error.message || "Failed to delete exam attempts from Supabase");
     }
 
-    const examResult = await client.from("omr_exams").delete().eq("id", id);
+    const examResult = await client.from("omr_exams")
+        .delete()
+        .eq("organization_id", organizationId)
+        .eq("id", id);
     if (examResult.error) {
         throw new Error(examResult.error.message || "Failed to delete exam from Supabase");
     }
@@ -1853,7 +2045,8 @@ export async function loadExams(): Promise<LoadResult<Exam>> {
             ? itemsNeedingRemoteSync(localItems, remoteItems)
             : [];
         const syncResult = await syncLocalItems(syncQueue, upsertRemoteExam);
-        saveLocalExams(remoteItems);
+        // List projections deliberately omit authoring/PDF detail. Never write
+        // them over a complete local exam; detail is refreshed by loadExam().
         const remoteError = [deletedRetry.error, syncResult.error].filter(Boolean).join(" / ") || undefined;
         return {
             items: mergeById(localItems, remoteItems),
@@ -1878,7 +2071,8 @@ export async function loadAttempts(): Promise<LoadResult<Attempt>> {
             : [];
         const syncResult = await syncLocalItems(syncQueue, upsertRemoteAttempt);
         const mergedItems = mergeById(localItems, remoteItems);
-        await saveLocalAttempts(mergedItems);
+        // List projections omit detail-only fields. Keep them out of the local
+        // canonical cache so a later detail read cannot be shadowed by a summary.
         // syncQueue attempts already upsert their question-result rows through
         // upsertRemoteAttempt above, so only re-sync question results for
         // still-pending attempts that this run's attempt-row resync missed. An
@@ -1916,12 +2110,11 @@ export async function loadAttemptsForStudent(scope: StudentAttemptScope): Promis
     }
 
     try {
-        const remoteItems = (await fetchRemoteAttemptsForStudent(scope.studentId))
+        const remoteItems = (await fetchRemoteAttemptsForStudent(scope.studentId, scope.organizationId))
             .filter(attempt => !isExamLocallyDeleted(attempt.examId))
             .filter(attempt => attemptMatchesStudentScope(attempt, scope));
         const mergedItems = mergeById(localItems, remoteItems)
             .filter(attempt => attemptMatchesStudentScope(attempt, scope));
-        await saveLocalAttempts(mergedItems);
         return {
             items: mergedItems,
             remoteLoaded: true,
@@ -1960,7 +2153,7 @@ export async function loadAttemptForStudent(id: string, scope: StudentAttemptSco
     if (localAttempt) return localAttempt;
 
     try {
-        const remoteAttempt = await fetchRemoteAttemptForStudent(id, scope.studentId);
+        const remoteAttempt = await fetchRemoteAttemptForStudent(id, scope.studentId, scope.organizationId);
         if (
             remoteAttempt &&
             !isExamLocallyDeleted(remoteAttempt.examId) &&

@@ -1,6 +1,6 @@
 "use client";
 
-import { Suspense, useCallback, useEffect, useMemo, useState } from "react";
+import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import dynamic from "next/dynamic";
 import { useRouter, useSearchParams } from "next/navigation";
@@ -34,16 +34,20 @@ import { createDashboardRevalidationGate, isTeacherDashboardStorageKey } from "@
 import { buildDemoDashboardData } from "@/lib/demoData";
 import { buildQuestionResultRepairPlan } from "@/lib/analyticsDataRepair";
 import { readLocalAttempts, readLocalExams, saveLocalAttempt } from "@/lib/omrPersistence";
-import { loadTeacherAttempts } from "@/lib/teacherAttemptClient";
+import { loadTeacherAttemptSummaries, loadTeacherAttempts } from "@/lib/teacherAttemptClient";
 import { loadTeacherExams } from "@/lib/teacherExamClient";
 import { summarizeAnalyticsDataHealth, summarizePersistenceHealth, type PersistenceHealth } from "@/lib/persistenceHealth";
 import { readLocalRosterSnapshot } from "@/lib/rosterPersistence";
 import { loadTeacherRosterSnapshot } from "@/lib/teacherRosterClient";
 import type { RosterGroup, RosterStudent } from "@/lib/rosterStorage";
 import { buildTeacherDashboardMetrics } from "@/lib/teacherDashboardMetrics";
+import { preferLocalDashboardItems } from "@/lib/teacherDashboardLoad";
 import { useServerPlan } from "@/lib/useServerPlan";
 import { readTeacherSession } from "@/lib/teacherSession";
 import { isMockupTeacherIdentity } from "@/lib/mockupAccount";
+import { loadTeacherAttemptAggregate } from "@/lib/teacherAttemptReportingClient";
+import type { TeacherAttemptAggregate } from "@/lib/teacherAttemptReportingGateway";
+import { loadTeacherIndividualAssignmentTargetCounts } from "@/app/actions/teacherAssignment";
 
 type TabType = 'overview' | 'exam' | 'student';
 type DashboardDataMode = "real" | "demo";
@@ -64,8 +68,40 @@ type DashboardSnapshot = {
     attempts: Attempt[];
     rosterStudents: RosterStudent[];
     rosterGroups: RosterGroup[];
+    aggregate?: TeacherAttemptAggregate;
+    individualAssignmentTargetCounts?: Record<string, number>;
+    individualAssignmentModes?: Record<string, "base" | "retake">;
     forceDemoData?: boolean;
 };
+type DetailedAttemptLoad = {
+    generation: number;
+    promise: ReturnType<typeof loadTeacherAttempts>;
+};
+
+function buildAttemptSummarySignal(attempts: Attempt[]): string {
+    return attempts
+        .map(attempt => {
+            // The current lightweight projection exposes lifecycle timestamps rather
+            // than updatedAt. Keep the optional field in the signal so a future
+            // projection can strengthen invalidation without another cache rewrite.
+            const updatedAt = (attempt as Attempt & { updatedAt?: unknown }).updatedAt;
+            return [
+                attempt.id,
+                typeof updatedAt === "string" ? updatedAt : "",
+                attempt.status,
+                attempt.finishedAt,
+                attempt.score,
+                attempt.totalScore,
+                attempt.mergedAt || "",
+                attempt.drawingPageCount ?? "",
+                attempt.drawingStrokeCount ?? "",
+                JSON.stringify(attempt.retake || null),
+                JSON.stringify(attempt.studentQuestions || []),
+            ].join("\u001f");
+        })
+        .sort()
+        .join("\u001e");
+}
 
 function normalizeDashboardTab(value: string | null): TabType {
     return value === "exam" || value === "student" || value === "overview" ? value : "overview";
@@ -97,8 +133,21 @@ function TeacherDashboard() {
     const [selectedExamIdForAnalytics, setSelectedExamIdForAnalytics] = useState<string | undefined>(initialExamId);
     const [exams, setExams] = useState<Exam[]>([]);
     const [attempts, setAttempts] = useState<Attempt[]>([]);
+    const [detailedAttempts, setDetailedAttempts] = useState<Attempt[] | null>(null);
+    const [detailedAttemptStatus, setDetailedAttemptStatus] = useState<"idle" | "loading" | "ready" | "error">("idle");
+    const [detailedAttemptGeneration, setDetailedAttemptGeneration] = useState(0);
+    const detailedAttemptGenerationRef = useRef(0);
+    const detailedAttemptCacheRef = useRef<{ generation: number; items: Attempt[] } | null>(null);
+    const detailedAttemptLoadRef = useRef<DetailedAttemptLoad | null>(null);
+    const attemptSummarySignalRef = useRef<string | null>(null);
     const [rosterStudents, setRosterStudents] = useState<RosterStudent[]>([]);
     const [rosterGroups, setRosterGroups] = useState<RosterGroup[]>([]);
+    const [individualAssignmentTargetCounts, setIndividualAssignmentTargetCounts] = useState<ReadonlyMap<string, number>>(
+        () => new Map(),
+    );
+    const [individualAssignmentModes, setIndividualAssignmentModes] = useState<ReadonlyMap<string, "base" | "retake">>(
+        () => new Map(),
+    );
     const [stats, setStats] = useState({
         totalStudents: 0,
         avgScore: 0,
@@ -109,20 +158,81 @@ function TeacherDashboard() {
     const [dataMode, setDataMode] = useState<DashboardDataMode>("real");
     const { plan: currentPlan } = useServerPlan();
     const [syncStatus, setSyncStatus] = useState<PersistenceHealth>(() => summarizePersistenceHealth([]));
+    const [hasDashboardDataResolved, setHasDashboardDataResolved] = useState(false);
     const [isRefreshingDashboardData, setIsRefreshingDashboardData] = useState(false);
     const [isRepairingAnalyticsData, setIsRepairingAnalyticsData] = useState(false);
+    const analyticsAttempts = useMemo(
+        () => dataMode === "demo" ? attempts : detailedAttempts || [],
+        [attempts, dataMode, detailedAttempts],
+    );
     const analyticsDataHealth = useMemo(
         () => dataMode === "demo"
             ? summarizeAnalyticsDataHealth([], [])
-            : summarizeAnalyticsDataHealth(exams, attempts),
-        [attempts, dataMode, exams],
+            : summarizeAnalyticsDataHealth(exams, analyticsAttempts),
+        [analyticsAttempts, dataMode, exams],
     );
     const questionResultRepairPlan = useMemo(
         () => dataMode === "demo"
             ? buildQuestionResultRepairPlan([], [])
-            : buildQuestionResultRepairPlan(exams, attempts),
-        [attempts, dataMode, exams],
+            : buildQuestionResultRepairPlan(exams, analyticsAttempts),
+        [analyticsAttempts, dataMode, exams],
     );
+
+    const invalidateDetailedAttempts = useCallback(() => {
+        const nextGeneration = detailedAttemptGenerationRef.current + 1;
+        detailedAttemptGenerationRef.current = nextGeneration;
+        detailedAttemptCacheRef.current = null;
+        setDetailedAttempts(null);
+        setDetailedAttemptStatus("idle");
+        setDetailedAttemptGeneration(nextGeneration);
+    }, []);
+
+    const loadDetailedAttempts = useCallback(async (): Promise<Attempt[]> => {
+        if (dataMode === "demo") return attempts;
+
+        // A summary refresh can finish while a rich request is in flight. Loop onto
+        // the newest generation instead of publishing or exporting the stale rows.
+        while (true) {
+            const requestedGeneration = detailedAttemptGenerationRef.current;
+            const cached = detailedAttemptCacheRef.current;
+            if (cached?.generation === requestedGeneration) return cached.items;
+
+            let activeLoad = detailedAttemptLoadRef.current;
+            if (!activeLoad || activeLoad.generation !== requestedGeneration) {
+                setDetailedAttemptStatus("loading");
+                activeLoad = {
+                    generation: requestedGeneration,
+                    promise: loadTeacherAttempts(),
+                };
+                detailedAttemptLoadRef.current = activeLoad;
+            }
+
+            try {
+                const result = await activeLoad.promise;
+                if (requestedGeneration !== detailedAttemptGenerationRef.current) continue;
+                if (result.remoteError) throw new Error(result.remoteError);
+                detailedAttemptCacheRef.current = { generation: requestedGeneration, items: result.items };
+                setDetailedAttempts(result.items);
+                setDetailedAttemptStatus("ready");
+                return result.items;
+            } catch (error) {
+                if (requestedGeneration !== detailedAttemptGenerationRef.current) continue;
+                setDetailedAttemptStatus("error");
+                throw error;
+            } finally {
+                if (detailedAttemptLoadRef.current === activeLoad) {
+                    detailedAttemptLoadRef.current = null;
+                }
+            }
+        }
+    }, [attempts, dataMode]);
+
+    useEffect(() => {
+        if (activeTab === "overview" || isMockupAccount) return;
+        void loadDetailedAttempts().catch(() => {
+            toast.error("분석 데이터 로드 실패", "상세 제출 데이터를 불러오지 못했습니다. 잠시 후 다시 시도해주세요.");
+        });
+    }, [activeTab, detailedAttemptGeneration, isMockupAccount, loadDetailedAttempts]);
 
     const applyDashboardSnapshot = useCallback((snapshot: DashboardSnapshot) => {
         const loadedExams = [...snapshot.exams];
@@ -142,25 +252,44 @@ function TeacherDashboard() {
         }
         setDataMode(shouldSeedDemo ? "demo" : "real");
 
+        if (!shouldSeedDemo) {
+            const nextSummarySignal = buildAttemptSummarySignal(loadedAttempts);
+            const previousSummarySignal = attemptSummarySignalRef.current;
+            attemptSummarySignalRef.current = nextSummarySignal;
+            if (previousSummarySignal !== null && previousSummarySignal !== nextSummarySignal) {
+                invalidateDetailedAttempts();
+            }
+        }
+
         loadedExams.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
         setExams(loadedExams);
         setAttempts(loadedAttempts);
         setRosterStudents(loadedRosterStudents);
         setRosterGroups(loadedRosterGroups);
+        setIndividualAssignmentTargetCounts(new Map(
+            Object.entries(snapshot.individualAssignmentTargetCounts || {}),
+        ));
+        setIndividualAssignmentModes(new Map(
+            Object.entries(snapshot.individualAssignmentModes || {}),
+        ));
 
         const metrics = buildTeacherDashboardMetrics(loadedExams, loadedAttempts, {
             rosterStudents: shouldSeedDemo ? undefined : loadedRosterStudents,
         });
         setStats({
-            totalStudents: metrics.totalStudents,
-            avgScore: metrics.avgScore,
+            totalStudents: loadedRosterStudents.length > 0
+                ? metrics.totalStudents
+                : snapshot.aggregate?.distinctStudentCount ?? metrics.totalStudents,
+            avgScore: snapshot.aggregate
+                ? Math.round(snapshot.aggregate.averageScorePercent * 10) / 10
+                : metrics.avgScore,
             activeExams: metrics.activeExams,
         });
         setTrendData(metrics.trendData.length === 0 && shouldSeedDemo
             ? [65, 78, 72, 85, 82, 90, metrics.avgScore || 80]
             : metrics.trendData);
         setTrendLabels(metrics.trendData.length === 0 && shouldSeedDemo ? [] : metrics.trendLabels);
-    }, []);
+    }, [invalidateDetailedAttempts]);
 
     const loadDashboardData = useCallback(async (options: DashboardLoadOptions = {}) => {
         if (isMockupAccount) {
@@ -171,33 +300,92 @@ function TeacherDashboard() {
                 rosterGroups: [],
                 forceDemoData: true,
             });
+            setHasDashboardDataResolved(true);
             if (options.notifyOnSuccess) {
                 toast.success("데모 데이터 새로고침 완료", "고정된 예시 데이터로 화면을 다시 구성했습니다.");
             }
             return;
         }
-        const [examResult, attemptResult, rosterResult] = await Promise.all([
-            loadTeacherExams(),
-            loadTeacherAttempts(),
-            loadTeacherRosterSnapshot(localStorage),
-        ]);
+        const localRoster = readLocalRosterSnapshot(localStorage);
+        const localSnapshot: DashboardSnapshot = {
+            exams: readLocalExams(),
+            attempts: readLocalAttempts(),
+            rosterStudents: localRoster.students,
+            rosterGroups: localRoster.groups,
+        };
+
+        const aggregatePromise = loadTeacherAttemptAggregate();
+        let results: Awaited<ReturnType<typeof Promise.all<[
+            ReturnType<typeof loadTeacherExams>,
+            ReturnType<typeof loadTeacherAttemptSummaries>,
+            ReturnType<typeof loadTeacherRosterSnapshot>,
+        ]>>>;
+        try {
+            results = await Promise.all([
+                loadTeacherExams(),
+                loadTeacherAttemptSummaries(),
+                loadTeacherRosterSnapshot(localStorage),
+            ]);
+        } catch (error) {
+            if (options.isCancelled?.()) return;
+            const message = error instanceof Error ? error.message : "Dashboard synchronization failed";
+            setSyncStatus(summarizePersistenceHealth([{
+                remoteLoaded: false,
+                remoteSynced: false,
+                pendingSyncCount: localSnapshot.exams.length
+                    + localSnapshot.attempts.length
+                    + localSnapshot.rosterStudents.length
+                    + localSnapshot.rosterGroups.length,
+                remoteError: message,
+            }]));
+            applyDashboardSnapshot(localSnapshot);
+            setHasDashboardDataResolved(true);
+            if (options.notifyOnError === true) {
+                toast.info(
+                    "로컬 데이터 기준으로 표시 중",
+                    "동기화 요청을 완료하지 못했습니다. 저장된 데이터는 유지하고 다음 로드 때 다시 시도합니다."
+                );
+            }
+            return;
+        }
+        const [examResult, attemptResult, rosterResult] = results;
+        const aggregateResult = await aggregatePromise.catch(() => ({ status: "service_unavailable" as const }));
         if (options.isCancelled?.()) return;
 
         const nextSyncStatus = summarizePersistenceHealth([examResult, attemptResult, rosterResult]);
         setSyncStatus(nextSyncStatus);
-        if (nextSyncStatus.kind === "error" && options.notifyOnError !== false) {
+        // Persistent synchronization health belongs to the inline status pill.
+        // Only an explicit user-triggered request may duplicate it as a toast.
+        if (nextSyncStatus.kind === "error" && options.notifyOnError === true) {
             toast.info(
                 "로컬 데이터 기준으로 표시 중",
                 "Supabase 동기화가 일부 지연되고 있어 시험·제출·명단은 다음 로드 때 다시 재시도합니다."
             );
         }
 
+        const preferredExams = preferLocalDashboardItems(examResult, localSnapshot.exams);
+        const targetedExamIds = preferredExams
+            .filter(exam => exam.accessConfig?.type === "targeted")
+            .map(exam => exam.id);
+        const assignmentCountsResult = targetedExamIds.length > 0
+            ? await loadTeacherIndividualAssignmentTargetCounts(targetedExamIds).catch(() => ({ status: "service_unavailable" as const }))
+            : { status: "loaded" as const, targetCounts: {}, assignmentModes: {} };
+        if (options.isCancelled?.()) return;
+
         applyDashboardSnapshot({
-            exams: examResult.items,
-            attempts: attemptResult.items,
-            rosterStudents: rosterResult.students,
-            rosterGroups: rosterResult.groups,
+            exams: preferredExams,
+            attempts: preferLocalDashboardItems(attemptResult, localSnapshot.attempts),
+            rosterStudents: rosterResult.remoteError ? localSnapshot.rosterStudents : rosterResult.students,
+            rosterGroups: rosterResult.remoteError ? localSnapshot.rosterGroups : rosterResult.groups,
+            ...(aggregateResult.status === "loaded" ? { aggregate: aggregateResult.aggregate } : {}),
+            ...(assignmentCountsResult.status === "loaded"
+                ? {
+                    individualAssignmentTargetCounts: assignmentCountsResult.targetCounts,
+                    individualAssignmentModes: assignmentCountsResult.assignmentModes,
+                }
+                : {}),
         });
+        setHasDashboardDataResolved(true);
 
         if (options.notifyOnSuccess && nextSyncStatus.kind !== "error") {
             toast.success("동기화 확인 완료", nextSyncStatus.detail);
@@ -219,14 +407,29 @@ function TeacherDashboard() {
                 rosterGroups: [],
                 forceDemoData: true,
             });
+            setHasDashboardDataResolved(true);
         } else {
             const localRoster = readLocalRosterSnapshot(localStorage);
+            const localExams = readLocalExams();
+            const localAttempts = readLocalAttempts();
             applyDashboardSnapshot({
-                exams: readLocalExams(),
-                attempts: readLocalAttempts(),
+                exams: localExams,
+                attempts: localAttempts,
                 rosterStudents: localRoster.students,
                 rosterGroups: localRoster.groups,
             });
+            // A usable local snapshot should render immediately while the remote
+            // reconciliation continues in the background. Keep the skeleton only
+            // for a genuinely empty local cache so remote-only data never flashes
+            // as an empty onboarding state.
+            if (
+                localExams.length > 0
+                || localAttempts.length > 0
+                || localRoster.students.length > 0
+                || localRoster.groups.length > 0
+            ) {
+                setHasDashboardDataResolved(true);
+            }
         }
         const refreshTimer = window.setTimeout(() => {
             void loadDashboardData({ isCancelled: () => cancelled });
@@ -315,7 +518,7 @@ function TeacherDashboard() {
         setIsRefreshingDashboardData(true);
         setSyncStatus(summarizePersistenceHealth([]));
         try {
-            await loadDashboardData({ notifyOnSuccess: true });
+            await loadDashboardData({ notifyOnSuccess: true, notifyOnError: true });
         } catch {
             toast.error("동기화 확인 실패", "데이터를 다시 읽지 못했습니다. 네트워크와 저장소 상태를 확인해주세요.");
         } finally {
@@ -345,6 +548,16 @@ function TeacherDashboard() {
             if (repairedAttempts.length > 0) {
                 const repairedById = new Map(repairedAttempts.map(attempt => [attempt.id, attempt]));
                 setAttempts(prev => prev.map(attempt => repairedById.get(attempt.id) || attempt));
+                setDetailedAttempts(prev => {
+                    const next = prev?.map(attempt => repairedById.get(attempt.id) || attempt) || prev;
+                    if (next) {
+                        detailedAttemptCacheRef.current = {
+                            generation: detailedAttemptGenerationRef.current,
+                            items: next,
+                        };
+                    }
+                    return next;
+                });
             }
 
             if (failedCount > 0) {
@@ -506,16 +719,24 @@ function TeacherDashboard() {
 
         return actions;
     }, [analyticsDataHealth.issues, analyticsDataHealth.kind, dataMode, isMockupAccount, questionResultRepairPlan.repairableCount]);
+    const isDashboardResolving = !isAccountModeResolved || !hasDashboardDataResolved;
+    const isRealDashboardEmpty = !isDashboardResolving
+        && !isMockupAccount
+        && dataMode === "real"
+        && exams.length === 0
+        && attempts.length === 0
+        && rosterStudents.length === 0
+        && rosterGroups.length === 0;
 
     // Tab Navigation Component
     const renderTabs = () => isMockupAccount ? (
-        <div className="mockup-dashboard-tabs" role="tablist" aria-label="데모 분석 화면">
-            <button type="button" role="tab" aria-selected={activeTab === "overview"} onClick={() => applyTab("overview")}>개요</button>
-            <button type="button" role="tab" aria-selected={activeTab === "exam"} onClick={() => applyTab("exam", selectedExamIdForAnalytics)}>시험별 분석</button>
-            <button type="button" role="tab" aria-selected={activeTab === "student"} onClick={() => applyTab("student")}>학생별 분석</button>
+        <div className="mockup-dashboard-tabs" role="group" aria-label="데모 분석 화면">
+            <button type="button" aria-pressed={activeTab === "overview"} onClick={() => applyTab("overview")}>개요</button>
+            <button type="button" aria-pressed={activeTab === "exam"} onClick={() => applyTab("exam", selectedExamIdForAnalytics)}>시험별 분석</button>
+            <button type="button" aria-pressed={activeTab === "student"} onClick={() => applyTab("student")}>학생별 분석</button>
         </div>
     ) : (
-        <div style={{
+        <div className="dashboard-tabs" role="group" aria-label="대시보드 보기" style={{
             display: 'grid',
             gridTemplateColumns: 'repeat(auto-fit, minmax(min(160px, 100%), 1fr))',
             gap: '0.5rem',
@@ -525,6 +746,9 @@ function TeacherDashboard() {
             boxShadow: '0 4px 6px rgba(0,0,0,0.02)'
         }}>
             <button
+                type="button"
+                aria-pressed={activeTab === 'overview'}
+                className={activeTab === 'overview' ? "is-active" : undefined}
                 onClick={() => applyTab('overview')}
                 style={{
                     display: 'flex', alignItems: 'center', gap: '0.5rem',
@@ -542,6 +766,9 @@ function TeacherDashboard() {
                 대시보드 요약
             </button>
             <button
+                type="button"
+                aria-pressed={activeTab === 'exam'}
+                className={activeTab === 'exam' ? "is-active" : undefined}
                 onClick={() => applyTab('exam', selectedExamIdForAnalytics)}
                 style={{
                     display: 'flex', alignItems: 'center', gap: '0.5rem',
@@ -559,6 +786,9 @@ function TeacherDashboard() {
                 시험 분석
             </button>
             <button
+                type="button"
+                aria-pressed={activeTab === 'student'}
+                className={activeTab === 'student' ? "is-active" : undefined}
                 onClick={() => applyTab('student')}
                 style={{
                     display: 'flex', alignItems: 'center', gap: '0.5rem',
@@ -594,8 +824,8 @@ function TeacherDashboard() {
             <main id="main-content" tabIndex={-1} className={`container dashboard-main animate-fade-in${isMockupAccount ? " mockup-dashboard-main" : ""}${isMockupAccount && activeTab !== "overview" ? " mockup-dashboard-subview" : ""}`}>
                 {/* Welcome Section */}
                 <div className="dashboard-welcome">
-                    <div style={{ minWidth: 0 }}>
-                        <h1 style={{ fontSize: '2.5rem', marginBottom: '0.75rem', lineHeight: 1.2, fontWeight: 800, letterSpacing: '-0.01em', color: 'var(--foreground)' }}>
+                    <div className="mobile-section-stack" style={{ minWidth: 0 }}>
+                        <h1 className="dashboard-title" style={{ fontSize: '2.5rem', marginBottom: '0.75rem', lineHeight: 1.2, fontWeight: 800, letterSpacing: '-0.01em', color: 'var(--foreground)' }}>
                             {isMockupAccount ? "좋은아침이에요, 김하늘 선생님" : "분석 센터"}
                         </h1>
                         <p className="text-muted" style={{ fontSize: '1.1rem' }}>
@@ -606,6 +836,7 @@ function TeacherDashboard() {
                     </div>
                     {!isMockupAccount && <div className="dashboard-welcome-status">
                         <div
+                            className="mobile-action-row"
                             aria-label="데이터 동기화 상태"
                             title={syncStatus.error || syncStatus.detail}
                             style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', minWidth: 0 }}
@@ -639,7 +870,7 @@ function TeacherDashboard() {
                                 <RefreshCw size={14} className={isRefreshingDashboardData ? "animate-spin" : undefined} />
                             </button>
                         </div>
-                        <div
+                        {analyticsDataHealth.kind !== "empty" && <div
                             aria-label="분석 데이터 상태"
                             title={analyticsDataHealth.issues[0]?.detail || analyticsDataHealth.detail}
                             style={{ minWidth: 0 }}
@@ -650,17 +881,15 @@ function TeacherDashboard() {
                                 detail={`${analyticsDataHealth.score}점 · ${analyticsDataHealth.detail}`}
                                 tone={dataHealthPillTone}
                             />
-                        </div>
-                        {activeTab !== 'overview' && (
-                            <Link href="/create" style={{
+                        </div>}
+                        {!isDashboardResolving && !isRealDashboardEmpty && <Link href="/create" className="dashboard-create-action" style={{
                                 padding: '0.55rem 1.1rem', background: 'var(--primary)',
                                 color: 'white', borderRadius: 'var(--radius-full)',
                                 fontWeight: 600, fontSize: '0.85rem', display: 'flex', alignItems: 'center', gap: '0.4rem',
                                 boxShadow: '0 4px 12px rgba(99, 102, 241, 0.3)'
                             }}>
                                 시험 출제하기
-                            </Link>
-                        )}
+                        </Link>}
                     </div>}
                 </div>
 
@@ -695,7 +924,7 @@ function TeacherDashboard() {
                     </div>
                 )}
 
-                {dataMode === "real" && analyticsDataHealth.kind !== "ready" && (
+                {dataMode === "real" && analyticsDataHealth.kind !== "ready" && analyticsDataHealth.kind !== "empty" && (
                     <div
                         role="status"
                         aria-label="분석 데이터 상태"
@@ -824,7 +1053,7 @@ function TeacherDashboard() {
                     </div>
                 )}
 
-                {!isMockupAccount && <div
+                {!isDashboardResolving && !isRealDashboardEmpty && !isMockupAccount && activeTab !== "overview" && <div
                     className="dashboard-analysis-actions"
                     aria-label="분석 다음 조치"
                     style={{
@@ -892,11 +1121,68 @@ function TeacherDashboard() {
                     })}
                 </div>}
 
-                {/* Tabs */}
-                {renderTabs()}
+                {isDashboardResolving ? (
+                    <AnalyticsTabSkeleton />
+                ) : isRealDashboardEmpty ? (
+                    <section
+                        className="bento-card dashboard-empty-onboarding"
+                        aria-labelledby="dashboard-empty-title"
+                        style={{
+                            minHeight: 360,
+                            display: 'flex',
+                            flexDirection: 'column',
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                            padding: 'clamp(2rem, 8vw, 4.5rem) 1.5rem',
+                            textAlign: 'center',
+                        }}
+                    >
+                        <span
+                            aria-hidden="true"
+                            style={{
+                                width: 68,
+                                height: 68,
+                                display: 'grid',
+                                placeItems: 'center',
+                                marginBottom: '1.25rem',
+                                borderRadius: 'var(--radius-full)',
+                                background: 'rgba(99,102,241,0.1)',
+                                color: 'var(--primary)',
+                            }}
+                        >
+                            <LayoutDashboard size={28} />
+                        </span>
+                        <h2 id="dashboard-empty-title" style={{ fontSize: '1.35rem', fontWeight: 850, marginBottom: '0.55rem' }}>
+                            첫 시험부터 시작해보세요
+                        </h2>
+                        <p style={{ maxWidth: 480, color: 'var(--muted)', lineHeight: 1.65, marginBottom: '1.4rem', wordBreak: 'keep-all' }}>
+                            시험을 만들고 배포하면 응시 현황, 점수, 학생 성취 분석이 이곳에 자동으로 정리됩니다.
+                        </p>
+                        <Link
+                            href="/create"
+                            style={{
+                                minHeight: 44,
+                                display: 'inline-flex',
+                                alignItems: 'center',
+                                justifyContent: 'center',
+                                padding: '0.7rem 1.2rem',
+                                borderRadius: 'var(--radius-full)',
+                                background: 'var(--primary)',
+                                color: 'white',
+                                fontWeight: 800,
+                                boxShadow: '0 6px 18px rgba(99,102,241,0.24)',
+                            }}
+                        >
+                            첫 시험 만들기
+                        </Link>
+                    </section>
+                ) : (
+                    <>
+                        {/* Tabs */}
+                        {!isRealDashboardEmpty && renderTabs()}
 
-                {/* Tab Content */}
-                <div style={{ minHeight: '600px' }}>
+                        {/* Tab Content */}
+                        <div style={{ minHeight: '600px' }}>
                     {activeTab === 'overview' && isMockupAccount && (
                         <MockupOverview
                             exams={exams}
@@ -917,30 +1203,46 @@ function TeacherDashboard() {
                             trendLabels={trendLabels}
                             rosterStudents={rosterStudents}
                             rosterGroups={rosterGroups}
+                            individualAssignmentTargetCounts={individualAssignmentTargetCounts}
+                            individualAssignmentModes={individualAssignmentModes}
                             onNavigateToExamAnalytics={handleNavigateToExamAnalytics}
                             onNavigateToStudentAnalytics={handleNavigateToStudentAnalytics}
+                            onLoadDetailedAttempts={loadDetailedAttempts}
                         />
                     )}
-                    {activeTab === 'exam' && (
+                    {activeTab !== 'overview' && dataMode === "real" && detailedAttemptStatus !== "ready" && (
+                        detailedAttemptStatus === "error" ? (
+                            <section className="bento-card" role="alert" style={{ padding: '2rem', textAlign: 'center' }}>
+                                <h2 style={{ fontSize: '1.1rem', fontWeight: 850, marginBottom: '0.5rem' }}>분석 데이터를 불러오지 못했습니다</h2>
+                                <p style={{ color: 'var(--muted)', marginBottom: '1rem' }}>상세 제출 데이터를 불러오지 못했습니다. 네트워크를 확인한 뒤 다시 시도해주세요.</p>
+                                <button type="button" className="btn btn-primary" onClick={() => void loadDetailedAttempts()}>
+                                    다시 불러오기
+                                </button>
+                            </section>
+                        ) : <AnalyticsTabSkeleton />
+                    )}
+                    {activeTab === 'exam' && (dataMode === "demo" || detailedAttemptStatus === "ready") && (
                         <ExamAnalyticsTab
                             exams={exams}
-                            attempts={attempts}
+                            attempts={analyticsAttempts}
                             rosterStudents={rosterStudents}
                             rosterGroups={rosterGroups}
                             initialExamId={selectedExamIdForAnalytics}
                             currentPlan={isMockupAccount ? "academy" : currentPlan}
                         />
                     )}
-                    {activeTab === 'student' && (
+                    {activeTab === 'student' && (dataMode === "demo" || detailedAttemptStatus === "ready") && (
                         <StudentAnalyticsTab
                             exams={exams}
-                            attempts={attempts}
+                            attempts={analyticsAttempts}
                             rosterStudents={rosterStudents}
                             rosterGroups={rosterGroups}
                             currentPlan={isMockupAccount ? "academy" : currentPlan}
                         />
                     )}
-                </div>
+                        </div>
+                    </>
+                )}
 
             </main>
         </div>

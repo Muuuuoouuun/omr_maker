@@ -39,6 +39,7 @@ export interface RosterPersistenceResult {
 export interface RosterLoadResult extends RosterSnapshot {
     remoteLoaded: boolean;
     remoteSynced?: boolean;
+    remoteRevision?: number;
     pendingSyncCount?: number;
     remoteError?: string;
 }

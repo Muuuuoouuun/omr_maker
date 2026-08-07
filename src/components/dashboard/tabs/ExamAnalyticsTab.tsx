@@ -2369,7 +2369,7 @@ export default function ExamAnalyticsTab({
                                         {examTypeWeaknessGroups.map(group => {
                                             const retakeIds = group.retakeQuestionIds;
                                             return (
-                                                <div key={group.key} style={{
+                                                <div key={group.key} className="exam-type-recommendation-row" style={{
                                                     display: 'flex',
                                                     alignItems: 'center',
                                                     justifyContent: 'space-between',
@@ -2399,7 +2399,7 @@ export default function ExamAnalyticsTab({
                                                             labels: group.retakeLabels,
                                                             concepts: group.retakeConcepts,
                                                         })}
-                                                        className="btn btn-secondary"
+                                                        className="btn btn-secondary exam-type-recommendation-action"
                                                         style={{ fontSize: '0.75rem', padding: '0.35rem 0.65rem', whiteSpace: 'nowrap' }}
                                                         lockedTitle="Pro 이상에서 유형 재추천 링크를 만들 수 있습니다."
                                                     >

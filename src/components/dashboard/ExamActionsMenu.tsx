@@ -1,16 +1,17 @@
 "use client";
 
 import { useEffect, useId, useRef, useState } from "react";
-import { MoreVertical, Pencil, Copy, Archive, Trash2 } from "lucide-react";
+import { MoreVertical, Pencil, Archive, Trash2 } from "lucide-react";
 
-export type ExamActionKind = "edit" | "duplicate" | "archive" | "delete";
+export type ExamActionKind = "edit" | "archive" | "delete";
 
 interface Props {
     exam: { id: string; title: string; archived?: boolean };
     onAction: (kind: ExamActionKind, examId: string) => void;
+    disabled?: boolean;
 }
 
-export default function ExamActionsMenu({ exam, onAction }: Props) {
+export default function ExamActionsMenu({ exam, onAction, disabled = false }: Props) {
     const [open, setOpen] = useState(false);
     const wrapRef = useRef<HTMLDivElement | null>(null);
     const triggerRef = useRef<HTMLButtonElement | null>(null);
@@ -72,7 +73,6 @@ export default function ExamActionsMenu({ exam, onAction }: Props) {
 
     const items: { kind: ExamActionKind; label: string; icon: React.ReactNode; danger?: boolean }[] = [
         { kind: "edit", label: "편집", icon: <Pencil size={14} /> },
-        { kind: "duplicate", label: "복제", icon: <Copy size={14} /> },
         { kind: "archive", label: exam.archived ? "보관 해제" : "보관", icon: <Archive size={14} /> },
         { kind: "delete", label: "삭제", icon: <Trash2 size={14} />, danger: true },
     ];
@@ -86,6 +86,7 @@ export default function ExamActionsMenu({ exam, onAction }: Props) {
                 aria-haspopup="menu"
                 aria-expanded={open}
                 aria-controls={open ? menuId : undefined}
+                disabled={disabled}
                 onClick={(e) => {
                     e.stopPropagation();
                     initialFocusIndexRef.current = 0;
@@ -107,7 +108,8 @@ export default function ExamActionsMenu({ exam, onAction }: Props) {
                     display: "inline-flex",
                     alignItems: "center",
                     justifyContent: "center",
-                    cursor: "pointer",
+                    cursor: disabled ? "not-allowed" : "pointer",
+                    opacity: disabled ? 0.55 : 1,
                     transition: "all 0.15s",
                 }}
                 onMouseEnter={(e) => {
@@ -150,6 +152,7 @@ export default function ExamActionsMenu({ exam, onAction }: Props) {
                             key={it.kind}
                             role="menuitem"
                             type="button"
+                            disabled={disabled}
                             onClick={(e) => {
                                 e.stopPropagation();
                                 handleClick(it.kind);

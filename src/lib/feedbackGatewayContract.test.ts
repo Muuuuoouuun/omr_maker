@@ -35,6 +35,22 @@ describe("feedback gateway contract", () => {
         expect(review).toContain("@/lib/studentFeedbackClient");
         expect(teacher).not.toMatch(/\b(loadAttemptFeedback|saveAttemptFeedbackDraft|returnAttemptFeedback)\b/);
         expect(review).not.toMatch(/\b(loadReturnedAttemptFeedbackForStudent|markFeedbackOpenedForStudent)\b/);
+        expect(dashboard).toContain('returnedFeedbackResult.status === "capacity_exceeded"');
+        expect(history).toContain('feedbackResult.status === "capacity_exceeded"');
+    });
+
+    it("preserves the local feedback fallback before requiring a server session", () => {
+        const actions = read("src/app/actions/feedback.ts");
+        const studentContext = actions.slice(
+            actions.indexOf("async function studentContext"),
+            actions.indexOf("export async function loadTeacherCanonicalFeedback"),
+        );
+
+        expect(studentContext.indexOf("getSupabaseServerConfigFromEnv()"))
+            .toBeGreaterThanOrEqual(0);
+        expect(studentContext.indexOf("getSupabaseServerConfigFromEnv()"))
+            .toBeLessThan(studentContext.indexOf("parseSignedStudentSessionCookie"));
+        expect(studentContext).toContain("if (!config) return unavailable()");
     });
 
     it("preserves stored markup when the save payload omits the key and honors explicit updates", () => {

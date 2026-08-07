@@ -113,7 +113,7 @@ describe("server-authoritative plan access", () => {
         await expect(resolveServerPlanAccess(session, { store })).resolves.toMatchObject({ plan: "free" });
     });
 
-    it("gives the signed admin account the unlimited Academy plan, including legacy sessions", async () => {
+    it("does not let an admin identity elevate the canonical organization plan", async () => {
         const store = {
             source: "supabase" as const,
             readPlan: async () => "free" as const,
@@ -122,15 +122,24 @@ describe("server-authoritative plan access", () => {
             releaseUsage: async () => ({ released: false, used: 0 }),
             syncStudentUsage: async () => ({ allowed: true, used: 0 }),
         };
-        const session = createTeacherSession(TOKEN, Date.now(), {
-            teacherId: "admin",
-            organizationId: "teacher_sharedqa",
-        });
+        const sessions = [
+            createTeacherSession(TOKEN, Date.now(), {
+                teacherId: "admin",
+                organizationId: "teacher_sharedqa",
+            }),
+            createTeacherSession(TOKEN, Date.now(), {
+                teacherId: "teacher-admin-role",
+                organizationId: "teacher_sharedqa",
+                memberRole: "admin",
+            }),
+        ];
 
-        await expect(resolveServerPlanAccess(session, { store })).resolves.toMatchObject({
-            authoritative: true,
-            plan: "academy",
-        });
+        for (const session of sessions) {
+            await expect(resolveServerPlanAccess(session, { store })).resolves.toMatchObject({
+                authoritative: true,
+                plan: "free",
+            });
+        }
     });
 
     it("keeps the explicit global development plan override authoritative", async () => {

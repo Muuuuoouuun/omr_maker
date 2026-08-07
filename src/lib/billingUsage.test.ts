@@ -83,6 +83,29 @@ describe("billing usage", () => {
         });
     });
 
+    it("preserves handwriting usage from lightweight summary scalars", () => {
+        const lightweight = {
+            ...attempt("summary", "2026-06-12T00:00:00.000Z", true),
+            detailLevel: "summary" as const,
+            questionDrawings: undefined,
+            handwriting: undefined,
+            handwritingQuestionCount: 3,
+            drawingStrokeCount: 21,
+        };
+
+        expect(buildBillingUsageSummary({
+            exams: [],
+            attempts: [lightweight],
+            students,
+            aiRecognition: 0,
+            now,
+        })).toMatchObject({
+            handwritingArchivesThisMonth: 1,
+            handwritingQuestionCount: 3,
+            handwritingStrokeCount: 21,
+        });
+    });
+
     it("flags near-limit and blocked plan usage before paid workflows run", () => {
         const usage: BillingUsageSummary = {
             examsThisMonth: 5,

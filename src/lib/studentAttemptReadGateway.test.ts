@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { INITIAL_OPERATIONS_LIMITS } from "@/lib/initialOperationsPolicy";
 import { attemptToSupabaseRow, examToSupabaseRow } from "@/lib/omrPersistence";
 import type { StudentServerSession } from "@/lib/studentServerSession";
 import type { Attempt, Exam } from "@/types/omr";
@@ -33,6 +34,16 @@ const attempt: Attempt = {
     score: 5,
     totalScore: 10,
     answers: { 1: 3, 2: 2 },
+    drawingsRef: {
+        store: "remote",
+        key: "asset-handwriting-1",
+        organizationId: "org-1",
+        kind: "attempt_handwriting",
+        attemptId: "attempt-1",
+        mimeType: "application/json",
+        size: 512,
+        updatedAt: "2026-07-14T01:00:01.000Z",
+    },
     status: "completed",
     questionResults: [
         {
@@ -91,25 +102,75 @@ const exam: Exam = {
     ],
 };
 
+function attemptListRow(item: Attempt) {
+    const row = { ...attemptToSupabaseRow(item) };
+    Reflect.deleteProperty(row, "payload");
+    return {
+        ...row,
+        exam_title: item.examTitle,
+        guest_id: item.guestId,
+        answers: item.answers,
+        question_results: item.questionResults,
+        question_timings: item.questionTimings,
+        focus_loss_events: item.focusLossEvents,
+        student_questions: item.studentQuestions,
+        auto_submitted: item.autoSubmitted,
+        tab_foci_lost_count: item.tabFociLostCount,
+        drawings_ref: item.drawingsRef,
+        handwriting: item.handwriting,
+        handwriting_archived: item.handwritingArchived,
+        handwriting_plan: item.handwritingPlan,
+        drawing_page_count: item.drawingPageCount,
+        drawing_stroke_count: item.drawingStrokeCount,
+        question_drawings: item.questionDrawings,
+        retake: item.retake,
+    };
+}
+
 function mockClient(options: {
     attemptRows?: unknown[];
     singleAttempt?: unknown;
     examRow?: unknown;
 } = {}) {
-    const calls: Array<{ table: string; filters: Array<[string, string]>; mode: "list" | "single" }> = [];
+    const calls: Array<{
+        table: string;
+        filters: Array<[string, string]>;
+        mode: "list" | "single";
+        afterId?: string;
+        limit?: number;
+        orders?: Array<[string, { ascending: boolean }]>;
+        sequence?: Array<[string, ...unknown[]]>;
+    }> = [];
     const client: StudentAttemptReadGatewayClient = {
         from(table) {
             return {
                 select() {
                     const filters: Array<[string, string]> = [];
+                    let afterId = "";
+                    const orders: Array<[string, { ascending: boolean }]> = [];
+                    const sequence: Array<[string, ...unknown[]]> = [];
                     const query = {
                         eq(column: string, value: string) {
                             filters.push([column, value]);
+                            sequence.push(["eq", column, value]);
                             return query;
                         },
-                        async order() {
-                            calls.push({ table, filters: [...filters], mode: "list" });
-                            return { data: options.attemptRows ?? [attemptToSupabaseRow(attempt)], error: null };
+                        gt(column: string, value: string) {
+                            afterId = value;
+                            sequence.push(["gt", column, value]);
+                            return query;
+                        },
+                        order(column: string, orderOptions: { ascending: boolean }) {
+                            orders.push([column, orderOptions]);
+                            sequence.push(["order", column, orderOptions]);
+                            return query;
+                        },
+                        async limit(value: number) {
+                            sequence.push(["limit", value]);
+                            calls.push({ table, filters: [...filters], mode: "list", afterId, limit: value, orders: [...orders], sequence: [...sequence] });
+                            const rows = options.attemptRows ?? [attemptListRow(attempt)];
+                            const selected = rows.filter(row => (row as { id?: string }).id! > afterId).slice(0, value);
+                            return { data: selected, error: null };
                         },
                         async maybeSingle() {
                             calls.push({ table, filters: [...filters], mode: "single" });
@@ -141,13 +202,81 @@ describe("student attempt read gateway", () => {
             ["student_id", "student-1"],
             ["status", "completed"],
         ]));
+        expect(calls[0].limit).toBe(INITIAL_OPERATIONS_LIMITS.listPageSize);
+        expect(calls[0].orders).toEqual([
+            ["id", { ascending: true }],
+        ]);
+        expect(calls[0].sequence).toEqual([
+            ["eq", "organization_id", "org-1"],
+            ["eq", "student_profile_id", "student-1"],
+            ["eq", "student_id", "student-1"],
+            ["eq", "status", "completed"],
+            ["order", "id", { ascending: true }],
+            ["limit", INITIAL_OPERATIONS_LIMITS.listPageSize],
+        ]);
         const serialized = JSON.stringify(result);
         expect(serialized).not.toContain("correctAnswer");
         expect(serialized).not.toContain("교사용 비밀 개념");
         expect(serialized).not.toContain("secret-answer-key");
     });
 
-    it("returns an answer-key-free review exam and official per-question statuses", async () => {
+    it("reads no further than the student attempt ceiling plus one and fails loudly on overflow", async () => {
+        const rows = Array.from({ length: INITIAL_OPERATIONS_LIMITS.studentAttempts + 1 }, (_, index) => attemptListRow({
+            ...attempt,
+            id: `attempt-${String(index).padStart(4, "0")}`,
+        }));
+        const { client, calls } = mockClient({ attemptRows: rows });
+
+        await expect(listStudentAttemptsWithGateway(client, session)).resolves.toEqual({
+            status: "service_unavailable",
+            error: "initial_capacity_exceeded",
+        });
+        const pages = calls.filter(call => call.mode === "list");
+        expect(pages.map(call => call.afterId)).toEqual(["", "attempt-0249"]);
+        expect(pages.map(call => call.limit)).toEqual([INITIAL_OPERATIONS_LIMITS.listPageSize, 1]);
+        expect(pages.reduce((sum, call) => sum + (call.limit || 0), 0)).toBe(INITIAL_OPERATIONS_LIMITS.studentAttempts + 1);
+    });
+
+    it("does not skip the next student attempt when an earlier id disappears between pages", async () => {
+        const mutableRows = Array.from({ length: INITIAL_OPERATIONS_LIMITS.studentAttempts }, (_, index) => {
+            const id = `attempt-${String(index).padStart(4, "0")}`;
+            return attemptListRow({
+                ...attempt,
+                id,
+                questionResults: attempt.questionResults?.map(result => ({ ...result, attemptId: id })),
+            });
+        });
+        let dataset = [...mutableRows];
+        let page = 0;
+        const calls: string[] = [];
+        const client = {
+            from() {
+                let afterId = "";
+                const query = {
+                    eq() { return query; },
+                    gt(_column: string, value: string) { afterId = value; calls.push(value); return query; },
+                    order() { return query; },
+                    async limit(value: number) {
+                        const selected = dataset.filter(row => row.id > afterId).slice(0, value);
+                        page += 1;
+                        if (page === 1) dataset = dataset.filter(row => row.id !== "attempt-0000");
+                        return { data: selected, error: null };
+                    },
+                };
+                return { select: () => query };
+            },
+        } as unknown as StudentAttemptReadGatewayClient;
+
+        const result = await listStudentAttemptsWithGateway(client, session);
+        expect(result.status).toBe("loaded");
+        if (result.status === "loaded") {
+            expect(result.attempts).toHaveLength(INITIAL_OPERATIONS_LIMITS.studentAttempts);
+            expect(new Set(result.attempts.map(item => item.id)).size).toBe(result.attempts.length);
+            expect(calls).toEqual(["attempt-0249"]);
+        }
+    });
+
+    it("returns post-submit answers, explanations, and the owned remote handwriting ref only in detail", async () => {
         const { client, calls } = mockClient();
         const result = await loadStudentAttemptWithGateway(client, "attempt-1", session);
         expect(result).toMatchObject({
@@ -160,7 +289,20 @@ describe("student attempt read gateway", () => {
                         { questionId: 2, selectedAnswer: 2, status: "wrong" },
                     ],
                 },
-                exam: { id: "exam-1", questions: [{ id: 1 }, { id: 2 }] },
+                exam: {
+                    id: "exam-1",
+                    questions: [
+                        { id: 1, answer: 3, explanation: "비밀 해설" },
+                        { id: 2, answer: 1 },
+                    ],
+                },
+                handwritingRef: {
+                    store: "remote",
+                    key: "asset-handwriting-1",
+                    organizationId: "org-1",
+                    kind: "attempt_handwriting",
+                    attemptId: "attempt-1",
+                },
             },
         });
         expect(calls[0].filters).toContainEqual(["id", "attempt-1"]);
@@ -169,9 +311,27 @@ describe("student attempt read gateway", () => {
             ["id", "exam-1"],
         ]));
         const serialized = JSON.stringify(result);
-        expect(serialized).not.toContain('"answer"');
-        expect(serialized).not.toContain("비밀 해설");
+        expect(serialized).toContain('"answer":3');
+        expect(serialized).toContain("비밀 해설");
         expect(serialized).not.toContain("secret-answer-key");
+    });
+
+    it("rejects a remote handwriting ref whose organization or attempt scope was forged", async () => {
+        const forged = attemptToSupabaseRow({
+            ...attempt,
+            drawingsRef: {
+                ...attempt.drawingsRef!,
+                organizationId: "other-org",
+                attemptId: "other-attempt",
+            },
+        });
+        const { client } = mockClient({ singleAttempt: forged });
+
+        const result = await loadStudentAttemptWithGateway(client, "attempt-1", session);
+        expect(result.status).toBe("loaded");
+        if (result.status === "loaded") {
+            expect(result.detail.handwritingRef).toBeUndefined();
+        }
     });
 
     it("fails closed if a service response contains another student or organization payload", async () => {

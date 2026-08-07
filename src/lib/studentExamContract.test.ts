@@ -1,9 +1,10 @@
 import { describe, expect, it } from "vitest";
-import type { Exam } from "@/types/omr";
+import type { Attempt, Exam } from "@/types/omr";
 import {
     clientExamFromStudentExamPreview,
     clientExamFromStudentSolveExam,
     studentExamPreviewFromExam,
+    studentAttemptSummaryFromAttempt,
     studentSolveExamFromExam,
 } from "./studentExamContract";
 
@@ -88,6 +89,56 @@ describe("student exam contract", () => {
         expect(JSON.stringify(clientExam)).not.toContain('"answer"');
         expect(JSON.stringify(clientExam)).not.toContain("answerKeyPdf");
         expect(clientExam.accessConfig).toEqual({ type: "group" });
+    });
+
+    it("creates a minimal attempt summary without answers, review details, telemetry, or artifacts", () => {
+        const summary = studentAttemptSummaryFromAttempt({
+            id: "attempt-1",
+            examId: "exam-1",
+            examTitle: "중간고사",
+            studentName: "학생 비밀",
+            studentId: "student-secret",
+            startedAt: "2026-08-06T00:00:00.000Z",
+            finishedAt: "2026-08-06T00:30:00.000Z",
+            status: "completed",
+            score: 80,
+            totalScore: 100,
+            answers: { 1: 3 },
+            questionResults: [{ correctAnswer: 3, selectedAnswer: 3 } as never],
+            questionTimings: [{ questionId: 1, questionNumber: 1, totalTimeSec: 10, visitCount: 1, revisitCount: 0, answerChangeCount: 0 }],
+            focusLossEvents: [{ at: "2026-08-06T00:01:00.000Z", count: 1, reason: "blur" }],
+            drawingsRef: { store: "indexeddb", key: "drawing-secret" },
+            studentQuestions: [{
+                questionId: 1,
+                questionNumber: 1,
+                body: "private-question",
+                createdAt: "2026-08-06T00:08:00.000Z",
+                status: "answered",
+                answer: { body: "private-answer", createdAt: "2026-08-06T00:09:00.000Z" },
+            }],
+            retake: {
+                sourceAttemptId: "attempt-origin",
+                questionIds: [1],
+                mode: "wrong",
+                labels: ["authoring-secret"],
+                createdAt: "2026-08-06T00:00:00.000Z",
+            },
+        } as Attempt);
+
+        expect(summary).toEqual({
+            id: "attempt-1",
+            examId: "exam-1",
+            examTitle: "중간고사",
+            status: "completed",
+            score: 80,
+            totalScore: 100,
+            startedAt: "2026-08-06T00:00:00.000Z",
+            finishedAt: "2026-08-06T00:30:00.000Z",
+            retakeSourceAttemptId: "attempt-origin",
+            answeredQuestionCount: 1,
+            latestAnsweredAt: "2026-08-06T00:09:00.000Z",
+        });
+        expect(JSON.stringify(summary)).not.toMatch(/학생 비밀|student-secret|answers|correctAnswer|questionResults|questionTimings|focusLossEvents|drawing-secret|private-question|authoring-secret/);
     });
 
 });

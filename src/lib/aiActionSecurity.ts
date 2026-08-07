@@ -44,6 +44,11 @@ export function buildAiActionRateLimitKey(
     return `ai-answer:${hash(`${normalizedTeacher}:${normalizedClient}`)}`;
 }
 
+export function buildAiActionAccountRateLimitKey(teacherId: unknown): string {
+    const normalizedTeacher = clean(teacherId).toLowerCase() || "unknown-teacher";
+    return `ai-answer:teacher:${hash(normalizedTeacher)}`;
+}
+
 export function consumeAiActionRateLimit(
     key: string,
     store: AiActionRateLimitStore = defaultAiActionRateLimitStore,
@@ -66,11 +71,18 @@ export function consumeAiActionRateLimit(
     return { allowed: true, retryAfterMs: 0 };
 }
 
-function clientFingerprintFromHeaders(headerStore: Headers): string {
-    return headerStore.get("x-forwarded-for")?.split(",")[0]?.trim()
-        || headerStore.get("x-real-ip")?.trim()
-        || headerStore.get("user-agent")?.trim()
-        || "unknown-client";
+/** Returns the existing non-plaintext limiter subject only for a valid session. */
+export function authorizedTeacherAiRateLimitSubject(
+    headerStore: Headers,
+    rawSessionCookie: string | null | undefined,
+    env: Record<string, string | undefined> = process.env,
+    now = Date.now(),
+): string | null {
+    const session = parseSignedTeacherSessionCookie(rawSessionCookie, env, now);
+    if (!session) return null;
+    return buildAiActionAccountRateLimitKey(
+        session.teacherId || session.email || session.displayName,
+    );
 }
 
 export function authorizeTeacherAiActionRequest(
@@ -89,9 +101,8 @@ export function authorizeTeacherAiActionRequest(
         return { allowed: false, error: AI_ACTION_UNAUTHORIZED_ERROR };
     }
 
-    const limitKey = buildAiActionRateLimitKey(
+    const limitKey = buildAiActionAccountRateLimitKey(
         session.teacherId || session.email || session.displayName,
-        clientFingerprintFromHeaders(headerStore),
     );
     const rateLimit = consumeAiActionRateLimit(limitKey, store, now);
     if (!rateLimit.allowed) {

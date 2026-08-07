@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import { getServerPlanSnapshot, type ServerPlanSnapshot } from "@/app/actions/premiumAccess";
 import TeacherHeader from "@/components/TeacherHeader";
 import StatusPill from "@/components/dashboard/StatusPill";
@@ -8,15 +8,13 @@ import { CreditCard, Check, Zap, Crown, Building, Download, Sparkles, TrendingUp
 import { formatLimit, usagePct } from "@/lib/pure";
 import { toast } from "@/components/Toast";
 import type { PlanKey } from "@/types/omr";
-import { loadTeacherAttempts } from "@/lib/teacherAttemptClient";
+import { loadTeacherAttemptSummaries } from "@/lib/teacherAttemptClient";
 import { loadTeacherExams } from "@/lib/teacherExamClient";
 import {
     buildBillingPlanHealth,
-    buildBillingUsageLimitViews,
     buildBillingUsageSummary,
     type BillingLimitStatus,
     type BillingPlanHealthLevel,
-    type BillingUsageLimitView,
     type BillingUsageSummary,
 } from "@/lib/billingUsage";
 import { billingStatusMeta, createLocalPlanChangeInvoice, filterBillingRecordsForDisplay, type BillingInvoice } from "@/lib/billingRecords";
@@ -33,7 +31,10 @@ import {
     type BillingFeatureStatus,
     type PremiumDeliveryStatus,
 } from "@/lib/premiumFeatureReadiness";
-import { PLAN_BY_KEY, PLAN_CATALOG, getPlanEntitlementViews, readAiRecognitionUsage, type PlanEntitlementKey, type PlanEntitlementView } from "@/utils/plans";
+import { PLAN_BY_KEY, PLAN_CATALOG, getPlanEntitlementViews, readAiRecognitionUsage, type PlanEntitlementKey } from "@/utils/plans";
+import { buildPlanChangeImpact } from "./planChangeImpact";
+import { isLiveCheckoutUiEnabled } from "@/lib/billingCheckoutGate";
+import { loadTeacherAttemptAggregate } from "@/lib/teacherAttemptReportingClient";
 
 const PLAN_ICONS: Record<PlanKey, React.ReactNode> = {
     free: <Sparkles size={22} />,
@@ -70,37 +71,6 @@ const PLAN_HEALTH_ENTITLEMENT_KEYS = [
     "pdfExport",
     "reminders",
 ] satisfies readonly PlanEntitlementKey[];
-
-export interface PlanChangeImpact {
-    isDowngrade: boolean;
-    limitWarnings: BillingUsageLimitView[];
-    lockedEntitlements: PlanEntitlementView[];
-}
-
-/**
- * Computes what a plan change would restrict. For a downgrade (target cheaper than
- * current) it returns the limits that would be blocked/near under the target plan
- * given current usage, plus the entitlements that are currently available but lost.
- * Upgrades and same-price changes report no restrictions.
- */
-export function buildPlanChangeImpact(
-    currentKey: PlanKey,
-    targetKey: PlanKey,
-    usage: BillingUsageSummary,
-    entitlementKeys: readonly PlanEntitlementKey[],
-): PlanChangeImpact {
-    const currentEntry = PLAN_BY_KEY[currentKey];
-    const targetEntry = PLAN_BY_KEY[targetKey];
-    const isDowngrade = targetEntry.priceNum < currentEntry.priceNum;
-    if (!isDowngrade) {
-        return { isDowngrade: false, limitWarnings: [], lockedEntitlements: [] };
-    }
-    const limitWarnings = buildBillingUsageLimitViews(targetKey, usage)
-        .filter(view => view.status === "blocked" || view.status === "near");
-    const lockedEntitlements = getPlanEntitlementViews(targetKey, entitlementKeys)
-        .filter(view => !view.enabled && currentEntry.entitlements[view.key]);
-    return { isDowngrade: true, limitWarnings, lockedEntitlements };
-}
 
 const PLAN_HEALTH_META: Record<BillingPlanHealthLevel, { label: string; color: string; background: string }> = {
     ready: { label: "서비스 가능", color: "#047857", background: "#d1fae5" },
@@ -205,6 +175,7 @@ export default function BillingPage() {
     const [current, setCurrent] = useState<PlanKey>("free");
     const [serverPlanSnapshot, setServerPlanSnapshot] = useState<ServerPlanSnapshot | null>(null);
     const [serverPlanLoading, setServerPlanLoading] = useState(true);
+    const [usageNotice, setUsageNotice] = useState("");
     // Keep the server render deterministic; browser-only preferences hydrate
     // after mount so stored records cannot cause a React hydration mismatch.
     const [yearly, setYearly] = useState(false);
@@ -222,6 +193,7 @@ export default function BillingPage() {
     const invoiceSeqRef = useRef(0);
     const paymentProviderReadiness = useMemo(() => getPaymentProviderReadiness(), []);
     const paymentProviderRolloutReadiness = useMemo(() => getPaymentProviderRolloutReadiness(), []);
+    const liveCheckoutEnabled = isLiveCheckoutUiEnabled(paymentProviderReadiness.canStartLiveCheckout);
 
     useEffect(() => {
         const animationFrame = window.requestAnimationFrame(() => {
@@ -237,9 +209,13 @@ export default function BillingPage() {
 
         let cancelled = false;
         const hydrateUsage = async () => {
-            const [examResult, attemptResult, planSnapshot] = await Promise.all([
+            const now = new Date();
+            const periodStart = new Date(now.getFullYear(), now.getMonth(), 1).toISOString();
+            const periodEnd = new Date(now.getFullYear(), now.getMonth() + 1, 1).toISOString();
+            const [examResult, attemptResult, aggregateResult, planSnapshot] = await Promise.all([
                 loadTeacherExams(),
-                loadTeacherAttempts(),
+                loadTeacherAttemptSummaries(),
+                loadTeacherAttemptAggregate({ periodStart, periodEnd }),
                 getServerPlanSnapshot().catch(() => null),
             ]);
             if (cancelled) return;
@@ -275,25 +251,30 @@ export default function BillingPage() {
                 students,
                 aiRecognition: readAiRecognitionUsage(),
             });
-            setUsage(planSnapshot?.authoritative && planSnapshot.usage
+            const exactAttemptUsage = aggregateResult.status === "loaded"
                 ? {
                     ...localUsage,
+                    attemptsThisMonth: aggregateResult.aggregate.periodAttemptCount,
+                    handwritingArchivesThisMonth: aggregateResult.aggregate.periodHandwritingArchiveCount,
+                    handwritingQuestionCount: aggregateResult.aggregate.periodHandwritingQuestionCount,
+                    handwritingStrokeCount: aggregateResult.aggregate.periodHandwritingStrokeCount,
+                }
+                : localUsage;
+            setUsage(planSnapshot?.authoritative && planSnapshot.usage
+                ? {
+                    ...exactAttemptUsage,
                     examsThisMonth: planSnapshot.usage.exams,
                     students: planSnapshot.usage.students,
                     aiRecognition: planSnapshot.usage.aiRecognition,
                 }
-                : localUsage);
+                : exactAttemptUsage);
 
             if (!planSnapshot?.authoritative) {
-                toast.info(
-                    "서버 플랜 확인 불가",
-                    "로컬 플랜을 권한 근거로 사용하지 않습니다. 플랜 표시와 프리미엄 변경은 Free 안전 기본값으로 제한됩니다."
-                );
-            } else if (examResult.remoteError || attemptResult.remoteError) {
-                toast.info(
-                    "로컬 사용량 기준으로 표시 중",
-                    "서버 동기화가 일부 지연되어 현재 기기 데이터로 사용량을 계산했습니다."
-                );
+                setUsageNotice("서버 사용량을 확인하지 못해 현재 기기 기록을 표시합니다. 기능 권한과 플랜 변경은 Free 안전 기본값으로 제한됩니다.");
+            } else if (examResult.remoteError || attemptResult.remoteError || aggregateResult.status !== "loaded") {
+                setUsageNotice("서버 동기화가 일부 지연되어 현재 기기 데이터로 사용량을 계산했습니다.");
+            } else {
+                setUsageNotice("");
             }
         };
 
@@ -494,14 +475,97 @@ th { background: #f8fafc; font-size: 12px; color: #64748b; text-transform: upper
         setUpgradeTarget(null);
     };
 
+    const renderBillingHistoryContent = () => (
+        <div className="billing-history-disclosure-content">
+            <div className="billing-history-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.25rem' }}>
+                <div>
+                    <h2 style={{ fontSize: '1.2rem', fontWeight: 700 }}>로컬 플랜 변경 기록</h2>
+                    <p style={{ fontSize: '0.85rem', color: 'var(--muted)' }}>이 브라우저에 저장된 변경 내역입니다. 결제 완료 내역이나 영수증이 아닙니다.</p>
+                </div>
+                <button
+                    type="button"
+                    className="billing-history-download-all"
+                    onClick={downloadAllInvoices}
+                    disabled={allInvoices.length === 0}
+                    style={{
+                        padding: '0.55rem 1rem',
+                        background: 'var(--surface)',
+                        border: '1px solid var(--border)',
+                        borderRadius: 'var(--radius-md)',
+                        fontSize: '0.85rem',
+                        fontWeight: 600,
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '0.4rem',
+                        opacity: allInvoices.length === 0 ? 0.5 : 1,
+                        cursor: allInvoices.length === 0 ? 'not-allowed' : 'pointer',
+                    }}
+                >
+                    <Download size={14} /> 전체 기록 다운로드
+                </button>
+            </div>
+            <div className="billing-table-scroll">
+                <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left' }}>
+                    <thead>
+                        <tr style={{ color: 'var(--muted)', fontSize: '0.8rem', borderBottom: '1px solid var(--border)', fontWeight: 700, letterSpacing: '0.05em', textTransform: 'uppercase' }}>
+                            <th style={{ padding: '0.85rem 0.5rem' }}>기록 ID</th>
+                            <th style={{ padding: '0.85rem 0.5rem' }}>설명</th>
+                            <th style={{ padding: '0.85rem 0.5rem' }}>날짜</th>
+                            <th style={{ padding: '0.85rem 0.5rem' }}>표시 가격</th>
+                            <th style={{ padding: '0.85rem 0.5rem' }}>상태</th>
+                            <th style={{ padding: '0.85rem 0.5rem', textAlign: 'right' }}>다운로드</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {allInvoices.map(inv => {
+                            const statusMeta = billingStatusMeta(inv.status);
+                            return (
+                                <tr key={inv.id} style={{ borderBottom: '1px solid var(--border)' }}>
+                                    <td style={{ padding: '1rem 0.5rem', fontSize: '0.85rem', fontFamily: 'var(--font-mono)', fontWeight: 600 }}>{inv.id}</td>
+                                    <td style={{ padding: '1rem 0.5rem', fontSize: '0.9rem' }}>{inv.desc}</td>
+                                    <td style={{ padding: '1rem 0.5rem', fontSize: '0.85rem', color: 'var(--muted)' }}>{inv.date}</td>
+                                    <td style={{ padding: '1rem 0.5rem', fontSize: '0.9rem', fontWeight: 700 }}>₩{inv.amount.toLocaleString()}</td>
+                                    <td style={{ padding: '1rem 0.5rem' }}>
+                                        <StatusPill tone={inv.status === "paid" ? "success" : "warning"} size="sm" label={statusMeta.label} />
+                                    </td>
+                                    <td style={{ padding: '1rem 0.5rem', textAlign: 'right' }}>
+                                        <button
+                                            type="button"
+                                            className="billing-history-download-item"
+                                            onClick={() => downloadInvoice(inv)}
+                                            title={`${statusMeta.receiptTitle} 다운로드`}
+                                            aria-label={`${inv.id} ${statusMeta.receiptTitle} 다운로드`}
+                                            style={{ color: 'var(--primary)', fontSize: '0.85rem', fontWeight: 600, display: 'inline-flex', alignItems: 'center', gap: '0.3rem', padding: '0.3rem 0.5rem', borderRadius: 'var(--radius-sm)' }}
+                                            onMouseEnter={e => e.currentTarget.style.background = 'rgba(99,102,241,0.08)'}
+                                            onMouseLeave={e => e.currentTarget.style.background = 'transparent'}
+                                        >
+                                            <Download size={14} />
+                                        </button>
+                                    </td>
+                                </tr>
+                            );
+                        })}
+                        {allInvoices.length === 0 && (
+                            <tr>
+                                <td colSpan={6} style={{ padding: '2.5rem 0.5rem', textAlign: 'center', color: 'var(--muted)', fontSize: '0.9rem' }}>
+                                    아직 로컬 플랜 변경 기록이 없습니다.
+                                </td>
+                            </tr>
+                        )}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    );
+
     return (
         <div className="layout-main">
             <TeacherHeader badge="BILLING" badgeColor="#a855f7" />
 
-            <main id="main-content" tabIndex={-1} className="container animate-fade-in" style={{ paddingBottom: '4rem', position: 'relative', zIndex: 1 }}>
-                <div style={{ margin: '3rem 0 2rem' }}>
+            <main id="main-content" tabIndex={-1} className="container animate-fade-in billing-page" style={{ paddingBottom: '4rem', position: 'relative', zIndex: 1 }}>
+                <div className="billing-page-heading" style={{ margin: '3rem 0 2rem' }}>
                     <h1 className="title-gradient" style={{ fontSize: '2.5rem', marginBottom: '0.5rem', lineHeight: 1.2 }}>결제 및 플랜</h1>
-                    <p className="text-muted" style={{ fontSize: '1.05rem' }}>플랜 변경, 사용량 확인, 결제/플랜 기록을 한 곳에서.</p>
+                    <p className="text-muted" style={{ fontSize: '1.05rem' }}>현재 한도와 사용량을 확인하고 필요한 플랜을 비교하세요.</p>
                 </div>
 
                 {/* Current plan hero */}
@@ -510,42 +574,54 @@ th { background: #f8fafc; font-size: 12px; color: #64748b; text-transform: upper
                     padding: '2rem', marginBottom: '2rem', position: 'relative', overflow: 'hidden'
                 }}>
                     <div style={{ position: 'absolute', top: '-30%', right: '-5%', width: 280, height: 280, background: 'radial-gradient(circle, rgba(255,255,255,0.2) 0%, transparent 70%)' }} />
-                    <div style={{ position: 'relative', zIndex: 1, display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: '1.5rem' }}>
-                        <div>
+                    <div className="billing-current-plan-main" style={{ position: 'relative', zIndex: 1, display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: '1.5rem' }}>
+                        <div className="billing-current-plan-copy">
                             <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.75rem' }}>
                                 {/* Sits on the plan gradient, not a plain surface — tone colors would lack
                                     contrast here, so this stays a translucent-white pill via style override. */}
                                 <StatusPill
                                     tone="muted"
                                     size="sm"
-                                    label={serverPlanSnapshot?.authoritative && serverPlanSnapshot.source === "supabase" ? "SERVER PLAN" : serverPlanSnapshot?.source === "dev-simulation" ? "SIMULATED PLAN" : "SAFE DEFAULT"}
-                                    style={{ background: 'rgba(255,255,255,0.2)', color: 'white', border: 'none', letterSpacing: '0.08em' }}
+                                    label={serverPlanSnapshot?.authoritative && serverPlanSnapshot.source === "supabase" ? "서버 기준" : serverPlanSnapshot?.source === "dev-simulation" ? "개발 미리보기" : "Free 안전 모드"}
+                                    style={{ background: 'rgba(255,255,255,0.2)', color: 'white', border: 'none' }}
                                 />
                                 {PLAN_ICONS[currentPlan.key]}
                             </div>
-                            <h2 style={{ fontSize: '2.5rem', fontWeight: 900, letterSpacing: '-0.03em', marginBottom: '0.25rem' }}>{currentPlan.name}</h2>
-                            <p style={{ fontSize: '1rem', opacity: 0.9 }}>{currentPlan.price} / 월 · 다음 사용 주기 {nextCycleDate}</p>
+                            <h2 className="billing-current-plan-name" style={{ fontSize: '2.5rem', fontWeight: 900, letterSpacing: '-0.03em', marginBottom: '0.25rem' }}>{currentPlan.name}</h2>
+                            <p className="billing-current-plan-meta" style={{ fontSize: '1rem', opacity: 0.9 }}>{currentPlan.price} / 월 · 다음 사용 주기 {nextCycleDate}</p>
                         </div>
                         <div className="billing-plan-actions" style={{ display: 'flex', gap: '0.75rem' }}>
                             <button onClick={handlePaymentMethodChange} title={paymentProviderReadiness.detail} style={{ padding: '0.75rem 1.25rem', background: 'rgba(255,255,255,0.2)', color: 'white', borderRadius: 'var(--radius-full)', fontWeight: 700, border: '1px solid rgba(255,255,255,0.3)', backdropFilter: 'blur(10px)', fontSize: '0.9rem' }}>결제 연동 상태</button>
-                            <button
-                                disabled={!nextPlan}
-                                onClick={() => nextPlan && handlePlanChange(nextPlan.key)}
-                                style={{ padding: '0.75rem 1.25rem', background: 'white', color: currentPlan.color, borderRadius: 'var(--radius-full)', fontWeight: 700, fontSize: '0.9rem', boxShadow: '0 4px 14px rgba(0,0,0,0.15)', display: 'flex', alignItems: 'center', gap: '0.4rem', opacity: nextPlan ? 1 : 0.6, cursor: nextPlan ? 'pointer' : 'default' }}
-                            >
-                                <Crown size={16} /> {nextPlan ? `${nextPlan.name}로 업그레이드` : '최상위 플랜'}
-                            </button>
+                            {liveCheckoutEnabled ? (
+                                <button
+                                    disabled={!nextPlan}
+                                    onClick={() => nextPlan && handlePlanChange(nextPlan.key)}
+                                    style={{ minHeight: 44, padding: '0.75rem 1.25rem', background: 'white', color: currentPlan.color, borderRadius: 'var(--radius-full)', fontWeight: 700, fontSize: '0.9rem', boxShadow: '0 4px 14px rgba(0,0,0,0.15)', display: 'flex', alignItems: 'center', gap: '0.4rem', opacity: nextPlan ? 1 : 0.6, cursor: nextPlan ? 'pointer' : 'default' }}
+                                >
+                                    <Crown size={16} /> {nextPlan ? `${nextPlan.name} 플랜 보기` : '최상위 플랜'}
+                                </button>
+                            ) : (
+                                <span className="billing-readonly-status" aria-label="실결제 연동 전 읽기 전용 플랜 화면">
+                                    실결제 연동 전
+                                </span>
+                            )}
                         </div>
                     </div>
 
                     {/* Payment method */}
                     <div className="billing-payment-status" style={{ position: 'relative', zIndex: 1, marginTop: '1.5rem', display: 'flex', alignItems: 'center', gap: '0.75rem', padding: '0.9rem 1.1rem', background: 'rgba(255,255,255,0.15)', borderRadius: 'var(--radius-md)', backdropFilter: 'blur(10px)', width: 'fit-content', border: '1px solid rgba(255,255,255,0.2)' }}>
                         <CreditCard size={18} />
-                        <span style={{ fontWeight: 600, fontSize: '0.9rem' }}>실결제 미연동</span>
-                        <span style={{ fontSize: '0.8rem', opacity: 0.8 }}>{paymentProviderReadiness.provider.label} · 플랜 변경 미리보기만 로컬 기록으로 저장</span>
+                        <span style={{ fontWeight: 600, fontSize: '0.9rem' }}>{liveCheckoutEnabled ? "결제 연동 준비됨" : "실결제 미연동"}</span>
+                        <span style={{ fontSize: '0.8rem', opacity: 0.8 }}>{paymentProviderReadiness.provider.label} · {liveCheckoutEnabled ? "거래 기능 사용 가능" : "기능 미리보기 · 예상 가격 확인"}</span>
                     </div>
                 </div>
 
+                <details className="billing-operations-details">
+                    <summary>
+                        <span>결제 연동·운영 상태</span>
+                        <StatusPill tone={planHealthTone} size="sm" label={planHealthLabel} />
+                    </summary>
+                    <div className="billing-operations-content">
                 <div
                     className="bento-card"
                     aria-live="polite"
@@ -638,7 +714,7 @@ th { background: #f8fafc; font-size: 12px; color: #64748b; text-transform: upper
                                     : `${planHealth.title} · ${planHealth.description}`}
                             </p>
                         </div>
-                        {healthUpgradePlan && (
+                        {healthUpgradePlan && liveCheckoutEnabled && (
                             <button
                                 type="button"
                                 onClick={() => handlePlanChange(healthUpgradePlan.key)}
@@ -723,11 +799,22 @@ th { background: #f8fafc; font-size: 12px; color: #64748b; text-transform: upper
                         </div>
                     </div>
                 </div>
+                    </div>
+                </details>
 
                 {/* Usage */}
                 <div style={{ marginBottom: '2rem' }}>
                     <h2 style={{ fontSize: '1.4rem', fontWeight: 700, marginBottom: '1rem' }}>이달 사용량</h2>
-                    <div className="bento-grid">
+                    {usageNotice && (
+                        <p
+                            role="status"
+                            className="billing-usage-notice"
+                            style={{ margin: '-0.35rem 0 1rem', color: 'var(--text-warning)', fontSize: '0.82rem', fontWeight: 700, lineHeight: 1.55 }}
+                        >
+                            {usageNotice}
+                        </p>
+                    )}
+                    <div className="bento-grid billing-usage-rail">
                         <UsageCard label="이번 달 생성 시험" used={usage.examsThisMonth} total={currentPlan.limits.exams} color="#4f46e5" />
                         <UsageCard label="등록 학생" used={usage.students} total={currentPlan.limits.students} color="#10b981" />
                         <UsageCard label="AI 정답 인식" used={usage.aiRecognition} total={currentPlan.limits.aiRecognition} color="#0f766e" />
@@ -749,7 +836,12 @@ th { background: #f8fafc; font-size: 12px; color: #64748b; text-transform: upper
                     </div>
                 </div>
 
-                <div className="bento-card" style={{ padding: '1.5rem', marginBottom: '2rem' }}>
+                <details className="billing-feature-disclosure">
+                    <summary>
+                        <span><strong>프리미엄 기능 상세</strong><small>{currentPlan.name} 플랜의 제공·준비·잠금 상태</small></span>
+                        <StatusPill tone="muted" icon={PLAN_ICONS[currentPlan.key]} label={currentPlan.name} />
+                    </summary>
+                    <div className="billing-feature-disclosure-content">
                     <div style={{ display: 'flex', justifyContent: 'space-between', gap: '1rem', alignItems: 'flex-start', marginBottom: '1.2rem', flexWrap: 'wrap' }}>
                         <div>
                             <h2 style={{ fontSize: '1.2rem', fontWeight: 800, marginBottom: '0.25rem' }}>프리미엄 기능 상태</h2>
@@ -808,12 +900,14 @@ th { background: #f8fafc; font-size: 12px; color: #64748b; text-transform: upper
                                     <div style={{ minWidth: 0, flex: 1 }}>
                                         <div style={{ display: 'flex', justifyContent: 'space-between', gap: '0.6rem', alignItems: 'center', marginBottom: '0.25rem' }}>
                                             <strong style={{ fontSize: '0.9rem' }}>{entitlement.displayLabel}</strong>
-                                            <StatusPill
-                                                tone={FEATURE_STATUS_TONE[entitlement.status]}
-                                                size="sm"
-                                                label={entitlement.statusLabel}
-                                                style={{ flexShrink: 0 }}
-                                            />
+                                            {entitlement.status !== "available" && (
+                                                <StatusPill
+                                                    tone={FEATURE_STATUS_TONE[entitlement.status]}
+                                                    size="sm"
+                                                    label={entitlement.statusLabel}
+                                                    style={{ flexShrink: 0 }}
+                                                />
+                                            )}
                                         </div>
                                         <p style={{ fontSize: '0.78rem', color: 'var(--muted)', lineHeight: 1.45, wordBreak: 'keep-all' }}>
                                             {entitlement.displayDescription}
@@ -823,22 +917,23 @@ th { background: #f8fafc; font-size: 12px; color: #64748b; text-transform: upper
                             );
                         })}
                     </div>
-                </div>
+                    </div>
+                </details>
 
                 {/* Plans */}
                 <div style={{ marginBottom: '2rem' }}>
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end', marginBottom: '1.25rem', flexWrap: 'wrap', gap: '1rem' }}>
                         <div>
                             <h2 style={{ fontSize: '1.4rem', fontWeight: 700, marginBottom: '0.25rem' }}>플랜 비교</h2>
-                            <p style={{ fontSize: '0.9rem', color: 'var(--muted)' }}>필요에 맞는 플랜으로 언제든 변경 가능합니다.</p>
+                            <p style={{ fontSize: '0.9rem', color: 'var(--muted)' }}>{liveCheckoutEnabled ? "필요에 맞는 플랜을 비교하고 변경하세요." : "실결제 연동 전에는 기능과 예상 가격만 확인할 수 있습니다."}</p>
                         </div>
                         <div className="billing-cycle-toggle" style={{ display: 'inline-flex', padding: '4px', background: 'var(--surface)', borderRadius: 'var(--radius-full)', border: '1px solid var(--border)' }}>
-                            <button onClick={() => handleCycleChange(false)} style={{
+                            <button type="button" className="billing-cycle-option" onClick={() => handleCycleChange(false)} style={{
                                 padding: '0.5rem 1.1rem', borderRadius: 'var(--radius-full)', fontSize: '0.85rem', fontWeight: 600,
                                 background: !yearly ? 'var(--primary)' : 'transparent',
                                 color: !yearly ? 'white' : 'var(--muted)', transition: 'var(--transition-base)'
                             }}>월간</button>
-                            <button onClick={() => handleCycleChange(true)} style={{
+                            <button type="button" className="billing-cycle-option" onClick={() => handleCycleChange(true)} style={{
                                 padding: '0.5rem 1.1rem', borderRadius: 'var(--radius-full)', fontSize: '0.85rem', fontWeight: 600,
                                 background: yearly ? 'var(--primary)' : 'transparent',
                                 color: yearly ? 'white' : 'var(--muted)', transition: 'var(--transition-base)',
@@ -853,15 +948,16 @@ th { background: #f8fafc; font-size: 12px; color: #64748b; text-transform: upper
                             const isPro = p.key === "pro";
                             const academyUnavailable = p.key === "academy";
                             const price = yearly ? Math.round(p.priceNum * 12 * 0.8) : p.priceNum;
-                            return (
-                                <div key={p.key} className="bento-card card-hover" style={{
+                            const planCardStyle = {
                                     padding: '1.75rem', position: 'relative', overflow: 'hidden',
                                     border: isPro ? `2px solid ${p.color}` : '1px solid var(--border)',
                                     transform: isPro ? 'scale(1.02)' : 'none'
-                                }}>
+                                } as const;
+                            const renderPlanCardContent = () => (
+                                <>
                                     {isPro && (
                                         <div style={{ position: 'absolute', top: 14, right: 14, padding: '0.2rem 0.7rem', background: p.gradient, color: 'white', borderRadius: 'var(--radius-full)', fontSize: 'var(--type-micro)', fontWeight: 800, letterSpacing: '0.08em' }}>
-                                            MOST POPULAR
+                                            추천
                                         </div>
                                     )}
                                     <div style={{ width: 46, height: 46, borderRadius: 'var(--radius-md)', background: `color-mix(in srgb, ${p.color}, transparent 88%)`, color: p.color, display: 'flex', alignItems: 'center', justifyContent: 'center', marginBottom: '1rem' }}>
@@ -897,115 +993,96 @@ th { background: #f8fafc; font-size: 12px; color: #64748b; text-transform: upper
                                                             <small style={{ display: 'block', marginTop: '0.1rem', color: 'var(--muted)', fontSize: '0.7rem', lineHeight: 1.4 }}>{feature.detail}</small>
                                                         )}
                                                     </span>
-                                                    <StatusPill
-                                                        tone={PLAN_FEATURE_STATUS_TONE[feature.status]}
-                                                        size="sm"
-                                                        label={featureMeta.label}
-                                                        style={{ flexShrink: 0 }}
-                                                    />
+                                                    {feature.status !== "available" && (
+                                                        <StatusPill
+                                                            tone={PLAN_FEATURE_STATUS_TONE[feature.status]}
+                                                            size="sm"
+                                                            label={featureMeta.label}
+                                                            style={{ flexShrink: 0 }}
+                                                        />
+                                                    )}
                                                 </li>
                                             );
                                         })}
                                     </ul>
 
-                                    <button
-                                        disabled={isCurrent || academyUnavailable}
-                                        onClick={() => handlePlanChange(p.key)}
-                                        title={academyUnavailable ? "조직 관리 기능이 실제 제공되기 전에는 Academy로 변경할 수 없습니다." : undefined}
-                                        style={{
-                                            width: '100%', padding: '0.85rem', borderRadius: 'var(--radius-md)',
-                                            background: isCurrent || academyUnavailable ? 'var(--background)' : isPro ? p.gradient : 'var(--surface)',
-                                            color: isCurrent || academyUnavailable ? 'var(--muted)' : isPro ? 'white' : 'var(--foreground)',
-                                            border: isCurrent || isPro ? 'none' : '1px solid var(--border)',
-                                            fontWeight: 700, fontSize: '0.9rem', cursor: isCurrent || academyUnavailable ? 'not-allowed' : 'pointer',
-                                            boxShadow: isPro && !isCurrent ? `0 4px 14px ${p.color}44` : 'none'
-                                        }}
-                                    >
-                                        {isCurrent ? '현재 플랜' : academyUnavailable ? 'Academy 준비 중' : p.key === "free" ? '다운그레이드' : '업그레이드'}
-                                    </button>
+                                    {liveCheckoutEnabled ? (
+                                        <button
+                                            disabled={isCurrent || academyUnavailable}
+                                            onClick={() => handlePlanChange(p.key)}
+                                            title={academyUnavailable ? "조직 관리 기능이 실제 제공되기 전에는 Academy로 변경할 수 없습니다." : undefined}
+                                            style={{
+                                                width: '100%', minHeight: 44, padding: '0.85rem', borderRadius: 'var(--radius-md)',
+                                                background: isCurrent || academyUnavailable ? 'var(--background)' : isPro ? p.gradient : 'var(--surface)',
+                                                color: isCurrent || academyUnavailable ? 'var(--muted)' : isPro ? 'white' : 'var(--foreground)',
+                                                border: isCurrent || isPro ? 'none' : '1px solid var(--border)',
+                                                fontWeight: 700, fontSize: '0.9rem', cursor: isCurrent || academyUnavailable ? 'not-allowed' : 'pointer',
+                                                boxShadow: isPro && !isCurrent ? `0 4px 14px ${p.color}44` : 'none'
+                                            }}
+                                        >
+                                            {isCurrent ? '현재 플랜' : academyUnavailable ? 'Academy 준비 중' : p.key === "free" ? '다운그레이드' : '업그레이드'}
+                                        </button>
+                                    ) : (
+                                        <div className="billing-plan-preview-status" aria-label={`${p.name} ${isCurrent ? "현재 플랜" : "기능 미리보기"}`}>
+                                            {isCurrent ? "현재 플랜" : academyUnavailable ? "준비 중" : "기능 미리보기"}
+                                        </div>
+                                    )}
+                                </>
+                            );
+                            if (academyUnavailable) {
+                                return (
+                                    <Fragment key={p.key}>
+                                        <div className="bento-card card-hover billing-academy-desktop" style={planCardStyle}>
+                                            {renderPlanCardContent()}
+                                        </div>
+                                        <details className="billing-academy-disclosure">
+                                            <summary>
+                                                <span>
+                                                    <strong>Academy</strong>
+                                                    <small>조직 관리 기능 준비 중</small>
+                                                </span>
+                                                <span aria-hidden="true" className="billing-mobile-disclosure-action" />
+                                            </summary>
+                                            <div className="bento-card card-hover billing-academy-disclosure-content" style={planCardStyle}>
+                                                {renderPlanCardContent()}
+                                            </div>
+                                        </details>
+                                    </Fragment>
+                                );
+                            }
+                            return (
+                                <div key={p.key} className="bento-card card-hover" style={planCardStyle}>
+                                    {renderPlanCardContent()}
                                 </div>
                             );
                         })}
                     </div>
                 </div>
 
-                {/* Invoices */}
-                <div className="bento-card billing-invoices-card" style={{ padding: '1.75rem' }}>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.25rem' }}>
-                        <div>
-                            <h2 style={{ fontSize: '1.2rem', fontWeight: 700 }}>로컬 플랜 변경 기록</h2>
-                            <p style={{ fontSize: '0.85rem', color: 'var(--muted)' }}>이 브라우저에 저장된 변경 내역입니다. 결제 완료 내역이나 영수증이 아닙니다.</p>
+                {allInvoices.length > 0 && (
+                    <>
+                        {/* Desktop uses normal document flow so the history remains visible and
+                            keyboard reachable without relying on a closed details element. */}
+                        <div className="bento-card billing-invoices-card billing-history-desktop" style={{ padding: '1.75rem' }}>
+                            {renderBillingHistoryContent()}
                         </div>
-                        <button
-                            onClick={downloadAllInvoices}
-                            disabled={allInvoices.length === 0}
-                            style={{
-                                padding: '0.55rem 1rem',
-                                background: 'var(--surface)',
-                                border: '1px solid var(--border)',
-                                borderRadius: 'var(--radius-md)',
-                                fontSize: '0.85rem',
-                                fontWeight: 600,
-                                display: 'flex',
-                                alignItems: 'center',
-                                gap: '0.4rem',
-                                opacity: allInvoices.length === 0 ? 0.5 : 1,
-                                cursor: allInvoices.length === 0 ? 'not-allowed' : 'pointer',
-                            }}
-                        >
-                            <Download size={14} /> 전체 기록 다운로드
-                        </button>
-                    </div>
-                    <div className="billing-table-scroll">
-                        <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left' }}>
-                            <thead>
-                                <tr style={{ color: 'var(--muted)', fontSize: '0.8rem', borderBottom: '1px solid var(--border)', fontWeight: 700, letterSpacing: '0.05em', textTransform: 'uppercase' }}>
-                                    <th style={{ padding: '0.85rem 0.5rem' }}>기록 ID</th>
-                                    <th style={{ padding: '0.85rem 0.5rem' }}>설명</th>
-                                    <th style={{ padding: '0.85rem 0.5rem' }}>날짜</th>
-                                    <th style={{ padding: '0.85rem 0.5rem' }}>표시 가격</th>
-                                    <th style={{ padding: '0.85rem 0.5rem' }}>상태</th>
-                                    <th style={{ padding: '0.85rem 0.5rem', textAlign: 'right' }}>다운로드</th>
-                                </tr>
-                            </thead>
-                            <tbody>
-                                {allInvoices.map(inv => {
-                                    const statusMeta = billingStatusMeta(inv.status);
-                                    return (
-                                        <tr key={inv.id} style={{ borderBottom: '1px solid var(--border)' }}>
-                                            <td style={{ padding: '1rem 0.5rem', fontSize: '0.85rem', fontFamily: 'var(--font-mono)', fontWeight: 600 }}>{inv.id}</td>
-                                            <td style={{ padding: '1rem 0.5rem', fontSize: '0.9rem' }}>{inv.desc}</td>
-                                            <td style={{ padding: '1rem 0.5rem', fontSize: '0.85rem', color: 'var(--muted)' }}>{inv.date}</td>
-                                            <td style={{ padding: '1rem 0.5rem', fontSize: '0.9rem', fontWeight: 700 }}>₩{inv.amount.toLocaleString()}</td>
-                                            <td style={{ padding: '1rem 0.5rem' }}>
-                                                <StatusPill tone={inv.status === "paid" ? "success" : "warning"} size="sm" label={statusMeta.label} />
-                                            </td>
-                                            <td style={{ padding: '1rem 0.5rem', textAlign: 'right' }}>
-                                                <button
-                                                    onClick={() => downloadInvoice(inv)}
-                                                    title={`${statusMeta.receiptTitle} 다운로드`}
-                                                    aria-label={`${inv.id} ${statusMeta.receiptTitle} 다운로드`}
-                                                    style={{ color: 'var(--primary)', fontSize: '0.85rem', fontWeight: 600, display: 'inline-flex', alignItems: 'center', gap: '0.3rem', padding: '0.3rem 0.5rem', borderRadius: 'var(--radius-sm)' }}
-                                                    onMouseEnter={e => e.currentTarget.style.background = 'rgba(99,102,241,0.08)'}
-                                                    onMouseLeave={e => e.currentTarget.style.background = 'transparent'}
-                                                >
-                                                    <Download size={14} />
-                                                </button>
-                                            </td>
-                                        </tr>
-                                    );
-                                })}
-                                {allInvoices.length === 0 && (
-                                    <tr>
-                                        <td colSpan={6} style={{ padding: '2.5rem 0.5rem', textAlign: 'center', color: 'var(--muted)', fontSize: '0.9rem' }}>
-                                            아직 로컬 플랜 변경 기록이 없습니다.
-                                        </td>
-                                    </tr>
-                                )}
-                            </tbody>
-                        </table>
-                    </div>
-                </div>
+
+                        {/* Phones use a separate, initially closed native disclosure. */}
+                        <details className="bento-card billing-invoices-card billing-history-disclosure" style={{ padding: '1.75rem' }}>
+                            <summary>
+                                <span>
+                                    <strong>로컬 플랜 변경 기록</strong>
+                                    <small>결제 내역이 아닌 이 브라우저의 미리보기 기록</small>
+                                </span>
+                                <span className="billing-mobile-disclosure-meta">
+                                    <StatusPill tone="muted" size="sm" label={`${allInvoices.length}건`} />
+                                    <span aria-hidden="true" className="billing-mobile-disclosure-action" />
+                                </span>
+                            </summary>
+                            {renderBillingHistoryContent()}
+                        </details>
+                    </>
+                )}
             </main>
 
             <style>{`
@@ -1014,7 +1091,7 @@ th { background: #f8fafc; font-size: 12px; color: #64748b; text-transform: upper
                 }
             `}</style>
 
-            {upgradeTarget && upgradePlan && (() => {
+            {liveCheckoutEnabled && upgradeTarget && upgradePlan && (() => {
                 const basePrice = yearly ? Math.round(upgradePlan.priceNum * 12 * 0.8) : upgradePlan.priceNum;
                 const planImpact = buildPlanChangeImpact(current, upgradeTarget, usage, BILLING_ENTITLEMENT_KEYS);
                 const actionLabel = upgradePlan.priceNum > currentPlan.priceNum
@@ -1189,20 +1266,18 @@ function UsageCard({
                         tone="warning"
                         size="sm"
                         icon={<Lock size={10} />}
-                        label="LOCKED"
-                        style={{ letterSpacing: '0.1em' }}
+                        label="Pro 필요"
                     />
                 )}
                 {isUnlimited && (
                     <StatusPill
                         tone="muted"
                         size="sm"
-                        label="UNLIMITED"
+                        label="무제한"
                         style={{
                             background: `color-mix(in srgb, ${color}, transparent 90%)`,
                             color,
                             border: 'none',
-                            letterSpacing: '0.1em',
                         }}
                     />
                 )}

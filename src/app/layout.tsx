@@ -1,5 +1,4 @@
 import type { Metadata, Viewport } from "next";
-import { Geist, Geist_Mono } from "next/font/google";
 // Pretendard's dynamic subset: 92 @font-face rules that split the Korean glyph
 // set by unicode-range, so the browser fetches only the ranges a page actually
 // renders. See the --font-pretendard note in globals.css for why this is not
@@ -13,16 +12,6 @@ import SyncFlusher from "@/components/SyncFlusher";
 import ViewportHeightSync from "@/components/ViewportHeightSync";
 import NativePlatformSync from "@/components/NativePlatformSync";
 import { PWA_STARTUP_IMAGE_LINKS } from "@/lib/pwaStartupImages";
-
-const geistSans = Geist({
-  variable: "--font-geist-sans",
-  subsets: ["latin"],
-});
-
-const geistMono = Geist_Mono({
-  variable: "--font-geist-mono",
-  subsets: ["latin"],
-});
 
 export const metadata: Metadata = {
   applicationName: "OMR Maker",
@@ -130,7 +119,7 @@ export default function RootLayout({
       <head>
         <script dangerouslySetInnerHTML={{ __html: themeInitScript }} />
       </head>
-      <body className={`${geistSans.variable} ${geistMono.variable}`}>
+      <body>
         <NativePlatformSync />
         <ViewportHeightSync />
         <PWARegister />

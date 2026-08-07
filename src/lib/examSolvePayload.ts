@@ -6,13 +6,13 @@ export type SolvableQuestion = Omit<Question, "answer" | "explanation" | "subQue
 };
 
 export interface SolvableExam
-    extends Omit<Exam, "questions" | "answerKeyPdf" | "answerKeyPdfRef" | "accessConfig"> {
+    extends Omit<Exam, "questions" | "answerKeyPdf" | "answerKeyPdfRef" | "accessConfig" | "organizationId"> {
     questions: SolvableQuestion[];
     /** Always absent on the solve payload — never sent to the client. */
     answerKeyPdf?: undefined;
     /** Always absent on the solve payload — never sent to the client. */
     answerKeyPdfRef?: undefined;
-    accessConfig?: { type: "public" | "group"; groupIds?: string[]; hasPin: boolean };
+    accessConfig?: { type: "public" | "group" | "targeted"; hasPin: boolean };
     /** Server-derived capabilities for this exam's organization. */
     premiumCapabilities: {
         handwritingArchive: boolean;
@@ -23,7 +23,7 @@ export interface ReviewableExam extends Omit<Exam, "answerKeyPdf" | "answerKeyPd
     /** Never shipped on the review payload — the answer sheet stays teacher-side. */
     answerKeyPdf?: undefined;
     answerKeyPdfRef?: undefined;
-    accessConfig?: { type: "public" | "group"; groupIds?: string[]; hasPin: boolean };
+    accessConfig?: { type: "public" | "group" | "targeted"; groupIds?: string[]; hasPin: boolean };
 }
 
 /** Remove teacher-only nested fields while otherwise preserving an exam payload. */
@@ -115,19 +115,21 @@ export function stripExamForSolving(
         answerKeyPdf: _omitPdf,
         answerKeyPdfRef: _omitPdfRef,
         accessConfig,
+        organizationId: _omitOrganizationId,
         questions: _omitQuestions,
         ...rest
     } = exam;
     void _omitPdf;
     void _omitPdfRef;
     void _omitQuestions;
+    void _omitOrganizationId;
 
     return {
         ...rest,
         questions: solvableQuestions,
         premiumCapabilities,
         accessConfig: accessConfig
-            ? { type: accessConfig.type, groupIds: accessConfig.groupIds, hasPin: !!accessConfig.pin }
+            ? { type: accessConfig.type, hasPin: !!accessConfig.pin }
             : undefined,
     };
 }

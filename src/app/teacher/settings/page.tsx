@@ -11,11 +11,13 @@ import { DEFAULT_SETTINGS, parseImportedSettings, readStoredSettings, type AppSe
 import { MAX_QUESTION_COUNT, MIN_QUESTION_COUNT } from "@/lib/questionCount";
 import { buildDataDbReadiness, type DataDbReadinessSummary, type DataDbReadinessTone } from "@/lib/dataDbReadiness";
 import type { DeploymentReadinessSummary, DeploymentReadinessTone } from "@/lib/deploymentReadiness";
-import { loadTeacherAttempts } from "@/lib/teacherAttemptClient";
+import { loadTeacherAttemptSummaries } from "@/lib/teacherAttemptClient";
+import { loadTeacherAttemptAggregate } from "@/lib/teacherAttemptReportingClient";
 import { loadTeacherExams } from "@/lib/teacherExamClient";
 import { readRosterTombstones } from "@/lib/rosterPersistence";
 import { loadTeacherRosterSnapshot } from "@/lib/teacherRosterClient";
 import { PRIMARY_NOTIFICATION_CHANNEL } from "@/lib/serviceRoadmap";
+import { resolveSectionAfterAdvancedToggle } from "@/lib/settingsDisclosureState";
 import {
     buildTeacherSessionDisplay,
     clearTeacherSession,
@@ -78,16 +80,29 @@ function readTeacherSessionDisplay(now = Date.now()): TeacherSessionDisplay {
     return buildTeacherSessionDisplay(session, now);
 }
 
-const SECTIONS: { key: Section; label: string; icon: React.ReactNode; color: string }[] = [
-    { key: "profile", label: "프로필", icon: <User size={18} />, color: "#4f46e5" },
+type SettingsSectionItem = { key: Section; label: string; icon: React.ReactNode; color: string };
+
+const PRIMARY_SECTIONS: SettingsSectionItem[] = [
     { key: "notifications", label: "알림", icon: <Bell size={18} />, color: "#ec4899" },
     { key: "exam-defaults", label: "시험 기본값", icon: <FileText size={18} />, color: "#8b5cf6" },
     { key: "grading", label: "채점", icon: <CheckCircle size={18} />, color: "#10b981" },
-    { key: "api", label: "API 키", icon: <Key size={18} />, color: "#f59e0b" },
     { key: "theme", label: "테마", icon: <Palette size={18} />, color: "#0ea5e9" },
+];
+
+const ADVANCED_SECTIONS: SettingsSectionItem[] = [
+    { key: "profile", label: "프로필", icon: <User size={18} />, color: "#4f46e5" },
+    { key: "api", label: "API 키", icon: <Key size={18} />, color: "#f59e0b" },
     { key: "data", label: "데이터 · DB", icon: <Database size={18} />, color: "#14b8a6" },
     { key: "security", label: "보안", icon: <Shield size={18} />, color: "#ef4444" },
 ];
+
+const ALL_SECTION_KEYS = new Set<Section>([...PRIMARY_SECTIONS, ...ADVANCED_SECTIONS].map(item => item.key));
+const ADVANCED_SECTION_KEYS = new Set<Section>(ADVANCED_SECTIONS.map(item => item.key));
+
+function sectionFromHash(hash: string): Section | null {
+    const candidate = hash.replace(/^#/, "") as Section;
+    return ALL_SECTION_KEYS.has(candidate) ? candidate : null;
+}
 
 const SECURITY_POSTURE_ITEMS = [
     {
@@ -318,7 +333,8 @@ function ResetSettingsConfirmDialog({
 }
 
 export default function SettingsPage() {
-    const [section, setSection] = useState<Section>("profile");
+    const [section, setSection] = useState<Section>("exam-defaults");
+    const [advancedDisclosureOpen, setAdvancedDisclosureOpen] = useState(false);
     const [showKey, setShowKey] = useState(false);
     // Draft state: edits live here until 저장 commits to localStorage.
     const [draft, setDraft] = useState<Settings>(DEFAULT_SETTINGS);
@@ -346,6 +362,19 @@ export default function SettingsPage() {
         draftRef.current = initial;
         persistedRef.current = initial;
         setHydrated(true);
+    }, []);
+
+    useEffect(() => {
+        const syncSectionFromUrl = () => {
+            const nextSection = sectionFromHash(window.location.hash);
+            if (!nextSection) return;
+            setSection(nextSection);
+            if (ADVANCED_SECTION_KEYS.has(nextSection)) setAdvancedDisclosureOpen(true);
+        };
+
+        syncSectionFromUrl();
+        window.addEventListener("hashchange", syncSectionFromUrl);
+        return () => window.removeEventListener("hashchange", syncSectionFromUrl);
     }, []);
 
     // Apply theme whenever the draft theme changes — so the user sees a live preview.
@@ -446,9 +475,10 @@ export default function SettingsPage() {
         if (typeof window === "undefined") return;
         setIsCheckingDataDb(true);
         try {
-            const [examResult, attemptResult, rosterResult] = await Promise.all([
+            const [examResult, attemptResult, aggregateResult, rosterResult] = await Promise.all([
                 loadTeacherExams(),
-                loadTeacherAttempts(),
+                loadTeacherAttemptSummaries(),
+                loadTeacherAttemptAggregate(),
                 loadTeacherRosterSnapshot(window.localStorage),
             ]);
             const summary = buildDataDbReadiness({
@@ -458,7 +488,9 @@ export default function SettingsPage() {
                     { ...rosterResult, sourceKey: "roster", sourceLabel: "명단" },
                 ],
                 examCount: examResult.items.length,
-                attemptCount: attemptResult.items.length,
+                attemptCount: aggregateResult.status === "loaded"
+                    ? aggregateResult.aggregate.totalAttemptCount
+                    : attemptResult.items.length,
                 rosterStudentCount: rosterResult.students.length,
                 rosterGroupCount: rosterResult.groups.length,
                 tombstones: readRosterTombstones(window.localStorage),
@@ -508,6 +540,36 @@ export default function SettingsPage() {
         void refreshDeploymentReadiness();
     }, [hydrated, refreshDeploymentReadiness, section]);
 
+    const selectSection = useCallback((nextSection: Section) => {
+        setSection(nextSection);
+        if (ADVANCED_SECTION_KEYS.has(nextSection)) setAdvancedDisclosureOpen(true);
+        if (typeof window !== "undefined") {
+            window.history.replaceState(null, "", `${window.location.pathname}${window.location.search}#${nextSection}`);
+        }
+    }, []);
+
+    const advancedOpen = advancedDisclosureOpen || ADVANCED_SECTION_KEYS.has(section);
+
+    const renderSectionButton = (item: SettingsSectionItem) => (
+        <button
+            key={item.key}
+            type="button"
+            aria-current={section === item.key ? "page" : undefined}
+            onClick={() => selectSection(item.key)}
+            style={{
+                width: '100%', minHeight: 44, display: 'flex', alignItems: 'center', gap: '0.75rem',
+                padding: '0.75rem 0.9rem', borderRadius: 'var(--radius-md)',
+                background: section === item.key ? `color-mix(in srgb, ${item.color}, transparent 88%)` : 'transparent',
+                color: section === item.key ? item.color : 'var(--muted)',
+                fontWeight: section === item.key ? 700 : 500,
+                fontSize: '0.9rem', transition: 'var(--transition-base)', textAlign: 'left'
+            }}
+        >
+            {item.icon}
+            {item.label}
+        </button>
+    );
+
     return (
         <div className="layout-main">
             <TeacherHeader badge="SETTINGS" badgeColor="#6366f1" />
@@ -515,29 +577,30 @@ export default function SettingsPage() {
             <main id="main-content" tabIndex={-1} className="container animate-fade-in" style={{ paddingBottom: '4rem', position: 'relative', zIndex: 1 }}>
                 <div style={{ margin: '3rem 0 2rem' }}>
                     <h1 className="title-gradient" style={{ fontSize: '2.5rem', marginBottom: '0.5rem', lineHeight: 1.2 }}>설정</h1>
-                    <p className="text-muted" style={{ fontSize: '1.05rem' }}>프로필, 알림, 시험 기본값을 관리하세요.</p>
+                    <p className="text-muted" style={{ fontSize: '1.05rem' }}>시험 기본값과 알림, 채점 및 화면 설정을 관리하세요.</p>
                 </div>
 
                 <div style={{ display: 'grid', gridTemplateColumns: '240px 1fr', gap: '1.5rem' }} className="settings-grid">
                     {/* Side nav */}
-                    <aside className="bento-card" style={{ padding: '0.75rem', alignSelf: 'flex-start', position: 'sticky', top: '5.5rem' }}>
-                        {SECTIONS.map(s => (
-                            <button
-                                key={s.key}
-                                onClick={() => setSection(s.key)}
-                                style={{
-                                    width: '100%', display: 'flex', alignItems: 'center', gap: '0.75rem',
-                                    padding: '0.75rem 0.9rem', borderRadius: 'var(--radius-md)',
-                                    background: section === s.key ? `color-mix(in srgb, ${s.color}, transparent 88%)` : 'transparent',
-                                    color: section === s.key ? s.color : 'var(--muted)',
-                                    fontWeight: section === s.key ? 700 : 500,
-                                    fontSize: '0.9rem', transition: 'var(--transition-base)', textAlign: 'left'
-                                }}
-                            >
-                                {s.icon}
-                                {s.label}
-                            </button>
-                        ))}
+                    <aside className="bento-card settings-section-nav" style={{ padding: '0.75rem', alignSelf: 'flex-start', position: 'sticky', top: '5.5rem' }}>
+                        {PRIMARY_SECTIONS.map(renderSectionButton)}
+                        <details
+                            className="settings-advanced-disclosure"
+                            open={advancedOpen}
+                            onToggle={(event) => {
+                                const nextSection = resolveSectionAfterAdvancedToggle(section, event.currentTarget.open);
+                                setAdvancedDisclosureOpen(event.currentTarget.open);
+                                if (nextSection !== section) selectSection(nextSection);
+                            }}
+                        >
+                            <summary>
+                                <span>고급 · 운영</span>
+                                <small>계정·API·DB·보안</small>
+                            </summary>
+                            <div className="settings-advanced-links">
+                                {ADVANCED_SECTIONS.map(renderSectionButton)}
+                            </div>
+                        </details>
                     </aside>
 
                     {/* Content */}
@@ -558,12 +621,13 @@ export default function SettingsPage() {
                         )}
 
                         {/* Global settings actions */}
-                        <div className="bento-card" style={{ padding: '1.5rem', marginTop: '0.25rem', background: 'var(--background)', border: '1px dashed var(--border)' }}>
-                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '1rem' }}>
-                                <div>
-                                    <div style={{ fontSize: '0.9rem', fontWeight: 700, marginBottom: '0.25rem' }}>백업 · 복원</div>
-                                    <div style={{ fontSize: '0.8rem', color: 'var(--muted)' }}>전체 설정을 JSON으로 내보내거나, 다른 기기에서 불러올 수 있습니다.</div>
-                                </div>
+                        <details className="settings-backup-disclosure">
+                            <summary>
+                                <span><strong>백업 · 복원</strong><small>설정을 JSON으로 이동하거나 초기화</small></span>
+                                <span aria-hidden="true">열기</span>
+                            </summary>
+                            <div className="settings-backup-actions">
+                                <div style={{ display: 'flex', justifyContent: 'flex-end', alignItems: 'center', flexWrap: 'wrap', gap: '1rem' }}>
                                 <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
                                     <input
                                         ref={importInputRef}
@@ -598,8 +662,9 @@ export default function SettingsPage() {
                                         <RotateCcw size={14} /> 전체 초기화
                                     </button>
                                 </div>
+                                </div>
                             </div>
-                        </div>
+                        </details>
                     </section>
                 </div>
             </main>
@@ -608,6 +673,28 @@ export default function SettingsPage() {
                 @media (max-width: 768px) {
                     .settings-grid { grid-template-columns: minmax(0, 1fr) !important; }
                     .settings-grid > * { min-width: 0; }
+                    .settings-section-nav {
+                        position: static !important;
+                        display: grid;
+                        grid-template-columns: repeat(4, minmax(0, 1fr));
+                        gap: 0.25rem;
+                        padding: 0.45rem !important;
+                    }
+                    .settings-section-nav button {
+                        justify-content: center;
+                        gap: 0.35rem !important;
+                        min-height: 44px;
+                        padding: 0.5rem 0.25rem !important;
+                        font-size: 0.72rem !important;
+                        text-align: center !important;
+                    }
+                    .settings-section-nav button svg { width: 15px; height: 15px; }
+                    .settings-section-nav .settings-advanced-disclosure {
+                        grid-column: 1 / -1;
+                    }
+                    .settings-advanced-links {
+                        grid-template-columns: repeat(2, minmax(0, 1fr));
+                    }
                 }
             `}</style>
             {resetConfirmOpen && (
@@ -718,9 +805,22 @@ type SectionProps<T> = {
 };
 
 function ProfileSection() {
+    const warningCount = PROFILE_STATUS_ITEMS.filter(item => item.tone === "warning").length;
+
     return (
         <Card title="프로필 상태" desc="서버 계정과 공개 프로필 기능의 현재 연결 상태를 보여줍니다.">
-            <CapabilityStatusList items={PROFILE_STATUS_ITEMS} />
+            <details className="settings-profile-summary">
+                <summary>
+                    <span>
+                        <strong>계정은 서버에서 안전하게 관리 중</strong>
+                        <small>{PROFILE_STATUS_ITEMS.length}개 상태 중 {warningCount}개 연동 전</small>
+                    </span>
+                    <StatusPill tone="warning" label={`${warningCount}개 확인`} size="sm" />
+                </summary>
+                <div className="settings-profile-detail">
+                    <CapabilityStatusList items={PROFILE_STATUS_ITEMS} />
+                </div>
+            </details>
             <p style={{ marginTop: '1rem', color: 'var(--muted)', fontSize: '0.78rem', lineHeight: 1.6, wordBreak: 'keep-all' }}>
                 실제 교사 계정 정보는 보안 탭의 배포 로그인 진단에서 확인할 수 있습니다. 작동하지 않는 로컬 프로필 편집은 제공하지 않습니다.
             </p>

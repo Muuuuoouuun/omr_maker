@@ -19,7 +19,7 @@ export type FeedbackViewMode = "student" | "markup" | "combined";
 interface HandwritingPanelProps {
     attempt: Attempt;
     handwritingArchiveEnabled: boolean;
-    feedbackEnabled: boolean;
+    feedbackMarkupEnabled: boolean;
     handwritingStatus: HandwritingStatus;
     pdfFile: File | null;
     drawings?: PdfDrawings;
@@ -83,7 +83,7 @@ function ErrorState({ title, onRetry }: { title: string; onRetry(): void }) {
 export default function HandwritingPanel({
     attempt,
     handwritingArchiveEnabled,
-    feedbackEnabled,
+    feedbackMarkupEnabled,
     handwritingStatus,
     pdfFile,
     drawings,
@@ -102,27 +102,7 @@ export default function HandwritingPanel({
     onDownloadHandwriting,
     onRetry,
 }: HandwritingPanelProps) {
-    if (!handwritingArchiveEnabled) {
-        return (
-            <LockedFeaturePanel
-                title="학생 필기 보관"
-                description="Pro 이상에서는 이후 제출부터 PDF 필기를 자동으로 보관합니다."
-                previewItems={["문항별 필기 위치", "교사 첨삭", "합쳐 보기와 파일 저장"]}
-            />
-        );
-    }
-
-    if (!attempt.handwritingArchived) {
-        return <EmptyState title="저장된 필기가 없습니다" description="이 제출에는 보관된 필기 원본이 없습니다." />;
-    }
-
-    if (handwritingStatus === "error") {
-        return <ErrorState title="필기 원본을 불러오지 못했습니다" onRetry={onRetry} />;
-    }
-
-    if (handwritingStatus === "idle" || handwritingStatus === "loading") {
-        return <EmptyState title="필기 원본을 불러오는 중입니다" description="PDF와 제출 시점의 필기 데이터를 준비하고 있습니다." />;
-    }
+    const feedbackReturned = feedback?.status === "returned";
 
     const handwriting = attempt.handwriting;
     const questionSummaries = Object.values(handwriting?.questions || {});
@@ -133,20 +113,20 @@ export default function HandwritingPanel({
         : feedbackViewMode === "markup"
             ? teacherMarkupDrawings
             : mergedReviewDrawings;
-    const canEditFeedbackMarkup = feedbackEnabled && feedbackViewMode === "markup";
+    const canEditFeedbackMarkup = feedbackMarkupEnabled && feedbackViewMode === "markup";
     const canShowReviewPdf = !!pdfFile;
-    const feedbackReturned = feedback?.status === "returned";
 
     return (
         <div className={styles.handwritingLayout}>
             <aside className={styles.handwritingSidebar}>
-                <section className="bento-card" style={{ padding: "1.25rem" }} aria-labelledby="handwriting-metadata-title">
+                {handwritingArchiveEnabled || feedbackReturned ? (
+                    <section className="bento-card" style={{ padding: "1.25rem" }} aria-labelledby="handwriting-metadata-title">
                     <div className={styles.sectionHeading}>
                         <h2 id="handwriting-metadata-title"><PenLine size={17} aria-hidden="true" /> 필기 보관</h2>
                         <StatusPill tone="success" label="저장됨" size="sm" />
                     </div>
                     <div className={styles.metadataList}>
-                        <div>플랜: <strong>{getPlanLabel(handwriting?.plan || attempt.handwritingPlan || "free")}</strong></div>
+                        <div>제출 당시 보관 플랜: <strong>{getPlanLabel(handwriting?.plan || attempt.handwritingPlan || "free")}</strong></div>
                         <div>페이지: <strong>{handwriting?.summary.pageCount ?? attempt.drawingPageCount ?? 0}</strong></div>
                         <div>획 수: <strong>{handwriting?.summary.strokeCount ?? attempt.drawingStrokeCount ?? 0}</strong></div>
                         <div>문항 연결: <strong>{handwriting?.summary.questionCount ?? questionSummaries.length}</strong></div>
@@ -158,29 +138,30 @@ export default function HandwritingPanel({
                             ))}
                         </div>
                     )}
-                    {hasStudentDrawings && (
+                    {hasStudentDrawings && handwritingArchiveEnabled && (
                         <button type="button" onClick={onDownloadHandwriting} className="btn btn-secondary" style={{ width: "100%", marginTop: "0.9rem", justifyContent: "center" }}>
                             <Download size={14} aria-hidden="true" /> 필기 원본 파일 저장
                         </button>
                     )}
-                </section>
+                    </section>
+                ) : (
+                    <LockedFeaturePanel
+                        title="학생 필기 보관"
+                        description="Pro 이상에서는 이후 제출부터 PDF 필기를 자동으로 보관합니다."
+                        previewItems={["문항별 필기 위치", "교사 첨삭", "합쳐 보기와 파일 저장"]}
+                    />
+                )}
 
                 <section className="bento-card" style={{ padding: "1.25rem" }} aria-labelledby="teacher-feedback-title">
                     <div className={styles.sectionHeading}>
                         <h2 id="teacher-feedback-title"><Send size={17} aria-hidden="true" /> 교사 피드백</h2>
                         <StatusPill
-                            tone={feedbackReturned ? "success" : feedbackEnabled ? "warning" : "muted"}
-                            label={feedbackReturned ? "반환됨" : feedbackEnabled ? "초안" : "Pro"}
+                            tone={feedbackReturned ? "success" : "warning"}
+                            label={feedbackReturned ? "반환됨" : "초안"}
                             size="sm"
                         />
                     </div>
-                    {!feedbackEnabled ? (
-                        <div className={styles.panelStack}>
-                            <p className={styles.emptyText}>교사 첨삭, 학생 반환, 열람 확인은 Pro 이상에서 사용할 수 있습니다.</p>
-                            <Link href="/teacher/billing" className="btn btn-primary" style={{ justifyContent: "center" }}>플랜 보기</Link>
-                        </div>
-                    ) : (
-                        <div className={styles.feedbackForm}>
+                    <div className={styles.feedbackForm}>
                             <label>
                                 전체 피드백
                                 <textarea
@@ -202,10 +183,17 @@ export default function HandwritingPanel({
                                 <input
                                     type="checkbox"
                                     checked={feedbackPolicy.allowAnnotatedPdfDownload}
+                                    disabled={!feedbackMarkupEnabled}
                                     onChange={event => onFeedbackPolicyChange({ allowAnnotatedPdfDownload: event.target.checked })}
                                 />
                                 첨삭/필기 파일 다운로드 허용
                             </label>
+                            {!feedbackMarkupEnabled && (
+                                <div className={styles.panelStack}>
+                                    <p className={styles.emptyText}>교사 첨삭과 첨삭 PDF 다운로드는 Pro 이상에서 사용할 수 있습니다.</p>
+                                    <Link href="/teacher/billing" className="btn btn-secondary" style={{ justifyContent: "center" }}>플랜 보기</Link>
+                                </div>
+                            )}
                             <label>
                                 다운로드 만료일
                                 <input
@@ -225,8 +213,7 @@ export default function HandwritingPanel({
                                 <div>마지막 열람: <strong>{formatFeedbackDate(feedback?.delivery.lastOpenedAt)}</strong></div>
                                 <div>열람 횟수: <strong>{feedback?.delivery.openCount ?? 0}</strong></div>
                             </div>
-                        </div>
-                    )}
+                    </div>
                 </section>
             </aside>
 
@@ -255,7 +242,19 @@ export default function HandwritingPanel({
                     </div>
                 </div>
                 <div className={styles.viewerBody}>
-                    {canShowReviewPdf ? (
+                    {!handwritingArchiveEnabled && !feedbackReturned ? (
+                        <LockedFeaturePanel
+                            title="학생 필기 보관"
+                            description="Pro 이상에서는 이후 제출부터 PDF 필기를 자동으로 보관합니다."
+                            previewItems={["문항별 필기 위치", "교사 첨삭", "합쳐 보기와 파일 저장"]}
+                        />
+                    ) : !attempt.handwritingArchived && !feedbackReturned ? (
+                        <EmptyState title="저장된 필기가 없습니다" description="이 제출에는 보관된 필기 원본이 없습니다." />
+                    ) : handwritingStatus === "error" && !feedbackReturned ? (
+                        <ErrorState title="필기 원본을 불러오지 못했습니다" onRetry={onRetry} />
+                    ) : (handwritingStatus === "idle" || handwritingStatus === "loading") && !feedbackReturned ? (
+                        <EmptyState title="필기 원본을 불러오는 중입니다" description="PDF와 제출 시점의 필기 데이터를 준비하고 있습니다." />
+                    ) : canShowReviewPdf ? (
                         <PDFViewer
                             file={pdfFile}
                             onLoadSuccess={() => { }}

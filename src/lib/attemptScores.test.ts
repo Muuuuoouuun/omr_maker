@@ -4,6 +4,7 @@ import {
     averageResolvedAttemptPercent,
     baseAttemptsOnly,
     buildAttemptScoreLookup,
+    groupBaseAttemptsByExam,
     resolveAttemptScore,
     retakeAttemptsOnly,
 } from "./attemptScores";
@@ -55,6 +56,20 @@ describe("attempt score resolution", () => {
         });
     });
 
+    it("uses canonical stored totals for lightweight summaries without answer detail", () => {
+        const summary = {
+            ...attempt({ score: 8, totalScore: 10, answers: {} }),
+            detailLevel: "summary" as const,
+        };
+
+        expect(resolveAttemptScore(summary, exam)).toMatchObject({
+            earnedScore: 8,
+            totalScore: 10,
+            scorePercent: 80,
+            source: "storedScore",
+        });
+    });
+
     it("builds reusable lookup maps and averages resolved percentages", () => {
         const attempts = [
             attempt({ id: "a1", answers: { 1: 1, 2: 2 }, score: 0 }),
@@ -83,5 +98,26 @@ describe("attempt score resolution", () => {
 
         expect(baseAttemptsOnly([original, retake]).map(item => item.id)).toEqual(["base"]);
         expect(retakeAttemptsOnly([original, retake]).map(item => item.id)).toEqual(["retake"]);
+    });
+
+    it("indexes original attempts by exam in one pass for dashboard exports", () => {
+        const first = attempt({ id: "base-1", examId: "exam-1" });
+        const second = attempt({ id: "base-2", examId: "exam-2" });
+        const retake = attempt({
+            id: "retake-1",
+            examId: "exam-1",
+            retake: {
+                sourceAttemptId: "base-1",
+                questionIds: [2],
+                mode: "wrong",
+                createdAt: "2026-06-15T10:20:00.000Z",
+            },
+        });
+
+        const grouped = groupBaseAttemptsByExam([first, retake, second]);
+
+        expect(grouped.get("exam-1")).toEqual([first]);
+        expect(grouped.get("exam-2")).toEqual([second]);
+        expect(grouped.has("missing")).toBe(false);
     });
 });

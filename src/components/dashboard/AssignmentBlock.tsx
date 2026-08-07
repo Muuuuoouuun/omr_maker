@@ -1,10 +1,11 @@
 import Link from "next/link";
 import { Exam } from "@/types/omr";
 import type { SolvableExam } from "@/lib/examSolvePayload";
+import type { StudentAssignmentPreview } from "@/lib/studentExamContract";
 import StatusPill from "@/components/dashboard/StatusPill";
 
 interface AssignmentBlockProps {
-  exams: Array<(Exam | SolvableExam) & { attemptId?: string; hasUnreadFeedback?: boolean; answeredQuestionCount?: number }>;
+  exams: Array<(Exam | SolvableExam | StudentAssignmentPreview) & { attemptId?: string; hasUnreadFeedback?: boolean; answeredQuestionCount?: number }>;
   type: "todo" | "done";
 }
 
@@ -43,6 +44,17 @@ function FolderIcon() {
       <path d="M6 14C6 12.9 6.9 12 8 12H16L20 16H32C33.1 16 34 16.9 34 18V30C34 31.1 33.1 32 32 32H8C6.9 32 6 31.1 6 30V14Z" stroke="currentColor" strokeWidth="2" strokeLinejoin="round" opacity="0.4" />
     </svg>
   );
+}
+
+function assignmentSolveHref(exam: Exam | SolvableExam | StudentAssignmentPreview): string {
+  if (!("assignmentId" in exam) || !exam.assignmentId) return `/solve/${exam.id}`;
+  const query = new URLSearchParams({ assignment: exam.assignmentId });
+  if (exam.assignmentMode === "retake" && exam.retakeSourceAttemptId && exam.retakeQuestionIds?.length) {
+    query.set("retakeFrom", exam.retakeSourceAttemptId);
+    query.set("questions", exam.retakeQuestionIds.join(","));
+    query.set("mode", "wrong");
+  }
+  return `/solve/${exam.id}?${query.toString()}`;
 }
 
 export default function AssignmentBlock({ exams, type }: AssignmentBlockProps) {
@@ -130,10 +142,13 @@ export default function AssignmentBlock({ exams, type }: AssignmentBlockProps) {
             </span>
           </div>
         ) : (
-          exams.map((exam) => (
+          exams.map((exam) => {
+            const questionCount = "questions" in exam ? exam.questions.length : undefined;
+            const accessType = "access" in exam ? exam.access.type : exam.accessConfig?.type;
+            return (
             <div
-              key={exam.id}
-              className={isTodo ? "card-hover" : ""}
+              key={("assignmentId" in exam && exam.assignmentId) || exam.id}
+              className={`student-assignment-row${isTodo ? " card-hover" : ""}`}
               style={{
                 padding: "1.1rem 1.25rem",
                 borderRadius: "var(--radius-lg)",
@@ -142,11 +157,12 @@ export default function AssignmentBlock({ exams, type }: AssignmentBlockProps) {
                 display: "flex",
                 alignItems: "center",
                 gap: "1rem",
-                transition: "all 0.2s",
+                transition: "background-color 0.2s, border-color 0.2s, box-shadow 0.2s, transform 0.2s",
                 opacity: isTodo ? 1 : 0.75,
               }}
             >
               <div
+                className="student-assignment-icon"
                 style={{
                   width: "44px",
                   height: "44px",
@@ -167,8 +183,10 @@ export default function AssignmentBlock({ exams, type }: AssignmentBlockProps) {
                 {exam.title.substring(0, 1)}
               </div>
 
-              <div style={{ flex: 1, minWidth: 0 }}>
+              <div className="student-assignment-content" style={{ flex: 1, minWidth: 0 }}>
                 <div
+                  className="student-assignment-title"
+                  title={exam.title}
                   style={{
                     fontWeight: 700,
                     fontSize: "0.98rem",
@@ -182,6 +200,7 @@ export default function AssignmentBlock({ exams, type }: AssignmentBlockProps) {
                   {exam.title}
                 </div>
                 <div
+                  className="student-assignment-meta"
                   style={{
                     fontSize: "0.82rem",
                     color: "var(--muted)",
@@ -190,8 +209,8 @@ export default function AssignmentBlock({ exams, type }: AssignmentBlockProps) {
                     alignItems: "center",
                   }}
                 >
-                  <span>{exam.questions.length}문항</span>
-                  <span
+                  {questionCount !== undefined && <span>{questionCount}문항</span>}
+                  {questionCount !== undefined && <span
                     style={{
                       width: "3px",
                       height: "3px",
@@ -199,14 +218,14 @@ export default function AssignmentBlock({ exams, type }: AssignmentBlockProps) {
                       borderRadius: "50%",
                       flexShrink: 0,
                     }}
-                  />
+                  />}
                   <span
                     className={
-                      exam.accessConfig?.type === "group" ? "badge badge-primary" : "badge badge-success"
+                      accessType === "group" || accessType === "targeted" ? "badge badge-primary" : "badge badge-success"
                     }
                     style={{ padding: "1px 7px", fontSize: "0.7rem" }}
                   >
-                    {exam.accessConfig?.type === "group" ? "클래스" : "공개"}
+                    {accessType === "targeted" ? "개별 배정" : accessType === "group" ? "클래스" : "공개"}
                   </span>
                   {!isTodo && exam.hasUnreadFeedback && (
                     <StatusPill size="sm" tone="primary" label="새 피드백" />
@@ -228,23 +247,24 @@ export default function AssignmentBlock({ exams, type }: AssignmentBlockProps) {
 
               {isTodo ? (
                 <Link
-                  href={`/solve/${exam.id}`}
-                  className="btn btn-primary"
-                  style={{ padding: "0.55rem 1.1rem", fontSize: "0.88rem", flexShrink: 0 }}
+                  href={assignmentSolveHref(exam)}
+                  className="btn btn-primary student-assignment-action"
+                  style={{ minHeight: 44, padding: "0.55rem 1.1rem", fontSize: "0.88rem", flexShrink: 0 }}
                 >
                   시작
                 </Link>
               ) : (
                 <Link
                   href={`/student/review/${exam.attemptId || exam.id}`}
-                  className="btn btn-secondary"
-                  style={{ padding: "0.5rem 1rem", fontSize: "0.85rem", flexShrink: 0 }}
+                  className="btn btn-secondary student-assignment-action"
+                  style={{ minHeight: 44, padding: "0.5rem 1rem", fontSize: "0.85rem", flexShrink: 0 }}
                 >
                   복습
                 </Link>
               )}
             </div>
-          ))
+            );
+          })
         )}
       </div>
     </div>

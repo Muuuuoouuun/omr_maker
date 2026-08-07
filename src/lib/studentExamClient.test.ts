@@ -120,12 +120,26 @@ describe("submitAttemptClient", () => {
     it("never grades locally for a server-sourced session (answers absent)", async () => {
         const server = vi.fn().mockRejectedValue(new Error("network"));
         const localFallback = vi.fn();
-        const res = await submitAttemptClient(
-            SUBMISSION, undefined,
+        await expect(submitAttemptClient(
+            SUBMISSION,
+            undefined,
             { server, localFallback, allowLocalFallback: false },
-        );
-        expect(res.status).toBe("error");
+        )).rejects.toThrow("network");
         expect(localFallback).not.toHaveBeenCalled();
+    });
+
+    it("keeps known server business statuses as results for server-sourced sessions", async () => {
+        const res = await submitAttemptClient(
+            SUBMISSION,
+            undefined,
+            {
+                server: vi.fn().mockResolvedValue({ status: "pin_required" }),
+                localFallback: vi.fn(),
+                allowLocalFallback: false,
+            },
+        );
+
+        expect(res).toMatchObject({ status: "pin_required", source: "server" });
     });
 
     it("passes access rejections through (pin_required)", async () => {
@@ -147,6 +161,48 @@ describe("listMyAssignmentsClient", () => {
         expect(res).toMatchObject({ status: "ok", source: "server" });
         expect(res.attempts).toHaveLength(1);
         expect(res.exams).toEqual([expect.objectContaining({ id: "e1" })]);
+    });
+
+    it("normalizes the local fallback to the same minimal summary contract", async () => {
+        const localAttempt = {
+            ...ATTEMPT,
+            examTitle: "로컬 시험",
+            studentName: "학생 비밀",
+            startedAt: "2026-08-06T00:00:00.000Z",
+            finishedAt: "2026-08-06T00:10:00.000Z",
+            status: "completed",
+            score: 9,
+            totalScore: 10,
+            answers: { 1: 3 },
+            questionResults: [{ correctAnswer: 3 }],
+            studentQuestions: [{
+                questionId: 1,
+                questionNumber: 1,
+                body: "private-question",
+                createdAt: "2026-08-06T00:05:00.000Z",
+                status: "answered",
+                answer: { body: "private-answer", createdAt: "2026-08-06T00:09:00.000Z" },
+            }],
+            drawingsRef: { store: "indexeddb", key: "drawing-secret" },
+        } as unknown as Attempt;
+        const res = await listMyAssignmentsClient({
+            server: vi.fn().mockResolvedValue({ status: "degraded_local" }),
+            localFallback: vi.fn().mockResolvedValue([localAttempt]),
+        });
+
+        expect(res.attempts).toEqual([{
+            id: "a1",
+            examId: "e1",
+            examTitle: "로컬 시험",
+            status: "completed",
+            score: 9,
+            totalScore: 10,
+            startedAt: "2026-08-06T00:00:00.000Z",
+            finishedAt: "2026-08-06T00:10:00.000Z",
+            answeredQuestionCount: 1,
+            latestAnsweredAt: "2026-08-06T00:09:00.000Z",
+        }]);
+        expect(JSON.stringify(res.attempts)).not.toMatch(/학생 비밀|private-question|private-answer|answers|correctAnswer|drawing-secret/);
     });
 
     it("falls back to the local list on degraded/error/throw", async () => {
@@ -171,6 +227,23 @@ describe("listMyAssignmentsClient", () => {
             localFallback,
         });
         expect(res).toMatchObject({ status: "unauthenticated", source: "server", attempts: [] });
+        expect(localFallback).not.toHaveBeenCalled();
+    });
+
+    it("preserves the stable server capacity error without a local success fallback", async () => {
+        const localFallback = vi.fn().mockResolvedValue([ATTEMPT]);
+        const res = await listMyAssignmentsClient({
+            server: vi.fn().mockResolvedValue({ status: "error", error: "initial_capacity_exceeded" }),
+            localFallback,
+        });
+
+        expect(res).toEqual({
+            status: "error",
+            attempts: [],
+            exams: [],
+            source: "server",
+            error: "initial_capacity_exceeded",
+        });
         expect(localFallback).not.toHaveBeenCalled();
     });
 });

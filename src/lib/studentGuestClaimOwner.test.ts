@@ -5,7 +5,10 @@ import {
     parseSignedGuestClaimOwnerProof,
 } from "./studentGuestClaimOwner";
 
-const ENV = { NODE_ENV: "production", STUDENT_SESSION_SECRET: "owner-proof-secret" };
+const ENV = {
+    NODE_ENV: "production",
+    STUDENT_SESSION_SECRET: "guest-owner-student-session-secret-at-least-32-bytes",
+};
 
 describe("guest DB-owner claim proof", () => {
     it("binds only server-verified guest and target identities, never client ids or payload", () => {

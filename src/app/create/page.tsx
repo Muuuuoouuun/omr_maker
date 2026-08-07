@@ -4,6 +4,8 @@ import BrandLogo from "@/components/BrandLogo";
 import OMRCardView from "@/components/OMRCardView";
 import OMRPreview from "@/components/OMRPreview";
 import dynamic from "next/dynamic";
+import { createPortal } from "react-dom";
+import type { PDFDocumentLoadingTask } from "pdfjs-dist";
 import TeacherLogoutButton from "@/components/TeacherLogoutButton";
 import TeacherSessionChip from "@/components/TeacherSessionChip";
 import ThemeToggle from "@/components/ThemeToggle";
@@ -12,8 +14,21 @@ import { useDialogFocus } from "@/hooks/useDialogFocus";
 import { activateFilePicker } from "@/lib/activateFilePicker";
 import { useRouter, useSearchParams } from "next/navigation";
 import { toast } from "@/components/Toast";
-import { getTeacherRemoteAssetUrl, uploadTeacherExamAsset } from "@/app/actions/remoteAssets";
-import { deleteTeacherCanonicalExam, loadTeacherCanonicalExam, saveTeacherCanonicalExam } from "@/app/actions/teacherExam";
+import {
+    finalizeTeacherExamAssetUpload,
+    getTeacherRemoteAssetUrl,
+    prepareTeacherExamAssetUpload,
+} from "@/app/actions/remoteAssets";
+import {
+    loadTeacherCanonicalExam,
+    rotateTeacherExamEntryInvite,
+    saveTeacherCanonicalExam,
+} from "@/app/actions/teacherExam";
+import {
+    clearTeacherIndividualAssignment,
+    loadTeacherIndividualAssignment,
+    saveTeacherIndividualAssignment,
+} from "@/app/actions/teacherAssignment";
 import { ArrowUpToLine, BrainCircuit, ChevronDown, Crosshair, Eye, FileText, FolderOpen, Loader2, Maximize2, Minimize2, PanelRightClose, PanelRightOpen, RefreshCw, Redo2, RotateCcw, Save, Settings2, Unlink, Undo2, UploadCloud, X, ZoomIn, ZoomOut } from "lucide-react";
 
 function PdfViewerLoading() {
@@ -37,13 +52,16 @@ const PDFViewer = dynamic(() => import("@/components/PDFViewer"), {
 });
 const AnswerImportModal = dynamic(() => import("@/components/AnswerImportModal"), { ssr: false });
 const DistributeModal = dynamic(() => import("@/components/DistributeModal"), { ssr: false });
-import { Suspense, useState, useEffect, useId, useRef, useCallback, useMemo, type CSSProperties } from "react";
+import { Suspense, useState, useEffect, useLayoutEffect, useId, useRef, useCallback, useMemo, type CSSProperties, type MouseEvent as ReactMouseEvent } from "react";
 import { DEFAULT_CHOICE_COUNT, questionChoiceCount, type Exam, type Question, type QuestionSubQuestion, type QuestionSubQuestionTemplateId } from "@/types/omr";
 import type { ParsedAnswer } from "@/services/answerParser";
-import { saveFileDataUrl, storedDataUrlToFile } from "@/utils/blobStore";
+import { deleteStoredData, saveFileDataUrl, storedDataUrlToFile } from "@/utils/blobStore";
 import { secureRandomId } from "@/utils/ids";
+import { isPdfFileByMagic, uploadTeacherPdfDirect } from "@/lib/directTeacherAssetUpload.client";
+import { createEditorRouteGenerationController } from "@/lib/editorRouteGeneration";
 import { validateExamDraft } from "@/lib/examValidation";
 import { buildSolveShareUrl, isShareUrlReachableByStudents } from "@/lib/shareLink";
+import type { DistributionShareResultLike } from "@/lib/distributionInviteRotation";
 import { buildExamServiceReadiness, type ExamServiceReadinessLevel } from "@/lib/examServiceReadiness";
 import { readStoredExamDefaults } from "@/lib/appSettings";
 import {
@@ -51,7 +69,7 @@ import {
     MIN_QUESTION_COUNT,
     parseQuestionCountInput,
 } from "@/lib/questionCount";
-import { loadExam, saveExam, saveLocalExam } from "@/lib/omrPersistence";
+import { readLocalExam, saveExam, saveLocalExam } from "@/lib/omrPersistence";
 import { attachInferredQuestionPdfRegions } from "@/lib/handwritingAnalytics";
 import {
     detectQuestionLocationsFromText,
@@ -95,9 +113,196 @@ import {
     normalizeSubQuestionMaxLength,
     SUB_QUESTION_TEMPLATES,
 } from "@/lib/subQuestions";
+import {
+    clearNewExamPublishTarget,
+    deleteScopedDraftPdfAssets,
+    discardNewExamPublishTarget,
+    getOrCreateNewExamPublishTarget,
+    getOrCreatePdfUploadAttemptNonce,
+    isEditDraftNewerThanExam,
+    isLoadedExamCurrentForEdit,
+    mergePdfHydrationFailures,
+    rotatePdfUploadAttemptNonce,
+    retryPendingScopedDraftPdfCleanup,
+    resolvePdfHydrationPairSequentially,
+    resolveExamEditorLoad,
+    runPdfAssetUploadsSequentially,
+    safeBrowserStorage,
+    scopedExamDraftStorageKey,
+    shouldApplyAutoDetectOutcome,
+    shouldApplyPdfHydrationOutcome,
+    shouldUploadExamPdf,
+    withExclusiveExamPublishLock,
+    type ExamPublishLockManager,
+} from "./createPageHelpers";
+
+type CreatePdfMenuProps = {
+    problemFileName?: string;
+    answerFileName?: string;
+    onChooseProblem: () => void;
+    onChooseAnswer: () => void;
+};
+
+function CreatePdfMenu({ problemFileName, answerFileName, onChooseProblem, onChooseAnswer }: CreatePdfMenuProps) {
+    const [isOpen, setIsOpen] = useState(false);
+    const [activeItemIndex, setActiveItemIndex] = useState(0);
+    const [menuPosition, setMenuPosition] = useState({ top: 0, left: 0, width: 272 });
+    const rootRef = useRef<HTMLDivElement>(null);
+    const triggerRef = useRef<HTMLButtonElement>(null);
+    const menuRef = useRef<HTMLDivElement>(null);
+    const itemRefs = useRef<Array<HTMLButtonElement | null>>([]);
+    const menuId = useId();
+
+    const updateMenuPosition = useCallback(() => {
+        const trigger = triggerRef.current;
+        if (!trigger) return;
+        const rect = trigger.getBoundingClientRect();
+        const edgeGap = 8;
+        const width = Math.min(272, window.innerWidth - edgeGap * 2);
+        const left = Math.min(Math.max(edgeGap, rect.left), window.innerWidth - width - edgeGap);
+        setMenuPosition({ top: rect.bottom + 7, left, width });
+    }, []);
+
+    const focusMenuItem = useCallback((index: number) => {
+        setActiveItemIndex(index);
+        requestAnimationFrame(() => itemRefs.current[index]?.focus());
+    }, []);
+
+    const openMenu = useCallback((focusIndex = 0) => {
+        updateMenuPosition();
+        setIsOpen(true);
+        focusMenuItem(focusIndex);
+    }, [focusMenuItem, updateMenuPosition]);
+
+    useEffect(() => {
+        if (!isOpen) return;
+
+        const handlePointerDown = (event: PointerEvent) => {
+            const target = event.target as Node;
+            if (!rootRef.current?.contains(target) && !menuRef.current?.contains(target)) setIsOpen(false);
+        };
+        const handleKeyDown = (event: KeyboardEvent) => {
+            if (event.key === "Escape") {
+                event.preventDefault();
+                setIsOpen(false);
+                triggerRef.current?.focus();
+                return;
+            }
+            if (event.key === "Tab" && menuRef.current?.contains(document.activeElement)) {
+                event.preventDefault();
+                setIsOpen(false);
+                requestAnimationFrame(() => triggerRef.current?.focus());
+                return;
+            }
+            if (!["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)) return;
+            const items = itemRefs.current.filter((item): item is HTMLButtonElement => Boolean(item));
+            if (items.length === 0 || !menuRef.current?.contains(document.activeElement)) return;
+            event.preventDefault();
+            const currentIndex = items.indexOf(document.activeElement as HTMLButtonElement);
+            let nextIndex = 0;
+            if (event.key === "End") nextIndex = items.length - 1;
+            else if (event.key === "Home") nextIndex = 0;
+            else if (currentIndex < 0) nextIndex = event.key === "ArrowDown" ? 0 : items.length - 1;
+            else if (event.key === "ArrowDown") nextIndex = (currentIndex + 1) % items.length;
+            else nextIndex = (currentIndex - 1 + items.length) % items.length;
+            focusMenuItem(nextIndex);
+        };
+        const handleViewportChange = () => updateMenuPosition();
+
+        document.addEventListener("pointerdown", handlePointerDown);
+        document.addEventListener("keydown", handleKeyDown);
+        window.addEventListener("resize", handleViewportChange);
+        window.addEventListener("scroll", handleViewportChange, true);
+        return () => {
+            document.removeEventListener("pointerdown", handlePointerDown);
+            document.removeEventListener("keydown", handleKeyDown);
+            window.removeEventListener("resize", handleViewportChange);
+            window.removeEventListener("scroll", handleViewportChange, true);
+        };
+    }, [focusMenuItem, isOpen, updateMenuPosition]);
+
+    const chooseFile = (choose: () => void) => {
+        setIsOpen(false);
+        choose();
+    };
+
+    const handleFocusLeave = (relatedTarget: EventTarget | null) => {
+        const nextTarget = relatedTarget as Node | null;
+        if (!rootRef.current?.contains(nextTarget) && !menuRef.current?.contains(nextTarget)) setIsOpen(false);
+    };
+
+    const menu = isOpen && typeof document !== "undefined" ? createPortal(
+        <div
+            ref={menuRef}
+            id={menuId}
+            role="menu"
+            aria-label="PDF 관리"
+            className="create-pdf-menu"
+            style={menuPosition}
+            onBlur={event => handleFocusLeave(event.relatedTarget)}
+        >
+            <button
+                ref={element => { itemRefs.current[0] = element; }}
+                type="button"
+                role="menuitem"
+                tabIndex={activeItemIndex === 0 ? 0 : -1}
+                aria-label="문제지 PDF 선택"
+                onClick={() => chooseFile(onChooseProblem)}
+            >
+                <FileText size={17} aria-hidden="true" />
+                <span><strong>문제지 PDF</strong><small>{problemFileName || "파일 선택"}</small></span>
+            </button>
+            <button
+                ref={element => { itemRefs.current[1] = element; }}
+                type="button"
+                role="menuitem"
+                tabIndex={activeItemIndex === 1 ? 0 : -1}
+                aria-label="답지 PDF 선택"
+                onClick={() => chooseFile(onChooseAnswer)}
+            >
+                <FileText size={17} aria-hidden="true" />
+                <span><strong>답지 PDF</strong><small>{answerFileName || "파일 선택"}</small></span>
+            </button>
+        </div>,
+        document.body,
+    ) : null;
+
+    return (
+        <>
+        <div
+            ref={rootRef}
+            className="create-pdf-menu-root"
+            onBlur={event => handleFocusLeave(event.relatedTarget)}
+        >
+            <button
+                ref={triggerRef}
+                type="button"
+                className="btn btn-secondary create-pdf-menu-trigger"
+                aria-label="PDF 관리"
+                aria-haspopup="menu"
+                aria-expanded={isOpen}
+                aria-controls={menuId}
+                onClick={() => {
+                    if (isOpen) setIsOpen(false);
+                    else openMenu(0);
+                }}
+                onKeyDown={(event) => {
+                    if (event.key !== "ArrowDown" && event.key !== "ArrowUp") return;
+                    event.preventDefault();
+                    openMenu(event.key === "ArrowDown" ? 0 : 1);
+                }}
+            >
+                <UploadCloud size={16} aria-hidden="true" />
+                <span>PDF 관리</span>
+                <ChevronDown size={14} aria-hidden="true" />
+            </button>
+        </div>
+        {menu}
+        </>
+    );
+}
 
 // ─── Autosave + history constants ────────────────────────────────────
-const DRAFT_KEY = "omr_exam_draft";
 const AUTOSAVE_INTERVAL_MS = 2000;
 const HISTORY_LIMIT = 20;
 const PDF_PANE_MIN_WIDTH = 200;
@@ -182,7 +387,14 @@ function uniqueUsageCount(usage: QuestionLabelSettingUsageInput): number {
     return new Set(values).size;
 }
 
-interface EditorDraft {
+interface EditorDraftAssets {
+    pdfData?: string;
+    pdfDataRef?: Exam["pdfDataRef"];
+    answerKeyPdf?: string;
+    answerKeyPdfRef?: Exam["answerKeyPdfRef"];
+}
+
+interface EditorDraft extends EditorDraftAssets {
     title: string;
     questionsCount: number;
     columns: number;
@@ -221,10 +433,6 @@ type CreateConfirmState =
     | { kind: "shrinkQuestions"; nextCount: number; losing: number }
     | { kind: "fourChoices"; losing: number }
     | { kind: "expandImportedAnswers"; maxQuestion: number; answers: ParsedAnswer[] };
-
-function isPdfUploadFile(file: File): boolean {
-    return file.type === "application/pdf" || file.name.toLowerCase().endsWith(".pdf");
-}
 
 function CreateConfirmDialog({
     state,
@@ -350,63 +558,6 @@ function safeSetLocal(key: string, value: string): boolean {
     }
 }
 
-// New exams autosave to the legacy shared key; editing an existing exam gets a
-// per-exam key so refining a published exam can't clobber (or be clobbered by)
-// the new-exam draft, and each exam's recovery is isolated.
-export function examDraftStorageKey(editId: string | null | undefined): string {
-    return editId ? `${DRAFT_KEY}_${editId}` : DRAFT_KEY;
-}
-
-// A stored edit-mode draft is only worth offering for restore when it captured
-// edits made AFTER the last save (strictly newer than the exam's updatedAt);
-// otherwise it just mirrors what already loaded.
-export function isEditDraftNewerThanExam(
-    draftSavedAt: string | undefined,
-    examUpdatedAt: string | undefined,
-): boolean {
-    if (!draftSavedAt) return false;
-    const draftTime = Date.parse(draftSavedAt);
-    if (Number.isNaN(draftTime)) return false;
-    const parsedExamTime = examUpdatedAt ? Date.parse(examUpdatedAt) : 0;
-    const examTime = Number.isNaN(parsedExamTime) ? 0 : parsedExamTime;
-    return draftTime > examTime;
-}
-
-export function shouldUploadExamPdf(file: File | null, explicitlyReplaced: boolean): file is File {
-    return explicitlyReplaced && file !== null;
-}
-
-type PdfAssetUploadOutcome<T> =
-    | { status: "skipped" }
-    | { status: "uploaded"; value: T }
-    | { status: "failed"; error: unknown };
-
-export async function runPdfAssetUploadsConcurrently<TProblem, TAnswer>(uploads: {
-    problem?: () => Promise<TProblem>;
-    answer?: () => Promise<TAnswer>;
-    rollback?: () => Promise<void>;
-}): Promise<{
-    problem: PdfAssetUploadOutcome<TProblem>;
-    answer: PdfAssetUploadOutcome<TAnswer>;
-}> {
-    const settle = async <T,>(upload?: () => Promise<T>): Promise<PdfAssetUploadOutcome<T>> => {
-        if (!upload) return { status: "skipped" };
-        try {
-            return { status: "uploaded", value: await upload() };
-        } catch (error) {
-            return { status: "failed", error };
-        }
-    };
-    const [problem, answer] = await Promise.all([
-        settle(uploads.problem),
-        settle(uploads.answer),
-    ]);
-    if ((problem.status === "failed" || answer.status === "failed") && uploads.rollback) {
-        await uploads.rollback();
-    }
-    return { problem, answer };
-}
-
 function splitTagInput(value: string): string[] {
     return value
         .split(",")
@@ -484,11 +635,24 @@ function CreateOMRPageInner() {
     const searchParams = useSearchParams();
     const router = useRouter();
     const editId = searchParams?.get('edit') || null;
-    const draftStorageKey = examDraftStorageKey(editId);
+    const editorDraftSlot = editId || "new";
+    const editorRouteStateRef = useRef(createEditorRouteGenerationController(editorDraftSlot));
+    useLayoutEffect(() => {
+        editorRouteStateRef.current.commit(editorDraftSlot);
+    }, [editorDraftSlot]);
+    const isEditorRouteGenerationCurrent = (generation: number) => (
+        editorRouteStateRef.current.isCurrent(generation)
+    );
+    const [draftStorageScope, setDraftStorageScope] = useState({ slot: "", key: "" });
+    const [draftCleanupRetryGeneration, setDraftCleanupRetryGeneration] = useState(0);
+    const draftStorageKey = draftStorageScope.slot === editorDraftSlot
+        ? draftStorageScope.key
+        : "";
     // UI State
     const [isSaving, setIsSaving] = useState(false);
     const [isImportModalOpen, setIsImportModalOpen] = useState(false);
     const [isDistributeModalOpen, setIsDistributeModalOpen] = useState(false);
+    const distributeTriggerRef = useRef<HTMLButtonElement | null>(null);
     const [confirmState, setConfirmState] = useState<CreateConfirmState | null>(null);
     const [isAdvancedDesignOpen, setIsAdvancedDesignOpen] = useState(false);
     const [isSubQuestionOpen, setIsSubQuestionOpen] = useState(false);
@@ -522,7 +686,11 @@ function CreateOMRPageInner() {
     const [labelSettingsScopeLabel, setLabelSettingsScopeLabel] = useState("이 브라우저 최근");
 
     // Validation
-    const [fastAnswer, setFastAnswer] = useState("");
+    const [fastAnswerState, setFastAnswerState] = useState({ slot: editorDraftSlot, value: "" });
+    const fastAnswer = fastAnswerState.slot === editorDraftSlot ? fastAnswerState.value : "";
+    const setFastAnswer = useCallback((value: string) => {
+        setFastAnswerState({ slot: editorDraftSlot, value });
+    }, [editorDraftSlot]);
 
     // Layout Sizing
     const [pdfWidth, setPdfWidth] = useState(PDF_PANE_DEFAULT_WIDTH);
@@ -700,10 +868,19 @@ function CreateOMRPageInner() {
     const answerKeyPdfInputRef = useRef<HTMLInputElement>(null);
     const problemPdfReplacedRef = useRef(false);
     const answerKeyPdfReplacedRef = useRef(false);
+    const assetHydrationGenerationRef = useRef(0);
+    const draftAssetsRef = useRef<EditorDraftAssets>({});
+    const pendingPdfReadyToastRef = useRef<{ kind: 'problem' | 'answer'; name: string } | null>(null);
     const [activeViewTab, setActiveViewTab] = useState<'problem' | 'answer'>('problem');
     const activePdfFile = activeViewTab === 'problem' ? pdfFile : answerKeyPdf;
     const [isDetectingLocation, setIsDetectingLocation] = useState(false);
-    const autoDetectRunRef = useRef<{ cancelled: boolean; timeoutId: ReturnType<typeof setTimeout> | null } | null>(null);
+    const autoDetectGenerationRef = useRef(0);
+    const autoDetectRunRef = useRef<{
+        cancelled: boolean;
+        generation: number;
+        abortController: AbortController;
+        timeoutId: ReturnType<typeof setTimeout> | null;
+    } | null>(null);
 
     // Schedule fields
     const [durationMin, setDurationMin] = useState<number | "">(50);
@@ -717,6 +894,19 @@ function CreateOMRPageInner() {
 
     // Edit mode: load existing exam snapshot + carry through on save.
     const [loadedExam, setLoadedExam] = useState<Exam | null>(null);
+    const [loadedExamIsCanonical, setLoadedExamIsCanonical] = useState(false);
+    const publishedRouteHandoffRef = useRef<{
+        exam: Exam;
+        canonical: boolean;
+    } | null>(null);
+    const [publishedShareHandoff, setPublishedShareHandoff] = useState<{
+        examId: string;
+        shareUrl: string;
+        expiresAt?: string;
+    } | null>(null);
+    const [isAssetHydrating, setIsAssetHydrating] = useState(false);
+    const [assetHydrationFailures, setAssetHydrationFailures] = useState({ problem: false, answer: false });
+    const assetHydrationFailed = assetHydrationFailures.problem || assetHydrationFailures.answer;
 
     const selectedQuestion = useMemo(
         () => questions.find(q => q.id === selectedQuestionId) || null,
@@ -801,6 +991,7 @@ function CreateOMRPageInner() {
         endAt,
         hasProblemPdf: hasProblemPdfForValidation,
     }), [title, questions, durationMin, startAt, endAt, hasProblemPdfForValidation]);
+    const hasValidationIssues = validationSummary.errors.length > 0 || validationSummary.warnings.length > 0;
     const serviceReadiness = useMemo(() => buildExamServiceReadiness({
         title,
         validation: validationSummary,
@@ -964,12 +1155,25 @@ function CreateOMRPageInner() {
 
     useEffect(() => {
         if (typeof window === "undefined") return;
-        const context = readActiveWorkspaceContext(window.sessionStorage);
+        const sessionStore = safeBrowserStorage(() => window.sessionStorage);
+        const context = readActiveWorkspaceContext(sessionStore);
+        let scopedDraftKey = "";
+        try {
+            if (context.organizationId && context.actorUserId) {
+                scopedDraftKey = scopedExamDraftStorageKey(editId, context.organizationId, context.actorUserId);
+            }
+        } catch {
+            // An unsafe or incomplete scope must never fall back to a shared key.
+        }
+        setDraftStorageScope({
+            slot: editorDraftSlot,
+            key: scopedDraftKey,
+        });
         const storageKey = questionLabelSettingsStorageKey(context.organizationId);
         setLabelSettingsKey(storageKey);
         setLabelSettingsScopeLabel(context.actorLabel ? `${context.actorLabel} 최근` : "이 브라우저 최근");
         setLabelSettings(readQuestionLabelSettings(window.localStorage, storageKey));
-    }, []);
+    }, [editId, editorDraftSlot]);
 
     useEffect(() => {
         if (editId) return;
@@ -992,30 +1196,115 @@ function CreateOMRPageInner() {
 
     // Load exam from localStorage when ?edit=<id> is present.
     useEffect(() => {
-        if (!editId) return;
         if (typeof window === 'undefined') return;
         let cancelled = false;
+        const routeGeneration = editorRouteStateRef.current.generation();
+        const isCurrentRoute = () => editorRouteStateRef.current.isCurrent(routeGeneration);
+        const matchingPublishedRouteHandoff = editId && publishedRouteHandoffRef.current?.exam.id === editId
+            ? publishedRouteHandoffRef.current
+            : null;
+        if (matchingPublishedRouteHandoff) {
+            // The first publish changes URL ownership, but it is still the same
+            // in-memory exam and the share result must remain visible.
+            publishedRouteHandoffRef.current = null;
+            setLoadedExam(matchingPublishedRouteHandoff.exam);
+            setLoadedExamIsCanonical(matchingPublishedRouteHandoff.canonical);
+            setIsAssetHydrating(false);
+            setInitialDefaultsReady(true);
+            return;
+        }
+        const runGeneration = ++assetHydrationGenerationRef.current;
+        autoDetectGenerationRef.current += 1;
+        const activeAutoDetect = autoDetectRunRef.current;
+        if (activeAutoDetect) {
+            activeAutoDetect.cancelled = true;
+            activeAutoDetect.abortController.abort();
+            if (activeAutoDetect.timeoutId) clearTimeout(activeAutoDetect.timeoutId);
+            autoDetectRunRef.current = null;
+        }
+        setIsDetectingLocation(false);
+        const routeDefaults = readStoredExamDefaults();
+        setLoadedExam(null);
+        setLoadedExamIsCanonical(false);
         problemPdfFileRef.current = null;
         answerKeyPdfFileRef.current = null;
         problemPdfReplacedRef.current = false;
         answerKeyPdfReplacedRef.current = false;
+        draftAssetsRef.current = {};
+        setPdfFile(null);
+        setAnswerKeyPdf(null);
+        setAssetHydrationFailures({ problem: false, answer: false });
+        setIsAssetHydrating(Boolean(editId));
+        draftPromptedRef.current = false;
+        editDraftPromptedRef.current = false;
+        setConfirmState(null);
+        setIsImportModalOpen(false);
+        setIsDistributeModalOpen(false);
+        distributeTriggerRef.current = null;
+        setIsSaving(false);
+        setIsAdvancedDesignOpen(false);
+        setIsSubQuestionOpen(false);
+        setBulkSubQuestionId(null);
+        setSubQuestionBatchTarget('all');
+        setSubQuestionBatchRange({ start: 1, end: routeDefaults.questions });
+        setSubQuestionSpecific('');
+        setSelectedQuestionId(null);
+        setCustomLabel("");
+        setLabelBatch({
+            start: 1,
+            end: routeDefaults.questions,
+            label: "",
+            unit: "",
+            concept: "",
+            difficulty: "",
+        });
+        setFastAnswer("");
+        setActiveViewTab('problem');
+        setActiveResizer(null);
+        pendingPdfReadyToastRef.current = null;
+        historyRef.current = [];
+        redoRef.current = [];
+        lastSnapshotRef.current = null;
+        setTitle("기말고사 OMR");
+        setQuestionsCount(routeDefaults.questions);
+        setQuestionCountInput(String(routeDefaults.questions));
+        setColumns(2);
+        setQuestions(buildDefaultQuestions(routeDefaults.questions, routeDefaults.choices, routeDefaults.scorePerQ));
+        setDefaultChoices(routeDefaults.choices);
+        setDefaultScorePerQuestion(routeDefaults.scorePerQ);
+        setDurationMin(routeDefaults.duration);
+        setStartAt("");
+        setEndAt("");
+        setInitialDefaultsReady(!editId);
+        if (!editId) return;
         const loadExistingExam = async () => {
             try {
                 const serverExam = await loadTeacherCanonicalExam(editId);
-                const parsed = serverExam.status === "loaded"
-                    ? serverExam.exam
-                    : serverExam.status === "local_only"
-                        ? await loadExam(editId)
-                        : null;
-                if (cancelled) return;
-                if (!parsed) {
+                const sessionStore = safeBrowserStorage(() => window.sessionStorage);
+                const workspace = readActiveWorkspaceContext(sessionStore);
+                const resolved = await resolveExamEditorLoad(
+                    serverExam,
+                    editId,
+                    workspace.organizationId,
+                    async examId => readLocalExam(examId),
+                );
+                if (cancelled || !isCurrentRoute()) return;
+                if (!resolved) {
                     toast.error(
                         serverExam.status === "service_unavailable" ? '시험 서버 연결 실패' : '시험을 찾을 수 없습니다',
                         serverExam.status === "service_unavailable" ? '네트워크를 확인한 뒤 다시 시도해주세요.' : editId,
                     );
                     return;
                 }
+                const parsed = resolved.exam;
                 setLoadedExam(parsed);
+                setLoadedExamIsCanonical(resolved.canonical);
+                draftAssetsRef.current = {
+                    pdfData: parsed.pdfData,
+                    pdfDataRef: parsed.pdfDataRef,
+                    answerKeyPdf: parsed.answerKeyPdf,
+                    answerKeyPdfRef: parsed.answerKeyPdfRef,
+                };
                 if (parsed.title) setTitle(parsed.title);
                 if (Array.isArray(parsed.questions) && parsed.questions.length > 0) {
                     setQuestionsCount(parsed.questions.length);
@@ -1025,50 +1314,79 @@ function CreateOMRPageInner() {
                 if (parsed.startAt) setStartAt(isoToLocalInput(parsed.startAt));
                 if (parsed.endAt) setEndAt(isoToLocalInput(parsed.endAt));
                 setInitialDefaultsReady(true);
-                const problemAsset = parsed.pdfDataRef?.store === "remote"
-                    ? await getTeacherRemoteAssetUrl(parsed.pdfDataRef)
-                    : null;
-                const problemData = problemAsset?.status === "signed" ? problemAsset.signedUrl : parsed.pdfData;
-                storedDataUrlToFile(
-                    "problem.pdf",
-                    problemData,
-                    parsed.pdfDataRef?.store === "remote" ? undefined : parsed.pdfDataRef,
-                )
-                    .then(file => {
-                        if (!cancelled && file && !problemPdfReplacedRef.current) {
-                            problemPdfFileRef.current = file;
-                            setPdfFile(file);
-                        }
-                    })
-                    .catch(() => {
-                        if (!cancelled) toast.error('문제지 PDF 불러오기 실패');
-                    });
-                const answerAsset = parsed.answerKeyPdfRef?.store === "remote"
-                    ? await getTeacherRemoteAssetUrl(parsed.answerKeyPdfRef)
-                    : null;
-                const answerData = answerAsset?.status === "signed" ? answerAsset.signedUrl : parsed.answerKeyPdf;
-                storedDataUrlToFile(
-                    "answer_key.pdf",
-                    answerData,
-                    parsed.answerKeyPdfRef?.store === "remote" ? undefined : parsed.answerKeyPdfRef,
-                )
-                    .then(file => {
-                        if (!cancelled && file && !answerKeyPdfReplacedRef.current) {
-                            answerKeyPdfFileRef.current = file;
-                            setAnswerKeyPdf(file);
-                        }
-                    })
-                    .catch(() => {
-                        if (!cancelled) toast.error('답지 PDF 불러오기 실패');
-                    });
+                const materializePdf = async (
+                    fallbackName: string,
+                    inlineData: string | undefined,
+                    ref: Exam["pdfDataRef"],
+                ) => {
+                    const remoteAsset = ref?.store === "remote"
+                        ? await getTeacherRemoteAssetUrl(ref)
+                        : null;
+                    if (ref?.store === "remote" && remoteAsset?.status !== "signed") {
+                        throw new Error("Remote PDF hydration failed");
+                    }
+                    return storedDataUrlToFile(
+                        fallbackName,
+                        remoteAsset?.status === "signed" ? remoteAsset.signedUrl : inlineData,
+                        ref?.store === "remote" ? undefined : ref,
+                    );
+                };
+                const hydration = await resolvePdfHydrationPairSequentially({
+                    problem: () => materializePdf("problem.pdf", parsed.pdfData, parsed.pdfDataRef),
+                    answer: () => materializePdf("answer_key.pdf", parsed.answerKeyPdf, parsed.answerKeyPdfRef),
+                });
+                if (cancelled || !isCurrentRoute()) return;
+                const applyProblem = shouldApplyPdfHydrationOutcome({
+                    runGeneration,
+                    currentGeneration: assetHydrationGenerationRef.current,
+                    replaced: problemPdfReplacedRef.current,
+                });
+                const applyAnswer = shouldApplyPdfHydrationOutcome({
+                    runGeneration,
+                    currentGeneration: assetHydrationGenerationRef.current,
+                    replaced: answerKeyPdfReplacedRef.current,
+                });
+                const hydrationFailures = {
+                    problem: applyProblem && hydration.problem.status === "failed",
+                    answer: applyAnswer && hydration.answer.status === "failed",
+                };
+                setAssetHydrationFailures(previous => mergePdfHydrationFailures(previous, {
+                    runGeneration,
+                    currentGeneration: assetHydrationGenerationRef.current,
+                    problem: {
+                        replaced: problemPdfReplacedRef.current,
+                        failed: hydration.problem.status === "failed",
+                    },
+                    answer: {
+                        replaced: answerKeyPdfReplacedRef.current,
+                        failed: hydration.answer.status === "failed",
+                    },
+                }));
+                if (applyProblem && hydration.problem.status === "loaded" && hydration.problem.value) {
+                    problemPdfFileRef.current = hydration.problem.value;
+                    setPdfFile(hydration.problem.value);
+                }
+                if (applyAnswer && hydration.answer.status === "loaded" && hydration.answer.value) {
+                    answerKeyPdfFileRef.current = hydration.answer.value;
+                    setAnswerKeyPdf(hydration.answer.value);
+                }
+                if (hydrationFailures.problem || hydrationFailures.answer) {
+                    toast.error('PDF 확인 필요', '불러오지 못한 PDF 파일을 다시 선택한 뒤 배포해주세요.');
+                }
                 toast.info('편집 모드', `"${parsed.title}"을(를) 불러왔습니다.`);
             } catch {
-                toast.error('시험을 찾을 수 없습니다', editId);
+                if (!cancelled && isCurrentRoute()) {
+                    toast.error('시험을 찾을 수 없습니다', editId);
+                }
+            } finally {
+                if (!cancelled && isCurrentRoute() && assetHydrationGenerationRef.current === runGeneration) {
+                    setIsAssetHydrating(false);
+                }
             }
         };
         void loadExistingExam();
         return () => { cancelled = true; };
-    }, [editId]);
+    }, [editId, setFastAnswer]);
 
     // Initialize questions when count changes
     useEffect(() => {
@@ -1099,11 +1417,60 @@ function CreateOMRPageInner() {
         }));
     }, [questionsCount]);
 
+    const deleteCurrentDraftPdfAssets = useCallback(async (
+        fallbackAssets: EditorDraftAssets,
+        shouldClearInMemory: () => boolean,
+    ) => {
+        if (!draftStorageKey) return { expected: 0, deleted: 0, failed: 0 };
+        const localStore = safeBrowserStorage(() => window.localStorage);
+        let storedAssets: EditorDraftAssets = {};
+        try {
+            const raw = localStore.getItem(draftStorageKey);
+            if (raw) storedAssets = JSON.parse(raw) as EditorDraftAssets;
+        } catch {
+            // The in-memory refs below still allow scoped cleanup.
+        }
+        const cleanup = await deleteScopedDraftPdfAssets({
+            draft: {
+                pdfDataRef: storedAssets.pdfDataRef || fallbackAssets.pdfDataRef,
+                answerKeyPdfRef: storedAssets.answerKeyPdfRef || fallbackAssets.answerKeyPdfRef,
+            },
+            scopedDraftKey: draftStorageKey,
+            deleteStoredData,
+        });
+        if (cleanup.failed === 0 && shouldClearInMemory()) draftAssetsRef.current = {};
+        return cleanup;
+    }, [draftStorageKey]);
+
+    useEffect(() => {
+        if (!draftStorageKey) return;
+        const localStore = safeBrowserStorage(() => window.localStorage);
+        let cancelled = false;
+        const routeGeneration = editorRouteStateRef.current.generation();
+        void retryPendingScopedDraftPdfCleanup({
+            storage: localStore,
+            scopedDraftKey: draftStorageKey,
+            deleteStoredData,
+        }).then(result => {
+            if (cancelled || !isEditorRouteGenerationCurrent(routeGeneration)) return;
+            if (result.status === "failed") {
+                toast.error("초안 정리 재시도 필요", "PDF 임시 파일을 삭제하지 못했습니다. 페이지를 다시 열어 재시도해주세요.");
+                return;
+            }
+            if (result.status === "cleaned") {
+                setDraftCleanupRetryGeneration(previous => previous + 1);
+            }
+        });
+        return () => { cancelled = true; };
+    }, [draftStorageKey]);
+
     // ─── Draft restore on mount (non-edit mode only) ─────────────────
     useEffect(() => {
         if (draftPromptedRef.current) return;
         if (typeof window === "undefined") return;
         if (editId) return; // Skip draft prompt while editing an existing exam
+        if (!draftStorageKey) return;
+        if (localStorage.getItem(`${draftStorageKey}:cleanupPending`)) return;
         draftPromptedRef.current = true;
 
         const raw = localStorage.getItem(draftStorageKey);
@@ -1114,7 +1481,7 @@ function CreateOMRPageInner() {
 
         toast.info("이전 작업 복원 가능", "저장된 임시 초안이 있습니다.");
         setConfirmState({ kind: "restoreDraft", draft });
-    }, [editId, draftStorageKey]);
+    }, [draftCleanupRetryGeneration, editId, draftStorageKey]);
 
     // ─── Draft restore in edit mode (per-exam, only when newer than saved) ───
     // Runs once the saved exam has hydrated so we can compare the draft's
@@ -1124,6 +1491,8 @@ function CreateOMRPageInner() {
         if (!editId) return;
         if (!loadedExam) return;
         if (typeof window === "undefined") return;
+        if (!draftStorageKey) return;
+        if (localStorage.getItem(`${draftStorageKey}:cleanupPending`)) return;
         if (editDraftPromptedRef.current) return;
         editDraftPromptedRef.current = true;
 
@@ -1145,7 +1514,7 @@ function CreateOMRPageInner() {
 
         toast.info("이전 편집 복원 가능", "저장 이후 편집하던 임시 초안이 있습니다.");
         setConfirmState({ kind: "restoreDraft", draft });
-    }, [editId, loadedExam, draftStorageKey, loadedExamSignature]);
+    }, [draftCleanupRetryGeneration, editId, loadedExam, draftStorageKey, loadedExamSignature]);
 
     // Mark hydration so autosave doesn't fire with defaults before restore runs
     useEffect(() => {
@@ -1155,6 +1524,7 @@ function CreateOMRPageInner() {
     // ─── Autosave draft every 2s when editor state changes ───────────
     useEffect(() => {
         if (!hasHydratedRef.current) return;
+        if (!draftStorageKey) return;
         if (confirmState?.kind === "restoreDraft") return;
         if (!initialDefaultsReady || autosaveIntervalMs <= 0) return;
         // Edit mode: wait for the existing exam to hydrate, then only autosave
@@ -1164,6 +1534,7 @@ function CreateOMRPageInner() {
         if (editId && (!loadedExam || !isEditDirty)) return;
         const handle = setTimeout(() => {
             const draft: EditorDraft = {
+                ...draftAssetsRef.current,
                 title, questionsCount, columns, questions,
                 defaultChoices, durationMin, startAt, endAt,
                 savedAt: new Date().toISOString(),
@@ -1266,41 +1637,71 @@ function CreateOMRPageInner() {
         return () => window.removeEventListener('keydown', onKey);
     }, [undo, redo]);
 
-    const handleProblemPdfFile = (file: File | null | undefined) => {
+    const handleProblemPdfFile = async (file: File | null | undefined) => {
         if (!file) return false;
-        if (!isPdfUploadFile(file)) {
-            toast.error("PDF 업로드 실패", "문제지는 PDF 파일만 등록할 수 있습니다.");
+        const routeGeneration = editorRouteStateRef.current.generation();
+        if (!(await isPdfFileByMagic(file))) {
+            if (isEditorRouteGenerationCurrent(routeGeneration)) {
+                toast.error("PDF 업로드 실패", "문제지는 PDF 파일만 등록할 수 있습니다.");
+            }
             return false;
         }
+        if (!isEditorRouteGenerationCurrent(routeGeneration)) return false;
         problemPdfFileRef.current = file;
+        draftAssetsRef.current = {
+            ...draftAssetsRef.current,
+            pdfData: undefined,
+            pdfDataRef: undefined,
+        };
+        pendingPdfReadyToastRef.current = { kind: 'problem', name: file.name };
         setPdfFile(file);
         problemPdfReplacedRef.current = true;
+        setAssetHydrationFailures(previous => ({ ...previous, problem: false }));
         setActiveViewTab('problem');
-        toast.success("문제지 PDF 업로드됨", file.name);
+        toast.info("문제지 PDF 파일 수신됨", "미리보기를 준비하고 있습니다.");
         return true;
     };
 
-    const handleAnswerKeyPdfFile = (file: File | null | undefined) => {
+    const handleAnswerKeyPdfFile = async (file: File | null | undefined) => {
         if (!file) return false;
-        if (!isPdfUploadFile(file)) {
-            toast.error("PDF 업로드 실패", "답지는 PDF 파일만 등록할 수 있습니다.");
+        const routeGeneration = editorRouteStateRef.current.generation();
+        if (!(await isPdfFileByMagic(file))) {
+            if (isEditorRouteGenerationCurrent(routeGeneration)) {
+                toast.error("PDF 업로드 실패", "답지는 PDF 파일만 등록할 수 있습니다.");
+            }
             return false;
         }
+        if (!isEditorRouteGenerationCurrent(routeGeneration)) return false;
         answerKeyPdfFileRef.current = file;
+        draftAssetsRef.current = {
+            ...draftAssetsRef.current,
+            answerKeyPdf: undefined,
+            answerKeyPdfRef: undefined,
+        };
+        pendingPdfReadyToastRef.current = { kind: 'answer', name: file.name };
         setAnswerKeyPdf(file);
         answerKeyPdfReplacedRef.current = true;
+        setAssetHydrationFailures(previous => ({ ...previous, answer: false }));
         setActiveViewTab('answer');
-        toast.success("답지 PDF 업로드됨", file.name);
+        toast.info("답지 PDF 파일 수신됨", "미리보기를 준비하고 있습니다.");
         return true;
     };
 
+    const handleActivePdfLoadSuccess = useCallback((numPages: number) => {
+        const pending = pendingPdfReadyToastRef.current;
+        if (!pending || !activePdfFile) return;
+        if (pending.kind !== activeViewTab || pending.name !== activePdfFile.name) return;
+        pendingPdfReadyToastRef.current = null;
+        toast.success("PDF 미리보기 준비 완료", `${pending.name} · ${numPages}페이지`);
+    }, [activePdfFile, activeViewTab]);
+
     const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-        handleProblemPdfFile(e.currentTarget.files?.[0]);
+        void handleProblemPdfFile(e.currentTarget.files?.[0]);
         e.currentTarget.value = "";
     };
 
     const handleFileDrop = (file: File) => {
-        handleProblemPdfFile(file);
+        void handleProblemPdfFile(file);
     };
 
     const handlePdfPageClick = (page: number, x: number, y: number) => {
@@ -1640,6 +2041,7 @@ function CreateOMRPageInner() {
         const current = autoDetectRunRef.current;
         if (!current || current.cancelled) return;
         current.cancelled = true;
+        current.abortController.abort();
         if (current.timeoutId) {
             clearTimeout(current.timeoutId);
             current.timeoutId = null;
@@ -1659,27 +2061,44 @@ function CreateOMRPageInner() {
             toast.info("문제지 필요", "먼저 문제지 PDF를 왼쪽 상단에서 업로드해주세요.");
             return;
         }
-        const run = { cancelled: false, timeoutId: null as ReturnType<typeof setTimeout> | null };
+        const routeGeneration = editorRouteStateRef.current.generation();
+        const run = {
+            cancelled: false,
+            generation: ++autoDetectGenerationRef.current,
+            abortController: new AbortController(),
+            timeoutId: null as ReturnType<typeof setTimeout> | null,
+        };
         autoDetectRunRef.current = run;
+        const isCurrentRun = () => autoDetectRunRef.current === run
+            && !run.cancelled
+            && isEditorRouteGenerationCurrent(routeGeneration)
+            && shouldApplyAutoDetectOutcome({
+                runGeneration: run.generation,
+                currentGeneration: autoDetectGenerationRef.current,
+                aborted: run.abortController.signal.aborted,
+            });
         run.timeoutId = setTimeout(() => {
-            if (autoDetectRunRef.current === run && !run.cancelled) {
+            if (isCurrentRun()) {
                 run.cancelled = true;
+                run.abortController.abort();
                 setIsDetectingLocation(false);
                 toast.info("자동 매칭 시간 초과", "90초가 지나 자동 매칭을 멈췄습니다. PDF가 너무 크면 문항 위치를 몇 개만 직접 찍은 뒤 다시 계산하세요.");
             }
         }, AUTO_DETECT_TIMEOUT_MS);
 
         setIsDetectingLocation(true);
+        let pdfLoadingTask: PDFDocumentLoadingTask | null = null;
         try {
             const pdfjsLib = await import('pdfjs-dist');
-            if (run.cancelled) return;
+            if (!isCurrentRun()) return;
             if (typeof window !== 'undefined' && !pdfjsLib.GlobalWorkerOptions.workerSrc) {
                 pdfjsLib.GlobalWorkerOptions.workerSrc = '/pdf.worker.min.mjs';
             }
             const arrayBuffer = await pdfFile.arrayBuffer();
-            if (run.cancelled) return;
-            const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
-            if (run.cancelled) return;
+            if (!isCurrentRun()) return;
+            pdfLoadingTask = pdfjsLib.getDocument({ data: arrayBuffer });
+            const pdf = await pdfLoadingTask.promise;
+            if (!isCurrentRun()) return;
 
             const newQuestions = [...questions];
             let mappedCount = 0;
@@ -1689,12 +2108,12 @@ function CreateOMRPageInner() {
             const pdfTextPages: PdfPageTextItems[] = [];
 
             for (let i = 1; i <= pdf.numPages; i++) {
-                if (run.cancelled) return;
+                if (!isCurrentRun()) return;
                 const page = await pdf.getPage(i);
-                if (run.cancelled) return;
+                if (!isCurrentRun()) return;
                 const viewport = page.getViewport({ scale: 1.0 });
                 const textContent = await page.getTextContent();
-                if (run.cancelled) return;
+                if (!isCurrentRun()) return;
 
                 const items: PdfTextLocatorItem[] = textContent.items
                     .map((rawItem): PdfTextLocatorItem | null => {
@@ -1730,7 +2149,7 @@ function CreateOMRPageInner() {
                 }
             }
 
-            if (run.cancelled) return;
+            if (!isCurrentRun()) return;
             for (const [qNum, best] of bestLocations.entries()) {
                 const qIndex = newQuestions.findIndex(q => q.number === qNum);
                 if (qIndex === -1) continue;
@@ -1747,7 +2166,7 @@ function CreateOMRPageInner() {
                 }
             }
 
-            if (run.cancelled) return;
+            if (!isCurrentRun()) return;
             const passageGroups = selectPassageGroupsForQuestions(
                 detectPassageGroupsFromPdfText(pdfTextPages, expectedQuestionNumbers),
                 newQuestions,
@@ -1763,6 +2182,7 @@ function CreateOMRPageInner() {
                 textPages: pdfTextPages,
                 passageGroups,
             });
+            if (!isCurrentRun()) return;
             setQuestions(matchedQuestions);
             const passageMessage = passageGroups.length > 0 ? `, 지문 묶음 ${passageGroups.length}개` : "";
             const missingQuestionNumbers = findMissingExpectedQuestionNumbers(
@@ -1785,10 +2205,15 @@ function CreateOMRPageInner() {
             }
         } catch (e) {
             console.error(e);
-            if (!run.cancelled) {
+            if (isCurrentRun()) {
                 toast.error("자동 매칭 실패", "위치 자동 매칭 중 오류가 발생했습니다.");
             }
         } finally {
+            try {
+                await pdfLoadingTask?.destroy();
+            } catch (cleanupError) {
+                console.warn("Teacher PDF auto-detection cleanup failed", cleanupError);
+            }
             if (autoDetectRunRef.current === run) {
                 if (run.timeoutId) clearTimeout(run.timeoutId);
                 autoDetectRunRef.current = null;
@@ -1797,10 +2222,62 @@ function CreateOMRPageInner() {
         }
     };
 
-    const handleShareConfig = async (accessConfig: NonNullable<Exam["accessConfig"]>) => {
-        let reservedExamId: string | null = null;
-        let createdCanonicalSkeleton = false;
+    const handleShareConfig = async (accessConfig: NonNullable<Exam["accessConfig"]>): Promise<DistributionShareResultLike> => {
+        if (!draftStorageKey) {
+            toast.error("교사 인증 필요", "교사로 다시 로그인한 뒤 시험을 배포해주세요.");
+            return "";
+        }
+        const routeGeneration = editorRouteStateRef.current.generation();
+        const lockManager = typeof navigator !== "undefined" && navigator.locks
+            ? navigator.locks as unknown as ExamPublishLockManager
+            : null;
         try {
+            const locked = await withExclusiveExamPublishLock(
+                lockManager,
+                draftStorageKey,
+                () => performShareConfig(accessConfig, routeGeneration),
+            );
+            if (locked.status === "acquired") return locked.value;
+            if (isEditorRouteGenerationCurrent(routeGeneration)) {
+                if (locked.status === "busy") {
+                    toast.info("다른 탭에서 배포 중", "같은 초안의 배포가 끝난 뒤 다시 시도해주세요.");
+                } else {
+                    toast.error("안전한 배포 잠금 필요", "이 브라우저에서는 중복 배포를 안전하게 막을 수 없습니다.");
+                }
+            }
+            return "";
+        } catch (error) {
+            console.error(error);
+            if (isEditorRouteGenerationCurrent(routeGeneration)) {
+                toast.error("배포 잠금 실패", "브라우저 잠금 상태를 확인한 뒤 다시 시도해주세요.");
+            }
+            return "";
+        }
+    };
+
+    const performShareConfig = async (
+        accessConfig: NonNullable<Exam["accessConfig"]>,
+        routeGeneration: number,
+    ): Promise<DistributionShareResultLike> => {
+        let reservedExamId: string | null = null;
+        let canonicalSaveAttempted = false;
+        let publishTargetScopeKey = "";
+        const publishDraftAssets = draftAssetsRef.current;
+        const currentProblemPdf = problemPdfFileRef.current;
+        const currentAnswerKeyPdf = answerKeyPdfFileRef.current;
+        const problemPdfWasReplaced = problemPdfReplacedRef.current;
+        const answerKeyPdfWasReplaced = answerKeyPdfReplacedRef.current;
+        const isCurrentRoute = () => isEditorRouteGenerationCurrent(routeGeneration);
+        try {
+            if (!isCurrentRoute()) return "";
+            if (isAssetHydrating) {
+                toast.info("PDF 불러오는 중", "문제지와 답지 확인이 끝난 뒤 다시 배포해주세요.");
+                return "";
+            }
+            if (assetHydrationFailed) {
+                toast.error("PDF 확인 필요", "기존 PDF를 불러오지 못했습니다. 파일을 다시 선택한 뒤 배포해주세요.");
+                return "";
+            }
             const validation = validateExamDraft({
                 title,
                 questions,
@@ -1815,21 +2292,37 @@ function CreateOMRPageInner() {
                 return "";
             }
 
-            if (editId && !loadedExam) {
+            if (!isLoadedExamCurrentForEdit(editId, loadedExam)) {
                 toast.info("시험 불러오는 중", "기존 시험 정보를 불러온 뒤 다시 배포해주세요.");
                 return "";
             }
 
+            const sessionStore = safeBrowserStorage(() => window.sessionStorage);
+            const localStore = safeBrowserStorage(() => window.localStorage);
+            const requiresCanonicalReservation = !loadedExam || !loadedExamIsCanonical;
+            if (requiresCanonicalReservation) {
+                publishTargetScopeKey = draftStorageKey;
+            }
+
             // Editing? Reuse the existing ID and preserve createdAt; otherwise mint a new one.
             // Unguessable id so shareable /solve/[id] links can't be enumerated.
-            const id = loadedExam?.id || secureRandomId();
-            if (!editId) {
+            const id = requiresCanonicalReservation
+                ? getOrCreateNewExamPublishTarget(
+                    localStore,
+                    publishTargetScopeKey,
+                    secureRandomId,
+                    loadedExam?.id,
+                )
+                : loadedExam!.id;
+            if (requiresCanonicalReservation) {
                 const authorization = await authorizeExamCreation(id);
                 if (!authorization.ok) {
-                    toast.error(
-                        authorization.quota?.allowed === false ? "월 시험 생성 한도 도달" : "서버 플랜 확인 필요",
-                        authorization.error || "서버에서 플랜과 사용량을 확인한 뒤 다시 시도해주세요.",
-                    );
+                    if (isCurrentRoute()) {
+                        toast.error(
+                            authorization.quota?.allowed === false ? "월 시험 생성 한도 도달" : "서버 플랜 확인 필요",
+                            authorization.error || "서버에서 플랜과 사용량을 확인한 뒤 다시 시도해주세요.",
+                        );
+                    }
                     return "";
                 }
                 reservedExamId = id;
@@ -1839,26 +2332,25 @@ function CreateOMRPageInner() {
             let pdfDataRef = loadedExam?.pdfDataRef;
             let answerKeyData = loadedExam?.answerKeyPdf || "";
             let answerKeyPdfRef = loadedExam?.answerKeyPdfRef;
-            const currentProblemPdf = problemPdfFileRef.current;
-            const currentAnswerKeyPdf = answerKeyPdfFileRef.current;
-            const problemPdfToUpload = shouldUploadExamPdf(currentProblemPdf, problemPdfReplacedRef.current)
+            const problemPdfToUpload = shouldUploadExamPdf(
+                currentProblemPdf,
+                problemPdfWasReplaced,
+                loadedExam?.pdfDataRef,
+                loadedExam?.pdfData,
+            )
                 ? currentProblemPdf
                 : null;
-            const answerKeyPdfToUpload = shouldUploadExamPdf(currentAnswerKeyPdf, answerKeyPdfReplacedRef.current)
+            const answerKeyPdfToUpload = shouldUploadExamPdf(
+                currentAnswerKeyPdf,
+                answerKeyPdfWasReplaced,
+                loadedExam?.answerKeyPdfRef,
+                loadedExam?.answerKeyPdf,
+            )
                 ? currentAnswerKeyPdf
                 : null;
 
             const rollbackNewExamPublish = async () => {
-                let canReleaseReservation = true;
-                if (createdCanonicalSkeleton) {
-                    const deleted = await deleteTeacherCanonicalExam(id);
-                    canReleaseReservation = ["deleted", "not_found", "local_only"].includes(deleted.status);
-                    if (canReleaseReservation) createdCanonicalSkeleton = false;
-                    if (!canReleaseReservation) {
-                        console.warn("Canonical exam skeleton rollback failed", "error" in deleted ? deleted.error : deleted.status);
-                    }
-                }
-                if (reservedExamId && canReleaseReservation) {
+                if (reservedExamId && !canonicalSaveAttempted) {
                     const release = await releaseExamCreationAuthorization(reservedExamId);
                     if (!release.ok) console.warn("Exam plan reservation release failed", release.error);
                     reservedExamId = null;
@@ -1874,10 +2366,12 @@ function CreateOMRPageInner() {
                 const entitlement = await authorizeAdvancedQuestionDesign();
                 if (!entitlement.ok) {
                     await rollbackNewExamPublish();
-                    toast.error(
-                        entitlement.access.authoritative ? "Pro 기능" : "서버 플랜 확인 필요",
-                        entitlement.error || "하위 질문을 저장하려면 서버에서 Pro 이상 플랜이 확인되어야 합니다.",
-                    );
+                    if (isCurrentRoute()) {
+                        toast.error(
+                            entitlement.access.authoritative ? "Pro 기능" : "서버 플랜 확인 필요",
+                            entitlement.error || "하위 질문을 저장하려면 서버에서 Pro 이상 플랜이 확인되어야 합니다.",
+                        );
+                    }
                     return "";
                 }
             }
@@ -1905,38 +2399,32 @@ function CreateOMRPageInner() {
                 archived: loadedExam?.archived || false,
             });
 
-            // Remote asset metadata is exam-scoped. For a new hosted exam,
-            // establish that canonical owner row before uploading its PDFs.
-            if (!loadedExam && (problemPdfToUpload || answerKeyPdfToUpload)) {
-                const skeletonSave = await saveTeacherCanonicalExam(
-                    examDataWithAssets(pdfData, pdfDataRef, answerKeyData, answerKeyPdfRef),
-                );
-                if (skeletonSave.status === "unauthorized") {
-                    await rollbackNewExamPublish();
-                    toast.error("교사 인증 필요", "교사로 다시 로그인한 뒤 시험을 저장해주세요.");
-                    return "";
-                }
-                if (skeletonSave.status === "plan_denied") {
-                    await rollbackNewExamPublish();
-                    toast.error("플랜 확인 필요", skeletonSave.error);
-                    return "";
-                }
-                if (skeletonSave.status === "invalid_exam" || skeletonSave.status === "service_unavailable") {
-                    await rollbackNewExamPublish();
-                    toast.error("배포 저장 실패", skeletonSave.error || "파일 업로드 전에 시험 저장소를 준비하지 못했습니다.");
-                    return "";
-                }
-                createdCanonicalSkeleton = skeletonSave.status === "saved";
-            }
-
-            const assetUploads = await runPdfAssetUploadsConcurrently({
+            const assetUploads = await runPdfAssetUploadsSequentially({
                 problem: problemPdfToUpload
                     ? async () => {
-                        const formData = new FormData();
-                        formData.set("file", problemPdfToUpload);
-                        formData.set("kind", "problem_pdf");
-                        formData.set("examId", id);
-                        const remote = await uploadTeacherExamAsset(formData);
+                        const attemptNonce = getOrCreatePdfUploadAttemptNonce(
+                            sessionStore,
+                            id,
+                            "problem_pdf",
+                            problemPdfToUpload,
+                            secureRandomId,
+                        );
+                        const remote = await uploadTeacherPdfDirect({
+                            file: problemPdfToUpload,
+                            examId: id,
+                            kind: "problem_pdf",
+                            attemptNonce,
+                            rotateAttemptNonce: () => rotatePdfUploadAttemptNonce(
+                                sessionStore,
+                                id,
+                                "problem_pdf",
+                                problemPdfToUpload,
+                                secureRandomId,
+                            ),
+                        }, {
+                            prepare: prepareTeacherExamAssetUpload,
+                            finalize: finalizeTeacherExamAssetUpload,
+                        });
                         if (remote.status === "uploaded") {
                             return { data: "", ref: remote.ref };
                         }
@@ -1944,16 +2432,34 @@ function CreateOMRPageInner() {
                             const stored = await saveFileDataUrl(`exam:${id}:problemPdf`, problemPdfToUpload);
                             return { data: stored.inlineDataUrl || "", ref: stored.ref };
                         }
-                        throw new Error(remote.error || "비공개 원격 저장소에 문제지를 보관하지 못했습니다.");
+                        throw new Error("비공개 원격 저장소에 문제지를 보관하지 못했습니다.");
                     }
                     : undefined,
                 answer: answerKeyPdfToUpload
                     ? async () => {
-                        const formData = new FormData();
-                        formData.set("file", answerKeyPdfToUpload);
-                        formData.set("kind", "answer_key_pdf");
-                        formData.set("examId", id);
-                        const remote = await uploadTeacherExamAsset(formData);
+                        const attemptNonce = getOrCreatePdfUploadAttemptNonce(
+                            sessionStore,
+                            id,
+                            "answer_key_pdf",
+                            answerKeyPdfToUpload,
+                            secureRandomId,
+                        );
+                        const remote = await uploadTeacherPdfDirect({
+                            file: answerKeyPdfToUpload,
+                            examId: id,
+                            kind: "answer_key_pdf",
+                            attemptNonce,
+                            rotateAttemptNonce: () => rotatePdfUploadAttemptNonce(
+                                sessionStore,
+                                id,
+                                "answer_key_pdf",
+                                answerKeyPdfToUpload,
+                                secureRandomId,
+                            ),
+                        }, {
+                            prepare: prepareTeacherExamAssetUpload,
+                            finalize: finalizeTeacherExamAssetUpload,
+                        });
                         if (remote.status === "uploaded") {
                             return { data: "", ref: remote.ref };
                         }
@@ -1961,14 +2467,14 @@ function CreateOMRPageInner() {
                             const stored = await saveFileDataUrl(`exam:${id}:answerKeyPdf`, answerKeyPdfToUpload);
                             return { data: stored.inlineDataUrl || "", ref: stored.ref };
                         }
-                        throw new Error(remote.error || "비공개 원격 저장소에 답지를 보관하지 못했습니다.");
+                        throw new Error("비공개 원격 저장소에 답지를 보관하지 못했습니다.");
                     }
                     : undefined,
                 rollback: rollbackNewExamPublish,
             });
             const assetUploadFailed = assetUploads.problem.status === "failed" || assetUploads.answer.status === "failed";
             if (assetUploadFailed) {
-                if (assetUploads.problem.status === "failed") {
+                if (isCurrentRoute() && assetUploads.problem.status === "failed") {
                     toast.error(
                         "문제지 업로드 실패",
                         assetUploads.problem.error instanceof Error && assetUploads.problem.error.message
@@ -1976,7 +2482,7 @@ function CreateOMRPageInner() {
                             : "비공개 원격 저장소에 문제지를 보관하지 못했습니다.",
                     );
                 }
-                if (assetUploads.answer.status === "failed") {
+                if (isCurrentRoute() && assetUploads.answer.status === "failed") {
                     toast.error(
                         "답지 업로드 실패",
                         assetUploads.answer.error instanceof Error && assetUploads.answer.error.message
@@ -1996,28 +2502,56 @@ function CreateOMRPageInner() {
             }
             const examData = examDataWithAssets(pdfData, pdfDataRef, answerKeyData, answerKeyPdfRef);
 
+            canonicalSaveAttempted = true;
             const serverSave = await saveTeacherCanonicalExam(examData);
             if (serverSave.status === "unauthorized") {
+                canonicalSaveAttempted = false;
                 await rollbackNewExamPublish();
-                toast.error("교사 인증 필요", "교사로 다시 로그인한 뒤 시험을 저장해주세요.");
+                if (isCurrentRoute()) toast.error("교사 인증 필요", "교사로 다시 로그인한 뒤 시험을 저장해주세요.");
                 return "";
             }
             if (serverSave.status === "plan_denied") {
+                canonicalSaveAttempted = false;
                 await rollbackNewExamPublish();
-                toast.error("플랜 확인 필요", serverSave.error);
+                if (isCurrentRoute()) toast.error("플랜 확인 필요", serverSave.error);
                 return "";
             }
-            if (serverSave.status === "invalid_exam" || serverSave.status === "service_unavailable") {
+            if (serverSave.status === "invalid_exam") {
+                canonicalSaveAttempted = false;
                 await rollbackNewExamPublish();
-                toast.error("배포 저장 실패", serverSave.error || "서버 시험 저장소에 시험을 보관하지 못했습니다.");
+                if (isCurrentRoute()) {
+                    toast.error("배포 저장 실패", serverSave.error || "서버 시험 저장소에 시험을 보관하지 못했습니다.");
+                }
+                return "";
+            }
+            if (serverSave.status === "conflict") {
+                if (isCurrentRoute()) {
+                    const serverVersion = serverSave.serverUpdatedAt
+                        ? ` 서버본 수정 시각: ${serverSave.serverUpdatedAt}`
+                        : ` 서버본 버전: ${serverSave.currentRevision}`;
+                    toast.error(
+                        "다른 곳에서 먼저 수정됨",
+                        `현재 편집 내용과 자동 저장 초안은 그대로 유지됩니다.${serverVersion} 새로고침해 서버본과 비교하거나 복제본으로 저장해주세요.`,
+                    );
+                }
+                return "";
+            }
+            if (serverSave.status === "service_unavailable") {
+                await rollbackNewExamPublish();
+                if (isCurrentRoute()) {
+                    toast.error("배포 저장 실패", serverSave.error || "서버 시험 저장소에 시험을 보관하지 못했습니다.");
+                }
                 return "";
             }
             const persistedExam = serverSave.status === "saved" ? serverSave.exam : examData;
             if (serverSave.status === "saved") {
                 // From this point the quota belongs to the committed exam, even
                 // if a browser cache write or later UI feedback fails.
-                createdCanonicalSkeleton = false;
                 reservedExamId = null;
+                if (requiresCanonicalReservation) {
+                    clearNewExamPublishTarget(localStore, publishTargetScopeKey);
+                }
+                if (isCurrentRoute()) setLoadedExamIsCanonical(true);
             }
             const result = serverSave.status === "saved"
                 ? { localSaved: saveLocalExam(persistedExam), remoteSaved: true }
@@ -2029,52 +2563,92 @@ function CreateOMRPageInner() {
             });
             if (!feedback.ok) {
                 await rollbackNewExamPublish();
-                toast.error(feedback.title, feedback.detail);
+                if (isCurrentRoute()) toast.error(feedback.title, feedback.detail);
                 return "";
             }
 
             // The quota reservation now represents a successfully-created exam.
             reservedExamId = null;
-            if (feedback.level === "info") {
+            if (isCurrentRoute() && feedback.level === "info") {
                 toast.info(feedback.title, feedback.detail);
             }
             rememberLabelUsage(labelSettingsUsageFromQuestions(questionsWithRegions));
-            problemPdfReplacedRef.current = false;
-            answerKeyPdfReplacedRef.current = false;
-            setLoadedExam(persistedExam);
-            setQuestions(questionsWithRegions);
-            if (!editId) {
-                router.replace(`/create?edit=${id}`, { scroll: false });
+            if (isEditorRouteGenerationCurrent(routeGeneration)) {
+                problemPdfReplacedRef.current = false;
+                answerKeyPdfReplacedRef.current = false;
+                setLoadedExam(persistedExam);
+                setQuestions(questionsWithRegions);
             }
             // Clear the autosave draft now that the exam is published. On the
             // first publish of a new exam editId is still null, so this clears
             // the new-exam draft; subsequent edit-mode saves clear the per-exam
             // key. The reload of loadedExam below resets isEditDirty to false so
             // autosave won't immediately rewrite the draft.
-            try { localStorage.removeItem(draftStorageKey); } catch { /* ignore */ }
-            const shareUrl = buildSolveShareUrl(id);
-            if (!isShareUrlReachableByStudents(shareUrl)) {
-                // Desktop/loopback origin: students on other devices cannot open it.
-                toast.info(
-                    "배포 준비 완료",
-                    "이 링크는 이 컴퓨터에서만 열립니다. 학생 배포에는 공개 주소(NEXT_PUBLIC_SHARE_BASE_URL) 설정이 필요합니다.",
-                );
+            const cleanup = await deleteCurrentDraftPdfAssets(publishDraftAssets, isCurrentRoute);
+            const cleanupMarkerKey = `${draftStorageKey}:cleanupPending`;
+            if (cleanup.failed > 0) {
+                try {
+                    localStore.setItem(cleanupMarkerKey, JSON.stringify({ removeDraftBody: true }));
+                } catch { /* keep the draft body itself as the remaining cleanup reference */ }
+                if (isCurrentRoute()) {
+                    toast.info("초안 정리 재시도 필요", "배포는 완료됐지만 PDF 임시 파일을 삭제하지 못했습니다. 다음 접속 때 다시 정리합니다.");
+                }
             } else {
-                toast.success("배포 준비 완료", "공유 링크가 생성되었습니다.");
+                try {
+                    localStore.removeItem(draftStorageKey);
+                    localStore.removeItem(cleanupMarkerKey);
+                } catch { /* ignore */ }
             }
-            return shareUrl;
+            let inviteToken: string | undefined;
+            let inviteExpiresAt: string | undefined;
+            if (accessConfig.type === "group") {
+                const invite = await rotateTeacherExamEntryInvite(id);
+                if (invite.status !== "issued") {
+                    if (isCurrentRoute()) {
+                        toast.error(
+                            "안전한 배포 링크 발급 실패",
+                            "시험은 저장됐지만 학생용 초대 링크를 발급하지 못했습니다. 잠시 후 다시 배포해주세요.",
+                        );
+                    }
+                    return "";
+                }
+                inviteToken = invite.token;
+                inviteExpiresAt = invite.expiresAt;
+            }
+            const shareUrl = buildSolveShareUrl(id, { inviteToken });
+            if (isCurrentRoute()) {
+                if (!isShareUrlReachableByStudents(shareUrl)) {
+                    // Desktop/loopback origin: students on other devices cannot open it.
+                    toast.info(
+                        "배포 준비 완료",
+                        "이 링크는 이 컴퓨터에서만 열립니다. 학생 배포에는 공개 주소(NEXT_PUBLIC_SHARE_BASE_URL) 설정이 필요합니다.",
+                    );
+                } else {
+                    toast.success("배포 준비 완료", "공유 링크가 생성되었습니다.");
+                }
+                if (!editId) {
+                    publishedRouteHandoffRef.current = {
+                        exam: persistedExam,
+                        canonical: serverSave.status === "saved",
+                    };
+                    setPublishedShareHandoff({
+                        examId: id,
+                        shareUrl,
+                        expiresAt: inviteExpiresAt,
+                    });
+                    router.replace(`/create?edit=${id}`, { scroll: false });
+                }
+            }
+            return { shareUrl, expiresAt: inviteExpiresAt, examId: id };
         } catch (e) {
-            let canReleaseReservation = true;
-            if (createdCanonicalSkeleton && reservedExamId) {
-                const deleted = await deleteTeacherCanonicalExam(reservedExamId);
-                canReleaseReservation = ["deleted", "not_found", "local_only"].includes(deleted.status);
-            }
-            if (reservedExamId && canReleaseReservation) {
+            if (reservedExamId && !canonicalSaveAttempted) {
                 const release = await releaseExamCreationAuthorization(reservedExamId);
                 if (!release.ok) console.warn("Exam plan reservation release failed", release.error);
             }
             console.error(e);
-            toast.error("배포 저장 실패", "파일 저장 공간 또는 브라우저 권한을 확인해주세요.");
+            if (isCurrentRoute()) {
+                toast.error("배포 저장 실패", "파일 저장 공간 또는 브라우저 권한을 확인해주세요.");
+            }
             return "";
         }
     };
@@ -2113,18 +2687,141 @@ function CreateOMRPageInner() {
         applyImportedAnswers(importedAnswers);
     };
 
-    const handleConfirmCancel = () => {
+    const restoreDraftPdfAssets = async (draft: EditorDraft) => {
+        const routeGeneration = editorRouteStateRef.current.generation();
+        const runGeneration = ++assetHydrationGenerationRef.current;
+        problemPdfReplacedRef.current = false;
+        answerKeyPdfReplacedRef.current = false;
+        setIsAssetHydrating(true);
+        setAssetHydrationFailures({ problem: false, answer: false });
+        const assets: EditorDraftAssets = {
+            pdfData: draft.pdfData,
+            pdfDataRef: draft.pdfDataRef,
+            answerKeyPdf: draft.answerKeyPdf,
+            answerKeyPdfRef: draft.answerKeyPdfRef,
+        };
+        draftAssetsRef.current = assets;
+
+        const resolveDraftFile = async (
+            fallbackName: string,
+            inlineData: string | undefined,
+            ref: Exam["pdfDataRef"],
+        ) => {
+            const remoteAsset = ref?.store === "remote"
+                ? await getTeacherRemoteAssetUrl(ref)
+                : null;
+            if (ref?.store === "remote" && remoteAsset?.status !== "signed") {
+                throw new Error("Remote draft PDF hydration failed");
+            }
+            const data = remoteAsset?.status === "signed" ? remoteAsset.signedUrl : inlineData;
+            return storedDataUrlToFile(
+                fallbackName,
+                data,
+                ref?.store === "remote" ? undefined : ref,
+            );
+        };
+
+        const hydration = await resolvePdfHydrationPairSequentially({
+            problem: () => resolveDraftFile("problem.pdf", draft.pdfData, draft.pdfDataRef),
+            answer: () => resolveDraftFile("answer_key.pdf", draft.answerKeyPdf, draft.answerKeyPdfRef),
+        });
+        const routeIsCurrent = isEditorRouteGenerationCurrent(routeGeneration);
+        const applyProblem = routeIsCurrent && shouldApplyPdfHydrationOutcome({
+            runGeneration,
+            currentGeneration: assetHydrationGenerationRef.current,
+            replaced: problemPdfReplacedRef.current,
+        });
+        const applyAnswer = routeIsCurrent && shouldApplyPdfHydrationOutcome({
+            runGeneration,
+            currentGeneration: assetHydrationGenerationRef.current,
+            replaced: answerKeyPdfReplacedRef.current,
+        });
+        const problemFile = hydration.problem.status === "loaded" ? hydration.problem.value : null;
+        const answerFile = hydration.answer.status === "loaded" ? hydration.answer.value : null;
+        const hydrationFailures = {
+            problem: applyProblem && hydration.problem.status === "failed",
+            answer: applyAnswer && hydration.answer.status === "failed",
+        };
+        if (routeIsCurrent && assetHydrationGenerationRef.current === runGeneration) {
+            setAssetHydrationFailures(previous => mergePdfHydrationFailures(previous, {
+                runGeneration,
+                currentGeneration: assetHydrationGenerationRef.current,
+                problem: {
+                    replaced: problemPdfReplacedRef.current,
+                    failed: hydration.problem.status === "failed",
+                },
+                answer: {
+                    replaced: answerKeyPdfReplacedRef.current,
+                    failed: hydration.answer.status === "failed",
+                },
+            }));
+            setIsAssetHydrating(false);
+        }
+        if (applyProblem && problemFile) {
+            problemPdfFileRef.current = problemFile;
+            problemPdfReplacedRef.current = true;
+            setPdfFile(problemFile);
+        }
+        if (applyAnswer && answerFile) {
+            answerKeyPdfFileRef.current = answerFile;
+            answerKeyPdfReplacedRef.current = true;
+            setAnswerKeyPdf(answerFile);
+        }
+        if (hydrationFailures.problem || hydrationFailures.answer) {
+            toast.error("PDF 복원 실패", "복원하지 못한 첨부 PDF만 다시 선택해주세요.");
+        } else if (applyProblem || applyAnswer) {
+            toast.success("초안 복원 완료", problemFile || answerFile
+                ? "출제 설정과 첨부 PDF를 복원했습니다."
+                : "출제 설정을 복원했습니다.");
+        }
+    };
+
+    const handleConfirmCancel = async () => {
         if (!confirmState) return;
-        if (confirmState.kind === "restoreDraft") {
-            try { localStorage.removeItem(draftStorageKey); } catch { /* ignore */ }
-            toast.info("초안 삭제", "임시 저장된 초안을 삭제했습니다.");
-        } else if (confirmState.kind === "expandImportedAnswers") {
-            applyImportedAnswers(confirmState.answers);
+        const routeGeneration = editorRouteStateRef.current.generation();
+        const activeConfirmState = confirmState;
+        if (activeConfirmState.kind === "restoreDraft") {
+            if (!draftStorageKey) return;
+            const localStore = safeBrowserStorage(() => window.localStorage);
+            try {
+                await discardNewExamPublishTarget(
+                    localStore,
+                    draftStorageKey,
+                    async targetId => {
+                        const released = await releaseExamCreationAuthorization(targetId);
+                        if (!released.ok) throw new Error("Exam reservation release failed");
+                    },
+                );
+            } catch {
+                // The server-side two-hour lease still bounds an unreachable
+                // provisional reservation when explicit release is unavailable.
+            }
+            const cleanup = await deleteScopedDraftPdfAssets({
+                draft: activeConfirmState.draft,
+                scopedDraftKey: draftStorageKey,
+                deleteStoredData,
+            });
+            if (cleanup.failed > 0) {
+                if (isEditorRouteGenerationCurrent(routeGeneration)) {
+                    toast.error("초안 삭제 실패", "PDF 임시 파일을 삭제하지 못했습니다. 잠시 후 다시 시도해주세요.");
+                }
+                return;
+            }
+            if (isEditorRouteGenerationCurrent(routeGeneration)) draftAssetsRef.current = {};
+            try {
+                localStore.removeItem(draftStorageKey);
+                localStore.removeItem(`${draftStorageKey}:cleanupPending`);
+            } catch { /* ignore */ }
+            if (isEditorRouteGenerationCurrent(routeGeneration)) {
+                toast.info("초안 삭제", "임시 저장된 초안을 삭제했습니다.");
+            }
+        } else if (activeConfirmState.kind === "expandImportedAnswers") {
+            applyImportedAnswers(activeConfirmState.answers);
             toast.info("현재 문항까지만 적용", `${questionsCount}번까지의 정답만 반영했습니다.`);
-        } else if (confirmState.kind === "shrinkQuestions") {
+        } else if (activeConfirmState.kind === "shrinkQuestions") {
             setQuestionCountInput(String(questionsCount));
         }
-        setConfirmState(null);
+        if (isEditorRouteGenerationCurrent(routeGeneration)) setConfirmState(null);
     };
 
     // Non-destructive resolution for backdrop click / Escape. For a recovered
@@ -2156,7 +2853,7 @@ function CreateOMRPageInner() {
             setDurationMin(snap.durationMin === "" ? "" : (snap.durationMin ?? 50));
             setStartAt(snap.startAt ?? "");
             setEndAt(snap.endAt ?? "");
-            toast.success("초안 복원 완료");
+            void restoreDraftPdfAssets(snap);
         } else if (confirmState.kind === "shrinkQuestions") {
             setQuestionsCount(confirmState.nextCount);
             toast.info("문항 수 변경됨", `${confirmState.losing}개 문항이 제거되었습니다.`);
@@ -2202,10 +2899,13 @@ function CreateOMRPageInner() {
             return;
         }
 
+        const routeGeneration = editorRouteStateRef.current.generation();
         setIsSaving(true);
         try {
             const { default: html2canvas } = await import("html2canvas");
+            if (!isEditorRouteGenerationCurrent(routeGeneration)) return;
             const canvas = await html2canvas(element, { scale: 2 });
+            if (!isEditorRouteGenerationCurrent(routeGeneration)) return;
             const dataUrl = canvas.toDataURL("image/png");
 
             const link = document.createElement("a");
@@ -2215,29 +2915,126 @@ function CreateOMRPageInner() {
             toast.success("이미지 저장 완료");
         } catch (err) {
             console.error("Save failed:", err);
-            toast.error("이미지 저장 실패");
+            if (isEditorRouteGenerationCurrent(routeGeneration)) toast.error("이미지 저장 실패");
         } finally {
-            setIsSaving(false);
+            if (isEditorRouteGenerationCurrent(routeGeneration)) setIsSaving(false);
         }
     };
 
-    const handleOpenDistribution = () => {
+    const handleSaveDraftNow = async () => {
+        if (!draftStorageKey) {
+            toast.error("교사 인증 필요", "교사로 다시 로그인한 뒤 초안을 저장해주세요.");
+            return;
+        }
+        const routeGeneration = editorRouteStateRef.current.generation();
+        const previousAssets = draftAssetsRef.current;
+        const currentProblemPdf = problemPdfFileRef.current;
+        const currentAnswerKeyPdf = answerKeyPdfFileRef.current;
+        const loadedExamSnapshot = loadedExam;
+        try {
+            const pendingCleanup = await retryPendingScopedDraftPdfCleanup({
+                storage: safeBrowserStorage(() => window.localStorage),
+                scopedDraftKey: draftStorageKey,
+                deleteStoredData,
+            });
+            if (pendingCleanup.status === "failed") {
+                if (isEditorRouteGenerationCurrent(routeGeneration)) {
+                    toast.error("초안 정리 재시도 필요", "이전 PDF 임시 파일을 정리하지 못해 새 저장을 중단했습니다. 잠시 후 다시 시도해주세요.");
+                }
+                return;
+            }
+            const problemAsset = currentProblemPdf
+                ? await saveFileDataUrl(`${draftStorageKey}:problemPdf`, currentProblemPdf)
+                : {
+                    inlineDataUrl: loadedExamSnapshot?.pdfData,
+                    ref: loadedExamSnapshot?.pdfDataRef,
+                };
+            const answerAsset = currentAnswerKeyPdf
+                ? await saveFileDataUrl(`${draftStorageKey}:answerKeyPdf`, currentAnswerKeyPdf)
+                : {
+                    inlineDataUrl: loadedExamSnapshot?.answerKeyPdf,
+                    ref: loadedExamSnapshot?.answerKeyPdfRef,
+                };
+            const assets: EditorDraftAssets = {
+                pdfData: problemAsset.inlineDataUrl,
+                pdfDataRef: problemAsset.ref,
+                answerKeyPdf: answerAsset.inlineDataUrl,
+                answerKeyPdfRef: answerAsset.ref,
+            };
+            const draft: EditorDraft = {
+                ...assets,
+                title,
+                questionsCount,
+                columns,
+                questions,
+                defaultChoices,
+                durationMin,
+                startAt,
+                endAt,
+                savedAt: new Date().toISOString(),
+            };
+            localStorage.setItem(draftStorageKey, JSON.stringify(draft));
+            const cleanup = await deleteScopedDraftPdfAssets({
+                draft: previousAssets,
+                scopedDraftKey: draftStorageKey,
+                preserve: assets,
+                deleteStoredData,
+            });
+            if (cleanup.failed > 0) {
+                localStorage.setItem(`${draftStorageKey}:cleanupPending`, JSON.stringify({
+                    assets: previousAssets,
+                    removeDraftBody: false,
+                }));
+                if (isEditorRouteGenerationCurrent(routeGeneration)) {
+                    toast.info("초안 정리 재시도 필요", "이전 PDF 임시 파일은 다음 접속 때 다시 정리합니다.");
+                }
+            } else {
+                localStorage.removeItem(`${draftStorageKey}:cleanupPending`);
+            }
+            if (isEditorRouteGenerationCurrent(routeGeneration)) {
+                draftAssetsRef.current = assets;
+                toast.success(
+                    "초안 저장 완료",
+                    currentProblemPdf || currentAnswerKeyPdf
+                        ? "이 기기에 출제 설정과 첨부 PDF를 함께 보관했습니다."
+                        : "이 기기에 현재 출제 설정을 보관했습니다.",
+                );
+            }
+        } catch {
+            if (isEditorRouteGenerationCurrent(routeGeneration)) {
+                toast.error("초안 저장 실패", "설정 또는 PDF 저장 공간을 확인한 뒤 다시 시도해주세요.");
+            }
+        }
+    };
+
+    const handleOpenDistribution = (event: ReactMouseEvent<HTMLButtonElement>) => {
         if (!serviceReadiness.canOpenDistribution) {
             toast.error("배포 전 확인 필요", serviceReadiness.detail || "시험 설정을 확인해주세요.");
             return;
         }
+        distributeTriggerRef.current = event.currentTarget;
+        setPublishedShareHandoff(null);
         setIsDistributeModalOpen(true);
     };
 
+    const handleCloseDistribution = () => {
+        const trigger = distributeTriggerRef.current;
+        setIsDistributeModalOpen(false);
+        setPublishedShareHandoff(null);
+        window.requestAnimationFrame(() => {
+            if (trigger?.isConnected) trigger.focus({ preventScroll: true });
+        });
+    };
+
     return (
-        <div className="layout-main" style={{ background: 'var(--background)', height: 'var(--app-viewport-height, 100dvh)', overflow: 'hidden' }}>
+        <div className="layout-main create-editor-page" style={{ background: 'var(--background)', height: 'var(--app-viewport-height, 100dvh)', overflow: 'hidden' }}>
             <header className="header create-editor-shell-header" style={{ flexShrink: 0 }}>
                 <div className="container header-content create-editor-header" style={{ maxWidth: '100%', padding: '0 2rem' }}>
                     <div className="create-editor-brand" style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
                         <BrandLogo compact />
-                        <span className="badge badge-primary" style={{ fontSize: '0.68rem' }}>
-                            스마트 에디터
-                        </span>
+                        <h1 style={{ fontSize: '0.9rem', fontWeight: 850, whiteSpace: 'nowrap' }}>
+                            {editId ? '시험 편집' : '새 시험 만들기'}
+                        </h1>
                     </div>
                     <div className="create-editor-actions scroll-custom" role="toolbar" aria-label="출제 도구 모음" style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
                         <button
@@ -2270,20 +3067,6 @@ function CreateOMRPageInner() {
                             tabIndex={-1}
                             aria-hidden="true"
                         />
-                        <button
-                            type="button"
-                            className="btn btn-secondary"
-                            aria-label="문제지 PDF 업로드"
-                            onClick={() => {
-                                if (problemPdfInputRef.current) {
-                                    activateFilePicker(problemPdfInputRef.current);
-                                }
-                            }}
-                            style={{ cursor: 'pointer', padding: '0.55rem 1rem', fontSize: '0.85rem' }}
-                        >
-                            <UploadCloud size={16} />
-                            문제지 업로드
-                        </button>
                         <input
                             ref={answerKeyPdfInputRef}
                             id="answer-key-pdf-upload-input"
@@ -2297,21 +3080,26 @@ function CreateOMRPageInner() {
                             tabIndex={-1}
                             aria-hidden="true"
                         />
-                        <button
-                            type="button"
-                            className="btn btn-secondary"
-                            aria-label="답지 PDF 업로드"
-                            onClick={() => {
-                                if (answerKeyPdfInputRef.current) {
-                                    activateFilePicker(answerKeyPdfInputRef.current);
-                                }
+                        <CreatePdfMenu
+                            problemFileName={pdfFile?.name}
+                            answerFileName={answerKeyPdf?.name}
+                            onChooseProblem={() => {
+                                if (problemPdfInputRef.current) activateFilePicker(problemPdfInputRef.current);
                             }}
-                            style={{ cursor: 'pointer', padding: '0.55rem 1rem', fontSize: '0.85rem' }}
-                        >
-                            <UploadCloud size={16} />
-                            답지 업로드
-                        </button>
+                            onChooseAnswer={() => {
+                                if (answerKeyPdfInputRef.current) activateFilePicker(answerKeyPdfInputRef.current);
+                            }}
+                        />
                         <div className="create-primary-actions create-primary-actions--desktop">
+                            <button
+                                type="button"
+                                className="btn btn-secondary"
+                                style={{ padding: '0.55rem 1rem', fontSize: '0.85rem' }}
+                                onClick={handleSaveDraftNow}
+                            >
+                                <Save size={15} />
+                                초안 저장
+                            </button>
                             <button
                                 type="button"
                                 className="btn btn-secondary"
@@ -2327,7 +3115,7 @@ function CreateOMRPageInner() {
                                 style={{ padding: '0.55rem 1.1rem', fontSize: '0.85rem' }}
                                 onClick={handleOpenDistribution}
                             >
-                                배포하기
+                                저장하고 배포하기
                             </button>
                         </div>
                         <TeacherSessionChip compact />
@@ -2337,8 +3125,9 @@ function CreateOMRPageInner() {
                 </div>
             </header>
 
-            {isImportModalOpen && (
+            {isImportModalOpen && isLoadedExamCurrentForEdit(editId, loadedExam) && (
                 <AnswerImportModal
+                    key={editorDraftSlot}
                     isOpen
                     onClose={() => setIsImportModalOpen(false)}
                     onApply={handleAnswerImport}
@@ -2349,15 +3138,31 @@ function CreateOMRPageInner() {
                 />
             )}
 
-            {isDistributeModalOpen && (
+            {isDistributeModalOpen && isLoadedExamCurrentForEdit(editId, loadedExam) && (
                 <DistributeModal
+                    key={editorDraftSlot}
                     isOpen
-                    onClose={() => setIsDistributeModalOpen(false)}
+                    onClose={handleCloseDistribution}
                     onSaveAndShare={handleShareConfig}
+                    onAssignStudents={saveTeacherIndividualAssignment}
+                    onClearStudentAssignment={clearTeacherIndividualAssignment}
+                    onLoadStudentAssignment={loadTeacherIndividualAssignment}
+                    retakeAssignmentsEnabled={hasPlanEntitlement(currentPlan, 'retakeAssignments')}
                     onAutoMatchRegions={handleAutoMatchMissingRegions}
                     validationSummary={validationSummary}
                     initialAccessConfig={loadedExam?.accessConfig}
+                    initialShareUrl={
+                        editId && publishedShareHandoff?.examId === editId
+                            ? publishedShareHandoff.shareUrl
+                            : undefined
+                    }
+                    initialShareExpiresAt={
+                        editId && publishedShareHandoff?.examId === editId
+                            ? publishedShareHandoff.expiresAt
+                            : undefined
+                    }
                     examId={loadedExam?.id}
+                    isExistingExam={Boolean(editId)}
                 />
             )}
 
@@ -2386,7 +3191,6 @@ function CreateOMRPageInner() {
                     >
                         <FileText size={17} aria-hidden="true" />
                         <span>문제지</span>
-                        <small>{pdfFile ? '연결됨' : '업로드'}</small>
                     </button>
                     <button
                         type="button"
@@ -2398,7 +3202,6 @@ function CreateOMRPageInner() {
                     >
                         <Settings2 size={17} aria-hidden="true" />
                         <span>설정</span>
-                        <small>{designSummary.answered}/{questionsCount} 정답</small>
                     </button>
                     <button
                         type="button"
@@ -2413,7 +3216,6 @@ function CreateOMRPageInner() {
                     >
                         <Eye size={17} aria-hidden="true" />
                         <span>미리보기</span>
-                        <small>{serviceReadiness.label}</small>
                     </button>
                 </div>
 
@@ -2476,7 +3278,7 @@ function CreateOMRPageInner() {
                         {activePdfFile ? (
                             <PDFViewer
                                 file={activePdfFile}
-                                onLoadSuccess={() => undefined}
+                                onLoadSuccess={handleActivePdfLoadSuccess}
                                 onPageClick={activeViewTab === 'problem' ? handlePdfPageClick : undefined}
                                 onFileDrop={activeViewTab === 'problem' ? handleFileDrop : handleAnswerKeyPdfFile}
                                 markers={activeViewTab === 'problem'
@@ -2529,52 +3331,61 @@ function CreateOMRPageInner() {
                             </div>
                         </div>
                         <div className="create-settings-toolbar">
-                            <div className="create-settings-zoom-group" role="group" aria-label="설정 내용 배율">
-                                <button
-                                    type="button"
-                                    className="create-settings-tool-button"
-                                    onClick={() => adjustSettingsZoom(-SETTINGS_ZOOM_STEP)}
-                                    disabled={settingsZoom <= SETTINGS_ZOOM_MIN}
-                                    aria-label="설정 내용 축소"
-                                    title="설정 내용 축소"
-                                >
-                                    <ZoomOut size={14} />
-                                </button>
-                                <span className="create-settings-zoom-value">{Math.round(settingsZoom * 100)}%</span>
-                                <button
-                                    type="button"
-                                    className="create-settings-tool-button"
-                                    onClick={() => adjustSettingsZoom(SETTINGS_ZOOM_STEP)}
-                                    disabled={settingsZoom >= SETTINGS_ZOOM_MAX}
-                                    aria-label="설정 내용 확대"
-                                    title="설정 내용 확대"
-                                >
-                                    <ZoomIn size={14} />
-                                </button>
-                            </div>
-                            <button
-                                type="button"
-                                className="create-settings-tool-button"
-                                onClick={scrollSettingsToTop}
-                                aria-label="설정 맨 위로 이동"
-                                title="설정 맨 위로 이동"
-                            >
-                                <ArrowUpToLine size={14} />
-                            </button>
-                            <button
-                                type="button"
-                                className="create-settings-tool-button"
-                                onClick={toggleComfortSidebarWidth}
-                                aria-label={sidebarWidth >= SETTINGS_SIDEBAR_COMFORT_WIDTH - 24 ? "설정 패널 기본 폭" : "설정 패널 넓게 보기"}
-                                title={sidebarWidth >= SETTINGS_SIDEBAR_COMFORT_WIDTH - 24 ? "설정 패널 기본 폭" : "설정 패널 넓게 보기"}
-                            >
-                                {sidebarWidth >= SETTINGS_SIDEBAR_COMFORT_WIDTH - 24 ? <Minimize2 size={14} /> : <Maximize2 size={14} />}
-                            </button>
+                            <details className="create-settings-view-options">
+                                <summary>
+                                    <Settings2 size={14} aria-hidden="true" />
+                                    보기 옵션
+                                    <ChevronDown size={13} aria-hidden="true" />
+                                </summary>
+                                <div className="create-settings-view-options-menu">
+                                    <div className="create-settings-zoom-group" role="group" aria-label="설정 내용 배율">
+                                        <button
+                                            type="button"
+                                            className="create-settings-tool-button"
+                                            onClick={() => adjustSettingsZoom(-SETTINGS_ZOOM_STEP)}
+                                            disabled={settingsZoom <= SETTINGS_ZOOM_MIN}
+                                            aria-label="설정 내용 축소"
+                                            title="설정 내용 축소"
+                                        >
+                                            <ZoomOut size={14} />
+                                        </button>
+                                        <span className="create-settings-zoom-value">{Math.round(settingsZoom * 100)}%</span>
+                                        <button
+                                            type="button"
+                                            className="create-settings-tool-button"
+                                            onClick={() => adjustSettingsZoom(SETTINGS_ZOOM_STEP)}
+                                            disabled={settingsZoom >= SETTINGS_ZOOM_MAX}
+                                            aria-label="설정 내용 확대"
+                                            title="설정 내용 확대"
+                                        >
+                                            <ZoomIn size={14} />
+                                        </button>
+                                    </div>
+                                    <button
+                                        type="button"
+                                        className="create-settings-tool-button"
+                                        onClick={scrollSettingsToTop}
+                                        aria-label="설정 맨 위로 이동"
+                                        title="설정 맨 위로 이동"
+                                    >
+                                        <ArrowUpToLine size={14} />
+                                    </button>
+                                    <button
+                                        type="button"
+                                        className="create-settings-tool-button"
+                                        onClick={toggleComfortSidebarWidth}
+                                        aria-label={sidebarWidth >= SETTINGS_SIDEBAR_COMFORT_WIDTH - 24 ? "설정 패널 기본 폭" : "설정 패널 넓게 보기"}
+                                        title={sidebarWidth >= SETTINGS_SIDEBAR_COMFORT_WIDTH - 24 ? "설정 패널 기본 폭" : "설정 패널 넓게 보기"}
+                                    >
+                                        {sidebarWidth >= SETTINGS_SIDEBAR_COMFORT_WIDTH - 24 ? <Minimize2 size={14} /> : <Maximize2 size={14} />}
+                                    </button>
+                                </div>
+                            </details>
                             <span
-                                className={`create-publish-chip ${serviceReadiness.canOpenDistribution ? 'is-ready' : 'needs-work'}`}
+                                className={`create-publish-chip ${serviceReadiness.canOpenDistribution && validationSummary.warnings.length === 0 ? 'is-ready' : 'needs-work'}`}
                                 title={serviceReadiness.detail}
                             >
-                                {serviceReadiness.canOpenDistribution ? '배포 가능' : '확인 필요'}
+                                {validationSummary.warnings.length > 0 ? '경고 확인' : serviceReadiness.canOpenDistribution ? '배포 가능' : '확인 필요'}
                             </span>
                         </div>
                     </div>
@@ -2594,7 +3405,7 @@ function CreateOMRPageInner() {
                             </div>
                         )}
 
-                        <div className="create-design-check-compact">
+                        {hasValidationIssues && <div className="create-design-check-compact" role="status" aria-label="시험 설계 확인 필요">
                             <div className="create-design-check-top">
                                 <div className="create-design-check-title">
                                     <span>설계 체크</span>
@@ -2669,15 +3480,15 @@ function CreateOMRPageInner() {
                             )}
 
                             <div
-                                className={`create-validation-line ${validationSummary.isPublishable ? 'is-ready' : 'needs-work'}`}
+                                className={`create-validation-line ${hasValidationIssues ? 'needs-work' : 'is-ready'}`}
                                 title={validationTooltip}
                             >
                                 <div>
-                                    <strong>{validationSummary.isPublishable ? '배포 가능' : '수정 필요'}</strong>
+                                    <strong>{validationSummary.warnings.length > 0 ? '경고 확인' : validationSummary.isPublishable ? '배포 가능' : '수정 필요'}</strong>
                                     <span>{validationSummary.errors.length} 오류 · {validationSummary.warnings.length} 경고</span>
                                 </div>
                             </div>
-                        </div>
+                        </div>}
 
                         <div className="create-section-label">
                             <span className="step">1</span>시험 기본
@@ -2773,6 +3584,7 @@ function CreateOMRPageInner() {
                                 title="정답 인식 마법사 (답지 추출)"
                                 style={{ border: '1px dashed var(--primary)', color: 'var(--primary)', background: 'color-mix(in srgb, var(--primary) 5%, var(--surface))' }}
                                 onClick={() => setIsImportModalOpen(true)}
+                                disabled={!initialDefaultsReady}
                             >
                                 <BrainCircuit size={17} />
                                 <span>정답 인식</span>
@@ -3931,15 +4743,15 @@ function CreateOMRPageInner() {
                     className="btn btn-primary"
                     onClick={handleOpenDistribution}
                 >
-                    배포하기
+                    저장하고 배포하기
                 </button>
                 <button
                     type="button"
                     className="btn btn-secondary"
-                    onClick={handleSaveImage}
-                    disabled={isSaving}
+                    onClick={handleSaveDraftNow}
                 >
-                    {isSaving ? "저장 중..." : "이미지 저장"}
+                    <Save size={16} />
+                    초안 저장
                 </button>
             </div>
         </div >

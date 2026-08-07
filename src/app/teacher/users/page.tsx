@@ -33,9 +33,13 @@ import type { Attempt, Exam } from "@/types/omr";
 import { decodeCsvBytes, parseCsvRows, serializeCsvRows } from "@/lib/csv";
 import { shouldUseDemoData } from "@/lib/demoData";
 import { readTeacherSession } from "@/lib/teacherSession";
-import { loadTeacherAttempts } from "@/lib/teacherAttemptClient";
+import { loadTeacherAttemptSummaries, loadTeacherAttempts } from "@/lib/teacherAttemptClient";
 import { loadTeacherExams } from "@/lib/teacherExamClient";
-import { loadTeacherRosterSnapshot, saveTeacherRosterSnapshot } from "@/lib/teacherRosterClient";
+import {
+    loadTeacherRosterSnapshot,
+    ROSTER_REVISION_CONFLICT_ERROR,
+    saveTeacherRosterSnapshot,
+} from "@/lib/teacherRosterClient";
 import { seedLocalTestStudentAccounts } from "@/lib/localTestAccounts";
 import { issueStudentStartCredential } from "@/app/actions/studentAuth";
 import { authorizeRosterStudentSet } from "@/app/actions/premiumAccess";
@@ -87,7 +91,6 @@ import { hasPlanEntitlement } from "@/utils/plans";
 import { useServerPlan } from "@/lib/useServerPlan";
 import { buildStudentResultHref } from "@/lib/studentResultHub";
 import { studentIdFor } from "@/utils/storage";
-import { readActiveWorkspaceContext } from "@/lib/workspaceContext";
 import {
     KPI,
     MiniStat,
@@ -111,6 +114,10 @@ import GroupsTab from "@/components/teacher/users/GroupsTab";
 import InvitesTab from "@/components/teacher/users/InvitesTab";
 import { ALL_REGION_KEY } from "@/components/teacher/users/parts";
 import type { StudentFormData, GroupFormData, SortKey, SortDirection, ConfirmAction } from "@/components/teacher/users/parts";
+import {
+    INITIAL_CAPACITY_EXCEEDED_ERROR,
+    INITIAL_CAPACITY_REMEDIATION_KO,
+} from "@/lib/initialOperationsPolicy";
 
 type TabType = "students" | "groups" | "invites";
 type RosterDataMode = "real" | "demo";
@@ -244,14 +251,6 @@ function normalizeEmail(value: string): string {
     return value.trim().toLowerCase();
 }
 
-function resolveInviteUrl(workspaceId: string): string {
-    const query = new URLSearchParams({ role: "student" });
-    if (workspaceId) query.set("workspace", workspaceId);
-    const path = `/?${query.toString()}`;
-    if (typeof window === "undefined") return path;
-    return `${window.location.origin}${path}`;
-}
-
 export default function ManageUsersPage() {
     return (
         <Suspense fallback={<div style={{ minHeight: '100vh' }} />}>
@@ -291,11 +290,12 @@ function ManageUsersInner() {
     const [invites, setInvites] = useState<RosterInvite[]>([]);
     const [rosterDataMode, setRosterDataMode] = useState<RosterDataMode>("real");
     const [allAttempts, setAllAttempts] = useState<Attempt[]>([]);
+    const [detailedAttempts, setDetailedAttempts] = useState<Attempt[] | null>(null);
+    const detailedAttemptLoadRef = useRef<Promise<Attempt[] | null> | null>(null);
     const [exams, setExams] = useState<Exam[]>([]);
     const [studentCodeRegistry, setStudentCodeRegistry] = useState<Record<string, string>>({});
     const [issuedStudentCredentialIds, setIssuedStudentCredentialIds] = useState<Set<string>>(new Set());
     const [sessionStudentCodes, setSessionStudentCodes] = useState<Record<string, string>>({});
-    const [workspaceId, setWorkspaceId] = useState("");
     const [issuingStudentCode, setIssuingStudentCode] = useState(false);
     const rosterPlanSyncRef = useRef<Promise<void>>(Promise.resolve());
     const rosterMutationVersionRef = useRef(0);
@@ -320,7 +320,8 @@ function ManageUsersInner() {
     const [showProfileModal, setShowProfileModal] = useState(false);
     const [confirmAction, setConfirmAction] = useState<ConfirmAction | null>(null);
     const [popoverId, setPopoverId] = useState<string | null>(null);
-    const [copyFlash, setCopyFlash] = useState(false);
+    const popoverTriggerRef = useRef<HTMLButtonElement | null>(null);
+    const copyFlash = false;
     const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
     const [selectedGroupId, setSelectedGroupId] = useState<string | null>(null);
     const [showGroupMoveModal, setShowGroupMoveModal] = useState(false);
@@ -332,7 +333,6 @@ function ManageUsersInner() {
     const [page, setPage] = useState(1);
 
     const fileInputRef = useRef<HTMLInputElement | null>(null);
-    const popoverMenuRef = useRef<HTMLTableCellElement | null>(null);
     const undoTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
     // Latest-ref indirection so a fired undo toast always runs the freshest
     // handler (which reads current state) instead of a stale closure.
@@ -348,7 +348,6 @@ function ManageUsersInner() {
                     ? loadTeacherLocalStudentCodes(localStorage, process.env.NODE_ENV)
                     : null;
                 seedLocalTestStudentAccounts(localStorage);
-                setWorkspaceId(readActiveWorkspaceContext(sessionStorage).organizationId);
                 const storedRosterExists = hasStoredRosterData(localStorage);
                 const storedStudents = readRosterStudents(localStorage);
                 const storedGroups = readRosterGroups(localStorage);
@@ -374,11 +373,15 @@ function ManageUsersInner() {
                 setGroups(nextGroups);
                 setInvites(nextInvites);
                 setRosterDataMode(useDemoRoster ? "demo" : "real");
-                if (rosterResult.remoteError) {
-                    toast.info(
-                        "명단은 로컬 기준으로 표시 중",
-                        "Supabase 명단 동기화가 지연되어 현재 기기 데이터를 우선 사용했습니다."
-                    );
+                if (rosterResult.remoteError && !useDemoRoster) {
+                    if (rosterResult.remoteError === INITIAL_CAPACITY_EXCEEDED_ERROR) {
+                        toast.error("초기 운영 지원 범위 초과", INITIAL_CAPACITY_REMEDIATION_KO);
+                    } else {
+                        toast.info(
+                            "명단은 로컬 기준으로 표시 중",
+                            "Supabase 명단 동기화가 지연되어 현재 기기 데이터를 우선 사용했습니다."
+                        );
+                    }
                 }
                 const storedCodes = productionCodes
                     ?? loadTeacherLocalStudentCodes(localStorage, process.env.NODE_ENV);
@@ -407,17 +410,24 @@ function ManageUsersInner() {
         let cancelled = false;
         const loadRosterAnalytics = async () => {
             const [attemptResult, examResult] = await Promise.all([
-                loadTeacherAttempts(),
+                loadTeacherAttemptSummaries(),
                 loadTeacherExams(),
             ]);
             if (cancelled) return;
             setAllAttempts(attemptResult.items);
             setExams(examResult.items);
-            if (attemptResult.remoteError || examResult.remoteError) {
-                toast.info(
-                    "로컬 응시 데이터 기준으로 표시 중",
-                    "서버 동기화가 일부 지연되어 학생 평균은 현재 기기 데이터로 계산했습니다."
-                );
+            if ((attemptResult.remoteError || examResult.remoteError) && !shouldUseDemoData(readTeacherSession())) {
+                if (
+                    attemptResult.remoteError === INITIAL_CAPACITY_EXCEEDED_ERROR
+                    || examResult.remoteError === INITIAL_CAPACITY_EXCEEDED_ERROR
+                ) {
+                    toast.error("초기 운영 지원 범위 초과", INITIAL_CAPACITY_REMEDIATION_KO);
+                } else {
+                    toast.info(
+                        "로컬 응시 데이터 기준으로 표시 중",
+                        "서버 동기화가 일부 지연되어 학생 평균은 현재 기기 데이터로 계산했습니다."
+                    );
+                }
             }
         };
 
@@ -429,11 +439,18 @@ function ManageUsersInner() {
     useEffect(() => {
         if (!popoverId) return;
         const handlePointerDown = (event: MouseEvent) => {
-            if (popoverMenuRef.current?.contains(event.target as Node)) return;
+            const target = event.target;
+            if (target instanceof Element && target.closest("[data-teacher-user-popover-root]")) return;
             setPopoverId(null);
         };
         const handleKeyDown = (event: KeyboardEvent) => {
-            if (event.key === "Escape") setPopoverId(null);
+            if (event.key !== "Escape") return;
+            event.preventDefault();
+            setPopoverId(null);
+            requestAnimationFrame(() => {
+                const trigger = popoverTriggerRef.current;
+                if (trigger?.isConnected) trigger.focus({ preventScroll: true });
+            });
         };
         document.addEventListener("mousedown", handlePointerDown);
         document.addEventListener("keydown", handleKeyDown);
@@ -479,10 +496,17 @@ function ManageUsersInner() {
                 setStudents(previousSnapshot.students);
                 setGroups(previousSnapshot.groups);
                 setInvites(previousSnapshot.invites);
-                toast.error(
-                    "명단 저장 실패",
-                    "서버에 저장되지 않아 방금 변경을 되돌렸습니다. 연결 상태를 확인한 뒤 다시 시도해주세요."
-                );
+                if (result.remoteError === ROSTER_REVISION_CONFLICT_ERROR) {
+                    toast.error(
+                        "다른 기기에서 명단이 변경됨",
+                        "방금 변경을 되돌렸습니다. 새로고침해 최신 명단을 확인한 뒤 다시 시도해주세요."
+                    );
+                } else {
+                    toast.error(
+                        "명단 저장 실패",
+                        "서버에 저장되지 않아 방금 변경을 되돌렸습니다. 연결 상태를 확인한 뒤 다시 시도해주세요."
+                    );
+                }
             }
         });
         // The canonical server save now synchronizes reductions and same-size
@@ -518,9 +542,18 @@ function ManageUsersInner() {
         buildRosterPerformanceMap(rosterStudents, allAttempts, examById)
     ), [rosterStudents, allAttempts, examById]);
 
+    const profileAttempts = detailedAttempts || allAttempts;
+    const profilePerformanceByStudentId = useMemo(() => (
+        buildRosterPerformanceMap(rosterStudents, profileAttempts, examById)
+    ), [rosterStudents, profileAttempts, examById]);
+
     const displayStudents = useMemo(() => (
         applyRosterPerformance(rosterStudents, performanceByStudentId)
     ), [rosterStudents, performanceByStudentId]);
+    const hasStudentRosterData = displayStudents.length > 0;
+    // Keep the established controls while the client snapshot is hydrating, then
+    // collapse to the single empty-state action set when the real roster is empty.
+    const showStudentListControls = !hydrated || hasStudentRosterData;
 
     const displayGroups = useMemo(() => (
         recomputeRosterGroupsFromStudents(displayStudents, rosterGroups)
@@ -530,10 +563,10 @@ function ManageUsersInner() {
         buildRegionalLearningScopes({
             students: displayStudents,
             groups: displayGroups,
-            attempts: allAttempts,
+            attempts: profileAttempts,
             exams,
         })
-    ), [displayStudents, displayGroups, allAttempts, exams]);
+    ), [displayStudents, displayGroups, profileAttempts, exams]);
 
     const activeRegionKey = selectedRegionKey === ALL_REGION_KEY || regionalScopes.some(scope => scope.regionKey === selectedRegionKey)
         ? selectedRegionKey
@@ -551,7 +584,6 @@ function ManageUsersInner() {
             averageScore: 0,
             groupNames: [],
         });
-
     const normalizedQuery = deferredQuery.trim().toLowerCase();
     const filtered = useMemo(() =>
         displayStudents.filter(s => {
@@ -651,8 +683,8 @@ function ManageUsersInner() {
     // unambiguous legacy matching, and stores each bucket newest first.
     const selectedMatchedAttempts = useMemo<Attempt[]>(() => {
         if (!selected) return [];
-        return performanceByStudentId.get(selected.id)?.attempts || [];
-    }, [performanceByStudentId, selected]);
+        return profilePerformanceByStudentId.get(selected.id)?.attempts || [];
+    }, [profilePerformanceByStudentId, selected]);
 
     const selectedRecentAttempts = selectedMatchedAttempts.slice(0, 3);
     const latestStableAttempt = selectedMatchedAttempts[0] || null;
@@ -669,12 +701,32 @@ function ManageUsersInner() {
 
     const selectedGroupProfile = useMemo<GroupProfileInsight | null>(() => {
         if (!selectedGroup) return null;
-        return buildGroupProfileInsight(selectedGroup, displayStudents, allAttempts, examById, {
+        return buildGroupProfileInsight(selectedGroup, displayStudents, profileAttempts, examById, {
             examLimit: 6,
             weaknessLimit: 6,
             riskLimit: 5,
         });
-    }, [selectedGroup, displayStudents, allAttempts, examById]);
+    }, [selectedGroup, displayStudents, profileAttempts, examById]);
+
+    const ensureDetailedAttempts = async (): Promise<Attempt[] | null> => {
+        if (detailedAttempts) return detailedAttempts;
+        if (detailedAttemptLoadRef.current) return detailedAttemptLoadRef.current;
+        const pending = loadTeacherAttempts().then(result => {
+            if (result.remoteError) throw new Error(result.remoteError);
+            setDetailedAttempts(result.items);
+            return result.items;
+        }).catch(error => {
+            toast.error(
+                "상세 분석 로드 실패",
+                error instanceof Error ? error.message : "상세 제출 데이터를 불러오지 못했습니다.",
+            );
+            return null;
+        }).finally(() => {
+            detailedAttemptLoadRef.current = null;
+        });
+        detailedAttemptLoadRef.current = pending;
+        return pending;
+    };
 
     // Detail-panel button handlers
     const handleSendMessage = () => {
@@ -684,11 +736,12 @@ function ManageUsersInner() {
         }
         setShowMessageModal(true);
     };
-    const handleOpenDetail = () => {
+    const handleOpenDetail = async () => {
         if (!studentGrowthReportsEnabled) {
             toast.info("학생 성장 리포트는 Pro 기능입니다", "기본 명단과 최근 점수는 확인할 수 있고, 누적 성장/취약 유형 리포트는 Pro 이상에서 열립니다.");
             return;
         }
+        if (!await ensureDetailedAttempts()) return;
         if (!selectedProfile) {
             toast.info("상세 데이터를 찾을 수 없음", "학생을 다시 선택한 뒤 열어주세요.");
             return;
@@ -696,11 +749,12 @@ function ManageUsersInner() {
         setShowProfileModal(true);
     };
 
-    const handleOpenGroupProfile = (groupId: string) => {
+    const handleOpenGroupProfile = async (groupId: string) => {
         if (!advancedAnalyticsEnabled) {
             toast.info("반별 분석 리포트는 Pro 기능입니다", "반 목록과 평균은 확인할 수 있고, 반별 약점/집중 관리 리포트는 Pro 이상에서 열립니다.");
             return;
         }
+        if (!await ensureDetailedAttempts()) return;
         setSelectedGroupId(groupId);
         setShowGroupProfileModal(true);
     };
@@ -713,7 +767,7 @@ function ManageUsersInner() {
         if (!initialGroupId || !hydrated) return;
         if (openedGroupDeepLinkRef.current === initialGroupId) return;
         openedGroupDeepLinkRef.current = initialGroupId;
-        handleOpenGroupProfile(initialGroupId);
+        void handleOpenGroupProfile(initialGroupId);
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [initialGroupId, hydrated]);
 
@@ -1229,12 +1283,10 @@ function ManageUsersInner() {
 
     // ===== Invite actions =====
     const handleCopyInvite = async () => {
-        try {
-            const activeWorkspaceId = workspaceId || readActiveWorkspaceContext(sessionStorage).organizationId;
-            await navigator.clipboard.writeText(resolveInviteUrl(activeWorkspaceId));
-            setCopyFlash(true);
-            setTimeout(() => setCopyFlash(false), 1500);
-        } catch {}
+        toast.info(
+            "시험별 링크를 사용해주세요",
+            "시험 만들기·편집의 배포 단계에서 대상 반을 고르면 만료 가능한 안전한 링크가 발급됩니다.",
+        );
     };
 
     const handleResendInvite = (id: string) => {
@@ -1360,7 +1412,7 @@ function ManageUsersInner() {
             <TeacherHeader badge="USERS" badgeColor="#22c55e" />
 
             <main id="main-content" tabIndex={-1} className="container animate-fade-in" style={{ paddingBottom: '4rem', position: 'relative', zIndex: 1 }}>
-                <div style={{ margin: '3rem 0 2rem', display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end', gap: '2rem', flexWrap: 'wrap' }}>
+                <div className="teacher-users-page-heading mobile-section-stack" style={{ margin: '3rem 0 2rem', display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end', gap: '2rem', flexWrap: 'wrap' }}>
                     <div>
                         <h1 className="title-gradient" style={{ fontSize: '2.5rem', marginBottom: '0.5rem', lineHeight: 1.2 }}>
                             사용자 관리
@@ -1369,18 +1421,18 @@ function ManageUsersInner() {
                             학생, 반, 초대를 한 곳에서 관리하세요.
                         </p>
                     </div>
-                    <div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap' }}>
-                        <input
-                            ref={fileInputRef}
-                            type="file"
-                            accept=".csv"
-                            style={{ display: 'none' }}
-                            onChange={(e) => {
-                                const f = e.target.files?.[0];
-                                if (f) handleCsvFile(f);
-                                if (fileInputRef.current) fileInputRef.current.value = "";
-                            }}
-                        />
+                    <input
+                        ref={fileInputRef}
+                        type="file"
+                        accept=".csv"
+                        style={{ display: 'none' }}
+                        onChange={(e) => {
+                            const f = e.target.files?.[0];
+                            if (f) handleCsvFile(f);
+                            if (fileInputRef.current) fileInputRef.current.value = "";
+                        }}
+                    />
+                    {(tab !== "students" || showStudentListControls) && <div className="teacher-users-desktop-actions" style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap' }}>
                         <button
                             onClick={() => fileInputRef.current?.click()}
                             style={{
@@ -1413,7 +1465,7 @@ function ManageUsersInner() {
                                 <UserPlus size={16} /> 학생 추가
                             </button>
                         )}
-                    </div>
+                    </div>}
                 </div>
 
                 {isDemoRoster && (
@@ -1444,84 +1496,128 @@ function ManageUsersInner() {
                     </div>
                 )}
 
-                {/* KPI */}
-                <div className="bento-grid" style={{ marginBottom: '1.25rem' }}>
-                    <KPI label="전체 학생" value={displayStudents.length} color="#4f46e5" icon={<Users size={22} />} />
-                    <KPI label="활동 중" value={displayStudents.filter(s => s.status === "active").length} color="#10b981" icon={<CheckCircle2 size={22} />} />
-                    <KPI label="반 개수" value={displayGroups.length} color="#8b5cf6" icon={<FolderPlus size={22} />} />
-                    <KPI label="지역 수" value={regionalScopes.length} color="#0ea5e9" icon={<MapPin size={22} />} />
-                    <KPI label="미수락 초대" value={rosterInvites.filter(i => i.status === "pending").length} color="#f59e0b" icon={<Clock size={22} />} />
-                </div>
+                {(tab !== "students" || showStudentListControls) && (
+                    <>
+                        <section className="teacher-users-mobile-summary" aria-label="명단 핵심 지표">
+                            <div><span>전체 학생</span><strong>{displayStudents.length}명</strong></div>
+                            <div><span>활동 중</span><strong>{displayStudents.filter(student => student.status === "active").length}명</strong></div>
+                            <div><span>반</span><strong>{displayGroups.length}개</strong></div>
+                        </section>
 
-                {regionalScopes.length > 0 && (
-                    <div className="bento-card" style={{ padding: '1.25rem 1.35rem', marginBottom: '1.25rem' }}>
-                        <div style={{ display: 'flex', justifyContent: 'space-between', gap: '1rem', alignItems: 'flex-start', marginBottom: '1rem', flexWrap: 'wrap' }}>
-                            <div>
-                                <h2 style={{ fontSize: '1.05rem', fontWeight: 850, marginBottom: '0.25rem' }}>지역별 현황</h2>
-                                <p style={{ fontSize: '0.82rem', color: 'var(--muted)', lineHeight: 1.5 }}>
-                                    {activeRegionName} · 학생 {activeRegionKey === ALL_REGION_KEY ? displayStudents.length : filtered.length}명
-                                </p>
-                            </div>
-                            <select
-                                aria-label="지역 필터"
-                                value={activeRegionKey}
-                                onChange={e => setSelectedRegionKey(e.target.value)}
-                                style={{
-                                    minWidth: 150,
-                                    padding: '0.55rem 0.75rem',
-                                    background: 'var(--background)',
-                                    border: '1px solid var(--border)',
-                                    borderRadius: 'var(--radius-md)',
-                                    color: 'var(--foreground)',
-                                    fontSize: '0.85rem',
-                                    fontWeight: 700,
-                                }}
+                        <div className="teacher-users-mobile-page-actions mobile-action-row" role="group" aria-label="명단 작업">
+                            {tab === "groups" ? (
+                                <button
+                                    type="button"
+                                    className="btn btn-primary"
+                                    onClick={() => { setEditingGroup(null); setShowGroupModal(true); }}
+                                >
+                                    <FolderPlus size={16} /> 새 반 만들기
+                                </button>
+                            ) : (
+                                <button
+                                    type="button"
+                                    className="btn btn-primary"
+                                    onClick={() => { setEditingStudent(null); setStudentModalDefaultGroupId(undefined); setShowStudentModal(true); }}
+                                >
+                                    <UserPlus size={16} /> 학생 추가
+                                </button>
+                            )}
+                            <button
+                                type="button"
+                                className="btn btn-secondary"
+                                onClick={() => fileInputRef.current?.click()}
                             >
-                                <option value={ALL_REGION_KEY}>전체 지역</option>
-                                {regionalScopes.map(scope => (
-                                    <option key={scope.regionKey} value={scope.regionKey}>{regionLabel(scope)}</option>
-                                ))}
-                            </select>
+                                <Upload size={16} /> CSV 업로드
+                            </button>
                         </div>
 
-                        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: '0.75rem' }}>
-                            {regionalScopes.map(scope => {
-                                const selectedRegion = activeRegionKey === scope.regionKey;
-                                return (
-                                    <button
-                                        key={scope.regionKey}
-                                        type="button"
-                                        onClick={() => setSelectedRegionKey(selectedRegion ? ALL_REGION_KEY : scope.regionKey)}
-                                        style={{
-                                            padding: '0.85rem 0.9rem',
-                                            borderRadius: 'var(--radius-md)',
-                                            border: selectedRegion ? '1px solid var(--primary)' : '1px solid var(--border)',
-                                            background: selectedRegion ? 'rgba(99,102,241,0.08)' : 'var(--background)',
-                                            textAlign: 'left',
-                                            color: 'var(--foreground)',
-                                        }}
-                                    >
-                                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.45rem', marginBottom: '0.55rem' }}>
-                                            <MapPin size={14} color={selectedRegion ? 'var(--primary)' : 'var(--muted)'} />
-                                            <span style={{ fontSize: '0.86rem', fontWeight: 850 }}>{regionLabel(scope)}</span>
+                        <details className="teacher-users-analysis">
+                            <summary>
+                                <span>명단 분석</span>
+                                <small>학생 {displayStudents.length}명 · 반 {displayGroups.length}개 · 지역 {regionalScopes.length}곳</small>
+                            </summary>
+                            <div className="teacher-users-analysis-content">
+                                <div className="bento-grid" style={{ marginBottom: '1.25rem' }}>
+                                    <KPI label="전체 학생" value={displayStudents.length} color="#4f46e5" icon={<Users size={22} />} />
+                                    <KPI label="활동 중" value={displayStudents.filter(s => s.status === "active").length} color="#10b981" icon={<CheckCircle2 size={22} />} />
+                                    <KPI label="반 개수" value={displayGroups.length} color="#8b5cf6" icon={<FolderPlus size={22} />} />
+                                    <KPI label="지역 수" value={regionalScopes.length} color="#0ea5e9" icon={<MapPin size={22} />} />
+                                    <KPI label="미수락 초대" value={rosterInvites.filter(i => i.status === "pending").length} color="#f59e0b" icon={<Clock size={22} />} />
+                                </div>
+
+                                {regionalScopes.length > 0 && (
+                                    <div className="bento-card" style={{ padding: '1.25rem 1.35rem', marginBottom: '1.25rem' }}>
+                                        <div style={{ display: 'flex', justifyContent: 'space-between', gap: '1rem', alignItems: 'flex-start', marginBottom: '1rem', flexWrap: 'wrap' }}>
+                                            <div>
+                                                <h2 style={{ fontSize: '1.05rem', fontWeight: 850, marginBottom: '0.25rem' }}>지역별 현황</h2>
+                                                <p style={{ fontSize: '0.82rem', color: 'var(--muted)', lineHeight: 1.5 }}>
+                                                    {activeRegionName} · 학생 {activeRegionKey === ALL_REGION_KEY ? displayStudents.length : filtered.length}명
+                                                </p>
+                                            </div>
+                                            <select
+                                                aria-label="지역 필터"
+                                                value={activeRegionKey}
+                                                onChange={event => setSelectedRegionKey(event.target.value)}
+                                                style={{
+                                                    minWidth: 150,
+                                                    padding: '0.55rem 0.75rem',
+                                                    background: 'var(--background)',
+                                                    border: '1px solid var(--border)',
+                                                    borderRadius: 'var(--radius-md)',
+                                                    color: 'var(--foreground)',
+                                                    fontSize: '0.85rem',
+                                                    fontWeight: 700,
+                                                }}
+                                            >
+                                                <option value={ALL_REGION_KEY}>전체 지역</option>
+                                                {regionalScopes.map(scope => (
+                                                    <option key={scope.regionKey} value={scope.regionKey}>{regionLabel(scope)}</option>
+                                                ))}
+                                            </select>
                                         </div>
-                                        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '0.35rem' }}>
-                                            <MiniRegionMetric label="학생" value={`${scope.studentCount}명`} />
-                                            <MiniRegionMetric label="반" value={`${scope.groupCount}개`} />
-                                            <MiniRegionMetric label="평균" value={`${scope.averageScore}점`} />
+
+                                        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: '0.75rem' }}>
+                                            {regionalScopes.map(scope => {
+                                                const selectedRegion = activeRegionKey === scope.regionKey;
+                                                return (
+                                                    <button
+                                                        key={scope.regionKey}
+                                                        type="button"
+                                                        onClick={() => setSelectedRegionKey(selectedRegion ? ALL_REGION_KEY : scope.regionKey)}
+                                                        style={{
+                                                            padding: '0.85rem 0.9rem',
+                                                            borderRadius: 'var(--radius-md)',
+                                                            border: selectedRegion ? '1px solid var(--primary)' : '1px solid var(--border)',
+                                                            background: selectedRegion ? 'rgba(99,102,241,0.08)' : 'var(--background)',
+                                                            textAlign: 'left',
+                                                            color: 'var(--foreground)',
+                                                        }}
+                                                    >
+                                                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.45rem', marginBottom: '0.55rem' }}>
+                                                            <MapPin size={14} color={selectedRegion ? 'var(--primary)' : 'var(--muted)'} />
+                                                            <span style={{ fontSize: '0.86rem', fontWeight: 850 }}>{regionLabel(scope)}</span>
+                                                        </div>
+                                                        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '0.35rem' }}>
+                                                            <MiniRegionMetric label="학생" value={`${scope.studentCount}명`} />
+                                                            <MiniRegionMetric label="반" value={`${scope.groupCount}개`} />
+                                                            <MiniRegionMetric label="평균" value={`${scope.averageScore}점`} />
+                                                        </div>
+                                                        <div style={{ marginTop: '0.55rem', fontSize: '0.72rem', color: 'var(--muted)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                                                            원시험 {scope.attemptCount}건 · 재시험 {scope.retakeAttemptCount}건 · 시험 {scope.examCount}개
+                                                        </div>
+                                                    </button>
+                                                );
+                                            })}
                                         </div>
-                                        <div style={{ marginTop: '0.55rem', fontSize: '0.72rem', color: 'var(--muted)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                                            원시험 {scope.attemptCount}건 · 재시험 {scope.retakeAttemptCount}건 · 시험 {scope.examCount}개
-                                        </div>
-                                    </button>
-                                );
-                            })}
-                        </div>
-                    </div>
+                                    </div>
+                                )}
+                            </div>
+                        </details>
+                    </>
                 )}
 
                 {/* Sub-tabs */}
-                <div style={{
+                <div className="teacher-users-tabs" role="group" aria-label="명단 보기" style={{
                     display: 'flex', gap: '0.5rem', marginBottom: '1.5rem',
                     background: 'var(--surface)', padding: '0.5rem', borderRadius: 'var(--radius-lg)',
                     border: '1px solid var(--border)', width: 'fit-content',
@@ -1534,6 +1630,9 @@ function ManageUsersInner() {
                     ] as const).map(t => (
                         <button
                             key={t.key}
+                            type="button"
+                            aria-pressed={tab === t.key}
+                            className={tab === t.key ? "is-active" : undefined}
                             onClick={() => setTab(t.key)}
                             style={{
                                 padding: '0.65rem 1.4rem', borderRadius: 'var(--radius-md)',
@@ -1553,6 +1652,7 @@ function ManageUsersInner() {
                         style={{ display: 'grid', gridTemplateColumns: selectedId ? 'minmax(0, 1fr) minmax(320px, 380px)' : 'minmax(0, 1fr)', gap: '1.25rem' }}
                     >
                         <div className="bento-card teacher-users-list-card" style={{ padding: '1.5rem' }}>
+                            {showStudentListControls && <>
                             {/* Search */}
                             <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', marginBottom: '1rem', padding: '0.75rem 1rem', background: 'var(--background)', borderRadius: 'var(--radius-md)', border: '1px solid var(--border)', flexWrap: 'wrap' }}>
                                 <Search size={16} color="var(--muted)" />
@@ -1723,7 +1823,7 @@ function ManageUsersInner() {
                                                     </span>
                                                 </td>
                                                 <td
-                                                    ref={s.id === popoverId ? popoverMenuRef : undefined}
+                                                    data-teacher-user-popover-root
                                                     style={{ padding: '0.85rem 0.5rem', textAlign: 'right', position: 'relative' }}
                                                 >
                                                     {!isDemoRoster && (
@@ -1731,6 +1831,7 @@ function ManageUsersInner() {
                                                             aria-label={`${s.name} 작업 메뉴 열기`}
                                                             onClick={(e) => {
                                                                 e.stopPropagation();
+                                                                if (popoverId !== s.id) popoverTriggerRef.current = e.currentTarget;
                                                                 setPopoverId(popoverId === s.id ? null : s.id);
                                                             }}
                                                             style={{ background: 'transparent', padding: 4, borderRadius: 6 }}
@@ -1771,6 +1872,118 @@ function ManageUsersInner() {
                                         ))}
                                     </tbody>
                                 </table>
+                            </div>
+
+                            <div className="teacher-users-mobile-list" aria-label="학생 명단">
+                                {pagedStudents.map(s => {
+                                    const regionName = rosterStudentRegionName(s, displayGroups);
+                                    const scoreTone = s.avgScore >= 80 ? 'var(--success)' : s.avgScore >= 65 ? 'var(--warning)' : 'var(--error)';
+                                    return (
+                                        <article
+                                            key={s.id}
+                                            data-testid="teacher-users-mobile-card"
+                                            className={`teacher-users-mobile-card${selectedId === s.id ? " is-selected" : ""}`}
+                                            aria-labelledby={`teacher-mobile-student-${s.id}`}
+                                        >
+                                            <div className="teacher-users-mobile-card-head">
+                                                <div className="teacher-users-mobile-avatar" style={{ background: s.avatar }} aria-hidden="true">
+                                                    {s.name.slice(1, 2)}
+                                                </div>
+                                                <div className="teacher-users-mobile-identity">
+                                                    <h3 id={`teacher-mobile-student-${s.id}`}>{s.name}</h3>
+                                                    <p>{s.email}</p>
+                                                </div>
+                                                <label className="teacher-users-mobile-select">
+                                                    <span className="sr-only">{s.name} 선택</span>
+                                                    <input
+                                                        type="checkbox"
+                                                        aria-label={`${s.name} 선택`}
+                                                        checked={selectedIds.has(s.id)}
+                                                        onChange={() => toggleSelect(s.id)}
+                                                        disabled={isDemoRoster}
+                                                    />
+                                                </label>
+                                            </div>
+
+                                            <div className="teacher-users-mobile-scope" aria-label={`${s.name} 소속`}>
+                                                <span>{s.group}</span>
+                                                <span>{regionName}</span>
+                                            </div>
+
+                                            <div className="teacher-users-mobile-metrics">
+                                                <div aria-label={`평균 ${s.avgScore}점`}>
+                                                    <span>평균</span>
+                                                    <strong style={{ color: scoreTone }}>
+                                                        {s.avgScore}점
+                                                        {s.trend === "up" && <TrendingUp size={13} aria-label="상승" />}
+                                                        {s.trend === "down" && <TrendingDown size={13} aria-label="하락" />}
+                                                    </strong>
+                                                </div>
+                                                <div aria-label={`응시 ${s.examsTaken}회`}>
+                                                    <span>응시</span>
+                                                    <strong>{s.examsTaken}회</strong>
+                                                </div>
+                                                <div aria-label={`최근 활동 ${s.lastActive}`}>
+                                                    <span>최근 활동</span>
+                                                    <strong>
+                                                        <i className={s.status === "active" ? "is-active" : undefined} aria-hidden="true" />
+                                                        {s.lastActive}
+                                                    </strong>
+                                                </div>
+                                            </div>
+
+                                            <div className="teacher-users-mobile-actions">
+                                                <button
+                                                    type="button"
+                                                    className="btn btn-secondary"
+                                                    aria-label={`${s.name} 상세 보기`}
+                                                    onClick={() => setSelectedId(s.id)}
+                                                >
+                                                    상세 보기
+                                                </button>
+                                                {!isDemoRoster && (
+                                                    <div data-teacher-user-popover-root className="teacher-users-mobile-menu-root">
+                                                        <button
+                                                            type="button"
+                                                            className="teacher-users-mobile-menu-trigger"
+                                                            aria-label={`${s.name} 작업 메뉴 열기`}
+                                                            aria-expanded={popoverId === s.id}
+                                                            onClick={(event) => {
+                                                                if (popoverId !== s.id) popoverTriggerRef.current = event.currentTarget;
+                                                                setPopoverId(popoverId === s.id ? null : s.id);
+                                                            }}
+                                                        >
+                                                            <MoreVertical size={18} />
+                                                        </button>
+                                                        {popoverId === s.id && (
+                                                            <div className="teacher-users-mobile-menu" role="menu" aria-label={`${s.name} 작업`}>
+                                                                <button
+                                                                    type="button"
+                                                                    role="menuitem"
+                                                                    onClick={() => {
+                                                                        setEditingStudent(s);
+                                                                        setShowStudentModal(true);
+                                                                        setPopoverId(null);
+                                                                    }}
+                                                                >
+                                                                    편집
+                                                                </button>
+                                                                <button
+                                                                    type="button"
+                                                                    role="menuitem"
+                                                                    className="is-danger"
+                                                                    onClick={() => handleDeleteStudent(s.id)}
+                                                                >
+                                                                    삭제
+                                                                </button>
+                                                            </div>
+                                                        )}
+                                                    </div>
+                                                )}
+                                            </div>
+                                        </article>
+                                    );
+                                })}
                             </div>
 
                             {/* T2: pager — range readout, page-size selector, prev/next */}
@@ -1839,7 +2052,8 @@ function ManageUsersInner() {
                                     )}
                                 </div>
                             )}
-                            {hydrated && filtered.length === 0 && (
+                            </>}
+                            {hydrated && !showStudentListControls && (
                                 <div style={{ padding: '3rem 2rem', textAlign: 'center' }}>
                                     <div style={{
                                         width: 64, height: 64, borderRadius: '50%',
@@ -1849,37 +2063,45 @@ function ManageUsersInner() {
                                     }}>
                                         <Users size={28} />
                                     </div>
-                                    <div style={{ fontSize: '1rem', fontWeight: 700, marginBottom: '0.35rem' }}>
-                                        {displayStudents.length === 0 ? '아직 등록된 학생이 없습니다' : '검색 결과가 없습니다'}
-                                    </div>
+                                    <div style={{ fontSize: '1rem', fontWeight: 700, marginBottom: '0.35rem' }}>아직 등록된 학생이 없습니다</div>
                                     <div style={{ fontSize: '0.85rem', color: 'var(--muted)', marginBottom: '1.25rem' }}>
-                                        {displayStudents.length === 0
-                                            ? '학생을 추가하거나 CSV로 업로드해서 시작하세요.'
-                                            : '다른 키워드로 검색해보세요.'}
+                                        학생을 추가하거나 CSV로 업로드해서 시작하세요.
                                     </div>
-                                    {displayStudents.length === 0 && (
-                                        <div style={{ display: 'inline-flex', gap: '0.5rem' }}>
-                                            <button
-                                                onClick={() => { setEditingStudent(null); setShowStudentModal(true); }}
-                                                style={{
-                                                    padding: '0.55rem 1.1rem', background: 'linear-gradient(135deg, #22c55e, #10b981)',
-                                                    color: 'white', borderRadius: 'var(--radius-md)', fontWeight: 600, fontSize: '0.85rem',
-                                                    display: 'flex', alignItems: 'center', gap: '0.4rem'
-                                                }}>
-                                                <UserPlus size={14} /> 학생 추가
-                                            </button>
-                                            <button
-                                                onClick={() => fileInputRef.current?.click()}
-                                                style={{
-                                                    padding: '0.55rem 1.1rem', background: 'var(--surface)',
-                                                    border: '1px solid var(--border)',
-                                                    borderRadius: 'var(--radius-md)', fontWeight: 600, fontSize: '0.85rem',
-                                                    display: 'flex', alignItems: 'center', gap: '0.4rem'
-                                                }}>
-                                                <Upload size={14} /> CSV 업로드
-                                            </button>
-                                        </div>
-                                    )}
+                                    <div style={{ display: 'inline-flex', gap: '0.5rem', flexWrap: 'wrap', justifyContent: 'center' }}>
+                                        <button
+                                            onClick={() => { setEditingStudent(null); setShowStudentModal(true); }}
+                                            style={{
+                                                minHeight: 44, padding: '0.55rem 1.1rem', background: 'linear-gradient(135deg, #22c55e, #10b981)',
+                                                color: 'white', borderRadius: 'var(--radius-md)', fontWeight: 600, fontSize: '0.85rem',
+                                                display: 'flex', alignItems: 'center', gap: '0.4rem'
+                                            }}>
+                                            <UserPlus size={14} /> 학생 추가
+                                        </button>
+                                        <button
+                                            onClick={() => fileInputRef.current?.click()}
+                                            style={{
+                                                minHeight: 44, padding: '0.55rem 1.1rem', background: 'var(--surface)',
+                                                border: '1px solid var(--border)',
+                                                borderRadius: 'var(--radius-md)', fontWeight: 600, fontSize: '0.85rem',
+                                                display: 'flex', alignItems: 'center', gap: '0.4rem'
+                                            }}>
+                                            <Upload size={14} /> CSV 업로드
+                                        </button>
+                                    </div>
+                                </div>
+                            )}
+                            {hydrated && showStudentListControls && filtered.length === 0 && (
+                                <div style={{ padding: '3rem 2rem', textAlign: 'center' }}>
+                                    <div style={{
+                                        width: 64, height: 64, borderRadius: '50%',
+                                        background: 'rgba(99,102,241,0.08)',
+                                        display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+                                        color: 'var(--primary)', marginBottom: '1rem'
+                                    }}>
+                                        <Search size={28} />
+                                    </div>
+                                    <div style={{ fontSize: '1rem', fontWeight: 700, marginBottom: '0.35rem' }}>검색 결과가 없습니다</div>
+                                    <div style={{ fontSize: '0.85rem', color: 'var(--muted)' }}>다른 키워드나 지역으로 검색해보세요.</div>
                                 </div>
                             )}
                         </div>
@@ -2226,7 +2448,6 @@ function ManageUsersInner() {
 
                 {tab === "invites" && (
                     <InvitesTab
-                        workspaceId={workspaceId}
                         copyFlash={copyFlash}
                         hydrated={hydrated}
                         rosterInvites={rosterInvites}

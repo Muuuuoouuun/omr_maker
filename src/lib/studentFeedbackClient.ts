@@ -11,6 +11,13 @@ import {
 } from "@/lib/feedbackPersistence";
 import type { PersistenceResult } from "@/lib/omrPersistence";
 import type { AttemptFeedback } from "@/types/omr";
+import { INITIAL_CAPACITY_EXCEEDED_ERROR } from "@/lib/initialOperationsPolicy";
+
+export type StudentFeedbackListClientResult =
+    | { status: "loaded"; items: AttemptFeedback[] }
+    | { status: "capacity_exceeded"; items: [] }
+    | { status: "unauthorized"; items: [] }
+    | { status: "service_unavailable"; items: []; error: string };
 
 export async function loadStudentReturnedFeedbackForAttempt(
     attemptId: string,
@@ -47,9 +54,23 @@ export async function markStudentFeedbackOpened(
 
 export async function loadStudentReturnedFeedbackWithDevFallback(
     studentProfileId: string,
-): Promise<AttemptFeedback[]> {
+): Promise<StudentFeedbackListClientResult> {
     const result = await listStudentCanonicalFeedback();
-    if (result.status === "loaded") return Promise.all(result.items.map(cacheFeedbackEnvelope));
-    if (result.status === "local_only") return loadLegacyReturnedFeedbackForStudent(studentProfileId);
-    return [];
+    if (result.status === "loaded") {
+        return { status: "loaded", items: result.items.map(item => item.feedback) };
+    }
+    if (result.status === "local_only") {
+        return { status: "loaded", items: await loadLegacyReturnedFeedbackForStudent(studentProfileId) };
+    }
+    if (result.error === INITIAL_CAPACITY_EXCEEDED_ERROR) {
+        return { status: "capacity_exceeded", items: [] };
+    }
+    if (result.status === "unauthorized") {
+        return { status: "unauthorized", items: [] };
+    }
+    return {
+        status: "service_unavailable",
+        items: [],
+        error: result.error || "피드백 목록을 불러올 수 없습니다.",
+    };
 }

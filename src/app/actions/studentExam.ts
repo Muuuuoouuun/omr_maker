@@ -2,7 +2,7 @@
 
 import { cookies, headers } from "next/headers";
 import { parseSignedStudentSessionCookie, resolveStudentSessionSecret, STUDENT_SERVER_SESSION_COOKIE, type StudentServerIdentity } from "@/lib/studentServerSession";
-import { getSupabaseServerConfigFromEnv, createSupabaseAdminClient, fetchAttemptRowByOwnerAndId, fetchAttemptRowsByOwner, fetchExamRowById, fetchExamRowsByOrganization, type SupabaseAdminClientLike, type SupabaseAdminReadClientLike } from "@/lib/supabaseServerAdmin";
+import { getSupabaseServerConfigFromEnv, createSupabaseAdminClient, fetchAttemptRowByOwnerAndId, fetchExamRowById, fetchStudentAttemptSummaryRowsByOwner, type SupabaseAdminClientLike, type SupabaseAdminReadClientLike } from "@/lib/supabaseServerAdmin";
 import { attemptFromSupabaseRow, examFromSupabaseRow, attemptToSupabaseRow, questionResultRowsForAttempt } from "@/lib/omrPersistence";
 import { evaluateExamAccess, examRequiresPin, verifyExamPin } from "@/lib/examAccess";
 import {
@@ -11,6 +11,7 @@ import {
     recordExamPinFailure,
     recordExamPinSuccess,
 } from "@/lib/examPinRateLimit";
+import { applyDurableRateLimitToSubjects } from "@/lib/durableRateLimit";
 import { stripExamForAttemptReview, stripExamForSolving, type ReviewableExam, type SolvableExam } from "@/lib/examSolvePayload";
 import {
     attemptOwnedBy,
@@ -21,11 +22,7 @@ import {
     ownerStudentId,
     type SubmitAttemptInput,
 } from "@/lib/studentExamCore";
-import {
-    upsertStudentQuestion,
-    validateStudentQuestionForAttempt,
-    type StudentQuestionInput,
-} from "@/lib/studentQuestions";
+import { type StudentQuestionInput } from "@/lib/studentQuestions";
 import { attemptIdForStudentSubmission } from "@/lib/studentSubmissionId";
 import type { Attempt, Exam } from "@/types/omr";
 import type { PlanKey } from "@/types/omr";
@@ -35,8 +32,18 @@ import {
     createStudentProblemPdfSignedUrlWithGateway,
     type RemoteAssetSupabaseGatewayClient,
 } from "@/lib/remoteAssetGateway.server";
+import { createOwnedStudentHandwritingSignedUrlWithGateway } from "@/lib/studentAttemptHandwritingRead.server";
 import { isSameOriginServerActionRequest } from "@/lib/serverActionSecurity";
 import { createStudentSubmissionSimulator } from "@/lib/studentSubmissionSimulation";
+import { INITIAL_CAPACITY_EXCEEDED_ERROR } from "@/lib/initialOperationsPolicy";
+import { studentAttemptSummaryFromSupabaseListRow } from "@/lib/supabaseListProjection";
+import type { StudentAssignmentPreview, StudentAttemptSummary } from "@/lib/studentExamContract";
+import { upsertStudentQuestionWithGateway } from "@/lib/studentExamServerGateway";
+import { resolveExamEntryInviteWithGateway } from "@/lib/examEntryInviteGateway";
+import {
+    listStudentAssignmentsWithGateway,
+    resolveStudentTargetedAssignmentWithGateway,
+} from "@/lib/studentTargetedAssignmentGateway.server";
 
 type Status = "ok" | "unauthenticated" | "degraded_local" | "denied" | "not_found" | "error";
 type AccessStatus = "pin_required" | "pin_rate_limited" | "login_required" | "group_denied" | "not_started" | "ended" | "archived";
@@ -50,6 +57,10 @@ type AccessStatus = "pin_required" | "pin_rate_limited" | "login_required" | "gr
  */
 const SUBMIT_ENDAT_GRACE_MS = 2 * 60 * 1000;
 const simulateStudentSubmission = createStudentSubmissionSimulator();
+const EXAM_PIN_DURABLE_POLICIES = {
+    identity: { limit: 5, windowMs: 5 * 60 * 1000, lockoutMs: 5 * 60 * 1000 },
+    global: { limit: 60, windowMs: 10 * 60 * 1000, lockoutMs: 10 * 60 * 1000 },
+};
 
 /**
  * PIN gate with brute-force protection. The PIN itself stays stateless (sent
@@ -89,11 +100,63 @@ function evaluateGatedAccess(
     return access.status;
 }
 
-type AdminClient = SupabaseAdminClientLike & SupabaseAdminReadClientLike & {
-    rpc(name: "omr_submit_session_attempt_v1", params: {
-        p_attempt: unknown;
-        p_question_results: unknown;
-    }): Promise<{ data: unknown; error: { message?: string } | null }>;
+async function evaluateDurableGatedAccess(
+    exam: Exam,
+    identity: StudentServerIdentity,
+    pin: string | undefined,
+    options: { graceMs?: number } = {},
+): Promise<"allowed" | AccessStatus> {
+    const pinProvided = typeof pin === "string" && pin.trim().length > 0;
+    if (!examRequiresPin(exam) || !pinProvided) return evaluateGatedAccess(exam, identity, pin, options);
+
+    const rateKeys = buildExamPinRateLimitKey(exam.id, ownerStudentId(identity));
+    const globalDecision = await applyDurableRateLimitToSubjects({
+        namespace: "exam-pin-global",
+        subjects: [rateKeys.globalKey],
+        operation: "consume",
+        policy: EXAM_PIN_DURABLE_POLICIES.global,
+    });
+    if (!globalDecision.allowed) return "pin_rate_limited";
+    const identityDecision = await applyDurableRateLimitToSubjects({
+        namespace: "exam-pin-identity",
+        subjects: [rateKeys.identityKey],
+        operation: "consume",
+        policy: EXAM_PIN_DURABLE_POLICIES.identity,
+    });
+    if (!identityDecision.allowed) {
+        await applyDurableRateLimitToSubjects({
+            namespace: "exam-pin-global",
+            subjects: [rateKeys.globalKey],
+            operation: "refund",
+            policy: EXAM_PIN_DURABLE_POLICIES.global,
+        });
+        return "pin_rate_limited";
+    }
+
+    const verified = verifyExamPin(exam, pin);
+    const access = evaluateGatedAccess(exam, identity, pin, options);
+    if (verified) {
+        await applyDurableRateLimitToSubjects({
+            namespace: "exam-pin-identity",
+            subjects: [rateKeys.identityKey],
+            operation: "success",
+            policy: EXAM_PIN_DURABLE_POLICIES.identity,
+        });
+        await applyDurableRateLimitToSubjects({
+            namespace: "exam-pin-global",
+            subjects: [rateKeys.globalKey],
+            operation: "refund",
+            policy: EXAM_PIN_DURABLE_POLICIES.global,
+        });
+    }
+    return access;
+}
+
+type AdminClient = Omit<SupabaseAdminClientLike, "rpc"> & SupabaseAdminReadClientLike & {
+    rpc(
+        name: string,
+        params: Record<string, unknown>,
+    ): Promise<{ data: unknown; error: { message?: string } | null }>;
 };
 
 interface ResolvedCtx {
@@ -142,11 +205,14 @@ function isCtx(value: ResolvedCtx | { status: "unauthenticated" | "degraded_loca
     return "identity" in value;
 }
 
-async function ownAttempts(admin: AdminClient, identity: StudentServerIdentity): Promise<Attempt[]> {
-    const rows = await fetchAttemptRowsByOwner(admin, { studentId: ownerStudentId(identity) });
+async function ownAttemptSummaries(admin: AdminClient, identity: StudentServerIdentity): Promise<StudentAttemptSummary[]> {
+    const rows = await fetchStudentAttemptSummaryRowsByOwner(admin, {
+        organizationId: identity.organizationId,
+        studentId: ownerStudentId(identity),
+    });
     return rows
-        .map(r => { try { return attemptFromSupabaseRow(r as Parameters<typeof attemptFromSupabaseRow>[0]); } catch { return null; } })
-        .filter((a): a is Attempt => !!a && attemptOwnedBy(a, identity));
+        .map(r => { try { return studentAttemptSummaryFromSupabaseListRow(r); } catch { return null; } })
+        .filter((attempt): attempt is StudentAttemptSummary => !!attempt);
 }
 
 async function ownAttempt(
@@ -156,7 +222,7 @@ async function ownAttempt(
 ): Promise<Attempt | null> {
     const row = await fetchAttemptRowByOwnerAndId(
         admin,
-        { studentId: ownerStudentId(identity) },
+        { organizationId: identity.organizationId, studentId: ownerStudentId(identity) },
         attemptId,
     );
     if (!row) return null;
@@ -194,16 +260,55 @@ export interface SolveLoadResult {
     exam?: SolvableExam;
 }
 
-export async function loadExamForSolving(examId: string, pin?: string): Promise<SolveLoadResult> {
+export async function loadExamForSolving(
+    examId: string,
+    pin?: string,
+    inviteToken?: string,
+    assignmentId?: string,
+): Promise<SolveLoadResult> {
     const ctx = await resolveCtx();
     if (!isCtx(ctx)) return ctx;
     try {
-        const row = await fetchExamRowById(ctx.admin, examId);
+        let organizationId = ctx.identity.organizationId || "";
+        if (inviteToken && assignmentId) return { status: "denied" };
+        if (inviteToken) {
+            const invite = await resolveExamEntryInviteWithGateway(ctx.admin, examId, inviteToken);
+            if (invite.status === "service_unavailable") return { status: "error" };
+            if (invite.status !== "resolved") return { status: "denied" };
+            if (
+                ctx.identity.kind !== "student"
+                || invite.scope.organizationId !== organizationId
+                || !ctx.identity.groupId
+                || !invite.scope.groupIds.includes(ctx.identity.groupId)
+            ) {
+                return { status: "group_denied" };
+            }
+            organizationId = invite.scope.organizationId;
+        }
+        const targeted = assignmentId
+            ? await resolveStudentTargetedAssignmentWithGateway(ctx.admin, ctx.identity, assignmentId, examId)
+            : null;
+        if (targeted?.status === "service_unavailable") return { status: "error" };
+        if (targeted?.status === "denied") {
+            return { status: ctx.identity.kind === "guest" ? "login_required" : "group_denied" };
+        }
+        const row = await fetchExamRowById(ctx.admin, organizationId, examId);
         // Distinct from "ended": lets the client fall back to a locally-synced copy
         // (offline-created exams, dev without sync). Exam ids are non-enumerable UUIDs.
         if (!row) return { status: "not_found" };
-        const exam = examFromSupabaseRow(row as Parameters<typeof examFromSupabaseRow>[0]);
-        const access = evaluateGatedAccess(exam, ctx.identity, pin);
+        let exam = examFromSupabaseRow(row as Parameters<typeof examFromSupabaseRow>[0]);
+        if (exam.accessConfig?.type === "targeted" && !targeted) {
+            return { status: ctx.identity.kind === "guest" ? "login_required" : "group_denied" };
+        }
+        if (targeted?.status === "authorized") {
+            if (targeted.mode === "retake") {
+                const allowed = new Set(targeted.questionIds);
+                exam = { ...exam, questions: exam.questions.filter(question => allowed.has(question.id)) };
+                if (exam.questions.length !== allowed.size) return { status: "denied" };
+            }
+            exam = { ...exam, accessConfig: { type: "targeted" } };
+        }
+        const access = await evaluateDurableGatedAccess(exam, ctx.identity, pin);
         if (access !== "allowed") return { status: access };
         const premium = await examOwnerPremium(ctx.admin, exam);
         const solvableExam = stripExamForSolving(exam, { handwritingArchive: premium.handwritingArchive });
@@ -264,7 +369,7 @@ export async function submitAttempt(input: SubmitAttemptInput, pin?: string): Pr
         if (!attemptId) return { status: "error" };
         const { existingAttempt, examRow } = await loadSubmissionBaseInParallel(
             () => ownAttempt(ctx.admin, ctx.identity, attemptId),
-            () => fetchExamRowById(ctx.admin, input.examId),
+            () => fetchExamRowById(ctx.admin, ctx.identity.organizationId || "", input.examId),
         );
         if (existingAttempt) {
             // This also repairs analytical rows if an older app version wrote
@@ -275,7 +380,7 @@ export async function submitAttempt(input: SubmitAttemptInput, pin?: string): Pr
 
         if (!examRow) return { status: "not_found" };
         const exam = examFromSupabaseRow(examRow as Parameters<typeof examFromSupabaseRow>[0]);
-        const access = evaluateGatedAccess(exam, ctx.identity, pin, { graceMs: SUBMIT_ENDAT_GRACE_MS });
+        const access = await evaluateDurableGatedAccess(exam, ctx.identity, pin, { graceMs: SUBMIT_ENDAT_GRACE_MS });
         if (access !== "allowed") return { status: access };
         const premium = hasArchiveableHandwriting(input)
             ? await examOwnerPremium(ctx.admin, exam)
@@ -292,31 +397,30 @@ export async function submitAttempt(input: SubmitAttemptInput, pin?: string): Pr
     }
 }
 
-export async function listMyAssignments(): Promise<{ status: Status; attempts?: Attempt[]; exams?: SolvableExam[] }> {
+export async function listMyAssignments(): Promise<{
+    status: Status;
+    attempts?: StudentAttemptSummary[];
+    exams?: StudentAssignmentPreview[];
+    error?: typeof INITIAL_CAPACITY_EXCEEDED_ERROR;
+}> {
     const ctx = await resolveCtx();
     if (!isCtx(ctx)) return ctx;
     try {
-        const [attempts, examRows] = await Promise.all([
-            ownAttempts(ctx.admin, ctx.identity),
-            ctx.identity.organizationId
-                ? fetchExamRowsByOrganization(ctx.admin, ctx.identity.organizationId)
-                : Promise.resolve([]),
+        const [attempts, assignmentList] = await Promise.all([
+            ownAttemptSummaries(ctx.admin, ctx.identity),
+            listStudentAssignmentsWithGateway(ctx.admin, ctx.identity),
         ]);
-        const premiumByOrganization = new Map<string, Promise<{ plan: PlanKey; handwritingArchive: boolean }>>();
-        const exams = (await Promise.all(examRows.map(async row => {
-            try {
-                const exam = examFromSupabaseRow(row as Parameters<typeof examFromSupabaseRow>[0]);
-                const access = evaluateGatedAccess(exam, ctx.identity, undefined);
-                if (access !== "allowed" && access !== "pin_required") return [];
-                const premium = await examOwnerPremium(ctx.admin, exam, premiumByOrganization);
-                return [stripExamForSolving(exam, { handwritingArchive: premium.handwritingArchive })];
-            } catch {
-                return [];
-            }
-        }))).flat();
+        if (assignmentList.status === "capacity_exceeded") {
+            return { status: "error", error: INITIAL_CAPACITY_EXCEEDED_ERROR };
+        }
+        if (assignmentList.status !== "loaded") return { status: "error" };
+        const exams = assignmentList.assignments;
         return { status: "ok", attempts, exams };
     } catch (e) {
         console.error("listMyAssignments failed", e);
+        if (e instanceof Error && e.message === INITIAL_CAPACITY_EXCEEDED_ERROR) {
+            return { status: "error", error: INITIAL_CAPACITY_EXCEEDED_ERROR };
+        }
         return { status: "error" };
     }
 }
@@ -329,6 +433,33 @@ export async function loadMyAttempt(attemptId: string): Promise<{ status: Status
         return match ? { status: "ok", attempt: match } : { status: "denied" };
     } catch (e) {
         console.error("loadMyAttempt failed", e);
+        return { status: "error" };
+    }
+}
+
+export async function loadMyAttemptHandwriting(
+    attemptId: string,
+): Promise<{ status: Status; signedUrl?: string }> {
+    const headerStore = await headers();
+    if (!isSameOriginServerActionRequest(headerStore)) return { status: "denied" };
+    const ctx = await resolveCtx();
+    if (!isCtx(ctx)) return ctx;
+    try {
+        const match = await ownAttempt(ctx.admin, ctx.identity, attemptId);
+        if (!match) return { status: "denied" };
+        const signed = await createOwnedStudentHandwritingSignedUrlWithGateway(
+            ctx.admin as unknown as RemoteAssetSupabaseGatewayClient,
+            match,
+            ctx.identity,
+        );
+        if (signed.status === "scope_denied" || signed.status === "not_found") {
+            return { status: "not_found" };
+        }
+        return signed.status === "signed"
+            ? { status: "ok", signedUrl: signed.signedUrl }
+            : { status: "error" };
+    } catch (error) {
+        console.error("loadMyAttemptHandwriting failed", error);
         return { status: "error" };
     }
 }
@@ -346,7 +477,7 @@ export async function loadExamForReview(
     try {
         const match = await ownAttempt(ctx.admin, ctx.identity, attemptId);
         if (!match) return { status: "denied" };
-        const row = await fetchExamRowById(ctx.admin, match.examId);
+        const row = await fetchExamRowById(ctx.admin, ctx.identity.organizationId || "", match.examId);
         if (!row) return { status: "not_found" };
         const exam = examFromSupabaseRow(row as Parameters<typeof examFromSupabaseRow>[0]);
         const reviewExam = stripExamForAttemptReview(exam, match);
@@ -409,15 +540,15 @@ export async function askAttemptQuestion(
     const ctx = await resolveCtx();
     if (!isCtx(ctx)) return ctx;
     try {
-        const match = await ownAttempt(ctx.admin, ctx.identity, attemptId);
-        if (!match) return { status: "denied" };
-        const validated = validateStudentQuestionForAttempt(match, question);
-        if (!validated) return { status: "error" };
-        const updated = upsertStudentQuestion(match, validated, new Date().toISOString());
-        if (!updated) return { status: "error" };
-        const result = await ctx.admin.from("omr_attempts").upsert(attemptToSupabaseRow(updated));
-        if (result.error) return { status: "error" };
-        return { status: "ok", attempt: updated };
+        const result = await upsertStudentQuestionWithGateway(ctx.admin, {
+            organizationId: ctx.identity.organizationId || "",
+            studentId: ownerStudentId(ctx.identity),
+            attemptId,
+            question,
+        });
+        return result.status === "saved"
+            ? { status: "ok", attempt: result.attempt }
+            : { status: "error" };
     } catch (e) {
         console.error("askAttemptQuestion failed", e);
         return { status: "error" };

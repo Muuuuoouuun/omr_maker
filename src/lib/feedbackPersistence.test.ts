@@ -257,6 +257,24 @@ describe("feedback persistence", () => {
         expect(student).toEqual({ 1: ["s1"], 2: ["s2"] });
     });
 
+    it("normalizes a missing comment id deterministically", () => {
+        const payload = {
+            ...createAttemptFeedbackDraft(attempt, "2026-06-26T10:00:00.000Z"),
+            questionComments: [
+                { questionId: 1, questionNumber: 1, body: "Check units", visibility: "student_visible" },
+            ],
+        };
+
+        vi.useFakeTimers();
+        vi.setSystemTime(new Date("2026-06-26T10:00:00.000Z"));
+        const first = sanitizeAttemptFeedbackPayload(payload)?.questionComments[0]?.id;
+        vi.setSystemTime(new Date("2099-01-01T00:00:00.000Z"));
+        const second = sanitizeAttemptFeedbackPayload(payload)?.questionComments[0]?.id;
+
+        expect(first).toMatch(/^comment:1:[a-f0-9]{8}$/);
+        expect(second).toBe(first);
+    });
+
     it("maps feedback to and from Supabase rows with receipt and markup drawings", () => {
         const feedback = {
             ...createAttemptFeedbackDraft(attempt, "2026-06-26T10:00:00.000Z"),

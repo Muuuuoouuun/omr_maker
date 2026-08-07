@@ -18,7 +18,7 @@ import {
 } from "@/lib/studentServerSession";
 import { isSameOriginServerActionRequest } from "@/lib/serverActionSecurity";
 import {
-    parseSignedTeacherSessionCookie,
+    resolveAuthorizedTeacherSessionCookie,
     TEACHER_SERVER_SESSION_COOKIE,
 } from "@/lib/teacherServerSession";
 import { workspaceContextFromTeacherSession } from "@/lib/workspaceContext";
@@ -104,7 +104,7 @@ export async function issueStudentStartCredential(
         return { success: false, error: "요청 출처를 확인할 수 없습니다." };
     }
     const cookieStore = await cookies();
-    const teacherSession = parseSignedTeacherSessionCookie(cookieStore.get(TEACHER_SERVER_SESSION_COOKIE)?.value);
+    const teacherSession = await resolveAuthorizedTeacherSessionCookie(cookieStore.get(TEACHER_SERVER_SESSION_COOKIE)?.value);
     if (!teacherSession) return { success: false, error: "교사 로그인이 필요합니다." };
     if (!canTeacherRoleWrite(teacherSession.memberRole)) {
         return { success: false, error: "학생 시작 코드를 발급할 권한이 없습니다." };

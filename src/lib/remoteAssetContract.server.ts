@@ -1,8 +1,12 @@
+import { createHash } from "node:crypto";
+
 export const REMOTE_ASSET_BUCKET = "omr-private-assets";
 export const REMOTE_ASSET_SIGNED_URL_TTL_SECONDS = 5 * 60;
 export const REMOTE_ASSET_MAX_SIGNED_URL_TTL_SECONDS = 15 * 60;
 export const REMOTE_PDF_MAX_BYTES = 50 * 1024 * 1024;
 export const REMOTE_HANDWRITING_MAX_BYTES = 10 * 1024 * 1024;
+export const REMOTE_STANDARD_UPLOAD_MAX_BYTES = 6 * 1024 * 1024;
+export const REMOTE_SIGNED_UPLOAD_TTL_SECONDS = 2 * 60 * 60;
 
 export type RemoteAssetKind = "problem_pdf" | "answer_key_pdf" | "attempt_handwriting";
 
@@ -32,6 +36,22 @@ export interface RemoteAssetUploadInput {
     originalName?: string;
     createdByUserId?: string;
 }
+
+export interface TeacherRemoteAssetUploadDeclaration {
+    organizationId: string;
+    examId: string;
+    kind: "problem_pdf" | "answer_key_pdf";
+    byteSize: number;
+    mimeType: "application/pdf";
+    sha256Hex: string;
+    idempotencyKey: string;
+    originalName?: string;
+    createdByUserId?: string;
+}
+
+export type TeacherRemoteAssetUploadValidationResult =
+    | ({ ok: true } & TeacherRemoteAssetUploadDeclaration)
+    | { ok: false; error: "invalid_organization" | "invalid_owner" | "invalid_mime_type" | "invalid_sha256" | "invalid_idempotency_key" | "asset_too_large" };
 
 export interface RemoteAssetStoredDataRef {
     store: "remote";
@@ -68,6 +88,7 @@ export type RemoteAssetValidationResult =
     };
 
 const SAFE_SCOPE_SEGMENT = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
+const SAFE_UPLOAD_IDEMPOTENCY_KEY = /^[A-Za-z0-9][A-Za-z0-9._:-]{7,127}$/;
 
 function clean(value: unknown): string {
     return typeof value === "string" ? value.trim() : "";
@@ -82,6 +103,62 @@ export function isRemoteAssetUploadByteSizeAllowed(kind: RemoteAssetKind, byteSi
         ? REMOTE_PDF_MAX_BYTES
         : REMOTE_HANDWRITING_MAX_BYTES;
     return Number.isSafeInteger(byteSize) && byteSize > 0 && byteSize <= maxBytes;
+}
+
+export function validateTeacherRemoteAssetUploadDeclaration(
+    input: TeacherRemoteAssetUploadDeclaration,
+): TeacherRemoteAssetUploadValidationResult {
+    const organizationId = clean(input.organizationId);
+    const examId = clean(input.examId);
+    const createdByUserId = clean(input.createdByUserId);
+    const idempotencyKey = clean(input.idempotencyKey);
+    const sha256Hex = clean(input.sha256Hex).toLowerCase();
+    if (!isSafeRemoteAssetScopeSegment(organizationId)) return { ok: false, error: "invalid_organization" };
+    if (!isSafeRemoteAssetScopeSegment(examId) || (createdByUserId && !isSafeRemoteAssetScopeSegment(createdByUserId))) {
+        return { ok: false, error: "invalid_owner" };
+    }
+    if (input.mimeType !== "application/pdf") return { ok: false, error: "invalid_mime_type" };
+    if (!/^[a-f0-9]{64}$/.test(sha256Hex)) return { ok: false, error: "invalid_sha256" };
+    if (!SAFE_UPLOAD_IDEMPOTENCY_KEY.test(idempotencyKey)) return { ok: false, error: "invalid_idempotency_key" };
+    if (!isRemoteAssetUploadByteSizeAllowed(input.kind, input.byteSize)) return { ok: false, error: "asset_too_large" };
+    return {
+        ok: true,
+        ...input,
+        organizationId,
+        examId,
+        createdByUserId: createdByUserId || undefined,
+        idempotencyKey,
+        sha256Hex,
+        originalName: cleanOriginalName(input.originalName),
+    };
+}
+
+export function buildTeacherRemoteAssetUploadIdentity(input: TeacherRemoteAssetUploadDeclaration): {
+    assetId: string;
+    uploadId: string;
+    objectPath: string;
+} {
+    const validated = validateTeacherRemoteAssetUploadDeclaration(input);
+    if (!validated.ok) throw new Error(validated.error);
+    const digest = createHash("sha256")
+        .update([
+            validated.organizationId,
+            validated.createdByUserId || "",
+            validated.examId,
+            validated.kind,
+            validated.idempotencyKey,
+        ].join("\u001f"))
+        .digest("hex")
+        .slice(0, 32);
+    const assetId = `asset_${digest}`;
+    const objectPath = buildRemoteAssetObjectPath({
+        organizationId: validated.organizationId,
+        examId: validated.examId,
+        kind: validated.kind,
+        assetId,
+    });
+    if (!objectPath) throw new Error("invalid_object_path");
+    return { assetId, uploadId: assetId, objectPath };
 }
 
 function cleanOriginalName(value: unknown): string | undefined {

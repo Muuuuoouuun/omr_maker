@@ -37,8 +37,21 @@ async function captureTeacherSurfaces(browser) {
 
     const pdfBytes = await readFile(path.join(process.cwd(), "e2e/fixtures/sample-problem.pdf"));
     await page.evaluate(({ pdfData }) => {
+        const teacherSession = JSON.parse(sessionStorage.getItem("omr_teacher_session") || "null");
+        const identityKey = String(
+            teacherSession?.teacherId || teacherSession?.email || teacherSession?.displayName || "",
+        ).trim().toLowerCase();
+        let hash = 0x811c9dc5;
+        for (let index = 0; index < identityKey.length; index += 1) {
+            hash ^= identityKey.charCodeAt(index);
+            hash = Math.imul(hash, 0x01000193);
+        }
+        const organizationId = teacherSession?.organizationId
+            || (identityKey ? `teacher_${(hash >>> 0).toString(36).padStart(7, "0")}` : "");
+        if (!organizationId) throw new Error("Teacher showcase session is missing an organization scope");
         const exam = {
             id: "quality-review-exam",
+            organizationId,
             title: "품질 검토 결과 시험",
             createdAt: "2026-07-29T00:00:00.000Z",
             updatedAt: "2026-07-29T00:00:00.000Z",
@@ -52,6 +65,7 @@ async function captureTeacherSurfaces(browser) {
         const attempt = {
             id: "quality-review-attempt",
             examId: exam.id,
+            organizationId,
             examTitle: exam.title,
             studentName: "검토 학생",
             studentId: "quality-review-student",

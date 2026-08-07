@@ -19,7 +19,7 @@ vi.mock("@/lib/teacherServerSession", async importOriginal => {
     const actual = await importOriginal<typeof import("@/lib/teacherServerSession")>();
     return {
         ...actual,
-        parseSignedTeacherSessionCookie: () => ({
+        resolveAuthorizedTeacherSessionCookie: async () => ({
             teacherId: "teacher-1",
             organizationId: "teacher_sharedqa",
             organizationName: "테스트 학원",

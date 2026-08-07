@@ -42,6 +42,13 @@ export interface TeacherSession {
     organizationName?: string;
     memberRole?: TeacherMemberRole;
     plan?: TeacherPlanCeiling;
+    /**
+     * Signed server-cookie authority. Account-backed sessions are checked
+     * against the private database generation on every protected request.
+     * Bootstrap covers explicitly configured deployment/demo identities.
+     */
+    sessionAuthority?: "account" | "bootstrap";
+    accountSessionGeneration?: number;
     issuedAt: number;
     expiresAt: number;
 }
@@ -54,6 +61,8 @@ export interface TeacherSessionIdentity {
     organizationName?: string;
     memberRole?: TeacherMemberRole;
     plan?: TeacherPlanCeiling;
+    sessionAuthority?: "account" | "bootstrap";
+    accountSessionGeneration?: number;
 }
 
 export interface TeacherSessionStorage {
@@ -83,6 +92,10 @@ export function isTeacherToken(token: unknown): token is string {
 }
 
 export function createTeacherSession(token: string, now = Date.now(), identity?: TeacherSessionIdentity): TeacherSession {
+    const accountSessionGeneration = Number.isSafeInteger(identity?.accountSessionGeneration)
+        && (identity?.accountSessionGeneration || 0) >= 1
+        ? identity?.accountSessionGeneration
+        : undefined;
     return {
         schemaVersion: 1,
         role: "teacher",
@@ -94,6 +107,10 @@ export function createTeacherSession(token: string, now = Date.now(), identity?:
         organizationName: identity?.organizationName?.trim() || undefined,
         memberRole: normalizeMemberRole(identity?.memberRole),
         plan: normalizePlan(identity?.plan),
+        sessionAuthority: identity?.sessionAuthority === "account" || accountSessionGeneration
+            ? "account"
+            : "bootstrap",
+        accountSessionGeneration,
         issuedAt: now,
         expiresAt: now + TEACHER_SESSION_TTL_MS,
     };
@@ -123,6 +140,13 @@ export function parseTeacherSession(raw: string | null | undefined, now = Date.n
             organizationName: typeof parsed.organizationName === "string" ? parsed.organizationName.trim() || undefined : undefined,
             memberRole: normalizeMemberRole(parsed.memberRole),
             plan: normalizePlan(parsed.plan),
+            sessionAuthority: parsed.sessionAuthority === "account" || parsed.sessionAuthority === "bootstrap"
+                ? parsed.sessionAuthority
+                : undefined,
+            accountSessionGeneration: Number.isSafeInteger(parsed.accountSessionGeneration)
+                && (parsed.accountSessionGeneration || 0) >= 1
+                ? parsed.accountSessionGeneration
+                : undefined,
             issuedAt: typeof parsed.issuedAt === "number" ? parsed.issuedAt : 0,
             expiresAt: typeof parsed.expiresAt === "number" ? parsed.expiresAt : 0,
         };

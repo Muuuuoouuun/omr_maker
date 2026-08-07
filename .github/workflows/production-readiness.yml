@@ -1,0 +1,66 @@
+name: Production readiness
+
+on:
+  workflow_dispatch:
+    inputs:
+      expected_build:
+        description: Full 40-character Git SHA deployed to production
+        required: true
+        type: string
+      expected_readiness_version:
+        description: Expected Supabase readiness contract version
+        required: true
+        default: "202608060029"
+        type: string
+
+concurrency:
+  group: production-readiness
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  verify-hosted-boundary:
+    name: Hosted build · readiness · access denials
+    # Production secrets may only reach workflow code from the protected
+    # default branch. expected_build identifies the deployed artifact; it is
+    # deliberately never used as an executable checkout ref.
+    if: github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+    runs-on: ubuntu-latest
+    environment: production
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          ref: ${{ github.event.repository.default_branch }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+      - name: Install locked dependencies
+        run: npm ci
+      - name: Verify hosted production deployment
+        env:
+          OMR_PRODUCTION_BASE_URL: ${{ secrets.OMR_PRODUCTION_BASE_URL }}
+          OMR_PRODUCTION_HOST: ${{ secrets.OMR_PRODUCTION_HOST }}
+          OMR_PRODUCTION_SUPABASE_URL: ${{ secrets.OMR_PRODUCTION_SUPABASE_URL }}
+          OMR_PRODUCTION_SUPABASE_ANON_KEY: ${{ secrets.OMR_PRODUCTION_SUPABASE_ANON_KEY }}
+          OMR_PRODUCTION_AUTHENTICATED_JWT: ${{ secrets.OMR_PRODUCTION_AUTHENTICATED_JWT }}
+          OMR_PRODUCTION_SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.OMR_PRODUCTION_SUPABASE_SERVICE_ROLE_KEY }}
+          OMR_READINESS_TOKEN: ${{ secrets.OMR_READINESS_TOKEN }}
+          OMR_PRODUCTION_EXPECTED_BUILD: ${{ inputs.expected_build }}
+          OMR_PRODUCTION_EXPECTED_READINESS_VERSION: ${{ inputs.expected_readiness_version }}
+        run: >-
+          npm run ops:verify:production --
+          --confirm-production-host="$OMR_PRODUCTION_HOST"
+          --output="$RUNNER_TEMP/production-readiness.json"
+      - name: Upload verified release evidence
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: production-readiness-${{ inputs.expected_build }}
+          path: ${{ runner.temp }}/production-readiness.json
+          if-no-files-found: error
+          retention-days: 90

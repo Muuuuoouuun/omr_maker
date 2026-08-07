@@ -9,6 +9,7 @@ import type {
     IdentityType,
     QuestionTiming,
     RetakeMetadata,
+    StoredDataRef,
 } from "@/types/omr";
 
 export interface StudentAttemptRecord {
@@ -37,13 +38,19 @@ export interface StudentAttemptReviewExam {
     id: string;
     title: string;
     createdAt: string;
-    questions: StudentSolveQuestion[];
+    questions: Array<StudentSolveQuestion & {
+        /** Released only after the signed student owns a completed attempt. */
+        answer?: number;
+        explanation?: string;
+    }>;
     pdfData?: string;
 }
 
 export interface StudentAttemptDetail {
     attempt: StudentAttemptRecord;
     exam: StudentAttemptReviewExam;
+    /** Server-validated archive pointer. It is absent from history list rows. */
+    handwritingRef?: StoredDataRef;
 }
 
 export type StudentAttemptListResult =
@@ -156,6 +163,8 @@ export function studentAttemptReviewExamFromExam(exam: Exam): StudentAttemptRevi
         questions: exam.questions.map(question => ({
             id: question.id,
             number: question.number,
+            ...(typeof question.answer === "number" ? { answer: question.answer } : {}),
+            ...(question.explanation ? { explanation: question.explanation } : {}),
             ...(question.choices ? { choices: question.choices } : {}),
             ...(question.pdfLocation ? { pdfLocation: question.pdfLocation } : {}),
             ...(question.pdfRegion ? { pdfRegion: question.pdfRegion } : {}),

@@ -10,12 +10,12 @@ import {
     readLocalAttempts,
     readLocalExams,
     saveLocalAttempt,
-    saveLocalAttempts,
     withLocalServerConfirmation,
     saveLocalExam,
 } from "@/lib/omrPersistence";
 import { attemptBelongsToSession, type StudentSession } from "@/utils/storage";
 import type { Attempt, Exam } from "@/types/omr";
+import { INITIAL_CAPACITY_EXCEEDED_ERROR } from "@/lib/initialOperationsPolicy";
 
 export interface StudentAttemptClientListResult {
     items: Attempt[];
@@ -80,7 +80,6 @@ export async function loadStudentOfficialAttempts(
         const attempts = result.attempts.map(record => withLocalServerConfirmation(
             withLocalStudentArtifacts(attemptFromStudentAttemptRecord(record), session),
         ));
-        await saveLocalAttempts(attempts);
         return { items: attempts, remoteLoaded: true };
     }
     if (result.status === "local_only") {
@@ -92,7 +91,9 @@ export async function loadStudentOfficialAttempts(
         remoteStatus: result.status,
         remoteError: result.status === "unauthorized"
             ? "Student server session is missing"
-            : result.error || "Official student attempts unavailable",
+            : result.error === INITIAL_CAPACITY_EXCEEDED_ERROR
+                ? INITIAL_CAPACITY_EXCEEDED_ERROR
+                : result.error || "Official student attempts unavailable",
     };
 }
 

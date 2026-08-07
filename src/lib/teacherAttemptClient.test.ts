@@ -6,6 +6,7 @@ const actionMocks = vi.hoisted(() => ({
     review: vi.fn(),
     finish: vi.fn(),
     list: vi.fn(),
+    summaries: vi.fn(),
     load: vi.fn(),
 }));
 const persistenceMocks = vi.hoisted(() => ({
@@ -13,13 +14,14 @@ const persistenceMocks = vi.hoisted(() => ({
     saveLocalAttempts: vi.fn(async () => true),
     loadAttempt: vi.fn(),
     loadAttempts: vi.fn(),
-    readLocalAttempts: vi.fn(() => []),
+    readLocalAttempts: vi.fn((): Attempt[] => []),
 }));
 
 vi.mock("@/app/actions/teacherAttempts", () => ({
     answerTeacherCanonicalAttemptQuestion: actionMocks.answer,
     setTeacherCanonicalSubquestionReview: actionMocks.review,
     forceFinishTeacherCanonicalAttempts: actionMocks.finish,
+    listTeacherCanonicalAttemptSummaries: actionMocks.summaries,
     listTeacherCanonicalAttempts: actionMocks.list,
     loadTeacherCanonicalAttempt: actionMocks.load,
 }));
@@ -28,8 +30,11 @@ vi.mock("@/lib/omrPersistence", () => persistenceMocks);
 import {
     answerTeacherAttemptQuestion,
     forceFinishTeacherAttempts,
+    loadTeacherAttemptSummaries,
+    loadTeacherAttempts,
     setTeacherAttemptSubquestionReview,
 } from "./teacherAttemptClient";
+import * as teacherAttemptClient from "./teacherAttemptClient";
 
 function deferred<T>() {
     let resolve!: (value: T) => void;
@@ -81,6 +86,7 @@ beforeEach(() => {
     vi.clearAllMocks();
     persistenceMocks.saveLocalAttempt.mockResolvedValue(true);
     persistenceMocks.readLocalAttempts.mockReturnValue([]);
+    persistenceMocks.loadAttempts.mockResolvedValue({ items: [], remoteLoaded: false });
     vi.stubGlobal("navigator", { locks: serialWebLocks() });
 });
 
@@ -214,5 +220,121 @@ describe("teacher attempt mutation serialization", () => {
         });
         expect(persistenceMocks.saveLocalAttempt).toHaveBeenCalledTimes(2);
         expect(actionMocks.finish).toHaveBeenCalledTimes(1);
+    });
+});
+
+describe("teacher attempt read fallback", () => {
+    it("preserves not-found, authorization, and transport failures for the detail surface", async () => {
+        const loadDetail = (teacherAttemptClient as Record<string, unknown>).loadTeacherAttemptDetail;
+        expect(loadDetail).toBeTypeOf("function");
+        if (typeof loadDetail !== "function") return;
+
+        actionMocks.load.mockResolvedValueOnce({ status: "not_found" });
+        await expect(loadDetail("missing")).resolves.toEqual({ status: "not_found" });
+
+        actionMocks.load.mockResolvedValueOnce({ status: "unauthorized" });
+        await expect(loadDetail("attempt-queue")).resolves.toEqual({
+            status: "unauthorized",
+            error: "Teacher server session is missing",
+        });
+
+        actionMocks.load.mockResolvedValueOnce({ status: "service_unavailable", error: "gateway offline" });
+        await expect(loadDetail("attempt-queue")).resolves.toEqual({
+            status: "service_unavailable",
+            error: "gateway offline",
+        });
+    });
+
+    it("loads common workspace rows through the lightweight summary action", async () => {
+        const summary = { ...baseAttempt, detailLevel: "summary" as const, answers: {} };
+        actionMocks.summaries.mockResolvedValue({ status: "loaded", attempts: [summary] });
+
+        await expect(loadTeacherAttemptSummaries()).resolves.toMatchObject({
+            items: [{ id: baseAttempt.id, detailLevel: "summary", answers: {} }],
+            remoteLoaded: true,
+        });
+        expect(actionMocks.summaries).toHaveBeenCalledTimes(1);
+        expect(actionMocks.list).not.toHaveBeenCalled();
+    });
+
+    it("propagates partial page metadata without turning usable recent rows into a transport failure", async () => {
+        const summary = { ...baseAttempt, detailLevel: "summary" as const, answers: {} };
+        actionMocks.summaries.mockResolvedValue({
+            status: "loaded",
+            attempts: [summary],
+            page: {
+                partial: true,
+                hasMore: true,
+                itemCount: 1,
+                nextCursor: { finishedAt: summary.finishedAt, id: summary.id },
+            },
+        });
+
+        await expect(loadTeacherAttemptSummaries()).resolves.toMatchObject({
+            items: [{ id: baseAttempt.id }],
+            remoteLoaded: true,
+            remoteSynced: false,
+            remotePartial: true,
+            remoteHasMore: true,
+            remoteItemCount: 1,
+            remoteNextCursor: { finishedAt: summary.finishedAt, id: summary.id },
+        });
+    });
+
+    it("fails closed instead of returning prior-account cache when the authenticated server read fails", async () => {
+        actionMocks.list.mockResolvedValue({ status: "service_unavailable", error: "offline" });
+        persistenceMocks.readLocalAttempts.mockReturnValue([{ ...baseAttempt, id: "prior-account" }]);
+
+        await expect(loadTeacherAttempts()).resolves.toMatchObject({
+            items: [],
+            remoteLoaded: false,
+            remoteError: "offline",
+        });
+        expect(persistenceMocks.readLocalAttempts).not.toHaveBeenCalled();
+    });
+
+    it("keeps the explicitly local-only development flow", async () => {
+        actionMocks.list.mockResolvedValue({ status: "local_only" });
+        persistenceMocks.loadAttempts.mockResolvedValue({
+            items: [{ ...baseAttempt, id: "local-development" }],
+            remoteLoaded: false,
+        });
+
+        await expect(loadTeacherAttempts()).resolves.toMatchObject({
+            items: [{ id: "local-development" }],
+            remoteLoaded: false,
+        });
+        expect(persistenceMocks.loadAttempts).toHaveBeenCalledTimes(1);
+    });
+
+    it("does not let a workspace summary mutate full attempt caches", async () => {
+        const full = { ...baseAttempt, subQuestionAnswers: baseAttempt.subQuestionAnswers };
+        const summary = { ...baseAttempt, subQuestionAnswers: undefined, score: 5 };
+        actionMocks.list.mockResolvedValue({ status: "loaded", attempts: [summary] });
+        persistenceMocks.readLocalAttempts.mockReturnValue([full]);
+
+        await expect(loadTeacherAttempts()).resolves.toMatchObject({ items: [summary], remoteLoaded: true });
+        expect(persistenceMocks.saveLocalAttempts).not.toHaveBeenCalled();
+        expect(persistenceMocks.readLocalAttempts).not.toHaveBeenCalled();
+    });
+
+    it("does not let an exam-scoped summary mutate full attempt caches", async () => {
+        const full = { ...baseAttempt, subQuestionAnswers: baseAttempt.subQuestionAnswers };
+        const summary = { ...baseAttempt, subQuestionAnswers: undefined, score: 5 };
+        actionMocks.list.mockResolvedValue({ status: "loaded", attempts: [summary] });
+        persistenceMocks.readLocalAttempts.mockReturnValue([full]);
+
+        await loadTeacherAttempts("exam-1");
+        expect(persistenceMocks.saveLocalAttempt).not.toHaveBeenCalled();
+        expect(persistenceMocks.readLocalAttempts).not.toHaveBeenCalled();
+    });
+
+    it("does not cache a fresh attempt summary as full detail", async () => {
+        const summary = { ...baseAttempt, subQuestionAnswers: undefined, score: 5 };
+        actionMocks.list.mockResolvedValue({ status: "loaded", attempts: [summary] });
+        persistenceMocks.readLocalAttempts.mockReturnValue([]);
+
+        await loadTeacherAttempts();
+        expect(persistenceMocks.saveLocalAttempts).not.toHaveBeenCalled();
     });
 });

@@ -14,7 +14,7 @@ import {
     type TeacherExamSaveResult,
 } from "@/lib/teacherExamGateway";
 import {
-    parseSignedTeacherSessionCookie,
+    resolveAuthorizedTeacherSessionCookie,
     TEACHER_SERVER_SESSION_COOKIE,
 } from "@/lib/teacherServerSession";
 import { isTeacherMutationAuthorized } from "@/lib/teacherMutationAuthorization";
@@ -26,6 +26,8 @@ import {
     releaseExamCreationAuthorization,
 } from "@/app/actions/premiumAccess";
 import type { Exam } from "@/types/omr";
+import { reportServerError } from "@/lib/reportServerError";
+import { rotateExamEntryInviteWithGateway } from "@/lib/examEntryInviteGateway";
 
 export type TeacherCanonicalExamSaveResult = TeacherExamSaveResult
     | { status: "local_only" | "unauthorized" }
@@ -39,6 +41,10 @@ export type TeacherCanonicalExamListResult =
     | { status: "loaded"; exams: Exam[] }
     | { status: "local_only" | "unauthorized" | "service_unavailable"; error?: string };
 
+export type TeacherExamEntryInviteResult =
+    | { status: "issued"; token: string; expiresAt: string }
+    | { status: "local_only" | "invalid_scope" | "unauthorized" | "service_unavailable" };
+
 async function teacherGatewayContext(requireWrite = false): Promise<{
     client: TeacherExamGatewayClient;
     context: ReturnType<typeof workspaceContextFromTeacherSession>;
@@ -46,7 +52,7 @@ async function teacherGatewayContext(requireWrite = false): Promise<{
     const headerStore = await headers();
     if (!isSameOriginServerActionRequest(headerStore)) return { status: "unauthorized" };
     const cookieStore = await cookies();
-    const session = parseSignedTeacherSessionCookie(cookieStore.get(TEACHER_SERVER_SESSION_COOKIE)?.value);
+    const session = await resolveAuthorizedTeacherSessionCookie(cookieStore.get(TEACHER_SERVER_SESSION_COOKIE)?.value);
     if (!session) return { status: "unauthorized" };
     if (requireWrite && !isTeacherMutationAuthorized(session)) return { status: "unauthorized" };
     const config = getSupabaseServerConfigFromEnv();
@@ -67,7 +73,7 @@ export async function saveTeacherCanonicalExam(
         const headerStore = await headers();
         if (!isSameOriginServerActionRequest(headerStore)) return { status: "unauthorized" };
         const cookieStore = await cookies();
-        const session = parseSignedTeacherSessionCookie(
+        const session = await resolveAuthorizedTeacherSessionCookie(
             cookieStore.get(TEACHER_SERVER_SESSION_COOKIE)?.value,
         );
         if (!session) return { status: "unauthorized" };
@@ -83,7 +89,11 @@ export async function saveTeacherCanonicalExam(
         const context = workspaceContextFromTeacherSession(session);
         const existing = await loadTeacherExamWithGateway(client, exam.id, context);
         if (existing.status === "service_unavailable") {
-            return { status: "service_unavailable", error: existing.error };
+            await reportServerError("teacher-exam-save", {
+                status: existing.status,
+                code: "service_unavailable",
+            });
+            return { status: "service_unavailable", error: "시험 저장 서비스를 사용할 수 없습니다." };
         }
 
         if (existing.status === "not_found") {
@@ -108,24 +118,35 @@ export async function saveTeacherCanonicalExam(
         }
 
         const result = await saveTeacherExamWithGateway(client, exam, context);
+        const planDeniedByDatabase = result.status === "service_unavailable"
+            && /plan (?:exam limit exceeded|entitlement required)/i.test(result.error || "");
+        if (result.status === "service_unavailable" && !planDeniedByDatabase) {
+            await reportServerError("teacher-exam-save", {
+                status: result.status,
+                code: "service_unavailable",
+            });
+        }
         if (result.status !== "saved" && releaseNewExamReservation) {
             await releaseExamCreationAuthorization(exam.id);
             releaseNewExamReservation = false;
         }
         if (
-            result.status === "service_unavailable"
-            && /plan (?:exam limit exceeded|entitlement required)/i.test(result.error || "")
+            planDeniedByDatabase
         ) {
-            return { status: "plan_denied", error: result.error || "현재 플랜에서 저장할 수 없습니다." };
+            return { status: "plan_denied", error: "현재 플랜에서 시험을 저장할 수 없습니다." };
+        }
+        if (result.status === "service_unavailable") {
+            return { status: "service_unavailable", error: "시험 저장 서비스를 사용할 수 없습니다." };
         }
         return result;
     } catch (error) {
         if (releaseNewExamReservation) {
             await releaseExamCreationAuthorization(exam.id).catch(() => undefined);
         }
+        await reportServerError("teacher-exam-save", error);
         return {
             status: "service_unavailable",
-            error: error instanceof Error ? error.message : "Canonical exam save failed",
+            error: "시험 저장 서비스를 사용할 수 없습니다.",
         };
     }
 }
@@ -134,9 +155,15 @@ export async function loadTeacherCanonicalExam(examId: string): Promise<TeacherC
     try {
         const gateway = await teacherGatewayContext();
         if ("status" in gateway) return gateway;
-        return loadTeacherExamWithGateway(gateway.client, examId, gateway.context);
+        const result = await loadTeacherExamWithGateway(gateway.client, examId, gateway.context);
+        if (result.status === "service_unavailable") {
+            await reportServerError("teacher-exam-read", { status: result.status, code: "service_unavailable" });
+            return { status: result.status, error: "시험을 불러올 수 없습니다." };
+        }
+        return result;
     } catch (error) {
-        return { status: "service_unavailable", error: error instanceof Error ? error.message : "Exam load failed" };
+        await reportServerError("teacher-exam-read", error);
+        return { status: "service_unavailable", error: "시험을 불러올 수 없습니다." };
     }
 }
 
@@ -145,9 +172,12 @@ export async function listTeacherCanonicalExams(): Promise<TeacherCanonicalExamL
         const gateway = await teacherGatewayContext();
         if ("status" in gateway) return gateway;
         const result = await listTeacherExamsWithGateway(gateway.client, gateway.context);
-        return result.status === "loaded" ? result : { status: "service_unavailable", error: result.error };
+        if (result.status === "loaded") return result;
+        await reportServerError("teacher-exam-read", { status: result.status, code: "service_unavailable" });
+        return { status: "service_unavailable", error: "시험 목록을 불러올 수 없습니다." };
     } catch (error) {
-        return { status: "service_unavailable", error: error instanceof Error ? error.message : "Exam list failed" };
+        await reportServerError("teacher-exam-read", error);
+        return { status: "service_unavailable", error: "시험 목록을 불러올 수 없습니다." };
     }
 }
 
@@ -158,8 +188,48 @@ export async function deleteTeacherCanonicalExam(examId: string): Promise<
     try {
         const gateway = await teacherGatewayContext(true);
         if ("status" in gateway) return gateway;
-        return deleteTeacherExamWithGateway(gateway.client, examId, gateway.context);
+        const result = await deleteTeacherExamWithGateway(gateway.client, examId, gateway.context);
+        if (result.status === "service_unavailable") {
+            await reportServerError("teacher-exam-save", { status: result.status, code: "service_unavailable" });
+            return { status: result.status, error: "시험을 삭제할 수 없습니다." };
+        }
+        return result;
     } catch (error) {
-        return { status: "service_unavailable", error: error instanceof Error ? error.message : "Exam delete failed" };
+        await reportServerError("teacher-exam-save", error);
+        return { status: "service_unavailable", error: "시험을 삭제할 수 없습니다." };
+    }
+}
+
+/**
+ * Rotate a short-lived, exam-scoped entry capability. The database rechecks
+ * teacher membership, exam ownership and current group scope atomically; this
+ * boundary returns the raw bearer exactly once and never logs it.
+ */
+export async function rotateTeacherExamEntryInvite(
+    examId: string,
+    requestedTtlMs?: number,
+): Promise<TeacherExamEntryInviteResult> {
+    try {
+        const gateway = await teacherGatewayContext(true);
+        if ("status" in gateway) return gateway;
+        const result = await rotateExamEntryInviteWithGateway(
+            gateway.client,
+            gateway.context,
+            examId,
+            requestedTtlMs,
+        );
+        if (result.status === "service_unavailable") {
+            await reportServerError("teacher-exam-entry-invite", {
+                status: result.status,
+                code: "service_unavailable",
+            });
+        }
+        return result;
+    } catch {
+        await reportServerError("teacher-exam-entry-invite", {
+            status: "service_unavailable",
+            code: "unexpected_failure",
+        });
+        return { status: "service_unavailable" };
     }
 }

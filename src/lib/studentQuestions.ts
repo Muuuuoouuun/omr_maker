@@ -13,6 +13,8 @@ export interface StudentQuestionInput {
     questionId: number;
     questionNumber: number;
     body: string;
+    /** Stable for one queued browser mutation and reused across network retries. */
+    clientMutationId?: string;
 }
 
 export function normalizeStudentQuestionBody(body: string): string {

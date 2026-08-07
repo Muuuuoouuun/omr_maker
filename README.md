@@ -19,12 +19,12 @@ With no `TEACHER_ACCOUNTS`/`TEACHER_PASSWORD` configured, the app falls back to 
 
 In production, there is no default account. Set one of these on the server before deploying:
 
-- Single teacher: `TEACHER_LOGIN_ID`, optional `TEACHER_EMAIL`/`TEACHER_NAME`/`TEACHER_PLAN`, and `TEACHER_PASSWORD`. An account whose login id is exactly `admin` defaults to the Academy plan and admin role.
-- Multiple teachers: `TEACHER_ACCOUNTS` as a JSON array, for example `[{"id":"teacher-id","email":"teacher@example.com","name":"Teacher","password":"replace-with-a-strong-password","plan":"pro"}]`
+- Single teacher: `TEACHER_LOGIN_ID`, optional `TEACHER_EMAIL`/`TEACHER_NAME`/`TEACHER_PLAN`, and a supported PBKDF2 value in `TEACHER_PASSWORD_HASH`.
+- Multiple teachers: `TEACHER_ACCOUNTS` as a JSON array whose entries use `passwordHash` rather than `password`. Production rejects plaintext `TEACHER_PASSWORD` and `TEACHER_ACCOUNTS[].password`; plaintext remains available only for local development fixtures.
 - `omr_organizations.plan` is the authoritative plan when Supabase service-role access is configured. Browser `omr_plan` values are display caches only and never authorize paid mutations.
 - Without a server plan store, paid mutations fail closed. Local development may opt into the process-local simulator with `OMR_PLAN_DEV_SIMULATION=1` and `OMR_DEV_PLAN=free|pro|academy`; this override is ignored in production.
 - Academy is a catalog tier, not a promise that every listed organization feature is implemented. Billing readiness labels are the source of truth for unavailable/partial features.
-- Recommended for server-side route guards: `TEACHER_SESSION_SECRET`
+- Required production signing secrets: `TEACHER_SESSION_SECRET`, `STUDENT_SESSION_SECRET`, and `STUDENT_ATTEMPT_SECRET`, each containing at least 32 UTF-8 bytes of random secret material. Short values fail closed and cannot mint or verify sessions or attempt tickets.
 
 Teacher login is currently backed by server environment variables, not Supabase Auth. If a deployed build only says the credentials are invalid, check the deployment provider's environment variables and redeploy before checking Supabase.
 
@@ -101,9 +101,12 @@ Setup:
 NEXT_PUBLIC_SUPABASE_URL=https://your-project.supabase.co
 NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY=sb_publishable_your_full_key_here
 SUPABASE_SERVICE_ROLE_KEY=server_only_service_role_key_for_workspace_bootstrap
+OMR_RATE_LIMIT_HASH_SECRET=replace_with_at_least_32_random_bytes
 ```
 
-3. Restart the dev or production server.
+`OMR_RATE_LIMIT_HASH_SECRET` is mandatory in production. Use a unique random value of at least 32 bytes; if it is missing or too short, teacher/student login, exam PIN checks, and AI request admission fail closed.
+
+3. Apply every migration and the production server boundary before promoting the matching application build, then restart the server. Do not deploy the code first: the limiter RPC and secret must both exist before login traffic reaches the new build.
 
 See `supabase/README.md` for details, the current RLS warning, and the production RLS handoff.
 Before going live with real student data, work through the consolidated [Go-Live Gate](docs/production-readiness.md).

@@ -42,6 +42,7 @@ function run(command, args, options = {}) {
 function runSqlMatrix(psqlFile) {
     psqlFile("supabase/live-test-prelude.sql");
     psqlFile("supabase/schema.sql");
+    psqlFile("supabase/live-test-alpha-generated-helpers.sql");
 
     const migrations = readdirSync(resolve(root, "supabase/migrations"))
         .filter(name => name.endsWith(".sql"))
@@ -50,8 +51,21 @@ function runSqlMatrix(psqlFile) {
         psqlFile(`supabase/migrations/${migration}`);
     }
 
+    psqlFile("supabase/individual-student-assignments-assertions.sql");
+    psqlFile("supabase/teacher-force-finish-compact-assertions.sql");
+    psqlFile("supabase/teacher-session-revocation-assertions.sql");
     psqlFile("supabase/production-server-boundary.sql");
+    psqlFile("supabase/live-test-boundary-assertions.sql");
+    psqlFile("supabase/production-server-boundary-rollback.sql", [
+        "set omr.rollback_confirm = 'restore-browser-access'",
+    ]);
+    psqlFile("supabase/live-test-rollback-assertions.sql");
+    psqlFile("supabase/production-server-boundary.sql");
+    psqlFile("supabase/live-test-boundary-assertions.sql");
     psqlFile("supabase/live-test-assertions.sql");
+    psqlFile("supabase/roster-snapshot-cas-assertions.sql");
+    psqlFile("supabase/teacher-notification-summary-assertions.sql");
+    psqlFile("supabase/teacher-notification-state-assertions.sql");
 }
 
 function postgresBinCandidates() {
@@ -121,11 +135,12 @@ function getFreePort(host) {
 }
 
 function runDockerVerification() {
-    function psqlFile(path) {
+    function psqlFile(path, commands = []) {
         run("docker", [
             "exec", container,
             "psql", "-U", migrationOwner, "-d", "postgres",
             "-v", "ON_ERROR_STOP=1",
+            ...commands.flatMap(command => ["-c", command]),
             "-f", `/workspace/${path}`,
         ]);
     }
@@ -190,13 +205,14 @@ async function runLocalVerification() {
         mkdirSync(socketDirectory, { mode: 0o700 });
         writeFileSync(passwordPath, `${password}\n`, { mode: 0o600 });
 
-        function psqlFile(path) {
+        function psqlFile(path, commands = []) {
             run(postgresBinary(postgresBin, "psql"), [
                 "-h", "127.0.0.1",
                 "-p", String(port),
                 "-U", migrationOwner,
                 "-d", localDatabase,
                 "-v", "ON_ERROR_STOP=1",
+                ...commands.flatMap(command => ["-c", command]),
                 "-f", resolve(root, path),
             ], { env: localEnv });
         }

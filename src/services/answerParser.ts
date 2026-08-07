@@ -118,7 +118,7 @@ export async function parseAnswerKeyPdf(file: File): Promise<ParsedAnswer[]> {
         return extractAnswersFromText(pageTexts.join(" "));
     } finally {
         try {
-            await pdf.destroy();
+            await pdf.loadingTask.destroy();
         } catch (error: unknown) {
             console.warn("Answer PDF cleanup failed", safePageFailureMeta(error, 0));
         }
@@ -369,7 +369,7 @@ export async function parseAnswerKeyWithGemini(
         }
     } finally {
         try {
-            await pdf.destroy();
+            await pdf.loadingTask.destroy();
         } catch (error: unknown) {
             console.warn("Answer PDF cleanup failed", safePageFailureMeta(error, 0));
         }

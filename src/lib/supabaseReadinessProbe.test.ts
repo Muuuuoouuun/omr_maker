@@ -5,9 +5,9 @@ import {
     type SupabaseProbeClient,
 } from "./supabaseReadinessProbe";
 
-const readyV4Payload = {
+const readyV22Payload = {
     ready: true,
-    version: "202607280003",
+    version: "202608060029",
     browserSchemaPrivilegesDenied: true,
     anonTablePrivilegesDenied: true,
     authenticatedCanonicalPrivilegesDenied: true,
@@ -23,13 +23,42 @@ const readyV4Payload = {
     serverGatewayCapabilitiesReady: true,
     queryPathIndexesReady: true,
     legacyBroadRpcsRemoved: true,
+    directUploadIntentLifecycleReady: true,
+    teacherUploadCleanupQueueReady: true,
+    teacherAssetFinalizePreauthorizationReady: true,
+    examReservationLeaseReady: true,
+    teacherAssetCleanupBacklogHealthy: true,
+    studentAttemptSessionsReady: true,
+    durableRateLimitsReady: true,
+    examRevisionReady: true,
+    teacherExamCasReady: true,
+    teacherNotificationSummaryReady: true,
+    teacherNotificationStateReady: true,
+    feedbackRevisionReady: true,
+    feedbackCasReady: true,
+    workspaceBootstrapPlanSafe: true,
+    sessionCleanupOptimizationReady: true,
+    feedbackReplayHardeningReady: true,
+    feedbackCoreFreeReady: true,
+    examEntryInvitesReady: true,
+    sessionCleanupFencingReady: true,
+    attemptCheckpointNullCasReady: true,
+    rosterSnapshotCasReady: true,
+    attemptMutationCasReady: true,
+    examDeleteSessionSafe: true,
+    studentQuestionAtomicReady: true,
+    teacherLiveSessionsReady: true,
+    teacherAccountLifecycleReady: true,
+    initialOperationsLoadControlReady: true,
+    individualStudentAssignmentsReady: true,
+    teacherAttemptReportingReady: true,
 };
 
 describe("Supabase deployment readiness probe", () => {
-    it("accepts only the complete v4 effective-boundary evidence", () => {
-        expect(parseSupabaseDeploymentProbe(readyV4Payload)).toEqual({
+    it("accepts only the complete v22 effective-boundary and gateway evidence", () => {
+        expect(parseSupabaseDeploymentProbe(readyV22Payload)).toEqual({
             ready: true,
-            version: "202607280003",
+            version: "202608060029",
             browserSchemaPrivilegesDenied: true,
             anonTablePrivilegesDenied: true,
             authenticatedCanonicalPrivilegesDenied: true,
@@ -45,11 +74,40 @@ describe("Supabase deployment readiness probe", () => {
             serverGatewayCapabilitiesReady: true,
             queryPathIndexesReady: true,
             legacyBroadRpcsRemoved: true,
+            directUploadIntentLifecycleReady: true,
+            teacherUploadCleanupQueueReady: true,
+            teacherAssetFinalizePreauthorizationReady: true,
+            examReservationLeaseReady: true,
+            teacherAssetCleanupBacklogHealthy: true,
+            studentAttemptSessionsReady: true,
+            durableRateLimitsReady: true,
+            examRevisionReady: true,
+            teacherExamCasReady: true,
+            teacherNotificationSummaryReady: true,
+            teacherNotificationStateReady: true,
+            feedbackRevisionReady: true,
+            feedbackCasReady: true,
+            workspaceBootstrapPlanSafe: true,
+            sessionCleanupOptimizationReady: true,
+            feedbackReplayHardeningReady: true,
+            feedbackCoreFreeReady: true,
+            examEntryInvitesReady: true,
+            sessionCleanupFencingReady: true,
+            attemptCheckpointNullCasReady: true,
+            rosterSnapshotCasReady: true,
+            attemptMutationCasReady: true,
+            examDeleteSessionSafe: true,
+            studentQuestionAtomicReady: true,
+            teacherLiveSessionsReady: true,
+            teacherAccountLifecycleReady: true,
+            initialOperationsLoadControlReady: true,
+            individualStudentAssignmentsReady: true,
+            teacherAttemptReportingReady: true,
             failedChecks: [],
         });
     });
 
-    it("fails closed when any v4 evidence key is false or missing", () => {
+    it("fails closed when any v22 evidence key is false or missing", () => {
         for (const key of [
             "browserSchemaPrivilegesDenied",
             "anonTablePrivilegesDenied",
@@ -66,9 +124,37 @@ describe("Supabase deployment readiness probe", () => {
             "serverGatewayCapabilitiesReady",
             "queryPathIndexesReady",
             "legacyBroadRpcsRemoved",
+            "directUploadIntentLifecycleReady",
+            "teacherUploadCleanupQueueReady",
+            "teacherAssetFinalizePreauthorizationReady",
+            "examReservationLeaseReady",
+            "teacherAssetCleanupBacklogHealthy",
+            "studentAttemptSessionsReady",
+            "durableRateLimitsReady",
+            "examRevisionReady",
+            "teacherExamCasReady",
+            "teacherNotificationSummaryReady",
+            "teacherNotificationStateReady",
+            "feedbackRevisionReady",
+            "feedbackCasReady",
+            "workspaceBootstrapPlanSafe",
+            "sessionCleanupOptimizationReady",
+            "feedbackReplayHardeningReady",
+            "feedbackCoreFreeReady",
+            "sessionCleanupFencingReady",
+            "attemptCheckpointNullCasReady",
+            "rosterSnapshotCasReady",
+            "attemptMutationCasReady",
+            "examDeleteSessionSafe",
+            "studentQuestionAtomicReady",
+            "teacherLiveSessionsReady",
+            "teacherAccountLifecycleReady",
+            "initialOperationsLoadControlReady",
+            "individualStudentAssignmentsReady",
+            "teacherAttemptReportingReady",
         ] as const) {
             expect(parseSupabaseDeploymentProbe({
-                ...readyV4Payload,
+                ...readyV22Payload,
                 [key]: false,
             })).toMatchObject({
                 ready: false,
@@ -76,7 +162,7 @@ describe("Supabase deployment readiness probe", () => {
                 failedChecks: [key],
             });
 
-            const missing = { ...readyV4Payload } as Record<string, unknown>;
+            const missing = { ...readyV22Payload } as Record<string, unknown>;
             delete missing[key];
             expect(parseSupabaseDeploymentProbe(missing)).toMatchObject({
                 ready: false,
@@ -90,7 +176,7 @@ describe("Supabase deployment readiness probe", () => {
         expect(parseSupabaseDeploymentProbe({ ready: "true" })).toMatchObject({ ready: false });
         expect(parseSupabaseDeploymentProbe({ ready: true })).toMatchObject({ ready: false });
         expect(parseSupabaseDeploymentProbe({
-            ...readyV4Payload,
+            ...readyV22Payload,
             version: "202607140018",
         })).toMatchObject({
             ready: false,
@@ -98,7 +184,7 @@ describe("Supabase deployment readiness probe", () => {
             failedChecks: ["probeVersion"],
         });
         expect(parseSupabaseDeploymentProbe({
-            ...readyV4Payload,
+            ...readyV22Payload,
             ready: false,
         })).toMatchObject({
             ready: false,
@@ -110,8 +196,8 @@ describe("Supabase deployment readiness probe", () => {
     it("rejects every array shape because the RPC contract is one JSON object", () => {
         for (const payload of [
             [],
-            [readyV4Payload],
-            [readyV4Payload, readyV4Payload],
+            [readyV22Payload],
+            [readyV22Payload, readyV22Payload],
         ]) {
             expect(parseSupabaseDeploymentProbe(payload)).toEqual({
                 ready: false,
@@ -123,11 +209,11 @@ describe("Supabase deployment readiness probe", () => {
 
     it("requires the exact version string without whitespace normalization", () => {
         expect(parseSupabaseDeploymentProbe({
-            ...readyV4Payload,
-            version: ` ${readyV4Payload.version} `,
+            ...readyV22Payload,
+            version: ` ${readyV22Payload.version} `,
         })).toMatchObject({
             ready: false,
-            version: ` ${readyV4Payload.version} `,
+            version: ` ${readyV22Payload.version} `,
             failedChecks: ["probeVersion"],
         });
     });
@@ -160,11 +246,27 @@ describe("Supabase deployment readiness probe", () => {
         const client: SupabaseProbeClient = {
             async rpc(name) {
                 calls.push(name);
-                return { data: readyV4Payload, error: null };
+                return { data: readyV22Payload, error: null };
             },
         };
 
         await expect(probeSupabaseDeployment(client)).resolves.toMatchObject({ ready: true });
         expect(calls).toEqual(["omr_service_readiness_v1"]);
+    });
+
+    it("forwards an AbortSignal to abortable PostgREST requests", async () => {
+        let receivedSignal: AbortSignal | undefined;
+        const request = Promise.resolve({ data: readyV22Payload, error: null }) as Promise<{
+            data: unknown;
+            error: null;
+        }> & { abortSignal(signal: AbortSignal): Promise<{ data: unknown; error: null }> };
+        request.abortSignal = (signal) => {
+            receivedSignal = signal;
+            return request;
+        };
+        const client: SupabaseProbeClient = { rpc: () => request };
+        const controller = new AbortController();
+        await expect(probeSupabaseDeployment(client, controller.signal)).resolves.toMatchObject({ ready: true });
+        expect(receivedSignal).toBe(controller.signal);
     });
 });
