@@ -9,7 +9,34 @@ process.env.TEACHER_SESSION_SECRET = e2eTeacherSessionSecret;
 const externalBaseURL = process.env.PLAYWRIGHT_BASE_URL;
 const baseURL = externalBaseURL || "http://localhost:3003";
 const enableWebKitPwa = process.env.PLAYWRIGHT_ENABLE_WEBKIT === "1";
-const webKitPwaProjects = enableWebKitPwa ? [
+const conditionalWebKitProjects = enableWebKitPwa ? [
+    {
+        name: "ios-se-webkit",
+        testMatch: /ios-mobile-layout\.spec\.ts/,
+        use: {
+            ...devices["iPhone 13"],
+            browserName: "webkit" as const,
+            viewport: { width: 320, height: 568 },
+        },
+    },
+    {
+        name: "ios-standard-webkit",
+        testMatch: /ios-mobile-layout\.spec\.ts/,
+        use: {
+            ...devices["iPhone 13"],
+            browserName: "webkit" as const,
+            viewport: { width: 393, height: 852 },
+        },
+    },
+    {
+        name: "ios-max-webkit",
+        testMatch: /ios-mobile-layout\.spec\.ts/,
+        use: {
+            ...devices["iPhone 13"],
+            browserName: "webkit" as const,
+            viewport: { width: 430, height: 932 },
+        },
+    },
     {
         name: "mobile-ios-webkit-pwa",
         testMatch: /pwa-mobile\.spec\.ts/,
@@ -58,23 +85,32 @@ export default defineConfig({
     projects: [
         {
             name: "chromium",
-            testIgnore: /(?:pwa-mobile|teacher-mobile)\.spec\.ts/,
+            testIgnore: /(?:ios-mobile-layout|pwa-mobile|teacher-mobile)\.spec\.ts/,
             use: { ...devices["Desktop Chrome"] },
         },
         {
             name: "webkit",
-            testIgnore: /(?:pwa-mobile|teacher-mobile)\.spec\.ts/,
+            testIgnore: /(?:ios-mobile-layout|pwa-mobile|teacher-mobile)\.spec\.ts/,
             use: { ...devices["Desktop Safari"] },
         },
         {
             name: "webkit-ipad",
-            testIgnore: /(?:pwa-mobile|teacher-mobile)\.spec\.ts/,
+            testIgnore: /(?:ios-mobile-layout|pwa-mobile|teacher-mobile)\.spec\.ts/,
             use: { ...devices["iPad Pro 11"] },
         },
         {
             name: "mobile-chrome-pwa",
             testMatch: /pwa-mobile\.spec\.ts/,
             use: { ...devices["Pixel 5"], browserName: "chromium" },
+        },
+        {
+            name: "mobile-375-chrome-pwa",
+            testMatch: /pwa-mobile\.spec\.ts/,
+            use: {
+                ...devices["Pixel 5"],
+                browserName: "chromium",
+                viewport: { width: 375, height: 812 },
+            },
         },
         {
             name: "mobile-ios-like-pwa",
@@ -101,7 +137,7 @@ export default defineConfig({
             testMatch: /pwa-mobile\.spec\.ts/,
             use: { ...devices["iPad Pro 11 landscape"], browserName: "chromium" },
         },
-        ...webKitPwaProjects,
+        ...conditionalWebKitProjects,
         {
             name: "teacher-mobile-chrome",
             testMatch: /teacher-mobile\.spec\.ts/,

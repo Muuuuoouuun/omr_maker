@@ -50,6 +50,18 @@ describe("student official attempt read surface", () => {
         expect(client).not.toContain("loadAttemptForStudent");
     });
 
+    it("confirms the server cookie is cleared before reporting a student logout", () => {
+        const dashboard = source("src/app/student/dashboard/page.tsx");
+        const handler = dashboard.slice(
+            dashboard.indexOf("const handleLogout ="),
+            dashboard.indexOf("if (!user)"),
+        );
+        expect(handler).toContain("await clearStudentServerSession()");
+        expect(handler.indexOf("await clearStudentServerSession()"))
+            .toBeLessThan(handler.indexOf("clearSession()"));
+        expect(handler).not.toContain("clearStudentServerSession().catch");
+    });
+
     it("removes publishable-key access to canonical exams and grading tables", () => {
         const migration = source("supabase/migrations/202607140015_student_attempt_read_boundary.sql");
         for (const table of ["omr_exams", "omr_attempts", "omr_question_results"]) {
@@ -133,8 +145,8 @@ describe("student official attempt read surface", () => {
         const review = source("src/app/student/review/[attemptId]/page.tsx");
         const studentClient = source("src/lib/studentAttemptClient.ts");
         const teacherClient = source("src/lib/teacherAttemptClient.ts");
-        expect(solve).toContain("await saveLocalAttempt(cachedAttempt)");
-        expect(solve).toContain("await saveLocalServerConfirmedAttempt(res.attempt)");
+        expect(solve).toContain("await withSubmissionTimeout(saveLocalAttempt(cachedAttempt))");
+        expect(solve).toContain("await withSubmissionTimeout(saveLocalServerConfirmedAttempt(res.attempt))");
         expect(review).toContain("await saveLocalServerConfirmedAttempt(found)");
         expect(studentClient).toContain("await saveLocalAttempts(attempts)");
         expect(teacherClient).toContain("await saveLocalAttempts(result.attempts)");
@@ -181,7 +193,7 @@ describe("student official attempt read surface", () => {
     it("resets the solve submission gate when local attempt locking fails", () => {
         const solve = source("src/app/solve/[id]/page.tsx");
         const review = source("src/app/student/review/[attemptId]/page.tsx");
-        expect(solve).toContain("Local attempt durability failed");
+        expect(solve).toContain("Student submission failed before confirmation");
         expect(solve).toContain('"제출 임시저장 실패"');
         expect(solve).toContain("resetFailedSubmission();");
         expect(solve).toContain("await saveDraftSnapshot();");

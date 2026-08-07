@@ -31,7 +31,8 @@ import {
     summarizeAttemptBehavior,
     summarizeAttemptScore,
 } from "@/lib/premiumAnalytics";
-import { hasTeacherSession } from "@/lib/teacherSession";
+import { hasTeacherSession, readTeacherSession } from "@/lib/teacherSession";
+import { resolveDemoAttemptDetail } from "@/lib/demoData";
 import ThemeToggle from "@/components/ThemeToggle";
 import {
     DEFAULT_FEEDBACK_DOWNLOAD_POLICY,
@@ -173,6 +174,19 @@ export default function TeacherAttemptPage() {
             }
 
             try {
+                const demoDetail = resolveDemoAttemptDetail(readTeacherSession(), id);
+                if (demoDetail) {
+                    setAttempt(demoDetail.attempt);
+                    setPeerAttempts(demoDetail.peerAttempts);
+                    setExam(demoDetail.exam);
+                    const nextFeedback = createAttemptFeedbackDraft(demoDetail.attempt);
+                    setFeedback(nextFeedback);
+                    setFeedbackSummary(nextFeedback.summary || "");
+                    setFeedbackPolicy(nextFeedback.downloadPolicy);
+                    setLoaded(true);
+                    return;
+                }
+
                 const found = await loadTeacherAttemptRecord(id);
                 if (cancelled) return;
                 if (!found) {
@@ -299,6 +313,17 @@ export default function TeacherAttemptPage() {
 
         void (async () => {
             try {
+                const demoDetail = resolveDemoAttemptDetail(readTeacherSession(), targetAttemptId);
+                if (demoDetail) {
+                    if (activeAttemptIdRef.current !== targetAttemptId) return;
+                    setCumulativeAttempts(demoDetail.cumulativeAttempts);
+                    setCumulativeExams(demoDetail.exams);
+                    setRosterStudent(demoDetail.rosterStudent);
+                    cumulativeSettledAttemptIdRef.current = targetAttemptId;
+                    setCumulativeStatus("ready");
+                    return;
+                }
+
                 const [attemptResult, examResult, rosterResult] = await Promise.all([
                     loadTeacherAttempts(),
                     loadTeacherExams(),
@@ -488,7 +513,19 @@ export default function TeacherAttemptPage() {
     }
 
     if (!loaded || (attempt !== null && attempt.id !== id)) {
-        return <div style={{ padding: '2rem', textAlign: 'center' }}>Loading...</div>;
+        return (
+            <main
+                role="status"
+                aria-live="polite"
+                aria-busy="true"
+                style={{ minHeight: '100vh', display: 'grid', placeItems: 'center', padding: '2rem', textAlign: 'center' }}
+            >
+                <div>
+                    <div className="loading-spinner" aria-hidden="true" style={{ margin: '0 auto 0.85rem' }} />
+                    <p style={{ color: 'var(--muted)', fontWeight: 700 }}>응시 기록을 불러오는 중입니다…</p>
+                </div>
+            </main>
+        );
     }
 
     if (!attempt) {

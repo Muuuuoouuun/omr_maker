@@ -42,4 +42,32 @@ describe("demo data gating", () => {
         const now = Date.UTC(2026, 6, 15, 9, 0, 0);
         expect(buildDemoDashboardData(now)).toEqual(buildDemoDashboardData(now));
     });
+
+    it("resolves a coherent showcase attempt detail only for the signed demo identity", async () => {
+        const demoModule = await import("./demoData");
+        expect(demoModule).toHaveProperty("resolveDemoAttemptDetail");
+        const resolveDemoAttemptDetail = (demoModule as typeof demoModule & {
+            resolveDemoAttemptDetail: (
+                identity: { teacherId: string } | null,
+                attemptId: string,
+                now?: number,
+            ) => null | {
+                attempt: { id: string; examId: string };
+                exam: { id: string };
+                peerAttempts: Array<{ examId: string }>;
+            };
+        }).resolveDemoAttemptDetail;
+        const now = Date.parse("2026-08-05T00:00:00.000Z");
+        const demo = buildDemoDashboardData(now);
+        const target = demo.attempts.find(attempt => attempt.examId === "mock-final-comprehensive");
+
+        expect(target).toBeDefined();
+        const detail = resolveDemoAttemptDetail({ teacherId: "omr-showcase" }, target!.id, now);
+        expect(detail?.attempt.id).toBe(target!.id);
+        expect(detail?.exam.id).toBe("mock-final-comprehensive");
+        expect(detail?.peerAttempts.length).toBe(84);
+        expect(detail?.peerAttempts.every(attempt => attempt.examId === detail.exam.id)).toBe(true);
+        expect(resolveDemoAttemptDetail({ teacherId: "admin" }, target!.id, now)).toBeNull();
+        expect(resolveDemoAttemptDetail({ teacherId: "omr-showcase" }, "missing", now)).toBeNull();
+    });
 });

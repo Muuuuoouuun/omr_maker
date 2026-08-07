@@ -237,6 +237,10 @@ export default function Home() {
   const [workspaceId, setWorkspaceId] = useState("");
   const [studentDirectoryStatus, setStudentDirectoryStatus] = useState<"local" | "loading" | "remote" | "degraded_local" | "error">("local");
   const [studentLoginPending, setStudentLoginPending] = useState(false);
+  const [rememberStudentOnDevice, setRememberStudentOnDevice] = useState(false);
+  const clearLoginError = () => setError("");
+  const teacherIdentifierInvalid = Boolean(error && (error.includes("아이디") || error.includes("계정")));
+  const teacherPasswordInvalid = Boolean(error && error.includes("비밀번호"));
   const studentGroupOptions = useMemo(
     () => buildStudentLoginGroupOptions(groups, rosterStudents),
     [groups, rosterStudents],
@@ -360,9 +364,8 @@ export default function Home() {
     try {
       const identifier = teacherIdentifier.trim();
       if (!identifier || !password.trim()) {
-        setError("아이디와 비밀번호를 모두 입력해주세요.");
-        setTimeout(() => setError(""), 2000);
-        return;
+      setError("아이디와 비밀번호를 모두 입력해주세요.");
+      return;
       }
 
       const res = await verifyTeacherPassword(identifier, password);
@@ -370,7 +373,6 @@ export default function Home() {
         const saved = saveTeacherSessionWithIdentity(res.token, res.teacher);
         if (!saved) {
           setError("브라우저 세션 저장을 사용할 수 없습니다.");
-          setTimeout(() => setError(""), 2000);
           return;
         }
         // Apply the account's bound plan only when one is configured, so accounts
@@ -380,11 +382,9 @@ export default function Home() {
         router.push(next);
       } else {
         setError(res.error || "잘못된 비밀번호입니다.");
-        setTimeout(() => setError(""), 2000);
       }
     } catch {
       setError("서버 인증 도중 오류가 발생했습니다.");
-      setTimeout(() => setError(""), 2000);
     }
   };
 
@@ -454,7 +454,7 @@ export default function Home() {
       }
     }
 
-    saveSession(session);
+    saveSession(session, { rememberDevice: rememberStudentOnDevice });
     if (issuedCode) {
       setCopiedIssuedCode(false);
       setIssuedCodeModal({ code: issuedCode, next });
@@ -471,12 +471,10 @@ export default function Home() {
     if (!trimmedName) {
       setError("이름을 입력해주세요.");
       studentNameInputRef.current?.focus();
-      setTimeout(() => setError(""), 2000);
       return;
     }
     if (!selectedGroupId) {
       setError("반을 선택해주세요.");
-      setTimeout(() => setError(""), 2000);
       return;
     }
 
@@ -489,7 +487,6 @@ export default function Home() {
         setNeedsStudentLookup(true);
         setNeedsCode(true);
         setError("학생번호(또는 이메일)와 시작 코드를 모두 입력해주세요.");
-        setTimeout(() => setError(""), 2500);
         return;
       }
 
@@ -542,7 +539,6 @@ export default function Home() {
     if (identity.lookupMismatch) {
       setNeedsStudentLookup(true);
       setError("학생번호 또는 이메일이 명단과 일치하지 않습니다.");
-      setTimeout(() => setError(""), 2500);
       return;
     }
     if (identity.requiresStudentLookup) {
@@ -550,7 +546,6 @@ export default function Home() {
       setError(identity.rosterMatchCount > 1
         ? "동명이인이 있습니다. 선생님이 알려준 학생번호 또는 이메일을 입력해주세요."
         : "명단 학생은 선생님이 알려준 학생번호 또는 이메일을 입력해주세요.");
-      setTimeout(() => setError(""), 3000);
       return;
     }
     const regionSnapshot = resolveSessionRegion({
@@ -579,18 +574,15 @@ export default function Home() {
     });
     if (codeDecision.codesChanged && !writeStudentCodes(localStorage, codeDecision.codes)) {
       setError("시작 코드 저장에 실패했습니다. 브라우저 저장소를 확인해주세요.");
-      setTimeout(() => setError(""), 2500);
       return;
     }
     if (codeDecision.status === "code_required") {
       setNeedsCode(true);
       setError("이미 등록된 학생입니다. 선생님이 발급한 시작 코드를 입력해주세요.");
-      setTimeout(() => setError(""), 2500);
       return;
     }
     if (codeDecision.status === "code_mismatch") {
       setError("시작 코드가 일치하지 않습니다.");
-      setTimeout(() => setError(""), 2500);
       return;
     }
 
@@ -668,7 +660,6 @@ export default function Home() {
     const guestGroup = resolveGuestGroupCode(guestGroupCode, studentGroupOptions);
     if (!guestGroup) {
       setError("반 코드를 입력해주세요.");
-      setTimeout(() => setError(""), 2000);
       return;
     }
 
@@ -809,7 +800,7 @@ export default function Home() {
 
       <main id="main-content" className="landing-main">
         <div
-          className="container animate-fade-in home-container"
+          className="container animate-fade-in home-container mobile-inline-surface mobile-section-stack"
           style={{ maxWidth: "960px", position: "relative", zIndex: 1, padding: "3rem 1.5rem" }}
         >
           {/* ── Hero ───────────────────────────── */}
@@ -1078,7 +1069,7 @@ export default function Home() {
         {/* ── Login Forms ────────────────────── */}
         {role !== "none" && (
           <div
-            className="glass-panel animate-slide-up home-login-card"
+            className="glass-panel animate-slide-up home-login-card mobile-section-stack"
             style={{ maxWidth: role === "teacher" ? "500px" : "440px", margin: "0 auto", padding: "2.75rem 2.5rem" }}
           >
             <button
@@ -1152,13 +1143,16 @@ export default function Home() {
                     type="text"
                     className="input-field"
                     value={teacherIdentifier}
-                    onChange={(e) => setTeacherIdentifier(e.target.value)}
+                    onChange={(e) => {
+                      setTeacherIdentifier(e.target.value);
+                      clearLoginError();
+                    }}
                     placeholder="admin 또는 teacher@example.com"
                     autoFocus
                     autoComplete="username"
                     autoCapitalize="none"
                     spellCheck={false}
-                    aria-invalid={Boolean(error)}
+                    aria-invalid={teacherIdentifierInvalid}
                     aria-describedby="teacher-login-feedback"
                   />
                 </div>
@@ -1183,10 +1177,13 @@ export default function Home() {
                     type="password"
                     className="input-field"
                     value={password}
-                    onChange={(e) => setPassword(e.target.value)}
+                    onChange={(e) => {
+                      setPassword(e.target.value);
+                      clearLoginError();
+                    }}
                     placeholder="비밀번호 입력"
                     autoComplete="current-password"
-                    aria-invalid={Boolean(error)}
+                    aria-invalid={teacherPasswordInvalid}
                     aria-describedby="teacher-login-feedback"
                   />
                   <div
@@ -1249,10 +1246,6 @@ export default function Home() {
               <>
                 {/* Student form */}
                 <div style={{ marginBottom: "2.25rem" }}>
-                  <span className="badge badge-secondary" style={{ marginBottom: "1rem" }}>
-                    <StudentIcon size={12} />
-                    학생 포털
-                  </span>
                   <h1
                     style={{
                       fontSize: "1.85rem",
@@ -1266,8 +1259,17 @@ export default function Home() {
                   </h1>
                 </div>
 
+                <form
+                  className="student-account-login-form"
+                  onSubmit={(event) => {
+                    event.preventDefault();
+                    void handleStudentLogin();
+                  }}
+                  noValidate
+                >
                 <div style={{ marginBottom: "1.1rem" }}>
                   <label
+                    htmlFor="student-name"
                     style={{
                       display: "block",
                       marginBottom: "0.55rem",
@@ -1289,7 +1291,10 @@ export default function Home() {
                     aria-invalid={error === "이름을 입력해주세요."}
                     aria-describedby={error === "이름을 입력해주세요." ? "student-name-error" : undefined}
                     value={studentName}
-                    onChange={(e) => setStudentName(e.target.value)}
+                    onChange={(e) => {
+                      setStudentName(e.target.value);
+                      clearLoginError();
+                    }}
                     placeholder="이름을 입력하세요"
                     autoFocus
                     autoComplete="name"
@@ -1298,7 +1303,7 @@ export default function Home() {
                     <p
                       id="student-name-error"
                       role="alert"
-                      style={{ fontSize: "var(--type-label)", color: "var(--error)", marginTop: "0.45rem", fontWeight: 700 }}
+                      style={{ fontSize: "var(--type-label)", color: "var(--text-error)", marginTop: "0.45rem", fontWeight: 700 }}
                     >
                       {error}
                     </p>
@@ -1307,12 +1312,13 @@ export default function Home() {
 
                 <div style={{ marginBottom: "1.1rem" }}>
                   <label
+                    htmlFor="student-lookup"
                     style={{
                       display: "block",
                       marginBottom: "0.55rem",
                       fontSize: "var(--type-label)",
                       fontWeight: 700,
-                      color: needsStudentLookup ? "var(--warning)" : "var(--muted)",
+                      color: needsStudentLookup ? "var(--text-warning)" : "var(--muted)",
                       textTransform: "uppercase",
                       letterSpacing: "0.07em",
                     }}
@@ -1320,12 +1326,15 @@ export default function Home() {
                     학생번호 또는 이메일
                   </label>
                   <input
+                    id="student-lookup"
                     type="text"
                     className="input-field"
                     aria-label="학생번호 또는 이메일"
                     value={studentLookup}
-                    onChange={(e) => setStudentLookup(e.target.value)}
-                    onKeyDown={(e) => e.key === "Enter" && handleStudentLogin()}
+                    onChange={(e) => {
+                      setStudentLookup(e.target.value);
+                      clearLoginError();
+                    }}
                     placeholder="선생님이 알려준 학생번호 또는 이메일"
                     autoComplete="email"
                     autoCapitalize="none"
@@ -1337,7 +1346,7 @@ export default function Home() {
                   />
                   <p style={{
                     fontSize: "var(--type-label)",
-                    color: needsStudentLookup ? "var(--warning)" : "var(--muted)",
+                    color: needsStudentLookup ? "var(--text-warning)" : "var(--muted)",
                     marginTop: "0.45rem",
                     lineHeight: 1.45,
                     wordBreak: "keep-all",
@@ -1350,6 +1359,7 @@ export default function Home() {
 
                 <div style={{ marginBottom: "1.35rem" }}>
                   <label
+                    htmlFor="student-group"
                     style={{
                       display: "block",
                       marginBottom: "0.55rem",
@@ -1364,9 +1374,13 @@ export default function Home() {
                   </label>
                   {studentGroupOptions.length > 0 ? (
                     <select
+                      id="student-group"
                       aria-label="반 선택"
                       value={selectedGroupId}
-                      onChange={(e) => setSelectedGroupId(e.target.value)}
+                      onChange={(e) => {
+                        setSelectedGroupId(e.target.value);
+                        clearLoginError();
+                      }}
                       className="input-field"
                       style={{ cursor: "pointer" }}
                     >
@@ -1379,11 +1393,15 @@ export default function Home() {
                     </select>
                   ) : (
                     <input
+                      id="student-group"
                       type="text"
                       className="input-field"
                       aria-label="반 코드"
                       value={selectedGroupId}
-                      onChange={(e) => setSelectedGroupId(e.target.value.trim())}
+                      onChange={(e) => {
+                        setSelectedGroupId(e.target.value.trim());
+                        clearLoginError();
+                      }}
                       placeholder="선생님이 알려준 반 코드"
                       autoCapitalize="none"
                       spellCheck={false}
@@ -1396,11 +1414,13 @@ export default function Home() {
                   )}
                 </div>
 
-                {error && error !== "이름을 입력해주세요." && (
-                  <p role="alert" style={{ fontSize: "var(--type-label)", color: "var(--error)", marginTop: "-0.35rem", marginBottom: "1.35rem", fontWeight: 600 }}>
-                    {error}
-                  </p>
-                )}
+                <div id="student-login-feedback" aria-live="polite">
+                  {error && error !== "이름을 입력해주세요." && (
+                    <p role="alert" style={{ fontSize: "var(--type-label)", color: "var(--text-error)", marginTop: "-0.35rem", marginBottom: "1.35rem", fontWeight: 650 }}>
+                      {error}
+                    </p>
+                  )}
+                </div>
 
                 {pendingGuestPreview && (
                   <div
@@ -1426,12 +1446,13 @@ export default function Home() {
                 {(needsCode || requiresServerStudentVerification) && (
                   <div style={{ marginBottom: "1.75rem" }}>
                     <label
+                      htmlFor="student-start-code"
                       style={{
                         display: "block",
                         marginBottom: "0.55rem",
                         fontSize: "var(--type-label)",
                         fontWeight: 700,
-                        color: needsCode ? "var(--warning)" : "var(--muted)",
+                        color: needsCode ? "var(--text-warning)" : "var(--muted)",
                         textTransform: "uppercase",
                         letterSpacing: "0.07em",
                       }}
@@ -1439,12 +1460,15 @@ export default function Home() {
                       시작 코드
                     </label>
                     <input
+                      id="student-start-code"
                       type="text"
                       className="input-field"
                       aria-label="시작 코드"
                       value={startCode}
-                      onChange={(e) => setStartCode(normalizeStartCodeInput(e.target.value))}
-                      onKeyDown={(e) => e.key === "Enter" && handleStudentLogin()}
+                      onChange={(e) => {
+                        setStartCode(normalizeStartCodeInput(e.target.value));
+                        clearLoginError();
+                      }}
                       placeholder="6자리 코드 입력"
                       autoComplete="one-time-code"
                       autoCapitalize="characters"
@@ -1459,7 +1483,7 @@ export default function Home() {
                 )}
 
                 <button
-                  onClick={handleStudentLogin}
+                  type="submit"
                   disabled={studentLoginPending || studentDirectoryStatus === "loading"}
                   className="btn btn-primary"
                   style={{
@@ -1472,69 +1496,91 @@ export default function Home() {
                   {studentLoginPending ? "계정 확인 중…" : "시험 시작하기"}
                 </button>
 
+                <label
+                  htmlFor="remember-student-device"
+                  style={{
+                    minHeight: 44,
+                    display: "flex",
+                    alignItems: "center",
+                    gap: "0.65rem",
+                    margin: "0.35rem 0 0.75rem",
+                    color: "var(--foreground)",
+                    fontSize: "var(--type-label)",
+                    fontWeight: 700,
+                    cursor: "pointer",
+                  }}
+                >
+                  <input
+                    id="remember-student-device"
+                    type="checkbox"
+                    checked={rememberStudentOnDevice}
+                    onChange={(event) => setRememberStudentOnDevice(event.target.checked)}
+                  />
+                  <span>
+                    이 기기에서 로그인 유지
+                    <small style={{ display: "block", marginTop: "0.15rem", color: "var(--muted)", fontWeight: 550 }}>
+                      공용 기기에서는 선택하지 마세요.
+                    </small>
+                  </span>
+                </label>
+
                 <p style={{ fontSize: "var(--type-caption)", color: "var(--muted)", margin: "0 0 0.75rem", lineHeight: 1.5, wordBreak: "keep-all" }}>
                   {requiresServerStudentVerification
                     ? "* 선생님이 발급한 초대 링크와 시작 코드로 서버 명단을 확인합니다."
                     : "* 현재 기기에 저장된 명단과 시작 코드로 로그인합니다."}
                 </p>
+                </form>
 
-                <div className="divider-label">
-                  <span>또는</span>
-                </div>
+                <details className="student-alternate-entry">
+                  <summary>다른 방법으로 참여</summary>
+                  <div className="student-alternate-entry-content">
+                    <div>
+                      <label htmlFor="guest-group-code">반 코드</label>
+                      <input
+                        id="guest-group-code"
+                        type="text"
+                        className="input-field"
+                        value={guestGroupCode}
+                        onChange={(e) => {
+                          setGuestGroupCode(e.target.value);
+                          clearLoginError();
+                        }}
+                        onKeyDown={(e) => e.key === "Enter" && handleGuestWithGroupCode()}
+                        placeholder="선생님이 알려준 코드"
+                        autoCapitalize="characters"
+                        spellCheck={false}
+                      />
+                    </div>
 
-                <div style={{ marginBottom: "0.75rem" }}>
-                  <label
-                    style={{
-                      display: "block",
-                      marginBottom: "0.55rem",
-                      fontSize: "var(--type-label)",
-                      fontWeight: 700,
-                      color: "var(--muted)",
-                      textTransform: "uppercase",
-                      letterSpacing: "0.07em",
-                    }}
-                  >
-                    반 코드
-                  </label>
-                  <input
-                    type="text"
-                    className="input-field"
-                    value={guestGroupCode}
-                    onChange={(e) => setGuestGroupCode(e.target.value)}
-                    onKeyDown={(e) => e.key === "Enter" && handleGuestWithGroupCode()}
-                    placeholder="선생님이 알려준 코드"
-                    autoCapitalize="characters"
-                    spellCheck={false}
-                  />
-                </div>
+                    <button
+                      type="button"
+                      onClick={handleGuestWithGroupCode}
+                      className="btn btn-primary"
+                      style={{
+                        width: "100%",
+                        background: "linear-gradient(135deg, #6366f1, #14b8a6)",
+                        boxShadow: "0 4px 18px rgba(20,184,166,0.25)",
+                      }}
+                    >
+                      반 코드로 게스트 시험보기
+                    </button>
 
-                <button
-                  type="button"
-                  onClick={handleGuestWithGroupCode}
-                  className="btn btn-primary"
-                  style={{
-                    width: "100%",
-                    background: "linear-gradient(135deg, #6366f1, #14b8a6)",
-                    boxShadow: "0 4px 18px rgba(20,184,166,0.25)",
-                    marginBottom: "0.75rem",
-                  }}
-                >
-                  반 코드로 게스트 시험보기
-                </button>
-
-                <button
-                  onClick={handleGuest}
-                  className="btn"
-                  style={{
-                    width: "100%",
-                    background: "transparent",
-                    border: "1px solid var(--border)",
-                    color: "var(--muted)",
-                    fontSize: "0.92rem",
-                  }}
-                >
-                  코드 없이 게스트로 계속하기
-                </button>
+                    <button
+                      type="button"
+                      onClick={handleGuest}
+                      className="btn"
+                      style={{
+                        width: "100%",
+                        background: "transparent",
+                        border: "1px solid var(--border)",
+                        color: "var(--muted)",
+                        fontSize: "0.92rem",
+                      }}
+                    >
+                      코드 없이 게스트로 계속하기
+                    </button>
+                  </div>
+                </details>
               </>
             )}
           </div>

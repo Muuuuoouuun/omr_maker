@@ -13,7 +13,7 @@ const persistenceMocks = vi.hoisted(() => ({
     saveLocalAttempts: vi.fn(async () => true),
     loadAttempt: vi.fn(),
     loadAttempts: vi.fn(),
-    readLocalAttempts: vi.fn(() => []),
+    readLocalAttempts: vi.fn((): Attempt[] => []),
 }));
 
 vi.mock("@/app/actions/teacherAttempts", () => ({
@@ -28,6 +28,7 @@ vi.mock("@/lib/omrPersistence", () => persistenceMocks);
 import {
     answerTeacherAttemptQuestion,
     forceFinishTeacherAttempts,
+    loadTeacherAttempts,
     setTeacherAttemptSubquestionReview,
 } from "./teacherAttemptClient";
 
@@ -81,6 +82,7 @@ beforeEach(() => {
     vi.clearAllMocks();
     persistenceMocks.saveLocalAttempt.mockResolvedValue(true);
     persistenceMocks.readLocalAttempts.mockReturnValue([]);
+    persistenceMocks.loadAttempts.mockResolvedValue({ items: [], remoteLoaded: false });
     vi.stubGlobal("navigator", { locks: serialWebLocks() });
 });
 
@@ -214,5 +216,33 @@ describe("teacher attempt mutation serialization", () => {
         });
         expect(persistenceMocks.saveLocalAttempt).toHaveBeenCalledTimes(2);
         expect(actionMocks.finish).toHaveBeenCalledTimes(1);
+    });
+});
+
+describe("teacher attempt read fallback", () => {
+    it("fails closed instead of returning prior-account cache when the authenticated server read fails", async () => {
+        actionMocks.list.mockResolvedValue({ status: "service_unavailable", error: "offline" });
+        persistenceMocks.readLocalAttempts.mockReturnValue([{ ...baseAttempt, id: "prior-account" }]);
+
+        await expect(loadTeacherAttempts()).resolves.toMatchObject({
+            items: [],
+            remoteLoaded: false,
+            remoteError: "offline",
+        });
+        expect(persistenceMocks.readLocalAttempts).not.toHaveBeenCalled();
+    });
+
+    it("keeps the explicitly local-only development flow", async () => {
+        actionMocks.list.mockResolvedValue({ status: "local_only" });
+        persistenceMocks.loadAttempts.mockResolvedValue({
+            items: [{ ...baseAttempt, id: "local-development" }],
+            remoteLoaded: false,
+        });
+
+        await expect(loadTeacherAttempts()).resolves.toMatchObject({
+            items: [{ id: "local-development" }],
+            remoteLoaded: false,
+        });
+        expect(persistenceMocks.loadAttempts).toHaveBeenCalledTimes(1);
     });
 });

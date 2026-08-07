@@ -65,6 +65,12 @@ describe("student handwriting result surface", () => {
         expect(panel).toContain("const canShowReviewPdf = !!pdfFile;");
     });
 
+    it("labels the archived plan as the plan captured when the submission was made", () => {
+        const panel = readProjectFile("src/components/teacher/student-results/HandwritingPanel.tsx");
+
+        expect(panel).toContain("제출 당시 보관 플랜:");
+    });
+
     it("renders the handwriting panel only for the handwriting tab", () => {
         const page = readProjectFile("src/app/teacher/attempt/[attemptId]/page.tsx");
 

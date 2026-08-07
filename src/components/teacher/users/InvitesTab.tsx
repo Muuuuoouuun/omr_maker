@@ -30,15 +30,15 @@ export default function InvitesTab({
     setShowInviteModal,
 }: InvitesTabProps) {
     return (
-                    <div className="bento-card" style={{ padding: '1.5rem' }}>
-                        <div style={{
+                    <div className="bento-card teacher-invites-card" style={{ padding: '1.5rem' }}>
+                        <div className="teacher-invite-share" style={{
                             display: 'flex', gap: '0.75rem', padding: '1rem 1.25rem',
                             background: 'linear-gradient(135deg, rgba(99,102,241,0.06), rgba(139,92,246,0.06))',
                             borderRadius: 'var(--radius-md)', border: '1px solid rgba(99,102,241,0.15)',
                             marginBottom: '1.5rem', alignItems: 'center'
                         }}>
                             <LinkIcon size={20} color="var(--primary)" style={{ flexShrink: 0, marginTop: 2 }} />
-                            <div style={{ flex: 1 }}>
+                            <div className="teacher-invite-share-copy" style={{ flex: 1 }}>
                                 <div style={{ fontSize: '0.85rem', fontWeight: 700, marginBottom: '0.25rem' }}>초대 링크</div>
                                 <code style={{ fontSize: '0.8rem', color: 'var(--muted)' }}>
                                     현재 도메인/?role=student&amp;workspace={workspaceId || '내-학원'}
@@ -48,12 +48,16 @@ export default function InvitesTab({
                                 <span style={{ fontSize: '0.8rem', color: 'var(--success)', fontWeight: 700 }}>복사됨</span>
                             )}
                             <button
+                                type="button"
+                                className="teacher-invite-action"
                                 onClick={handleCopyInvite}
                                 style={{ padding: '0.5rem 1rem', background: 'var(--surface)', color: 'var(--primary)', border: '1px solid rgba(99,102,241,0.3)', borderRadius: 'var(--radius-md)', fontWeight: 600, fontSize: '0.8rem' }}
                             >
                                 링크 복사
                             </button>
                             <button
+                                type="button"
+                                className="teacher-invite-action"
                                 onClick={() => setShowInviteModal(true)}
                                 style={{ padding: '0.5rem 1rem', background: 'var(--primary)', color: 'white', borderRadius: 'var(--radius-md)', fontWeight: 600, fontSize: '0.8rem', display: 'flex', alignItems: 'center', gap: '0.3rem' }}
                             >
@@ -61,7 +65,8 @@ export default function InvitesTab({
                             </button>
                         </div>
 
-                        <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left' }}>
+                        <div className="teacher-invite-table-scroll scroll-custom" tabIndex={0} aria-label="초대 기록 표, 가로로 스크롤할 수 있습니다">
+                        <table className="teacher-invite-table" style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left' }}>
                             <thead>
                                 <tr style={{ color: 'var(--muted)', fontSize: '0.8rem', borderBottom: '1px solid var(--border)', fontWeight: 700, letterSpacing: '0.05em', textTransform: 'uppercase' }}>
                                     <th style={{ padding: '0.85rem 0.5rem' }}>초대 연락처</th>
@@ -108,6 +113,7 @@ export default function InvitesTab({
                                 })}
                             </tbody>
                         </table>
+                        </div>
                         {hydrated && rosterInvites.length === 0 && (
                             <div style={{ padding: '2.5rem 1rem', textAlign: 'center', color: 'var(--muted)', fontSize: '0.9rem' }}>
                                 아직 저장된 초대 기록이 없습니다. 위의 <strong style={{ color: 'var(--primary)' }}>카카오 초대 기록</strong> 버튼으로 시작하세요.

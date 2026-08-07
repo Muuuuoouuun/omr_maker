@@ -133,7 +133,7 @@ export default function AssignmentBlock({ exams, type }: AssignmentBlockProps) {
           exams.map((exam) => (
             <div
               key={exam.id}
-              className={isTodo ? "card-hover" : ""}
+              className={`student-assignment-row${isTodo ? " card-hover" : ""}`}
               style={{
                 padding: "1.1rem 1.25rem",
                 borderRadius: "var(--radius-lg)",
@@ -142,11 +142,12 @@ export default function AssignmentBlock({ exams, type }: AssignmentBlockProps) {
                 display: "flex",
                 alignItems: "center",
                 gap: "1rem",
-                transition: "all 0.2s",
+                transition: "background-color 0.2s, border-color 0.2s, box-shadow 0.2s, transform 0.2s",
                 opacity: isTodo ? 1 : 0.75,
               }}
             >
               <div
+                className="student-assignment-icon"
                 style={{
                   width: "44px",
                   height: "44px",
@@ -167,8 +168,10 @@ export default function AssignmentBlock({ exams, type }: AssignmentBlockProps) {
                 {exam.title.substring(0, 1)}
               </div>
 
-              <div style={{ flex: 1, minWidth: 0 }}>
+              <div className="student-assignment-content" style={{ flex: 1, minWidth: 0 }}>
                 <div
+                  className="student-assignment-title"
+                  title={exam.title}
                   style={{
                     fontWeight: 700,
                     fontSize: "0.98rem",
@@ -182,6 +185,7 @@ export default function AssignmentBlock({ exams, type }: AssignmentBlockProps) {
                   {exam.title}
                 </div>
                 <div
+                  className="student-assignment-meta"
                   style={{
                     fontSize: "0.82rem",
                     color: "var(--muted)",
@@ -229,16 +233,16 @@ export default function AssignmentBlock({ exams, type }: AssignmentBlockProps) {
               {isTodo ? (
                 <Link
                   href={`/solve/${exam.id}`}
-                  className="btn btn-primary"
-                  style={{ padding: "0.55rem 1.1rem", fontSize: "0.88rem", flexShrink: 0 }}
+                  className="btn btn-primary student-assignment-action"
+                  style={{ minHeight: 44, padding: "0.55rem 1.1rem", fontSize: "0.88rem", flexShrink: 0 }}
                 >
                   시작
                 </Link>
               ) : (
                 <Link
                   href={`/student/review/${exam.attemptId || exam.id}`}
-                  className="btn btn-secondary"
-                  style={{ padding: "0.5rem 1rem", fontSize: "0.85rem", flexShrink: 0 }}
+                  className="btn btn-secondary student-assignment-action"
+                  style={{ minHeight: 44, padding: "0.5rem 1rem", fontSize: "0.85rem", flexShrink: 0 }}
                 >
                   복습
                 </Link>

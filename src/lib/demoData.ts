@@ -118,6 +118,15 @@ export interface DemoDashboardData {
     rosterGroups: RosterGroup[];
 }
 
+export interface DemoAttemptDetail {
+    attempt: Attempt;
+    exam: Exam;
+    peerAttempts: Attempt[];
+    cumulativeAttempts: Attempt[];
+    exams: Exam[];
+    rosterStudent: RosterStudent | null;
+}
+
 export function shouldUseDemoData(identity: Partial<TeacherSessionIdentity> | null | undefined): boolean {
     return isMockupTeacherIdentity(identity);
 }
@@ -298,4 +307,27 @@ export function buildDemoDashboardData(now = Date.now()): DemoDashboardData {
     });
 
     return { exams, attempts, rosterStudents, rosterGroups };
+}
+
+export function resolveDemoAttemptDetail(
+    identity: Partial<TeacherSessionIdentity> | null | undefined,
+    attemptId: string,
+    now = Date.now(),
+): DemoAttemptDetail | null {
+    if (!shouldUseDemoData(identity)) return null;
+
+    const demo = buildDemoDashboardData(now);
+    const attempt = demo.attempts.find(candidate => candidate.id === attemptId);
+    if (!attempt) return null;
+    const exam = demo.exams.find(candidate => candidate.id === attempt.examId);
+    if (!exam) return null;
+
+    return {
+        attempt,
+        exam,
+        peerAttempts: demo.attempts.filter(candidate => candidate.examId === exam.id),
+        cumulativeAttempts: demo.attempts.filter(candidate => candidate.studentId === attempt.studentId),
+        exams: demo.exams,
+        rosterStudent: demo.rosterStudents.find(candidate => candidate.id === attempt.studentId) || null,
+    };
 }

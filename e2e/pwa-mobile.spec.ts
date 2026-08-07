@@ -148,7 +148,7 @@ async function expectMetaContent(page: Page, name: string, content: string) {
 }
 
 async function triggerAndroidInstallPrompt(page: Page) {
-    await page.evaluate(() => {
+    await expect.poll(async () => page.evaluate(() => {
         const event = new Event("beforeinstallprompt", { cancelable: true }) as Event & {
             prompt: () => Promise<void>;
             userChoice: Promise<{ outcome: "accepted"; platform: string }>;
@@ -157,7 +157,8 @@ async function triggerAndroidInstallPrompt(page: Page) {
         event.prompt = async () => undefined;
         event.userChoice = Promise.resolve({ outcome: "accepted", platform: "web" });
         window.dispatchEvent(event);
-    });
+        return event.defaultPrevented;
+    })).toBe(true);
 }
 
 async function emulateStandaloneDisplay(page: Page) {
@@ -403,6 +404,20 @@ test.describe("Mobile PWA entry", () => {
         await page.goto("/student/dashboard");
 
         await expect(page.getByRole("heading", { name: "모바일학생님," })).toBeVisible();
+        const dashboardHeader = page.locator(".student-dashboard-shell-header");
+        const dashboardHeaderContent = page.locator(".student-dashboard-header");
+        const dashboardMain = page.locator("main").first();
+        const [headerBox, headerContentBox, mainBox] = await Promise.all([
+            dashboardHeader.boundingBox(),
+            dashboardHeaderContent.boundingBox(),
+            dashboardMain.boundingBox(),
+        ]);
+        expect(headerBox).not.toBeNull();
+        expect(headerContentBox).not.toBeNull();
+        expect(mainBox).not.toBeNull();
+        expect(headerContentBox!.y).toBeGreaterThanOrEqual(headerBox!.y);
+        expect(headerContentBox!.y + headerContentBox!.height).toBeLessThanOrEqual(headerBox!.y + headerBox!.height + 1);
+        expect(mainBox!.y).toBeGreaterThanOrEqual(headerBox!.y + headerBox!.height - 1);
         await expectTouchTarget(page.getByRole("button", { name: "로그아웃" }));
         await expectTouchTarget(page.getByRole("link", { name: /나의 원시험 평균/ }));
         await expectNoHorizontalOverflow(page);
@@ -749,6 +764,39 @@ test.describe("Mobile PWA entry", () => {
         await expect(page.getByRole("complementary", { name: "앱 설치 안내" })).toHaveCount(0);
     });
 
+    test("keeps advanced PWA diagnostics collapsed until requested", async ({ page }) => {
+        await page.goto("/pwa-check");
+
+        await expect(page.getByTestId("pwa-device-verdict")).toBeVisible();
+        await expect(page.getByTestId("pwa-preflight-checklist")).toBeVisible();
+        const passedChecks = page.getByTestId("pwa-passed-checks");
+        const passedChecksSummary = page.getByTestId("pwa-passed-checks-summary");
+        await expect(passedChecks).toBeVisible({ timeout: 15_000 });
+        await expect(passedChecks).not.toHaveAttribute("open", "");
+        await expect(passedChecksSummary).toContainText(/\d+개 항목 통과/);
+        const passedCount = await passedChecks.locator('[data-testid^="pwa-device-check-"]').count();
+        const attentionCount = await page.getByTestId("pwa-preflight-checklist")
+            .locator(':scope > [data-testid^="pwa-device-check-"]')
+            .count();
+        expect(passedCount).toBeGreaterThan(0);
+        expect(passedCount + attentionCount).toBe(16);
+        await expect(passedChecksSummary).toContainText(`${passedCount}개 항목 통과`);
+        await expect.poll(async () => page.evaluate(() => document.documentElement.scrollHeight)).toBeLessThanOrEqual(1400);
+        const advancedDiagnostics = page.getByTestId("pwa-advanced-diagnostics");
+        await expect(advancedDiagnostics).not.toHaveAttribute("open", "");
+        await expect(page.getByTestId("pwa-install-proof-guide")).not.toBeVisible();
+        await expect(page.getByTestId("pwa-device-handoff")).not.toBeVisible();
+        await expect(page.getByTestId("pwa-proof-verifier")).not.toBeVisible();
+
+        await page.getByTestId("pwa-advanced-diagnostics-summary").click();
+
+        await expect(advancedDiagnostics).toHaveAttribute("open", "");
+        await expect(page.getByTestId("pwa-install-proof-guide")).toBeVisible();
+        await expect(page.getByTestId("pwa-device-handoff")).toBeVisible();
+        await expect(page.getByTestId("pwa-proof-verifier")).toBeVisible();
+        await expectNoHorizontalOverflow(page);
+    });
+
     test("renders the device diagnostics page without blocking app entry", async ({ page }, testInfo) => {
         const consoleProblems = collectConsoleProblems(page);
         await stubClipboard(page);
@@ -757,7 +805,19 @@ test.describe("Mobile PWA entry", () => {
 
         await expect(page.getByRole("heading", { name: "PWA 디바이스 체크" })).toBeVisible();
         await expect(page.getByTestId("pwa-device-verdict")).toContainText("설치 실행 전");
+        const passedChecks = page.getByTestId("pwa-passed-checks");
+        await expect(passedChecks).not.toHaveAttribute("open", "");
+        await page.getByTestId("pwa-passed-checks-summary").click();
+        await expect(passedChecks).toHaveAttribute("open", "");
         await expect(page.getByTestId("pwa-device-check-manifest")).toContainText("standalone / any");
+        await expect(page.getByTestId("pwa-preflight-checklist")).toBeVisible();
+        const advancedDiagnostics = page.getByTestId("pwa-advanced-diagnostics");
+        await expect(advancedDiagnostics).not.toHaveAttribute("open", "");
+        await expect(page.getByTestId("pwa-install-proof-guide")).not.toBeVisible();
+        await expect(page.getByTestId("pwa-device-handoff")).not.toBeVisible();
+        await expect(page.getByTestId("pwa-proof-verifier")).not.toBeVisible();
+        await page.getByTestId("pwa-advanced-diagnostics-summary").click();
+        await expect(advancedDiagnostics).toHaveAttribute("open", "");
         await expect(page.getByTestId("pwa-device-report")).toContainText("manifest=pass:standalone / any");
         await expect(page.getByTestId("pwa-device-check-secure-context")).toBeVisible();
         await expect(page.getByTestId("pwa-device-check-display-mode")).toBeVisible();
@@ -924,8 +984,10 @@ test.describe("Mobile PWA entry", () => {
         expect(standaloneState.layoutHeight).toBeGreaterThan(0);
 
         await page.goto("/pwa-check");
+        await page.getByTestId("pwa-passed-checks-summary").click();
         await expect(page.getByTestId("pwa-device-check-display-mode")).toContainText(/standalone|fullscreen/);
         await expect(page.getByTestId("pwa-device-check-launch-proof")).toContainText("확인됨");
+        await page.getByTestId("pwa-advanced-diagnostics-summary").click();
         await expect(page.getByTestId("pwa-device-report")).toContainText("installedDisplay=yes");
         await expect(page.getByTestId("pwa-device-report")).toContainText("launch-proof=pass:확인됨");
         await expect(page.getByTestId("pwa-device-report")).toContainText("handoff-origin=");
@@ -975,6 +1037,7 @@ test.describe("Mobile PWA entry", () => {
 
         await page.reload();
         await expect(page.getByRole("heading", { name: "PWA 디바이스 체크" })).toBeVisible();
+        await page.getByTestId("pwa-advanced-diagnostics-summary").click();
         await expect(page.getByTestId("pwa-proof-input")).toHaveValue(validInstalledProofReport("android"));
         await expect(page.getByTestId("pwa-proof-input-ios")).toHaveValue(validInstalledProofReport("ios"));
         await expect(page.getByTestId("pwa-proof-result")).toContainText("Android/iOS 리포트 통과");

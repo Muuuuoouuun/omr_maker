@@ -20,6 +20,10 @@ interface ToastMessage {
     action?: ToastActionSpec;
 }
 
+export function getVisibleToastItems<T>(items: readonly T[]): T[] {
+    return items.length > 0 ? [items[0]] : [];
+}
+
 // Singleton event-bus: any component can call `showToast(...)` without context.
 type Listener = (t: ToastMessage) => void;
 const listeners = new Set<Listener>();
@@ -96,20 +100,19 @@ export default function ToastHost() {
     }, []);
 
     useEffect(() => {
-        const activeIds = new Set(items.map(item => item.id));
+        const activeItem = getVisibleToastItems(items)[0];
+        const activeIds = new Set(activeItem ? [activeItem.id] : []);
         removalTimersRef.current.forEach((timer, id) => {
             if (activeIds.has(id)) return;
             clearTimeout(timer);
             removalTimersRef.current.delete(id);
         });
-        items.forEach(item => {
-            if (removalTimersRef.current.has(item.id)) return;
-            const timer = setTimeout(() => {
-                removalTimersRef.current.delete(item.id);
-                setItems(prev => prev.filter(candidate => candidate.id !== item.id));
-            }, item.duration);
-            removalTimersRef.current.set(item.id, timer);
-        });
+        if (!activeItem || removalTimersRef.current.has(activeItem.id)) return;
+        const timer = setTimeout(() => {
+            removalTimersRef.current.delete(activeItem.id);
+            setItems(prev => prev.filter(candidate => candidate.id !== activeItem.id));
+        }, activeItem.duration);
+        removalTimersRef.current.set(activeItem.id, timer);
     }, [items]);
 
     useEffect(() => {
@@ -120,10 +123,12 @@ export default function ToastHost() {
         };
     }, []);
 
-    if (items.length === 0) return null;
+    const visibleItems = getVisibleToastItems(items);
+    if (visibleItems.length === 0) return null;
 
     return (
         <div
+            className="toast-host"
             role="region"
             aria-label="알림"
             aria-live="polite"
@@ -137,7 +142,7 @@ export default function ToastHost() {
                 zIndex: 2000, pointerEvents: 'none'
             }}
         >
-            {items.map(t => {
+            {visibleItems.map(t => {
                 const meta = KIND[t.kind];
                 return (
                     <div

@@ -146,7 +146,7 @@ export default function HandwritingPanel({
                         <StatusPill tone="success" label="저장됨" size="sm" />
                     </div>
                     <div className={styles.metadataList}>
-                        <div>플랜: <strong>{getPlanLabel(handwriting?.plan || attempt.handwritingPlan || "free")}</strong></div>
+                        <div>제출 당시 보관 플랜: <strong>{getPlanLabel(handwriting?.plan || attempt.handwritingPlan || "free")}</strong></div>
                         <div>페이지: <strong>{handwriting?.summary.pageCount ?? attempt.drawingPageCount ?? 0}</strong></div>
                         <div>획 수: <strong>{handwriting?.summary.strokeCount ?? attempt.drawingStrokeCount ?? 0}</strong></div>
                         <div>문항 연결: <strong>{handwriting?.summary.questionCount ?? questionSummaries.length}</strong></div>

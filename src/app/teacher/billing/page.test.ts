@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildPlanChangeImpact, type PlanChangeImpact } from "./page";
+import { buildPlanChangeImpact, type PlanChangeImpact } from "./planChangeImpact";
 import type { PlanEntitlementKey } from "@/utils/plans";
 import type { BillingUsageSummary } from "@/lib/billingUsage";
 

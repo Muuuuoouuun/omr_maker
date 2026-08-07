@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { RosterGroup, RosterStudent } from "@/lib/rosterStorage";
-import { summarizeDistributionTargets } from "./distributionTargets";
+import { countDistributionGroupMembers, summarizeDistributionTargets } from "./distributionTargets";
 
 const baseStudent = {
     email: "",
@@ -24,6 +24,12 @@ const students: RosterStudent[] = [
 ];
 
 describe("distribution targets", () => {
+    it("derives each group row count from the roster instead of stale cached metadata", () => {
+        expect(groups[0].count).toBe(0);
+        expect(countDistributionGroupMembers(groups[0], students)).toBe(2);
+        expect(countDistributionGroupMembers(groups[1], students)).toBe(1);
+    });
+
     it("counts students for selected group ids using group names and scoped legacy ids", () => {
         const summary = summarizeDistributionTargets({
             selectedGroupIds: ["class-a"],

@@ -42,6 +42,30 @@ export default function GroupsTab({
     setEditingGroup,
     setShowGroupModal,
 }: GroupsTabProps) {
+    if (displayGroups.length === 0) {
+        return (
+            <section className="bento-card teacher-groups-empty-state" aria-labelledby="groups-empty-title">
+                <div className="teacher-groups-empty-icon" aria-hidden="true">
+                    <Users size={22} />
+                </div>
+                <div>
+                    <h2 id="groups-empty-title">첫 반을 만들어 학생을 묶어보세요</h2>
+                    <p>반별 시험 배정과 성취도 비교를 한곳에서 관리할 수 있습니다.</p>
+                </div>
+                <button
+                    type="button"
+                    className="btn btn-primary"
+                    onClick={() => {
+                        setEditingGroup(null);
+                        setShowGroupModal(true);
+                    }}
+                >
+                    <FolderPlus size={16} /> 첫 반 만들기
+                </button>
+            </section>
+        );
+    }
+
     return (
                     <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(260px, 1fr))', gap: '1.25rem' }}>
                         {displayGroups.map(g => {

@@ -385,8 +385,31 @@ export default function OverviewTab({ exams: examsProp, attempts, stats, trendDa
                 </div>
             </section>
 
+            <section className="overview-metric-rail" aria-label="운영 핵심 지표">
+                <div>
+                    <span>진행 중 시험</span>
+                    <strong>{stats.activeExams}<small>개</small></strong>
+                    <p>현재 배포·응시 중</p>
+                </div>
+                <button type="button" onClick={onNavigateToStudentAnalytics} aria-label={`${stats.totalStudents}명 학생별 성취 분석 보기`}>
+                    <span>전체 학생</span>
+                    <strong>{stats.totalStudents}<small>명</small></strong>
+                    <p>{rosterGroups.length}개 그룹 기준</p>
+                </button>
+                <button
+                    type="button"
+                    onClick={latestExamRow && onNavigateToExamAnalytics ? () => onNavigateToExamAnalytics(latestExamRow.id) : undefined}
+                    disabled={!latestExamRow || !onNavigateToExamAnalytics}
+                    aria-label={`${stats.avgScore}점 평균 점수 원인 분석 보기`}
+                >
+                    <span>평균 점수</span>
+                    <strong>{stats.avgScore}<small>점</small></strong>
+                    <p>{scoreDelta === undefined ? "완료 응시 기준" : `직전 대비 ${scoreDelta >= 0 ? "+" : ""}${scoreDelta.toFixed(1)}점`}</p>
+                </button>
+            </section>
+
             {/* 1. 자주 쓰는 빠른 작업 */}
-            <div className="bento-card col-span-2" style={{ padding: '1.5rem', display: 'flex', flexDirection: 'column' }}>
+            <div className="bento-card col-span-2 overview-quick-actions-card" style={{ padding: '1.5rem', display: 'flex', flexDirection: 'column' }}>
                 <div style={{ marginBottom: '1.5rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                     <h3 style={{ fontSize: 'var(--type-heading-md)', fontWeight: 700, color: 'var(--foreground)' }}>
                         빠른 작업 <span style={{ fontWeight: 400, color: 'var(--muted)', fontSize: '0.9rem' }}>자주 쓰는 기능 바로가기</span>
@@ -493,23 +516,16 @@ export default function OverviewTab({ exams: examsProp, attempts, stats, trendDa
             )}
 
             {/* 2. Score Trend — 시안 B dark-glass surface (dot-grid + glow) */}
-            <div className="bento-card col-span-2 comet-chart-dark" style={{
-                background: 'linear-gradient(135deg, var(--primary), var(--primary-dark))',
-                color: 'white', border: 'none',
-                position: 'relative', overflow: 'hidden'
-            }}>
-                <div className="chart-texture is-dark" aria-hidden="true" />
+            {trendData.length > 0 && <div className="bento-card col-span-2 overview-trend-card" style={{ position: 'relative', overflow: 'hidden' }}>
                 <div style={{ marginBottom: '1.5rem', position: 'relative', zIndex: 1 }}>
                     <h3 style={{ fontSize: '1.25rem', fontWeight: 700 }}>평균 점수 추이</h3>
-                    <p style={{ opacity: 0.8, fontSize: '0.95rem' }}>최근 7개 시험의 평균 점수 흐름</p>
+                    <p style={{ color: 'var(--muted)', fontSize: '0.9rem' }}>최근 7개 시험 · 상세 분석 전 빠른 흐름 확인</p>
                 </div>
-
-                <div style={{ position: 'absolute', top: '-20%', right: '-10%', width: '220px', height: '220px', background: 'radial-gradient(circle, rgba(255,255,255,0.28) 0%, transparent 70%)' }}></div>
 
                 <div style={{ flex: 1, display: 'flex', alignItems: 'flex-end', width: '100%', position: 'relative', zIndex: 1 }}>
-                    <TrendChart data={trendData} labels={trendLabels} color="white" height={160} />
+                    <TrendChart data={trendData} labels={trendLabels} color="var(--primary)" height={160} />
                 </div>
-            </div>
+            </div>}
 
             {/* 3. Project Summary (Currently Ongoing / Completed Exams) */}
             <div className="bento-card overview-exam-summary-card" style={{ gridColumn: 'span 4', overflow: 'hidden' }}>

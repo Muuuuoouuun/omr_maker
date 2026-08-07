@@ -458,6 +458,38 @@ describe("Supabase persistence mapping", () => {
         });
     });
 
+    it("only exposes local exam and attempt caches from the active teacher workspace", () => {
+        const activeOrganizationId = "teacher_accounta";
+        const otherOrganizationId = "teacher_accountb";
+        const teacherSession = createTeacherSession("tkn_test_0123456789abcdef0123456789abcdef", Date.now(), {
+            teacherId: "teacher-a",
+            displayName: "Teacher A",
+            organizationId: activeOrganizationId,
+        });
+        const localStorage = createStorage({
+            "omr_exam_active": JSON.stringify({ ...exam, id: "active", organizationId: activeOrganizationId }),
+            "omr_exam_other": JSON.stringify({ ...exam, id: "other", organizationId: otherOrganizationId }),
+            "omr_exam_legacy": JSON.stringify({ ...exam, id: "legacy" }),
+            omr_attempts: JSON.stringify([
+                { ...attempt, id: "attempt-active", examId: "active", organizationId: activeOrganizationId },
+                { ...attempt, id: "attempt-other", examId: "other", organizationId: otherOrganizationId },
+                { ...attempt, id: "attempt-linked-active", examId: "active", organizationId: undefined },
+                { ...attempt, id: "attempt-legacy", examId: "legacy", organizationId: undefined },
+            ]),
+        });
+        const sessionStorage = createStorage({
+            omr_teacher_session: JSON.stringify(teacherSession),
+        });
+        vi.stubGlobal("window", { localStorage, sessionStorage });
+        vi.stubGlobal("localStorage", localStorage);
+
+        expect(readLocalExams().map(item => item.id)).toEqual(["active"]);
+        expect(readLocalAttempts().map(item => item.id).sort()).toEqual([
+            "attempt-active",
+            "attempt-linked-active",
+        ]);
+    });
+
     it("promotes retake and guest merge metadata into attempt fact columns", () => {
         const retakeAttempt: Attempt = {
             ...attempt,

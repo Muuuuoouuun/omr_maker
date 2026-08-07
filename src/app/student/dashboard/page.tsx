@@ -10,7 +10,7 @@ import { createDashboardRevalidationGate, isStudentDashboardStorageKey } from "@
 import ThemeToggle from "@/components/ThemeToggle";
 import StudentGuestRecoveryPanel from "@/components/StudentGuestRecoveryPanel";
 import { toast } from "@/components/Toast";
-import { Award, LogIn, Sparkles } from "lucide-react";
+import { AlertTriangle, Award, LogIn, RefreshCw } from "lucide-react";
 
 import {
     attemptBelongsToSession,
@@ -46,13 +46,7 @@ function hasLocalDraftFor(examId: string, ownerKey: string): boolean {
     return false;
 }
 
-function getTimeGreeting(): string {
-    const h = new Date().getHours();
-    if (h < 6) return "늦은 밤이네요";
-    if (h < 12) return "좋은 아침이에요";
-    if (h < 18) return "오늘도 수고하세요";
-    return "좋은 저녁이에요";
-}
+type DashboardDataState = "loading" | "ready" | "error";
 
 export default function StudentDashboard() {
     const router = useRouter();
@@ -67,10 +61,24 @@ export default function StudentDashboard() {
     const [sessionState, setSessionState] = useState<"checking" | "active" | "missing">("checking");
     const [guestMergePreview, setGuestMergePreview] = useState<GuestMergePreview | null>(null);
     const [refreshKey, setRefreshKey] = useState(0);
+    const [logoutPending, setLogoutPending] = useState(false);
+    const [dataState, setDataState] = useState<DashboardDataState>("loading");
+    const [dataError, setDataError] = useState("");
 
     useEffect(() => {
         let cancelled = false;
+        const failDataLoad = (message: string) => {
+            if (cancelled) return;
+            setTodoExams([]);
+            setDoneExams([]);
+            setStats({ avgScore: 0, completedCount: 0, retakeCount: 0 });
+            setGuestMergePreview(null);
+            setDataError(message);
+            setDataState("error");
+        };
         const loadStudentData = async () => {
+            setDataState("loading");
+            setDataError("");
             // 1. Check Session (Simulated)
             const currentUser = getSession();
             if (!currentUser) {
@@ -98,6 +106,14 @@ export default function StudentDashboard() {
                 });
                 setSessionState("missing");
                 router.replace(`/?${query.toString()}`);
+                return;
+            }
+            if (myAttemptsResult.status !== "ok") {
+                failDataLoad(
+                    myAttemptsResult.status === "unauthenticated"
+                        ? "학생 세션을 확인하지 못했습니다. 학생 로그인으로 돌아가 다시 로그인한 뒤 시도해주세요."
+                        : "배정된 시험과 제출 기록을 불러오지 못했습니다. 네트워크 연결과 이 기기의 저장공간을 확인한 뒤 다시 시도해주세요.",
+                );
                 return;
             }
 
@@ -204,9 +220,14 @@ export default function StudentDashboard() {
                     }
                 } catch { /* storage unavailable — badge still surfaces answers */ }
             }
+            setDataState("ready");
         };
 
-        void loadStudentData();
+        void loadStudentData().catch(() => {
+            failDataLoad(
+                "학습 현황을 구성하는 중 문제가 발생했습니다. 네트워크 연결과 이 기기의 저장공간을 확인한 뒤 다시 시도해주세요.",
+            );
+        });
         return () => { cancelled = true; };
 
     }, [router, refreshKey]);
@@ -271,17 +292,34 @@ export default function StudentDashboard() {
         router.push("/?role=student");
     };
 
-    const handleLogout = () => {
+    const handleDashboardRetry = () => {
+        setDataError("");
+        setDataState("loading");
+        setRefreshKey(key => key + 1);
+    };
+
+    const handleLogout = async () => {
+        if (logoutPending) return;
+        setLogoutPending(true);
         const workspaceId = user?.workspaceId;
+        try {
+            // A local-only logout leaves the HttpOnly cookie active on shared
+            // devices, so confirm the server boundary before clearing the UI.
+            await clearStudentServerSession();
+        } catch {
+            toast.error("로그아웃하지 못했습니다", "네트워크를 확인한 뒤 다시 시도해주세요.");
+            setLogoutPending(false);
+            return;
+        }
         clearSession();
-        // Also drop the httpOnly server session cookie (shared-device safety).
-        clearStudentServerSession().catch(() => { /* offline — cookie expires on TTL */ });
         setUser(null);
         setTodoExams([]);
         setDoneExams([]);
         setStats({ avgScore: 0, completedCount: 0, retakeCount: 0 });
         setGuestMergePreview(null);
         setSessionState("missing");
+        setDataError("");
+        setDataState("loading");
         toast.info("로그아웃됨", "다시 시험을 보려면 학생 로그인이 필요합니다.");
         if (workspaceId) {
             const query = new URLSearchParams({ role: "student", workspace: workspaceId });
@@ -311,7 +349,7 @@ export default function StudentDashboard() {
 
                 <main className="container animate-fade-in" style={{ padding: "4rem 1rem", maxWidth: 760 }}>
                     <section
-                        className="bento-card"
+                        className="bento-card mobile-section-stack"
                         style={{
                             alignItems: "flex-start",
                             gap: "1rem",
@@ -356,117 +394,179 @@ export default function StudentDashboard() {
 
     return (
         <div className="layout-main">
-            <header className="header">
-                <div className="container header-content" style={{ gap: "1rem", flexWrap: "wrap" }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
+            <header className="header student-dashboard-shell-header">
+                <div className="container header-content student-dashboard-header" style={{ gap: "1rem", flexWrap: "wrap" }}>
+                    <div className="student-dashboard-brand" style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
                         <BrandLogo />
-                        <span style={{
-                            fontSize: '0.75rem', fontWeight: 700,
-                            background: 'rgba(236, 72, 153, 0.1)', color: 'var(--secondary)',
-                            padding: '4px 10px', borderRadius: 'var(--radius-full)',
-                            border: '1px solid rgba(236, 72, 153, 0.2)'
-                        }}>
-                            {user.isGuest ? "게스트" : "학생"}
-                        </span>
                     </div>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
-                        <span style={{ fontWeight: 600, fontSize: '0.95rem', display: 'inline-flex', alignItems: 'center', gap: '0.45rem', flexWrap: 'wrap' }}>
-                            <span>
-                                {user.name} <span style={{ color: 'var(--muted)', fontWeight: 400 }}>({user.groupName})</span>
-                            </span>
-                            {user.isGuest && user.loginId ? (
-                                <span style={{
-                                    color: 'var(--primary)',
-                                    background: 'rgba(99,102,241,0.1)',
-                                    border: '1px solid rgba(99,102,241,0.18)',
-                                    borderRadius: 'var(--radius-full)',
-                                    padding: '0.18rem 0.5rem',
-                                    fontSize: 'var(--type-caption)',
-                                    fontWeight: 800,
-                                    fontVariantNumeric: 'tabular-nums',
-                                }}>
-                                    임시 ID {user.loginId}
+                    <div className="student-dashboard-identity" style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
+                        <span className="student-dashboard-user" style={{ fontWeight: 600, fontSize: '0.95rem', display: 'inline-flex', alignItems: 'center', gap: '0.45rem', flexWrap: 'wrap' }}>
+                            <span className="student-dashboard-user-name" title={`${user.name} (${user.groupName})`}>
+                                {user.name}{' '}
+                                <span className={`student-dashboard-group-label${user.isGuest ? " is-redundant" : ""}`} style={{ color: 'var(--muted)', fontWeight: 400 }}>
+                                    ({user.groupName})
                                 </span>
-                            ) : null}
+                            </span>
                         </span>
-                        <button
-                            onClick={handleLogout}
-                            style={{
-                                minHeight: '2.75rem',
-                                padding: '0.45rem 0.2rem',
-                                borderRadius: 'var(--radius-md)',
-                                fontSize: '0.9rem',
-                                color: 'var(--muted)',
-                                cursor: 'pointer',
-                                transition: 'color 0.2s',
-                                fontWeight: 500,
-                            }}
-                        >
-                            로그아웃
-                        </button>
-                        <ThemeToggle />
+                        <div className="student-dashboard-controls">
+                            <button
+                                onClick={handleLogout}
+                                disabled={logoutPending}
+                                aria-busy={logoutPending}
+                                style={{
+                                    minHeight: '2.75rem',
+                                    padding: '0.45rem 0.2rem',
+                                    borderRadius: 'var(--radius-md)',
+                                    fontSize: '0.9rem',
+                                    color: 'var(--muted)',
+                                    cursor: logoutPending ? 'wait' : 'pointer',
+                                    transition: 'color 0.2s',
+                                    fontWeight: 500,
+                                }}
+                            >
+                                {logoutPending ? '로그아웃 중…' : '로그아웃'}
+                            </button>
+                            <ThemeToggle />
+                        </div>
                     </div>
                 </div>
             </header>
 
             <main className="container animate-fade-in" style={{ paddingBottom: '4rem' }}>
+                {dataState === "loading" && (
+                    <section
+                        data-testid="student-dashboard-loading"
+                        role="status"
+                        aria-live="polite"
+                        aria-atomic="true"
+                        aria-busy="true"
+                        className="bento-card mobile-section-stack"
+                        style={{
+                            maxWidth: 760,
+                            minHeight: 0,
+                            margin: "3rem auto 0",
+                            padding: "2rem",
+                            alignItems: "flex-start",
+                            gap: "0.85rem",
+                        }}
+                    >
+                        <RefreshCw size={24} color="var(--primary)" aria-hidden="true" />
+                        <div>
+                            <h1 style={{ fontSize: "1.55rem", fontWeight: 800, marginBottom: "0.45rem" }}>
+                                학습 현황을 불러오는 중입니다
+                            </h1>
+                            <p className="text-muted" style={{ lineHeight: 1.7 }}>
+                                배정된 시험과 제출 기록을 확인하고 있습니다.
+                            </p>
+                        </div>
+                    </section>
+                )}
+
+                {dataState === "error" && (
+                    <section
+                        data-testid="student-dashboard-error"
+                        role="status"
+                        aria-live="polite"
+                        aria-atomic="true"
+                        className="bento-card"
+                        style={{
+                            maxWidth: 760,
+                            minHeight: 0,
+                            margin: "3rem auto 0",
+                            padding: "2rem",
+                            alignItems: "flex-start",
+                            gap: "1rem",
+                            borderColor: "rgba(245, 158, 11, 0.35)",
+                        }}
+                    >
+                        <div style={{
+                            width: 48,
+                            height: 48,
+                            display: "grid",
+                            placeItems: "center",
+                            borderRadius: "var(--radius-md)",
+                            color: "#b45309",
+                            background: "rgba(245, 158, 11, 0.12)",
+                        }}>
+                            <AlertTriangle size={24} aria-hidden="true" />
+                        </div>
+                        <div>
+                            <h1 style={{ fontSize: "1.55rem", fontWeight: 800, marginBottom: "0.45rem" }}>
+                                학습 현황을 불러오지 못했습니다
+                            </h1>
+                            <p className="text-muted" style={{ lineHeight: 1.7, wordBreak: "keep-all" }}>
+                                {dataError}
+                            </p>
+                        </div>
+                        <div className="mobile-action-row" style={{ gap: "0.75rem" }}>
+                            <button
+                                type="button"
+                                data-testid="student-dashboard-retry"
+                                className="btn btn-primary"
+                                onClick={handleDashboardRetry}
+                            >
+                                다시 시도
+                            </button>
+                            <Link href="/?role=student" className="btn">
+                                학생 로그인
+                            </Link>
+                            <Link href="/" className="btn">
+                                홈으로
+                            </Link>
+                        </div>
+                    </section>
+                )}
+
+                {dataState === "ready" && (
+                    <>
                 {!user.isGuest && <StudentGuestRecoveryPanel />}
 
                 {/* Guest Banner */}
                 {user.isGuest && (
-                    <div style={{
-                        margin: '2rem 0 1rem', padding: '1.5rem',
-                        background: 'var(--surface)',
-                        borderRadius: 'var(--radius-lg)', color: 'var(--foreground)',
-                        border: '1px solid var(--border)', borderLeft: '4px solid var(--primary)',
-                        display: 'flex', justifyContent: 'space-between', alignItems: 'center',
-                        gap: '1rem', flexWrap: 'wrap',
-                        boxShadow: 'var(--shadow-md)'
-                    }}>
-                        <div>
-                            <h3 style={{ fontSize: '1.2rem', fontWeight: 700, marginBottom: '0.25rem' }}>
-                                게스트 기록을 학생 기록으로 저장
-                            </h3>
-                            <p style={{ color: 'var(--muted)', fontSize: '0.95rem', lineHeight: 1.6, wordBreak: "keep-all" }}>
-                                이름과 반으로 로그인하면 지금 기기에서 푼 게스트 기록
-                                {guestMergePreview ? ` ${guestMergePreview.mergeableCount}건` : ""}을 같은 학생 기록에 연결합니다.
-                            </p>
-                            {user.loginId ? (
-                                <div style={{ marginTop: '0.45rem', color: 'var(--primary)', fontSize: '0.82rem', fontWeight: 800 }}>
-                                    현재 게스트 임시 ID: {user.loginId}
-                                </div>
-                            ) : null}
-                            {guestMergePreview?.examTitles.length ? (
-                                <div style={{ marginTop: '0.45rem', color: 'var(--muted)', fontSize: '0.82rem', fontWeight: 700 }}>
-                                    최근 기록: {guestMergePreview.examTitles.join(", ")}
-                                </div>
-                            ) : null}
+                    <details className="student-guest-merge-disclosure">
+                        <summary>
+                            <span>
+                                <strong>게스트 기록 저장하기</strong>
+                                <small>학생 로그인에 현재 기록을 연결합니다.</small>
+                            </span>
+                            <span aria-hidden="true">열기</span>
+                        </summary>
+                        <div className="student-guest-merge-content">
+                            <div>
+                                <h3>게스트 기록을 학생 기록으로 저장</h3>
+                                <p style={{ color: 'var(--muted)', fontSize: '0.95rem', lineHeight: 1.6, wordBreak: "keep-all" }}>
+                                    이름과 반으로 로그인하면 지금 기기에서 푼 게스트 기록
+                                    {guestMergePreview ? ` ${guestMergePreview.mergeableCount}건` : ""}을 같은 학생 기록에 연결합니다.
+                                </p>
+                                {user.loginId ? (
+                                    <div className="student-dashboard-login-id" style={{ marginTop: '0.45rem', color: 'var(--primary)', fontSize: '0.82rem', fontWeight: 800 }}>
+                                        현재 게스트 임시 ID: {user.loginId}
+                                    </div>
+                                ) : null}
+                                {guestMergePreview?.examTitles.length ? (
+                                    <div style={{ marginTop: '0.45rem', color: 'var(--muted)', fontSize: '0.82rem', fontWeight: 700 }}>
+                                        최근 기록: {guestMergePreview.examTitles.join(", ")}
+                                    </div>
+                                ) : null}
+                            </div>
+                            <button
+                                onClick={handleConnectStudentAccount}
+                                className="btn btn-primary"
+                                style={{
+                                    fontWeight: 700,
+                                    padding: '0.75rem 1.5rem', fontSize: '0.95rem',
+                                    flexShrink: 0
+                                }}
+                            >
+                                학생 로그인으로 저장
+                            </button>
                         </div>
-                        <button
-                            onClick={handleConnectStudentAccount}
-                            className="btn btn-primary"
-                            style={{
-                                fontWeight: 700,
-                                padding: '0.75rem 1.5rem', fontSize: '0.95rem',
-                                flexShrink: 0
-                            }}
-                        >
-                            학생 로그인으로 저장
-                        </button>
-                    </div>
+                    </details>
                 )}
 
                 {/* Welcome */}
-                <div style={{ margin: '3rem 0' }}>
-                    <div style={{
-                        display: 'inline-flex', alignItems: 'center', gap: '0.5rem',
-                        fontSize: '0.8rem', fontWeight: 700, letterSpacing: '0.04em',
-                        color: 'var(--muted)', marginBottom: '0.5rem'
-                    }}>
-                        <Sparkles size={14} color="var(--primary)" />
-                        {getTimeGreeting()}
-                    </div>
-                    <h1 className="title-gradient" style={{ fontSize: '2.5rem', marginBottom: '0.75rem', lineHeight: 1.2 }}>
+                <div className="student-dashboard-welcome mobile-section-stack" style={{ margin: '3rem 0' }}>
+                    <h1 className="title-gradient" title={`${user.name}님`} style={{ fontSize: '2.5rem', marginBottom: '0.75rem', lineHeight: 1.2 }}>
                         {user.name}님,
                     </h1>
                     <p className="text-muted" style={{ fontSize: '1.1rem' }}>
@@ -479,9 +579,14 @@ export default function StudentDashboard() {
                 </div>
 
                 {/* Dashboard Grid */}
-                <div className="bento-grid">
+                <div className={`bento-grid student-dashboard-grid student-dashboard-task-flow${stats.completedCount === 0 ? " is-zero-completions" : ""}`}>
+                    {/* Todo List (Main Focus) */}
+                    <div className="col-span-2 row-span-2 student-dashboard-primary-task">
+                        <AssignmentBlock type="todo" exams={todoExams} />
+                    </div>
+
                     {/* Stats */}
-                    <Link href="/student/history" className="bento-card col-span-1 card-hover" style={{
+                    <Link href="/student/history" className="bento-card col-span-1 card-hover student-dashboard-average-card student-dashboard-history-action" style={{
                         background: 'linear-gradient(135deg, var(--secondary), #f472b6)',
                         color: 'white', border: 'none',
                         display: 'flex', flexDirection: 'column', justifyContent: 'center'
@@ -490,12 +595,9 @@ export default function StudentDashboard() {
                         <div style={{ fontSize: '3rem', fontWeight: 800, lineHeight: 1 }}>
                             {stats.avgScore}<span style={{ fontSize: '1.5rem', fontWeight: 700, opacity: 0.85 }}>%</span>
                         </div>
-                        <div style={{ fontSize: '0.85rem', opacity: 0.8, marginTop: '1rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                            상세 보기 <span>→</span>
-                        </div>
                     </Link>
 
-                    <div className="bento-card col-span-1" style={{ justifyContent: 'center', alignItems: 'center', background: 'var(--surface)', position: 'relative', overflow: 'hidden' }}>
+                    {stats.completedCount > 0 && <div className="bento-card col-span-1 student-dashboard-secondary-status" style={{ justifyContent: 'center', alignItems: 'center', background: 'var(--surface)', position: 'relative', overflow: 'hidden' }}>
                         <Award size={22} color="var(--primary)" style={{ position: 'absolute', top: 16, right: 16, opacity: 0.6 }} />
                         <div style={{ fontSize: '3rem', fontWeight: 800, color: 'var(--foreground)', lineHeight: 1, marginBottom: '0.5rem' }}>
                             {stats.completedCount}
@@ -506,18 +608,15 @@ export default function StudentDashboard() {
                                 재시험 {stats.retakeCount}회
                             </div>
                         )}
-                    </div>
-
-                    {/* Todo List (Main Focus) */}
-                    <div className="col-span-2 row-span-2">
-                        <AssignmentBlock type="todo" exams={todoExams} />
-                    </div>
+                    </div>}
 
                     {/* Completed List */}
-                    <div className="col-span-2">
+                    <div className="col-span-2 student-dashboard-completed-task">
                         <AssignmentBlock type="done" exams={doneExams} />
                     </div>
                 </div>
+                    </>
+                )}
             </main>
         </div>
     );

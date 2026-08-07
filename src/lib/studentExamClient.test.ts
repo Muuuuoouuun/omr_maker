@@ -120,12 +120,26 @@ describe("submitAttemptClient", () => {
     it("never grades locally for a server-sourced session (answers absent)", async () => {
         const server = vi.fn().mockRejectedValue(new Error("network"));
         const localFallback = vi.fn();
-        const res = await submitAttemptClient(
-            SUBMISSION, undefined,
+        await expect(submitAttemptClient(
+            SUBMISSION,
+            undefined,
             { server, localFallback, allowLocalFallback: false },
-        );
-        expect(res.status).toBe("error");
+        )).rejects.toThrow("network");
         expect(localFallback).not.toHaveBeenCalled();
+    });
+
+    it("keeps known server business statuses as results for server-sourced sessions", async () => {
+        const res = await submitAttemptClient(
+            SUBMISSION,
+            undefined,
+            {
+                server: vi.fn().mockResolvedValue({ status: "pin_required" }),
+                localFallback: vi.fn(),
+                allowLocalFallback: false,
+            },
+        );
+
+        expect(res).toMatchObject({ status: "pin_required", source: "server" });
     });
 
     it("passes access rejections through (pin_required)", async () => {

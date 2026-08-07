@@ -7,7 +7,7 @@ import {
 import {
     loadExam,
     loadExams,
-    readLocalExams,
+    saveExam,
     saveLocalExam,
     saveLocalExams,
     deleteLocalExam,
@@ -28,13 +28,22 @@ export interface TeacherExamMutationResult {
     error?: string;
 }
 
+export type TeacherExamDetailLoadResult =
+    | { status: "loaded"; exam: Exam; source: "server" | "local" }
+    | { status: "not_found" }
+    | { status: "unauthorized"; error: string }
+    | { status: "service_unavailable"; error: string };
+
 export async function saveTeacherExamMutation(exam: Exam): Promise<TeacherExamMutationResult> {
     const result = await saveTeacherCanonicalExam(exam);
     if (result.status === "saved") {
         saveLocalExam(result.exam);
         return { ok: true };
     }
-    if (result.status === "local_only") return { ok: saveLocalExam(exam), localOnly: true };
+    if (result.status === "local_only") {
+        const localResult = await saveExam(exam);
+        return { ok: localResult.localSaved, localOnly: true };
+    }
     return {
         ok: false,
         error: result.status === "unauthorized"
@@ -60,14 +69,34 @@ export async function deleteTeacherExamMutation(examId: string): Promise<Teacher
     };
 }
 
-export async function loadTeacherExam(examId: string): Promise<Exam | null> {
+export async function loadTeacherExamDetail(examId: string): Promise<TeacherExamDetailLoadResult> {
     const result = await loadTeacherCanonicalExam(examId);
     if (result.status === "loaded") {
         saveLocalExam(result.exam);
-        return result.exam;
+        return { status: "loaded", exam: result.exam, source: "server" };
     }
-    if (result.status === "local_only") return loadExam(examId);
-    return null;
+    if (result.status === "local_only") {
+        const exam = await loadExam(examId);
+        return exam
+            ? { status: "loaded", exam, source: "local" }
+            : { status: "not_found" };
+    }
+    if (result.status === "not_found") return { status: "not_found" };
+    if (result.status === "unauthorized") {
+        return {
+            status: "unauthorized",
+            error: result.error || "Teacher server session is missing",
+        };
+    }
+    return {
+        status: "service_unavailable",
+        error: result.error || "Canonical exam gateway unavailable",
+    };
+}
+
+export async function loadTeacherExam(examId: string): Promise<Exam | null> {
+    const result = await loadTeacherExamDetail(examId);
+    return result.status === "loaded" ? result.exam : null;
 }
 
 export async function loadTeacherExams(): Promise<TeacherExamLoadResult> {
@@ -83,7 +112,7 @@ export async function loadTeacherExams(): Promise<TeacherExamLoadResult> {
     }
     if (result.status === "local_only") return loadExams();
     return {
-        items: readLocalExams(),
+        items: [],
         remoteLoaded: false,
         remoteSynced: false,
         remoteError: result.status === "unauthorized"

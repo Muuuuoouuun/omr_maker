@@ -4,7 +4,7 @@ import {
     isEditDraftNewerThanExam,
     runPdfAssetUploadsConcurrently,
     shouldUploadExamPdf,
-} from "./page";
+} from "./createPageHelpers";
 
 describe("examDraftStorageKey", () => {
     it("uses the shared legacy key for new exams", () => {

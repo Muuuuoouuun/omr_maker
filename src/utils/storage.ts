@@ -127,7 +127,11 @@ export function getOrCreateGuestId(): string {
     return id;
 }
 
-export function saveSession(session: StudentSession) {
+export interface SaveStudentSessionOptions {
+    rememberDevice?: boolean;
+}
+
+export function saveSession(session: StudentSession, options: SaveStudentSessionOptions = {}) {
     if (typeof window === 'undefined') return;
     const stamped: StudentSession = session.createdAt ? session : { ...session, createdAt: new Date().toISOString() };
     const payload = JSON.stringify(stamped);
@@ -137,7 +141,11 @@ export function saveSession(session: StudentSession) {
         // Session storage can be blocked in some embedded/private modes.
     }
     try {
-        localStorage.setItem(STORAGE_KEYS.STUDENT_SESSION_BACKUP, payload);
+        if (options.rememberDevice === true) {
+            localStorage.setItem(STORAGE_KEYS.STUDENT_SESSION_BACKUP, payload);
+        } else if (options.rememberDevice === false) {
+            localStorage.removeItem(STORAGE_KEYS.STUDENT_SESSION_BACKUP);
+        }
     } catch {
         // Keep the in-tab session even if persistent storage is unavailable.
     }

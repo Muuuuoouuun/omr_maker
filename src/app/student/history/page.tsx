@@ -177,9 +177,16 @@ export default function HistoryPage() {
 
             <main className="container" style={{ padding: '2rem 1rem' }}>
                 <StudentGuestRecoveryPanel />
-                <h1 style={{ fontSize: '1.8rem', fontWeight: 700, marginBottom: '1.5rem', color: 'var(--foreground)' }}>
+                <h1 style={{ fontSize: '1.8rem', fontWeight: 700, marginBottom: '1rem', color: 'var(--foreground)' }}>
                     내 시험 기록
                 </h1>
+
+                {loadState === "ready" && session && attempts.length > 0 && (
+                    <section className="student-history-identity mobile-section-stack" aria-label="학생 기록 상태">
+                        <strong>{session.name} · {session.groupName || "소속 반 없음"}</strong>
+                        <p>응시 완료 {summary.total}회 · 재시험 회복 {summary.retakeTotal}회</p>
+                    </section>
+                )}
 
                 {loadState === "loading" ? (
                     <div role="status" aria-live="polite" style={{ textAlign: 'center', padding: '4rem 1rem', color: 'var(--muted)' }}>
@@ -202,51 +209,119 @@ export default function HistoryPage() {
                         </button>
                     </div>
                 ) : attempts.length === 0 ? (
-                    <div style={{ textAlign: 'center', padding: '4rem 1rem', color: 'var(--muted)', background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: '12px', boxShadow: 'var(--shadow-sm)' }}>
+                    <div className="student-history-empty-state" style={{ textAlign: 'center', padding: '2.25rem 1rem', color: 'var(--muted)', background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: '12px' }}>
                         <p style={{ fontSize: '1.2rem' }}>
                             {session ? "아직 응시한 시험이 없습니다." : "로그인이 필요합니다."}
                         </p>
-                        <Link href="/" className="btn btn-primary" style={{ marginTop: '1.5rem', display: 'inline-block' }}>
+                        <Link href="/" className="btn btn-primary" style={{ marginTop: '1rem', display: 'inline-block' }}>
                             {session ? "시험 응시하러 가기" : "로그인하러 가기"}
                         </Link>
                     </div>
                 ) : (
-                    <>
+                    <section className="student-history-ready-flow">
+                        {visibleAttempts.length === 0 ? (
+                            <div style={{ textAlign: 'center', padding: '3rem', color: 'var(--muted)', background: 'var(--surface)', borderRadius: '12px', border: '1px solid var(--border)' }}>
+                                선택한 기간에 해당하는 응시 기록이 없습니다.
+                            </div>
+                        ) : (
+                            <div className="student-history-record-list mobile-section-stack">
+                                {pageItems.map((attempt) => {
+                                    const score = scoreByAttemptId.get(attempt.id);
+                                    const p = score?.scorePercent ?? 0;
+                                    const badgeTone = badgeForPct(p);
+                                    return (
+                                        <Link
+                                            key={attempt.id}
+                                            href={`/student/review/${attempt.id}`}
+                                            style={{
+                                                textDecoration: 'none', color: 'inherit',
+                                                display: 'block',
+                                                background: 'var(--surface)',
+                                                padding: '1.5rem',
+                                                borderRadius: '12px',
+                                                border: '1px solid var(--border)',
+                                                boxShadow: 'var(--shadow-sm)',
+                                                transition: 'transform 0.2s',
+                                                cursor: 'pointer'
+                                            }}
+                                            className="history-card mobile-section-stack"
+                                        >
+                                            <div className="student-history-card-head">
+                                                <h3>{attempt.examTitle}</h3>
+                                                <div className="student-history-card-badges">
+                                                    {unreadFeedbackAttemptIds.has(attempt.id) && (
+                                                        <span className="tone-chip tone-primary" style={{ fontSize: '0.78rem', fontWeight: 900 }}>
+                                                            새 피드백
+                                                        </span>
+                                                    )}
+                                                    {attempt.retake && (
+                                                        <span className="tone-chip tone-teal" style={{ fontSize: '0.78rem', fontWeight: 800 }}>
+                                                            재시험 {attempt.retake.questionIds.length}문항
+                                                        </span>
+                                                    )}
+                                                    <span className={`tone-chip ${badgeTone}`} style={{ fontSize: '0.8rem', fontWeight: 700 }}>
+                                                        {Math.round(p)}%
+                                                    </span>
+                                                </div>
+                                            </div>
+                                            <div style={{ color: 'var(--muted)', fontSize: '0.9rem', display: 'flex', gap: '0.75rem', flexWrap: 'wrap' }}>
+                                                <span>응시일: {formatKoreanDateTime(attempt.finishedAt)}</span>
+                                                <span aria-hidden="true">·</span>
+                                                <span>{score?.earnedScore ?? attempt.score} / {score?.totalScore ?? attempt.totalScore} 점</span>
+                                                {score?.source === "storedScore" && (
+                                                    <>
+                                                        <span aria-hidden="true">·</span>
+                                                        <span>저장 점수 기준</span>
+                                                    </>
+                                                )}
+                                            </div>
+                                        </Link>
+                                    );
+                                })}
+                            </div>
+                        )}
+
+                        {/* Pagination (only if >= 10 total filtered attempts) */}
+                        {visibleAttempts.length >= PAGE_SIZE && totalPages > 1 && (
+                            <div className="student-history-pagination mobile-action-row" style={{
+                                marginTop: '1.5rem', display: 'flex', justifyContent: 'center',
+                                alignItems: 'center', gap: '0.75rem',
+                            }}>
+                                <button
+                                    className="btn btn-secondary"
+                                    disabled={page <= 1}
+                                    onClick={() => setPage(p => Math.max(1, p - 1))}
+                                    style={{ fontSize: '0.85rem', opacity: page <= 1 ? 0.5 : 1 }}
+                                >
+                                    이전
+                                </button>
+                                <span style={{ fontSize: '0.9rem', color: 'var(--muted)', fontWeight: 600 }}>
+                                    {page} / {totalPages}
+                                </span>
+                                <button
+                                    className="btn btn-secondary"
+                                    disabled={page >= totalPages}
+                                    onClick={() => setPage(p => Math.min(totalPages, p + 1))}
+                                    style={{ fontSize: '0.85rem', opacity: page >= totalPages ? 0.5 : 1 }}
+                                >
+                                    다음
+                                </button>
+                            </div>
+                        )}
+
                         {/* Summary row */}
-                        <div style={{
-                            display: 'grid',
-                            gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))',
-                            gap: '0.9rem',
-                            marginBottom: '1.5rem',
-                        }}>
-                            <div className="bento-card kpi-spring" style={{ padding: '1rem 1.1rem', background: 'var(--surface)', borderRadius: '12px', border: '1px solid var(--border)' }}>
-                                <div style={{ fontSize: '0.75rem', color: 'var(--muted)', fontWeight: 600, marginBottom: '0.25rem' }}>원시험 응시</div>
-                                <div style={{ fontSize: '1.5rem', fontWeight: 800, color: 'var(--foreground)' }}>{summary.total}회</div>
+                        <section className="history-summary-rail" aria-label="시험 기록 요약">
+                            <div><span>평균</span><strong>{summary.avgPct}%</strong></div>
+                            <div><span>원시험 응시</span><strong>{summary.total}회</strong></div>
+                            <div><span>재시험 회복</span><strong>{summary.retakeTotal}회</strong></div>
+                            <div>
+                                <span>최근 흐름</span>
+                                <strong className="is-trend">{summary.trend.length > 0 ? summary.trend.map(v => `${v}%`).join(' → ') : '-'}</strong>
                             </div>
-                            <div className="bento-card kpi-spring" style={{ padding: '1rem 1.1rem', background: 'var(--surface)', borderRadius: '12px', border: '1px solid var(--border)', animationDelay: '70ms' }}>
-                                <div style={{ fontSize: '0.75rem', color: 'var(--muted)', fontWeight: 600, marginBottom: '0.25rem' }}>원시험 평균</div>
-                                <div style={{ fontSize: '1.5rem', fontWeight: 800, color: 'var(--primary)' }}>{summary.avgPct}%</div>
-                            </div>
-                            <div className="bento-card kpi-spring" style={{ padding: '1rem 1.1rem', background: 'var(--surface)', borderRadius: '12px', border: '1px solid var(--border)', animationDelay: '140ms' }}>
-                                <div style={{ fontSize: '0.75rem', color: 'var(--muted)', fontWeight: 600, marginBottom: '0.25rem' }}>원시험 최고</div>
-                                <div style={{ fontSize: '1.5rem', fontWeight: 800, color: 'var(--success)' }}>{summary.bestPct}%</div>
-                            </div>
-                            <div className="bento-card kpi-spring" style={{ padding: '1rem 1.1rem', background: 'var(--surface)', borderRadius: '12px', border: '1px solid var(--border)', animationDelay: '210ms' }}>
-                                <div style={{ fontSize: '0.75rem', color: 'var(--muted)', fontWeight: 600, marginBottom: '0.25rem' }}>재시험 회복</div>
-                                <div className="tone-text-teal" style={{ fontSize: '1.5rem', fontWeight: 800 }}>{summary.retakeTotal}회</div>
-                            </div>
-                            <div className="bento-card kpi-spring" style={{ padding: '1rem 1.1rem', background: 'var(--surface)', borderRadius: '12px', border: '1px solid var(--border)', animationDelay: '280ms' }}>
-                                <div style={{ fontSize: '0.75rem', color: 'var(--muted)', fontWeight: 600, marginBottom: '0.25rem' }}>원시험 추이 (최근 3회)</div>
-                                <div style={{ fontSize: '0.95rem', fontWeight: 700, color: 'var(--foreground)' }}>
-                                    {summary.trend.length > 0
-                                        ? summary.trend.map(v => `${v}%`).join(' → ')
-                                        : '-'}
-                                </div>
-                            </div>
-                        </div>
+                        </section>
 
                         {/* Filter controls */}
-                        <div style={{
+                        <div className="student-history-toolbar mobile-action-row" style={{
                             background: 'var(--surface)', padding: '0.85rem 1rem',
                             borderRadius: '12px', border: '1px solid var(--border)',
                             display: 'flex', flexWrap: 'wrap', gap: '1rem',
@@ -290,97 +365,7 @@ export default function HistoryPage() {
                                 총 {visibleAttempts.length}건
                             </div>
                         </div>
-
-                        {visibleAttempts.length === 0 ? (
-                            <div style={{ textAlign: 'center', padding: '3rem', color: 'var(--muted)', background: 'var(--surface)', borderRadius: '12px', border: '1px solid var(--border)' }}>
-                                선택한 기간에 해당하는 응시 기록이 없습니다.
-                            </div>
-                        ) : (
-                            <div style={{ display: 'grid', gap: '1rem' }}>
-                                {pageItems.map((attempt) => {
-                                    const score = scoreByAttemptId.get(attempt.id);
-                                    const p = score?.scorePercent ?? 0;
-                                    const badgeTone = badgeForPct(p);
-                                    return (
-                                        <Link
-                                            key={attempt.id}
-                                            href={`/student/review/${attempt.id}`}
-                                            style={{
-                                                textDecoration: 'none', color: 'inherit',
-                                                display: 'block',
-                                                background: 'var(--surface)',
-                                                padding: '1.5rem',
-                                                borderRadius: '12px',
-                                                border: '1px solid var(--border)',
-                                                boxShadow: 'var(--shadow-sm)',
-                                                transition: 'transform 0.2s',
-                                                cursor: 'pointer'
-                                            }}
-                                            className="history-card"
-                                        >
-                                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '0.5rem', gap: '0.75rem' }}>
-                                                <h3 style={{ fontSize: '1.1rem', fontWeight: 600, color: 'var(--foreground)' }}>{attempt.examTitle}</h3>
-                                                <div style={{ display: 'flex', gap: '0.35rem', flexWrap: 'wrap', justifyContent: 'flex-end' }}>
-                                                    {unreadFeedbackAttemptIds.has(attempt.id) && (
-                                                        <span className="tone-chip tone-primary" style={{ fontSize: '0.78rem', fontWeight: 900 }}>
-                                                            새 피드백
-                                                        </span>
-                                                    )}
-                                                    {attempt.retake && (
-                                                        <span className="tone-chip tone-teal" style={{ fontSize: '0.78rem', fontWeight: 800 }}>
-                                                            재시험 {attempt.retake.questionIds.length}문항
-                                                        </span>
-                                                    )}
-                                                    <span className={`tone-chip ${badgeTone}`} style={{ fontSize: '0.8rem', fontWeight: 700 }}>
-                                                        {Math.round(p)}%
-                                                    </span>
-                                                </div>
-                                            </div>
-                                            <div style={{ color: 'var(--muted)', fontSize: '0.9rem', display: 'flex', gap: '0.75rem', flexWrap: 'wrap' }}>
-                                                <span>응시일: {formatKoreanDateTime(attempt.finishedAt)}</span>
-                                                <span aria-hidden="true">·</span>
-                                                <span>{score?.earnedScore ?? attempt.score} / {score?.totalScore ?? attempt.totalScore} 점</span>
-                                                {score?.source === "storedScore" && (
-                                                    <>
-                                                        <span aria-hidden="true">·</span>
-                                                        <span>저장 점수 기준</span>
-                                                    </>
-                                                )}
-                                            </div>
-                                        </Link>
-                                    );
-                                })}
-                            </div>
-                        )}
-
-                        {/* Pagination (only if >= 10 total filtered attempts) */}
-                        {visibleAttempts.length >= PAGE_SIZE && totalPages > 1 && (
-                            <div style={{
-                                marginTop: '1.5rem', display: 'flex', justifyContent: 'center',
-                                alignItems: 'center', gap: '0.75rem',
-                            }}>
-                                <button
-                                    className="btn btn-secondary"
-                                    disabled={page <= 1}
-                                    onClick={() => setPage(p => Math.max(1, p - 1))}
-                                    style={{ fontSize: '0.85rem', opacity: page <= 1 ? 0.5 : 1 }}
-                                >
-                                    이전
-                                </button>
-                                <span style={{ fontSize: '0.9rem', color: 'var(--muted)', fontWeight: 600 }}>
-                                    {page} / {totalPages}
-                                </span>
-                                <button
-                                    className="btn btn-secondary"
-                                    disabled={page >= totalPages}
-                                    onClick={() => setPage(p => Math.min(totalPages, p + 1))}
-                                    style={{ fontSize: '0.85rem', opacity: page >= totalPages ? 0.5 : 1 }}
-                                >
-                                    다음
-                                </button>
-                            </div>
-                        )}
-                    </>
+                    </section>
                 )}
             </main>
         </div>

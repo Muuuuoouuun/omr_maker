@@ -40,6 +40,12 @@ export async function loginAsTeacher(page: Page, nextPath = "/teacher/dashboard"
     await expect(page).toHaveURL(new RegExp(`${escapeRegExp(nextPath)}(?:[?#].*)?$`), { timeout: 15_000 });
 }
 
+export async function loginAsShowcaseTeacher(page: Page) {
+    await page.goto("/?role=teacher");
+    await page.getByRole("button", { name: "데모 계정으로 둘러보기" }).click();
+    await expect(page).toHaveURL(/\/teacher\/dashboard\?showcase=1(?:#.*)?$/, { timeout: 15_000 });
+}
+
 export async function openTeacherPage(page: Page, path: string) {
     await loginAsTeacher(page, path);
 }

@@ -11,6 +11,7 @@ import { MAX_SUB_QUESTION_LENGTH, normalizeQuestionSubQuestions } from "@/lib/su
 import { SUPABASE_ATTEMPT_READ_COLUMNS, SUPABASE_EXAM_READ_COLUMNS } from "@/lib/supabaseReadColumns";
 import { withBrowserStorageLock } from "@/lib/browserStorageLock";
 import { canUseCanonicalBrowserDataPlane } from "@/lib/productionBrowserBoundary";
+import { readTeacherSession } from "@/lib/teacherSession";
 
 type Env = Record<string, string | undefined>;
 
@@ -238,6 +239,19 @@ function storedScopeContext(scope: {
 
 function activePersistenceContext(): WorkspaceContext {
     return readActiveWorkspaceContext();
+}
+
+function activeTeacherOrganizationId(): string | null {
+    if (!readTeacherSession()) return null;
+    return contextOrganizationId(activePersistenceContext());
+}
+
+function matchesActiveTeacherOrganization(
+    item: { organizationId?: string } | null | undefined,
+    activeOrganizationId: string | null,
+): boolean {
+    if (!activeOrganizationId) return true;
+    return scopedValue(item?.organizationId) === activeOrganizationId;
 }
 
 function shouldFilterRemoteByOrganization(): boolean {
@@ -948,19 +962,25 @@ export function isExamLocallyDeleted(id: string): boolean {
 export function readLocalExam(id: string): Exam | null {
     if (!hasBrowserStorage()) return null;
     if (isExamLocallyDeleted(id)) return null;
-    return sanitizeExamPayload(readJson<unknown>(localStorage.getItem(`${EXAM_PREFIX}${id}`), null));
+    const exam = sanitizeExamPayload(readJson<unknown>(localStorage.getItem(`${EXAM_PREFIX}${id}`), null));
+    return matchesActiveTeacherOrganization(exam, activeTeacherOrganizationId()) ? exam : null;
 }
 
 export function readLocalExams(): Exam[] {
     if (!hasBrowserStorage()) return [];
 
     const deletedExamIds = readLocalDeletedExamIds();
+    const activeOrganizationId = activeTeacherOrganizationId();
     const exams: Exam[] = [];
     for (let i = 0; i < localStorage.length; i++) {
         const key = localStorage.key(i);
         if (!key?.startsWith(EXAM_PREFIX)) continue;
         const exam = sanitizeExamPayload(readJson<unknown>(localStorage.getItem(key), null));
-        if (exam?.id && !deletedExamIds[exam.id]) exams.push(exam);
+        if (
+            exam?.id
+            && !deletedExamIds[exam.id]
+            && matchesActiveTeacherOrganization(exam, activeOrganizationId)
+        ) exams.push(exam);
     }
 
     return sortByNewestActivity(exams);
@@ -1063,7 +1083,7 @@ function deleteLocalExamUnlocked(id: string): boolean {
     if (!hasBrowserStorage()) return false;
     try {
         localStorage.removeItem(`${EXAM_PREFIX}${id}`);
-        const attempts = readLocalAttempts().filter(attempt => attempt.examId !== id);
+        const attempts = readAllLocalAttempts().filter(attempt => attempt.examId !== id);
         localStorage.setItem(ATTEMPTS_KEY, JSON.stringify(attempts));
         deleteLocalSolveDraftsForExam(id);
         markLocalExamDeleted(id);
@@ -1077,7 +1097,7 @@ export async function deleteLocalExam(id: string): Promise<boolean> {
     return withBrowserStorageLock("attempt-index", () => deleteLocalExamUnlocked(id));
 }
 
-export function readLocalAttempts(): Attempt[] {
+function readAllLocalAttempts(): Attempt[] {
     if (!hasBrowserStorage()) return [];
     const deletedExamIds = readLocalDeletedExamIds();
     return sortByNewestActivity(
@@ -1086,6 +1106,22 @@ export function readLocalAttempts(): Attempt[] {
             .filter((attempt): attempt is Attempt => !!attempt)
             .filter(attempt => !deletedExamIds[attempt.examId])
     );
+}
+
+export function readLocalAttempts(): Attempt[] {
+    const attempts = readAllLocalAttempts();
+    const activeOrganizationId = activeTeacherOrganizationId();
+    if (!activeOrganizationId) return attempts;
+
+    return attempts.filter(attempt => {
+        if (scopedValue(attempt.organizationId)) {
+            return matchesActiveTeacherOrganization(attempt, activeOrganizationId);
+        }
+        const linkedExam = sanitizeExamPayload(
+            readJson<unknown>(localStorage.getItem(`${EXAM_PREFIX}${attempt.examId}`), null),
+        );
+        return matchesActiveTeacherOrganization(linkedExam, activeOrganizationId);
+    });
 }
 
 export function withLocalServerConfirmation(
@@ -1398,7 +1434,7 @@ function saveLocalAttemptsUnlocked(attempts: Attempt[]): boolean {
     if (!hasBrowserStorage()) return false;
     if (attempts.length === 0) return true;
     try {
-        const nextById = new Map(readLocalAttempts().map(attempt => [attempt.id, attempt]));
+        const nextById = new Map(readAllLocalAttempts().map(attempt => [attempt.id, attempt]));
         for (const attempt of attempts) {
             const existing = nextById.get(attempt.id);
             const incomingProvenance = sanitizeLocalSubmissionProvenance(attempt.localSubmissionProvenance);

@@ -168,7 +168,7 @@ export default function MobileInstallPrompt() {
       </div>
       <div className="mobile-install-prompt__actions">
         {deferredPrompt ? (
-          <button type="button" className="mobile-install-prompt__action" onClick={install}>
+          <button type="button" className="mobile-install-prompt__action" onClick={install} aria-label="설치">
             <Download size={16} />
             <span>설치</span>
           </button>

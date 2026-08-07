@@ -4,6 +4,7 @@ import BrandLogo from "@/components/BrandLogo";
 import OMRCardView from "@/components/OMRCardView";
 import OMRPreview from "@/components/OMRPreview";
 import dynamic from "next/dynamic";
+import { createPortal } from "react-dom";
 import TeacherLogoutButton from "@/components/TeacherLogoutButton";
 import TeacherSessionChip from "@/components/TeacherSessionChip";
 import ThemeToggle from "@/components/ThemeToggle";
@@ -37,7 +38,7 @@ const PDFViewer = dynamic(() => import("@/components/PDFViewer"), {
 });
 const AnswerImportModal = dynamic(() => import("@/components/AnswerImportModal"), { ssr: false });
 const DistributeModal = dynamic(() => import("@/components/DistributeModal"), { ssr: false });
-import { Suspense, useState, useEffect, useId, useRef, useCallback, useMemo, type CSSProperties } from "react";
+import { Suspense, useState, useEffect, useId, useRef, useCallback, useMemo, type CSSProperties, type MouseEvent as ReactMouseEvent } from "react";
 import { DEFAULT_CHOICE_COUNT, questionChoiceCount, type Exam, type Question, type QuestionSubQuestion, type QuestionSubQuestionTemplateId } from "@/types/omr";
 import type { ParsedAnswer } from "@/services/answerParser";
 import { saveFileDataUrl, storedDataUrlToFile } from "@/utils/blobStore";
@@ -95,9 +96,202 @@ import {
     normalizeSubQuestionMaxLength,
     SUB_QUESTION_TEMPLATES,
 } from "@/lib/subQuestions";
+import {
+    examDraftStorageKey,
+    isEditDraftNewerThanExam,
+    runPdfAssetUploadsConcurrently,
+    shouldUploadExamPdf,
+} from "./createPageHelpers";
+
+type CreatePdfMenuProps = {
+    problemFileName?: string;
+    answerFileName?: string;
+    onChooseProblem: () => void;
+    onChooseAnswer: () => void;
+};
+
+function CreatePdfMenu({ problemFileName, answerFileName, onChooseProblem, onChooseAnswer }: CreatePdfMenuProps) {
+    const [isOpen, setIsOpen] = useState(false);
+    const [activeItemIndex, setActiveItemIndex] = useState(0);
+    const [menuPosition, setMenuPosition] = useState({ top: 0, left: 0, width: 272 });
+    const rootRef = useRef<HTMLDivElement>(null);
+    const triggerRef = useRef<HTMLButtonElement>(null);
+    const menuRef = useRef<HTMLDivElement>(null);
+    const itemRefs = useRef<Array<HTMLButtonElement | null>>([]);
+    const focusFrameRef = useRef<number | null>(null);
+    const menuId = useId();
+
+    const updateMenuPosition = useCallback(() => {
+        const trigger = triggerRef.current;
+        if (!trigger) return;
+        const rect = trigger.getBoundingClientRect();
+        const edgeGap = 8;
+        const width = Math.min(272, window.innerWidth - edgeGap * 2);
+        const left = Math.min(Math.max(edgeGap, rect.left), window.innerWidth - width - edgeGap);
+        setMenuPosition({ top: rect.bottom + 7, left, width });
+    }, []);
+
+    const cancelFocusFrame = useCallback(() => {
+        if (focusFrameRef.current === null) return;
+        window.cancelAnimationFrame(focusFrameRef.current);
+        focusFrameRef.current = null;
+    }, []);
+
+    const closeMenu = useCallback((restoreTriggerFocus = false) => {
+        cancelFocusFrame();
+        setIsOpen(false);
+        if (restoreTriggerFocus) triggerRef.current?.focus();
+    }, [cancelFocusFrame]);
+
+    const focusMenuItem = useCallback((index: number) => {
+        setActiveItemIndex(index);
+        cancelFocusFrame();
+        focusFrameRef.current = window.requestAnimationFrame(() => {
+            focusFrameRef.current = null;
+            itemRefs.current[index]?.focus();
+        });
+    }, [cancelFocusFrame]);
+
+    const openMenu = useCallback((focusIndex = 0) => {
+        updateMenuPosition();
+        setIsOpen(true);
+        focusMenuItem(focusIndex);
+    }, [focusMenuItem, updateMenuPosition]);
+
+    useEffect(() => {
+        if (!isOpen) return;
+
+        const handlePointerDown = (event: PointerEvent) => {
+            const target = event.target as Node;
+            if (!rootRef.current?.contains(target) && !menuRef.current?.contains(target)) closeMenu();
+        };
+        const handleFocusIn = (event: FocusEvent) => {
+            const target = event.target as Node;
+            if (!rootRef.current?.contains(target) && !menuRef.current?.contains(target)) closeMenu();
+        };
+        const handleKeyDown = (event: KeyboardEvent) => {
+            if (event.key === "Escape") {
+                event.preventDefault();
+                closeMenu(true);
+                return;
+            }
+            if (event.key === "Tab" && menuRef.current?.contains(document.activeElement)) {
+                event.preventDefault();
+                closeMenu(true);
+                return;
+            }
+            if (!["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)) return;
+            const items = itemRefs.current.filter((item): item is HTMLButtonElement => Boolean(item));
+            if (items.length === 0 || !menuRef.current?.contains(document.activeElement)) return;
+            event.preventDefault();
+            const currentIndex = items.indexOf(document.activeElement as HTMLButtonElement);
+            let nextIndex = 0;
+            if (event.key === "End") nextIndex = items.length - 1;
+            else if (event.key === "Home") nextIndex = 0;
+            else if (currentIndex < 0) nextIndex = event.key === "ArrowDown" ? 0 : items.length - 1;
+            else if (event.key === "ArrowDown") nextIndex = (currentIndex + 1) % items.length;
+            else nextIndex = (currentIndex - 1 + items.length) % items.length;
+            focusMenuItem(nextIndex);
+        };
+        const handleViewportChange = () => updateMenuPosition();
+
+        document.addEventListener("pointerdown", handlePointerDown);
+        document.addEventListener("focusin", handleFocusIn);
+        document.addEventListener("keydown", handleKeyDown);
+        window.addEventListener("resize", handleViewportChange);
+        window.addEventListener("scroll", handleViewportChange, true);
+        return () => {
+            cancelFocusFrame();
+            document.removeEventListener("pointerdown", handlePointerDown);
+            document.removeEventListener("focusin", handleFocusIn);
+            document.removeEventListener("keydown", handleKeyDown);
+            window.removeEventListener("resize", handleViewportChange);
+            window.removeEventListener("scroll", handleViewportChange, true);
+        };
+    }, [cancelFocusFrame, closeMenu, focusMenuItem, isOpen, updateMenuPosition]);
+
+    const chooseFile = (choose: () => void) => {
+        closeMenu();
+        choose();
+    };
+
+    const handleFocusLeave = (relatedTarget: EventTarget | null) => {
+        const nextTarget = relatedTarget as Node | null;
+        if (!rootRef.current?.contains(nextTarget) && !menuRef.current?.contains(nextTarget)) closeMenu();
+    };
+
+    const menu = isOpen && typeof document !== "undefined" ? createPortal(
+        <div
+            ref={menuRef}
+            id={menuId}
+            role="menu"
+            aria-label="PDF 관리"
+            className="create-pdf-menu"
+            style={menuPosition}
+            onBlur={event => handleFocusLeave(event.relatedTarget)}
+        >
+            <button
+                ref={element => { itemRefs.current[0] = element; }}
+                type="button"
+                role="menuitem"
+                tabIndex={activeItemIndex === 0 ? 0 : -1}
+                aria-label="문제지 PDF 선택"
+                onClick={() => chooseFile(onChooseProblem)}
+            >
+                <FileText size={17} aria-hidden="true" />
+                <span><strong>문제지 PDF</strong><small>{problemFileName || "파일 선택"}</small></span>
+            </button>
+            <button
+                ref={element => { itemRefs.current[1] = element; }}
+                type="button"
+                role="menuitem"
+                tabIndex={activeItemIndex === 1 ? 0 : -1}
+                aria-label="답지 PDF 선택"
+                onClick={() => chooseFile(onChooseAnswer)}
+            >
+                <FileText size={17} aria-hidden="true" />
+                <span><strong>답지 PDF</strong><small>{answerFileName || "파일 선택"}</small></span>
+            </button>
+        </div>,
+        document.body,
+    ) : null;
+
+    return (
+        <>
+        <div
+            ref={rootRef}
+            className="create-pdf-menu-root"
+            onBlur={event => handleFocusLeave(event.relatedTarget)}
+        >
+            <button
+                ref={triggerRef}
+                type="button"
+                className="btn btn-secondary create-pdf-menu-trigger"
+                aria-label="PDF 관리"
+                aria-haspopup="menu"
+                aria-expanded={isOpen}
+                aria-controls={menuId}
+                onClick={() => {
+                    if (isOpen) closeMenu();
+                    else openMenu(0);
+                }}
+                onKeyDown={(event) => {
+                    if (event.key !== "ArrowDown" && event.key !== "ArrowUp") return;
+                    event.preventDefault();
+                    openMenu(event.key === "ArrowDown" ? 0 : 1);
+                }}
+            >
+                <UploadCloud size={16} aria-hidden="true" />
+                <span>PDF 관리</span>
+                <ChevronDown size={14} aria-hidden="true" />
+            </button>
+        </div>
+        {menu}
+        </>
+    );
+}
 
 // ─── Autosave + history constants ────────────────────────────────────
-const DRAFT_KEY = "omr_exam_draft";
 const AUTOSAVE_INTERVAL_MS = 2000;
 const HISTORY_LIMIT = 20;
 const PDF_PANE_MIN_WIDTH = 200;
@@ -182,7 +376,14 @@ function uniqueUsageCount(usage: QuestionLabelSettingUsageInput): number {
     return new Set(values).size;
 }
 
-interface EditorDraft {
+interface EditorDraftAssets {
+    pdfData?: string;
+    pdfDataRef?: Exam["pdfDataRef"];
+    answerKeyPdf?: string;
+    answerKeyPdfRef?: Exam["answerKeyPdfRef"];
+}
+
+interface EditorDraft extends EditorDraftAssets {
     title: string;
     questionsCount: number;
     columns: number;
@@ -350,63 +551,6 @@ function safeSetLocal(key: string, value: string): boolean {
     }
 }
 
-// New exams autosave to the legacy shared key; editing an existing exam gets a
-// per-exam key so refining a published exam can't clobber (or be clobbered by)
-// the new-exam draft, and each exam's recovery is isolated.
-export function examDraftStorageKey(editId: string | null | undefined): string {
-    return editId ? `${DRAFT_KEY}_${editId}` : DRAFT_KEY;
-}
-
-// A stored edit-mode draft is only worth offering for restore when it captured
-// edits made AFTER the last save (strictly newer than the exam's updatedAt);
-// otherwise it just mirrors what already loaded.
-export function isEditDraftNewerThanExam(
-    draftSavedAt: string | undefined,
-    examUpdatedAt: string | undefined,
-): boolean {
-    if (!draftSavedAt) return false;
-    const draftTime = Date.parse(draftSavedAt);
-    if (Number.isNaN(draftTime)) return false;
-    const parsedExamTime = examUpdatedAt ? Date.parse(examUpdatedAt) : 0;
-    const examTime = Number.isNaN(parsedExamTime) ? 0 : parsedExamTime;
-    return draftTime > examTime;
-}
-
-export function shouldUploadExamPdf(file: File | null, explicitlyReplaced: boolean): file is File {
-    return explicitlyReplaced && file !== null;
-}
-
-type PdfAssetUploadOutcome<T> =
-    | { status: "skipped" }
-    | { status: "uploaded"; value: T }
-    | { status: "failed"; error: unknown };
-
-export async function runPdfAssetUploadsConcurrently<TProblem, TAnswer>(uploads: {
-    problem?: () => Promise<TProblem>;
-    answer?: () => Promise<TAnswer>;
-    rollback?: () => Promise<void>;
-}): Promise<{
-    problem: PdfAssetUploadOutcome<TProblem>;
-    answer: PdfAssetUploadOutcome<TAnswer>;
-}> {
-    const settle = async <T,>(upload?: () => Promise<T>): Promise<PdfAssetUploadOutcome<T>> => {
-        if (!upload) return { status: "skipped" };
-        try {
-            return { status: "uploaded", value: await upload() };
-        } catch (error) {
-            return { status: "failed", error };
-        }
-    };
-    const [problem, answer] = await Promise.all([
-        settle(uploads.problem),
-        settle(uploads.answer),
-    ]);
-    if ((problem.status === "failed" || answer.status === "failed") && uploads.rollback) {
-        await uploads.rollback();
-    }
-    return { problem, answer };
-}
-
 function splitTagInput(value: string): string[] {
     return value
         .split(",")
@@ -489,6 +633,7 @@ function CreateOMRPageInner() {
     const [isSaving, setIsSaving] = useState(false);
     const [isImportModalOpen, setIsImportModalOpen] = useState(false);
     const [isDistributeModalOpen, setIsDistributeModalOpen] = useState(false);
+    const distributeTriggerRef = useRef<HTMLButtonElement | null>(null);
     const [confirmState, setConfirmState] = useState<CreateConfirmState | null>(null);
     const [isAdvancedDesignOpen, setIsAdvancedDesignOpen] = useState(false);
     const [isSubQuestionOpen, setIsSubQuestionOpen] = useState(false);
@@ -700,6 +845,8 @@ function CreateOMRPageInner() {
     const answerKeyPdfInputRef = useRef<HTMLInputElement>(null);
     const problemPdfReplacedRef = useRef(false);
     const answerKeyPdfReplacedRef = useRef(false);
+    const draftAssetsRef = useRef<EditorDraftAssets>({});
+    const pendingPdfReadyToastRef = useRef<{ kind: 'problem' | 'answer'; name: string } | null>(null);
     const [activeViewTab, setActiveViewTab] = useState<'problem' | 'answer'>('problem');
     const activePdfFile = activeViewTab === 'problem' ? pdfFile : answerKeyPdf;
     const [isDetectingLocation, setIsDetectingLocation] = useState(false);
@@ -801,6 +948,7 @@ function CreateOMRPageInner() {
         endAt,
         hasProblemPdf: hasProblemPdfForValidation,
     }), [title, questions, durationMin, startAt, endAt, hasProblemPdfForValidation]);
+    const hasValidationIssues = validationSummary.errors.length > 0 || validationSummary.warnings.length > 0;
     const serviceReadiness = useMemo(() => buildExamServiceReadiness({
         title,
         validation: validationSummary,
@@ -1016,6 +1164,12 @@ function CreateOMRPageInner() {
                     return;
                 }
                 setLoadedExam(parsed);
+                draftAssetsRef.current = {
+                    pdfData: parsed.pdfData,
+                    pdfDataRef: parsed.pdfDataRef,
+                    answerKeyPdf: parsed.answerKeyPdf,
+                    answerKeyPdfRef: parsed.answerKeyPdfRef,
+                };
                 if (parsed.title) setTitle(parsed.title);
                 if (Array.isArray(parsed.questions) && parsed.questions.length > 0) {
                     setQuestionsCount(parsed.questions.length);
@@ -1164,6 +1318,7 @@ function CreateOMRPageInner() {
         if (editId && (!loadedExam || !isEditDirty)) return;
         const handle = setTimeout(() => {
             const draft: EditorDraft = {
+                ...draftAssetsRef.current,
                 title, questionsCount, columns, questions,
                 defaultChoices, durationMin, startAt, endAt,
                 savedAt: new Date().toISOString(),
@@ -1273,10 +1428,16 @@ function CreateOMRPageInner() {
             return false;
         }
         problemPdfFileRef.current = file;
+        draftAssetsRef.current = {
+            ...draftAssetsRef.current,
+            pdfData: undefined,
+            pdfDataRef: undefined,
+        };
+        pendingPdfReadyToastRef.current = { kind: 'problem', name: file.name };
         setPdfFile(file);
         problemPdfReplacedRef.current = true;
         setActiveViewTab('problem');
-        toast.success("문제지 PDF 업로드됨", file.name);
+        toast.info("문제지 PDF 파일 수신됨", "미리보기를 준비하고 있습니다.");
         return true;
     };
 
@@ -1287,12 +1448,26 @@ function CreateOMRPageInner() {
             return false;
         }
         answerKeyPdfFileRef.current = file;
+        draftAssetsRef.current = {
+            ...draftAssetsRef.current,
+            answerKeyPdf: undefined,
+            answerKeyPdfRef: undefined,
+        };
+        pendingPdfReadyToastRef.current = { kind: 'answer', name: file.name };
         setAnswerKeyPdf(file);
         answerKeyPdfReplacedRef.current = true;
         setActiveViewTab('answer');
-        toast.success("답지 PDF 업로드됨", file.name);
+        toast.info("답지 PDF 파일 수신됨", "미리보기를 준비하고 있습니다.");
         return true;
     };
+
+    const handleActivePdfLoadSuccess = useCallback((numPages: number) => {
+        const pending = pendingPdfReadyToastRef.current;
+        if (!pending || !activePdfFile) return;
+        if (pending.kind !== activeViewTab || pending.name !== activePdfFile.name) return;
+        pendingPdfReadyToastRef.current = null;
+        toast.success("PDF 미리보기 준비 완료", `${pending.name} · ${numPages}페이지`);
+    }, [activePdfFile, activeViewTab]);
 
     const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
         handleProblemPdfFile(e.currentTarget.files?.[0]);
@@ -2113,6 +2288,54 @@ function CreateOMRPageInner() {
         applyImportedAnswers(importedAnswers);
     };
 
+    const restoreDraftPdfAssets = async (draft: EditorDraft) => {
+        const assets: EditorDraftAssets = {
+            pdfData: draft.pdfData,
+            pdfDataRef: draft.pdfDataRef,
+            answerKeyPdf: draft.answerKeyPdf,
+            answerKeyPdfRef: draft.answerKeyPdfRef,
+        };
+        draftAssetsRef.current = assets;
+
+        const resolveDraftFile = async (
+            fallbackName: string,
+            inlineData: string | undefined,
+            ref: Exam["pdfDataRef"],
+        ) => {
+            const remoteAsset = ref?.store === "remote"
+                ? await getTeacherRemoteAssetUrl(ref)
+                : null;
+            const data = remoteAsset?.status === "signed" ? remoteAsset.signedUrl : inlineData;
+            return storedDataUrlToFile(
+                fallbackName,
+                data,
+                ref?.store === "remote" ? undefined : ref,
+            );
+        };
+
+        try {
+            const [problemFile, answerFile] = await Promise.all([
+                resolveDraftFile("problem.pdf", draft.pdfData, draft.pdfDataRef),
+                resolveDraftFile("answer_key.pdf", draft.answerKeyPdf, draft.answerKeyPdfRef),
+            ]);
+            if (problemFile) {
+                problemPdfFileRef.current = problemFile;
+                problemPdfReplacedRef.current = true;
+                setPdfFile(problemFile);
+            }
+            if (answerFile) {
+                answerKeyPdfFileRef.current = answerFile;
+                answerKeyPdfReplacedRef.current = true;
+                setAnswerKeyPdf(answerFile);
+            }
+            toast.success("초안 복원 완료", problemFile || answerFile
+                ? "출제 설정과 첨부 PDF를 복원했습니다."
+                : "출제 설정을 복원했습니다.");
+        } catch {
+            toast.error("PDF 복원 실패", "출제 설정은 복원했지만 첨부 PDF를 다시 선택해주세요.");
+        }
+    };
+
     const handleConfirmCancel = () => {
         if (!confirmState) return;
         if (confirmState.kind === "restoreDraft") {
@@ -2156,7 +2379,7 @@ function CreateOMRPageInner() {
             setDurationMin(snap.durationMin === "" ? "" : (snap.durationMin ?? 50));
             setStartAt(snap.startAt ?? "");
             setEndAt(snap.endAt ?? "");
-            toast.success("초안 복원 완료");
+            void restoreDraftPdfAssets(snap);
         } else if (confirmState.kind === "shrinkQuestions") {
             setQuestionsCount(confirmState.nextCount);
             toast.info("문항 수 변경됨", `${confirmState.losing}개 문항이 제거되었습니다.`);
@@ -2221,23 +2444,81 @@ function CreateOMRPageInner() {
         }
     };
 
-    const handleOpenDistribution = () => {
+    const handleSaveDraftNow = async () => {
+        try {
+            const currentProblemPdf = problemPdfFileRef.current;
+            const currentAnswerKeyPdf = answerKeyPdfFileRef.current;
+            const [problemAsset, answerAsset] = await Promise.all([
+                currentProblemPdf
+                    ? saveFileDataUrl(`${draftStorageKey}:problemPdf`, currentProblemPdf)
+                    : Promise.resolve({
+                        inlineDataUrl: loadedExam?.pdfData,
+                        ref: loadedExam?.pdfDataRef,
+                    }),
+                currentAnswerKeyPdf
+                    ? saveFileDataUrl(`${draftStorageKey}:answerKeyPdf`, currentAnswerKeyPdf)
+                    : Promise.resolve({
+                        inlineDataUrl: loadedExam?.answerKeyPdf,
+                        ref: loadedExam?.answerKeyPdfRef,
+                    }),
+            ]);
+            const assets: EditorDraftAssets = {
+                pdfData: problemAsset.inlineDataUrl,
+                pdfDataRef: problemAsset.ref,
+                answerKeyPdf: answerAsset.inlineDataUrl,
+                answerKeyPdfRef: answerAsset.ref,
+            };
+            draftAssetsRef.current = assets;
+            const draft: EditorDraft = {
+                ...assets,
+                title,
+                questionsCount,
+                columns,
+                questions,
+                defaultChoices,
+                durationMin,
+                startAt,
+                endAt,
+                savedAt: new Date().toISOString(),
+            };
+            localStorage.setItem(draftStorageKey, JSON.stringify(draft));
+            toast.success(
+                "초안 저장 완료",
+                currentProblemPdf || currentAnswerKeyPdf
+                    ? "이 기기에 출제 설정과 첨부 PDF를 함께 보관했습니다."
+                    : "이 기기에 현재 출제 설정을 보관했습니다.",
+            );
+        } catch {
+            toast.error("초안 저장 실패", "설정 또는 PDF 저장 공간을 확인한 뒤 다시 시도해주세요.");
+        }
+    };
+
+    const handleOpenDistribution = (event: ReactMouseEvent<HTMLButtonElement>) => {
         if (!serviceReadiness.canOpenDistribution) {
             toast.error("배포 전 확인 필요", serviceReadiness.detail || "시험 설정을 확인해주세요.");
             return;
         }
+        distributeTriggerRef.current = event.currentTarget;
         setIsDistributeModalOpen(true);
     };
 
+    const handleCloseDistribution = () => {
+        const trigger = distributeTriggerRef.current;
+        setIsDistributeModalOpen(false);
+        window.requestAnimationFrame(() => {
+            if (trigger?.isConnected) trigger.focus({ preventScroll: true });
+        });
+    };
+
     return (
-        <div className="layout-main" style={{ background: 'var(--background)', height: 'var(--app-viewport-height, 100dvh)', overflow: 'hidden' }}>
+        <div className="layout-main create-editor-page" style={{ background: 'var(--background)', height: 'var(--app-viewport-height, 100dvh)', overflow: 'hidden' }}>
             <header className="header create-editor-shell-header" style={{ flexShrink: 0 }}>
                 <div className="container header-content create-editor-header" style={{ maxWidth: '100%', padding: '0 2rem' }}>
                     <div className="create-editor-brand" style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
                         <BrandLogo compact />
-                        <span className="badge badge-primary" style={{ fontSize: '0.68rem' }}>
-                            스마트 에디터
-                        </span>
+                        <h1 style={{ fontSize: '0.9rem', fontWeight: 850, whiteSpace: 'nowrap' }}>
+                            {editId ? '시험 편집' : '새 시험 만들기'}
+                        </h1>
                     </div>
                     <div className="create-editor-actions scroll-custom" role="toolbar" aria-label="출제 도구 모음" style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
                         <button
@@ -2270,20 +2551,6 @@ function CreateOMRPageInner() {
                             tabIndex={-1}
                             aria-hidden="true"
                         />
-                        <button
-                            type="button"
-                            className="btn btn-secondary"
-                            aria-label="문제지 PDF 업로드"
-                            onClick={() => {
-                                if (problemPdfInputRef.current) {
-                                    activateFilePicker(problemPdfInputRef.current);
-                                }
-                            }}
-                            style={{ cursor: 'pointer', padding: '0.55rem 1rem', fontSize: '0.85rem' }}
-                        >
-                            <UploadCloud size={16} />
-                            문제지 업로드
-                        </button>
                         <input
                             ref={answerKeyPdfInputRef}
                             id="answer-key-pdf-upload-input"
@@ -2297,21 +2564,26 @@ function CreateOMRPageInner() {
                             tabIndex={-1}
                             aria-hidden="true"
                         />
-                        <button
-                            type="button"
-                            className="btn btn-secondary"
-                            aria-label="답지 PDF 업로드"
-                            onClick={() => {
-                                if (answerKeyPdfInputRef.current) {
-                                    activateFilePicker(answerKeyPdfInputRef.current);
-                                }
+                        <CreatePdfMenu
+                            problemFileName={pdfFile?.name}
+                            answerFileName={answerKeyPdf?.name}
+                            onChooseProblem={() => {
+                                if (problemPdfInputRef.current) activateFilePicker(problemPdfInputRef.current);
                             }}
-                            style={{ cursor: 'pointer', padding: '0.55rem 1rem', fontSize: '0.85rem' }}
-                        >
-                            <UploadCloud size={16} />
-                            답지 업로드
-                        </button>
+                            onChooseAnswer={() => {
+                                if (answerKeyPdfInputRef.current) activateFilePicker(answerKeyPdfInputRef.current);
+                            }}
+                        />
                         <div className="create-primary-actions create-primary-actions--desktop">
+                            <button
+                                type="button"
+                                className="btn btn-secondary"
+                                style={{ padding: '0.55rem 1rem', fontSize: '0.85rem' }}
+                                onClick={handleSaveDraftNow}
+                            >
+                                <Save size={15} />
+                                초안 저장
+                            </button>
                             <button
                                 type="button"
                                 className="btn btn-secondary"
@@ -2327,7 +2599,7 @@ function CreateOMRPageInner() {
                                 style={{ padding: '0.55rem 1.1rem', fontSize: '0.85rem' }}
                                 onClick={handleOpenDistribution}
                             >
-                                배포하기
+                                저장하고 배포하기
                             </button>
                         </div>
                         <TeacherSessionChip compact />
@@ -2352,7 +2624,7 @@ function CreateOMRPageInner() {
             {isDistributeModalOpen && (
                 <DistributeModal
                     isOpen
-                    onClose={() => setIsDistributeModalOpen(false)}
+                    onClose={handleCloseDistribution}
                     onSaveAndShare={handleShareConfig}
                     onAutoMatchRegions={handleAutoMatchMissingRegions}
                     validationSummary={validationSummary}
@@ -2386,7 +2658,6 @@ function CreateOMRPageInner() {
                     >
                         <FileText size={17} aria-hidden="true" />
                         <span>문제지</span>
-                        <small>{pdfFile ? '연결됨' : '업로드'}</small>
                     </button>
                     <button
                         type="button"
@@ -2398,7 +2669,6 @@ function CreateOMRPageInner() {
                     >
                         <Settings2 size={17} aria-hidden="true" />
                         <span>설정</span>
-                        <small>{designSummary.answered}/{questionsCount} 정답</small>
                     </button>
                     <button
                         type="button"
@@ -2413,7 +2683,6 @@ function CreateOMRPageInner() {
                     >
                         <Eye size={17} aria-hidden="true" />
                         <span>미리보기</span>
-                        <small>{serviceReadiness.label}</small>
                     </button>
                 </div>
 
@@ -2476,7 +2745,7 @@ function CreateOMRPageInner() {
                         {activePdfFile ? (
                             <PDFViewer
                                 file={activePdfFile}
-                                onLoadSuccess={() => undefined}
+                                onLoadSuccess={handleActivePdfLoadSuccess}
                                 onPageClick={activeViewTab === 'problem' ? handlePdfPageClick : undefined}
                                 onFileDrop={activeViewTab === 'problem' ? handleFileDrop : handleAnswerKeyPdfFile}
                                 markers={activeViewTab === 'problem'
@@ -2529,52 +2798,61 @@ function CreateOMRPageInner() {
                             </div>
                         </div>
                         <div className="create-settings-toolbar">
-                            <div className="create-settings-zoom-group" role="group" aria-label="설정 내용 배율">
-                                <button
-                                    type="button"
-                                    className="create-settings-tool-button"
-                                    onClick={() => adjustSettingsZoom(-SETTINGS_ZOOM_STEP)}
-                                    disabled={settingsZoom <= SETTINGS_ZOOM_MIN}
-                                    aria-label="설정 내용 축소"
-                                    title="설정 내용 축소"
-                                >
-                                    <ZoomOut size={14} />
-                                </button>
-                                <span className="create-settings-zoom-value">{Math.round(settingsZoom * 100)}%</span>
-                                <button
-                                    type="button"
-                                    className="create-settings-tool-button"
-                                    onClick={() => adjustSettingsZoom(SETTINGS_ZOOM_STEP)}
-                                    disabled={settingsZoom >= SETTINGS_ZOOM_MAX}
-                                    aria-label="설정 내용 확대"
-                                    title="설정 내용 확대"
-                                >
-                                    <ZoomIn size={14} />
-                                </button>
-                            </div>
-                            <button
-                                type="button"
-                                className="create-settings-tool-button"
-                                onClick={scrollSettingsToTop}
-                                aria-label="설정 맨 위로 이동"
-                                title="설정 맨 위로 이동"
-                            >
-                                <ArrowUpToLine size={14} />
-                            </button>
-                            <button
-                                type="button"
-                                className="create-settings-tool-button"
-                                onClick={toggleComfortSidebarWidth}
-                                aria-label={sidebarWidth >= SETTINGS_SIDEBAR_COMFORT_WIDTH - 24 ? "설정 패널 기본 폭" : "설정 패널 넓게 보기"}
-                                title={sidebarWidth >= SETTINGS_SIDEBAR_COMFORT_WIDTH - 24 ? "설정 패널 기본 폭" : "설정 패널 넓게 보기"}
-                            >
-                                {sidebarWidth >= SETTINGS_SIDEBAR_COMFORT_WIDTH - 24 ? <Minimize2 size={14} /> : <Maximize2 size={14} />}
-                            </button>
+                            <details className="create-settings-view-options">
+                                <summary>
+                                    <Settings2 size={14} aria-hidden="true" />
+                                    보기 옵션
+                                    <ChevronDown size={13} aria-hidden="true" />
+                                </summary>
+                                <div className="create-settings-view-options-menu">
+                                    <div className="create-settings-zoom-group" role="group" aria-label="설정 내용 배율">
+                                        <button
+                                            type="button"
+                                            className="create-settings-tool-button"
+                                            onClick={() => adjustSettingsZoom(-SETTINGS_ZOOM_STEP)}
+                                            disabled={settingsZoom <= SETTINGS_ZOOM_MIN}
+                                            aria-label="설정 내용 축소"
+                                            title="설정 내용 축소"
+                                        >
+                                            <ZoomOut size={14} />
+                                        </button>
+                                        <span className="create-settings-zoom-value">{Math.round(settingsZoom * 100)}%</span>
+                                        <button
+                                            type="button"
+                                            className="create-settings-tool-button"
+                                            onClick={() => adjustSettingsZoom(SETTINGS_ZOOM_STEP)}
+                                            disabled={settingsZoom >= SETTINGS_ZOOM_MAX}
+                                            aria-label="설정 내용 확대"
+                                            title="설정 내용 확대"
+                                        >
+                                            <ZoomIn size={14} />
+                                        </button>
+                                    </div>
+                                    <button
+                                        type="button"
+                                        className="create-settings-tool-button"
+                                        onClick={scrollSettingsToTop}
+                                        aria-label="설정 맨 위로 이동"
+                                        title="설정 맨 위로 이동"
+                                    >
+                                        <ArrowUpToLine size={14} />
+                                    </button>
+                                    <button
+                                        type="button"
+                                        className="create-settings-tool-button"
+                                        onClick={toggleComfortSidebarWidth}
+                                        aria-label={sidebarWidth >= SETTINGS_SIDEBAR_COMFORT_WIDTH - 24 ? "설정 패널 기본 폭" : "설정 패널 넓게 보기"}
+                                        title={sidebarWidth >= SETTINGS_SIDEBAR_COMFORT_WIDTH - 24 ? "설정 패널 기본 폭" : "설정 패널 넓게 보기"}
+                                    >
+                                        {sidebarWidth >= SETTINGS_SIDEBAR_COMFORT_WIDTH - 24 ? <Minimize2 size={14} /> : <Maximize2 size={14} />}
+                                    </button>
+                                </div>
+                            </details>
                             <span
-                                className={`create-publish-chip ${serviceReadiness.canOpenDistribution ? 'is-ready' : 'needs-work'}`}
+                                className={`create-publish-chip ${serviceReadiness.canOpenDistribution && validationSummary.warnings.length === 0 ? 'is-ready' : 'needs-work'}`}
                                 title={serviceReadiness.detail}
                             >
-                                {serviceReadiness.canOpenDistribution ? '배포 가능' : '확인 필요'}
+                                {validationSummary.warnings.length > 0 ? '경고 확인' : serviceReadiness.canOpenDistribution ? '배포 가능' : '확인 필요'}
                             </span>
                         </div>
                     </div>
@@ -2594,7 +2872,7 @@ function CreateOMRPageInner() {
                             </div>
                         )}
 
-                        <div className="create-design-check-compact">
+                        {hasValidationIssues && <div className="create-design-check-compact" role="status" aria-label="시험 설계 확인 필요">
                             <div className="create-design-check-top">
                                 <div className="create-design-check-title">
                                     <span>설계 체크</span>
@@ -2669,15 +2947,15 @@ function CreateOMRPageInner() {
                             )}
 
                             <div
-                                className={`create-validation-line ${validationSummary.isPublishable ? 'is-ready' : 'needs-work'}`}
+                                className={`create-validation-line ${hasValidationIssues ? 'needs-work' : 'is-ready'}`}
                                 title={validationTooltip}
                             >
                                 <div>
-                                    <strong>{validationSummary.isPublishable ? '배포 가능' : '수정 필요'}</strong>
+                                    <strong>{validationSummary.warnings.length > 0 ? '경고 확인' : validationSummary.isPublishable ? '배포 가능' : '수정 필요'}</strong>
                                     <span>{validationSummary.errors.length} 오류 · {validationSummary.warnings.length} 경고</span>
                                 </div>
                             </div>
-                        </div>
+                        </div>}
 
                         <div className="create-section-label">
                             <span className="step">1</span>시험 기본
@@ -3931,15 +4209,15 @@ function CreateOMRPageInner() {
                     className="btn btn-primary"
                     onClick={handleOpenDistribution}
                 >
-                    배포하기
+                    저장하고 배포하기
                 </button>
                 <button
                     type="button"
                     className="btn btn-secondary"
-                    onClick={handleSaveImage}
-                    disabled={isSaving}
+                    onClick={handleSaveDraftNow}
                 >
-                    {isSaving ? "저장 중..." : "이미지 저장"}
+                    <Save size={16} />
+                    초안 저장
                 </button>
             </div>
         </div >

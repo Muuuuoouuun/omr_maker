@@ -214,11 +214,12 @@ export default function MockupOverview({
             onAction: () => onNavigateToExamAnalytics(lowestParticipationRow?.id || latestRow?.id || exams[0]?.id || ""),
         },
     ] as const;
+    const operationalMetrics = [metrics[2], metrics[3], metrics[1], metrics[0]] as const;
 
     return (
         <section className="mockup-overview" aria-label="데모 계정 대시보드 개요">
             <div className="mockup-metric-grid">
-                {metrics.map((metric, metricIndex) => {
+                {operationalMetrics.map((metric, metricIndex) => {
                     const Icon = metric.icon;
                     const countable = parseCountableValue(metric.value);
                     return (

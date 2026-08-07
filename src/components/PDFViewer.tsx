@@ -22,6 +22,7 @@ import {
 import 'react-pdf/dist/Page/AnnotationLayer.css';
 import 'react-pdf/dist/Page/TextLayer.css';
 import { buildPenCursor, buildHighlighterCursor } from '@/lib/drawingCursors';
+import { parseStoredDrawingPath } from '@/lib/drawingPath';
 import { strokeHitTest } from '@/lib/strokeGeometry';
 import {
     completePdfRenderRequest,
@@ -535,17 +536,12 @@ export default function PDFViewer({
         // Draw saved paths
         const paths = drawings[pageNumber] || [];
         paths.forEach(pathStr => {
-            try {
-                const pathData = JSON.parse(pathStr);
-                if (pathData.points && pathData.points.length > 0) {
-                    const mode = (pathData.mode || 'pen') as DrawingMode;
-                    const color = pathData.color || (mode === 'highlighter' ? HIGHLIGHTER_COLOR : '#ef4444');
-                    const width = pathData.width || (mode === 'eraser' ? eraserWidth : mode === 'highlighter' ? highlighterWidth : 2);
-                    drawSmoothPath(ctx, pathData.points, metrics.rect, mode, color, width);
-                }
-            } catch (err) {
-                console.error("Failed to parse path JSON", err);
-            }
+            const pathData = parseStoredDrawingPath(pathStr);
+            if (!pathData) return;
+            const mode = pathData.mode;
+            const color = pathData.color || (mode === 'highlighter' ? HIGHLIGHTER_COLOR : '#ef4444');
+            const width = pathData.width || (mode === 'eraser' ? eraserWidth : mode === 'highlighter' ? highlighterWidth : 2);
+            drawSmoothPath(ctx, pathData.points, metrics.rect, mode, color, width);
         });
 
         // Reset globalCompositeOperation to default
@@ -672,17 +668,13 @@ export default function PDFViewer({
     // pts === null (eraser masks or unparseable JSON) are never removed by stroke-erase.
     const buildEraseCache = (paths: string[]): Array<{ raw: string; pts: DrawPoint[] | null; halfWidth: number }> =>
         paths.map(raw => {
-            try {
-                const data = JSON.parse(raw);
-                if (data.mode !== 'eraser' && Array.isArray(data.points) && data.points.length > 0) {
-                    return {
-                        raw,
-                        pts: data.points as DrawPoint[],
-                        halfWidth: typeof data.width === 'number' ? data.width / 2 : 1,
-                    };
-                }
-            } catch {
-                // fall through to a non-hittable entry
+            const data = parseStoredDrawingPath(raw);
+            if (data && data.mode !== 'eraser') {
+                return {
+                    raw,
+                    pts: data.points,
+                    halfWidth: data.width ? data.width / 2 : 1,
+                };
             }
             return { raw, pts: null, halfWidth: 0 };
         });

@@ -143,7 +143,8 @@ export async function submitAttemptClient(
                 return { status: asLoadStatus(res.status), source: "server" };
             }
         }
-    } catch {
+    } catch (error) {
+        if (!deps.allowLocalFallback) throw error;
         serverStatus = "error";
         retryableFailure = true;
     }

@@ -7,6 +7,7 @@ import { readLocalAttempts, readLocalExams } from "@/lib/omrPersistence";
 import { readRosterGroups, readRosterInvites, readRosterStudents } from "@/lib/rosterStorage";
 import { buildKakaoNotificationCandidates } from "@/lib/kakaoNotificationQueue";
 import { collectStudentQuestionInbox } from "@/lib/studentQuestions";
+import { useDialogFocus } from "@/hooks/useDialogFocus";
 
 interface Notification {
     id: string;
@@ -174,6 +175,11 @@ export default function NotificationBell() {
     const [hydrated, setHydrated] = useState(false);
     const [clearConfirmOpen, setClearConfirmOpen] = useState(false);
     const rootRef = useRef<HTMLDivElement | null>(null);
+    const closeNotifications = useCallback(() => {
+        setOpen(false);
+        setClearConfirmOpen(false);
+    }, []);
+    const dialogRef = useDialogFocus(open, closeNotifications);
 
     // Merge auto-generated (dynamic) notifications with persisted user
     // notifications. The persisted list is what the user has dismissed/read
@@ -230,12 +236,12 @@ export default function NotificationBell() {
         if (!open) return;
         const onClick = (e: MouseEvent) => {
             if (rootRef.current && !rootRef.current.contains(e.target as Node)) {
-                setOpen(false);
+                closeNotifications();
             }
         };
         window.addEventListener("mousedown", onClick);
         return () => window.removeEventListener("mousedown", onClick);
-    }, [open]);
+    }, [closeNotifications, open]);
 
     const unreadCount = notifications.filter(n => n.unread).length;
 
@@ -277,8 +283,11 @@ export default function NotificationBell() {
     return (
         <div ref={rootRef} style={{ position: 'relative' }}>
             <button
-                onClick={() => setOpen(prev => !prev)}
+                onClick={() => open ? closeNotifications() : setOpen(true)}
                 aria-label={unreadCount > 0 ? `알림 (읽지 않음 ${unreadCount}개)` : '알림 받기'}
+                aria-expanded={open}
+                aria-controls="teacher-notifications-dialog"
+                aria-haspopup="dialog"
                 style={{
                     width: 44, height: 44, display: 'flex', alignItems: 'center', justifyContent: 'center',
                     borderRadius: 'var(--radius-full)', background: 'var(--background)',
@@ -313,8 +322,11 @@ export default function NotificationBell() {
 
             {open && (
                 <div
+                    id="teacher-notifications-dialog"
+                    ref={dialogRef}
                     role="dialog"
                     aria-label="알림 목록"
+                    tabIndex={-1}
                     style={{
                         position: 'absolute', top: 'calc(100% + 0.5rem)', right: 0,
                         width: 360, maxWidth: '90vw',
@@ -450,7 +462,7 @@ export default function NotificationBell() {
                                     <Link
                                         key={n.id}
                                         href={n.href}
-                                        onClick={() => { markOneRead(n.id); setOpen(false); }}
+                                        onClick={() => { markOneRead(n.id); closeNotifications(); }}
                                         style={commonStyle}
                                     >
                                         {content}

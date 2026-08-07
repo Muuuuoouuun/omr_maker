@@ -8,11 +8,12 @@ import { formatRegionScopedLabel } from '@/lib/dashboardSelection';
 import type { ExamValidationSummary } from '@/lib/examValidation';
 import { isValidExamPin, normalizeExamPin } from '@/lib/examAccess';
 import { readRosterGroups, readRosterInvites, readRosterStudents, type RosterGroup, type RosterInvite, type RosterStudent } from '@/lib/rosterStorage';
-import { summarizeDistributionTargets } from '@/lib/distributionTargets';
+import { countDistributionGroupMembers, summarizeDistributionTargets } from '@/lib/distributionTargets';
 import { isShareUrlReachableByStudents } from '@/lib/shareLink';
 import { addRosterGroup, addRosterStudent } from '@/lib/rosterMutations';
 import { saveTeacherRosterSnapshot } from '@/lib/teacherRosterClient';
 import { toast } from '@/components/Toast';
+import { useDialogFocus } from '@/hooks/useDialogFocus';
 
 type AccessConfig = NonNullable<Exam["accessConfig"]>;
 
@@ -44,16 +45,9 @@ export default function DistributeModal({ isOpen, onClose, onSaveAndShare, onAut
     const [newStudentName, setNewStudentName] = useState("");
     const [newStudentEmail, setNewStudentEmail] = useState("");
     const wasOpenRef = useRef(false);
-    const dialogRef = useRef<HTMLDivElement>(null);
-    const closeButtonRef = useRef<HTMLButtonElement>(null);
-    const previouslyFocusedRef = useRef<HTMLElement | null>(null);
     const copyResetTimerRef = useRef<number | undefined>(undefined);
-    const onCloseRef = useRef(onClose);
+    const dialogRef = useDialogFocus(isOpen, onClose);
     const dialogTitleId = useId();
-
-    useEffect(() => {
-        onCloseRef.current = onClose;
-    }, [onClose]);
 
     useEffect(() => () => {
         if (copyResetTimerRef.current !== undefined) {
@@ -98,49 +92,6 @@ export default function DistributeModal({ isOpen, onClose, onSaveAndShare, onAut
         setNewStudentName("");
         setNewStudentEmail("");
     }, [isOpen, initialAccessConfig]);
-
-    useEffect(() => {
-        if (!isOpen) return;
-        previouslyFocusedRef.current = document.activeElement instanceof HTMLElement
-            ? document.activeElement
-            : null;
-        const focusTimer = window.setTimeout(() => closeButtonRef.current?.focus(), 0);
-
-        const handleKeyDown = (event: KeyboardEvent) => {
-            if (event.key === 'Escape') {
-                event.preventDefault();
-                onCloseRef.current();
-                return;
-            }
-            if (event.key !== 'Tab') return;
-
-            const focusable = Array.from(dialogRef.current?.querySelectorAll<HTMLElement>(
-                'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
-            ) || []).filter(element => !element.hasAttribute('hidden'));
-            if (focusable.length === 0) {
-                event.preventDefault();
-                dialogRef.current?.focus();
-                return;
-            }
-
-            const first = focusable[0];
-            const last = focusable[focusable.length - 1];
-            if (event.shiftKey && document.activeElement === first) {
-                event.preventDefault();
-                last.focus();
-            } else if (!event.shiftKey && document.activeElement === last) {
-                event.preventDefault();
-                first.focus();
-            }
-        };
-
-        document.addEventListener('keydown', handleKeyDown);
-        return () => {
-            window.clearTimeout(focusTimer);
-            document.removeEventListener('keydown', handleKeyDown);
-            previouslyFocusedRef.current?.focus();
-        };
-    }, [isOpen]);
 
     const targetSummary = useMemo(() => summarizeDistributionTargets({
         selectedGroupIds: selectedGroups,
@@ -301,18 +252,25 @@ export default function DistributeModal({ isOpen, onClose, onSaveAndShare, onAut
 
     return (
         <div
+            className="distribute-dialog-backdrop"
             role="presentation"
             onMouseDown={(event) => {
                 if (event.target === event.currentTarget) onClose();
             }}
             style={{
-            position: 'fixed', inset: 0,
+            position: 'fixed',
+            top: 'var(--app-visual-viewport-offset-top)',
+            left: 'var(--app-visual-viewport-offset-left)',
+            width: 'var(--app-viewport-width, 100vw)',
+            height: 'var(--app-viewport-height, 100dvh)',
             background: 'rgba(0,0,0,0.5)',
             display: 'flex', alignItems: 'center', justifyContent: 'center',
-            zIndex: 1000
+            zIndex: 1000,
+            padding: 'max(0.5rem, var(--app-safe-area-top)) max(0.5rem, var(--app-safe-area-right)) max(0.5rem, var(--app-safe-area-bottom)) max(0.5rem, var(--app-safe-area-left))'
         }}>
             <div
                 ref={dialogRef}
+                className="balanced-dialog-panel distribute-dialog"
                 role="dialog"
                 aria-modal="true"
                 aria-labelledby={dialogTitleId}
@@ -320,8 +278,6 @@ export default function DistributeModal({ isOpen, onClose, onSaveAndShare, onAut
                 style={{
                 background: 'var(--surface)',
                 color: 'var(--foreground)',
-                width: '500px',
-                maxWidth: 'calc(100vw - 2rem)',
                 borderRadius: '8px',
                 display: 'flex', flexDirection: 'column',
                 border: '1px solid var(--border)',
@@ -330,7 +286,6 @@ export default function DistributeModal({ isOpen, onClose, onSaveAndShare, onAut
                 <header style={{ padding: '1.5rem', borderBottom: '1px solid var(--border)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                     <h2 id={dialogTitleId} style={{ fontSize: '1.25rem', fontWeight: 600 }}>시험 배포하기</h2>
                     <button
-                        ref={closeButtonRef}
                         type="button"
                         onClick={onClose}
                         aria-label="닫기"
@@ -348,7 +303,7 @@ export default function DistributeModal({ isOpen, onClose, onSaveAndShare, onAut
                     </button>
                 </header>
 
-                <div style={{ padding: '2rem' }}>
+                <div className="distribute-dialog-body">
                     {!shareUrl ? (
                         <>
                             {validationSummary && (
@@ -410,12 +365,12 @@ export default function DistributeModal({ isOpen, onClose, onSaveAndShare, onAut
 
                             <div style={{ marginBottom: '1.5rem' }}>
                                 <label style={{ display: 'block', marginBottom: '0.5rem', fontWeight: 600 }}>접근 권한 설정</label>
-                                <div style={{ display: 'flex', gap: '1rem' }}>
-                                    <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer' }}>
+                                <div className="distribute-access-options">
+                                    <label className="distribute-access-option">
                                         <input type="radio" name="access" checked={accessType === 'public'} onChange={() => setAccessType('public')} />
                                         전체 공개 (링크 공유)
                                     </label>
-                                    <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer' }}>
+                                    <label className="distribute-access-option">
                                         <input type="radio" name="access" checked={accessType === 'group'} onChange={() => setAccessType('group')} />
                                         특정 그룹만
                                     </label>
@@ -506,6 +461,7 @@ export default function DistributeModal({ isOpen, onClose, onSaveAndShare, onAut
                                             {groups.map(g => {
                                                 const isSelected = selectedGroups.includes(g.id);
                                                 const isAddingStudent = studentFormGroupId === g.id;
+                                                const memberCount = countDistributionGroupMembers(g, students);
                                                 return (
                                                     <div key={g.id} style={{ borderRadius: '8px', border: isSelected ? '1px solid rgba(99,102,241,0.35)' : '1px solid transparent', background: isSelected ? 'rgba(99,102,241,0.05)' : 'transparent', padding: '0.35rem 0.45rem' }}>
                                                         <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontSize: '0.9rem' }}>
@@ -518,7 +474,7 @@ export default function DistributeModal({ isOpen, onClose, onSaveAndShare, onAut
                                                                 <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                                                                     {formatRegionScopedLabel(g.name, g.region)}
                                                                 </span>
-                                                                <span style={{ fontSize: '0.72rem', color: 'var(--muted)', flexShrink: 0 }}>{g.count}명</span>
+                                                                <span style={{ fontSize: '0.72rem', color: 'var(--muted)', flexShrink: 0 }}>{memberCount}명</span>
                                                             </label>
                                                             <button
                                                                 type="button"
@@ -601,7 +557,7 @@ export default function DistributeModal({ isOpen, onClose, onSaveAndShare, onAut
 
                             <button
                                 onClick={handleShareClick}
-                                className="btn btn-primary"
+                                className="btn btn-primary distribute-dialog-primary-action"
                                 style={{ width: '100%', padding: '0.8rem' }}
                                 disabled={isSaving || (validationSummary ? !validationSummary.isPublishable : false)}
                             >
@@ -637,7 +593,7 @@ export default function DistributeModal({ isOpen, onClose, onSaveAndShare, onAut
                                 <QRCodeCanvas id="qr-code-canvas" value={shareUrl} size={200} level={"H"} includeMargin={true} />
                             </div>
 
-                            <div style={{ display: 'flex', gap: '0.5rem', justifyContent: 'center', marginBottom: '1.5rem' }}>
+                            <div className="distribute-share-actions">
                                 <button onClick={downloadQR} className="btn btn-secondary">QR 저장</button>
                                 <button onClick={copyShareLink} className="btn btn-primary">
                                     {copyStatus || "링크 복사"}
@@ -667,7 +623,7 @@ export default function DistributeModal({ isOpen, onClose, onSaveAndShare, onAut
                                         borderRadius: 'var(--radius-full)',
                                         border: '1px solid rgba(99,102,241,0.28)',
                                         background: 'rgba(99,102,241,0.07)',
-                                        transition: 'all 0.15s',
+                                        transition: 'border-color 0.15s, background-color 0.15s, color 0.15s, transform 0.15s',
                                     }}
                                 >
                                     결과 분석 보러 가기 →

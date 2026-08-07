@@ -46,9 +46,8 @@ export async function loadTeacherAttempts(examId?: string) {
         if (!examId?.trim()) return local;
         return { ...local, items: local.items.filter(attempt => attempt.examId === examId.trim()) };
     }
-    const cached = readLocalAttempts();
     return {
-        items: examId?.trim() ? cached.filter(attempt => attempt.examId === examId.trim()) : cached,
+        items: [],
         remoteLoaded: false,
         remoteSynced: false,
         remoteError: result.status === "unauthorized"
