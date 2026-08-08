@@ -92,8 +92,8 @@ describe("student session and cleanup optimization migration", () => {
         expect(boundary).toContain("public.omr_gc_attempt_sessions_v1(integer,integer)");
         expect(boundary).toContain("public.omr_requeue_dead_remote_asset_cleanup_v1(text,text,integer,text,text)");
         expect(boundary).toContain("'sessionCleanupOptimizationReady'");
-        expect(boundary).toContain("'version', '202608080009'");
-        expect(readinessClient).toContain('SUPABASE_READINESS_VERSION = "202608080009"');
+        expect(boundary).toContain("'version', '202608080010'");
+        expect(readinessClient).toContain('SUPABASE_READINESS_VERSION = "202608080010"');
         expect(readinessClient).toContain('"sessionCleanupOptimizationReady"');
         expect(deploymentReadiness).toContain("sessionCleanupOptimizationReady: \"세션·자산 정리 최적화\"");
         expect(rollback).toContain("'omr_gc_attempt_sessions_v1'");

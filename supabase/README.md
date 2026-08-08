@@ -79,7 +79,7 @@ catalogs, verify ENABLE + FORCE RLS, perform actual denied browser CRUD, and
 exercise the service-role workflows and Storage CRUD. The live-only fixture
 also proves an unrelated permissive bucket policy still works.
 
-The service-role-only readiness probe version `202608080009` is the runtime
+The service-role-only readiness probe version `202608080010` is the runtime
 release gate. It combines direct catalog grants with effective
 `has_*_privilege` checks (including column privileges and PostgreSQL 17
 `MAINTAIN`), requires zero public canonical policies, validates the exact
@@ -87,7 +87,7 @@ Phase C vNext mutation catalog/body digest and `effectiveWorkspacePlanEnforcemen
 denies retired/private mutation paths and direct service-role mutation of plan/asset
 state, and keeps the initial-operations load gate on its seeded exact identity and
 v2 student-session/teacher-asset paths. It also validates the exact
-41-table allowlist plus every table's ENABLE + FORCE RLS state, reruns the
+42-table allowlist plus every table's ENABLE + FORCE RLS state, reruns the
 four-count organization preflight, checks the exact purpose-scoped teacher RPC
 signatures, requires the exact 17 server-gateway signatures with no extra
 overload, forbids every legacy broad-RPC overload, and verifies the hosted
@@ -219,7 +219,7 @@ idempotent, but its preflight is intentionally fail-closed. Use this order:
 7. Deploy the matching server build and verify teacher/student server-action
    journeys before reopening writes.
 
-The profile covers all canonical 41 tables under `public.omr_*`. Supabase requires entities
+The profile covers all canonical 42 tables under `public.omr_*`. Supabase requires entities
 under `storage` to remain owned by `supabase_storage_admin`; see
 [Supabase platform permissions](https://supabase.com/docs/guides/platform/permissions).
 Still in the `postgres` transaction, the profile verifies that `postgres` can

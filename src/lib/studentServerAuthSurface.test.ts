@@ -45,19 +45,38 @@ describe("student server authentication surface", () => {
     it("uses only the organization-bound PBKDF2 credential row for student authentication", () => {
         const sessionAction = source("src/app/actions/studentSession.ts");
         const authAction = source("src/app/actions/studentAuth.ts");
+        const batchGateway = source("src/lib/studentCredentialBatchGateway.server.ts");
 
         expect(authAction).toContain("resolveAuthorizedTeacherSessionCookie");
+        expect(authAction).not.toContain("export async function loginStudentWithStartCode");
+        expect(authAction).not.toContain("verifyStudentCredentials");
         expect(sessionAction).toContain("verifyStudentCredentials");
         expect(sessionAction).toContain("organizationId: workspaceId");
         expect(sessionAction).toContain("studentProfileId: profile.id");
         expect(sessionAction).not.toContain("metadataWithStudentAccessCode");
         expect(sessionAction).not.toContain("readStudentAccessCodeRecord");
         expect(sessionAction).not.toContain("verifyStudentAccessCode");
-        expect(authAction).toContain("omr_rotate_student_start_credential_v1");
-        expect(authAction).toContain("hashStudentStartCode");
+        expect(batchGateway).toContain("omr_issue_student_start_code_batch_v1");
+        expect(authAction).not.toContain("omr_rotate_student_start_credential_v1");
+        expect(authAction).toContain("issueStudentCredentialBatchWithGateway");
         expect(authAction).toContain("canTeacherRoleWrite");
         expect(authAction.indexOf("canTeacherRoleWrite"))
             .toBeLessThan(authAction.indexOf("const client = adminClient()"));
+    });
+
+    it("displays only the server-issued code in the one-student compatibility flow", () => {
+        const users = source("src/app/teacher/users/page.tsx");
+        const issuanceStart = users.indexOf("const handleIssueStudentStartCode");
+        const issuanceEnd = users.indexOf("const handleCopyStudentStartCode", issuanceStart);
+        const issuance = users.slice(issuanceStart, issuanceEnd);
+
+        expect(issuance).toContain("studentCredentialRequestKeysRef.current");
+        expect(issuance).toContain("crypto.randomUUID()");
+        expect(issuance).toContain("await issueStudentStartCredential(selectedStudent.id, requestKey)");
+        expect(issuance).toContain('serverResult.status === "outcome_unknown"');
+        expect(issuance).toContain("serverResult.startCode");
+        expect(issuance).not.toContain("generateStartCode()");
+        expect(issuance).not.toMatch(/localStorage[\s\S]{0,120}requestKey|requestKey[\s\S]{0,120}localStorage/);
     });
 
     it("keeps the server exam action primary and limits fallback to device-local data", () => {

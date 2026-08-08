@@ -149,7 +149,8 @@ begin
                'omr_plan_usage',
                'omr_plan_usage_reservations',
                'omr_student_start_credentials',
-               'omr_student_credential_epochs'
+               'omr_student_credential_epochs',
+               'omr_student_credential_batch_receipts'
            )
            and (
                not has_table_privilege('service_role', relation.oid, 'SELECT')
@@ -168,6 +169,9 @@ begin
         'SELECT,INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER,MAINTAIN'
     ) or has_table_privilege(
         'service_role', 'public.omr_feedback_mutations',
+        'SELECT,INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER,MAINTAIN'
+    ) or has_table_privilege(
+        'service_role', 'public.omr_student_credential_batch_receipts',
         'SELECT,INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER,MAINTAIN'
     ) then
         raise exception 'service_role bypassed an RPC-only OMR state table';
@@ -320,6 +324,7 @@ begin
                ,'omr_revoke_student_session_on_status_v2()'
                ,'omr_revoke_withdrawn_student_credential_v8_snapshot()'
                ,'omr_revoke_student_session_on_delete_v2()'
+               ,'omr_rotate_student_start_credential_v1(text, text, bigint, text, text, text, text)'
            )
     ) then
         raise exception 'service_role lost a public function execute privilege';
@@ -3960,7 +3965,7 @@ declare
     readiness jsonb;
 begin
     readiness := public.omr_service_readiness_v1();
-    if readiness->>'version' <> '202608080009'
+    if readiness->>'version' <> '202608080010'
         or readiness->>'ready' <> 'true'
         or exists (
             select 1
@@ -8423,6 +8428,429 @@ $phase_c_pilot_replacement$;
 reset role;
 rollback;
 
+-- Task 6 atomic credential batches: exact 1/100 boundaries, semantic replay
+-- after response loss, conflict isolation, all-or-none rejection, and redaction.
+begin;
+delete from public.omr_teacher_accounts where id = 'teacher_6666666666666666';
+delete from public.omr_organizations where id in ('teacher_task6batch', 'teacher_task6foreign');
+insert into public.omr_organizations (id, name, plan, metadata) values
+    ('teacher_task6batch', 'Task 6 Batch School', 'free', '{}'::jsonb),
+    ('teacher_task6foreign', 'Task 6 Foreign School', 'free', '{}'::jsonb);
+insert into public.omr_teacher_accounts (
+    id, email, display_name, password_hash, status, email_verified_at, session_generation
+) values (
+    'teacher_6666666666666666', 'task6-batch@example.test', 'Task 6 Teacher',
+    'pbkdf2-sha256:120000:' || repeat('6', 32) || ':' || repeat('6', 64),
+    'active', pg_catalog.now(), 7
+);
+insert into public.omr_organization_members (
+    organization_id, user_id, email, display_name, role, status
+) values (
+    'teacher_task6batch', 'teacher_task6batch', 'task6-batch@example.test',
+    'Task 6 Teacher', 'owner', 'active'
+);
+insert into public.omr_teacher_profiles (organization_id, user_id, display_name, status)
+values ('teacher_task6batch', 'teacher_task6batch', 'Task 6 Teacher', 'active');
+insert into public.omr_student_profiles (
+    id, organization_id, display_name, external_id, status, metadata
+)
+select 'task6-student-' || pg_catalog.lpad(number::text, 3, '0'),
+       'teacher_task6batch', 'Task 6 Student ' || number,
+       'TASK6-' || pg_catalog.lpad(number::text, 3, '0'),
+       case when number = 100 then 'invited' when number = 102 then 'withdrawn' else 'active' end,
+       '{}'::jsonb
+  from pg_catalog.generate_series(1, 102) number;
+insert into public.omr_student_profiles (
+    id, organization_id, display_name, external_id, status, metadata
+) values (
+    'task6-foreign', 'teacher_task6foreign', 'Task 6 Foreign', 'TASK6-F', 'active', '{}'::jsonb
+);
+commit;
+
+set role service_role;
+do $task6_batch_behavior$
+declare
+    v_hash_a text := 'pbkdf2-sha256:120000:' || repeat('1', 32) || ':' || repeat('a', 64);
+    v_hash_b text := 'pbkdf2-sha256:120000:' || repeat('2', 32) || ':' || repeat('b', 64);
+    v_items jsonb;
+    v_result jsonb;
+begin
+    v_result := public.omr_issue_student_start_code_batch_v1(
+        'legacy_account', 'teacher_6666666666666666', 7,
+        'teacher_task6batch', 'teacher_task6batch', '[]'::jsonb,
+        'batch_' || repeat('0', 32)
+    );
+    if v_result <> '{"status":"invalid_request"}'::jsonb then
+        raise exception 'empty Task 6 batch was accepted: %', v_result;
+    end if;
+
+    select pg_catalog.jsonb_agg(pg_catalog.jsonb_build_object(
+               'studentId', 'task6-student-' || pg_catalog.lpad(number::text, 3, '0'),
+               'verifier', v_hash_a
+           ) order by number)
+      into v_items from pg_catalog.generate_series(1, 101) number;
+    v_result := public.omr_issue_student_start_code_batch_v1(
+        'legacy_account', 'teacher_6666666666666666', 7,
+        'teacher_task6batch', 'teacher_task6batch', v_items,
+        'batch_' || repeat('1', 32)
+    );
+    if v_result <> '{"status":"capacity_exceeded"}'::jsonb then
+        raise exception '101-student Task 6 batch was accepted: %', v_result;
+    end if;
+
+    v_result := public.omr_issue_student_start_code_batch_v1(
+        'legacy_account', 'teacher_6666666666666666', 7,
+        'teacher_task6batch', 'teacher_task6batch',
+        pg_catalog.jsonb_build_array(
+            pg_catalog.jsonb_build_object('studentId', 'task6-student-101', 'verifier', v_hash_a, 'extra', true)
+        ), 'batch_' || repeat('2', 32)
+    );
+    if v_result <> '{"status":"invalid_request"}'::jsonb then
+        raise exception 'extra-key Task 6 item was accepted: %', v_result;
+    end if;
+
+    v_result := public.omr_issue_student_start_code_batch_v1(
+        'legacy_account', 'teacher_6666666666666666', 6,
+        'teacher_task6batch', 'teacher_task6batch',
+        pg_catalog.jsonb_build_array(pg_catalog.jsonb_build_object(
+            'studentId', 'task6-student-101', 'verifier', v_hash_a
+        )), 'batch_' || repeat('3', 32)
+    );
+    if v_result <> '{"status":"unauthorized"}'::jsonb then
+        raise exception 'stale Task 6 teacher session was accepted: %', v_result;
+    end if;
+
+    for v_items in
+        select candidate.items from (values
+            (pg_catalog.jsonb_build_array(
+                pg_catalog.jsonb_build_object('studentId', 'task6-student-101', 'verifier', v_hash_a),
+                pg_catalog.jsonb_build_object('studentId', 'task6-student-101', 'verifier', v_hash_b)
+            )),
+            (pg_catalog.jsonb_build_array(
+                pg_catalog.jsonb_build_object('studentId', 'task6-student-101', 'verifier', 'malformed')
+            ))
+        ) candidate(items)
+    loop
+        v_result := public.omr_issue_student_start_code_batch_v1(
+            'legacy_account', 'teacher_6666666666666666', 7,
+            'teacher_task6batch', 'teacher_task6batch', v_items,
+            'batch_' || repeat('4', 32)
+        );
+        if v_result <> '{"status":"invalid_request"}'::jsonb then
+            raise exception 'duplicate or malformed Task 6 batch was accepted: %', v_result;
+        end if;
+    end loop;
+    for v_items in
+        select pg_catalog.jsonb_build_array(pg_catalog.jsonb_build_object(
+            'studentId', candidate.student_id, 'verifier', v_hash_a
+        )) from (values ('task6-foreign'), ('task6-student-102')) candidate(student_id)
+    loop
+        v_result := public.omr_issue_student_start_code_batch_v1(
+            'legacy_account', 'teacher_6666666666666666', 7,
+            'teacher_task6batch', 'teacher_task6batch', v_items,
+            'batch_' || repeat('5', 32)
+        );
+        if v_result <> '{"status":"student_unavailable"}'::jsonb then
+            raise exception 'foreign or inactive Task 6 student was accepted: %', v_result;
+        end if;
+    end loop;
+
+    v_result := public.omr_issue_student_start_code_batch_v1(
+        'legacy_account', 'teacher_6666666666666666', 7,
+        'teacher_task6batch', 'teacher_task6batch',
+        pg_catalog.jsonb_build_array(pg_catalog.jsonb_build_object(
+            'studentId', 'task6-student-101', 'verifier', v_hash_a
+        )), 'batch_' || repeat('A', 32)
+    );
+    if v_result ->> 'status' <> 'issued'
+       or v_result ->> 'count' <> '1'
+       or v_result -> 'studentIds' <> '["task6-student-101"]'::jsonb then
+        raise exception 'one-student Task 6 issue failed: %', v_result;
+    end if;
+
+    -- Simulate an HTTP response being discarded: a retry regenerates verifier
+    -- material, but the stable semantic request key/identity/IDs replays once.
+    v_result := public.omr_issue_student_start_code_batch_v1(
+        'legacy_account', 'teacher_6666666666666666', 7,
+        'teacher_task6batch', 'teacher_task6batch',
+        pg_catalog.jsonb_build_array(pg_catalog.jsonb_build_object(
+            'studentId', 'task6-student-101', 'verifier', v_hash_b
+        )), 'batch_' || repeat('A', 32)
+    );
+    if v_result ->> 'status' <> 'already_applied'
+       or v_result ->> 'count' <> '1'
+       or v_result -> 'studentIds' <> '["task6-student-101"]'::jsonb
+       or v_result ? 'verifier' or v_result ? 'startCode' then
+        raise exception 'response-loss Task 6 replay was unsafe: %', v_result;
+    end if;
+
+    v_result := public.omr_issue_student_start_code_batch_v1(
+        'legacy_account', 'teacher_6666666666666666', 7,
+        'teacher_task6batch', 'teacher_task6batch',
+        pg_catalog.jsonb_build_array(pg_catalog.jsonb_build_object(
+            'studentId', 'task6-student-100', 'verifier', v_hash_b
+        )), 'batch_' || repeat('A', 32)
+    );
+    if v_result <> '{"status":"idempotency_conflict"}'::jsonb then
+        raise exception 'changed-ID Task 6 key did not conflict: %', v_result;
+    end if;
+
+    v_result := public.omr_issue_student_start_code_batch_v1(
+        'legacy_account', 'teacher_6666666666666666', 7,
+        'teacher_task6batch', 'teacher_task6batch',
+        pg_catalog.jsonb_build_array(
+            pg_catalog.jsonb_build_object('studentId', 'task6-student-099', 'verifier', v_hash_a),
+            pg_catalog.jsonb_build_object('studentId', 'missing-task6-student', 'verifier', v_hash_b)
+        ), 'batch_' || repeat('B', 32)
+    );
+    if v_result <> '{"status":"student_unavailable"}'::jsonb then
+        raise exception 'mixed-invalid Task 6 batch was not rejected: %', v_result;
+    end if;
+
+    select pg_catalog.jsonb_agg(pg_catalog.jsonb_build_object(
+               'studentId', 'task6-student-' || pg_catalog.lpad(number::text, 3, '0'),
+               'verifier', 'pbkdf2-sha256:120000:' || pg_catalog.lpad(pg_catalog.to_hex(number), 32, '0') || ':' || repeat('c', 64)
+           ) order by number)
+      into v_items from pg_catalog.generate_series(1, 100) number;
+    v_result := public.omr_issue_student_start_code_batch_v1(
+        'legacy_account', 'teacher_6666666666666666', 7,
+        'teacher_task6batch', 'teacher_task6batch', v_items,
+        'batch_' || repeat('C', 32)
+    );
+    if v_result ->> 'status' <> 'issued'
+       or v_result ->> 'count' <> '100'
+       or pg_catalog.jsonb_array_length(v_result -> 'studentIds') <> 100 then
+        raise exception '100-student Task 6 issue failed: %', v_result;
+    end if;
+end
+$task6_batch_behavior$;
+reset role;
+
+do $task6_batch_state$
+declare
+    v_metadata text;
+begin
+    if (select pg_catalog.count(*) from public.omr_student_start_credentials
+         where organization_id = 'teacher_task6batch') <> 101
+       or exists (
+           select 1
+             from pg_catalog.generate_series(1, 100) number
+             join public.omr_student_start_credentials credential
+               on credential.organization_id = 'teacher_task6batch'
+              and credential.student_profile_id =
+                  'task6-student-' || pg_catalog.lpad(number::text, 3, '0')
+            where credential.start_code_hash is distinct from
+                  'pbkdf2-sha256:120000:' || pg_catalog.lpad(pg_catalog.to_hex(number), 32, '0') || ':' || repeat('c', 64)
+       )
+       or (select credential_generation from public.omr_student_profiles
+            where organization_id = 'teacher_task6batch' and id = 'task6-student-101') <> 1
+       or (select pg_catalog.count(*) from public.omr_student_credential_batch_receipts
+            where organization_id = 'teacher_task6batch') <> 2
+       or (select pg_catalog.count(*) from public.omr_audit_logs
+            where organization_id = 'teacher_task6batch'
+              and action = 'student_start_code_batch_issued') <> 2 then
+        raise exception 'Task 6 replay/rejection mutated counts or generation';
+    end if;
+    select pg_catalog.string_agg(metadata::text, '') into v_metadata
+      from public.omr_audit_logs
+     where organization_id = 'teacher_task6batch'
+       and action = 'student_start_code_batch_issued';
+    if v_metadata ~ '(task6-student|pbkdf2|batch_)'
+       or exists (
+           select 1 from public.omr_student_credential_batch_receipts
+            where organization_id = 'teacher_task6batch'
+              and (idempotency_key_hash !~ '^[a-f0-9]{64}$'
+                   or request_fingerprint !~ '^[a-f0-9]{64}$'
+                   or state <> 'applied')
+       ) then
+        raise exception 'Task 6 receipt or audit leaked request material';
+    end if;
+end
+$task6_batch_state$;
+
+insert into public.omr_student_profiles (
+    id, organization_id, display_name, external_id, status, metadata
+) values (
+    'task6-student-103', 'teacher_task6batch', 'Task 6 Concurrency',
+    'TASK6-103', 'active', '{}'::jsonb
+);
+do $task6_batch_concurrency$
+declare
+    v_items jsonb := pg_catalog.jsonb_build_array(pg_catalog.jsonb_build_object(
+        'studentId', 'task6-student-103',
+        'verifier', 'pbkdf2-sha256:120000:' || repeat('7', 32) || ':' || repeat('d', 64)
+    ));
+    v_query text;
+    v_left text;
+    v_right text;
+    v_sent integer;
+    v_generation integer;
+begin
+    perform extensions.dblink_connect(
+        'task6-batch-left',
+        'host=127.0.0.1 port=' || current_setting('port') || ' dbname=' || current_database()
+            || ' user=postgres password=omr-live-test-password'
+    );
+    perform extensions.dblink_connect(
+        'task6-batch-right',
+        'host=127.0.0.1 port=' || current_setting('port') || ' dbname=' || current_database()
+            || ' user=postgres password=omr-live-test-password'
+    );
+    v_query := pg_catalog.format(
+        'select public.omr_issue_student_start_code_batch_v1(%L,%L,7,%L,%L,%L::jsonb,%L)::text',
+        'legacy_account', 'teacher_6666666666666666', 'teacher_task6batch',
+        'teacher_task6batch', v_items::text, 'batch_' || repeat('D', 32)
+    );
+    v_sent := extensions.dblink_send_query('task6-batch-left', v_query);
+    v_sent := extensions.dblink_send_query('task6-batch-right', v_query);
+    select result into v_left from extensions.dblink_get_result('task6-batch-left') result(result text);
+    select result into v_right from extensions.dblink_get_result('task6-batch-right') result(result text);
+    if (select pg_catalog.count(*) from pg_catalog.unnest(array[
+            v_left::jsonb ->> 'status', v_right::jsonb ->> 'status'
+        ]) status where status = 'issued') <> 1
+       or (select pg_catalog.count(*) from pg_catalog.unnest(array[
+            v_left::jsonb ->> 'status', v_right::jsonb ->> 'status'
+        ]) status where status = 'already_applied') <> 1 then
+        raise exception 'same-key Task 6 race was not exactly-once: %, %', v_left, v_right;
+    end if;
+
+    perform extensions.dblink_disconnect('task6-batch-left');
+    perform extensions.dblink_disconnect('task6-batch-right');
+    perform extensions.dblink_connect(
+        'task6-batch-left-distinct',
+        'host=127.0.0.1 port=' || current_setting('port') || ' dbname=' || current_database()
+            || ' user=postgres password=omr-live-test-password'
+    );
+    perform extensions.dblink_connect(
+        'task6-batch-right-distinct',
+        'host=127.0.0.1 port=' || current_setting('port') || ' dbname=' || current_database()
+            || ' user=postgres password=omr-live-test-password'
+    );
+
+    v_query := pg_catalog.format(
+        'select public.omr_issue_student_start_code_batch_v1(%L,%L,7,%L,%L,%L::jsonb,%L)::text',
+        'legacy_account', 'teacher_6666666666666666', 'teacher_task6batch',
+        'teacher_task6batch', v_items::text, 'batch_' || repeat('E', 32)
+    );
+    v_sent := extensions.dblink_send_query('task6-batch-left-distinct', v_query);
+    v_query := pg_catalog.format(
+        'select public.omr_issue_student_start_code_batch_v1(%L,%L,7,%L,%L,%L::jsonb,%L)::text',
+        'legacy_account', 'teacher_6666666666666666', 'teacher_task6batch',
+        'teacher_task6batch', v_items::text, 'batch_' || repeat('F', 32)
+    );
+    v_sent := extensions.dblink_send_query('task6-batch-right-distinct', v_query);
+    select result into v_left from extensions.dblink_get_result('task6-batch-left-distinct') result(result text);
+    select result into v_right from extensions.dblink_get_result('task6-batch-right-distinct') result(result text);
+    perform extensions.dblink_disconnect('task6-batch-left-distinct');
+    perform extensions.dblink_disconnect('task6-batch-right-distinct');
+    select credential_generation into v_generation
+      from public.omr_student_start_credentials
+     where organization_id = 'teacher_task6batch' and student_profile_id = 'task6-student-103';
+    if v_left::jsonb ->> 'status' <> 'issued'
+       or v_right::jsonb ->> 'status' <> 'issued'
+       or v_generation <> 3 then
+        raise exception 'distinct-key overlapping Task 6 race lost a rotation: %, %, %',
+            v_left, v_right, v_generation;
+    end if;
+end
+$task6_batch_concurrency$;
+
+create function public.omr_test_fail_task6_audit_v1()
+returns trigger language plpgsql set search_path = '' as $$
+begin
+    if new.action = 'student_start_code_batch_issued'
+       and new.organization_id = 'teacher_task6batch' then
+        raise exception 'forced Task 6 audit rollback';
+    end if;
+    return new;
+end
+$$;
+create trigger omr_test_fail_task6_audit
+before insert on public.omr_audit_logs
+for each row execute function public.omr_test_fail_task6_audit_v1();
+set role service_role;
+do $task6_audit_rollback$
+declare
+    v_hash text := 'pbkdf2-sha256:120000:' || repeat('8', 32) || ':' || repeat('e', 64);
+begin
+    begin
+        perform public.omr_issue_student_start_code_batch_v1(
+            'legacy_account', 'teacher_6666666666666666', 7,
+            'teacher_task6batch', 'teacher_task6batch',
+            pg_catalog.jsonb_build_array(pg_catalog.jsonb_build_object(
+                'studentId', 'task6-student-103', 'verifier', v_hash
+            )), 'batch_' || repeat('H', 32)
+        );
+        raise exception 'forced Task 6 audit failure unexpectedly committed';
+    exception when raise_exception then
+        if sqlerrm <> 'forced Task 6 audit rollback' then raise; end if;
+    end;
+end
+$task6_audit_rollback$;
+reset role;
+drop trigger omr_test_fail_task6_audit on public.omr_audit_logs;
+drop function public.omr_test_fail_task6_audit_v1();
+do $$
+begin
+    if (select credential_generation from public.omr_student_start_credentials
+         where organization_id = 'teacher_task6batch' and student_profile_id = 'task6-student-103') <> 3
+       or exists (
+           select 1 from public.omr_student_credential_batch_receipts
+            where organization_id = 'teacher_task6batch'
+              and idempotency_key_hash = pg_catalog.encode(
+                  extensions.digest('batch_' || repeat('H', 32), 'sha256'), 'hex'
+              )
+       ) then
+        raise exception 'forced Task 6 audit failure leaked a partial mutation';
+    end if;
+end
+$$;
+update public.omr_student_credential_epochs
+   set credential_generation = 2147483646
+ where organization_id = 'teacher_task6batch' and student_profile_id = 'task6-student-001';
+update public.omr_student_profiles
+   set credential_generation = 2147483646
+ where organization_id = 'teacher_task6batch' and id = 'task6-student-001';
+update public.omr_student_start_credentials
+   set credential_generation = 2147483646
+ where organization_id = 'teacher_task6batch' and student_profile_id = 'task6-student-001';
+set role service_role;
+do $task6_generation_exhaustion$
+declare
+    v_hash text := 'pbkdf2-sha256:120000:' || repeat('9', 32) || ':' || repeat('f', 64);
+begin
+    begin
+        perform public.omr_issue_student_start_code_batch_v1(
+            'legacy_account', 'teacher_6666666666666666', 7,
+            'teacher_task6batch', 'teacher_task6batch',
+            pg_catalog.jsonb_build_array(
+                pg_catalog.jsonb_build_object('studentId', 'task6-student-001', 'verifier', v_hash),
+                pg_catalog.jsonb_build_object('studentId', 'task6-student-002', 'verifier', v_hash)
+            ), 'batch_' || repeat('J', 32)
+        );
+        raise exception 'Task 6 generation exhaustion unexpectedly committed';
+    exception when raise_exception then
+        if sqlerrm <> 'student credential generation exhausted' then raise; end if;
+    end;
+end
+$task6_generation_exhaustion$;
+reset role;
+do $$
+begin
+    if (select credential_generation from public.omr_student_start_credentials
+         where organization_id = 'teacher_task6batch' and student_profile_id = 'task6-student-002') <> 1
+       or exists (
+           select 1 from public.omr_student_credential_batch_receipts
+            where organization_id = 'teacher_task6batch'
+              and idempotency_key_hash = pg_catalog.encode(
+                  extensions.digest('batch_' || repeat('J', 32), 'sha256'), 'hex'
+              )
+       ) then
+        raise exception 'Task 6 exhaustion leaked a partial batch mutation';
+    end if;
+end
+$$;
+
 -- Student session generations bind every registered cookie to a non-reused
 -- credential incarnation. Rotation, withdrawal, deterministic profile reuse,
 -- dependency ACLs, and concurrent rotation/deactivation all fail closed.
@@ -8472,12 +8900,14 @@ declare
     v_before jsonb;
     v_after jsonb;
 begin
-    v_result := public.omr_rotate_student_start_credential_v1(
+    v_result := public.omr_issue_student_start_code_batch_v1(
         'legacy_account', 'teacher_5555555555555555', 6,
-        'teacher_task5gen', 'teacher_task5gen', 'task5-student', v_hash_a
+        'teacher_task5gen', 'teacher_task5gen',
+        pg_catalog.jsonb_build_array(pg_catalog.jsonb_build_object('studentId', 'task5-student', 'verifier', v_hash_a)),
+        'batch_' || repeat('A', 32)
     );
-    if v_result ->> 'status' <> 'rotated'
-       or v_result ->> 'studentId' <> 'task5-student'
+    if v_result ->> 'status' <> 'issued'
+       or v_result -> 'studentIds' <> '["task5-student"]'::jsonb
        or (select pg_catalog.count(*) from pg_catalog.jsonb_object_keys(v_result)) <> 3 then
         raise exception 'initial student credential rotation failed: %', v_result;
     end if;
@@ -8543,9 +8973,11 @@ begin
                    from public.omr_student_start_credentials credential
                   where credential.organization_id = 'teacher_task5gen'
                     and credential.student_profile_id = 'task5-student');
-    v_result := public.omr_rotate_student_start_credential_v1(
+    v_result := public.omr_issue_student_start_code_batch_v1(
         'legacy_account', 'teacher_5555555555555555', 6,
-        'teacher_task5gen', 'wrong-actor', 'task5-student', v_hash_b
+        'teacher_task5gen', 'wrong-actor',
+        pg_catalog.jsonb_build_array(pg_catalog.jsonb_build_object('studentId', 'task5-student', 'verifier', v_hash_b)),
+        'batch_' || repeat('B', 32)
     );
     v_after := (select pg_catalog.to_jsonb(credential)
                   from public.omr_student_start_credentials credential
@@ -8556,9 +8988,11 @@ begin
     end if;
 
     begin
-        perform public.omr_rotate_student_start_credential_v1(
+        perform public.omr_issue_student_start_code_batch_v1(
             'legacy_account', 'teacher_5555555555555555', 6,
-            'teacher_task5gen', 'teacher_task5gen', 'task5-student', v_hash_b
+            'teacher_task5gen', 'teacher_task5gen',
+            pg_catalog.jsonb_build_array(pg_catalog.jsonb_build_object('studentId', 'task5-student', 'verifier', v_hash_b)),
+            'batch_' || repeat('C', 32)
         );
         raise exception 'force student credential rollback' using errcode = 'P5001';
     exception when sqlstate 'P5001' then null;
@@ -8571,16 +9005,18 @@ begin
         raise exception 'rolled-back student rotation changed hash or incarnation';
     end if;
 
-    v_result := public.omr_rotate_student_start_credential_v1(
+    v_result := public.omr_issue_student_start_code_batch_v1(
         'legacy_account', 'teacher_5555555555555555', 6,
-        'teacher_task5gen', 'teacher_task5gen', 'task5-student', v_hash_b
+        'teacher_task5gen', 'teacher_task5gen',
+        pg_catalog.jsonb_build_array(pg_catalog.jsonb_build_object('studentId', 'task5-student', 'verifier', v_hash_b)),
+        'batch_' || repeat('D', 32)
     );
     select credential.account_id, credential.credential_generation
       into v_current_account, v_current_generation
       from public.omr_student_start_credentials credential
      where credential.organization_id = 'teacher_task5gen'
        and credential.student_profile_id = 'task5-student';
-    if v_result ->> 'status' <> 'rotated'
+    if v_result ->> 'status' <> 'issued'
        or v_current_account = v_old_account
        or v_current_generation <> v_old_generation + 1
        or public.omr_validate_student_session_v1(
@@ -8606,16 +9042,18 @@ begin
     update public.omr_student_profiles
        set status = 'active'
      where organization_id = 'teacher_task5gen' and id = 'task5-student';
-    v_result := public.omr_rotate_student_start_credential_v1(
+    v_result := public.omr_issue_student_start_code_batch_v1(
         'legacy_account', 'teacher_5555555555555555', 6,
-        'teacher_task5gen', 'teacher_task5gen', 'task5-student', v_hash_c
+        'teacher_task5gen', 'teacher_task5gen',
+        pg_catalog.jsonb_build_array(pg_catalog.jsonb_build_object('studentId', 'task5-student', 'verifier', v_hash_c)),
+        'batch_' || repeat('E', 32)
     );
     select credential.account_id, credential.credential_generation
       into v_current_account, v_current_generation
       from public.omr_student_start_credentials credential
      where credential.organization_id = 'teacher_task5gen'
        and credential.student_profile_id = 'task5-student';
-    if v_result ->> 'status' <> 'rotated'
+    if v_result ->> 'status' <> 'issued'
        or v_current_generation <= v_old_generation
        or v_current_account = v_old_account
        or public.omr_validate_student_session_v1(
@@ -8637,16 +9075,18 @@ begin
     );
     v_old_account := v_current_account;
     v_old_generation := v_current_generation;
-    v_result := public.omr_rotate_student_start_credential_v1(
+    v_result := public.omr_issue_student_start_code_batch_v1(
         'legacy_account', 'teacher_5555555555555555', 6,
-        'teacher_task5gen', 'teacher_task5gen', 'task5-student', v_hash_d
+        'teacher_task5gen', 'teacher_task5gen',
+        pg_catalog.jsonb_build_array(pg_catalog.jsonb_build_object('studentId', 'task5-student', 'verifier', v_hash_d)),
+        'batch_' || repeat('F', 32)
     );
     select credential.account_id, credential.credential_generation
       into v_current_account, v_current_generation
       from public.omr_student_start_credentials credential
      where credential.organization_id = 'teacher_task5gen'
        and credential.student_profile_id = 'task5-student';
-    if v_result ->> 'status' <> 'rotated'
+    if v_result ->> 'status' <> 'issued'
        or v_current_generation <= v_old_generation
        or v_current_account = v_old_account
        or public.omr_validate_student_session_v1(
@@ -8698,13 +9138,16 @@ begin
     );
     v_sent := extensions.dblink_send_query(
         'task5-student-rotate',
-        'select public.omr_rotate_student_start_credential_v1('
+        'select public.omr_issue_student_start_code_batch_v1('
             || quote_literal('legacy_account') || ','
             || quote_literal('teacher_5555555555555555') || ',6,'
             || quote_literal('teacher_task5gen') || ','
             || quote_literal('teacher_task5gen') || ','
-            || quote_literal('task5-student') || ','
-            || quote_literal('pbkdf2-sha256:120000:' || repeat('5', 32) || ':' || repeat('e', 64))
+            || quote_literal(pg_catalog.jsonb_build_array(pg_catalog.jsonb_build_object(
+                'studentId', 'task5-student',
+                'verifier', 'pbkdf2-sha256:120000:' || repeat('5', 32) || ':' || repeat('e', 64)
+            ))::text) || '::jsonb,'
+            || quote_literal('batch_' || repeat('G', 32))
             || ')::text'
     );
     v_sent := extensions.dblink_send_query(
@@ -8719,7 +9162,7 @@ begin
     perform extensions.dblink_disconnect('task5-student-rotate');
     perform extensions.dblink_disconnect('task5-student-withdraw');
     if v_withdraw <> 'withdrawn'
-       or v_rotate::jsonb ->> 'status' not in ('rotated', 'student_unavailable')
+       or v_rotate::jsonb ->> 'status' not in ('issued', 'student_unavailable')
        or exists (
            select 1 from public.omr_student_start_credentials
             where organization_id = 'teacher_task5gen' and student_profile_id = 'task5-student'

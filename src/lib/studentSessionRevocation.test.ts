@@ -277,7 +277,10 @@ describe("student session generation revocation", () => {
         expect(submitExport).toContain("resolveAuthorizedStudentSessionCookie");
         expect(submitExport).toContain("claims.organizationId !== session.organizationId");
         expect(source("src/app/actions/studentAuth.ts")).toContain(
-            'rpc("omr_rotate_student_start_credential_v1"',
+            "issueStudentCredentialBatchWithGateway",
+        );
+        expect(source("src/app/actions/studentAuth.ts")).not.toContain(
+            "omr_rotate_student_start_credential_v1",
         );
         expect(source("src/app/actions/studentAuth.ts")).not.toContain(
             '.from("omr_student_start_credentials").upsert',

@@ -150,6 +150,7 @@ revoke all on table public.omr_teacher_notification_states from public, anon, au
 revoke all on table public.omr_operational_job_status from public, anon, authenticated, service_role;
 revoke all on table public.omr_pilot_plan_grants from public, anon, authenticated, service_role;
 revoke all on table public.omr_student_credential_epochs from public, anon, authenticated, service_role;
+revoke all on table public.omr_student_credential_batch_receipts from public, anon, authenticated, service_role;
 revoke all on table public.omr_student_start_credentials from service_role;
 grant select on table public.omr_student_start_credentials to service_role;
 revoke all on sequence public.omr_operational_job_run_sequence from public, anon, authenticated, service_role;
@@ -752,6 +753,9 @@ grant execute on function public.omr_requeue_dead_remote_asset_cleanup_v1(text,t
 alter table if exists public.omr_student_credential_epochs enable row level security;
 alter table if exists public.omr_student_credential_epochs force row level security;
 revoke all on table public.omr_student_credential_epochs from public, anon, authenticated, service_role;
+alter table if exists public.omr_student_credential_batch_receipts enable row level security;
+alter table if exists public.omr_student_credential_batch_receipts force row level security;
+revoke all on table public.omr_student_credential_batch_receipts from public, anon, authenticated, service_role;
 revoke all on table public.omr_student_start_credentials from service_role;
 grant select on table public.omr_student_start_credentials to service_role;
 revoke all on function public.omr_guard_student_credential_mutation_v1() from public, anon, authenticated, service_role;
@@ -762,8 +766,9 @@ revoke all on function public.omr_revoke_student_session_on_delete_v2() from pub
 revoke all on function public.omr_revoke_withdrawn_student_credential_v8_snapshot() from public, anon, authenticated, service_role;
 revoke all on function public.omr_validate_student_session_v1(text,text,text,integer) from public, anon, authenticated;
 grant execute on function public.omr_validate_student_session_v1(text,text,text,integer) to service_role;
-revoke all on function public.omr_rotate_student_start_credential_v1(text,text,bigint,text,text,text,text) from public, anon, authenticated;
-grant execute on function public.omr_rotate_student_start_credential_v1(text,text,bigint,text,text,text,text) to service_role;
+revoke all on function public.omr_rotate_student_start_credential_v1(text,text,bigint,text,text,text,text) from public, anon, authenticated, service_role;
+revoke all on function public.omr_issue_student_start_code_batch_v1(text,text,bigint,text,text,jsonb,text) from public, anon, authenticated;
+grant execute on function public.omr_issue_student_start_code_batch_v1(text,text,bigint,text,text,jsonb,text) to service_role;
 revoke all on table public.omr_remote_assets from service_role;
 revoke all on table public.omr_remote_asset_upload_intents from service_role;
 revoke all on table public.omr_remote_asset_cleanup_queue from service_role;

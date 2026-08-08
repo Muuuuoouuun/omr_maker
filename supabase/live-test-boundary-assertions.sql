@@ -74,9 +74,26 @@ begin
        or pg_catalog.has_table_privilege('authenticated', 'public.omr_exams', 'SELECT') then
         raise exception 'production boundary left browser canonical access';
     end if;
+    if pg_catalog.has_table_privilege(
+           'service_role', 'public.omr_student_credential_batch_receipts',
+           'SELECT,INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER,MAINTAIN'
+       )
+       or not pg_catalog.has_function_privilege(
+           'service_role',
+           'public.omr_issue_student_start_code_batch_v1(text,text,bigint,text,text,jsonb,text)',
+           'EXECUTE'
+       )
+       or pg_catalog.has_function_privilege(
+           'service_role',
+           'public.omr_rotate_student_start_credential_v1(text,text,bigint,text,text,text,text)',
+           'EXECUTE'
+       ) then
+        raise exception 'production boundary weakened atomic student credential batch ACL';
+    end if;
     readiness := public.omr_service_readiness_v1();
-    if readiness ->> 'version' <> '202608080009'
+    if readiness ->> 'version' <> '202608080010'
        or readiness ->> 'ready' <> 'true'
+       or readiness ->> 'studentCredentialBatchReady' <> 'true'
        or readiness ->> 'teacherUploadCleanupQueueReady' <> 'true'
        or readiness ->> 'studentAttemptSessionsReady' <> 'true'
        or readiness ->> 'durableRateLimitsReady' <> 'true'
@@ -301,6 +318,84 @@ begin
     end if;
 end
 $$;
+
+insert into public.omr_organizations (id, name, plan, metadata)
+values ('teacher_task6ready', 'Task 6 Readiness', 'free', '{}'::jsonb)
+on conflict (id) do nothing;
+do $task6_readiness_drift$
+declare
+    v_original_function text;
+    v_readiness jsonb;
+begin
+    select pg_catalog.pg_get_functiondef(
+        'public.omr_issue_student_start_code_batch_v1(text,text,bigint,text,text,jsonb,text)'::pg_catalog.regprocedure
+    ) into v_original_function;
+
+    execute $drift$
+        create or replace function public.omr_issue_student_start_code_batch_v1(
+            p_session_authority text, p_account_id text, p_session_generation bigint,
+            p_organization_id text, p_actor_user_id text, p_items jsonb,
+            p_idempotency_key text
+        ) returns jsonb language sql security definer set search_path = ''
+          set statement_timeout = '10s' set lock_timeout = '2s'
+          as 'select ''{"status":"issued"}''::jsonb'
+    $drift$;
+    v_readiness := public.omr_service_readiness_v1();
+    if v_readiness ->> 'studentCredentialBatchReady' <> 'false'
+       or v_readiness ->> 'ready' <> 'false' then
+        raise exception 'Task 6 function body drift passed readiness: %', v_readiness;
+    end if;
+    execute v_original_function;
+
+    alter table public.omr_student_credential_batch_receipts add column raw_code text;
+    if public.omr_service_readiness_v1() ->> 'studentCredentialBatchReady' <> 'false' then
+        raise exception 'Task 6 secret-capable column drift passed readiness';
+    end if;
+    alter table public.omr_student_credential_batch_receipts drop column raw_code;
+
+    alter table public.omr_student_credential_batch_receipts
+        drop constraint omr_student_credential_batch_receipts_pkey;
+    if public.omr_service_readiness_v1() ->> 'studentCredentialBatchReady' <> 'false' then
+        raise exception 'Task 6 primary index drift passed readiness';
+    end if;
+    alter table public.omr_student_credential_batch_receipts
+        add constraint omr_student_credential_batch_receipts_pkey
+        primary key (organization_id, idempotency_key_hash);
+
+    grant select on public.omr_student_credential_batch_receipts to service_role;
+    if public.omr_service_readiness_v1() ->> 'studentCredentialBatchReady' <> 'false' then
+        raise exception 'Task 6 receipt ACL drift passed readiness';
+    end if;
+    revoke select on public.omr_student_credential_batch_receipts from service_role;
+
+    create function public.omr_issue_student_start_code_batch_v1(integer)
+    returns jsonb language sql as 'select ''{}''::jsonb';
+    revoke all on function public.omr_issue_student_start_code_batch_v1(integer)
+        from public, anon, authenticated, service_role;
+    if public.omr_service_readiness_v1() ->> 'studentCredentialBatchReady' <> 'false' then
+        raise exception 'Task 6 overload drift passed readiness';
+    end if;
+    drop function public.omr_issue_student_start_code_batch_v1(integer);
+
+    insert into public.omr_student_credential_batch_receipts (
+        organization_id, idempotency_key_hash, request_fingerprint, student_count, state
+    ) values (
+        'teacher_task6ready', repeat('a', 64), repeat('b', 64), 1, 'pending'
+    );
+    if public.omr_service_readiness_v1() ->> 'studentCredentialBatchReady' <> 'false' then
+        raise exception 'Task 6 committed pending receipt passed readiness';
+    end if;
+    delete from public.omr_student_credential_batch_receipts
+     where organization_id = 'teacher_task6ready';
+
+    v_readiness := public.omr_service_readiness_v1();
+    if v_readiness ->> 'studentCredentialBatchReady' <> 'true'
+       or v_readiness ->> 'ready' <> 'true' then
+        raise exception 'Task 6 readiness did not recover after exact restoration: %', v_readiness;
+    end if;
+end
+$task6_readiness_drift$;
+delete from public.omr_organizations where id = 'teacher_task6ready';
 
 -- The Task 5 readiness bit is an exact catalog and state attestation, not a
 -- name-only probe. Every induced drift must take the aggregate gateway and

@@ -1743,7 +1743,9 @@ describe("service UI surface", () => {
         expect(usersPage).toContain("student-login-id-value");
         expect(usersPage).toContain("student-login-start-code-value");
         expect(usersPage).toContain("handleIssueStudentStartCode");
-        expect(usersPage).toContain("generateStartCode");
+        expect(usersPage).toContain("serverResult.startCode");
+        expect(usersPage).toContain("studentCredentialRequestKeysRef");
+        expect(usersPage).not.toContain("generateStartCode");
         expect(usersPage).toContain("disambiguateRosterStudentId");
         expect(usersPage).toContain("uniqueStudentIdForRoster");
         expect(usersPage).toContain('"id", "name", "email"');

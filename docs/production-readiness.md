@@ -33,14 +33,14 @@ service-role RPC만 유지합니다. 기존 `production-rls.sql`은 직접 authe
 5. `schema.sql` → sorted `migrations` → `production-server-boundary.sql` →
    `live-test-assertions.sql` 순서를 실행하는 `npm run test:supabase:live`와
    CI의 blocking `supabase-live-contract` 작업을 통과시킵니다.
-   service-role 전용 readiness probe 버전은 `202608080009`이어야 합니다.
+   service-role 전용 readiness probe 버전은 `202608080010`이어야 합니다.
    `effectiveWorkspacePlanEnforcementReady=true`를 별도 필수 항목으로 확인하고,
    exact vNext RPC catalog/body digest, retired RPC 거부, private helper 실행 거부,
    plan/asset 상태 테이블의 service-role SELECT-only 경계를 drift/restore까지 증명합니다.
    초기 100명 운영 부하 게이트도 fixture가 발급한 exact `legacy_account` identity로
    학생 세션 open과 교사 asset prepare/authorize/finalize v2 경로를 실행해야 합니다.
    브라우저 schema/table/column/sequence/function 실효 권한과 PostgreSQL 17
-   `MAINTAIN` 차단, 정확한 canonical 41개 allowlist의 ENABLE+FORCE RLS, public
+   `MAINTAIN` 차단, 정확한 canonical 42개 allowlist의 ENABLE+FORCE RLS, public
    정책 0개, 조직 preflight 4개 count 0, 정확한 목적별 교사 RPC signature,
    추가 overload 없는 정확한 서버 gateway 17개 signature, 직접 업로드 intent와
    lease 기반 Storage 정리 outbox
@@ -115,7 +115,7 @@ upload, 초과분은 6 MiB chunk의 signed TUS로 브라우저에서 private Sto
 readiness가 주장하지 않으므로, 별도 스케줄러를 반드시 구성하고 `dead` 항목을 알림
 대상으로 삼아야 합니다.
 
-현재 public 앱 테이블은 canonical 41개 `public.omr_*` 테이블입니다. 별도의 Supabase 관리 관계인
+현재 public 앱 테이블은 canonical 42개 `public.omr_*` 테이블입니다. 별도의 Supabase 관리 관계인
 `storage.objects`와 `storage.buckets`는
 [Supabase 플랫폼 권한 문서](https://supabase.com/docs/guides/platform/permissions)의
 요구대로 `supabase_storage_admin` 소유권을 유지합니다. 프로필은 managed table ACL이나

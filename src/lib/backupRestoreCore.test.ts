@@ -50,17 +50,18 @@ function manifestFixture() {
 }
 
 describe("backup and restore manifest core", () => {
-    it("keeps the exact sorted 41-table backup allowlist aligned with baseline plus migrations", () => {
+    it("keeps the exact sorted 42-table backup allowlist aligned with baseline plus migrations", () => {
         const discoveredTables = loadRepositoryCanonicalTables({ rootDir: process.cwd() });
 
-        expect(discoveredTables).toHaveLength(41);
+        expect(discoveredTables).toHaveLength(42);
         expect(discoveredTables).toEqual([...discoveredTables].sort());
         expect(new Set(discoveredTables).size).toBe(discoveredTables.length);
-        expect(CANONICAL_BACKUP_TABLES).toHaveLength(41);
+        expect(CANONICAL_BACKUP_TABLES).toHaveLength(42);
         expect(CANONICAL_BACKUP_TABLES).toEqual(discoveredTables);
         expect(CANONICAL_BACKUP_TABLES).toContain("omr_operational_job_status");
         expect(CANONICAL_BACKUP_TABLES).toContain("omr_pilot_plan_grants");
         expect(CANONICAL_BACKUP_TABLES).toContain("omr_student_credential_epochs");
+        expect(CANONICAL_BACKUP_TABLES).toContain("omr_student_credential_batch_receipts");
     });
 
     it("discovers only public OMR CREATE TABLE DDL across deterministically sorted migrations", () => {
@@ -393,7 +394,7 @@ describe("backup and restore manifest core", () => {
             createdAt: manifest.createdAt,
             gitCommit: manifest.gitCommit,
             sourceProjectRefHash: SHA_A,
-            databaseTableCount: 41,
+            databaseTableCount: 42,
             databaseRowCount: 0,
             storageBucket: REMOTE_ASSET_BUCKET,
             storageObjectCount: 1,

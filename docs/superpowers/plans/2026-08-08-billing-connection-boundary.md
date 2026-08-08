@@ -198,7 +198,7 @@ anon/authenticated denial, service-role success, and absence of raw identifiers 
 - [ ] **Step 6: Update canonical manifests and readiness version**
 
 After operator grant and operational job-status tables, the four billing tables make the expected final
-canonical count 44. Set readiness version to `202608080012`, add `billingBoundaryReady`, and update every
+canonical count 46. Set readiness version to `202608080012`, add `billingBoundaryReady`, and update every
 exact-version consumer found by:
 
 ```sh

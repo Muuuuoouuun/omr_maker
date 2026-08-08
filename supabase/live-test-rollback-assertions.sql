@@ -89,6 +89,21 @@ begin
        or pg_catalog.has_table_privilege('service_role', 'public.omr_teacher_notification_states', 'SELECT,INSERT,UPDATE,DELETE') then
         raise exception 'rollback exposed RPC-only rate or mutation state';
     end if;
+    if pg_catalog.has_table_privilege('anon', 'public.omr_student_credential_batch_receipts', 'SELECT,INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER,MAINTAIN')
+       or pg_catalog.has_table_privilege('authenticated', 'public.omr_student_credential_batch_receipts', 'SELECT,INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER,MAINTAIN')
+       or pg_catalog.has_table_privilege('service_role', 'public.omr_student_credential_batch_receipts', 'SELECT,INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER,MAINTAIN')
+       or not pg_catalog.has_function_privilege(
+           'service_role',
+           'public.omr_issue_student_start_code_batch_v1(text,text,bigint,text,text,jsonb,text)',
+           'EXECUTE'
+       )
+       or pg_catalog.has_function_privilege(
+           'service_role',
+           'public.omr_rotate_student_start_credential_v1(text,text,bigint,text,text,text,text)',
+           'EXECUTE'
+       ) then
+        raise exception 'rollback weakened atomic student credential batch boundary';
+    end if;
     if pg_catalog.has_table_privilege('anon', 'public.omr_pilot_plan_grants', 'SELECT,INSERT,UPDATE,DELETE')
        or pg_catalog.has_table_privilege('authenticated', 'public.omr_pilot_plan_grants', 'SELECT,INSERT,UPDATE,DELETE')
        or pg_catalog.has_table_privilege('service_role', 'public.omr_pilot_plan_grants', 'SELECT,INSERT,UPDATE,DELETE') then
