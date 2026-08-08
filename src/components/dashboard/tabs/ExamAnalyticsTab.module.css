@@ -227,6 +227,54 @@
   font-weight: 750;
 }
 
+.horizontalTableRegion {
+  max-width: 100%;
+  min-width: 0;
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+  -webkit-overflow-scrolling: touch;
+}
+
+.horizontalTableRegion:focus-visible {
+  outline: 3px solid color-mix(in srgb, var(--primary) 45%, transparent);
+  outline-offset: 2px;
+}
+
+.scrollHint {
+  margin: 0 0 0.45rem;
+  color: var(--muted);
+  font-size: 0.74rem;
+  font-weight: 700;
+  line-height: 1.45;
+}
+
+.sortButton {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 1rem;
+  color: inherit;
+  border: 0;
+  background: transparent;
+  font: inherit;
+  font-weight: 800;
+  text-align: left;
+  cursor: pointer;
+  transition: color 0.16s ease, background-color 0.16s ease;
+}
+
+.sortButton:hover {
+  color: var(--primary);
+  background: color-mix(in srgb, var(--primary) 5%, transparent);
+}
+
+.sortButton:focus-visible {
+  color: var(--primary);
+  outline: 3px solid color-mix(in srgb, var(--primary) 45%, transparent);
+  outline-offset: -3px;
+}
+
 .emptyOption {
   padding: 0.9rem;
   color: var(--muted);
@@ -1377,4 +1425,10 @@
 
 :global(html[data-motion="off"]) .reportAction {
   transition: none;
+}
+
+@media print {
+  .scrollHint {
+    display: none;
+  }
 }

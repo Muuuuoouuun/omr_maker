@@ -339,6 +339,7 @@ export default function ExamAnalyticsTab({
     const [selectedExamId, setSelectedExamId] = useState<string>(initialExamId || (exams.length > 0 ? exams[0].id : ""));
     const [isSelectOpen, setIsSelectOpen] = useState(false);
     const [inputValue, setInputValue] = useState("");
+    const [activeOptionIndex, setActiveOptionIndex] = useState(-1);
     const [selectedRegionKey, setSelectedRegionKey] = useState(ALL_REGION_KEY);
     const [activeWorkspaceView, setActiveWorkspaceView] = useState<AnalyticsWorkspaceView>("overview");
     const [analysisScope, setAnalysisScope] = useState<AnalysisScope>("exam");
@@ -347,6 +348,7 @@ export default function ExamAnalyticsTab({
     const [kakaoReviews, setKakaoReviews] = useState<KakaoCandidateReviewMap>({});
     const [kakaoDispatchLogs, setKakaoDispatchLogs] = useState<KakaoDispatchLog[]>([]);
     const dropdownRef = useRef<HTMLDivElement>(null);
+    const shouldScrollActiveOptionRef = useRef(false);
     const lastAppliedInitialExamIdRef = useRef<string | undefined>(initialExamId);
     const advancedAnalyticsEnabled = hasPlanEntitlement(currentPlan, "advancedAnalytics");
     const retakeAssignmentsEnabled = hasPlanEntitlement(currentPlan, "retakeAssignments");
@@ -372,6 +374,7 @@ export default function ExamAnalyticsTab({
         const handleClickOutside = (event: MouseEvent) => {
             if (dropdownRef.current && !dropdownRef.current.contains(event.target as Node)) {
                 setIsSelectOpen(false);
+                setActiveOptionIndex(-1);
             }
         };
         document.addEventListener("mousedown", handleClickOutside);
@@ -385,6 +388,27 @@ export default function ExamAnalyticsTab({
         if (currentSelected && inputValue === currentSelected.title && !isSelectOpen) return exams;
         return exams.filter(exam => exam.title.toLowerCase().includes(inputValue.toLowerCase()));
     }, [exams, inputValue, selectedExamId, isSelectOpen]);
+    const filteredExamKey = filteredExams.map(exam => exam.id).join("\u0000");
+
+    useEffect(() => {
+        const timer = window.setTimeout(() => {
+            setActiveOptionIndex(isSelectOpen && filteredExams.length > 0 ? 0 : -1);
+        }, 0);
+        return () => window.clearTimeout(timer);
+    }, [filteredExamKey, filteredExams.length, isSelectOpen]);
+
+    useEffect(() => {
+        if (!shouldScrollActiveOptionRef.current) return;
+        shouldScrollActiveOptionRef.current = false;
+        if (!isSelectOpen || activeOptionIndex < 0) return;
+
+        const activeOption = dropdownRef.current?.querySelector<HTMLElement>(
+            `#exam-analytics-option-${activeOptionIndex}`,
+        );
+        if (activeOption && typeof activeOption.scrollIntoView === "function") {
+            activeOption.scrollIntoView({ block: "nearest" });
+        }
+    }, [activeOptionIndex, filteredExamKey, isSelectOpen]);
 
     // Keep input in sync with selected exam when not open
     useEffect(() => {
@@ -1122,8 +1146,15 @@ export default function ExamAnalyticsTab({
         setSelectedExamId(exam.id);
         setInputValue(exam.title);
         setIsSelectOpen(false);
+        setActiveOptionIndex(-1);
         setSelectedClassKey("");
         setSelectedStudentKey("");
+    };
+
+    const moveActiveOptionFromKeyboard = (nextIndex: number) => {
+        if (nextIndex === activeOptionIndex) return;
+        shouldScrollActiveOptionRef.current = true;
+        setActiveOptionIndex(nextIndex);
     };
 
     const handleSort = (field: 'name' | 'score') => {
@@ -1226,25 +1257,66 @@ export default function ExamAnalyticsTab({
                                 aria-autocomplete="list"
                                 aria-expanded={isSelectOpen}
                                 aria-controls="exam-analytics-options"
+                                aria-activedescendant={isSelectOpen && activeOptionIndex >= 0 && filteredExams[activeOptionIndex]
+                                    ? `exam-analytics-option-${activeOptionIndex}`
+                                    : undefined}
                                 value={inputValue}
                                 onChange={(event) => {
-                                    setInputValue(event.target.value);
+                                    const nextInputValue = event.target.value;
+                                    const hasMatchingExam = exams.some(exam => (
+                                        exam.title.toLowerCase().includes(nextInputValue.toLowerCase())
+                                    ));
+                                    setInputValue(nextInputValue);
                                     setIsSelectOpen(true);
+                                    setActiveOptionIndex(hasMatchingExam ? 0 : -1);
                                 }}
                                 onFocus={() => {
                                     setIsSelectOpen(true);
+                                    setActiveOptionIndex(exams.length > 0 ? 0 : -1);
                                     const currentExam = exams.find(exam => exam.id === selectedExamId);
                                     if (currentExam && inputValue === currentExam.title) setInputValue("");
                                 }}
                                 onKeyDown={(event) => {
+                                    const lastOptionIndex = filteredExams.length - 1;
+                                    if (event.key === "ArrowDown" && lastOptionIndex >= 0) {
+                                        event.preventDefault();
+                                        setIsSelectOpen(true);
+                                        moveActiveOptionFromKeyboard(activeOptionIndex < 0
+                                            ? 0
+                                            : Math.min(activeOptionIndex + 1, lastOptionIndex));
+                                        return;
+                                    }
+                                    if (event.key === "ArrowUp" && lastOptionIndex >= 0) {
+                                        event.preventDefault();
+                                        setIsSelectOpen(true);
+                                        moveActiveOptionFromKeyboard(activeOptionIndex < 0
+                                            ? lastOptionIndex
+                                            : Math.max(activeOptionIndex - 1, 0));
+                                        return;
+                                    }
+                                    if (event.key === "Home" && lastOptionIndex >= 0) {
+                                        event.preventDefault();
+                                        setIsSelectOpen(true);
+                                        moveActiveOptionFromKeyboard(0);
+                                        return;
+                                    }
+                                    if (event.key === "End" && lastOptionIndex >= 0) {
+                                        event.preventDefault();
+                                        setIsSelectOpen(true);
+                                        moveActiveOptionFromKeyboard(lastOptionIndex);
+                                        return;
+                                    }
                                     if (event.key === "Escape") {
+                                        event.preventDefault();
                                         setIsSelectOpen(false);
+                                        setActiveOptionIndex(-1);
                                         const currentExam = exams.find(exam => exam.id === selectedExamId);
                                         if (currentExam) setInputValue(currentExam.title);
+                                        return;
                                     }
-                                    if (event.key === "Enter" && isSelectOpen && filteredExams[0]) {
+                                    if (event.key === "Enter" && isSelectOpen && filteredExams[activeOptionIndex]) {
                                         event.preventDefault();
-                                        handleSelectExam(filteredExams[0]);
+                                        handleSelectExam(filteredExams[activeOptionIndex]);
                                     }
                                 }}
                                 placeholder="시험을 검색하거나 선택하세요"
@@ -1258,13 +1330,16 @@ export default function ExamAnalyticsTab({
 
                         {isSelectOpen && (
                             <div id="exam-analytics-options" role="listbox" className={styles.dropdown}>
-                                {filteredExams.length > 0 ? filteredExams.map(exam => (
+                                {filteredExams.length > 0 ? filteredExams.map((exam, index) => (
                                     <button
                                         key={exam.id}
+                                        id={`exam-analytics-option-${index}`}
                                         type="button"
                                         role="option"
-                                        aria-selected={exam.id === selectedExamId}
-                                        className={`${styles.dropdownOption} ${exam.id === selectedExamId ? styles.dropdownOptionSelected : ""}`}
+                                        tabIndex={-1}
+                                        aria-selected={index === activeOptionIndex}
+                                        className={`${styles.dropdownOption} ${index === activeOptionIndex ? styles.dropdownOptionSelected : ""}`}
+                                        onMouseEnter={() => setActiveOptionIndex(index)}
                                         onMouseDown={(event) => {
                                             event.preventDefault();
                                             handleSelectExam(exam);
@@ -1835,7 +1910,17 @@ export default function ExamAnalyticsTab({
                         </div>
                     )}
 
-                    <div style={{ overflowX: 'auto', border: '1px solid var(--border)', borderRadius: 'var(--radius-md)' }}>
+                    <p id="exam-question-db-scroll-hint" className={styles.scrollHint}>
+                        표가 화면보다 넓으면 좌우로 스크롤해 확인하세요.
+                    </p>
+                    <div
+                        role="region"
+                        tabIndex={0}
+                        aria-label="문항 DB 준비 상태 표"
+                        aria-describedby="exam-question-db-scroll-hint"
+                        className={styles.horizontalTableRegion}
+                        style={{ border: '1px solid var(--border)', borderRadius: 'var(--radius-md)' }}
+                    >
                         <table style={{ width: '100%', minWidth: '720px', borderCollapse: 'collapse', textAlign: 'left' }}>
                             <thead style={{ background: 'var(--background)', color: 'var(--muted)', fontSize: '0.78rem' }}>
                                 <tr>
@@ -2181,7 +2266,17 @@ export default function ExamAnalyticsTab({
                                 <StatusPill tone="success" size="sm" label="Class cut" />
                             </div>
 
-                            <div style={{ overflowX: 'auto', border: '1px solid var(--border)', borderRadius: 'var(--radius-md)' }}>
+                            <p id="exam-class-matrix-scroll-hint" className={styles.scrollHint}>
+                                표가 화면보다 넓으면 좌우로 스크롤해 확인하세요.
+                            </p>
+                            <div
+                                role="region"
+                                tabIndex={0}
+                                aria-label="반별 시험 분석 매트릭스 표"
+                                aria-describedby="exam-class-matrix-scroll-hint"
+                                className={styles.horizontalTableRegion}
+                                style={{ border: '1px solid var(--border)', borderRadius: 'var(--radius-md)' }}
+                            >
                                 <table style={{ width: '100%', minWidth: '860px', borderCollapse: 'collapse', textAlign: 'left', fontVariantNumeric: 'tabular-nums' }}>
                                     <thead style={{ background: 'var(--background)', color: 'var(--muted)', fontSize: '0.78rem' }}>
                                         <tr>
@@ -2782,7 +2877,16 @@ export default function ExamAnalyticsTab({
                             <List size={16} color="var(--primary)" />
                             세부사항: 문항별 선택률
                         </h4>
-                        <div style={{ overflowX: 'auto' }}>
+                        <p id="exam-question-detail-scroll-hint" className={styles.scrollHint}>
+                            표가 화면보다 넓으면 좌우로 스크롤해 확인하세요.
+                        </p>
+                        <div
+                            role="region"
+                            tabIndex={0}
+                            aria-label="문항별 상세 분석 표"
+                            aria-describedby="exam-question-detail-scroll-hint"
+                            className={styles.horizontalTableRegion}
+                        >
                             <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left', minWidth: '820px', fontVariantNumeric: 'tabular-nums' }}>
                                 <thead>
                                     <tr style={{ background: 'var(--surface)', color: 'var(--muted)', fontSize: '0.85rem' }}>
@@ -2919,32 +3023,48 @@ export default function ExamAnalyticsTab({
                             </h3>
                         </div>
 
+                        <p id="exam-student-score-scroll-hint" className={styles.scrollHint}>
+                            표가 화면보다 넓으면 좌우로 스크롤해 확인하세요.
+                        </p>
                         <div
                             data-testid="exam-analytics-student-table-scroll"
-                            style={{ overflowX: 'auto', borderRadius: 'var(--radius-lg)', border: '1px solid var(--border)' }}
+                            role="region"
+                            tabIndex={0}
+                            aria-label="학생별 점수 및 성취도 표"
+                            aria-describedby="exam-student-score-scroll-hint"
+                            className={styles.horizontalTableRegion}
+                            style={{ borderRadius: 'var(--radius-lg)', border: '1px solid var(--border)' }}
                         >
                             <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left', minWidth: '940px', fontVariantNumeric: 'tabular-nums' }}>
                                 <thead style={{ background: 'var(--surface)' }}>
                                     <tr>
                                         <th
-                                            onClick={() => handleSort('name')}
-                                            style={{ padding: '1rem', fontSize: '0.85rem', color: 'var(--muted)', cursor: 'pointer', transition: 'color 0.2s' }}
-                                            onMouseEnter={(e) => { e.currentTarget.style.color = 'var(--primary)'; }}
-                                            onMouseLeave={(e) => { e.currentTarget.style.color = 'var(--muted)'; }}
+                                            scope="col"
+                                            aria-sort={sortField === 'name' ? (sortDir === 'asc' ? 'ascending' : 'descending') : 'none'}
+                                            style={{ padding: 0, fontSize: '0.85rem', color: 'var(--muted)' }}
                                         >
-                                            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                                                학생 이름 {sortField === 'name' ? (sortDir === 'asc' ? <ChevronUp size={14} /> : <ChevronDown size={14} />) : ''}
-                                            </div>
+                                            <button
+                                                type="button"
+                                                className={styles.sortButton}
+                                                onClick={() => handleSort('name')}
+                                                aria-label={`학생 이름 정렬 (${sortField === 'name' ? (sortDir === 'asc' ? '오름차순' : '내림차순') : '정렬 안 됨'})`}
+                                            >
+                                                학생 이름 {sortField === 'name' ? (sortDir === 'asc' ? <ChevronUp size={14} aria-hidden="true" /> : <ChevronDown size={14} aria-hidden="true" />) : null}
+                                            </button>
                                         </th>
                                         <th
-                                            onClick={() => handleSort('score')}
-                                            style={{ padding: '1rem', fontSize: '0.85rem', color: 'var(--muted)', cursor: 'pointer', transition: 'color 0.2s' }}
-                                            onMouseEnter={(e) => { e.currentTarget.style.color = 'var(--primary)'; }}
-                                            onMouseLeave={(e) => { e.currentTarget.style.color = 'var(--muted)'; }}
+                                            scope="col"
+                                            aria-sort={sortField === 'score' ? (sortDir === 'asc' ? 'ascending' : 'descending') : 'none'}
+                                            style={{ padding: 0, fontSize: '0.85rem', color: 'var(--muted)' }}
                                         >
-                                            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                                                총점 {sortField === 'score' ? (sortDir === 'asc' ? <ChevronUp size={14} /> : <ChevronDown size={14} />) : ''}
-                                            </div>
+                                            <button
+                                                type="button"
+                                                className={styles.sortButton}
+                                                onClick={() => handleSort('score')}
+                                                aria-label={`총점 정렬 (${sortField === 'score' ? (sortDir === 'asc' ? '오름차순' : '내림차순') : '정렬 안 됨'})`}
+                                            >
+                                                총점 {sortField === 'score' ? (sortDir === 'asc' ? <ChevronUp size={14} aria-hidden="true" /> : <ChevronDown size={14} aria-hidden="true" />) : null}
+                                            </button>
                                         </th>
                                         {/* Dynamic Label Columns */}
                                         {examLabels.map(label => (

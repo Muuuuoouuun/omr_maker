@@ -129,6 +129,193 @@ function buildProps(
 }
 
 describe("ExamAnalyticsReportOverview", () => {
+    it("supports active-option keyboard navigation and selection in the exam combobox", () => {
+        const { exam } = buildUngradedExamAnalyticsFixture();
+        const secondExam: Exam = {
+            ...exam,
+            id: "exam-second",
+            title: "두 번째 진단",
+            questions: exam.questions.map(question => ({ ...question })),
+        };
+        render(<ExamAnalyticsTab exams={[exam, secondExam]} attempts={[]} currentPlan="free" />);
+
+        const combobox = screen.getByRole("combobox", { name: "시험" });
+        fireEvent.focus(combobox);
+
+        const firstOption = screen.getByRole("option", { name: /미채점 진단/ });
+        const secondOption = screen.getByRole("option", { name: /두 번째 진단/ });
+        expect(firstOption).toHaveAttribute("id");
+        expect(combobox).toHaveAttribute("aria-activedescendant", firstOption.id);
+        expect(firstOption).toHaveAttribute("aria-selected", "true");
+
+        fireEvent.keyDown(combobox, { key: "ArrowDown" });
+        expect(combobox).toHaveAttribute("aria-activedescendant", secondOption.id);
+        expect(secondOption).toHaveAttribute("aria-selected", "true");
+        expect(firstOption).toHaveAttribute("aria-selected", "false");
+
+        fireEvent.keyDown(combobox, { key: "Home" });
+        expect(combobox).toHaveAttribute("aria-activedescendant", firstOption.id);
+        fireEvent.keyDown(combobox, { key: "End" });
+        expect(combobox).toHaveAttribute("aria-activedescendant", secondOption.id);
+        fireEvent.keyDown(combobox, { key: "ArrowUp" });
+        expect(combobox).toHaveAttribute("aria-activedescendant", firstOption.id);
+
+        fireEvent.keyDown(combobox, { key: "ArrowDown" });
+        fireEvent.keyDown(combobox, { key: "Enter" });
+        expect(combobox).toHaveValue("두 번째 진단");
+        expect(combobox).toHaveAttribute("aria-expanded", "false");
+        expect(combobox).not.toHaveAttribute("aria-activedescendant");
+
+        fireEvent.focus(combobox);
+        fireEvent.change(combobox, { target: { value: "미채점" } });
+        const filteredOption = screen.getByRole("option", { name: /미채점 진단/ });
+        expect(combobox).toHaveAttribute("aria-activedescendant", filteredOption.id);
+        fireEvent.change(combobox, { target: { value: "없는 시험" } });
+        expect(combobox).not.toHaveAttribute("aria-activedescendant");
+        expect(screen.getByText("검색 결과가 없습니다")).toBeInTheDocument();
+        fireEvent.keyDown(combobox, { key: "Escape" });
+        expect(combobox).toHaveValue("두 번째 진단");
+        expect(combobox).toHaveAttribute("aria-expanded", "false");
+    });
+
+    it("keeps listbox options out of the Tab order while preserving pointer selection", () => {
+        const { exam } = buildUngradedExamAnalyticsFixture();
+        const secondExam: Exam = {
+            ...exam,
+            id: "exam-pointer",
+            title: "포인터 선택 진단",
+            questions: exam.questions.map(question => ({ ...question })),
+        };
+        const { container } = render(<ExamAnalyticsTab exams={[exam, secondExam]} attempts={[]} currentPlan="free" />);
+
+        const combobox = screen.getByRole("combobox", { name: "시험" });
+        combobox.focus();
+        fireEvent.focus(combobox);
+        const options = within(screen.getByRole("listbox")).getAllByRole("option");
+
+        expect(combobox).toHaveFocus();
+        options.forEach(option => expect(option).toHaveAttribute("tabindex", "-1"));
+        const tabStops = Array.from(container.querySelectorAll<HTMLElement>("input, select, button, [tabindex]"))
+            .filter(element => element.tabIndex >= 0 && !element.hasAttribute("disabled"));
+        const nextTabStop = tabStops[tabStops.indexOf(combobox) + 1];
+        expect(nextTabStop).toBe(screen.getByRole("combobox", { name: "시험 분석 지역 필터" }));
+        nextTabStop.focus();
+        expect(screen.getByRole("combobox", { name: "시험 분석 지역 필터" })).toHaveFocus();
+
+        fireEvent.mouseDown(screen.getByRole("option", { name: /포인터 선택 진단/ }));
+        expect(combobox).toHaveValue("포인터 선택 진단");
+        expect(combobox).toHaveAttribute("aria-expanded", "false");
+    });
+
+    it("scrolls only keyboard-changed active options into the visible listbox area", () => {
+        const originalScrollIntoView = Object.getOwnPropertyDescriptor(HTMLElement.prototype, "scrollIntoView");
+        const scrollIntoView = vi.fn();
+        Object.defineProperty(HTMLElement.prototype, "scrollIntoView", {
+            configurable: true,
+            value: scrollIntoView,
+        });
+
+        try {
+            const { exam } = buildUngradedExamAnalyticsFixture();
+            const exams = [exam, ...Array.from({ length: 4 }, (_, index): Exam => ({
+                ...exam,
+                id: `exam-scroll-${index + 1}`,
+                title: `스크롤 진단 ${index + 1}`,
+                questions: exam.questions.map(question => ({ ...question })),
+            }))];
+            render(<ExamAnalyticsTab exams={exams} attempts={[]} currentPlan="free" />);
+
+            const combobox = screen.getByRole("combobox", { name: "시험" });
+            combobox.focus();
+            fireEvent.focus(combobox);
+            expect(scrollIntoView).not.toHaveBeenCalled();
+
+            fireEvent.keyDown(combobox, { key: "ArrowDown" });
+            expect(scrollIntoView).toHaveBeenCalledTimes(1);
+            expect(scrollIntoView).toHaveBeenLastCalledWith({ block: "nearest" });
+            expect(scrollIntoView.mock.instances[0]).toBe(screen.getByRole("option", { name: /스크롤 진단 1/ }));
+
+            fireEvent.keyDown(combobox, { key: "Home" });
+            expect(scrollIntoView).toHaveBeenCalledTimes(2);
+            fireEvent.keyDown(combobox, { key: "Home" });
+            expect(scrollIntoView).toHaveBeenCalledTimes(2);
+        } finally {
+            if (originalScrollIntoView) {
+                Object.defineProperty(HTMLElement.prototype, "scrollIntoView", originalScrollIntoView);
+            } else {
+                delete (HTMLElement.prototype as Partial<HTMLElement>).scrollIntoView;
+            }
+        }
+    });
+
+    it("uses semantic sortable headers with keyboard-operable buttons", () => {
+        const { exam, attempts } = buildUngradedExamAnalyticsFixture();
+        const namedAttempts = attempts.slice(0, 2).map((attempt, index) => ({
+            ...attempt,
+            studentName: index === 0 ? "가 학생" : "나 학생",
+            score: index === 0 ? 10 : 5,
+            totalScore: 10,
+        }));
+        render(<ExamAnalyticsTab exams={[exam]} attempts={namedAttempts} currentPlan="free" />);
+        fireEvent.click(screen.getByRole("tab", { name: "학생·반" }));
+
+        const studentTableRegion = screen.getByRole("region", { name: "학생별 점수 및 성취도 표" });
+        const nameHeader = within(studentTableRegion).getByRole("columnheader", { name: "학생 이름" });
+        const scoreHeader = within(studentTableRegion).getByRole("columnheader", { name: "총점" });
+        expect(nameHeader).toHaveAttribute("aria-sort", "none");
+        expect(scoreHeader).toHaveAttribute("aria-sort", "descending");
+
+        const nameSortButton = within(nameHeader).getByRole("button", {
+            name: "학생 이름 정렬 (정렬 안 됨)",
+        });
+        nameSortButton.focus();
+        expect(nameSortButton).toHaveFocus();
+        fireEvent.click(nameSortButton);
+        expect(nameHeader).toHaveAttribute("aria-sort", "descending");
+        expect(within(nameHeader).getByRole("button")).toHaveAccessibleName("학생 이름 정렬 (내림차순)");
+
+        fireEvent.click(within(nameHeader).getByRole("button"));
+        expect(nameHeader).toHaveAttribute("aria-sort", "ascending");
+        expect(within(within(studentTableRegion).getAllByRole("row")[1]).getAllByRole("cell")[0]).toHaveTextContent("가 학생");
+    });
+
+    it("exposes every dense analytics table as a named focusable scroll region", () => {
+        const { exam, attempts } = buildUngradedExamAnalyticsFixture();
+        const groupedAttempts = attempts.map((attempt, index) => ({
+            ...attempt,
+            studentId: `student-${index + 1}`,
+            groupId: "class-a",
+            groupName: "A반",
+        }));
+        render(<ExamAnalyticsTab exams={[exam]} attempts={groupedAttempts} currentPlan="pro" />);
+
+        const assertScrollRegion = (name: string) => {
+            const region = screen.getByRole("region", { name });
+            expect(region).toHaveAttribute("tabindex", "0");
+            const descriptionId = region.getAttribute("aria-describedby");
+            expect(descriptionId).toBeTruthy();
+            expect(document.getElementById(descriptionId!)).toBeVisible();
+            expect(document.getElementById(descriptionId!)).toHaveTextContent("좌우로 스크롤");
+        };
+
+        fireEvent.click(screen.getByRole("tab", { name: "운영" }));
+        assertScrollRegion("문항 DB 준비 상태 표");
+
+        fireEvent.click(screen.getByRole("tab", { name: "문항 분석" }));
+        assertScrollRegion("문항별 상세 분석 표");
+
+        fireEvent.click(screen.getByRole("tab", { name: "학생·반" }));
+        assertScrollRegion("반별 시험 분석 매트릭스 표");
+        assertScrollRegion("학생별 점수 및 성취도 표");
+
+        const css = readFileSync(
+            path.join(process.cwd(), "src/components/dashboard/tabs/ExamAnalyticsTab.module.css"),
+            "utf8",
+        );
+        expect(css).toMatch(/\.horizontalTableRegion\s*\{[\s\S]*?overscroll-behavior-x:\s*contain/);
+        expect(css).toMatch(/\.horizontalTableRegion:focus-visible\s*\{/);
+    });
+
     it("renders a fully ungraded question as neutral evidence without actions or percentages", () => {
         const { exam, attempts } = buildUngradedExamAnalyticsFixture();
         render(<ExamAnalyticsTab exams={[exam]} attempts={attempts} currentPlan="free" />);
