@@ -32,6 +32,7 @@
     "test:supabase:live": "node scripts/verify-supabase-live.mjs",
     "test:ops:initial": "node scripts/run-initial-operations.mjs",
     "ops:verify:production": "node scripts/verify-production-deployment.mjs",
+    "ops:alert:verify": "node scripts/verify-operational-alert.mjs",
     "ops:backup:inventory": "node scripts/backup-production.mjs --inventory-only",
     "ops:backup:create": "node scripts/backup-production.mjs --create",
     "ops:restore:verify": "node scripts/verify-restored-environment.mjs",
