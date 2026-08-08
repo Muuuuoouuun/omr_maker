@@ -366,6 +366,97 @@ describe("operational event sink", () => {
         );
     });
 
+    it("preserves already-redacted built-in error diagnostics through delivery", async () => {
+        const fetchImpl = vi.fn(async (...args: Parameters<typeof fetch>) => {
+            void args;
+            return new Response(null, { status: 202 });
+        });
+        const event = buildOperationalErrorEvent(
+            "route-error",
+            new TypeError("private student@example.com database path"),
+        );
+
+        expect(event.error).toEqual({ name: "TypeError", message: "[REDACTED]" });
+        await expect(deliverOperationalEvent(event, configuredEnv, fetchImpl, 250))
+            .resolves.toEqual({ status: "delivered" });
+        const body = String(fetchImpl.mock.calls[0]?.[1]?.body);
+        expect(JSON.parse(body).error).toEqual({ name: "TypeError", message: "[REDACTED]" });
+        expect(body).not.toMatch(/student@example\.com|database path/);
+    });
+
+    it("preserves an exact normalized error without invoking proxy access or toJSON", async () => {
+        const fetchImpl = vi.fn(async (...args: Parameters<typeof fetch>) => {
+            void args;
+            return new Response(null, { status: 202 });
+        });
+        const errorToJSON = vi.fn(() => ({ message: "toJSON-private-token" }));
+        const proxyGet = vi.fn(() => {
+            throw new Error("normalized-proxy-secret");
+        });
+        const normalizedError = new Proxy({
+            name: "TypeError",
+            message: "[REDACTED]",
+            toJSON: errorToJSON,
+        }, { get: proxyGet });
+        const event = {
+            ...buildOperationalErrorEvent("route-error", new Error("private")),
+            error: normalizedError,
+        };
+
+        await expect(deliverOperationalEvent(event, configuredEnv, fetchImpl, 250))
+            .resolves.toEqual({ status: "delivered" });
+        expect(errorToJSON).not.toHaveBeenCalled();
+        expect(proxyGet).not.toHaveBeenCalled();
+        const body = String(fetchImpl.mock.calls[0]?.[1]?.body);
+        expect(JSON.parse(body).error).toEqual({ name: "TypeError", message: "[REDACTED]" });
+        expect(body).not.toMatch(/toJSON-private-token|normalized-proxy-secret/);
+    });
+
+    it.each([
+        { name: "TypeError ", message: "[REDACTED]" },
+        { name: "StudentEmailError", message: "[REDACTED]" },
+        { name: "TypeError", message: "[REDACTED] " },
+        { name: "TypeError", message: "student@example.com raw DB path" },
+    ])("drops adversarial normalized-error near-match %#", async error => {
+        const fetchImpl = vi.fn(async (...args: Parameters<typeof fetch>) => {
+            void args;
+            return new Response(null, { status: 202 });
+        });
+        const event = {
+            ...buildOperationalErrorEvent("route-error", new Error("private")),
+            error,
+        };
+
+        await expect(deliverOperationalEvent(event, configuredEnv, fetchImpl, 250))
+            .resolves.toEqual({ status: "delivered" });
+        const body = String(fetchImpl.mock.calls[0]?.[1]?.body);
+        expect(JSON.parse(body).error).toEqual({});
+        expect(body).not.toMatch(/StudentEmailError|student@example\.com|raw DB path/);
+    });
+
+    it("does not execute normalized-error accessors", async () => {
+        const fetchImpl = vi.fn(async (...args: Parameters<typeof fetch>) => {
+            void args;
+            return new Response(null, { status: 202 });
+        });
+        const nameGetter = vi.fn(() => "TypeError");
+        const errorToJSON = vi.fn(() => ({ message: "getter-toJSON-secret" }));
+        const error = { message: "[REDACTED]", toJSON: errorToJSON };
+        Object.defineProperty(error, "name", { enumerable: true, get: nameGetter });
+        const event = {
+            ...buildOperationalErrorEvent("route-error", new Error("private")),
+            error,
+        };
+
+        await expect(deliverOperationalEvent(event, configuredEnv, fetchImpl, 250))
+            .resolves.toEqual({ status: "delivered" });
+        expect(nameGetter).not.toHaveBeenCalled();
+        expect(errorToJSON).not.toHaveBeenCalled();
+        const body = String(fetchImpl.mock.calls[0]?.[1]?.body);
+        expect(JSON.parse(body).error).toEqual({});
+        expect(body).not.toContain("getter-toJSON-secret");
+    });
+
     it("deep-snapshots heartbeat metrics from exact numeric data descriptors", async () => {
         const fetchImpl = vi.fn(async (...args: Parameters<typeof fetch>) => {
             void args;

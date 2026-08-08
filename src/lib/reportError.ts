@@ -112,6 +112,13 @@ function isErrorObject(value: object): boolean {
     }
 }
 
+function snapshotNormalizedError(value: object): { name: string; message: typeof REDACTED } | undefined {
+    const name = ownDataValue(value, "name");
+    const message = ownDataValue(value, "message");
+    if (typeof name !== "string" || !SAFE_ERROR_NAMES.has(name) || message !== REDACTED) return undefined;
+    return { name, message: REDACTED };
+}
+
 function redactValueUnsafe(value: unknown, depth: number, seen: WeakSet<object>, allowDiagnostic = false): unknown {
     if (value === null || value === undefined || typeof value === "boolean" || typeof value === "number") {
         return value;
@@ -123,6 +130,9 @@ function redactValueUnsafe(value: unknown, depth: number, seen: WeakSet<object>,
     if (typeof value !== "object") return REDACTED;
     if (seen.has(value)) return "[CIRCULAR]";
     seen.add(value);
+
+    const normalizedError = snapshotNormalizedError(value);
+    if (normalizedError) return normalizedError;
 
     if (isErrorObject(value)) {
         return {
