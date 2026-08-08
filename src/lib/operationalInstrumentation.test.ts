@@ -51,6 +51,10 @@ describe("global operational instrumentation", () => {
         { kind: "error", name: "TypeError", message: "private student payload" },
         { kind: "error", name: "CustomPrivateError" },
         { kind: "other", name: "Error" },
+        { kind: "error", name: "Error", severity: "critical" },
+        { kind: "error", name: "Error", correlationId: "corr_01JABCDEF0123456789" },
+        { kind: "error", name: "Error", eventId: "evt_attacker_controlled_event_id" },
+        { kind: "error", name: "Error", email: "student@example.com", answers: [1, 2, 3] },
     ])("rejects attacker-controlled client payload fields", async body => {
         const response = await POST(request(JSON.stringify(body)));
         expect(response.status).toBe(400);

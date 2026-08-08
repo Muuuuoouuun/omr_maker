@@ -3,6 +3,18 @@ const MAX_DEPTH = 5;
 const MAX_KEYS = 40;
 const MAX_ARRAY_ITEMS = 20;
 
+export type OperationalSeverity = "info" | "warning" | "error" | "critical";
+
+export const SAFE_CORRELATION_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{7,127}$/;
+
+const SAFE_OPERATIONAL_SEVERITIES = new Set<OperationalSeverity>([
+    "info",
+    "warning",
+    "error",
+    "critical",
+]);
+const SENSITIVE_CORRELATION_ID = /(?:AKIA[0-9A-Z]{16}|gh[pousr]_?[A-Za-z0-9]{36,}|sk_(?:live|test)_[A-Za-z0-9_-]{8,})/i;
+
 const SAFE_RECORD_KEYS = new Set([
     "code",
     "status",
@@ -52,8 +64,10 @@ const SAFE_ERROR_NAMES = new Set([
     "TimeoutError",
 ]);
 type EventOptions = {
-    /** Ignored: caller-controlled identifiers are never serialized. */
+    /** Preserved only when it is a bounded opaque identifier. */
     correlationId?: string;
+    /** Preserved only when it is an operational severity. */
+    severity?: OperationalSeverity;
     /** Ignored: deployment identifiers may contain credentials. */
     deploymentId?: string;
     now?: Date;
@@ -158,18 +172,55 @@ export function redactOperationalError(error: unknown): unknown {
     return redactValue(error, 0, new WeakSet());
 }
 
-function generatedCorrelationId(): string {
+let fallbackIdSequence = 0;
+
+function randomHex32(): string {
     try {
         const uuid = globalThis.crypto?.randomUUID?.();
-        if (uuid) return `req_${uuid}`;
+        const hex = uuid?.replaceAll("-", "").toLowerCase();
+        if (hex && /^[a-f0-9]{32}$/.test(hex)) return hex;
     } catch {
-        // Fall through to a non-identifying request code.
+        // Fall through to getRandomValues.
     }
     try {
-        return `req_${Date.now().toString(36)}`;
+        const bytes = new Uint8Array(16);
+        globalThis.crypto?.getRandomValues?.(bytes);
+        const hex = Array.from(bytes, byte => byte.toString(16).padStart(2, "0")).join("");
+        if (/[1-9a-f]/.test(hex)) return hex;
     } catch {
-        return "req_unknown";
+        // Fall through to a non-identifying process-local code.
     }
+    fallbackIdSequence = (fallbackIdSequence + 1) >>> 0;
+    try {
+        const randomPrefix = Array.from({ length: 3 }, () => Math.floor(Math.random() * 0x1_0000_0000)
+            .toString(16)
+            .padStart(8, "0"))
+            .join("");
+        return `${randomPrefix}${fallbackIdSequence.toString(16).padStart(8, "0")}`;
+    } catch {
+        return fallbackIdSequence.toString(16).padStart(32, "0");
+    }
+}
+
+function generatedOperationalId(excluded?: string): string {
+    const candidate = `evt_${randomHex32()}`;
+    if (candidate !== excluded) return candidate;
+    const replacement = candidate.endsWith("0") ? "1" : "0";
+    return `${candidate.slice(0, -1)}${replacement}`;
+}
+
+function safeCorrelationId(value: unknown, eventId: string): string {
+    if (typeof value === "string") {
+        const match = value.match(SAFE_CORRELATION_ID)?.[0];
+        if (match === value && !SENSITIVE_CORRELATION_ID.test(value)) return value;
+    }
+    return generatedOperationalId(eventId);
+}
+
+function safeSeverity(value: unknown, fallback: OperationalSeverity): OperationalSeverity {
+    return typeof value === "string" && SAFE_OPERATIONAL_SEVERITIES.has(value as OperationalSeverity)
+        ? value as OperationalSeverity
+        : fallback;
 }
 
 function safeContext(value: unknown): string {
@@ -189,7 +240,7 @@ function safeTimestamp(value: unknown): string {
     }
 }
 
-function safeRuntimeBuildId(): string {
+function safeRuntimeBuildSha(): string {
     try {
         for (const value of [process.env.VERCEL_GIT_COMMIT_SHA, process.env.GIT_SHA]) {
             const candidate = typeof value === "string" ? value.trim() : "";
@@ -207,11 +258,14 @@ export function buildOperationalErrorEvent(
     options: EventOptions = {},
 ) {
     try {
+        const eventId = generatedOperationalId();
         return {
             event: "omr.runtime_error" as const,
             context: safeContext(context),
-            correlationId: generatedCorrelationId(),
-            build: safeRuntimeBuildId(),
+            eventId,
+            correlationId: safeCorrelationId(ownDataValue(options, "correlationId"), eventId),
+            buildSha: safeRuntimeBuildSha(),
+            severity: safeSeverity(ownDataValue(options, "severity"), "error"),
             timestamp: safeTimestamp(ownDataValue(options, "now")),
             error: redactOperationalError(error),
         };
@@ -219,8 +273,10 @@ export function buildOperationalErrorEvent(
         return {
             event: "omr.runtime_error" as const,
             context: "unknown",
-            correlationId: "req_unknown",
-            build: "unknown",
+            eventId: "evt_00000000000000000000000000000000",
+            correlationId: "evt_00000000000000000000000000000001",
+            buildSha: "unknown",
+            severity: "error" as const,
             timestamp: "1970-01-01T00:00:00.000Z",
             error: "[UNREADABLE]",
         };
@@ -235,8 +291,10 @@ export type OperationalHeartbeatEvent = {
     event: "omr.job_heartbeat";
     job: "asset-gc" | "readiness" | "unknown";
     status: "ok" | "degraded";
+    severity: "info" | "warning";
+    eventId: string;
     correlationId: string;
-    build: string;
+    buildSha: string;
     timestamp: string;
     metrics: Record<string, number>;
 };
@@ -256,12 +314,15 @@ export function buildOperationalHeartbeatEvent(
             boundedMetrics[key] = value;
         }
     }
+    const eventId = generatedOperationalId();
     return {
         event: "omr.job_heartbeat",
         job: SAFE_JOBS.has(job) ? job as OperationalHeartbeatEvent["job"] : "unknown",
         status,
-        correlationId: generatedCorrelationId(),
-        build: safeRuntimeBuildId(),
+        severity: status === "ok" ? "info" : "warning",
+        eventId,
+        correlationId: generatedOperationalId(eventId),
+        buildSha: safeRuntimeBuildSha(),
         timestamp: safeTimestamp(now),
         metrics: boundedMetrics,
     };
@@ -290,6 +351,8 @@ export function emitOperationalErrorEvent(
 /** Single structured console funnel. Server delivery lives in reportServerError. */
 export function reportError(context: string, error: unknown, options: EventOptions = {}): void {
     const safeOptions = {
+        correlationId: ownDataValue(options, "correlationId"),
+        severity: ownDataValue(options, "severity"),
         now: ownDataValue(options, "now"),
     } as EventOptions;
     void emitOperationalErrorEvent(context, error, safeOptions);

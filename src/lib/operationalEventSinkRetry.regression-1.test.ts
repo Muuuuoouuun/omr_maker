@@ -23,8 +23,9 @@ describe("operational event sink transient retry", () => {
         expect(fetchImpl).toHaveBeenCalledTimes(2);
         const firstHeaders = fetchImpl.mock.calls[0]?.[1]?.headers as Record<string, string>;
         const secondHeaders = fetchImpl.mock.calls[1]?.[1]?.headers as Record<string, string>;
-        expect(firstHeaders["x-omr-event-id"]).toBe(event.correlationId);
-        expect(secondHeaders["x-omr-event-id"]).toBe(event.correlationId);
+        expect(event.eventId).not.toBe(event.correlationId);
+        expect(firstHeaders["x-omr-event-id"]).toBe(event.eventId);
+        expect(secondHeaders["x-omr-event-id"]).toBe(event.eventId);
         expect(fetchImpl.mock.calls[0]?.[1]?.body).toBe(fetchImpl.mock.calls[1]?.[1]?.body);
     });
 

@@ -1,5 +1,5 @@
 import "next/dist/compiled/server-only";
-import type { OperationalEvent } from "./reportError";
+import { SAFE_CORRELATION_ID, type OperationalEvent } from "./reportError";
 
 type Env = Record<string, string | undefined>;
 type FetchLike = typeof fetch;
@@ -30,8 +30,8 @@ function clean(value: unknown): string {
 }
 
 function safeEventId(event: OperationalEvent): string {
-    const value = clean(event.correlationId);
-    return /^[A-Za-z0-9_-]{1,128}$/.test(value) ? value : "event_unknown";
+    const value = clean(event.eventId);
+    return value.match(SAFE_CORRELATION_ID)?.[0] === value ? value : "event_unknown";
 }
 
 function isTransientSinkStatus(status: number): boolean {
