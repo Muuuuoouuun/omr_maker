@@ -152,7 +152,10 @@ describe("operational event sink", () => {
     });
 
     it("delivers one bounded redacted event without following redirects", async () => {
-        const fetchImpl = vi.fn(async () => new Response(null, { status: 202 }));
+        const fetchImpl = vi.fn(async (...args: Parameters<typeof fetch>) => {
+            void args;
+            return new Response(null, { status: 202 });
+        });
         const event = buildOperationalErrorEvent(
             "student-submit",
             { code: "service_unavailable", token: "never-send-this" },
@@ -200,7 +203,10 @@ describe("operational event sink", () => {
     });
 
     it("uses a real delivery as the readiness probe", async () => {
-        const fetchImpl = vi.fn(async () => new Response(null, { status: 204 }));
+        const fetchImpl = vi.fn(async (...args: Parameters<typeof fetch>) => {
+            void args;
+            return new Response(null, { status: 204 });
+        });
         await expect(probeOperationalEventSink(configuredEnv, fetchImpl, 250))
             .resolves.toBe("ready");
         expect(fetchImpl).toHaveBeenCalledWith(
