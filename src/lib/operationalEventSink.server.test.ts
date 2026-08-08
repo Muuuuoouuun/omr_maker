@@ -159,6 +159,31 @@ describe("operational event sink", () => {
         }
     });
 
+    it("keeps bounded cleanup generation and sweep proof in the heartbeat", () => {
+        expect(buildOperationalHeartbeatEvent("asset-gc", "ok", {
+            claimed: 0,
+            deleted: 0,
+            failed: 0,
+            batches: 1,
+            claimAttempts: 1,
+            nonemptyBatches: 0,
+            runSequence: 20,
+            applied: true,
+            superseded: false,
+            token: "private",
+        }).metrics).toEqual({
+            claimed: 0,
+            deleted: 0,
+            failed: 0,
+            batches: 1,
+            claimAttempts: 1,
+            nonemptyBatches: 0,
+            runSequence: 20,
+            applied: 1,
+            superseded: 0,
+        });
+    });
+
     it("fails configuration closed and requires HTTPS in production", () => {
         expect(operationalEventSinkConfiguration({})).toEqual({ status: "not_configured" });
         expect(operationalEventSinkConfiguration({

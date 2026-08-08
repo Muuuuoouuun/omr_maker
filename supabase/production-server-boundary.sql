@@ -121,6 +121,7 @@ revoke all on table public.omr_teacher_accounts from public, anon, authenticated
 revoke all on table public.omr_teacher_account_tokens from public, anon, authenticated, service_role;
 revoke all on table public.omr_teacher_notification_states from public, anon, authenticated, service_role;
 revoke all on table public.omr_operational_job_status from public, anon, authenticated, service_role;
+revoke all on sequence public.omr_operational_job_run_sequence from public, anon, authenticated, service_role;
 
 -- Cleanup completion is fenced by the claim attempt (lease epoch). Keep the
 -- compatibility stubs in the catalog for upgrade diagnostics, but do not let
@@ -175,7 +176,9 @@ grant execute on function public.omr_ack_remote_asset_cleanup_v1(text,text,integ
     to service_role;
 grant execute on function public.omr_fail_remote_asset_cleanup_v1(text,text,integer,text)
     to service_role;
-grant execute on function public.omr_record_operational_job_status_v1(text,text,text,text)
+grant execute on function public.omr_begin_operational_job_run_v1(text,text)
+    to service_role;
+grant execute on function public.omr_complete_operational_job_run_v1(text,bigint,text,text,text)
     to service_role;
 grant execute on function public.omr_read_operational_job_status_v1(text)
     to service_role;
@@ -629,6 +632,7 @@ begin
               from pg_catalog.pg_class relation
               join pg_catalog.pg_namespace namespace on namespace.oid = relation.relnamespace
              where namespace.nspname = 'public' and relation.relkind = 'S'
+               and relation.relname <> 'omr_operational_job_run_sequence'
                and (
                    not pg_catalog.has_sequence_privilege('service_role', relation.oid, 'USAGE')
                    or not pg_catalog.has_sequence_privilege('service_role', relation.oid, 'SELECT')
@@ -638,40 +642,49 @@ begin
 
     v_operational_job_status_ready :=
         pg_catalog.to_regclass('public.omr_operational_job_status') is not null
-        and pg_catalog.to_regclass('public.omr_remote_asset_cleanup_dead_idx') is not null
-        and position(
-            'status = ''dead''' in lower(pg_catalog.pg_get_indexdef(
-                'public.omr_remote_asset_cleanup_dead_idx'::pg_catalog.regclass
-            ))
-        ) > 0
+        and pg_catalog.to_regclass('public.omr_operational_job_run_sequence') is not null
+        and exists (
+            select 1
+              from pg_catalog.pg_index index_record
+             where index_record.indexrelid = pg_catalog.to_regclass(
+                       'public.omr_remote_asset_cleanup_dead_idx'
+                   )
+               and index_record.indrelid = 'public.omr_remote_asset_cleanup_queue'::pg_catalog.regclass
+               and index_record.indisvalid
+               and index_record.indisready
+               and not index_record.indisunique
+               and index_record.indnatts = 1
+               and index_record.indnkeyatts = 1
+               and pg_catalog.pg_get_indexdef(index_record.indexrelid, 1, true) = 'status'
+               and pg_catalog.pg_get_expr(
+                   index_record.indpred, index_record.indrelid, true
+               ) = 'status = ''dead''::text'
+        )
         and pg_catalog.to_regprocedure(
-            'public.omr_record_operational_job_status_v1(text,text,text,text)'
+            'public.omr_begin_operational_job_run_v1(text,text)'
         ) is not null
         and pg_catalog.to_regprocedure(
-            'public.omr_read_operational_job_status_v1(text)'
+            'public.omr_complete_operational_job_run_v1(text,bigint,text,text,text)'
         ) is not null
-        and pg_catalog.pg_get_function_result(
-            'public.omr_record_operational_job_status_v1(text,text,text,text)'::pg_catalog.regprocedure
-        ) = 'jsonb'
-        and pg_catalog.pg_get_function_result(
-            'public.omr_read_operational_job_status_v1(text)'::pg_catalog.regprocedure
-        ) = 'jsonb'
+        and pg_catalog.to_regprocedure('public.omr_read_operational_job_status_v1(text)') is not null
         and not exists (
             select 1
               from pg_catalog.pg_proc routine
              where routine.oid in (
-                 'public.omr_record_operational_job_status_v1(text,text,text,text)'::pg_catalog.regprocedure,
+                 'public.omr_begin_operational_job_run_v1(text,text)'::pg_catalog.regprocedure,
+                 'public.omr_complete_operational_job_run_v1(text,bigint,text,text,text)'::pg_catalog.regprocedure,
                  'public.omr_read_operational_job_status_v1(text)'::pg_catalog.regprocedure
              )
                and (
                    routine.prokind <> 'f'
+                   or pg_catalog.pg_get_function_result(routine.oid) <> 'jsonb'
                    or not routine.prosecdef
                    or pg_catalog.pg_get_userbyid(routine.proowner) <> 'postgres'
                    or not coalesce(routine.proconfig, '{}'::text[]) @> array[
                        'search_path=""', 'statement_timeout=5s'
                    ]::text[]
                    or (
-                       routine.proname = 'omr_record_operational_job_status_v1'
+                       routine.proname <> 'omr_read_operational_job_status_v1'
                        and not coalesce(routine.proconfig, '{}'::text[])
                            @> array['lock_timeout=2s']::text[]
                    )
@@ -680,69 +693,58 @@ begin
         and not exists (
             select 1
               from pg_catalog.pg_proc routine
-              join pg_catalog.pg_namespace namespace
-                on namespace.oid = routine.pronamespace
+              join pg_catalog.pg_namespace namespace on namespace.oid = routine.pronamespace
              where namespace.nspname = 'public'
                and routine.proname in (
-                   'omr_record_operational_job_status_v1',
+                   'omr_begin_operational_job_run_v1',
+                   'omr_complete_operational_job_run_v1',
                    'omr_read_operational_job_status_v1'
                )
                and routine.oid not in (
-                   'public.omr_record_operational_job_status_v1(text,text,text,text)'::pg_catalog.regprocedure,
+                   'public.omr_begin_operational_job_run_v1(text,text)'::pg_catalog.regprocedure,
+                   'public.omr_complete_operational_job_run_v1(text,bigint,text,text,text)'::pg_catalog.regprocedure,
                    'public.omr_read_operational_job_status_v1(text)'::pg_catalog.regprocedure
                )
         )
-        and pg_catalog.has_function_privilege(
-            'service_role',
-            'public.omr_record_operational_job_status_v1(text,text,text,text)',
-            'EXECUTE'
+        and not exists (
+            select 1
+              from pg_catalog.unnest(array[
+                  'public.omr_begin_operational_job_run_v1(text,text)',
+                  'public.omr_complete_operational_job_run_v1(text,bigint,text,text,text)',
+                  'public.omr_read_operational_job_status_v1(text)'
+              ]) signature(value)
+             where not pg_catalog.has_function_privilege('service_role', signature.value, 'EXECUTE')
+                or pg_catalog.has_function_privilege('anon', signature.value, 'EXECUTE')
+                or pg_catalog.has_function_privilege('authenticated', signature.value, 'EXECUTE')
         )
-        and pg_catalog.has_function_privilege(
-            'service_role',
-            'public.omr_read_operational_job_status_v1(text)',
-            'EXECUTE'
+        and not pg_catalog.has_sequence_privilege(
+            'service_role', 'public.omr_operational_job_run_sequence', 'USAGE,SELECT,UPDATE'
         )
         and position(
-            'cleanup.status = ''dead''' in pg_catalog.pg_get_functiondef(
-                'public.omr_record_operational_job_status_v1(text,text,text,text)'::pg_catalog.regprocedure
+            'nextval' in pg_catalog.pg_get_functiondef(
+                'public.omr_begin_operational_job_run_v1(text,text)'::pg_catalog.regprocedure
+            )
+        ) > 0
+        and position(
+            'p_run_sequence = v_job_status.latest_started_sequence' in pg_catalog.pg_get_functiondef(
+                'public.omr_complete_operational_job_run_v1(text,bigint,text,text,text)'::pg_catalog.regprocedure
             )
         ) > 0
         and position(
             'lock table public.omr_remote_asset_cleanup_queue in share mode' in pg_catalog.pg_get_functiondef(
-                'public.omr_record_operational_job_status_v1(text,text,text,text)'::pg_catalog.regprocedure
+                'public.omr_complete_operational_job_run_v1(text,bigint,text,text,text)'::pg_catalog.regprocedure
             )
         ) > 0
-        and position(
-            'cleanup.status = ''dead''' in pg_catalog.pg_get_functiondef(
-                'public.omr_read_operational_job_status_v1(text)'::pg_catalog.regprocedure
-            )
-        ) > 0
-        and not exists (
-            select 1
-              from pg_catalog.unnest(array['anon', 'authenticated']) browser_role(role_name)
-             where pg_catalog.has_table_privilege(
-                       browser_role.role_name,
-                       'public.omr_operational_job_status',
-                       'SELECT,INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER,MAINTAIN'
-                   )
-                or pg_catalog.has_function_privilege(
-                       browser_role.role_name,
-                       'public.omr_record_operational_job_status_v1(text,text,text,text)',
-                       'EXECUTE'
-                   )
-                or pg_catalog.has_function_privilege(
-                       browser_role.role_name,
-                       'public.omr_read_operational_job_status_v1(text)',
-                       'EXECUTE'
-                   )
-        )
         and not exists (
             select 1
               from pg_catalog.pg_class relation
               cross join lateral pg_catalog.aclexplode(
                   coalesce(relation.relacl, pg_catalog.acldefault('r', relation.relowner))
               ) privilege
-             where relation.oid = 'public.omr_operational_job_status'::pg_catalog.regclass
+             where relation.oid in (
+                       'public.omr_operational_job_status'::pg_catalog.regclass,
+                       'public.omr_operational_job_run_sequence'::pg_catalog.regclass
+                   )
                and privilege.grantee = 0
         )
         and not exists (
@@ -752,27 +754,12 @@ begin
                   coalesce(routine.proacl, pg_catalog.acldefault('f', routine.proowner))
               ) privilege
              where routine.oid in (
-                 'public.omr_record_operational_job_status_v1(text,text,text,text)'::pg_catalog.regprocedure,
-                 'public.omr_read_operational_job_status_v1(text)'::pg_catalog.regprocedure
-             )
-               and privilege.grantee = 0
-               and privilege.privilege_type = 'EXECUTE'
-        )
-        and not exists (
-            select 1
-              from pg_catalog.pg_proc routine
-              cross join lateral pg_catalog.aclexplode(
-                  coalesce(routine.proacl, pg_catalog.acldefault('f', routine.proowner))
-              ) privilege
-             where routine.oid in (
-                 'public.omr_record_operational_job_status_v1(text,text,text,text)'::pg_catalog.regprocedure,
+                 'public.omr_begin_operational_job_run_v1(text,text)'::pg_catalog.regprocedure,
+                 'public.omr_complete_operational_job_run_v1(text,bigint,text,text,text)'::pg_catalog.regprocedure,
                  'public.omr_read_operational_job_status_v1(text)'::pg_catalog.regprocedure
              )
                and privilege.privilege_type = 'EXECUTE'
-               and privilege.grantee not in (
-                   routine.proowner,
-                   'service_role'::pg_catalog.regrole
-               )
+               and privilege.grantee not in (routine.proowner, 'service_role'::pg_catalog.regrole)
         );
 
     v_cleanup_epoch_ready :=

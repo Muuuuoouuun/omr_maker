@@ -1,9 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
 
 import {
+    beginOperationalJobRun,
+    completeOperationalJobRun,
     evaluateAssetGcReadiness,
     readOperationalJobStatus,
-    recordOperationalJobStatus,
 } from "./operationalJobStatusGateway.server";
 
 const BUILD_SHA = "0123456789abcdef0123456789abcdef01234567";
@@ -24,6 +25,8 @@ describe("operational job status gateway", () => {
             deadCount: 0,
             buildSha: BUILD_SHA,
             failureCategory: null,
+            latestStartedSequence: 19,
+            latestCompletedSequence: 19,
         });
 
         await expect(readOperationalJobStatus(client, "asset_gc")).resolves.toEqual({
@@ -33,6 +36,8 @@ describe("operational job status gateway", () => {
             deadCount: 0,
             buildSha: BUILD_SHA,
             failureCategory: null,
+            latestStartedSequence: 19,
+            latestCompletedSequence: 19,
         });
         expect(client.rpc).toHaveBeenCalledWith("omr_read_operational_job_status_v1", {
             p_job_key: "asset_gc",
@@ -50,13 +55,44 @@ describe("operational job status gateway", () => {
             { status: "healthy", lastAttemptAt: NOW.toISOString(), lastSuccessAt: NOW.toISOString(), deadCount: 0, buildSha: "short", failureCategory: null },
             { status: "failed", lastAttemptAt: NOW.toISOString(), lastSuccessAt: null, deadCount: 0, buildSha: BUILD_SHA, failureCategory: "Raw Student@example.com" },
             { status: "healthy", lastAttemptAt: NOW.toISOString(), lastSuccessAt: null, deadCount: 0, buildSha: BUILD_SHA, failureCategory: null },
+            {
+                status: "healthy",
+                lastAttemptAt: NOW.toISOString(),
+                lastSuccessAt: NOW.toISOString(),
+                deadCount: 0,
+                buildSha: BUILD_SHA,
+                failureCategory: null,
+                latestStartedSequence: 20,
+                latestCompletedSequence: 19,
+            },
         ]) {
             await expect(readOperationalJobStatus(clientWithResult(malformed), "asset_gc"))
                 .rejects.toThrow("Operational job status read failed");
         }
     });
 
-    it("returns the authoritative bounded status persisted by the canonical RPC", async () => {
+    it("begins a DB-issued positive generation before cleanup", async () => {
+        const client = clientWithResult({ runSequence: 20 });
+        await expect(beginOperationalJobRun(client, {
+            jobKey: "asset_gc",
+            buildSha: BUILD_SHA,
+        })).resolves.toEqual({ runSequence: 20 });
+        expect(client.rpc).toHaveBeenCalledWith("omr_begin_operational_job_run_v1", {
+            p_job_key: "asset_gc",
+            p_build_sha: BUILD_SHA,
+        });
+    });
+
+    it("rejects a malformed or non-positive begin result", async () => {
+        for (const result of [null, { runSequence: 0 }, { runSequence: -1 }, { runSequence: 1.5 }]) {
+            await expect(beginOperationalJobRun(clientWithResult(result), {
+                jobKey: "asset_gc",
+                buildSha: BUILD_SHA,
+            })).rejects.toThrow("Operational job run begin failed");
+        }
+    });
+
+    it("returns the authoritative bounded completion and supersession result", async () => {
         const persisted = {
             status: "failed",
             lastAttemptAt: "2026-08-08T00:00:00.000Z",
@@ -64,29 +100,37 @@ describe("operational job status gateway", () => {
             deadCount: 2,
             buildSha: BUILD_SHA,
             failureCategory: "dead_backlog",
+            latestStartedSequence: 21,
+            latestCompletedSequence: 21,
+            runSequence: 20,
+            applied: false,
+            superseded: true,
         };
         const client = clientWithResult(persisted);
-        await expect(recordOperationalJobStatus(client, {
+        await expect(completeOperationalJobRun(client, {
             jobKey: "asset_gc",
+            runSequence: 20,
             status: "healthy",
             buildSha: BUILD_SHA,
             failureCategory: null,
         })).resolves.toEqual(persisted);
-        expect(client.rpc).toHaveBeenCalledWith("omr_record_operational_job_status_v1", {
+        expect(client.rpc).toHaveBeenCalledWith("omr_complete_operational_job_run_v1", {
             p_job_key: "asset_gc",
+            p_run_sequence: 20,
             p_status: "healthy",
             p_build_sha: BUILD_SHA,
             p_failure_category: null,
         });
     });
 
-    it("fails closed when the record RPC does not return an authoritative status", async () => {
-        await expect(recordOperationalJobStatus(clientWithResult(true), {
+    it("fails closed when the completion RPC does not return an authoritative status", async () => {
+        await expect(completeOperationalJobRun(clientWithResult(true), {
             jobKey: "asset_gc",
+            runSequence: 20,
             status: "healthy",
             buildSha: BUILD_SHA,
             failureCategory: null,
-        })).rejects.toThrow("Operational job status record failed");
+        })).rejects.toThrow("Operational job run completion failed");
     });
 
     it("rejects malformed build SHA and failure category before calling the RPC", async () => {
@@ -95,12 +139,20 @@ describe("operational job status gateway", () => {
             { status: "failed", buildSha: BUILD_SHA, failureCategory: "student@example.com" },
         ] as const) {
             const client = clientWithResult(true);
-            await expect(recordOperationalJobStatus(client, {
+            await expect(completeOperationalJobRun(client, {
                 jobKey: "asset_gc",
+                runSequence: 20,
                 ...input,
             })).rejects.toThrow("Invalid operational job status");
             expect(client.rpc).not.toHaveBeenCalled();
         }
+        await expect(completeOperationalJobRun(clientWithResult(true), {
+            jobKey: "asset_gc",
+            runSequence: 0,
+            status: "healthy",
+            buildSha: BUILD_SHA,
+            failureCategory: null,
+        })).rejects.toThrow("Invalid operational job status");
     });
 
     it("accepts the exact 30-hour boundary and rejects one millisecond older", () => {
@@ -112,6 +164,8 @@ describe("operational job status gateway", () => {
             buildSha: BUILD_SHA,
             expectedBuildSha: BUILD_SHA,
             failureCategory: null,
+            latestStartedSequence: 19,
+            latestCompletedSequence: 19,
         };
         expect(evaluateAssetGcReadiness({
             ...base,
@@ -130,6 +184,8 @@ describe("operational job status gateway", () => {
             lastSuccessAt: NOW.toISOString(),
             buildSha: BUILD_SHA,
             expectedBuildSha: BUILD_SHA,
+            latestStartedSequence: 19,
+            latestCompletedSequence: 19,
         };
         expect(evaluateAssetGcReadiness({
             ...base,
@@ -150,5 +206,20 @@ describe("operational job status gateway", () => {
             failureCategory: null,
             expectedBuildSha: "f".repeat(40),
         })).toBe("build_mismatch");
+    });
+
+    it("rejects an in-flight latest generation even after a prior successful run", () => {
+        expect(evaluateAssetGcReadiness({
+            now: NOW,
+            status: "failed",
+            lastAttemptAt: NOW.toISOString(),
+            lastSuccessAt: NOW.toISOString(),
+            deadCount: 0,
+            buildSha: BUILD_SHA,
+            expectedBuildSha: BUILD_SHA,
+            failureCategory: "run_incomplete",
+            latestStartedSequence: 20,
+            latestCompletedSequence: 19,
+        })).toBe("incomplete");
     });
 });

@@ -239,7 +239,14 @@ describe("remote asset cleanup service", () => {
             workerId: "worker-1",
             batchSize: 1,
             maxBatches: 24,
-        })).resolves.toEqual({ claimed: 2, deleted: 2, failed: 0, batches: 3 });
+        })).resolves.toEqual({
+            claimed: 2,
+            deleted: 2,
+            failed: 0,
+            batches: 3,
+            claimAttempts: 3,
+            nonemptyBatches: 2,
+        });
         expect(claims).toBe(3);
     });
 
@@ -273,7 +280,14 @@ describe("remote asset cleanup service", () => {
             deadlineAtMs: 56_000,
             minimumBatchBudgetMs: 30_000,
             now: () => now,
-        })).resolves.toEqual({ claimed: 1, deleted: 1, failed: 0, batches: 1 });
+        })).resolves.toEqual({
+            claimed: 1,
+            deleted: 1,
+            failed: 0,
+            batches: 1,
+            claimAttempts: 1,
+            nonemptyBatches: 1,
+        });
         expect(claims).toBe(1);
     });
 });

@@ -5,6 +5,8 @@ import { describe, expect, it } from "vitest";
 
 const workflow = readFileSync(resolve(".github/workflows/production-readiness.yml"), "utf8");
 const operationsGuide = readFileSync(resolve("docs/production-readiness.md"), "utf8");
+const backupRunbook = readFileSync(resolve("docs/operations/backup-restore-runbook.md"), "utf8");
+const evidenceTemplate = readFileSync(resolve("docs/operations/release-evidence-template.md"), "utf8");
 const defaultBranchOnly = "if: github.ref == format('refs/heads/{0}', github.event.repository.default_branch)";
 
 function hasDefaultBranchOnlyGate(candidate: string): boolean {
@@ -19,6 +21,11 @@ describe("production readiness workflow release identity", () => {
         expect(readiness).toBeGreaterThan(bootstrap);
         expect(operationsGuide).toMatch(/writes?[^\n]{0,80}paused/i);
         expect(operationsGuide).toMatch(/GC claims?[^\n]{0,100}(?:resume|resumed)/i);
+        expect(operationsGuide).toMatch(/pause[^\n]{0,100}Vercel[^\n]{0,100}(?:cron|scheduler)/i);
+        expect(operationsGuide).toMatch(/only[^\n]{0,100}(?:one-shot|verifier)[^\n]{0,100}claim/i);
+        expect(operationsGuide).toMatch(/resume[^\n]{0,100}(?:cron|scheduler)[^\n]{0,100}ready/i);
+        expect(backupRunbook).toMatch(/Vercel[^\n]{0,100}(?:cron|scheduler)[^\n]{0,100}(?:pause|중지)/i);
+        expect(evidenceTemplate).toMatch(/scheduler pause confirmation hash/i);
     });
     it.each(["preview_deployment_id", "preview_artifact_digest", "preview_attestation_signature"])(
         "requires the %s dispatch input",
@@ -28,6 +35,27 @@ describe("production readiness workflow release identity", () => {
             ));
         },
     );
+
+    it("requires a target-bound scheduler-pause confirmation before repository execution", () => {
+        expect(workflow).toMatch(
+            /      asset_gc_scheduler_pause_confirmation:\n(?:        .+\n)*?        required: true\n/,
+        );
+        const gate = workflow.indexOf("- name: Verify asset GC scheduler pause confirmation");
+        const checkout = workflow.indexOf("- uses: actions/checkout@v4");
+        expect(gate).toBeGreaterThan(-1);
+        expect(gate).toBeLessThan(checkout);
+        const preCheckout = workflow.slice(gate, checkout);
+        expect(preCheckout).toContain(
+            "OMR_PRODUCTION_ASSET_GC_PAUSED_REF: ${{ inputs.asset_gc_scheduler_pause_confirmation }}",
+        );
+        expect(preCheckout).toContain("OMR_PRODUCTION_HOST: ${{ secrets.OMR_PRODUCTION_HOST }}");
+        expect(preCheckout).toContain(
+            'test "$OMR_PRODUCTION_ASSET_GC_PAUSED_REF" = "asset-gc-paused:$OMR_PRODUCTION_HOST"',
+        );
+        expect(workflow).toContain(
+            "OMR_PRODUCTION_ASSET_GC_PAUSED_REF: ${{ inputs.asset_gc_scheduler_pause_confirmation }}",
+        );
+    });
 
     it("checks out the exact expected build", () => {
         expect(workflow).toContain("          ref: ${{ inputs.expected_build }}");

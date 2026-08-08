@@ -24,6 +24,10 @@ on:
         required: true
         default: "202608080005"
         type: string
+      asset_gc_scheduler_pause_confirmation:
+        description: Exact target-bound confirmation (asset-gc-paused:<production-host>)
+        required: true
+        type: string
 
 concurrency:
   group: production-readiness
@@ -47,6 +51,11 @@ jobs:
           OMR_PRODUCTION_EXPECTED_BUILD: ${{ inputs.expected_build }}
           WORKFLOW_SHA: ${{ github.sha }}
         run: test "$OMR_PRODUCTION_EXPECTED_BUILD" = "$WORKFLOW_SHA"
+      - name: Verify asset GC scheduler pause confirmation
+        env:
+          OMR_PRODUCTION_ASSET_GC_PAUSED_REF: ${{ inputs.asset_gc_scheduler_pause_confirmation }}
+          OMR_PRODUCTION_HOST: ${{ secrets.OMR_PRODUCTION_HOST }}
+        run: test "$OMR_PRODUCTION_ASSET_GC_PAUSED_REF" = "asset-gc-paused:$OMR_PRODUCTION_HOST"
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
@@ -76,6 +85,7 @@ jobs:
           OMR_PRODUCTION_SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.OMR_PRODUCTION_SUPABASE_SERVICE_ROLE_KEY }}
           OMR_READINESS_TOKEN: ${{ secrets.OMR_READINESS_TOKEN }}
           OMR_ASSET_GC_CRON_SECRET: ${{ secrets.OMR_ASSET_GC_CRON_SECRET }}
+          OMR_PRODUCTION_ASSET_GC_PAUSED_REF: ${{ inputs.asset_gc_scheduler_pause_confirmation }}
           OMR_PRODUCTION_EXPECTED_BUILD: ${{ inputs.expected_build }}
           OMR_PRODUCTION_PREVIEW_DEPLOYMENT_ID: ${{ inputs.preview_deployment_id }}
           OMR_PRODUCTION_PREVIEW_ARTIFACT_DIGEST: ${{ inputs.preview_artifact_digest }}

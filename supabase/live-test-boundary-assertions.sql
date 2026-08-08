@@ -68,7 +68,11 @@ begin
         'EXECUTE'
     ) or not pg_catalog.has_function_privilege(
         'service_role',
-        'public.omr_record_operational_job_status_v1(text,text,text,text)',
+        'public.omr_begin_operational_job_run_v1(text,text)',
+        'EXECUTE'
+    ) or not pg_catalog.has_function_privilege(
+        'service_role',
+        'public.omr_complete_operational_job_run_v1(text,bigint,text,text,text)',
         'EXECUTE'
     ) or not pg_catalog.has_function_privilege(
         'service_role',

@@ -14,7 +14,9 @@
 
 ## 1. 백업 생성
 
-1. production 쓰기와 `/api/internal/asset-gc` 스케줄을 중지합니다.
+1. production 쓰기를 중지하고 Vercel asset-GC cron/scheduler trigger를 명시적으로 pause합니다.
+   백업·cutover·qualification 동안에는 protected workflow가 실행하는 verifier one-shot 외의
+   `/api/internal/asset-gc` claim을 허용하지 않습니다.
 2. leased cleanup row가 0인지 확인합니다.
 3. 새 0700 디렉터리로 백업합니다. 이 디렉터리는 전체 학생 DB·PDF·필기를 포함하므로 OS 권한만 믿지 말고 KMS가 적용된 암호화 볼륨에 두며 전송 전 별도 암호화합니다.
 

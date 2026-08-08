@@ -145,6 +145,12 @@ export function resolveProductionDeploymentConfig(input) {
         throw new Error("Confirmed production host is missing or invalid");
     }
     const database = strictOrigin(env.OMR_PRODUCTION_SUPABASE_URL, "Production Supabase URL", ".supabase.co");
+    const schedulerPauseConfirmation = typeof env.OMR_PRODUCTION_ASSET_GC_PAUSED_REF === "string"
+        ? env.OMR_PRODUCTION_ASSET_GC_PAUSED_REF
+        : "";
+    if (schedulerPauseConfirmation !== `asset-gc-paused:${app.hostname}`) {
+        throw new Error("Asset GC scheduler pause confirmation is missing or invalid");
+    }
     const projectRef = database.hostname.match(/^([a-z0-9-]+)\.supabase\.co$/)?.[1] ?? "";
     if (!PROJECT_REF.test(projectRef)) throw new Error("Production Supabase project ref is invalid");
     const expectedBuild = typeof env.OMR_PRODUCTION_EXPECTED_BUILD === "string"
@@ -200,6 +206,9 @@ export function resolveProductionDeploymentConfig(input) {
         productionHost: app.hostname,
         supabaseUrl: database.origin,
         databaseProjectRefHash: createHash("sha256").update(projectRef).digest("hex"),
+        schedulerPauseConfirmationHash: createHash("sha256")
+            .update(schedulerPauseConfirmation)
+            .digest("hex"),
         expectedBuild,
         verifierSha,
         previewDeploymentId,
@@ -300,8 +309,27 @@ export async function runProductionDeploymentVerification(config, fetchImpl = fe
         || !["ready", "degraded"].includes(assetGc.body?.observability)
         || !boundedCount(assetGc.body?.claimed, 100)
         || !boundedCount(assetGc.body?.deleted, 100)
-        || assetGc.body?.failed !== 0
+        || !boundedCount(assetGc.body?.failed, 100)
+        || assetGc.body.failed !== 0
         || !boundedCount(assetGc.body?.batches, 4)
+        || assetGc.body.batches < 1
+        || !boundedCount(assetGc.body?.claimAttempts, 4)
+        || assetGc.body.claimAttempts < 1
+        || assetGc.body.claimAttempts !== assetGc.body.batches
+        || !boundedCount(assetGc.body?.nonemptyBatches, 4)
+        || assetGc.body.nonemptyBatches > assetGc.body.claimAttempts
+        || assetGc.body.claimed !== assetGc.body.deleted + assetGc.body.failed
+        || (assetGc.body.claimed === 0 && assetGc.body.nonemptyBatches !== 0)
+        || (assetGc.body.claimed > 0 && (
+            assetGc.body.nonemptyBatches < 1
+            || assetGc.body.claimed > 25 * assetGc.body.nonemptyBatches
+        ))
+        || !Number.isSafeInteger(assetGc.body?.runSequence)
+        || assetGc.body.runSequence <= 0
+        || assetGc.body.applied !== true
+        || assetGc.body.superseded !== false
+        || assetGc.body.durableStatus !== "healthy"
+        || assetGc.body.deadCount !== 0
     ) throw new Error("Production asset GC bootstrap failed");
 
     const readinessUrl = new URL("/api/readyz", `${config.baseUrl}/`);
@@ -366,9 +394,15 @@ export async function runProductionDeploymentVerification(config, fetchImpl = fe
         }),
         readinessVersion: config.expectedReadinessVersion,
         databaseProjectRefHash: config.databaseProjectRefHash,
+        schedulerPauseConfirmationHash: config.schedulerPauseConfirmationHash,
         assetGcBootstrap: Object.freeze({
             status: "healthy",
             observability: assetGc.body.observability,
+            runSequence: assetGc.body.runSequence,
+            claimed: assetGc.body.claimed,
+            deleted: assetGc.body.deleted,
+            claimAttempts: assetGc.body.claimAttempts,
+            nonemptyBatches: assetGc.body.nonemptyBatches,
         }),
         access,
         staticAssetCompression,

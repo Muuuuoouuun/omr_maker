@@ -74,7 +74,10 @@ function snapshotSeverity(value: unknown): OperationalSeverity {
 
 function snapshotHeartbeatMetrics(value: unknown): Record<string, number> {
     const metrics: Record<string, number> = {};
-    for (const key of ["claimed", "deleted", "failed", "batches"]) {
+    for (const key of [
+        "claimed", "deleted", "failed", "batches",
+        "claimAttempts", "nonemptyBatches", "runSequence", "applied", "superseded",
+    ]) {
         const metric = ownDataValue(value, key);
         if (typeof metric === "number" && Number.isSafeInteger(metric) && metric >= 0) {
             metrics[key] = metric;

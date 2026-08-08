@@ -5,7 +5,8 @@ const mocks = vi.hoisted(() => ({
     drain: vi.fn(),
     heartbeat: vi.fn(),
     reportError: vi.fn(),
-    recordJobStatus: vi.fn(),
+    beginJobRun: vi.fn(),
+    completeJobRun: vi.fn(),
 }));
 
 const BUILD_SHA = "0123456789abcdef0123456789abcdef01234567";
@@ -18,6 +19,11 @@ function persistedStatus(overrides: Record<string, unknown> = {}) {
         deadCount: 0,
         buildSha: BUILD_SHA,
         failureCategory: null,
+        latestStartedSequence: 20,
+        latestCompletedSequence: 20,
+        runSequence: 20,
+        applied: true,
+        superseded: false,
         ...overrides,
     };
 }
@@ -43,7 +49,8 @@ vi.mock("@/lib/reportServerError", () => ({
 
 vi.mock("@/lib/operationalJobStatusGateway.server", () => ({
     operationalRuntimeBuildSha: () => BUILD_SHA,
-    recordOperationalJobStatus: mocks.recordJobStatus,
+    beginOperationalJobRun: mocks.beginJobRun,
+    completeOperationalJobRun: mocks.completeJobRun,
 }));
 
 import { GET } from "@/app/api/internal/asset-gc/route";
@@ -52,10 +59,13 @@ describe("remote asset cleanup route behavior", () => {
     beforeEach(() => {
         vi.clearAllMocks();
         mocks.authorize.mockReturnValue(true);
-        mocks.drain.mockResolvedValue({ claimed: 2, deleted: 2, failed: 0, batches: 1 });
+        mocks.drain.mockResolvedValue({
+            claimed: 2, deleted: 2, failed: 0, batches: 1, claimAttempts: 1, nonemptyBatches: 1,
+        });
         mocks.heartbeat.mockResolvedValue({ status: "delivered" });
         mocks.reportError.mockResolvedValue({ status: "delivered" });
-        mocks.recordJobStatus.mockResolvedValue(persistedStatus());
+        mocks.beginJobRun.mockResolvedValue({ runSequence: 20 });
+        mocks.completeJobRun.mockResolvedValue(persistedStatus());
     });
 
     it("returns success only after a clean run and delivered heartbeat", async () => {
@@ -68,15 +78,34 @@ describe("remote asset cleanup route behavior", () => {
             deleted: 2,
             failed: 0,
             batches: 1,
+            claimAttempts: 1,
+            nonemptyBatches: 1,
+            runSequence: 20,
+            applied: true,
+            superseded: false,
+            durableStatus: "healthy",
+            deadCount: 0,
         });
         expect(mocks.heartbeat).toHaveBeenCalledWith("asset-gc", "ok", {
             claimed: 2,
             deleted: 2,
             failed: 0,
             batches: 1,
+            claimAttempts: 1,
+            nonemptyBatches: 1,
+            runSequence: 20,
+            applied: true,
+            superseded: false,
         });
-        expect(mocks.recordJobStatus).toHaveBeenCalledWith(expect.anything(), {
+        expect(mocks.beginJobRun).toHaveBeenCalledWith(expect.anything(), {
             jobKey: "asset_gc",
+            buildSha: BUILD_SHA,
+        });
+        expect(mocks.beginJobRun.mock.invocationCallOrder[0])
+            .toBeLessThan(mocks.drain.mock.invocationCallOrder[0]);
+        expect(mocks.completeJobRun).toHaveBeenCalledWith(expect.anything(), {
+            jobKey: "asset_gc",
+            runSequence: 20,
             status: "healthy",
             buildSha: "0123456789abcdef0123456789abcdef01234567",
             failureCategory: null,
@@ -84,7 +113,9 @@ describe("remote asset cleanup route behavior", () => {
     });
 
     it("keeps a clean GC run successful while exposing degraded telemetry", async () => {
-        mocks.drain.mockResolvedValue({ claimed: 0, deleted: 0, failed: 0, batches: 1 });
+        mocks.drain.mockResolvedValue({
+            claimed: 0, deleted: 0, failed: 0, batches: 1, claimAttempts: 1, nonemptyBatches: 0,
+        });
         mocks.heartbeat.mockResolvedValue({ status: "rejected" });
         const response = await GET(new Request("https://app.example.test/api/internal/asset-gc"));
         expect(response.status).toBe(200);
@@ -95,19 +126,28 @@ describe("remote asset cleanup route behavior", () => {
             deleted: 0,
             failed: 0,
             batches: 1,
+            claimAttempts: 1,
+            nonemptyBatches: 0,
+            runSequence: 20,
+            applied: true,
+            superseded: false,
+            durableStatus: "healthy",
+            deadCount: 0,
         });
-        expect(mocks.recordJobStatus).toHaveBeenCalledWith(
+        expect(mocks.completeJobRun).toHaveBeenCalledWith(
             expect.anything(),
             expect.objectContaining({ status: "healthy" }),
         );
     });
 
     it("returns a redacted 503 for partial cleanup failure", async () => {
-        const cleanup = { claimed: 2, deleted: 1, failed: 1, batches: 1 };
+        const cleanup = {
+            claimed: 2, deleted: 1, failed: 1, batches: 1, claimAttempts: 1, nonemptyBatches: 1,
+        };
         const heartbeat = { status: "delivered" };
         mocks.drain.mockResolvedValue(cleanup);
         mocks.heartbeat.mockResolvedValue(heartbeat);
-        mocks.recordJobStatus.mockResolvedValue(persistedStatus({
+        mocks.completeJobRun.mockResolvedValue(persistedStatus({
             status: "failed",
             lastSuccessAt: null,
             failureCategory: "cleanup_failed",
@@ -118,9 +158,9 @@ describe("remote asset cleanup route behavior", () => {
         expect(mocks.heartbeat).toHaveBeenCalledWith(
             "asset-gc",
             cleanup.failed > 0 ? "degraded" : "ok",
-            cleanup,
+            expect.objectContaining(cleanup),
         );
-        expect(mocks.recordJobStatus).toHaveBeenCalledWith(
+        expect(mocks.completeJobRun).toHaveBeenCalledWith(
             expect.anything(),
             expect.objectContaining({
                 status: "failed",
@@ -130,21 +170,32 @@ describe("remote asset cleanup route behavior", () => {
     });
 
     it("does not let a newer healthy row mask this invocation's cleanup failure", async () => {
-        const cleanup = { claimed: 2, deleted: 1, failed: 1, batches: 1 };
+        const cleanup = {
+            claimed: 2, deleted: 1, failed: 1, batches: 1, claimAttempts: 1, nonemptyBatches: 1,
+        };
         mocks.drain.mockResolvedValue(cleanup);
-        mocks.recordJobStatus.mockResolvedValue(persistedStatus());
+        mocks.completeJobRun.mockResolvedValue(persistedStatus({
+            latestStartedSequence: 21,
+            latestCompletedSequence: 21,
+            applied: false,
+            superseded: true,
+        }));
 
         const response = await GET(new Request("https://app.example.test/api/internal/asset-gc"));
 
         expect(response.status).toBe(503);
         await expect(response.json()).resolves.toEqual({ status: "unavailable" });
-        expect(mocks.heartbeat).toHaveBeenCalledWith("asset-gc", "degraded", cleanup);
+        expect(mocks.heartbeat).toHaveBeenCalledWith(
+            "asset-gc", "degraded", expect.objectContaining(cleanup),
+        );
     });
 
     it("returns 503 when a clean batch reveals a pre-existing durable dead backlog", async () => {
-        const cleanup = { claimed: 0, deleted: 0, failed: 0, batches: 1 };
+        const cleanup = {
+            claimed: 0, deleted: 0, failed: 0, batches: 1, claimAttempts: 1, nonemptyBatches: 0,
+        };
         mocks.drain.mockResolvedValue(cleanup);
-        mocks.recordJobStatus.mockResolvedValue(persistedStatus({
+        mocks.completeJobRun.mockResolvedValue(persistedStatus({
             status: "failed",
             deadCount: 1,
             failureCategory: "dead_backlog",
@@ -154,11 +205,13 @@ describe("remote asset cleanup route behavior", () => {
 
         expect(response.status).toBe(503);
         await expect(response.json()).resolves.toEqual({ status: "unavailable" });
-        expect(mocks.heartbeat).toHaveBeenCalledWith("asset-gc", "degraded", cleanup);
+        expect(mocks.heartbeat).toHaveBeenCalledWith(
+            "asset-gc", "degraded", expect.objectContaining(cleanup),
+        );
     });
 
     it("fails the route closed when authoritative persistence is unavailable", async () => {
-        mocks.recordJobStatus.mockRejectedValue(new Error("database unavailable"));
+        mocks.completeJobRun.mockRejectedValue(new Error("database unavailable"));
 
         const response = await GET(new Request("https://app.example.test/api/internal/asset-gc"));
 
@@ -174,7 +227,7 @@ describe("remote asset cleanup route behavior", () => {
         expect(response.status).toBe(503);
         await expect(response.json()).resolves.toEqual({ status: "unavailable" });
         expect(mocks.reportError).toHaveBeenCalledWith("asset-gc", expect.any(Error));
-        expect(mocks.recordJobStatus).toHaveBeenCalledWith(
+        expect(mocks.completeJobRun).toHaveBeenCalledWith(
             expect.anything(),
             expect.objectContaining({
                 status: "failed",
@@ -191,10 +244,43 @@ describe("remote asset cleanup route behavior", () => {
             status: "ok",
             observability: "degraded",
         });
-        expect(mocks.recordJobStatus).toHaveBeenCalledTimes(1);
-        expect(mocks.recordJobStatus).toHaveBeenCalledWith(
+        expect(mocks.completeJobRun).toHaveBeenCalledTimes(1);
+        expect(mocks.completeJobRun).toHaveBeenCalledWith(
             expect.anything(),
             expect.objectContaining({ status: "healthy" }),
         );
+    });
+
+    it("does not run cleanup when the DB generation cannot begin", async () => {
+        mocks.beginJobRun.mockRejectedValue(new Error("database unavailable"));
+
+        const response = await GET(new Request("https://app.example.test/api/internal/asset-gc"));
+
+        expect(response.status).toBe(503);
+        await expect(response.json()).resolves.toEqual({ status: "unavailable" });
+        expect(mocks.drain).not.toHaveBeenCalled();
+        expect(mocks.completeJobRun).not.toHaveBeenCalled();
+        expect(mocks.reportError).toHaveBeenCalledWith("asset-gc", expect.any(Error));
+    });
+
+    it("returns an authoritative superseded healthy generation without masking proof", async () => {
+        mocks.completeJobRun.mockResolvedValue(persistedStatus({
+            latestStartedSequence: 21,
+            latestCompletedSequence: 21,
+            runSequence: 20,
+            applied: false,
+            superseded: true,
+        }));
+
+        const response = await GET(new Request("https://app.example.test/api/internal/asset-gc"));
+
+        expect(response.status).toBe(200);
+        await expect(response.json()).resolves.toMatchObject({
+            status: "ok",
+            runSequence: 20,
+            applied: false,
+            superseded: true,
+            durableStatus: "healthy",
+        });
     });
 });

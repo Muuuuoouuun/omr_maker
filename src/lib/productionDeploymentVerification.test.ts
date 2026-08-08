@@ -24,6 +24,7 @@ const ANON_KEY = "anon-key-which-is-at-least-32-random-bytes";
 const AUTH_JWT = `eyJhbGciOiJIUzI1NiJ9.${"a".repeat(32)}.${"b".repeat(32)}`;
 const SERVICE_KEY = "service-role-key-which-is-at-least-32-bytes";
 const ASSET_GC_CRON_SECRET = "asset-gc-cron-secret-with-strong-entropy-42";
+const SCHEDULER_PAUSE_CONFIRMATION = "asset-gc-paused:app.example.com";
 
 function signPreviewIdentity(secret: string): string {
     return createHmac("sha256", secret)
@@ -52,6 +53,7 @@ function env() {
         OMR_PRODUCTION_PREVIEW_ATTESTATION_SIGNATURE: PREVIEW_ATTESTATION_SIGNATURE,
         OMR_RELEASE_ATTESTATION_SECRET: RELEASE_ATTESTATION_SECRET,
         OMR_ASSET_GC_CRON_SECRET: ASSET_GC_CRON_SECRET,
+        OMR_PRODUCTION_ASSET_GC_PAUSED_REF: SCHEDULER_PAUSE_CONFIRMATION,
     };
 }
 
@@ -72,6 +74,7 @@ function fetchFor(options: {
     denyStatus?: number;
     assetGcStatus?: number;
     assetGcObservability?: string;
+    assetGcBody?: Record<string, unknown>;
 } = {}) {
     return vi.fn(async (input: URL | RequestInfo, init?: RequestInit) => {
         const url = String(input);
@@ -114,6 +117,14 @@ function fetchFor(options: {
                 deleted: 0,
                 failed: 0,
                 batches: 1,
+                claimAttempts: 1,
+                nonemptyBatches: 0,
+                runSequence: 20,
+                applied: true,
+                superseded: false,
+                durableStatus: "healthy",
+                deadCount: 0,
+                ...options.assetGcBody,
             }, options.assetGcStatus ?? 200);
             Object.defineProperties(result, { url: { value: url }, redirected: { value: false } });
             return result;
@@ -197,12 +208,32 @@ describe("hosted production deployment verification", () => {
             previewIdentityAttested: true,
             expectedReadinessVersion: VERSION,
             databaseProjectRefHash: createHash("sha256").update(PROJECT_REF).digest("hex"),
+            schedulerPauseConfirmationHash: createHash("sha256")
+                .update(SCHEDULER_PAUSE_CONFIRMATION)
+                .digest("hex"),
         });
         expect(JSON.stringify(config)).not.toContain(READINESS_TOKEN);
         expect(JSON.stringify(config)).not.toContain(SERVICE_KEY);
         expect(JSON.stringify(config)).not.toContain(RELEASE_ATTESTATION_SECRET);
         expect(JSON.stringify(config)).not.toContain(PREVIEW_ATTESTATION_SIGNATURE);
         expect(JSON.stringify(config)).not.toContain(ASSET_GC_CRON_SECRET);
+        expect(JSON.stringify(config)).not.toContain(SCHEDULER_PAUSE_CONFIRMATION);
+    });
+
+    it.each([
+        ["missing", undefined],
+        ["wrong target", "asset-gc-paused:preview.example.com"],
+        ["bare boolean", "true"],
+    ])("rejects a %s target-bound scheduler pause confirmation", (_label, value) => {
+        const outputRoot = mkdtempSync(join(tmpdir(), "omr-release-pause-confirmation-"));
+        expect(() => resolveProductionDeploymentConfig({
+            argv: [
+                "--confirm-production-host=app.example.com",
+                `--output=${join(outputRoot, "release.json")}`,
+            ],
+            env: { ...env(), OMR_PRODUCTION_ASSET_GC_PAUSED_REF: value },
+            cwd: process.cwd(),
+        })).toThrow(/scheduler.*pause.*confirmation/i);
     });
 
     it.each([
@@ -386,6 +417,7 @@ describe("hosted production deployment verification", () => {
         expect(JSON.stringify(result)).not.toContain(RELEASE_ATTESTATION_SECRET);
         expect(JSON.stringify(result)).not.toContain(PREVIEW_ATTESTATION_SIGNATURE);
         expect(JSON.stringify(result)).not.toContain(ASSET_GC_CRON_SECRET);
+        expect(JSON.stringify(result)).not.toContain(SCHEDULER_PAUSE_CONFIRMATION);
         expect(result.releaseIdentity).toEqual({
             verifierSha: BUILD,
             deployedSha: BUILD,
@@ -399,7 +431,18 @@ describe("hosted production deployment verification", () => {
         expect(requestUrls.indexOf("https://app.example.com/api/internal/asset-gc"))
             .toBeLessThan(requestUrls.indexOf("https://app.example.com/api/readyz"));
         expect(result).toMatchObject({
-            assetGcBootstrap: { status: "healthy", observability: "ready" },
+            assetGcBootstrap: {
+                status: "healthy",
+                observability: "ready",
+                runSequence: 20,
+                claimed: 0,
+                deleted: 0,
+                claimAttempts: 1,
+                nonemptyBatches: 0,
+            },
+            schedulerPauseConfirmationHash: createHash("sha256")
+                .update(SCHEDULER_PAUSE_CONFIRMATION)
+                .digest("hex"),
         });
     });
 
@@ -445,6 +488,29 @@ describe("hosted production deployment verification", () => {
         });
         await expect(runProductionDeploymentVerification(config, fetchFor({ assetGcStatus: 503 })))
             .rejects.toThrow();
+    });
+
+    it.each([
+        ["zero run sequence", { runSequence: 0 }],
+        ["no sweep proof", { batches: 0, claimAttempts: 0 }],
+        ["claimed arithmetic mismatch", { claimed: 2, deleted: 1, failed: 0, nonemptyBatches: 1 }],
+        ["capacity mismatch", { claimed: 26, deleted: 26, nonemptyBatches: 1 }],
+        ["empty with nonempty batch", { claimed: 0, deleted: 0, nonemptyBatches: 1 }],
+        ["unapplied generation", { applied: false, superseded: true }],
+        ["dead durable status", { durableStatus: "failed", deadCount: 1 }],
+        ["unsafe integer", { claimed: Number.MAX_SAFE_INTEGER + 1 }],
+    ])("rejects adversarial one-shot proof: %s", async (_label, assetGcBody) => {
+        const outputRoot = mkdtempSync(join(tmpdir(), "omr-release-gc-proof-"));
+        const config = resolveProductionDeploymentConfig({
+            argv: [
+                "--confirm-production-host=app.example.com",
+                `--output=${join(outputRoot, "release.json")}`,
+            ],
+            env: env(),
+            cwd: process.cwd(),
+        });
+        await expect(runProductionDeploymentVerification(config, fetchFor({ assetGcBody })))
+            .rejects.toThrow(/asset GC bootstrap/i);
     });
 
     it.each([

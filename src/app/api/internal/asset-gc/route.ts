@@ -10,8 +10,9 @@ import {
 } from "@/lib/remoteAssetCleanup.server";
 import { reportOperationalHeartbeat, reportServerError } from "@/lib/reportServerError";
 import {
+    beginOperationalJobRun,
+    completeOperationalJobRun,
     operationalRuntimeBuildSha,
-    recordOperationalJobStatus,
     type OperationalJobStatusGatewayClient,
 } from "@/lib/operationalJobStatusGateway.server";
 
@@ -40,6 +41,20 @@ export async function GET(request: Request): Promise<Response> {
     };
     const client = createSupabaseAdminClient(cleanupConfig) as unknown as
         RemoteAssetCleanupGatewayClient & OperationalJobStatusGatewayClient;
+    const buildSha = operationalRuntimeBuildSha();
+    let runSequence: number;
+    try {
+        ({ runSequence } = await beginOperationalJobRun(client, {
+            jobKey: "asset_gc",
+            buildSha,
+        }));
+    } catch (error) {
+        await reportServerError("asset-gc", error);
+        return Response.json({ status: "unavailable" }, {
+            status: 503,
+            headers: NO_STORE_HEADERS,
+        });
+    }
     let result: Awaited<ReturnType<typeof drainRemoteAssetCleanupWithGateway>>;
     try {
         result = await drainRemoteAssetCleanupWithGateway(
@@ -55,10 +70,11 @@ export async function GET(request: Request): Promise<Response> {
         );
     } catch (error) {
         try {
-            await recordOperationalJobStatus(client, {
+            await completeOperationalJobRun(client, {
                 jobKey: "asset_gc",
+                runSequence,
                 status: "failed",
-                buildSha: operationalRuntimeBuildSha(),
+                buildSha,
                 failureCategory: "cleanup_exception",
             });
         } catch {
@@ -71,13 +87,17 @@ export async function GET(request: Request): Promise<Response> {
         });
     }
 
-    let persistedStatus: Awaited<ReturnType<typeof recordOperationalJobStatus>>;
+    const sweepIncomplete = result.claimAttempts < 1;
+    let persistedStatus: Awaited<ReturnType<typeof completeOperationalJobRun>>;
     try {
-        persistedStatus = await recordOperationalJobStatus(client, {
+        persistedStatus = await completeOperationalJobRun(client, {
             jobKey: "asset_gc",
-            status: result.failed > 0 ? "failed" : "healthy",
-            buildSha: operationalRuntimeBuildSha(),
-            failureCategory: result.failed > 0 ? "cleanup_failed" : null,
+            runSequence,
+            status: result.failed > 0 || sweepIncomplete ? "failed" : "healthy",
+            buildSha,
+            failureCategory: result.failed > 0
+                ? "cleanup_failed"
+                : sweepIncomplete ? "sweep_not_completed" : null,
         });
     } catch (error) {
         await reportServerError("asset-gc", error);
@@ -88,12 +108,19 @@ export async function GET(request: Request): Promise<Response> {
     }
 
     const durableFailure = result.failed > 0
+        || sweepIncomplete
         || persistedStatus.status !== "healthy"
         || persistedStatus.deadCount !== 0;
+    const proof = {
+        ...result,
+        runSequence,
+        applied: persistedStatus.applied,
+        superseded: persistedStatus.superseded,
+    };
     const heartbeat = await reportOperationalHeartbeat(
         "asset-gc",
         durableFailure ? "degraded" : "ok",
-        result,
+        proof,
     ).catch(() => ({ status: "rejected" as const }));
     if (durableFailure) {
         return Response.json({ status: "unavailable" }, {
@@ -104,7 +131,9 @@ export async function GET(request: Request): Promise<Response> {
     return Response.json({
         status: "ok",
         observability: heartbeat.status === "delivered" ? "ready" : "degraded",
-        ...result,
+        ...proof,
+        durableStatus: persistedStatus.status,
+        deadCount: persistedStatus.deadCount,
     }, {
         status: 200,
         headers: NO_STORE_HEADERS,

@@ -12,6 +12,14 @@ export type OperationalJobStatus = {
     deadCount: number;
     buildSha: string;
     failureCategory: string | null;
+    latestStartedSequence: number;
+    latestCompletedSequence: number | null;
+};
+
+export type OperationalJobRunCompletion = OperationalJobStatus & {
+    runSequence: number;
+    applied: boolean;
+    superseded: boolean;
 };
 
 export interface OperationalJobStatusGatewayClient {
@@ -28,6 +36,7 @@ export type AssetGcReadiness =
     | "stale"
     | "dead_items"
     | "build_mismatch"
+    | "incomplete"
     | "malformed";
 
 const BUILD_SHA_PATTERN = /^[a-f0-9]{40}$/;
@@ -69,6 +78,8 @@ function parseOperationalJobStatus(value: unknown): OperationalJobStatus | null 
     const deadCount = row.deadCount;
     const buildSha = normalizedBuildSha(row.buildSha);
     const failureCategory = normalizedFailureCategory(row.failureCategory);
+    const latestStartedSequence = row.latestStartedSequence;
+    const latestCompletedSequence = row.latestCompletedSequence;
     if (
         (status !== "healthy" && status !== "failed")
         || !lastAttemptAt
@@ -77,7 +88,15 @@ function parseOperationalJobStatus(value: unknown): OperationalJobStatus | null 
         || (deadCount as number) < 0
         || (deadCount as number) > MAX_DEAD_COUNT
         || !buildSha
+        || !Number.isSafeInteger(latestStartedSequence)
+        || (latestStartedSequence as number) <= 0
+        || (latestCompletedSequence !== null && (
+            !Number.isSafeInteger(latestCompletedSequence)
+            || (latestCompletedSequence as number) <= 0
+            || (latestCompletedSequence as number) > (latestStartedSequence as number)
+        ))
         || (status === "healthy" && (!lastSuccessAt || failureCategory !== null))
+        || (status === "healthy" && latestCompletedSequence !== latestStartedSequence)
         || (status === "failed" && failureCategory === null)
         || (lastSuccessAt !== null && Date.parse(lastSuccessAt) > Date.parse(lastAttemptAt))
     ) return null;
@@ -88,6 +107,8 @@ function parseOperationalJobStatus(value: unknown): OperationalJobStatus | null 
         deadCount: deadCount as number,
         buildSha,
         failureCategory,
+        latestStartedSequence: latestStartedSequence as number,
+        latestCompletedSequence: latestCompletedSequence as number | null,
     };
 }
 
@@ -130,19 +151,49 @@ export async function readOperationalJobStatusWithServiceRole(
     );
 }
 
-export async function recordOperationalJobStatus(
+export async function beginOperationalJobRun(
     client: OperationalJobStatusGatewayClient,
     input: {
         jobKey: "asset_gc";
+        buildSha: string;
+    },
+): Promise<{ runSequence: number }> {
+    const buildSha = normalizedBuildSha(input.buildSha);
+    if (!validJobKey(input.jobKey) || !buildSha) throw new Error("Invalid operational job run");
+
+    try {
+        const result = await client.rpc("omr_begin_operational_job_run_v1", {
+            p_job_key: input.jobKey,
+            p_build_sha: buildSha,
+        });
+        if (result.error) throw new Error("rpc failed");
+        if (!result.data || typeof result.data !== "object" || Array.isArray(result.data)) {
+            throw new Error("invalid result");
+        }
+        const runSequence = (result.data as Record<string, unknown>).runSequence;
+        if (!Number.isSafeInteger(runSequence) || (runSequence as number) <= 0) throw new Error("invalid result");
+        return { runSequence: runSequence as number };
+    } catch {
+        throw new Error("Operational job run begin failed");
+    }
+}
+
+export async function completeOperationalJobRun(
+    client: OperationalJobStatusGatewayClient,
+    input: {
+        jobKey: "asset_gc";
+        runSequence: number;
         status: "healthy" | "failed";
         buildSha: string;
         failureCategory: string | null;
     },
-): Promise<OperationalJobStatus> {
+): Promise<OperationalJobRunCompletion> {
     const buildSha = normalizedBuildSha(input.buildSha);
     const failureCategory = normalizedFailureCategory(input.failureCategory);
     if (
         !validJobKey(input.jobKey)
+        || !Number.isSafeInteger(input.runSequence)
+        || input.runSequence <= 0
         || (input.status !== "healthy" && input.status !== "failed")
         || !buildSha
         || (input.status === "healthy" && input.failureCategory !== null)
@@ -150,18 +201,33 @@ export async function recordOperationalJobStatus(
     ) throw new Error("Invalid operational job status");
 
     try {
-        const result = await client.rpc("omr_record_operational_job_status_v1", {
+        const result = await client.rpc("omr_complete_operational_job_run_v1", {
             p_job_key: input.jobKey,
+            p_run_sequence: input.runSequence,
             p_status: input.status,
             p_build_sha: buildSha,
             p_failure_category: failureCategory,
         });
-        if (result.error) throw new Error("rpc failed");
-        const persisted = parseOperationalJobStatus(result.data);
-        if (!persisted) throw new Error("invalid row");
-        return persisted;
+        if (result.error || !result.data || typeof result.data !== "object" || Array.isArray(result.data)) {
+            throw new Error("rpc failed");
+        }
+        const row = result.data as Record<string, unknown>;
+        const persisted = parseOperationalJobStatus(row);
+        if (
+            !persisted
+            || row.runSequence !== input.runSequence
+            || typeof row.applied !== "boolean"
+            || typeof row.superseded !== "boolean"
+            || row.applied === row.superseded
+        ) throw new Error("invalid row");
+        return {
+            ...persisted,
+            runSequence: input.runSequence,
+            applied: row.applied,
+            superseded: row.superseded,
+        };
     } catch {
-        throw new Error("Operational job status record failed");
+        throw new Error("Operational job run completion failed");
     }
 }
 
@@ -172,6 +238,7 @@ export function evaluateAssetGcReadiness(
     const parsed = parseOperationalJobStatus(input);
     if (!parsed || !Number.isFinite(input.now.getTime())) return "malformed";
     if (!expectedBuildSha || parsed.buildSha !== expectedBuildSha) return "build_mismatch";
+    if (parsed.latestCompletedSequence !== parsed.latestStartedSequence) return "incomplete";
     if (parsed.status !== "healthy") return "failed";
     if (parsed.deadCount !== 0) return "dead_items";
     if (!parsed.lastSuccessAt) return "missing";

@@ -328,9 +328,10 @@ npx vitest run src/lib/operationalJobStatusGateway.server.test.ts src/lib/operat
 - [ ] **Step 3: Add the service-role-only job status boundary**
 
 The migration creates `omr_operational_job_status` keyed by a bounded job name and a service-role-only
-RPC `omr_record_operational_job_status_v1`. The row stores only status, last attempt, last success,
-dead count, build SHA, and sanitized failure category. The GC route records a successful state only
-after cleanup has completed; it records failure without moving `last_success_at`.
+RPCs `omr_begin_operational_job_run_v1` and `omr_complete_operational_job_run_v1`. The row stores only
+bounded status, attempt/success time, durable dead count, build SHA, sanitized category, and monotonic
+run generations. The GC route begins before claiming work, and an older completion cannot overwrite a
+newer started generation; failure never moves `last_success_at`.
 
 Readiness must return `not_ready` when the configured scheduler has no row, last success is more than
 30 hours old, or dead count is nonzero. Missing job status cannot be inferred as healthy.

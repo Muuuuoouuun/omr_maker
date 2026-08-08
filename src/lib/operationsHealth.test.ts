@@ -257,6 +257,8 @@ describe("operational health", () => {
                 deadCount: 0,
                 buildSha,
                 failureCategory: null,
+                latestStartedSequence: 19,
+                latestCompletedSequence: 19,
             }),
         )).resolves.toMatchObject({ status: "ready" });
     });

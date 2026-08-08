@@ -319,11 +319,18 @@ export function buildOperationalHeartbeatEvent(
     now = new Date(),
 ): OperationalHeartbeatEvent {
     const boundedMetrics: Record<string, number> = {};
-    for (const key of ["claimed", "deleted", "failed", "batches"]) {
+    for (const key of [
+        "claimed", "deleted", "failed", "batches",
+        "claimAttempts", "nonemptyBatches", "runSequence",
+    ]) {
         const value = metrics[key];
         if (typeof value === "number" && Number.isSafeInteger(value) && value >= 0) {
             boundedMetrics[key] = value;
         }
+    }
+    for (const key of ["applied", "superseded"]) {
+        const value = metrics[key];
+        if (typeof value === "boolean") boundedMetrics[key] = value ? 1 : 0;
     }
     const eventId = generatedOperationalId();
     return {

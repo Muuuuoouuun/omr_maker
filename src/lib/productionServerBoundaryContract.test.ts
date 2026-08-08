@@ -370,11 +370,10 @@ describe("production server-only database boundary", () => {
             );
         }
         expect(profile).toContain("public.omr_operational_job_status");
-        expect(profile).toContain("public.omr_record_operational_job_status_v1(text,text,text,text)");
+        expect(profile).toContain("public.omr_begin_operational_job_run_v1(text,text)");
+        expect(profile).toContain("public.omr_complete_operational_job_run_v1(text,bigint,text,text,text)");
         expect(profile).toContain("public.omr_read_operational_job_status_v1(text)");
-        expect(profile).toMatch(
-            /pg_get_function_result\([\s\S]{0,240}omr_record_operational_job_status_v1\(text,text,text,text\)[\s\S]{0,120}= 'jsonb'/i,
-        );
+        expect(profile).toContain("pg_catalog.pg_get_function_result(routine.oid) <> 'jsonb'");
     });
 
     it("keeps operational job heartbeat state RPC-only, bounded, and monotonic", () => {
@@ -393,6 +392,10 @@ describe("production server-only database boundary", () => {
         expect(operationalJobStatusMigration).toMatch(/on conflict \(job_key\) do update/i);
         expect(operationalJobStatusMigration).not.toContain("p_dead_count");
         expect(operationalJobStatusMigration).not.toContain("p_attempted_at");
+        expect(operationalJobStatusMigration).toContain("latest_started_sequence");
+        expect(operationalJobStatusMigration).toContain("latest_completed_sequence");
+        expect(operationalJobStatusMigration).toContain("create sequence public.omr_operational_job_run_sequence");
+        expect(operationalJobStatusMigration).toContain("maxvalue 9007199254740991");
         expect(operationalJobStatusMigration).toContain("pg_advisory_xact_lock");
         expect(operationalJobStatusMigration).toContain("pg_catalog.clock_timestamp()");
         expect(operationalJobStatusMigration).not.toContain(
@@ -405,15 +408,18 @@ describe("production server-only database boundary", () => {
             /count\(\*\)[\s\S]*omr_remote_asset_cleanup_queue[\s\S]*status = 'dead'/i,
         );
         expect(operationalJobStatusMigration).toMatch(
-            /omr_record_operational_job_status_v1[\s\S]*returns jsonb/i,
+            /omr_begin_operational_job_run_v1[\s\S]*returns jsonb/i,
+        );
+        expect(operationalJobStatusMigration).toMatch(
+            /omr_complete_operational_job_run_v1[\s\S]*returns jsonb/i,
         );
         expect(operationalJobStatusMigration).toContain("'deadCount', v_dead_count");
         expect(operationalJobStatusMigration).toContain("'dead_backlog'");
         expect(operationalJobStatusMigration).toMatch(
-            /v_previous_attempt_at \+ interval '1 microsecond'/i,
+            /v_job_status\.last_attempt_at \+ interval '1 microsecond'/i,
         );
         expect(operationalJobStatusMigration).toMatch(
-            /when excluded\.status = 'healthy' then v_recorded_at\s+else current_status\.last_success_at/i,
+            /when v_effective_status = 'healthy' then v_recorded_at\s+else last_success_at/i,
         );
         for (const role of ["public", "anon", "authenticated"]) {
             expect(operationalJobStatusMigration).toMatch(
@@ -427,9 +433,9 @@ describe("production server-only database boundary", () => {
             "operational job status service role boundary failed",
         );
         expect(liveAssertions).toContain(
-            "operational job DB ordering did not advance a later invocation",
+            "operational job older completion was not superseded",
         );
-        expect(liveAssertions).toContain("operational job concurrent DB ordering was not monotonic");
+        expect(liveAssertions).toContain("operational job concurrent begin sequence was not positive and unique");
         expect(liveAssertions).toContain(
             "operational job failure advanced last success",
         );
@@ -437,7 +443,17 @@ describe("production server-only database boundary", () => {
             "operational job status accepted malformed input",
         );
         expect(boundaryAssertions).toContain("public.omr_operational_job_status");
-        expect(boundaryAssertions).toContain("public.omr_record_operational_job_status_v1");
+        expect(boundaryAssertions).toContain("public.omr_begin_operational_job_run_v1");
+        expect(boundaryAssertions).toContain("public.omr_complete_operational_job_run_v1");
+        for (const catalogAssertion of [
+            "index_record.indrelid = 'public.omr_remote_asset_cleanup_queue'::pg_catalog.regclass",
+            "index_record.indisvalid",
+            "index_record.indisready",
+            "not index_record.indisunique",
+            "index_record.indnatts = 1",
+            "pg_catalog.pg_get_indexdef(index_record.indexrelid, 1, true) = 'status'",
+            "pg_catalog.pg_get_expr",
+        ]) expect(profile).toContain(catalogAssertion);
         for (const assertion of [
             "prosecdef",
             "pg_get_userbyid",
@@ -449,7 +465,8 @@ describe("production server-only database boundary", () => {
         expect(rollback).toContain(
             "revoke all on table public.omr_operational_job_status from public, anon, authenticated, service_role",
         );
-        expect(rollback).toContain("'omr_record_operational_job_status_v1'");
+        expect(rollback).toContain("'omr_begin_operational_job_run_v1'");
+        expect(rollback).toContain("'omr_complete_operational_job_run_v1'");
         expect(rollback).toContain("'omr_read_operational_job_status_v1'");
     });
 

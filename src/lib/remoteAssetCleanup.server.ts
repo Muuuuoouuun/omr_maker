@@ -173,7 +173,14 @@ export async function drainRemoteAssetCleanupWithGateway(
         minimumBatchBudgetMs?: number;
         now?: () => number;
     },
-): Promise<{ claimed: number; deleted: number; failed: number; batches: number }> {
+): Promise<{
+    claimed: number;
+    deleted: number;
+    failed: number;
+    batches: number;
+    claimAttempts: number;
+    nonemptyBatches: number;
+}> {
     const requestedMaxBatches = Number.isFinite(input.maxBatches) ? Math.floor(input.maxBatches as number) : 1;
     const maxBatches = Math.max(1, Math.min(24, requestedMaxBatches));
     const requestedBatchSize = Number.isFinite(input.batchSize) ? Math.floor(input.batchSize as number) : 20;
@@ -188,6 +195,7 @@ export async function drainRemoteAssetCleanupWithGateway(
     let deleted = 0;
     let failed = 0;
     let batches = 0;
+    let nonemptyBatches = 0;
     for (; batches < maxBatches;) {
         if (deadlineAtMs !== null && now() + minimumBatchBudgetMs > deadlineAtMs) break;
         const result = await runRemoteAssetCleanupWithGateway(client, {
@@ -196,10 +204,11 @@ export async function drainRemoteAssetCleanupWithGateway(
             concurrency: input.concurrency,
         });
         batches += 1;
+        if (result.claimed > 0) nonemptyBatches += 1;
         claimed += result.claimed;
         deleted += result.deleted;
         failed += result.failed;
         if (result.claimed < batchSize) break;
     }
-    return { claimed, deleted, failed, batches };
+    return { claimed, deleted, failed, batches, claimAttempts: batches, nonemptyBatches };
 }

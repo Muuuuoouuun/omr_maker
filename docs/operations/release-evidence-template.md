@@ -19,6 +19,7 @@
 - `/api/healthz` build와 배포 SHA 일치: 예 / 아니오
 - `/api/readyz` 상태: `ready` / 그 외
 - readiness version: `202608080005` / 그 외
+- scheduler pause confirmation hash (target-bound; 원문/secret 제외):
 - observability: `ready` / 그 외
 - teacher account delivery probe: 통과 / 실패
 - anon canonical table 직접 읽기: 거부 / 성공
