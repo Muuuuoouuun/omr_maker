@@ -154,6 +154,21 @@ describe("student credential issuance action roles", () => {
         expect(JSON.stringify(unknown)).not.toContain("secret database timeout");
     });
 
+    it("passes the canonical Korean roster ID unchanged through the authorized action", async () => {
+        controls.role = "owner";
+        const studentId = "e2e-class-a::김학생";
+        const result = await issueStudentCredentialBatch([studentId], `batch_${"K".repeat(32)}`);
+
+        expect(result).toMatchObject({
+            status: "issued",
+            credentials: [{ studentId }],
+        });
+        expect(controls.rpcCalls).toHaveLength(1);
+        expect(controls.rpcCalls[0]?.p_items).toEqual([
+            { studentId, verifier: expect.stringMatching(/^pbkdf2-sha256:/) },
+        ]);
+    });
+
     it("keeps the caller-owned key through the one-student response-loss recovery contract", async () => {
         controls.role = "owner";
         const requestKey = `batch_${"R".repeat(32)}`;

@@ -2775,7 +2775,7 @@ begin
                and routine.proname = 'omr_issue_student_start_code_batch_v1'
                and pg_catalog.oidvectortypes(routine.proargtypes) =
                    'text, text, bigint, text, text, jsonb, text'
-        ) = '2d8d3a9fa3de5751fc10462427f625dafa2751f64b983d28f4a056526bfcdb8e'
+        ) = '03347ee80c1a3be2ef93c57a0da64da25e0b8efbb1cc13b7a0a01bccff423009'
       into v_student_credential_batch_ready;
 
     -- Keep exact catalog drift detection for the two legacy-named public

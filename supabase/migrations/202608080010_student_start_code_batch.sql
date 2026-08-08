@@ -99,7 +99,7 @@ begin
     end if;
 
     select pg_catalog.count(*)::integer,
-           pg_catalog.count(distinct pg_catalog.btrim(element ->> 'studentId'))::integer,
+           pg_catalog.count(distinct ((element ->> 'studentId') collate "C"))::integer,
            pg_catalog.bool_and(
                case when pg_catalog.jsonb_typeof(element) = 'object' then
                    (select pg_catalog.count(*) from pg_catalog.jsonb_object_keys(element)) = 2
@@ -107,9 +107,36 @@ begin
                    and element ? 'verifier'
                    and pg_catalog.jsonb_typeof(element -> 'studentId') = 'string'
                    and pg_catalog.jsonb_typeof(element -> 'verifier') = 'string'
-                   and element ->> 'studentId' = pg_catalog.btrim(element ->> 'studentId')
-                   and pg_catalog.octet_length(element ->> 'studentId') between 1 and 256
-                   and element ->> 'studentId' ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$'
+                    and element ->> 'studentId' = pg_catalog.btrim(
+                        element ->> 'studentId',
+                        pg_catalog.chr(9) || pg_catalog.chr(10)
+                        || pg_catalog.chr(11) || pg_catalog.chr(12)
+                        || pg_catalog.chr(13) || pg_catalog.chr(32)
+                        || pg_catalog.chr(160) || pg_catalog.chr(5760)
+                        || pg_catalog.chr(8192) || pg_catalog.chr(8193)
+                        || pg_catalog.chr(8194) || pg_catalog.chr(8195)
+                        || pg_catalog.chr(8196) || pg_catalog.chr(8197)
+                        || pg_catalog.chr(8198) || pg_catalog.chr(8199)
+                        || pg_catalog.chr(8200) || pg_catalog.chr(8201)
+                        || pg_catalog.chr(8202) || pg_catalog.chr(8232)
+                        || pg_catalog.chr(8233) || pg_catalog.chr(8239)
+                        || pg_catalog.chr(8287) || pg_catalog.chr(12288)
+                        || pg_catalog.chr(65279)
+                    )
+                    and pg_catalog.octet_length(element ->> 'studentId') between 1 and 256
+                    and element ->> 'studentId' !~ '[[:cntrl:]]'
+                    and not exists (
+                        select 1
+                          from pg_catalog.generate_series(127, 159) forbidden(codepoint)
+                         where pg_catalog.strpos(
+                             element ->> 'studentId',
+                             pg_catalog.chr(forbidden.codepoint)
+                         ) > 0
+                    )
+                    and pg_catalog.strpos(element ->> 'studentId', pg_catalog.chr(133)) = 0
+                    and pg_catalog.strpos(element ->> 'studentId', pg_catalog.chr(8232)) = 0
+                    and pg_catalog.strpos(element ->> 'studentId', pg_catalog.chr(8233)) = 0
+                    and pg_catalog.strpos(element ->> 'studentId', pg_catalog.chr(65279)) = 0
                    and element ->> 'verifier' ~ '^pbkdf2-sha256:120000:[a-f0-9]{32}:[a-f0-9]{64}$'
                else false end
            )

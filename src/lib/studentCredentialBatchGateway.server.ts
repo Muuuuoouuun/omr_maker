@@ -40,8 +40,7 @@ export interface StudentCredentialBatchDependencies {
     hashConcurrency: number;
 }
 
-const CONTROL_CHARACTERS = /[\u0000-\u001f\u007f]/;
-const ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$/;
+const FORBIDDEN_STUDENT_ID_CHARACTERS = /[\u0000-\u001f\u007f-\u009f\u2028\u2029\ufeff]/u;
 const PROVISIONED_ACCOUNT_PATTERN = /^teacher_[a-f0-9]{16}$/;
 const LEGACY_ACCOUNT_PATTERN = /^teacher_[a-z0-9]{16}$/;
 const LEGACY_ACTOR_PATTERN = /^teacher_[a-z0-9]{7,16}$/;
@@ -70,10 +69,8 @@ export function validateCredentialBatch(value: unknown): CredentialBatchValidati
         if (
             raw !== studentId
             || !studentId
-            || studentId.length > 256
             || Buffer.byteLength(studentId, "utf8") > 256
-            || CONTROL_CHARACTERS.test(studentId)
-            || !ID_PATTERN.test(studentId)
+            || FORBIDDEN_STUDENT_ID_CHARACTERS.test(studentId)
             || unique.has(studentId)
         ) return { ok: false, error: "invalid_input" };
         unique.add(studentId);
@@ -332,7 +329,10 @@ export async function issueStudentCredentialBatch(
 
     const sortedItems = credentials
         .map((credential, index) => ({ studentId: credential.studentId, verifier: verifiers[index] }))
-        .sort((left, right) => left.studentId < right.studentId ? -1 : left.studentId > right.studentId ? 1 : 0);
+        .sort((left, right) => Buffer.compare(
+            Buffer.from(left.studentId, "utf8"),
+            Buffer.from(right.studentId, "utf8"),
+        ));
     const sortedStudentIds = sortedItems.map(item => item.studentId);
     try {
         const result = await client.rpc("omr_issue_student_start_code_batch_v1", {

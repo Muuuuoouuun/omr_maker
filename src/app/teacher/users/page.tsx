@@ -24,7 +24,6 @@ import {
     AlertTriangle,
     Copy,
     KeyRound,
-    RefreshCw,
     Lock,
     MapPin,
 } from "lucide-react";
@@ -40,8 +39,10 @@ import {
     ROSTER_REVISION_CONFLICT_ERROR,
     saveTeacherRosterSnapshot,
 } from "@/lib/teacherRosterClient";
-import { seedLocalTestStudentAccounts } from "@/lib/localTestAccounts";
-import { issueStudentStartCredential } from "@/app/actions/studentAuth";
+import { issueStudentCredentialBatch } from "@/app/actions/studentAuth";
+import StudentCredentialBatchDialog, {
+    type FrozenCredentialStudent,
+} from "@/components/StudentCredentialBatchDialog";
 import { resolveAttemptScore } from "@/lib/attemptScores";
 import {
     applyRosterPerformance,
@@ -80,11 +81,7 @@ import {
 } from "@/lib/regionalAnalytics";
 import {
     STUDENT_CODES_STORAGE_KEY,
-    findStudentStartCode,
-    writeStudentCodes,
 } from "@/lib/studentCodes";
-import { loadTeacherLocalStudentCodes } from "@/lib/studentCredentialLocalState";
-import { withStudentCredentialIssuanceLock } from "@/lib/studentCredentialIssuance";
 import { hasPlanEntitlement } from "@/utils/plans";
 import { useServerPlan } from "@/lib/useServerPlan";
 import { buildStudentResultHref } from "@/lib/studentResultHub";
@@ -123,7 +120,6 @@ type RosterDataMode = "real" | "demo";
 type PendingDeleteUndo = {
     id: number;
     students: RosterStudent[];
-    codeEntries: Record<string, string>;
     label: string;
 };
 
@@ -291,14 +287,8 @@ function ManageUsersInner() {
     const [detailedAttempts, setDetailedAttempts] = useState<Attempt[] | null>(null);
     const detailedAttemptLoadRef = useRef<Promise<Attempt[] | null> | null>(null);
     const [exams, setExams] = useState<Exam[]>([]);
-    const [studentCodeRegistry, setStudentCodeRegistry] = useState<Record<string, string>>({});
     const [issuedStudentCredentialIds, setIssuedStudentCredentialIds] = useState<Set<string>>(new Set());
-    const [sessionStudentCodes, setSessionStudentCodes] = useState<Record<string, string>>({});
-    const [issuingStudentCode, setIssuingStudentCode] = useState(false);
     const rosterMutationVersionRef = useRef(0);
-    const studentCredentialIssuanceLocksRef = useRef(new Set<string>());
-    const studentCredentialRequestKeysRef = useRef(new Map<string, string>());
-    const studentCodeRegistryRef = useRef<Record<string, string>>({});
     const issuedStudentCredentialIdsRef = useRef<Set<string>>(new Set());
     const { plan: currentPlan } = useServerPlan();
     const [hydrated, setHydrated] = useState(false);
@@ -326,6 +316,9 @@ function ManageUsersInner() {
     const [pendingDeleteUndo, setPendingDeleteUndo] = useState<PendingDeleteUndo | null>(null);
     const [sortState, setSortState] = useState<{ key: SortKey; direction: SortDirection } | null>(null);
     const [csvPreview, setCsvPreview] = useState<RosterCsvImportPlan | null>(null);
+    const [credentialBatchExpectedStudents, setCredentialBatchExpectedStudents] = useState<
+        readonly FrozenCredentialStudent[] | null
+    >(null);
     // T2: windowed pagination for the (potentially large) filtered roster.
     const [pageSize, setPageSize] = useState<number | "all">(50);
     const [page, setPage] = useState(1);
@@ -342,10 +335,7 @@ function ManageUsersInner() {
         let cancelled = false;
         const hydrateRoster = async () => {
             try {
-                const productionCodes = process.env.NODE_ENV === "production"
-                    ? loadTeacherLocalStudentCodes(localStorage, process.env.NODE_ENV)
-                    : null;
-                seedLocalTestStudentAccounts(localStorage);
+                localStorage.removeItem(STUDENT_CODES_STORAGE_KEY);
                 const storedRosterExists = hasStoredRosterData(localStorage);
                 const storedStudents = readRosterStudents(localStorage);
                 const storedGroups = readRosterGroups(localStorage);
@@ -381,10 +371,6 @@ function ManageUsersInner() {
                         );
                     }
                 }
-                const storedCodes = productionCodes
-                    ?? loadTeacherLocalStudentCodes(localStorage, process.env.NODE_ENV);
-                studentCodeRegistryRef.current = storedCodes;
-                setStudentCodeRegistry(storedCodes);
                 const storedIssuedIds = readIssuedStudentCredentialIds(localStorage);
                 issuedStudentCredentialIdsRef.current = storedIssuedIds;
                 setIssuedStudentCredentialIds(storedIssuedIds);
@@ -393,8 +379,6 @@ function ManageUsersInner() {
                 setStudents([]);
                 setGroups([]);
                 setInvites([]);
-                studentCodeRegistryRef.current = {};
-                setStudentCodeRegistry({});
                 setRosterDataMode("real");
             }
             setHydrated(true);
@@ -537,6 +521,13 @@ function ManageUsersInner() {
     const displayStudents = useMemo(() => (
         applyRosterPerformance(rosterStudents, performanceByStudentId)
     ), [rosterStudents, performanceByStudentId]);
+    const credentialBatchCurrentStudents = useMemo<readonly FrozenCredentialStudent[]>(() => {
+        if (!credentialBatchExpectedStudents) return [];
+        const expectedIds = new Set(credentialBatchExpectedStudents.map(student => student.studentId));
+        return displayStudents
+            .filter(student => expectedIds.has(student.id))
+            .map(student => ({ studentId: student.id, name: student.name, group: student.group }));
+    }, [credentialBatchExpectedStudents, displayStudents]);
     const hasStudentRosterData = displayStudents.length > 0;
     // Keep the established controls while the client snapshot is hydrating, then
     // collapse to the single empty-state action set when the real roster is empty.
@@ -652,19 +643,7 @@ function ManageUsersInner() {
 
     const selected = displayStudents.find(s => s.id === selectedId);
     const selectedGroup = displayGroups.find(group => group.id === selectedGroupId) || null;
-    const selectedStudentGroup = selected
-        ? displayGroups.find(group => group.name === selected.group && (!selected.region || group.region === selected.region))
-        : null;
-    const selectedLegacyStudentId = selected ? studentIdForRoster(selected.name, selected.group, rosterGroups) : "";
-    const selectedStartCode = selected
-        ? sessionStudentCodes[selected.id] || findStudentStartCode(studentCodeRegistry, selected.id, selectedLegacyStudentId)
-        : "";
-    const selectedCredentialIssued = !!selected && (
-        !!selectedStartCode
-        || issuedStudentCredentialIds.has(selected.id)
-        || (!!selectedLegacyStudentId && issuedStudentCredentialIds.has(selectedLegacyStudentId))
-    );
-    const selectedCodeLabel = selectedStartCode || (selectedCredentialIssued ? "발급됨" : "미발급");
+    const selectedCredentialIssued = !!selected && issuedStudentCredentialIds.has(selected.id);
 
     // The shared roster performance index already applies strict stable-id and
     // unambiguous legacy matching, and stores each bucket newest first.
@@ -758,103 +737,11 @@ function ManageUsersInner() {
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [initialGroupId, hydrated]);
 
-    const handleIssueStudentStartCode = async () => {
-        if (!selected || isDemoRoster) {
-            toast.info("실제 학생에서만 코드 발급", "저장된 명단의 학생을 선택한 뒤 시작 코드를 발급할 수 있습니다.");
-            return;
-        }
-        const selectedStudent = selected;
-        const legacyStudentId = selectedLegacyStudentId;
-        await withStudentCredentialIssuanceLock(
-            studentCredentialIssuanceLocksRef.current,
-            selectedStudent.id,
-            async () => {
-                setIssuingStudentCode(true);
-                try {
-                    const requestKey = studentCredentialRequestKeysRef.current.get(selectedStudent.id)
-                        ?? `batch_${crypto.randomUUID().replaceAll("-", "")}`;
-                    studentCredentialRequestKeysRef.current.set(selectedStudent.id, requestKey);
-                    const serverResult = await issueStudentStartCredential(selectedStudent.id, requestKey);
-                    if (!serverResult.success) {
-                        if (serverResult.status === "outcome_unknown") {
-                            toast.info("코드 발급 결과 확인 필요", serverResult.error);
-                            return;
-                        }
-                        studentCredentialRequestKeysRef.current.delete(selectedStudent.id);
-                        toast.error("코드 발급 실패", serverResult.error);
-                        return;
-                    }
-                    studentCredentialRequestKeysRef.current.delete(selectedStudent.id);
-                    const nextCode = serverResult.startCode;
-                    const localOnlyRegistry = { ...studentCodeRegistryRef.current };
-                    delete localOnlyRegistry[selectedStudent.id];
-                    if (legacyStudentId) delete localOnlyRegistry[legacyStudentId];
-                    if (!writeStudentCodes(localStorage, localOnlyRegistry)) {
-                        localStorage.removeItem(STUDENT_CODES_STORAGE_KEY);
-                    }
-                    studentCodeRegistryRef.current = localOnlyRegistry;
-                    setStudentCodeRegistry(localOnlyRegistry);
-                    setSessionStudentCodes(current => ({ ...current, [selectedStudent.id]: nextCode }));
-
-                    const nextIssuedIds = new Set(issuedStudentCredentialIdsRef.current);
-                    nextIssuedIds.add(selectedStudent.id);
-                    if (legacyStudentId) nextIssuedIds.delete(legacyStudentId);
-                    issuedStudentCredentialIdsRef.current = nextIssuedIds;
-                    setIssuedStudentCredentialIds(nextIssuedIds);
-                    if (!writeIssuedStudentCredentialIds(localStorage, nextIssuedIds)) {
-                        toast.info(
-                            "코드는 서버에 발급됨",
-                            "이 기기의 발급 상태 표시에 실패했습니다. 코드는 지금 복사해 전달해주세요."
-                        );
-                    }
-                    toast.success(
-                        selectedCredentialIssued ? "시작 코드 재발급" : "시작 코드 발급",
-                        `${selectedStudent.name}: ${nextCode}`,
-                    );
-                } catch {
-                    toast.error("코드 발급 실패", "서버 연결을 확인한 뒤 다시 시도해주세요.");
-                } finally {
-                    setIssuingStudentCode(false);
-                }
-            },
-        );
-    };
-
-    const handleCopyStudentStartCode = async () => {
-        if (!selectedStartCode) return;
-        try {
-            await navigator.clipboard.writeText(selectedStartCode);
-            toast.success("시작 코드 복사됨", `${selected?.name || "학생"} 코드 ${selectedStartCode}`);
-        } catch {
-            toast.error("복사 실패", "브라우저 클립보드 권한을 확인해주세요.");
-        }
-    };
-
     const handleCopyStudentId = async () => {
         if (!selected) return;
         try {
             await navigator.clipboard.writeText(selected.id);
             toast.success("학생번호 복사됨", `${selected.name}: ${selected.id}`);
-        } catch {
-            toast.error("복사 실패", "브라우저 클립보드 권한을 확인해주세요.");
-        }
-    };
-
-    const handleCopyStudentLoginInfo = async () => {
-        if (!selected) return;
-        const loginInfo = [
-            "OMR Maker 학생 로그인 안내",
-            `이름: ${selected.name}`,
-            `반: ${selected.group}`,
-            `반 코드: ${selectedStudentGroup?.id || selected.group}`,
-            `로그인 ID(학생번호): ${selected.id}`,
-            `이메일 로그인 ID: ${selected.email}`,
-            `시작 코드: ${selectedStartCode || (selectedCredentialIssued ? "보안상 숨김 - 재발급 후 전달" : "미발급 - 선생님에게 발급 요청")}`,
-        ].join("\n");
-
-        try {
-            await navigator.clipboard.writeText(loginInfo);
-            toast.success("학생 계정 안내 복사됨", `${selected.name} 로그인 정보를 복사했습니다.`);
         } catch {
             toast.error("복사 실패", "브라우저 클립보드 권한을 확인해주세요.");
         }
@@ -948,34 +835,14 @@ function ManageUsersInner() {
         setPopoverId(null);
     };
 
-    // Deterministic student ids ("${groupId}::${name}") mean a same-named
-    // replacement student added later would silently inherit a deleted
-    // student's leftover start code unless the registry entry is purged too.
-    const purgeStudentCodes = (ids: string[]): Record<string, string> => {
+    const purgeIssuedCredentialMarkers = (ids: string[]) => {
         const idSet = new Set(ids.filter(Boolean));
-        const removedEntries: Record<string, string> = {};
-        if (idSet.size === 0) return removedEntries;
+        if (idSet.size === 0) return;
         const nextIssuedIds = new Set(issuedStudentCredentialIdsRef.current);
-        const nextSessionCodes = { ...sessionStudentCodes };
-        const nextRegistry = { ...studentCodeRegistryRef.current };
-        for (const id of idSet) {
-            if (nextRegistry[id]) {
-                removedEntries[id] = nextRegistry[id];
-                delete nextRegistry[id];
-            }
-            nextIssuedIds.delete(id);
-            delete nextSessionCodes[id];
-        }
-        if (Object.keys(removedEntries).length > 0) {
-            studentCodeRegistryRef.current = nextRegistry;
-            setStudentCodeRegistry(nextRegistry);
-            writeStudentCodes(localStorage, nextRegistry);
-        }
+        idSet.forEach(id => nextIssuedIds.delete(id));
         issuedStudentCredentialIdsRef.current = nextIssuedIds;
         setIssuedStudentCredentialIds(nextIssuedIds);
-        setSessionStudentCodes(nextSessionCodes);
         writeIssuedStudentCredentialIds(localStorage, nextIssuedIds);
-        return removedEntries;
     };
 
     const clearDeleteUndoTimer = () => {
@@ -985,10 +852,10 @@ function ManageUsersInner() {
         }
     };
 
-    const scheduleDeleteUndo = (removed: RosterStudent[], codeEntries: Record<string, string>, label: string) => {
+    const scheduleDeleteUndo = (removed: RosterStudent[], label: string) => {
         clearDeleteUndoTimer();
         const undoId = Date.now();
-        setPendingDeleteUndo({ id: undoId, students: removed, codeEntries, label });
+        setPendingDeleteUndo({ id: undoId, students: removed, label });
         undoTimeoutRef.current = setTimeout(() => {
             setPendingDeleteUndo(prev => (prev?.id === undoId ? null : prev));
             undoTimeoutRef.current = null;
@@ -1016,8 +883,8 @@ function ManageUsersInner() {
         if (removed.length === 0) return;
         const next = students.filter(s => !idSet.has(s.id));
         persistRoster(next, recomputeGroups(next, groups), invites);
-        const removedCodeEntries = purgeStudentCodes(ids);
-        scheduleDeleteUndo(removed, removedCodeEntries, label);
+        purgeIssuedCredentialMarkers(ids);
+        scheduleDeleteUndo(removed, label);
     };
 
     const handleUndoDelete = async () => {
@@ -1032,12 +899,6 @@ function ManageUsersInner() {
             return;
         }
         persistRoster(merged, recomputeGroups(merged, groups), invites);
-        if (Object.keys(restored.codeEntries).length > 0) {
-            const nextRegistry = { ...studentCodeRegistryRef.current, ...restored.codeEntries };
-            studentCodeRegistryRef.current = nextRegistry;
-            setStudentCodeRegistry(nextRegistry);
-            writeStudentCodes(localStorage, nextRegistry);
-        }
         toast.success("삭제 취소됨", `${restored.label} 복원했습니다.`);
     };
 
@@ -1083,6 +944,39 @@ function ManageUsersInner() {
         });
     };
     const clearSelection = () => setSelectedIds(new Set());
+
+    const openStudentCredentialBatch = (studentIds: readonly string[]) => {
+        if (isDemoRoster) {
+            toast.info("실제 학생에서만 코드 발급", "저장된 명단의 학생을 선택한 뒤 시작 코드를 발급할 수 있습니다.");
+            return;
+        }
+        if (studentIds.length < 1 || studentIds.length > 100 || new Set(studentIds).size !== studentIds.length) {
+            toast.error("발급 대상을 확인해주세요", "한 번에 중복 없이 1명부터 100명까지 선택할 수 있습니다.");
+            return;
+        }
+        const selectedSet = new Set(studentIds);
+        const snapshot = displayStudents
+            .filter(student => selectedSet.has(student.id))
+            .map(student => Object.freeze({
+                studentId: student.id,
+                name: student.name,
+                group: student.group,
+            }));
+        if (snapshot.length !== studentIds.length) {
+            toast.error("선택 학생이 변경됨", "명단을 새로 확인한 뒤 다시 선택해주세요.");
+            return;
+        }
+        setCredentialBatchExpectedStudents(Object.freeze(snapshot));
+    };
+
+    const handleCredentialBatchIssued = (studentIds: readonly string[]) => {
+        const nextIssuedIds = new Set(issuedStudentCredentialIdsRef.current);
+        studentIds.forEach(studentId => nextIssuedIds.add(studentId));
+        issuedStudentCredentialIdsRef.current = nextIssuedIds;
+        setIssuedStudentCredentialIds(nextIssuedIds);
+        writeIssuedStudentCredentialIds(localStorage, nextIssuedIds);
+        setSelectedIds(new Set());
+    };
 
     const handleBulkDelete = () => {
         if (isDemoRoster) {
@@ -1679,6 +1573,13 @@ function ManageUsersInner() {
                                         <span style={{ fontWeight: 500, color: 'var(--muted)' }}> · 모든 페이지 포함 (필터 전체 {filtered.length}명 중)</span>
                                     </span>
                                     <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+                                        <button onClick={() => openStudentCredentialBatch([...selectedIds])} style={{
+                                            padding: '0.4rem 0.85rem', background: 'var(--primary)', color: 'white',
+                                            border: '1px solid var(--primary)', borderRadius: 'var(--radius-md)',
+                                            fontSize: '0.8rem', fontWeight: 700, display: 'flex', alignItems: 'center', gap: '0.35rem'
+                                        }}>
+                                            <KeyRound size={13} /> 선택 학생 코드 발급
+                                        </button>
                                         {filtered.length > 0 && !filtered.every(s => selectedIds.has(s.id)) && (
                                             <button onClick={() => setSelectedIds(new Set(filtered.map(s => s.id)))} style={{
                                                 padding: '0.4rem 0.85rem', background: 'var(--surface)', color: 'var(--primary)',
@@ -2142,34 +2043,9 @@ function ManageUsersInner() {
                                     <MiniStat label="필기 보관" value={`${selectedHandwritingCount}건`} color="#8b5cf6" />
                                 </div>
                                 <div data-testid="student-login-guide-panel" style={{ padding: '1rem', background: 'var(--background)', borderRadius: 'var(--radius-md)', marginBottom: '1rem', border: '1px solid var(--border)' }}>
-                                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '0.75rem', marginBottom: '0.75rem' }}>
-                                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', fontSize: '0.75rem', fontWeight: 800, color: 'var(--muted)', letterSpacing: '0.08em' }}>
-                                            <Lock size={13} />
-                                            학생 계정 안내
-                                        </div>
-                                        <button
-                                            type="button"
-                                            aria-label="학생 계정 안내 복사"
-                                            data-testid="copy-student-login-credentials"
-                                            onClick={handleCopyStudentLoginInfo}
-                                            style={{
-                                                padding: '0.35rem 0.55rem',
-                                                borderRadius: 'var(--radius-md)',
-                                                background: 'var(--surface)',
-                                                border: '1px solid var(--border)',
-                                                color: 'var(--foreground)',
-                                                fontSize: '0.72rem',
-                                                fontWeight: 800,
-                                                display: 'inline-flex',
-                                                alignItems: 'center',
-                                                justifyContent: 'center',
-                                                gap: '0.3rem',
-                                                whiteSpace: 'nowrap',
-                                            }}
-                                        >
-                                            <Copy size={12} />
-                                            안내 복사
-                                        </button>
+                                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', marginBottom: '0.75rem', fontSize: '0.75rem', fontWeight: 800, color: 'var(--muted)', letterSpacing: '0.08em' }}>
+                                        <Lock size={13} />
+                                        학생 계정 안내
                                     </div>
                                     <div style={{ display: 'grid', gap: '0.45rem', fontSize: '0.78rem' }}>
                                         <div style={{ display: 'grid', gridTemplateColumns: '86px minmax(0, 1fr)', gap: '0.55rem', alignItems: 'center' }}>
@@ -2181,96 +2057,36 @@ function ManageUsersInner() {
                                             <code data-testid="student-login-email-value" style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', color: 'var(--foreground)', fontWeight: 850 }}>{selected.email}</code>
                                         </div>
                                         <div style={{ display: 'grid', gridTemplateColumns: '86px minmax(0, 1fr)', gap: '0.55rem', alignItems: 'center' }}>
-                                            <span style={{ color: 'var(--muted)', fontWeight: 750 }}>시작 코드</span>
-                                            <code data-testid="student-login-start-code-value" style={{
-                                                overflow: 'hidden',
-                                                textOverflow: 'ellipsis',
-                                                whiteSpace: 'nowrap',
-                                                color: selectedCredentialIssued ? '#047857' : '#b45309',
-                                                fontWeight: 850,
-                                                letterSpacing: selectedStartCode ? '0.08em' : 0,
-                                            }}>{selectedCodeLabel}</code>
+                                            <span style={{ color: 'var(--muted)', fontWeight: 750 }}>코드 상태</span>
+                                            <span style={{ color: selectedCredentialIssued ? '#047857' : '#b45309', fontWeight: 850 }}>
+                                                {selectedCredentialIssued ? '발급 기록 있음' : '미발급'}
+                                            </span>
                                         </div>
                                     </div>
                                     <p style={{ fontSize: '0.74rem', color: 'var(--muted)', lineHeight: 1.55, marginTop: '0.75rem', wordBreak: 'keep-all' }}>
-                                        학생에게 이름, 반, 로그인 ID, 시작 코드를 함께 전달하세요. 이메일도 로그인 ID로 사용할 수 있습니다.
+                                        시작 코드는 화면·클립보드·브라우저 저장소에 보관하지 않고 일회용 CSV로만 내려받습니다.
                                     </p>
                                 </div>
                                 <div data-testid="student-start-code-panel" style={{ padding: '1rem', background: 'var(--background)', borderRadius: 'var(--radius-md)', marginBottom: '1rem', border: '1px solid var(--border)' }}>
                                     <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '0.75rem', marginBottom: '0.7rem' }}>
                                         <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', fontSize: '0.75rem', fontWeight: 800, color: 'var(--muted)', letterSpacing: '0.08em' }}>
                                             <KeyRound size={13} />
-                                            시작 코드
+                                            일회용 시작 코드 발급
                                         </div>
-                                        <span data-testid="student-start-code-value">
-                                            <StatusPill
-                                                tone={selectedCredentialIssued ? 'success' : 'warning'}
-                                                label={selectedCodeLabel}
-                                                size="sm"
-                                                style={{
-                                                    minWidth: 86,
-                                                    justifyContent: 'center',
-                                                    fontVariantNumeric: 'tabular-nums',
-                                                    letterSpacing: selectedStartCode ? '0.08em' : 0,
-                                                }}
-                                            />
-                                        </span>
                                     </div>
                                     <p style={{ fontSize: '0.76rem', color: 'var(--muted)', lineHeight: 1.55, marginBottom: '0.75rem', wordBreak: 'keep-all' }}>
-                                        학생 포털 재로그인과 반 제한 시험 입장에 쓰는 6자리 코드입니다. 새 코드는 발급한 현재 화면에서만 확인할 수 있습니다.
+                                        재발급하면 기존 코드와 로그인 세션이 즉시 종료됩니다. 발급 후 CSV를 안전한 경로로 전달하세요.
                                     </p>
-                                    <div style={{ display: 'flex', gap: '0.5rem' }}>
-                                        <button
-                                            type="button"
-                                            aria-label={selectedCredentialIssued ? '학생 시작 코드 재발급' : '학생 시작 코드 발급'}
-                                            data-testid="issue-student-start-code"
-                                            onClick={handleIssueStudentStartCode}
-                                            disabled={isDemoRoster || issuingStudentCode}
-                                            style={{
-                                                flex: 1,
-                                                padding: '0.55rem 0.65rem',
-                                                borderRadius: 'var(--radius-md)',
-                                                background: 'var(--surface)',
-                                                border: '1px solid var(--border)',
-                                                color: 'var(--foreground)',
-                                                fontSize: '0.78rem',
-                                                fontWeight: 800,
-                                                display: 'flex',
-                                                alignItems: 'center',
-                                                justifyContent: 'center',
-                                                gap: '0.35rem',
-                                                opacity: isDemoRoster || issuingStudentCode ? 0.55 : 1,
-                                            }}
-                                        >
-                                            <RefreshCw size={13} className={issuingStudentCode ? 'animate-spin' : undefined} />
-                                            {issuingStudentCode ? '연결 중' : selectedCredentialIssued ? '재발급' : '발급'}
-                                        </button>
-                                        <button
-                                            type="button"
-                                            aria-label="학생 시작 코드 복사"
-                                            data-testid="copy-student-start-code"
-                                            onClick={handleCopyStudentStartCode}
-                                            disabled={!selectedStartCode}
-                                            style={{
-                                                flex: 1,
-                                                padding: '0.55rem 0.65rem',
-                                                borderRadius: 'var(--radius-md)',
-                                                background: selectedStartCode ? 'var(--primary)' : 'var(--surface)',
-                                                border: selectedStartCode ? '1px solid var(--primary)' : '1px solid var(--border)',
-                                                color: selectedStartCode ? 'white' : 'var(--muted)',
-                                                fontSize: '0.78rem',
-                                                fontWeight: 800,
-                                                display: 'flex',
-                                                alignItems: 'center',
-                                                justifyContent: 'center',
-                                                gap: '0.35rem',
-                                                opacity: selectedStartCode ? 1 : 0.55,
-                                            }}
-                                        >
-                                            <Copy size={13} />
-                                            복사
-                                        </button>
-                                    </div>
+                                    <button
+                                        type="button"
+                                        data-testid="open-student-credential-batch"
+                                        onClick={() => openStudentCredentialBatch([selected.id])}
+                                        disabled={isDemoRoster}
+                                        className="btn btn-primary"
+                                        style={{ width: '100%', justifyContent: 'center', opacity: isDemoRoster ? 0.55 : 1 }}
+                                    >
+                                        <KeyRound size={14} /> {selectedCredentialIssued ? '새 코드 재발급' : '시작 코드 발급'}
+                                    </button>
                                 </div>
                                 <div style={{ padding: '1rem', background: 'var(--background)', borderRadius: 'var(--radius-md)', marginBottom: '1rem' }}>
                                     <div style={{ fontSize: '0.75rem', fontWeight: 700, color: 'var(--muted)', letterSpacing: '0.08em', marginBottom: '0.5rem' }}>최근 응시 이력</div>
@@ -2547,6 +2363,17 @@ function ManageUsersInner() {
                     plan={csvPreview}
                     onClose={() => setCsvPreview(null)}
                     onConfirm={handleConfirmCsvImport}
+                />
+            )}
+
+            {credentialBatchExpectedStudents && (
+                <StudentCredentialBatchDialog
+                    open
+                    expectedStudents={credentialBatchExpectedStudents}
+                    students={credentialBatchCurrentStudents}
+                    issueStudentCredentialBatch={issueStudentCredentialBatch}
+                    onIssued={handleCredentialBatchIssued}
+                    onClose={() => setCredentialBatchExpectedStudents(null)}
                 />
             )}
 

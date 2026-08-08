@@ -974,11 +974,7 @@ test.describe("Manage Users page", () => {
         await expect(page.getByRole("heading", { name: "E2E 편집반" })).not.toBeVisible();
     });
 
-    test("issued student start code gates the student portal login", async ({ page, baseURL }, testInfo) => {
-        test.skip(
-            testInfo.project.name.startsWith("prod-"),
-            "Production refuses the suite's no-database local credential fallback.",
-        );
+    test("student credential issuance is one-time and fails closed without a database", async ({ page, baseURL }) => {
         await authenticateTeacher(page, baseURL);
         await seedStoredRoster(page);
         await page.goto("/teacher/users");
@@ -990,8 +986,7 @@ test.describe("Manage Users page", () => {
         await expect(page.getByText("학생 계정 안내")).toBeVisible();
         await expect(page.getByTestId("student-login-id-value")).toHaveText("e2e-class-a::김학생");
         await expect(page.getByTestId("student-login-email-value")).toHaveText("kim.student@example.com");
-        await expect(page.getByTestId("student-login-start-code-value")).toHaveText("미발급");
-        await expect(page.getByTestId("copy-student-login-credentials")).toBeVisible();
+        await expect(page.getByText("미발급", { exact: true })).toBeVisible();
         const studentGridColumnCount = await page.locator(".teacher-users-students-grid.has-detail").evaluate(element =>
             window.getComputedStyle(element).gridTemplateColumns.split(/\s+/).filter(Boolean).length
         );
@@ -1007,43 +1002,13 @@ test.describe("Manage Users page", () => {
         expect(tableScrollMetrics.scrollWidth).toBeGreaterThanOrEqual(tableScrollMetrics.clientWidth);
         const hasAccountGuideBodyOverflow = await page.evaluate(() => document.documentElement.scrollWidth > document.documentElement.clientWidth + 1);
         expect(hasAccountGuideBodyOverflow).toBe(false);
-        await expect(page.getByTestId("student-start-code-value")).toHaveText("미발급");
-
-        await page.getByTestId("issue-student-start-code").click();
-        await expect(page.getByTestId("student-start-code-value")).toHaveText(/^[A-Z2-9]{6}$/);
-        const issuedCode = (await page.getByTestId("student-start-code-value").innerText()).trim();
-        expect(issuedCode).toMatch(/^[A-Z2-9]{6}$/);
-        await expect(page.getByTestId("student-login-start-code-value")).toHaveText(issuedCode);
-
-        const storedCodes = await page.evaluate(() => JSON.parse(window.localStorage.getItem("omr_student_codes") || "{}"));
-        expect(storedCodes["e2e-class-a::김학생"]).toBe(issuedCode);
-
-        await page.goto("/?role=student");
-        await expect(page.getByRole("heading", { name: "학습 시작" })).toBeVisible();
-        await page.getByLabel("이름").fill("김학생");
-        await page.getByLabel("학생번호 또는 이메일").fill("kim.student@example.com");
-        await page.getByLabel("반 선택").selectOption("e2e-class-a");
-        await expect(page.getByLabel("시작 코드")).toBeVisible();
-
-        await page.getByRole("button", { name: "시험 시작하기" }).click();
-        await expect(page.getByText("이미 등록된 학생입니다. 선생님이 발급한 시작 코드를 입력해주세요.")).toBeVisible();
-
-        await page.getByLabel("시작 코드").fill(issuedCode);
-        await page.getByRole("button", { name: "시험 시작하기" }).click();
-        await expect(page).toHaveURL(/\/student\/dashboard$/);
-
-        const session = await page.evaluate(() => JSON.parse(window.sessionStorage.getItem("omr_student_session") || "null"));
-        expect(session).toMatchObject({
-            studentId: "e2e-class-a::김학생",
-            loginId: "e2e-class-a::김학생",
-            name: "김학생",
-            groupId: "e2e-class-a",
-            groupName: "E2E A반",
-            regionId: "서울",
-            regionName: "서울",
-            isGuest: false,
-            identityType: "temporary",
-        });
+        await page.getByTestId("open-student-credential-batch").click();
+        const dialog = page.getByRole("dialog", { name: "학생 시작 코드 일괄 발급" });
+        await expect(dialog).toContainText("기존 로그인 세션도 즉시 종료됩니다");
+        await dialog.getByRole("button", { name: "1명 발급" }).click();
+        await expect(dialog).toContainText("발급을 시작하지 못했습니다");
+        expect(await page.evaluate(() => window.localStorage.getItem("omr_student_codes"))).toBeNull();
+        await expect(page.getByTestId("student-login-guide-panel")).not.toContainText(/^[23456789ABCDEFGHJKLMNPQRSTUVWXYZ]{6}$/);
     });
 });
 

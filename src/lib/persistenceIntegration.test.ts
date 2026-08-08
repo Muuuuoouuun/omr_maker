@@ -174,7 +174,9 @@ describe("persistence integration", () => {
         expect(action).not.toContain("metadataWithStudentAccessCode");
         expect(action).toContain("loadStudentLoginDirectory");
         expect(action).toContain("organizationId: workspaceId");
-        expect(users).toContain("issueStudentStartCredential");
+        expect(users).toContain("issueStudentCredentialBatch");
+        expect(users).toContain("StudentCredentialBatchDialog");
+        expect(users).not.toContain("issueStudentStartCredential");
         expect(users).not.toContain("syncStudentAccessCodes");
         expect(users).not.toContain('query.set("workspace", workspaceId)');
         expect(home).toContain("readExamEntryInviteHandoff(sessionStorage, requestedExam)");

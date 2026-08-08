@@ -85,17 +85,27 @@ export default defineConfig({
     projects: [
         {
             name: "chromium",
-            testIgnore: /(?:ios-mobile-layout|pwa-mobile|teacher-mobile)\.spec\.ts/,
+            testIgnore: /(?:ios-mobile-layout|pwa-mobile|teacher-mobile|student-credential-batch)\.spec\.ts/,
             use: { ...devices["Desktop Chrome"] },
         },
         {
+            name: "student-credential-chromium",
+            testMatch: /student-credential-batch\.spec\.ts/,
+            use: {
+                ...devices["Desktop Chrome"],
+                trace: "off",
+                screenshot: "off",
+                video: "off",
+            },
+        },
+        {
             name: "webkit",
-            testIgnore: /(?:ios-mobile-layout|pwa-mobile|teacher-mobile)\.spec\.ts/,
+            testIgnore: /(?:ios-mobile-layout|pwa-mobile|teacher-mobile|student-credential-batch)\.spec\.ts/,
             use: { ...devices["Desktop Safari"] },
         },
         {
             name: "webkit-ipad",
-            testIgnore: /(?:ios-mobile-layout|pwa-mobile|teacher-mobile)\.spec\.ts/,
+            testIgnore: /(?:ios-mobile-layout|pwa-mobile|teacher-mobile|student-credential-batch)\.spec\.ts/,
             use: { ...devices["iPad Pro 11"] },
         },
         {
@@ -158,6 +168,7 @@ export default defineConfig({
             ...process.env,
             OMR_PLAN_DEV_SIMULATION: "1",
             OMR_DEV_PLAN: "free",
+            OMR_TEACHER_IDENTITY_MODE: "self_service",
             TEACHER_SESSION_SECRET: e2eTeacherSessionSecret,
             TEACHER_ACCOUNTS: JSON.stringify([{
                 id: "admin",

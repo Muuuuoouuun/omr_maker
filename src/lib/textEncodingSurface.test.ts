@@ -166,7 +166,7 @@ const requiredStringsByFile: Record<string, string[]> = {
         "로그인 ID",
         "이메일 ID",
         "시작 코드",
-        "학생에게 이름, 반, 로그인 ID, 시작 코드를 함께 전달하세요.",
+        "시작 코드는 화면·클립보드·브라우저 저장소에 보관하지 않고 일회용 CSV로만 내려받습니다.",
     ],
     "src/components/dashboard/tabs/OverviewTab.tsx": [
         "빠른 작업",

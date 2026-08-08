@@ -416,6 +416,11 @@ git commit -m "feat(roster): issue student codes atomically"
 - Create: `src/lib/studentCredentialBatchSurface.test.ts`
 - Modify: `src/app/teacher/users/page.tsx`
 - Create: `e2e/student-credential-batch.spec.ts`
+- Modify: `src/lib/studentCredentialBatchGateway.server.ts`
+- Modify: `supabase/migrations/202608080010_student_start_code_batch.sql`
+- Modify: `supabase/live-test-assertions.sql`
+- Modify: `supabase/production-server-boundary.sql`
+- Modify: `playwright.config.ts`, `.github/workflows/ci.yml`, and affected surface/E2E contracts
 
 - [ ] **Step 1: Write failing CSV and surface tests**
 
@@ -463,12 +468,24 @@ proves the prior cookie and prior code are rejected.
 
 ```sh
 npx vitest run src/lib/studentCredentialCsv.test.ts src/lib/studentCredentialBatchSurface.test.ts
-npx playwright test --project=chromium --workers=1 --retries=0 e2e/student-credential-batch.spec.ts
+npx playwright test --project=student-credential-chromium --workers=1 --retries=0 e2e/student-credential-batch.spec.ts
 ```
 
 - [ ] **Step 7: Commit**
 
 ```sh
-git add src/lib/studentCredentialCsv.ts src/lib/studentCredentialCsv.test.ts src/components/StudentCredentialBatchDialog.tsx src/lib/studentCredentialBatchSurface.test.ts src/app/teacher/users/page.tsx e2e/student-credential-batch.spec.ts
+git add .github/workflows/ci.yml \
+  docs/superpowers/plans/2026-08-08-provisioned-identity-roster.md \
+  e2e/student-credential-batch.spec.ts e2e/teacher-pages.spec.ts playwright.config.ts \
+  src/app/teacher/users/page.tsx src/components/StudentCredentialBatchDialog.tsx \
+  src/lib/studentCredentialCsv.ts src/lib/studentCredentialCsv.test.ts \
+  src/lib/studentCredentialBatchSurface.test.ts \
+  src/lib/studentCredentialBatchGateway.server.ts src/lib/studentCredentialBatchGateway.test.ts \
+  src/lib/studentCredentialBatchMigrationContract.test.ts \
+  src/lib/studentCredentialIssuanceAction.test.ts \
+  src/lib/persistenceIntegration.test.ts src/lib/studentServerAuthSurface.test.ts \
+  src/lib/textEncodingSurface.test.ts src/lib/uiSurface.test.ts \
+  supabase/migrations/202608080010_student_start_code_batch.sql \
+  supabase/live-test-assertions.sql supabase/production-server-boundary.sql
 git commit -m "feat(roster): export one-time student credentials"
 ```

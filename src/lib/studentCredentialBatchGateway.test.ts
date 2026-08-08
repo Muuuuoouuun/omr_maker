@@ -15,6 +15,7 @@ const IDENTITY = {
 const IDEMPOTENCY_KEY = `batch_${"C".repeat(32)}`;
 const VERIFIER = `pbkdf2-sha256:120000:${"d".repeat(32)}:${"e".repeat(64)}`;
 const VERIFIER_2 = `pbkdf2-sha256:120000:${"f".repeat(32)}:${"a".repeat(64)}`;
+const VERIFIER_3 = `pbkdf2-sha256:120000:${"b".repeat(32)}:${"c".repeat(64)}`;
 
 function client(result: { data: unknown; error: { message?: string } | null } = {
     data: { status: "issued", count: 2, studentIds: ["student-1", "student-2"] },
@@ -53,6 +54,37 @@ describe("student credential batch gateway", () => {
         expect(validateCredentialBatch({ studentId: "student-1" })).toEqual({ ok: false, error: "invalid_input" });
     });
 
+    it("accepts canonical Korean roster IDs while rejecting Unicode line/control ambiguity", () => {
+        expect(validateCredentialBatch(["e2e-class-a::김학생"])).toEqual({
+            ok: true,
+            studentIds: ["e2e-class-a::김학생"],
+        });
+        for (const invalid of [
+            "학생\u0085id",
+            "학생\u009Fid",
+            "학생\u2028id",
+            "학생\u2029id",
+            "학생\uFEFFid",
+            "\u00a0학생",
+            "학생\u00a0",
+            "\u1680학생",
+            "학생\u2000",
+            "\u200a학생",
+            "학생\u202f",
+            "\u205f학생",
+            "학생\u3000",
+        ]) {
+            expect(validateCredentialBatch([invalid])).toEqual({ ok: false, error: "invalid_input" });
+        }
+
+        const composed = "class::가";
+        const decomposed = "class::가";
+        expect(validateCredentialBatch([composed, decomposed])).toEqual({
+            ok: true,
+            studentIds: [composed, decomposed],
+        });
+    });
+
     it("generates unique six-character codes, hashes asynchronously, and calls one canonical ordered RPC", async () => {
         const current = client();
         const deps = dependencies();
@@ -87,6 +119,53 @@ describe("student credential batch gateway", () => {
         });
         expect(JSON.stringify(current.rpc.mock.calls[0])).not.toContain("AB2CD3");
         expect(JSON.stringify(current.rpc.mock.calls[0])).not.toContain("EF4GH5");
+    });
+
+    it("sorts exact Unicode IDs by UTF-8 bytes without losing verifier binding", async () => {
+        const korean = "e2e-class-a::김학생";
+        const nfc = "task6-class::가";
+        const nfd = "task6-class::가";
+        const expectedOrder = [korean, nfd, nfc];
+        const current = client({
+            data: { status: "issued", count: 3, studentIds: expectedOrder },
+            error: null,
+        });
+        const codes = ["AB2CD3", "EF4GH5", "JK6MN7"];
+        const verifierByCode = new Map([
+            [codes[0], VERIFIER],
+            [codes[1], VERIFIER_2],
+            [codes[2], VERIFIER_3],
+        ]);
+        let codeIndex = 0;
+        const deps = {
+            generateCode: vi.fn(() => codes[codeIndex++]),
+            hashCode: vi.fn(async (code: string) => verifierByCode.get(code)!),
+            generateIdempotencyKey: vi.fn(() => IDEMPOTENCY_KEY),
+            hashConcurrency: 2,
+        };
+
+        const result = await issueStudentCredentialBatch({
+            ...IDENTITY,
+            studentIds: [nfc, korean, nfd],
+            idempotencyKey: IDEMPOTENCY_KEY,
+        }, current, deps);
+
+        expect(result).toEqual({
+            status: "issued",
+            credentials: [
+                { studentId: nfc, startCode: codes[0] },
+                { studentId: korean, startCode: codes[1] },
+                { studentId: nfd, startCode: codes[2] },
+            ],
+            idempotencyKey: IDEMPOTENCY_KEY,
+        });
+        expect(current.rpc).toHaveBeenCalledWith("omr_issue_student_start_code_batch_v1", expect.objectContaining({
+            p_items: [
+                { studentId: korean, verifier: VERIFIER_2 },
+                { studentId: nfd, verifier: VERIFIER_3 },
+                { studentId: nfc, verifier: VERIFIER },
+            ],
+        }));
     });
 
     it("bounds asynchronous hashing concurrency", async () => {

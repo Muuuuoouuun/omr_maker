@@ -8465,6 +8465,12 @@ insert into public.omr_student_profiles (
 ) values (
     'task6-foreign', 'teacher_task6foreign', 'Task 6 Foreign', 'TASK6-F', 'active', '{}'::jsonb
 );
+insert into public.omr_student_profiles (
+    id, organization_id, display_name, external_id, status, metadata
+) values
+    ('e2e-class-a::김학생', 'teacher_task6batch', '김학생', 'TASK6-KO', 'active', '{}'::jsonb),
+    ('task6-class::가', 'teacher_task6batch', 'NFC composed', 'TASK6-NFC', 'active', '{}'::jsonb),
+    ('task6-class::가', 'teacher_task6batch', 'NFC decomposed', 'TASK6-NFD', 'active', '{}'::jsonb);
 commit;
 
 set role service_role;
@@ -8472,6 +8478,9 @@ do $task6_batch_behavior$
 declare
     v_hash_a text := 'pbkdf2-sha256:120000:' || repeat('1', 32) || ':' || repeat('a', 64);
     v_hash_b text := 'pbkdf2-sha256:120000:' || repeat('2', 32) || ':' || repeat('b', 64);
+    v_hash_k text := 'pbkdf2-sha256:120000:' || repeat('3', 32) || ':' || repeat('d', 64);
+    v_hash_nfc text := 'pbkdf2-sha256:120000:' || repeat('4', 32) || ':' || repeat('e', 64);
+    v_hash_nfd text := 'pbkdf2-sha256:120000:' || repeat('5', 32) || ':' || repeat('f', 64);
     v_items jsonb;
     v_result jsonb;
 begin
@@ -8538,6 +8547,28 @@ begin
         );
         if v_result <> '{"status":"invalid_request"}'::jsonb then
             raise exception 'duplicate or malformed Task 6 batch was accepted: %', v_result;
+        end if;
+    end loop;
+    for v_items in
+        select pg_catalog.jsonb_build_array(pg_catalog.jsonb_build_object(
+            'studentId', candidate.student_id, 'verifier', v_hash_a
+        )) from (values
+            ('학생' || pg_catalog.chr(133) || 'id'),
+            ('학생' || pg_catalog.chr(159) || 'id'),
+            ('학생' || pg_catalog.chr(8232) || 'id'),
+            ('학생' || pg_catalog.chr(8233) || 'id'),
+            ('학생' || pg_catalog.chr(65279) || 'id'),
+            (pg_catalog.chr(160) || '학생'),
+            ('학생' || pg_catalog.chr(12288))
+        ) candidate(student_id)
+    loop
+        v_result := public.omr_issue_student_start_code_batch_v1(
+            'legacy_account', 'teacher_6666666666666666', 7,
+            'teacher_task6batch', 'teacher_task6batch', v_items,
+            'batch_' || repeat('U', 32)
+        );
+        if v_result <> '{"status":"invalid_request"}'::jsonb then
+            raise exception 'ambiguous Unicode Task 6 ID was accepted: %', v_result;
         end if;
     end loop;
     for v_items in
@@ -8622,6 +8653,56 @@ begin
        or pg_catalog.jsonb_array_length(v_result -> 'studentIds') <> 100 then
         raise exception '100-student Task 6 issue failed: %', v_result;
     end if;
+
+    -- Canonical roster IDs are exact UTF-8 identities, not ASCII-only or
+    -- normalization-folded. A response-loss retry changes verifier material
+    -- but applies the Korean/NFC-distinct batch exactly once.
+    v_items := pg_catalog.jsonb_build_array(
+        pg_catalog.jsonb_build_object(
+            'studentId', 'e2e-class-a::김학생', 'verifier', v_hash_k
+        ),
+        pg_catalog.jsonb_build_object(
+            'studentId', 'task6-class::가', 'verifier', v_hash_nfc
+        ),
+        pg_catalog.jsonb_build_object(
+            'studentId', 'task6-class::가', 'verifier', v_hash_nfd
+        )
+    );
+    v_result := public.omr_issue_student_start_code_batch_v1(
+        'legacy_account', 'teacher_6666666666666666', 7,
+        'teacher_task6batch', 'teacher_task6batch', v_items,
+        'batch_' || repeat('K', 32)
+    );
+    if v_result ->> 'status' <> 'issued'
+       or v_result ->> 'count' <> '3'
+       or v_result -> 'studentIds' <>
+          '["e2e-class-a::김학생","task6-class::가","task6-class::가"]'::jsonb then
+        raise exception 'Unicode Task 6 issue failed: %', v_result;
+    end if;
+
+    v_items := pg_catalog.jsonb_build_array(
+        pg_catalog.jsonb_build_object(
+            'studentId', 'e2e-class-a::김학생', 'verifier', v_hash_b
+        ),
+        pg_catalog.jsonb_build_object(
+            'studentId', 'task6-class::가', 'verifier', v_hash_b
+        ),
+        pg_catalog.jsonb_build_object(
+            'studentId', 'task6-class::가', 'verifier', v_hash_b
+        )
+    );
+    v_result := public.omr_issue_student_start_code_batch_v1(
+        'legacy_account', 'teacher_6666666666666666', 7,
+        'teacher_task6batch', 'teacher_task6batch', v_items,
+        'batch_' || repeat('K', 32)
+    );
+    if v_result ->> 'status' <> 'already_applied'
+       or v_result ->> 'count' <> '3'
+       or v_result -> 'studentIds' <>
+          '["e2e-class-a::김학생","task6-class::가","task6-class::가"]'::jsonb
+       or v_result ? 'verifier' or v_result ? 'startCode' then
+        raise exception 'Unicode Task 6 response-loss replay was unsafe: %', v_result;
+    end if;
 end
 $task6_batch_behavior$;
 reset role;
@@ -8631,7 +8712,7 @@ declare
     v_metadata text;
 begin
     if (select pg_catalog.count(*) from public.omr_student_start_credentials
-         where organization_id = 'teacher_task6batch') <> 101
+         where organization_id = 'teacher_task6batch') <> 104
        or exists (
            select 1
              from pg_catalog.generate_series(1, 100) number
@@ -8644,11 +8725,24 @@ begin
        )
        or (select credential_generation from public.omr_student_profiles
             where organization_id = 'teacher_task6batch' and id = 'task6-student-101') <> 1
+       or exists (
+           select 1
+             from (values
+                 ('e2e-class-a::김학생', 'pbkdf2-sha256:120000:' || repeat('3', 32) || ':' || repeat('d', 64)),
+                 ('task6-class::가', 'pbkdf2-sha256:120000:' || repeat('4', 32) || ':' || repeat('e', 64)),
+                 ('task6-class::가', 'pbkdf2-sha256:120000:' || repeat('5', 32) || ':' || repeat('f', 64))
+             ) expected(student_id, verifier)
+             left join public.omr_student_start_credentials credential
+               on credential.organization_id = 'teacher_task6batch'
+              and credential.student_profile_id = expected.student_id
+            where credential.start_code_hash is distinct from expected.verifier
+               or credential.credential_generation <> 1
+       )
        or (select pg_catalog.count(*) from public.omr_student_credential_batch_receipts
-            where organization_id = 'teacher_task6batch') <> 2
+            where organization_id = 'teacher_task6batch') <> 3
        or (select pg_catalog.count(*) from public.omr_audit_logs
             where organization_id = 'teacher_task6batch'
-              and action = 'student_start_code_batch_issued') <> 2 then
+              and action = 'student_start_code_batch_issued') <> 3 then
         raise exception 'Task 6 replay/rejection mutated counts or generation';
     end if;
     select pg_catalog.string_agg(metadata::text, '') into v_metadata

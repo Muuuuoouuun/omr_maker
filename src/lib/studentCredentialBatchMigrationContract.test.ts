@@ -61,6 +61,19 @@ describe("student start-code batch migration contract", () => {
         expect(sql).toMatch(/count\(\*\) from pg_catalog\.jsonb_object_keys\(element\)\)\s*=\s*2/i);
         expect(sql).toContain("studentId");
         expect(sql).toContain("verifier");
+        expect(sql).toContain("[[:cntrl:]]");
+        expect(sql).toContain("pg_catalog.chr(133)");
+        expect(sql).toContain("pg_catalog.chr(8232)");
+        expect(sql).toContain("pg_catalog.chr(8233)");
+        expect(sql).toContain("pg_catalog.chr(65279)");
+        expect(sql).toContain("pg_catalog.chr(160)");
+        expect(sql).toContain("pg_catalog.chr(5760)");
+        expect(sql).toContain("pg_catalog.chr(8192)");
+        expect(sql).toContain("pg_catalog.chr(8202)");
+        expect(sql).toContain("pg_catalog.chr(8239)");
+        expect(sql).toContain("pg_catalog.chr(8287)");
+        expect(sql).toContain("pg_catalog.chr(12288)");
+        expect(sql).not.toContain("^[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$");
         expect(sql).toMatch(/count\(distinct[\s\S]*student_id/i);
         expect(sql).toMatch(/\^batch_\[A-Za-z0-9_-\]\{32,122\}\$/);
         const keyHash = sql.match(
@@ -127,6 +140,17 @@ describe("student start-code batch migration contract", () => {
         expect(auditWrite).not.toMatch(/\b(verifier|idempotency_key|studentId|startCode)\b/i);
         expect(sql.trimStart().startsWith("begin;")).toBe(true);
         expect(sql.trimEnd().endsWith("commit;")).toBe(true);
+    });
+
+    it("proves Korean and normalization-distinct IDs issue and replay once on live PostgreSQL", () => {
+        const live = read("supabase/live-test-assertions.sql");
+
+        expect(live).toContain("e2e-class-a::김학생");
+        expect(live).toContain("task6-class::가");
+        expect(live).toContain("task6-class::가");
+        expect(live).toContain("Unicode Task 6 response-loss replay was unsafe");
+        expect(live).toContain("ambiguous Unicode Task 6 ID was accepted");
+        expect(live).toContain("pg_catalog.chr(159)");
     });
 
     it("propagates exact 010 readiness, backup, boundary, rollback, and docs contracts", () => {

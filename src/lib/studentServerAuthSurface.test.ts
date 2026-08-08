@@ -29,16 +29,15 @@ describe("student server authentication surface", () => {
         expect(rootPage.indexOf("loadLocalStudentCodes(localStorage, process.env.NODE_ENV)"))
             .toBeLessThan(rootPage.indexOf("seedLocalTestStudentAccounts(localStorage)"));
         const users = source("src/app/teacher/users/page.tsx");
-        expect(users).toContain("await issueStudentStartCredential");
+        expect(users).toContain("issueStudentCredentialBatch");
+        expect(users).toContain("StudentCredentialBatchDialog");
         expect(users).not.toContain("syncStudentAccessCodes");
         expect(users).toContain("STUDENT_CREDENTIAL_STATUS_STORAGE_KEY");
-        expect(users).toContain("setSessionStudentCodes");
         expect(users).toContain("localStorage.removeItem(STUDENT_CODES_STORAGE_KEY)");
-        expect(users).toContain("studentCredentialIssuanceLocksRef");
-        expect(users).toContain("withStudentCredentialIssuanceLock");
-        expect(users).toContain("studentCodeRegistryRef.current");
         expect(users).toContain("issuedStudentCredentialIdsRef.current");
-        expect(users).not.toContain("const nextRegistry = { ...studentCodeRegistry, [selected.id]: nextCode }");
+        expect(users).not.toContain("issueStudentStartCredential");
+        expect(users).not.toContain("setSessionStudentCodes");
+        expect(users).not.toContain("studentCodeRegistryRef.current");
         expect(source("src/app/student/dashboard/page.tsx")).toContain("clearStudentServerSession()");
     });
 
@@ -64,19 +63,18 @@ describe("student server authentication surface", () => {
             .toBeLessThan(authAction.indexOf("const client = adminClient()"));
     });
 
-    it("displays only the server-issued code in the one-student compatibility flow", () => {
+    it("keeps server-issued codes inside the one-time batch dialog memory boundary", () => {
         const users = source("src/app/teacher/users/page.tsx");
-        const issuanceStart = users.indexOf("const handleIssueStudentStartCode");
-        const issuanceEnd = users.indexOf("const handleCopyStudentStartCode", issuanceStart);
-        const issuance = users.slice(issuanceStart, issuanceEnd);
+        const dialog = source("src/components/StudentCredentialBatchDialog.tsx");
 
-        expect(issuance).toContain("studentCredentialRequestKeysRef.current");
-        expect(issuance).toContain("crypto.randomUUID()");
-        expect(issuance).toContain("await issueStudentStartCredential(selectedStudent.id, requestKey)");
-        expect(issuance).toContain('serverResult.status === "outcome_unknown"');
-        expect(issuance).toContain("serverResult.startCode");
-        expect(issuance).not.toContain("generateStartCode()");
-        expect(issuance).not.toMatch(/localStorage[\s\S]{0,120}requestKey|requestKey[\s\S]{0,120}localStorage/);
+        expect(users).toContain("issueStudentCredentialBatch={issueStudentCredentialBatch}");
+        expect(users).not.toContain("issueStudentStartCredential");
+        expect(users).not.toContain("serverResult.startCode");
+        expect(dialog).toContain("secureIdempotencyKey");
+        expect(dialog).toContain('result.status === "outcome_unknown"');
+        expect(dialog).toContain("result.credentials");
+        expect(dialog).toContain("createStudentCredentialDownloadController");
+        expect(dialog).not.toMatch(/localStorage|sessionStorage|clipboard|console\./);
     });
 
     it("keeps the server exam action primary and limits fallback to device-local data", () => {
