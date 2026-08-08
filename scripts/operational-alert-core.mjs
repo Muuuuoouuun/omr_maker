@@ -99,6 +99,11 @@ export async function resolveAllAddresses(hostname, {
     resolveIpv6 = resolve6,
 } = {}) {
     const [ipv4, ipv6] = await Promise.allSettled([resolveIpv4(hostname), resolveIpv6(hostname)]);
+    for (const result of [ipv4, ipv6]) {
+        if (result.status === "rejected" && result.reason?.code !== "ENODATA") {
+            throw new Error("DNS resolution failed");
+        }
+    }
     return [
         ...(ipv4.status === "fulfilled" ? ipv4.value.map((address) => ({ address, family: 4 })) : []),
         ...(ipv6.status === "fulfilled" ? ipv6.value.map((address) => ({ address, family: 6 })) : []),
@@ -434,6 +439,7 @@ async function exactJson(response, keys, code) {
 }
 
 async function request(config, deps, endpoint, token, eventId, init, timeoutMs = config.requestTimeoutMs) {
+    const startedAtMs = monotonicTime(deps);
     let response;
     try {
         response = await deps.transport({
@@ -453,10 +459,26 @@ async function request(config, deps, endpoint, token, eventId, init, timeoutMs =
     } catch {
         fail("request_failed");
     }
+    const result = { response, startedAtMs, timeoutMs };
+    assertRequestTime(result, deps, init.overallDeadline);
     if (response.status >= 300 && response.status < 400) fail("redirect_rejected");
     const observedAt = deps.now();
     if (!(observedAt instanceof Date) || !Number.isFinite(observedAt.getTime())) fail("invalid_clock");
-    return { response, observedAtMs: observedAt.getTime() };
+    return { ...result, observedAtMs: observedAt.getTime() };
+}
+
+function monotonicTime(deps) {
+    const value = deps.monotonicNow();
+    if (!Number.isFinite(value) || value < 0) fail("invalid_clock");
+    return value;
+}
+
+function assertRequestTime(result, deps, overallDeadline) {
+    const current = monotonicTime(deps);
+    if (overallDeadline && current - overallDeadline.startedAtMs > overallDeadline.durationMs) {
+        fail("receipt_deadline");
+    }
+    if (current - result.startedAtMs > result.timeoutMs) fail("request_failed");
 }
 
 function requireEventId(payload, eventId, code) {
@@ -508,21 +530,33 @@ async function writeEvidence(outputPath, evidence, deps, boundary) {
         handle = await fs.open(temporaryPath, "wx", 0o600);
         temporaryCreated = true;
         temporaryPresent = true;
-        if (
-            typeof handle.chmod !== "function"
-            || typeof handle.writeFile !== "function"
-            || typeof handle.stat !== "function"
-        ) fail("unsafe_output");
-        ownedStats = await handle.stat();
+        ownedStats = await fs.lstat(temporaryPath);
         if (
             !ownedStats.isFile()
+            || ownedStats.isSymbolicLink()
             || (ownedStats.mode & 0o777) !== 0o600
             || ownedStats.size !== 0
             || ownedStats.uid !== boundary.uid
         ) fail("unsafe_output");
+        if (
+            typeof handle.chmod !== "function"
+            || typeof handle.writeFile !== "function"
+            || typeof handle.sync !== "function"
+            || typeof handle.stat !== "function"
+            || typeof handle.close !== "function"
+        ) fail("unsafe_output");
+        const initialHandleStats = await handle.stat();
+        if (
+            !initialHandleStats.isFile()
+            || initialHandleStats.dev !== ownedStats.dev
+            || initialHandleStats.ino !== ownedStats.ino
+            || (initialHandleStats.mode & 0o777) !== 0o600
+            || initialHandleStats.size !== 0
+            || initialHandleStats.uid !== boundary.uid
+        ) fail("unsafe_output");
         await handle.chmod(0o600);
         await handle.writeFile(serialized, { encoding: "utf8" });
-        if (typeof handle.sync === "function") await handle.sync();
+        await handle.sync();
         writtenStats = await handle.stat();
         if (
             !writtenStats.isFile()
@@ -532,10 +566,8 @@ async function writeEvidence(outputPath, evidence, deps, boundary) {
             || writtenStats.size !== Buffer.byteLength(serialized, "utf8")
             || writtenStats.uid !== boundary.uid
         ) fail("unsafe_output");
-        if (typeof handle.close === "function") {
-            await handle.close();
-            closed = true;
-        }
+        await handle.close();
+        closed = true;
         if (!await sameParentBoundary(boundary, deps)) fail("unsafe_output");
         await fs.link(temporaryPath, outputPath);
         finalLinked = true;
@@ -551,8 +583,11 @@ async function writeEvidence(outputPath, evidence, deps, boundary) {
         await fs.unlink(temporaryPath);
         temporaryPresent = false;
         directoryHandle = await fs.open(boundary.parentPath, "r");
-        if (typeof directoryHandle.sync === "function") await directoryHandle.sync();
-        if (typeof directoryHandle.close === "function") await directoryHandle.close();
+        if (typeof directoryHandle.sync !== "function" || typeof directoryHandle.close !== "function") {
+            fail("unsafe_output");
+        }
+        await directoryHandle.sync();
+        await directoryHandle.close();
         directoryHandle = undefined;
     } catch {
         if (temporaryCreated && !ownedStats && handle && typeof handle.stat === "function") {
@@ -618,7 +653,7 @@ export async function runOperationalAlertExercise(input, overrides = {}) {
     const emittedAt = now.toISOString();
     const emittedMs = now.getTime();
 
-    const { response: emitResponse } = await request(config, deps, endpoints.sink, config.tokens.sink, eventId, {
+    const emitResult = await request(config, deps, endpoints.sink, config.tokens.sink, eventId, {
         method: "POST",
         body: JSON.stringify({
             eventId,
@@ -629,14 +664,17 @@ export async function runOperationalAlertExercise(input, overrides = {}) {
             correlation: eventId,
         }),
     });
+    const { response: emitResponse } = emitResult;
     if (![200, 201, 202, 204].includes(emitResponse.status)) fail("emit_rejected");
     await boundedResponseText(emitResponse);
+    assertRequestTime(emitResult, deps);
 
-    const receiptStartedMs = deps.monotonicNow();
+    const receiptStartedMs = monotonicTime(deps);
+    const receiptDeadline = { startedAtMs: receiptStartedMs, durationMs: config.deadlineMs };
     const maximumPollAttempts = Math.ceil(config.deadlineMs / config.pollIntervalMs);
     let receipt;
     for (let attempt = 0; attempt < maximumPollAttempts; attempt += 1) {
-        const elapsedMs = deps.monotonicNow() - receiptStartedMs;
+        const elapsedMs = monotonicTime(deps) - receiptStartedMs;
         if (elapsedMs >= config.deadlineMs) fail("receipt_deadline");
         const remainingMs = Math.max(1, config.deadlineMs - elapsedMs);
         const receiptResult = await request(
@@ -645,20 +683,23 @@ export async function runOperationalAlertExercise(input, overrides = {}) {
             endpoints.receipt,
             config.tokens.receipt,
             eventId,
-            { method: "GET" },
+            { method: "GET", overallDeadline: receiptDeadline },
             Math.min(config.requestTimeoutMs, remainingMs),
         );
         const { response } = receiptResult;
         if ([202, 204, 404].includes(response.status)) {
             await boundedResponseText(response);
-            const remainingAfterResponseMs = config.deadlineMs - (deps.monotonicNow() - receiptStartedMs);
+            assertRequestTime(receiptResult, deps, receiptDeadline);
+            const remainingAfterResponseMs = config.deadlineMs - (monotonicTime(deps) - receiptStartedMs);
             if (remainingAfterResponseMs <= 0) fail("receipt_deadline");
             await deps.sleep(Math.min(config.pollIntervalMs, remainingAfterResponseMs));
             continue;
         }
         if (response.status !== 200) fail("receipt_rejected");
+        const receiptPayload = await exactJson(response, ["eventId", "sinkReceivedAt", "alertReceivedAt"], "invalid_receipt");
+        assertRequestTime(receiptResult, deps, receiptDeadline);
         receipt = {
-            payload: await exactJson(response, ["eventId", "sinkReceivedAt", "alertReceivedAt"], "invalid_receipt"),
+            payload: receiptPayload,
             observedAtMs: receiptResult.observedAtMs,
         };
         break;
@@ -677,6 +718,7 @@ export async function runOperationalAlertExercise(input, overrides = {}) {
     });
     if (acknowledgeResult.response.status !== 200) fail("acknowledgement_rejected");
     const acknowledgement = await exactJson(acknowledgeResult.response, ["eventId", "acknowledgedAt"], "invalid_acknowledgement");
+    assertRequestTime(acknowledgeResult, deps);
     requireEventId(acknowledgement, eventId, "invalid_acknowledgement");
     const acknowledgedAt = timestamp(acknowledgement.acknowledgedAt, "invalid_acknowledgement", acknowledgeResult.observedAtMs);
     if (acknowledgedAt.milliseconds < alertReceivedAt.milliseconds) fail("invalid_acknowledgement_order");
@@ -687,6 +729,7 @@ export async function runOperationalAlertExercise(input, overrides = {}) {
     });
     if (resolveResult.response.status !== 200) fail("resolution_rejected");
     const resolution = await exactJson(resolveResult.response, ["eventId", "resolvedAt"], "invalid_resolution");
+    assertRequestTime(resolveResult, deps);
     requireEventId(resolution, eventId, "invalid_resolution");
     const resolvedAt = timestamp(resolution.resolvedAt, "invalid_resolution", resolveResult.observedAtMs);
     if (resolvedAt.milliseconds < acknowledgedAt.milliseconds) fail("invalid_resolution_order");

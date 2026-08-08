@@ -63,6 +63,8 @@ DNS host는 단일 trailing dot을 제거해 canonicalize한 뒤 모든 A/AAAA �
 private/ULA, link-local, CGNAT, documentation, benchmark, multicast, reserved 등 non-global 주소가 하나라도
 섞이면 실패합니다. 검사를 통과한 주소 하나를 TLS 연결에 고정하되 원래 canonical host를 HTTP Host와
 TLS SNI로 유지하여 DNS rebinding을 막습니다. literal IP에도 같은 global-address 정책을 적용합니다.
+한 address family의 `ENODATA`만 해당 family 부재로 취급합니다. `EAI_AGAIN`, `SERVFAIL`, `REFUSED`,
+`ENOTFOUND`와 알 수 없는 resolver 오류는 다른 family가 안전해 보여도 전체 검증을 실패시킵니다.
 
 Provider-neutral HTTP 계약:
 
@@ -70,7 +72,7 @@ Provider-neutral HTTP 계약:
 - receipt: receipt endpoint에 `GET`; `200` body는 정확히 `eventId`, `sinkReceivedAt`, `alertReceivedAt`이며 `202`/`204`/`404`만 deadline 전 transient 상태입니다.
 - acknowledge: acknowledgement endpoint에 `{ "eventId": "..." }`를 `POST`; `200` body는 정확히 `eventId`, `acknowledgedAt`입니다.
 - resolve: resolution endpoint에 `{ "eventId": "..." }`를 `POST`; `200` body는 정확히 `eventId`, `resolvedAt`입니다.
-- 모든 응답은 redirect 없이 monotonic request timeout 안에 32 KiB 이하여야 합니다. receipt deadline도 monotonic clock 기준입니다.
+- 모든 응답은 redirect 없이 monotonic request timeout 안에 32 KiB 이하여야 합니다. headers 수신 직후와 body 완전 parse 직후 모두 timeout을 재검사합니다. receipt deadline도 monotonic clock 기준이며 마지막 `200`도 deadline을 초과해 끝나면 실패합니다.
 - 모든 provider 시각은 UTC millisecond ISO-8601이고 emit ≤ sink ≤ alert ≤ acknowledge ≤ resolve 순서이며, 각 응답을 로컬에서 관찰한 wall clock보다 최대 5분(`300000 ms`)까지만 미래일 수 있습니다.
 
 - `ops:alert:verify` 상태: `verified` / `unverified` (외부 시스템 실행만 `verified` 가능)
@@ -99,6 +101,8 @@ realpath/dev/inode/uid/`0700`을 publish 직전에 다시 확인합니다. 완�
 `O_EXCL` `0600` 임시 inode에 write→fsync→stat→close한 뒤 hard-link로 overwrite 없이 원자적으로
 publish하고 임시 이름을 제거하며 부모 디렉터리를 fsync합니다. 실패 시 이 실행이 만든 inode만 정리하고
 기존 또는 교체된 경로는 삭제하지 않습니다. CLI 진단은 `unverified: <allowlisted_code>` 한 줄뿐입니다.
+file handle의 `writeFile`/`sync`/`stat`/`close`와 directory handle의 `sync`/`close`는 모두 필수이며,
+하나라도 없으면 안전하지 않은 filesystem으로 보고 artifact를 publish하지 않습니다.
 
 ## 변경형 여정과 운영 증거
 

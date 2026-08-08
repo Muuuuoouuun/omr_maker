@@ -1,6 +1,5 @@
 import { createHash, createHmac } from "node:crypto";
 import { chmod, link as linkFile, lstat, mkdir, mkdtemp, open, readFile, readdir, realpath, rm, symlink, unlink, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { EventEmitter } from "node:events";
 
@@ -26,12 +25,18 @@ const TOKENS = {
 
 const roots: string[] = [];
 
+function dnsError(code: string) {
+    const error = new Error(code) as NodeJS.ErrnoException;
+    error.code = code;
+    return error;
+}
+
 afterEach(async () => {
     await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
 });
 
 async function secureOutput(name = "alert-evidence.json") {
-    const root = await realpath(await mkdtemp(join(tmpdir(), "omr-alert-test-")));
+    const root = await realpath(await mkdtemp(join(process.cwd(), ".omr-alert-test-")));
     roots.push(root);
     await chmod(root, 0o700);
     return { root, output: join(root, name) };
@@ -94,6 +99,7 @@ async function fixture(options: {
         sleepCalls,
         currentTime: () => nowMs,
         setWallTime: (value: number) => { nowMs = value; },
+        advanceMonotonic: (milliseconds: number) => { monotonicMs += milliseconds; },
     };
 }
 
@@ -335,6 +341,71 @@ describe("provider-neutral operational alert exercise", () => {
         expect(current.calls).toHaveLength(2);
     });
 
+    it("rejects final receipt headers that arrive after the overall monotonic deadline", async () => {
+        const current = await fixture();
+        const originalTransport = current.deps.transport;
+        let requests = 0;
+        const deps = {
+            ...current.deps,
+            transport: async (input: Parameters<typeof originalTransport>[0]) => {
+                requests += 1;
+                if (requests === 2) current.advanceMonotonic(1001);
+                return originalTransport(input);
+            },
+        };
+        await expect(runOperationalAlertExercise({ argv: ["--output", current.output], env: current.env }, deps)).rejects.toMatchObject({ code: "receipt_deadline" });
+        expect(current.calls).toHaveLength(2);
+    });
+
+    it("rejects final receipt body completion after the overall monotonic deadline", async () => {
+        const current = await fixture();
+        const originalTransport = current.deps.transport;
+        let requests = 0;
+        const payload = new TextEncoder().encode(JSON.stringify({
+            eventId: EVENT_ID,
+            sinkReceivedAt: "2026-08-08T00:00:01.000Z",
+            alertReceivedAt: "2026-08-08T00:00:02.000Z",
+        }));
+        const deps = {
+            ...current.deps,
+            transport: async (input: Parameters<typeof originalTransport>[0]) => {
+                requests += 1;
+                if (requests !== 2) return originalTransport(input);
+                let delivered = false;
+                return {
+                    status: 200,
+                    headers: new Headers(),
+                    body: {
+                        getReader: () => ({
+                            read: async () => {
+                                if (delivered) return { done: true, value: undefined };
+                                delivered = true;
+                                current.advanceMonotonic(1001);
+                                return { done: false, value: payload };
+                            },
+                        }),
+                    },
+                } as unknown as Response;
+            },
+        };
+        await expect(runOperationalAlertExercise({ argv: ["--output", current.output], env: current.env }, deps)).rejects.toMatchObject({ code: "receipt_deadline" });
+        expect(requests).toBe(2);
+    });
+
+    it("rejects any request whose headers arrive after its monotonic timeout", async () => {
+        const current = await fixture();
+        const originalTransport = current.deps.transport;
+        const deps = {
+            ...current.deps,
+            transport: async (input: Parameters<typeof originalTransport>[0]) => {
+                current.advanceMonotonic(1001);
+                return originalTransport(input);
+            },
+        };
+        await expect(runOperationalAlertExercise({ argv: ["--output", current.output], env: current.env }, deps)).rejects.toMatchObject({ code: "request_failed" });
+        expect(current.calls).toHaveLength(1);
+    });
+
     it.each([
         ["redirect", new Response(null, { status: 302, headers: { location: "https://other.example.test" } })],
         ["oversized response", new Response("x".repeat(32 * 1024 + 1), { status: 200 })],
@@ -446,8 +517,26 @@ describe("provider-neutral operational alert exercise", () => {
         ]);
         await expect(resolveAllAddresses("ipv4-only.ops.vendor.com", {
             resolveIpv4: (async () => ["1.1.1.1"]) as unknown as typeof import("node:dns/promises").resolve4,
-            resolveIpv6: async () => { throw new Error("ENODATA"); },
+            resolveIpv6: async () => { throw dnsError("ENODATA"); },
         })).resolves.toEqual([{ address: "1.1.1.1", family: 4 }]);
+    });
+
+    it.each([
+        ["AAAA EAI_AGAIN", async () => ["1.1.1.1"], async () => { throw dnsError("EAI_AGAIN"); }],
+        ["A REFUSED", async () => { throw dnsError("REFUSED"); }, async () => ["2606:4700:4700::1111"]],
+        ["AAAA SERVFAIL", async () => ["1.1.1.1"], async () => { throw dnsError("SERVFAIL"); }],
+    ])("rejects partial DNS results when %s occurs", async (_label, ipv4, ipv6) => {
+        await expect(resolveAllAddresses("alerts.ops.vendor.com", {
+            resolveIpv4: ipv4 as unknown as typeof import("node:dns/promises").resolve4,
+            resolveIpv6: ipv6 as unknown as typeof import("node:dns/promises").resolve6,
+        })).rejects.toThrow();
+    });
+
+    it("returns no addresses only when both DNS families are explicitly absent", async () => {
+        await expect(resolveAllAddresses("absent.ops.vendor.com", {
+            resolveIpv4: (async () => { throw dnsError("ENODATA"); }) as unknown as typeof import("node:dns/promises").resolve4,
+            resolveIpv6: (async () => { throw dnsError("ENODATA"); }) as unknown as typeof import("node:dns/promises").resolve6,
+        })).resolves.toEqual([]);
     });
 
     it("accepts all-global A/AAAA answers and pins the vetted first address", async () => {
@@ -515,7 +604,7 @@ describe("provider-neutral operational alert exercise", () => {
     });
 
     it("rejects writable or symlinked output ancestors before transport", async () => {
-        const root = await realpath(await mkdtemp(join(tmpdir(), "omr-alert-ancestor-")));
+        const root = await realpath(await mkdtemp(join(process.cwd(), ".omr-alert-ancestor-")));
         roots.push(root);
         await chmod(root, 0o700);
         const writableAncestor = join(root, "writable");
@@ -530,6 +619,20 @@ describe("provider-neutral operational alert exercise", () => {
             await expect(runOperationalAlertExercise({ argv: ["--output", output], env: current.env }, current.deps)).rejects.toMatchObject({ code: "unsafe_output" });
             expect(current.calls).toHaveLength(0);
         }
+    });
+
+    it("rejects a sticky 01777 output ancestor independently of its private child", async () => {
+        const root = await realpath(await mkdtemp(join(process.cwd(), ".omr-alert-sticky-")));
+        roots.push(root);
+        await chmod(root, 0o700);
+        const sticky = join(root, "sticky");
+        const privateParent = join(sticky, "private");
+        await mkdir(privateParent, { recursive: true, mode: 0o700 });
+        await chmod(sticky, 0o1777);
+        await chmod(privateParent, 0o700);
+        const current = await fixture();
+        await expect(runOperationalAlertExercise({ argv: ["--output", join(privateParent, "evidence.json")], env: current.env }, current.deps)).rejects.toMatchObject({ code: "unsafe_output" });
+        expect(current.calls).toHaveLength(0);
     });
 
     it("fails if the secure parent identity changes before atomic publication", async () => {
@@ -580,6 +683,39 @@ describe("provider-neutral operational alert exercise", () => {
             },
         };
         await expect(runOperationalAlertExercise({ argv: ["--output", current.output], env: current.env }, deps)).rejects.toMatchObject({ code: "unsafe_output" });
+        await expect(lstat(current.output)).rejects.toThrow();
+        expect((await readdir(parent)).filter((name) => name.includes(".tmp"))).toHaveLength(0);
+    });
+
+    it.each([
+        ["file", "writeFile"], ["file", "sync"], ["file", "stat"], ["file", "close"],
+        ["directory", "sync"], ["directory", "close"],
+    ] as const)("fails closed and cleans up when %s handle lacks %s", async (handleKind, missingMethod) => {
+        const current = await fixture();
+        const parent = dirname(current.output);
+        const handles: Array<Awaited<ReturnType<typeof open>>> = [];
+        const deps = {
+            ...current.deps,
+            fs: {
+                open: async (path: string, flags: string, mode?: number) => {
+                    const handle = await open(path, flags, mode);
+                    handles.push(handle);
+                    const isDirectory = path === parent;
+                    if ((handleKind === "directory") !== isDirectory) return handle;
+                    return new Proxy(handle, {
+                        get: (target, property) => property === missingMethod
+                            ? undefined
+                            : typeof Reflect.get(target, property, target) === "function"
+                                ? Reflect.get(target, property, target).bind(target)
+                                : Reflect.get(target, property, target),
+                    });
+                },
+            },
+        };
+        await expect(runOperationalAlertExercise({ argv: ["--output", current.output], env: current.env }, deps)).rejects.toMatchObject({ code: "unsafe_output" });
+        await Promise.all(handles.map(async (handle) => {
+            try { await handle.close(); } catch { /* already closed */ }
+        }));
         await expect(lstat(current.output)).rejects.toThrow();
         expect((await readdir(parent)).filter((name) => name.includes(".tmp"))).toHaveLength(0);
     });
