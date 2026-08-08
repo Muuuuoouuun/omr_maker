@@ -1,7 +1,7 @@
 "use server";
 
 import { cookies, headers } from "next/headers";
-import { parseSignedStudentSessionCookie, resolveStudentSessionSecret, STUDENT_SERVER_SESSION_COOKIE, type StudentServerIdentity } from "@/lib/studentServerSession";
+import { resolveAuthorizedStudentSessionCookie, resolveStudentSessionSecret, STUDENT_SERVER_SESSION_COOKIE, type StudentServerIdentity } from "@/lib/studentServerSession";
 import { getSupabaseServerConfigFromEnv, createSupabaseAdminClient, fetchAttemptRowByOwnerAndId, fetchExamRowById, fetchStudentAttemptSummaryRowsByOwner, type SupabaseAdminClientLike, type SupabaseAdminReadClientLike } from "@/lib/supabaseServerAdmin";
 import { attemptFromSupabaseRow, examFromSupabaseRow, attemptToSupabaseRow, questionResultRowsForAttempt } from "@/lib/omrPersistence";
 import { evaluateExamAccess, examRequiresPin, verifyExamPin } from "@/lib/examAccess";
@@ -193,10 +193,25 @@ async function resolveCtx(): Promise<ResolvedCtx | { status: "unauthenticated" |
     if (!config) {
         return { status: process.env.NODE_ENV === "production" ? "error" : "degraded_local" };
     }
+    const admin = createSupabaseAdminClient(config) as unknown as AdminClient;
     const cookieStore = await cookies();
-    const identity = parseSignedStudentSessionCookie(cookieStore.get(STUDENT_SERVER_SESSION_COOKIE)?.value);
-    if (!identity) return { status: "unauthenticated" };
-    return { identity, admin: createSupabaseAdminClient(config) as unknown as AdminClient };
+    const validation = await resolveAuthorizedStudentSessionCookie(
+        cookieStore.get(STUDENT_SERVER_SESSION_COOKIE)?.value,
+        admin,
+    );
+    if (validation.status === "service_unavailable") return { status: "error" };
+    if (validation.status !== "active") return { status: "unauthenticated" };
+    const identity = validation.identity;
+    return { identity, admin };
+}
+
+async function resolveSimulationStudentIdentity(): Promise<StudentServerIdentity | null> {
+    const cookieStore = await cookies();
+    const validation = await resolveAuthorizedStudentSessionCookie(
+        cookieStore.get(STUDENT_SERVER_SESSION_COOKIE)?.value,
+        { rpc: async () => ({ data: false, error: { message: "simulation has no registered authority" } }) },
+    );
+    return validation.status === "active" ? validation.identity : null;
 }
 
 function isCtx(value: ResolvedCtx | { status: "unauthenticated" | "degraded_local" | "error" }): value is ResolvedCtx {
@@ -347,8 +362,7 @@ export async function submitAttempt(input: SubmitAttemptInput, pin?: string): Pr
         process.env.NODE_ENV !== "production"
         && process.env.OMR_E2E_STUDENT_SUBMISSION_SIMULATION === "1"
     ) {
-        const cookieStore = await cookies();
-        const identity = parseSignedStudentSessionCookie(cookieStore.get(STUDENT_SERVER_SESSION_COOKIE)?.value);
+        const identity = await resolveSimulationStudentIdentity();
         if (identity) {
             const simulated = simulateStudentSubmission(input, identity);
             if (simulated.status === "ok") return { status: "ok", attempt: simulated.attempt };
@@ -526,8 +540,7 @@ export async function askAttemptQuestion(
         process.env.NODE_ENV !== "production"
         && process.env.OMR_E2E_STUDENT_SUBMISSION_SIMULATION === "1"
     ) {
-        const cookieStore = await cookies();
-        const identity = parseSignedStudentSessionCookie(cookieStore.get(STUDENT_SERVER_SESSION_COOKIE)?.value);
+        const identity = await resolveSimulationStudentIdentity();
         if (identity) {
             const simulated = simulateStudentSubmission.askQuestion(attemptId, question, identity);
             if (simulated.status === "ok") return simulated;

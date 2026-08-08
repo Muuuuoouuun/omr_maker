@@ -1,5 +1,4 @@
 \set ON_ERROR_STOP on
-
 do $$
 declare
     readiness jsonb;
@@ -76,7 +75,7 @@ begin
         raise exception 'production boundary left browser canonical access';
     end if;
     readiness := public.omr_service_readiness_v1();
-    if readiness ->> 'version' <> '202608080008'
+    if readiness ->> 'version' <> '202608080009'
        or readiness ->> 'ready' <> 'true'
        or readiness ->> 'teacherUploadCleanupQueueReady' <> 'true'
        or readiness ->> 'studentAttemptSessionsReady' <> 'true'
@@ -104,7 +103,8 @@ begin
        or readiness ->> 'operationalJobStatusReady' <> 'true'
        or readiness ->> 'operatorPilotProvisioningReady' <> 'true'
        or readiness ->> 'provisionedTeacherLoginReady' <> 'true'
-       or readiness ->> 'effectiveWorkspacePlanEnforcementReady' <> 'true' then
+       or readiness ->> 'effectiveWorkspacePlanEnforcementReady' <> 'true'
+       or readiness ->> 'studentSessionGenerationReady' <> 'true' then
         raise exception 'production boundary readiness failed: %', readiness;
     end if;
     if pg_catalog.has_table_privilege(
@@ -301,6 +301,144 @@ begin
     end if;
 end
 $$;
+
+-- The Task 5 readiness bit is an exact catalog and state attestation, not a
+-- name-only probe. Every induced drift must take the aggregate gateway and
+-- database readiness false, and the exact restoration must recover it.
+do $task5_readiness_drift$
+declare
+    v_readiness jsonb;
+    v_original_validator text;
+    v_original_profile_constraint text;
+begin
+    select pg_catalog.pg_get_functiondef(
+        'public.omr_validate_student_session_v1(text,text,text,integer)'::pg_catalog.regprocedure
+    ) into v_original_validator;
+    select pg_catalog.pg_get_constraintdef(constraint_row.oid, true)
+      into v_original_profile_constraint
+      from pg_catalog.pg_constraint constraint_row
+     where constraint_row.conname = 'omr_student_profiles_credential_generation_check'
+       and constraint_row.conrelid = 'public.omr_student_profiles'::pg_catalog.regclass;
+
+    execute $drift$
+        create or replace function public.omr_validate_student_session_v1(
+            p_account_id text, p_organization_id text, p_student_id text,
+            p_credential_generation integer
+        ) returns boolean language sql stable security definer
+        set search_path = '' set statement_timeout = '5s' set lock_timeout = '2s'
+        as 'select true'
+    $drift$;
+    v_readiness := public.omr_service_readiness_v1();
+    if v_readiness->>'studentSessionGenerationReady' <> 'false'
+       or v_readiness->>'serverGatewayCapabilitiesReady' <> 'false'
+       or v_readiness->>'ready' <> 'false' then
+        raise exception 'student session readiness accepted a fake validator body: %', v_readiness;
+    end if;
+    execute v_original_validator;
+
+    execute 'alter table public.omr_student_profiles drop constraint '
+        || 'omr_student_profiles_credential_generation_check';
+    execute 'alter table public.omr_student_profiles add constraint '
+        || 'omr_student_profiles_credential_generation_check '
+        || 'check (credential_generation > 0 or true)';
+    v_readiness := public.omr_service_readiness_v1();
+    if v_readiness->>'studentSessionGenerationReady' <> 'false'
+       or v_readiness->>'serverGatewayCapabilitiesReady' <> 'false'
+       or v_readiness->>'ready' <> 'false' then
+        raise exception 'student session readiness accepted a weakened generation constraint: %',
+            v_readiness;
+    end if;
+    execute 'alter table public.omr_student_profiles drop constraint '
+        || 'omr_student_profiles_credential_generation_check';
+    execute 'alter table public.omr_student_profiles add constraint '
+        || 'omr_student_profiles_credential_generation_check '
+        || v_original_profile_constraint;
+
+    alter index public.omr_student_credential_epochs_account_id_unique
+        rename to omr_student_credential_epochs_account_id_unique_drift;
+    v_readiness := public.omr_service_readiness_v1();
+    if v_readiness->>'studentSessionGenerationReady' <> 'false'
+       or v_readiness->>'serverGatewayCapabilitiesReady' <> 'false'
+       or v_readiness->>'ready' <> 'false' then
+        raise exception 'student session readiness accepted credential index drift: %', v_readiness;
+    end if;
+    alter index public.omr_student_credential_epochs_account_id_unique_drift
+        rename to omr_student_credential_epochs_account_id_unique;
+
+    alter table public.omr_student_profiles
+        disable trigger omr_student_profile_credential_revocation;
+    v_readiness := public.omr_service_readiness_v1();
+    if v_readiness->>'studentSessionGenerationReady' <> 'false'
+       or v_readiness->>'serverGatewayCapabilitiesReady' <> 'false'
+       or v_readiness->>'ready' <> 'false' then
+        raise exception 'student session readiness accepted a disabled revocation trigger: %',
+            v_readiness;
+    end if;
+    alter table public.omr_student_profiles
+        enable trigger omr_student_profile_credential_revocation;
+
+    grant execute on function public.omr_validate_student_session_v1(text,text,text,integer)
+        to anon;
+    v_readiness := public.omr_service_readiness_v1();
+    if v_readiness->>'studentSessionGenerationReady' <> 'false'
+       or v_readiness->>'serverGatewayCapabilitiesReady' <> 'false'
+       or v_readiness->>'ready' <> 'false' then
+        raise exception 'student session readiness accepted browser validator execute: %', v_readiness;
+    end if;
+    revoke execute on function public.omr_validate_student_session_v1(text,text,text,integer)
+        from anon;
+
+    create function public.omr_validate_student_session_v1(text,text,text,bigint)
+    returns boolean language sql stable security definer
+    set search_path = '' set statement_timeout = '5s' set lock_timeout = '2s'
+    as 'select false';
+    v_readiness := public.omr_service_readiness_v1();
+    if v_readiness->>'studentSessionGenerationReady' <> 'false'
+       or v_readiness->>'serverGatewayCapabilitiesReady' <> 'false'
+       or v_readiness->>'ready' <> 'false' then
+        raise exception 'student session readiness accepted an extra validator overload: %', v_readiness;
+    end if;
+    drop function public.omr_validate_student_session_v1(text,text,text,bigint);
+
+    insert into public.omr_organizations (id, name, plan, metadata)
+    values ('teacher_task5drift', 'Task 5 Drift School', 'free', '{}'::jsonb);
+    insert into public.omr_student_profiles (
+        id, organization_id, display_name, external_id, status, metadata
+    ) values (
+        'task5-drift-student', 'teacher_task5drift', 'Task 5 Drift Student',
+        'TASK5-DRIFT', 'active', '{}'::jsonb
+    );
+    insert into public.omr_student_credential_epochs (
+        organization_id, student_profile_id, account_id, credential_generation
+    ) values (
+        'teacher_task5drift', 'task5-drift-student',
+        'student_credential_' || repeat('9', 32), 1
+    );
+    alter table public.omr_student_profiles
+        disable trigger omr_student_profile_generation_guard;
+    update public.omr_student_profiles set credential_generation = 2
+     where organization_id = 'teacher_task5drift' and id = 'task5-drift-student';
+    alter table public.omr_student_profiles
+        enable trigger omr_student_profile_generation_guard;
+    v_readiness := public.omr_service_readiness_v1();
+    if v_readiness->>'studentSessionGenerationReady' <> 'false'
+       or v_readiness->>'serverGatewayCapabilitiesReady' <> 'false'
+       or v_readiness->>'ready' <> 'false' then
+        raise exception 'student session readiness accepted profile/epoch data drift: %', v_readiness;
+    end if;
+    update public.omr_student_profiles set credential_generation = 1
+     where organization_id = 'teacher_task5drift' and id = 'task5-drift-student';
+    delete from public.omr_organizations where id = 'teacher_task5drift';
+
+    v_readiness := public.omr_service_readiness_v1();
+    if v_readiness->>'studentSessionGenerationReady' <> 'true'
+       or v_readiness->>'serverGatewayCapabilitiesReady' <> 'true'
+       or v_readiness->>'ready' <> 'true' then
+        raise exception 'student session readiness did not recover after exact restoration: %',
+            v_readiness;
+    end if;
+end
+$task5_readiness_drift$;
 
 -- The named Phase C readiness bit must detect semantic body, overload, and ACL
 -- drift and return to ready only after the exact catalog is restored.

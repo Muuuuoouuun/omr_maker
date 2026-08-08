@@ -4,7 +4,8 @@ import { cookies, headers } from "next/headers";
 import { randomUUID } from "node:crypto";
 import {
     createSignedStudentSessionCookie,
-    parseSignedStudentSessionCookie,
+    resolveAuthorizedStudentSessionCookie,
+    validateStudentServerSession,
     STUDENT_SERVER_SESSION_COOKIE,
     STUDENT_SERVER_SESSION_MAX_AGE_SECONDS,
     type StudentIdentityInput,
@@ -17,6 +18,7 @@ import {
 } from "@/lib/supabaseServerAdmin";
 import {
     verifyStudentCredentials,
+    validateVerifiedStudentCredentialSession,
     type StudentCredentialClient,
 } from "@/lib/studentCredentialVerifier";
 import {
@@ -324,10 +326,6 @@ export async function issueStudentSession(input: {
         return { ok: false, status: "unauthenticated" };
     }
     const cookieStore = await cookies();
-    const existingIdentity = parseSignedStudentSessionCookie(
-        cookieStore.get(STUDENT_SERVER_SESSION_COOKIE)?.value,
-    );
-    const existingGuestSession = existingIdentity?.kind === "guest" ? existingIdentity : null;
     const client = adminClient();
     if (!client) {
         if (process.env.NODE_ENV === "production") {
@@ -352,6 +350,13 @@ export async function issueStudentSession(input: {
         });
         return { ok: result.ok, status: "degraded_local", identity: result.ok ? identity : undefined };
     }
+    const existingValidation = await resolveAuthorizedStudentSessionCookie(
+        cookieStore.get(STUDENT_SERVER_SESSION_COOKIE)?.value,
+        client,
+    );
+    if (existingValidation.status === "service_unavailable") return { ok: false, status: "error" };
+    const existingIdentity = existingValidation.status === "active" ? existingValidation.identity : null;
+    const existingGuestSession = existingIdentity?.kind === "guest" ? existingIdentity : null;
 
     const name = clean(input.name);
     const groupId = clean(input.groupId);
@@ -469,6 +474,17 @@ export async function issueStudentSession(input: {
             await recordDurableStudentLoginFailure(rateLimitKeys);
             return { ok: false, status: "invalid_credentials" };
         }
+        const currentCredential = await validateVerifiedStudentCredentialSession(
+            client,
+            credential.identity,
+        );
+        if (currentCredential === "service_unavailable") {
+            throw new Error("Student credential validation unavailable");
+        }
+        if (currentCredential !== "active") {
+            await recordDurableStudentLoginFailure(rateLimitKeys);
+            return { ok: false, status: "invalid_credentials" };
+        }
 
         const regionName = studentRegionFromProfile(profile.metadata, classRow.campus);
         const identity: IssuedStudentIdentity = {
@@ -481,10 +497,13 @@ export async function issueStudentSession(input: {
         };
         const now = Date.now();
         const verifiedStudent: StudentServerIdentity = {
+            version: 2,
             kind: "student",
             ...identity,
             organizationId: workspaceId,
-            identityType: "temporary",
+            identityType: "registered",
+            accountId: credential.identity.accountId,
+            credentialGeneration: credential.identity.credentialGeneration,
             issuedAt: now,
             expiresAt: now + STUDENT_SERVER_SESSION_MAX_AGE_SECONDS * 1000,
         };
@@ -504,7 +523,9 @@ export async function issueStudentSession(input: {
             kind: "student",
             ...identity,
             organizationId: workspaceId,
-            identityType: "temporary",
+            identityType: "registered",
+            accountId: credential.identity.accountId,
+            credentialGeneration: credential.identity.credentialGeneration,
         });
         if (!cookieResult.ok) return { ok: false, status: "error" };
         await recordDurableStudentLoginSuccess(rateLimitKeys);
@@ -530,12 +551,20 @@ export async function retryGuestServerClaims(attemptIds: string[]): Promise<Gues
         return { status: "retryable_error", acknowledgedAttemptIds: [], error: "Server storage unavailable" };
     }
     const cookieStore = await cookies();
-    const student = parseSignedStudentSessionCookie(cookieStore.get(STUDENT_SERVER_SESSION_COOKIE)?.value);
+    const studentValidation = await resolveAuthorizedStudentSessionCookie(
+        cookieStore.get(STUDENT_SERVER_SESSION_COOKIE)?.value,
+        client,
+    );
+    if (studentValidation.status === "service_unavailable") {
+        return { status: "retryable_error", acknowledgedAttemptIds: [], error: "Server storage unavailable" };
+    }
+    const student = studentValidation.status === "active" ? studentValidation.identity : null;
     const proof = parseSignedGuestClaimOwnerProof(cookieStore.get(GUEST_CLAIM_OWNER_COOKIE)?.value);
     if (!student || student.kind !== "student" || !proof || !guestClaimOwnerMatchesStudent(proof, student)) {
         return { status: "retryable_error", acknowledgedAttemptIds: [], error: "Guest claim proof unavailable" };
     }
     const guest: StudentServerIdentity = {
+        version: 2,
         kind: "guest",
         guestId: proof.guestId,
         studentId: `guest:${proof.guestId}`,
@@ -555,8 +584,17 @@ export async function refreshStudentSession(): Promise<StudentSessionIssueResult
         return { ok: false, status: "unauthenticated" };
     }
     const cookieStore = await cookies();
-    const identity = parseSignedStudentSessionCookie(cookieStore.get(STUDENT_SERVER_SESSION_COOKIE)?.value);
-    if (!identity) return { ok: false, status: "unauthenticated" };
+    const client = adminClient() || {
+        rpc: async () => ({ data: null, error: { message: "Student session storage unavailable" } }),
+        from: () => ({ select: () => ({}) }),
+    } as unknown as StudentAuthClient;
+    const validation = await validateStudentServerSession(
+        cookieStore.get(STUDENT_SERVER_SESSION_COOKIE)?.value,
+        client,
+    );
+    if (validation.status === "service_unavailable") return { ok: false, status: "error" };
+    if (validation.status !== "active") return { ok: false, status: "unauthenticated" };
+    const identity = validation.identity;
     const result = await setSessionCookie({
         kind: identity.kind,
         guestId: identity.guestId,
@@ -568,6 +606,8 @@ export async function refreshStudentSession(): Promise<StudentSessionIssueResult
         regionId: identity.regionId,
         regionName: identity.regionName,
         identityType: identity.identityType,
+        accountId: identity.accountId,
+        credentialGeneration: identity.credentialGeneration,
     });
     if (!result.ok) return { ok: false, status: "error" };
     const session = restoredSessionFromSignedIdentity(identity);
@@ -594,8 +634,17 @@ export async function refreshStudentSession(): Promise<StudentSessionIssueResult
 /** Confirm that the browser still has a valid signed student/guest cookie. */
 export async function validateStudentSession(): Promise<StudentSessionIssueResult> {
     const cookieStore = await cookies();
-    const identity = parseSignedStudentSessionCookie(cookieStore.get(STUDENT_SERVER_SESSION_COOKIE)?.value);
-    if (!identity) return { ok: false, status: "unauthenticated" };
+    const client = adminClient() || {
+        rpc: async () => ({ data: null, error: { message: "Student session storage unavailable" } }),
+        from: () => ({ select: () => ({}) }),
+    } as unknown as StudentAuthClient;
+    const validation = await validateStudentServerSession(
+        cookieStore.get(STUDENT_SERVER_SESSION_COOKIE)?.value,
+        client,
+    );
+    if (validation.status === "service_unavailable") return { ok: false, status: "error" };
+    if (validation.status !== "active") return { ok: false, status: "unauthenticated" };
+    const identity = validation.identity;
     if (identity.kind === "guest") return { ok: true, status: "ok" };
     return {
         ok: true,
@@ -622,7 +671,17 @@ export async function issueGuestSession(name?: string): Promise<{ ok: boolean; g
     }
     const trimmedName = name?.trim();
     const cookieStore = await cookies();
-    const existing = parseSignedStudentSessionCookie(cookieStore.get(STUDENT_SERVER_SESSION_COOKIE)?.value);
+    const client = adminClient() || {
+        rpc: async () => ({ data: null, error: { message: "Student session storage unavailable" } }),
+        from: () => ({ select: () => ({}) }),
+    } as unknown as StudentAuthClient;
+    const existingValidation = await resolveAuthorizedStudentSessionCookie(
+        cookieStore.get(STUDENT_SERVER_SESSION_COOKIE)?.value,
+        client,
+    );
+    if (existingValidation.status === "service_unavailable") return { ok: false };
+    const existing = existingValidation.status === "active" ? existingValidation.identity : null;
+    if (existing && existing.kind !== "guest") return { ok: false };
     if (existing?.kind === "guest" && existing.guestId) {
         if (!trimmedName || trimmedName === existing.name) {
             return { ok: true, guestId: existing.guestId };

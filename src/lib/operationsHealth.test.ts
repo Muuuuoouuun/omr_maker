@@ -38,7 +38,7 @@ function completeReadyProbe(): SupabaseDeploymentProbe {
     return {
         ...Object.fromEntries(SUPABASE_READINESS_CHECK_KEYS.map(key => [key, true])),
         ready: true,
-        version: "202608080008",
+        version: "202608080009",
         failedChecks: [],
     };
 }
@@ -130,7 +130,7 @@ describe("operational health", () => {
             database: "ready",
             observability: "ready",
             configuration: "ready",
-            version: "202608080008",
+            version: "202608080009",
         });
 
         await expect(probeOperationalReadiness(env, async () => ({
@@ -142,7 +142,7 @@ describe("operational health", () => {
             status: "not_ready",
             database: "not_ready",
             observability: "ready",
-            version: "202608080008",
+            version: "202608080009",
             failedChecks: ["queryPathIndexesReady", "databaseDeclaredReady"],
         });
     });
@@ -178,7 +178,7 @@ describe("operational health", () => {
             database: "ready",
             observability: "ready",
             configuration: "not_ready",
-            version: "202608080008",
+            version: "202608080009",
             failedChecks: ["configuration:teacher_account_delivery"],
         });
         expect(configurationProbe).toHaveBeenCalledOnce();
@@ -203,7 +203,7 @@ describe("operational health", () => {
             database: "ready",
             observability: "ready",
             configuration: "not_ready",
-            version: "202608080008",
+            version: "202608080009",
             failedChecks: ["configuration:teacher_account_delivery_probe"],
         });
     });
@@ -222,7 +222,7 @@ describe("operational health", () => {
             database: "ready",
             observability: "ready",
             configuration: "ready",
-            version: "202608080008",
+            version: "202608080009",
         });
 
         await expect(probeOperationalReadiness({
@@ -317,7 +317,7 @@ describe("operational health", () => {
             database: "ready",
             observability: "ready",
             configuration: "ready",
-            version: "202608080008",
+            version: "202608080009",
             environment: "staging",
             build: "a".repeat(40),
             databaseProjectRefHash: createHash("sha256").update(projectRef).digest("hex"),
@@ -336,7 +336,7 @@ describe("operational health", () => {
                 database: "ready",
                 observability: "not_configured",
                 configuration: "ready",
-                version: "202608080008",
+                version: "202608080009",
             });
         await expect(probeOperationalReadiness({
             ...base,
@@ -347,7 +347,7 @@ describe("operational health", () => {
             database: "ready",
             observability: "probe_failed",
             configuration: "ready",
-            version: "202608080008",
+            version: "202608080009",
         });
     });
 
@@ -407,7 +407,7 @@ describe("operational health", () => {
             database: "ready",
             observability: "ready",
             configuration: "not_ready",
-            version: "202608080008",
+            version: "202608080009",
             failedChecks: ["configuration:remote_asset_cleanup_heartbeat"],
         });
 
@@ -451,7 +451,7 @@ describe("operational health", () => {
             database: "ready",
             observability: "ready",
             configuration: "not_ready",
-            version: "202608080008",
+            version: "202608080009",
             failedChecks: ["configuration:remote_asset_cleanup_schedule"],
         });
     });

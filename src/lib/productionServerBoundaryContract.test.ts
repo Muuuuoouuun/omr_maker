@@ -321,12 +321,12 @@ describe("production server-only database boundary", () => {
         expect(liveAssertions).toContain(
             "v4 readiness accepted a server gateway procedure impostor",
         );
-        expect(supabaseReadme).toContain("202608080008");
+        expect(supabaseReadme).toContain("202608080009");
         expect(supabaseReadme).toContain("rosterSnapshotCasReady");
         expect(supabaseReadme).toContain("attemptMutationCasReady");
         expect(supabaseReadme).toContain("examDeleteSessionSafe");
         expect(supabaseReadme).toContain("teacherAccountLifecycleReady");
-        expect(productionReadiness).toContain("202608080008");
+        expect(productionReadiness).toContain("202608080009");
         expect(productionReadiness).toContain("rosterSnapshotCasReady");
         expect(productionReadiness).toContain("attemptMutationCasReady");
         expect(productionReadiness).toContain("examDeleteSessionSafe");
@@ -361,7 +361,7 @@ describe("production server-only database boundary", () => {
         expect(profile).toMatch(/grant all on all functions in schema public to service_role;/i);
 
         const discoveredTables = [...CANONICAL_TABLES];
-        expect(discoveredTables).toHaveLength(40);
+        expect(discoveredTables).toHaveLength(41);
         expect(discoveredTables).toEqual([...discoveredTables].sort());
         expect(new Set(discoveredTables).size).toBe(discoveredTables.length);
         for (const table of CANONICAL_TABLES) {
@@ -559,7 +559,7 @@ describe("production server-only database boundary", () => {
         expect(profile).toContain(
             "revoke all on function public.omr_normalize_exam_save_request_v10(jsonb)",
         );
-        expect(profile).toContain("'version', '202608080008'");
+        expect(profile).toContain("'version', '202608080009'");
         expect(profile).toContain("'operationalJobStatusReady'");
         expect(profile).toContain("'durableRateLimitsReady'");
         expect(profile).toContain("'teacherExamCasReady'");

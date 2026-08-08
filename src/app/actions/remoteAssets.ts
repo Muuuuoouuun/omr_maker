@@ -31,7 +31,7 @@ import {
 import { isTeacherMutationAuthorized } from "@/lib/teacherMutationAuthorization";
 import { workspaceContextFromTeacherSession } from "@/lib/workspaceContext";
 import {
-    parseSignedStudentSessionCookie,
+    resolveAuthorizedStudentSessionCookie,
     STUDENT_SERVER_SESSION_COOKIE,
 } from "@/lib/studentServerSession";
 import { ownerStudentId } from "@/lib/studentExamCore";
@@ -211,10 +211,15 @@ export async function uploadStudentAttemptHandwriting(input: {
         let attachmentTicketId = "";
         if (input.sessionId) {
             const cookieStore = await cookies();
-            const identity = parseSignedStudentSessionCookie(
+            const validation = await resolveAuthorizedStudentSessionCookie(
                 cookieStore.get(STUDENT_SERVER_SESSION_COOKIE)?.value,
+                client,
             );
-            if (!identity?.organizationId) return { status: "invalid_ticket" };
+            if (validation.status === "service_unavailable") return { status: "service_unavailable" };
+            if (validation.status !== "active" || !validation.identity.organizationId) {
+                return { status: "invalid_ticket" };
+            }
+            const identity = validation.identity;
             const sessionRead = await client.from("omr_attempt_sessions")
                 .select("organization_id,owner_student_id,status,submission_id,submitted_attempt_id")
                 .eq("id", input.sessionId.trim())

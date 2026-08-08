@@ -149,6 +149,9 @@ revoke all on table public.omr_teacher_account_tokens from public, anon, authent
 revoke all on table public.omr_teacher_notification_states from public, anon, authenticated, service_role;
 revoke all on table public.omr_operational_job_status from public, anon, authenticated, service_role;
 revoke all on table public.omr_pilot_plan_grants from public, anon, authenticated, service_role;
+revoke all on table public.omr_student_credential_epochs from public, anon, authenticated, service_role;
+revoke all on table public.omr_student_start_credentials from service_role;
+grant select on table public.omr_student_start_credentials to service_role;
 revoke all on sequence public.omr_operational_job_run_sequence from public, anon, authenticated, service_role;
 
 
@@ -552,7 +555,7 @@ alter table if exists public.omr_remote_assets no force row level security;
 -- The service-only upload intent and cleanup outbox remain FORCE RLS because
 -- schema.sql already forces them in the pre-boundary baseline.
 
--- omr_student_start_credentials and omr_roster_invites keep FORCE RLS: schema.sql
+-- omr_student_start_credentials, omr_student_credential_epochs, and omr_roster_invites keep FORCE RLS.
 -- sets it, so leaving it on is the correct alpha state, not an oversight.
 
 -- The 25 alpha allow-all policies, verbatim from schema.sql. A contract test
@@ -746,6 +749,21 @@ grant execute on function public.omr_requeue_dead_remote_asset_cleanup_v1(text,t
 -- Final Stage 3 Phase C ACL fence. Rollback may restore the historical browser
 -- policies, but it must never restore direct service-role paid-mutation,
 -- private-worker, quota-ledger, or Storage-metadata bypasses.
+alter table if exists public.omr_student_credential_epochs enable row level security;
+alter table if exists public.omr_student_credential_epochs force row level security;
+revoke all on table public.omr_student_credential_epochs from public, anon, authenticated, service_role;
+revoke all on table public.omr_student_start_credentials from service_role;
+grant select on table public.omr_student_start_credentials to service_role;
+revoke all on function public.omr_guard_student_credential_mutation_v1() from public, anon, authenticated, service_role;
+revoke all on function public.omr_guard_student_profile_generation_v1() from public, anon, authenticated, service_role;
+revoke all on function public.omr_guard_student_credential_mutation_v8_snapshot() from public, anon, authenticated, service_role;
+revoke all on function public.omr_revoke_student_session_on_status_v2() from public, anon, authenticated, service_role;
+revoke all on function public.omr_revoke_student_session_on_delete_v2() from public, anon, authenticated, service_role;
+revoke all on function public.omr_revoke_withdrawn_student_credential_v8_snapshot() from public, anon, authenticated, service_role;
+revoke all on function public.omr_validate_student_session_v1(text,text,text,integer) from public, anon, authenticated;
+grant execute on function public.omr_validate_student_session_v1(text,text,text,integer) to service_role;
+revoke all on function public.omr_rotate_student_start_credential_v1(text,text,bigint,text,text,text,text) from public, anon, authenticated;
+grant execute on function public.omr_rotate_student_start_credential_v1(text,text,bigint,text,text,text,text) to service_role;
 revoke all on table public.omr_remote_assets from service_role;
 revoke all on table public.omr_remote_asset_upload_intents from service_role;
 revoke all on table public.omr_remote_asset_cleanup_queue from service_role;

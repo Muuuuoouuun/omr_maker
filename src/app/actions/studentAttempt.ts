@@ -21,7 +21,7 @@ import type {
 import { isSameOriginServerActionRequest } from "@/lib/serverActionSecurity";
 import {
     createSignedStudentSessionCookie,
-    parseSignedStudentSessionCookie,
+    resolveAuthorizedStudentSessionCookie,
     STUDENT_SERVER_SESSION_COOKIE,
     shouldUseSecureStudentSessionCookie,
     type StudentServerIdentity,
@@ -109,10 +109,32 @@ export async function openStudentExam(
         const client = getGatewayClient();
         if (!client) return { status: unavailableGatewayStatus() };
         const cookieStore = await cookies();
-        const studentSession = parseSignedStudentSessionCookie(
+        const validation = await resolveAuthorizedStudentSessionCookie(
             cookieStore.get(STUDENT_SERVER_SESSION_COOKIE)?.value,
+            client,
         );
-        const result = await openStudentExamWithGateway(client, input, process.env, Date.now(), studentSession);
+        if (validation.status === "service_unavailable") return { status: "service_unavailable" };
+        if (validation.status !== "active") return { status: "login_required" };
+        const studentSession = validation.identity;
+        const verifiedIdentity = studentSession.kind === "guest"
+            ? {
+                organizationId: studentSession.organizationId || undefined,
+                studentId: studentSession.studentId,
+                studentName: studentSession.studentName,
+                identityType: "guest" as const,
+                guestId: studentSession.guestId || "",
+                groupId: studentSession.groupId,
+                groupName: studentSession.groupName,
+            }
+            : {
+                organizationId: studentSession.organizationId,
+                studentId: studentSession.studentId,
+                studentName: studentSession.studentName,
+                identityType: studentSession.identityType === "registered" ? "registered" as const : "temporary" as const,
+                groupId: studentSession.groupId,
+                groupName: studentSession.groupName,
+            };
+        const result = await openStudentExamWithGateway(client, input, process.env, Date.now(), verifiedIdentity);
         if (result.status !== "allowed") {
             if (result.status === "service_unavailable") {
                 await reportServerError("student-exam-open", {
@@ -162,6 +184,22 @@ export async function submitStudentAttempt(
         if (!isSameOriginServerActionRequest(headerStore)) return { status: "service_unavailable" };
         const client = getGatewayClient();
         if (!client) return { status: "service_unavailable" };
+        const claims = parseStudentAttemptTicket(submission.ticket);
+        if (!claims) return { status: "invalid_ticket" };
+        const cookieStore = await cookies();
+        const validation = await resolveAuthorizedStudentSessionCookie(
+            cookieStore.get(STUDENT_SERVER_SESSION_COOKIE)?.value,
+            client,
+        );
+        if (validation.status === "service_unavailable") return { status: "service_unavailable" };
+        if (validation.status !== "active") return { status: "invalid_ticket" };
+        const session = validation.identity;
+        if (
+            claims.organizationId !== session.organizationId
+            || claims.studentId !== session.studentId
+            || claims.identityType !== session.identityType
+            || (session.kind === "guest" && claims.guestId !== session.guestId)
+        ) return { status: "invalid_ticket" };
         const result = await submitStudentAttemptWithGateway(client, submission);
         if (result.status === "service_unavailable") {
             await reportServerError("student-submit", {

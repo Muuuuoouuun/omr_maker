@@ -2,7 +2,7 @@ import { readFileSync, readdirSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-export const EXPECTED_CANONICAL_TABLE_COUNT = 40;
+export const EXPECTED_CANONICAL_TABLE_COUNT = 41;
 
 const repositoryRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 

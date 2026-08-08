@@ -7,6 +7,7 @@ import {
 } from "@/lib/supabaseServerAdmin";
 import {
     hashStudentStartCode,
+    validateVerifiedStudentCredentialSession,
     verifyStudentCredentials,
     type StudentCredentialClient,
 } from "@/lib/studentCredentialVerifier";
@@ -29,17 +30,11 @@ export type StudentServerLoginResult =
     | { success: true; student: VerifiedStudentIdentity }
     | { success: false; status: "invalid_credentials" | "credential_not_configured" | "service_unavailable" | "local_only" };
 
-interface StudentCredentialUpdateClient {
-    from(table: string): {
-        upsert(values: Record<string, unknown>, options: { onConflict: string }): {
-            select(columns: string): {
-                maybeSingle(): PromiseLike<{
-                    data: { student_profile_id?: string } | null;
-                    error: { message?: string } | null;
-                }>;
-            };
-        };
-    };
+interface StudentCredentialRotationClient {
+    rpc(name: string, params: Record<string, unknown>): PromiseLike<{
+        data: unknown;
+        error: { message?: string } | null;
+    }>;
 }
 
 function adminClient() {
@@ -69,6 +64,16 @@ export async function loginStudentWithStartCode(input: {
         if (verified.status !== "verified") {
             return { success: false, status: verified.status };
         }
+        const current = await validateVerifiedStudentCredentialSession(
+            client as unknown as StudentCredentialRotationClient,
+            verified.identity,
+        );
+        if (current !== "active") {
+            return {
+                success: false,
+                status: current === "stale" ? "invalid_credentials" : "service_unavailable",
+            };
+        }
         const signedCookie = createSignedStudentSessionCookie(verified.identity);
         if (!signedCookie) return { success: false, status: "service_unavailable" };
 
@@ -80,7 +85,17 @@ export async function loginStudentWithStartCode(input: {
             path: "/",
             maxAge: STUDENT_SERVER_SESSION_MAX_AGE_SECONDS,
         });
-        return { success: true, student: verified.identity };
+        return {
+            success: true,
+            student: {
+                organizationId: verified.identity.organizationId,
+                studentId: verified.identity.studentId,
+                studentName: verified.identity.studentName,
+                identityType: verified.identity.identityType,
+                groupId: verified.identity.groupId,
+                groupName: verified.identity.groupName,
+            },
+        };
     } catch {
         return { success: false, status: "service_unavailable" };
     }
@@ -119,20 +134,32 @@ export async function issueStudentStartCredential(
         }
         const context = workspaceContextFromTeacherSession(teacherSession);
         const hash = hashStudentStartCode(startCode);
-        const result = await (client as unknown as StudentCredentialUpdateClient)
-            .from("omr_student_start_credentials")
-            .upsert({
-                organization_id: context.organizationId,
-                student_profile_id: studentId.trim(),
-                start_code_hash: hash,
-                updated_at: new Date().toISOString(),
-            }, { onConflict: "organization_id,student_profile_id" })
-            .select("student_profile_id")
-            .maybeSingle();
+        const result = await (client as unknown as StudentCredentialRotationClient)
+            .rpc("omr_rotate_student_start_credential_v1", {
+                p_session_authority: context.sessionAuthority,
+                p_account_id: context.accountId,
+                p_session_generation: context.accountSessionGeneration,
+                p_organization_id: context.organizationId,
+                p_actor_user_id: context.actorUserId,
+                p_student_id: studentId.trim(),
+                p_start_code_hash: hash,
+            });
         if (result.error) {
-            return { success: false, error: result.error.message || "학생 시작 코드를 서버에 저장하지 못했습니다." };
+            return { success: false, error: "학생 시작 코드를 서버에 저장하지 못했습니다." };
         }
-        if (!result.data?.student_profile_id) {
+        const payload = result.data && typeof result.data === "object" && !Array.isArray(result.data)
+            ? result.data as Record<string, unknown>
+            : null;
+        const exactKeys = payload ? Object.keys(payload).sort() : [];
+        if (
+            !payload
+            || exactKeys.join(",") !== "credentialGeneration,status,studentId"
+            || payload.status !== "rotated"
+            || payload.studentId !== studentId.trim()
+            || typeof payload.credentialGeneration !== "number"
+            || !Number.isSafeInteger(payload.credentialGeneration)
+            || payload.credentialGeneration < 1
+        ) {
             return { success: false, error: "현재 조직의 학생 명단에서 해당 학생을 찾지 못했습니다." };
         }
         return { success: true };

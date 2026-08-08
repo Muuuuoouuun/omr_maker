@@ -49,7 +49,8 @@ describe("feedback gateway contract", () => {
         expect(studentContext.indexOf("getSupabaseServerConfigFromEnv()"))
             .toBeGreaterThanOrEqual(0);
         expect(studentContext.indexOf("getSupabaseServerConfigFromEnv()"))
-            .toBeLessThan(studentContext.indexOf("parseSignedStudentSessionCookie"));
+            .toBeLessThan(studentContext.indexOf("resolveAuthorizedStudentSessionCookie"));
+        expect(studentContext).not.toContain("parseSignedStudentSessionCookie");
         expect(studentContext).toContain("if (!config) return unavailable()");
     });
 

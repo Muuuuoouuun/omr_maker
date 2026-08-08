@@ -12,10 +12,12 @@ describe("student server authentication surface", () => {
         const examAction = source("src/app/actions/studentExam.ts");
 
         expect(sessionAction).toContain("createSignedStudentSessionCookie");
-        expect(sessionAction).toContain("parseSignedStudentSessionCookie");
+        expect(sessionAction).toContain("resolveAuthorizedStudentSessionCookie");
+        expect(sessionAction).not.toContain("parseSignedStudentSessionCookie");
         expect(sessionAction).toContain("httpOnly: true");
         expect(sessionAction).toContain("sameSite: \"lax\"");
-        expect(examAction).toContain("parseSignedStudentSessionCookie");
+        expect(examAction).toContain("resolveAuthorizedStudentSessionCookie");
+        expect(examAction).not.toContain("parseSignedStudentSessionCookie");
         expect(examAction).toContain("resolveCtx()");
     });
 
@@ -51,7 +53,7 @@ describe("student server authentication surface", () => {
         expect(sessionAction).not.toContain("metadataWithStudentAccessCode");
         expect(sessionAction).not.toContain("readStudentAccessCodeRecord");
         expect(sessionAction).not.toContain("verifyStudentAccessCode");
-        expect(authAction).toContain("omr_student_start_credentials");
+        expect(authAction).toContain("omr_rotate_student_start_credential_v1");
         expect(authAction).toContain("hashStudentStartCode");
         expect(authAction).toContain("canTeacherRoleWrite");
         expect(authAction.indexOf("canTeacherRoleWrite"))

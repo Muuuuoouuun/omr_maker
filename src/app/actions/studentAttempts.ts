@@ -16,8 +16,9 @@ import type {
 } from "@/lib/studentAttemptHistoryContract";
 import { isSameOriginServerActionRequest } from "@/lib/serverActionSecurity";
 import {
-    parseSignedStudentSessionCookie,
+    resolveAuthorizedStudentSessionCookie,
     STUDENT_SERVER_SESSION_COOKIE,
+    type StudentSessionValidationClient,
     type StudentServerSession,
 } from "@/lib/studentServerSession";
 
@@ -33,13 +34,18 @@ async function actionContext(): Promise<StudentAttemptActionContext> {
     if (!config) {
         return { status: process.env.NODE_ENV === "production" ? "service_unavailable" : "local_only" };
     }
+    const client = createSupabaseAdminClient(config) as unknown as StudentAttemptReadGatewayClient
+        & StudentSessionValidationClient;
     const cookieStore = await cookies();
-    const session = parseSignedStudentSessionCookie(
+    const validation = await resolveAuthorizedStudentSessionCookie(
         cookieStore.get(STUDENT_SERVER_SESSION_COOKIE)?.value,
+        client,
     );
-    if (!session) return { status: "unauthorized" };
+    if (validation.status === "service_unavailable") return { status: "service_unavailable" };
+    if (validation.status !== "active") return { status: "unauthorized" };
+    const session = validation.identity;
     return {
-        client: createSupabaseAdminClient(config) as unknown as StudentAttemptReadGatewayClient,
+        client,
         session,
     };
 }

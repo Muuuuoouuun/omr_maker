@@ -31,7 +31,12 @@ vi.mock("@/lib/supabaseServerAdmin", async importOriginal => {
                 eq() { return query; },
                 async maybeSingle() { return { data: { plan: "free" }, error: null }; },
             };
-            return { from: () => query, rpc: mocks.listStudentAssignmentsRpc };
+            return {
+                from: () => query,
+                rpc: (name: string, params: Record<string, unknown>) => name === "omr_validate_student_session_v1"
+                    ? Promise.resolve({ data: true, error: null })
+                    : mocks.listStudentAssignmentsRpc(name, params),
+            };
         }),
         fetchAttemptRowsByOwner: mocks.fetchAttemptRowsByOwner,
         fetchStudentAttemptSummaryRowsByOwner: mocks.fetchStudentAttemptSummaryRowsByOwner,
@@ -47,10 +52,13 @@ describe("student assignment capacity action boundary", () => {
     beforeEach(() => {
         vi.stubEnv("STUDENT_SESSION_SECRET", "student-capacity-action-secret");
         mocks.cookie = createSignedStudentSessionCookie({
+            kind: "student",
+            accountId: `student_credential_${"a".repeat(32)}`,
             organizationId: "org-1",
             studentId: "student-1",
-            studentName: "학생 1",
+            name: "학생 1",
             identityType: "registered",
+            credentialGeneration: 1,
         }, process.env, Date.now()) || "";
         mocks.fetchAttemptRowsByOwner.mockReset();
         mocks.fetchStudentAttemptSummaryRowsByOwner.mockReset();

@@ -3,7 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const controls = vi.hoisted(() => ({
     role: undefined as "owner" | "admin" | "teacher" | "assistant" | "viewer" | undefined,
     adminClientCalls: 0,
-    upsertCalls: [] as Array<Record<string, unknown>>,
+    rpcCalls: [] as Array<Record<string, unknown>>,
 }));
 
 vi.mock("next/headers", () => ({
@@ -33,19 +33,17 @@ vi.mock("@/lib/supabaseServerAdmin", () => ({
     createSupabaseAdminClient: () => {
         controls.adminClientCalls += 1;
         return {
-            from: () => ({
-                upsert: (row: Record<string, unknown>) => {
-                    controls.upsertCalls.push(row);
-                    return {
-                        select: () => ({
-                            maybeSingle: async () => ({
-                                data: { student_profile_id: row.student_profile_id },
-                                error: null,
-                            }),
-                        }),
-                    };
-                },
-            }),
+            rpc: async (name: string, params: Record<string, unknown>) => {
+                controls.rpcCalls.push({ name, ...params });
+                return {
+                    data: {
+                        status: "rotated",
+                        studentId: params.p_student_id,
+                        credentialGeneration: controls.rpcCalls.length,
+                    },
+                    error: null,
+                };
+            },
         };
     },
 }));
@@ -56,7 +54,7 @@ describe("student credential issuance action roles", () => {
     beforeEach(() => {
         controls.role = undefined;
         controls.adminClientCalls = 0;
-        controls.upsertCalls = [];
+        controls.rpcCalls = [];
     });
 
     it("rejects viewer and missing roles before resolving a service-role client", async () => {
@@ -67,7 +65,7 @@ describe("student credential issuance action roles", () => {
             });
         }
         expect(controls.adminClientCalls).toBe(0);
-        expect(controls.upsertCalls).toHaveLength(0);
+        expect(controls.rpcCalls).toHaveLength(0);
     });
 
     it("allows each explicit write-capable role", async () => {
@@ -78,6 +76,7 @@ describe("student credential issuance action roles", () => {
             });
         }
         expect(controls.adminClientCalls).toBe(4);
-        expect(controls.upsertCalls).toHaveLength(4);
+        expect(controls.rpcCalls).toHaveLength(4);
+        expect(controls.rpcCalls.every(call => call.name === "omr_rotate_student_start_credential_v1")).toBe(true);
     });
 });

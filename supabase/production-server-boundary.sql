@@ -122,6 +122,7 @@ revoke all on table public.omr_teacher_account_tokens from public, anon, authent
 revoke all on table public.omr_teacher_notification_states from public, anon, authenticated, service_role;
 revoke all on table public.omr_operational_job_status from public, anon, authenticated, service_role;
 revoke all on table public.omr_pilot_plan_grants from public, anon, authenticated, service_role;
+revoke all on table public.omr_student_credential_epochs from public, anon, authenticated, service_role;
 revoke all on sequence public.omr_operational_job_run_sequence from public, anon, authenticated, service_role;
 
 
@@ -133,11 +134,13 @@ revoke all on table public.omr_remote_asset_upload_intents from service_role;
 revoke all on table public.omr_remote_asset_cleanup_queue from service_role;
 revoke all on table public.omr_plan_usage from service_role;
 revoke all on table public.omr_plan_usage_reservations from service_role;
+revoke all on table public.omr_student_start_credentials from service_role;
 grant select on table public.omr_remote_assets to service_role;
 grant select on table public.omr_remote_asset_upload_intents to service_role;
 grant select on table public.omr_remote_asset_cleanup_queue to service_role;
 grant select on table public.omr_plan_usage to service_role;
 grant select on table public.omr_plan_usage_reservations to service_role;
+grant select on table public.omr_student_start_credentials to service_role;
 revoke all on sequence public.omr_remote_asset_cleanup_queue_id_seq from service_role;
 revoke all on function public.omr_lock_provisioned_teacher_identity_v1(text,bigint,text) from public, anon, authenticated, service_role;
 revoke all on function public.omr_authorize_effective_teacher_plan_v1(text,text) from public, anon, authenticated, service_role;
@@ -458,6 +461,8 @@ alter table if exists public.omr_student_profiles enable row level security;
 alter table if exists public.omr_student_profiles force row level security;
 alter table if exists public.omr_student_start_credentials enable row level security;
 alter table if exists public.omr_student_start_credentials force row level security;
+alter table if exists public.omr_student_credential_epochs enable row level security;
+alter table if exists public.omr_student_credential_epochs force row level security;
 alter table if exists public.omr_classes enable row level security;
 alter table if exists public.omr_classes force row level security;
 alter table if exists public.omr_roster_invites enable row level security;
@@ -588,6 +593,7 @@ declare
     v_legacy_gateway_catalog_ready boolean;
     v_server_gateway_capabilities_ready boolean;
     v_effective_workspace_plan_enforcement_ready boolean;
+    v_student_session_generation_ready boolean;
     v_ready boolean;
 begin
     v_previous := public.omr_service_readiness_v10_snapshot();
@@ -607,7 +613,7 @@ begin
         ('omr_rate_limit_buckets'), ('omr_exam_mutations'), ('omr_feedback_mutations'),
         ('omr_initial_ops_metrics'), ('omr_teacher_accounts'), ('omr_teacher_account_tokens'),
         ('omr_teacher_notification_states'), ('omr_operational_job_status'),
-        ('omr_pilot_plan_grants')
+        ('omr_pilot_plan_grants'), ('omr_student_credential_epochs')
     ), actual(table_name, row_security, force_row_security) as (
         select relation.relname::text, relation.relrowsecurity, relation.relforcerowsecurity
           from pg_catalog.pg_class relation
@@ -643,6 +649,7 @@ begin
                    'omr_initial_ops_metrics', 'omr_teacher_accounts', 'omr_teacher_account_tokens',
                    'omr_teacher_notification_states', 'omr_operational_job_status',
                    'omr_pilot_plan_grants',
+                   'omr_student_credential_epochs', 'omr_student_start_credentials',
                    'omr_remote_assets', 'omr_remote_asset_upload_intents',
                    'omr_remote_asset_cleanup_queue', 'omr_plan_usage',
                    'omr_plan_usage_reservations'
@@ -693,6 +700,17 @@ begin
         and not pg_catalog.has_table_privilege(
             'service_role', 'public.omr_pilot_plan_grants',
             'SELECT,INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER,MAINTAIN'
+        )
+        and not pg_catalog.has_table_privilege(
+            'service_role', 'public.omr_student_credential_epochs',
+            'SELECT,INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER,MAINTAIN'
+        )
+        and pg_catalog.has_table_privilege(
+            'service_role', 'public.omr_student_start_credentials', 'SELECT'
+        )
+        and not pg_catalog.has_table_privilege(
+            'service_role', 'public.omr_student_start_credentials',
+            'INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER,MAINTAIN'
         )
         and not exists (
             select 1
@@ -2256,6 +2274,292 @@ begin
        )) > 0
       into v_effective_workspace_plan_enforcement_ready;
 
+    v_student_session_generation_ready :=
+        pg_catalog.to_regclass('public.omr_student_credential_epochs') is not null
+        and exists (
+            select 1 from pg_catalog.pg_class relation
+             where relation.oid = 'public.omr_student_credential_epochs'::pg_catalog.regclass
+               and relation.relrowsecurity and relation.relforcerowsecurity
+        )
+        and not exists (
+            select 1 from (values
+                ('omr_student_profiles', 'credential_generation'),
+                ('omr_student_start_credentials', 'account_id'),
+                ('omr_student_start_credentials', 'credential_generation'),
+                ('omr_student_credential_epochs', 'account_id'),
+                ('omr_student_credential_epochs', 'credential_generation')
+            ) expected(table_name, column_name)
+             where not exists (
+                 select 1 from pg_catalog.pg_attribute attribute
+                  where attribute.attrelid = ('public.' || expected.table_name)::pg_catalog.regclass
+                    and attribute.attname = expected.column_name
+                    and not attribute.attisdropped
+                    and attribute.attnotnull
+             )
+        )
+        and not exists (
+            select 1 from (values
+                ('omr_student_credential_active_profile_guard', 'omr_student_start_credentials'),
+                ('omr_student_profile_credential_revocation', 'omr_student_profiles'),
+                ('omr_student_profile_session_revocation_on_delete', 'omr_student_profiles')
+                ,('omr_student_profile_generation_guard', 'omr_student_profiles')
+            ) expected(trigger_name, table_name)
+             where not exists (
+                 select 1 from pg_catalog.pg_trigger trigger_row
+                  where trigger_row.tgname = expected.trigger_name
+                    and trigger_row.tgrelid = ('public.' || expected.table_name)::pg_catalog.regclass
+                    and not trigger_row.tgisinternal
+                    and trigger_row.tgenabled = 'O'
+             )
+        )
+        and pg_catalog.to_regprocedure(
+            'public.omr_validate_student_session_v1(text,text,text,integer)'
+        ) is not null
+        and pg_catalog.to_regprocedure(
+            'public.omr_rotate_student_start_credential_v1(text,text,bigint,text,text,text,text)'
+        ) is not null
+        and pg_catalog.has_function_privilege(
+            'service_role',
+            'public.omr_validate_student_session_v1(text,text,text,integer)',
+            'EXECUTE'
+        )
+        and pg_catalog.has_function_privilege(
+            'service_role',
+            'public.omr_rotate_student_start_credential_v1(text,text,bigint,text,text,text,text)',
+            'EXECUTE'
+        )
+        and not pg_catalog.has_table_privilege(
+            'service_role', 'public.omr_student_credential_epochs',
+            'SELECT,INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER,MAINTAIN'
+        )
+        and pg_catalog.has_table_privilege(
+            'service_role', 'public.omr_student_start_credentials', 'SELECT'
+        )
+        and not pg_catalog.has_table_privilege(
+            'service_role', 'public.omr_student_start_credentials',
+            'INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER,MAINTAIN'
+        )
+        and not pg_catalog.has_function_privilege(
+            'anon', 'public.omr_validate_student_session_v1(text,text,text,integer)', 'EXECUTE'
+        )
+        and not pg_catalog.has_function_privilege(
+            'authenticated', 'public.omr_validate_student_session_v1(text,text,text,integer)', 'EXECUTE'
+        )
+        and not pg_catalog.has_function_privilege(
+            'anon',
+            'public.omr_rotate_student_start_credential_v1(text,text,bigint,text,text,text,text)',
+            'EXECUTE'
+        )
+        and not pg_catalog.has_function_privilege(
+            'authenticated',
+            'public.omr_rotate_student_start_credential_v1(text,text,bigint,text,text,text,text)',
+            'EXECUTE'
+        );
+
+    v_student_session_generation_ready := v_student_session_generation_ready
+        and (
+            with expected(name, args, result, volatility, service_callable) as (values
+                ('omr_validate_student_session_v1', 'text, text, text, integer', 'boolean', 's', true),
+                ('omr_rotate_student_start_credential_v1', 'text, text, bigint, text, text, text, text', 'jsonb', 'v', true),
+                ('omr_guard_student_credential_mutation_v1', '', 'trigger', 'v', false),
+                ('omr_guard_student_profile_generation_v1', '', 'trigger', 'v', false),
+                ('omr_revoke_student_session_on_status_v2', '', 'trigger', 'v', false),
+                ('omr_revoke_student_session_on_delete_v2', '', 'trigger', 'v', false)
+            ), actual as (
+                select routine.proname::text as name,
+                       pg_catalog.oidvectortypes(routine.proargtypes) as args,
+                       pg_catalog.pg_get_function_result(routine.oid) as result,
+                       routine.provolatile::text as volatility,
+                       owner_role.rolname::text as owner_name,
+                       routine.prosecdef as security_definer,
+                       routine.proconfig as config,
+                       routine.prokind,
+                       routine.oid,
+                       coalesce(pg_catalog.obj_description(routine.oid, 'pg_proc'), '') as description,
+                       pg_catalog.pg_get_functiondef(routine.oid) as definition
+                  from pg_catalog.pg_proc routine
+                  join pg_catalog.pg_namespace namespace on namespace.oid = routine.pronamespace
+                  join pg_catalog.pg_roles owner_role on owner_role.oid = routine.proowner
+                 where namespace.nspname = 'public'
+                   and routine.proname in (select expected.name from expected)
+            )
+            select not exists (
+                       select name, args, result, volatility from expected
+                       except select name, args, result, volatility from actual
+                   )
+               and not exists (
+                       select name, args, result, volatility from actual
+                       except select name, args, result, volatility from expected
+                   )
+               and not exists (
+                   select 1 from actual join expected using (name, args, result, volatility)
+                    where actual.prokind <> 'f'
+                       or actual.owner_name <> 'postgres'
+                       or not actual.security_definer
+                       or not coalesce(actual.config @> array['search_path=""'], false)
+                       or not coalesce(actual.config @> array['statement_timeout=5s'], false)
+                       or not coalesce(actual.config @> array['lock_timeout=2s'], false)
+                       or actual.description = ''
+                       or pg_catalog.has_function_privilege('anon', actual.oid, 'EXECUTE')
+                       or pg_catalog.has_function_privilege('authenticated', actual.oid, 'EXECUTE')
+                       or pg_catalog.has_function_privilege('service_role', actual.oid, 'EXECUTE')
+                            is distinct from expected.service_callable
+               )
+               and (
+                   select pg_catalog.encode(extensions.digest(
+                       'student-session-generation-routines:202608080009|'
+                       || pg_catalog.string_agg(
+                           name || '|' || args || '|' || result || '|' || owner_name || '|'
+                               || security_definer::text || '|' || volatility || '|'
+                               || coalesce(pg_catalog.array_to_string(config, ','), '') || '|'
+                               || description || '|' || definition,
+                           E'\n-- task5-routine --\n' order by name, args
+                       ), 'sha256'), 'hex'
+                   ) from actual
+               ) = '94d72f002aefd97ba6eccb13275429027dab16297acdf5be369b1383446d9d4e'
+        );
+    v_student_session_generation_ready := v_student_session_generation_ready
+        and (
+            with actual as (
+                select trigger_row.tgname::text as trigger_name,
+                       relation.relname::text as table_name,
+                       routine.proname::text as function_name,
+                       trigger_row.tgtype::integer as trigger_type,
+                       trigger_row.tgattr::text as trigger_attributes,
+                       trigger_row.tgenabled::text as enabled,
+                       pg_catalog.pg_get_triggerdef(trigger_row.oid, true) as definition
+                  from pg_catalog.pg_trigger trigger_row
+                  join pg_catalog.pg_class relation on relation.oid = trigger_row.tgrelid
+                  join pg_catalog.pg_namespace namespace on namespace.oid = relation.relnamespace
+                  join pg_catalog.pg_proc routine on routine.oid = trigger_row.tgfoid
+                 where namespace.nspname = 'public'
+                   and not trigger_row.tgisinternal
+                   and trigger_row.tgname in (
+                       'omr_student_credential_active_profile_guard',
+                       'omr_student_profile_generation_guard',
+                       'omr_student_profile_credential_revocation',
+                       'omr_student_profile_session_revocation_on_delete'
+                   )
+            )
+            select pg_catalog.count(*) = 4
+               and pg_catalog.encode(extensions.digest(
+                       'student-session-generation-triggers:202608080009|'
+                       || pg_catalog.string_agg(
+                           trigger_name || '|' || table_name || '|' || function_name || '|'
+                               || trigger_type::text || '|' || trigger_attributes || '|'
+                               || enabled || '|' || definition,
+                           E'\n-- task5-trigger --\n' order by trigger_name
+                       ), 'sha256'), 'hex'
+                   ) = 'a40670f5a70b96c13beae74c6ed073d90e343881f80378a3fc0f80b00411bda0'
+              from actual
+        );
+    v_student_session_generation_ready := v_student_session_generation_ready
+        and not exists (
+            select 1 from (values
+                ('omr_student_profiles_credential_generation_check', 'omr_student_profiles'),
+                ('omr_student_start_credentials_account_id_unique', 'omr_student_start_credentials'),
+                ('omr_student_start_credentials_account_id_check', 'omr_student_start_credentials'),
+                ('omr_student_start_credentials_generation_check', 'omr_student_start_credentials'),
+                ('omr_student_credential_epochs_pkey', 'omr_student_credential_epochs'),
+                ('omr_student_credential_epochs_account_id_unique', 'omr_student_credential_epochs'),
+                ('omr_student_credential_epochs_account_id_check', 'omr_student_credential_epochs'),
+                ('omr_student_credential_epochs_generation_check', 'omr_student_credential_epochs'),
+                ('omr_student_credential_epochs_updated_check', 'omr_student_credential_epochs')
+            ) expected(constraint_name, table_name)
+             where not exists (
+                 select 1 from pg_catalog.pg_constraint constraint_row
+                  where constraint_row.conname = expected.constraint_name
+                    and constraint_row.conrelid = ('public.' || expected.table_name)::pg_catalog.regclass
+                    and constraint_row.convalidated
+             )
+        )
+        and (
+            select pg_catalog.count(*) = 9
+               and pg_catalog.encode(extensions.digest(
+                   'student-session-generation-constraints:202608080009|'
+                   || pg_catalog.string_agg(
+                       constraint_row.conname || '|'
+                           || pg_catalog.pg_get_constraintdef(constraint_row.oid, true)
+                           || '|' || constraint_row.convalidated::text,
+                       E'\n-- task5-constraint --\n' order by constraint_row.conname
+                   ), 'sha256'), 'hex'
+               ) = 'a9c416b4400d68ece9a56ee6a70e73564337905907f800e7c6568cd36286ae5d'
+              from pg_catalog.pg_constraint constraint_row
+             where constraint_row.conname in (
+                 'omr_student_profiles_credential_generation_check',
+                 'omr_student_start_credentials_account_id_unique',
+                 'omr_student_start_credentials_account_id_check',
+                 'omr_student_start_credentials_generation_check',
+                 'omr_student_credential_epochs_pkey',
+                 'omr_student_credential_epochs_account_id_unique',
+                 'omr_student_credential_epochs_account_id_check',
+                 'omr_student_credential_epochs_generation_check',
+                 'omr_student_credential_epochs_updated_check'
+             )
+        );
+    v_student_session_generation_ready := v_student_session_generation_ready
+        and (
+            select pg_catalog.count(*) = 3
+               and pg_catalog.encode(extensions.digest(
+                   'student-session-generation-normalized-indexes:202608080009|'
+                   || pg_catalog.string_agg(
+                       index_relation.relname || '|' || table_relation.relname || '|'
+                           || index_record.indisvalid::text || '|'
+                           || index_record.indisready::text || '|'
+                           || index_record.indisunique::text || '|'
+                           || index_record.indnkeyatts::text || '|'
+                           || index_record.indnatts::text || '|'
+                           || coalesce((select pg_catalog.string_agg(
+                               pg_catalog.pg_get_indexdef(
+                                   index_record.indexrelid, ordinal, false
+                               ), ',' order by ordinal
+                           ) from pg_catalog.generate_series(
+                               1, index_record.indnatts
+                           ) ordinal), '') || '|'
+                           || coalesce(pg_catalog.pg_get_expr(
+                               index_record.indpred, index_record.indrelid, false
+                           ), ''),
+                       E'\n-- task5-normalized-index --\n' order by index_relation.relname
+                   ), 'sha256'), 'hex'
+               ) = 'f6f207962762adf8fee68ee7371c50a50dc38d9b97eedc140d6c7ad7611e076c'
+              from pg_catalog.pg_index index_record
+              join pg_catalog.pg_class index_relation
+                on index_relation.oid = index_record.indexrelid
+              join pg_catalog.pg_class table_relation
+                on table_relation.oid = index_record.indrelid
+              join pg_catalog.pg_namespace namespace
+                on namespace.oid = index_relation.relnamespace
+             where namespace.nspname = 'public'
+               and index_relation.relname in (
+                   'omr_student_start_credentials_account_id_unique',
+                   'omr_student_credential_epochs_pkey',
+                   'omr_student_credential_epochs_account_id_unique'
+               )
+        );
+    v_student_session_generation_ready := v_student_session_generation_ready
+        and not exists (
+            select 1
+              from public.omr_student_start_credentials credential
+              left join public.omr_student_profiles student
+                on student.organization_id = credential.organization_id
+               and student.id = credential.student_profile_id
+              left join public.omr_student_credential_epochs epoch
+                on epoch.organization_id = credential.organization_id
+               and epoch.student_profile_id = credential.student_profile_id
+             where student.id is null or epoch.account_id is null
+                or credential.account_id is distinct from epoch.account_id
+                or credential.credential_generation is distinct from epoch.credential_generation
+                or credential.credential_generation is distinct from student.credential_generation
+        )
+        and not exists (
+            select 1
+              from public.omr_student_profiles student
+              join public.omr_student_credential_epochs epoch
+                on epoch.organization_id = student.organization_id
+               and epoch.student_profile_id = student.id
+             where student.credential_generation is distinct from epoch.credential_generation
+        );
+
     -- Keep exact catalog drift detection for the two legacy-named public
     -- gateway families exercised by the long-lived readiness probes. The v1
     -- exam signature is a denied compatibility stub, but an extra overload or
@@ -2277,6 +2581,7 @@ begin
       into v_legacy_gateway_catalog_ready;
 
     v_server_gateway_capabilities_ready := v_legacy_gateway_catalog_ready
+        and v_student_session_generation_ready
         and v_effective_workspace_plan_enforcement_ready
         and v_roster_snapshot_cas_ready
         and v_cleanup_epoch_ready
@@ -2299,6 +2604,7 @@ begin
         and v_teacher_live_sessions_ready
         and v_teacher_account_lifecycle_ready
         and v_provisioned_teacher_login_ready
+        and v_student_session_generation_ready
         and v_effective_workspace_plan_enforcement_ready
         and v_initial_operations_load_control_ready
         and v_individual_student_assignments_ready
@@ -2330,11 +2636,12 @@ begin
             - 'directUploadIntentLifecycleReady'
             - 'teacherAssetFinalizePreauthorizationReady'
         || pg_catalog.jsonb_build_object(
-            'version', '202608080008',
+            'version', '202608080009',
             'canonicalTablesForceRls', v_canonical_tables_force_rls,
             'serviceRolePrivilegesReady', v_service_role_privileges_ready,
             'serverGatewayCapabilitiesReady', v_server_gateway_capabilities_ready,
             'effectiveWorkspacePlanEnforcementReady', v_effective_workspace_plan_enforcement_ready,
+            'studentSessionGenerationReady', v_student_session_generation_ready,
             'operationalJobStatusReady', v_operational_job_status_ready,
             'operatorPilotProvisioningReady', v_operator_pilot_provisioning_ready,
             'provisionedTeacherLoginReady', v_provisioned_teacher_login_ready,
@@ -2377,6 +2684,19 @@ grant execute on function public.omr_service_readiness_v1()
 
 
 -- Final Phase C ACL fence. Keep this after every compatibility grant above.
+revoke all on table public.omr_student_credential_epochs from public, anon, authenticated, service_role;
+revoke all on table public.omr_student_start_credentials from service_role;
+grant select on table public.omr_student_start_credentials to service_role;
+revoke all on function public.omr_guard_student_credential_mutation_v1() from public, anon, authenticated, service_role;
+revoke all on function public.omr_guard_student_profile_generation_v1() from public, anon, authenticated, service_role;
+revoke all on function public.omr_guard_student_credential_mutation_v8_snapshot() from public, anon, authenticated, service_role;
+revoke all on function public.omr_revoke_student_session_on_status_v2() from public, anon, authenticated, service_role;
+revoke all on function public.omr_revoke_student_session_on_delete_v2() from public, anon, authenticated, service_role;
+revoke all on function public.omr_revoke_withdrawn_student_credential_v8_snapshot() from public, anon, authenticated, service_role;
+revoke all on function public.omr_validate_student_session_v1(text,text,text,integer) from public, anon, authenticated;
+grant execute on function public.omr_validate_student_session_v1(text,text,text,integer) to service_role;
+revoke all on function public.omr_rotate_student_start_credential_v1(text,text,bigint,text,text,text,text) from public, anon, authenticated;
+grant execute on function public.omr_rotate_student_start_credential_v1(text,text,bigint,text,text,text,text) to service_role;
 revoke all on table public.omr_remote_assets from service_role;
 revoke all on table public.omr_remote_asset_upload_intents from service_role;
 revoke all on table public.omr_remote_asset_cleanup_queue from service_role;

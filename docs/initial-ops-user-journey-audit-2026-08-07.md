@@ -146,14 +146,14 @@ self-signup이 제품 요구라면 현재는 미구현이다.
 
 - 100명 초기 운영 상한을 중앙 정책으로 관리한다. attempt 목록은 250건씩 안정된 최신순으로 최대 2,001건만 읽고, 초과 시 최근 2,000건과 partial metadata를 반환한다.
 - canonical 테이블은 production boundary에서 브라우저 권한을 회수하고 service-role RPC만 허용한다.
-- 조직 격리 preflight, 40개 canonical 테이블 FORCE RLS, private Storage 경계를 PostgreSQL에서 검사한다.
+- 조직 격리 preflight, 41개 canonical 테이블 FORCE RLS, private Storage 경계를 PostgreSQL에서 검사한다.
 - 시험·제출·피드백·세션·로스터에 revision/receipt/lease 기반 CAS와 replay 방어가 있다.
 - 로스터 load/save는 동일 advisory lock의 원자 RPC를 사용하고 stale writer를 거절한다.
 - 학생 로그인 조회는 활성·조직 범위와 DB 상한을 적용하고 overflow 시 credential work 전에 중단한다.
 - 대시보드는 summary/detail 읽기를 분리하고, rich detail은 필요할 때만 읽는다.
 - 실시간 selected-exam polling은 요청 완료 후 다음 poll을 예약하고 background refresh 중 기존 데이터를 유지한다.
 - Storage cleanup은 bounded claim, lease, backoff, dead-letter, generation fence를 사용한다.
-- readiness `202608080008`은 NULL checkpoint CAS, secure submission replay marker, 나머지 학생 세션 변경 CAS,
+- readiness `202608080009`은 NULL checkpoint CAS, secure submission replay marker, 나머지 학생 세션 변경 CAS,
   제출 세션 안전 시험 삭제, roster snapshot CAS, 학생 질문 원자 저장과 무료 코어 피드백 경계를 요구한다.
 - `/api/readyz`는 치명적 배포 설정뿐 아니라 계정 전달 webhook에 HMAC 서명된 무부작용
   `HEAD`를 보내 DNS·timeout·5xx를 fail-closed로 처리한다.

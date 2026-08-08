@@ -105,6 +105,7 @@ describe("production boundary rollback contract", () => {
             "omr_teacher_notification_states",
             "omr_operational_job_status",
             "omr_pilot_plan_grants",
+            "omr_student_credential_epochs",
         ]);
         const forcedByBoundary = new Set(
             [...boundary.matchAll(/alter table if exists public\.(omr_\w+) force row level security/g)]

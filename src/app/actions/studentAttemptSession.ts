@@ -12,7 +12,7 @@ import {
 import { attemptFromSupabaseRow, examFromSupabaseRow } from "@/lib/omrPersistence";
 import { isSameOriginServerActionRequest } from "@/lib/serverActionSecurity";
 import {
-    parseSignedStudentSessionCookie,
+    resolveAuthorizedStudentSessionCookie,
     resolveStudentSessionSecret,
     STUDENT_SERVER_SESSION_COOKIE,
     type StudentServerIdentity,
@@ -59,18 +59,22 @@ interface AttemptSessionContext {
     secret: string;
 }
 
-async function parseStudentAttemptSessionContext(): Promise<AttemptSessionContext | null> {
+async function parseStudentAttemptSessionContext(): Promise<AttemptSessionContext | DurableActionStatus> {
     const config = getSupabaseServerConfigFromEnv();
     const secret = resolveStudentSessionSecret();
-    if (!config || !secret) return null;
+    if (!config || !secret) return "service_unavailable";
+    const admin = createSupabaseAdminClient(config) as unknown as AttemptSessionAdmin;
     const cookieStore = await cookies();
-    const identity = parseSignedStudentSessionCookie(
+    const validation = await resolveAuthorizedStudentSessionCookie(
         cookieStore.get(STUDENT_SERVER_SESSION_COOKIE)?.value,
+        admin,
     );
-    if (!identity?.organizationId) return null;
+    if (validation.status !== "active") return validation.status;
+    const identity = validation.identity;
+    if (!identity.organizationId) return "unauthenticated";
     return {
         identity,
-        admin: createSupabaseAdminClient(config) as unknown as AttemptSessionAdmin,
+        admin,
         secret,
     };
 }
@@ -143,7 +147,7 @@ export async function openDurableStudentAttemptSession(
 ) {
     if (!await sameOriginMutation()) return { status: "unauthenticated" as const };
     const context = await parseStudentAttemptSessionContext();
-    if (!context) return { status: "service_unavailable" as const };
+    if (typeof context === "string") return { status: context };
     const claims = parseStudentAttemptTicket(input.attemptTicket);
     if (!claims) return { status: "invalid" as const };
     const studentId = ownerStudentId(context.identity);
@@ -204,7 +208,7 @@ export async function checkpointDurableStudentAttemptSession(
 ) {
     if (!await sameOriginMutation()) return { status: "unauthenticated" as const };
     const context = await parseStudentAttemptSessionContext();
-    if (!context) return { status: "service_unavailable" as const };
+    if (typeof context === "string") return { status: context };
     return checkpointStudentAttemptSessionWithGateway(context.admin, {
         sessionId: input.sessionId,
         organizationId: context.identity.organizationId || "",
@@ -224,7 +228,7 @@ export async function heartbeatDurableStudentAttemptSession(
 ) {
     if (!await sameOriginMutation()) return { status: "unauthenticated" as const };
     const context = await parseStudentAttemptSessionContext();
-    if (!context) return { status: "service_unavailable" as const };
+    if (typeof context === "string") return { status: context };
     return heartbeatStudentAttemptSessionWithGateway(context.admin, {
         sessionId: input.sessionId,
         organizationId: context.identity.organizationId || "",
@@ -239,7 +243,7 @@ export async function takeoverDurableStudentAttemptSession(
 ) {
     if (!await sameOriginMutation()) return { status: "unauthenticated" as const };
     const context = await parseStudentAttemptSessionContext();
-    if (!context) return { status: "service_unavailable" as const };
+    if (typeof context === "string") return { status: context };
     const leaseToken = randomUUID();
     const result = await takeoverStudentAttemptSessionWithGateway(context.admin, {
         sessionId: input.sessionId,
@@ -263,7 +267,7 @@ export async function submitDurableStudentAttemptSession(
 ) {
     if (!await sameOriginMutation()) return { status: "unauthenticated" as const };
     const context = await parseStudentAttemptSessionContext();
-    if (!context) return { status: "service_unavailable" as const };
+    if (typeof context === "string") return { status: context };
     const result = await submitStudentAttemptSessionService({
         identity: context.identity,
         sessionId: input.sessionId,

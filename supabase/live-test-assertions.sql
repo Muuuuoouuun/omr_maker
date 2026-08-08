@@ -1,5 +1,4 @@
 \set ON_ERROR_STOP on
-
 -- Created after the production profile under the single migration owner. Its
 -- effective grants prove future public functions inherit the intended defaults.
 create or replace function public.omr_default_acl_probe_v1()
@@ -148,7 +147,9 @@ begin
                'omr_remote_asset_upload_intents',
                'omr_remote_asset_cleanup_queue',
                'omr_plan_usage',
-               'omr_plan_usage_reservations'
+               'omr_plan_usage_reservations',
+               'omr_student_start_credentials',
+               'omr_student_credential_epochs'
            )
            and (
                not has_table_privilege('service_role', relation.oid, 'SELECT')
@@ -186,11 +187,23 @@ begin
      ) or has_table_privilege(
          'service_role', 'public.omr_operational_job_status',
          'SELECT,INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER,MAINTAIN'
-     ) or has_table_privilege(
+    ) or has_table_privilege(
          'service_role', 'public.omr_pilot_plan_grants',
+         'SELECT,INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER,MAINTAIN'
+     ) or has_table_privilege(
+         'service_role', 'public.omr_student_credential_epochs',
          'SELECT,INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER,MAINTAIN'
      ) then
          raise exception 'service_role bypassed a private operations or teacher-auth table';
+    end if;
+
+    if not has_table_privilege(
+        'service_role', 'public.omr_student_start_credentials', 'SELECT'
+    ) or has_table_privilege(
+        'service_role', 'public.omr_student_start_credentials',
+        'INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER,MAINTAIN'
+    ) then
+        raise exception 'student credential table must remain service-role read-only';
     end if;
 
     if exists (
@@ -301,9 +314,31 @@ begin
                'omr_reserve_plan_usage(text, text, date, text, integer, integer, integer)',
                'omr_release_plan_usage(text, text, date, text)',
                'omr_sync_student_plan_usage(text, text[], integer, integer)'
+               ,'omr_guard_student_profile_generation_v1()'
+               ,'omr_guard_student_credential_mutation_v1()'
+               ,'omr_guard_student_credential_mutation_v8_snapshot()'
+               ,'omr_revoke_student_session_on_status_v2()'
+               ,'omr_revoke_withdrawn_student_credential_v8_snapshot()'
+               ,'omr_revoke_student_session_on_delete_v2()'
            )
     ) then
         raise exception 'service_role lost a public function execute privilege';
+    end if;
+
+    if has_function_privilege(
+        'service_role', 'public.omr_guard_student_profile_generation_v1()', 'EXECUTE'
+    ) or has_function_privilege(
+        'service_role', 'public.omr_guard_student_credential_mutation_v1()', 'EXECUTE'
+    ) or has_function_privilege(
+        'service_role', 'public.omr_guard_student_credential_mutation_v8_snapshot()', 'EXECUTE'
+    ) or has_function_privilege(
+        'service_role', 'public.omr_revoke_student_session_on_status_v2()', 'EXECUTE'
+    ) or has_function_privilege(
+        'service_role', 'public.omr_revoke_withdrawn_student_credential_v8_snapshot()', 'EXECUTE'
+    ) or has_function_privilege(
+        'service_role', 'public.omr_revoke_student_session_on_delete_v2()', 'EXECUTE'
+    ) then
+        raise exception 'service_role can execute a private student-session trigger routine';
     end if;
 
     if exists (
@@ -996,12 +1031,30 @@ begin
 end
 $$;
 
+insert into public.omr_student_credential_epochs (
+    organization_id, student_profile_id, account_id, credential_generation
+)
+select student.organization_id,
+       student.id,
+       'student_credential_' || pg_catalog.encode(extensions.gen_random_bytes(16), 'hex'),
+       student.credential_generation
+  from public.omr_student_profiles student
+ where (student.organization_id, student.id) in (
+     ('live-org-a', 'live-student-a'),
+     ('live-org-b', 'live-student-b')
+ )
+on conflict (organization_id, student_profile_id) do nothing;
+
 insert into public.omr_student_start_credentials (
-    organization_id, student_profile_id, start_code_hash
-) values (
-    'live-org-a', 'live-student-a',
-    'pbkdf2-sha256:10000:07070707070707070707070707070707:8de12bc47d04bf0f520b627acee8c21c74b064b9f30fc943efaf7b2788e45e94'
-);
+    organization_id, student_profile_id, start_code_hash,
+    account_id, credential_generation
+)
+select epoch.organization_id, epoch.student_profile_id,
+       'pbkdf2-sha256:10000:07070707070707070707070707070707:8de12bc47d04bf0f520b627acee8c21c74b064b9f30fc943efaf7b2788e45e94',
+       epoch.account_id, epoch.credential_generation
+  from public.omr_student_credential_epochs epoch
+ where epoch.organization_id = 'live-org-a'
+   and epoch.student_profile_id = 'live-student-a';
 
 select public.omr_save_roster_v2(
     'live-org-a',
@@ -1028,11 +1081,15 @@ do $$
 begin
     begin
         insert into public.omr_student_start_credentials (
-            organization_id, student_profile_id, start_code_hash
-        ) values (
-            'live-org-a', 'live-student-a',
-            'pbkdf2-sha256:10000:08080808080808080808080808080808:9df12bc47d04bf0f520b627acee8c21c74b064b9f30fc943efaf7b2788e45e95'
-        );
+            organization_id, student_profile_id, start_code_hash,
+            account_id, credential_generation
+        )
+        select epoch.organization_id, epoch.student_profile_id,
+               'pbkdf2-sha256:10000:08080808080808080808080808080808:9df12bc47d04bf0f520b627acee8c21c74b064b9f30fc943efaf7b2788e45e95',
+               epoch.account_id, epoch.credential_generation
+          from public.omr_student_credential_epochs epoch
+         where epoch.organization_id = 'live-org-a'
+           and epoch.student_profile_id = 'live-student-a';
         raise exception 'post-withdraw service-role credential mutation unexpectedly succeeded';
     exception
         when check_violation then null;
@@ -1074,11 +1131,15 @@ do $$
 begin
     begin
         insert into public.omr_student_start_credentials (
-            organization_id, student_profile_id, start_code_hash
-        ) values (
-            'live-org-a', 'live-student-a',
-            'pbkdf2-sha256:10000:09090909090909090909090909090909:adf12bc47d04bf0f520b627acee8c21c74b064b9f30fc943efaf7b2788e45e96'
-        );
+            organization_id, student_profile_id, start_code_hash,
+            account_id, credential_generation
+        )
+        select epoch.organization_id, epoch.student_profile_id,
+               'pbkdf2-sha256:10000:09090909090909090909090909090909:adf12bc47d04bf0f520b627acee8c21c74b064b9f30fc943efaf7b2788e45e96',
+               epoch.account_id, epoch.credential_generation
+          from public.omr_student_credential_epochs epoch
+         where epoch.organization_id = 'live-org-a'
+           and epoch.student_profile_id = 'live-student-a';
         raise exception 'withdraw-first serialized outcome accepted a credential';
     exception
         when check_violation then null;
@@ -3485,22 +3546,54 @@ begin
 end
 $$;
 
+insert into public.omr_student_credential_epochs (
+    organization_id, student_profile_id, account_id, credential_generation
+)
+select student.organization_id,
+       student.id,
+       'student_credential_' || pg_catalog.encode(extensions.gen_random_bytes(16), 'hex'),
+       student.credential_generation
+  from public.omr_student_profiles student
+ where (student.organization_id, student.id) in (
+     ('live-org-a', 'live-student-a'),
+     ('live-org-b', 'live-student-b')
+ )
+on conflict (organization_id, student_profile_id) do nothing;
+
 insert into public.omr_student_start_credentials (
-    organization_id, student_profile_id, start_code_hash
-) values
-    (
-        'live-org-a',
-        'live-student-a',
-        'pbkdf2-sha256:10000:0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
-    ),
-    (
-        'live-org-b',
-        'live-student-b',
-        'pbkdf2-sha256:10000:0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'
-    )
+    organization_id, student_profile_id, start_code_hash,
+    account_id, credential_generation
+)
+select epoch.organization_id,
+       epoch.student_profile_id,
+       case epoch.organization_id
+           when 'live-org-a' then
+               'pbkdf2-sha256:10000:' || repeat('0a', 16) || ':' || repeat('a', 64)
+           else
+               'pbkdf2-sha256:10000:' || repeat('0b', 16) || ':' || repeat('b', 64)
+       end,
+       epoch.account_id,
+       epoch.credential_generation
+  from public.omr_student_credential_epochs epoch
+ where (epoch.organization_id, epoch.student_profile_id) in (
+     ('live-org-a', 'live-student-a'),
+     ('live-org-b', 'live-student-b')
+ )
 on conflict (organization_id, student_profile_id) do update
 set start_code_hash = excluded.start_code_hash,
     updated_at = now();
+
+do $$
+begin
+    if (select count(*) from public.omr_student_start_credentials
+         where (organization_id, student_profile_id) in (
+             ('live-org-a', 'live-student-a'),
+             ('live-org-b', 'live-student-b')
+         )) <> 2 then
+        raise exception 'live credential fixture did not seed both exact student incarnations';
+    end if;
+end
+$$;
 
 insert into public.omr_organization_members (
     organization_id, user_id, role, status
@@ -3867,7 +3960,7 @@ declare
     readiness jsonb;
 begin
     readiness := public.omr_service_readiness_v1();
-    if readiness->>'version' <> '202608080008'
+    if readiness->>'version' <> '202608080009'
         or readiness->>'ready' <> 'true'
         or exists (
             select 1
@@ -8329,6 +8422,330 @@ end
 $phase_c_pilot_replacement$;
 reset role;
 rollback;
+
+-- Student session generations bind every registered cookie to a non-reused
+-- credential incarnation. Rotation, withdrawal, deterministic profile reuse,
+-- dependency ACLs, and concurrent rotation/deactivation all fail closed.
+begin;
+delete from public.omr_teacher_accounts where id = 'teacher_5555555555555555';
+delete from public.omr_organizations where id = 'teacher_task5gen';
+insert into public.omr_organizations (id, name, plan, metadata)
+values ('teacher_task5gen', 'Task 5 Session School', 'free', '{}'::jsonb);
+insert into public.omr_teacher_accounts (
+    id, email, display_name, password_hash, status, email_verified_at,
+    session_generation
+) values (
+    'teacher_5555555555555555', 'task5-session@example.test',
+    'Task 5 Teacher',
+    'pbkdf2-sha256:120000:0123456789abcdef0123456789abcdef:' || repeat('5', 64),
+    'active', pg_catalog.now(), 6
+);
+insert into public.omr_organization_members (
+    organization_id, user_id, email, display_name, role, status
+) values (
+    'teacher_task5gen', 'teacher_task5gen', 'task5-session@example.test',
+    'Task 5 Teacher', 'owner', 'active'
+);
+insert into public.omr_teacher_profiles (
+    organization_id, user_id, display_name, status
+) values ('teacher_task5gen', 'teacher_task5gen', 'Task 5 Teacher', 'active');
+insert into public.omr_student_profiles (
+    id, organization_id, display_name, external_id, status, metadata
+) values (
+    'task5-student', 'teacher_task5gen', 'Task 5 Student', 'TASK5-001',
+    'active', '{}'::jsonb
+);
+commit;
+
+set role service_role;
+do $task5_student_sessions$
+declare
+    v_hash_a text := 'pbkdf2-sha256:120000:' || repeat('1', 32) || ':' || repeat('a', 64);
+    v_hash_b text := 'pbkdf2-sha256:120000:' || repeat('2', 32) || ':' || repeat('b', 64);
+    v_hash_c text := 'pbkdf2-sha256:120000:' || repeat('3', 32) || ':' || repeat('c', 64);
+    v_hash_d text := 'pbkdf2-sha256:120000:' || repeat('4', 32) || ':' || repeat('d', 64);
+    v_result jsonb;
+    v_old_account text;
+    v_current_account text;
+    v_old_generation integer;
+    v_current_generation integer;
+    v_before jsonb;
+    v_after jsonb;
+begin
+    v_result := public.omr_rotate_student_start_credential_v1(
+        'legacy_account', 'teacher_5555555555555555', 6,
+        'teacher_task5gen', 'teacher_task5gen', 'task5-student', v_hash_a
+    );
+    if v_result ->> 'status' <> 'rotated'
+       or v_result ->> 'studentId' <> 'task5-student'
+       or (select pg_catalog.count(*) from pg_catalog.jsonb_object_keys(v_result)) <> 3 then
+        raise exception 'initial student credential rotation failed: %', v_result;
+    end if;
+    select credential.account_id, credential.credential_generation
+      into v_old_account, v_old_generation
+      from public.omr_student_start_credentials credential
+     where credential.organization_id = 'teacher_task5gen'
+       and credential.student_profile_id = 'task5-student';
+    if v_old_account is null
+       or v_old_account = 'task5-student'
+       or not public.omr_validate_student_session_v1(
+           v_old_account, 'teacher_task5gen', 'task5-student', v_old_generation
+       )
+       or public.omr_validate_student_session_v1(
+           'student_credential_' || repeat('f', 32),
+           'teacher_task5gen', 'task5-student', v_old_generation
+       )
+       or public.omr_validate_student_session_v1(
+           v_old_account, 'teacher_wrongorg', 'task5-student', v_old_generation
+       )
+       or public.omr_validate_student_session_v1(
+           v_old_account, 'teacher_task5gen', 'wrong-student', v_old_generation
+       )
+       or public.omr_validate_student_session_v1(
+           v_old_account, 'teacher_task5gen', 'task5-student', v_old_generation + 1
+       )
+       or public.omr_validate_student_session_v1(
+           null, 'teacher_task5gen', 'task5-student', v_old_generation
+       )
+       or public.omr_validate_student_session_v1(
+           '', 'teacher_task5gen', 'task5-student', v_old_generation
+       )
+       or public.omr_validate_student_session_v1(
+           repeat('x', 257), 'teacher_task5gen', 'task5-student', v_old_generation
+       )
+       or public.omr_validate_student_session_v1(
+           v_old_account, 'teacher_task5gen', 'task5-student', null
+       )
+       or public.omr_validate_student_session_v1(
+           v_old_account, 'teacher_task5gen', 'task5-student', 0
+       )
+       or public.omr_validate_student_session_v1(
+           v_old_account, 'teacher_task5gen', 'task5-student', -1
+       )
+       or public.omr_validate_student_session_v1(
+           v_old_account, 'teacher_task5gen', 'task5-student', 2147483647
+       ) then
+        raise exception 'student session validator accepted a malformed or stale tuple';
+    end if;
+    update public.omr_student_profiles
+       set status = 'invited'
+     where organization_id = 'teacher_task5gen' and id = 'task5-student';
+    if not public.omr_validate_student_session_v1(
+        v_old_account, 'teacher_task5gen', 'task5-student', v_old_generation
+    ) then
+        raise exception 'invited login-eligible student session was rejected';
+    end if;
+    update public.omr_student_profiles
+       set status = 'active'
+     where organization_id = 'teacher_task5gen' and id = 'task5-student';
+
+    v_before := (select pg_catalog.to_jsonb(credential)
+                   from public.omr_student_start_credentials credential
+                  where credential.organization_id = 'teacher_task5gen'
+                    and credential.student_profile_id = 'task5-student');
+    v_result := public.omr_rotate_student_start_credential_v1(
+        'legacy_account', 'teacher_5555555555555555', 6,
+        'teacher_task5gen', 'wrong-actor', 'task5-student', v_hash_b
+    );
+    v_after := (select pg_catalog.to_jsonb(credential)
+                  from public.omr_student_start_credentials credential
+                 where credential.organization_id = 'teacher_task5gen'
+                   and credential.student_profile_id = 'task5-student');
+    if v_result <> '{"status":"unauthorized"}'::jsonb or v_after is distinct from v_before then
+        raise exception 'unauthorized student credential rotation changed state: %', v_result;
+    end if;
+
+    begin
+        perform public.omr_rotate_student_start_credential_v1(
+            'legacy_account', 'teacher_5555555555555555', 6,
+            'teacher_task5gen', 'teacher_task5gen', 'task5-student', v_hash_b
+        );
+        raise exception 'force student credential rollback' using errcode = 'P5001';
+    exception when sqlstate 'P5001' then null;
+    end;
+    v_after := (select pg_catalog.to_jsonb(credential)
+                  from public.omr_student_start_credentials credential
+                 where credential.organization_id = 'teacher_task5gen'
+                   and credential.student_profile_id = 'task5-student');
+    if v_after is distinct from v_before then
+        raise exception 'rolled-back student rotation changed hash or incarnation';
+    end if;
+
+    v_result := public.omr_rotate_student_start_credential_v1(
+        'legacy_account', 'teacher_5555555555555555', 6,
+        'teacher_task5gen', 'teacher_task5gen', 'task5-student', v_hash_b
+    );
+    select credential.account_id, credential.credential_generation
+      into v_current_account, v_current_generation
+      from public.omr_student_start_credentials credential
+     where credential.organization_id = 'teacher_task5gen'
+       and credential.student_profile_id = 'task5-student';
+    if v_result ->> 'status' <> 'rotated'
+       or v_current_account = v_old_account
+       or v_current_generation <> v_old_generation + 1
+       or public.omr_validate_student_session_v1(
+           v_old_account, 'teacher_task5gen', 'task5-student', v_old_generation
+       )
+       or not public.omr_validate_student_session_v1(
+           v_current_account, 'teacher_task5gen', 'task5-student', v_current_generation
+       ) then
+        raise exception 'credential rotation did not revoke the previous session tuple';
+    end if;
+
+    update public.omr_student_profiles
+       set status = 'withdrawn'
+     where organization_id = 'teacher_task5gen' and id = 'task5-student';
+    if exists (
+        select 1 from public.omr_student_start_credentials
+         where organization_id = 'teacher_task5gen' and student_profile_id = 'task5-student'
+    ) or public.omr_validate_student_session_v1(
+        v_current_account, 'teacher_task5gen', 'task5-student', v_current_generation
+    ) then
+        raise exception 'withdrawal retained an active student session';
+    end if;
+    update public.omr_student_profiles
+       set status = 'active'
+     where organization_id = 'teacher_task5gen' and id = 'task5-student';
+    v_result := public.omr_rotate_student_start_credential_v1(
+        'legacy_account', 'teacher_5555555555555555', 6,
+        'teacher_task5gen', 'teacher_task5gen', 'task5-student', v_hash_c
+    );
+    select credential.account_id, credential.credential_generation
+      into v_current_account, v_current_generation
+      from public.omr_student_start_credentials credential
+     where credential.organization_id = 'teacher_task5gen'
+       and credential.student_profile_id = 'task5-student';
+    if v_result ->> 'status' <> 'rotated'
+       or v_current_generation <= v_old_generation
+       or v_current_account = v_old_account
+       or public.omr_validate_student_session_v1(
+           v_old_account, 'teacher_task5gen', 'task5-student', v_old_generation
+       )
+       or not public.omr_validate_student_session_v1(
+           v_current_account, 'teacher_task5gen', 'task5-student', v_current_generation
+       ) then
+        raise exception 'withdraw/reissue revived an old student session tuple';
+    end if;
+
+    delete from public.omr_student_profiles
+     where organization_id = 'teacher_task5gen' and id = 'task5-student';
+    insert into public.omr_student_profiles (
+        id, organization_id, display_name, external_id, status, metadata
+    ) values (
+        'task5-student', 'teacher_task5gen', 'Task 5 Student Recreated',
+        'TASK5-001', 'active', '{}'::jsonb
+    );
+    v_old_account := v_current_account;
+    v_old_generation := v_current_generation;
+    v_result := public.omr_rotate_student_start_credential_v1(
+        'legacy_account', 'teacher_5555555555555555', 6,
+        'teacher_task5gen', 'teacher_task5gen', 'task5-student', v_hash_d
+    );
+    select credential.account_id, credential.credential_generation
+      into v_current_account, v_current_generation
+      from public.omr_student_start_credentials credential
+     where credential.organization_id = 'teacher_task5gen'
+       and credential.student_profile_id = 'task5-student';
+    if v_result ->> 'status' <> 'rotated'
+       or v_current_generation <= v_old_generation
+       or v_current_account = v_old_account
+       or public.omr_validate_student_session_v1(
+           v_old_account, 'teacher_task5gen', 'task5-student', v_old_generation
+       ) then
+        raise exception 'profile delete/recreate revived an old student session tuple';
+    end if;
+
+    begin
+        update public.omr_student_profiles
+           set credential_generation = 1
+         where organization_id = 'teacher_task5gen' and id = 'task5-student';
+        raise exception 'direct profile generation lowering unexpectedly succeeded';
+    exception when check_violation then null;
+    end;
+    begin
+        update public.omr_student_start_credentials
+           set start_code_hash = v_hash_a
+         where organization_id = 'teacher_task5gen' and student_profile_id = 'task5-student';
+        raise exception 'service_role directly changed a student credential';
+    exception when insufficient_privilege then null;
+    end;
+end
+$task5_student_sessions$;
+reset role;
+
+-- Independent transactions race a valid rotation against withdrawal. Whichever
+-- serializes first, the final inactive profile has no credential and no live tuple.
+do $task5_student_session_race$
+declare
+    v_account text;
+    v_generation integer;
+    v_rotate text;
+    v_withdraw text;
+    v_sent integer;
+begin
+    select account_id, credential_generation into v_account, v_generation
+      from public.omr_student_start_credentials
+     where organization_id = 'teacher_task5gen' and student_profile_id = 'task5-student';
+    perform extensions.dblink_connect(
+        'task5-student-rotate',
+        'host=127.0.0.1 port=' || current_setting('port') || ' dbname=' || current_database()
+            || ' user=postgres password=omr-live-test-password'
+    );
+    perform extensions.dblink_connect(
+        'task5-student-withdraw',
+        'host=127.0.0.1 port=' || current_setting('port') || ' dbname=' || current_database()
+            || ' user=postgres password=omr-live-test-password'
+    );
+    v_sent := extensions.dblink_send_query(
+        'task5-student-rotate',
+        'select public.omr_rotate_student_start_credential_v1('
+            || quote_literal('legacy_account') || ','
+            || quote_literal('teacher_5555555555555555') || ',6,'
+            || quote_literal('teacher_task5gen') || ','
+            || quote_literal('teacher_task5gen') || ','
+            || quote_literal('task5-student') || ','
+            || quote_literal('pbkdf2-sha256:120000:' || repeat('5', 32) || ':' || repeat('e', 64))
+            || ')::text'
+    );
+    v_sent := extensions.dblink_send_query(
+        'task5-student-withdraw',
+        'update public.omr_student_profiles set status = ''withdrawn'' '
+            || 'where organization_id = ''teacher_task5gen'' and id = ''task5-student'' returning status'
+    );
+    select recorded into v_rotate
+      from extensions.dblink_get_result('task5-student-rotate') as result(recorded text);
+    select recorded into v_withdraw
+      from extensions.dblink_get_result('task5-student-withdraw') as result(recorded text);
+    perform extensions.dblink_disconnect('task5-student-rotate');
+    perform extensions.dblink_disconnect('task5-student-withdraw');
+    if v_withdraw <> 'withdrawn'
+       or v_rotate::jsonb ->> 'status' not in ('rotated', 'student_unavailable')
+       or exists (
+           select 1 from public.omr_student_start_credentials
+            where organization_id = 'teacher_task5gen' and student_profile_id = 'task5-student'
+       )
+       or public.omr_validate_student_session_v1(
+           v_account, 'teacher_task5gen', 'task5-student', v_generation
+       ) then
+        raise exception 'concurrent student rotation/withdrawal did not serialize safely: %, %',
+            v_rotate, v_withdraw;
+    end if;
+end
+$task5_student_session_race$;
+
+-- Organization cascades must not ask the profile-delete trigger to recreate a
+-- tombstone whose parent organization has already been removed.
+delete from public.omr_organizations where id = 'teacher_task5gen';
+do $$
+begin
+    if exists (select 1 from public.omr_organizations where id = 'teacher_task5gen')
+       or exists (select 1 from public.omr_student_credential_epochs
+                   where organization_id = 'teacher_task5gen') then
+        raise exception 'organization cascade retained Task 5 student session state';
+    end if;
+end
+$$;
+delete from public.omr_teacher_accounts where id = 'teacher_5555555555555555';
 
 -- Phase C plan usage v2 derives plan, limits, observed counts and the current
 -- Korean calendar period inside PostgreSQL. Callers supply only exact session

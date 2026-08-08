@@ -11,9 +11,12 @@ import {
 
 const session: StudentServerSession = {
     audience: "omr-student",
-    schemaVersion: 1,
+    schemaVersion: 2,
+    version: 2,
+    kind: "student",
     organizationId: "org-1",
     studentId: "student-1",
+    name: "학생 1",
     studentName: "학생 1",
     identityType: "registered",
     issuedAt: 1_000,

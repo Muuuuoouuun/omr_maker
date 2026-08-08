@@ -4,7 +4,9 @@ import type { Attempt, Exam } from "@/types/omr";
 const mocks = vi.hoisted(() => ({
     cookie: "",
     cookieSets: [] as Array<{ name: string; value: string }>,
+    validateSession: vi.fn(),
     openStudentExamWithGateway: vi.fn(),
+    submitStudentAttemptWithGateway: vi.fn(),
     fetchExamRowById: vi.fn(),
     openSession: vi.fn(),
     checkpointSession: vi.fn(),
@@ -43,7 +45,7 @@ vi.mock("@/lib/supabaseServerAdmin", async importOriginal => {
                 eq() { return query; },
                 async maybeSingle() { return { data: { plan: "free" }, error: null }; },
             };
-            return { from: () => query, rpc: vi.fn() };
+            return { from: () => query, rpc: mocks.validateSession };
         }),
         fetchExamRowById: mocks.fetchExamRowById,
     };
@@ -54,6 +56,7 @@ vi.mock("@/lib/studentExamServerGateway", async importOriginal => {
     return {
         ...actual,
         openStudentExamWithGateway: mocks.openStudentExamWithGateway,
+        submitStudentAttemptWithGateway: mocks.submitStudentAttemptWithGateway,
     };
 });
 
@@ -69,7 +72,7 @@ vi.mock("@/lib/studentAttemptSessionGateway.server", async importOriginal => {
 });
 
 import { issueGuestSession } from "@/app/actions/studentSession";
-import { openStudentExam } from "@/app/actions/studentAttempt";
+import { openStudentExam, submitStudentAttempt } from "@/app/actions/studentAttempt";
 import {
     checkpointDurableStudentAttemptSession,
     openDurableStudentAttemptSession,
@@ -78,7 +81,10 @@ import {
 import { examToSupabaseRow } from "@/lib/omrPersistence";
 import { createStudentAttemptTicket } from "@/lib/studentAttemptTicket";
 import { studentSolveExamFromExam } from "@/lib/studentExamContract";
-import { parseSignedStudentSessionCookie } from "@/lib/studentServerSession";
+import {
+    createSignedStudentSessionCookie,
+    parseSignedStudentSessionCookie,
+} from "@/lib/studentServerSession";
 
 const exam: Exam = {
     id: "exam-public-1",
@@ -116,7 +122,10 @@ describe("public guest durable action flow", () => {
         vi.stubEnv("STUDENT_ATTEMPT_SECRET", "guest-durable-attempt-secret");
         mocks.cookie = "";
         mocks.cookieSets.length = 0;
+        mocks.validateSession.mockReset();
+        mocks.validateSession.mockResolvedValue({ data: true, error: null });
         mocks.openStudentExamWithGateway.mockReset();
+        mocks.submitStudentAttemptWithGateway.mockReset();
         mocks.fetchExamRowById.mockReset();
         mocks.openSession.mockReset();
         mocks.checkpointSession.mockReset();
@@ -241,6 +250,108 @@ describe("public guest durable action flow", () => {
                 ownerStudentId: issuedGuest!.studentId,
             }));
         }
+    });
+
+    it("never downgrades a signed registered session to a guest on validation success or outage", async () => {
+        mocks.cookie = createSignedStudentSessionCookie({
+            kind: "student",
+            accountId: `student_credential_${"a".repeat(32)}`,
+            organizationId: "pilot_org_aaaaaaaaaaaaaaaaaaaaaaaa",
+            studentId: "student-registered-1",
+            name: "등록 학생",
+            identityType: "registered",
+            credentialGeneration: 4,
+        })!;
+        const registeredCookie = mocks.cookie;
+
+        await expect(issueGuestSession("게스트로 변경")).resolves.toEqual({ ok: false });
+        expect(mocks.cookie).toBe(registeredCookie);
+        expect(mocks.cookieSets).toHaveLength(0);
+
+        mocks.validateSession.mockRejectedValueOnce(new Error("student session dependency timeout"));
+        await expect(issueGuestSession("게스트로 변경")).resolves.toEqual({ ok: false });
+        expect(mocks.cookie).toBe(registeredCookie);
+        expect(mocks.cookieSets).toHaveLength(0);
+    });
+
+    it("fails registered open and submit closed before either gateway on stale or unavailable validation", async () => {
+        mocks.cookie = createSignedStudentSessionCookie({
+            kind: "student",
+            accountId: `student_credential_${"b".repeat(32)}`,
+            organizationId: "pilot_org_aaaaaaaaaaaaaaaaaaaaaaaa",
+            studentId: "student-registered-2",
+            name: "등록 학생 2",
+            identityType: "registered",
+            credentialGeneration: 8,
+        })!;
+        mocks.validateSession.mockRejectedValueOnce(new Error("student validation timeout"));
+        await expect(openStudentExam({
+            examId: exam.id,
+            student: {
+                studentId: "student-registered-2",
+                studentName: "등록 학생 2",
+                identityType: "registered",
+            },
+        })).resolves.toEqual({ status: "service_unavailable" });
+        expect(mocks.openStudentExamWithGateway).not.toHaveBeenCalled();
+
+        const ticket = createStudentAttemptTicket({
+            examId: exam.id,
+            organizationId: "pilot_org_aaaaaaaaaaaaaaaaaaaaaaaa",
+            studentId: "student-registered-2",
+            studentName: "등록 학생 2",
+            identityType: "registered",
+            allowedQuestionIds: [1],
+        }, process.env, Date.now(), "44444444-4444-4444-8444-444444444444")!;
+        mocks.validateSession.mockResolvedValueOnce({ data: false, error: null });
+        await expect(submitStudentAttempt({ ticket, answers: { 1: 2 } }))
+            .resolves.toEqual({ status: "invalid_ticket" });
+        expect(mocks.submitStudentAttemptWithGateway).not.toHaveBeenCalled();
+    });
+
+    it("rejects an active ticket/session identity mismatch but preserves guest direct submit", async () => {
+        mocks.cookie = createSignedStudentSessionCookie({
+            kind: "student",
+            accountId: `student_credential_${"c".repeat(32)}`,
+            organizationId: "pilot_org_aaaaaaaaaaaaaaaaaaaaaaaa",
+            studentId: "student-registered-3",
+            name: "등록 학생 3",
+            identityType: "registered",
+            credentialGeneration: 9,
+        })!;
+        const mismatched = createStudentAttemptTicket({
+            examId: exam.id,
+            organizationId: "pilot_org_aaaaaaaaaaaaaaaaaaaaaaaa",
+            studentId: "different-student",
+            studentName: "다른 학생",
+            identityType: "registered",
+            allowedQuestionIds: [1],
+        }, process.env, Date.now(), "55555555-5555-4555-8555-555555555555")!;
+        await expect(submitStudentAttempt({ ticket: mismatched, answers: {} }))
+            .resolves.toEqual({ status: "invalid_ticket" });
+        expect(mocks.submitStudentAttemptWithGateway).not.toHaveBeenCalled();
+
+        mocks.cookie = createSignedStudentSessionCookie({
+            kind: "guest",
+            guestId: "guest-direct-submit",
+            organizationId: exam.organizationId,
+            name: "게스트 학생",
+            identityType: "guest",
+        })!;
+        const guest = parseSignedStudentSessionCookie(mocks.cookie)!;
+        const guestTicket = createStudentAttemptTicket({
+            examId: exam.id,
+            organizationId: guest.organizationId,
+            studentId: guest.studentId,
+            studentName: guest.studentName,
+            identityType: "guest",
+            guestId: guest.guestId,
+            allowedQuestionIds: [1],
+        }, process.env, Date.now(), "66666666-6666-4666-8666-666666666666")!;
+        mocks.submitStudentAttemptWithGateway.mockResolvedValueOnce({ status: "invalid_ticket" });
+        await expect(submitStudentAttempt({ ticket: guestTicket, answers: {} }))
+            .resolves.toEqual({ status: "invalid_ticket" });
+        expect(mocks.submitStudentAttemptWithGateway).toHaveBeenCalledTimes(1);
     });
 
     it("refuses to bind a guest when an impossible group-exam grant crosses the gateway boundary", async () => {

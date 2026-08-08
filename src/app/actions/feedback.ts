@@ -13,7 +13,7 @@ import {
 } from "@/lib/feedbackServerGateway";
 import { isSameOriginServerActionRequest } from "@/lib/serverActionSecurity";
 import {
-    parseSignedStudentSessionCookie,
+    resolveAuthorizedStudentSessionCookie,
     STUDENT_SERVER_SESSION_COOKIE,
     type StudentServerSession,
 } from "@/lib/studentServerSession";
@@ -86,11 +86,17 @@ async function studentContext(): Promise<StudentActionContext> {
     if (!isSameOriginServerActionRequest(await headers())) return { status: "unauthorized" };
     const config = getSupabaseServerConfigFromEnv();
     if (!config) return unavailable();
+    const client = createSupabaseAdminClient(config) as unknown as FeedbackGatewayClient;
     const cookieStore = await cookies();
-    const session = parseSignedStudentSessionCookie(cookieStore.get(STUDENT_SERVER_SESSION_COOKIE)?.value);
-    if (!session) return { status: "unauthorized" };
+    const validation = await resolveAuthorizedStudentSessionCookie(
+        cookieStore.get(STUDENT_SERVER_SESSION_COOKIE)?.value,
+        client,
+    );
+    if (validation.status === "service_unavailable") return { status: "service_unavailable" };
+    if (validation.status !== "active") return { status: "unauthorized" };
+    const session = validation.identity;
     return {
-        client: createSupabaseAdminClient(config) as unknown as FeedbackGatewayClient,
+        client,
         session,
     };
 }

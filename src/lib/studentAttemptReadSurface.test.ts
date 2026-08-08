@@ -10,7 +10,8 @@ describe("student official attempt read surface", () => {
     it("authorizes list and detail reads only from the signed HttpOnly student session", () => {
         const action = source("src/app/actions/studentAttempts.ts");
         expect(action).toContain("STUDENT_SERVER_SESSION_COOKIE");
-        expect(action).toContain("parseSignedStudentSessionCookie");
+        expect(action).toContain("resolveAuthorizedStudentSessionCookie");
+        expect(action).not.toContain("parseSignedStudentSessionCookie");
         expect(action).toContain("isSameOriginServerActionRequest");
         expect(action).toContain("listStudentAttemptsWithGateway(context.client, context.session)");
         expect(action).toContain("loadStudentAttemptWithGateway(context.client, attemptId, context.session)");

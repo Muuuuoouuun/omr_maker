@@ -19,12 +19,14 @@ const productionEnv = {
     STUDENT_SESSION_SECRET: "student-session-secret-at-least-32-bytes",
 };
 const registeredIdentity = {
+    accountId: `student_credential_${"a".repeat(32)}`,
     organizationId: "org-1",
     studentId: "student-1",
     studentName: "김학생",
     identityType: "registered" as const,
     groupId: "class-a",
     groupName: "A반",
+    credentialGeneration: 1,
 };
 
 describe("studentServerSession", () => {

@@ -7,7 +7,7 @@ import {
 
 const readyV22Payload = {
     ready: true,
-    version: "202608080008",
+    version: "202608080009",
     browserSchemaPrivilegesDenied: true,
     anonTablePrivilegesDenied: true,
     authenticatedCanonicalPrivilegesDenied: true,
@@ -56,13 +56,14 @@ const readyV22Payload = {
     operatorPilotProvisioningReady: true,
     provisionedTeacherLoginReady: true,
     effectiveWorkspacePlanEnforcementReady: true,
+    studentSessionGenerationReady: true,
 };
 
 describe("Supabase deployment readiness probe", () => {
     it("accepts only the complete v22 effective-boundary and gateway evidence", () => {
         expect(parseSupabaseDeploymentProbe(readyV22Payload)).toEqual({
             ready: true,
-            version: "202608080008",
+            version: "202608080009",
             browserSchemaPrivilegesDenied: true,
             anonTablePrivilegesDenied: true,
             authenticatedCanonicalPrivilegesDenied: true,
@@ -111,6 +112,7 @@ describe("Supabase deployment readiness probe", () => {
             operatorPilotProvisioningReady: true,
             provisionedTeacherLoginReady: true,
             effectiveWorkspacePlanEnforcementReady: true,
+            studentSessionGenerationReady: true,
             failedChecks: [],
         });
     });
@@ -209,7 +211,7 @@ describe("Supabase deployment readiness probe", () => {
         delete oldShape.operationalJobStatusReady;
         expect(parseSupabaseDeploymentProbe(oldShape)).toMatchObject({
             ready: false,
-            version: "202608080008",
+            version: "202608080009",
             operationalJobStatusReady: false,
             failedChecks: ["operationalJobStatusReady"],
         });
@@ -220,7 +222,7 @@ describe("Supabase deployment readiness probe", () => {
         delete oldShape.operatorPilotProvisioningReady;
         expect(parseSupabaseDeploymentProbe(oldShape)).toMatchObject({
             ready: false,
-            version: "202608080008",
+            version: "202608080009",
             operatorPilotProvisioningReady: false,
             failedChecks: ["operatorPilotProvisioningReady"],
         });
@@ -231,7 +233,7 @@ describe("Supabase deployment readiness probe", () => {
         delete oldShape.provisionedTeacherLoginReady;
         expect(parseSupabaseDeploymentProbe(oldShape)).toMatchObject({
             ready: false,
-            version: "202608080008",
+            version: "202608080009",
             provisionedTeacherLoginReady: false,
             failedChecks: ["provisionedTeacherLoginReady"],
         });
