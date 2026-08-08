@@ -44,10 +44,17 @@ export async function GET(request: Request): Promise<Response> {
     const buildSha = operationalRuntimeBuildSha();
     let runSequence: number;
     try {
-        ({ runSequence } = await beginOperationalJobRun(client, {
+        const begun = await beginOperationalJobRun(client, {
             jobKey: "asset_gc",
             buildSha,
-        }));
+        });
+        if (!begun.admitted) {
+            return Response.json({ status: "unavailable" }, {
+                status: 503,
+                headers: NO_STORE_HEADERS,
+            });
+        }
+        runSequence = begun.runSequence;
     } catch (error) {
         await reportServerError("asset-gc", error);
         return Response.json({ status: "unavailable" }, {

@@ -26,6 +26,8 @@ describe("production readiness workflow release identity", () => {
         expect(operationsGuide).toMatch(/resume[^\n]{0,100}(?:cron|scheduler)[^\n]{0,100}ready/i);
         expect(backupRunbook).toMatch(/Vercel[^\n]{0,100}(?:cron|scheduler)[^\n]{0,100}(?:pause|중지)/i);
         expect(evidenceTemplate).toMatch(/scheduler pause confirmation hash/i);
+        expect(operationsGuide).toMatch(/human attestation[^\n]{0,120}not[^\n]{0,80}machine proof/i);
+        expect(evidenceTemplate).toMatch(/human attestation[^\n]{0,120}not[^\n]{0,80}machine proof/i);
     });
     it.each(["preview_deployment_id", "preview_artifact_digest", "preview_attestation_signature"])(
         "requires the %s dispatch input",

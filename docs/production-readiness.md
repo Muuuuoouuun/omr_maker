@@ -165,11 +165,15 @@ CRUD 성공을 모두 확인합니다.
   하나라도 있으면 `503`이고, 정리는 깨끗하지만 heartbeat 전달만 실패하면 작업 결과는 `200`을
   유지하되 `observability=degraded`를 반환합니다. 운영 수집기에서는 heartbeat 부재와
   degraded 응답을 별도 경보 조건으로 설정합니다.
+  job-level active lease는 begin transaction의 DB clock 기준 15분으로 고정됩니다. 이는 cleanup queue의 최대 900초 lease,
+  provider 60초 timeout, route 55초 drain을 모두 포함합니다. lease가 살아 있는 중복 호출은
+  cleanup을 시작하지 않고 `503`이며, crash 뒤 만료된 lease만 새 generation으로 복구합니다.
 - 두 응답 모두 `Cache-Control: no-store`입니다. 준비 상태 응답과 오류 로그에는 원본 DB 오류,
   학생 이름·이메일, 쿠키, 토큰, 답안/PDF payload를 넣지 않습니다. `OMR_READINESS_TIMEOUT_MS`는
   별도 probe 제한 시간이며 100~10,000ms 범위로 제한됩니다(기본 5,000ms).
 - Before backup and cutover, pause Vercel asset-GC cron/scheduler triggers. 이어서
   target-bound `asset-gc-paused:<production-host>` 확인값을 protected workflow에 입력합니다.
+  This value is a human attestation, not machine proof that the scheduler is paused.
   애플리케이션 writes는 계속 paused 상태로 둘 수 있으며, qualification 중에는 verifier의
   one-shot 요청만 cleanup claim을 실행할 수 있도록 해당 요청의 GC claims만 resumed 상태로
   전환합니다. Only the verifier one-shot may claim cleanup work during qualification, and operators

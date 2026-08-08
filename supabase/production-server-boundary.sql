@@ -645,6 +645,26 @@ begin
         and pg_catalog.to_regclass('public.omr_operational_job_run_sequence') is not null
         and exists (
             select 1
+              from pg_catalog.pg_attribute attribute
+             where attribute.attrelid = 'public.omr_operational_job_status'::pg_catalog.regclass
+               and attribute.attname = 'active_lease_until'
+               and not attribute.attisdropped
+               and not attribute.attnotnull
+               and pg_catalog.format_type(attribute.atttypid, attribute.atttypmod)
+                   = 'timestamp with time zone'
+        )
+        and exists (
+            select 1
+              from pg_catalog.pg_attribute attribute
+             where attribute.attrelid = 'public.omr_operational_job_status'::pg_catalog.regclass
+               and attribute.attname = 'active_lease_started_at'
+               and not attribute.attisdropped
+               and not attribute.attnotnull
+               and pg_catalog.format_type(attribute.atttypid, attribute.atttypmod)
+                   = 'timestamp with time zone'
+        )
+        and exists (
+            select 1
               from pg_catalog.pg_index index_record
              where index_record.indexrelid = pg_catalog.to_regclass(
                        'public.omr_remote_asset_cleanup_dead_idx'
@@ -726,7 +746,32 @@ begin
             )
         ) > 0
         and position(
+            'v_job_status.active_lease_until > v_now' in pg_catalog.pg_get_functiondef(
+                'public.omr_begin_operational_job_run_v1(text,text)'::pg_catalog.regprocedure
+            )
+        ) > 0
+        and position(
+            'interval ''15 minutes''' in pg_catalog.pg_get_functiondef(
+                'public.omr_begin_operational_job_run_v1(text,text)'::pg_catalog.regprocedure
+            )
+        ) > 0
+        and position(
+            'v_now + interval ''15 minutes''' in pg_catalog.pg_get_functiondef(
+                'public.omr_begin_operational_job_run_v1(text,text)'::pg_catalog.regprocedure
+            )
+        ) > 0
+        and position(
             'p_run_sequence = v_job_status.latest_started_sequence' in pg_catalog.pg_get_functiondef(
+                'public.omr_complete_operational_job_run_v1(text,bigint,text,text,text)'::pg_catalog.regprocedure
+            )
+        ) > 0
+        and position(
+            'active_lease_until = null' in pg_catalog.pg_get_functiondef(
+                'public.omr_complete_operational_job_run_v1(text,bigint,text,text,text)'::pg_catalog.regprocedure
+            )
+        ) > 0
+        and position(
+            'active_lease_started_at = null' in pg_catalog.pg_get_functiondef(
                 'public.omr_complete_operational_job_run_v1(text,bigint,text,text,text)'::pg_catalog.regprocedure
             )
         ) > 0

@@ -22,6 +22,10 @@ export type OperationalJobRunCompletion = OperationalJobStatus & {
     superseded: boolean;
 };
 
+export type OperationalJobRunBegin =
+    | { admitted: true; busy: false; runSequence: number }
+    | { admitted: false; busy: true; runSequence: null };
+
 export interface OperationalJobStatusGatewayClient {
     rpc(name: string, params: Record<string, unknown>): PromiseLike<{
         data: unknown;
@@ -157,7 +161,7 @@ export async function beginOperationalJobRun(
         jobKey: "asset_gc";
         buildSha: string;
     },
-): Promise<{ runSequence: number }> {
+): Promise<OperationalJobRunBegin> {
     const buildSha = normalizedBuildSha(input.buildSha);
     if (!validJobKey(input.jobKey) || !buildSha) throw new Error("Invalid operational job run");
 
@@ -170,9 +174,18 @@ export async function beginOperationalJobRun(
         if (!result.data || typeof result.data !== "object" || Array.isArray(result.data)) {
             throw new Error("invalid result");
         }
-        const runSequence = (result.data as Record<string, unknown>).runSequence;
-        if (!Number.isSafeInteger(runSequence) || (runSequence as number) <= 0) throw new Error("invalid result");
-        return { runSequence: runSequence as number };
+        const row = result.data as Record<string, unknown>;
+        if (row.admitted === false && row.busy === true && row.runSequence === null) {
+            return { admitted: false, busy: true, runSequence: null };
+        }
+        const runSequence = row.runSequence;
+        if (
+            row.admitted !== true
+            || row.busy !== false
+            || !Number.isSafeInteger(runSequence)
+            || (runSequence as number) <= 0
+        ) throw new Error("invalid result");
+        return { admitted: true, busy: false, runSequence: runSequence as number };
     } catch {
         throw new Error("Operational job run begin failed");
     }

@@ -5389,7 +5389,8 @@ begin
     if v_columns is distinct from array[
         'job_key', 'status', 'last_attempt_at', 'last_success_at',
         'dead_count', 'build_sha', 'failure_category',
-        'latest_started_sequence', 'latest_completed_sequence'
+        'latest_started_sequence', 'latest_completed_sequence',
+        'active_lease_started_at', 'active_lease_until'
     ]::text[] then
         raise exception 'operational job status persisted an unbounded or raw field';
     end if;
@@ -5653,15 +5654,25 @@ $$;
 delete from public.omr_operational_job_status where job_key = 'asset_gc';
 do $$
 declare
-    v_begin_old jsonb;
-    v_begin_new jsonb;
-    v_complete_new jsonb;
+    v_begin_a jsonb;
+    v_begin_b jsonb;
+    v_busy_again jsonb;
+    v_complete_admitted jsonb;
     v_complete_old jsonb;
+    v_begin_crashed jsonb;
+    v_begin_recovered jsonb;
+    v_complete_recovered jsonb;
     v_final jsonb;
-    v_old_sequence bigint;
-    v_new_sequence bigint;
-    v_old_build text;
-    v_new_build text;
+    v_admitted_sequence bigint;
+    v_crashed_sequence bigint;
+    v_recovered_sequence bigint;
+    v_admitted_build text;
+    v_sequence_before bigint;
+    v_sequence_after bigint;
+    v_lease_before timestamptz;
+    v_lease_after timestamptz;
+    v_previous_attempt timestamptz;
+    v_now timestamptz;
     v_sent integer;
 begin
     perform extensions.dblink_connect(
@@ -5677,8 +5688,7 @@ begin
             || ' user=postgres password=omr-live-test-password'
     );
     -- Both async begins are in flight before either result is consumed. The
-    -- advisory lock is acquired before nextval, so committed generations are
-    -- positive, unique, and ordered even under true dblink overlap.
+    -- advisory lock and durable active lease admit exactly one cleanup worker.
     v_sent := extensions.dblink_send_query(
         'operational-job-old',
         $sql$select public.omr_begin_operational_job_run_v1(
@@ -5693,79 +5703,149 @@ begin
         )::text$sql$
     );
     if v_sent <> 1 then raise exception 'operational job new begin was not sent'; end if;
-    select result.recorded::jsonb into v_begin_old
+    select result.recorded::jsonb into v_begin_a
       from extensions.dblink_get_result('operational-job-old') as result(recorded text);
-    select result.recorded::jsonb into v_begin_new
+    select result.recorded::jsonb into v_begin_b
       from extensions.dblink_get_result('operational-job-new') as result(recorded text);
-    v_old_sequence := (v_begin_old->>'runSequence')::bigint;
-    v_new_sequence := (v_begin_new->>'runSequence')::bigint;
-    v_old_build := '0123456789abcdef0123456789abcdef01234567';
-    v_new_build := 'ffffffffffffffffffffffffffffffffffffffff';
-    if v_old_sequence <= 0 or v_new_sequence <= 0 or v_old_sequence = v_new_sequence then
-        raise exception 'operational job concurrent begin sequence was not positive and unique';
+    if coalesce((v_begin_a->>'admitted')::boolean, false)
+           = coalesce((v_begin_b->>'admitted')::boolean, false) then
+        raise exception 'operational job concurrent begins did not admit exactly one cleanup';
     end if;
-    if v_old_sequence > v_new_sequence then
-        -- Connection scheduling may invert labels; preserve semantic old/new.
-        v_old_sequence := (v_begin_new->>'runSequence')::bigint;
-        v_new_sequence := (v_begin_old->>'runSequence')::bigint;
-        v_old_build := 'ffffffffffffffffffffffffffffffffffffffff';
-        v_new_build := '0123456789abcdef0123456789abcdef01234567';
+    if (v_begin_a->>'admitted')::boolean then
+        v_admitted_sequence := (v_begin_a->>'runSequence')::bigint;
+        v_admitted_build := '0123456789abcdef0123456789abcdef01234567';
+        if v_begin_b->>'busy' <> 'true' or v_begin_b->>'runSequence' is not null then
+            raise exception 'operational job active lease admitted overlapping cleanup';
+        end if;
+    else
+        v_admitted_sequence := (v_begin_b->>'runSequence')::bigint;
+        v_admitted_build := 'ffffffffffffffffffffffffffffffffffffffff';
+        if v_begin_a->>'busy' <> 'true' or v_begin_a->>'runSequence' is not null then
+            raise exception 'operational job active lease admitted overlapping cleanup';
+        end if;
+    end if;
+    if v_admitted_sequence is null or v_admitted_sequence <= 0 then
+        raise exception 'operational job concurrent begin sequence was not positive';
     end if;
     perform extensions.dblink_disconnect('operational-job-old');
     perform extensions.dblink_disconnect('operational-job-new');
-    perform extensions.dblink_connect(
-        'operational-job-old',
-        'host=127.0.0.1 port=' || current_setting('port')
-            || ' dbname=' || current_database()
-            || ' user=postgres password=omr-live-test-password'
-    );
-    perform extensions.dblink_connect(
-        'operational-job-new',
-        'host=127.0.0.1 port=' || current_setting('port')
-            || ' dbname=' || current_database()
-            || ' user=postgres password=omr-live-test-password'
-    );
 
-    -- New failure and old healthy completion overlap. Completion fencing must
-    -- keep the newer failure authoritative regardless of arrival timing.
-    v_sent := extensions.dblink_send_query(
-        'operational-job-new',
-        pg_catalog.format(
-            $sql$select public.omr_complete_operational_job_run_v1(
-                'asset_gc', %s, 'failed',
-                %L, 'cleanup_failed'
-            )::text$sql$,
-            v_new_sequence,
-            v_new_build
-        )
+    -- An active-lease rejection must not consume a run generation.
+    select last_value into v_sequence_before
+      from public.omr_operational_job_run_sequence;
+    v_busy_again := public.omr_begin_operational_job_run_v1(
+        'asset_gc', 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
     );
-    if v_sent <> 1 then raise exception 'operational job new completion was not sent'; end if;
-    v_sent := extensions.dblink_send_query(
-        'operational-job-old',
-        pg_catalog.format(
-            $sql$select public.omr_complete_operational_job_run_v1(
-                'asset_gc', %s, 'healthy',
-                %L, null
-            )::text$sql$,
-            v_old_sequence,
-            v_old_build
-        )
+    select last_value into v_sequence_after
+      from public.omr_operational_job_run_sequence;
+    if v_busy_again->>'admitted' <> 'false'
+       or v_busy_again->>'busy' <> 'true'
+       or v_busy_again->>'runSequence' is not null
+       or v_sequence_after is distinct from v_sequence_before then
+        raise exception 'operational job active lease admitted overlapping cleanup';
+    end if;
+
+    -- A non-current generation cannot clear the admitted worker's lease.
+    select active_lease_until into v_lease_before
+      from public.omr_operational_job_status where job_key = 'asset_gc';
+    v_complete_old := public.omr_complete_operational_job_run_v1(
+        'asset_gc', v_admitted_sequence - 1, 'healthy', v_admitted_build, null
     );
-    if v_sent <> 1 then raise exception 'operational job old completion was not sent'; end if;
-    select result.recorded::jsonb into v_complete_new
-      from extensions.dblink_get_result('operational-job-new') as result(recorded text);
-    select result.recorded::jsonb into v_complete_old
-      from extensions.dblink_get_result('operational-job-old') as result(recorded text);
+    select active_lease_until into v_lease_after
+      from public.omr_operational_job_status where job_key = 'asset_gc';
+    if v_complete_old->>'superseded' <> 'true'
+       or v_lease_after is distinct from v_lease_before then
+        raise exception 'operational job wrong generation cleared active lease';
+    end if;
+
+    -- The admitted worker's failure clears its lease and leaves a status that
+    -- application readiness must reject.
+    v_complete_admitted := public.omr_complete_operational_job_run_v1(
+        'asset_gc', v_admitted_sequence, 'failed',
+        v_admitted_build, 'cleanup_failed'
+    );
     v_final := public.omr_read_operational_job_status_v1('asset_gc');
-    if v_complete_new->>'applied' <> 'true'
-       or v_complete_old->>'superseded' <> 'true'
+    if v_complete_admitted->>'applied' <> 'true'
        or v_final->>'status' <> 'failed'
-       or (v_final->>'latestStartedSequence')::bigint <> v_new_sequence
-       or (v_final->>'latestCompletedSequence')::bigint <> v_new_sequence then
+       or (v_final->>'latestStartedSequence')::bigint <> v_admitted_sequence
+       or (v_final->>'latestCompletedSequence')::bigint <> v_admitted_sequence
+       or exists (
+           select 1 from public.omr_operational_job_status
+            where job_key = 'asset_gc' and active_lease_until is not null
+       ) then
+        raise exception 'operational job admitted failure did not remain readiness-failed';
+    end if;
+
+    -- Simulate a crashed worker and a database clock behind the recorded
+    -- attempt. Begin clamps forward; only an expired lease is recoverable.
+    update public.omr_operational_job_status
+       set last_attempt_at = pg_catalog.clock_timestamp() + interval '1 minute'
+     where job_key = 'asset_gc'
+     returning last_attempt_at into v_previous_attempt;
+    v_begin_crashed := public.omr_begin_operational_job_run_v1(
+        'asset_gc', 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'
+    );
+    v_crashed_sequence := (v_begin_crashed->>'runSequence')::bigint;
+    if v_begin_crashed->>'admitted' <> 'true'
+       or not exists (
+           select 1 from public.omr_operational_job_status
+            where job_key = 'asset_gc' and last_attempt_at > v_previous_attempt
+       ) then
+        raise exception 'operational job begin did not clamp a backward database clock';
+    end if;
+    if exists (
+        select 1 from public.omr_operational_job_status
+         where job_key = 'asset_gc'
+           and (
+               active_lease_started_at > pg_catalog.clock_timestamp()
+               or active_lease_until > pg_catalog.clock_timestamp() + interval '15 minutes'
+           )
+    ) then
+        raise exception 'operational job rollback clock extended active lease';
+    end if;
+    v_now := pg_catalog.clock_timestamp();
+    update public.omr_operational_job_status
+       set last_attempt_at = v_now - interval '15 minutes 1 second',
+           active_lease_started_at = v_now - interval '15 minutes 1 second',
+           active_lease_until = v_now - interval '1 second'
+     where job_key = 'asset_gc';
+    v_begin_recovered := public.omr_begin_operational_job_run_v1(
+        'asset_gc', 'cccccccccccccccccccccccccccccccccccccccc'
+    );
+    v_recovered_sequence := (v_begin_recovered->>'runSequence')::bigint;
+    if v_begin_recovered->>'admitted' <> 'true'
+       or v_recovered_sequence <= v_crashed_sequence then
+        raise exception 'operational job expired lease was not recovered';
+    end if;
+
+    select active_lease_until into v_lease_before
+      from public.omr_operational_job_status where job_key = 'asset_gc';
+    v_complete_old := public.omr_complete_operational_job_run_v1(
+        'asset_gc', v_crashed_sequence, 'healthy',
+        'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb', null
+    );
+    select active_lease_until into v_lease_after
+      from public.omr_operational_job_status where job_key = 'asset_gc';
+    if v_complete_old->>'superseded' <> 'true' then
         raise exception 'operational job older completion was not superseded';
     end if;
-    perform extensions.dblink_disconnect('operational-job-old');
-    perform extensions.dblink_disconnect('operational-job-new');
+    if v_lease_after is distinct from v_lease_before then
+        raise exception 'operational job wrong generation cleared active lease';
+    end if;
+
+    v_complete_recovered := public.omr_complete_operational_job_run_v1(
+        'asset_gc', v_recovered_sequence, 'failed',
+        'cccccccccccccccccccccccccccccccccccccccc', 'cleanup_failed'
+    );
+    v_final := public.omr_read_operational_job_status_v1('asset_gc');
+    if v_complete_recovered->>'applied' <> 'true'
+       or v_final->>'status' <> 'failed'
+       or exists (
+           select 1 from public.omr_operational_job_status
+            where job_key = 'asset_gc' and active_lease_until is not null
+       ) then
+        raise exception 'operational job recovered failure did not clear active lease';
+    end if;
 end
 $$;
 delete from public.omr_operational_job_status where job_key = 'asset_gc';

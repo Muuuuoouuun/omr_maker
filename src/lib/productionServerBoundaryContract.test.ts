@@ -394,6 +394,18 @@ describe("production server-only database boundary", () => {
         expect(operationalJobStatusMigration).not.toContain("p_attempted_at");
         expect(operationalJobStatusMigration).toContain("latest_started_sequence");
         expect(operationalJobStatusMigration).toContain("latest_completed_sequence");
+        expect(operationalJobStatusMigration).toContain("active_lease_until");
+        expect(operationalJobStatusMigration).toContain("active_lease_started_at");
+        expect(operationalJobStatusMigration).toContain("interval '15 minutes'");
+        expect(operationalJobStatusMigration).toMatch(
+            /active_lease_until = active_lease_started_at \+ interval '15 minutes'/i,
+        );
+        expect(operationalJobStatusMigration).toContain("v_now + interval '15 minutes'");
+        expect(operationalJobStatusMigration).toContain("'admitted', false");
+        expect(operationalJobStatusMigration).toContain("'busy', true");
+        expect(operationalJobStatusMigration).toMatch(
+            /greatest\([\s\S]{0,240}v_job_status\.last_attempt_at \+ interval '1 microsecond'/i,
+        );
         expect(operationalJobStatusMigration).toContain("create sequence public.omr_operational_job_run_sequence");
         expect(operationalJobStatusMigration).toContain("maxvalue 9007199254740991");
         expect(operationalJobStatusMigration).toContain("pg_advisory_xact_lock");
@@ -435,7 +447,11 @@ describe("production server-only database boundary", () => {
         expect(liveAssertions).toContain(
             "operational job older completion was not superseded",
         );
-        expect(liveAssertions).toContain("operational job concurrent begin sequence was not positive and unique");
+        expect(liveAssertions).toContain("operational job active lease admitted overlapping cleanup");
+        expect(liveAssertions).toContain("operational job expired lease was not recovered");
+        expect(liveAssertions).toContain("operational job rollback clock extended active lease");
+        expect(liveAssertions).toContain("operational job wrong generation cleared active lease");
+        expect(liveAssertions).toContain("operational job concurrent begins did not admit exactly one cleanup");
         expect(liveAssertions).toContain(
             "operational job failure advanced last success",
         );
@@ -462,12 +478,23 @@ describe("production server-only database boundary", () => {
             "statement_timeout=5s",
             "lock_timeout=2s",
         ]) expect(profile).toContain(assertion);
+        for (const leaseAssertion of [
+            "attribute.attname = 'active_lease_until'",
+            "attribute.attname = 'active_lease_started_at'",
+            "timestamp with time zone",
+            "v_job_status.active_lease_until > v_now",
+            "active_lease_until = null",
+            "interval ''15 minutes''",
+        ]) expect(profile).toContain(leaseAssertion);
         expect(rollback).toContain(
             "revoke all on table public.omr_operational_job_status from public, anon, authenticated, service_role",
         );
         expect(rollback).toContain("'omr_begin_operational_job_run_v1'");
         expect(rollback).toContain("'omr_complete_operational_job_run_v1'");
         expect(rollback).toContain("'omr_read_operational_job_status_v1'");
+        expect(rollback.match(
+            /revoke all on sequence public\.omr_operational_job_run_sequence/g,
+        )).toHaveLength(1);
     });
 
     it("documents the canonical final-schema contract and exact table count", () => {

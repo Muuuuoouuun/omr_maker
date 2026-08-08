@@ -72,19 +72,33 @@ describe("operational job status gateway", () => {
     });
 
     it("begins a DB-issued positive generation before cleanup", async () => {
-        const client = clientWithResult({ runSequence: 20 });
+        const client = clientWithResult({ admitted: true, busy: false, runSequence: 20 });
         await expect(beginOperationalJobRun(client, {
             jobKey: "asset_gc",
             buildSha: BUILD_SHA,
-        })).resolves.toEqual({ runSequence: 20 });
+        })).resolves.toEqual({ admitted: true, busy: false, runSequence: 20 });
         expect(client.rpc).toHaveBeenCalledWith("omr_begin_operational_job_run_v1", {
             p_job_key: "asset_gc",
             p_build_sha: BUILD_SHA,
         });
     });
 
+    it("returns an explicit busy result without inventing a sequence", async () => {
+        const client = clientWithResult({ admitted: false, busy: true, runSequence: null });
+        await expect(beginOperationalJobRun(client, {
+            jobKey: "asset_gc",
+            buildSha: BUILD_SHA,
+        })).resolves.toEqual({ admitted: false, busy: true, runSequence: null });
+    });
+
     it("rejects a malformed or non-positive begin result", async () => {
-        for (const result of [null, { runSequence: 0 }, { runSequence: -1 }, { runSequence: 1.5 }]) {
+        for (const result of [
+            null,
+            { admitted: true, busy: false, runSequence: 0 },
+            { admitted: true, busy: true, runSequence: 20 },
+            { admitted: false, busy: true, runSequence: 20 },
+            { admitted: false, busy: false, runSequence: null },
+        ]) {
             await expect(beginOperationalJobRun(clientWithResult(result), {
                 jobKey: "asset_gc",
                 buildSha: BUILD_SHA,

@@ -20,6 +20,8 @@ create table public.omr_operational_job_status (
     failure_category text,
     latest_started_sequence bigint not null,
     latest_completed_sequence bigint,
+    active_lease_started_at timestamptz,
+    active_lease_until timestamptz,
     constraint omr_operational_job_status_job_key_check check (
         pg_catalog.octet_length(job_key) between 1 and 64 and job_key = 'asset_gc'
     ),
@@ -49,6 +51,24 @@ create table public.omr_operational_job_status (
                 latest_completed_sequence between 1 and 9007199254740991
                 and latest_completed_sequence <= latest_started_sequence
             )
+        )
+    ),
+    constraint omr_operational_job_status_lease_check check (
+        (
+            status = 'failed'
+            and failure_category = 'run_incomplete'
+            and latest_completed_sequence is distinct from latest_started_sequence
+            and active_lease_started_at is not null
+            and pg_catalog.isfinite(active_lease_started_at)
+            and active_lease_until is not null
+            and pg_catalog.isfinite(active_lease_until)
+            and active_lease_started_at <= last_attempt_at
+            and active_lease_until = active_lease_started_at + interval '15 minutes'
+        )
+        or (
+            failure_category is distinct from 'run_incomplete'
+            and active_lease_started_at is null
+            and active_lease_until is null
         )
     ),
     constraint omr_operational_job_status_state_check check (
@@ -89,6 +109,8 @@ as $$
 declare
     v_dead_count bigint;
     v_run_sequence bigint;
+    v_job_status public.omr_operational_job_status%rowtype;
+    v_now timestamptz;
     v_started_at timestamptz;
 begin
     if p_job_key is distinct from 'asset_gc'
@@ -97,11 +119,35 @@ begin
         raise exception 'invalid operational job run';
     end if;
 
-    -- Lock before issuing the sequence: committed latest_started_sequence can
-    -- never move backward even when begins overlap.
+    -- The 15-minute job lease covers the cleanup queue's bounded 900-second
+    -- lease, the provider's 60-second timeout, and the route's 55-second drain.
+    -- Lock the durable job row before issuing a generation so only one caller
+    -- can be admitted while that lease remains active.
     perform pg_catalog.pg_advisory_xact_lock(20260808, 5);
+    v_now := pg_catalog.clock_timestamp();
+    select job_status.*
+      into v_job_status
+      from public.omr_operational_job_status job_status
+     where job_status.job_key = p_job_key
+     for update;
+    if found
+       and v_job_status.failure_category = 'run_incomplete'
+       and v_job_status.active_lease_until > v_now then
+        return pg_catalog.jsonb_build_object(
+            'admitted', false,
+            'busy', true,
+            'runSequence', null
+        );
+    end if;
+
     v_run_sequence := pg_catalog.nextval('public.omr_operational_job_run_sequence'::pg_catalog.regclass);
-    v_started_at := pg_catalog.clock_timestamp();
+    v_started_at := case
+        when v_job_status.job_key is null then v_now
+        else greatest(
+            v_now,
+            v_job_status.last_attempt_at + interval '1 microsecond'
+        )
+    end;
     lock table public.omr_remote_asset_cleanup_queue in share mode;
     select pg_catalog.count(*)::bigint
       into v_dead_count
@@ -113,10 +159,12 @@ begin
 
     insert into public.omr_operational_job_status as current_status (
         job_key, status, last_attempt_at, last_success_at, dead_count,
-        build_sha, failure_category, latest_started_sequence, latest_completed_sequence
+        build_sha, failure_category, latest_started_sequence, latest_completed_sequence,
+        active_lease_started_at, active_lease_until
     ) values (
         p_job_key, 'failed', v_started_at, null, v_dead_count::integer,
-        p_build_sha, 'run_incomplete', v_run_sequence, null
+        p_build_sha, 'run_incomplete', v_run_sequence, null,
+        v_now, v_now + interval '15 minutes'
     )
     on conflict (job_key) do update
         set status = 'failed',
@@ -126,9 +174,15 @@ begin
             build_sha = p_build_sha,
             failure_category = 'run_incomplete',
             latest_started_sequence = v_run_sequence,
-            latest_completed_sequence = current_status.latest_completed_sequence;
+            latest_completed_sequence = current_status.latest_completed_sequence,
+            active_lease_started_at = v_now,
+            active_lease_until = v_now + interval '15 minutes';
 
-    return pg_catalog.jsonb_build_object('runSequence', v_run_sequence);
+    return pg_catalog.jsonb_build_object(
+        'admitted', true,
+        'busy', false,
+        'runSequence', v_run_sequence
+    );
 end;
 $$;
 
@@ -167,15 +221,6 @@ begin
     end if;
 
     perform pg_catalog.pg_advisory_xact_lock(20260808, 5);
-    lock table public.omr_remote_asset_cleanup_queue in share mode;
-    select pg_catalog.count(*)::bigint
-      into v_dead_count
-      from public.omr_remote_asset_cleanup_queue cleanup
-     where cleanup.status = 'dead';
-    if v_dead_count > 1000000 then
-        raise exception 'operational cleanup backlog exceeds bounded status';
-    end if;
-
     select job_status.*
       into v_job_status
       from public.omr_operational_job_status job_status
@@ -183,6 +228,15 @@ begin
      for update;
     if not found then
         raise exception 'operational job run was not begun';
+    end if;
+
+    lock table public.omr_remote_asset_cleanup_queue in share mode;
+    select pg_catalog.count(*)::bigint
+      into v_dead_count
+      from public.omr_remote_asset_cleanup_queue cleanup
+     where cleanup.status = 'dead';
+    if v_dead_count > 1000000 then
+        raise exception 'operational cleanup backlog exceeds bounded status';
     end if;
 
     if p_run_sequence = v_job_status.latest_started_sequence then
@@ -207,7 +261,9 @@ begin
                end,
                dead_count = v_dead_count::integer,
                failure_category = v_effective_failure_category,
-               latest_completed_sequence = p_run_sequence
+               latest_completed_sequence = p_run_sequence,
+               active_lease_started_at = null,
+               active_lease_until = null
          where job_key = p_job_key
          returning * into strict v_job_status;
         v_applied := true;

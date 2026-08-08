@@ -64,7 +64,7 @@ describe("remote asset cleanup route behavior", () => {
         });
         mocks.heartbeat.mockResolvedValue({ status: "delivered" });
         mocks.reportError.mockResolvedValue({ status: "delivered" });
-        mocks.beginJobRun.mockResolvedValue({ runSequence: 20 });
+        mocks.beginJobRun.mockResolvedValue({ admitted: true, busy: false, runSequence: 20 });
         mocks.completeJobRun.mockResolvedValue(persistedStatus());
     });
 
@@ -261,6 +261,18 @@ describe("remote asset cleanup route behavior", () => {
         expect(mocks.drain).not.toHaveBeenCalled();
         expect(mocks.completeJobRun).not.toHaveBeenCalled();
         expect(mocks.reportError).toHaveBeenCalledWith("asset-gc", expect.any(Error));
+    });
+
+    it("returns a safe 503 without cleanup when another lease is active", async () => {
+        mocks.beginJobRun.mockResolvedValue({ admitted: false, busy: true, runSequence: null });
+
+        const response = await GET(new Request("https://app.example.test/api/internal/asset-gc"));
+
+        expect(response.status).toBe(503);
+        await expect(response.json()).resolves.toEqual({ status: "unavailable" });
+        expect(mocks.drain).not.toHaveBeenCalled();
+        expect(mocks.completeJobRun).not.toHaveBeenCalled();
+        expect(mocks.reportError).not.toHaveBeenCalled();
     });
 
     it("returns an authoritative superseded healthy generation without masking proof", async () => {

@@ -149,7 +149,6 @@ revoke all on table public.omr_teacher_account_tokens from public, anon, authent
 revoke all on table public.omr_teacher_notification_states from public, anon, authenticated, service_role;
 revoke all on table public.omr_operational_job_status from public, anon, authenticated, service_role;
 revoke all on sequence public.omr_operational_job_run_sequence from public, anon, authenticated, service_role;
-revoke all on sequence public.omr_operational_job_run_sequence from public, anon, authenticated, service_role;
 
 do $$
 declare
