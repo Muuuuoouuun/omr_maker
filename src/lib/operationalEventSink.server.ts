@@ -1,8 +1,9 @@
 import "next/dist/compiled/server-only";
-import { SAFE_CORRELATION_ID, type OperationalEvent } from "./reportError";
+import { SAFE_EVENT_ID, type OperationalEvent } from "./reportError";
 
 type Env = Record<string, string | undefined>;
 type FetchLike = typeof fetch;
+const MAX_OPERATIONAL_EVENT_BYTES = 32 * 1024;
 
 export type OperationalSinkDeliveryStatus =
     | "delivered"
@@ -29,9 +30,8 @@ function clean(value: unknown): string {
     return typeof value === "string" ? value.trim() : "";
 }
 
-function safeEventId(event: OperationalEvent): string {
-    const value = clean(event.eventId);
-    return value.match(SAFE_CORRELATION_ID)?.[0] === value ? value : "event_unknown";
+function isSafeEventId(value: unknown): value is string {
+    return typeof value === "string" && value.match(SAFE_EVENT_ID)?.[0] === value;
 }
 
 function isTransientSinkStatus(status: number): boolean {
@@ -91,10 +91,26 @@ export async function deliverOperationalEvent(
     const configuration = resolveConfiguration(env);
     if (configuration.status !== "configured") return { status: configuration.status };
 
+    let eventId: string;
+    try {
+        if (!isSafeEventId(event.eventId)) return { status: "rejected" };
+        eventId = event.eventId;
+    } catch {
+        return { status: "rejected" };
+    }
+
     let body: string;
     try {
         body = JSON.stringify(event);
-        if (body.length > 32_000) return { status: "failed" };
+        if (new TextEncoder().encode(body).byteLength > MAX_OPERATIONAL_EVENT_BYTES) {
+            return { status: "failed" };
+        }
+        const serializedEvent = JSON.parse(body) as unknown;
+        if (
+            typeof serializedEvent !== "object"
+            || serializedEvent === null
+            || Reflect.get(serializedEvent, "eventId") !== eventId
+        ) return { status: "rejected" };
     } catch {
         return { status: "failed" };
     }
@@ -111,7 +127,7 @@ export async function deliverOperationalEvent(
                         authorization: `Bearer ${configuration.token}`,
                         "content-type": "application/json",
                         "user-agent": "omr-maker-operational-events/1",
-                        "x-omr-event-id": safeEventId(event),
+                        "x-omr-event-id": eventId,
                     },
                     body,
                     cache: "no-store",

@@ -8,6 +8,10 @@ import {
     buildOperationalErrorEvent,
     buildOperationalHeartbeatEvent,
 } from "./reportError";
+import * as operationalEvents from "./reportError";
+
+const MAX_OPERATIONAL_EVENT_BYTES = 32 * 1024;
+const EXACT_EVENT_ID = /^evt_[a-f0-9]{32}$/;
 
 const configuredEnv = {
     NODE_ENV: "production",
@@ -17,8 +21,15 @@ const configuredEnv = {
 
 describe("operational event sink", () => {
     afterEach(() => {
+        vi.restoreAllMocks();
         vi.unstubAllEnvs();
         vi.useRealTimers();
+    });
+
+    it("exports the exact operational event ID contract", () => {
+        expect(operationalEvents).toHaveProperty("SAFE_EVENT_ID");
+        expect(String(Reflect.get(operationalEvents, "SAFE_EVENT_ID")))
+            .toBe("/^evt_[a-f0-9]{32}$/");
     });
 
     it("builds a bounded runtime envelope with safe severity and caller correlation", () => {
@@ -76,6 +87,20 @@ describe("operational event sink", () => {
         expect(event.eventId).not.toBe(correlationId);
     });
 
+    it("chooses a distinct correlation fallback when caller correlation collides with event ID", () => {
+        const uuid = "11111111-1111-4111-8111-111111111111" as `${string}-${string}-${string}-${string}-${string}`;
+        vi.spyOn(globalThis.crypto, "randomUUID").mockReturnValue(uuid);
+        const collidingId = `evt_${uuid.replaceAll("-", "")}`;
+
+        const event = buildOperationalErrorEvent("route-error", new Error("private"), {
+            correlationId: collidingId,
+        });
+
+        expect(event.eventId).toBe(collidingId);
+        expect(event.correlationId).toMatch(EXACT_EVENT_ID);
+        expect(event.correlationId).not.toBe(event.eventId);
+    });
+
     it.each([
         "A234567",
         `Z${"a".repeat(128)}`,
@@ -123,10 +148,15 @@ describe("operational event sink", () => {
     });
 
     it("assigns explicit informational and warning severity to job heartbeats", () => {
-        expect(buildOperationalHeartbeatEvent("asset-gc", "ok"))
-            .toMatchObject({ event: "omr.job_heartbeat", severity: "info" });
-        expect(buildOperationalHeartbeatEvent("asset-gc", "degraded"))
-            .toMatchObject({ event: "omr.job_heartbeat", severity: "warning" });
+        const healthy = buildOperationalHeartbeatEvent("asset-gc", "ok");
+        const degraded = buildOperationalHeartbeatEvent("asset-gc", "degraded");
+        expect(healthy).toMatchObject({ event: "omr.job_heartbeat", severity: "info" });
+        expect(degraded).toMatchObject({ event: "omr.job_heartbeat", severity: "warning" });
+        for (const event of [healthy, degraded]) {
+            expect(event.eventId).toMatch(EXACT_EVENT_ID);
+            expect(event.correlationId).toMatch(EXACT_EVENT_ID);
+            expect(event.eventId).not.toBe(event.correlationId);
+        }
     });
 
     it("fails configuration closed and requires HTTPS in production", () => {
@@ -178,7 +208,75 @@ describe("operational event sink", () => {
             "content-type": "application/json",
             "x-omr-event-id": event.eventId,
         });
+        expect(JSON.parse(String(init?.body))).toMatchObject({ eventId: event.eventId });
+        expect((init?.headers as Record<string, string>)["x-omr-event-id"])
+            .toBe(JSON.parse(String(init?.body)).eventId);
         expect(String(init?.body)).not.toContain("never-send-this");
+    });
+
+    it.each([
+        "corr_01JABCDEF0123456789",
+        "evt_ABCDEF0123456789ABCDEF0123456789",
+        " evt_abcdef0123456789abcdef0123456789",
+        "evt_abcdef0123456789abcdef0123456789 ",
+        "evt_abcdef0123456789abcdef012345678",
+        "event_unknown",
+    ])("rejects malformed or spoofed event ID before serialization: %j", async eventId => {
+        const fetchImpl = vi.fn(async (...args: Parameters<typeof fetch>) => {
+            void args;
+            return new Response(null, { status: 202 });
+        });
+        const toJSON = vi.fn(() => {
+            throw new Error("invalid envelope must not be serialized");
+        });
+        const invalidEvent = Object.assign(
+            { ...buildOperationalErrorEvent("route-error", new Error("private")), eventId },
+            { toJSON },
+        );
+
+        await expect(deliverOperationalEvent(invalidEvent, configuredEnv, fetchImpl, 250))
+            .resolves.toEqual({ status: "rejected" });
+        expect(toJSON).not.toHaveBeenCalled();
+        expect(fetchImpl).not.toHaveBeenCalled();
+    });
+
+    it("rejects an envelope whose serialization changes the validated event ID", async () => {
+        const fetchImpl = vi.fn(async (...args: Parameters<typeof fetch>) => {
+            void args;
+            return new Response(null, { status: 202 });
+        });
+        const event = buildOperationalErrorEvent("route-error", new Error("private"));
+        const spoofedEvent = Object.assign({ ...event }, {
+            toJSON: () => ({ ...event, eventId: "corr_01JABCDEF0123456789" }),
+        });
+
+        await expect(deliverOperationalEvent(spoofedEvent, configuredEnv, fetchImpl, 250))
+            .resolves.toEqual({ status: "rejected" });
+        expect(fetchImpl).not.toHaveBeenCalled();
+    });
+
+    it("enforces the 32 KiB delivery bound using UTF-8 bytes", async () => {
+        const fetchImpl = vi.fn(async (...args: Parameters<typeof fetch>) => {
+            void args;
+            return new Response(null, { status: 202 });
+        });
+        const encoder = new TextEncoder();
+        const baseEvent = { ...buildOperationalErrorEvent("route-error", new Error("private")), error: "" };
+        const baseBytes = encoder.encode(JSON.stringify(baseEvent)).byteLength;
+        const underCount = Math.floor((MAX_OPERATIONAL_EVENT_BYTES - baseBytes) / 3);
+        const underEvent = { ...baseEvent, error: "가".repeat(underCount) };
+        const overEvent = { ...baseEvent, error: "가".repeat(underCount + 1) };
+        const underBytes = encoder.encode(JSON.stringify(underEvent)).byteLength;
+        const overBytes = encoder.encode(JSON.stringify(overEvent)).byteLength;
+
+        expect(underBytes).toBeLessThanOrEqual(MAX_OPERATIONAL_EVENT_BYTES);
+        expect(MAX_OPERATIONAL_EVENT_BYTES - underBytes).toBeLessThan(3);
+        expect(overBytes).toBeGreaterThan(MAX_OPERATIONAL_EVENT_BYTES);
+        await expect(deliverOperationalEvent(underEvent, configuredEnv, fetchImpl, 250))
+            .resolves.toEqual({ status: "delivered" });
+        await expect(deliverOperationalEvent(overEvent, configuredEnv, fetchImpl, 250))
+            .resolves.toEqual({ status: "failed" });
+        expect(fetchImpl).toHaveBeenCalledTimes(1);
     });
 
     it("reports rejection and timeout without exposing provider responses", async () => {

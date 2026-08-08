@@ -6,6 +6,7 @@ const MAX_ARRAY_ITEMS = 20;
 export type OperationalSeverity = "info" | "warning" | "error" | "critical";
 
 export const SAFE_CORRELATION_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{7,127}$/;
+export const SAFE_EVENT_ID = /^evt_[a-f0-9]{32}$/;
 
 const SAFE_OPERATIONAL_SEVERITIES = new Set<OperationalSeverity>([
     "info",
@@ -212,7 +213,7 @@ function generatedOperationalId(excluded?: string): string {
 function safeCorrelationId(value: unknown, eventId: string): string {
     if (typeof value === "string") {
         const match = value.match(SAFE_CORRELATION_ID)?.[0];
-        if (match === value && !SENSITIVE_CORRELATION_ID.test(value)) return value;
+        if (match === value && value !== eventId && !SENSITIVE_CORRELATION_ID.test(value)) return value;
     }
     return generatedOperationalId(eventId);
 }
