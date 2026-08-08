@@ -32,6 +32,7 @@ import {
     forceFinishTeacherAttempts,
     loadTeacherAttemptSummaries,
     loadTeacherAttempts,
+    resolveTeacherCollectionGroupCompleteness,
     resolveTeacherAttemptCollectionCompleteness,
     setTeacherAttemptSubquestionReview,
 } from "./teacherAttemptClient";
@@ -115,6 +116,29 @@ describe("teacher attempt collection completeness", () => {
             remotePartial: true,
             remoteError: "exam metadata unavailable",
         })).toBe("stale");
+    });
+
+    it.each([
+        ["exam", [{ id: "exam-1" }], [{ id: "student-1" }]],
+        ["roster", [{ id: "exam-1" }], [{ id: "student-1" }]],
+    ] as const)("downgrades ready attempts when usable %s evidence is local-only", (localSource, exams, roster) => {
+        expect(resolveTeacherCollectionGroupCompleteness([
+            { items: [baseAttempt], remoteLoaded: true, remoteSynced: true },
+            { items: exams, remoteLoaded: localSource !== "exam", remoteSynced: localSource !== "exam" },
+            { items: roster, remoteLoaded: localSource !== "roster", remoteSynced: localSource !== "roster" },
+        ])).toBe("stale");
+    });
+
+    it("uses deterministic error, stale, partial, ready priority across required sources", () => {
+        const ready = { items: [baseAttempt], remoteLoaded: true, remoteSynced: true };
+        const partial = { items: [baseAttempt], remoteLoaded: true, remoteSynced: false, remotePartial: true };
+        const stale = { items: [baseAttempt], remoteLoaded: false };
+        const error = { items: [], remoteLoaded: false, remoteError: "offline" };
+
+        expect(resolveTeacherCollectionGroupCompleteness([ready, ready])).toBe("ready");
+        expect(resolveTeacherCollectionGroupCompleteness([ready, partial])).toBe("partial");
+        expect(resolveTeacherCollectionGroupCompleteness([partial, stale])).toBe("stale");
+        expect(resolveTeacherCollectionGroupCompleteness([stale, error])).toBe("error");
     });
 });
 

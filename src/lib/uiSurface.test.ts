@@ -1350,7 +1350,7 @@ describe("service UI surface", () => {
         expect(teacherAttemptPage).toContain("attemptResult.remoteError");
         expect(teacherAttemptPage).toContain("examResult.remoteError");
         expect(teacherAttemptPage).toContain("rosterResult.remoteError");
-        expect(teacherAttemptPage).toContain("resolveTeacherAttemptCollectionCompleteness");
+        expect(teacherAttemptPage).toContain("resolveTeacherCollectionGroupCompleteness");
         expect(teacherAttemptPage).toContain("setCumulativeStatus(attemptCompleteness)");
         expect(teacherAttemptPage).toContain("const retryCumulativeLoad = useCallback");
         expect(reportPanel).toContain("<StudentGrowthReport");
@@ -1364,8 +1364,11 @@ describe("service UI surface", () => {
         const loaderEnd = teacherAttemptPage.indexOf("} catch", loaderStart);
         const loaderBlock = teacherAttemptPage.slice(loaderStart, loaderEnd);
 
-        expect(loaderBlock).toContain("resolveTeacherAttemptCollectionCompleteness({");
-        expect(loaderBlock).toContain("remoteError: warnings.join");
+        expect(loaderBlock).toContain("resolveTeacherCollectionGroupCompleteness([");
+        expect(loaderBlock).toContain("...attemptResult");
+        expect(loaderBlock).toContain("...examResult");
+        expect(loaderBlock).toContain("...rosterResult");
+        expect(loaderBlock).toContain("items: [...rosterResult.students, ...rosterResult.groups]");
         expect(loaderBlock).toContain("setCumulativeStatus(attemptCompleteness)");
         expect(loaderBlock).not.toContain("if (attemptResult.remotePartial)");
     });

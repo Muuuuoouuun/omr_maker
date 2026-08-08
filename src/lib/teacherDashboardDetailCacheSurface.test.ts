@@ -48,6 +48,26 @@ describe("teacher dashboard detailed attempt cache", () => {
         expect(loaderBlock).toContain("setDetailedAttempts(result.items)");
     });
 
+    it("offers an actionable retry for stale or partial detail rows and hides it for ready data", () => {
+        const dashboard = readProjectFile("src/app/teacher/dashboard/page.tsx");
+        const retryStart = dashboard.indexOf("const retryDetailedAttempts = useCallback");
+        const retryEnd = dashboard.indexOf("const loadDetailedAttempts = useCallback", retryStart);
+        const retryBlock = dashboard.slice(retryStart, retryEnd);
+        const invalidationStart = dashboard.indexOf("const invalidateDetailedAttempts = useCallback");
+        const invalidationBlock = dashboard.slice(invalidationStart, retryStart);
+
+        expect(retryStart).toBeGreaterThan(-1);
+        expect(retryBlock).toContain("invalidateDetailedAttempts()");
+        expect(invalidationBlock).toContain("detailedAttemptGenerationRef.current + 1");
+        expect(invalidationBlock).toContain("detailedAttemptCacheRef.current = null");
+        expect(invalidationBlock).toContain("setDetailedAttempts(null)");
+        expect(invalidationBlock).toContain("setDetailedAttemptGeneration(nextGeneration)");
+        expect(dashboard).toContain('detailedAttemptSampleStatus !== "ready"');
+        expect(dashboard).toContain("onClick={retryDetailedAttempts}");
+        expect(dashboard).toContain("최신 데이터 다시 불러오기");
+        expect(dashboard).toMatch(/detailedAttemptSampleStatus !== "ready"[\s\S]*onClick=\{retryDetailedAttempts\}/);
+    });
+
     it("turns a failed CSV detail load into a retryable user-visible error", () => {
         const overview = readProjectFile("src/components/dashboard/tabs/OverviewTab.tsx");
 

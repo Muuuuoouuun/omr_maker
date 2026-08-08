@@ -16,7 +16,7 @@ import {
     answerTeacherAttemptQuestion,
     loadTeacherAttemptDetail as loadTeacherAttemptRecord,
     loadTeacherAttempts,
-    resolveTeacherAttemptCollectionCompleteness,
+    resolveTeacherCollectionGroupCompleteness,
     setTeacherAttemptSubquestionReview,
 } from "@/lib/teacherAttemptClient";
 import { loadTeacherExam, loadTeacherExams } from "@/lib/teacherExamClient";
@@ -417,10 +417,14 @@ export default function TeacherAttemptPage() {
                 const matchedStudent = matchRosterStudentForAttempt(attempt, rosterResult.students);
                 const warnings = [attemptResult.remoteError, examResult.remoteError, rosterResult.remoteError]
                     .filter((message): message is string => Boolean(message));
-                const attemptCompleteness = resolveTeacherAttemptCollectionCompleteness({
-                    ...attemptResult,
-                    remoteError: warnings.join(" ") || undefined,
-                });
+                const attemptCompleteness = resolveTeacherCollectionGroupCompleteness([
+                    { ...attemptResult },
+                    { ...examResult },
+                    {
+                        ...rosterResult,
+                        items: [...rosterResult.students, ...rosterResult.groups],
+                    },
+                ]);
                 setCumulativeAttempts(attemptResult.items);
                 setCumulativeExams(examResult.items);
                 setCumulativeRoster({

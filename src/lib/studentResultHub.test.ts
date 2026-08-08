@@ -255,6 +255,47 @@ describe("student result hub", () => {
         )).toEqual([exactA, selected]);
     });
 
+    it("prefers the canonical exam revision before recency regardless of input order", () => {
+        const canonical: Exam = {
+            id: "exam-collision",
+            title: "충돌 시험",
+            organizationId: "org-a",
+            revision: 8,
+            createdAt: "2026-06-01T00:00:00.000Z",
+            updatedAt: "2026-06-01T00:00:00.000Z",
+            questions: [{ id: 1, number: 1, answer: 2, score: 1 }],
+        };
+        const newerButStale: Exam = {
+            ...canonical,
+            revision: 7,
+            updatedAt: "2026-08-01T00:00:00.000Z",
+            questions: [{ id: 1, number: 1, answer: 1, score: 1 }],
+        };
+
+        expect(buildCumulativeExamMap([newerButStale, canonical], "org-a").get(canonical.id)).toBe(canonical);
+        expect(buildCumulativeExamMap([canonical, newerButStale], "org-a").get(canonical.id)).toBe(canonical);
+    });
+
+    it("uses a stable semantic tie-break for same-scope exam collisions", () => {
+        const first: Exam = {
+            id: "exam-semantic-tie",
+            title: "동일 시험",
+            organizationId: "org-a",
+            revision: 3,
+            createdAt: "2026-06-01T00:00:00.000Z",
+            updatedAt: "2026-06-01T00:00:00.000Z",
+            questions: [{ id: 1, number: 1, answer: 1, score: 1 }],
+        };
+        const second: Exam = {
+            ...first,
+            questions: [{ id: 1, number: 1, answer: 2, score: 1 }],
+        };
+
+        const forward = buildCumulativeExamMap([first, second], "org-a").get(first.id);
+        const reverse = buildCumulativeExamMap([second, first], "org-a").get(first.id);
+        expect(forward).toEqual(reverse);
+    });
+
     it("keeps a compatible id-less legacy attempt when the roster match is unique", () => {
         const selected = attempt({ id: "selected", studentProfileId: "student-a", groupName: "A반" });
         const legacy = attempt({ id: "legacy", groupName: "A반" });

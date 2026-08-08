@@ -53,6 +53,21 @@ function examRecency(exam: Exam): number {
     return Date.parse(exam.updatedAt || exam.createdAt) || 0;
 }
 
+function examRevision(exam: Exam): number {
+    return Number.isSafeInteger(exam.revision) ? exam.revision! : -1;
+}
+
+function stableSemanticKey(value: unknown): string {
+    if (Array.isArray(value)) return `[${value.map(stableSemanticKey).join(",")}]`;
+    if (value && typeof value === "object") {
+        const entries = Object.entries(value as Record<string, unknown>)
+            .sort(([left], [right]) => left.localeCompare(right))
+            .map(([key, item]) => `${JSON.stringify(key)}:${stableSemanticKey(item)}`);
+        return `{${entries.join(",")}}`;
+    }
+    return JSON.stringify(value) ?? String(value);
+}
+
 export function buildCumulativeExamMap(
     exams: readonly Exam[],
     selectedOrganizationId?: string,
@@ -73,10 +88,22 @@ export function buildCumulativeExamMap(
             || (
                 candidateExact === currentExact
                 && (
-                    examRecency(exam) > examRecency(current)
+                    examRevision(exam) > examRevision(current)
                     || (
-                        examRecency(exam) === examRecency(current)
-                        && exam.title.localeCompare(current.title, "ko") < 0
+                        examRevision(exam) === examRevision(current)
+                        && (
+                            examRecency(exam) > examRecency(current)
+                            || (
+                                examRecency(exam) === examRecency(current)
+                                && (
+                                    exam.title.localeCompare(current.title, "ko") < 0
+                                    || (
+                                        exam.title === current.title
+                                        && stableSemanticKey(exam).localeCompare(stableSemanticKey(current)) < 0
+                                    )
+                                )
+                            )
+                        )
                     )
                 )
             );

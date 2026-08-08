@@ -42,13 +42,17 @@ export interface TeacherAttemptCollectionLoadResult {
 
 export type TeacherAttemptCollectionCompleteness = "ready" | "partial" | "stale" | "error";
 
-export function resolveTeacherAttemptCollectionCompleteness(input: {
-    items: readonly Attempt[];
+export interface TeacherCollectionCompletenessInput {
+    items: readonly unknown[];
     remoteLoaded: boolean;
     remoteSynced?: boolean;
     remotePartial?: boolean;
     remoteError?: string;
-}): TeacherAttemptCollectionCompleteness {
+}
+
+export function resolveTeacherAttemptCollectionCompleteness(
+    input: TeacherCollectionCompletenessInput,
+): TeacherAttemptCollectionCompleteness {
     const hasUsableItems = input.items.length > 0;
     // A source error means the available rows are cached evidence, even when the
     // remote response also carries pagination metadata.
@@ -58,6 +62,22 @@ export function resolveTeacherAttemptCollectionCompleteness(input: {
         return hasUsableItems ? "stale" : "error";
     }
     return "ready";
+}
+
+export function resolveTeacherCollectionGroupCompleteness(
+    inputs: readonly TeacherCollectionCompletenessInput[],
+): TeacherAttemptCollectionCompleteness {
+    if (inputs.length === 0) return "error";
+    const priorities: Record<TeacherAttemptCollectionCompleteness, number> = {
+        ready: 0,
+        partial: 1,
+        stale: 2,
+        error: 3,
+    };
+    return inputs.reduce<TeacherAttemptCollectionCompleteness>((combined, input) => {
+        const current = resolveTeacherAttemptCollectionCompleteness(input);
+        return priorities[current] > priorities[combined] ? current : combined;
+    }, "ready");
 }
 
 export async function loadTeacherActiveAttemptSessions(examId: string): Promise<{

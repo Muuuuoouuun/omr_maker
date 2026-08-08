@@ -198,6 +198,10 @@ function TeacherDashboard() {
         setDetailedAttemptGeneration(nextGeneration);
     }, []);
 
+    const retryDetailedAttempts = useCallback(() => {
+        invalidateDetailedAttempts();
+    }, [invalidateDetailedAttempts]);
+
     const loadDetailedAttempts = useCallback(async (): Promise<Attempt[]> => {
         if (dataMode === "demo") return attempts;
 
@@ -1237,6 +1241,36 @@ function TeacherDashboard() {
                             onNavigateToStudentAnalytics={handleNavigateToStudentAnalytics}
                             onLoadDetailedAttempts={loadDetailedAttempts}
                         />
+                    )}
+                    {activeTab !== 'overview'
+                        && dataMode === "real"
+                        && detailedAttemptStatus === "ready"
+                        && detailedAttemptSampleStatus !== "ready" && (
+                        <section
+                            className="bento-card"
+                            role="status"
+                            style={{
+                                marginBottom: '1rem',
+                                padding: '0.9rem 1rem',
+                                display: 'flex',
+                                alignItems: 'center',
+                                justifyContent: 'space-between',
+                                gap: '1rem',
+                                flexWrap: 'wrap',
+                            }}
+                        >
+                            <div>
+                                <strong style={{ fontSize: '0.92rem' }}>
+                                    {detailedAttemptSampleStatus === "partial" ? "일부 제출 기준 분석" : "저장된 제출 기준 분석"}
+                                </strong>
+                                <p style={{ margin: '0.2rem 0 0', color: 'var(--muted)', fontSize: '0.8rem' }}>
+                                    최신 서버 데이터와 차이가 있을 수 있습니다.
+                                </p>
+                            </div>
+                            <button type="button" className="btn btn-secondary" onClick={retryDetailedAttempts}>
+                                최신 데이터 다시 불러오기
+                            </button>
+                        </section>
                     )}
                     {activeTab !== 'overview' && dataMode === "real" && detailedAttemptStatus !== "ready" && (
                         detailedAttemptStatus === "error" ? (
