@@ -1,3 +1,4 @@
+import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -23,6 +24,33 @@ describe("production readiness workflow release identity", () => {
         expect(workflow).toContain("          ref: ${{ inputs.expected_build }}");
         expect(workflow).toContain("          fetch-depth: 0");
         expect(workflow).not.toContain("          ref: ${{ github.event.repository.default_branch }}");
+    });
+
+    it("rejects a historical build before checkout or repository-controlled execution", () => {
+        const workflowGate = "- name: Verify requested build matches trusted workflow revision";
+        const equalityCheck = 'test "$OMR_PRODUCTION_EXPECTED_BUILD" = "$WORKFLOW_SHA"';
+        const gate = workflow.indexOf(workflowGate);
+        const equality = workflow.indexOf(equalityCheck);
+        const checkout = workflow.indexOf("- uses: actions/checkout@v4");
+        const setupNode = workflow.indexOf("- uses: actions/setup-node@v4");
+        const install = workflow.indexOf("run: npm ci");
+        const verifier = workflow.indexOf("- name: Verify hosted production deployment");
+
+        expect(gate).toBeGreaterThan(-1);
+        expect(workflow.slice(gate, checkout)).toContain("WORKFLOW_SHA: ${{ github.sha }}");
+        expect(equality).toBeGreaterThan(gate);
+        expect(equality).toBeLessThan(checkout);
+        expect(equality).toBeLessThan(setupNode);
+        expect(equality).toBeLessThan(install);
+        expect(equality).toBeLessThan(verifier);
+
+        const historical = spawnSync("sh", ["-c", equalityCheck], {
+            env: {
+                OMR_PRODUCTION_EXPECTED_BUILD: "a".repeat(40),
+                WORKFLOW_SHA: "b".repeat(40),
+            },
+        });
+        expect(historical.status).not.toBe(0);
     });
 
     it("rejects a workflow shape that is not restricted to the protected default branch", () => {

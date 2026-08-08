@@ -6,6 +6,7 @@ import { join, resolve } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 
 import {
+    buildPreviewIdentityAttestationPayload,
     resolveProductionDeploymentConfig,
     runProductionDeploymentVerification,
 } from "../../scripts/verify-production-deployment.mjs";
@@ -25,7 +26,11 @@ const SERVICE_KEY = "service-role-key-which-is-at-least-32-bytes";
 
 function signPreviewIdentity(secret: string): string {
     return createHmac("sha256", secret)
-        .update(`${BUILD}\n${PREVIEW_DEPLOYMENT_ID}\n${PREVIEW_ARTIFACT_DIGEST}`, "utf8")
+        .update(buildPreviewIdentityAttestationPayload({
+            expectedBuild: BUILD,
+            previewDeploymentId: PREVIEW_DEPLOYMENT_ID,
+            previewArtifactDigest: PREVIEW_ARTIFACT_DIGEST,
+        }), "utf8")
         .digest("hex");
 }
 
@@ -122,6 +127,16 @@ function fetchFor(options: { build?: string; readyStatus?: string; denyStatus?: 
 }
 
 describe("hosted production deployment verification", () => {
+    it("exports the versioned canonical preview identity payload for release signers", () => {
+        expect(buildPreviewIdentityAttestationPayload({
+            expectedBuild: BUILD,
+            previewDeploymentId: PREVIEW_DEPLOYMENT_ID,
+            previewArtifactDigest: PREVIEW_ARTIFACT_DIGEST,
+        })).toBe(
+            `omr-preview-identity:v1\n${BUILD}\n${PREVIEW_DEPLOYMENT_ID}\n${PREVIEW_ARTIFACT_DIGEST}`,
+        );
+    });
+
     it("fails closed when hosted credentials are missing and the CLI emits unverified", () => {
         expect(() => resolveProductionDeploymentConfig({
             argv: ["--confirm-production-host=app.example.com", "--output=/tmp/release.json"],
@@ -265,6 +280,24 @@ describe("hosted production deployment verification", () => {
             },
             cwd: process.cwd(),
         })).toThrow(/credentials.*distinct/i);
+    });
+
+    it("rejects a signature made without the versioned preview identity domain", () => {
+        const outputRoot = mkdtempSync(join(tmpdir(), "omr-release-attestation-domain-"));
+        const legacySignature = createHmac("sha256", RELEASE_ATTESTATION_SECRET)
+            .update(`${BUILD}\n${PREVIEW_DEPLOYMENT_ID}\n${PREVIEW_ARTIFACT_DIGEST}`, "utf8")
+            .digest("hex");
+        expect(() => resolveProductionDeploymentConfig({
+            argv: [
+                "--confirm-production-host=app.example.com",
+                `--output=${join(outputRoot, "release.json")}`,
+            ],
+            env: {
+                ...env(),
+                OMR_PRODUCTION_PREVIEW_ATTESTATION_SIGNATURE: legacySignature,
+            },
+            cwd: process.cwd(),
+        })).toThrow(/release attestation.*invalid/i);
     });
 
     it("requires ready health, direct service readiness, and both anon/authenticated table denials", async () => {

@@ -77,11 +77,19 @@ function releaseAttestationSecret(value) {
     return secret;
 }
 
+export function buildPreviewIdentityAttestationPayload({ expectedBuild, previewDeploymentId, previewArtifactDigest }) {
+    return `omr-preview-identity:v1\n${expectedBuild}\n${previewDeploymentId}\n${previewArtifactDigest}`;
+}
+
 function verifyPreviewIdentityAttestation({ expectedBuild, previewDeploymentId, previewArtifactDigest, signature, secret }) {
     if (!PREVIEW_ATTESTATION_SIGNATURE.test(signature)) {
         throw new Error("Release attestation signature is missing or invalid");
     }
-    const payload = `${expectedBuild}\n${previewDeploymentId}\n${previewArtifactDigest}`;
+    const payload = buildPreviewIdentityAttestationPayload({
+        expectedBuild,
+        previewDeploymentId,
+        previewArtifactDigest,
+    });
     const expectedSignature = createHmac("sha256", secret).update(payload, "utf8").digest();
     const providedSignature = Buffer.from(signature, "hex");
     if (!timingSafeEqual(expectedSignature, providedSignature)) {

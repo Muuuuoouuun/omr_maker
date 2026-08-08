@@ -42,6 +42,11 @@ jobs:
     environment: production
     timeout-minutes: 10
     steps:
+      - name: Verify requested build matches trusted workflow revision
+        env:
+          OMR_PRODUCTION_EXPECTED_BUILD: ${{ inputs.expected_build }}
+          WORKFLOW_SHA: ${{ github.sha }}
+        run: test "$OMR_PRODUCTION_EXPECTED_BUILD" = "$WORKFLOW_SHA"
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
