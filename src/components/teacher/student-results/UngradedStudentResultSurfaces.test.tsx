@@ -45,6 +45,7 @@ describe("ungraded student result surfaces", () => {
                     scorePercent: 100,
                     scoreDelta: null,
                     scoreSummary: { earnedScore: 10, totalScore: 10, scorePercent: 100, source: "questionResults", gradedQuestionCount: 1, ungradedQuestionCount: 0 },
+                    comparisonScore: { totalScore: 10, scorePercent: 100 },
                 }]}
                 activeView="answers"
             />,
@@ -65,6 +66,7 @@ describe("ungraded student result surfaces", () => {
                     scorePercent: null,
                     scoreDelta: null,
                     scoreSummary: { earnedScore: 0, totalScore: 0, scorePercent: 0, source: "questionResults", gradedQuestionCount: 0, ungradedQuestionCount: 1 },
+                    comparisonScore: { totalScore: 0, scorePercent: 0 },
                 }]}
                 activeView="answers"
             />,

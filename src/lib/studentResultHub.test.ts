@@ -9,6 +9,7 @@ import {
     filterCumulativeAttemptsForStudent,
     matchRosterStudentForAttempt,
     markUnresolvedGrowthAttempt,
+    mergeSelectedAttemptIntoPeers,
     parseStudentResultView,
     sameStudentAttempt,
 } from "./studentResultHub";
@@ -606,6 +607,62 @@ describe("student result hub", () => {
         )).toEqual([
             expect.objectContaining({ attempt: original, scorePercent: 50, scoreDelta: null }),
             expect.objectContaining({ attempt: retake, scorePercent: 100, scoreDelta: 50 }),
+        ]);
+    });
+
+    it("preserves a submitted graded retake delta while exposing current canonical scores", () => {
+        const canonicalExam: Exam = {
+            id: "exam-1",
+            title: "중간고사",
+            createdAt: "2026-06-01T00:00:00.000Z",
+            questions: [
+                { id: 1, number: 1, answer: 2, score: 50 },
+                { id: 2, number: 2, answer: 4, score: 50 },
+            ],
+        };
+        const original = attempt({ id: "graded-original", studentId: "student-1", score: 60, totalScore: 100, answers: { 1: 2, 2: 1 } });
+        const retake = attempt({
+            id: "graded-retake",
+            studentId: "student-1",
+            score: 80,
+            totalScore: 100,
+            answers: { 1: 2, 2: 4 },
+            retake: { sourceAttemptId: original.id, questionIds: [2], mode: "wrong", createdAt: "2026-06-02T00:00:00.000Z" },
+        });
+
+        expect(buildStudentAttemptSeries(
+            retake,
+            [original, retake],
+            new Map([[canonicalExam.id, canonicalExam]]),
+        )).toEqual([
+            expect.objectContaining({ attempt: original, scorePercent: 50, scoreDelta: null }),
+            expect.objectContaining({ attempt: retake, scorePercent: 100, scoreDelta: 20 }),
+        ]);
+    });
+
+    it("merges an omitted selected detail exactly once before canonical series scoring", () => {
+        const canonicalExam: Exam = {
+            id: "exam-1",
+            title: "중간고사",
+            createdAt: "2026-06-01T00:00:00.000Z",
+            questions: [{ id: 1, number: 1, answer: 2, score: 10 }],
+        };
+        const selectedOlder = attempt({
+            id: "selected-older",
+            studentId: "student-1",
+            score: 0,
+            totalScore: 0,
+            answers: { 1: 2 },
+            finishedAt: "2026-05-01T10:00:00.000Z",
+        });
+        const cappedPeer = attempt({ id: "newer-peer", studentId: "student-1", finishedAt: "2026-06-01T10:00:00.000Z" });
+        const merged = mergeSelectedAttemptIntoPeers(selectedOlder, [cappedPeer]);
+        const series = buildStudentAttemptSeries(selectedOlder, merged, new Map([[canonicalExam.id, canonicalExam]]));
+
+        expect(merged.filter(item => item.id === selectedOlder.id)).toHaveLength(1);
+        expect(series).toEqual([
+            expect.objectContaining({ attempt: selectedOlder, scorePercent: 100 }),
+            expect.objectContaining({ attempt: cappedPeer }),
         ]);
     });
 

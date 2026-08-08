@@ -60,7 +60,9 @@ import {
     filterCumulativeAttemptsForStudent,
     markUnresolvedGrowthAttempt,
     matchRosterStudentForAttempt,
+    mergeSelectedAttemptIntoPeers,
     parseStudentResultView,
+    resolveStudentResultComparisonScore,
 } from "@/lib/studentResultHub";
 import StudentResultHeader from "@/components/teacher/student-results/StudentResultHeader";
 import StudentResultTabs from "@/components/teacher/student-results/StudentResultTabs";
@@ -488,7 +490,8 @@ export default function TeacherAttemptPage() {
     const attemptSeries = useMemo(() => {
         if (!attempt) return [];
         const examById = exam ? new Map([[exam.id, exam]]) : new Map<string, Exam>();
-        const series = buildStudentAttemptSeries(attempt, peerAttempts.length ? peerAttempts : [attempt], examById);
+        const seriesAttempts = mergeSelectedAttemptIntoPeers(attempt, peerAttempts);
+        const series = buildStudentAttemptSeries(attempt, seriesAttempts, examById);
         return series.length > 0 ? series : buildStudentAttemptSeries(attempt, [attempt], examById);
     }, [attempt, exam, peerAttempts]);
 
@@ -599,24 +602,29 @@ export default function TeacherAttemptPage() {
             ...attemptSeries.map(item => item.attempt),
             ...cumulativeAttempts,
         ].find(item => item.id === attempt.retake?.sourceAttemptId && item.id !== attempt.id);
-        const currentSummary = attemptSeries.find(item => item.attempt.id === attempt.id)?.scoreSummary
+        const selectedSeriesItem = attemptSeries.find(item => item.attempt.id === attempt.id);
+        const currentCanonicalSummary = selectedSeriesItem?.scoreSummary
             ?? analytics?.score
             ?? {
                 totalScore: attempt.totalScore,
                 scorePercent: safeScorePercent(attempt.score, attempt.totalScore),
             };
+        const currentSummary = selectedSeriesItem?.comparisonScore
+            ?? resolveStudentResultComparisonScore(attempt, currentCanonicalSummary);
         if (!sourceAttempt) return buildStudentRetakeScoreDelta(currentSummary, null);
-        const sourceSeriesSummary = attemptSeries.find(item => item.attempt.id === sourceAttempt.id)?.scoreSummary;
+        const sourceSeriesItem = attemptSeries.find(item => item.attempt.id === sourceAttempt.id);
         const sourceExam = sourceAttempt.examId === exam?.id
             ? exam
             : cumulativeExams.find(item => item.id === sourceAttempt.examId);
-        const sourceSummary = sourceSeriesSummary
+        const sourceCanonicalSummary = sourceSeriesItem?.scoreSummary
             ?? (sourceExam
                 ? summarizeAttemptScore(sourceExam, sourceAttempt)
                 : {
                     totalScore: sourceAttempt.totalScore,
                     scorePercent: safeScorePercent(sourceAttempt.score, sourceAttempt.totalScore),
                 });
+        const sourceSummary = sourceSeriesItem?.comparisonScore
+            ?? resolveStudentResultComparisonScore(sourceAttempt, sourceCanonicalSummary);
         return buildStudentRetakeScoreDelta(currentSummary, sourceSummary);
     }, [analytics, attempt, attemptSeries, cumulativeAttempts, cumulativeExams, exam]);
 

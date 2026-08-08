@@ -1819,6 +1819,7 @@ describe("service UI surface", () => {
             expect(mutation).toContain("activeAttemptIdRef.current !== targetAttemptId");
             expect(mutation).toMatch(/finally\s*\{[^}]*activeAttemptIdRef\.current === targetAttemptId/);
         }
+        expect(teacherAttemptPage).toContain("mergeSelectedAttemptIntoPeers(attempt, peerAttempts)");
         expect(teacherAttemptPage).toContain("const series = buildStudentAttemptSeries(");
         expect(teacherAttemptPage).toContain("return series.length > 0 ? series : buildStudentAttemptSeries(attempt, [attempt], examById);");
     });

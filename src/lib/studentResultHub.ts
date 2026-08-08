@@ -1,7 +1,7 @@
 import type { Attempt, Exam } from "@/types/omr";
 import type { RosterStudent } from "@/lib/rosterStorage";
 import { resolveAttemptScore, type ResolvedAttemptScore } from "@/lib/attemptScores";
-import { hasGradableAttemptScore } from "@/lib/scoreUtils";
+import { hasGradableAttemptScore, safeScorePercent } from "@/lib/scoreUtils";
 import { attemptMatchesStudentProfile } from "@/utils/storage";
 
 export const STUDENT_RESULT_VIEWS = ["answers", "handwriting", "report", "analytics"] as const;
@@ -15,6 +15,7 @@ export interface StudentAttemptSeriesItem {
     scorePercent: number | null;
     scoreDelta: number | null;
     scoreSummary: ResolvedAttemptScore;
+    comparisonScore: { totalScore: number; scorePercent: number };
 }
 
 export type StudentRetakeScoreDelta =
@@ -161,6 +162,24 @@ function timestamp(attempt: Attempt): number {
     return Number.isFinite(value) ? value : 0;
 }
 
+export function mergeSelectedAttemptIntoPeers(selectedAttempt: Attempt, peerAttempts: Attempt[]): Attempt[] {
+    return [
+        ...peerAttempts.filter(attempt => attempt.id !== selectedAttempt.id),
+        selectedAttempt,
+    ];
+}
+
+export function resolveStudentResultComparisonScore(
+    attempt: Attempt,
+    canonicalScore: { totalScore: number; scorePercent: number },
+): { totalScore: number; scorePercent: number } {
+    const storedScore = {
+        totalScore: attempt.totalScore,
+        scorePercent: safeScorePercent(attempt.score, attempt.totalScore),
+    };
+    return hasGradableAttemptScore(storedScore) ? storedScore : canonicalScore;
+}
+
 export function parseStudentResultView(value?: string | null): StudentResultView {
     return STUDENT_RESULT_VIEWS.includes(value as StudentResultView) ? value as StudentResultView : "answers";
 }
@@ -261,18 +280,23 @@ export function buildStudentAttemptSeries(
         attempt.id,
         resolveAttemptScore(attempt, examById.get(attempt.examId)),
     ]));
+    const comparisonScoreByAttemptId = new Map(relatedAttempts.map(attempt => [
+        attempt.id,
+        resolveStudentResultComparisonScore(attempt, scoreSummaryByAttemptId.get(attempt.id)!),
+    ]));
     let originalOrdinal = 0;
     let retakeOrdinal = 0;
 
     return relatedAttempts.map(attempt => {
         const kind = attempt.retake ? "retake" : "original";
         const scoreSummary = scoreSummaryByAttemptId.get(attempt.id)!;
+        const comparisonScore = comparisonScoreByAttemptId.get(attempt.id)!;
         const scorePercent = hasGradableAttemptScore(scoreSummary)
             ? scoreSummary.scorePercent
             : null;
-        const sourceSummary = attempt.retake ? scoreSummaryByAttemptId.get(attempt.retake.sourceAttemptId) : undefined;
-        const sourceScore = sourceSummary && hasGradableAttemptScore(sourceSummary)
-            ? sourceSummary.scorePercent
+        const sourceComparisonScore = attempt.retake ? comparisonScoreByAttemptId.get(attempt.retake.sourceAttemptId) : undefined;
+        const sourceScore = sourceComparisonScore && hasGradableAttemptScore(sourceComparisonScore)
+            ? sourceComparisonScore.scorePercent
             : null;
         return {
             attempt,
@@ -280,9 +304,10 @@ export function buildStudentAttemptSeries(
             ordinal: kind === "original" ? ++originalOrdinal : ++retakeOrdinal,
             scorePercent,
             scoreSummary,
-            scoreDelta: scorePercent === null || sourceScore == null
+            comparisonScore,
+            scoreDelta: !hasGradableAttemptScore(comparisonScore) || sourceScore == null
                 ? null
-                : Math.round((scorePercent - sourceScore) * 10) / 10,
+                : Math.round((comparisonScore.scorePercent - sourceScore) * 10) / 10,
         };
     });
 }
