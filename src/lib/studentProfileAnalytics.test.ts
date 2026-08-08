@@ -56,7 +56,7 @@ function attempt(partial: Partial<Attempt>): Attempt {
 }
 
 describe("student profile analytics", () => {
-    it("excludes completely ungraded attempts from score aggregates and visible history", () => {
+    it("excludes completely ungraded attempts from score aggregates while preserving activity history", () => {
         const ungradedExam: Exam = {
             id: "exam-ungraded",
             title: "미채점 시험",
@@ -78,14 +78,67 @@ describe("student profile analytics", () => {
                 score: 0,
                 totalScore: 0,
                 answers: {},
+                questionTimings: [{ questionId: 1, questionNumber: 1, totalTimeSec: 45, visitCount: 1, revisitCount: 0, answerChangeCount: 0 }],
+                tabFociLostCount: 2,
+            }),
+            attempt({
+                id: "ungraded-retake",
+                examId: ungradedExam.id,
+                examTitle: ungradedExam.title,
+                studentId: student.id,
+                finishedAt: "2026-06-17T10:30:00.000Z",
+                score: 0,
+                totalScore: 0,
+                answers: {},
+                questionTimings: [{ questionId: 1, questionNumber: 1, totalTimeSec: 15, visitCount: 1, revisitCount: 0, answerChangeCount: 0 }],
+                tabFociLostCount: 1,
+                retake: { sourceAttemptId: "ungraded", questionIds: [1], mode: "wrong", createdAt: "2026-06-16T12:00:00.000Z" },
             }),
         ], new Map([[exam.id, exam], [ungradedExam.id, ungradedExam]]));
 
-        expect(insight.attempts.map(item => item.id)).toEqual(["gradable"]);
+        expect(insight.attempts.map(item => item.id)).toEqual(["ungraded-retake", "ungraded", "gradable"]);
+        expect(insight.attempts[0]).toMatchObject({ scorePercent: null, focusLossCount: 1, isRetake: true });
         expect(insight.averageScore).toBe(67);
         expect(insight.latestScore).toBe(67);
         expect(insight.bestScore).toBe(67);
-        expect(insight.baseAttemptCount).toBe(1);
+        expect(insight.baseAttemptCount).toBe(2);
+        expect(insight.retakeAttemptCount).toBe(1);
+        expect(insight.focusLossCount).toBe(3);
+        expect(insight.totalTrackedTimeSec).toBe(60);
+    });
+
+    it("publishes unavailable score metrics without falling back to the roster average", () => {
+        const ungradedStudent = { ...student, avgScore: 91 };
+        const ungradedExam: Exam = {
+            id: "ungraded-only-exam",
+            title: "미채점 서술형",
+            createdAt: "2026-06-15T00:00:00.000Z",
+            questions: [{ id: 1, number: 1 }],
+        };
+        const insight = buildStudentProfileInsight(ungradedStudent, [
+            attempt({
+                id: "ungraded-only",
+                examId: ungradedExam.id,
+                examTitle: ungradedExam.title,
+                studentId: ungradedStudent.id,
+                score: 0,
+                totalScore: 0,
+                answers: {},
+                questionTimings: [{ questionId: 1, questionNumber: 1, totalTimeSec: 30, visitCount: 1, revisitCount: 0, answerChangeCount: 0 }],
+            }),
+        ], new Map([[ungradedExam.id, ungradedExam]]));
+
+        expect(insight).toMatchObject({
+            averageScore: null,
+            bestScore: null,
+            latestScore: null,
+            trendDelta: null,
+            baseAttemptCount: 1,
+            totalTrackedTimeSec: 30,
+        });
+        expect(insight.attempts).toEqual([
+            expect.objectContaining({ id: "ungraded-only", scorePercent: null }),
+        ]);
     });
 
     it("keeps bounded headline evidence from all candidates when recurring weaknesses rank below the display top six", () => {

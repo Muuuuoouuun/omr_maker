@@ -1,6 +1,6 @@
 import type { Attempt, Exam } from "@/types/omr";
 import type { RosterStudent } from "@/lib/rosterStorage";
-import { safeScorePercent } from "@/lib/scoreUtils";
+import { hasGradableAttemptScore, safeScorePercent } from "@/lib/scoreUtils";
 import { attemptMatchesStudentProfile } from "@/utils/storage";
 
 export const STUDENT_RESULT_VIEWS = ["answers", "handwriting", "report", "analytics"] as const;
@@ -11,8 +11,26 @@ export interface StudentAttemptSeriesItem {
     attempt: Attempt;
     kind: "original" | "retake";
     ordinal: number;
-    scorePercent: number;
+    scorePercent: number | null;
     scoreDelta: number | null;
+}
+
+export interface StudentRetakeScoreDelta {
+    sourceScorePercent: number;
+    currentScorePercent: number;
+    delta: number;
+}
+
+export function buildStudentRetakeScoreDelta(
+    current: { totalScore: number; scorePercent: number },
+    source: { totalScore: number; scorePercent: number },
+): StudentRetakeScoreDelta | null {
+    if (!hasGradableAttemptScore(current) || !hasGradableAttemptScore(source)) return null;
+    return {
+        sourceScorePercent: source.scorePercent,
+        currentScorePercent: current.scorePercent,
+        delta: current.scorePercent - source.scorePercent,
+    };
 }
 
 function normalized(value: string | undefined): string | null {
@@ -225,20 +243,28 @@ export function buildStudentAttemptSeries(selectedAttempt: Attempt, attempts: At
             if (kindDifference) return kindDifference;
             return timestamp(left) - timestamp(right) || left.id.localeCompare(right.id);
         });
-    const scoreByAttemptId = new Map(relatedAttempts.map(attempt => [attempt.id, safeScorePercent(attempt.score, attempt.totalScore)]));
+    const scoreByAttemptId = new Map(relatedAttempts.map(attempt => {
+        const scorePercent = safeScorePercent(attempt.score, attempt.totalScore);
+        return [attempt.id, hasGradableAttemptScore({ totalScore: attempt.totalScore, scorePercent }) ? scorePercent : null] as const;
+    }));
     let originalOrdinal = 0;
     let retakeOrdinal = 0;
 
     return relatedAttempts.map(attempt => {
         const kind = attempt.retake ? "retake" : "original";
-        const scorePercent = safeScorePercent(attempt.score, attempt.totalScore);
+        const rawScorePercent = safeScorePercent(attempt.score, attempt.totalScore);
+        const scorePercent = hasGradableAttemptScore({ totalScore: attempt.totalScore, scorePercent: rawScorePercent })
+            ? rawScorePercent
+            : null;
         const sourceScore = attempt.retake ? scoreByAttemptId.get(attempt.retake.sourceAttemptId) : undefined;
         return {
             attempt,
             kind,
             ordinal: kind === "original" ? ++originalOrdinal : ++retakeOrdinal,
             scorePercent,
-            scoreDelta: sourceScore === undefined ? null : Math.round((scorePercent - sourceScore) * 10) / 10,
+            scoreDelta: scorePercent === null || sourceScore == null
+                ? null
+                : Math.round((scorePercent - sourceScore) * 10) / 10,
         };
     });
 }

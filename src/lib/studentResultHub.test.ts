@@ -3,6 +3,7 @@ import type { Attempt, Exam } from "@/types/omr";
 import type { RosterStudent } from "@/lib/rosterStorage";
 import {
     buildStudentAttemptSeries,
+    buildStudentRetakeScoreDelta,
     buildStudentResultHref,
     buildCumulativeExamMap,
     filterCumulativeAttemptsForStudent,
@@ -533,10 +534,40 @@ describe("student result hub", () => {
         ]);
     });
 
+    it("does not publish percentages or retake deltas for completely ungraded attempts", () => {
+        const original = attempt({ id: "original-ungraded", studentId: "student-1", score: 0, totalScore: 0 });
+        const retake = attempt({
+            id: "retake-ungraded",
+            studentId: "student-1",
+            score: 0,
+            totalScore: 0,
+            retake: { sourceAttemptId: original.id, questionIds: [], mode: "wrong", createdAt: "2026-06-02T10:00:00.000Z" },
+        });
+
+        expect(buildStudentAttemptSeries(retake, [original, retake])).toEqual([
+            expect.objectContaining({ attempt: original, scorePercent: null, scoreDelta: null }),
+            expect.objectContaining({ attempt: retake, scorePercent: null, scoreDelta: null }),
+        ]);
+    });
+
+    it("refuses an attempt-page retake comparison unless both scores are gradable", () => {
+        expect(buildStudentRetakeScoreDelta(
+            { totalScore: 100, scorePercent: 80 },
+            { totalScore: 0, scorePercent: 0 },
+        )).toBeNull();
+        expect(buildStudentRetakeScoreDelta(
+            { totalScore: 100, scorePercent: 80 },
+            { totalScore: 100, scorePercent: 60 },
+        )).toEqual({ sourceScorePercent: 60, currentScorePercent: 80, delta: 20 });
+    });
+
     it("rounds fractional source deltas to one decimal place", async () => {
         vi.resetModules();
         vi.doMock("@/lib/scoreUtils", () => ({
             safeScorePercent: (score: number) => score,
+            hasGradableAttemptScore: ({ totalScore, scorePercent }: { totalScore: number; scorePercent: number }) => (
+                totalScore > 0 && Number.isFinite(scorePercent)
+            ),
         }));
 
         const original = attempt({ id: "original", studentId: "student-1", score: 60.01, totalScore: 10 });

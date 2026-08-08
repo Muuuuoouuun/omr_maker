@@ -14,6 +14,8 @@ import type {
     QuestionTiming,
 } from "@/types/omr";
 import { resolveAwayCount } from "@/lib/examAwayTracker";
+import { hasGradableAttemptScore } from "@/lib/scoreUtils";
+export { hasGradableAttemptScore } from "@/lib/scoreUtils";
 
 export interface WeaknessGroup {
     key: string;
@@ -873,15 +875,6 @@ export function summarizeAttemptScore(exam: Exam, attempt: Attempt): AttemptScor
         gradedQuestionCount,
         ungradedQuestionCount,
     };
-}
-
-/** Whether a score summary has a real computed or legacy-stored denominator. */
-export function hasGradableAttemptScore(
-    summary: Pick<AttemptScoreSummary, "totalScore" | "scorePercent">,
-): boolean {
-    return Number.isFinite(summary.totalScore)
-        && summary.totalScore > 0
-        && Number.isFinite(summary.scorePercent);
 }
 
 export function collectQuestionResults(exam: Exam, attempts: Attempt[], scope: QuestionResultScope = {}): QuestionResult[] {

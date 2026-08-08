@@ -74,14 +74,14 @@ export default function CumulativeGrowthPanel({
                     ) : insight ? (
                         <>
                             <div className={styles.reportStatGrid}>
-                                <Stat label="최근 점수" value={`${insight.latestScore}%`} />
-                                <Stat label="이전 대비" value={`${insight.trendDelta > 0 ? "+" : ""}${insight.trendDelta}%p`} />
+                                <Stat label="최근 점수" value={insight.latestScore === null ? "확인 불가" : `${insight.latestScore}%`} />
+                                <Stat label="이전 대비" value={insight.trendDelta === null ? "비교 불가" : `${insight.trendDelta > 0 ? "+" : ""}${insight.trendDelta}%p`} />
                                 <Stat label="원시험" value={`${insight.baseAttemptCount}회`} />
                                 <Stat label="재시험" value={`${insight.retakeAttemptCount}회`} />
                             </div>
                             <div className={styles.reportGrowthDetails}>
                                 <div><strong>반복 약점</strong><p>{insight.weaknessGroups.slice(0, 3).map(group => group.title).join(", ") || "뚜렷한 반복 약점 없음"}</p></div>
-                                <div><strong>최근 원시험</strong><p>{insight.attempts.filter(item => !item.isRetake).slice(0, 4).map(item => `${item.examTitle} ${item.scorePercent}%`).join(" · ") || "기록 없음"}</p></div>
+                                <div><strong>최근 원시험</strong><p>{insight.attempts.filter(item => !item.isRetake).slice(0, 4).map(item => `${item.examTitle} ${item.scorePercent === null ? "미채점" : `${item.scorePercent}%`}`).join(" · ") || "기록 없음"}</p></div>
                             </div>
                         </>
                     ) : (

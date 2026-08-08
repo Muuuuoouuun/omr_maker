@@ -23,7 +23,7 @@ export interface StudentProfileAttemptInsight {
     examId: string;
     examTitle: string;
     finishedAt: string;
-    scorePercent: number;
+    scorePercent: number | null;
     elapsedTimeSec: number;
     totalTrackedTimeSec: number;
     averageQuestionTimeSec: number;
@@ -90,10 +90,10 @@ export type StudentProfileTagInsight = QuestionResultTagStat;
 
 export interface StudentProfileInsight {
     attempts: StudentProfileAttemptInsight[];
-    averageScore: number;
-    bestScore: number;
-    latestScore: number;
-    trendDelta: number;
+    averageScore: number | null;
+    bestScore: number | null;
+    latestScore: number | null;
+    trendDelta: number | null;
     averageElapsedTimeSec: number;
     averageQuestionTimeSec: number;
     totalTrackedTimeSec: number;
@@ -240,15 +240,13 @@ export function buildStudentProfileInsight(
         attempt,
         resolveAttemptScore(attempt, examById.get(attempt.examId)),
     ]));
-    const gradableMatchedAttempts = matchedAttempts.filter(attempt => (
-        hasGradableAttemptScore(resolvedScoreByAttempt.get(attempt)!)
-    ));
-    const baseMatchedAttempts = baseAttemptsOnly(gradableMatchedAttempts);
-    const retakeMatchedAttempts = retakeAttemptsOnly(gradableMatchedAttempts);
+    const baseMatchedAttempts = baseAttemptsOnly(matchedAttempts);
+    const retakeMatchedAttempts = retakeAttemptsOnly(matchedAttempts);
     const baseAttemptIds = new Set(baseMatchedAttempts.map(attempt => attempt.id));
 
-    const attemptInsights = gradableMatchedAttempts.map(attempt => {
+    const attemptInsights = matchedAttempts.map(attempt => {
         const exam = examById.get(attempt.examId);
+        const resolvedScore = resolvedScoreByAttempt.get(attempt)!;
         const results = exam ? getAttemptQuestionResults(exam, attempt) : [];
         const behavior = summarizeAttemptBehavior(attempt);
         const wrongQuestionNumbers = sortedUniqueQuestionNumbers(
@@ -267,7 +265,7 @@ export function buildStudentProfileInsight(
             examId: attempt.examId,
             examTitle: attempt.examTitle || exam?.title || "시험",
             finishedAt: attempt.finishedAt,
-            scorePercent: resolvedScoreByAttempt.get(attempt)!.scorePercent,
+            scorePercent: hasGradableAttemptScore(resolvedScore) ? resolvedScore.scorePercent : null,
             elapsedTimeSec: behavior.elapsedTimeSec,
             totalTrackedTimeSec: behavior.totalTrackedTimeSec,
             averageQuestionTimeSec: behavior.averageTimeSec,
@@ -285,17 +283,16 @@ export function buildStudentProfileInsight(
         };
     });
 
-    const scoredAttempts = attemptInsights.filter(attempt => (
-        baseAttemptIds.has(attempt.id) && Number.isFinite(attempt.scorePercent)
-    ));
-    const averageScore = scoredAttempts.length > 0
-        ? Math.round(scoredAttempts.reduce((sum, attempt) => sum + attempt.scorePercent, 0) / scoredAttempts.length)
-        : student.avgScore;
-    const bestScore = scoredAttempts.length > 0
-        ? Math.max(...scoredAttempts.map(attempt => attempt.scorePercent))
-        : student.avgScore;
-    const latestScore = scoredAttempts[0]?.scorePercent ?? student.avgScore;
-    const previousScore = scoredAttempts[1]?.scorePercent ?? latestScore;
+    const scoreValues = attemptInsights
+        .filter(attempt => baseAttemptIds.has(attempt.id))
+        .map(attempt => attempt.scorePercent)
+        .filter((score): score is number => score !== null && Number.isFinite(score));
+    const averageScore = scoreValues.length > 0
+        ? Math.round(scoreValues.reduce((sum, score) => sum + score, 0) / scoreValues.length)
+        : null;
+    const bestScore = scoreValues.length > 0 ? Math.max(...scoreValues) : null;
+    const latestScore = scoreValues[0] ?? null;
+    const previousScore = scoreValues[1] ?? latestScore;
 
     const attemptsByExam = new Map<string, Attempt[]>();
     for (const attempt of baseMatchedAttempts) {
@@ -390,13 +387,13 @@ export function buildStudentProfileInsight(
         })
         .slice(0, weaknessLimit);
     const tagStats = buildQuestionResultTagStats(baseQuestionResults, "label").slice(0, weaknessLimit);
-    const elapsedTimes = baseMatchedAttempts.map(attemptElapsedTimeSec).filter(value => value > 0);
-    const questionTimes = baseMatchedAttempts
+    const elapsedTimes = matchedAttempts.map(attemptElapsedTimeSec).filter(value => value > 0);
+    const questionTimes = matchedAttempts
         .flatMap(attempt => attempt.questionTimings || [])
         .map(timing => Math.max(0, timing.totalTimeSec))
         .filter(value => value > 0);
     const totalTrackedTimeSec = questionTimes.reduce((sum, value) => sum + value, 0);
-    const focusLossCount = baseMatchedAttempts.reduce((sum, attempt) => (
+    const focusLossCount = matchedAttempts.reduce((sum, attempt) => (
         sum + resolveAwayCount(attempt)
     ), 0);
 
@@ -405,7 +402,7 @@ export function buildStudentProfileInsight(
         averageScore,
         bestScore,
         latestScore,
-        trendDelta: latestScore - previousScore,
+        trendDelta: latestScore === null || previousScore === null ? null : latestScore - previousScore,
         averageElapsedTimeSec: roundedAverage(elapsedTimes),
         averageQuestionTimeSec: roundedAverage(questionTimes),
         totalTrackedTimeSec,

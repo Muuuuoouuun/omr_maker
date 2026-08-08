@@ -201,6 +201,10 @@ describe("ReportPanel", () => {
         expect(scoreSection).toHaveTextContent("비교 불가");
         expect(scoreSection).not.toHaveTextContent("0%");
         expect(screen.getByRole("region", { name: "핵심 해석" })).not.toHaveTextContent("0%를 기록");
+        const weaknessSection = screen.getByRole("region", { name: "주요 오답과 약점" });
+        expect(weaknessSection).toHaveTextContent("근거 없음");
+        expect(weaknessSection).toHaveTextContent("미채점");
+        expect(weaknessSection).not.toHaveTextContent("뚜렷한 약점 없음");
     });
 
     it("renders all five personal report signals together with the cumulative headline", () => {
@@ -247,6 +251,45 @@ describe("ReportPanel", () => {
         expect(within(signals).getByText("반복 약점").closest("div")).toHaveTextContent("뚜렷한 반복 없음");
         expect(within(signals).getByText("평균 풀이 시간").closest("div")).toHaveTextContent("기록 없음");
         expect(screen.getByText("82%를 기록했고, 현재 시험에서 확인된 오답·미응답이 없습니다.")).toBeInTheDocument();
+    });
+
+    it("keeps ungraded cumulative activity visible without rendering null as a score", () => {
+        renderReport({
+            insight: cumulativeInsight({
+                averageScore: null,
+                bestScore: null,
+                latestScore: null,
+                trendDelta: null,
+                attempts: [{
+                    id: "ungraded-history",
+                    examId: "exam-ungraded",
+                    examTitle: "미채점 서술형",
+                    finishedAt: "2026-08-07T00:30:00.000Z",
+                    scorePercent: null,
+                    elapsedTimeSec: 1_800,
+                    totalTrackedTimeSec: 1_800,
+                    averageQuestionTimeSec: 60,
+                    wrongQuestionNumbers: [],
+                    unansweredQuestionNumbers: [],
+                    slowQuestionNumbers: [],
+                    revisitedQuestionNumbers: [],
+                    answerChangedQuestionNumbers: [],
+                    focusLossCount: 1,
+                    handwritingArchived: true,
+                    handwritingLabel: "1쪽",
+                    detailHref: "/teacher/attempt/ungraded-history",
+                    isRetake: false,
+                    retakeQuestionCount: 0,
+                }],
+            }),
+        });
+
+        const history = screen.getByRole("region", { name: "상세 응시 이력" });
+        expect(history).toHaveTextContent("평균확인 불가");
+        expect(history).toHaveTextContent("최고확인 불가");
+        expect(history).toHaveTextContent("미채점 서술형");
+        expect(history).toHaveTextContent("미채점");
+        expect(history).not.toHaveTextContent("null%");
     });
 
     it("does not leak cumulative weakness or elapsed time when growth reports are locked", () => {

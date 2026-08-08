@@ -213,11 +213,15 @@ export default function ReportPanel({
                         <div className={styles.reportTwoColumns}>
                             <div>
                                 <strong>상위 오답·미응답</strong>
-                                <p>{analytics.wrongResults.slice(0, 5).map(result => `${result.questionNumber}번`).join(", ") || "없음"}</p>
+                                <p>{hasGradableScore
+                                    ? analytics.wrongResults.slice(0, 5).map(result => `${result.questionNumber}번`).join(", ") || "없음"
+                                    : "근거 없음"}</p>
                             </div>
                             <div>
                                 <strong>약점 그룹</strong>
-                                <p>{analytics.weaknessGroups.slice(0, 3).map(group => group.title).join(", ") || "뚜렷한 약점 없음"}</p>
+                                <p>{hasGradableScore
+                                    ? analytics.weaknessGroups.slice(0, 3).map(group => group.title).join(", ") || "뚜렷한 약점 없음"
+                                    : "미채점"}</p>
                             </div>
                         </div>
                     ) : (
@@ -263,8 +267,8 @@ export default function ReportPanel({
                             {reportCumulativeInsight?.attempts.length ? (
                                 <>
                                     <div className={styles.reportStatGrid}>
-                                        <Stat label="평균" value={`${reportCumulativeInsight.averageScore}%`} />
-                                        <Stat label="최고" value={`${reportCumulativeInsight.bestScore}%`} />
+                                        <Stat label="평균" value={reportCumulativeInsight.averageScore === null ? "확인 불가" : `${reportCumulativeInsight.averageScore}%`} />
+                                        <Stat label="최고" value={reportCumulativeInsight.bestScore === null ? "확인 불가" : `${reportCumulativeInsight.bestScore}%`} />
                                         <Stat label="원시험" value={`${reportCumulativeInsight.baseAttemptCount}회`} />
                                         <Stat label="재시험" value={`${reportCumulativeInsight.retakeAttemptCount}회`} />
                                     </div>
@@ -277,7 +281,7 @@ export default function ReportPanel({
                                                 style={{ display: "flex", justifyContent: "space-between", gap: "0.75rem", fontSize: "0.78rem" }}
                                             >
                                                 <span>{item.examTitle}{item.isRetake ? " · 재시험" : ""}</span>
-                                                <span>{item.scorePercent}% · {formatKoreanDateTime(item.finishedAt)}</span>
+                                                <span>{item.scorePercent === null ? "미채점" : `${item.scorePercent}%`} · {formatKoreanDateTime(item.finishedAt)}</span>
                                             </Link>
                                         ))}
                                     </div>

@@ -55,6 +55,7 @@ import {
 } from "@/lib/teacherFeedbackClient";
 import {
     buildStudentAttemptSeries,
+    buildStudentRetakeScoreDelta,
     buildCumulativeExamMap,
     filterCumulativeAttemptsForStudent,
     markUnresolvedGrowthAttempt,
@@ -604,13 +605,16 @@ export default function TeacherAttemptPage() {
         const sourceScorePercent = sourceExam
             ? summarizeAttemptScore(sourceExam, sourceAttempt).scorePercent
             : safeScorePercent(sourceAttempt.score, sourceAttempt.totalScore);
+        const sourceTotalScore = sourceExam
+            ? summarizeAttemptScore(sourceExam, sourceAttempt).totalScore
+            : sourceAttempt.totalScore;
         const currentScorePercent = analytics?.score.scorePercent
             ?? safeScorePercent(attempt.score, attempt.totalScore);
-        return {
-            sourceScorePercent,
-            currentScorePercent,
-            delta: currentScorePercent - sourceScorePercent,
-        };
+        const currentTotalScore = analytics?.score.totalScore ?? attempt.totalScore;
+        return buildStudentRetakeScoreDelta(
+            { totalScore: currentTotalScore, scorePercent: currentScorePercent },
+            { totalScore: sourceTotalScore, scorePercent: sourceScorePercent },
+        );
     }, [analytics, attempt, attemptSeries, cumulativeAttempts, cumulativeExams, exam]);
 
     const handleTeacherMarkupChange = (page: number, newPaths: string[]) => {
