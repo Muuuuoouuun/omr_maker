@@ -22,7 +22,7 @@ vi.mock("./StudentGrowthReport", () => ({
     default: () => <section aria-label="개인 성장 그래프 테스트 대역" />,
 }));
 
-import ReportPanel from "./ReportPanel";
+import ReportPanel, { type RetakeScoreDelta } from "./ReportPanel";
 
 const attempt: Attempt = {
     id: "attempt-2",
@@ -135,11 +135,15 @@ function renderReport({
     model = growthModel,
     status = "ready",
     enabled = true,
+    reportAttempt = attempt,
+    retakeScoreDelta = null,
 }: {
     insight?: StudentProfileInsight | null;
     model?: StudentGrowthReportModel;
     status?: StudentGrowthReportState["status"];
     enabled?: boolean;
+    reportAttempt?: Attempt;
+    retakeScoreDelta?: RetakeScoreDelta | null;
 } = {}) {
     const growthReportState: StudentGrowthReportState = status === "error"
         ? { status, message: "연결에 실패했습니다." }
@@ -150,7 +154,7 @@ function renderReport({
                 : { status, model };
     return render(
         <ReportPanel
-            attempt={attempt}
+            attempt={reportAttempt}
             exam={exam}
             analytics={{
                 score: { earnedScore: 82, totalScore: 100, scorePercent: 82, gradedQuestionCount: 10, ungradedQuestionCount: 0 },
@@ -160,7 +164,7 @@ function renderReport({
             }}
             selectedAttemptLabel="원시험"
             feedbackSummary=""
-            retakeScoreDelta={null}
+            retakeScoreDelta={retakeScoreDelta}
             cumulativeInsight={insight}
             growthReportState={growthReportState}
             studentGrowthReportsEnabled={enabled}
@@ -290,6 +294,34 @@ describe("ReportPanel", () => {
         expect(history).toHaveTextContent("미채점 서술형");
         expect(history).toHaveTextContent("미채점");
         expect(history).not.toHaveTextContent("null%");
+    });
+
+    it("describes an ungraded retake as unavailable instead of claiming the source is missing", () => {
+        renderReport({
+            reportAttempt: {
+                ...attempt,
+                retake: { sourceAttemptId: "original", questionIds: [1], mode: "wrong", createdAt: "2026-08-07T00:00:00.000Z" },
+            },
+            retakeScoreDelta: { status: "score-unavailable" },
+        });
+
+        const headlineSection = screen.getByRole("region", { name: "핵심 해석" });
+        expect(headlineSection).toHaveTextContent("원시험 또는 재시험이 미채점되어 점수 변화를 비교할 수 없습니다.");
+        expect(headlineSection).not.toHaveTextContent("원시험 기록을 찾을 수 없어");
+    });
+
+    it("reserves the missing-source message for a genuinely missing original", () => {
+        renderReport({
+            reportAttempt: {
+                ...attempt,
+                retake: { sourceAttemptId: "missing-original", questionIds: [1], mode: "wrong", createdAt: "2026-08-07T00:00:00.000Z" },
+            },
+            retakeScoreDelta: { status: "source-missing" },
+        });
+
+        expect(screen.getByRole("region", { name: "핵심 해석" })).toHaveTextContent(
+            "연결된 원시험 기록을 찾을 수 없어 점수 변화를 계산하지 못했습니다.",
+        );
     });
 
     it("does not leak cumulative weakness or elapsed time when growth reports are locked", () => {

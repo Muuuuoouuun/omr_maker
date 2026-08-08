@@ -103,9 +103,10 @@ export default function AnswersPanel({
     const currentTotalScore = score?.totalScore ?? attempt.totalScore;
     const hasGradableScore = hasGradableAttemptScore({ totalScore: currentTotalScore, scorePercent: currentPercent });
     const storedPercent = safeScorePercent(attempt.score, attempt.totalScore);
+    const storedScoreIsGradable = hasGradableAttemptScore({ totalScore: attempt.totalScore, scorePercent: storedPercent });
     const scoreRegraded = !!score
-        && attempt.totalScore > 0
-        && score.scorePercent !== storedPercent;
+        && hasGradableScore
+        && (!storedScoreIsGradable || score.scorePercent !== storedPercent);
     const visibleQuestionResults = wrongOnly
         ? questionResults.filter(result => result.status === "wrong" || result.status === "unanswered")
         : questionResults;
@@ -142,7 +143,9 @@ export default function AnswersPanel({
                     <StatusPill
                         tone="warning"
                         label="현재 정답 기준 재채점됨"
-                        detail={`제출 당시 ${attempt.score}점 (${storedPercent}%)`}
+                        detail={storedScoreIsGradable
+                            ? `제출 당시 ${attempt.score}점 (${storedPercent}%)`
+                            : "제출 당시 미채점"}
                         style={{ marginTop: "0.65rem" }}
                     />
                 )}

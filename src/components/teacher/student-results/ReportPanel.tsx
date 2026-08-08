@@ -6,6 +6,7 @@ import type { Attempt, Exam, QuestionResult } from "@/types/omr";
 import { hasGradableAttemptScore, type AttemptScoreSummary, type WeaknessGroup } from "@/lib/premiumAnalytics";
 import type { StudentProfileInsight } from "@/lib/studentProfileAnalytics";
 import { buildStudentReportHeadline } from "@/lib/studentReportHeadline";
+import type { StudentRetakeScoreDelta } from "@/lib/studentResultHub";
 import { formatKoreanDateTime } from "@/lib/pure";
 import { safeScorePercent } from "@/lib/scoreUtils";
 import StudentGrowthReport, { type StudentGrowthReportState } from "./StudentGrowthReport";
@@ -23,11 +24,7 @@ export interface ReportAnalyticsData {
     weaknessGroups: WeaknessGroup[];
 }
 
-export interface RetakeScoreDelta {
-    sourceScorePercent: number;
-    currentScorePercent: number;
-    delta: number;
-}
+export type RetakeScoreDelta = StudentRetakeScoreDelta;
 
 interface ReportPanelProps {
     attempt: Attempt;
@@ -95,7 +92,7 @@ export default function ReportPanel({
         ? "채점 가능한 문항이 없어 점수와 비교 지표를 표시하지 않습니다."
         : !analytics
         ? `제출 당시 저장된 점수 ${scorePercent}%를 표시합니다. 문항 분석은 시험 정보를 불러온 뒤 확인할 수 있습니다.`
-        : retakeScoreDelta
+        : retakeScoreDelta?.status === "comparable"
             ? retakeScoreDelta.delta > 0
                 ? `재시험에서 ${retakeScoreDelta.delta}%p 상승했습니다.`
                 : retakeScoreDelta.delta < 0
@@ -188,11 +185,13 @@ export default function ReportPanel({
                             <div><dt>평균 풀이 시간</dt><dd>{averageElapsedTime}</dd></div>
                         </dl>
                         {attempt.retake && (
-                            retakeScoreDelta ? (
+                            retakeScoreDelta?.status === "comparable" ? (
                                 <p className={styles.reportDelta}>
                                     원시험 {retakeScoreDelta.sourceScorePercent}% → 재시험 {retakeScoreDelta.currentScorePercent}%
                                     <strong>{retakeScoreDelta.delta > 0 ? "+" : ""}{retakeScoreDelta.delta}%p</strong>
                                 </p>
+                            ) : retakeScoreDelta?.status === "score-unavailable" ? (
+                                <p className={styles.emptyText}>원시험 또는 재시험이 미채점되어 점수 변화를 비교할 수 없습니다.</p>
                             ) : (
                                 <p className={styles.emptyText}>연결된 원시험 기록을 찾을 수 없어 점수 변화를 계산하지 못했습니다.</p>
                             )

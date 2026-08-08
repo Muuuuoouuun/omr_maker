@@ -550,15 +550,78 @@ describe("student result hub", () => {
         ]);
     });
 
-    it("refuses an attempt-page retake comparison unless both scores are gradable", () => {
+    it("uses the current exam answer key as the canonical score for legacy stored zero-over-zero attempts", () => {
+        const canonicalExam: Exam = {
+            id: "exam-1",
+            title: "중간고사",
+            createdAt: "2026-06-01T00:00:00.000Z",
+            questions: [{ id: 1, number: 1, answer: 2, score: 10 }],
+        };
+        const legacy = attempt({
+            id: "legacy-score",
+            studentId: "student-1",
+            score: 0,
+            totalScore: 0,
+            answers: { 1: 2 },
+        });
+
+        expect(buildStudentAttemptSeries(
+            legacy,
+            [legacy],
+            new Map([[canonicalExam.id, canonicalExam]]),
+        )).toEqual([
+            expect.objectContaining({
+                attempt: legacy,
+                scorePercent: 100,
+                scoreDelta: null,
+                scoreSummary: expect.objectContaining({ earnedScore: 10, totalScore: 10, scorePercent: 100 }),
+            }),
+        ]);
+    });
+
+    it("derives retake deltas from the same canonical exam summaries", () => {
+        const canonicalExam: Exam = {
+            id: "exam-1",
+            title: "중간고사",
+            createdAt: "2026-06-01T00:00:00.000Z",
+            questions: [
+                { id: 1, number: 1, answer: 2, score: 5 },
+                { id: 2, number: 2, answer: 3, score: 5 },
+            ],
+        };
+        const original = attempt({ id: "legacy-original", studentId: "student-1", score: 0, totalScore: 0, answers: { 1: 2, 2: 1 } });
+        const retake = attempt({
+            id: "legacy-retake",
+            studentId: "student-1",
+            score: 0,
+            totalScore: 0,
+            answers: { 1: 2, 2: 3 },
+            retake: { sourceAttemptId: original.id, questionIds: [2], mode: "wrong", createdAt: "2026-06-02T00:00:00.000Z" },
+        });
+
+        expect(buildStudentAttemptSeries(
+            retake,
+            [original, retake],
+            new Map([[canonicalExam.id, canonicalExam]]),
+        )).toEqual([
+            expect.objectContaining({ attempt: original, scorePercent: 50, scoreDelta: null }),
+            expect.objectContaining({ attempt: retake, scorePercent: 100, scoreDelta: 50 }),
+        ]);
+    });
+
+    it("distinguishes a missing retake source from unavailable score evidence", () => {
         expect(buildStudentRetakeScoreDelta(
             { totalScore: 100, scorePercent: 80 },
+            null,
+        )).toEqual({ status: "source-missing" });
+        expect(buildStudentRetakeScoreDelta(
             { totalScore: 0, scorePercent: 0 },
-        )).toBeNull();
+            { totalScore: 100, scorePercent: 80 },
+        )).toEqual({ status: "score-unavailable" });
         expect(buildStudentRetakeScoreDelta(
             { totalScore: 100, scorePercent: 80 },
             { totalScore: 100, scorePercent: 60 },
-        )).toEqual({ sourceScorePercent: 60, currentScorePercent: 80, delta: 20 });
+        )).toEqual({ status: "comparable", sourceScorePercent: 60, currentScorePercent: 80, delta: 20 });
     });
 
     it("rounds fractional source deltas to one decimal place", async () => {

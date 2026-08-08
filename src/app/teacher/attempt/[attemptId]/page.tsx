@@ -487,9 +487,10 @@ export default function TeacherAttemptPage() {
 
     const attemptSeries = useMemo(() => {
         if (!attempt) return [];
-        const series = buildStudentAttemptSeries(attempt, peerAttempts.length ? peerAttempts : [attempt]);
-        return series.length > 0 ? series : buildStudentAttemptSeries(attempt, [attempt]);
-    }, [attempt, peerAttempts]);
+        const examById = exam ? new Map([[exam.id, exam]]) : new Map<string, Exam>();
+        const series = buildStudentAttemptSeries(attempt, peerAttempts.length ? peerAttempts : [attempt], examById);
+        return series.length > 0 ? series : buildStudentAttemptSeries(attempt, [attempt], examById);
+    }, [attempt, exam, peerAttempts]);
 
     const cumulativeInsight = useMemo(() => {
         if (!attempt || cumulativeAttemptId !== attempt.id || !rosterStudent) return null;
@@ -598,23 +599,25 @@ export default function TeacherAttemptPage() {
             ...attemptSeries.map(item => item.attempt),
             ...cumulativeAttempts,
         ].find(item => item.id === attempt.retake?.sourceAttemptId && item.id !== attempt.id);
-        if (!sourceAttempt) return null;
+        const currentSummary = attemptSeries.find(item => item.attempt.id === attempt.id)?.scoreSummary
+            ?? analytics?.score
+            ?? {
+                totalScore: attempt.totalScore,
+                scorePercent: safeScorePercent(attempt.score, attempt.totalScore),
+            };
+        if (!sourceAttempt) return buildStudentRetakeScoreDelta(currentSummary, null);
+        const sourceSeriesSummary = attemptSeries.find(item => item.attempt.id === sourceAttempt.id)?.scoreSummary;
         const sourceExam = sourceAttempt.examId === exam?.id
             ? exam
             : cumulativeExams.find(item => item.id === sourceAttempt.examId);
-        const sourceScorePercent = sourceExam
-            ? summarizeAttemptScore(sourceExam, sourceAttempt).scorePercent
-            : safeScorePercent(sourceAttempt.score, sourceAttempt.totalScore);
-        const sourceTotalScore = sourceExam
-            ? summarizeAttemptScore(sourceExam, sourceAttempt).totalScore
-            : sourceAttempt.totalScore;
-        const currentScorePercent = analytics?.score.scorePercent
-            ?? safeScorePercent(attempt.score, attempt.totalScore);
-        const currentTotalScore = analytics?.score.totalScore ?? attempt.totalScore;
-        return buildStudentRetakeScoreDelta(
-            { totalScore: currentTotalScore, scorePercent: currentScorePercent },
-            { totalScore: sourceTotalScore, scorePercent: sourceScorePercent },
-        );
+        const sourceSummary = sourceSeriesSummary
+            ?? (sourceExam
+                ? summarizeAttemptScore(sourceExam, sourceAttempt)
+                : {
+                    totalScore: sourceAttempt.totalScore,
+                    scorePercent: safeScorePercent(sourceAttempt.score, sourceAttempt.totalScore),
+                });
+        return buildStudentRetakeScoreDelta(currentSummary, sourceSummary);
     }, [analytics, attempt, attemptSeries, cumulativeAttempts, cumulativeExams, exam]);
 
     const handleTeacherMarkupChange = (page: number, newPaths: string[]) => {

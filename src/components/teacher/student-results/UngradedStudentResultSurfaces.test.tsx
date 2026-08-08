@@ -34,6 +34,26 @@ const ungradedAttempt: Attempt = {
 afterEach(cleanup);
 
 describe("ungraded student result surfaces", () => {
+    it("uses the canonical series score in the header for a legacy stored zero-over-zero attempt", () => {
+        render(
+            <StudentResultHeader
+                attempt={ungradedAttempt}
+                series={[{
+                    attempt: ungradedAttempt,
+                    kind: "original",
+                    ordinal: 1,
+                    scorePercent: 100,
+                    scoreDelta: null,
+                    scoreSummary: { earnedScore: 10, totalScore: 10, scorePercent: 100, source: "questionResults", gradedQuestionCount: 1, ungradedQuestionCount: 0 },
+                }]}
+                activeView="answers"
+            />,
+        );
+
+        expect(screen.getByLabelText("점수 100점")).toHaveTextContent("100점");
+        expect(screen.queryByText("미채점")).not.toBeInTheDocument();
+    });
+
     it("labels the result header as ungraded instead of zero points", () => {
         render(
             <StudentResultHeader
@@ -44,6 +64,7 @@ describe("ungraded student result surfaces", () => {
                     ordinal: 1,
                     scorePercent: null,
                     scoreDelta: null,
+                    scoreSummary: { earnedScore: 0, totalScore: 0, scorePercent: 0, source: "questionResults", gradedQuestionCount: 0, ungradedQuestionCount: 1 },
                 }]}
                 activeView="answers"
             />,
@@ -75,5 +96,29 @@ describe("ungraded student result surfaces", () => {
         expect(summary).toHaveTextContent("미채점");
         expect(summary).not.toHaveTextContent("0%");
         expect(summary).not.toHaveTextContent("0 / 0점");
+    });
+
+    it("announces canonical grading when a legacy stored zero-over-zero result becomes gradable", () => {
+        render(
+            <AnswersPanel
+                attempt={ungradedAttempt}
+                questionResults={[]}
+                counts={{ correctCount: 1, incorrectCount: 0, unansweredCount: 0, ungradedCount: 0 }}
+                score={{ earnedScore: 10, totalScore: 10, scorePercent: 100, gradedQuestionCount: 1, ungradedQuestionCount: 0 }}
+                subQuestionFilter="needs_review"
+                onSubQuestionFilterChange={() => {}}
+                onReviewSubQuestion={async () => {}}
+                savingSubQuestionKey={null}
+                answerDrafts={{}}
+                onAnswerDraftChange={() => {}}
+                onAnswerStudentQuestion={async () => {}}
+                savingQuestionId={null}
+            />,
+        );
+
+        const summary = screen.getByRole("region", { name: "현재 채점 요약" });
+        expect(summary).toHaveTextContent("100%");
+        expect(summary).toHaveTextContent("현재 정답 기준 재채점됨");
+        expect(summary).toHaveTextContent("제출 당시 미채점");
     });
 });

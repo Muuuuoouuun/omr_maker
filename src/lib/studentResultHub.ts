@@ -1,6 +1,7 @@
 import type { Attempt, Exam } from "@/types/omr";
 import type { RosterStudent } from "@/lib/rosterStorage";
-import { hasGradableAttemptScore, safeScorePercent } from "@/lib/scoreUtils";
+import { resolveAttemptScore, type ResolvedAttemptScore } from "@/lib/attemptScores";
+import { hasGradableAttemptScore } from "@/lib/scoreUtils";
 import { attemptMatchesStudentProfile } from "@/utils/storage";
 
 export const STUDENT_RESULT_VIEWS = ["answers", "handwriting", "report", "analytics"] as const;
@@ -13,20 +14,29 @@ export interface StudentAttemptSeriesItem {
     ordinal: number;
     scorePercent: number | null;
     scoreDelta: number | null;
+    scoreSummary: ResolvedAttemptScore;
 }
 
-export interface StudentRetakeScoreDelta {
-    sourceScorePercent: number;
-    currentScorePercent: number;
-    delta: number;
-}
+export type StudentRetakeScoreDelta =
+    | { status: "source-missing" }
+    | { status: "score-unavailable" }
+    | {
+        status: "comparable";
+        sourceScorePercent: number;
+        currentScorePercent: number;
+        delta: number;
+    };
 
 export function buildStudentRetakeScoreDelta(
     current: { totalScore: number; scorePercent: number },
-    source: { totalScore: number; scorePercent: number },
-): StudentRetakeScoreDelta | null {
-    if (!hasGradableAttemptScore(current) || !hasGradableAttemptScore(source)) return null;
+    source: { totalScore: number; scorePercent: number } | null,
+): StudentRetakeScoreDelta {
+    if (!source) return { status: "source-missing" };
+    if (!hasGradableAttemptScore(current) || !hasGradableAttemptScore(source)) {
+        return { status: "score-unavailable" };
+    }
     return {
+        status: "comparable",
         sourceScorePercent: source.scorePercent,
         currentScorePercent: current.scorePercent,
         delta: current.scorePercent - source.scorePercent,
@@ -235,7 +245,11 @@ export function sameStudentAttempt(left: Attempt, right: Attempt): boolean {
     return guardedLegacyCompatibility(left, right);
 }
 
-export function buildStudentAttemptSeries(selectedAttempt: Attempt, attempts: Attempt[]): StudentAttemptSeriesItem[] {
+export function buildStudentAttemptSeries(
+    selectedAttempt: Attempt,
+    attempts: Attempt[],
+    examById: ReadonlyMap<string, Exam> = new Map(),
+): StudentAttemptSeriesItem[] {
     const relatedAttempts = attempts
         .filter(attempt => attempt.examId === selectedAttempt.examId && sameStudentAttempt(selectedAttempt, attempt))
         .sort((left, right) => {
@@ -243,25 +257,29 @@ export function buildStudentAttemptSeries(selectedAttempt: Attempt, attempts: At
             if (kindDifference) return kindDifference;
             return timestamp(left) - timestamp(right) || left.id.localeCompare(right.id);
         });
-    const scoreByAttemptId = new Map(relatedAttempts.map(attempt => {
-        const scorePercent = safeScorePercent(attempt.score, attempt.totalScore);
-        return [attempt.id, hasGradableAttemptScore({ totalScore: attempt.totalScore, scorePercent }) ? scorePercent : null] as const;
-    }));
+    const scoreSummaryByAttemptId = new Map(relatedAttempts.map(attempt => [
+        attempt.id,
+        resolveAttemptScore(attempt, examById.get(attempt.examId)),
+    ]));
     let originalOrdinal = 0;
     let retakeOrdinal = 0;
 
     return relatedAttempts.map(attempt => {
         const kind = attempt.retake ? "retake" : "original";
-        const rawScorePercent = safeScorePercent(attempt.score, attempt.totalScore);
-        const scorePercent = hasGradableAttemptScore({ totalScore: attempt.totalScore, scorePercent: rawScorePercent })
-            ? rawScorePercent
+        const scoreSummary = scoreSummaryByAttemptId.get(attempt.id)!;
+        const scorePercent = hasGradableAttemptScore(scoreSummary)
+            ? scoreSummary.scorePercent
             : null;
-        const sourceScore = attempt.retake ? scoreByAttemptId.get(attempt.retake.sourceAttemptId) : undefined;
+        const sourceSummary = attempt.retake ? scoreSummaryByAttemptId.get(attempt.retake.sourceAttemptId) : undefined;
+        const sourceScore = sourceSummary && hasGradableAttemptScore(sourceSummary)
+            ? sourceSummary.scorePercent
+            : null;
         return {
             attempt,
             kind,
             ordinal: kind === "original" ? ++originalOrdinal : ++retakeOrdinal,
             scorePercent,
+            scoreSummary,
             scoreDelta: scorePercent === null || sourceScore == null
                 ? null
                 : Math.round((scorePercent - sourceScore) * 10) / 10,

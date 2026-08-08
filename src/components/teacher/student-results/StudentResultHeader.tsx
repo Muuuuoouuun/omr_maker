@@ -4,7 +4,6 @@ import Link from "next/link";
 import { Check } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { formatKoreanDateTime } from "@/lib/pure";
-import { hasGradableAttemptScore, safeScorePercent } from "@/lib/scoreUtils";
 import {
     buildStudentResultHref,
     type StudentAttemptSeriesItem,
@@ -102,8 +101,8 @@ export default function StudentResultHeader({
     activeView,
 }: StudentResultHeaderProps) {
     const title = examTitle || attempt.examTitle;
-    const scorePercent = safeScorePercent(attempt.score, attempt.totalScore);
-    const hasGradableScore = hasGradableAttemptScore({ totalScore: attempt.totalScore, scorePercent });
+    const scorePercent = series.find(item => item.attempt.id === attempt.id)?.scorePercent ?? null;
+    const hasGradableScore = scorePercent !== null;
 
     return (
         <header className={`${styles.header} student-result-report-screen-only`}>

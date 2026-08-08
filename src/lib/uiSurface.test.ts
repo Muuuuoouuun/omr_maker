@@ -1820,7 +1820,7 @@ describe("service UI surface", () => {
             expect(mutation).toMatch(/finally\s*\{[^}]*activeAttemptIdRef\.current === targetAttemptId/);
         }
         expect(teacherAttemptPage).toContain("const series = buildStudentAttemptSeries(");
-        expect(teacherAttemptPage).toContain("return series.length > 0 ? series : buildStudentAttemptSeries(attempt, [attempt]);");
+        expect(teacherAttemptPage).toContain("return series.length > 0 ? series : buildStudentAttemptSeries(attempt, [attempt], examById);");
     });
 
     it("keeps the dashboard overview bento grid usable on mobile", () => {
