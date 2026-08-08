@@ -286,4 +286,80 @@ describe("regional analytics", () => {
             wrongQuestionCount: 3,
         });
     });
+
+    it("keeps a fully ungraded region neutral instead of treating it as zero-score risk", () => {
+        const ungraded = attempt({
+            id: "seoul-ungraded",
+            studentId: "seoul-a::김학생",
+            groupId: "seoul-a",
+            groupName: "A반",
+            regionName: "서울",
+            score: 0,
+            totalScore: 0,
+            answers: {},
+        });
+
+        const scope = buildRegionalLearningScopes({
+            students,
+            groups,
+            attempts: [ungraded],
+            exams: [algebraExam],
+        }).find(item => item.regionName === "서울");
+        const plan = buildRegionalActionPlans({
+            students,
+            groups,
+            attempts: [ungraded],
+            exams: [algebraExam],
+            options: { weaknessKinds: ["concept"] },
+        }).find(item => item.regionName === "서울");
+
+        expect(scope).toMatchObject({ attemptCount: 1, averageScore: null });
+        expect(plan).toMatchObject({
+            averageScore: null,
+            severity: null,
+            recommendedAction: "서울 근거 없음",
+            studentsNeedingAttention: [],
+        });
+        expect(plan?.exams[0]).toMatchObject({ attemptCount: 1, averageScore: null });
+    });
+
+    it("excludes ungraded rows from mixed regional score and risk calculations", () => {
+        const graded = attempt({
+            id: "seoul-graded",
+            studentId: "seoul-a::김학생",
+            groupId: "seoul-a",
+            groupName: "A반",
+            regionName: "서울",
+            score: 80,
+            totalScore: 100,
+            answers: { 1: 1, 2: 2 },
+        });
+        const ungraded = attempt({
+            id: "seoul-ungraded",
+            studentId: "seoul-a::이학생",
+            studentName: "이학생",
+            groupId: "seoul-a",
+            groupName: "A반",
+            regionName: "서울",
+            score: 0,
+            totalScore: 0,
+            answers: {},
+        });
+
+        const plan = buildRegionalActionPlans({
+            students,
+            groups,
+            attempts: [graded, ungraded],
+            exams: [algebraExam],
+            options: { weaknessKinds: ["concept"] },
+        }).find(item => item.regionName === "서울");
+
+        expect(plan).toMatchObject({
+            attemptCount: 2,
+            averageScore: 100,
+            severity: "watch",
+            studentsNeedingAttention: [],
+        });
+        expect(plan?.exams[0]).toMatchObject({ attemptCount: 2, averageScore: 100 });
+    });
 });

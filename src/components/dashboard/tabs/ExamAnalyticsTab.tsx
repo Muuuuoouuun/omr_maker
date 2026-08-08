@@ -259,13 +259,15 @@ function regionalScopeLabel(scope: RegionalLearningScope | undefined): string {
     return scope?.regionName || "전체 지역";
 }
 
-function severityLabel(severity: "watch" | "review" | "urgent"): string {
+function severityLabel(severity: "watch" | "review" | "urgent" | null): string {
+    if (severity === null) return "근거 없음";
     if (severity === "urgent") return "긴급";
     if (severity === "review") return "점검";
     return "관찰";
 }
 
-function severityColor(severity: "watch" | "review" | "urgent"): string {
+function severityColor(severity: "watch" | "review" | "urgent" | null): string {
+    if (severity === null) return "var(--muted)";
     if (severity === "urgent") return "var(--error)";
     if (severity === "review") return "var(--warning)";
     return "var(--primary)";
@@ -1012,6 +1014,7 @@ export default function ExamAnalyticsTab({
         if (!selectedExam || examAttempts.length === 0) return map;
 
         for (const attempt of examAttempts) {
+            if (!hasGradableAttemptScore(summarizeAttemptScore(selectedExam, attempt))) continue;
             const studentKey = studentScopeKeyForAttempt(attempt);
             const topGroup = buildLearningRecommendations(selectedExam, examAttempts, {
                 scope: "student",
@@ -1414,7 +1417,7 @@ export default function ExamAnalyticsTab({
                                                 {plan.regionName}
                                             </div>
                                             <div style={{ fontSize: '0.72rem', color: 'var(--muted)', fontWeight: 800 }}>
-                                                제출 {plan.attemptCount}건 · 평균 {plan.averageScore}점 · 오답 {plan.wrongQuestionCount}문항
+                                                제출 {plan.attemptCount}건 · 평균 {plan.averageScore === null ? "미채점" : `${plan.averageScore}점`} · 오답 {plan.wrongQuestionCount}문항
                                             </div>
                                         </div>
                                         <span style={{
@@ -1437,7 +1440,7 @@ export default function ExamAnalyticsTab({
 
                                     <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '0.75rem', flexWrap: 'wrap' }}>
                                         <div style={{ fontSize: '0.74rem', color: 'var(--muted)', fontWeight: 800 }}>
-                                            주의 학생 {plan.studentsNeedingAttention.length}명
+                                            {plan.averageScore === null ? "주의 학생 근거 없음" : `주의 학생 ${plan.studentsNeedingAttention.length}명`}
                                             {recommendation ? ` · ${recommendation.wrongRate}% 취약` : ""}
                                         </div>
                                         {href && (
@@ -2958,8 +2961,12 @@ export default function ExamAnalyticsTab({
                                 <tbody>
                                     {sortedStudentScores.map((student, i) => {
                                         const behavior = summarizeAttemptBehavior(student.attempt);
-                                        const retakeIds = selectedExam ? buildRetakeQuestionIds(selectedExam, student.attempt) : [];
-                                        const topWeakness = studentWeaknessByAttemptId.get(student.attempt.id);
+                                        const retakeIds = selectedExam && student.hasPerformanceScore
+                                            ? buildRetakeQuestionIds(selectedExam, student.attempt)
+                                            : [];
+                                        const topWeakness = student.hasPerformanceScore
+                                            ? studentWeaknessByAttemptId.get(student.attempt.id)
+                                            : undefined;
                                         return (
                                             <tr
                                                 key={i}
@@ -3002,7 +3009,9 @@ export default function ExamAnalyticsTab({
                                                     );
                                                 })}
                                                 <td style={{ padding: '1rem' }}>
-                                                    {topWeakness ? (
+                                                    {!student.hasPerformanceScore ? (
+                                                        <span style={{ color: 'var(--muted)', fontSize: '0.78rem', fontWeight: 800 }}>근거 없음</span>
+                                                    ) : topWeakness ? (
                                                         <div style={{ minWidth: '120px' }}>
                                                             <div style={{ fontSize: '0.86rem', fontWeight: 900, color: 'var(--foreground)' }}>
                                                                 {topWeakness.title}
@@ -3033,7 +3042,9 @@ export default function ExamAnalyticsTab({
                                                     )}
                                                 </td>
                                                 <td style={{ padding: '1rem' }}>
-                                                    {retakeIds.length > 0 ? (
+                                                    {!student.hasPerformanceScore ? (
+                                                        <span style={{ color: 'var(--muted)', fontSize: '0.78rem', fontWeight: 800 }}>미채점</span>
+                                                    ) : retakeIds.length > 0 ? (
                                                         <PremiumActionLink
                                                             enabled={retakeAssignmentsEnabled}
                                                             href={buildRetakeHref(selectedExamId, student.attempt.id, retakeIds, "wrong")}

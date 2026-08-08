@@ -251,10 +251,38 @@ describe("ExamAnalyticsReportOverview", () => {
         expect(matrixRow).not.toHaveTextContent("유지");
     });
 
+    it("keeps fully ungraded student and regional operation conclusions neutral", () => {
+        const { exam, attempts } = buildUngradedExamAnalyticsFixture();
+        const groupedAttempts = attempts.map((attempt, index) => ({
+            ...attempt,
+            studentId: `student-${index + 1}`,
+            groupId: "class-a",
+            groupName: "A반",
+            regionName: "서울",
+        }));
+        render(<ExamAnalyticsTab exams={[exam]} attempts={groupedAttempts} currentPlan="pro" />);
+
+        fireEvent.click(screen.getByRole("tab", { name: "학생·반" }));
+        const studentRow = screen.getByRole("row", { name: /학생 1/ });
+        expect(studentRow).toHaveTextContent("미채점");
+        expect(studentRow).toHaveTextContent("근거 없음");
+        expect(studentRow).not.toHaveTextContent("안정");
+        expect(studentRow).not.toHaveTextContent("완료");
+
+        fireEvent.click(screen.getByRole("tab", { name: "운영" }));
+        const operationsCard = screen.getByRole("heading", { name: "지역별 다음 액션" }).closest<HTMLElement>(".card");
+        expect(operationsCard).not.toBeNull();
+        expect(within(operationsCard!).getByText(/평균 미채점/)).toBeInTheDocument();
+        expect(within(operationsCard!).getByText("근거 없음")).toBeInTheDocument();
+        expect(operationsCard).not.toHaveTextContent("관찰");
+        expect(operationsCard).not.toHaveTextContent("추가 조치 없음");
+        expect(within(operationsCard!).queryByText("재시험 만들기")).not.toBeInTheDocument();
+    });
+
     it.each([
         ["partial" as const, "일부 제출 기준의 중간 결과입니다."],
         ["stale" as const, "최신 제출이 아직 반영되지 않았을 수 있습니다."],
-    ])("keeps the %s qualifier persistent and links it to the metric section", (sampleStatus, copy) => {
+    ])("keeps the %s qualifier persistent and links it to the metric and headline sections", (sampleStatus, copy) => {
         const { exam, attempts } = buildUngradedExamAnalyticsFixture();
         render(
             <ExamAnalyticsTab
@@ -270,6 +298,10 @@ describe("ExamAnalyticsReportOverview", () => {
         expect(qualifier).toHaveAttribute("id", "exam-analytics-sample-qualifier");
         expect(screen.getAllByText(copy)).toHaveLength(1);
         expect(screen.getByRole("region", { name: "시험 핵심 지표" })).toHaveAttribute(
+            "aria-describedby",
+            "exam-analytics-sample-qualifier",
+        );
+        expect(screen.getByRole("region", { name: "시험 핵심 해석" })).toHaveAttribute(
             "aria-describedby",
             "exam-analytics-sample-qualifier",
         );
@@ -391,6 +423,10 @@ describe("ExamAnalyticsReportOverview", () => {
         );
 
         expect(screen.getByRole("region", { name: "시험 핵심 지표" })).toHaveAttribute(
+            "aria-describedby",
+            "sample-note",
+        );
+        expect(screen.getByRole("region", { name: "시험 핵심 해석" })).toHaveAttribute(
             "aria-describedby",
             "sample-note",
         );

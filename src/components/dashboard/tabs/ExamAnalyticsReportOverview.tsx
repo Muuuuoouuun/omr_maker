@@ -116,6 +116,7 @@ export default function ExamAnalyticsReportOverview({
                 title="시험 핵심 해석"
                 density="compact"
                 className={`${styles.reportHeadlineSection} ${headlineToneClasses[headline.tone]}`}
+                ariaDescribedBy={sampleStatusDescriptionId}
             >
                 <h3 className={styles.reportHeadlineTitle}>{headline.title}</h3>
                 <p className={styles.reportHeadlineDetail}>{headline.detail}</p>
