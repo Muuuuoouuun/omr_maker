@@ -126,6 +126,10 @@ export function MiniRegionMetric({ label, value }: { label: string; value: strin
     );
 }
 
+export function RegionalAverageMetric({ averageScore }: { averageScore: number | null }) {
+    return <MiniRegionMetric label="평균" value={averageScore === null ? "미채점" : `${averageScore}점`} />;
+}
+
 // DEV-B: clickable/keyboard-focusable table header that toggles asc/desc
 // sort for a column, with a small arrow indicator. Rendered inside a plain
 // <th> so it inherits the header row's text styling via `font: inherit`.
