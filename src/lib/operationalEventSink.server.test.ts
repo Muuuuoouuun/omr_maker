@@ -240,18 +240,74 @@ describe("operational event sink", () => {
         expect(fetchImpl).not.toHaveBeenCalled();
     });
 
-    it("rejects an envelope whose serialization changes the validated event ID", async () => {
+    it("serializes a plain snapshot instead of invoking an envelope toJSON override", async () => {
         const fetchImpl = vi.fn(async (...args: Parameters<typeof fetch>) => {
             void args;
             return new Response(null, { status: 202 });
         });
         const event = buildOperationalErrorEvent("route-error", new Error("private"));
+        const toJSON = vi.fn(() => ({ ...event, eventId: "corr_01JABCDEF0123456789" }));
         const spoofedEvent = Object.assign({ ...event }, {
-            toJSON: () => ({ ...event, eventId: "corr_01JABCDEF0123456789" }),
+            toJSON,
         });
 
         await expect(deliverOperationalEvent(spoofedEvent, configuredEnv, fetchImpl, 250))
+            .resolves.toEqual({ status: "delivered" });
+        expect(toJSON).not.toHaveBeenCalled();
+        expect(fetchImpl).toHaveBeenCalledTimes(1);
+        const init = fetchImpl.mock.calls[0]?.[1];
+        expect((init?.headers as Record<string, string>)["x-omr-event-id"]).toBe(event.eventId);
+        expect(JSON.parse(String(init?.body))).toMatchObject({ eventId: event.eventId });
+    });
+
+    it("reads a stateful event ID getter exactly once and delivers the validated snapshot", async () => {
+        const fetchImpl = vi.fn(async (...args: Parameters<typeof fetch>) => {
+            void args;
+            return new Response(null, { status: 202 });
+        });
+        const event = buildOperationalErrorEvent("route-error", new Error("private"));
+        const statefulEvent = { ...event };
+        let accesses = 0;
+        Object.defineProperty(statefulEvent, "eventId", {
+            enumerable: true,
+            get() {
+                accesses += 1;
+                if (accesses === 1) return event.eventId;
+                throw new Error("eventId read more than once");
+            },
+        });
+
+        await expect(deliverOperationalEvent(statefulEvent, configuredEnv, fetchImpl, 250))
+            .resolves.toEqual({ status: "delivered" });
+        expect(accesses).toBe(1);
+        expect(fetchImpl).toHaveBeenCalledTimes(1);
+        const init = fetchImpl.mock.calls[0]?.[1];
+        const headerId = (init?.headers as Record<string, string>)["x-omr-event-id"];
+        const bodyId = JSON.parse(String(init?.body)).eventId;
+        expect(headerId).toBe(event.eventId);
+        expect(bodyId).toBe(event.eventId);
+        expect(headerId).toBe(bodyId);
+    });
+
+    it("rejects an event ID getter that throws on first access without fetching", async () => {
+        const fetchImpl = vi.fn(async (...args: Parameters<typeof fetch>) => {
+            void args;
+            return new Response(null, { status: 202 });
+        });
+        const event = buildOperationalErrorEvent("route-error", new Error("private"));
+        const unreadableEvent = { ...event };
+        let accesses = 0;
+        Object.defineProperty(unreadableEvent, "eventId", {
+            enumerable: true,
+            get() {
+                accesses += 1;
+                throw new Error("unreadable eventId");
+            },
+        });
+
+        await expect(deliverOperationalEvent(unreadableEvent, configuredEnv, fetchImpl, 250))
             .resolves.toEqual({ status: "rejected" });
+        expect(accesses).toBe(1);
         expect(fetchImpl).not.toHaveBeenCalled();
     });
 

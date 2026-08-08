@@ -34,6 +34,36 @@ function isSafeEventId(value: unknown): value is string {
     return typeof value === "string" && value.match(SAFE_EVENT_ID)?.[0] === value;
 }
 
+function snapshotOperationalEvent(event: OperationalEvent, eventId: string): OperationalEvent | undefined {
+    const eventName = event.event;
+    if (eventName === "omr.runtime_error") {
+        return {
+            event: eventName,
+            context: event.context,
+            eventId,
+            correlationId: event.correlationId,
+            buildSha: event.buildSha,
+            severity: event.severity,
+            timestamp: event.timestamp,
+            error: event.error,
+        };
+    }
+    if (eventName === "omr.job_heartbeat") {
+        return {
+            event: eventName,
+            job: event.job,
+            status: event.status,
+            severity: event.severity,
+            eventId,
+            correlationId: event.correlationId,
+            buildSha: event.buildSha,
+            timestamp: event.timestamp,
+            metrics: event.metrics,
+        };
+    }
+    return undefined;
+}
+
 function isTransientSinkStatus(status: number): boolean {
     return status === 408 || status === 425 || status === 429 || status >= 500;
 }
@@ -92,16 +122,21 @@ export async function deliverOperationalEvent(
     if (configuration.status !== "configured") return { status: configuration.status };
 
     let eventId: string;
+    let eventSnapshot: OperationalEvent;
     try {
-        if (!isSafeEventId(event.eventId)) return { status: "rejected" };
-        eventId = event.eventId;
+        const eventIdSnapshot = event.eventId;
+        if (!isSafeEventId(eventIdSnapshot)) return { status: "rejected" };
+        eventId = eventIdSnapshot;
+        const snapshot = snapshotOperationalEvent(event, eventId);
+        if (!snapshot) return { status: "rejected" };
+        eventSnapshot = snapshot;
     } catch {
         return { status: "rejected" };
     }
 
     let body: string;
     try {
-        body = JSON.stringify(event);
+        body = JSON.stringify(eventSnapshot);
         if (new TextEncoder().encode(body).byteLength > MAX_OPERATIONAL_EVENT_BYTES) {
             return { status: "failed" };
         }
