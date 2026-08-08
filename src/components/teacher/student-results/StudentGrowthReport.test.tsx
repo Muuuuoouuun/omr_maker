@@ -125,12 +125,12 @@ afterEach(() => {
 });
 
 describe("StudentGrowthReport", () => {
-    it("switches between summary and trend-only panels while keeping the chart available", () => {
+    it("switches between summary and trend-only panels while keeping the chart available", async () => {
         render(<StudentGrowthReport state={{ status: "ready", model: manyPointModel }} enabled onRetry={() => {}} />);
 
         expect(screen.getByRole("tab", { name: "요약" })).toHaveAttribute("aria-selected", "true");
         expect(screen.getByLabelText("최근 시험 요약")).toBeInTheDocument();
-        const chartShell = screen.getByTestId("growth-chart-shell");
+        const chartShell = await screen.findByTestId("growth-chart-shell");
         expect(chartShell.className).toContain("growthChartAnimated");
 
         fireEvent.click(screen.getByRole("tab", { name: "추세만" }));
@@ -185,9 +185,10 @@ describe("StudentGrowthReport", () => {
         expect(screen.getByLabelText("최근 시험 요약")).toHaveTextContent("반 비교 불가");
     });
 
-    it("does not present a solo student's class comparison as authoritative", () => {
+    it("does not present a solo student's class comparison as authoritative", async () => {
         render(<StudentGrowthReport state={{ status: "ready", model: onePointModel }} enabled onRetry={() => {}} />);
 
+        await screen.findByTestId("growth-chart-shell");
         expect(screen.getByRole("status", { name: "반 비교 안내" })).toHaveTextContent("비교 가능한 같은 반 응시자가 없습니다");
         expect(screen.getByLabelText("최근 시험 요약")).toHaveTextContent("반 비교 불가");
         expect(screen.getByLabelText("최근 시험 요약")).not.toHaveTextContent("-10%p");
@@ -199,7 +200,7 @@ describe("StudentGrowthReport", () => {
         expect(table).toHaveTextContent("비교 불가");
     });
 
-    it("excludes unavailable rows from a mixed comparison summary and explains the omission", () => {
+    it("excludes unavailable rows from a mixed comparison summary and explains the omission", async () => {
         const mixedModel: StudentGrowthReportModel = {
             ...manyPointModel,
             rows: [
@@ -210,13 +211,14 @@ describe("StudentGrowthReport", () => {
         };
         render(<StudentGrowthReport state={{ status: "ready", model: mixedModel }} enabled onRetry={() => {}} />);
 
+        await screen.findByTestId("growth-chart-shell");
         expect(screen.getByRole("status", { name: "반 비교 안내" })).toHaveTextContent("1명인 시험은 개인 점수만 표시");
         expect(screen.getByLabelText("최근 시험 요약")).toHaveTextContent("+6%p");
         expect(screen.getByLabelText("최근 시험 요약")).not.toHaveTextContent("-2%p");
         expect(screen.getByTestId("line-classAverage")).toBeInTheDocument();
     });
 
-    it("keeps an isolated comparable class average visible without connecting unavailable gaps", () => {
+    it("keeps an isolated comparable class average visible without connecting unavailable gaps", async () => {
         const isolatedComparisonRows = [
             { ...manyPointModel.rows[0], examId: "solo-before", participantCount: 1, rank: null },
             { ...manyPointModel.rows[1], examId: "comparable", isLatest: false },
@@ -228,6 +230,7 @@ describe("StudentGrowthReport", () => {
             onRetry={() => {}}
         />);
 
+        await screen.findByTestId("growth-chart-shell");
         const averageLine = screen.getByTestId("line-classAverage");
         expect(averageLine).toHaveAttribute("data-connect-nulls", "false");
         expect(averageLine).toHaveAttribute("data-dot", "custom");
@@ -317,9 +320,10 @@ describe("StudentGrowthReport", () => {
         expect(screen.queryByRole("button", { name: "다시 시도" })).not.toBeInTheDocument();
     });
 
-    it("provides a named focusable internal scroll region, visible hint, and complete accessible table", () => {
+    it("provides a named focusable internal scroll region, visible hint, and complete accessible table", async () => {
         render(<StudentGrowthReport state={{ status: "ready", model: manyPointModel }} enabled onRetry={() => {}} />);
 
+        await screen.findByTestId("growth-chart-shell");
         const scrollRegion = screen.getByRole("region", { name: "개인 성장 그래프 가로 스크롤 영역" });
         expect(scrollRegion).toHaveAttribute("tabindex", "0");
         expect(screen.getByText("가로로 스크롤하여 시험별 추세 더 보기")).toBeVisible();
@@ -339,9 +343,10 @@ describe("StudentGrowthReport", () => {
         expect(table).toHaveTextContent("12명");
     });
 
-    it("keeps both Recharts lines static and differentiates the class average", () => {
+    it("keeps both Recharts lines static and differentiates the class average", async () => {
         render(<StudentGrowthReport state={{ status: "ready", model: manyPointModel }} enabled onRetry={() => {}} />);
 
+        await screen.findByTestId("growth-chart-shell");
         expect(screen.getByTestId("line-studentScore")).toHaveAttribute("data-animation-active", "false");
         expect(screen.getByTestId("line-classAverage")).toHaveAttribute("data-animation-active", "false");
         expect(screen.getByTestId("line-classAverage")).toHaveAttribute("data-stroke-dasharray", "6 6");
@@ -366,7 +371,7 @@ describe("StudentGrowthReport", () => {
         expect(screen.getByTestId("growth-chart-canvas")).toHaveStyle({ minWidth: "896px" });
     });
 
-    it("adds a visible ordinal discriminator when exam titles share the same prefix", () => {
+    it("adds a visible ordinal discriminator when exam titles share the same prefix", async () => {
         const duplicatePrefixRows = manyPointModel.rows.map((row, index) => ({
             ...row,
             examId: `duplicate-${index}`,
@@ -378,6 +383,7 @@ describe("StudentGrowthReport", () => {
             onRetry={() => {}}
         />);
 
+        await screen.findByTestId("growth-chart-shell");
         const labels = screen.getByTestId("chart-axis-labels").textContent?.split("|") ?? [];
         expect(labels).toHaveLength(2);
         expect(labels[0]).not.toBe(labels[1]);
@@ -390,6 +396,13 @@ describe("StudentGrowthReport", () => {
 
         expect(css).not.toMatch(/\.growthChartAnimated \.growthGapPill[\s\S]{0,180}animation:\s*growth-evidence-reveal/);
         expect(css).toMatch(/\.growthChartAnimated \.growthEvidenceContent[\s\S]{0,180}animation:\s*growth-evidence-reveal/);
+    });
+
+    it("keeps Korean report heading tracking at a nonnegative token", () => {
+        const css = readFileSync("src/components/teacher/student-results/StudentResultHub.module.css", "utf8");
+
+        expect(css).toMatch(/\.studentSummary h1\s*\{[^}]*letter-spacing:\s*(?:0|normal);/);
+        expect(css).not.toMatch(/\.studentSummary h1\s*\{[^}]*letter-spacing:\s*-/);
     });
 
     it("does not retain a fixed dash pattern on the student line after mount motion", () => {
@@ -407,13 +420,14 @@ describe("StudentGrowthReport", () => {
         );
     });
 
-    it("skips the mount animation for OS and app reduced-motion settings", () => {
+    it("skips the mount animation for OS and app reduced-motion settings", async () => {
         vi.mocked(window.matchMedia).mockReturnValue({
             matches: true,
             addEventListener: vi.fn(),
             removeEventListener: vi.fn(),
         } as unknown as MediaQueryList);
         const { unmount } = render(<StudentGrowthReport state={{ status: "ready", model: manyPointModel }} enabled onRetry={() => {}} />);
+        await screen.findByTestId("growth-chart-shell");
         expect(screen.getByTestId("growth-chart-shell").className).not.toContain("growthChartAnimated");
         unmount();
 
@@ -424,6 +438,7 @@ describe("StudentGrowthReport", () => {
             removeEventListener: vi.fn(),
         } as unknown as MediaQueryList);
         render(<StudentGrowthReport state={{ status: "ready", model: manyPointModel }} enabled onRetry={() => {}} />);
+        await screen.findByTestId("growth-chart-shell");
         expect(screen.getByTestId("growth-chart-shell").className).not.toContain("growthChartAnimated");
     });
 });

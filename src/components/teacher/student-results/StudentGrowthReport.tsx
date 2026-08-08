@@ -2,10 +2,18 @@
 
 import { useId, useRef, useState } from "react";
 import type { KeyboardEvent } from "react";
+import dynamic from "next/dynamic";
 import type { StudentGrowthReportModel, StudentGrowthRow } from "@/lib/studentGrowthReport";
-import GrowthTrendChart from "./GrowthTrendChart";
 import LockedFeaturePanel from "./LockedFeaturePanel";
 import styles from "./StudentResultHub.module.css";
+
+const GrowthTrendChart = dynamic(
+    () => import("@/components/teacher/student-results/GrowthTrendChart"),
+    {
+        ssr: false,
+        loading: () => <p className={styles.growthReportState} role="status">성장 그래프를 준비하고 있습니다.</p>,
+    },
+);
 
 export type StudentGrowthReportState =
     | { status: "idle" | "loading" }

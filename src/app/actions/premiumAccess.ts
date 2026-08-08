@@ -17,6 +17,7 @@ import {
     type ServerPlanUsage,
 } from "@/lib/serverPlan";
 import { isTeacherSessionActive } from "@/lib/teacherSession";
+import { isMockupTeacherIdentity } from "@/lib/mockupAccount";
 import { hasPlanEntitlement, type PlanEntitlementKey, type PlanLimitMetric } from "@/utils/plans";
 
 export interface ServerPlanSnapshot extends ServerPlanAccess {
@@ -54,7 +55,7 @@ async function accessAndStore() {
     }
 
     const access = await resolveServerPlanAccess(session, { store });
-    return { access, store };
+    return { access, store, session };
 }
 
 function limitsFor(access: ServerPlanAccess): Record<PlanLimitMetric, number> {
@@ -67,11 +68,14 @@ function limitsFor(access: ServerPlanAccess): Record<PlanLimitMetric, number> {
 
 /** Authoritative server snapshot for client display. localStorage is never consulted. */
 export async function getServerPlanSnapshot(): Promise<ServerPlanSnapshot> {
-    const { access, store } = await accessAndStore();
-    const snapshot: ServerPlanSnapshot = { ...access, limits: limitsFor(access) };
-    if (!access.authoritative || !store) return snapshot;
+    const { access, store, session } = await accessAndStore();
+    const displayAccess = isMockupTeacherIdentity(session)
+        ? { ...access, plan: "academy" as const }
+        : access;
+    const snapshot: ServerPlanSnapshot = { ...displayAccess, limits: limitsFor(displayAccess) };
+    if (!displayAccess.authoritative || !store) return snapshot;
     try {
-        return { ...snapshot, usage: await readServerPlanUsage(access, store) };
+        return { ...snapshot, usage: await readServerPlanUsage(displayAccess, store) };
     } catch (error) {
         return {
             ...snapshot,

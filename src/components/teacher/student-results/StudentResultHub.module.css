@@ -361,7 +361,7 @@
   color: var(--foreground);
   font-size: clamp(1.45rem, 3vw, 2rem);
   line-height: 1.2;
-  letter-spacing: -0.035em;
+  letter-spacing: 0;
 }
 
 .score {
@@ -546,6 +546,22 @@
 
 .reportPrintRoot {
   min-width: 0;
+}
+
+.reportPrelude {
+  display: grid;
+  grid-template-columns: minmax(0, 1.15fr) minmax(0, 0.85fr) minmax(220px, 0.8fr);
+  gap: 0.65rem;
+  min-width: 0;
+}
+
+.reportPreludeSection {
+  min-width: 0;
+  padding: 0.8rem;
+}
+
+.reportPreludeHeadline {
+  align-content: start;
 }
 
 .reportActions {
@@ -1052,6 +1068,31 @@
 }
 
 @media (max-width: 760px) {
+  :global(.teacher-attempt-page > header) {
+    height: auto;
+    min-height: 4.5rem;
+  }
+
+  :global(.teacher-attempt-page > header .header-content) {
+    gap: 0.5rem;
+    padding-block: 0.5rem;
+  }
+
+  :global(.teacher-attempt-page > header .header-content > div:first-child) {
+    flex: 1 1 0;
+  }
+
+  :global(.teacher-attempt-page > header .header-content > div:last-child) {
+    flex: 0 0 auto;
+    flex-wrap: nowrap !important;
+    gap: 0.25rem !important;
+  }
+
+  :global(.teacher-attempt-page > header .header-content > div:last-child .btn) {
+    min-height: 44px;
+    padding-inline: 0.6rem;
+  }
+
   .headerMain {
     grid-template-columns: minmax(0, 1fr);
     align-items: start;
@@ -1096,6 +1137,10 @@
   .reportStatGrid,
   .reportTwoColumns,
   .reportGrowthDetails {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .reportPrelude {
     grid-template-columns: minmax(0, 1fr);
   }
 
@@ -1149,6 +1194,14 @@
     box-shadow: none;
   }
 
+  .reportPrelude {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .reportPreludeHeadline {
+    grid-column: 1 / -1;
+  }
+
   .growthTabs,
   .growthScrollHint,
   .growthChartLegend {
@@ -1161,18 +1214,28 @@
   }
 
   .growthChartBlock {
-    display: none;
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    clip-path: inset(50%);
+    opacity: 0;
+    pointer-events: none;
+    visibility: hidden;
   }
 
   .growthChartShell {
-    overflow: visible;
+    overflow: hidden;
     border: 0;
   }
 
   .growthChartCanvas {
-    min-width: 0;
-    height: auto;
-    min-height: 0;
+    width: 1px;
+    min-width: 1px;
+    height: 300px;
+    min-height: 300px;
   }
 
   .growthSummaryRail {

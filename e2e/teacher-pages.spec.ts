@@ -369,6 +369,55 @@ test("opens one student result hub and preserves the selected view across attemp
     await expect(page.getByRole("tab", { name: "답안" })).toHaveAttribute("aria-selected", "true");
 });
 
+test("connects the editorial exam overview to a dense personal growth report", async ({ page }) => {
+    const consoleIssues: Array<{ type: string; text: string; url: string }> = [];
+    page.on("console", message => {
+        if (message.type() !== "warning" && message.type() !== "error") return;
+        consoleIssues.push({
+            type: message.type(),
+            text: message.text(),
+            url: message.location().url,
+        });
+    });
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await page.goto("/?role=teacher");
+    await page.getByRole("button", { name: "데모 계정으로 둘러보기" }).click();
+    await expect(page).toHaveURL(/\/teacher\/dashboard\?showcase=1/);
+    await page.goto("/teacher/dashboard?showcase=1&tab=exam");
+
+    const overviewHeadings = page.locator('[role="tabpanel"][aria-label="시험 통계 요약"] > * h2');
+    await expect(page.getByRole("region", { name: "시험 핵심 지표" })).toBeVisible();
+    await expect(page.getByRole("table", { name: "취약 문항 근거" })).toBeVisible();
+    expect(await overviewHeadings.allTextContents()).toEqual([
+        "시험 핵심 지표",
+        "시험 핵심 해석",
+        "점수 분포",
+        "성취 구간",
+        "취약 문항",
+        "다음 행동",
+    ]);
+
+    await page.getByRole("button", { name: "학생별 분석" }).click();
+    await page.getByRole("link", { name: /결과 분석 열기/ }).first().click();
+    await expect(page).toHaveURL(/\/teacher\/attempt\/.*\?view=analytics/);
+    await page.getByRole("tab", { name: "리포트", exact: true }).click();
+
+    const growth = page.getByRole("region", { name: "개인 성장", exact: true });
+    await expect(growth).toBeVisible();
+    const growthTop = await growth.evaluate(element => element.getBoundingClientRect().top + window.scrollY);
+    expect(growthTop, "dense desktop report should bring growth into the first viewport").toBeLessThan(900);
+
+    const growthTabs = growth.getByRole("tablist", { name: "개인 성장 보기" });
+    await expect(growthTabs.getByRole("tab", { name: "요약" })).toHaveAttribute("aria-selected", "true");
+    await growthTabs.getByRole("tab", { name: "추세만" }).click();
+    await expect(growthTabs.getByRole("tab", { name: "추세만" })).toHaveAttribute("aria-selected", "true");
+    await expect(growth.getByRole("region", { name: "개인 성장 그래프 가로 스크롤 영역" })).toBeVisible();
+    expect(
+        consoleIssues.filter(issue => /width\(0\).*height\(0\).*chart/i.test(issue.text)),
+        JSON.stringify(consoleIssues, null, 2),
+    ).toEqual([]);
+});
+
 test.describe("Teacher dashboard", () => {
     test.beforeEach(async ({ page, baseURL }) => {
         await authenticateTeacher(page, baseURL);
@@ -1080,7 +1129,7 @@ test.describe("Settings page", () => {
         await page.getByText("고급 · 운영", { exact: true }).click();
         await page.getByRole("button", { name: "보안", exact: true }).click();
         await expect(page.getByText("배포 로그인 진단")).toBeVisible();
-        await expect(page.getByText("교사 계정 환경변수")).toBeVisible();
+        await expect(page.getByText("교사 계정 수명주기")).toBeVisible();
         await expect(page.getByText("브라우저 데이터 경계")).toBeVisible();
         await expect(page.getByText("Supabase 서버 게이트웨이")).toBeVisible();
         await expect(page.getByRole("button", { name: "배포 로그인 진단 새로고침" })).toBeVisible();

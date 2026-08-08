@@ -94,48 +94,50 @@ export default function ReportPanel({
             </div>
 
             <div className={styles.panelStack}>
-                <section className="bento-card" style={{ padding: "1rem" }} aria-labelledby="report-summary-title">
-                    <h2 id="report-summary-title" className={styles.reportSectionTitle}>응시 요약</h2>
-                    <dl className={styles.reportSummaryList}>
-                        <div><dt>학생</dt><dd>{attempt.studentName}</dd></div>
-                        <div><dt>시험</dt><dd>{exam?.title || attempt.examTitle}</dd></div>
-                        <div><dt>제출</dt><dd>{formatKoreanDateTime(attempt.finishedAt)}</dd></div>
-                        <div><dt>선택 응시</dt><dd>{selectedAttemptLabel}</dd></div>
-                    </dl>
-                </section>
+                <div className={styles.reportPrelude}>
+                    <section className={`bento-card ${styles.reportPreludeSection}`} aria-labelledby="report-summary-title">
+                        <h2 id="report-summary-title" className={styles.reportSectionTitle}>응시 요약</h2>
+                        <dl className={styles.reportSummaryList}>
+                            <div><dt>학생</dt><dd>{attempt.studentName}</dd></div>
+                            <div><dt>시험</dt><dd>{exam?.title || attempt.examTitle}</dd></div>
+                            <div><dt>제출</dt><dd>{formatKoreanDateTime(attempt.finishedAt)}</dd></div>
+                            <div><dt>선택 응시</dt><dd>{selectedAttemptLabel}</dd></div>
+                        </dl>
+                    </section>
 
-                <section className="bento-card" style={{ padding: "1rem" }} aria-labelledby="report-score-title">
-                    <h2 id="report-score-title" className={styles.reportSectionTitle}>점수와 답안 현황</h2>
-                    <div className={styles.reportScoreLine}>
-                        <strong>{scorePercent}%</strong>
-                        <span>{score?.earnedScore ?? attempt.score} / {score?.totalScore ?? attempt.totalScore}점</span>
-                    </div>
-                    {analytics ? (
-                        <div className={styles.reportStatGrid}>
-                            <Stat label="정답" value={analytics.counts.correctCount} />
-                            <Stat label="오답" value={analytics.counts.incorrectCount} />
-                            <Stat label="미응답" value={analytics.counts.unansweredCount} />
-                            {analytics.counts.ungradedCount > 0 && <Stat label="미채점" value={analytics.counts.ungradedCount} />}
+                    <section className={`bento-card ${styles.reportPreludeSection}`} aria-labelledby="report-score-title">
+                        <h2 id="report-score-title" className={styles.reportSectionTitle}>점수와 답안 현황</h2>
+                        <div className={styles.reportScoreLine}>
+                            <strong>{scorePercent}%</strong>
+                            <span>{score?.earnedScore ?? attempt.score} / {score?.totalScore ?? attempt.totalScore}점</span>
                         </div>
-                    ) : (
-                        <p className={styles.emptyText}>시험 정보를 불러오지 못해 제출 당시 저장된 점수를 표시합니다.</p>
-                    )}
-                </section>
-
-                <section className="bento-card" style={{ padding: "1rem" }} aria-labelledby="report-headline-title">
-                    <h2 id="report-headline-title" className={styles.reportSectionTitle}>핵심 해석</h2>
-                    <p className={styles.reportFeedback}>{headline}</p>
-                    {attempt.retake && (
-                        retakeScoreDelta ? (
-                            <p className={styles.reportDelta}>
-                                원시험 {retakeScoreDelta.sourceScorePercent}% → 재시험 {retakeScoreDelta.currentScorePercent}%
-                                <strong>{retakeScoreDelta.delta > 0 ? "+" : ""}{retakeScoreDelta.delta}%p</strong>
-                            </p>
+                        {analytics ? (
+                            <div className={styles.reportStatGrid}>
+                                <Stat label="정답" value={analytics.counts.correctCount} />
+                                <Stat label="오답" value={analytics.counts.incorrectCount} />
+                                <Stat label="미응답" value={analytics.counts.unansweredCount} />
+                                {analytics.counts.ungradedCount > 0 && <Stat label="미채점" value={analytics.counts.ungradedCount} />}
+                            </div>
                         ) : (
-                            <p className={styles.emptyText}>연결된 원시험 기록을 찾을 수 없어 점수 변화를 계산하지 못했습니다.</p>
-                        )
-                    )}
-                </section>
+                            <p className={styles.emptyText}>시험 정보를 불러오지 못해 제출 당시 저장된 점수를 표시합니다.</p>
+                        )}
+                    </section>
+
+                    <section className={`bento-card ${styles.reportPreludeSection} ${styles.reportPreludeHeadline}`} aria-labelledby="report-headline-title">
+                        <h2 id="report-headline-title" className={styles.reportSectionTitle}>핵심 해석</h2>
+                        <p className={styles.reportFeedback}>{headline}</p>
+                        {attempt.retake && (
+                            retakeScoreDelta ? (
+                                <p className={styles.reportDelta}>
+                                    원시험 {retakeScoreDelta.sourceScorePercent}% → 재시험 {retakeScoreDelta.currentScorePercent}%
+                                    <strong>{retakeScoreDelta.delta > 0 ? "+" : ""}{retakeScoreDelta.delta}%p</strong>
+                                </p>
+                            ) : (
+                                <p className={styles.emptyText}>연결된 원시험 기록을 찾을 수 없어 점수 변화를 계산하지 못했습니다.</p>
+                            )
+                        )}
+                    </section>
+                </div>
 
                 <StudentGrowthReport
                     state={growthReportState}
