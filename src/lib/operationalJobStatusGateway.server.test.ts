@@ -119,6 +119,7 @@ describe("operational job status gateway", () => {
             runSequence: 20,
             applied: false,
             superseded: true,
+            duplicate: false,
         };
         const client = clientWithResult(persisted);
         await expect(completeOperationalJobRun(client, {
@@ -135,6 +136,57 @@ describe("operational job status gateway", () => {
             p_build_sha: BUILD_SHA,
             p_failure_category: null,
         });
+    });
+
+    it("returns an explicit idempotent duplicate completion", async () => {
+        const duplicate = {
+            status: "healthy",
+            lastAttemptAt: "2026-08-08T00:00:00.000Z",
+            lastSuccessAt: "2026-08-08T00:00:00.000Z",
+            deadCount: 0,
+            buildSha: BUILD_SHA,
+            failureCategory: null,
+            latestStartedSequence: 20,
+            latestCompletedSequence: 20,
+            runSequence: 20,
+            applied: false,
+            superseded: false,
+            duplicate: true,
+        };
+        await expect(completeOperationalJobRun(clientWithResult(duplicate), {
+            jobKey: "asset_gc",
+            runSequence: 20,
+            status: "healthy",
+            buildSha: BUILD_SHA,
+            failureCategory: null,
+        })).resolves.toEqual(duplicate);
+    });
+
+    it("rejects a completion result without exactly one terminal disposition", async () => {
+        const base = {
+            status: "healthy",
+            lastAttemptAt: "2026-08-08T00:00:00.000Z",
+            lastSuccessAt: "2026-08-08T00:00:00.000Z",
+            deadCount: 0,
+            buildSha: BUILD_SHA,
+            failureCategory: null,
+            latestStartedSequence: 20,
+            latestCompletedSequence: 20,
+            runSequence: 20,
+        };
+        for (const dispositions of [
+            { applied: false, superseded: false, duplicate: false },
+            { applied: true, superseded: false, duplicate: true },
+            { applied: false, superseded: true, duplicate: true },
+        ]) {
+            await expect(completeOperationalJobRun(clientWithResult({ ...base, ...dispositions }), {
+                jobKey: "asset_gc",
+                runSequence: 20,
+                status: "healthy",
+                buildSha: BUILD_SHA,
+                failureCategory: null,
+            })).rejects.toThrow("Operational job run completion failed");
+        }
     });
 
     it("fails closed when the completion RPC does not return an authoritative status", async () => {

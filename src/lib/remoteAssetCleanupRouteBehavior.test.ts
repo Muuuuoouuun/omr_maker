@@ -24,6 +24,7 @@ function persistedStatus(overrides: Record<string, unknown> = {}) {
         runSequence: 20,
         applied: true,
         superseded: false,
+        duplicate: false,
         ...overrides,
     };
 }
@@ -83,6 +84,7 @@ describe("remote asset cleanup route behavior", () => {
             runSequence: 20,
             applied: true,
             superseded: false,
+            duplicate: false,
             durableStatus: "healthy",
             deadCount: 0,
         });
@@ -96,6 +98,7 @@ describe("remote asset cleanup route behavior", () => {
             runSequence: 20,
             applied: true,
             superseded: false,
+            duplicate: false,
         });
         expect(mocks.beginJobRun).toHaveBeenCalledWith(expect.anything(), {
             jobKey: "asset_gc",
@@ -131,6 +134,7 @@ describe("remote asset cleanup route behavior", () => {
             runSequence: 20,
             applied: true,
             superseded: false,
+            duplicate: false,
             durableStatus: "healthy",
             deadCount: 0,
         });
@@ -292,6 +296,25 @@ describe("remote asset cleanup route behavior", () => {
             runSequence: 20,
             applied: false,
             superseded: true,
+            durableStatus: "healthy",
+        });
+    });
+
+    it("treats an identical terminal replay as safe without claiming it was newly applied", async () => {
+        mocks.completeJobRun.mockResolvedValue(persistedStatus({
+            applied: false,
+            superseded: false,
+            duplicate: true,
+        }));
+
+        const response = await GET(new Request("https://app.example.test/api/internal/asset-gc"));
+
+        expect(response.status).toBe(200);
+        await expect(response.json()).resolves.toMatchObject({
+            status: "ok",
+            applied: false,
+            superseded: false,
+            duplicate: true,
             durableStatus: "healthy",
         });
     });

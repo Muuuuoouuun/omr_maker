@@ -15,6 +15,9 @@ const PREVIEW_ARTIFACT_DIGEST = /^sha256:[a-f0-9]{64}$/;
 const PREVIEW_ATTESTATION_SIGNATURE = /^[a-f0-9]{64}$/;
 const MAX_RESPONSE_BYTES = 32 * 1024;
 const REQUEST_TIMEOUT_MS = 12_000;
+const ASSET_GC_REQUEST_TIMEOUT_MS = 65_000;
+const MIN_REQUEST_TIMEOUT_MS = 100;
+const MAX_REQUEST_TIMEOUT_MS = 65_000;
 const MAX_CLOCK_SKEW_MS = 5 * 60 * 1_000;
 
 function clean(value) {
@@ -243,9 +246,23 @@ async function boundedJson(response) {
     }
 }
 
-async function requestJson(url, init, fetchImpl, acceptedStatuses) {
+export async function requestJson(
+    url,
+    init,
+    fetchImpl,
+    acceptedStatuses,
+    timeoutMs = REQUEST_TIMEOUT_MS,
+) {
+    if (
+        !Number.isSafeInteger(timeoutMs)
+        || timeoutMs < MIN_REQUEST_TIMEOUT_MS
+        || timeoutMs > MAX_REQUEST_TIMEOUT_MS
+    ) throw new Error("Hosted verification timeout is invalid");
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(new DOMException("Verification timed out", "TimeoutError")), REQUEST_TIMEOUT_MS);
+    const timer = setTimeout(
+        () => controller.abort(new DOMException("Verification timed out", "TimeoutError")),
+        timeoutMs,
+    );
     try {
         const response = await fetchImpl(url, {
             ...init,
@@ -300,7 +317,7 @@ export async function runProductionDeploymentVerification(config, fetchImpl = fe
             authorization: `Bearer ${config.gcCronSecret}`,
             "user-agent": "omr-production-verifier/1",
         },
-    }, fetchImpl, [200]);
+    }, fetchImpl, [200], ASSET_GC_REQUEST_TIMEOUT_MS);
     const boundedCount = (value, maximum) => Number.isSafeInteger(value)
         && value >= 0
         && value <= maximum;
@@ -328,6 +345,7 @@ export async function runProductionDeploymentVerification(config, fetchImpl = fe
         || assetGc.body.runSequence <= 0
         || assetGc.body.applied !== true
         || assetGc.body.superseded !== false
+        || assetGc.body.duplicate !== false
         || assetGc.body.durableStatus !== "healthy"
         || assetGc.body.deadCount !== 0
     ) throw new Error("Production asset GC bootstrap failed");

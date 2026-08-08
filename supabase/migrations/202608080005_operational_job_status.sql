@@ -202,6 +202,8 @@ set lock_timeout = '2s'
 as $$
 declare
     v_applied boolean := false;
+    v_duplicate boolean := false;
+    v_superseded boolean := false;
     v_dead_count bigint;
     v_effective_status text;
     v_effective_failure_category text;
@@ -239,36 +241,53 @@ begin
         raise exception 'operational cleanup backlog exceeds bounded status';
     end if;
 
+    v_recorded_at := pg_catalog.clock_timestamp();
+    v_effective_status := case when v_dead_count > 0 then 'failed' else p_status end;
+    v_effective_failure_category := case
+        when v_dead_count > 0 and p_status = 'healthy' then 'dead_backlog'
+        else p_failure_category
+    end;
+
     if p_run_sequence = v_job_status.latest_started_sequence then
-        if p_build_sha is distinct from v_job_status.build_sha then
-            raise exception 'operational job build mismatch';
+        if v_job_status.latest_completed_sequence = p_run_sequence then
+            if p_build_sha is distinct from v_job_status.build_sha
+               or v_effective_status is distinct from v_job_status.status
+               or v_effective_failure_category is distinct from v_job_status.failure_category then
+                raise exception 'operational job completion conflict';
+            end if;
+            v_duplicate := true;
+        else
+            if p_build_sha is distinct from v_job_status.build_sha
+               or v_job_status.status is distinct from 'failed'
+               or v_job_status.failure_category is distinct from 'run_incomplete'
+               or v_job_status.active_lease_started_at is null
+               or v_job_status.active_lease_until is null
+               or v_job_status.active_lease_until <= v_recorded_at then
+                raise exception 'operational job completion conflict';
+            end if;
+            if v_recorded_at <= v_job_status.last_attempt_at then
+                v_recorded_at := v_job_status.last_attempt_at + interval '1 microsecond';
+            end if;
+            update public.omr_operational_job_status
+               set status = v_effective_status,
+                   last_attempt_at = v_recorded_at,
+                   last_success_at = case
+                       when v_effective_status = 'healthy' then v_recorded_at
+                       else last_success_at
+                   end,
+                   dead_count = v_dead_count::integer,
+                   failure_category = v_effective_failure_category,
+                   latest_completed_sequence = p_run_sequence,
+                   active_lease_started_at = null,
+                   active_lease_until = null
+             where job_key = p_job_key
+             returning * into strict v_job_status;
+            v_applied := true;
         end if;
-        v_recorded_at := pg_catalog.clock_timestamp();
-        if v_recorded_at <= v_job_status.last_attempt_at then
-            v_recorded_at := v_job_status.last_attempt_at + interval '1 microsecond';
-        end if;
-        v_effective_status := case when v_dead_count > 0 then 'failed' else p_status end;
-        v_effective_failure_category := case
-            when v_dead_count > 0 and p_status = 'healthy' then 'dead_backlog'
-            else p_failure_category
-        end;
-        update public.omr_operational_job_status
-           set status = v_effective_status,
-               last_attempt_at = v_recorded_at,
-               last_success_at = case
-                   when v_effective_status = 'healthy' then v_recorded_at
-                   else last_success_at
-               end,
-               dead_count = v_dead_count::integer,
-               failure_category = v_effective_failure_category,
-               latest_completed_sequence = p_run_sequence,
-               active_lease_started_at = null,
-               active_lease_until = null
-         where job_key = p_job_key
-         returning * into strict v_job_status;
-        v_applied := true;
     elsif p_run_sequence > v_job_status.latest_started_sequence then
         raise exception 'operational job run sequence was not begun';
+    else
+        v_superseded := true;
     end if;
 
     return pg_catalog.jsonb_build_object(
@@ -285,7 +304,8 @@ begin
         'latestCompletedSequence', v_job_status.latest_completed_sequence,
         'runSequence', p_run_sequence,
         'applied', v_applied,
-        'superseded', not v_applied
+        'superseded', v_superseded,
+        'duplicate', v_duplicate
     );
 end;
 $$;

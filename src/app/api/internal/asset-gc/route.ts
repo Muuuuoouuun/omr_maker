@@ -123,6 +123,7 @@ export async function GET(request: Request): Promise<Response> {
         runSequence,
         applied: persistedStatus.applied,
         superseded: persistedStatus.superseded,
+        duplicate: persistedStatus.duplicate,
     };
     const heartbeat = await reportOperationalHeartbeat(
         "asset-gc",

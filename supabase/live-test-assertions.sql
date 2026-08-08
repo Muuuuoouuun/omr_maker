@@ -5380,6 +5380,9 @@ declare
     v_recorded jsonb;
     v_snapshot jsonb;
     v_rejected integer := 0;
+    v_terminal_conflicts integer := 0;
+    v_terminal_attempt timestamptz;
+    v_terminal_success timestamptz;
 begin
     select pg_catalog.array_agg(column_name::text order by ordinal_position)
       into v_columns
@@ -5538,6 +5541,39 @@ begin
         raise exception 'operational job success did not return authoritative status';
     end if;
     v_first_success := (v_recorded->>'lastSuccessAt')::timestamptz;
+    v_terminal_attempt := (v_recorded->>'lastAttemptAt')::timestamptz;
+    v_terminal_success := (v_recorded->>'lastSuccessAt')::timestamptz;
+    v_recorded := public.omr_complete_operational_job_run_v1(
+        'asset_gc', v_run_sequence, 'healthy',
+        '0123456789abcdef0123456789abcdef01234567', null
+    );
+    v_snapshot := public.omr_read_operational_job_status_v1('asset_gc');
+    if v_recorded->>'applied' <> 'false'
+       or v_recorded->>'superseded' <> 'false'
+       or v_recorded->>'duplicate' <> 'true'
+       or (v_snapshot->>'lastAttemptAt')::timestamptz is distinct from v_terminal_attempt
+       or (v_snapshot->>'lastSuccessAt')::timestamptz is distinct from v_terminal_success then
+        raise exception 'operational job duplicate completion changed terminal state';
+    end if;
+    begin
+        perform public.omr_complete_operational_job_run_v1(
+            'asset_gc', v_run_sequence, 'failed',
+            '0123456789abcdef0123456789abcdef01234567', 'cleanup_failed'
+        );
+    exception when others then
+        v_terminal_conflicts := v_terminal_conflicts + 1;
+    end;
+    begin
+        perform public.omr_complete_operational_job_run_v1(
+            'asset_gc', v_run_sequence, 'healthy',
+            'ffffffffffffffffffffffffffffffffffffffff', null
+        );
+    exception when others then
+        v_terminal_conflicts := v_terminal_conflicts + 1;
+    end;
+    if v_terminal_conflicts <> 2 then
+        raise exception 'operational job conflicting terminal replay was accepted';
+    end if;
     v_begun := public.omr_begin_operational_job_run_v1(
         'asset_gc', '0123456789abcdef0123456789abcdef01234567'
     );
@@ -5558,6 +5594,51 @@ begin
        or v_snapshot->>'deadCount' <> '0' then
         raise exception 'operational job failure advanced last success';
     end if;
+    v_terminal_attempt := (v_snapshot->>'lastAttemptAt')::timestamptz;
+    v_terminal_success := (v_snapshot->>'lastSuccessAt')::timestamptz;
+    v_recorded := public.omr_complete_operational_job_run_v1(
+        'asset_gc', v_run_sequence, 'failed',
+        '0123456789abcdef0123456789abcdef01234567', 'cleanup_failed'
+    );
+    v_snapshot := public.omr_read_operational_job_status_v1('asset_gc');
+    if v_recorded->>'duplicate' <> 'true'
+       or (v_snapshot->>'lastAttemptAt')::timestamptz is distinct from v_terminal_attempt
+       or (v_snapshot->>'lastSuccessAt')::timestamptz is distinct from v_terminal_success then
+        raise exception 'operational job duplicate completion changed terminal state';
+    end if;
+    begin
+        perform public.omr_complete_operational_job_run_v1(
+            'asset_gc', v_run_sequence, 'failed',
+            '0123456789abcdef0123456789abcdef01234567', 'cleanup_exception'
+        );
+    exception when others then
+        v_terminal_conflicts := v_terminal_conflicts + 1;
+    end;
+    if v_terminal_conflicts <> 3 then
+        raise exception 'operational job conflicting terminal replay was accepted';
+    end if;
+    insert into public.omr_remote_asset_cleanup_queue (
+        organization_id, source_type, source_id, storage_bucket, object_path,
+        reason, status, attempts
+    ) values (
+        'live-org-a', 'remote_asset', 'operational-replay-dead-fixture',
+        'omr-private-assets',
+        'organizations/live-org-a/operational-replay-dead-fixture.pdf',
+        'asset_replaced', 'dead', 10
+    );
+    v_recorded := public.omr_complete_operational_job_run_v1(
+        'asset_gc', v_run_sequence, 'failed',
+        '0123456789abcdef0123456789abcdef01234567', 'cleanup_failed'
+    );
+    v_snapshot := public.omr_read_operational_job_status_v1('asset_gc');
+    if v_recorded->>'duplicate' <> 'true'
+       or v_recorded->>'deadCount' <> '1'
+       or (v_snapshot->>'lastAttemptAt')::timestamptz is distinct from v_terminal_attempt
+       or (v_snapshot->>'lastSuccessAt')::timestamptz is distinct from v_terminal_success then
+        raise exception 'operational job mutable backlog broke idempotent completion';
+    end if;
+    delete from public.omr_remote_asset_cleanup_queue
+     where source_id = 'operational-replay-dead-fixture';
     v_begun := public.omr_begin_operational_job_run_v1(
         'asset_gc', 'ffffffffffffffffffffffffffffffffffffffff'
     );
@@ -5674,6 +5755,7 @@ declare
     v_previous_attempt timestamptz;
     v_now timestamptz;
     v_sent integer;
+    v_expired_completion_rejected boolean := false;
 begin
     perform extensions.dblink_connect(
         'operational-job-old',
@@ -5809,6 +5891,17 @@ begin
            active_lease_started_at = v_now - interval '15 minutes 1 second',
            active_lease_until = v_now - interval '1 second'
      where job_key = 'asset_gc';
+    begin
+        perform public.omr_complete_operational_job_run_v1(
+            'asset_gc', v_crashed_sequence, 'failed',
+            'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb', 'cleanup_failed'
+        );
+    exception when others then
+        v_expired_completion_rejected := true;
+    end;
+    if not v_expired_completion_rejected then
+        raise exception 'operational job expired lease completion was accepted';
+    end if;
     v_begin_recovered := public.omr_begin_operational_job_run_v1(
         'asset_gc', 'cccccccccccccccccccccccccccccccccccccccc'
     );

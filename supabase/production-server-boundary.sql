@@ -776,6 +776,16 @@ begin
             )
         ) > 0
         and position(
+            '''duplicate'', v_duplicate' in pg_catalog.pg_get_functiondef(
+                'public.omr_complete_operational_job_run_v1(text,bigint,text,text,text)'::pg_catalog.regprocedure
+            )
+        ) > 0
+        and position(
+            'operational job completion conflict' in pg_catalog.pg_get_functiondef(
+                'public.omr_complete_operational_job_run_v1(text,bigint,text,text,text)'::pg_catalog.regprocedure
+            )
+        ) > 0
+        and position(
             'lock table public.omr_remote_asset_cleanup_queue in share mode' in pg_catalog.pg_get_functiondef(
                 'public.omr_complete_operational_job_run_v1(text,bigint,text,text,text)'::pg_catalog.regprocedure
             )

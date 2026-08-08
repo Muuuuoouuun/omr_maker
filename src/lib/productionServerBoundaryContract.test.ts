@@ -403,6 +403,8 @@ describe("production server-only database boundary", () => {
         expect(operationalJobStatusMigration).toContain("v_now + interval '15 minutes'");
         expect(operationalJobStatusMigration).toContain("'admitted', false");
         expect(operationalJobStatusMigration).toContain("'busy', true");
+        expect(operationalJobStatusMigration).toContain("'duplicate', v_duplicate");
+        expect(operationalJobStatusMigration).toContain("operational job completion conflict");
         expect(operationalJobStatusMigration).toMatch(
             /greatest\([\s\S]{0,240}v_job_status\.last_attempt_at \+ interval '1 microsecond'/i,
         );
@@ -451,6 +453,10 @@ describe("production server-only database boundary", () => {
         expect(liveAssertions).toContain("operational job expired lease was not recovered");
         expect(liveAssertions).toContain("operational job rollback clock extended active lease");
         expect(liveAssertions).toContain("operational job wrong generation cleared active lease");
+        expect(liveAssertions).toContain("operational job duplicate completion changed terminal state");
+        expect(liveAssertions).toContain("operational job conflicting terminal replay was accepted");
+        expect(liveAssertions).toContain("operational job expired lease completion was accepted");
+        expect(liveAssertions).toContain("operational job mutable backlog broke idempotent completion");
         expect(liveAssertions).toContain("operational job concurrent begins did not admit exactly one cleanup");
         expect(liveAssertions).toContain(
             "operational job failure advanced last success",
@@ -485,6 +491,8 @@ describe("production server-only database boundary", () => {
             "v_job_status.active_lease_until > v_now",
             "active_lease_until = null",
             "interval ''15 minutes''",
+            "''duplicate'', v_duplicate",
+            "operational job completion conflict",
         ]) expect(profile).toContain(leaseAssertion);
         expect(rollback).toContain(
             "revoke all on table public.omr_operational_job_status from public, anon, authenticated, service_role",

@@ -20,6 +20,7 @@ export type OperationalJobRunCompletion = OperationalJobStatus & {
     runSequence: number;
     applied: boolean;
     superseded: boolean;
+    duplicate: boolean;
 };
 
 export type OperationalJobRunBegin =
@@ -231,13 +232,15 @@ export async function completeOperationalJobRun(
             || row.runSequence !== input.runSequence
             || typeof row.applied !== "boolean"
             || typeof row.superseded !== "boolean"
-            || row.applied === row.superseded
+            || typeof row.duplicate !== "boolean"
+            || [row.applied, row.superseded, row.duplicate].filter(Boolean).length !== 1
         ) throw new Error("invalid row");
         return {
             ...persisted,
             runSequence: input.runSequence,
             applied: row.applied,
             superseded: row.superseded,
+            duplicate: row.duplicate,
         };
     } catch {
         throw new Error("Operational job run completion failed");

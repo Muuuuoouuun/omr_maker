@@ -11,6 +11,22 @@ import {
     runProductionDeploymentVerification,
 } from "../../scripts/verify-production-deployment.mjs";
 
+type RequestJson = (
+    url: URL,
+    init: RequestInit,
+    fetchImpl: typeof fetch,
+    acceptedStatuses: number[],
+    timeoutMs?: number,
+) => Promise<{ status: number; body: unknown }>;
+
+async function loadRequestJson(): Promise<RequestJson> {
+    const verifier = await import("../../scripts/verify-production-deployment.mjs") as unknown as {
+        requestJson?: RequestJson;
+    };
+    expect(typeof verifier.requestJson).toBe("function");
+    return verifier.requestJson as RequestJson;
+}
+
 const PROJECT_REF = "production-project-ref";
 const BUILD = execFileSync("git", ["rev-parse", "--verify", "HEAD"], {
     encoding: "utf8",
@@ -122,6 +138,7 @@ function fetchFor(options: {
                 runSequence: 20,
                 applied: true,
                 superseded: false,
+                duplicate: false,
                 durableStatus: "healthy",
                 deadCount: 0,
                 ...options.assetGcBody,
@@ -160,6 +177,93 @@ function fetchFor(options: {
 }
 
 describe("hosted production deployment verification", () => {
+    it("uses a bounded 12-second default and an explicit 65-second cleanup deadline", async () => {
+        vi.useFakeTimers();
+        try {
+            const requestJson = await loadRequestJson();
+            const pendingFetch = vi.fn((_input: URL | RequestInfo, init?: RequestInit) => new Promise<Response>(
+                (_resolve, reject) => init?.signal?.addEventListener("abort", () => reject(init.signal?.reason)),
+            ));
+
+            const defaultRequest = requestJson(
+                new URL("https://app.example.com/api/healthz"),
+                { method: "GET" },
+                pendingFetch as typeof fetch,
+                [200],
+            );
+            const defaultExpectation = expect(defaultRequest).rejects
+                .toThrow("Hosted verification request failed");
+            await vi.advanceTimersByTimeAsync(11_999);
+            expect((pendingFetch.mock.calls[0]?.[1]?.signal as AbortSignal).aborted).toBe(false);
+            await vi.advanceTimersByTimeAsync(1);
+            await defaultExpectation;
+
+            const cleanupRequest = requestJson(
+                new URL("https://app.example.com/api/internal/asset-gc"),
+                { method: "GET" },
+                pendingFetch as typeof fetch,
+                [200],
+                65_000,
+            );
+            const cleanupExpectation = expect(cleanupRequest).rejects
+                .toThrow("Hosted verification request failed");
+            await vi.advanceTimersByTimeAsync(64_999);
+            expect((pendingFetch.mock.calls[1]?.[1]?.signal as AbortSignal).aborted).toBe(false);
+            await vi.advanceTimersByTimeAsync(1);
+            await cleanupExpectation;
+        } finally {
+            vi.useRealTimers();
+        }
+    });
+
+    it("accepts a controlled 55-second cleanup response and rejects beyond 65 seconds", async () => {
+        vi.useFakeTimers();
+        try {
+            const requestJson = await loadRequestJson();
+            const delayedResponse = (delayMs: number) => vi.fn((input: URL | RequestInfo, init?: RequestInit) => new Promise<Response>((resolve, reject) => {
+                const timer = setTimeout(() => {
+                    const result = response(String(input), { status: "ok" });
+                    Object.defineProperties(result, {
+                        url: { value: String(input) },
+                        redirected: { value: false },
+                    });
+                    resolve(result);
+                }, delayMs);
+                init?.signal?.addEventListener("abort", () => {
+                    clearTimeout(timer);
+                    reject(init.signal?.reason);
+                });
+            }));
+            const url = new URL("https://app.example.com/api/internal/asset-gc");
+
+            const accepted = requestJson(url, { method: "GET" }, delayedResponse(55_000), [200], 65_000);
+            await vi.advanceTimersByTimeAsync(55_000);
+            await expect(accepted).resolves.toMatchObject({ status: 200 });
+
+            const rejected = requestJson(url, { method: "GET" }, delayedResponse(65_001), [200], 65_000);
+            const rejectedExpectation = expect(rejected).rejects
+                .toThrow("Hosted verification request failed");
+            await vi.advanceTimersByTimeAsync(65_000);
+            await rejectedExpectation;
+        } finally {
+            vi.useRealTimers();
+        }
+    });
+
+    it.each([0, 99, 65_001, 1.5, Number.NaN])(
+        "rejects unsafe request timeout %s",
+        async timeoutMs => {
+            const requestJson = await loadRequestJson();
+            await expect(requestJson(
+                new URL("https://app.example.com/api/healthz"),
+                { method: "GET" },
+                fetch,
+                [200],
+                timeoutMs,
+            )).rejects.toThrow(/timeout/i);
+        },
+    );
+
     it("exports the versioned canonical preview identity payload for release signers", () => {
         expect(buildPreviewIdentityAttestationPayload({
             expectedBuild: BUILD,
@@ -497,6 +601,7 @@ describe("hosted production deployment verification", () => {
         ["capacity mismatch", { claimed: 26, deleted: 26, nonemptyBatches: 1 }],
         ["empty with nonempty batch", { claimed: 0, deleted: 0, nonemptyBatches: 1 }],
         ["unapplied generation", { applied: false, superseded: true }],
+        ["duplicate generation", { applied: false, superseded: false, duplicate: true }],
         ["dead durable status", { durableStatus: "failed", deadCount: 1 }],
         ["unsafe integer", { claimed: Number.MAX_SAFE_INTEGER + 1 }],
     ])("rejects adversarial one-shot proof: %s", async (_label, assetGcBody) => {
