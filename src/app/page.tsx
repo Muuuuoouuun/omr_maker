@@ -58,6 +58,7 @@ import { setCurrentPlan } from "@/utils/plans";
 import { readGuestRecoveryState } from "@/lib/studentGuestRecovery";
 import { readExamEntryInviteHandoff } from "@/lib/examEntryInviteHandoff";
 import { useTeacherIdentityMode } from "@/components/TeacherIdentityModeProvider";
+import { buildTeacherRecoveryCanonicalUrl } from "@/lib/teacherRecoveryCanonical";
 
 /* ─── SVG Icons ──────────────────────────────────────── */
 
@@ -232,14 +233,8 @@ function scrubTeacherLifecycleQuery(query: URLSearchParams): void {
   );
 }
 
-function redirectToCanonicalTeacherRecovery(query: URLSearchParams): void {
-  const sanitized = new URLSearchParams(query);
-  sanitized.delete("teacherResetToken");
-  sanitized.delete("teacherVerifyToken");
-  sanitized.set("role", "teacher");
-  sanitized.set("teacherRecovery", "legacy_link");
-  const search = sanitized.toString();
-  window.location.replace(`/${search ? `?${search}` : ""}${window.location.hash}`);
+function redirectToCanonicalTeacherRecovery(): void {
+  window.location.replace(buildTeacherRecoveryCanonicalUrl(new URL(window.location.href)));
 }
 
 export default function Home() {
@@ -345,7 +340,7 @@ export default function Home() {
     if (!teacherSelfServiceEnabled && hasTeacherLifecycleQuery) {
       setRole("teacher");
       setTeacherLegacyLinkBlocked(true);
-      redirectToCanonicalTeacherRecovery(query);
+      redirectToCanonicalTeacherRecovery();
       return () => { cancelled = true; };
     }
     if (teacherOperatorRecovery) {

@@ -75,6 +75,12 @@ test.describe("provisioned-only legacy teacher links", () => {
             "현재 운영 모드에서는 이 링크를 사용할 수 없습니다. 운영자에게 계정 또는 비밀번호 재발급을 요청해주세요.",
             { exact: true },
         )).toBeVisible();
+        await expect(page).toHaveURL(url => {
+            const current = new URL(url);
+            return current.pathname === "/"
+                && current.search === "?role=teacher&teacherRecovery=legacy_link&next=%2Fteacher%2Fsettings"
+                && current.hash === "";
+        });
         await page.waitForTimeout(100);
         expect(serverActionRequests).toEqual([]);
     });
@@ -104,4 +110,57 @@ test.describe("provisioned-only legacy teacher links", () => {
         expect(serializedRequests).not.toContain("teacherResetToken");
         expect(serializedRequests).not.toContain("teacherVerifyToken");
     });
+
+    const adversarialCases = [
+        {
+            name: "nested next and fragment",
+            secrets: ["NESTED_SECRET"],
+            url: "/?teacherResetToken=NESTED_SECRET&next=%2Fteacher%2Fsettings%3FteacherResetToken%3DNESTED_SECRET%26echo%3DNESTED_SECRET#teacherVerifyToken=NESTED_SECRET",
+        },
+        {
+            name: "encoded and double-encoded values",
+            secrets: ["ENCODED_SECRET"],
+            url: "/?%74eacherVerifyToken=ENCODED_SECRET&next=%252Fteacher%252Fsettings%253FteacherVerifyToken%253DENCODED_SECRET&echo=%2574eacherResetToken%253DENCODED_SECRET",
+        },
+        {
+            name: "duplicate token and next parameters",
+            secrets: ["FIRST_SECRET", "SECOND_SECRET"],
+            url: "/?teacherResetToken=FIRST_SECRET&teacherResetToken=SECOND_SECRET&next=%2Fteacher%2Fsettings&next=%2Fteacher%2Fdashboard%3FteacherResetToken%3DSECOND_SECRET",
+        },
+    ] as const;
+
+    for (const adversarialCase of adversarialCases) {
+        test(`drops ${adversarialCase.name} before a later Server Action`, async ({ page }) => {
+            const actionRequests: Array<{ url: string; body: string; headers: Record<string, string> }> = [];
+            page.on("request", request => {
+                if (request.method() === "POST" && request.headers()["next-action"]) {
+                    actionRequests.push({
+                        url: request.url(),
+                        body: request.postData() || "",
+                        headers: request.headers(),
+                    });
+                }
+            });
+
+            await page.goto(adversarialCase.url);
+            await expect(page.getByRole("form", { name: "교사 로그인" })).toBeVisible();
+            await expect(page).toHaveURL(url => {
+                const current = new URL(url);
+                return current.pathname === "/"
+                    && current.search === "?role=teacher&teacherRecovery=legacy_link"
+                    && current.hash === "";
+            });
+            await page.getByLabel("아이디 또는 이메일").fill("operator-issued-id");
+            await page.getByLabel("비밀번호").fill("not-a-real-password");
+            await page.getByRole("button", { name: "대시보드 입장" }).click();
+            await expect.poll(() => actionRequests.length).toBeGreaterThan(0);
+
+            const serializedRequests = JSON.stringify(actionRequests);
+            expect(serializedRequests).not.toContain("teacherResetToken");
+            expect(serializedRequests).not.toContain("teacherVerifyToken");
+            for (const secret of adversarialCase.secrets) {
+                expect(serializedRequests).not.toContain(secret);
+            }
+        });
+    }
 });

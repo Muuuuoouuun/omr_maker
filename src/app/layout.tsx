@@ -13,6 +13,7 @@ import ViewportHeightSync from "@/components/ViewportHeightSync";
 import NativePlatformSync from "@/components/NativePlatformSync";
 import TeacherIdentityModeProvider from "@/components/TeacherIdentityModeProvider";
 import { PWA_STARTUP_IMAGE_LINKS } from "@/lib/pwaStartupImages";
+import { TEACHER_RECOVERY_SAFE_NEXT_PATHS } from "@/lib/teacherRecoveryCanonical";
 import { resolveTeacherIdentityMode } from "@/lib/teacherIdentityMode.server";
 
 export const metadata: Metadata = {
@@ -121,12 +122,16 @@ const teacherLegacyLinkCanonicalizationScript = `
     var url = new URL(window.location.href);
     var hasLegacyTeacherToken = url.searchParams.has('teacherResetToken') || url.searchParams.has('teacherVerifyToken');
     if (!hasLegacyTeacherToken) return;
-    url.searchParams.delete('teacherResetToken');
-    url.searchParams.delete('teacherVerifyToken');
-    url.searchParams.set('role', 'teacher');
-    url.searchParams.set('teacherRecovery', 'legacy_link');
-    var search = url.searchParams.toString();
-    var canonicalUrl = '/' + (search ? '?' + search : '') + url.hash;
+    var canonicalSearch = new URLSearchParams();
+    canonicalSearch.set('role', 'teacher');
+    canonicalSearch.set('teacherRecovery', 'legacy_link');
+    var requestedNextValues = url.searchParams.getAll('next');
+    var requestedNext = requestedNextValues.length === 1 ? requestedNextValues[0] : '';
+    var safeNextPaths = ${JSON.stringify(TEACHER_RECOVERY_SAFE_NEXT_PATHS)};
+    if (safeNextPaths.indexOf(requestedNext) !== -1) {
+      canonicalSearch.set('next', requestedNext);
+    }
+    var canonicalUrl = '/?' + canonicalSearch.toString();
     window.location.replace(canonicalUrl);
   } catch (e) {
     // The client effect provides a second fail-closed redirect if URL parsing

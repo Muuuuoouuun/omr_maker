@@ -63,6 +63,23 @@ describe("provisioned-only teacher identity surface", () => {
         expect(queryEffect).toContain('!teacherOperatorRecovery && requestedRole === "student"');
     });
 
+    it("rebuilds provisioned recovery URLs from a strict shared allowlist", () => {
+        const layout = source("src/app/layout.tsx");
+        const page = source("src/app/page.tsx");
+        const provisionedRedirect = page.slice(
+            page.indexOf("function redirectToCanonicalTeacherRecovery"),
+            page.indexOf("export default function Home"),
+        );
+
+        expect(layout).toContain("TEACHER_RECOVERY_SAFE_NEXT_PATHS");
+        expect(layout).toContain("var canonicalSearch = new URLSearchParams();");
+        expect(layout).toContain("url.searchParams.getAll('next')");
+        expect(layout).not.toContain("url.searchParams.delete('teacherResetToken')");
+        expect(layout).not.toContain("+ url.hash");
+        expect(page).toContain("buildTeacherRecoveryCanonicalUrl(new URL(window.location.href))");
+        expect(provisionedRedirect).not.toContain("new URLSearchParams(query)");
+    });
+
     it("stores or uses valid self-service tokens before scrubbing them from the address bar", () => {
         const page = source("src/app/page.tsx");
         const queryLifecycle = page.slice(
