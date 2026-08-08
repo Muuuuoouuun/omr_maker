@@ -13,7 +13,7 @@ import ViewportHeightSync from "@/components/ViewportHeightSync";
 import NativePlatformSync from "@/components/NativePlatformSync";
 import TeacherIdentityModeProvider from "@/components/TeacherIdentityModeProvider";
 import { PWA_STARTUP_IMAGE_LINKS } from "@/lib/pwaStartupImages";
-import { resolveTeacherIdentityMode } from "@/lib/teacherIdentityMode";
+import { resolveTeacherIdentityMode } from "@/lib/teacherIdentityMode.server";
 
 export const metadata: Metadata = {
   applicationName: "OMR Maker",

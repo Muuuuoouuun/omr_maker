@@ -219,6 +219,19 @@ function pendingGuestAttemptIds(): string[] {
     .map(attempt => attempt.id);
 }
 
+function scrubTeacherLifecycleQuery(query: URLSearchParams): void {
+  const sanitized = new URLSearchParams(query);
+  sanitized.delete("teacherResetToken");
+  sanitized.delete("teacherVerifyToken");
+  sanitized.set("role", "teacher");
+  const search = sanitized.toString();
+  window.history.replaceState(
+    window.history.state,
+    "",
+    `${window.location.pathname}${search ? `?${search}` : ""}${window.location.hash}`,
+  );
+}
+
 export default function Home() {
   const router = useRouter();
   const teacherIdentityMode = useTeacherIdentityMode();
@@ -236,6 +249,7 @@ export default function Home() {
   const [teacherAccountMode, setTeacherAccountMode] = useState<"login" | "signup" | "reset" | "reset_complete">("login");
   const visibleTeacherAccountMode = teacherSelfServiceEnabled ? teacherAccountMode : "login";
   const [teacherResetToken, setTeacherResetToken] = useState("");
+  const [teacherLegacyLinkBlocked, setTeacherLegacyLinkBlocked] = useState(false);
   const [teacherLifecyclePending, setTeacherLifecyclePending] = useState(false);
   const [mockupLoginPending, setMockupLoginPending] = useState(false);
   const [error, setError] = useState("");
@@ -313,6 +327,7 @@ export default function Home() {
     }
     const resetToken = query.get("teacherResetToken")?.trim() || "";
     const verifyToken = query.get("teacherVerifyToken")?.trim() || "";
+    const hasTeacherLifecycleQuery = query.has("teacherResetToken") || query.has("teacherVerifyToken");
     if (teacherSelfServiceEnabled && resetToken) {
       setRole("teacher");
       setTeacherResetToken(resetToken);
@@ -320,7 +335,8 @@ export default function Home() {
     } else if (teacherSelfServiceEnabled && verifyToken) {
       setRole("teacher");
       setTeacherLifecyclePending(true);
-      void confirmTeacherSignupEmail(verifyToken).then(result => {
+      const verification = confirmTeacherSignupEmail(verifyToken);
+      void verification.then(result => {
         if (!cancelled) setError(result.status === "verified"
           ? "이메일 확인이 완료되었습니다. 이제 로그인할 수 있습니다."
           : "확인 링크가 만료되었거나 이미 사용되었습니다.");
@@ -329,6 +345,14 @@ export default function Home() {
       }).finally(() => {
         if (!cancelled) setTeacherLifecyclePending(false);
       });
+    } else if (!teacherSelfServiceEnabled && hasTeacherLifecycleQuery) {
+      setRole("teacher");
+      setTeacherLegacyLinkBlocked(true);
+    } else if (hasTeacherLifecycleQuery) {
+      setRole("teacher");
+    }
+    if (hasTeacherLifecycleQuery) {
+      scrubTeacherLifecycleQuery(query);
     }
     const requestedExam = query.get("exam")?.trim() || "";
     const requestedInvite = requestedExam
@@ -368,7 +392,7 @@ export default function Home() {
         setSelectedGroupId("");
         setStudentDirectoryStatus("error");
       });
-    } else if (requestedRole === "student") {
+    } else if (requestedRole === "student" && !hasTeacherLifecycleQuery) {
       // A guest account connection can resume without exposing organization
       // scope only when the signed HttpOnly cookie already carries both the
       // organization and class. A signed student cookie can restore the local
@@ -1473,7 +1497,9 @@ export default function Home() {
                     </>
                   ) : (
                     <p style={{ color: "var(--muted)", fontSize: "var(--type-caption)", lineHeight: 1.5 }}>
-                      운영자에게 계정 또는 비밀번호 재발급을 요청해주세요
+                      {teacherLegacyLinkBlocked
+                        ? "현재 운영 모드에서는 이 링크를 사용할 수 없습니다. 운영자에게 계정 또는 비밀번호 재발급을 요청해주세요."
+                        : "운영자에게 계정 또는 비밀번호 재발급을 요청해주세요"}
                     </p>
                   )}
                 </div>

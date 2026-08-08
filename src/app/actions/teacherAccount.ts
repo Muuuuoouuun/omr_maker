@@ -23,7 +23,7 @@ import {
     validateTeacherSignupInput,
 } from "@/lib/teacherAccountLifecycle";
 import { isSameOriginServerActionRequest } from "@/lib/serverActionSecurity";
-import { resolveTeacherIdentityMode } from "@/lib/teacherIdentityMode";
+import { resolveTeacherIdentityMode } from "@/lib/teacherIdentityMode.server";
 import {
     createSupabaseAdminClient,
     getSupabaseServerConfigFromEnv,

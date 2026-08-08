@@ -137,6 +137,14 @@ CRUD 성공을 모두 확인합니다.
 
 ## 3. 환경 변수 위생
 
+### 교사 계정 운영 모드 컷오버
+
+`provisioned_only` 전환 즉시 대기 중인 이메일 확인 및 비밀번호 재설정 완료 작업은 무효화됩니다.
+따라서 전환 전에 대기 계정을 통지하고 정합성을 확인해야 합니다. 전환 뒤에는 공개 가입·이메일
+확인·비밀번호 재설정 링크를 복구 경로로 사용하지 않으며, 운영자 계정 발급 또는 비밀번호 재발급을
+요청하는 것이 유일한 복구 경로입니다. 이 절차는 이메일 전달 기능이 동작한다고 가정하거나 주장하지
+않습니다.
+
 - 앱 코드가 사용하는 Supabase 변수: `NEXT_PUBLIC_SUPABASE_URL`,
   `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY`(또는 `NEXT_PUBLIC_SUPABASE_ANON_KEY`),
   `SUPABASE_SERVICE_ROLE_KEY`(또는 `OMR_SUPABASE_SERVICE_ROLE_KEY`).

@@ -11,7 +11,7 @@ describe("provisioned-only teacher identity surface", () => {
         const layout = source("src/app/layout.tsx");
         const provider = source("src/components/TeacherIdentityModeProvider.tsx");
 
-        expect(layout).toContain('import { resolveTeacherIdentityMode } from "@/lib/teacherIdentityMode";');
+        expect(layout).toContain('import { resolveTeacherIdentityMode } from "@/lib/teacherIdentityMode.server";');
         expect(layout).toContain("const teacherIdentityMode = resolveTeacherIdentityMode();");
         expect(layout).toContain("<TeacherIdentityModeProvider mode={teacherIdentityMode}>");
         expect(provider).toContain('createContext<TeacherIdentityMode>("provisioned_only")');
@@ -41,6 +41,22 @@ describe("provisioned-only teacher identity surface", () => {
 
         expect(queryLifecycle).toContain("if (teacherSelfServiceEnabled && resetToken)");
         expect(queryLifecycle).toContain("else if (teacherSelfServiceEnabled && verifyToken)");
+        expect(queryLifecycle).toContain("setTeacherLegacyLinkBlocked(true)");
+        expect(queryLifecycle).toContain("scrubTeacherLifecycleQuery(query)");
+        expect(page).toContain("현재 운영 모드에서는 이 링크를 사용할 수 없습니다.");
         expect(page).not.toMatch(/NEXT_PUBLIC_OMR_TEACHER_IDENTITY_MODE/);
+    });
+
+    it("stores or uses valid self-service tokens before scrubbing them from the address bar", () => {
+        const page = source("src/app/page.tsx");
+        const queryLifecycle = page.slice(
+            page.indexOf('const resetToken = query.get("teacherResetToken")'),
+            page.indexOf('const requestedExam = query.get("exam")'),
+        );
+        const scrub = queryLifecycle.indexOf("scrubTeacherLifecycleQuery(query)");
+
+        expect(queryLifecycle.indexOf("setTeacherResetToken(resetToken)")).toBeLessThan(scrub);
+        expect(queryLifecycle.indexOf("confirmTeacherSignupEmail(verifyToken)")).toBeLessThan(scrub);
+        expect(queryLifecycle).toContain("!teacherSelfServiceEnabled && hasTeacherLifecycleQuery");
     });
 });

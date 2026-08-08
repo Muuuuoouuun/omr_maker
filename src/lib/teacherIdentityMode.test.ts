@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { resolveTeacherIdentityMode } from "./teacherIdentityMode";
+import { resolveTeacherIdentityMode } from "./teacherIdentityMode.server";
 
 describe("teacher identity mode", () => {
     it("locks production to provisioned-only for every configured value", () => {
