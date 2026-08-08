@@ -979,6 +979,7 @@ export default function ExamAnalyticsTab({
                     attemptRegionName(student.attempt),
                 ].filter(Boolean).join(" · "),
                 scorePercentage: student.scorePercentage,
+                hasPerformanceScore: student.hasPerformanceScore,
                 attempt: student.attempt,
             }))
             .filter(student => {
@@ -1063,7 +1064,7 @@ export default function ExamAnalyticsTab({
         if (analysisScope === "student") {
             const selected = studentScopeOptions.find(student => student.key === activeStudentKey);
             return selected
-                ? `${selected.label} · 점수 ${selected.scorePercentage}%`
+                ? `${selected.label} · ${selected.hasPerformanceScore ? `점수 ${selected.scorePercentage}%` : "미채점"}`
                 : "학생 제출이 없습니다.";
         }
 
@@ -2004,7 +2005,7 @@ export default function ExamAnalyticsTab({
                                     {studentScopeOptions.length > 0 ? (
                                         studentScopeOptions.map(student => (
                                             <option key={student.key} value={student.key}>
-                                                {student.label} ({student.scorePercentage}%)
+                                                {student.label} ({student.hasPerformanceScore ? `${student.scorePercentage}%` : "미채점"})
                                             </option>
                                         ))
                                     ) : (
@@ -2237,13 +2238,23 @@ export default function ExamAnalyticsTab({
                                                         </div>
                                                     </td>
                                                     <td style={{ padding: '0.85rem 0.9rem' }}>
-                                                        <div style={{ fontWeight: 900, color: pressureColor }}>{row.wrongRate}%</div>
-                                                        <div style={{ fontSize: '0.74rem', color: 'var(--muted)', marginTop: '0.15rem' }}>
-                                                            {row.wrongCount}/{row.totalCount}
-                                                        </div>
+                                                        {row.totalCount > 0 ? (
+                                                            <>
+                                                                <div style={{ fontWeight: 900, color: pressureColor }}>{row.wrongRate}%</div>
+                                                                <div style={{ fontSize: '0.74rem', color: 'var(--muted)', marginTop: '0.15rem' }}>
+                                                                    {row.wrongCount}/{row.totalCount}
+                                                                </div>
+                                                            </>
+                                                        ) : (
+                                                            <span style={{ color: 'var(--muted)', fontWeight: 800 }}>근거 없음</span>
+                                                        )}
                                                     </td>
                                                     <td style={{ padding: '0.85rem 0.9rem', color: 'var(--muted)', fontWeight: 800 }}>
-                                                        {row.focusQuestionNumbers.length > 0 ? `${row.focusQuestionNumbers.join(', ')}번` : '안정'}
+                                                        {row.totalCount === 0
+                                                            ? '미채점'
+                                                            : row.focusQuestionNumbers.length > 0
+                                                                ? `${row.focusQuestionNumbers.join(', ')}번`
+                                                                : '안정'}
                                                     </td>
                                                     <td style={{ padding: '0.85rem 0.9rem' }}>
                                                         {topRecommendation ? (
@@ -2253,6 +2264,8 @@ export default function ExamAnalyticsTab({
                                                                     {topRecommendation.basis} · {topRecommendation.wrongRate}%
                                                                 </div>
                                                             </div>
+                                                        ) : row.totalCount === 0 ? (
+                                                            <span style={{ color: 'var(--muted)', fontSize: '0.8rem', fontWeight: 900 }}>근거 없음</span>
                                                         ) : (
                                                             <span style={{ color: 'var(--success)', fontSize: '0.8rem', fontWeight: 900 }}>추가 보강 없음</span>
                                                         )}
@@ -2271,6 +2284,8 @@ export default function ExamAnalyticsTab({
                                                             >
                                                                 반별 세트
                                                             </PremiumActionLink>
+                                                        ) : row.totalCount === 0 ? (
+                                                            <span style={{ color: 'var(--muted)', fontSize: '0.78rem', fontWeight: 800 }}>미채점</span>
                                                         ) : (
                                                             <span style={{ color: 'var(--muted)', fontSize: '0.78rem', fontWeight: 800 }}>유지</span>
                                                         )}

@@ -28,6 +28,56 @@ describe("exam analytics sample completeness", () => {
 });
 
 describe("exam analytics report headline", () => {
+    it.each([
+        {
+            name: "ungraded observation",
+            input: { hasGradableEvidence: false, lowStudentCount: 0, riskyQuestionCount: 0 },
+            detail: "전체 제출 8건 중 채점 가능한 5명 기준 · 미채점 문항은 취약 개념과 행동 추천에서 제외했습니다.",
+        },
+        {
+            name: "missing-rate observation",
+            input: { weakConcept: "시제", lowStudentCount: 0, riskyQuestionCount: 0 },
+            detail: "전체 제출 8건 중 채점 가능한 5명 기준 · ‘시제’ 정답률을 계산할 수 없습니다.",
+        },
+        {
+            name: "weak-concept action",
+            input: { weakConcept: "시제", weakConceptRate: 60, lowStudentCount: 1, riskyQuestionCount: 2 },
+            detail: "정답률 60% · 지원 학생 1명 · 점검 문항 2개 · 전체 제출 8건 중 채점 가능한 5명 기준",
+        },
+        {
+            name: "risky-question observation",
+            input: { weakConcept: "시제", weakConceptRate: 80, lowStudentCount: 0, riskyQuestionCount: 2 },
+            detail: "재점검이 필요한 문항 2개 · 전체 제출 8건 중 채점 가능한 5명 기준입니다.",
+        },
+        {
+            name: "low-student observation",
+            input: { weakConcept: "시제", weakConceptRate: 80, lowStudentCount: 1, riskyQuestionCount: 0 },
+            detail: "60점 미만 학생 1명 · 전체 제출 8건 중 채점 가능한 5명 기준입니다.",
+        },
+        {
+            name: "positive",
+            input: { weakConcept: "시제", weakConceptRate: 80, lowStudentCount: 0, riskyQuestionCount: 0 },
+            detail: "전체 제출 8건 중 채점 가능한 5명 기준입니다.",
+        },
+    ])("uses the mixed evidence basis in the $name branch", ({ input, detail }) => {
+        expect(buildExamHeadlineInsight({
+            performanceCount: 5,
+            totalSubmissionCount: 8,
+            ...input,
+        })).toMatchObject({ detail });
+    });
+
+    it("keeps equal submission and performance counts concise", () => {
+        expect(buildExamHeadlineInsight({
+            performanceCount: 5,
+            totalSubmissionCount: 5,
+            weakConcept: "시제",
+            weakConceptRate: 80,
+            lowStudentCount: 0,
+            riskyQuestionCount: 0,
+        }).detail).toBe("5명 제출 기준입니다.");
+    });
+
     it("does not fabricate an action when every question lacks gradable evidence", () => {
         expect(buildExamHeadlineInsight({
             performanceCount: 8,
@@ -39,7 +89,7 @@ describe("exam analytics report headline", () => {
         })).toEqual({
             tone: "observation",
             title: "채점 가능한 문항 근거가 더 필요합니다",
-            detail: "미채점 문항은 취약 개념과 행동 추천에서 제외했습니다.",
+            detail: "8명 제출 기준 · 미채점 문항은 취약 개념과 행동 추천에서 제외했습니다.",
         });
     });
 
@@ -67,7 +117,7 @@ describe("exam analytics report headline", () => {
         })).toEqual({
             tone: "observation",
             title: "경향을 확정하려면 표본이 더 필요합니다",
-            detail: "현재 0명 제출 기준입니다.",
+            detail: "0명 제출 기준입니다.",
         });
     });
 
@@ -81,7 +131,7 @@ describe("exam analytics report headline", () => {
         })).toEqual({
             tone: "action",
             title: "‘시제’ 보강이 가장 효과적입니다",
-            detail: "정답률 69% · 지원 학생 2명 · 점검 문항 3개",
+            detail: "정답률 69% · 지원 학생 2명 · 점검 문항 3개 · 5명 제출 기준",
         });
     });
 
@@ -95,7 +145,7 @@ describe("exam analytics report headline", () => {
         })).toEqual({
             tone: "observation",
             title: "문항별 정답률 차이를 먼저 점검해 주세요",
-            detail: "재점검이 필요한 문항 2개입니다.",
+            detail: "재점검이 필요한 문항 2개 · 8명 제출 기준입니다.",
         });
     });
 
@@ -123,7 +173,7 @@ describe("exam analytics report headline", () => {
         })).toEqual({
             tone: "observation",
             title: "지원이 필요한 학생을 먼저 확인해 주세요",
-            detail: "60점 미만 학생 5명입니다.",
+            detail: "60점 미만 학생 5명 · 5명 제출 기준입니다.",
         });
     });
 
@@ -135,7 +185,7 @@ describe("exam analytics report headline", () => {
         })).toEqual({
             tone: "observation",
             title: "지원이 필요한 학생을 먼저 확인해 주세요",
-            detail: "60점 미만 학생 5명입니다.",
+            detail: "60점 미만 학생 5명 · 5명 제출 기준입니다.",
         });
     });
 
@@ -159,7 +209,7 @@ describe("exam analytics report headline", () => {
         })).toEqual({
             tone: "action",
             title: "‘시제’ 보강이 가장 효과적입니다",
-            detail: "정답률 12% · 지원 학생 0명 · 점검 문항 2개",
+            detail: "정답률 12% · 지원 학생 0명 · 점검 문항 2개 · 5명 제출 기준",
         });
 
         expect(buildExamHeadlineInsight({
@@ -169,7 +219,7 @@ describe("exam analytics report headline", () => {
         })).toEqual({
             tone: "observation",
             title: "경향을 확정하려면 표본이 더 필요합니다",
-            detail: "현재 0명 제출 기준입니다.",
+            detail: "0명 제출 기준입니다.",
         });
     });
 
@@ -184,7 +234,7 @@ describe("exam analytics report headline", () => {
         expect(insight).toEqual({
             tone: "observation",
             title: "취약 개념의 근거 데이터를 확인해 주세요",
-            detail: "‘시제’ 정답률을 계산할 수 없습니다.",
+            detail: "9명 제출 기준 · ‘시제’ 정답률을 계산할 수 없습니다.",
         });
         expect(insight.detail).not.toContain("undefined%");
     });
@@ -201,7 +251,7 @@ describe("exam analytics report headline", () => {
             })).toEqual({
                 tone: "observation",
                 title: "취약 개념의 근거 데이터를 확인해 주세요",
-                detail: "‘시제’ 정답률을 계산할 수 없습니다.",
+                detail: "9명 제출 기준 · ‘시제’ 정답률을 계산할 수 없습니다.",
             });
         },
     );
@@ -216,7 +266,7 @@ describe("exam analytics report headline", () => {
         })).toEqual({
             tone: "action",
             title: "‘시제’ 보강이 가장 효과적입니다",
-            detail: "정답률 69.9% · 지원 학생 2명 · 점검 문항 1개",
+            detail: "정답률 69.9% · 지원 학생 2명 · 점검 문항 1개 · 9명 제출 기준",
         });
 
         expect(buildExamHeadlineInsight({
@@ -228,7 +278,7 @@ describe("exam analytics report headline", () => {
         })).toEqual({
             tone: "observation",
             title: "문항별 정답률 차이를 먼저 점검해 주세요",
-            detail: "재점검이 필요한 문항 1개입니다.",
+            detail: "재점검이 필요한 문항 1개 · 9명 제출 기준입니다.",
         });
     });
 

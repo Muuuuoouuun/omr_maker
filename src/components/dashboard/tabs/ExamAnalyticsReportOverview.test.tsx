@@ -221,6 +221,34 @@ describe("ExamAnalyticsReportOverview", () => {
         expect(ungradedStudentRow).not.toHaveTextContent("0점");
         expect(ungradedStudentRow).not.toHaveTextContent("(0%)");
         expect(ungradedStudentRow).not.toHaveTextContent("정답률 0%");
+
+        fireEvent.click(screen.getByRole("button", { name: "학생별" }));
+        const ungradedOption = screen.getByRole("option", { name: "학생 2 · A반 (미채점)" });
+        const studentSelect = ungradedOption.closest<HTMLSelectElement>("select");
+        expect(studentSelect).not.toBeNull();
+        fireEvent.change(studentSelect!, { target: { value: "student-2" } });
+        expect(screen.getByText("학생 2 · A반 · 미채점")).toBeInTheDocument();
+    });
+
+    it("renders a fully ungraded class matrix as unavailable evidence", () => {
+        const { exam, attempts } = buildUngradedExamAnalyticsFixture();
+        const groupedAttempts = attempts.map((attempt, index) => ({
+            ...attempt,
+            studentId: `student-${index + 1}`,
+            groupId: "class-a",
+            groupName: "A반",
+        }));
+        render(<ExamAnalyticsTab exams={[exam]} attempts={groupedAttempts} currentPlan="pro" />);
+
+        fireEvent.click(screen.getByRole("tab", { name: "학생·반" }));
+        const matrixRow = screen.getByRole("row", { name: /A반.*제출 5건/ });
+
+        expect(matrixRow).toHaveTextContent("미채점");
+        expect(matrixRow).toHaveTextContent("근거 없음");
+        expect(matrixRow).not.toHaveTextContent("0%");
+        expect(matrixRow).not.toHaveTextContent("안정");
+        expect(matrixRow).not.toHaveTextContent("추가 보강 없음");
+        expect(matrixRow).not.toHaveTextContent("유지");
     });
 
     it.each([
