@@ -111,6 +111,30 @@ const themeInitScript = `
 })();
 `;
 
+// Provisioned deployments must replace legacy lifecycle URLs before React or
+// Next's client router can retain the token-bearing route as an action target.
+// The non-secret sentinel restores the honest operator-recovery surface after
+// the canonical, token-free document has loaded.
+const teacherLegacyLinkCanonicalizationScript = `
+(function() {
+  try {
+    var url = new URL(window.location.href);
+    var hasLegacyTeacherToken = url.searchParams.has('teacherResetToken') || url.searchParams.has('teacherVerifyToken');
+    if (!hasLegacyTeacherToken) return;
+    url.searchParams.delete('teacherResetToken');
+    url.searchParams.delete('teacherVerifyToken');
+    url.searchParams.set('role', 'teacher');
+    url.searchParams.set('teacherRecovery', 'legacy_link');
+    var search = url.searchParams.toString();
+    var canonicalUrl = '/' + (search ? '?' + search : '') + url.hash;
+    window.location.replace(canonicalUrl);
+  } catch (e) {
+    // The client effect provides a second fail-closed redirect if URL parsing
+    // is unavailable during the pre-hydration pass.
+  }
+})();
+`;
+
 export default function RootLayout({
   children,
 }: Readonly<{
@@ -122,6 +146,9 @@ export default function RootLayout({
     <html lang="ko" data-theme="light" data-scroll-behavior="smooth" suppressHydrationWarning>
       <head>
         <script dangerouslySetInnerHTML={{ __html: themeInitScript }} />
+        {teacherIdentityMode === "provisioned_only" ? (
+          <script dangerouslySetInnerHTML={{ __html: teacherLegacyLinkCanonicalizationScript }} />
+        ) : null}
       </head>
       <body>
         <NativePlatformSync />

@@ -232,6 +232,16 @@ function scrubTeacherLifecycleQuery(query: URLSearchParams): void {
   );
 }
 
+function redirectToCanonicalTeacherRecovery(query: URLSearchParams): void {
+  const sanitized = new URLSearchParams(query);
+  sanitized.delete("teacherResetToken");
+  sanitized.delete("teacherVerifyToken");
+  sanitized.set("role", "teacher");
+  sanitized.set("teacherRecovery", "legacy_link");
+  const search = sanitized.toString();
+  window.location.replace(`/${search ? `?${search}` : ""}${window.location.hash}`);
+}
+
 export default function Home() {
   const router = useRouter();
   const teacherIdentityMode = useTeacherIdentityMode();
@@ -322,13 +332,26 @@ export default function Home() {
 
     const query = new URLSearchParams(window.location.search);
     const requestedRole = query.get("role");
-    if (requestedRole === "student" || requestedRole === "teacher") {
+    const teacherOperatorRecovery = query.get("teacherRecovery") === "legacy_link";
+    if (teacherOperatorRecovery) {
+      setRole("teacher");
+      setTeacherLegacyLinkBlocked(true);
+    } else if (requestedRole === "student" || requestedRole === "teacher") {
       setRole(requestedRole);
     }
     const resetToken = query.get("teacherResetToken")?.trim() || "";
     const verifyToken = query.get("teacherVerifyToken")?.trim() || "";
     const hasTeacherLifecycleQuery = query.has("teacherResetToken") || query.has("teacherVerifyToken");
-    if (teacherSelfServiceEnabled && resetToken) {
+    if (!teacherSelfServiceEnabled && hasTeacherLifecycleQuery) {
+      setRole("teacher");
+      setTeacherLegacyLinkBlocked(true);
+      redirectToCanonicalTeacherRecovery(query);
+      return () => { cancelled = true; };
+    }
+    if (teacherOperatorRecovery) {
+      // A provisioned-only legacy link has already been canonicalized. Keep
+      // operator recovery dominant over every student or exam handoff.
+    } else if (teacherSelfServiceEnabled && resetToken) {
       setRole("teacher");
       setTeacherResetToken(resetToken);
       setTeacherAccountMode("reset_complete");
@@ -345,22 +368,19 @@ export default function Home() {
       }).finally(() => {
         if (!cancelled) setTeacherLifecyclePending(false);
       });
-    } else if (!teacherSelfServiceEnabled && hasTeacherLifecycleQuery) {
-      setRole("teacher");
-      setTeacherLegacyLinkBlocked(true);
     } else if (hasTeacherLifecycleQuery) {
       setRole("teacher");
     }
-    if (hasTeacherLifecycleQuery) {
+    if (teacherSelfServiceEnabled && hasTeacherLifecycleQuery) {
       scrubTeacherLifecycleQuery(query);
     }
     const requestedExam = query.get("exam")?.trim() || "";
-    const requestedInvite = requestedExam
+    const requestedInvite = !teacherOperatorRecovery && requestedExam
       ? readExamEntryInviteHandoff(sessionStorage, requestedExam)
       : null;
     setInviteToken(requestedInvite || "");
     setInviteExamId(requestedExam);
-    if (requestedInvite && requestedExam) {
+    if (!teacherOperatorRecovery && requestedInvite && requestedExam) {
       setRole("student");
       setGroups([]);
       setStudentDirectoryStatus("loading");
@@ -392,7 +412,7 @@ export default function Home() {
         setSelectedGroupId("");
         setStudentDirectoryStatus("error");
       });
-    } else if (requestedRole === "student" && !hasTeacherLifecycleQuery) {
+    } else if (!teacherOperatorRecovery && requestedRole === "student" && !hasTeacherLifecycleQuery) {
       // A guest account connection can resume without exposing organization
       // scope only when the signed HttpOnly cookie already carries both the
       // organization and class. A signed student cookie can restore the local

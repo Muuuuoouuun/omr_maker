@@ -34,6 +34,7 @@ describe("provisioned-only teacher identity surface", () => {
 
     it("does not let reset or verification query parameters enter self-service in provisioned-only mode", () => {
         const page = source("src/app/page.tsx");
+        const layout = source("src/app/layout.tsx");
         const queryLifecycle = page.slice(
             page.indexOf('const resetToken = query.get("teacherResetToken")'),
             page.indexOf('const requestedExam = query.get("exam")'),
@@ -44,7 +45,22 @@ describe("provisioned-only teacher identity surface", () => {
         expect(queryLifecycle).toContain("setTeacherLegacyLinkBlocked(true)");
         expect(queryLifecycle).toContain("scrubTeacherLifecycleQuery(query)");
         expect(page).toContain("현재 운영 모드에서는 이 링크를 사용할 수 없습니다.");
+        expect(layout).toContain('teacherIdentityMode === "provisioned_only"');
+        expect(layout).toContain("window.location.replace");
+        expect(layout).toContain("teacherRecovery");
         expect(page).not.toMatch(/NEXT_PUBLIC_OMR_TEACHER_IDENTITY_MODE/);
+    });
+
+    it("makes canonical operator recovery dominate student and exam handoffs", () => {
+        const page = source("src/app/page.tsx");
+        const queryEffect = page.slice(
+            page.indexOf("const query = new URLSearchParams(window.location.search)"),
+            page.indexOf("}, [router, teacherSelfServiceEnabled])"),
+        );
+
+        expect(queryEffect).toContain('query.get("teacherRecovery") === "legacy_link"');
+        expect(queryEffect).toContain("!teacherOperatorRecovery && requestedInvite && requestedExam");
+        expect(queryEffect).toContain('!teacherOperatorRecovery && requestedRole === "student"');
     });
 
     it("stores or uses valid self-service tokens before scrubbing them from the address bar", () => {
