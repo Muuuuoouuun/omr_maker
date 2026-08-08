@@ -4,7 +4,8 @@ export const LEGACY_TEACHER_TOKEN_KEY = "omr_teacher_token";
 export const TEACHER_SESSION_TTL_MS = 12 * 60 * 60 * 1000;
 export const TEACHER_SESSION_EXPIRING_SOON_MS = 30 * 60 * 1000;
 const DEFAULT_TEACHER_REDIRECT = "/teacher/dashboard";
-const ORGANIZATION_ID_PATTERN = /^(?:default|teacher_[a-z0-9]{7,16})$/;
+const LEGACY_ORGANIZATION_ID_PATTERN = /^(?:default|teacher_[a-z0-9]{7,16})$/;
+const PILOT_ORGANIZATION_ID_PATTERN = /^pilot_org_[a-f0-9]{24}$/;
 
 export type TeacherMemberRole = "owner" | "admin" | "teacher" | "assistant" | "viewer";
 export type TeacherPlanCeiling = "free" | "pro" | "academy";
@@ -26,10 +27,13 @@ function normalizePlan(value: unknown): TeacherPlanCeiling | undefined {
         : undefined;
 }
 
-function normalizeOrganizationId(value: unknown): string | undefined {
+function normalizeOrganizationId(value: unknown, authority?: TeacherSessionAuthority): string | undefined {
     const normalized = typeof value === "string" ? value.trim().toLowerCase() : "";
-    return ORGANIZATION_ID_PATTERN.test(normalized) ? normalized : undefined;
+    const pattern = authority === "account" ? PILOT_ORGANIZATION_ID_PATTERN : LEGACY_ORGANIZATION_ID_PATTERN;
+    return pattern.test(normalized) ? normalized : undefined;
 }
+
+export type TeacherSessionAuthority = "account" | "legacy_account" | "bootstrap";
 
 export interface TeacherSession {
     schemaVersion: 1;
@@ -47,7 +51,7 @@ export interface TeacherSession {
      * against the private database generation on every protected request.
      * Bootstrap covers explicitly configured deployment/demo identities.
      */
-    sessionAuthority?: "account" | "bootstrap";
+    sessionAuthority?: TeacherSessionAuthority;
     accountSessionGeneration?: number;
     issuedAt: number;
     expiresAt: number;
@@ -61,7 +65,7 @@ export interface TeacherSessionIdentity {
     organizationName?: string;
     memberRole?: TeacherMemberRole;
     plan?: TeacherPlanCeiling;
-    sessionAuthority?: "account" | "bootstrap";
+    sessionAuthority?: TeacherSessionAuthority;
     accountSessionGeneration?: number;
 }
 
@@ -96,6 +100,8 @@ export function createTeacherSession(token: string, now = Date.now(), identity?:
         && (identity?.accountSessionGeneration || 0) >= 1
         ? identity?.accountSessionGeneration
         : undefined;
+    const sessionAuthority: TeacherSessionAuthority = identity?.sessionAuthority
+        || (accountSessionGeneration ? "legacy_account" : "bootstrap");
     return {
         schemaVersion: 1,
         role: "teacher",
@@ -103,13 +109,11 @@ export function createTeacherSession(token: string, now = Date.now(), identity?:
         teacherId: identity?.teacherId?.trim() || undefined,
         email: identity?.email?.trim() || undefined,
         displayName: identity?.displayName?.trim() || undefined,
-        organizationId: normalizeOrganizationId(identity?.organizationId),
+        organizationId: normalizeOrganizationId(identity?.organizationId, sessionAuthority),
         organizationName: identity?.organizationName?.trim() || undefined,
         memberRole: normalizeMemberRole(identity?.memberRole),
         plan: normalizePlan(identity?.plan),
-        sessionAuthority: identity?.sessionAuthority === "account" || accountSessionGeneration
-            ? "account"
-            : "bootstrap",
+        sessionAuthority,
         accountSessionGeneration,
         issuedAt: now,
         expiresAt: now + TEACHER_SESSION_TTL_MS,
@@ -117,18 +121,34 @@ export function createTeacherSession(token: string, now = Date.now(), identity?:
 }
 
 export function isTeacherSessionActive(session: TeacherSession | null | undefined, now = Date.now()): session is TeacherSession {
-    return !!session
+    const baseActive = !!session
         && session.schemaVersion === 1
         && session.role === "teacher"
         && isTeacherToken(session.token)
         && Number.isFinite(session.expiresAt)
         && session.expiresAt > now;
+    if (!baseActive) return false;
+    if (session.sessionAuthority === "account") {
+        return /^teacher_[a-f0-9]{16}$/.test(session.teacherId || "")
+            && PILOT_ORGANIZATION_ID_PATTERN.test(session.organizationId || "")
+            && !!session.organizationName?.trim()
+            && session.memberRole === "owner"
+            && !!session.plan
+            && Number.isSafeInteger(session.accountSessionGeneration)
+            && (session.accountSessionGeneration || 0) >= 1;
+    }
+    return session.sessionAuthority === "legacy_account" || session.sessionAuthority === "bootstrap";
 }
 
 export function parseTeacherSession(raw: string | null | undefined, now = Date.now()): TeacherSession | null {
     if (!raw) return null;
     try {
         const parsed = JSON.parse(raw) as Partial<TeacherSession>;
+        const sessionAuthority = parsed.sessionAuthority === "account"
+            || parsed.sessionAuthority === "legacy_account"
+            || parsed.sessionAuthority === "bootstrap"
+            ? parsed.sessionAuthority
+            : undefined;
         const session: TeacherSession = {
             schemaVersion: parsed.schemaVersion === 1 ? 1 : 1,
             role: "teacher",
@@ -136,13 +156,11 @@ export function parseTeacherSession(raw: string | null | undefined, now = Date.n
             teacherId: typeof parsed.teacherId === "string" ? parsed.teacherId.trim() || undefined : undefined,
             email: typeof parsed.email === "string" ? parsed.email.trim() || undefined : undefined,
             displayName: typeof parsed.displayName === "string" ? parsed.displayName.trim() || undefined : undefined,
-            organizationId: normalizeOrganizationId(parsed.organizationId),
+            organizationId: normalizeOrganizationId(parsed.organizationId, sessionAuthority),
             organizationName: typeof parsed.organizationName === "string" ? parsed.organizationName.trim() || undefined : undefined,
             memberRole: normalizeMemberRole(parsed.memberRole),
             plan: normalizePlan(parsed.plan),
-            sessionAuthority: parsed.sessionAuthority === "account" || parsed.sessionAuthority === "bootstrap"
-                ? parsed.sessionAuthority
-                : undefined,
+            sessionAuthority,
             accountSessionGeneration: Number.isSafeInteger(parsed.accountSessionGeneration)
                 && (parsed.accountSessionGeneration || 0) >= 1
                 ? parsed.accountSessionGeneration

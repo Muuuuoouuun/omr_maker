@@ -517,7 +517,7 @@ export function evaluateInitialOperationsEvidence(evidence, expectations = {}) {
         || evidence.probes.readiness.database !== "ready"
         || evidence.probes.readiness.observability !== "ready"
         || evidence.probes.readiness.configuration !== "ready"
-        || evidence.probes.readiness.version !== "202608080006"
+        || evidence.probes.readiness.version !== "202608080007"
         || evidence.probes.readiness.environment !== "staging"
         || evidence.probes.readiness.build !== expectedBuild
         || evidence.probes.readiness.databaseProjectRefHash !== expectedDatabaseProjectRefHash

@@ -35,8 +35,9 @@ import {
     STUDENT_SERVER_SESSION_COOKIE,
 } from "@/lib/studentServerSession";
 import { ownerStudentId } from "@/lib/studentExamCore";
-import { hasPlanEntitlement, normalizePlan } from "@/utils/plans";
+import { hasPlanEntitlement } from "@/utils/plans";
 import { archiveStudentAttemptHandwritingWithGateway } from "@/lib/studentAttemptHandwritingGateway.server";
+import { readEffectiveWorkspacePlan } from "@/lib/effectiveWorkspacePlanGateway";
 
 export type TeacherRemoteAssetPrepareActionResult =
     | TeacherRemoteAssetPreparedUpload
@@ -232,13 +233,8 @@ export async function uploadStudentAttemptHandwriting(input: {
             organizationId = session.organization_id;
             attachmentTicketId = session.submission_id;
         } else return { status: "invalid_ticket" };
-        const organizationRead = await client.from("omr_organizations")
-            .select("plan")
-            .eq("id", organizationId)
-            .maybeSingle();
-        const plan = !organizationRead.error && organizationRead.data
-            ? normalizePlan((organizationRead.data as { plan?: unknown }).plan) || "free"
-            : "free";
+        const organizationRead = await readEffectiveWorkspacePlan(client, organizationId);
+        const plan = organizationRead.authoritative ? organizationRead.plan : "free";
         if (!hasPlanEntitlement(plan, "remoteHandwritingArchive")) {
             return { status: "invalid_asset" };
         }

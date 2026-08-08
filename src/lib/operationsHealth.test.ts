@@ -5,6 +5,10 @@ import {
     buildLivenessPayload,
     probeOperationalReadiness,
 } from "./operationsHealth";
+import {
+    SUPABASE_READINESS_CHECK_KEYS,
+    type SupabaseDeploymentProbe,
+} from "./supabaseReadinessProbe";
 
 const readyConfigurationProbe = () => ({
     label: "배포 준비됨",
@@ -14,6 +18,30 @@ const readyConfigurationProbe = () => ({
     totalCount: 1,
     checks: [{ key: "configuration", label: "configuration", detail: "ready", tone: "ready" as const }],
 });
+
+function pilotOnlyUnavailableProbe(): SupabaseDeploymentProbe {
+    return {
+        ...completeReadyProbe(),
+        ready: false,
+        serverGatewayCapabilitiesReady: false,
+        operatorPilotProvisioningReady: false,
+        provisionedTeacherLoginReady: false,
+        failedChecks: [
+            "serverGatewayCapabilitiesReady",
+            "operatorPilotProvisioningReady",
+            "provisionedTeacherLoginReady",
+        ],
+    };
+}
+
+function completeReadyProbe(): SupabaseDeploymentProbe {
+    return {
+        ...Object.fromEntries(SUPABASE_READINESS_CHECK_KEYS.map(key => [key, true])),
+        ready: true,
+        version: "202608080007",
+        failedChecks: [],
+    };
+}
 
 describe("operational health", () => {
     it("exposes only a bounded public liveness payload", () => {
@@ -44,28 +72,26 @@ describe("operational health", () => {
             OMR_OPERATIONAL_SINK_URL: "https://ops.example.test/events",
             OMR_OPERATIONAL_SINK_TOKEN: "ops_sink_token_0123456789_abcdef",
         };
-        await expect(probeOperationalReadiness(env, async () => ({
-            ready: true,
-            version: "202608060004",
-            failedChecks: [],
-        }), 50, async () => "ready", readyConfigurationProbe, async () => "ready")).resolves.toEqual({
+        await expect(probeOperationalReadiness(env, async () => completeReadyProbe(), 50,
+        async () => "ready", readyConfigurationProbe, async () => "ready")).resolves.toEqual({
             status: "ready",
             database: "ready",
             observability: "ready",
             configuration: "ready",
-            version: "202608060004",
+            version: "202608080007",
         });
 
         await expect(probeOperationalReadiness(env, async () => ({
+            ...completeReadyProbe(),
             ready: false,
-            version: "202608060004",
+            queryPathIndexesReady: false,
             failedChecks: ["queryPathIndexesReady"],
         }), 50, async () => "ready")).resolves.toEqual({
             status: "not_ready",
             database: "not_ready",
             observability: "ready",
-            version: "202608060004",
-            failedChecks: ["queryPathIndexesReady"],
+            version: "202608080007",
+            failedChecks: ["queryPathIndexesReady", "databaseDeclaredReady"],
         });
     });
 
@@ -91,7 +117,7 @@ describe("operational health", () => {
 
         await expect(probeOperationalReadiness(
             env,
-            async () => ({ ready: true, version: "202608080006", failedChecks: [] }),
+            async () => completeReadyProbe(),
             50,
             async () => "ready",
             configurationProbe,
@@ -100,7 +126,7 @@ describe("operational health", () => {
             database: "ready",
             observability: "ready",
             configuration: "not_ready",
-            version: "202608080006",
+            version: "202608080007",
             failedChecks: ["configuration:teacher_account_delivery"],
         });
         expect(configurationProbe).toHaveBeenCalledOnce();
@@ -108,13 +134,14 @@ describe("operational health", () => {
 
     it("fails readiness when the configured account delivery endpoint is unreachable", async () => {
         const env = {
+            OMR_TEACHER_IDENTITY_MODE: "self_service",
             SUPABASE_URL: "https://example.supabase.co",
             SUPABASE_SERVICE_ROLE_KEY: "service-role",
         };
 
         await expect(probeOperationalReadiness(
             env,
-            async () => ({ ready: true, version: "202608080006", failedChecks: [] }),
+            async () => completeReadyProbe(),
             50,
             async () => "ready",
             readyConfigurationProbe,
@@ -124,9 +151,100 @@ describe("operational health", () => {
             database: "ready",
             observability: "ready",
             configuration: "not_ready",
-            version: "202608080006",
+            version: "202608080007",
             failedChecks: ["configuration:teacher_account_delivery_probe"],
         });
+    });
+
+    it("allows only pilot-derived DB failures in self-service mode", async () => {
+        const baseEnv = {
+            SUPABASE_URL: "https://example.supabase.co",
+            SUPABASE_SERVICE_ROLE_KEY: "service-role",
+        };
+        await expect(probeOperationalReadiness({
+            ...baseEnv,
+            OMR_TEACHER_IDENTITY_MODE: "self_service",
+        }, async () => pilotOnlyUnavailableProbe(), 50, async () => "ready",
+        readyConfigurationProbe, async () => "ready")).resolves.toEqual({
+            status: "ready",
+            database: "ready",
+            observability: "ready",
+            configuration: "ready",
+            version: "202608080007",
+        });
+
+        await expect(probeOperationalReadiness({
+            ...baseEnv,
+            OMR_TEACHER_IDENTITY_MODE: "self_service",
+        }, async () => ({
+            ...pilotOnlyUnavailableProbe(),
+            canonicalTablesForceRls: false,
+            failedChecks: [
+                ...(pilotOnlyUnavailableProbe().failedChecks || []),
+                "canonicalTablesForceRls",
+            ],
+        }), 50, async () => "ready", readyConfigurationProbe, async () => "ready"))
+            .resolves.toMatchObject({ status: "not_ready", database: "not_ready" });
+
+        await expect(probeOperationalReadiness({
+            ...baseEnv,
+            NODE_ENV: "production",
+        }, async () => pilotOnlyUnavailableProbe(), 50, async () => "ready",
+        readyConfigurationProbe, async () => "ready"))
+            .resolves.toMatchObject({ status: "not_ready", database: "not_ready" });
+
+        const unsafeSelfServiceProbes: Array<{
+            probe: SupabaseDeploymentProbe;
+            expectedFailure: string;
+        }> = [
+            {
+                probe: { ...pilotOnlyUnavailableProbe(), version: "202608080006" },
+                expectedFailure: "probeVersion",
+            },
+            { probe: {
+                ...pilotOnlyUnavailableProbe(),
+                failedChecks: [
+                    ...(pilotOnlyUnavailableProbe().failedChecks || []),
+                    "unknownCapability" as never,
+                ],
+            }, expectedFailure: "unknownCapability" },
+            { probe: {
+                ...pilotOnlyUnavailableProbe(),
+                operatorPilotProvisioningReady: true,
+                provisionedTeacherLoginReady: true,
+                failedChecks: ["serverGatewayCapabilitiesReady"],
+            }, expectedFailure: "serverGatewayCapabilitiesReady" },
+            { probe: {
+                ...pilotOnlyUnavailableProbe(),
+                ready: true,
+                serverGatewayCapabilitiesReady: true,
+                operatorPilotProvisioningReady: true,
+                provisionedTeacherLoginReady: true,
+                canonicalTablesForceRls: false,
+                failedChecks: ["canonicalTablesForceRls"],
+            }, expectedFailure: "canonicalTablesForceRls" },
+            { probe: {
+                ...pilotOnlyUnavailableProbe(),
+                ready: true,
+                version: "202608080006",
+                serverGatewayCapabilitiesReady: true,
+                operatorPilotProvisioningReady: true,
+                provisionedTeacherLoginReady: true,
+                failedChecks: [],
+            }, expectedFailure: "probeVersion" },
+        ];
+        for (const { probe: unsafeProbe, expectedFailure } of unsafeSelfServiceProbes) {
+            await expect(probeOperationalReadiness({
+                ...baseEnv,
+                OMR_TEACHER_IDENTITY_MODE: "self_service",
+            }, async () => unsafeProbe, 50, async () => "ready",
+            readyConfigurationProbe, async () => "ready"))
+                .resolves.toMatchObject({
+                    status: "not_ready",
+                    database: "not_ready",
+                    failedChecks: expect.arrayContaining([expectedFailure]),
+                });
+        }
     });
 
     it("attests the candidate build and hashed database binding for an explicit staging deployment", async () => {
@@ -139,18 +257,15 @@ describe("operational health", () => {
             OMR_OPERATIONAL_SINK_TOKEN: "ops_sink_token_0123456789_abcdef",
             OMR_DEPLOYMENT_TIER: "staging",
             VERCEL_GIT_COMMIT_SHA: "a".repeat(40),
-        }, async () => ({
-            ready: true,
-            version: "202608080006",
-            failedChecks: [],
-        }), 50, async () => "ready", readyConfigurationProbe, async () => "ready");
+        }, async () => completeReadyProbe(), 50, async () => "ready",
+        readyConfigurationProbe, async () => "ready");
 
         expect(result).toEqual({
             status: "ready",
             database: "ready",
             observability: "ready",
             configuration: "ready",
-            version: "202608080006",
+            version: "202608080007",
             environment: "staging",
             build: "a".repeat(40),
             databaseProjectRefHash: createHash("sha256").update(projectRef).digest("hex"),
@@ -160,7 +275,7 @@ describe("operational health", () => {
     });
 
     it("fails readiness when the central operational sink is absent or unreachable", async () => {
-        const databaseProbe = vi.fn(async () => ({ ready: true as const, version: "v" }));
+        const databaseProbe = vi.fn(async () => completeReadyProbe());
         const base = { SUPABASE_URL: "https://example.supabase.co", SUPABASE_SERVICE_ROLE_KEY: "key" };
 
         await expect(probeOperationalReadiness(base, databaseProbe, 20, async () => "not_configured", readyConfigurationProbe, async () => "ready"))
@@ -169,7 +284,7 @@ describe("operational health", () => {
                 database: "ready",
                 observability: "not_configured",
                 configuration: "ready",
-                version: "v",
+                version: "202608080007",
             });
         await expect(probeOperationalReadiness({
             ...base,
@@ -180,7 +295,7 @@ describe("operational health", () => {
             database: "ready",
             observability: "probe_failed",
             configuration: "ready",
-            version: "v",
+            version: "202608080007",
         });
     });
 
@@ -223,7 +338,7 @@ describe("operational health", () => {
             CRON_SECRET: "cron-secret-that-is-at-least-thirty-two-characters",
             VERCEL_GIT_COMMIT_SHA: buildSha,
         };
-        const databaseProbe = async () => ({ ready: true as const, version: "v", failedChecks: [] });
+        const databaseProbe = async () => completeReadyProbe();
         const heartbeatAt = new Date().toISOString();
 
         await expect(probeOperationalReadiness(
@@ -239,7 +354,7 @@ describe("operational health", () => {
             database: "ready",
             observability: "ready",
             configuration: "not_ready",
-            version: "v",
+            version: "202608080007",
             failedChecks: ["configuration:remote_asset_cleanup_heartbeat"],
         });
 
@@ -270,7 +385,7 @@ describe("operational health", () => {
                 SUPABASE_URL: "https://example.supabase.co",
                 SUPABASE_SERVICE_ROLE_KEY: "service-role",
             },
-            async () => ({ ready: true, version: "v", failedChecks: [] }),
+            async () => completeReadyProbe(),
             50,
             async () => "ready",
             readyConfigurationProbe,
@@ -281,7 +396,7 @@ describe("operational health", () => {
             database: "ready",
             observability: "ready",
             configuration: "not_ready",
-            version: "v",
+            version: "202608080007",
             failedChecks: ["configuration:remote_asset_cleanup_schedule"],
         });
     });

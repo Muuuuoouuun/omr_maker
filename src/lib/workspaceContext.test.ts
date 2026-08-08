@@ -124,4 +124,24 @@ describe("workspace context", () => {
         expect(rows.member).toBeUndefined();
         expect(rows.teacherProfile).toBeUndefined();
     });
+
+    it("uses the exact provisioned account and pilot organization without legacy hashing", () => {
+        expect(workspaceContextFromIdentity({
+            teacherId: "teacher_0123456789abcdef",
+            organizationId: "pilot_org_0123456789abcdef01234567",
+            organizationName: "파일럿 학원",
+            memberRole: "owner",
+        }, "account")).toMatchObject({
+            organizationId: "pilot_org_0123456789abcdef01234567",
+            organizationName: "파일럿 학원",
+            actorUserId: "teacher_0123456789abcdef",
+            memberRole: "owner",
+        });
+        const invalid = workspaceContextFromIdentity({
+            teacherId: "teacher_0123456789abcdef",
+            organizationId: "teacher_sharedqa",
+        }, "account");
+        expect(invalid.organizationId).toBe("default");
+        expect(invalid).not.toHaveProperty("actorUserId");
+    });
 });

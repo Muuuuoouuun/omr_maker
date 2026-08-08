@@ -1,7 +1,11 @@
 import { pbkdf2Sync } from "node:crypto";
 import { describe, expect, it } from "vitest";
-import { buildDeploymentReadiness } from "./deploymentReadiness";
+import {
+    buildDeploymentReadiness,
+    databaseProbeFailuresForIdentityMode,
+} from "./deploymentReadiness";
 import { TEACHER_PASSWORD_HASH_MIN_ITERATIONS } from "./teacherAuth";
+import type { SupabaseDeploymentProbe } from "./supabaseReadinessProbe";
 
 function teacherPasswordHash(password: string, saltHex = "00112233445566778899aabbccddeeff"): string {
     const iterations = TEACHER_PASSWORD_HASH_MIN_ITERATIONS;
@@ -15,7 +19,7 @@ const STRONG_STUDENT_ATTEMPT_SECRET = "student-attempt-secret-at-least-32-bytes"
 
 const readyDatabaseProbe = {
     ready: true,
-    version: "202608080006",
+    version: "202608080007",
     browserSchemaPrivilegesDenied: true,
     anonTablePrivilegesDenied: true,
     authenticatedCanonicalPrivilegesDenied: true,
@@ -62,6 +66,7 @@ const readyDatabaseProbe = {
     teacherAttemptReportingReady: true,
     operationalJobStatusReady: true,
     operatorPilotProvisioningReady: true,
+    provisionedTeacherLoginReady: true,
     failedChecks: [],
 };
 
@@ -111,6 +116,89 @@ describe("deployment readiness", () => {
             detail: expect.stringContaining("DB 교사 계정 수명주기"),
         }));
         expect(JSON.stringify(summary)).not.toContain("로그인 판별은 Supabase가 아니라");
+    });
+
+    it("requires pilot login capabilities only in provisioned mode, not explicit self-service", () => {
+        const lifecycleOnlyProbe: SupabaseDeploymentProbe = {
+            ...readyDatabaseProbe,
+            ready: false,
+            serverGatewayCapabilitiesReady: false,
+            operatorPilotProvisioningReady: false,
+            provisionedTeacherLoginReady: false,
+            failedChecks: [
+                "serverGatewayCapabilitiesReady",
+                "operatorPilotProvisioningReady",
+                "provisionedTeacherLoginReady",
+            ],
+        };
+        const baseEnv = {
+            SUPABASE_URL: "https://example.supabase.co",
+            SUPABASE_SERVICE_ROLE_KEY: "service-role",
+            TEACHER_ACCOUNTS: "",
+            OMR_TEACHER_ACCOUNTS: "",
+            TEACHER_LOGIN_ID: "",
+            TEACHER_PASSWORD: "",
+        };
+        expect(databaseProbeFailuresForIdentityMode({
+            ...readyDatabaseProbe,
+            ready: false,
+            operatorPilotProvisioningReady: false,
+            failedChecks: ["operatorPilotProvisioningReady"],
+        }, "self_service")).toEqual([]);
+        expect(databaseProbeFailuresForIdentityMode({
+            ...readyDatabaseProbe,
+            ready: false,
+            serverGatewayCapabilitiesReady: false,
+            operatorPilotProvisioningReady: false,
+            failedChecks: ["serverGatewayCapabilitiesReady", "operatorPilotProvisioningReady"],
+        }, "self_service")).toEqual(["serverGatewayCapabilitiesReady"]);
+        expect(databaseProbeFailuresForIdentityMode({
+            ...readyDatabaseProbe,
+            ready: false,
+            serverGatewayCapabilitiesReady: false,
+            provisionedTeacherLoginReady: false,
+            failedChecks: ["serverGatewayCapabilitiesReady", "provisionedTeacherLoginReady"],
+        }, "self_service")).toEqual([]);
+
+        const selfService = buildDeploymentReadiness({
+            ...baseEnv,
+            NODE_ENV: "test",
+            OMR_TEACHER_IDENTITY_MODE: "self_service",
+            OMR_PRODUCTION_RLS_APPLIED: "true",
+        }, lifecycleOnlyProbe);
+        expect(selfService.checks).toContainEqual(expect.objectContaining({
+            key: "teacher_credentials",
+            tone: "ready",
+        }));
+        expect(selfService.checks).toContainEqual(expect.objectContaining({
+            key: "production_rls",
+            tone: "ready",
+        }));
+
+        const unrelatedFailure = buildDeploymentReadiness({
+            ...baseEnv,
+            NODE_ENV: "test",
+            OMR_TEACHER_IDENTITY_MODE: "self_service",
+            OMR_PRODUCTION_RLS_APPLIED: "true",
+        }, {
+            ...lifecycleOnlyProbe,
+            canonicalTablesForceRls: false,
+            failedChecks: [...(lifecycleOnlyProbe.failedChecks || []), "canonicalTablesForceRls"],
+        });
+        expect(unrelatedFailure.checks).toContainEqual(expect.objectContaining({
+            key: "production_rls",
+            tone: "warning",
+        }));
+        expect(unrelatedFailure.label).toBe("배포 보강 권장");
+
+        const provisioned = buildDeploymentReadiness({
+            ...baseEnv,
+            NODE_ENV: "production",
+        }, lifecycleOnlyProbe);
+        expect(provisioned.checks).toContainEqual(expect.objectContaining({
+            key: "teacher_credentials",
+            tone: "error",
+        }));
     });
 
     it("fails closed when production has browser sync but no server grading gateway", () => {
@@ -223,6 +311,7 @@ describe("deployment readiness", () => {
     it("recognizes explicit server session and service role readiness", () => {
         const summary = buildDeploymentReadiness({
             NODE_ENV: "production",
+            OMR_TEACHER_IDENTITY_MODE: "self_service",
             TEACHER_ACCOUNTS: JSON.stringify([{ id: "teacher-a", email: "a@example.com", passwordHash: teacherPasswordHash("pass-a") }]),
             TEACHER_SESSION_SECRET: STRONG_TEACHER_SESSION_SECRET,
             STUDENT_SESSION_SECRET: STRONG_STUDENT_SESSION_SECRET,
@@ -278,10 +367,10 @@ describe("deployment readiness", () => {
         }));
         expect(summary.checks).toContainEqual(expect.objectContaining({
             key: "teacher_account_delivery",
-            tone: "error",
-            detail: expect.stringContaining("이메일 delivery adapter"),
+            tone: "ready",
+            detail: expect.stringContaining("프로비저닝 전용 모드"),
         }));
-        expect(summary.readyCount).toBe(10);
+        expect(summary.readyCount).toBe(11);
     });
 
     it("fails production readiness when the central operational sink is missing or invalid", () => {
@@ -450,7 +539,7 @@ describe("deployment readiness", () => {
             OMR_PRODUCTION_RLS_APPLIED: "true",
         }, {
             ready: true,
-            version: "202608080006",
+            version: "202608080007",
         });
 
         expect(summary.checks).toContainEqual(expect.objectContaining({

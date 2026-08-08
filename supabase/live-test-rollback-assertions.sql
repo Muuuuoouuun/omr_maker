@@ -138,6 +138,10 @@ begin
     ) or not pg_catalog.has_function_privilege(
         'service_role', 'public.omr_read_effective_workspace_plan_v1(text)', 'EXECUTE'
     ) or not pg_catalog.has_function_privilege(
+        'service_role', 'public.omr_lookup_provisioned_teacher_login_v1(text)', 'EXECUTE'
+    ) or not pg_catalog.has_function_privilege(
+        'service_role', 'public.omr_validate_provisioned_teacher_session_v1(text,bigint,text)', 'EXECUTE'
+    ) or not pg_catalog.has_function_privilege(
         'service_role', 'public.omr_rotate_exam_entry_invite_v1(text,text,text,text,timestamptz)', 'EXECUTE'
     ) or not pg_catalog.has_function_privilege(
         'service_role', 'public.omr_resolve_exam_entry_invite_v1(text,text)', 'EXECUTE'

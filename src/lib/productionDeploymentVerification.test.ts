@@ -31,7 +31,7 @@ const PROJECT_REF = "production-project-ref";
 const BUILD = execFileSync("git", ["rev-parse", "--verify", "HEAD"], {
     encoding: "utf8",
 }).trim();
-const VERSION = "202608080006";
+const VERSION = "202608080007";
 const PREVIEW_DEPLOYMENT_ID = "preview_deployment:production-42";
 const PREVIEW_ARTIFACT_DIGEST = `sha256:${"b".repeat(64)}`;
 const RELEASE_ATTESTATION_SECRET = "release-attestation-secret-with-strong-entropy-42";

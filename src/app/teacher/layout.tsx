@@ -13,7 +13,7 @@ export default async function TeacherLayout({ children }: { children: ReactNode 
         return <TeacherAuthGate initialSession={null} requireServerSession>{null}</TeacherAuthGate>;
     }
 
-    if (!isMockupTeacherIdentity(serverSession)) {
+    if (!isMockupTeacherIdentity(serverSession) && serverSession.sessionAuthority !== "account") {
         const bootstrapResult = await bootstrapWorkspaceWithServiceRole(workspaceContextFromTeacherSession(serverSession));
         if (!bootstrapResult.ok && !bootstrapResult.skipped) {
             console.warn("Teacher workspace bootstrap failed", bootstrapResult.error);

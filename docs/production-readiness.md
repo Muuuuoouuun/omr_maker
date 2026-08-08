@@ -33,7 +33,7 @@ service-role RPC만 유지합니다. 기존 `production-rls.sql`은 직접 authe
 5. `schema.sql` → sorted `migrations` → `production-server-boundary.sql` →
    `live-test-assertions.sql` 순서를 실행하는 `npm run test:supabase:live`와
    CI의 blocking `supabase-live-contract` 작업을 통과시킵니다.
-   service-role 전용 readiness probe 버전은 `202608080006`이어야 합니다.
+   service-role 전용 readiness probe 버전은 `202608080007`이어야 합니다.
    브라우저 schema/table/column/sequence/function 실효 권한과 PostgreSQL 17
    `MAINTAIN` 차단, 정확한 canonical 40개 allowlist의 ENABLE+FORCE RLS, public
    정책 0개, 조직 preflight 4개 count 0, 정확한 목적별 교사 RPC signature,
@@ -46,7 +46,9 @@ service-role RPC만 유지합니다. 기존 `production-rls.sql`은 직접 authe
    (`examDeleteSessionSafe`), 학생 질문 원자 저장
    (`studentQuestionAtomicReady`), 브라우저·service-role 직접 테이블 접근 없이
    해시만 저장하는 교사 가입·이메일 확인·비밀번호 복구 RPC
-   (`teacherAccountLifecycleReady`)와 service-role 전용 초기 운영 부하 제어
+   (`teacherAccountLifecycleReady`)와 정확한 단일 owner membership·교사 profile·파일럿
+   조직·현재 grant에 로그인과 매 요청 세션을 결속하는
+   (`provisionedTeacherLoginReady`), service-role 전용 초기 운영 부하 제어
    (`initialOperationsLoadControlReady`), secure submission replay marker와 브라우저가
    조직 ID를 받지 않는 시험별 opaque 초대 경계(`examEntryInvitesReady`)를 모두
    `true`로 반환해야 합니다. 키 누락·이전 또는 공백이

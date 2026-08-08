@@ -26,7 +26,8 @@ import { type StudentQuestionInput } from "@/lib/studentQuestions";
 import { attemptIdForStudentSubmission } from "@/lib/studentSubmissionId";
 import type { Attempt, Exam } from "@/types/omr";
 import type { PlanKey } from "@/types/omr";
-import { hasPlanEntitlement, normalizePlan } from "@/utils/plans";
+import { hasPlanEntitlement } from "@/utils/plans";
+import { readEffectiveWorkspacePlan } from "@/lib/effectiveWorkspacePlanGateway";
 import { isRemoteAssetStoredDataRef } from "@/lib/remoteAssetContract.server";
 import {
     createStudentProblemPdfSignedUrlWithGateway,
@@ -171,12 +172,9 @@ async function examOwnerPremium(
 ): Promise<{ plan: PlanKey; handwritingArchive: boolean }> {
     if (!exam.organizationId) return { plan: "free", handwritingArchive: false };
     const read = async () => {
-        const { data, error } = await (admin as SupabaseAdminReadClientLike).from("omr_organizations")
-            .select("plan")
-            .eq("id", exam.organizationId!)
-            .maybeSingle();
-        if (error || !data) return { plan: "free" as const, handwritingArchive: false };
-        const plan = normalizePlan((data as { plan?: unknown }).plan) || "free";
+        const result = await readEffectiveWorkspacePlan(admin, exam.organizationId!);
+        if (!result.authoritative) return { plan: "free" as const, handwritingArchive: false };
+        const plan = result.plan;
         return { plan, handwritingArchive: hasPlanEntitlement(plan, "handwritingArchive") };
     };
     if (!cache) return read();

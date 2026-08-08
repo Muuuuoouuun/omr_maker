@@ -76,12 +76,21 @@ validated owner-only `0700` directory, is a regular non-symlink file owned by th
 inode be unlinked and the directory synced before retry. If any prerequisite, PID ownership, or inode
 identity is uncertain, preserve the file and escalate; never use a wildcard deletion.
 
-## Required Phase B before pilot release
+## Phase B login bridge (implemented in migration 202608080007)
 
-This phase only provides the atomic RPC gateway and crash-safe operator credential handoff. It does
-not complete the provisioned login journey. A pilot release remains blocked until a later migration
-and server integration bind account login to the provisioned organization and owner membership,
-permit the canonical `pilot_org_<24 hex>` workspace identifier, and resolve every paid-feature check
-through `omr_read_effective_workspace_plan_v1`. That integration must include live PostgreSQL apply,
-replay, login, expiry, session, and paid-feature tests; this command alone is not evidence that the
-journey is connected.
+Migration `202608080007_provisioned_teacher_login.sql` and the server gateway now bind login and every
+protected account request to one exact active owner membership, one matching active teacher profile,
+the signed `pilot_org_<24 hex>` tenant, and the current effective grant. Expiry, supersession, account
+generation, membership/profile drift, and forged `omr_organizations.plan` are exercised on PostgreSQL
+17 and fail closed without workspace repair. Explicit nonproduction `self_service` uses the separate
+signed `legacy_account` authority; provisioned `account` sessions never bootstrap.
+Until trusted proxy provenance is attested, login also uses a shared 500-attempt/10-minute durable
+PBKDF2 safety ceiling (100 launch users times five identifier attempts) in addition to the five-attempt
+per-identifier bucket. It counts all attempts and success does not clear it. This avoids trusting raw
+forwarding headers, but operators must monitor the shared ceiling for coordinated denial-of-service.
+
+Phase C remains a release blocker: request validation/effective-plan reads and existing domain mutation
+RPCs are separate transactions. Migration `202608080008` must add the account/organization/effective-
+plan checks inside paid mutation and asset RPC transactions before the pilot can claim race-free paid
+authorization. The current bridge provides fresh request-time denial, not transaction-atomic
+authorization.

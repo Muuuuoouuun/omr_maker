@@ -79,7 +79,7 @@ catalogs, verify ENABLE + FORCE RLS, perform actual denied browser CRUD, and
 exercise the service-role workflows and Storage CRUD. The live-only fixture
 also proves an unrelated permissive bucket policy still works.
 
-The service-role-only readiness probe version `202608080006` is the runtime
+The service-role-only readiness probe version `202608080007` is the runtime
 release gate. It combines direct catalog grants with effective
 `has_*_privilege` checks (including column privileges and PostgreSQL 17
 `MAINTAIN`), requires zero public canonical policies, validates the exact

@@ -52,7 +52,7 @@ describe("roster snapshot CAS migration", () => {
         expect(boundary).toContain("not pg_catalog.has_function_privilege('service_role', 'public.omr_save_roster_v1");
         expect(boundary).toContain("and v_roster_snapshot_cas_ready");
         expect(boundary).toContain("'rosterSnapshotCasReady', v_roster_snapshot_cas_ready");
-        expect(boundary).toContain("'version', '202608080006'");
+        expect(boundary).toContain("'version', '202608080007'");
     });
 
     it("prevents workspace bootstrap from resetting the roster revision", () => {

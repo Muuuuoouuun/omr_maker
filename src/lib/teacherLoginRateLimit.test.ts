@@ -1,12 +1,15 @@
 import { describe, expect, it } from "vitest";
+import { applyDurableRateLimit, createInMemoryDurableRateLimitStore } from "./durableRateLimit";
 import {
     buildTeacherLoginRateLimitKeys,
+    buildTeacherLoginSafetyRateLimitKey,
     checkTeacherLoginRateLimit,
     recordTeacherLoginFailure,
     recordTeacherLoginSuccess,
     TEACHER_LOGIN_LOCKOUT_MS,
     TEACHER_LOGIN_MAX_FAILURES,
     TEACHER_LOGIN_WINDOW_MS,
+    TEACHER_LOGIN_GLOBAL_MAX_ATTEMPTS,
     type TeacherLoginRateLimitStore,
 } from "./teacherLoginRateLimit";
 
@@ -18,6 +21,33 @@ describe("teacher login rate limit", () => {
         expect(keys[0]).toMatch(/^teacher-login:identifier:[a-f0-9]{64}$/);
         expect(keys.join(" ")).not.toContain("Director");
         expect(keys.join(" ")).not.toContain("203.0.113.9");
+        const safetyKey = buildTeacherLoginSafetyRateLimitKey();
+        expect(safetyKey).toMatch(/^teacher-login:global:[a-f0-9]{64}$/);
+        expect(safetyKey).not.toContain("203.0.113.9");
+        expect(TEACHER_LOGIN_GLOBAL_MAX_ATTEMPTS).toBe(500);
+    });
+
+    it("uses a capacity-derived global ceiling when trusted proxy provenance is unavailable", async () => {
+        expect(buildTeacherLoginSafetyRateLimitKey()).toBe(buildTeacherLoginSafetyRateLimitKey());
+        expect(TEACHER_LOGIN_GLOBAL_MAX_ATTEMPTS).toBe(100 * TEACHER_LOGIN_MAX_FAILURES);
+        const store = createInMemoryDurableRateLimitStore();
+        const input = {
+            namespace: "teacher-login-global-safety",
+            subject: buildTeacherLoginSafetyRateLimitKey(),
+            operation: "consume" as const,
+            policy: {
+                limit: TEACHER_LOGIN_GLOBAL_MAX_ATTEMPTS,
+                windowMs: TEACHER_LOGIN_WINDOW_MS,
+            },
+        };
+        for (let attempt = 0; attempt < TEACHER_LOGIN_GLOBAL_MAX_ATTEMPTS; attempt += 1) {
+            await expect(applyDurableRateLimit(input, {
+                env: { NODE_ENV: "development" }, store, now: 1_000,
+            }), `capacity attempt ${attempt + 1}`).resolves.toEqual({ allowed: true, retryAfterMs: 0 });
+        }
+        await expect(applyDurableRateLimit(input, {
+            env: { NODE_ENV: "development" }, store, now: 1_000,
+        })).resolves.toEqual({ allowed: false, retryAfterMs: TEACHER_LOGIN_WINDOW_MS });
     });
 
     it("locks one teacher identifier even when the client fingerprint rotates", () => {

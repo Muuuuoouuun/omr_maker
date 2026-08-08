@@ -47,7 +47,8 @@ import type {
     RetakeMetadata,
     SubQuestionAnswers,
 } from "@/types/omr";
-import { hasPlanEntitlement, normalizePlan } from "@/utils/plans";
+import { hasPlanEntitlement } from "@/utils/plans";
+import { readEffectiveWorkspacePlan } from "@/lib/effectiveWorkspacePlanGateway";
 
 type DurableActionStatus = "unauthenticated" | "invalid" | "service_unavailable";
 type AttemptSessionAdmin = StudentAttemptSessionRpcClient & SupabaseAdminReadClientLike;
@@ -107,13 +108,11 @@ async function ownStoredAttempt(context: AttemptSessionContext, attemptId: strin
 }
 
 async function safeSolveSnapshot(context: AttemptSessionContext, snapshot: Parameters<typeof stripExamForSolving>[0]) {
-    const organizationRead = await context.admin.from("omr_organizations")
-        .select("plan")
-        .eq("id", snapshot.organizationId || context.identity.organizationId || "")
-        .maybeSingle();
-    const plan = !organizationRead.error && organizationRead.data
-        ? normalizePlan((organizationRead.data as { plan?: unknown }).plan) || "free"
-        : "free";
+    const organizationRead = await readEffectiveWorkspacePlan(
+        context.admin,
+        snapshot.organizationId || context.identity.organizationId || "",
+    );
+    const plan = organizationRead.authoritative ? organizationRead.plan : "free";
     const safe = stripExamForSolving(snapshot, {
         handwritingArchive: hasPlanEntitlement(plan, "handwritingArchive"),
     });

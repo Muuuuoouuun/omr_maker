@@ -1,8 +1,10 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
 import { createTeacherSession, isTeacherSessionActive, type TeacherSession, type TeacherSessionIdentity } from "@/lib/teacherSession";
 import { resolveServerSigningSecret } from "@/lib/serverSigningSecret";
+import { resolveTeacherIdentityModeForEnvironment } from "@/lib/teacherIdentityModePolicy";
 import {
     validateActiveTeacherAccountSession,
+    validateProvisionedTeacherSession,
     type TeacherAccountGatewayClient,
 } from "@/lib/teacherAccountGateway";
 import {
@@ -148,9 +150,12 @@ export async function resolveAuthorizedTeacherSessionCookie(
         options.now ?? Date.now(),
     );
     if (!session) return null;
+    const identityMode = resolveTeacherIdentityModeForEnvironment(options.env || process.env);
+    if (identityMode === "provisioned_only" && session.sessionAuthority !== "account") return null;
+    if (identityMode === "self_service" && session.sessionAuthority === "account") return null;
     if (session.sessionAuthority === "bootstrap") return session;
     if (
-        session.sessionAuthority !== "account"
+        (session.sessionAuthority !== "account" && session.sessionAuthority !== "legacy_account")
         || !session.teacherId
         || !Number.isSafeInteger(session.accountSessionGeneration)
         || (session.accountSessionGeneration || 0) < 1
@@ -162,12 +167,28 @@ export async function resolveAuthorizedTeacherSessionCookie(
     if (!accountClient) return null;
 
     try {
-        const active = await validateActiveTeacherAccountSession(
+        if (session.sessionAuthority === "legacy_account") {
+            const active = await validateActiveTeacherAccountSession(
+                accountClient,
+                session.teacherId,
+                session.accountSessionGeneration!,
+            );
+            return active ? session : null;
+        }
+        if (!session.organizationId || session.memberRole !== "owner") return null;
+        const current = await validateProvisionedTeacherSession(
             accountClient,
             session.teacherId,
             session.accountSessionGeneration!,
+            session.organizationId,
         );
-        return active ? session : null;
+        return current ? {
+            ...session,
+            organizationId: current.organizationId,
+            organizationName: current.organizationName,
+            memberRole: current.memberRole,
+            plan: current.plan,
+        } : null;
     } catch {
         return null;
     }

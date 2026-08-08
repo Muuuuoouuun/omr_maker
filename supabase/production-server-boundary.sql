@@ -508,6 +508,7 @@ declare
     v_cleanup_epoch_ready boolean;
     v_operational_job_status_ready boolean;
     v_operator_pilot_provisioning_ready boolean;
+    v_provisioned_teacher_login_ready boolean;
     v_attempt_sessions_ready boolean;
     v_durable_rate_limits_ready boolean;
     v_teacher_notification_summary_ready boolean;
@@ -1314,6 +1315,72 @@ begin
             'SELECT,INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER,MAINTAIN'
         );
 
+    v_provisioned_teacher_login_ready :=
+        pg_catalog.to_regprocedure(
+            'public.omr_lookup_teacher_account_v1(text)'
+        ) is not null
+        and
+        pg_catalog.to_regprocedure(
+            'public.omr_lookup_provisioned_teacher_login_v1(text)'
+        ) is not null
+        and pg_catalog.to_regprocedure(
+            'public.omr_validate_provisioned_teacher_session_v1(text,bigint,text)'
+        ) is not null
+        and (
+            select pg_catalog.count(*) = 3
+               and pg_catalog.bool_and(
+                   routine.prosecdef
+                   and routine.prokind = 'f'
+                   and (
+                       (routine.proname = 'omr_lookup_teacher_account_v1'
+                        and pg_catalog.oidvectortypes(routine.proargtypes) = 'text')
+                       or
+                       (routine.proname = 'omr_lookup_provisioned_teacher_login_v1'
+                        and pg_catalog.oidvectortypes(routine.proargtypes) = 'text')
+                       or
+                       (routine.proname = 'omr_validate_provisioned_teacher_session_v1'
+                        and pg_catalog.oidvectortypes(routine.proargtypes) = 'text, bigint, text')
+                   )
+                   and pg_catalog.pg_get_userbyid(routine.proowner) = 'postgres'
+                   and pg_catalog.pg_get_function_result(routine.oid) = 'jsonb'
+                   and routine.proconfig @> array[
+                       'search_path=""', 'statement_timeout=5s', 'lock_timeout=2s'
+                   ]::text[]
+                   and pg_catalog.has_function_privilege('service_role', routine.oid, 'EXECUTE')
+                   and not pg_catalog.has_function_privilege('anon', routine.oid, 'EXECUTE')
+                   and not pg_catalog.has_function_privilege('authenticated', routine.oid, 'EXECUTE')
+               )
+              from pg_catalog.pg_proc routine
+              join pg_catalog.pg_namespace namespace on namespace.oid = routine.pronamespace
+             where namespace.nspname = 'public'
+               and routine.proname in (
+                   'omr_lookup_teacher_account_v1',
+                   'omr_lookup_provisioned_teacher_login_v1',
+                   'omr_validate_provisioned_teacher_session_v1'
+               )
+        )
+        and pg_catalog.obj_description(
+            'public.omr_lookup_teacher_account_v1(text)'::pg_catalog.regprocedure,
+            'pg_proc'
+        ) = 'exact legacy self-service teacher account lookup envelope:202608080007'
+        and pg_catalog.obj_description(
+            'public.omr_lookup_provisioned_teacher_login_v1(text)'::pg_catalog.regprocedure,
+            'pg_proc'
+        ) = 'exact provisioned teacher login binding:202608080007'
+        and pg_catalog.obj_description(
+            'public.omr_validate_provisioned_teacher_session_v1(text,bigint,text)'::pg_catalog.regprocedure,
+            'pg_proc'
+        ) = 'request-time provisioned teacher binding and entitlement validation:202608080007'
+        and pg_catalog.encode(extensions.digest(pg_catalog.pg_get_functiondef(
+            'public.omr_lookup_teacher_account_v1(text)'::pg_catalog.regprocedure
+        ), 'sha256'), 'hex') = '742e37f333ed502c7c78f183fd28474770a30b3df1725550c8193436d7f3d70c'
+        and pg_catalog.encode(extensions.digest(pg_catalog.pg_get_functiondef(
+            'public.omr_lookup_provisioned_teacher_login_v1(text)'::pg_catalog.regprocedure
+        ), 'sha256'), 'hex') = '2d11e1024fd3ae900f1d0cd7cc451186487d727227dabb97471ea4f7c8816785'
+        and pg_catalog.encode(extensions.digest(pg_catalog.pg_get_functiondef(
+            'public.omr_validate_provisioned_teacher_session_v1(text,bigint,text)'::pg_catalog.regprocedure
+        ), 'sha256'), 'hex') = '2a7b831a133a947f9aee5e499c50a679c2ac526441d51ecbd5b4b3395b9a0190';
+
     v_teacher_live_sessions_ready :=
         pg_catalog.to_regclass('public.omr_attempt_sessions_teacher_live_idx') is not null
         and pg_catalog.to_regprocedure(
@@ -1941,6 +2008,7 @@ begin
         and v_student_question_atomic_ready
         and v_teacher_live_sessions_ready
         and v_teacher_account_lifecycle_ready
+        and v_provisioned_teacher_login_ready
         and v_initial_operations_load_control_ready
         and v_individual_student_assignments_ready
         and v_teacher_attempt_reporting_ready;
@@ -1949,6 +2017,7 @@ begin
         and v_service_role_privileges_ready
         and v_operational_job_status_ready
         and v_operator_pilot_provisioning_ready
+        and v_provisioned_teacher_login_ready
         and v_server_gateway_capabilities_ready
         and not exists (
             select 1
@@ -1964,12 +2033,13 @@ begin
             - 'serviceRolePrivilegesReady' - 'serverGatewayCapabilitiesReady'
             - 'teacherUploadCleanupQueueReady' - 'studentAttemptSessionsReady')
         || pg_catalog.jsonb_build_object(
-            'version', '202608080006',
+            'version', '202608080007',
             'canonicalTablesForceRls', v_canonical_tables_force_rls,
             'serviceRolePrivilegesReady', v_service_role_privileges_ready,
             'serverGatewayCapabilitiesReady', v_server_gateway_capabilities_ready,
             'operationalJobStatusReady', v_operational_job_status_ready,
             'operatorPilotProvisioningReady', v_operator_pilot_provisioning_ready,
+            'provisionedTeacherLoginReady', v_provisioned_teacher_login_ready,
             'teacherUploadCleanupQueueReady', v_cleanup_epoch_ready,
             'studentAttemptSessionsReady', v_attempt_sessions_ready,
             'durableRateLimitsReady', v_durable_rate_limits_ready,

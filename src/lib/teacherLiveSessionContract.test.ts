@@ -45,8 +45,8 @@ describe("teacher durable live session SQL contract", () => {
         const boundary = readFileSync(join(root, "supabase/production-server-boundary.sql"), "utf8");
         const readiness = readFileSync(join(root, "src/lib/supabaseReadinessProbe.ts"), "utf8");
         expect(boundary).toContain("teacherLiveSessionsReady");
-        expect(boundary).toContain("'version', '202608080006'");
-        expect(readiness).toContain('SUPABASE_READINESS_VERSION = "202608080006"');
+        expect(boundary).toContain("'version', '202608080007'");
+        expect(readiness).toContain('SUPABASE_READINESS_VERSION = "202608080007"');
         expect(readiness).toContain('"teacherLiveSessionsReady"');
 
     });

@@ -4,6 +4,8 @@ import {
     beginTeacherSignup,
     completeTeacherPasswordReset,
     findActiveTeacherAccount,
+    lookupProvisionedTeacherLogin,
+    validateProvisionedTeacherSession,
     verifyTeacherEmail,
     type TeacherAccountGatewayClient,
 } from "./teacherAccountGateway";
@@ -57,14 +59,14 @@ describe("teacher account service-role gateway", () => {
 
     it("returns only active normalized database accounts for login", async () => {
         const client = clientWith({
-            omr_lookup_teacher_account_v1: [{
+            omr_lookup_teacher_account_v1: {
                 id: "teacher_0123456789abcdef",
                 email: "teacher@example.com",
                 display_name: "김선생",
                 password_hash: "pbkdf2-sha256:120000:00112233445566778899aabbccddeeff:" + "a".repeat(64),
                 status: "active",
                 session_generation: 1,
-            }],
+            },
         });
         await expect(findActiveTeacherAccount(client, " Teacher@Example.com ")).resolves.toMatchObject({
             id: "teacher_0123456789abcdef",
@@ -76,5 +78,73 @@ describe("teacher account service-role gateway", () => {
         expect(client.rpc).toHaveBeenCalledWith("omr_lookup_teacher_account_v1", {
             p_identifier: "teacher@example.com",
         });
+        await expect(findActiveTeacherAccount(clientWith({
+            omr_lookup_teacher_account_v1: [{
+                id: "teacher_0123456789abcdef",
+                email: "teacher@example.com",
+                display_name: "김선생",
+                password_hash: "pbkdf2-sha256:120000:00112233445566778899aabbccddeeff:" + "a".repeat(64),
+                status: "active",
+                session_generation: 1,
+            }],
+        }), "teacher@example.com")).resolves.toBeNull();
+    });
+});
+
+describe("provisioned teacher account gateway", () => {
+    const valid = {
+        accountId: "teacher_0123456789abcdef",
+        email: "teacher@example.com",
+        displayName: "김선생",
+        passwordHash: "pbkdf2-sha256:120000:00112233445566778899aabbccddeeff:" + "a".repeat(64),
+        sessionGeneration: 3,
+        organizationId: "pilot_org_0123456789abcdef01234567",
+        organizationName: "파일럿 학원",
+        memberRole: "owner",
+        plan: "pro",
+        grantExpiresAt: "2026-08-31T15:00:00.000000Z",
+    };
+
+    it("accepts only an exact getter-free provisioned login envelope", async () => {
+        const client = clientWith({ omr_lookup_provisioned_teacher_login_v1: valid });
+        await expect(lookupProvisionedTeacherLogin(client, " Teacher@Example.com ")).resolves.toEqual(valid);
+        expect(client.rpc).toHaveBeenCalledWith("omr_lookup_provisioned_teacher_login_v1", {
+            p_identifier: "teacher@example.com",
+        });
+        await expect(lookupProvisionedTeacherLogin(clientWith({
+            omr_lookup_provisioned_teacher_login_v1: { ...valid, unexpected: true },
+        }), "teacher@example.com")).resolves.toBeNull();
+        await expect(lookupProvisionedTeacherLogin(clientWith({
+            omr_lookup_provisioned_teacher_login_v1: [valid],
+        }), "teacher@example.com")).resolves.toBeNull();
+
+        const getter = Object.defineProperty({ ...valid }, "email", { enumerable: true, get: () => "attacker@example.com" });
+        await expect(lookupProvisionedTeacherLogin(clientWith({ omr_lookup_provisioned_teacher_login_v1: getter }), "x"))
+            .resolves.toBeNull();
+        await expect(lookupProvisionedTeacherLogin(clientWith({
+            omr_lookup_provisioned_teacher_login_v1: { ...valid, grantExpiresAt: "2026-08-01T00:00:00.000000Z" },
+        }), "teacher@example.com", Date.parse("2026-08-08T00:00:00Z"))).resolves.toBeNull();
+    });
+
+    it("returns current request-time organization and plan only for an exact signed binding", async () => {
+        const result = {
+            accountId: valid.accountId,
+            sessionGeneration: 3,
+            organizationId: valid.organizationId,
+            organizationName: valid.organizationName,
+            memberRole: "owner",
+            plan: "free",
+            grantExpiresAt: null,
+        };
+        const client = clientWith({ omr_validate_provisioned_teacher_session_v1: result });
+        await expect(validateProvisionedTeacherSession(client, valid.accountId, 3, valid.organizationId))
+            .resolves.toEqual(result);
+        expect(client.rpc).toHaveBeenCalledWith("omr_validate_provisioned_teacher_session_v1", {
+            p_account_id: valid.accountId,
+            p_session_generation: 3,
+            p_organization_id: valid.organizationId,
+        });
+        await expect(validateProvisionedTeacherSession(client, valid.accountId, 3, "teacher_legacy1"))
+            .resolves.toBeNull();
     });
 });

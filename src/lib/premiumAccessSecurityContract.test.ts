@@ -19,6 +19,7 @@ const SESSION_SECRET = "premium-access-contract-session-secret";
 
 function configureUnhostedRuntime(nodeEnv: "test" | "production") {
     vi.stubEnv("NODE_ENV", nodeEnv);
+    if (nodeEnv === "test") vi.stubEnv("OMR_TEACHER_IDENTITY_MODE", "self_service");
     vi.stubEnv("TEACHER_SESSION_SECRET", SESSION_SECRET);
     vi.stubEnv("SUPABASE_URL", "");
     vi.stubEnv("SUPABASE_SERVICE_ROLE_KEY", "");
@@ -101,7 +102,7 @@ describe("premium access local fallback security contract", () => {
         await expect(authorizeExamCreation("production-exam")).resolves.toMatchObject({
             ok: false,
             access: {
-                authenticated: true,
+                authenticated: false,
                 authoritative: false,
                 source: "unavailable",
                 plan: "free",

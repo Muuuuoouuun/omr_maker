@@ -12,9 +12,11 @@ export default async function CreateLayout({ children }: { children: ReactNode }
         return <TeacherAuthGate initialSession={null} requireServerSession>{null}</TeacherAuthGate>;
     }
 
-    const bootstrapResult = await bootstrapWorkspaceWithServiceRole(workspaceContextFromTeacherSession(serverSession));
-    if (!bootstrapResult.ok && !bootstrapResult.skipped) {
-        console.warn("Teacher workspace bootstrap failed", bootstrapResult.error);
+    if (serverSession.sessionAuthority !== "account") {
+        const bootstrapResult = await bootstrapWorkspaceWithServiceRole(workspaceContextFromTeacherSession(serverSession));
+        if (!bootstrapResult.ok && !bootstrapResult.skipped) {
+            console.warn("Teacher workspace bootstrap failed", bootstrapResult.error);
+        }
     }
 
     return <TeacherAuthGate initialSession={serverSession}>{children}</TeacherAuthGate>;

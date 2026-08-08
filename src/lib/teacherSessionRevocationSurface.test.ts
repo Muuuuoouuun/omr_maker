@@ -39,7 +39,9 @@ describe("teacher session revocation server surface", () => {
     it("mints database login cookies with the lookup generation and explicit account authority", () => {
         const authAction = source("src/app/actions/auth.ts");
         expect(authAction).toContain("accountSessionGeneration: account.sessionGeneration");
-        expect(authAction).toContain('sessionAuthority: result.accountSessionGeneration ? "account" : "bootstrap"');
+        expect(authAction).toContain('sessionAuthority: "account"');
+        expect(authAction).toContain('sessionAuthority: "legacy_account"');
+        expect(authAction).toContain('sessionAuthority: result.sessionAuthority || "bootstrap"');
         expect(authAction.indexOf("accountSessionGeneration: result.accountSessionGeneration"))
             .toBeLessThan(authAction.indexOf("cookieStore.set(TEACHER_SERVER_SESSION_COOKIE"));
     });

@@ -126,6 +126,11 @@ returns `free` after expiry or supersession. Task 3 must bind account login to t
 organization/owner membership and move every paid-plan decision to this boundary before the pilot
 journey is considered connected; Task 2 alone does not claim login or paid-feature integration.
 
+Implementation update: Phase B uses `202608080007_provisioned_teacher_login.sql` for the exact
+provisioned login/request bridge. Phase C is reserved as `202608080008` for in-transaction paid
+mutation/asset entitlement enforcement. Future student session, batch credential, invite lifecycle,
+and billing migrations are `202608080009`, `202608080010`, `202608080011`, and `202608080012`.
+
 Update the canonical manifest expectation from 39 to 40 because the pilot grant ledger is canonical;
 the backup and boundary tests must discover and protect the new table.
 
@@ -273,7 +278,7 @@ git commit -m "feat(identity): align readiness with provisioned mode"
 ### Task 5: Add student session generation and request-time validation
 
 **Files:**
-- Create: `supabase/migrations/202608080007_student_session_generation.sql`
+- Create: `supabase/migrations/202608080009_student_session_generation.sql`
 - Create: `src/lib/studentSessionRevocation.test.ts`
 - Modify: `src/lib/studentServerSession.ts`
 - Modify: `src/app/actions/studentAuth.ts`
@@ -331,14 +336,14 @@ npm run test:supabase:live
 - [ ] **Step 6: Commit**
 
 ```sh
-git add supabase/migrations/202608080007_student_session_generation.sql src/lib/studentSessionRevocation.test.ts src/lib/studentServerSession.ts src/app/actions/studentAuth.ts src/app/actions/studentSession.ts supabase/live-test-assertions.sql
+git add supabase/migrations/202608080009_student_session_generation.sql src/lib/studentSessionRevocation.test.ts src/lib/studentServerSession.ts src/app/actions/studentAuth.ts src/app/actions/studentSession.ts supabase/live-test-assertions.sql
 git commit -m "feat(students): revoke sessions on credential rotation"
 ```
 
 ### Task 6: Add all-or-none start-code batch issuance
 
 **Files:**
-- Create: `supabase/migrations/202608080008_student_start_code_batch.sql`
+- Create: `supabase/migrations/202608080010_student_start_code_batch.sql`
 - Create: `src/lib/studentCredentialBatchMigrationContract.test.ts`
 - Create: `src/lib/studentCredentialBatchGateway.server.ts`
 - Create: `src/lib/studentCredentialBatchGateway.test.ts`
@@ -396,7 +401,7 @@ npm run test:supabase:live
 - [ ] **Step 6: Commit**
 
 ```sh
-git add supabase/migrations/202608080008_student_start_code_batch.sql src/lib/studentCredentialBatchMigrationContract.test.ts src/lib/studentCredentialBatchGateway.server.ts src/lib/studentCredentialBatchGateway.test.ts src/app/actions/studentAuth.ts supabase/live-test-assertions.sql
+git add supabase/migrations/202608080010_student_start_code_batch.sql src/lib/studentCredentialBatchMigrationContract.test.ts src/lib/studentCredentialBatchGateway.server.ts src/lib/studentCredentialBatchGateway.test.ts src/app/actions/studentAuth.ts supabase/live-test-assertions.sql
 git commit -m "feat(roster): issue student codes atomically"
 ```
 

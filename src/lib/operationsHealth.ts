@@ -10,6 +10,7 @@ import {
 } from "./operationalEventSink.server";
 import {
     buildDeploymentReadiness,
+    databaseProbeFailuresForIdentityMode,
     type DeploymentReadinessSummary,
 } from "./deploymentReadiness";
 import {
@@ -17,6 +18,7 @@ import {
     type TeacherAccountDeliveryReadiness,
 } from "./teacherAccountDelivery";
 import { isRemoteAssetCleanupScheduled } from "./remoteAssetCleanup.server";
+import { resolveTeacherIdentityMode } from "./teacherIdentityMode.server";
 import {
     evaluateAssetGcReadiness,
     operationalRuntimeBuildSha,
@@ -171,14 +173,21 @@ export async function probeOperationalReadiness(
         }
         const observability = await sinkPromise;
         if (!result) return { status: "not_ready", database: "probe_failed", observability, ...attestation };
-        if (!result.ready) {
+        const identityMode = resolveTeacherIdentityMode(env);
+        const identityRelevantDatabaseFailures = databaseProbeFailuresForIdentityMode(
+            result,
+            identityMode,
+        );
+        if (identityRelevantDatabaseFailures.length > 0) {
             return {
                 status: "not_ready",
                 database: "not_ready",
                 observability,
                 ...attestation,
                 ...(result.version ? { version: result.version } : {}),
-                ...(result.failedChecks?.length ? { failedChecks: result.failedChecks } : {}),
+                ...(identityRelevantDatabaseFailures.length
+                    ? { failedChecks: identityRelevantDatabaseFailures }
+                    : {}),
             };
         }
         const configuration = configurationProbe(env, result);
@@ -196,7 +205,9 @@ export async function probeOperationalReadiness(
                 failedChecks: fatalConfigurationChecks,
             };
         }
-        const deliveryReadiness = await deliveryProbe(env).catch(() => "probe_failed" as const);
+        const deliveryReadiness = identityMode === "self_service"
+            ? await deliveryProbe(env).catch(() => "probe_failed" as const)
+            : "ready" as const;
         if (deliveryReadiness !== "ready") {
             return {
                 status: "not_ready",

@@ -7,6 +7,7 @@ import { isRemoteAssetCleanupScheduled } from "./remoteAssetCleanup.server";
 import { operationalEventSinkConfiguration } from "./operationalEventSink.server";
 import { PRODUCTION_SIGNING_SECRET_MIN_BYTES } from "./serverSigningSecret";
 import { resolveTeacherAccountDeliveryAdapter } from "./teacherAccountDelivery";
+import { resolveTeacherIdentityMode } from "./teacherIdentityMode.server";
 import {
     SUPABASE_READINESS_CHECK_KEYS,
     SUPABASE_READINESS_VERSION,
@@ -191,6 +192,14 @@ function operationalEventSinkCheck(env: Env): DeploymentReadinessCheck {
 }
 
 function teacherAccountDeliveryCheck(env: Env): DeploymentReadinessCheck {
+    if (resolveTeacherIdentityMode(env) === "provisioned_only") {
+        return {
+            key: "teacher_account_delivery",
+            label: "교사 계정 전달 모드",
+            detail: "프로비저닝 전용 모드에서는 운영자가 초기 자격 증명과 재발급을 전달하므로 self-service 이메일 adapter를 요구하지 않습니다.",
+            tone: "ready",
+        };
+    }
     let configured = false;
     try {
         configured = !!resolveTeacherAccountDeliveryAdapter(env);
@@ -225,14 +234,32 @@ function databaseProbeFailureKeys(
     return [...new Set(failures)];
 }
 
+export function databaseProbeFailuresForIdentityMode(
+    probe: SupabaseDeploymentProbe | null | undefined,
+    identityMode: ReturnType<typeof resolveTeacherIdentityMode>,
+): SupabaseReadinessFailureKey[] {
+    const failures = databaseProbeFailureKeys(probe);
+    if (identityMode !== "self_service") return failures;
+    const operatorPilotFailed = failures.includes("operatorPilotProvisioningReady");
+    const provisionedLoginFailed = failures.includes("provisionedTeacherLoginReady");
+    if (!operatorPilotFailed && !provisionedLoginFailed) return failures;
+    return failures.filter(key => {
+        if (key === "operatorPilotProvisioningReady" || key === "provisionedTeacherLoginReady") return false;
+        if (key === "databaseDeclaredReady") return false;
+        if (key === "serverGatewayCapabilitiesReady" && provisionedLoginFailed) return false;
+        return true;
+    });
+}
+
 function productionRlsCheck(
     env: Env,
     serverGatewayReady: boolean,
+    identityMode: ReturnType<typeof resolveTeacherIdentityMode>,
     databaseProbe?: SupabaseDeploymentProbe | null,
 ): DeploymentReadinessCheck {
     const rlsApplied = isFlagEnabled(env.OMR_PRODUCTION_RLS_APPLIED);
     const isProduction = clean(env.NODE_ENV).toLowerCase() === "production";
-    const probeFailures = databaseProbeFailureKeys(databaseProbe);
+    const probeFailures = databaseProbeFailuresForIdentityMode(databaseProbe, identityMode);
     const databaseReady = !!databaseProbe && probeFailures.length === 0;
 
     if (rlsApplied && databaseReady) {
@@ -292,6 +319,7 @@ function productionRlsCheck(
             teacherAttemptReportingReady: "전체 제출 정확 집계·커서 내보내기 gateway",
             operationalJobStatusReady: "운영 작업 상태·dead-letter heartbeat 경계",
             operatorPilotProvisioningReady: "운영자 교사·파일럿 플랜 원자 프로비저닝 경계",
+            provisionedTeacherLoginReady: "프로비저닝 계정·조직·플랜 로그인 결속 경계",
             probeVersion: "probe 버전",
             databaseDeclaredReady: "DB 최종 readiness 판정",
             probeExecution: "probe 실행",
@@ -364,12 +392,18 @@ export function buildDeploymentReadiness(
     const supabasePublicReady = publicSupabaseConfigured(env);
     const serviceRoleReady = !!getSupabaseServerConfigFromEnv(env);
     const isProduction = clean(env.NODE_ENV).toLowerCase() === "production";
+    const teacherIdentityMode = resolveTeacherIdentityMode(env);
     const cleanupScheduleReady = isRemoteAssetCleanupScheduled(env);
     const databaseTeacherLifecycleReady = serviceRoleReady
         && !!databaseProbe
-        && databaseProbeFailureKeys(databaseProbe).length === 0
-        && databaseProbe.teacherAccountLifecycleReady === true;
-    const bootstrapLoginEnabled = !isProduction || isFlagEnabled(env.OMR_ALLOW_TEACHER_BOOTSTRAP_LOGIN);
+        && databaseProbeFailuresForIdentityMode(databaseProbe, teacherIdentityMode).length === 0
+        && databaseProbe.teacherAccountLifecycleReady === true
+        && (teacherIdentityMode === "self_service" || (
+            databaseProbe.operatorPilotProvisioningReady === true
+            && databaseProbe.provisionedTeacherLoginReady === true
+        ));
+    const bootstrapLoginEnabled = teacherIdentityMode === "self_service"
+        && (!isProduction || isFlagEnabled(env.OMR_ALLOW_TEACHER_BOOTSTRAP_LOGIN));
     const bootstrapTeacherReady = bootstrapLoginEnabled && authConfig.ready;
     const teacherCredentialsTone: DeploymentReadinessTone = databaseTeacherLifecycleReady
         ? "ready"
@@ -415,7 +449,7 @@ export function buildDeploymentReadiness(
             tone: cleanupScheduleReady ? "ready" : isProduction ? "error" : "warning",
         },
         operationalEventSinkCheck(env),
-        productionRlsCheck(env, serviceRoleReady, databaseProbe),
+        productionRlsCheck(env, serviceRoleReady, teacherIdentityMode, databaseProbe),
     ];
 
     const readyCount = checks.filter(check => check.tone === "ready").length;

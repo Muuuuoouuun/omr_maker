@@ -4,7 +4,7 @@ import {
     type TeacherSession,
     type TeacherSessionStorage,
 } from "@/lib/teacherSession";
-import type { TeacherMemberRole } from "@/lib/teacherSession";
+import type { TeacherMemberRole, TeacherSessionAuthority } from "@/lib/teacherSession";
 
 export const DEFAULT_WORKSPACE_ORGANIZATION_ID = "default";
 export const DEFAULT_WORKSPACE_ORGANIZATION_NAME = "OMR Maker";
@@ -88,7 +88,26 @@ export function stableWorkspaceHash(value: string): string {
     return (hash >>> 0).toString(36).padStart(7, "0");
 }
 
-export function workspaceContextFromIdentity(identity: WorkspaceIdentity | null | undefined): WorkspaceContext {
+export function workspaceContextFromIdentity(
+    identity: WorkspaceIdentity | null | undefined,
+    sessionAuthority: TeacherSessionAuthority = "bootstrap",
+): WorkspaceContext {
+    if (sessionAuthority === "account") {
+        const organizationId = clean(identity?.organizationId).toLowerCase();
+        const actorUserId = clean(identity?.teacherId).toLowerCase();
+        const organizationName = clean(identity?.organizationName);
+        if (!/^pilot_org_[a-f0-9]{24}$/.test(organizationId)
+            || !/^teacher_[a-f0-9]{16}$/.test(actorUserId)
+            || !organizationName || identity?.memberRole !== "owner") return DEFAULT_CONTEXT;
+        return {
+            organizationId,
+            organizationName,
+            actorUserId,
+            actorEmail: clean(identity?.email).toLowerCase() || undefined,
+            actorLabel: clean(identity?.displayName) || clean(identity?.email) || actorUserId,
+            memberRole: "owner",
+        };
+    }
     const key = identityKey(identity);
     if (!key) return DEFAULT_CONTEXT;
 
@@ -174,7 +193,7 @@ export function workspaceContextFromTeacherSession(
     now = Date.now(),
 ): WorkspaceContext {
     if (!isTeacherSessionActive(session, now)) return DEFAULT_CONTEXT;
-    return workspaceContextFromIdentity(session);
+    return workspaceContextFromIdentity(session, session.sessionAuthority);
 }
 
 export function readActiveWorkspaceContext(

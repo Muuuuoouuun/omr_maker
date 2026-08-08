@@ -53,7 +53,7 @@ import {
   type StudentSession,
 } from "@/utils/storage";
 import { normalizeStudentRedirectPath } from "@/lib/studentRedirect";
-import { normalizeTeacherRedirectPath, saveTeacherSessionWithIdentity } from "@/lib/teacherSession";
+import { normalizeTeacherRedirectPath, saveTeacherSessionSnapshot, saveTeacherSessionWithIdentity } from "@/lib/teacherSession";
 import { setCurrentPlan } from "@/utils/plans";
 import { readGuestRecoveryState } from "@/lib/studentGuestRecovery";
 import { readExamEntryInviteHandoff } from "@/lib/examEntryInviteHandoff";
@@ -502,7 +502,9 @@ export default function Home() {
 
       const res = await verifyTeacherPassword(identifier, password);
       if (res.success && res.token) {
-        const saved = saveTeacherSessionWithIdentity(res.token, res.teacher);
+        const saved = res.session
+          ? saveTeacherSessionSnapshot(res.session)
+          : saveTeacherSessionWithIdentity(res.token, res.teacher);
         if (!saved) {
           setError("브라우저 세션 저장을 사용할 수 없습니다.");
           return;

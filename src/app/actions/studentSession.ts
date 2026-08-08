@@ -55,7 +55,7 @@ import {
 } from "@/lib/initialOperationsPolicy";
 import { resolveExamEntryInviteWithGateway } from "@/lib/examEntryInviteGateway";
 
-const WORKSPACE_ID_PATTERN = /^(?:default|teacher_[a-z0-9]{7,16})$/;
+const WORKSPACE_ID_PATTERN = /^(?:default|teacher_[a-z0-9]{7,16}|pilot_org_[a-f0-9]{24})$/;
 type QueryError = { message?: string } | null;
 const STUDENT_LOGIN_DURABLE_POLICY = {
     limit: STUDENT_LOGIN_MAX_FAILURES,

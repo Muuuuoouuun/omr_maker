@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createHash } from "node:crypto";
 import { MOCKUP_TEACHER_IDENTITY } from "./mockupAccount";
 import { createSignedTeacherSessionCookie } from "./teacherServerSession";
 
@@ -55,6 +56,27 @@ vi.mock("@/lib/durableRateLimit", () => ({
     applyDurableRateLimitToSubjects: async () => ({ allowed: true, retryAfterMs: 0 }),
 }));
 
+vi.mock("@/lib/teacherAccountGateway", async importOriginal => {
+    const actual = await importOriginal<typeof import("@/lib/teacherAccountGateway")>();
+    return {
+        ...actual,
+        validateProvisionedTeacherSession: async (
+            _client: unknown,
+            accountId: string,
+            sessionGeneration: number,
+            organizationId: string,
+        ) => ({
+            accountId,
+            sessionGeneration,
+            organizationId,
+            organizationName: "Readiness 학원",
+            memberRole: "owner" as const,
+            plan: "pro" as const,
+            grantExpiresAt: "2099-01-01T00:00:00Z",
+        }),
+    };
+});
+
 vi.mock("@/lib/deploymentReadinessActionSecurity", async importOriginal => {
     const actual = await importOriginal<typeof import("@/lib/deploymentReadinessActionSecurity")>();
     return {
@@ -98,9 +120,19 @@ function signTeacher(
     teacherId: string,
     memberRole: "owner" | "admin" | "teacher" | "assistant" | "viewer",
 ): string {
+    const accountId = `teacher_${createHash("sha256").update(teacherId).digest("hex").slice(0, 16)}`;
+    const organizationId = `pilot_org_${createHash("sha256").update(`org:${teacherId}`).digest("hex").slice(0, 24)}`;
     const cookie = createSignedTeacherSessionCookie(
         TOKEN,
-        { teacherId, memberRole },
+        {
+            teacherId: accountId,
+            organizationId,
+            organizationName: "Readiness 학원",
+            memberRole,
+            plan: "pro",
+            accountSessionGeneration: 1,
+            sessionAuthority: "account",
+        },
         { NODE_ENV: "production", TEACHER_SESSION_SECRET: SESSION_SECRET },
     );
     if (!cookie) throw new Error("test teacher session was not signed");
@@ -111,6 +143,8 @@ describe("teacher deployment readiness server action", () => {
     beforeEach(() => {
         vi.stubEnv("NODE_ENV", "production");
         vi.stubEnv("TEACHER_SESSION_SECRET", SESSION_SECRET);
+        vi.stubEnv("SUPABASE_URL", "https://example.supabase.co");
+        vi.stubEnv("SUPABASE_SERVICE_ROLE_KEY", "service-role");
         vi.stubEnv("OMR_RATE_LIMIT_HASH_SECRET", "readiness-rate-limit-test-secret-at-least-32-bytes");
         controls.headers = sameOriginHeaders();
         controls.cookieValue = undefined;
@@ -151,8 +185,8 @@ describe("teacher deployment readiness server action", () => {
         expect(buildReadiness).not.toHaveBeenCalled();
     });
 
-    it("allows a signed read-only viewer session to inspect readiness", async () => {
-        controls.cookieValue = signTeacher("viewer-readiness", "viewer");
+    it("allows an exact request-time validated provisioned owner session to inspect readiness", async () => {
+        controls.cookieValue = signTeacher("owner-readiness", "owner");
 
         await expect(getTeacherDeploymentReadiness()).resolves.toEqual(authorizedSummary);
 
@@ -161,7 +195,7 @@ describe("teacher deployment readiness server action", () => {
     });
 
     it("reports a production rate-limit secret configuration error without probing", async () => {
-        controls.cookieValue = signTeacher("viewer-readiness", "viewer");
+        controls.cookieValue = signTeacher("owner-readiness-config", "owner");
         vi.stubEnv("OMR_RATE_LIMIT_HASH_SECRET", "");
 
         const result = await getTeacherDeploymentReadiness();
@@ -190,7 +224,7 @@ describe("teacher deployment readiness server action", () => {
     });
 
     it("bounds readiness probes by signed actor even when spoofable client headers rotate", async () => {
-        controls.cookieValue = signTeacher("teacher-rate-limit-private", "viewer");
+        controls.cookieValue = signTeacher("teacher-rate-limit-private", "owner");
 
         for (let request = 0; request < 12; request += 1) {
             controls.headers = sameOriginHeaders(`198.51.100.${request + 1}`);

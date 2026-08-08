@@ -6,6 +6,10 @@ import { getSupabaseServerConfigFromEnv } from "@/lib/supabaseServerAdmin";
 import { workspaceContextFromIdentity, workspaceContextFromTeacherSession } from "@/lib/workspaceContext";
 import type { PlanKey } from "@/types/omr";
 import { normalizePlan, PLAN_BY_KEY, type PlanLimitMetric } from "@/utils/plans";
+import {
+    readEffectiveWorkspacePlan,
+    type EffectiveWorkspacePlanRpcClient,
+} from "@/lib/effectiveWorkspacePlanGateway";
 
 type Env = Record<string, string | undefined>;
 
@@ -163,13 +167,12 @@ export function createSupabaseServerPlanStore(client: SupabaseClient): ServerPla
     return {
         source: "supabase",
         async readPlan(organizationId) {
-            const { data, error } = await client.from("omr_organizations")
-                .select("plan")
-                .eq("id", organizationId)
-                .maybeSingle();
-            if (error) throw new Error(error.message || "조직 플랜 조회에 실패했습니다.");
-            if (!data) return null;
-            return normalizePlan((data as { plan?: unknown }).plan);
+            const result = await readEffectiveWorkspacePlan(
+                client as unknown as EffectiveWorkspacePlanRpcClient,
+                organizationId,
+            );
+            if (!result.authoritative) throw new Error("조직 플랜 조회에 실패했습니다.");
+            return result.plan;
         },
         async readUsage(organizationId, metric, period) {
             if (metric === "exams") {
@@ -371,7 +374,9 @@ export async function resolveServerPlanAccess(
             authoritative: true,
             organizationId: context.organizationId,
             actorUserId: context.actorUserId,
-            plan: applyPlanCeiling(organizationPlan, session.plan),
+            plan: session.sessionAuthority === "account"
+                ? organizationPlan
+                : applyPlanCeiling(organizationPlan, session.plan),
             source: store.source,
         };
     } catch (error) {

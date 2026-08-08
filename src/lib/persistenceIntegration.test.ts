@@ -156,7 +156,8 @@ describe("persistence integration", () => {
         expect(limiter).toContain("TEACHER_LOGIN_MAX_FAILURES");
         expect(limiter).toContain("TEACHER_LOGIN_LOCKOUT_MS");
         expect(limiter).toContain("teacher-login:identifier");
-        expect(limiter).not.toContain("teacher-login:client:");
+        expect(limiter).toContain("teacher-login:global:");
+        expect(source).toContain('namespace: "teacher-login-global-safety"');
     });
 
     it("connects teacher-issued student access to a server-verified login flow", () => {

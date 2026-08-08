@@ -53,8 +53,8 @@ describe("atomic student question mutation", () => {
         expect(boundary).toContain("v_student_question_atomic_ready");
         expect(boundary).toContain("student-question-atomic:202608060019");
         expect(boundary).toContain("'studentQuestionAtomicReady'");
-        expect(boundary).toContain("'version', '202608080006'");
-        expect(readinessProbe).toContain('SUPABASE_READINESS_VERSION = "202608080006"');
+        expect(boundary).toContain("'version', '202608080007'");
+        expect(readinessProbe).toContain('SUPABASE_READINESS_VERSION = "202608080007"');
         expect(readinessProbe).toContain('"studentQuestionAtomicReady"');
         expect(live).toContain("student question retry lost the concurrent teacher answer");
         expect(live).toContain("student question mutation changed an unrelated question");

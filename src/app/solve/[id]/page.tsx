@@ -23,7 +23,7 @@ import {
 } from "@/app/actions/studentAttemptSession";
 import { uploadStudentAttemptHandwriting } from "@/app/actions/remoteAssets";
 import { issueGuestSession, validateStudentSession } from "@/app/actions/studentSession";
-import { saveTeacherSessionWithIdentity } from "@/lib/teacherSession";
+import { saveTeacherSessionSnapshot, saveTeacherSessionWithIdentity } from "@/lib/teacherSession";
 import { attemptBelongsToSession, getOrCreateGuestId, getSession, guestLoginIdFor, saveSession, STUDENT_SESSION_CHANGED_EVENT, type StudentSession } from "@/utils/storage";
 import { canArchiveHandwriting, getPlanLabel } from "@/utils/plans";
 import { loadExam as loadPersistedExam, readLocalAttempts, readLocalExam, saveLocalAttempt, saveLocalExam, saveLocalServerConfirmedAttempt } from "@/lib/omrPersistence";
@@ -3210,7 +3210,9 @@ export default function SolvePage() {
         try {
             const res = await verifyTeacherPassword(identifier, password);
             if (res.success && res.token) {
-                const saved = saveTeacherSessionWithIdentity(res.token, res.teacher);
+                const saved = res.session
+                    ? saveTeacherSessionSnapshot(res.session)
+                    : saveTeacherSessionWithIdentity(res.token, res.teacher);
                 if (!saved) {
                     setTeacherAuthError("브라우저 세션 저장을 사용할 수 없습니다.");
                     setIsTeacherMode(false);

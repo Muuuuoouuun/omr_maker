@@ -20,6 +20,7 @@ import {
 } from "@/lib/supabaseServerAdmin";
 import {
     buildTeacherLoginRateLimitKeys,
+    buildTeacherLoginSafetyRateLimitKey,
     checkTeacherLoginRateLimit,
     recordTeacherLoginFailure,
     recordTeacherLoginSuccess,
@@ -27,6 +28,7 @@ import {
     TEACHER_LOGIN_LOCKOUT_MS,
     TEACHER_LOGIN_MAX_FAILURES,
     TEACHER_LOGIN_WINDOW_MS,
+    TEACHER_LOGIN_GLOBAL_MAX_ATTEMPTS,
 } from "@/lib/teacherLoginRateLimit";
 import {
     createSignedTeacherSessionCookie,
@@ -45,11 +47,18 @@ import {
     consumeTeacherDeploymentReadinessRateLimit,
 } from "@/lib/deploymentReadinessActionSecurity";
 import { applyDurableRateLimit, applyDurableRateLimitToSubjects } from "@/lib/durableRateLimit";
-import { findActiveTeacherAccount, type TeacherAccountGatewayClient } from "@/lib/teacherAccountGateway";
+import {
+    findActiveTeacherAccount,
+    lookupProvisionedTeacherLogin,
+    type TeacherAccountGatewayClient,
+} from "@/lib/teacherAccountGateway";
 import {
     isTeacherBootstrapLoginEnabled,
     verifyTeacherAccountPasswordConstantWorkAsync,
 } from "@/lib/teacherAccountLifecycle";
+import { resolveTeacherIdentityMode } from "@/lib/teacherIdentityMode.server";
+import type { TeacherSessionAuthority } from "@/lib/teacherSession";
+import { createTeacherSession, type TeacherSession } from "@/lib/teacherSession";
 
 const TEACHER_LOGIN_DURABLE_POLICY = {
     limit: TEACHER_LOGIN_MAX_FAILURES,
@@ -57,6 +66,11 @@ const TEACHER_LOGIN_DURABLE_POLICY = {
     lockoutMs: TEACHER_LOGIN_LOCKOUT_MS,
 };
 const READINESS_DURABLE_POLICY = { limit: 12, windowMs: 60 * 1000 };
+const TEACHER_LOGIN_GLOBAL_DURABLE_POLICY = {
+    limit: TEACHER_LOGIN_GLOBAL_MAX_ATTEMPTS,
+    windowMs: TEACHER_LOGIN_WINDOW_MS,
+    lockoutMs: TEACHER_LOGIN_LOCKOUT_MS,
+};
 
 function clientFingerprintFromHeaders(headerStore: Headers): string {
     const forwardedFor = headerStore.get("x-forwarded-for")?.split(",")[0]?.trim();
@@ -72,11 +86,22 @@ function clientFingerprintFromHeaders(headerStore: Headers): string {
 export async function verifyTeacherPassword(
     identifier: string,
     password: string,
-): Promise<{ success: boolean; token?: string; teacher?: TeacherLoginIdentity; error?: string }> {
+): Promise<{
+    success: boolean;
+    token?: string;
+    teacher?: TeacherLoginIdentity;
+    session?: TeacherSession;
+    error?: string;
+}> {
     const authConfig = inspectTeacherAuthConfig();
     const serverConfig = getSupabaseServerConfigFromEnv();
+    const identityMode = resolveTeacherIdentityMode();
     const bootstrapLoginEnabled = isTeacherBootstrapLoginEnabled();
-    if (!serverConfig && (!bootstrapLoginEnabled || authConfig.credentialCount === 0)) {
+    if (!serverConfig && (
+        identityMode === "provisioned_only"
+        || !bootstrapLoginEnabled
+        || authConfig.credentialCount === 0
+    )) {
         return {
             success: false,
             error: TEACHER_AUTH_DEPLOYMENT_CONFIG_ERROR,
@@ -92,12 +117,21 @@ export async function verifyTeacherPassword(
     }
 
     const rateLimitKeys = buildTeacherLoginRateLimitKeys(identifier, clientFingerprintFromHeaders(headerStore));
+    const safetyRateLimitKey = buildTeacherLoginSafetyRateLimitKey();
     const rateLimit = checkTeacherLoginRateLimit(rateLimitKeys);
     if (!rateLimit.allowed) {
         return {
             success: false,
             error: TEACHER_LOGIN_RATE_LIMIT_ERROR,
         };
+    }
+    if (!(await applyDurableRateLimit({
+        namespace: "teacher-login-global-safety",
+        subject: safetyRateLimitKey,
+        operation: "consume",
+        policy: TEACHER_LOGIN_GLOBAL_DURABLE_POLICY,
+    })).allowed) {
+        return { success: false, error: TEACHER_LOGIN_RATE_LIMIT_ERROR };
     }
     if (!(await applyDurableRateLimitToSubjects({
         namespace: "teacher-login",
@@ -112,40 +146,60 @@ export async function verifyTeacherPassword(
         success: boolean;
         teacher?: TeacherLoginIdentity;
         accountSessionGeneration?: number;
+        sessionAuthority?: TeacherSessionAuthority;
     } = { success: false };
     if (serverConfig) {
-        const account = await findActiveTeacherAccount(
-            createSupabaseAdminClient(serverConfig) as unknown as TeacherAccountGatewayClient,
-            identifier,
-        );
+        const client = createSupabaseAdminClient(serverConfig) as unknown as TeacherAccountGatewayClient;
+        const account = identityMode === "provisioned_only"
+            ? await lookupProvisionedTeacherLogin(client, identifier)
+            : await findActiveTeacherAccount(client, identifier);
         const databasePasswordMatches = await verifyTeacherAccountPasswordConstantWorkAsync(
             password,
             account?.passwordHash,
         );
         if (account && databasePasswordMatches) {
-            result = {
-                success: true,
-                teacher: {
-                    teacherId: account.id,
-                    email: account.email,
-                    displayName: account.displayName,
-                    plan: "free",
-                    memberRole: "owner",
-                },
-                accountSessionGeneration: account.sessionGeneration,
-            };
+            if (identityMode === "provisioned_only" && "accountId" in account) {
+                result = {
+                    success: true,
+                    teacher: {
+                        teacherId: account.accountId,
+                        email: account.email,
+                        displayName: account.displayName,
+                        organizationId: account.organizationId,
+                        organizationName: account.organizationName,
+                        memberRole: account.memberRole,
+                        plan: account.plan,
+                    },
+                    accountSessionGeneration: account.sessionGeneration,
+                    sessionAuthority: "account",
+                };
+            } else if (identityMode === "self_service" && "id" in account) {
+                result = {
+                    success: true,
+                    teacher: {
+                        teacherId: account.id,
+                        email: account.email,
+                        displayName: account.displayName,
+                        plan: "free",
+                        memberRole: "owner",
+                    },
+                    accountSessionGeneration: account.sessionGeneration,
+                    sessionAuthority: "legacy_account",
+                };
+            }
         }
     }
     // Environment credentials are deployment bootstrap/demo credentials only.
     // Production must opt in explicitly with OMR_ALLOW_TEACHER_BOOTSTRAP_LOGIN=true.
-    if (!result.success && bootstrapLoginEnabled) {
-        result = verifyTeacherLogin(identifier, password);
+    if (!result.success && identityMode === "self_service" && bootstrapLoginEnabled) {
+        const bootstrapResult = verifyTeacherLogin(identifier, password);
+        result = { ...bootstrapResult, sessionAuthority: bootstrapResult.success ? "bootstrap" : undefined };
     }
     if (result.success && result.teacher) {
         const token = mintTeacherToken();
         const serverSession = createSignedTeacherSessionCookie(token, {
             ...result.teacher,
-            sessionAuthority: result.accountSessionGeneration ? "account" : "bootstrap",
+            sessionAuthority: result.sessionAuthority || "bootstrap",
             accountSessionGeneration: result.accountSessionGeneration,
         });
         if (!serverSession) {
@@ -179,15 +233,22 @@ export async function verifyTeacherPassword(
             operation: "success",
             policy: TEACHER_LOGIN_DURABLE_POLICY,
         });
-        const bootstrapResult = await bootstrapWorkspaceWithServiceRole(workspaceContextFromIdentity(result.teacher));
-        if (!bootstrapResult.ok && !bootstrapResult.skipped) {
-            console.warn("Teacher workspace bootstrap failed", bootstrapResult.error);
+        if (result.sessionAuthority !== "account") {
+            const bootstrapResult = await bootstrapWorkspaceWithServiceRole(workspaceContextFromIdentity(result.teacher));
+            if (!bootstrapResult.ok && !bootstrapResult.skipped) {
+                console.warn("Teacher workspace bootstrap failed", bootstrapResult.error);
+            }
         }
 
         return {
             success: true,
             token,
             teacher: result.teacher,
+            session: createTeacherSession(token, Date.now(), {
+                ...result.teacher,
+                sessionAuthority: result.sessionAuthority || "bootstrap",
+                accountSessionGeneration: result.accountSessionGeneration,
+            }),
         };
     }
 
