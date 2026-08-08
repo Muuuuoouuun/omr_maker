@@ -84,7 +84,10 @@ import { hasPlanEntitlement } from "@/utils/plans";
 import WaveBar from "@/components/dashboard/WaveBar";
 import StatusPill from "@/components/dashboard/StatusPill";
 import type { AnalyticsMetricItem } from "@/components/AnalyticsMetricGrid";
-import { buildExamHeadlineInsight } from "@/lib/examAnalyticsReport";
+import {
+    buildExamHeadlineInsight,
+    examAnalyticsSampleStatusNote,
+} from "@/lib/examAnalyticsReport";
 import type { ExamAnalyticsSampleStatus } from "@/lib/examAnalyticsReport";
 import ExamAnalyticsReportOverview, {
     type ExamOverviewAction,
@@ -104,6 +107,29 @@ interface ExamAnalyticsTabProps {
 export function filterGradableQuestionEvidence<T extends { totalCount: number }>(items: T[]): T[] {
     return items.filter(item => item.totalCount > 0);
 }
+
+export function hasValidPerformanceScore(summary: { totalScore: number; scorePercent: number }): boolean {
+    return Number.isFinite(summary.totalScore)
+        && summary.totalScore > 0
+        && Number.isFinite(summary.scorePercent);
+}
+
+export function buildQuestionCorrectRateChartData<T extends {
+    index: number;
+    totalCount: number;
+    correctRate: number;
+}>(items: T[]): Array<Omit<T, "correctRate"> & {
+    correctRate: number | null;
+    correctRateLabel: string;
+}> {
+    return items.map(item => ({
+        ...item,
+        correctRate: item.totalCount > 0 ? item.correctRate : null,
+        correctRateLabel: item.totalCount > 0 ? `${item.correctRate}%` : "미채점",
+    }));
+}
+
+const EXAM_ANALYTICS_SAMPLE_QUALIFIER_ID = "exam-analytics-sample-qualifier";
 
 const difficultyLabelMap: Record<string, string> = {
     easy: "기초",
@@ -299,6 +325,7 @@ export default function ExamAnalyticsTab({
     const retakeAssignmentsEnabled = hasPlanEntitlement(currentPlan, "retakeAssignments");
     const remindersEnabled = hasPlanEntitlement(currentPlan, "reminders");
     const kakaoProviderReadiness = useMemo(() => getKakaoProviderReadiness(), []);
+    const sampleStatusCopy = examAnalyticsSampleStatusNote(sampleStatus);
 
     useEffect(() => {
         const timer = window.setTimeout(() => {
@@ -393,12 +420,13 @@ export default function ExamAnalyticsTab({
     const examStats = useMemo(() => {
         if (!selectedExam || examAttempts.length === 0) return null;
 
-        const scores = examAttempts.map(attempt => summarizeAttemptScore(selectedExam, attempt).scorePercent);
-        const avgScore = scores.reduce((a, b) => a + b, 0) / scores.length;
-        // reduce instead of Math.max(...scores)/Math.min(...scores) so we never blow the
-        // call stack spreading a very large scores array.
-        const maxScore = scores.reduce((hi, value) => Math.max(hi, value), scores[0]);
-        const minScore = scores.reduce((lo, value) => Math.min(lo, value), scores[0]);
+        // A stored legacy score remains valid when it carries a positive totalScore.
+        // Rows with no computed or stored denominator are submission evidence only,
+        // never zero-score performance evidence.
+        const scores = examAttempts
+            .map(attempt => summarizeAttemptScore(selectedExam, attempt))
+            .filter(hasValidPerformanceScore)
+            .map(summary => summary.scorePercent);
         const distribution = computeScoreDistribution(scores);
         const elapsedTimes = examAttempts.map(attemptElapsedTimeSec).filter(value => value > 0);
         const avgElapsedTimeSec = elapsedTimes.length > 0
@@ -409,13 +437,14 @@ export default function ExamAnalyticsTab({
         )).length;
 
         return {
-            avgScore: Math.round(avgScore),
-            maxScore: Math.round(maxScore),
-            minScore: Math.round(minScore),
-            medianScore: distribution.median,
-            standardDeviation: distribution.standardDeviation,
+            avgScore: distribution.count > 0 ? Math.round(distribution.mean) : null,
+            maxScore: distribution.count > 0 ? Math.round(distribution.max) : null,
+            minScore: distribution.count > 0 ? Math.round(distribution.min) : null,
+            medianScore: distribution.count > 0 ? distribution.median : null,
+            standardDeviation: distribution.count > 0 ? distribution.standardDeviation : null,
             distributionBuckets: distribution.buckets,
-            count: examAttempts.length,
+            submissionCount: examAttempts.length,
+            performanceCount: distribution.count,
             avgElapsedTimeSec,
             handwritingArchiveCount,
         };
@@ -574,6 +603,15 @@ export default function ExamAnalyticsTab({
         () => filterGradableQuestionEvidence(questionAnalytics),
         [questionAnalytics],
     );
+    const questionCorrectRateChartData = useMemo(
+        () => buildQuestionCorrectRateChartData(
+            [...questionAnalytics].sort((a, b) => a.index - b.index),
+        ),
+        [questionAnalytics],
+    );
+    const questionCorrectRateChartSummary = `문항별 상세 정답률 데이터: ${questionCorrectRateChartData
+        .map(question => `${question.index}번 ${question.correctRateLabel}`)
+        .join(", ")}.`;
 
     const examLabels = useMemo(() => {
         if (!selectedExam) return [];
@@ -605,11 +643,17 @@ export default function ExamAnalyticsTab({
                 studentName: attempt.studentName,
                 totalScore: scoreSummary.earnedScore,
                 scorePercentage: scoreSummary.scorePercent,
+                hasPerformanceScore: hasValidPerformanceScore(scoreSummary),
                 labelScores,
                 attempt
             };
         });
     }, [selectedExam, examAttempts, examLabels]);
+
+    const performanceStudentScores = useMemo(
+        () => studentScores.filter(student => student.hasPerformanceScore),
+        [studentScores],
+    );
 
     const [sortField, setSortField] = useState<'name' | 'score'>('score');
     const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc');
@@ -696,9 +740,9 @@ export default function ExamAnalyticsTab({
         ));
         const tooEasyCount = gradableQuestionAnalytics.filter(q => q.correctRate >= 90).length;
         const weakDiscriminationCount = gradableQuestionAnalytics.filter(hasWeakDiscrimination).length;
-        const lowStudents = studentScores.filter(student => student.scorePercentage < 60);
-        const borderlineStudents = studentScores.filter(student => student.scorePercentage >= 60 && student.scorePercentage < 80);
-        const advancedStudents = studentScores.filter(student => student.scorePercentage >= 90);
+        const lowStudents = performanceStudentScores.filter(student => student.scorePercentage < 60);
+        const borderlineStudents = performanceStudentScores.filter(student => student.scorePercentage >= 60 && student.scorePercentage < 80);
+        const advancedStudents = performanceStudentScores.filter(student => student.scorePercentage >= 90);
 
         return {
             weakConcept,
@@ -713,7 +757,7 @@ export default function ExamAnalyticsTab({
                 ? `${weakConcept.concept} 보강 후 ${weakConcept.questionNumbers.slice(0, 4).join(", ")}번 유사문항 재응시`
                 : "응시 데이터가 쌓이면 보강 우선순위를 계산합니다.",
         };
-    }, [conceptAnalytics, examStats, gradableQuestionAnalytics, studentScores]);
+    }, [conceptAnalytics, examStats, gradableQuestionAnalytics, performanceStudentScores]);
 
     const studentAchievementBands = useMemo(() => {
         const definitions = [
@@ -722,9 +766,9 @@ export default function ExamAnalyticsTab({
             { key: "under80", label: "60~79점", min: 60, max: 80, tone: "neutral" as const },
             { key: "over80", label: "80~100점", min: 80, max: 101, tone: "success" as const },
         ];
-        const total = studentScores.length;
+        const total = performanceStudentScores.length;
         return definitions.map(definition => {
-            const count = studentScores.filter(student => (
+            const count = performanceStudentScores.filter(student => (
                 student.scorePercentage >= definition.min && student.scorePercentage < definition.max
             )).length;
             return {
@@ -733,7 +777,7 @@ export default function ExamAnalyticsTab({
                 rate: safeRatePercent(count, total),
             };
         });
-    }, [studentScores]);
+    }, [performanceStudentScores]);
 
     const overviewRetakeQuestionIds = (
         teachingInsights?.riskyQuestions.length
@@ -748,19 +792,19 @@ export default function ExamAnalyticsTab({
         })
         : null;
     const overviewHeadline = useMemo(() => buildExamHeadlineInsight({
-        submissionCount: examStats?.count ?? 0,
+        submissionCount: examStats?.performanceCount ?? 0,
         weakConcept: teachingInsights?.weakConcept?.concept,
         weakConceptRate: teachingInsights?.weakConcept?.correctRate,
         hasGradableEvidence: gradableQuestionAnalytics.length > 0,
         lowStudentCount: teachingInsights?.lowStudents.length ?? 0,
         riskyQuestionCount: teachingInsights?.riskyQuestionCount ?? 0,
-    }), [examStats?.count, gradableQuestionAnalytics.length, teachingInsights]);
+    }), [examStats?.performanceCount, gradableQuestionAnalytics.length, teachingInsights]);
     const overviewMetrics = useMemo<AnalyticsMetricItem[]>(() => examStats ? [
-        { id: "mean", label: "평균", value: examStats.avgScore, unit: "점", detail: `표준편차 ${examStats.standardDeviation}`, animate: true },
-        { id: "median", label: "중앙값", value: examStats.medianScore, unit: "점", animate: true },
-        { id: "maximum", label: "최고", value: examStats.maxScore, unit: "점", animate: true },
-        { id: "minimum", label: "최저", value: examStats.minScore, unit: "점", tone: "grade", animate: true },
-        { id: "submissions", label: "응시", value: examStats.count, unit: "명", animate: true },
+        { id: "mean", label: "평균", value: examStats.avgScore ?? "-", unit: examStats.avgScore === null ? undefined : "점", detail: examStats.standardDeviation === null ? "채점 가능한 점수 없음" : `표준편차 ${examStats.standardDeviation}`, animate: true },
+        { id: "median", label: "중앙값", value: examStats.medianScore ?? "-", unit: examStats.medianScore === null ? undefined : "점", animate: true },
+        { id: "maximum", label: "최고", value: examStats.maxScore ?? "-", unit: examStats.maxScore === null ? undefined : "점", animate: true },
+        { id: "minimum", label: "최저", value: examStats.minScore ?? "-", unit: examStats.minScore === null ? undefined : "점", tone: "grade", animate: true },
+        { id: "submissions", label: "채점 응시", value: examStats.performanceCount, unit: "명", detail: `전체 제출 ${examStats.submissionCount}건`, animate: true },
         { id: "elapsed", label: "평균 시간", value: formatSeconds(examStats.avgElapsedTimeSec) },
     ] : [], [examStats]);
     const overviewWeakQuestions = useMemo<ExamOverviewWeakQuestion[]>(() => (
@@ -1244,6 +1288,16 @@ export default function ExamAnalyticsTab({
                         </div>
                     </div>
                 </div>
+
+                {sampleStatusCopy ? (
+                    <p
+                        id={EXAM_ANALYTICS_SAMPLE_QUALIFIER_ID}
+                        className={styles.reportSampleNote}
+                        role="status"
+                    >
+                        {sampleStatusCopy}
+                    </p>
+                ) : null}
 
                 <div className={styles.tabs} role="tablist" aria-label="시험 통계 보기 전환">
                     {[
@@ -1831,7 +1885,10 @@ export default function ExamAnalyticsTab({
                                     tone: band.tone,
                                 }))}
                                 actions={overviewActions}
-                                sampleStatus={sampleStatus}
+                                hasPerformanceEvidence={examStats.performanceCount > 0}
+                                sampleStatusDescriptionId={sampleStatusCopy
+                                    ? EXAM_ANALYTICS_SAMPLE_QUALIFIER_ID
+                                    : undefined}
                             />
                         </div>
                     )}
@@ -2637,7 +2694,12 @@ export default function ExamAnalyticsTab({
                             <CheckCircle size={18} color="var(--success)" />
                             문항별 상세 정답률
                         </h3>
-                        <div style={{ height: '300px', width: '100%', minWidth: 0, marginBottom: '2rem' }}>
+                        <div
+                            role="img"
+                            aria-label="문항별 상세 정답률"
+                            aria-describedby="exam-question-correct-rate-summary"
+                            style={{ height: '300px', width: '100%', minWidth: 0, marginBottom: '2rem' }}
+                        >
                             <ResponsiveContainer
                                 width="100%"
                                 height="100%"
@@ -2645,20 +2707,23 @@ export default function ExamAnalyticsTab({
                                 minHeight={300}
                                 initialDimension={{ width: 900, height: 300 }}
                             >
-                                <BarChart data={[...questionAnalytics].sort((a: { index: number }, b: { index: number }) => a.index - b.index)}>
+                                <BarChart data={questionCorrectRateChartData}>
                                     <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="var(--border)" />
                                     <XAxis dataKey="index" tickFormatter={(v) => `${v}번`} tick={{ fill: 'var(--muted)' }} axisLine={false} tickLine={false} />
                                     <YAxis domain={[0, 100]} tick={{ fill: 'var(--muted)' }} axisLine={false} tickLine={false} />
                                     <RechartsTooltip
                                         cursor={{ fill: 'rgba(99, 102, 241, 0.05)' }}
                                         contentStyle={{ borderRadius: '8px', border: '1px solid var(--border)', boxShadow: '0 4px 12px rgba(0,0,0,0.05)', background: 'var(--background)' }}
-                                        formatter={(value: number | string | undefined) => [`${value}%`, '정답률']}
+                                        formatter={(value) => [value === null || value === undefined ? '미채점' : `${value}%`, '정답률']}
                                         labelFormatter={(label) => `${label}번 문항`}
                                     />
                                     <Bar dataKey="correctRate" fill="var(--primary)" isAnimationActive={false} shape={<WaveBar />} />
                                 </BarChart>
                             </ResponsiveContainer>
                         </div>
+                        <p id="exam-question-correct-rate-summary" className="sr-only">
+                            {questionCorrectRateChartSummary}
+                        </p>
 
                         {/* Option Selection Rates Table */}
                         <h4 style={{ fontSize: 'var(--type-heading-sm)', fontWeight: 700, marginTop: '1rem', marginBottom: '1rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>

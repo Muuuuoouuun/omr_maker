@@ -11,7 +11,10 @@ import ExamAnalyticsReportOverview, {
 import ExamAnalyticsTab from "./ExamAnalyticsTab";
 import type { Attempt, Exam, QuestionResult } from "@/types/omr";
 
-afterEach(cleanup);
+afterEach(() => {
+    cleanup();
+    document.documentElement.removeAttribute("data-motion");
+});
 
 function buildUngradedExamAnalyticsFixture(): { exam: Exam; attempts: Attempt[] } {
     const exam: Exam = {
@@ -120,7 +123,7 @@ function buildProps(
                 href: "/teacher/retake?question=7",
             },
         ],
-        sampleStatus: "ready",
+        hasPerformanceEvidence: true,
         ...overrides,
     };
 }
@@ -134,6 +137,17 @@ describe("ExamAnalyticsReportOverview", () => {
         expect(screen.queryByRole("heading", { name: /보강이 가장 효과적/ })).not.toBeInTheDocument();
         expect(screen.queryByText("보강 세트 만들기")).not.toBeInTheDocument();
 
+        const metricsRegion = screen.getByRole("region", { name: "시험 핵심 지표" });
+        expect(within(metricsRegion).getByText("평균").parentElement).toHaveTextContent("평균-");
+        expect(within(metricsRegion).getByText("중앙값").parentElement).toHaveTextContent("중앙값-");
+        expect(within(metricsRegion).getByText("최고").parentElement).toHaveTextContent("최고-");
+        expect(within(metricsRegion).getByText("최저").parentElement).toHaveTextContent("최저-");
+        expect(within(metricsRegion).getByText("채점 응시").parentElement).toHaveTextContent("채점 응시0명전체 제출 5건");
+        expect(within(screen.getByRole("region", { name: "점수 분포" })).getByRole("status"))
+            .toHaveTextContent("채점 가능한 점수 근거가 없습니다.");
+        expect(within(screen.getByRole("region", { name: "성취 구간" })).getByRole("status"))
+            .toHaveTextContent("채점 가능한 점수 근거가 없습니다.");
+
         fireEvent.click(screen.getByRole("tab", { name: "문항 분석" }));
         const row = screen.getByRole("row", { name: /1번.*시제/ });
         const cells = within(row).getAllByRole("cell");
@@ -143,6 +157,37 @@ describe("ExamAnalyticsReportOverview", () => {
         expect(cells[2]).toHaveTextContent(/^-$|^근거 없음$/);
         expect(cells[4]).toHaveTextContent(/^-$|^근거 없음$/);
         expect(within(row).queryByText("0%")).not.toBeInTheDocument();
+        expect(screen.getByText("문항별 상세 정답률 데이터: 1번 미채점.")).toBeInTheDocument();
+    });
+
+    it.each([
+        ["partial" as const, "일부 제출 기준의 중간 결과입니다."],
+        ["stale" as const, "최신 제출이 아직 반영되지 않았을 수 있습니다."],
+    ])("keeps the %s qualifier persistent and links it to the metric section", (sampleStatus, copy) => {
+        const { exam, attempts } = buildUngradedExamAnalyticsFixture();
+        render(
+            <ExamAnalyticsTab
+                exams={[exam]}
+                attempts={attempts}
+                currentPlan="free"
+                sampleStatus={sampleStatus}
+            />,
+        );
+
+        const contextRegion = screen.getByRole("region", { name: "시험별 통계" });
+        const qualifier = within(contextRegion).getByText(copy);
+        expect(qualifier).toHaveAttribute("id", "exam-analytics-sample-qualifier");
+        expect(screen.getAllByText(copy)).toHaveLength(1);
+        expect(screen.getByRole("region", { name: "시험 핵심 지표" })).toHaveAttribute(
+            "aria-describedby",
+            "exam-analytics-sample-qualifier",
+        );
+
+        for (const tabName of ["문항 분석", "학생·반", "운영", "요약"]) {
+            fireEvent.click(screen.getByRole("tab", { name: tabName }));
+            expect(within(contextRegion).getByText(copy)).toBeInTheDocument();
+            expect(screen.getAllByText(copy)).toHaveLength(1);
+        }
     });
 
     it("keeps graded question diagnostics and percentages unchanged", () => {
@@ -173,6 +218,29 @@ describe("ExamAnalyticsReportOverview", () => {
         expect(cells[2]).toHaveTextContent("100%");
         expect(cells[4]).toHaveTextContent("0%");
         expect(within(row).getAllByText("100%").length).toBeGreaterThanOrEqual(2);
+    });
+
+    it("excludes ungraded submissions without depressing mixed performance aggregates", () => {
+        document.documentElement.setAttribute("data-motion", "off");
+        const { exam, attempts } = buildUngradedExamAnalyticsFixture();
+        const mixedAttempts = attempts.map((attempt, index) => index === 0 ? {
+            ...attempt,
+            score: 10,
+            totalScore: 10,
+        } : attempt);
+        render(<ExamAnalyticsTab exams={[exam]} attempts={mixedAttempts} currentPlan="free" />);
+
+        const metricsRegion = screen.getByRole("region", { name: "시험 핵심 지표" });
+        expect(within(metricsRegion).getByText("평균").parentElement).toHaveTextContent("평균100점");
+        expect(within(metricsRegion).getByText("최저").parentElement).toHaveTextContent("최저100점");
+        expect(within(metricsRegion).getByText("채점 응시").parentElement).toHaveTextContent("채점 응시1명전체 제출 5건");
+        expect(screen.getByRole("img", { name: "점수 구간별 응시 인원" })).toHaveAccessibleDescription(
+            "90-100점 구간이 1명으로 가장 많습니다. 총 1명입니다.",
+        );
+
+        const achievementRegion = screen.getByRole("region", { name: "성취 구간" });
+        expect(within(achievementRegion).getByText("40점 미만").closest("li")).toHaveTextContent("0명0%");
+        expect(within(achievementRegion).getByText("80~100점").closest("li")).toHaveTextContent("1명100%");
     });
 
     it("renders the approved editorial report regions in exact reading order", () => {
@@ -221,19 +289,21 @@ describe("ExamAnalyticsReportOverview", () => {
         expect(gradeRate.className).toContain("rateGrade");
     });
 
-    it("shows concise sample notes for partial and stale data only", () => {
-        const { rerender } = render(
-            <ExamAnalyticsReportOverview {...buildProps({ sampleStatus: "partial" })} />,
+    it("links one external sample qualifier without duplicating its copy", () => {
+        render(
+            <>
+                <p id="sample-note">일부 제출 기준의 중간 결과입니다.</p>
+                <ExamAnalyticsReportOverview
+                    {...buildProps({ sampleStatusDescriptionId: "sample-note" })}
+                />
+            </>,
         );
 
-        expect(screen.getByText("일부 제출 기준의 중간 결과입니다.")).toBeInTheDocument();
-
-        rerender(<ExamAnalyticsReportOverview {...buildProps({ sampleStatus: "stale" })} />);
-        expect(screen.getByText("최신 제출이 아직 반영되지 않았을 수 있습니다.")).toBeInTheDocument();
-
-        rerender(<ExamAnalyticsReportOverview {...buildProps({ sampleStatus: "ready" })} />);
-        expect(screen.queryByText("일부 제출 기준의 중간 결과입니다.")).not.toBeInTheDocument();
-        expect(screen.queryByText("최신 제출이 아직 반영되지 않았을 수 있습니다.")).not.toBeInTheDocument();
+        expect(screen.getByRole("region", { name: "시험 핵심 지표" })).toHaveAttribute(
+            "aria-describedby",
+            "sample-note",
+        );
+        expect(screen.getAllByText("일부 제출 기준의 중간 결과입니다.")).toHaveLength(1);
     });
 
     it("preserves linked and callback actions", () => {
@@ -305,11 +375,10 @@ describe("exam overview wiring", () => {
             "utf8",
         );
 
-        expect(dashboardSource).toContain("resolveExamAnalyticsSampleStatus(result)");
         expect(dashboardSource).toContain("sampleStatus={detailedAttemptSampleStatus}");
         expect(tabSource).toContain("sampleStatus = \"ready\"");
-        expect(tabSource).toContain("sampleStatus={sampleStatus}");
-        expect(tabSource).not.toContain('sampleStatus="ready"');
+        expect(tabSource).toContain("examAnalyticsSampleStatusNote(sampleStatus)");
+        expect(tabSource).toContain("EXAM_ANALYTICS_SAMPLE_QUALIFIER_ID");
     });
 
     it("excludes zero-denominator questions from actionable evidence", async () => {
@@ -334,6 +403,44 @@ describe("exam overview wiring", () => {
         expect(source).toContain("const gradableQuestionAnalytics = useMemo");
         expect(source).toContain("hasGradableEvidence: gradableQuestionAnalytics.length > 0");
         expect(source).not.toContain("questionAnalytics.slice(0, 5).map");
+    });
+
+    it("uses null chart values and a neutral label for questions without a denominator", async () => {
+        const examAnalyticsModule = await import("./ExamAnalyticsTab");
+        const buildQuestionCorrectRateChartData = (
+            examAnalyticsModule as unknown as {
+                buildQuestionCorrectRateChartData?: <T extends {
+                    index: number;
+                    totalCount: number;
+                    correctRate: number;
+                }>(items: T[]) => Array<T & { correctRate: number | null; correctRateLabel: string }>;
+            }
+        ).buildQuestionCorrectRateChartData;
+        const input = [
+            { index: 1, totalCount: 0, correctRate: 0 },
+            { index: 2, totalCount: 5, correctRate: 60 },
+        ];
+
+        expect(buildQuestionCorrectRateChartData).toBeTypeOf("function");
+        expect(buildQuestionCorrectRateChartData?.(input)).toEqual([
+            { index: 1, totalCount: 0, correctRate: null, correctRateLabel: "미채점" },
+            { index: 2, totalCount: 5, correctRate: 60, correctRateLabel: "60%" },
+        ]);
+    });
+
+    it("accepts only finite scores with a positive stored or computed denominator", async () => {
+        const examAnalyticsModule = await import("./ExamAnalyticsTab");
+        const hasValidPerformanceScore = (
+            examAnalyticsModule as unknown as {
+                hasValidPerformanceScore?: (summary: { totalScore: number; scorePercent: number }) => boolean;
+            }
+        ).hasValidPerformanceScore;
+
+        expect(hasValidPerformanceScore).toBeTypeOf("function");
+        expect(hasValidPerformanceScore?.({ totalScore: 10, scorePercent: 0 })).toBe(true);
+        expect(hasValidPerformanceScore?.({ totalScore: 0, scorePercent: 0 })).toBe(false);
+        expect(hasValidPerformanceScore?.({ totalScore: Number.NaN, scorePercent: 80 })).toBe(false);
+        expect(hasValidPerformanceScore?.({ totalScore: 10, scorePercent: Number.NaN })).toBe(false);
     });
 
     it("keeps the true risky-question total while capping the overview evidence list", async () => {

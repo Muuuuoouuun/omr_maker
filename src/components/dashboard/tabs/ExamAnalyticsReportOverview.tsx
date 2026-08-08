@@ -48,7 +48,8 @@ export interface ExamAnalyticsReportOverviewProps {
     weakQuestions: ExamOverviewWeakQuestion[];
     achievementBands: ExamOverviewAchievementBand[];
     actions: ExamOverviewAction[];
-    sampleStatus: "ready" | "partial" | "stale";
+    hasPerformanceEvidence: boolean;
+    sampleStatusDescriptionId?: string;
 }
 
 type DistributionBarStyle = CSSProperties & {
@@ -72,12 +73,6 @@ const achievementToneClasses: Record<ExamOverviewAchievementTone, string> = {
     grade: styles.achievementGrade,
 };
 
-function sampleStatusNote(status: ExamAnalyticsReportOverviewProps["sampleStatus"]): string | null {
-    if (status === "partial") return "일부 제출 기준의 중간 결과입니다.";
-    if (status === "stale") return "최신 제출이 아직 반영되지 않았을 수 있습니다.";
-    return null;
-}
-
 function distributionSummary(distribution: ScoreBucket[]): string {
     const total = distribution.reduce((sum, bucket) => sum + bucket.count, 0);
     const peak = distribution.reduce<ScoreBucket | undefined>((current, bucket) => (
@@ -95,9 +90,9 @@ export default function ExamAnalyticsReportOverview({
     weakQuestions,
     achievementBands,
     actions,
-    sampleStatus,
+    hasPerformanceEvidence,
+    sampleStatusDescriptionId,
 }: ExamAnalyticsReportOverviewProps) {
-    const sampleNote = sampleStatusNote(sampleStatus);
     const maxDistributionCount = Math.max(1, ...distribution.map(bucket => bucket.count));
     const chartSummary = distributionSummary(distribution);
 
@@ -107,6 +102,7 @@ export default function ExamAnalyticsReportOverview({
                 id="exam-report-metrics"
                 title="시험 핵심 지표"
                 className={styles.reportMetricsSection}
+                ariaDescribedBy={sampleStatusDescriptionId}
             >
                 <AnalyticsMetricGrid
                     metrics={metrics}
@@ -123,7 +119,6 @@ export default function ExamAnalyticsReportOverview({
             >
                 <h3 className={styles.reportHeadlineTitle}>{headline.title}</h3>
                 <p className={styles.reportHeadlineDetail}>{headline.detail}</p>
-                {sampleNote ? <p className={styles.reportSampleNote}>{sampleNote}</p> : null}
             </AnalyticsReportSection>
 
             <div className={styles.reportEvidenceGrid}>
@@ -137,7 +132,9 @@ export default function ExamAnalyticsReportOverview({
                     <AnalyticsChartFrame
                         ariaLabel="점수 구간별 응시 인원"
                         height={260}
-                        state={{ status: "ready", summary: chartSummary }}
+                        state={hasPerformanceEvidence
+                            ? { status: "ready", summary: chartSummary }
+                            : { status: "empty", message: "채점 가능한 점수 근거가 없습니다." }}
                         accessibleTable={(
                             <table className={styles.reportDataTable}>
                                 <caption>점수 분포 데이터</caption>
@@ -181,7 +178,7 @@ export default function ExamAnalyticsReportOverview({
                     description="학생 지원 우선순위를 점수 구간으로 읽습니다."
                     className={styles.reportEvidenceSection}
                 >
-                    <ul className={styles.achievementList} aria-label="학생 성취 구간 분포">
+                    {hasPerformanceEvidence ? <ul className={styles.achievementList} aria-label="학생 성취 구간 분포">
                         {achievementBands.map(band => (
                             <li key={band.key} className={achievementToneClasses[band.tone]}>
                                 <div className={styles.achievementCopy}>
@@ -197,7 +194,7 @@ export default function ExamAnalyticsReportOverview({
                                 </span>
                             </li>
                         ))}
-                    </ul>
+                    </ul> : <p role="status">채점 가능한 점수 근거가 없습니다.</p>}
                 </AnalyticsReportSection>
             </div>
 

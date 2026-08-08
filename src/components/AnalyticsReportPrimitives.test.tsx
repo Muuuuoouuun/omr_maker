@@ -25,6 +25,27 @@ describe("AnalyticsReportSection", () => {
         expect(screen.getAllByRole("heading", { level: 2 })).toHaveLength(1);
     });
 
+    it("links an external evidence qualifier without duplicating its copy", () => {
+        render(
+            <>
+                <p id="sample-qualifier">일부 제출 기준</p>
+                <AnalyticsReportSection
+                    id="qualified-report"
+                    title="시험 핵심 지표"
+                    ariaDescribedBy="sample-qualifier"
+                >
+                    내용
+                </AnalyticsReportSection>
+            </>,
+        );
+
+        expect(screen.getByRole("region", { name: "시험 핵심 지표" })).toHaveAttribute(
+            "aria-describedby",
+            "sample-qualifier",
+        );
+        expect(screen.getAllByText("일부 제출 기준")).toHaveLength(1);
+    });
+
     it("renders description, metadata, and actions after the title in a readable order", () => {
         render(
             <AnalyticsReportSection
