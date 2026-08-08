@@ -23,9 +23,18 @@ describe("Supabase live verifier local PostgreSQL fallback", () => {
         expect(verifier).toContain('import { CANONICAL_TABLES } from "./canonical-table-manifest.mjs"');
         expect(verifier).toContain("assertLiveCanonicalTables");
         expect(verifier).toContain("relation.relkind in ('r', 'p')");
-        expect(verifier).toContain("relation.relkind = 'f'");
-        expect(verifier).toContain("live database contains unsupported public OMR foreign relations");
+        expect(verifier).toContain("relation.relkind in ('f', 'v', 'm')");
+        expect(verifier).toContain("live database contains unsupported public OMR relation kinds");
         expect(verifier).toContain("live canonical tables do not match the generated manifest");
+    });
+
+    it("proves dynamic view DDL cannot bypass the unsupported live relation guard", () => {
+        expect(verifier).toContain("assertUnsupportedLiveRelationProbe");
+        expect(verifier).toContain("do $probe$");
+        expect(verifier).toContain("create view public.omr_live_manifest_view_probe");
+        expect(verifier).toContain("create materialized view public.omr_live_manifest_materialized_probe");
+        expect(verifier).toContain("drop materialized view if exists public.omr_live_manifest_materialized_probe");
+        expect(verifier).toContain("drop view if exists public.omr_live_manifest_view_probe");
     });
 
     it("uses an isolated loopback-only PostgreSQL 17 cluster and always cleans it up", () => {

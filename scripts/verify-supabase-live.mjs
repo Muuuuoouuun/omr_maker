@@ -32,12 +32,18 @@ select coalesce(json_agg(canonical.table_name order by canonical.table_name), '[
          and relation.relname like 'omr\\_%' escape '\\'
   ) canonical
 `;
-const liveCanonicalForeignTablesSql = `
-select coalesce(json_agg(relation.relname order by relation.relname), '[]'::json)::text
+const liveUnsupportedCanonicalRelationsSql = `
+select coalesce(
+           json_agg(
+               json_build_object('kind', relation.relkind, 'name', relation.relname)
+               order by relation.relkind, relation.relname
+           ),
+           '[]'::json
+       )::text
   from pg_class relation
   join pg_namespace namespace on namespace.oid = relation.relnamespace
  where namespace.nspname = 'public'
-   and relation.relkind = 'f'
+   and relation.relkind in ('f', 'v', 'm')
    and relation.relname like 'omr\\_%' escape '\\'
 `;
 
@@ -60,11 +66,15 @@ function run(command, args, options = {}) {
     return result;
 }
 
+function unsupportedLiveCanonicalRelations(psqlQuery) {
+    return JSON.parse(psqlQuery(liveUnsupportedCanonicalRelationsSql).trim());
+}
+
 function assertLiveCanonicalTables(psqlQuery) {
-    const foreignTables = JSON.parse(psqlQuery(liveCanonicalForeignTablesSql).trim());
-    if (foreignTables.length > 0) {
+    const unsupportedRelations = unsupportedLiveCanonicalRelations(psqlQuery);
+    if (unsupportedRelations.length > 0) {
         throw new Error(
-            `live database contains unsupported public OMR foreign relations: ${JSON.stringify(foreignTables)}`,
+            `live database contains unsupported public OMR relation kinds: count=${unsupportedRelations.length}`,
         );
     }
     const liveTables = JSON.parse(psqlQuery(liveCanonicalTablesSql).trim());
@@ -72,6 +82,32 @@ function assertLiveCanonicalTables(psqlQuery) {
         throw new Error(
             `live canonical tables do not match the generated manifest: expected ${JSON.stringify(CANONICAL_TABLES)}, found ${JSON.stringify(liveTables)}`,
         );
+    }
+}
+
+function assertUnsupportedLiveRelationProbe(psqlQuery) {
+    try {
+        psqlQuery(`
+do $probe$
+begin
+    execute 'create view public.omr_live_manifest_view_probe as select 1 as id';
+    execute 'create materialized view public.omr_live_manifest_materialized_probe as select 1 as id';
+end
+$probe$
+        `);
+        const detected = unsupportedLiveCanonicalRelations(psqlQuery);
+        if (
+            !detected.some((relation) => relation.kind === "v" && relation.name === "omr_live_manifest_view_probe")
+            || !detected.some((relation) => relation.kind === "m" && relation.name === "omr_live_manifest_materialized_probe")
+        ) {
+            throw new Error("unsupported live relation probe did not detect dynamic view DDL");
+        }
+    } finally {
+        try {
+            psqlQuery("drop materialized view if exists public.omr_live_manifest_materialized_probe");
+        } finally {
+            psqlQuery("drop view if exists public.omr_live_manifest_view_probe");
+        }
     }
 }
 
@@ -86,6 +122,7 @@ function runSqlMatrix(psqlFile, psqlQuery) {
     for (const migration of migrations) {
         psqlFile(`supabase/migrations/${migration}`);
     }
+    assertUnsupportedLiveRelationProbe(psqlQuery);
     assertLiveCanonicalTables(psqlQuery);
 
     psqlFile("supabase/individual-student-assignments-assertions.sql");
