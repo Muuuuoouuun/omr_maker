@@ -7,6 +7,8 @@ import { createClient } from "@supabase/supabase-js";
 const REQUEST_MAX_BYTES = 32 * 1024;
 const SECRET_FILE_MAX_BYTES = 16 * 1024;
 const SUPABASE_TIMEOUT_MS = 10_000;
+const SUPABASE_MAX_RESPONSE_BYTES = 64 * 1024;
+const UNSAFE_PATH_CHARACTER_PATTERN = /[\u0000-\u001f\u007f\u0085\u2028\u2029]/u;
 const PASSWORD_PATTERN = /^Omr-[A-Za-z0-9_-]{24,120}!$/;
 const VERIFIER_PATTERN = /^pbkdf2-sha256:120000:[a-f0-9]{32}:[a-f0-9]{64}$/;
 const ORGANIZATION_ID_PATTERN = /^pilot_org_[a-f0-9]{24}$/;
@@ -90,8 +92,18 @@ function hashPassword(password, salt = randomBytes(16)) {
 export function createOperatorProvisioningDeadlineFetch(
     timeoutMs,
     fetchImplementation = globalThis.fetch.bind(globalThis),
+    expectedOrigin,
 ) {
     return async (input, init = {}) => {
+        let requestUrl;
+        try {
+            requestUrl = new URL(input instanceof Request ? input.url : String(input));
+        } catch {
+            throw new Error("Provisioning transport rejected the request");
+        }
+        if (requestUrl.username || requestUrl.password || (expectedOrigin && requestUrl.origin !== expectedOrigin)) {
+            throw new Error("Provisioning transport rejected the request");
+        }
         const controller = new AbortController();
         const callerSignal = init.signal;
         const forwardAbort = () => controller.abort(callerSignal?.reason);
@@ -100,13 +112,71 @@ export function createOperatorProvisioningDeadlineFetch(
         const timer = setTimeout(() => {
             controller.abort(new DOMException("Supabase provisioning request timed out", "TimeoutError"));
         }, timeoutMs);
+        const aborted = new Promise((_, reject) => {
+            controller.signal.addEventListener("abort", () => reject(controller.signal.reason), { once: true });
+        });
         try {
-            return await fetchImplementation(input, { ...init, signal: controller.signal });
+            const response = await Promise.race([
+                fetchImplementation(input, { ...init, redirect: "error", signal: controller.signal }),
+                aborted,
+            ]);
+            if (!(response instanceof Response) || (response.status >= 300 && response.status < 400)) {
+                controller.abort();
+                throw new Error("Provisioning transport rejected the response");
+            }
+            const declared = response.headers.get("content-length");
+            if (declared && (!/^\d+$/.test(declared) || Number(declared) > SUPABASE_MAX_RESPONSE_BYTES)) {
+                controller.abort();
+                throw new Error("Provisioning transport rejected the response");
+            }
+            const chunks = [];
+            let total = 0;
+            if (response.body) {
+                const reader = response.body.getReader();
+                while (true) {
+                    const part = await Promise.race([reader.read(), aborted]);
+                    if (part.done) break;
+                    total += part.value.byteLength;
+                    if (total > SUPABASE_MAX_RESPONSE_BYTES) {
+                        controller.abort();
+                        try { await reader.cancel(); } catch { /* already aborted */ }
+                        throw new Error("Provisioning transport rejected the response");
+                    }
+                    chunks.push(part.value);
+                }
+            }
+            const body = new Uint8Array(total);
+            let offset = 0;
+            for (const chunk of chunks) {
+                body.set(chunk, offset);
+                offset += chunk.byteLength;
+            }
+            const bodyAllowed = ![101, 103, 204, 205, 304].includes(response.status);
+            return new Response(bodyAllowed && total > 0 ? body : null, {
+                status: response.status,
+                statusText: response.statusText,
+                headers: response.headers,
+            });
         } finally {
             clearTimeout(timer);
             callerSignal?.removeEventListener("abort", forwardAbort);
         }
     };
+}
+
+export function parseOperatorSupabaseRootUrl(value) {
+    let endpoint;
+    try { endpoint = new URL(clean(value)); } catch { throw new Error("Invalid Supabase endpoint"); }
+    if (
+        endpoint.protocol !== "https:"
+        || endpoint.username
+        || endpoint.password
+        || endpoint.pathname !== "/"
+        || endpoint.search
+        || endpoint.hash
+        || !endpoint.hostname
+    ) throw new Error("Invalid Supabase endpoint");
+    return endpoint.origin;
 }
 
 const DEFAULT_FS = { lstat, link, open, realpath, readdir, unlink };
@@ -145,6 +215,7 @@ function normalizedAbsolutePath(value, code) {
         || normalize(value) !== value
         || value.endsWith(sep)
         || Buffer.byteLength(value, "utf8") > 4096
+        || UNSAFE_PATH_CHARACTER_PATTERN.test(value)
     ) fail(code);
     return value;
 }
@@ -434,14 +505,65 @@ async function safeUnlink(filePath, expectedStats, boundary, deps, code) {
     }
 }
 
+function validateLockValue(raw) {
+    const value = exactObject(raw, ["createdAt", "nonce", "pid", "schemaVersion"], "unsafe_state");
+    if (
+        value.schemaVersion !== 1
+        || !Number.isSafeInteger(value.pid)
+        || value.pid < 1
+        || !INPUT_TIMESTAMP_PATTERN.test(value.createdAt)
+        || !Number.isFinite(Date.parse(value.createdAt))
+        || !/^[a-f0-9]{32}$/.test(value.nonce)
+    ) fail("unsafe_state");
+    return value;
+}
+
+async function recoverDeadLockFile(lockPath, boundary, deps) {
+    await repairInterruptedPublication(lockPath, boundary, deps, "unsafe_state");
+    const lockFile = await readSecureJson(lockPath, deps, "unsafe_state", 1024, boundary);
+    const value = validateLockValue(lockFile.value);
+    if (deps.isProcessAlive(value.pid)) fail("unsafe_state");
+    await safeUnlink(lockPath, lockFile.stats, boundary, deps, "unsafe_state");
+}
+
+async function recoverOrphanLockTemps(lockPath, boundary, deps) {
+    let names;
+    try { names = await deps.fs.readdir(boundary.parentPath); } catch { fail("unsafe_state"); }
+    const prefix = `.${basename(lockPath)}.`;
+    const candidates = names.filter(name => (
+        name.startsWith(prefix) && /^[a-f0-9]{32}\.tmp$/.test(name.slice(prefix.length))
+    ));
+    for (const name of candidates) {
+        const path = `${boundary.parentPath}${sep}${name}`;
+        const file = await readSecureJson(path, deps, "unsafe_state", 1024, boundary);
+        const value = validateLockValue(file.value);
+        if (deps.isProcessAlive(value.pid)) fail("unsafe_state");
+        await safeUnlink(path, file.stats, boundary, deps, "unsafe_state");
+    }
+}
+
 async function acquireLock(statePath, boundary, deps, recovered = false) {
     const lockPath = `${statePath}.lock`;
     if (!await sameParent(boundary, deps)) fail("unsafe_state");
+    const existing = await pathState(lockPath, deps).catch(() => fail("unsafe_state"));
+    if (existing.exists) {
+        if (recovered) fail("unsafe_state");
+        await recoverDeadLockFile(lockPath, boundary, deps);
+        return acquireLock(statePath, boundary, deps, true);
+    }
+    await recoverOrphanLockTemps(lockPath, boundary, deps);
+    const temporaryId = deps.generateTempName();
+    if (!/^[a-f0-9]{32}$/.test(temporaryId)) fail("unsafe_state");
+    const temporaryPath = `${boundary.parentPath}${sep}.${basename(lockPath)}.${temporaryId}.tmp`;
     let handle;
+    let owned;
+    let linked = false;
     try {
-        handle = await deps.fs.open(lockPath, "wx", 0o600);
+        handle = await deps.fs.open(temporaryPath, "wx", 0o600);
         const initial = await handle.stat();
         if (!safeRegularStats(initial, boundary, 0, true) || initial.size !== 0) fail("unsafe_state");
+        owned = initial;
+        await deps.checkpoint("lock_temp_created");
         const pid = deps.currentPid();
         const createdAt = deps.now();
         const nonce = deps.generateTempName();
@@ -459,7 +581,9 @@ async function acquireLock(statePath, boundary, deps, recovered = false) {
             nonce,
         })}\n`;
         await handle.writeFile(serialized, { encoding: "utf8" });
+        await deps.checkpoint("lock_temp_written");
         await handle.sync();
+        await deps.checkpoint("lock_temp_synced");
         const stats = await handle.stat();
         if (
             !safeRegularStats(stats, boundary, 1024)
@@ -467,28 +591,43 @@ async function acquireLock(statePath, boundary, deps, recovered = false) {
             || stats.ino !== initial.ino
             || stats.size !== Buffer.byteLength(serialized, "utf8")
         ) fail("unsafe_state");
-        return { path: lockPath, handle, stats, boundary };
+        if (!await sameParent(boundary, deps)) fail("unsafe_state");
+        await deps.fs.link(temporaryPath, lockPath);
+        linked = true;
+        await deps.checkpoint("lock_final_linked");
+        const linkedStats = await deps.fs.lstat(lockPath);
+        if (
+            !linkedStats.isFile() || linkedStats.isSymbolicLink()
+            || linkedStats.uid !== boundary.uid
+            || linkedStats.dev !== stats.dev || linkedStats.ino !== stats.ino
+            || (linkedStats.mode & 0o777) !== 0o600
+            || linkedStats.nlink !== 2 || linkedStats.size !== stats.size
+        ) fail("unsafe_state");
+        await syncDirectory(boundary, deps, "unsafe_state");
+        await deps.checkpoint("lock_link_dir_synced");
+        await deps.fs.unlink(temporaryPath);
+        await deps.checkpoint("lock_temp_unlinked");
+        await syncDirectory(boundary, deps, "unsafe_state");
+        await deps.checkpoint("lock_unlink_dir_synced");
+        const finalized = await deps.fs.lstat(lockPath);
+        if (
+            !safeRegularStats(finalized, boundary, 1024)
+            || finalized.dev !== stats.dev || finalized.ino !== stats.ino || finalized.size !== stats.size
+        ) fail("unsafe_state");
+        return { path: lockPath, handle, stats: finalized, boundary };
     } catch (error) {
         if (handle) {
             try { await handle.close(); } catch { /* fail closed */ }
         }
         if (error instanceof OperatorProvisioningCliError) throw error;
-        if (error?.code === "EEXIST" && !recovered) {
-            const lockFile = await readSecureJson(lockPath, deps, "unsafe_state", 1024, boundary);
-            const value = exactObject(lockFile.value, ["createdAt", "nonce", "pid", "schemaVersion"], "unsafe_state");
-            if (
-                value.schemaVersion !== 1
-                || !Number.isSafeInteger(value.pid)
-                || value.pid < 1
-                || !INPUT_TIMESTAMP_PATTERN.test(value.createdAt)
-                || !Number.isFinite(Date.parse(value.createdAt))
-                || !/^[a-f0-9]{32}$/.test(value.nonce)
-            ) fail("unsafe_state");
-            if (deps.isProcessAlive(value.pid)) fail("unsafe_state");
-            await safeUnlink(lockPath, lockFile.stats, boundary, deps, "unsafe_state");
-            return acquireLock(statePath, boundary, deps, true);
+        if (error?.code === "EEXIST" && owned && !linked) {
+            try {
+                const current = await deps.fs.lstat(temporaryPath);
+                if (current.dev === owned.dev && current.ino === owned.ino) await deps.fs.unlink(temporaryPath);
+            } catch { /* winner remains untouched */ }
+            if (!recovered) return acquireLock(statePath, boundary, deps, true);
         }
-        fail("unsafe_state");
+        throw error;
     }
 }
 
@@ -586,8 +725,11 @@ function validateReceipt(raw, request) {
 }
 
 function validateProvisionedResult(value, request) {
+    const expectedKeys = ["accountId", "expiresAt", "grantId", "organizationId", "plan", "replayed", "status"];
     if (
-        !value || value.status !== "provisioned"
+        !value || typeof value !== "object" || Array.isArray(value)
+        || Object.keys(value).sort().join("\0") !== expectedKeys.sort().join("\0")
+        || value.status !== "provisioned"
         || !ORGANIZATION_ID_PATTERN.test(value.organizationId)
         || !ACCOUNT_ID_PATTERN.test(value.accountId)
         || !GRANT_ID_PATTERN.test(value.grantId)
@@ -620,15 +762,16 @@ async function defaultProvisionWithVerifier(input, env) {
     if (!url || serviceRoleKey.length < 32 || /\s/.test(serviceRoleKey)) {
         return { status: "unavailable", error: "dependency_unavailable" };
     }
-    let endpoint;
-    try { endpoint = new URL(url); } catch { return { status: "unavailable", error: "dependency_unavailable" }; }
-    if (endpoint.protocol !== "https:" || endpoint.username || endpoint.password) {
-        return { status: "unavailable", error: "dependency_unavailable" };
-    }
+    let origin;
+    try { origin = parseOperatorSupabaseRootUrl(url); } catch { return { status: "unavailable", error: "dependency_unavailable" }; }
     try {
-        const client = createClient(endpoint.href, serviceRoleKey, {
+        const client = createClient(origin, serviceRoleKey, {
             auth: { persistSession: false, autoRefreshToken: false },
-            global: { fetch: createOperatorProvisioningDeadlineFetch(SUPABASE_TIMEOUT_MS) },
+            global: { fetch: createOperatorProvisioningDeadlineFetch(
+                SUPABASE_TIMEOUT_MS,
+                globalThis.fetch.bind(globalThis),
+                origin,
+            ) },
         });
         const result = await client.rpc("omr_provision_pilot_teacher_v1", {
             p_organization_name: input.organizationName,
@@ -650,7 +793,10 @@ async function defaultProvisionWithVerifier(input, env) {
             if (message === "capacity_exceeded") return { status: "rejected", error: "capacity_exceeded" };
             return { status: "unavailable", error: "dependency_unavailable" };
         }
-        const row = Array.isArray(result.data) ? result.data[0] : result.data;
+        if (Array.isArray(result.data)) {
+            return { status: "unavailable", error: "dependency_unavailable" };
+        }
+        const row = result.data;
         return { status: "provisioned", ...row };
     } catch {
         return { status: "unavailable", error: "dependency_unavailable" };

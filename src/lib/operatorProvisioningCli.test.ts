@@ -1,4 +1,5 @@
 import { constants } from "node:fs";
+import { spawn } from "node:child_process";
 import {
     chmod,
     link,
@@ -19,6 +20,7 @@ import {
     OperatorProvisioningCliError,
     createOperatorProvisioningDeadlineFetch,
     executeOperatorProvisioning,
+    parseOperatorSupabaseRootUrl,
     runOperatorProvisioningCli,
 } from "../../scripts/operator-provisioning-cli-core.mjs";
 
@@ -84,6 +86,191 @@ async function receipt(path: string) {
 }
 
 describe("operator teacher provisioning CLI", () => {
+    it.each([
+        "https://project.supabase.co/path",
+        "https://project.supabase.co/?query=1",
+        "https://project.supabase.co/#hash",
+        "https://user:secret@project.supabase.co/",
+        "http://project.supabase.co/",
+    ])("rejects a non-root or non-HTTPS Supabase URL %s", (url) => {
+        expect(() => parseOperatorSupabaseRootUrl(url)).toThrow();
+    });
+
+    it("accepts only the exact HTTPS origin root", () => {
+        expect(parseOperatorSupabaseRootUrl("https://project.supabase.co/"))
+            .toBe("https://project.supabase.co");
+    });
+
+    it("rejects cross-origin inputs and redirects without forwarding credentials", async () => {
+        const calls: Array<{ input: string; authorization?: string; apiKey?: string }> = [];
+        const transport = createOperatorProvisioningDeadlineFetch(100, async (input, init) => {
+            calls.push({
+                input: String(input),
+                authorization: new Headers(init?.headers).get("authorization") ?? undefined,
+                apiKey: new Headers(init?.headers).get("apikey") ?? undefined,
+            });
+            return new Response(null, {
+                status: 307,
+                headers: {
+                    location: calls.length === 1
+                        ? "https://attacker.invalid/steal"
+                        : "https://project.supabase.co/other",
+                },
+            });
+        }, "https://project.supabase.co");
+        await expect(transport("https://attacker.invalid/rest/v1/rpc", {
+            headers: { authorization: "Bearer service-secret" },
+        })).rejects.toBeInstanceOf(Error);
+        expect(calls).toEqual([]);
+        await expect(transport("https://user:password@project.supabase.co/rest/v1/rpc", {
+            headers: { authorization: "Bearer service-secret" },
+        })).rejects.toBeInstanceOf(Error);
+        expect(calls).toEqual([]);
+        await expect(transport("https://project.supabase.co/rest/v1/rpc", {
+            headers: { authorization: "Bearer service-secret", apikey: "service-secret" },
+        })).rejects.toBeInstanceOf(Error);
+        expect(calls).toHaveLength(1);
+        expect(calls[0]?.input).toContain("project.supabase.co");
+        expect(calls.some(call => call.input.includes("attacker.invalid"))).toBe(false);
+        await expect(transport("https://project.supabase.co/rest/v1/rpc", {
+            headers: { authorization: "Bearer service-secret", apikey: "service-secret" },
+        })).rejects.toBeInstanceOf(Error);
+        expect(calls).toHaveLength(2);
+        expect(calls.every(call => call.input.endsWith("/rest/v1/rpc"))).toBe(true);
+    });
+
+    it.each(["headers", "body"])("aborts a %s stall under the same deadline", async (phase) => {
+        const transport = createOperatorProvisioningDeadlineFetch(10, async (_input, init) => {
+            if (phase === "headers") {
+                return new Promise<Response>((_resolve, reject) => {
+                    init?.signal?.addEventListener("abort", () => reject(init.signal?.reason), { once: true });
+                });
+            }
+            return new Response(new ReadableStream({ start(controller) { controller.enqueue(new Uint8Array([1])); } }));
+        }, "https://project.supabase.co");
+        await expect(transport("https://project.supabase.co/rest/v1/rpc", {}))
+            .rejects.toMatchObject({ name: "TimeoutError" });
+    });
+
+    it.each(["declared", "chunked"])("rejects an oversized %s response body", async (kind) => {
+        const body = new Uint8Array(64 * 1024 + 1);
+        const transport = createOperatorProvisioningDeadlineFetch(100, async () => new Response(body, {
+            headers: kind === "declared" ? { "content-length": String(body.length) } : {},
+        }), "https://project.supabase.co");
+        await expect(transport("https://project.supabase.co/rest/v1/rpc", {})).rejects.toBeInstanceOf(Error);
+    });
+
+    it.each(["\n", "\u001b", "\u0085", "\u2028", "\u2029"])(
+        "rejects unsafe request-path character %j before filesystem access",
+        async (character) => {
+            const current = await fixture();
+            const unsafePath = `${current.requestPath}${character}suffix`;
+            await writeFile(unsafePath, JSON.stringify(current.request), { mode: 0o600 });
+            const generatePassword = vi.fn(() => PASSWORD);
+            await expect(executeOperatorProvisioning(
+                { argv: [`--request=${unsafePath}`], env: {} },
+                { ...current.deps, generatePassword },
+            )).rejects.toMatchObject({ code: "unsafe_request" });
+            expect(generatePassword).not.toHaveBeenCalled();
+        },
+    );
+
+    it.each(["\n", "\u001b", "\u0085", "\u2028", "\u2029"])(
+        "rejects unsafe credential-state path character %j before credential generation",
+        async (character) => {
+            const current = await fixture();
+            await writeFile(current.requestPath, JSON.stringify({
+                ...current.request,
+                credentialStatePath: `${current.statePath}${character}suffix`,
+            }), { mode: 0o600 });
+            const generatePassword = vi.fn(() => PASSWORD);
+            await expect(executeOperatorProvisioning(
+                { argv: [`--request=${current.requestPath}`], env: {} },
+                { ...current.deps, generatePassword },
+            )).rejects.toMatchObject({ code: "invalid_request" });
+            expect(generatePassword).not.toHaveBeenCalled();
+            expect(current.deps.provisionWithVerifier).not.toHaveBeenCalled();
+        },
+    );
+
+    it.each([
+        { ...SUCCESS, extra: "unexpected" },
+        [SUCCESS, SUCCESS],
+    ])("rejects extra or multiple success envelopes", async (response) => {
+        const current = await fixture();
+        current.deps.provisionWithVerifier.mockResolvedValueOnce(response as never);
+        await expect(executeOperatorProvisioning(
+            { argv: [`--request=${current.requestPath}`], env: {} }, current.deps,
+        )).rejects.toMatchObject({ code: "dependency_unavailable" });
+    });
+
+    it.each([
+        "lock_temp_created",
+        "lock_temp_written",
+        "lock_temp_synced",
+        "lock_final_linked",
+        "lock_link_dir_synced",
+        "lock_temp_unlinked",
+        "lock_unlink_dir_synced",
+    ])("fails closed and recovers a dead-process lock crash at %s", async (phase) => {
+        const current = await fixture();
+        let crashed = false;
+        await expect(executeOperatorProvisioning(
+            { argv: [`--request=${current.requestPath}`], env: {} },
+            {
+                ...current.deps,
+                checkpoint: async (name: string) => {
+                    if (!crashed && name === phase) {
+                        crashed = true;
+                        throw new Error("simulated process crash");
+                    }
+                },
+            },
+        )).rejects.toBeInstanceOf(Error);
+        if (phase === "lock_temp_created") {
+            await expect(executeOperatorProvisioning(
+                { argv: [`--request=${current.requestPath}`], env: {} },
+                { ...current.deps, isProcessAlive: () => false },
+            )).rejects.toMatchObject({ code: "unsafe_state" });
+            return;
+        }
+        await executeOperatorProvisioning(
+            { argv: [`--request=${current.requestPath}`], env: {} },
+            { ...current.deps, isProcessAlive: () => false },
+        );
+        expect((await receipt(current.statePath)).initialPassword).toBe(PASSWORD);
+    });
+
+    it("serializes two real competing operator processes without divergent credentials", async () => {
+        const current = await fixture();
+        const script = join(process.cwd(), "scripts", "provision-initial-teacher.mjs");
+        const env = { ...process.env };
+        for (const name of [
+            "SUPABASE_URL", "NEXT_PUBLIC_SUPABASE_URL", "SUPABASE_SERVICE_ROLE_KEY", "OMR_SUPABASE_SERVICE_ROLE_KEY",
+        ]) delete env[name];
+        const run = () => new Promise<{ code: number | null; stdout: string; stderr: string }>((resolve) => {
+            const child = spawn(process.execPath, [script, `--request=${current.requestPath}`], {
+                cwd: process.cwd(), env, stdio: ["ignore", "pipe", "pipe"],
+            });
+            let stdout = "";
+            let stderr = "";
+            child.stdout.setEncoding("utf8").on("data", chunk => { stdout += chunk; });
+            child.stderr.setEncoding("utf8").on("data", chunk => { stderr += chunk; });
+            child.on("close", code => resolve({ code, stdout, stderr }));
+        });
+
+        const results = await Promise.all([run(), run()]);
+
+        expect(results.map(result => result.code)).toEqual([1, 1]);
+        expect(results.every(result => result.stdout === "")).toBe(true);
+        expect(results.every(result => /^provision_failed: (dependency_unavailable|unsafe_state)\n$/.test(result.stderr))).toBe(true);
+        const pending = JSON.parse(await readFile(current.statePath, "utf8"));
+        expect(pending).toMatchObject({ status: "pending", idempotencyKey: IDEMPOTENCY_KEY });
+        expect(pending.initialPassword).toMatch(/^Omr-[A-Za-z0-9_-]{24,120}!$/);
+        expect(pending.passwordVerifier).toMatch(/^pbkdf2-sha256:120000:[a-f0-9]{32}:[a-f0-9]{64}$/);
+        expect((await lstat(current.statePath)).nlink).toBe(1);
+    });
+
     it.each(["\u0000", "\u0001", "\u007f"])(
         "rejects email control character %j before credential or journal side effects",
         async (controlCharacter) => {
@@ -538,6 +725,11 @@ describe("operator teacher provisioning CLI", () => {
             deps: current.deps,
         });
         expect(code).toBe(0);
+        expect(stdout).toHaveLength(5);
+        expect(stdout.map(line => line.split("=")[0])).toEqual([
+            "receipt_path", "organization_id", "account_id", "grant_id", "expires_at",
+        ]);
+        expect(stdout.every(line => !/[\u0000-\u001f\u007f\u0085\u2028\u2029]/u.test(line))).toBe(true);
         const printed = stdout.join("\n");
         expect(printed).toContain(`receipt_path=${current.statePath}.receipt`);
         expect(printed).toContain(`organization_id=${SUCCESS.organizationId}`);
