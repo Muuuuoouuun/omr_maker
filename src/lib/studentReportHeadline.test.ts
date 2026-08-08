@@ -1,28 +1,14 @@
 import { describe, expect, it } from "vitest";
-import type { StudentProfileWeaknessInsight } from "./studentProfileAnalytics";
+import type { StudentProfileHeadlineWeaknessEvidence } from "./studentProfileAnalytics";
 import { buildStudentReportHeadline } from "./studentReportHeadline";
 
-function weakness(partial: Partial<StudentProfileWeaknessInsight>): StudentProfileWeaknessInsight {
+function evidence(partial: Partial<StudentProfileHeadlineWeaknessEvidence>): StudentProfileHeadlineWeaknessEvidence {
     return {
-        key: partial.key || "weakness",
-        examId: partial.examId || "exam-1",
-        examTitle: partial.examTitle || "1차 진단",
         kind: partial.kind || "concept",
         title: partial.title || "시제",
-        basis: partial.basis || "같은 개념",
+        examIds: partial.examIds || ["exam-1"],
         wrongCount: partial.wrongCount ?? 2,
-        unansweredCount: partial.unansweredCount ?? 0,
-        totalCount: partial.totalCount ?? 3,
-        wrongRate: partial.wrongRate ?? 67,
-        questionNumbers: partial.questionNumbers || [1, 2],
-        recommendedQuestionIds: partial.recommendedQuestionIds || [1, 2],
-        severity: partial.severity || "review",
-        reason: partial.reason || "오답이 반복됨",
-        sourceAttemptId: partial.sourceAttemptId || "attempt-1",
-        retakeMode: partial.retakeMode || "similar",
-        retakeQuestionIds: partial.retakeQuestionIds || [1, 2],
-        retakeLabels: partial.retakeLabels || [],
-        retakeConcepts: partial.retakeConcepts || [partial.title || "시제"],
+        maxWrongRate: partial.maxWrongRate ?? 67,
         recommendedAction: partial.recommendedAction || "같은 개념 2문항 재추천",
     };
 }
@@ -30,9 +16,8 @@ function weakness(partial: Partial<StudentProfileWeaknessInsight>): StudentProfi
 describe("student report headline", () => {
     it("prioritizes a weakness repeated across distinct exams and names the learning order", () => {
         const groups = [
-            weakness({ key: "later", examId: "exam-2", examTitle: "2차 진단", title: "시제" }),
-            weakness({ key: "single", examId: "exam-3", examTitle: "3차 진단", title: "문맥 어휘", wrongCount: 5 }),
-            weakness({ key: "earlier", examId: "exam-1", examTitle: "1차 진단", title: "시제", recommendedAction: "시제 핵심 2문항 재추천" }),
+            evidence({ title: "시제", examIds: ["exam-2", "exam-1", "exam-1"], wrongCount: 4, recommendedAction: "시제 핵심 2문항 재추천" }),
+            evidence({ title: "문맥 어휘", examIds: ["exam-3"], wrongCount: 5 }),
         ];
         const snapshot = structuredClone(groups);
 
@@ -47,7 +32,7 @@ describe("student report headline", () => {
 
     it("describes a single cumulative weakness without claiming repetition", () => {
         const result = buildStudentReportHeadline([
-            weakness({ title: "문맥 어휘", recommendedAction: "같은 개념 1문항 재추천" }),
+            evidence({ title: "문맥 어휘", recommendedAction: "같은 개념 1문항 재추천" }),
         ], "현재 시험 해석");
 
         expect(result.headline).toContain("누적 이력에서 ‘문맥 어휘’ 약점이 확인");

@@ -62,6 +62,15 @@ export interface StudentProfileWeaknessInsight {
     recommendedAction: string;
 }
 
+export interface StudentProfileHeadlineWeaknessEvidence {
+    kind: QuestionResultGroupKind;
+    title: string;
+    examIds: string[];
+    wrongCount: number;
+    maxWrongRate: number;
+    recommendedAction: string;
+}
+
 export interface StudentProfileMissedQuestionInsight {
     key: string;
     examId: string;
@@ -94,6 +103,8 @@ export interface StudentProfileInsight {
     baseAttemptCount: number;
     retakeAttemptCount: number;
     weaknessGroups: StudentProfileWeaknessInsight[];
+    /** Bounded title-level evidence for cumulative narrative; independent from the display top-N. */
+    headlineWeaknessGroups: StudentProfileHeadlineWeaknessEvidence[];
     mostMissedQuestions: StudentProfileMissedQuestionInsight[];
     tagStats: StudentProfileTagInsight[];
 }
@@ -137,6 +148,78 @@ function sortedUniqueQuestionNumbers(values: number[]): number[] {
 function roundedAverage(values: number[]): number {
     if (values.length === 0) return 0;
     return Math.round(values.reduce((sum, value) => sum + value, 0) / values.length);
+}
+
+const HEADLINE_WEAKNESS_EVIDENCE_LIMIT = 12;
+
+interface MutableHeadlineWeaknessEvidence {
+    kind: QuestionResultGroupKind;
+    title: string;
+    examIds: Set<string>;
+    wrongCount: number;
+    maxWrongRate: number;
+    recommendedAction: string;
+    actionWrongCount: number;
+    actionWrongRate: number;
+}
+
+function buildHeadlineWeaknessEvidence(
+    groups: readonly StudentProfileWeaknessInsight[],
+): StudentProfileHeadlineWeaknessEvidence[] {
+    const evidenceByTitle = new Map<string, MutableHeadlineWeaknessEvidence>();
+    for (const group of groups) {
+        const title = group.title.trim();
+        if (!title) continue;
+        const key = `${group.kind}\u0000${title.toLocaleLowerCase("ko-KR")}`;
+        const current = evidenceByTitle.get(key);
+        if (!current) {
+            evidenceByTitle.set(key, {
+                kind: group.kind,
+                title,
+                examIds: new Set([group.examId]),
+                wrongCount: Math.max(0, group.wrongCount),
+                maxWrongRate: group.wrongRate,
+                recommendedAction: group.recommendedAction.trim(),
+                actionWrongCount: group.wrongCount,
+                actionWrongRate: group.wrongRate,
+            });
+            continue;
+        }
+
+        current.examIds.add(group.examId);
+        current.wrongCount += Math.max(0, group.wrongCount);
+        current.maxWrongRate = Math.max(current.maxWrongRate, group.wrongRate);
+        const actionIsPreferred = group.wrongCount > current.actionWrongCount
+            || (group.wrongCount === current.actionWrongCount && group.wrongRate > current.actionWrongRate)
+            || (
+                group.wrongCount === current.actionWrongCount
+                && group.wrongRate === current.actionWrongRate
+                && group.recommendedAction.localeCompare(current.recommendedAction, "ko") < 0
+            );
+        if (actionIsPreferred) {
+            current.recommendedAction = group.recommendedAction.trim();
+            current.actionWrongCount = group.wrongCount;
+            current.actionWrongRate = group.wrongRate;
+        }
+    }
+
+    return Array.from(evidenceByTitle.values())
+        .sort((left, right) => (
+            right.examIds.size - left.examIds.size
+            || right.wrongCount - left.wrongCount
+            || right.maxWrongRate - left.maxWrongRate
+            || left.title.localeCompare(right.title, "ko")
+            || left.kind.localeCompare(right.kind)
+        ))
+        .slice(0, HEADLINE_WEAKNESS_EVIDENCE_LIMIT)
+        .map(group => ({
+            kind: group.kind,
+            title: group.title,
+            examIds: Array.from(group.examIds).sort((left, right) => left.localeCompare(right)),
+            wrongCount: group.wrongCount,
+            maxWrongRate: group.maxWrongRate,
+            recommendedAction: group.recommendedAction,
+        }));
 }
 
 export function buildStudentProfileInsight(
@@ -244,7 +327,6 @@ export function buildStudentProfileInsight(
             scope: "student",
             attempt: sourceAttempt,
             kinds: weaknessKinds,
-            limit: weaknessLimit * 2,
         })) {
             weaknessGroups.push({
                 key: `${exam.id}:${recommendation.key}`,
@@ -281,7 +363,8 @@ export function buildStudentProfileInsight(
         label: 6,
     };
 
-    const rankedWeaknessGroups = weaknessGroups
+    const headlineWeaknessGroups = buildHeadlineWeaknessEvidence(weaknessGroups);
+    const rankedWeaknessGroups = [...weaknessGroups]
         .sort((a, b) => {
             if (b.wrongRate !== a.wrongRate) return b.wrongRate - a.wrongRate;
             if (b.wrongCount !== a.wrongCount) return b.wrongCount - a.wrongCount;
@@ -325,6 +408,7 @@ export function buildStudentProfileInsight(
         baseAttemptCount: baseMatchedAttempts.length,
         retakeAttemptCount: retakeMatchedAttempts.length,
         weaknessGroups: rankedWeaknessGroups,
+        headlineWeaknessGroups,
         mostMissedQuestions: sortedMostMissedQuestions,
         tagStats,
     };

@@ -3,6 +3,7 @@ import type { Attempt, Exam } from "@/types/omr";
 import type { RosterStudent } from "@/lib/rosterStorage";
 import type { TeacherAttemptSummary } from "@/lib/teacherAttemptSummary";
 import { buildStudentProfileInsight } from "./studentProfileAnalytics";
+import { buildStudentReportHeadline } from "./studentReportHeadline";
 
 const exam: Exam = {
     id: "exam-1",
@@ -55,6 +56,57 @@ function attempt(partial: Partial<Attempt>): Attempt {
 }
 
 describe("student profile analytics", () => {
+    it("keeps bounded headline evidence from all candidates when recurring weaknesses rank below the display top six", () => {
+        const exams = Array.from({ length: 4 }, (_, examIndex): Exam => ({
+            id: `exam-${examIndex + 1}`,
+            title: `${examIndex + 1}차 진단`,
+            createdAt: `2026-0${examIndex + 1}-01T00:00:00.000Z`,
+            questions: [
+                { id: 1, number: 1, answer: 1, score: 1, tags: { concept: "반복 개념" } },
+                { id: 2, number: 2, answer: 1, score: 1, tags: { concept: "반복 개념" } },
+                ...Array.from({ length: 14 }, (_, uniqueIndex) => ({
+                    id: uniqueIndex + 3,
+                    number: uniqueIndex + 3,
+                    answer: 1,
+                    score: 1,
+                    tags: { concept: `고우선-${examIndex + 1}-${uniqueIndex + 1}` },
+                })),
+            ],
+        }));
+        const attempts = exams.map((currentExam, examIndex) => attempt({
+            id: `attempt-${examIndex + 1}`,
+            examId: currentExam.id,
+            examTitle: currentExam.title,
+            studentId: student.id,
+            finishedAt: `2026-0${examIndex + 1}-02T10:30:00.000Z`,
+            score: 1,
+            totalScore: 16,
+            answers: Object.fromEntries(currentExam.questions.map(question => [
+                question.id,
+                question.id === 2 ? 1 : 2,
+            ])),
+        }));
+
+        const insight = buildStudentProfileInsight(
+            student,
+            attempts,
+            new Map(exams.map(currentExam => [currentExam.id, currentExam])),
+            { weaknessKinds: ["concept"], weaknessLimit: 6 },
+        );
+
+        expect(insight.weaknessGroups).toHaveLength(6);
+        expect(insight.weaknessGroups.map(group => group.title)).not.toContain("반복 개념");
+        const recurringEvidence = insight.headlineWeaknessGroups.find(group => group.title === "반복 개념");
+        expect(recurringEvidence).toMatchObject({
+            title: "반복 개념",
+            examIds: ["exam-1", "exam-2", "exam-3", "exam-4"],
+        });
+        expect(buildStudentReportHeadline(insight.headlineWeaknessGroups, "현재 시험 해석")).toMatchObject({
+            weaknessLabel: "반복 개념 · 4회 반복",
+        });
+        expect(insight.headlineWeaknessGroups.length).toBeLessThanOrEqual(12);
+    });
+
     it("counts archived handwriting from lightweight teacher attempt summaries", () => {
         const summaryAttempt: TeacherAttemptSummary = {
             ...attempt({

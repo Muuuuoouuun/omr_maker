@@ -98,12 +98,13 @@ export default function ReportPanel({
             : analytics.wrongResults.length
                 ? `${scorePercent}%를 기록했고, 오답·미응답 ${analytics.wrongResults.length}문항을 우선 복습하면 좋습니다.`
                 : `${scorePercent}%를 기록했고, 현재 시험에서 확인된 오답·미응답이 없습니다.`;
-    const growthModel = studentGrowthReportsEnabled && "model" in growthReportState
+    const hasUsableGrowthModel = studentGrowthReportsEnabled && "model" in growthReportState;
+    const growthModel = hasUsableGrowthModel
         ? growthReportState.model
         : null;
-    const reportCumulativeInsight = studentGrowthReportsEnabled ? cumulativeInsight : null;
-    const reportHeadline = buildStudentReportHeadline(reportCumulativeInsight?.weaknessGroups ?? [], headline);
-    const dataQualifier = !studentGrowthReportsEnabled
+    const reportCumulativeInsight = hasUsableGrowthModel ? cumulativeInsight : null;
+    const reportHeadline = buildStudentReportHeadline(reportCumulativeInsight?.headlineWeaknessGroups ?? [], headline);
+    const dataQualifier = !hasUsableGrowthModel
         ? null
         : growthReportState.status === "partial"
             ? "일부 제출 기준"

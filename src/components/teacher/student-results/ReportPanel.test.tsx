@@ -4,8 +4,13 @@ import "@testing-library/jest-dom/vitest";
 import { cleanup, render, screen, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Attempt, Exam } from "@/types/omr";
-import type { StudentProfileInsight, StudentProfileWeaknessInsight } from "@/lib/studentProfileAnalytics";
+import type {
+    StudentProfileHeadlineWeaknessEvidence,
+    StudentProfileInsight,
+    StudentProfileWeaknessInsight,
+} from "@/lib/studentProfileAnalytics";
 import type { StudentGrowthReportModel } from "@/lib/studentGrowthReport";
+import type { StudentGrowthReportState } from "./StudentGrowthReport";
 
 vi.mock("next/link", () => ({
     default: ({ href, children, ...props }: React.AnchorHTMLAttributes<HTMLAnchorElement> & { href: string }) => (
@@ -88,6 +93,20 @@ function weakness(partial: Partial<StudentProfileWeaknessInsight>): StudentProfi
 }
 
 function cumulativeInsight(overrides: Partial<StudentProfileInsight> = {}): StudentProfileInsight {
+    const weaknesses = [
+        weakness({ examId: "exam-2", sourceAttemptId: "attempt-2" }),
+        weakness({ examId: "exam-1", sourceAttemptId: "attempt-1" }),
+    ];
+    const defaultHeadlineEvidence: StudentProfileHeadlineWeaknessEvidence[] = [{
+        kind: "concept",
+        title: "시제",
+        examIds: ["exam-1", "exam-2"],
+        wrongCount: 4,
+        maxWrongRate: 67,
+        recommendedAction: "같은 개념 2문항 재추천",
+    }];
+    const headlineWeaknessGroups = overrides.headlineWeaknessGroups
+        ?? (overrides.weaknessGroups ? [] : defaultHeadlineEvidence);
     return {
         attempts: [],
         averageScore: 76,
@@ -103,10 +122,8 @@ function cumulativeInsight(overrides: Partial<StudentProfileInsight> = {}): Stud
         handwritingArchiveCount: 0,
         baseAttemptCount: 2,
         retakeAttemptCount: 0,
-        weaknessGroups: [
-            weakness({ examId: "exam-2", sourceAttemptId: "attempt-2" }),
-            weakness({ examId: "exam-1", sourceAttemptId: "attempt-1" }),
-        ],
+        weaknessGroups: weaknesses,
+        headlineWeaknessGroups,
         mostMissedQuestions: [],
         tagStats: [],
         ...overrides,
@@ -121,9 +138,16 @@ function renderReport({
 }: {
     insight?: StudentProfileInsight | null;
     model?: StudentGrowthReportModel;
-    status?: "ready" | "partial" | "stale";
+    status?: StudentGrowthReportState["status"];
     enabled?: boolean;
 } = {}) {
+    const growthReportState: StudentGrowthReportState = status === "error"
+        ? { status, message: "연결에 실패했습니다." }
+        : status === "empty"
+            ? { status, message: "표시할 성장 데이터가 없습니다." }
+            : status === "idle" || status === "loading"
+                ? { status }
+                : { status, model };
     return render(
         <ReportPanel
             attempt={attempt}
@@ -138,7 +162,7 @@ function renderReport({
             feedbackSummary=""
             retakeScoreDelta={null}
             cumulativeInsight={insight}
-            growthReportState={{ status, model }}
+            growthReportState={growthReportState}
             studentGrowthReportsEnabled={enabled}
             pdfExportEnabled={false}
             onRetryCumulative={() => {}}
@@ -209,4 +233,20 @@ describe("ReportPanel", () => {
         expect(within(signals).getByText("평균 풀이 시간").closest("div")).toHaveTextContent("확인 불가");
         expect(screen.queryByText("반복 약점과 추천")).not.toBeInTheDocument();
     });
+
+    it.each(["idle", "loading", "error", "empty"] as const)(
+        "ignores retained cumulative insight while growth data is %s",
+        status => {
+            renderReport({ status });
+            const headline = screen.getByRole("region", { name: "핵심 해석" });
+            const signals = screen.getByRole("group", { name: "개인 리포트 핵심 지표" });
+
+            expect(headline).toHaveTextContent("82%를 기록했고, 현재 시험에서 확인된 오답·미응답이 없습니다.");
+            expect(headline).not.toHaveTextContent("시제");
+            expect(within(signals).getByText("최근 점수").closest("div")).toHaveTextContent("확인 불가");
+            expect(within(signals).getByText("반복 약점").closest("div")).toHaveTextContent("뚜렷한 반복 없음");
+            expect(within(signals).getByText("평균 풀이 시간").closest("div")).toHaveTextContent("확인 불가");
+            expect(screen.queryByText("반복 약점과 추천")).not.toBeInTheDocument();
+        },
+    );
 });
