@@ -1,15 +1,71 @@
 // @vitest-environment jsdom
 
 import "@testing-library/jest-dom/vitest";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import ExamAnalyticsReportOverview, {
     type ExamAnalyticsReportOverviewProps,
 } from "./ExamAnalyticsReportOverview";
+import ExamAnalyticsTab from "./ExamAnalyticsTab";
+import type { Attempt, Exam, QuestionResult } from "@/types/omr";
 
 afterEach(cleanup);
+
+function buildUngradedExamAnalyticsFixture(): { exam: Exam; attempts: Attempt[] } {
+    const exam: Exam = {
+        id: "exam-ungraded",
+        title: "미채점 진단",
+        createdAt: "2026-08-08T09:00:00.000Z",
+        questions: [{
+            id: 1,
+            number: 1,
+            label: "문법",
+            score: 10,
+            choices: 4,
+            tags: { concept: "시제" },
+        }],
+    };
+    const attempts = Array.from({ length: 5 }, (_, index) => {
+        const id = `attempt-ungraded-${index + 1}`;
+        const finishedAt = `2026-08-08T09:${String(index + 10).padStart(2, "0")}:00.000Z`;
+        const result: QuestionResult = {
+            schemaVersion: 1,
+            attemptId: id,
+            examId: exam.id,
+            examTitle: exam.title,
+            studentName: `학생 ${index + 1}`,
+            questionId: 1,
+            questionNumber: 1,
+            label: "문법",
+            concept: "시제",
+            score: 0,
+            earnedScore: 0,
+            status: "ungraded",
+            isCorrect: false,
+            isWrong: false,
+            isUnanswered: false,
+            finishedAt,
+        };
+
+        return {
+            id,
+            examId: exam.id,
+            examTitle: exam.title,
+            studentName: result.studentName,
+            startedAt: "2026-08-08T09:00:00.000Z",
+            finishedAt,
+            score: 0,
+            totalScore: 0,
+            answers: {},
+            questionResults: [result],
+            status: "completed" as const,
+        };
+    });
+
+    return { exam, attempts };
+}
 
 function buildProps(
     overrides: Partial<ExamAnalyticsReportOverviewProps> = {},
@@ -70,6 +126,55 @@ function buildProps(
 }
 
 describe("ExamAnalyticsReportOverview", () => {
+    it("renders a fully ungraded question as neutral evidence without actions or percentages", () => {
+        const { exam, attempts } = buildUngradedExamAnalyticsFixture();
+        render(<ExamAnalyticsTab exams={[exam]} attempts={attempts} currentPlan="free" />);
+
+        expect(screen.getByRole("heading", { name: "채점 가능한 문항 근거가 더 필요합니다" })).toBeInTheDocument();
+        expect(screen.queryByRole("heading", { name: /보강이 가장 효과적/ })).not.toBeInTheDocument();
+        expect(screen.queryByText("보강 세트 만들기")).not.toBeInTheDocument();
+
+        fireEvent.click(screen.getByRole("tab", { name: "문항 분석" }));
+        const row = screen.getByRole("row", { name: /1번.*시제/ });
+        const cells = within(row).getAllByRole("cell");
+
+        expect(cells[1]).toHaveTextContent("미채점");
+        expect(cells[1]).not.toHaveTextContent("보강");
+        expect(cells[2]).toHaveTextContent(/^-$|^근거 없음$/);
+        expect(cells[4]).toHaveTextContent(/^-$|^근거 없음$/);
+        expect(within(row).queryByText("0%")).not.toBeInTheDocument();
+    });
+
+    it("keeps graded question diagnostics and percentages unchanged", () => {
+        const { exam, attempts } = buildUngradedExamAnalyticsFixture();
+        exam.questions[0] = { ...exam.questions[0], answer: 2 };
+        const gradedAttempts = attempts.map(attempt => ({
+            ...attempt,
+            score: 10,
+            totalScore: 10,
+            answers: { 1: 2 },
+            questionResults: attempt.questionResults?.map(result => ({
+                ...result,
+                score: 10,
+                earnedScore: 10,
+                selectedAnswer: 2,
+                correctAnswer: 2,
+                status: "correct" as const,
+                isCorrect: true,
+            })),
+        }));
+        render(<ExamAnalyticsTab exams={[exam]} attempts={gradedAttempts} currentPlan="free" />);
+
+        fireEvent.click(screen.getByRole("tab", { name: "문항 분석" }));
+        const row = screen.getByRole("row", { name: /1번.*시제/ });
+        const cells = within(row).getAllByRole("cell");
+
+        expect(cells[1]).toHaveTextContent("쉬움");
+        expect(cells[2]).toHaveTextContent("100%");
+        expect(cells[4]).toHaveTextContent("0%");
+        expect(within(row).getAllByText("100%").length).toBeGreaterThanOrEqual(2);
+    });
+
     it("renders the approved editorial report regions in exact reading order", () => {
         render(<ExamAnalyticsReportOverview {...buildProps()} />);
 

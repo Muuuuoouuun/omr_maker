@@ -2692,20 +2692,25 @@ export default function ExamAnalyticsTab({
                                 </thead>
                                 <tbody>
                                     {[...questionAnalytics].sort((a: { index: number }, b: { index: number }) => a.index - b.index).map((q, i) => {
+                                        const hasQuestionEvidence = q.totalCount > 0;
                                         const optMap = q.optionRates.reduce((acc: Record<number, number>, curr: { option: number; rate: number }) => { acc[curr.option] = curr.rate; return acc; }, {});
                                         const weakPointBiserial = q.pointBiserial !== null && q.pointBiserial < WEAK_POINT_BISERIAL_THRESHOLD;
-                                        const qualityLabel = q.correctRate < 50
+                                        const qualityLabel = !hasQuestionEvidence
+                                            ? '미채점'
+                                            : q.correctRate < 50
                                             ? '보강'
                                             : weakPointBiserial
                                                 ? '변별 점검'
                                                 : q.correctRate >= 90
                                                     ? '쉬움'
                                                     : '정상';
-                                        // 보강/변별 점검 = a correctness/quality problem worth flagging (grade-red);
-                                        // 정상/쉬움 = no issue (success).
-                                        const qualityTone: "grade" | "success" = qualityLabel === '정상' || qualityLabel === '쉬움'
-                                            ? 'success'
-                                            : 'grade';
+                                        // 미채점 = no usable denominator (neutral). 보강/변별 점검 is a
+                                        // correctness/quality problem (grade-red); 정상/쉬움 is success.
+                                        const qualityTone: "grade" | "success" | "muted" = !hasQuestionEvidence
+                                            ? 'muted'
+                                            : qualityLabel === '정상' || qualityLabel === '쉬움'
+                                                ? 'success'
+                                                : 'grade';
                                         return (
                                             <tr
                                                 key={i}
@@ -2725,8 +2730,8 @@ export default function ExamAnalyticsTab({
                                                 <td style={{ padding: '0.75rem 1rem' }}>
                                                     <StatusPill tone={qualityTone} size="sm" label={qualityLabel} />
                                                 </td>
-                                                <td style={{ padding: '0.75rem 1rem', fontWeight: 600, color: q.correctRate < 40 ? 'var(--grade-red)' : 'var(--text)' }}>
-                                                    {q.correctRate}%
+                                                <td style={{ padding: '0.75rem 1rem', fontWeight: 600, color: !hasQuestionEvidence ? 'var(--muted)' : q.correctRate < 40 ? 'var(--grade-red)' : 'var(--text)' }}>
+                                                    {hasQuestionEvidence ? `${q.correctRate}%` : '-'}
                                                 </td>
                                                 <td
                                                     style={{ padding: '0.75rem 1rem', fontWeight: 700, color: weakPointBiserial ? 'var(--warning)' : 'var(--muted)' }}
@@ -2734,8 +2739,8 @@ export default function ExamAnalyticsTab({
                                                 >
                                                     {q.pointBiserial !== null ? q.pointBiserial.toFixed(2) : '-'}
                                                 </td>
-                                                <td style={{ padding: '0.75rem 1rem', fontWeight: 700, color: q.unansweredRate >= 20 ? 'var(--grade-red)' : 'var(--muted)' }}>
-                                                    {q.unansweredRate}%
+                                                <td style={{ padding: '0.75rem 1rem', fontWeight: 700, color: hasQuestionEvidence && q.unansweredRate >= 20 ? 'var(--grade-red)' : 'var(--muted)' }}>
+                                                    {hasQuestionEvidence ? `${q.unansweredRate}%` : '-'}
                                                 </td>
                                                 <td style={{ padding: '0.75rem 1rem', color: q.timeOverExpectedRate && q.timeOverExpectedRate >= 130 ? 'var(--warning)' : 'var(--muted)', fontWeight: 800 }}>
                                                     {q.averageTimeSec ? formatSeconds(q.averageTimeSec) : '-'}
@@ -2745,11 +2750,13 @@ export default function ExamAnalyticsTab({
                                                         </div>
                                                     ) : null}
                                                 </td>
-                                                <td style={{ padding: '0.75rem 1rem', color: q.revisitRate >= 40 ? 'var(--primary)' : 'var(--muted)', fontWeight: 800 }}>
-                                                    {q.revisitRate}%
-                                                    <div style={{ fontSize: '0.7rem', color: 'var(--muted)', marginTop: '0.12rem', fontWeight: 700 }}>
-                                                        변경 {q.answerChangeCount}회
-                                                    </div>
+                                                <td style={{ padding: '0.75rem 1rem', color: hasQuestionEvidence && q.revisitRate >= 40 ? 'var(--primary)' : 'var(--muted)', fontWeight: 800 }}>
+                                                    {hasQuestionEvidence ? `${q.revisitRate}%` : '-'}
+                                                    {hasQuestionEvidence ? (
+                                                        <div style={{ fontSize: '0.7rem', color: 'var(--muted)', marginTop: '0.12rem', fontWeight: 700 }}>
+                                                            변경 {q.answerChangeCount}회
+                                                        </div>
+                                                    ) : null}
                                                 </td>
                                                 {Array.from({ length: maxChoiceCount }, (_, optIdx) => {
                                                     const optNum = optIdx + 1;
@@ -2763,7 +2770,7 @@ export default function ExamAnalyticsTab({
                                                                 color: isCorrectAnswer ? 'var(--success)' : !isAvailableOption ? 'rgba(148,163,184,0.55)' : 'var(--muted)',
                                                                 fontWeight: isCorrectAnswer ? 700 : 400
                                                             }}>
-                                                                {isAvailableOption ? `${optMap[optNum] || 0}%` : '-'}
+                                                                {isAvailableOption && hasQuestionEvidence ? `${optMap[optNum] || 0}%` : '-'}
                                                             </span>
                                                         </td>
                                                     );
