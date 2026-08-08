@@ -1,6 +1,8 @@
-import { existsSync, readFileSync, readdirSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+
+import { CANONICAL_TABLES } from "../../scripts/canonical-table-manifest.mjs";
 
 const rootDir = process.cwd();
 
@@ -43,21 +45,6 @@ const canonicalTables = [
     "omr_remote_assets",
 ] as const;
 
-const currentCanonicalTables = [
-    ...canonicalTables,
-    "omr_attempt_sessions",
-    "omr_rate_limit_buckets",
-    "omr_exam_mutations",
-    "omr_feedback_mutations",
-    "omr_remote_asset_upload_intents",
-    "omr_remote_asset_cleanup_queue",
-    "omr_initial_ops_metrics",
-    "omr_teacher_accounts",
-    "omr_teacher_account_tokens",
-    "omr_exam_entry_invites",
-    "omr_teacher_notification_states",
-] as const;
-
 const serverGatewaySignatures = [
     ["omr_submit_attempt_v1", "text, jsonb, jsonb"],
     ["omr_submit_session_attempt_v1", "jsonb, jsonb"],
@@ -84,22 +71,6 @@ const serverGatewaySignatures = [
 function createdPolicies(sql: string): Array<{ name: string; table: string }> {
     return [...sql.matchAll(/create\s+policy\s+"([^"]+)"\s+on\s+public\.([a-z0-9_]+)/gi)]
         .map(match => ({ name: match[1], table: match[2] }));
-}
-
-function discoveredPublicAppTables(): string[] {
-    const migrationDir = path.join(rootDir, "supabase/migrations");
-    const sources = [
-        read("supabase/schema.sql"),
-        ...readdirSync(migrationDir)
-            .filter(name => name.endsWith(".sql"))
-            .sort()
-            .map(name => read(`supabase/migrations/${name}`)),
-    ];
-    return [...new Set(
-        sources.flatMap(sql => [...sql.matchAll(
-            /create\s+table\s+(?:if\s+not\s+exists\s+)?public\.(omr_[a-z0-9_]+)/gi,
-        )].map(match => match[1])),
-    )].sort();
 }
 
 describe("production server-only database boundary", () => {
@@ -381,14 +352,24 @@ describe("production server-only database boundary", () => {
         expect(profile).toMatch(/grant all on all sequences in schema public to service_role;/i);
         expect(profile).toMatch(/grant all on all functions in schema public to service_role;/i);
 
-        expect([...currentCanonicalTables].sort()).toEqual(discoveredPublicAppTables());
-        for (const table of currentCanonicalTables) {
+        const discoveredTables = [...CANONICAL_TABLES];
+        expect(discoveredTables).toHaveLength(38);
+        expect(discoveredTables).toEqual([...discoveredTables].sort());
+        expect(new Set(discoveredTables).size).toBe(discoveredTables.length);
+        for (const table of CANONICAL_TABLES) {
             expect(profile, `${table} must ENABLE RLS`).toMatch(
                 new RegExp(`alter table(?: if exists)? public\\.${table} enable row level security;`, "i"),
             );
             expect(profile, `${table} must FORCE RLS`).toMatch(
                 new RegExp(`alter table(?: if exists)? public\\.${table} force row level security;`, "i"),
             );
+        }
+    });
+
+    it("documents the canonical final-schema contract and exact table count", () => {
+        for (const document of [productionReadiness, read("docs/operations/backup-restore-runbook.md")]) {
+            expect(document).toContain("schema.sql baseline + sorted migrations = final schema");
+            expect(document).toMatch(/canonical 38(?:개| tables)/i);
         }
     });
 

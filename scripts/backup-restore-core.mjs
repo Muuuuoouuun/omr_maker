@@ -1,47 +1,10 @@
 import { createHash } from "node:crypto";
 
+import { CANONICAL_TABLES } from "./canonical-table-manifest.mjs";
+
 export const BACKUP_FORMAT_VERSION = 1;
 
-export const CANONICAL_BACKUP_TABLES = Object.freeze([
-    "omr_organizations",
-    "omr_plan_usage",
-    "omr_plan_usage_reservations",
-    "omr_user_profiles",
-    "omr_organization_members",
-    "omr_teacher_profiles",
-    "omr_student_profiles",
-    "omr_student_start_credentials",
-    "omr_classes",
-    "omr_roster_invites",
-    "omr_class_teachers",
-    "omr_class_students",
-    "omr_materials",
-    "omr_exams",
-    "omr_exam_entry_invites",
-    "omr_exam_questions",
-    "omr_exam_materials",
-    "omr_assignments",
-    "omr_assignment_targets",
-    "omr_attempts",
-    "omr_question_results",
-    "omr_assignment_submissions",
-    "omr_attempt_feedback",
-    "omr_kakao_candidate_reviews",
-    "omr_kakao_dispatch_logs",
-    "omr_comments",
-    "omr_audit_logs",
-    "omr_remote_assets",
-    "omr_remote_asset_upload_intents",
-    "omr_remote_asset_cleanup_queue",
-    "omr_attempt_sessions",
-    "omr_rate_limit_buckets",
-    "omr_exam_mutations",
-    "omr_feedback_mutations",
-    "omr_initial_ops_metrics",
-    "omr_teacher_accounts",
-    "omr_teacher_account_tokens",
-    "omr_teacher_notification_states",
-]);
+export const CANONICAL_BACKUP_TABLES = CANONICAL_TABLES;
 
 export const REMOTE_ASSET_BUCKET = "omr-private-assets";
 

@@ -1,7 +1,9 @@
-import { readFileSync } from "node:fs";
-import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 
+import {
+    discoverCanonicalTables,
+    loadRepositoryCanonicalTables,
+} from "../../scripts/canonical-table-manifest.mjs";
 import {
     BACKUP_FORMAT_VERSION,
     CANONICAL_BACKUP_TABLES,
@@ -48,16 +50,57 @@ function manifestFixture() {
 }
 
 describe("backup and restore manifest core", () => {
-    it("keeps the exact 38-table backup allowlist aligned with the production boundary", () => {
-        const sql = readFileSync(resolve(process.cwd(), "supabase/production-server-boundary.sql"), "utf8");
-        const expectedBlock = sql.match(/with expected\(table_name\) as \(values([\s\S]*?)\), actual\(/)?.[1];
-        const boundaryTables = Array.from(expectedBlock?.matchAll(/'(omr_[a-z0-9_]+)'/g) ?? [])
-            .map((match) => match[1])
-            .filter((table): table is string => Boolean(table));
+    it("keeps the exact sorted 38-table backup allowlist aligned with baseline plus migrations", () => {
+        const discoveredTables = loadRepositoryCanonicalTables({ rootDir: process.cwd() });
 
+        expect(discoveredTables).toHaveLength(38);
+        expect(discoveredTables).toEqual([...discoveredTables].sort());
+        expect(new Set(discoveredTables).size).toBe(discoveredTables.length);
         expect(CANONICAL_BACKUP_TABLES).toHaveLength(38);
-        expect(CANONICAL_BACKUP_TABLES).toEqual(boundaryTables);
-        expect(new Set(CANONICAL_BACKUP_TABLES).size).toBe(CANONICAL_BACKUP_TABLES.length);
+        expect(CANONICAL_BACKUP_TABLES).toEqual(discoveredTables);
+    });
+
+    it("discovers only public OMR CREATE TABLE DDL across deterministically sorted migrations", () => {
+        const discoveredTables = discoverCanonicalTables({
+            schemaSql: [
+                "-- create table public.omr_line_comment (id bigint);",
+                "/* create table public.omr_block_comment (id bigint); */",
+                "select 'create table public.omr_string_literal (id bigint)';",
+                "select 'path\\';",
+                "do $body$ begin raise notice 'create table public.omr_function_body'; end $body$;",
+                "create table public.omr_after_standard_string (id bigint);",
+                'CREATE TABLE IF NOT EXISTS "public"."omr_zeta" (id bigint);',
+                "create table private.omr_private (id bigint);",
+                "create table public.unrelated (id bigint);",
+            ].join("\n"),
+            migrationSqlFiles: [
+                { path: "002_beta.sql", sql: 'create table public."omr_beta" (id bigint);' },
+                { path: "001_alpha.sql", sql: "CREATE TABLE public.omr_alpha (id bigint);" },
+                { path: "003_duplicate.sql", sql: "create table if not exists public.omr_alpha (id bigint);" },
+            ],
+        });
+
+        expect(discoveredTables).toEqual([
+            "omr_after_standard_string",
+            "omr_alpha",
+            "omr_beta",
+            "omr_zeta",
+        ]);
+        expect(new Set(discoveredTables).size).toBe(discoveredTables.length);
+    });
+
+    it("rejects migration inputs without a unique path ordering key", () => {
+        expect(() => discoverCanonicalTables({
+            schemaSql: "",
+            migrationSqlFiles: [
+                { path: "001.sql", sql: "create table public.omr_alpha (id bigint);" },
+                { path: "001.sql", sql: "create table public.omr_beta (id bigint);" },
+            ],
+        })).toThrow(/duplicate migration path/i);
+        expect(() => discoverCanonicalTables({
+            schemaSql: "",
+            migrationSqlFiles: [{ path: "", sql: "create table public.omr_alpha (id bigint);" }],
+        })).toThrow(/migration path/i);
     });
 
     it("counts rows inside canonical pg_dump COPY blocks", () => {

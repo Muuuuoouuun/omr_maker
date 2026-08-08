@@ -21,7 +21,8 @@ service-role RPC만 유지합니다. 기존 `production-rls.sql`은 직접 authe
 1. 쓰기를 유지보수 모드로 전환하고 복구 가능한 DB 스냅샷을 생성합니다.
 2. 단일 migration owner인 `postgres`로 접속해 동일한 커밋의 `schema.sql`과 모든
    `migrations`를 파일명 순으로 적용합니다. PostgreSQL default privilege는 소유자별이므로
-   실행자를 섞지 않습니다.
+   실행자를 섞지 않습니다. canonical 테이블 manifest는
+   `schema.sql baseline + sorted migrations = final schema` 규칙으로 계산합니다.
 3. 같은 `postgres` 세션에서
    `select public.omr_assert_production_boundary_preflight_v1();`을 실행합니다.
    조직 null·고아·교차 조직·학생 credential 누락 중 하나라도 0이 아니면 중단합니다.
@@ -95,7 +96,7 @@ upload, 초과분은 6 MiB chunk의 signed TUS로 브라우저에서 private Sto
 readiness가 주장하지 않으므로, 별도 스케줄러를 반드시 구성하고 `dead` 항목을 알림
 대상으로 삼아야 합니다.
 
-현재 public 앱 테이블은 `public.omr_*` 37개입니다. 별도의 Supabase 관리 관계인
+현재 public 앱 테이블은 canonical 38개 `public.omr_*` 테이블입니다. 별도의 Supabase 관리 관계인
 `storage.objects`와 `storage.buckets`는
 [Supabase 플랫폼 권한 문서](https://supabase.com/docs/guides/platform/permissions)의
 요구대로 `supabase_storage_admin` 소유권을 유지합니다. 프로필은 managed table ACL이나
