@@ -6205,6 +6205,33 @@ begin
     if not v_rejected or v_before is distinct from v_after then
         raise exception 'operator provisioning null plan did not fail as invalid request';
     end if;
+    if not pg_catalog.isfinite(timestamptz '294276-12-31 23:59:59+00') then
+        raise exception 'operator provisioning extreme expiry fixture is not finite';
+    end if;
+    v_rejected := false;
+    begin
+        perform public.omr_provision_pilot_teacher_v1(
+            'Extreme Expiry School', 'extreme-expiry@example.test', 'Extreme Teacher',
+            'pbkdf2-sha256:120000:13131313131313131313131313131313:acacacacacacacacacacacacacacacacacacacacacacacacacacacacacacacac',
+            'pro', timestamptz '294276-12-31 23:59:59+00',
+            'operator:live', 'extreme_expiry_probe',
+            'prov_extreme_expiry_0123456789abcdef0123456789abcdef'
+        );
+    exception when others then
+        if sqlerrm <> 'invalid_provisioning_request' then raise; end if;
+        v_rejected := true;
+    end;
+    select pg_catalog.jsonb_build_object(
+        'organizations', (select pg_catalog.count(*) from public.omr_organizations),
+        'accounts', (select pg_catalog.count(*) from public.omr_teacher_accounts),
+        'members', (select pg_catalog.count(*) from public.omr_organization_members),
+        'profiles', (select pg_catalog.count(*) from public.omr_teacher_profiles),
+        'grants', (select pg_catalog.count(*) from public.omr_pilot_plan_grants),
+        'audits', (select pg_catalog.count(*) from public.omr_audit_logs)
+    ) into v_after;
+    if not v_rejected or v_before is distinct from v_after then
+        raise exception 'operator provisioning extreme finite expiry did not fail as invalid request';
+    end if;
 end
 $$;
 

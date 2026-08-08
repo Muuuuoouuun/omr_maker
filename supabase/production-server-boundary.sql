@@ -1264,7 +1264,7 @@ begin
         -- spoofing such as `expires_at > clock_timestamp() OR true`.
         and pg_catalog.encode(extensions.digest(pg_catalog.pg_get_functiondef(
             'public.omr_provision_pilot_teacher_v1(text,text,text,text,text,timestamptz,text,text,text)'::pg_catalog.regprocedure
-        ), 'sha256'), 'hex') = '3acb4bed7ceb5238c412bfa41ef8593de35d3e893d0dd321a384b4546b348711'
+        ), 'sha256'), 'hex') = '282a79ed02c1a3cfc927248cf554ff5ae64eb73b18b8b1f658396d466f884a46'
         and pg_catalog.encode(extensions.digest(pg_catalog.pg_get_functiondef(
             'public.omr_read_effective_workspace_plan_v1(text)'::pg_catalog.regprocedure
         ), 'sha256'), 'hex') = 'fcd083ee1f40a923e03cc8fd7bfccbdaa70d74d34a2e8dc35e7439760b099b45'

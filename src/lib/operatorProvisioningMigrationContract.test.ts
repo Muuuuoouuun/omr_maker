@@ -50,6 +50,9 @@ describe("atomic operator pilot-teacher provisioning migration", () => {
         expect(migration).toContain("v_actor !~ '^operator:[a-z0-9][a-z0-9._-]{0,63}$'");
         expect(migration).toContain("v_reason !~ '^[a-z][a-z0-9_]{0,63}$'");
         expect(migration).toContain("p_plan is null");
+        expect(migration).toContain("p_expires_at > v_now + interval '366 days'");
+        expect(migration.indexOf("p_expires_at > v_now + interval '366 days'"))
+            .toBeLessThan(migration.indexOf("v_request := pg_catalog.jsonb_build_object"));
         expect(migration).toMatch(/alter function public\.omr_provision_pilot_teacher_v1[\s\S]+owner to postgres/i);
         expect(migration).toMatch(/grant execute on function public\.omr_provision_pilot_teacher_v1[\s\S]+to service_role/i);
         expect(migration).not.toMatch(/grant execute[^;]+\bto\s+(anon|authenticated)\b/i);
@@ -112,7 +115,7 @@ describe("atomic operator pilot-teacher provisioning migration", () => {
             "omr_pilot_plan_grants_expiry_check",
             "omr_pilot_plan_grants_superseded_check",
             "extensions.digest(pg_catalog.pg_get_functiondef",
-            "3acb4bed7ceb5238c412bfa41ef8593de35d3e893d0dd321a384b4546b348711",
+            "282a79ed02c1a3cfc927248cf554ff5ae64eb73b18b8b1f658396d466f884a46",
             "fcd083ee1f40a923e03cc8fd7bfccbdaa70d74d34a2e8dc35e7439760b099b45",
             "9e546425eaa75644fb8ee944062da143dad242f4424061910bee2fab4ea07670",
             "a28a831abf38473c8a7d6989749d298b2de2c6d7629fb08925c146a5c57e0bc1",
@@ -138,6 +141,8 @@ describe("atomic operator pilot-teacher provisioning migration", () => {
             "operator provisioning cross-timezone exact instant did not replay",
             "operator provisioning cross-timezone changed instant did not conflict atomically",
             "operator provisioning null plan did not fail as invalid request",
+            "operator provisioning extreme finite expiry did not fail as invalid request",
+            "expired pilot receipt did not replay deterministically",
             "operator provisioning second membership was accepted",
             "operator provisioning second profile was accepted",
             "operator provisioning RPC exposed to anon",

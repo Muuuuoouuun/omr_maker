@@ -169,6 +169,10 @@ begin
        or v_plan not in ('pro', 'academy')
        or p_expires_at is null
        or not pg_catalog.isfinite(p_expires_at)
+       -- Admission upper-bounds the epoch-microsecond cast before hashing.
+       -- Legitimately stored expired receipts remain replayable because no
+       -- lower-bound check occurs until after replay/conflict resolution.
+       or p_expires_at > v_now + interval '366 days'
        or p_actor is null
        or pg_catalog.char_length(v_actor) not between 10 and 73
        or pg_catalog.octet_length(v_actor) > 73
