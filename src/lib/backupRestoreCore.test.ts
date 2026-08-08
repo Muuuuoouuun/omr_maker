@@ -175,6 +175,51 @@ describe("backup and restore manifest core", () => {
         })).toThrow(error);
     });
 
+    it.each([
+        [
+            "unquoted foreign table",
+            "create foreign table public.omr_foreign (id bigint) server upstream;",
+        ],
+        [
+            "quoted foreign table with IF NOT EXISTS",
+            'create foreign table if not exists "public"."omr_foreign" (id bigint) server upstream;',
+        ],
+    ])("fails closed on a canonical public %s", (_label, sql) => {
+        expect(() => discoverCanonicalTables({
+            schemaSql: "",
+            migrationSqlFiles: [{ path: "001_foreign.sql", sql }],
+        })).toThrow(/001_foreign\.sql.*CREATE FOREIGN TABLE/i);
+    });
+
+    it("ignores noncanonical foreign tables", () => {
+        expect(discoverCanonicalTables({
+            schemaSql: "",
+            migrationSqlFiles: [{
+                path: "001_foreign.sql",
+                sql: [
+                    "create foreign table public.vendor_rows (id bigint) server upstream;",
+                    "create foreign table private.omr_foreign (id bigint) server upstream;",
+                ].join("\n"),
+            }],
+        })).toEqual([]);
+    });
+
+    it.each([
+        ["VIEW", "create view public.omr_view as select 1 as id;"],
+        ["MATERIALIZED VIEW", "create materialized view public.omr_materialized as select 1 as id;"],
+        ["TEMP VIEW", "create temp view public.omr_temp_view as select 1 as id;"],
+        ["RECURSIVE VIEW", "create recursive view public.omr_recursive (id) as select 1;"],
+        [
+            "OR REPLACE TEMPORARY VIEW",
+            "create or replace temporary view public.omr_temp_view as select 1 as id;",
+        ],
+    ])("fails closed on unsupported canonical public CREATE %s relations", (category, sql) => {
+        expect(() => discoverCanonicalTables({
+            schemaSql: "",
+            migrationSqlFiles: [{ path: "001_relation.sql", sql }],
+        })).toThrow(new RegExp(`001_relation\\.sql.*CREATE ${category}`));
+    });
+
     it("counts rows inside canonical pg_dump COPY blocks", () => {
         const sql = [
             "COPY public.omr_organizations (id, name) FROM stdin;",

@@ -32,6 +32,14 @@ select coalesce(json_agg(canonical.table_name order by canonical.table_name), '[
          and relation.relname like 'omr\\_%' escape '\\'
   ) canonical
 `;
+const liveCanonicalForeignTablesSql = `
+select coalesce(json_agg(relation.relname order by relation.relname), '[]'::json)::text
+  from pg_class relation
+  join pg_namespace namespace on namespace.oid = relation.relnamespace
+ where namespace.nspname = 'public'
+   and relation.relkind = 'f'
+   and relation.relname like 'omr\\_%' escape '\\'
+`;
 
 function run(command, args, options = {}) {
     const result = spawnSync(command, args, {
@@ -53,6 +61,12 @@ function run(command, args, options = {}) {
 }
 
 function assertLiveCanonicalTables(psqlQuery) {
+    const foreignTables = JSON.parse(psqlQuery(liveCanonicalForeignTablesSql).trim());
+    if (foreignTables.length > 0) {
+        throw new Error(
+            `live database contains unsupported public OMR foreign relations: ${JSON.stringify(foreignTables)}`,
+        );
+    }
     const liveTables = JSON.parse(psqlQuery(liveCanonicalTablesSql).trim());
     if (JSON.stringify(liveTables) !== JSON.stringify(CANONICAL_TABLES)) {
         throw new Error(

@@ -131,7 +131,61 @@ function unsupportedIdentityDdl(sourcePath, category) {
     throw new Error(`${sourcePath}: unsupported canonical ${category}`);
 }
 
+function rejectUnsupportedCreateTarget(statement, targetIndex, sourcePath, category) {
+    let index = targetIndex;
+    if (
+        wordIs(statement[index], "if")
+        && wordIs(statement[index + 1], "not")
+        && wordIs(statement[index + 2], "exists")
+    ) {
+        index += 3;
+    }
+    const target = qualifiedName(statement, index);
+    if (target?.schema === "public" && isCanonicalTableName(target.table)) {
+        unsupportedIdentityDdl(sourcePath, category);
+    }
+    if (!target && hasCanonicalIdentifier(statement.slice(index))) {
+        unsupportedIdentityDdl(sourcePath, category);
+    }
+}
+
+function rejectUnsupportedView(statement, sourcePath) {
+    let index = 1;
+    const modifiers = [];
+    if (wordIs(statement[index], "or") && wordIs(statement[index + 1], "replace")) {
+        modifiers.push("OR REPLACE");
+        index += 2;
+    }
+    if (wordIs(statement[index], "temp") || wordIs(statement[index], "temporary")) {
+        modifiers.push(statement[index].value.toUpperCase());
+        index += 1;
+    }
+    if (wordIs(statement[index], "recursive")) {
+        modifiers.push("RECURSIVE");
+        index += 1;
+    }
+    if (!wordIs(statement[index], "view")) return false;
+
+    rejectUnsupportedCreateTarget(
+        statement,
+        index + 1,
+        sourcePath,
+        `CREATE ${modifiers.length > 0 ? `${modifiers.join(" ")} ` : ""}VIEW`,
+    );
+    return true;
+}
+
 function createTable(state, statement, sourcePath) {
+    if (wordIs(statement[1], "foreign") && wordIs(statement[2], "table")) {
+        rejectUnsupportedCreateTarget(statement, 3, sourcePath, "CREATE FOREIGN TABLE");
+        return;
+    }
+    if (rejectUnsupportedView(statement, sourcePath)) return;
+    if (wordIs(statement[1], "materialized") && wordIs(statement[2], "view")) {
+        rejectUnsupportedCreateTarget(statement, 3, sourcePath, "CREATE MATERIALIZED VIEW");
+        return;
+    }
+
     let index = 1;
     if (wordIs(statement[index], "global") || wordIs(statement[index], "local")) index += 1;
     if (wordIs(statement[index], "temp") || wordIs(statement[index], "temporary")) {

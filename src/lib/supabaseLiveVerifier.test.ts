@@ -23,6 +23,8 @@ describe("Supabase live verifier local PostgreSQL fallback", () => {
         expect(verifier).toContain('import { CANONICAL_TABLES } from "./canonical-table-manifest.mjs"');
         expect(verifier).toContain("assertLiveCanonicalTables");
         expect(verifier).toContain("relation.relkind in ('r', 'p')");
+        expect(verifier).toContain("relation.relkind = 'f'");
+        expect(verifier).toContain("live database contains unsupported public OMR foreign relations");
         expect(verifier).toContain("live canonical tables do not match the generated manifest");
     });
 
