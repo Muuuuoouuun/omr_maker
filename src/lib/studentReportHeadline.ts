@@ -81,6 +81,6 @@ export function buildStudentReportHeadline(
 
     return {
         headline: `누적 이력에서 ‘${selected.title}’ 약점이 확인되었습니다. ${learningOrder}`,
-        weaknessLabel: selected.title,
+        weaknessLabel: "뚜렷한 반복 없음",
     };
 }

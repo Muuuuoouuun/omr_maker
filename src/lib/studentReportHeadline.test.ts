@@ -52,7 +52,7 @@ describe("student report headline", () => {
 
         expect(result.headline).toContain("누적 이력에서 ‘문맥 어휘’ 약점이 확인");
         expect(result.headline).not.toContain("반복되었습니다");
-        expect(result.weaknessLabel).toBe("문맥 어휘");
+        expect(result.weaknessLabel).toBe("뚜렷한 반복 없음");
     });
 
     it("falls back to the current-attempt headline when cumulative evidence is unavailable", () => {

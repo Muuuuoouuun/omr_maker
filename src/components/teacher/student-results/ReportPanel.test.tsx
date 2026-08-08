@@ -116,9 +116,13 @@ function cumulativeInsight(overrides: Partial<StudentProfileInsight> = {}): Stud
 function renderReport({
     insight = cumulativeInsight(),
     model = growthModel,
+    status = "ready",
+    enabled = true,
 }: {
     insight?: StudentProfileInsight | null;
     model?: StudentGrowthReportModel;
+    status?: "ready" | "partial" | "stale";
+    enabled?: boolean;
 } = {}) {
     return render(
         <ReportPanel
@@ -134,8 +138,8 @@ function renderReport({
             feedbackSummary=""
             retakeScoreDelta={null}
             cumulativeInsight={insight}
-            growthReportState={{ status: "ready", model }}
-            studentGrowthReportsEnabled
+            growthReportState={{ status, model }}
+            studentGrowthReportsEnabled={enabled}
             pdfExportEnabled={false}
             onRetryCumulative={() => {}}
         />,
@@ -161,6 +165,18 @@ describe("ReportPanel", () => {
         }
         expect(screen.getByText(/‘시제’ 약점이 2개 시험에 반복/)).toHaveTextContent("추천 학습 순서");
         expect(screen.getByText(/‘시제’ 약점이 2개 시험에 반복/)).toHaveTextContent("후 관련 오답 재풀이");
+        expect(screen.getByRole("region", { name: "핵심 해석" })).not.toHaveTextContent("일부 제출 기준");
+        expect(signals).not.toHaveTextContent("저장된 데이터 기준");
+    });
+
+    it.each([
+        ["partial", "일부 제출 기준"],
+        ["stale", "저장된 데이터 기준"],
+    ] as const)("qualifies the top headline and KPI group when growth data is %s", (status, qualifier) => {
+        renderReport({ status });
+
+        expect(screen.getByRole("region", { name: "핵심 해석" })).toHaveTextContent(qualifier);
+        expect(screen.getByRole("group", { name: "개인 리포트 핵심 지표" })).toHaveTextContent(qualifier);
     });
 
     it("states unavailable and zero-duration signals truthfully", () => {
@@ -177,5 +193,20 @@ describe("ReportPanel", () => {
         expect(within(signals).getByText("반복 약점").closest("div")).toHaveTextContent("뚜렷한 반복 없음");
         expect(within(signals).getByText("평균 풀이 시간").closest("div")).toHaveTextContent("기록 없음");
         expect(screen.getByText("82%를 기록했고, 현재 시험에서 확인된 오답·미응답이 없습니다.")).toBeInTheDocument();
+    });
+
+    it("does not leak cumulative weakness or elapsed time when growth reports are locked", () => {
+        renderReport({ enabled: false, status: "stale" });
+        const headline = screen.getByRole("region", { name: "핵심 해석" });
+        const signals = screen.getByRole("group", { name: "개인 리포트 핵심 지표" });
+
+        expect(headline).toHaveTextContent("82%를 기록했고, 현재 시험에서 확인된 오답·미응답이 없습니다.");
+        expect(headline).not.toHaveTextContent("시제");
+        expect(headline).not.toHaveTextContent("재추천");
+        expect(headline).not.toHaveTextContent("저장된 데이터 기준");
+        expect(signals).not.toHaveTextContent("저장된 데이터 기준");
+        expect(within(signals).getByText("반복 약점").closest("div")).toHaveTextContent("뚜렷한 반복 없음");
+        expect(within(signals).getByText("평균 풀이 시간").closest("div")).toHaveTextContent("확인 불가");
+        expect(screen.queryByText("반복 약점과 추천")).not.toBeInTheDocument();
     });
 });

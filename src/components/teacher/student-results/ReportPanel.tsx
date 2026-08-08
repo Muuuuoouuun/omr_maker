@@ -101,7 +101,15 @@ export default function ReportPanel({
     const growthModel = studentGrowthReportsEnabled && "model" in growthReportState
         ? growthReportState.model
         : null;
-    const reportHeadline = buildStudentReportHeadline(cumulativeInsight?.weaknessGroups ?? [], headline);
+    const reportCumulativeInsight = studentGrowthReportsEnabled ? cumulativeInsight : null;
+    const reportHeadline = buildStudentReportHeadline(reportCumulativeInsight?.weaknessGroups ?? [], headline);
+    const dataQualifier = !studentGrowthReportsEnabled
+        ? null
+        : growthReportState.status === "partial"
+            ? "일부 제출 기준"
+            : growthReportState.status === "stale"
+                ? "저장된 데이터 기준"
+                : null;
     const recentScore = growthModel
         ? growthModel.latestScore == null ? "기록 없음" : `${growthModel.latestScore}점`
         : "확인 불가";
@@ -109,8 +117,8 @@ export default function ReportPanel({
         ? "비교 불가"
         : `상위 ${growthModel.currentPercentile}%`;
     const growthTrend = growthModel ? formatGrowthTrend(growthModel.trend) : "확인 불가";
-    const averageElapsedTime = cumulativeInsight
-        ? formatElapsedTime(cumulativeInsight.averageElapsedTimeSec)
+    const averageElapsedTime = reportCumulativeInsight
+        ? formatElapsedTime(reportCumulativeInsight.averageElapsedTimeSec)
         : "확인 불가";
 
     return (
@@ -159,8 +167,13 @@ export default function ReportPanel({
 
                     <section className={`bento-card ${styles.reportPreludeSection} ${styles.reportPreludeHeadline}`} aria-labelledby="report-headline-title">
                         <h2 id="report-headline-title" className={styles.reportSectionTitle}>핵심 해석</h2>
-                        <p className={styles.reportFeedback}>{reportHeadline.headline}</p>
+                        <p className={styles.reportFeedback}>
+                            {dataQualifier ? `${dataQualifier} · ` : ""}{reportHeadline.headline}
+                        </p>
                         <dl className={styles.reportSignalGrid} role="group" aria-label="개인 리포트 핵심 지표">
+                            {dataQualifier && (
+                                <div className={styles.reportSignalQualifier}><dt>데이터 기준</dt><dd>{dataQualifier}</dd></div>
+                            )}
                             <div><dt>최근 점수</dt><dd>{recentScore}</dd></div>
                             <div><dt>반 백분위</dt><dd>{percentile}</dd></div>
                             <div><dt>성장 추세</dt><dd>{growthTrend}</dd></div>
@@ -203,11 +216,11 @@ export default function ReportPanel({
                     ) : (
                         <p className={styles.emptyText}>시험 정보를 불러오지 못해 오답과 약점을 계산할 수 없습니다.</p>
                     )}
-                    {!!cumulativeInsight?.weaknessGroups.length && (
+                    {!!reportCumulativeInsight?.weaknessGroups.length && (
                         <div className={styles.reportGrowthDetails} style={{ marginTop: "0.75rem" }}>
                             <div>
                                 <strong>반복 약점과 추천</strong>
-                                <p>{cumulativeInsight.weaknessGroups.slice(0, 3).map(group => `${group.title} · ${group.recommendedAction}`).join(" / ")}</p>
+                                <p>{reportCumulativeInsight.weaknessGroups.slice(0, 3).map(group => `${group.title} · ${group.recommendedAction}`).join(" / ")}</p>
                             </div>
                         </div>
                     )}
@@ -240,16 +253,16 @@ export default function ReportPanel({
                             {growthReportState.status === "partial" && (
                                 <p className={styles.cumulativeWarning} role="status">일부 제출 기준의 상세 이력을 표시합니다.</p>
                             )}
-                            {cumulativeInsight?.attempts.length ? (
+                            {reportCumulativeInsight?.attempts.length ? (
                                 <>
                                     <div className={styles.reportStatGrid}>
-                                        <Stat label="평균" value={`${cumulativeInsight.averageScore}%`} />
-                                        <Stat label="최고" value={`${cumulativeInsight.bestScore}%`} />
-                                        <Stat label="원시험" value={`${cumulativeInsight.baseAttemptCount}회`} />
-                                        <Stat label="재시험" value={`${cumulativeInsight.retakeAttemptCount}회`} />
+                                        <Stat label="평균" value={`${reportCumulativeInsight.averageScore}%`} />
+                                        <Stat label="최고" value={`${reportCumulativeInsight.bestScore}%`} />
+                                        <Stat label="원시험" value={`${reportCumulativeInsight.baseAttemptCount}회`} />
+                                        <Stat label="재시험" value={`${reportCumulativeInsight.retakeAttemptCount}회`} />
                                     </div>
                                     <div className={styles.rowList} style={{ marginTop: "0.75rem" }}>
-                                        {cumulativeInsight.attempts.map(item => (
+                                        {reportCumulativeInsight.attempts.map(item => (
                                             <Link
                                                 key={item.id}
                                                 href={item.detailHref}

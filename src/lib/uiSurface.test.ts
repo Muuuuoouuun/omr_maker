@@ -1633,7 +1633,7 @@ describe("service UI surface", () => {
         expect(historyBlock).toContain('growthReportState.status === "empty"');
         expect(historyBlock.match(/onClick=\{onRetryCumulative\}/g) ?? []).toHaveLength(2);
         expect(historyBlock).toContain("상세 이력을 학생 명단과 연결할 수 없습니다.");
-        expect(historyBlock).toContain("cumulativeInsight?.attempts.length");
+        expect(historyBlock).toContain("reportCumulativeInsight?.attempts.length");
     });
 
     it("distinguishes unavailable report calculations from a calculated empty result", () => {
