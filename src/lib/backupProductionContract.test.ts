@@ -102,7 +102,7 @@ function backupClient(body = "pdf-body", options: {
                 expect(name).toBe("omr_service_readiness_v1");
                 return {
                     data: {
-                        version: options.version ?? "202608080007",
+                        version: options.version ?? "202608080008",
                         ready: options.ready ?? true,
                     },
                     error: null,

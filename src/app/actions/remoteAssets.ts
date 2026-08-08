@@ -35,9 +35,7 @@ import {
     STUDENT_SERVER_SESSION_COOKIE,
 } from "@/lib/studentServerSession";
 import { ownerStudentId } from "@/lib/studentExamCore";
-import { hasPlanEntitlement } from "@/utils/plans";
 import { archiveStudentAttemptHandwritingWithGateway } from "@/lib/studentAttemptHandwritingGateway.server";
-import { readEffectiveWorkspacePlan } from "@/lib/effectiveWorkspacePlanGateway";
 
 export type TeacherRemoteAssetPrepareActionResult =
     | TeacherRemoteAssetPreparedUpload
@@ -100,6 +98,7 @@ export async function prepareTeacherExamAssetUpload(
                 organizationId: gateway.context.organizationId,
                 createdByUserId: gateway.context.actorUserId,
             },
+            { identity: gateway.context },
         );
         return result.status === "prepared"
             ? result
@@ -128,11 +127,15 @@ export async function finalizeTeacherExamAssetUpload(
                 error: gateway.error,
             };
         }
-        const result = await finalizeTeacherRemoteAssetUploadWithGateway(gateway.client, {
-            ...input,
-            organizationId: gateway.context.organizationId,
-            createdByUserId: gateway.context.actorUserId,
-        });
+        const result = await finalizeTeacherRemoteAssetUploadWithGateway(
+            gateway.client,
+            {
+                ...input,
+                organizationId: gateway.context.organizationId,
+                createdByUserId: gateway.context.actorUserId,
+            },
+            { identity: gateway.context },
+        );
         return result.status === "finalized"
             ? { status: "uploaded", ref: remoteAssetStoredDataRef(result.asset) }
             : {
@@ -204,6 +207,7 @@ export async function uploadStudentAttemptHandwriting(input: {
                 }>;
             };
         let organizationId = "";
+        let exactOwnerStudentId = "";
         let attachmentTicketId = "";
         if (input.sessionId) {
             const cookieStore = await cookies();
@@ -231,17 +235,14 @@ export async function uploadStudentAttemptHandwriting(input: {
                 || typeof session.submission_id !== "string"
             ) return { status: "invalid_ticket" };
             organizationId = session.organization_id;
+            exactOwnerStudentId = ownerStudentId(identity);
             attachmentTicketId = session.submission_id;
         } else return { status: "invalid_ticket" };
-        const organizationRead = await readEffectiveWorkspacePlan(client, organizationId);
-        const plan = organizationRead.authoritative ? organizationRead.plan : "free";
-        if (!hasPlanEntitlement(plan, "remoteHandwritingArchive")) {
-            return { status: "invalid_asset" };
-        }
         const body = new TextEncoder().encode(JSON.stringify(input.drawings));
         const archived = await archiveStudentAttemptHandwritingWithGateway(client, {
             sessionId: input.sessionId,
             organizationId,
+            ownerStudentId: exactOwnerStudentId,
             attemptId: input.attemptId,
             attachmentTicketId,
             body,

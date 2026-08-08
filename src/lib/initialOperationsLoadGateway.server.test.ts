@@ -14,6 +14,12 @@ const context = {
     actorId: `student_${SUFFIX}_001`,
 };
 const fixture = { organizationId: `teacher_${SUFFIX}`, examId: `initial_ops_exam_${SUFFIX}` };
+const teacherIdentity = {
+    sessionAuthority: "legacy_account",
+    accountId: fixture.organizationId,
+    accountSessionGeneration: 1,
+    actorUserId: fixture.organizationId,
+} as const;
 const unusedFrom = () => vi.fn() as unknown as InitialOperationsLoadClient["from"];
 
 describe("initial-operations Supabase load gateway", () => {
@@ -88,15 +94,15 @@ describe("initial-operations Supabase load gateway", () => {
 
     it("prepares and finalizes a canonical 50 MiB staging Storage object", async () => {
         const rpc = vi.fn(async (name: string, args: Record<string, unknown>) => ({
-            data: name === "omr_prepare_teacher_asset_upload_v1"
+            data: name === "omr_prepare_teacher_asset_upload_v2"
                 ? { ...(args.p_upload as Record<string, unknown>), status: "pending" }
-                : name === "omr_authorize_teacher_asset_finalize_v1"
+                : name === "omr_authorize_teacher_asset_finalize_v2"
                     ? {
                         id: args.p_upload_id,
                         organization_id: args.p_organization_id,
                         exam_id: (args.p_declaration as Record<string, unknown>).exam_id,
                         kind: (args.p_declaration as Record<string, unknown>).kind,
-                        created_by_user_id: args.p_created_by_user_id,
+                        created_by_user_id: args.p_actor_user_id,
                         storage_bucket: (args.p_declaration as Record<string, unknown>).storage_bucket,
                         object_path: (args.p_declaration as Record<string, unknown>).object_path,
                         mime_type: (args.p_declaration as Record<string, unknown>).mime_type,
@@ -104,13 +110,13 @@ describe("initial-operations Supabase load gateway", () => {
                         sha256_hex: (args.p_declaration as Record<string, unknown>).sha256_hex,
                         status: "pending",
                     }
-                    : name === "omr_finalize_teacher_asset_upload_v1"
+                    : name === "omr_finalize_teacher_asset_upload_v2"
                         ? {
                             id: args.p_upload_id,
                             organization_id: args.p_organization_id,
                             exam_id: fixture.examId,
                             kind: "problem_pdf",
-                            created_by_user_id: args.p_created_by_user_id,
+                            created_by_user_id: args.p_actor_user_id,
                             storage_bucket: "omr-private-assets",
                             object_path: (args.p_observation as Record<string, unknown>).object_path,
                             mime_type: "application/pdf",
@@ -148,6 +154,7 @@ describe("initial-operations Supabase load gateway", () => {
         const uploader = { ...context, actorId: `uploader_${SUFFIX}_01` };
         const declaration = {
             fixture,
+            teacherIdentity,
             byteSize: 50 * 1024 * 1024,
             sha256Hex: "c".repeat(64),
             idempotencyKey: `${RUN_ID}:upload:01`,
@@ -160,7 +167,11 @@ describe("initial-operations Supabase load gateway", () => {
             uploadUrl: expect.stringContaining("stagingprojectref.supabase.co"),
             mode: "tus",
         });
-        expect(rpc).toHaveBeenCalledWith("omr_prepare_teacher_asset_upload_v1", expect.objectContaining({
+        expect(rpc).toHaveBeenCalledWith("omr_prepare_teacher_asset_upload_v2", expect.objectContaining({
+            p_session_authority: teacherIdentity.sessionAuthority,
+            p_account_id: teacherIdentity.accountId,
+            p_session_generation: teacherIdentity.accountSessionGeneration,
+            p_actor_user_id: teacherIdentity.actorUserId,
             p_upload: expect.objectContaining({
                 organization_id: fixture.organizationId,
                 exam_id: fixture.examId,
@@ -177,6 +188,52 @@ describe("initial-operations Supabase load gateway", () => {
         });
         expect(finalized).toMatchObject({ status: "finalized", readbackUrl: expect.stringContaining("token=read") });
         expect(info).toHaveBeenCalledWith(prepared.objectPath);
+        expect(rpc).toHaveBeenCalledWith("omr_authorize_teacher_asset_finalize_v2", expect.objectContaining({
+            p_session_authority: teacherIdentity.sessionAuthority,
+            p_account_id: teacherIdentity.accountId,
+            p_session_generation: teacherIdentity.accountSessionGeneration,
+            p_actor_user_id: teacherIdentity.actorUserId,
+        }));
+        expect(rpc).toHaveBeenCalledWith("omr_finalize_teacher_asset_upload_v2", expect.objectContaining({
+            p_session_authority: teacherIdentity.sessionAuthority,
+            p_account_id: teacherIdentity.accountId,
+            p_session_generation: teacherIdentity.accountSessionGeneration,
+            p_actor_user_id: teacherIdentity.actorUserId,
+        }));
+    });
+
+    it.each([
+        ["missing", undefined],
+        ["wrong authority", { ...teacherIdentity, sessionAuthority: "account" }],
+        ["unsafe account", { ...teacherIdentity, accountId: "teacher_short" }],
+        ["invalid generation", { ...teacherIdentity, accountSessionGeneration: 0 }],
+        ["foreign actor", { ...teacherIdentity, actorUserId: "uploader_foreign_01" }],
+    ])("fails teacher uploads closed on %s fixture identity", async (_label, suppliedIdentity) => {
+        const rpc = vi.fn();
+        const createSignedUploadUrl = vi.fn();
+        const client = {
+            rpc,
+            storage: { from: vi.fn(() => ({ createSignedUploadUrl, remove: vi.fn() })) },
+            from: unusedFrom(),
+        };
+        const gateway = createInitialOperationsLoadGateway(client);
+        const uploader = { ...context, actorId: `uploader_${SUFFIX}_01` };
+        const input = {
+            fixture,
+            ...(suppliedIdentity ? { teacherIdentity: suppliedIdentity } : {}),
+            byteSize: 50 * 1024 * 1024,
+            sha256Hex: "c".repeat(64),
+            idempotencyKey: `${RUN_ID}:upload:01`,
+        };
+
+        await expect(gateway.executeOperation("teacher-max-pdf-upload-prepare", uploader, input))
+            .resolves.toEqual({ status: "invalid" });
+        await expect(gateway.executeOperation("teacher-max-pdf-upload-finalize", uploader, {
+            ...input,
+            objectPath: `organizations/${fixture.organizationId}/exams/${fixture.examId}/problem/asset_${"a".repeat(32)}.pdf`,
+        })).resolves.toEqual({ status: "invalid" });
+        expect(rpc).not.toHaveBeenCalled();
+        expect(createSignedUploadUrl).not.toHaveBeenCalled();
     });
 
     it("does not issue signed URLs when the database rejects an inactive, foreign-role, or over-quota run", async () => {
@@ -193,6 +250,7 @@ describe("initial-operations Supabase load gateway", () => {
 
         await expect(gateway.executeOperation("teacher-max-pdf-upload-prepare", uploader, {
             fixture,
+            teacherIdentity,
             byteSize: 50 * 1024 * 1024,
             sha256Hex: "c".repeat(64),
             idempotencyKey: `${RUN_ID}:upload:01`,

@@ -55,7 +55,7 @@ describe("attempt mutation CAS and submitted-session exam delete migration", () 
     });
 
     it("pins readiness, live verification, and rollback verification to both fixes", () => {
-        expect(boundary).toContain("'version', '202608080007'");
+        expect(boundary).toContain("'version', '202608080008'");
         expect(boundary).toContain("'attemptMutationCasReady'");
         expect(boundary).toContain("'examDeleteSessionSafe'");
         expect(live).toContain("attempt heartbeat accepted an invalid CAS or blank token");

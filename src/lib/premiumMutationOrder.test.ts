@@ -7,20 +7,22 @@ function source(relativePath: string): string {
 }
 
 describe("premium mutation authorization order", () => {
-    it("authorizes outgoing subquestions before any exam persistence", () => {
+    it("uses the final canonical save as the sole exam and advanced-design authorization boundary", () => {
         const createPage = source("src/app/create/page.tsx");
-        const entitlement = createPage.indexOf("await authorizeAdvancedQuestionDesign()");
         const save = createPage.indexOf("await saveTeacherCanonicalExam(examData)");
-        expect(entitlement).toBeGreaterThan(-1);
-        expect(save).toBeGreaterThan(entitlement);
+        expect(save).toBeGreaterThan(-1);
+        expect(createPage).not.toContain("authorizeAdvancedQuestionDesign");
+        expect(createPage).not.toContain("authorizeExamCreation");
+        expect(createPage).not.toContain("releaseExamCreationAuthorization");
         expect(createPage).toContain('from "@/app/actions/teacherExam"');
     });
 
-    it("checks every outgoing edit that retains paid subquestions", () => {
+    it("does not pre-reserve or compensate plan usage in the browser editor", () => {
         const createPage = source("src/app/create/page.tsx");
-        expect(createPage).toContain("questionsWithRegions.some(question => (question.subQuestions?.length || 0) > 0)");
-        expect(createPage).toContain("Fail closed before any exam or asset persistence");
-        expect(createPage).toContain("await releaseExamCreationAuthorization(reservedExamId)");
+        expect(createPage).not.toContain("reservedExamId");
+        expect(createPage).not.toContain("advancedQuestionDesignAuthorized");
+        expect(createPage).not.toContain("canonicalSaveAttempted");
+        expect(createPage).not.toContain("requiresCanonicalReservation");
     });
 
     it("keeps a new exam as an upload intent until the final atomic canonical save", () => {
@@ -34,22 +36,19 @@ describe("premium mutation authorization order", () => {
         expect(createPage).not.toContain("deleteTeacherCanonicalExam");
     });
 
-    it("persists the new publish target before quota/upload and keeps it after ambiguous save failure", () => {
+    it("persists the new publish target before upload and keeps it until the canonical save is confirmed", () => {
         const createPage = source("src/app/create/page.tsx");
         const target = createPage.indexOf("getOrCreateNewExamPublishTarget(");
-        const quota = createPage.indexOf("await authorizeExamCreation(id)");
         const upload = createPage.indexOf("await uploadTeacherPdfDirect(");
-        const saveAttempt = createPage.indexOf("canonicalSaveAttempted = true");
         const save = createPage.indexOf("await saveTeacherCanonicalExam(examData)");
         const confirmed = createPage.indexOf('serverSave.status === "saved"');
         const clear = createPage.indexOf("clearNewExamPublishTarget(localStore");
         expect(target).toBeGreaterThan(-1);
-        expect(quota).toBeGreaterThan(target);
-        expect(upload).toBeGreaterThan(quota);
-        expect(saveAttempt).toBeGreaterThan(upload);
-        expect(save).toBeGreaterThan(saveAttempt);
+        expect(upload).toBeGreaterThan(target);
+        expect(save).toBeGreaterThan(upload);
         expect(clear).toBeGreaterThan(confirmed);
-        expect(createPage).toContain("reservedExamId && !canonicalSaveAttempted");
+        expect(createPage).not.toContain("releaseExamCreationAuthorization");
+        expect(createPage).toContain("clearNewExamPublishTarget(localStore, draftStorageKey)");
     });
 
     it("gates legacy asset hydration and serializes a workspace-scoped publish across tabs", () => {
@@ -58,18 +57,17 @@ describe("premium mutation authorization order", () => {
         const scopedDraft = createPage.indexOf("scopedExamDraftStorageKey(");
         const lock = createPage.indexOf("await withExclusiveExamPublishLock(");
         const target = createPage.indexOf("getOrCreateNewExamPublishTarget(");
-        const quota = createPage.indexOf("await authorizeExamCreation(id)");
         expect(createPage).toContain("resolveExamEditorLoad(");
         expect(createPage).toContain("readLocalExam");
-        expect(createPage).toContain("requiresCanonicalReservation");
-        expect(createPage).toContain("requiresCanonicalReservation\n                ? getOrCreateNewExamPublishTarget(");
+        expect(createPage).toContain("requiresCanonicalTarget");
+        expect(createPage).toContain("requiresCanonicalTarget\n                ? getOrCreateNewExamPublishTarget(");
         expect(createPage).toContain("safeBrowserStorage(() => window.sessionStorage)");
         expect(createPage).toContain("safeBrowserStorage(() => window.localStorage)");
         expect(scopedDraft).toBeGreaterThan(-1);
         expect(lock).toBeGreaterThan(scopedDraft);
         expect(target).toBeGreaterThan(lock);
         expect(hydrationGuard).toBeGreaterThan(-1);
-        expect(quota).toBeGreaterThan(target);
+        expect(createPage).not.toContain("authorizeExamCreation");
         expect(createPage).not.toContain("tryAcquireNewExamPublishLock");
         expect(createPage).not.toContain("releaseNewExamPublishLock");
     });
@@ -87,13 +85,16 @@ describe("premium mutation authorization order", () => {
         expect(aiAction.lastIndexOf("catch (error: unknown)")).toBeLessThan(release);
     });
 
-    it("rechecks exam and roster plan rules inside canonical server actions", () => {
+    it("makes account-bound canonical RPCs the sole exam and roster plan mutation boundaries", () => {
         const examAction = source("src/app/actions/teacherExam.ts");
         const rosterAction = source("src/app/actions/teacherRoster.ts");
-        expect(examAction).toContain("await authorizeExamCreation(exam.id)");
-        expect(examAction).toContain("await authorizeAdvancedQuestionDesign()");
-        expect(rosterAction).toContain("await authorizeRosterStudentSet(snapshot.students.map(student => student.id))");
-        expect(rosterAction).toContain("previous.snapshot.students.map(student => student.id)");
+        expect(examAction).not.toContain("authorizeExamCreation");
+        expect(examAction).not.toContain("authorizeAdvancedQuestionDesign");
+        expect(examAction).not.toContain("releaseExamCreationAuthorization");
+        expect(examAction).toContain("saveTeacherExamWithGateway");
+        expect(rosterAction).not.toContain("authorizeRosterStudentSet");
+        expect(rosterAction).not.toContain("previous.snapshot.students.map");
+        expect(rosterAction).toContain("saveTeacherRosterWithGateway");
     });
 
     it("enforces plan limits within the canonical database write transaction", () => {

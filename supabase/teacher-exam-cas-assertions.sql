@@ -439,18 +439,17 @@ $$;
 
 set role service_role;
 do $$
-declare
-    v_rows integer;
 begin
-    select count(*)::integer into v_rows
-      from public.omr_release_plan_usage(
-          'cas-free-org', 'aiRecognition',
-          date_trunc('month', timezone('Asia/Seoul', now()))::date,
-          'ai:missing-release-probe'
-      );
-    if v_rows <> 1 then
-        raise exception 'service role could not use the guarded release wrapper';
-    end if;
+    begin
+        perform public.omr_release_plan_usage(
+            'cas-free-org', 'aiRecognition',
+            date_trunc('month', timezone('Asia/Seoul', now()))::date,
+            'ai:missing-release-probe'
+        );
+        raise exception 'service role executed retired caller-trusting release';
+    exception
+        when insufficient_privilege then null;
+    end;
 end;
 $$;
 reset role;
@@ -459,15 +458,19 @@ do $$
 begin
     if pg_catalog.has_function_privilege(
         'anon',
-        'public.omr_save_exam_v2(jsonb,jsonb,jsonb,text,bigint,text)',
+        'public.omr_save_exam_v3(text,text,bigint,text,jsonb,jsonb,jsonb,bigint,text)',
         'EXECUTE'
     ) or pg_catalog.has_function_privilege(
         'authenticated',
+        'public.omr_save_exam_v3(text,text,bigint,text,jsonb,jsonb,jsonb,bigint,text)',
+        'EXECUTE'
+    ) or pg_catalog.has_function_privilege(
+        'service_role',
         'public.omr_save_exam_v2(jsonb,jsonb,jsonb,text,bigint,text)',
         'EXECUTE'
     ) or not pg_catalog.has_function_privilege(
         'service_role',
-        'public.omr_save_exam_v2(jsonb,jsonb,jsonb,text,bigint,text)',
+        'public.omr_save_exam_v3(text,text,bigint,text,jsonb,jsonb,jsonb,bigint,text)',
         'EXECUTE'
     ) or pg_catalog.has_function_privilege(
         'service_role',

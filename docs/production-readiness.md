@@ -33,7 +33,12 @@ service-role RPC만 유지합니다. 기존 `production-rls.sql`은 직접 authe
 5. `schema.sql` → sorted `migrations` → `production-server-boundary.sql` →
    `live-test-assertions.sql` 순서를 실행하는 `npm run test:supabase:live`와
    CI의 blocking `supabase-live-contract` 작업을 통과시킵니다.
-   service-role 전용 readiness probe 버전은 `202608080007`이어야 합니다.
+   service-role 전용 readiness probe 버전은 `202608080008`이어야 합니다.
+   `effectiveWorkspacePlanEnforcementReady=true`를 별도 필수 항목으로 확인하고,
+   exact vNext RPC catalog/body digest, retired RPC 거부, private helper 실행 거부,
+   plan/asset 상태 테이블의 service-role SELECT-only 경계를 drift/restore까지 증명합니다.
+   초기 100명 운영 부하 게이트도 fixture가 발급한 exact `legacy_account` identity로
+   학생 세션 open과 교사 asset prepare/authorize/finalize v2 경로를 실행해야 합니다.
    브라우저 schema/table/column/sequence/function 실효 권한과 PostgreSQL 17
    `MAINTAIN` 차단, 정확한 canonical 40개 allowlist의 ENABLE+FORCE RLS, public
    정책 0개, 조직 preflight 4개 count 0, 정확한 목적별 교사 RPC signature,

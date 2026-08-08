@@ -56,7 +56,7 @@ export interface InitialOperationsLoadClient {
 }
 
 export const INITIAL_OPERATIONS_PRODUCTION_WORKLOAD_PATHS = Object.freeze({
-    "student-read": Object.freeze(["rpc:omr_open_attempt_session_v1"]),
+    "student-read": Object.freeze(["rpc:omr_open_attempt_session_v2"]),
     checkpoint: Object.freeze(["rpc:omr_checkpoint_attempt_session_v1"]),
     heartbeat: Object.freeze(["rpc:omr_heartbeat_attempt_session_v1"]),
     "teacher-live-read": Object.freeze(["rpc:omr_list_active_attempt_sessions_v1"]),
@@ -69,12 +69,20 @@ export const INITIAL_OPERATIONS_PRODUCTION_WORKLOAD_PATHS = Object.freeze({
         "rpc:omr_prepare_attempt_session_submit_v1",
         "rpc:omr_commit_attempt_session_submit_v1",
     ]),
-    "teacher-max-pdf-upload-prepare": Object.freeze(["rpc:omr_prepare_teacher_asset_upload_v1"]),
+    "teacher-max-pdf-upload-prepare": Object.freeze(["rpc:omr_prepare_teacher_asset_upload_v2"]),
     "teacher-max-pdf-upload-finalize": Object.freeze([
-        "rpc:omr_authorize_teacher_asset_finalize_v1",
-        "rpc:omr_finalize_teacher_asset_upload_v1",
+        "rpc:omr_authorize_teacher_asset_finalize_v2",
+        "rpc:omr_finalize_teacher_asset_upload_v2",
     ]),
 });
+
+interface InitialOperationsTeacherIdentity {
+    organizationId: string;
+    sessionAuthority: "legacy_account";
+    accountId: string;
+    accountSessionGeneration: number;
+    actorUserId: string;
+}
 
 function record(value: unknown): Record<string, unknown> | null {
     return value !== null && typeof value === "object" && !Array.isArray(value)
@@ -84,6 +92,37 @@ function record(value: unknown): Record<string, unknown> | null {
 
 function clean(value: unknown): string {
     return typeof value === "string" ? value.trim() : "";
+}
+
+function teacherIdentityForFixture(
+    value: unknown,
+    fixture: InitialOperationsFixtureScope,
+): InitialOperationsTeacherIdentity | null {
+    const identity = record(value);
+    if (!identity || Object.keys(identity).sort().join(",") !== [
+        "accountId",
+        "accountSessionGeneration",
+        "actorUserId",
+        "sessionAuthority",
+    ].join(",")) return null;
+    const accountId = clean(identity.accountId);
+    const actorUserId = clean(identity.actorUserId);
+    const accountSessionGeneration = Number(identity.accountSessionGeneration);
+    if (
+        identity.sessionAuthority !== "legacy_account"
+        || !/^teacher_[a-z0-9]{16}$/.test(accountId)
+        || accountId !== fixture.organizationId
+        || !/^teacher_[a-z0-9]{7,16}$/.test(actorUserId)
+        || !Number.isSafeInteger(accountSessionGeneration)
+        || accountSessionGeneration < 1
+    ) return null;
+    return {
+        organizationId: fixture.organizationId,
+        sessionAuthority: "legacy_account",
+        accountId,
+        accountSessionGeneration,
+        actorUserId,
+    };
 }
 
 function stableJson(value: unknown): string {
@@ -182,6 +221,7 @@ function signedUrl(data: unknown): string {
 function declaration(
     context: InitialOperationsRequestContext,
     input: Record<string, unknown>,
+    teacherIdentity: InitialOperationsTeacherIdentity,
 ): TeacherRemoteAssetUploadDeclaration | null {
     const fixture = record(input.fixture);
     const candidate: TeacherRemoteAssetUploadDeclaration = {
@@ -192,7 +232,7 @@ function declaration(
         mimeType: "application/pdf",
         sha256Hex: clean(input.sha256Hex ?? input.expectedSha256).toLowerCase(),
         idempotencyKey: clean(input.idempotencyKey),
-        createdByUserId: context.actorId,
+        createdByUserId: teacherIdentity.actorUserId,
         originalName: `${context.actorId}.pdf`,
     };
     const validated = validateTeacherRemoteAssetUploadDeclaration(candidate);
@@ -396,11 +436,14 @@ export function createInitialOperationsLoadGateway(
             });
         }
         if (operation === "teacher-max-pdf-upload-prepare") {
-            const upload = declaration(context, input);
+            const teacherIdentity = teacherIdentityForFixture(input.teacherIdentity, fixture);
+            if (!teacherIdentity) return { status: "invalid" };
+            const upload = declaration(context, input, teacherIdentity);
             if (!upload) return { status: "invalid" };
             const prepared = await prepareTeacherRemoteAssetUploadWithGateway(
                 client as unknown as RemoteAssetSupabaseGatewayClient,
                 upload,
+                { identity: teacherIdentity },
             );
             if (prepared.status !== "prepared") return { status: "service_unavailable" };
             return withCoverage(operation, {
@@ -415,30 +458,35 @@ export function createInitialOperationsLoadGateway(
             });
         }
         if (operation === "teacher-max-pdf-upload-finalize") {
-            const upload = declaration(context, input);
+            const teacherIdentity = teacherIdentityForFixture(input.teacherIdentity, fixture);
+            if (!teacherIdentity) return { status: "invalid" };
+            const upload = declaration(context, input, teacherIdentity);
             if (!upload) return { status: "invalid" };
-            const identity = buildTeacherRemoteAssetUploadIdentity(upload);
-            if (clean(input.objectPath) !== identity.objectPath) return { status: "invalid" };
+            const uploadIdentity = buildTeacherRemoteAssetUploadIdentity(upload);
+            if (clean(input.objectPath) !== uploadIdentity.objectPath) return { status: "invalid" };
             const finalized = await finalizeTeacherRemoteAssetUploadWithGateway(
                 client as unknown as RemoteAssetSupabaseGatewayClient,
                 {
-                    uploadId: identity.uploadId,
+                    uploadId: uploadIdentity.uploadId,
                     organizationId: upload.organizationId,
                     examId: upload.examId,
                     kind: upload.kind,
-                    objectPath: identity.objectPath,
+                    objectPath: uploadIdentity.objectPath,
                     byteSize: upload.byteSize,
                     mimeType: upload.mimeType,
                     sha256Hex: upload.sha256Hex,
                     originalName: upload.originalName,
                     createdByUserId: upload.createdByUserId,
                 },
-                { ...(options.fetchImpl ? { fetchImpl: options.fetchImpl } : {}) },
+                {
+                    ...(options.fetchImpl ? { fetchImpl: options.fetchImpl } : {}),
+                    identity: teacherIdentity,
+                },
             );
             if (finalized.status !== "finalized") return { status: "service_unavailable" };
             const bucket = client.storage.from(REMOTE_ASSET_BUCKET);
             if (!bucket.createSignedUrl) return { status: "service_unavailable" };
-            const read = await bucket.createSignedUrl(identity.objectPath, 15 * 60);
+            const read = await bucket.createSignedUrl(uploadIdentity.objectPath, 15 * 60);
             const readbackUrl = signedUrl(read.data);
             return read.error || !readbackUrl
                 ? { status: "service_unavailable" }

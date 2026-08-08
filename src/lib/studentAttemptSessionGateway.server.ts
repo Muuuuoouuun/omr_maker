@@ -133,7 +133,7 @@ export async function openStudentAttemptSessionWithGateway(
     | Exclude<StudentAttemptSessionMutationResult, { status: "active" }>
 > {
     if (!validOpenInput(input)) return { status: "invalid" };
-    const result = await client.rpc("omr_open_attempt_session_v1", {
+    const result = await client.rpc("omr_open_attempt_session_v2", {
         p_session_id: input.sessionId,
         p_organization_id: input.organizationId,
         p_exam_id: input.examId,

@@ -11,7 +11,6 @@ import {
 import { resolveAuthorizedTeacherSessionCookie, TEACHER_SERVER_SESSION_COOKIE } from "@/lib/teacherServerSession";
 import { isTeacherMutationAuthorized } from "@/lib/teacherMutationAuthorization";
 import { workspaceContextFromTeacherSession } from "@/lib/workspaceContext";
-import { authorizeRosterStudentSet } from "@/app/actions/premiumAccess";
 import type { RosterSnapshot } from "@/lib/rosterPersistence";
 import { reportServerError } from "@/lib/reportServerError";
 
@@ -61,20 +60,6 @@ export async function saveTeacherCanonicalRoster(snapshot: RosterSnapshot, expec
     try {
         const gateway = await actionContext(true);
         if ("status" in gateway) return gateway;
-        const previous = await loadTeacherRosterWithGateway(gateway.client, gateway.context);
-        if (previous.status !== "loaded") {
-            await reportServerError("teacher-roster-save", {
-                status: previous.status,
-                code: "service_unavailable",
-            });
-            return { status: "service_unavailable", error: "학생 명단을 저장할 수 없습니다." };
-        }
-
-        const authorization = await authorizeRosterStudentSet(snapshot.students.map(student => student.id));
-        if (!authorization.ok) {
-            return { status: "plan_denied", error: authorization.error || "학생 등록 한도를 확인할 수 없습니다." };
-        }
-
         const result = await saveTeacherRosterWithGateway(
             gateway.client,
             snapshot,
@@ -90,9 +75,6 @@ export async function saveTeacherCanonicalRoster(snapshot: RosterSnapshot, expec
             });
         }
         if (result.status !== "saved") {
-            // Restore the separately synchronized plan ledger when the
-            // downstream canonical roster write does not commit.
-            await authorizeRosterStudentSet(previous.snapshot.students.map(student => student.id));
             if (
                 planDeniedByDatabase
             ) {

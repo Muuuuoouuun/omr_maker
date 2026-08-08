@@ -3,14 +3,10 @@ import {
     REMOTE_ASSET_BUCKET,
     buildRemoteAssetObjectPath,
     remoteAssetRecordFromRow,
-    remoteAssetStoredDataRef,
     type RemoteAssetRecord,
     type RemoteAssetStoredDataRef,
 } from "@/lib/remoteAssetContract.server";
-import {
-    uploadRemoteAssetWithGateway,
-    type RemoteAssetSupabaseGatewayClient,
-} from "@/lib/remoteAssetGateway.server";
+import type { RemoteAssetSupabaseGatewayClient } from "@/lib/remoteAssetGateway.server";
 
 export type StudentAttemptHandwritingArchiveResult =
     | { status: "uploaded"; ref: RemoteAssetStoredDataRef }
@@ -20,6 +16,45 @@ function record(value: unknown): Record<string, unknown> | null {
     return value !== null && typeof value === "object" && !Array.isArray(value)
         ? value as Record<string, unknown>
         : null;
+}
+
+function exactAuthoritativeDrawingsRef(
+    value: unknown,
+    asset: RemoteAssetRecord,
+): RemoteAssetStoredDataRef | null {
+    if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+    try {
+        const prototype = Object.getPrototypeOf(value);
+        if ((prototype !== Object.prototype && prototype !== null)
+            || Object.getOwnPropertySymbols(value).length > 0) return null;
+        const descriptors = Object.getOwnPropertyDescriptors(value);
+        const expected = [
+            "attemptId", "key", "kind", "mimeType", ...(asset.originalName ? ["name"] : []),
+            "organizationId", "size", "store", "updatedAt",
+        ].sort();
+        const actual = Object.keys(descriptors).sort();
+        if (actual.length !== expected.length
+            || actual.some((key, index) => key !== expected[index])) return null;
+        for (const key of expected) {
+            const descriptor = descriptors[key];
+            if (!descriptor || !("value" in descriptor) || !descriptor.enumerable) return null;
+        }
+        const snapshot = Object.fromEntries(expected.map(key => [key, descriptors[key]!.value]));
+        if (snapshot.store !== "remote"
+            || snapshot.key !== asset.id
+            || snapshot.organizationId !== asset.organizationId
+            || snapshot.kind !== "attempt_handwriting"
+            || snapshot.attemptId !== asset.attemptId
+            || snapshot.mimeType !== "application/json"
+            || snapshot.size !== asset.byteSize
+            || (asset.originalName ? snapshot.name !== asset.originalName : "name" in snapshot)
+            || typeof snapshot.updatedAt !== "string"
+            || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{6}Z$/.test(snapshot.updatedAt)
+        ) return null;
+        return snapshot as unknown as RemoteAssetStoredDataRef;
+    } catch {
+        return null;
+    }
 }
 
 export function canonicalAttemptHandwritingAssetId(sessionId: string, generationId: string): string {
@@ -51,11 +86,32 @@ async function discardReservation(
     }).catch(() => undefined);
 }
 
+async function uploadPreparedHandwritingObject(
+    client: RemoteAssetSupabaseGatewayClient,
+    asset: RemoteAssetRecord,
+    body: Uint8Array,
+): Promise<boolean> {
+    if (
+        asset.kind !== "attempt_handwriting"
+        || asset.bucket !== REMOTE_ASSET_BUCKET
+        || asset.mimeType !== "application/json"
+        || asset.byteSize !== body.byteLength
+        || asset.sha256Hex !== createHash("sha256").update(body).digest("hex")
+    ) return false;
+    const uploaded = await client.storage.from(asset.bucket).upload(asset.objectPath, body, {
+        contentType: asset.mimeType,
+        cacheControl: "300",
+        upsert: false,
+    });
+    return !uploaded.error;
+}
+
 export async function archiveStudentAttemptHandwritingWithGateway(
     client: RemoteAssetSupabaseGatewayClient,
     input: {
         sessionId: string;
         organizationId: string;
+        ownerStudentId: string;
         attemptId: string;
         attachmentTicketId: string;
         body: Uint8Array;
@@ -72,8 +128,10 @@ export async function archiveStudentAttemptHandwritingWithGateway(
     });
     if (!objectPath) return { status: "invalid_asset" };
 
-    const prepared = await client.rpc("omr_prepare_attempt_handwriting_asset_v1", {
+    const prepared = await client.rpc("omr_prepare_attempt_handwriting_asset_v2", {
         p_session_id: input.sessionId,
+        p_organization_id: input.organizationId,
+        p_owner_student_id: input.ownerStudentId,
         p_asset: {
             id: assetId,
             organization_id: input.organizationId,
@@ -108,8 +166,12 @@ export async function archiveStudentAttemptHandwritingWithGateway(
             ? "invalid_asset"
             : "service_unavailable" };
     }
-    const ref = remoteAssetStoredDataRef(asset);
-    if (preparedBody.status === "attached") return { status: "uploaded", ref };
+    if (preparedBody.status === "attached") {
+        const authoritativeRef = exactAuthoritativeDrawingsRef(preparedBody.drawingsRef, asset);
+        return authoritativeRef
+            ? { status: "uploaded", ref: authoritativeRef }
+            : { status: "service_unavailable" };
+    }
 
     let objectReady = false;
     if (preparedBody.objectRequired === false) {
@@ -117,14 +179,8 @@ export async function archiveStudentAttemptHandwritingWithGateway(
         objectReady = !!info && !info.error && observedStorageObjectMatches(info.data, asset);
     }
     if (!objectReady) {
-        const uploaded = await uploadRemoteAssetWithGateway(client, {
-            organizationId: input.organizationId,
-            kind: "attempt_handwriting",
-            attemptId: input.attemptId,
-            body: input.body,
-            originalName: input.originalName,
-        }, { assetId: asset.id });
-        if (uploaded.status === "uploaded") {
+        const uploaded = await uploadPreparedHandwritingObject(client, asset, input.body);
+        if (uploaded) {
             objectReady = true;
         } else {
             // A concurrent/retried immutable upload may have won the same path.
@@ -137,14 +193,23 @@ export async function archiveStudentAttemptHandwritingWithGateway(
         return { status: "service_unavailable" };
     }
 
-    const attached = await client.rpc("omr_attach_attempt_handwriting_v1", {
+    const attached = await client.rpc("omr_attach_attempt_handwriting_v2", {
+        p_session_id: input.sessionId,
+        p_organization_id: input.organizationId,
+        p_owner_student_id: input.ownerStudentId,
         p_ticket_id: input.attachmentTicketId,
         p_asset_id: asset.id,
-        p_ref: ref,
     });
     if (attached.error) {
-        await discardReservation(client, input.sessionId, asset.id);
+        // The DB transaction may have committed and only the response may have
+        // been lost. Never discard here; the next exact prepare replays the
+        // authoritative attached ref, while an unattached reservation expires
+        // into the cleanup outbox.
         return { status: "service_unavailable" };
     }
-    return { status: "uploaded", ref };
+    const attachedBody = record(attached.data);
+    const authoritativeRef = exactAuthoritativeDrawingsRef(attachedBody?.drawingsRef, asset);
+    return authoritativeRef
+        ? { status: "uploaded", ref: authoritativeRef }
+        : { status: "service_unavailable" };
 }

@@ -1,8 +1,9 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { createTeacherSession } from "./teacherSession";
 import { workspaceContextFromIdentity } from "./workspaceContext";
 import {
     createDevServerPlanStore,
+    createSupabaseServerPlanStore,
     createServerPlanStoreFromEnv,
     evaluateServerPlanQuota,
     resolveServerPlanAccess,
@@ -12,6 +13,69 @@ import {
 const TOKEN = "tkn_abc123_0123456789abcdef0123456789abcdef";
 
 describe("server-authoritative plan access", () => {
+    it("sends only exact signed identity and resource inputs to plan-usage v2", async () => {
+        const rpc = vi.fn(async (name: string, params?: Record<string, unknown>) => {
+            void params;
+            return {
+                data: name === "omr_reserve_plan_usage_v2"
+                    ? { allowed: true, idempotent: false, used: 1 }
+                    : name === "omr_release_plan_usage_v2"
+                        ? { released: true, used: 0 }
+                        : { allowed: true, used: 2 },
+                error: null,
+            };
+        });
+        const session = createTeacherSession(TOKEN, Date.now(), {
+            teacherId: "teacher_0123456789abcdef",
+            organizationId: "pilot_org_0123456789abcdef01234567",
+            organizationName: "Pilot",
+            memberRole: "owner",
+            plan: "pro",
+            sessionAuthority: "account",
+            accountSessionGeneration: 3,
+        });
+        const store = createSupabaseServerPlanStore({ rpc } as never, session);
+        const period = seoulBillingPeriod();
+        await expect(store.reserveUsage({
+            organizationId: session.organizationId!, metric: "exams", period,
+            resourceKey: "exam:x", attempted: 1, observedUsed: 999, limit: 999,
+        })).resolves.toMatchObject({ allowed: true, used: 1 });
+        expect(rpc).toHaveBeenLastCalledWith("omr_reserve_plan_usage_v2", {
+            p_session_authority: "account",
+            p_account_id: session.teacherId,
+            p_session_generation: 3,
+            p_organization_id: session.organizationId,
+            p_actor_user_id: session.teacherId,
+            p_metric: "exams",
+            p_resource_key: "exam:x",
+        });
+        expect(JSON.stringify(rpc.mock.calls.at(-1)?.[1])).not.toMatch(/observed|limit|period|resource_keys/);
+    });
+
+    it("rejects array, extra and accessor plan-usage envelopes", async () => {
+        const getter = vi.fn(() => true);
+        const session = createTeacherSession(TOKEN, Date.now(), {
+            teacherId: "teacher_0123456789abcdef", organizationId: "pilot_org_0123456789abcdef01234567",
+            organizationName: "Pilot", memberRole: "owner", plan: "pro",
+            sessionAuthority: "account", accountSessionGeneration: 3,
+        });
+        const period = seoulBillingPeriod();
+        for (const data of [
+            [{ allowed: true, idempotent: false, used: 1 }],
+            { allowed: true, idempotent: false, used: 1, extra: true },
+            Object.defineProperty({ idempotent: false, used: 1 }, "allowed", { enumerable: true, get: getter }),
+        ]) {
+            const store = createSupabaseServerPlanStore({
+                rpc: async () => ({ data, error: null }),
+            } as never, session);
+            await expect(store.reserveUsage({
+                organizationId: session.organizationId!, metric: "exams", period,
+                resourceKey: "exam:x", attempted: 1, observedUsed: 0, limit: 5,
+            })).rejects.toThrow("응답이 올바르지 않습니다");
+        }
+        expect(getter).not.toHaveBeenCalled();
+    });
+
     it("uses Asia/Seoul month boundaries for quota periods", () => {
         expect(seoulBillingPeriod(new Date("2026-07-31T15:30:00.000Z"))).toEqual({
             key: "2026-08-01",

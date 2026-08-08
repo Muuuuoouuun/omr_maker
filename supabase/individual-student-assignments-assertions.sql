@@ -319,6 +319,22 @@ begin
     if not v_rejected then raise exception 'free retake attempt write was accepted'; end if;
 
     update public.omr_organizations set plan = 'pro' where id = 'individual-test-org';
+    -- Phase C requires the paid retake capability to be proven before the
+    -- legacy body reaches its adoption trigger. Production callers use the
+    -- v2 boundary; this direct postgres assertion only preserves the original
+    -- historical behavior fixture.
+    perform public.omr_set_effective_plan_transaction_proof_v1(
+        'individual-test-org',
+        pg_catalog.jsonb_build_object(
+            'organizationId', 'individual-test-org',
+            'plan', 'pro',
+            'grantId', 'historical-direct-postgres-fixture',
+            'expiresAt', pg_catalog.to_char(
+                (pg_catalog.clock_timestamp() + interval '1 hour') at time zone 'UTC',
+                'YYYY-MM-DD"T"HH24:MI:SS.US"Z"'
+            )
+        )
+    );
 
     v_result := public.omr_assign_students_v1(
         'individual-test-org', 'individual-test-teacher', 'teacher',
@@ -445,6 +461,30 @@ begin
         raise exception 'atomic group clear failed: %', v_result;
     end if;
 end;
+$$;
+
+do $$
+begin
+    if pg_catalog.has_function_privilege(
+        'service_role',
+        'public.omr_assign_students_v1(text,text,text,text,text[],text,bigint,text)',
+        'EXECUTE'
+    ) or pg_catalog.has_function_privilege(
+        'service_role',
+        'public.omr_clear_student_assignment_v1(text,text,text,text,bigint,text,text[],text)',
+        'EXECUTE'
+    ) or not pg_catalog.has_function_privilege(
+        'service_role',
+        'public.omr_assign_students_v2(text,text,bigint,text,text,text,text,text[],text,bigint,text)',
+        'EXECUTE'
+    ) or not pg_catalog.has_function_privilege(
+        'service_role',
+        'public.omr_clear_student_assignment_v2(text,text,bigint,text,text,text,text,bigint,text,text[],text)',
+        'EXECUTE'
+    ) then
+        raise exception 'targeted assignment boundary is not v2-only';
+    end if;
+end
 $$;
 
 rollback;

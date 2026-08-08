@@ -140,10 +140,15 @@ begin
                'omr_initial_ops_metrics',
                'omr_exam_entry_invites',
                'omr_teacher_accounts',
-                'omr_teacher_account_tokens',
-                'omr_teacher_notification_states',
-                'omr_operational_job_status',
-                'omr_pilot_plan_grants'
+               'omr_teacher_account_tokens',
+               'omr_teacher_notification_states',
+               'omr_operational_job_status',
+               'omr_pilot_plan_grants',
+               'omr_remote_assets',
+               'omr_remote_asset_upload_intents',
+               'omr_remote_asset_cleanup_queue',
+               'omr_plan_usage',
+               'omr_plan_usage_reservations'
            )
            and (
                not has_table_privilege('service_role', relation.oid, 'SELECT')
@@ -242,6 +247,8 @@ begin
                'omr_advance_teacher_session_on_disable_v1()',
                'omr_initial_ops_operation_v1(text, text, text, text, text, text, jsonb)',
                'omr_initial_ops_reserve_upload_v1(text, text, text, text, text, text, bigint)',
+               'omr_initial_ops_database_snapshot_v26_snapshot(text, text, text, text, text)',
+               'omr_initial_ops_fixture_v26_snapshot(text, text, text, text, text)',
                'omr_prepare_teacher_asset_upload_v6_snapshot(jsonb)',
                'omr_save_exam_v6_snapshot(jsonb, jsonb, jsonb, text)',
                'omr_save_exam_v10_snapshot(jsonb, jsonb, jsonb, text)',
@@ -262,7 +269,38 @@ begin
                'omr_assert_targeted_assignment_scope_v1(text, text, text, text, text, text, integer[])',
                'omr_validate_targeted_attempt_session_v1()',
                'omr_validate_targeted_attempt_v1()',
-               'omr_guard_targeted_exam_access_v1()'
+               'omr_guard_targeted_exam_access_v1()',
+               'omr_lock_provisioned_teacher_identity_v1(text, bigint, text)',
+               'omr_authorize_effective_teacher_plan_v1(text, text)',
+               'omr_read_effective_organization_plan_v1(text)',
+               'omr_set_effective_plan_transaction_proof_v1(text, jsonb)',
+               'omr_prove_effective_organization_plan_v1(text)',
+               'omr_assert_effective_plan_transaction_proof_v1(text, boolean)',
+               'omr_lock_legacy_teacher_identity_v1(text, bigint, text, text)',
+               'omr_read_legacy_teacher_plan_v1(text, text, text)',
+               'omr_lock_teacher_mutation_identity_v1(text, text, bigint, text, text)',
+               'omr_read_teacher_mutation_plan_v1(text, text, text, text)',
+               'omr_save_exam_effective_worker_v3(text, text, text, text, jsonb, jsonb, jsonb)',
+               'omr_save_feedback_effective_worker_v4(text, jsonb, bigint, text)',
+               'omr_claim_remote_asset_cleanup_v8_snapshot(text, integer, integer)',
+               'omr_save_roster_v2(text, jsonb, jsonb, jsonb, jsonb, bigint)',
+               'omr_save_exam_v2(jsonb, jsonb, jsonb, text, bigint, text)',
+               'omr_save_feedback_v2(text, jsonb, bigint, text)',
+               'omr_return_feedback_v2(text, text, bigint, text)',
+               'omr_save_feedback_v3(text, jsonb, bigint, text)',
+               'omr_return_feedback_v3(text, text, bigint, text)',
+               'omr_assign_students_v1(text, text, text, text, text[], text, bigint, text)',
+               'omr_clear_student_assignment_v1(text, text, text, text, bigint, text, text[], text)',
+               'omr_open_attempt_session_v1(text, text, text, text, text, text, text, text, text, text, text, integer[], integer[], timestamp with time zone, jsonb, integer, timestamp with time zone, text, text, integer)',
+               'omr_prepare_teacher_asset_upload_v1(jsonb)',
+               'omr_authorize_teacher_asset_finalize_v1(text, text, text, jsonb)',
+               'omr_finalize_teacher_asset_upload_v1(text, text, text, jsonb)',
+               'omr_prepare_attempt_handwriting_asset_v1(text, jsonb)',
+               'omr_attach_attempt_handwriting_v1(text, text, jsonb)',
+               'omr_save_remote_asset_metadata_v1(jsonb)',
+               'omr_reserve_plan_usage(text, text, date, text, integer, integer, integer)',
+               'omr_release_plan_usage(text, text, date, text)',
+               'omr_sync_student_plan_usage(text, text[], integer, integer)'
            )
     ) then
         raise exception 'service_role lost a public function execute privilege';
@@ -750,8 +788,8 @@ begin
     then
         raise exception 'browser roles unexpectedly have remote asset metadata RPC execute privilege';
     end if;
-    if not has_function_privilege('service_role', 'public.omr_save_remote_asset_metadata_v1(jsonb)', 'execute') then
-        raise exception 'service_role must have remote asset metadata RPC execute privilege';
+    if has_function_privilege('service_role', 'public.omr_save_remote_asset_metadata_v1(jsonb)', 'execute') then
+        raise exception 'service_role unexpectedly retained generic remote asset metadata execute';
     end if;
     if has_function_privilege('anon', 'public.omr_prepare_teacher_asset_upload_v1(jsonb)', 'execute')
         or has_function_privilege('authenticated', 'public.omr_prepare_teacher_asset_upload_v1(jsonb)', 'execute')
@@ -760,8 +798,11 @@ begin
     then
         raise exception 'browser roles unexpectedly have teacher upload lifecycle RPC execute privilege';
     end if;
-    if not has_function_privilege('service_role', 'public.omr_prepare_teacher_asset_upload_v1(jsonb)', 'execute')
-        or not has_function_privilege('service_role', 'public.omr_finalize_teacher_asset_upload_v1(text,text,text,jsonb)', 'execute')
+    if has_function_privilege('service_role', 'public.omr_prepare_teacher_asset_upload_v1(jsonb)', 'execute')
+        or has_function_privilege('service_role', 'public.omr_finalize_teacher_asset_upload_v1(text,text,text,jsonb)', 'execute')
+        or not has_function_privilege('service_role', 'public.omr_prepare_teacher_asset_upload_v2(text,text,bigint,text,text,jsonb)', 'execute')
+        or not has_function_privilege('service_role', 'public.omr_authorize_teacher_asset_finalize_v2(text,text,bigint,text,text,text,jsonb)', 'execute')
+        or not has_function_privilege('service_role', 'public.omr_finalize_teacher_asset_upload_v2(text,text,bigint,text,text,text,jsonb)', 'execute')
     then
         raise exception 'service_role must have teacher upload lifecycle RPC execute privilege';
     end if;
@@ -773,10 +814,12 @@ begin
     then
         raise exception 'browser roles unexpectedly have teacher exam RPC execute privilege';
     end if;
-    if not has_function_privilege('service_role', 'public.omr_save_exam_v2(jsonb,jsonb,jsonb,text,bigint,text)', 'execute') then
-        raise exception 'service_role must have teacher exam RPC execute privilege';
+    if has_function_privilege('service_role', 'public.omr_save_exam_v2(jsonb,jsonb,jsonb,text,bigint,text)', 'execute')
+        or not has_function_privilege('service_role', 'public.omr_save_exam_v3(text,text,bigint,text,jsonb,jsonb,jsonb,bigint,text)', 'execute') then
+        raise exception 'service_role teacher exam v3 privilege boundary is invalid';
     end if;
     if has_function_privilege('service_role', 'public.omr_save_exam_v1(jsonb,jsonb,jsonb,text)', 'execute')
+        or has_function_privilege('service_role', 'public.omr_save_exam_v2(jsonb,jsonb,jsonb,text,bigint,text)', 'execute')
         or has_function_privilege('service_role', 'public.omr_save_exam_v10_snapshot(jsonb,jsonb,jsonb,text)', 'execute')
         or has_function_privilege('service_role', 'public.omr_release_plan_usage_v10_snapshot(text,text,date,text)', 'execute')
         or has_function_privilege('service_role', 'public.omr_normalize_exam_save_request_v10(jsonb)', 'execute')
@@ -795,6 +838,13 @@ begin
         or has_function_privilege('authenticated', 'public.omr_attach_attempt_handwriting_v1(text,text,jsonb)', 'execute')
     then
         raise exception 'browser roles unexpectedly have handwriting RPC execute privilege';
+    end if;
+    if has_function_privilege('service_role', 'public.omr_attach_attempt_handwriting_v1(text,text,jsonb)', 'execute')
+        or has_function_privilege('service_role', 'public.omr_prepare_attempt_handwriting_asset_v1(text,jsonb)', 'execute')
+        or not has_function_privilege('service_role', 'public.omr_prepare_attempt_handwriting_asset_v2(text,text,text,jsonb)', 'execute')
+        or not has_function_privilege('service_role', 'public.omr_attach_attempt_handwriting_v2(text,text,text,text,text)', 'execute')
+    then
+        raise exception 'service_role handwriting v2 privilege boundary is invalid';
     end if;
     if pg_catalog.to_regprocedure('public.omr_teacher_update_attempt_v1(text,jsonb,jsonb)') is not null then
         raise exception 'legacy broad teacher attempt RPC still exists';
@@ -830,8 +880,9 @@ begin
         raise exception 'browser roles unexpectedly have teacher roster RPC execute privilege';
     end if;
     if has_function_privilege('service_role', 'public.omr_save_roster_v1(text,jsonb,jsonb,jsonb,jsonb)', 'execute')
+        or has_function_privilege('service_role', 'public.omr_save_roster_v2(text,jsonb,jsonb,jsonb,jsonb,bigint)', 'execute')
         or not has_function_privilege('service_role', 'public.omr_load_roster_v2(text)', 'execute')
-        or not has_function_privilege('service_role', 'public.omr_save_roster_v2(text,jsonb,jsonb,jsonb,jsonb,bigint)', 'execute')
+        or not has_function_privilege('service_role', 'public.omr_save_roster_v3(text,text,bigint,text,text,jsonb,jsonb,jsonb,jsonb,bigint)', 'execute')
     then
         raise exception 'service_role roster CAS privilege boundary is invalid';
     end if;
@@ -850,10 +901,12 @@ begin
     end if;
     if has_function_privilege('service_role', 'public.omr_save_feedback_v1(text,jsonb)', 'execute')
         or has_function_privilege('service_role', 'public.omr_return_feedback_v1(text,text,timestamp with time zone)', 'execute')
-        or not has_function_privilege('service_role', 'public.omr_save_feedback_v2(text,jsonb,bigint,text)', 'execute')
-        or not has_function_privilege('service_role', 'public.omr_return_feedback_v2(text,text,bigint,text)', 'execute')
-        or not has_function_privilege('service_role', 'public.omr_save_feedback_v3(text,jsonb,bigint,text)', 'execute')
-        or not has_function_privilege('service_role', 'public.omr_return_feedback_v3(text,text,bigint,text)', 'execute')
+        or has_function_privilege('service_role', 'public.omr_save_feedback_v2(text,jsonb,bigint,text)', 'execute')
+        or has_function_privilege('service_role', 'public.omr_return_feedback_v2(text,text,bigint,text)', 'execute')
+        or has_function_privilege('service_role', 'public.omr_save_feedback_v3(text,jsonb,bigint,text)', 'execute')
+        or has_function_privilege('service_role', 'public.omr_return_feedback_v3(text,text,bigint,text)', 'execute')
+        or not has_function_privilege('service_role', 'public.omr_save_feedback_v4(text,text,bigint,text,text,jsonb,bigint,text)', 'execute')
+        or not has_function_privilege('service_role', 'public.omr_return_feedback_v4(text,text,bigint,text,text,text,bigint,text)', 'execute')
         or not has_function_privilege('service_role', 'public.omr_mark_feedback_opened_v2(text,text,text,timestamp with time zone)', 'execute')
     then
         raise exception 'service_role must have feedback RPC execute privilege';
@@ -914,6 +967,11 @@ begin
     end if;
 end
 $$;
+
+-- Historical v1/v2 regression workflows below exercise implementation
+-- semantics as the migration owner. Their public execute grants are retired by
+-- Phase C and are asserted separately above; do not regrant them to service_role.
+reset role;
 
 select public.omr_save_roster_v2(
     'live-org-a',
@@ -1957,6 +2015,7 @@ $$;
 
 -- Core text feedback remains available on Free, including return and read
 -- receipt. Markup drawings and annotated-PDF policy remain paid boundaries.
+reset role;
 update public.omr_organizations set plan = 'free' where id = 'live-org-a';
 do $$
 begin
@@ -2080,7 +2139,7 @@ begin
     end if;
 end
 $$;
-set role service_role;
+reset role;
 
 select public.omr_save_feedback_v2(
     'live-org-a',
@@ -2156,7 +2215,7 @@ begin
     end if;
 end
 $$;
-set role service_role;
+reset role;
 
 do $$
 begin
@@ -3765,6 +3824,7 @@ begin
 end
 $$;
 
+reset role;
 do $$
 declare
     readiness jsonb;
@@ -3807,7 +3867,7 @@ declare
     readiness jsonb;
 begin
     readiness := public.omr_service_readiness_v1();
-    if readiness->>'version' <> '202608080007'
+    if readiness->>'version' <> '202608080008'
         or readiness->>'ready' <> 'true'
         or exists (
             select 1
@@ -4259,19 +4319,10 @@ begin
     update public.omr_remote_assets set created_at = now() - interval '3 hours'
      where id = stale_id;
     perform public.omr_claim_remote_asset_cleanup_v1('handwriting-stale-recovery', 100, 60);
-    if not exists (select 1 from public.omr_remote_assets where id = stale_id)
-       or exists (
-           select 1 from public.omr_remote_asset_cleanup_queue where source_id = stale_id
-       ) then raise exception 'handwriting attachment response-loss retention was not preserved'; end if;
-    update public.omr_attempt_sessions set updated_at = now() - interval '8 days'
-     where id = 'live-handwriting-stale-session';
-    update public.omr_remote_assets set created_at = now() - interval '8 days'
-     where id = stale_id;
-    perform public.omr_claim_remote_asset_cleanup_v1('handwriting-stale-recovery-after-retention', 100, 60);
     if exists (select 1 from public.omr_remote_assets where id = stale_id)
        or not exists (
            select 1 from public.omr_remote_asset_cleanup_queue where source_id = stale_id
-       ) then raise exception 'stale handwriting reservation was not recovered after retention'; end if;
+       ) then raise exception 'pre-008 unattached handwriting reservation was not recovered immediately'; end if;
     update public.omr_organizations set plan = 'free' where id = 'live-org-a';
 end
 $$;
@@ -4355,7 +4406,7 @@ end
 $$;
 
 delete from public.omr_attempt_sessions where id = 'checkpoint-lock-clock-fixture';
-set role service_role;
+reset role;
 
 do $$
 declare
@@ -5354,9 +5405,9 @@ begin
         raise exception 'latest assignment/reporting readiness failed: %', readiness;
     end if;
     if not pg_catalog.has_function_privilege(
-        'service_role', 'public.omr_assign_students_v1(text,text,text,text,text[],text,bigint,text)', 'EXECUTE'
+        'service_role', 'public.omr_assign_students_v2(text,text,bigint,text,text,text,text,text[],text,bigint,text)', 'EXECUTE'
     ) or not pg_catalog.has_function_privilege(
-        'service_role', 'public.omr_clear_student_assignment_v1(text,text,text,text,bigint,text,text[],text)', 'EXECUTE'
+        'service_role', 'public.omr_clear_student_assignment_v2(text,text,bigint,text,text,text,text,bigint,text,text[],text)', 'EXECUTE'
     ) or not pg_catalog.has_function_privilege(
         'service_role', 'public.omr_load_teacher_student_assignment_v1(text,text,text,text)', 'EXECUTE'
     ) or not pg_catalog.has_function_privilege(
@@ -7655,5 +7706,1052 @@ delete from public.omr_teacher_accounts
  where id in ('teacher_aaaaaaaaaaaaaaaa', 'teacher_bbbbbbbbbbbbbbbb');
 delete from public.omr_organizations
  where id in ('pilot_org_aaaaaaaaaaaaaaaaaaaaaaaa', 'pilot_org_bbbbbbbbbbbbbbbbbbbbbbbb');
+
+-- Phase C: student handwriting reservations are tenant-bound, short-lived and
+-- replayable by semantic payload. All fixture data is transaction-local so the
+-- production-boundary privilege checks still run against a pristine database.
+begin;
+insert into public.omr_organizations (id, name, plan, metadata)
+values ('teacher_phasec01', 'Phase C Legacy School', 'pro', '{}'::jsonb);
+insert into public.omr_teacher_accounts (
+    id, email, display_name, password_hash, status, email_verified_at,
+    session_generation
+) values (
+    'teacher_1111111111111111', 'phase-c-legacy@example.test',
+    'Phase C Legacy Teacher',
+    'pbkdf2-sha256:120000:0123456789abcdef0123456789abcdef:' || repeat('1', 64),
+    'active', pg_catalog.now(), 7
+);
+insert into public.omr_organization_members (
+    organization_id, user_id, email, display_name, role, status
+) values (
+    'teacher_phasec01', 'teacher_phasec01', 'phase-c-legacy@example.test',
+    'Phase C Legacy Teacher', 'owner', 'active'
+);
+insert into public.omr_teacher_profiles (
+    organization_id, user_id, display_name, status
+) values (
+    'teacher_phasec01', 'teacher_phasec01', 'Phase C Legacy Teacher', 'active'
+);
+insert into public.omr_exams (
+    id, organization_id, title, payload, created_by_user_id,
+    created_at, updated_at, archived
+) values (
+    'phasec-handwriting-exam', 'teacher_phasec01', 'Phase C Handwriting',
+    '{"id":"phasec-handwriting-exam","questions":[{"id":1}]}'::jsonb,
+    'teacher_phasec01', pg_catalog.now(), pg_catalog.now(), false
+);
+insert into public.omr_student_profiles (
+    id, organization_id, display_name, status
+) values
+    ('phasec-student-replay', 'teacher_phasec01', 'Replay Student', 'active'),
+    ('phasec-student-expired', 'teacher_phasec01', 'Expired Student', 'active'),
+    ('phasec-student-cutover', 'teacher_phasec01', 'Cutover Student', 'active');
+insert into public.omr_attempts (
+    id, ticket_id, organization_id, exam_id, student_name, student_id,
+    identity_type, status, payload, started_at, finished_at
+) values
+    ('attempt_phasec-ticket-replay', 'phasec-ticket-replay', 'teacher_phasec01',
+     'phasec-handwriting-exam', 'Replay Student', 'phasec-student-replay',
+     'registered', 'completed', '{"id":"attempt_phasec-ticket-replay"}'::jsonb,
+     pg_catalog.now() - interval '10 minutes', pg_catalog.now()),
+    ('attempt_phasec-ticket-expired', 'phasec-ticket-expired', 'teacher_phasec01',
+     'phasec-handwriting-exam', 'Expired Student', 'phasec-student-expired',
+     'registered', 'completed', '{"id":"attempt_phasec-ticket-expired"}'::jsonb,
+     pg_catalog.now() - interval '10 minutes', pg_catalog.now()),
+    ('attempt_phasec-ticket-cutover', 'phasec-ticket-cutover', 'teacher_phasec01',
+     'phasec-handwriting-exam', 'Cutover Student', 'phasec-student-cutover',
+     'registered', 'completed', '{"id":"attempt_phasec-ticket-cutover"}'::jsonb,
+     pg_catalog.now() - interval '10 minutes', pg_catalog.now());
+insert into public.omr_attempt_sessions (
+    id, organization_id, exam_id, owner_student_id, student_name,
+    identity_type, scope_key, submission_id, attempt_id,
+    allowed_question_ids, grading_snapshot, status, started_at, deadline_at,
+    last_heartbeat_at, lease_token_hash, lease_expires_at,
+    submitted_attempt_id, submitted_at
+) values
+    ('phasec-handwriting-replay-session', 'teacher_phasec01',
+     'phasec-handwriting-exam', 'phasec-student-replay', 'Replay Student',
+     'registered', 'base', 'phasec-ticket-replay', 'attempt_phasec-ticket-replay',
+     array[1], '{"questions":[{"id":1}]}'::jsonb, 'submitted',
+     pg_catalog.now() - interval '10 minutes', pg_catalog.now() + interval '1 hour',
+     pg_catalog.now(), 'phasec-finished-replay', pg_catalog.now(),
+     'attempt_phasec-ticket-replay', pg_catalog.now()),
+    ('phasec-handwriting-expired-session', 'teacher_phasec01',
+     'phasec-handwriting-exam', 'phasec-student-expired', 'Expired Student',
+     'registered', 'base', 'phasec-ticket-expired', 'attempt_phasec-ticket-expired',
+     array[1], '{"questions":[{"id":1}]}'::jsonb, 'submitted',
+     pg_catalog.now() - interval '10 minutes', pg_catalog.now() + interval '1 hour',
+     pg_catalog.now(), 'phasec-finished-expired', pg_catalog.now(),
+     'attempt_phasec-ticket-expired', pg_catalog.now()),
+    ('phasec-handwriting-cutover-session', 'teacher_phasec01',
+     'phasec-handwriting-exam', 'phasec-student-cutover', 'Cutover Student',
+     'registered', 'base', 'phasec-ticket-cutover', 'attempt_phasec-ticket-cutover',
+     array[1], '{"questions":[{"id":1}]}'::jsonb, 'submitted',
+     pg_catalog.now() - interval '10 minutes', pg_catalog.now() + interval '1 hour',
+     pg_catalog.now(), 'phasec-finished-cutover', pg_catalog.now(),
+     'attempt_phasec-ticket-cutover', pg_catalog.now());
+
+-- Simulate an exact pre-008 attached registry row. The Phase C RPC must replay
+-- this canonical ref without manufacturing a reservation or requiring paid
+-- entitlement after cutover.
+do $phase_c_pre008_seed$
+declare
+    v_asset_id text := 'asset_handwriting_'
+        || pg_catalog.md5('phasec-handwriting-cutover-session')
+        || '_33333333-3333-4333-8333-333333333333';
+    v_asset public.omr_remote_assets%rowtype;
+    v_ref jsonb;
+begin
+    insert into public.omr_remote_assets (
+        id, organization_id, kind, attempt_id, storage_bucket, object_path,
+        mime_type, byte_size, sha256_hex, original_name, created_at, updated_at
+    ) values (
+        v_asset_id, 'teacher_phasec01', 'attempt_handwriting',
+        'attempt_phasec-ticket-cutover', 'omr-private-assets',
+        'organizations/teacher_phasec01/attempts/attempt_phasec-ticket-cutover/handwriting/'
+            || v_asset_id || '.json',
+        'application/json', 17, repeat('c', 64), 'cutover.json',
+        pg_catalog.now() - interval '1 day', pg_catalog.now() - interval '1 day'
+    ) returning * into v_asset;
+    v_ref := pg_catalog.jsonb_strip_nulls(pg_catalog.jsonb_build_object(
+        'store', 'remote', 'key', v_asset.id,
+        'organizationId', v_asset.organization_id,
+        'kind', 'attempt_handwriting', 'attemptId', v_asset.attempt_id,
+        'name', v_asset.original_name, 'mimeType', v_asset.mime_type,
+        'size', v_asset.byte_size,
+        'updatedAt', pg_catalog.to_char(
+            v_asset.updated_at at time zone 'UTC',
+            'YYYY-MM-DD"T"HH24:MI:SS.US"Z"'
+        )
+    ));
+    update public.omr_attempts
+       set payload = pg_catalog.jsonb_set(
+           pg_catalog.jsonb_set(payload, '{drawingsRef}', v_ref, true),
+           '{handwritingArchived}', 'true'::jsonb, true
+       )
+     where id = 'attempt_phasec-ticket-cutover';
+end
+$phase_c_pre008_seed$;
+
+set local role service_role;
+do $phase_c_legacy_handwriting$
+declare
+    v_asset_id text := 'asset_handwriting_'
+        || pg_catalog.md5('phasec-handwriting-replay-session')
+        || '_11111111-1111-4111-8111-111111111111';
+    v_retry_id text := 'asset_handwriting_'
+        || pg_catalog.md5('phasec-handwriting-replay-session')
+        || '_22222222-2222-4222-8222-222222222222';
+    v_expired_id text := 'asset_handwriting_'
+        || pg_catalog.md5('phasec-handwriting-expired-session')
+        || '_44444444-4444-4444-8444-444444444444';
+    v_cutover_id text := 'asset_handwriting_'
+        || pg_catalog.md5('phasec-handwriting-cutover-session')
+        || '_33333333-3333-4333-8333-333333333333';
+    v_prepared jsonb;
+    v_retried jsonb;
+    v_attached jsonb;
+    v_before_payload jsonb;
+    v_before_ctid tid;
+    v_after_ctid tid;
+    v_count bigint;
+begin
+    v_prepared := public.omr_prepare_attempt_handwriting_asset_v2(
+        'phasec-handwriting-replay-session', 'teacher_phasec01',
+        'phasec-student-replay', pg_catalog.jsonb_build_object(
+            'id', v_asset_id, 'organization_id', 'teacher_phasec01',
+            'kind', 'attempt_handwriting',
+            'attempt_id', 'attempt_phasec-ticket-replay',
+            'storage_bucket', 'omr-private-assets',
+            'object_path', 'organizations/teacher_phasec01/attempts/'
+                || 'attempt_phasec-ticket-replay/handwriting/' || v_asset_id || '.json',
+            'mime_type', 'application/json', 'byte_size', 19,
+            'sha256_hex', repeat('a', 64), 'original_name', 'replay.json'
+        )
+    );
+    if v_prepared ->> 'status' <> 'reserved'
+       or v_prepared ->> 'objectRequired' <> 'true'
+       or v_prepared #>> '{asset,id}' is distinct from v_asset_id
+       or v_prepared #>> '{asset,handwriting_reservation_source}' <> 'legacy'
+       or v_prepared #>> '{asset,handwriting_reservation_grant_id}' is not null
+       or (v_prepared #>> '{asset,handwriting_reservation_expires_at}')::timestamptz
+            > (v_prepared #>> '{asset,created_at}')::timestamptz + interval '15 minutes'
+    then
+        raise exception 'legacy handwriting reservation was not exact and 15-minute bounded: %',
+            v_prepared;
+    end if;
+
+    -- A response-loss retry may generate a fresh candidate UUID/path, but the
+    -- database replays the authoritative row when the semantic payload matches.
+    v_retried := public.omr_prepare_attempt_handwriting_asset_v2(
+        'phasec-handwriting-replay-session', 'teacher_phasec01',
+        'phasec-student-replay', pg_catalog.jsonb_build_object(
+            'id', v_retry_id, 'organization_id', 'teacher_phasec01',
+            'kind', 'attempt_handwriting',
+            'attempt_id', 'attempt_phasec-ticket-replay',
+            'storage_bucket', 'omr-private-assets',
+            'object_path', 'organizations/teacher_phasec01/attempts/'
+                || 'attempt_phasec-ticket-replay/handwriting/' || v_retry_id || '.json',
+            'mime_type', 'application/json', 'byte_size', 19,
+            'sha256_hex', repeat('a', 64), 'original_name', 'replay.json'
+        )
+    );
+    if v_retried ->> 'status' <> 'reserved'
+       or v_retried ->> 'objectRequired' <> 'false'
+       or v_retried #>> '{asset,id}' is distinct from v_asset_id then
+        raise exception 'semantic response-loss replay did not return stored reservation: %',
+            v_retried;
+    end if;
+
+    select pg_catalog.count(*) into v_count
+      from public.omr_remote_assets
+     where organization_id = 'teacher_phasec01'
+       and attempt_id = 'attempt_phasec-ticket-replay';
+    begin
+        perform public.omr_prepare_attempt_handwriting_asset_v2(
+            'phasec-handwriting-replay-session', 'teacher_phasec01',
+            'phasec-student-replay', pg_catalog.jsonb_build_object(
+                'id', v_retry_id, 'organization_id', 'teacher_phasec01',
+                'kind', 'attempt_handwriting',
+                'attempt_id', 'attempt_phasec-ticket-replay',
+                'storage_bucket', 'omr-private-assets',
+                'object_path', 'organizations/other/attempts/tampered.json',
+                'mime_type', 'application/json', 'byte_size', 19,
+                'sha256_hex', repeat('a', 64), 'original_name', 'replay.json'
+            )
+        );
+        raise exception 'tampered handwriting path unexpectedly passed';
+    exception when others then
+        if sqlerrm = 'tampered handwriting path unexpectedly passed' then raise; end if;
+    end;
+    begin
+        perform public.omr_prepare_attempt_handwriting_asset_v2(
+            'phasec-handwriting-replay-session', 'teacher_phasec01',
+            'phasec-student-expired', v_prepared -> 'asset'
+        );
+        raise exception 'wrong student ownership unexpectedly passed';
+    exception when others then
+        if sqlerrm = 'wrong student ownership unexpectedly passed' then raise; end if;
+    end;
+    begin
+        perform public.omr_prepare_attempt_handwriting_asset_v2(
+            'phasec-handwriting-replay-session', 'teacher_phasec99',
+            'phasec-student-replay', v_prepared -> 'asset'
+        );
+        raise exception 'wrong organization ownership unexpectedly passed';
+    exception when others then
+        if sqlerrm = 'wrong organization ownership unexpectedly passed' then raise; end if;
+    end;
+    if (select pg_catalog.count(*) from public.omr_remote_assets
+         where organization_id = 'teacher_phasec01'
+           and attempt_id = 'attempt_phasec-ticket-replay') <> v_count then
+        raise exception 'malformed or wrong-owner denial mutated handwriting metadata';
+    end if;
+
+    begin
+        perform public.omr_attach_attempt_handwriting_v2(
+            'phasec-handwriting-replay-session', 'teacher_phasec01',
+            'phasec-student-expired', 'phasec-ticket-replay', v_asset_id
+        );
+        raise exception 'wrong attachment owner unexpectedly passed';
+    exception when others then
+        if sqlerrm = 'wrong attachment owner unexpectedly passed' then raise; end if;
+    end;
+    v_attached := public.omr_attach_attempt_handwriting_v2(
+        'phasec-handwriting-replay-session', 'teacher_phasec01',
+        'phasec-student-replay', 'phasec-ticket-replay', v_asset_id
+    );
+    if v_attached #>> '{drawingsRef,key}' is distinct from v_asset_id
+       or v_attached ->> 'handwritingArchived' <> 'true'
+       or v_attached ->> 'handwritingPlan' <> 'pro' then
+        raise exception 'legacy handwriting attachment was not canonical: %', v_attached;
+    end if;
+
+    v_prepared := public.omr_prepare_attempt_handwriting_asset_v2(
+        'phasec-handwriting-expired-session', 'teacher_phasec01',
+        'phasec-student-expired', pg_catalog.jsonb_build_object(
+            'id', v_expired_id, 'organization_id', 'teacher_phasec01',
+            'kind', 'attempt_handwriting',
+            'attempt_id', 'attempt_phasec-ticket-expired',
+            'storage_bucket', 'omr-private-assets',
+            'object_path', 'organizations/teacher_phasec01/attempts/'
+                || 'attempt_phasec-ticket-expired/handwriting/' || v_expired_id || '.json',
+            'mime_type', 'application/json', 'byte_size', 23,
+            'sha256_hex', repeat('b', 64), 'original_name', 'expired.json'
+        )
+    );
+    if v_prepared #>> '{asset,id}' is distinct from v_expired_id then
+        raise exception 'expired cleanup seed reservation failed';
+    end if;
+
+    -- The exact pre-008 attached row has no reservation authorization columns,
+    -- yet canonical replay is read-only and must remain available.
+    v_prepared := public.omr_prepare_attempt_handwriting_asset_v2(
+        'phasec-handwriting-cutover-session', 'teacher_phasec01',
+        'phasec-student-cutover', pg_catalog.jsonb_build_object(
+            'id', v_cutover_id, 'organization_id', 'teacher_phasec01',
+            'kind', 'attempt_handwriting',
+            'attempt_id', 'attempt_phasec-ticket-cutover',
+            'storage_bucket', 'omr-private-assets',
+            'object_path', 'organizations/teacher_phasec01/attempts/'
+                || 'attempt_phasec-ticket-cutover/handwriting/' || v_cutover_id || '.json',
+            'mime_type', 'application/json', 'byte_size', 17,
+            'sha256_hex', repeat('c', 64), 'original_name', 'cutover.json'
+        )
+    );
+    if v_prepared ->> 'status' <> 'attached'
+       or v_prepared ->> 'objectRequired' <> 'false'
+       or v_prepared #>> '{drawingsRef,key}' is distinct from v_cutover_id then
+        raise exception 'pre-008 canonical attachment did not replay: %', v_prepared;
+    end if;
+
+    select payload, ctid into v_before_payload, v_before_ctid
+      from public.omr_attempts where id = 'attempt_phasec-ticket-replay';
+end
+$phase_c_legacy_handwriting$;
+reset role;
+
+-- Force the unattached reservation beyond its 15-minute authorization and
+-- downgrade the workspace. Attached exact replay must still be a no-op.
+update public.omr_remote_assets
+   set created_at = pg_catalog.clock_timestamp() - interval '16 minutes',
+       handwriting_reservation_expires_at = pg_catalog.clock_timestamp() - interval '2 minutes'
+ where attempt_id in (
+     'attempt_phasec-ticket-replay',
+     'attempt_phasec-ticket-expired'
+ );
+update public.omr_organizations set plan = 'free' where id = 'teacher_phasec01';
+set local role service_role;
+do $phase_c_legacy_expiry$
+declare
+    v_asset_id text := 'asset_handwriting_'
+        || pg_catalog.md5('phasec-handwriting-replay-session')
+        || '_11111111-1111-4111-8111-111111111111';
+    v_expired_id text := 'asset_handwriting_'
+        || pg_catalog.md5('phasec-handwriting-expired-session')
+        || '_44444444-4444-4444-8444-444444444444';
+    v_fresh_id text := 'asset_handwriting_'
+        || pg_catalog.md5('phasec-handwriting-expired-session')
+        || '_55555555-5555-4555-8555-555555555555';
+    v_before_payload jsonb;
+    v_after_payload jsonb;
+    v_before_ctid tid;
+    v_after_ctid tid;
+    v_claimed jsonb;
+    v_cleanup_id text;
+begin
+    select payload, ctid into v_before_payload, v_before_ctid
+      from public.omr_attempts where id = 'attempt_phasec-ticket-replay';
+    v_after_payload := public.omr_attach_attempt_handwriting_v2(
+        'phasec-handwriting-replay-session', 'teacher_phasec01',
+        'phasec-student-replay', 'phasec-ticket-replay', v_asset_id
+    );
+    select ctid into v_after_ctid
+      from public.omr_attempts where id = 'attempt_phasec-ticket-replay';
+    if v_after_payload is distinct from v_before_payload
+       or v_after_ctid is distinct from v_before_ctid then
+        raise exception 'attached handwriting replay after downgrade mutated the attempt';
+    end if;
+
+    v_claimed := public.omr_claim_remote_asset_cleanup_v1(
+        'phase-c-expired-handwriting-worker', 100, 60
+    );
+    select item ->> 'id' into v_cleanup_id
+      from pg_catalog.jsonb_array_elements(v_claimed) item
+     where item ->> 'object_path' like '%/' || v_expired_id || '.json';
+    if v_cleanup_id is null
+       or exists (select 1 from public.omr_remote_assets where id = v_expired_id)
+       or not exists (
+           select 1 from public.omr_remote_asset_cleanup_queue
+            where id::text = v_cleanup_id and source_id = v_expired_id
+              and status = 'leased'
+       ) then
+        raise exception 'expired unattached handwriting was not deleted into leased outbox: %',
+            v_claimed;
+    end if;
+    begin
+        perform public.omr_prepare_attempt_handwriting_asset_v2(
+            'phasec-handwriting-expired-session', 'teacher_phasec01',
+            'phasec-student-expired', pg_catalog.jsonb_build_object(
+                'id', v_fresh_id, 'organization_id', 'teacher_phasec01',
+                'kind', 'attempt_handwriting',
+                'attempt_id', 'attempt_phasec-ticket-expired',
+                'storage_bucket', 'omr-private-assets',
+                'object_path', 'organizations/teacher_phasec01/attempts/'
+                    || 'attempt_phasec-ticket-expired/handwriting/' || v_fresh_id || '.json',
+                'mime_type', 'application/json', 'byte_size', 23,
+                'sha256_hex', repeat('d', 64), 'original_name', 'fresh.json'
+            )
+        );
+        raise exception 'free workspace unexpectedly minted replacement handwriting capability';
+    exception when others then
+        if sqlerrm = 'free workspace unexpectedly minted replacement handwriting capability' then
+            raise;
+        end if;
+    end;
+    if exists (select 1 from public.omr_remote_assets where id = v_fresh_id) then
+        raise exception 'denied replacement handwriting prepare mutated metadata';
+    end if;
+end
+$phase_c_legacy_expiry$;
+reset role;
+rollback;
+
+-- A provisioned pilot reservation is bound to the exact active grant. A later
+-- grant may authorize a fresh generation only after the superseded unattached
+-- generation has been deleted into the cleanup outbox.
+begin;
+insert into public.omr_organizations (id, name, plan, metadata)
+values (
+    'pilot_org_222222222222222222222222', 'Phase C Pilot School',
+    'free', '{}'::jsonb
+);
+insert into public.omr_teacher_accounts (
+    id, email, display_name, password_hash, status, email_verified_at,
+    session_generation
+) values (
+    'teacher_2222222222222222', 'phase-c-pilot@example.test',
+    'Phase C Pilot Teacher',
+    'pbkdf2-sha256:120000:0123456789abcdef0123456789abcdef:' || repeat('2', 64),
+    'active', pg_catalog.now(), 9
+);
+insert into public.omr_organization_members (
+    organization_id, user_id, email, display_name, role, status
+) values (
+    'pilot_org_222222222222222222222222', 'teacher_2222222222222222',
+    'phase-c-pilot@example.test', 'Phase C Pilot Teacher', 'owner', 'active'
+);
+insert into public.omr_teacher_profiles (
+    organization_id, user_id, display_name, status
+) values (
+    'pilot_org_222222222222222222222222', 'teacher_2222222222222222',
+    'Phase C Pilot Teacher', 'active'
+);
+insert into public.omr_pilot_plan_grants (
+    id, idempotency_key_hash, request_hash, organization_id, account_id,
+    plan, expires_at, state
+) values (
+    'pilot_grant_222222222222222222222222', repeat('2', 64), repeat('3', 64),
+    'pilot_org_222222222222222222222222', 'teacher_2222222222222222',
+    'academy', pg_catalog.clock_timestamp() + interval '1 day', 'active'
+);
+insert into public.omr_exams (
+    id, organization_id, title, payload, created_by_user_id,
+    created_at, updated_at, archived
+) values (
+    'phasec-pilot-handwriting-exam', 'pilot_org_222222222222222222222222',
+    'Phase C Pilot Handwriting',
+    '{"id":"phasec-pilot-handwriting-exam","questions":[{"id":1}]}'::jsonb,
+    'teacher_2222222222222222', pg_catalog.now(), pg_catalog.now(), false
+);
+insert into public.omr_student_profiles (
+    id, organization_id, display_name, status
+) values
+    ('phasec-pilot-student-attached', 'pilot_org_222222222222222222222222',
+     'Pilot Attached Student', 'active'),
+    ('phasec-pilot-student-cleanup', 'pilot_org_222222222222222222222222',
+     'Pilot Cleanup Student', 'active');
+insert into public.omr_attempts (
+    id, ticket_id, organization_id, exam_id, student_name, student_id,
+    identity_type, status, payload, started_at, finished_at
+) values
+    ('attempt_phasec-pilot-attached-ticket', 'phasec-pilot-attached-ticket',
+     'pilot_org_222222222222222222222222', 'phasec-pilot-handwriting-exam',
+     'Pilot Attached Student', 'phasec-pilot-student-attached', 'registered',
+     'completed', '{"id":"attempt_phasec-pilot-attached-ticket"}'::jsonb,
+     pg_catalog.now() - interval '10 minutes', pg_catalog.now()),
+    ('attempt_phasec-pilot-cleanup-ticket', 'phasec-pilot-cleanup-ticket',
+     'pilot_org_222222222222222222222222', 'phasec-pilot-handwriting-exam',
+     'Pilot Cleanup Student', 'phasec-pilot-student-cleanup', 'registered',
+     'completed', '{"id":"attempt_phasec-pilot-cleanup-ticket"}'::jsonb,
+     pg_catalog.now() - interval '10 minutes', pg_catalog.now());
+insert into public.omr_attempt_sessions (
+    id, organization_id, exam_id, owner_student_id, student_name,
+    identity_type, scope_key, submission_id, attempt_id,
+    allowed_question_ids, grading_snapshot, status, started_at, deadline_at,
+    last_heartbeat_at, lease_token_hash, lease_expires_at,
+    submitted_attempt_id, submitted_at
+) values
+    ('phasec-pilot-attached-session', 'pilot_org_222222222222222222222222',
+     'phasec-pilot-handwriting-exam', 'phasec-pilot-student-attached',
+     'Pilot Attached Student', 'registered', 'base',
+     'phasec-pilot-attached-ticket', 'attempt_phasec-pilot-attached-ticket',
+     array[1], '{"questions":[{"id":1}]}'::jsonb, 'submitted',
+     pg_catalog.now() - interval '10 minutes', pg_catalog.now() + interval '1 hour',
+     pg_catalog.now(), 'phasec-pilot-attached-finished', pg_catalog.now(),
+     'attempt_phasec-pilot-attached-ticket', pg_catalog.now()),
+    ('phasec-pilot-cleanup-session', 'pilot_org_222222222222222222222222',
+     'phasec-pilot-handwriting-exam', 'phasec-pilot-student-cleanup',
+     'Pilot Cleanup Student', 'registered', 'base',
+     'phasec-pilot-cleanup-ticket', 'attempt_phasec-pilot-cleanup-ticket',
+     array[1], '{"questions":[{"id":1}]}'::jsonb, 'submitted',
+     pg_catalog.now() - interval '10 minutes', pg_catalog.now() + interval '1 hour',
+     pg_catalog.now(), 'phasec-pilot-cleanup-finished', pg_catalog.now(),
+     'attempt_phasec-pilot-cleanup-ticket', pg_catalog.now());
+
+set local role service_role;
+do $phase_c_pilot_handwriting$
+declare
+    v_attached_id text := 'asset_handwriting_'
+        || pg_catalog.md5('phasec-pilot-attached-session')
+        || '_66666666-6666-4666-8666-666666666666';
+    v_cleanup_id text := 'asset_handwriting_'
+        || pg_catalog.md5('phasec-pilot-cleanup-session')
+        || '_77777777-7777-4777-8777-777777777777';
+    v_prepared jsonb;
+    v_attached jsonb;
+begin
+    v_prepared := public.omr_prepare_attempt_handwriting_asset_v2(
+        'phasec-pilot-attached-session', 'pilot_org_222222222222222222222222',
+        'phasec-pilot-student-attached', pg_catalog.jsonb_build_object(
+            'id', v_attached_id,
+            'organization_id', 'pilot_org_222222222222222222222222',
+            'kind', 'attempt_handwriting',
+            'attempt_id', 'attempt_phasec-pilot-attached-ticket',
+            'storage_bucket', 'omr-private-assets',
+            'object_path', 'organizations/pilot_org_222222222222222222222222/attempts/'
+                || 'attempt_phasec-pilot-attached-ticket/handwriting/'
+                || v_attached_id || '.json',
+            'mime_type', 'application/json', 'byte_size', 29,
+            'sha256_hex', repeat('6', 64), 'original_name', 'pilot-attached.json'
+        )
+    );
+    if v_prepared #>> '{asset,handwriting_reservation_source}' <> 'pilot'
+       or v_prepared #>> '{asset,handwriting_reservation_grant_id}'
+            <> 'pilot_grant_222222222222222222222222'
+       or (v_prepared #>> '{asset,handwriting_reservation_expires_at}')::timestamptz
+            > (v_prepared #>> '{asset,created_at}')::timestamptz + interval '15 minutes' then
+        raise exception 'pilot handwriting reservation was not grant/15-minute bounded: %',
+            v_prepared;
+    end if;
+    v_attached := public.omr_attach_attempt_handwriting_v2(
+        'phasec-pilot-attached-session', 'pilot_org_222222222222222222222222',
+        'phasec-pilot-student-attached', 'phasec-pilot-attached-ticket', v_attached_id
+    );
+    if v_attached #>> '{drawingsRef,key}' is distinct from v_attached_id
+       or v_attached ->> 'handwritingPlan' <> 'academy' then
+        raise exception 'pilot handwriting attachment was not canonical: %', v_attached;
+    end if;
+
+    v_prepared := public.omr_prepare_attempt_handwriting_asset_v2(
+        'phasec-pilot-cleanup-session', 'pilot_org_222222222222222222222222',
+        'phasec-pilot-student-cleanup', pg_catalog.jsonb_build_object(
+            'id', v_cleanup_id,
+            'organization_id', 'pilot_org_222222222222222222222222',
+            'kind', 'attempt_handwriting',
+            'attempt_id', 'attempt_phasec-pilot-cleanup-ticket',
+            'storage_bucket', 'omr-private-assets',
+            'object_path', 'organizations/pilot_org_222222222222222222222222/attempts/'
+                || 'attempt_phasec-pilot-cleanup-ticket/handwriting/'
+                || v_cleanup_id || '.json',
+            'mime_type', 'application/json', 'byte_size', 31,
+            'sha256_hex', repeat('7', 64), 'original_name', 'pilot-cleanup.json'
+        )
+    );
+    if v_prepared #>> '{asset,handwriting_reservation_grant_id}'
+            <> 'pilot_grant_222222222222222222222222' then
+        raise exception 'pilot cleanup reservation lost its exact grant';
+    end if;
+end
+$phase_c_pilot_handwriting$;
+reset role;
+
+update public.omr_pilot_plan_grants
+   set state = 'superseded', superseded_at = pg_catalog.clock_timestamp(),
+       updated_at = pg_catalog.clock_timestamp()
+ where id = 'pilot_grant_222222222222222222222222';
+insert into public.omr_pilot_plan_grants (
+    id, idempotency_key_hash, request_hash, organization_id, account_id,
+    plan, expires_at, state
+) values (
+    'pilot_grant_333333333333333333333333', repeat('4', 64), repeat('5', 64),
+    'pilot_org_222222222222222222222222', 'teacher_2222222222222222',
+    'pro', pg_catalog.clock_timestamp() + interval '5 minutes', 'active'
+);
+select pg_catalog.set_config(
+    'omr.phase_c_test_replacement_grant_expiry', expires_at::text, true
+)
+  from public.omr_pilot_plan_grants
+ where id = 'pilot_grant_333333333333333333333333';
+
+set local role service_role;
+do $phase_c_pilot_replacement$
+declare
+    v_old_id text := 'asset_handwriting_'
+        || pg_catalog.md5('phasec-pilot-cleanup-session')
+        || '_77777777-7777-4777-8777-777777777777';
+    v_fresh_id text := 'asset_handwriting_'
+        || pg_catalog.md5('phasec-pilot-cleanup-session')
+        || '_88888888-8888-4888-8888-888888888888';
+    v_claimed jsonb;
+    v_cleanup_id text;
+    v_prepared jsonb;
+begin
+    v_claimed := public.omr_claim_remote_asset_cleanup_v1(
+        'phase-c-superseded-handwriting-worker', 100, 60
+    );
+    select item ->> 'id' into v_cleanup_id
+      from pg_catalog.jsonb_array_elements(v_claimed) item
+     where item ->> 'object_path' like '%/' || v_old_id || '.json';
+    if v_cleanup_id is null
+       or exists (select 1 from public.omr_remote_assets where id = v_old_id) then
+        raise exception 'superseded unattached handwriting was not deleted/outboxed: %',
+            v_claimed;
+    end if;
+    v_prepared := public.omr_prepare_attempt_handwriting_asset_v2(
+        'phasec-pilot-cleanup-session', 'pilot_org_222222222222222222222222',
+        'phasec-pilot-student-cleanup', pg_catalog.jsonb_build_object(
+            'id', v_fresh_id,
+            'organization_id', 'pilot_org_222222222222222222222222',
+            'kind', 'attempt_handwriting',
+            'attempt_id', 'attempt_phasec-pilot-cleanup-ticket',
+            'storage_bucket', 'omr-private-assets',
+            'object_path', 'organizations/pilot_org_222222222222222222222222/attempts/'
+                || 'attempt_phasec-pilot-cleanup-ticket/handwriting/'
+                || v_fresh_id || '.json',
+            'mime_type', 'application/json', 'byte_size', 31,
+            'sha256_hex', repeat('8', 64), 'original_name', 'pilot-fresh.json'
+        )
+    );
+    if v_prepared ->> 'objectRequired' <> 'true'
+       or v_prepared #>> '{asset,id}' is distinct from v_fresh_id
+       or v_prepared #>> '{asset,handwriting_reservation_grant_id}'
+            <> 'pilot_grant_333333333333333333333333'
+       or (v_prepared #>> '{asset,handwriting_reservation_expires_at}')::timestamptz
+            > pg_catalog.current_setting(
+                'omr.phase_c_test_replacement_grant_expiry'
+            )::timestamptz then
+        raise exception 'fresh replacement grant did not mint a fresh reservation: %',
+            v_prepared;
+    end if;
+end
+$phase_c_pilot_replacement$;
+reset role;
+rollback;
+
+-- Phase C plan usage v2 derives plan, limits, observed counts and the current
+-- Korean calendar period inside PostgreSQL. Callers supply only exact session
+-- identity plus a constrained metric/resource key.
+begin;
+insert into public.omr_organizations (id, name, plan, metadata)
+values ('teacher_phasec03', 'Phase C Usage School', 'pro', '{}'::jsonb);
+insert into public.omr_teacher_accounts (
+    id, email, display_name, password_hash, status, email_verified_at,
+    session_generation
+) values (
+    'teacher_3333333333333333', 'phase-c-usage@example.test',
+    'Phase C Usage Teacher',
+    'pbkdf2-sha256:120000:0123456789abcdef0123456789abcdef:' || repeat('3', 64),
+    'active', pg_catalog.now(), 5
+);
+insert into public.omr_organization_members (
+    organization_id, user_id, email, display_name, role, status
+) values (
+    'teacher_phasec03', 'teacher_phasec03', 'phase-c-usage@example.test',
+    'Phase C Usage Teacher', 'owner', 'active'
+);
+insert into public.omr_teacher_profiles (
+    organization_id, user_id, display_name, status
+) values (
+    'teacher_phasec03', 'teacher_phasec03', 'Phase C Usage Teacher', 'active'
+);
+
+-- Pro creates a provisional paid-era exam reservation with a renewable lease.
+set local role service_role;
+do $phase_c_usage_paid_seed$
+declare
+    v_result jsonb;
+begin
+    v_result := public.omr_reserve_plan_usage_v2(
+        'legacy_account', 'teacher_3333333333333333', 5,
+        'teacher_phasec03', 'teacher_phasec03', 'exams',
+        'exam:phasec-paid-era-provisional'
+    );
+    if v_result ->> 'allowed' <> 'true'
+       or v_result ->> 'idempotent' <> 'false'
+       or not exists (
+           select 1 from public.omr_plan_usage_reservations
+            where organization_id = 'teacher_phasec03'
+              and metric = 'exams'
+              and resource_key = 'exam:phasec-paid-era-provisional'
+              and expires_at > pg_catalog.clock_timestamp()
+       ) then
+        raise exception 'pro paid-era reservation seed failed: %', v_result;
+    end if;
+end
+$phase_c_usage_paid_seed$;
+reset role;
+
+-- Downgrade with aggregate usage already over the free limit. The historical
+-- reservation is not a receipt and its lease must not be renewed.
+update public.omr_organizations set plan = 'free' where id = 'teacher_phasec03';
+insert into public.omr_plan_usage (
+    organization_id, metric, period_start, used, updated_at
+) values (
+    'teacher_phasec03', 'exams',
+    pg_catalog.date_trunc(
+        'month', pg_catalog.clock_timestamp() at time zone 'Asia/Seoul'
+    )::date,
+    6, pg_catalog.now()
+) on conflict (organization_id, metric, period_start)
+do update set used = 6, updated_at = excluded.updated_at;
+insert into public.omr_plan_usage (
+    organization_id, metric, period_start, used, updated_at
+) values (
+    'teacher_phasec03', 'aiRecognition',
+    pg_catalog.date_trunc(
+        'month', pg_catalog.clock_timestamp() at time zone 'Asia/Seoul'
+    )::date,
+    100, pg_catalog.now()
+) on conflict (organization_id, metric, period_start)
+do update set used = 100, updated_at = excluded.updated_at;
+
+set local role service_role;
+do $phase_c_usage_free$
+declare
+    v_result jsonb;
+    v_expiry_before timestamptz;
+    v_expiry_after timestamptz;
+begin
+    select expires_at into v_expiry_before
+      from public.omr_plan_usage_reservations
+     where organization_id = 'teacher_phasec03'
+       and metric = 'exams'
+       and resource_key = 'exam:phasec-paid-era-provisional';
+    v_result := public.omr_reserve_plan_usage_v2(
+        'legacy_account', 'teacher_3333333333333333', 5,
+        'teacher_phasec03', 'teacher_phasec03', 'exams',
+        'exam:phasec-paid-era-provisional'
+    );
+    select expires_at into v_expiry_after
+      from public.omr_plan_usage_reservations
+     where organization_id = 'teacher_phasec03'
+       and metric = 'exams'
+       and resource_key = 'exam:phasec-paid-era-provisional';
+    if v_result ->> 'allowed' <> 'false'
+       or v_result ->> 'idempotent' <> 'true'
+       or v_expiry_after is distinct from v_expiry_before then
+        raise exception 'free over-limit retry renewed paid-era lease: %, before=%, after=%',
+            v_result, v_expiry_before, v_expiry_after;
+    end if;
+
+    v_result := public.omr_reserve_plan_usage_v2(
+        'legacy_account', 'teacher_3333333333333333', 5,
+        'teacher_phasec03', 'teacher_phasec03', 'exams',
+        'exam:phasec-free-sixth'
+    );
+    if v_result ->> 'allowed' <> 'false' or v_result ->> 'used' <> '6' then
+        raise exception 'free exam limit was not database-derived: %', v_result;
+    end if;
+    v_result := public.omr_reserve_plan_usage_v2(
+        'legacy_account', 'teacher_3333333333333333', 5,
+        'teacher_phasec03', 'teacher_phasec03', 'aiRecognition',
+        'ai:10000000-0000-4000-8000-000000000001'
+    );
+    if v_result ->> 'allowed' <> 'false' or v_result ->> 'used' <> '100' then
+        raise exception 'free AI limit was not database-derived: %', v_result;
+    end if;
+end
+$phase_c_usage_free$;
+reset role;
+
+-- Pro retains its 5,000 AI boundary while exam creation is unlimited.
+update public.omr_organizations set plan = 'pro' where id = 'teacher_phasec03';
+update public.omr_plan_usage set used = 5000, updated_at = pg_catalog.now()
+ where organization_id = 'teacher_phasec03' and metric = 'aiRecognition';
+set local role service_role;
+do $phase_c_usage_pro$
+declare
+    v_result jsonb;
+begin
+    v_result := public.omr_reserve_plan_usage_v2(
+        'legacy_account', 'teacher_3333333333333333', 5,
+        'teacher_phasec03', 'teacher_phasec03', 'aiRecognition',
+        'ai:20000000-0000-4000-8000-000000000002'
+    );
+    if v_result ->> 'allowed' <> 'false' or v_result ->> 'used' <> '5000' then
+        raise exception 'pro AI limit was not database-derived: %', v_result;
+    end if;
+    v_result := public.omr_reserve_plan_usage_v2(
+        'legacy_account', 'teacher_3333333333333333', 5,
+        'teacher_phasec03', 'teacher_phasec03', 'exams',
+        'exam:phasec-pro-unlimited'
+    );
+    if v_result ->> 'allowed' <> 'true' then
+        raise exception 'pro exam reservation was unexpectedly limited: %', v_result;
+    end if;
+end
+$phase_c_usage_pro$;
+reset role;
+
+-- Academy has no AI cap at the initial-operations scale.
+update public.omr_organizations set plan = 'academy' where id = 'teacher_phasec03';
+set local role service_role;
+do $phase_c_usage_academy$
+declare
+    v_result jsonb;
+begin
+    v_result := public.omr_reserve_plan_usage_v2(
+        'legacy_account', 'teacher_3333333333333333', 5,
+        'teacher_phasec03', 'teacher_phasec03', 'aiRecognition',
+        'ai:30000000-0000-4000-8000-000000000003'
+    );
+    if v_result ->> 'allowed' <> 'true' or v_result ->> 'used' <> '5001' then
+        raise exception 'academy AI reservation was unexpectedly limited: %', v_result;
+    end if;
+end
+$phase_c_usage_academy$;
+reset role;
+
+-- Canonical exam release is refused, while a provisional reservation remains
+-- releasable even when it was created in a previous Korean calendar month.
+insert into public.omr_plan_usage (
+    organization_id, metric, period_start, used, updated_at
+) values (
+    'teacher_phasec03', 'exams',
+    pg_catalog.date_trunc(
+        'month', pg_catalog.clock_timestamp() at time zone 'Asia/Seoul'
+    )::date,
+    8, pg_catalog.now()
+) on conflict (organization_id, metric, period_start)
+do update set used = 8, updated_at = excluded.updated_at;
+insert into public.omr_plan_usage_reservations (
+    organization_id, metric, period_start, resource_key, amount, expires_at
+) values (
+    'teacher_phasec03', 'exams',
+    pg_catalog.date_trunc(
+        'month', pg_catalog.clock_timestamp() at time zone 'Asia/Seoul'
+    )::date,
+    'exam:phasec-canonical-exam', 1, pg_catalog.now() + interval '2 hours'
+);
+insert into public.omr_exams (
+    id, organization_id, title, payload, created_by_user_id,
+    created_at, updated_at, archived
+) values (
+    'phasec-canonical-exam', 'teacher_phasec03', 'Canonical Usage Exam',
+    '{"id":"phasec-canonical-exam"}'::jsonb, 'teacher_phasec03',
+    pg_catalog.now(), pg_catalog.now(), false
+);
+insert into public.omr_plan_usage (
+    organization_id, metric, period_start, used, updated_at
+) values (
+    'teacher_phasec03', 'exams',
+    (pg_catalog.date_trunc(
+        'month', pg_catalog.clock_timestamp() at time zone 'Asia/Seoul'
+    )::date - interval '1 month')::date,
+    1, pg_catalog.now()
+);
+insert into public.omr_plan_usage_reservations (
+    organization_id, metric, period_start, resource_key, amount, expires_at
+) values (
+    'teacher_phasec03', 'exams',
+    (pg_catalog.date_trunc(
+        'month', pg_catalog.clock_timestamp() at time zone 'Asia/Seoul'
+    )::date - interval '1 month')::date,
+    'exam:phasec-cross-month-provisional', 1, pg_catalog.now() + interval '2 hours'
+);
+
+set local role service_role;
+do $phase_c_usage_release$
+declare
+    v_result jsonb;
+begin
+    v_result := public.omr_release_plan_usage_v2(
+        'legacy_account', 'teacher_3333333333333333', 5,
+        'teacher_phasec03', 'teacher_phasec03', 'exams',
+        'exam:phasec-canonical-exam'
+    );
+    if v_result ->> 'released' <> 'false'
+       or v_result ->> 'used' <> '8'
+       or (select used from public.omr_plan_usage
+            where organization_id = 'teacher_phasec03'
+              and metric = 'exams'
+              and period_start = pg_catalog.date_trunc(
+                  'month', pg_catalog.clock_timestamp() at time zone 'Asia/Seoul'
+              )::date) <> 8
+       or not exists (
+           select 1 from public.omr_plan_usage_reservations
+            where organization_id = 'teacher_phasec03'
+              and resource_key = 'exam:phasec-canonical-exam'
+              and expires_at is null
+       ) then
+        raise exception 'canonical exam usage was released: %', v_result;
+    end if;
+    v_result := public.omr_release_plan_usage_v2(
+        'legacy_account', 'teacher_3333333333333333', 5,
+        'teacher_phasec03', 'teacher_phasec03', 'exams',
+        'exam:phasec-cross-month-provisional'
+    );
+    if v_result ->> 'released' <> 'true'
+       or v_result ->> 'used' <> '0'
+       or (select used from public.omr_plan_usage
+            where organization_id = 'teacher_phasec03'
+              and metric = 'exams'
+              and period_start = (
+                  pg_catalog.date_trunc(
+                      'month', pg_catalog.clock_timestamp() at time zone 'Asia/Seoul'
+                  )::date - interval '1 month'
+              )::date) <> 0
+       or exists (
+           select 1 from public.omr_plan_usage_reservations
+            where organization_id = 'teacher_phasec03'
+              and resource_key = 'exam:phasec-cross-month-provisional'
+       ) then
+        raise exception 'cross-month provisional usage was not released: %', v_result;
+    end if;
+end
+$phase_c_usage_release$;
+reset role;
+
+-- Synchronization derives all 31 authoritative student ids, persists the true
+-- ledger floor, and reports the free limit failure without trusting a count.
+update public.omr_organizations set plan = 'free' where id = 'teacher_phasec03';
+insert into public.omr_student_profiles (
+    id, organization_id, display_name, status
+)
+select 'phasec-usage-student-' || pg_catalog.lpad(item::text, 2, '0'),
+       'teacher_phasec03', 'Usage Student ' || item, 'active'
+  from pg_catalog.generate_series(1, 31) item;
+set local role service_role;
+do $phase_c_usage_students$
+declare
+    v_result jsonb;
+begin
+    v_result := public.omr_sync_student_plan_usage_v2(
+        'legacy_account', 'teacher_3333333333333333', 5,
+        'teacher_phasec03', 'teacher_phasec03'
+    );
+    if v_result ->> 'allowed' <> 'false'
+       or v_result ->> 'used' <> '31'
+       or (select used from public.omr_plan_usage
+            where organization_id = 'teacher_phasec03'
+              and metric = 'students' and period_start = date '1970-01-01') <> 31
+       or (select pg_catalog.count(*) from public.omr_plan_usage_reservations
+            where organization_id = 'teacher_phasec03'
+              and metric = 'students' and period_start = date '1970-01-01') <> 31 then
+        raise exception '31-student authoritative synchronization failed: %', v_result;
+    end if;
+end
+$phase_c_usage_students$;
+reset role;
+
+-- Add immutable pilot-ledger provenance only after legitimate legacy cases.
+-- The same account can no longer be presented through the legacy authority.
+insert into public.omr_pilot_plan_grants (
+    id, idempotency_key_hash, request_hash, organization_id, account_id,
+    plan, expires_at, state, superseded_at
+) values (
+    'pilot_grant_444444444444444444444444', repeat('9', 64), repeat('a', 64),
+    'teacher_phasec03', 'teacher_3333333333333333', 'pro',
+    pg_catalog.clock_timestamp() + interval '1 day', 'superseded',
+    pg_catalog.clock_timestamp()
+);
+
+set local role service_role;
+do $phase_c_usage_denials$
+declare
+    v_before jsonb;
+    v_after jsonb;
+begin
+    v_before := pg_catalog.jsonb_build_object(
+        'usage', (select pg_catalog.count(*) from public.omr_plan_usage
+                   where organization_id = 'teacher_phasec03'),
+        'reservations', (select pg_catalog.count(*) from public.omr_plan_usage_reservations
+                          where organization_id = 'teacher_phasec03'),
+        'sum', (select coalesce(pg_catalog.sum(used), 0) from public.omr_plan_usage
+                 where organization_id = 'teacher_phasec03')
+    );
+    begin
+        perform public.omr_reserve_plan_usage_v2(
+            'legacy_account', 'teacher_3333333333333333', 4,
+            'teacher_phasec03', 'teacher_phasec03', 'exams',
+            'exam:phasec-stale-generation'
+        );
+        raise exception 'stale generation unexpectedly reserved usage';
+    exception when others then
+        if sqlerrm = 'stale generation unexpectedly reserved usage' then raise; end if;
+    end;
+    begin
+        perform public.omr_reserve_plan_usage_v2(
+            'bootstrap', 'teacher_3333333333333333', 5,
+            'teacher_phasec03', 'teacher_phasec03', 'exams',
+            'exam:phasec-bootstrap-authority'
+        );
+        raise exception 'bootstrap authority unexpectedly reserved usage';
+    exception when others then
+        if sqlerrm = 'bootstrap authority unexpectedly reserved usage' then raise; end if;
+    end;
+    begin
+        perform public.omr_reserve_plan_usage_v2(
+            'legacy_account', 'teacher_3333333333333333', 5,
+            'teacher_phasec03', 'teacher_wrongactor', 'exams',
+            'exam:phasec-wrong-actor'
+        );
+        raise exception 'wrong actor unexpectedly reserved usage';
+    exception when others then
+        if sqlerrm = 'wrong actor unexpectedly reserved usage' then raise; end if;
+    end;
+    begin
+        perform public.omr_reserve_plan_usage_v2(
+            'legacy_account', 'teacher_3333333333333333', 5,
+            'teacher_phasec03', 'teacher_phasec03', 'exams',
+            'exam:phasec-pilot-as-legacy'
+        );
+        raise exception 'pilot-ledger account unexpectedly used legacy authority';
+    exception when others then
+        if sqlerrm = 'pilot-ledger account unexpectedly used legacy authority' then raise; end if;
+    end;
+    v_after := pg_catalog.jsonb_build_object(
+        'usage', (select pg_catalog.count(*) from public.omr_plan_usage
+                   where organization_id = 'teacher_phasec03'),
+        'reservations', (select pg_catalog.count(*) from public.omr_plan_usage_reservations
+                          where organization_id = 'teacher_phasec03'),
+        'sum', (select coalesce(pg_catalog.sum(used), 0) from public.omr_plan_usage
+                 where organization_id = 'teacher_phasec03')
+    );
+    if v_after is distinct from v_before then
+        raise exception 'unauthorized plan usage calls mutated ledger: before=%, after=%',
+            v_before, v_after;
+    end if;
+
+    begin
+        perform public.omr_reserve_plan_usage(
+            'teacher_phasec03', 'exams', current_date,
+            'exam:phasec-old-rpc', 1, 0, 5
+        );
+        raise exception 'old caller-trusting reserve RPC unexpectedly executed';
+    exception when insufficient_privilege then null;
+    end;
+    begin
+        update public.omr_plan_usage set used = 0
+         where organization_id = 'teacher_phasec03';
+        raise exception 'service_role directly updated plan usage';
+    exception when insufficient_privilege then null;
+    end;
+    begin
+        delete from public.omr_plan_usage_reservations
+         where organization_id = 'teacher_phasec03';
+        raise exception 'service_role directly deleted plan reservations';
+    exception when insufficient_privilege then null;
+    end;
+    begin
+        insert into public.omr_remote_assets (
+            id, organization_id, kind, attempt_id, storage_bucket, object_path,
+            mime_type, byte_size, sha256_hex
+        ) values (
+            'phasec-direct-asset', 'teacher_phasec03', 'attempt_handwriting',
+            'phasec-missing-attempt', 'omr-private-assets',
+            'organizations/teacher_phasec03/attempts/phasec-missing-attempt/handwriting/'
+                || 'phasec-direct-asset.json',
+            'application/json', 1, repeat('f', 64)
+        );
+        raise exception 'service_role directly inserted remote asset metadata';
+    exception when insufficient_privilege then null;
+    end;
+end
+$phase_c_usage_denials$;
+reset role;
+rollback;
 
 select 'OMR live PostgreSQL verification passed' as result;

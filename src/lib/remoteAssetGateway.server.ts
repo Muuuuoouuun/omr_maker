@@ -1,4 +1,3 @@
-import { createHash, randomUUID } from "node:crypto";
 import {
     REMOTE_ASSET_BUCKET,
     REMOTE_SIGNED_UPLOAD_TTL_SECONDS,
@@ -8,13 +7,12 @@ import {
     normalizeRemoteAssetSignedUrlTtl,
     remoteAssetPathBelongsToOrganization,
     remoteAssetRecordFromRow,
-    validateRemoteAssetUpload,
     validateTeacherRemoteAssetUploadDeclaration,
     type RemoteAssetKind,
     type RemoteAssetRecord,
-    type RemoteAssetUploadInput,
     type TeacherRemoteAssetUploadDeclaration,
 } from "@/lib/remoteAssetContract.server";
+import type { WorkspaceContext } from "@/lib/workspaceContext";
 
 interface GatewayResult<T> {
     data: T | null;
@@ -112,12 +110,9 @@ export type TeacherUploadPublicErrorCode =
     | "upload_reservation_required"
     | "upload_unavailable";
 
-export type RemoteAssetUploadResult =
-    | { status: "uploaded"; asset: RemoteAssetRecord }
-    | {
-        status: "invalid_asset" | "storage_unavailable" | "metadata_unavailable";
-        error?: string;
-    };
+type TeacherAssetMutationIdentity = Pick<WorkspaceContext,
+    "organizationId" | "actorUserId" | "accountId" | "accountSessionGeneration" | "sessionAuthority"
+>;
 
 export type RemoteAssetSignedUrlResult =
     | { status: "signed"; asset: RemoteAssetRecord; signedUrl: string; expiresIn: number }
@@ -176,25 +171,6 @@ function teacherUploadStorageUnavailable(): {
     return { errorCode: "upload_unavailable", error: "Teacher upload storage unavailable" };
 }
 
-function metadataRow(asset: RemoteAssetRecord): Record<string, unknown> {
-    return {
-        id: asset.id,
-        organization_id: asset.organizationId,
-        kind: asset.kind,
-        exam_id: asset.examId || null,
-        attempt_id: asset.attemptId || null,
-        storage_bucket: asset.bucket,
-        object_path: asset.objectPath,
-        mime_type: asset.mimeType,
-        byte_size: asset.byteSize,
-        sha256_hex: asset.sha256Hex,
-        original_name: asset.originalName || null,
-        created_by_user_id: asset.createdByUserId || null,
-        created_at: asset.createdAt,
-        updated_at: asset.updatedAt,
-    };
-}
-
 function addSeconds(iso: string, seconds: number): string | null {
     const value = new Date(iso);
     if (!Number.isFinite(value.getTime())) return null;
@@ -230,7 +206,7 @@ function storageObjectObservation(data: Record<string, unknown>): {
 export async function prepareTeacherRemoteAssetUploadWithGateway(
     client: RemoteAssetSupabaseGatewayClient,
     input: TeacherRemoteAssetUploadDeclaration,
-    options: { now?: string } = {},
+    options: { now?: string; identity?: TeacherAssetMutationIdentity } = {},
 ): Promise<TeacherRemoteAssetPrepareResult> {
     const validated = validateTeacherRemoteAssetUploadDeclaration(input);
     if (!validated.ok) return { status: "invalid_asset", error: validated.error };
@@ -255,7 +231,12 @@ export async function prepareTeacherRemoteAssetUploadWithGateway(
         original_name: validated.originalName || null,
         expires_at: expiresAt,
     };
-    const prepared = await client.rpc("omr_prepare_teacher_asset_upload_v1", {
+    const prepared = await client.rpc("omr_prepare_teacher_asset_upload_v2", {
+        p_session_authority: options.identity?.sessionAuthority || "",
+        p_account_id: clean(options.identity?.accountId),
+        p_session_generation: options.identity?.accountSessionGeneration || 0,
+        p_organization_id: validated.organizationId,
+        p_actor_user_id: validated.createdByUserId || "",
         p_upload: declaration,
     });
     if (prepared.error) {
@@ -284,6 +265,13 @@ export async function prepareTeacherRemoteAssetUploadWithGateway(
         || !["pending", "uploaded", "finalized"].includes(clean(preparedRow.status))
     ) {
         return { status: "metadata_unavailable", error: "Invalid authoritative upload intent" };
+    }
+    if (clean(preparedRow.status) === "finalized" && preparedRow.capabilityReplay === true) {
+        return {
+            status: "metadata_unavailable",
+            error: "Teacher upload is already finalized",
+            errorCode: "upload_request_conflict",
+        };
     }
 
     const bucket = client.storage.from(REMOTE_ASSET_BUCKET);
@@ -357,7 +345,7 @@ async function verifyBoundedPdfMagic(
 export async function finalizeTeacherRemoteAssetUploadWithGateway(
     client: RemoteAssetSupabaseGatewayClient,
     input: TeacherRemoteAssetFinalizeInput,
-    options: { now?: string; fetchImpl?: typeof fetch } = {},
+    options: { now?: string; fetchImpl?: typeof fetch; identity?: TeacherAssetMutationIdentity } = {},
 ): Promise<TeacherRemoteAssetFinalizeResult> {
     const organizationId = clean(input.organizationId);
     const uploadId = clean(input.uploadId);
@@ -384,10 +372,13 @@ export async function finalizeTeacherRemoteAssetUploadWithGateway(
     // Resolve the exact actor-bound intent before touching Storage. This
     // service-role-only DB boundary prevents the object metadata endpoint from
     // becoming a cross-actor existence oracle.
-    const authorized = await client.rpc("omr_authorize_teacher_asset_finalize_v1", {
+    const authorized = await client.rpc("omr_authorize_teacher_asset_finalize_v2", {
+        p_session_authority: options.identity?.sessionAuthority || "",
+        p_account_id: clean(options.identity?.accountId),
+        p_session_generation: options.identity?.accountSessionGeneration || 0,
         p_organization_id: organizationId,
         p_upload_id: uploadId,
-        p_created_by_user_id: clean(input.createdByUserId) || null,
+        p_actor_user_id: clean(input.createdByUserId),
         p_declaration: {
             exam_id: examId,
             kind: input.kind,
@@ -417,6 +408,12 @@ export async function finalizeTeacherRemoteAssetUploadWithGateway(
         || !["pending", "uploaded", "finalized"].includes(clean(authorizedRow.status))
     ) {
         return { status: "metadata_unavailable", ...teacherUploadScopeDenied() };
+    }
+    if (clean(authorizedRow.status) === "finalized" && authorizedRow.capabilityReplay === true) {
+        const replayed = remoteAssetRecordFromRow(authorizedRow);
+        return replayed
+            ? { status: "finalized", asset: replayed }
+            : { status: "metadata_unavailable", ...teacherUploadScopeDenied() };
     }
 
     let bucket: ReturnType<RemoteAssetSupabaseGatewayClient["storage"]["from"]>;
@@ -461,10 +458,13 @@ export async function finalizeTeacherRemoteAssetUploadWithGateway(
         return { status: "storage_unavailable", error: "Bounded PDF verification failed" };
     }
 
-    const finalized = await client.rpc("omr_finalize_teacher_asset_upload_v1", {
+    const finalized = await client.rpc("omr_finalize_teacher_asset_upload_v2", {
+        p_session_authority: options.identity?.sessionAuthority || "",
+        p_account_id: clean(options.identity?.accountId),
+        p_session_generation: options.identity?.accountSessionGeneration || 0,
         p_organization_id: organizationId,
         p_upload_id: uploadId,
-        p_created_by_user_id: clean(input.createdByUserId) || null,
+        p_actor_user_id: clean(input.createdByUserId),
         p_observation: {
             storage_bucket: REMOTE_ASSET_BUCKET,
             object_path: expectedPath,
@@ -499,63 +499,6 @@ export async function finalizeTeacherRemoteAssetUploadWithGateway(
         status: "finalized",
         asset: authoritativeAsset,
     };
-}
-
-export async function uploadRemoteAssetWithGateway(
-    client: RemoteAssetSupabaseGatewayClient,
-    input: RemoteAssetUploadInput,
-    options: { assetId?: string; now?: string } = {},
-): Promise<RemoteAssetUploadResult> {
-    const validated = validateRemoteAssetUpload(input);
-    if (!validated.ok) return { status: "invalid_asset", error: validated.error };
-
-    const assetId = clean(options.assetId) || `asset_${randomUUID()}`;
-    const objectPath = buildRemoteAssetObjectPath({
-        organizationId: validated.organizationId,
-        kind: validated.kind,
-        assetId,
-        examId: validated.examId,
-        attemptId: validated.attemptId,
-    });
-    if (!objectPath) return { status: "invalid_asset", error: "invalid_object_path" };
-
-    const now = clean(options.now) || new Date().toISOString();
-    const asset: RemoteAssetRecord = {
-        id: assetId,
-        organizationId: validated.organizationId,
-        kind: validated.kind,
-        ...(validated.examId ? { examId: validated.examId } : {}),
-        ...(validated.attemptId ? { attemptId: validated.attemptId } : {}),
-        bucket: REMOTE_ASSET_BUCKET,
-        objectPath,
-        mimeType: validated.mimeType,
-        byteSize: input.body.byteLength,
-        sha256Hex: createHash("sha256").update(input.body).digest("hex"),
-        originalName: validated.originalName,
-        createdByUserId: validated.createdByUserId,
-        createdAt: now,
-        updatedAt: now,
-    };
-
-    const bucket = client.storage.from(REMOTE_ASSET_BUCKET);
-    const upload = await bucket.upload(objectPath, input.body, {
-        contentType: asset.mimeType,
-        cacheControl: "300",
-        upsert: false,
-    });
-    if (upload.error) {
-        return { status: "storage_unavailable", error: errorMessage(upload.error, "Remote asset upload failed") };
-    }
-
-    const metadata = await client.rpc("omr_save_remote_asset_metadata_v1", {
-        p_asset: metadataRow(asset),
-    });
-    if (metadata.error) {
-        await bucket.remove([objectPath]).catch(() => undefined);
-        return { status: "metadata_unavailable", error: errorMessage(metadata.error, "Remote asset metadata save failed") };
-    }
-
-    return { status: "uploaded", asset };
 }
 
 async function loadScopedAssetResult(

@@ -18,9 +18,12 @@ const exam: Exam = {
 };
 
 const context = {
-    organizationId: "teacher_org1",
+    organizationId: "pilot_org_0123456789abcdef01234567",
     organizationName: "Teacher Org",
-    actorUserId: "teacher_user1",
+    actorUserId: "teacher_0123456789abcdef",
+    accountId: "teacher_0123456789abcdef",
+    accountSessionGeneration: 3,
+    sessionAuthority: "account" as const,
 };
 
 function savedResponse(params: Record<string, unknown>) {
@@ -66,7 +69,13 @@ describe("teacher canonical exam gateway", () => {
             status: "saved",
             exam: { revision: 4, updatedAt: "2026-08-06T01:02:03.000Z" },
         });
-        expect(calls.map(call => call.name)).toEqual(["omr_save_exam_v2", "omr_save_exam_v2"]);
+        expect(calls.map(call => call.name)).toEqual(["omr_save_exam_v3", "omr_save_exam_v3"]);
+        expect(calls[0].params).toMatchObject({
+            p_session_authority: "account",
+            p_account_id: context.accountId,
+            p_session_generation: 3,
+            p_actor_user_id: context.actorUserId,
+        });
         expect(calls[0].params.p_expected_revision).toBe(3);
         expect(calls[0].params.p_mutation_id).toMatch(/^exam-save:[a-f0-9]{64}$/);
         expect(calls[1].params.p_mutation_id).toBe(calls[0].params.p_mutation_id);
@@ -140,19 +149,19 @@ describe("teacher canonical exam gateway", () => {
 
         expect(result).toMatchObject({
             status: "saved",
-            exam: { organizationId: "teacher_org1", createdByUserId: "teacher_user1" },
+            exam: { organizationId: context.organizationId, createdByUserId: context.actorUserId },
         });
         expect(calls).toHaveLength(1);
-        expect(calls[0].name).toBe("omr_save_exam_v2");
+        expect(calls[0].name).toBe("omr_save_exam_v3");
         expect(calls[0].params.p_exam).toMatchObject({
-            organization_id: "teacher_org1",
-            created_by_user_id: "teacher_user1",
+            organization_id: context.organizationId,
+            created_by_user_id: context.actorUserId,
         });
         expect(calls[0].params.p_questions).toEqual([
-            expect.objectContaining({ exam_id: "exam-1", organization_id: "teacher_org1" }),
+            expect.objectContaining({ exam_id: "exam-1", organization_id: context.organizationId }),
         ]);
         expect(calls[0].params.p_teacher_asset_intent_ids).toEqual([]);
-        expect(calls[0].params.p_asset_actor_user_id).toBe("teacher_user1");
+        expect(calls[0].params.p_actor_user_id).toBe(context.actorUserId);
     });
 
     it("binds exact remote PDF refs and current actor into the atomic save RPC", async () => {
@@ -181,7 +190,7 @@ describe("teacher canonical exam gateway", () => {
             },
         }, context)).resolves.toMatchObject({ status: "saved" });
         expect(calls[0].p_teacher_asset_intent_ids).toEqual(["asset-problem", "asset-answer"]);
-        expect(calls[0].p_asset_actor_user_id).toBe(context.actorUserId);
+        expect(calls[0].p_actor_user_id).toBe(context.actorUserId);
     });
 
     it("rejects inline PDF bodies at the configured canonical gateway", async () => {

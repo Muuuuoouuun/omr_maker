@@ -2,10 +2,13 @@ import { describe, expect, it, vi } from "vitest";
 import type { WorkspaceContext } from "@/lib/workspaceContext";
 
 const context: WorkspaceContext = {
-    organizationId: "org-1",
+    organizationId: "pilot_org_0123456789abcdef01234567",
     organizationName: "학원",
-    actorUserId: "teacher-1",
-    memberRole: "teacher",
+    actorUserId: "teacher_0123456789abcdef",
+    accountId: "teacher_0123456789abcdef",
+    accountSessionGeneration: 7,
+    sessionAuthority: "account",
+    memberRole: "owner",
 };
 
 async function subject() {
@@ -85,10 +88,13 @@ describe("individual student assignment gateway", () => {
             mode: "base",
         });
         expect(rpc).toHaveBeenCalledOnce();
-        expect(rpc).toHaveBeenCalledWith("omr_assign_students_v1", expect.objectContaining({
-            p_organization_id: "org-1",
-            p_actor_user_id: "teacher-1",
-            p_actor_role: "teacher",
+        expect(rpc).toHaveBeenCalledWith("omr_assign_students_v2", expect.objectContaining({
+            p_session_authority: "account",
+            p_account_id: "teacher_0123456789abcdef",
+            p_session_generation: 7,
+            p_organization_id: "pilot_org_0123456789abcdef01234567",
+            p_actor_user_id: "teacher_0123456789abcdef",
+            p_actor_role: "owner",
             p_exam_id: "exam-1",
             p_target_student_ids: ["student-1", "student-2"],
             p_mode: "base",
@@ -115,6 +121,11 @@ describe("individual student assignment gateway", () => {
         })).resolves.toEqual({ status: "invalid_request" });
         await expect(gateway.saveTeacherIndividualAssignmentWithGateway(client, {
             ...context, memberRole: "viewer",
+        }, {
+            examId: "exam-1", targetStudentIds: ["student-1"], mode: "base", expectedRevision: 0,
+        })).resolves.toEqual({ status: "unauthorized" });
+        await expect(gateway.saveTeacherIndividualAssignmentWithGateway(client, {
+            ...context, accountSessionGeneration: undefined,
         }, {
             examId: "exam-1", targetStudentIds: ["student-1"], mode: "base", expectedRevision: 0,
         })).resolves.toEqual({ status: "unauthorized" });
@@ -148,7 +159,10 @@ describe("individual student assignment gateway", () => {
             examId: " exam-1 ", expectedRevision: 5, accessType: "group",
             groupIds: [" group-2 ", "group-1", "group-2"],
         })).resolves.toEqual({ status: "cleared", revision: 6 });
-        expect(rpc).toHaveBeenCalledWith("omr_clear_student_assignment_v1", expect.objectContaining({
+        expect(rpc).toHaveBeenCalledWith("omr_clear_student_assignment_v2", expect.objectContaining({
+            p_session_authority: "account",
+            p_account_id: "teacher_0123456789abcdef",
+            p_session_generation: 7,
             p_exam_id: "exam-1",
             p_expected_revision: 5,
             p_access_type: "group",

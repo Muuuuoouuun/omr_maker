@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 const STAGING = "https://staging.omr.example";
 const PRODUCTION = "https://omr.example";
@@ -12,16 +12,23 @@ const BUILD = "a".repeat(40);
 const RUN_ID = "run-20260807-driver";
 const CHALLENGE = "b".repeat(32);
 const STAGING_DB_HASH = createHash("sha256").update("stagingprojectref").digest("hex");
+const FIXTURE = { organizationId: "teacher_f2ea1de9e08ca3d3", examId: "initial_ops_exam_f2ea1de9e08ca3d3" };
+const TEACHER_IDENTITY = {
+    sessionAuthority: "legacy_account",
+    accountId: FIXTURE.organizationId,
+    accountSessionGeneration: 1,
+    actorUserId: FIXTURE.organizationId,
+};
 const CONTROL_PATHS = {
-    "student-read": ["rpc:omr_open_attempt_session_v1"],
+    "student-read": ["rpc:omr_open_attempt_session_v2"],
     checkpoint: ["rpc:omr_checkpoint_attempt_session_v1"],
     heartbeat: ["rpc:omr_heartbeat_attempt_session_v1"],
     "teacher-live-read": ["rpc:omr_list_active_attempt_sessions_v1"],
     "teacher-upload-read": ["table:omr_remote_assets"],
     "student-submit": ["rpc:omr_prepare_attempt_session_submit_v1", "rpc:omr_commit_attempt_session_submit_v1"],
     "student-submit-replay": ["rpc:omr_prepare_attempt_session_submit_v1", "rpc:omr_commit_attempt_session_submit_v1"],
-    "teacher-max-pdf-upload-prepare": ["rpc:omr_prepare_teacher_asset_upload_v1"],
-    "teacher-max-pdf-upload-finalize": ["rpc:omr_authorize_teacher_asset_finalize_v1", "rpc:omr_finalize_teacher_asset_upload_v1"],
+    "teacher-max-pdf-upload-prepare": ["rpc:omr_prepare_teacher_asset_upload_v2"],
+    "teacher-max-pdf-upload-finalize": ["rpc:omr_authorize_teacher_asset_finalize_v2", "rpc:omr_finalize_teacher_asset_upload_v2"],
 };
 
 const temporaryDirectories: string[] = [];
@@ -40,6 +47,24 @@ afterEach(async () => {
 });
 
 describe("initial-operations staging load driver", () => {
+    it("accepts only the exact safe legacy teacher identity returned for the fixture", async () => {
+        const { normalizeInitialOperationsTeacherIdentity } = await import("./initial-operations-driver.mjs");
+        expect(normalizeInitialOperationsTeacherIdentity(TEACHER_IDENTITY, FIXTURE)).toEqual(TEACHER_IDENTITY);
+        for (const invalid of [
+            undefined,
+            {},
+            { ...TEACHER_IDENTITY, extra: true },
+            { ...TEACHER_IDENTITY, sessionAuthority: "account" },
+            { ...TEACHER_IDENTITY, accountId: "teacher_short" },
+            { ...TEACHER_IDENTITY, accountId: "teacher_0000000000000000" },
+            { ...TEACHER_IDENTITY, accountSessionGeneration: 0 },
+            { ...TEACHER_IDENTITY, accountSessionGeneration: 1.5 },
+            { ...TEACHER_IDENTITY, actorUserId: "uploader_f2ea1de9e08ca3d3_01" },
+        ]) {
+            expect(normalizeInitialOperationsTeacherIdentity(invalid, FIXTURE)).toBeNull();
+        }
+    });
+
     it("merges in-path RSS only for workload-serving instances without creating workload requests", async () => {
         const { buildInPathRssEvidence } = await import("./initial-operations-driver.mjs");
         const evidence = buildInPathRssEvidence(RUN_ID, BUILD, [
@@ -192,7 +217,7 @@ describe("initial-operations staging load driver", () => {
                 }
                 : url.endsWith("/fixture")
                     ? fixtureBody.action === "create"
-                        ? { status: "created", ...fixtureBody.fixture, examUpdatedAt: "2026-08-07T00:00:00.000Z" }
+                        ? { status: "created", ...fixtureBody.fixture, examUpdatedAt: "2026-08-07T00:00:00.000Z", teacherIdentity: TEACHER_IDENTITY }
                         : { status: "cleaned", remaining: { sessions: 0, attempts: 0, assets: 0, objects: 0 } }
                     : { status: "ok", revision: 1 });
             const response = new Response(body, {
@@ -237,7 +262,7 @@ describe("initial-operations staging load driver", () => {
         await expect(control.attest()).resolves.toMatchObject({ environment: "staging" });
         await expect(control.createFixture({
             fixture: { organizationId: "teacher_f2ea1de9e08ca3d3", examId: "initial_ops_exam_f2ea1de9e08ca3d3" },
-        })).resolves.toMatchObject({ status: "created" });
+        })).resolves.toMatchObject({ status: "created", teacherIdentity: TEACHER_IDENTITY });
         await expect(control.cleanupFixture({
             fixture: { organizationId: "teacher_f2ea1de9e08ca3d3", examId: "initial_ops_exam_f2ea1de9e08ca3d3" },
         })).resolves.toMatchObject({ status: "cleaned" });
@@ -484,7 +509,7 @@ describe("initial-operations staging load driver", () => {
                 async attest() { lifecycle.push("attest"); return config.externalState; },
                 async createFixture() {
                     lifecycle.push("create");
-                    return { status: "created", organizationId: "teacher_f2ea1de9e08ca3d3", examId: "initial_ops_exam_f2ea1de9e08ca3d3", examUpdatedAt: "2026-08-07T00:00:00.000Z" };
+                    return { status: "created", ...FIXTURE, examUpdatedAt: "2026-08-07T00:00:00.000Z", teacherIdentity: TEACHER_IDENTITY };
                 },
                 async cleanupFixture() {
                     lifecycle.push("cleanup");
@@ -513,7 +538,7 @@ describe("initial-operations staging load driver", () => {
         await expect(runInitialOperationsStagingLoad({ ...config, outputDirectory: emptyCollectorOutput }, {
             controlPlane: {
                 async attest() { return config.externalState; },
-                async createFixture() { return { status: "created", organizationId: "teacher_f2ea1de9e08ca3d3", examId: "initial_ops_exam_f2ea1de9e08ca3d3", examUpdatedAt: "2026-08-07T00:00:00.000Z" }; },
+                async createFixture() { return { status: "created", ...FIXTURE, examUpdatedAt: "2026-08-07T00:00:00.000Z", teacherIdentity: TEACHER_IDENTITY }; },
                 async cleanupFixture() { return { status: "cleaned", remaining: { sessions: 0, attempts: 0, assets: 0, objects: 0 } }; },
             },
             collectors: {
@@ -526,6 +551,61 @@ describe("initial-operations staging load driver", () => {
             code: "collector_evidence_missing",
             cleanupVerified: true,
         });
+    });
+
+    it.each([
+        ["missing", undefined],
+        ["malformed", { ...TEACHER_IDENTITY, accountSessionGeneration: 0 }],
+    ])("fails the run closed when fixture teacher identity is %s", async (_label, suppliedIdentity) => {
+        const { runInitialOperationsStagingLoad } = await import("./initial-operations-driver.mjs");
+        const executeWorkload = vi.fn();
+        const cleanupFixture = vi.fn(async () => ({
+            status: "cleaned",
+            remaining: { sessions: 0, attempts: 0, assets: 0, objects: 0 },
+        }));
+        const outputDirectory = await temporaryDirectory();
+        const config = {
+            runId: RUN_ID,
+            runChallenge: CHALLENGE,
+            baseUrl: STAGING,
+            productionBaseUrl: PRODUCTION,
+            stagingSupabaseUrl: STAGING_DB,
+            productionSupabaseUrl: PRODUCTION_DB,
+            expectedBuild: BUILD,
+            loadToken: "l".repeat(40),
+            outputDirectory,
+            externalState: {
+                environment: "staging",
+                appOrigin: STAGING,
+                storageOrigin: STAGING_DB,
+                databaseProjectRefHash: STAGING_DB_HASH,
+                controlPlaneVersion: 2,
+                productionWorkloadPaths: CONTROL_PATHS,
+            },
+        };
+        const result = await runInitialOperationsStagingLoad(config, {
+            controlPlane: {
+                async attest() { return config.externalState; },
+                async createFixture() {
+                    return {
+                        status: "created",
+                        ...FIXTURE,
+                        examUpdatedAt: "2026-08-07T00:00:00.000Z",
+                        ...(suppliedIdentity ? { teacherIdentity: suppliedIdentity } : {}),
+                    };
+                },
+                cleanupFixture,
+            },
+            collectors: {
+                database: { async start() {}, async stop() { return []; } },
+                rss: { async start() {}, async stop() { return []; } },
+            },
+            executeWorkload,
+        });
+
+        expect(result).toMatchObject({ status: "unverified", code: "fixture_create_unverified" });
+        expect(executeWorkload).not.toHaveBeenCalled();
+        expect(cleanupFixture).toHaveBeenCalledOnce();
     });
 
     it("executes primary and replay phases as distinct concurrent barriers", async () => {
@@ -747,12 +827,12 @@ describe("initial-operations staging load driver", () => {
             },
             overrides: {
                 now: () => now, waitUntil: async () => { now += 1; }, uploadOffsetMs: 1,
-                fetchImpl, storageWriter: { async append() {} },
+                fetchImpl, storageWriter: { async append() {} }, fixtureTeacherIdentity: TEACHER_IDENTITY,
             },
         });
         const expectedSha256 = initialOperationsStorageObjectSha256(idempotencyKey, bytes);
-        expect(prepareBody).toMatchObject({ sha256Hex: expectedSha256 });
-        expect(finalizeBody).toMatchObject({ expectedSha256 });
+        expect(prepareBody).toMatchObject({ sha256Hex: expectedSha256, teacherIdentity: TEACHER_IDENTITY });
+        expect(finalizeBody).toMatchObject({ expectedSha256, teacherIdentity: TEACHER_IDENTITY });
     });
 
     it("exposes only the fail-closed staging runner as the operations package command", async () => {

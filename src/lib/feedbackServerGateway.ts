@@ -89,6 +89,22 @@ function clean(value: unknown): string {
     return typeof value === "string" ? value.trim() : "";
 }
 
+function teacherMutationIdentity(context: WorkspaceContext): {
+    authority: "account" | "legacy_account";
+    accountId: string;
+    generation: number;
+    actorUserId: string;
+} | null {
+    const authority = context.sessionAuthority;
+    const accountId = clean(context.accountId);
+    const actorUserId = clean(context.actorUserId);
+    const generation = context.accountSessionGeneration;
+    if ((authority !== "account" && authority !== "legacy_account")
+        || !accountId || !actorUserId
+        || !Number.isSafeInteger(generation) || (generation ?? 0) < 1) return null;
+    return { authority, accountId, generation: generation as number, actorUserId };
+}
+
 function deterministicMutationId(prefix: "feedback-save" | "feedback-return", input: unknown): string {
     return `${prefix}:${createHash("sha256").update(JSON.stringify(input)).digest("hex")}`;
 }
@@ -263,7 +279,8 @@ export async function saveTeacherFeedbackWithGateway(
     context: WorkspaceContext,
     markupDrawings?: PdfDrawings,
 ): Promise<FeedbackMutationResult<"saved">> {
-    if (!clean(context.organizationId) || !clean(context.actorUserId)) return { status: "invalid_feedback" };
+    const identity = teacherMutationIdentity(context);
+    if (!clean(context.organizationId) || !identity) return { status: "invalid_feedback" };
     const scopedFeedback: AttemptFeedback = {
         ...feedback,
         organizationId: context.organizationId,
@@ -295,7 +312,11 @@ export async function saveTeacherFeedbackWithGateway(
             payload: row.payload ? { ...row.payload, updatedAt: undefined } : row.payload,
         },
     };
-    const result = await client.rpc("omr_save_feedback_v3", {
+    const result = await client.rpc("omr_save_feedback_v4", {
+        p_session_authority: identity.authority,
+        p_account_id: identity.accountId,
+        p_session_generation: identity.generation,
+        p_actor_user_id: identity.actorUserId,
         p_organization_id: context.organizationId,
         p_feedback: row,
         p_expected_revision: expectedRevision,
@@ -322,9 +343,14 @@ export async function returnTeacherFeedbackWithGateway(
     context: WorkspaceContext,
 ): Promise<FeedbackMutationResult<"returned">> {
     const normalizedId = clean(feedback.id);
-    if (!normalizedId || !clean(context.organizationId)) return { status: "not_found" };
+    const identity = teacherMutationIdentity(context);
+    if (!normalizedId || !clean(context.organizationId) || !identity) return { status: "not_found" };
     const expectedRevision = Math.max(0, Math.floor(feedback.revision || 0));
-    const result = await client.rpc("omr_return_feedback_v3", {
+    const result = await client.rpc("omr_return_feedback_v4", {
+        p_session_authority: identity.authority,
+        p_account_id: identity.accountId,
+        p_session_generation: identity.generation,
+        p_actor_user_id: identity.actorUserId,
         p_organization_id: context.organizationId,
         p_feedback_id: normalizedId,
         p_expected_revision: expectedRevision,

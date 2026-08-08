@@ -58,8 +58,8 @@ describe("teacher account lifecycle migration contract", () => {
         expect(boundary).toContain("omr_teacher_accounts");
         expect(boundary).toContain("omr_teacher_account_tokens");
         expect(boundary).toContain("teacherAccountLifecycleReady");
-        expect(boundary).toContain("'version', '202608080007'");
-        expect(readiness).toContain('SUPABASE_READINESS_VERSION = "202608080007"');
+        expect(boundary).toContain("'version', '202608080008'");
+        expect(readiness).toContain('SUPABASE_READINESS_VERSION = "202608080008"');
         expect(readiness).toContain('"teacherAccountLifecycleReady"');
     });
 });

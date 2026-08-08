@@ -5,7 +5,7 @@ import {
 
 type Env = Record<string, string | undefined>;
 
-export const SUPABASE_READINESS_VERSION = "202608080007";
+export const SUPABASE_READINESS_VERSION = "202608080008";
 
 export const SUPABASE_READINESS_CHECK_KEYS = [
     "browserSchemaPrivilegesDenied",
@@ -55,6 +55,7 @@ export const SUPABASE_READINESS_CHECK_KEYS = [
     "operationalJobStatusReady",
     "operatorPilotProvisioningReady",
     "provisionedTeacherLoginReady",
+    "effectiveWorkspacePlanEnforcementReady",
 ] as const;
 
 export type SupabaseReadinessCheckKey = typeof SUPABASE_READINESS_CHECK_KEYS[number];

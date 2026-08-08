@@ -27,14 +27,16 @@ describe("provisioned teacher request surfaces", () => {
     });
 
     it("routes all current TypeScript entitlement reads through one effective-plan gateway", () => {
-        const files = [
+        const gatewayConsumers = [
             "src/lib/serverPlan.ts",
             "src/app/actions/studentAttemptSession.ts",
-            "src/app/actions/remoteAssets.ts",
             "src/app/actions/studentExam.ts",
         ].map(source);
-        for (const file of files) expect(file).toContain("readEffectiveWorkspacePlan");
-        expect(files.join("\n")).not.toContain('.select("plan")');
+        for (const file of gatewayConsumers) expect(file).toContain("readEffectiveWorkspacePlan");
+        const remoteAssets = source("src/app/actions/remoteAssets.ts");
+        expect(remoteAssets).not.toContain("readEffectiveWorkspacePlan");
+        expect(remoteAssets).toContain("prepareTeacherRemoteAssetUploadWithGateway");
+        expect([...gatewayConsumers, remoteAssets].join("\n")).not.toContain('.select("plan")');
     });
 
     it("allows only the exact lowercase pilot organization shape for student session issuance", () => {

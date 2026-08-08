@@ -7,7 +7,6 @@ import {
     prepareTeacherRemoteAssetUploadWithGateway,
     createStaffRemoteAssetSignedUrlWithGateway,
     createStudentProblemPdfSignedUrlWithGateway,
-    uploadRemoteAssetWithGateway,
     type RemoteAssetSupabaseGatewayClient,
 } from "./remoteAssetGateway.server";
 
@@ -110,99 +109,22 @@ function mockClient(options: {
 }
 
 describe("remote asset Supabase gateway", () => {
-    it("uploads a private immutable object and stores organization-scoped metadata", async () => {
-        const { client, uploaded, rows } = mockClient();
-        const result = await uploadRemoteAssetWithGateway(client, {
-            organizationId: "org-1",
-            examId: "exam-1",
-            kind: "problem_pdf",
-            body: new Uint8Array([1, 2, 3]),
-            originalName: "중간고사.pdf",
-            createdByUserId: "teacher-1",
-        }, {
-            assetId: "asset-1",
-            now: "2026-07-14T00:00:00.000Z",
-        });
-
-        expect(result).toMatchObject({
-            status: "uploaded",
-            asset: {
-                id: "asset-1",
-                organizationId: "org-1",
-                examId: "exam-1",
-                kind: "problem_pdf",
-                objectPath: "organizations/org-1/exams/exam-1/problem/asset-1.pdf",
-                sha256Hex: "039058c6f2c0cb492c533b0a4d14ef77cc0f78abccced5287d84a1a2011cfb81",
-            },
-        });
-        expect(uploaded).toHaveLength(1);
-        expect(uploaded[0].options).toMatchObject({
-            contentType: "application/pdf",
-            cacheControl: "300",
-            upsert: false,
-        });
-        expect(rows.get("asset-1")).toMatchObject({
-            organization_id: "org-1",
-            exam_id: "exam-1",
-            attempt_id: null,
-            storage_bucket: "omr-private-assets",
-        });
-    });
-
-    it("removes an uploaded object when metadata persistence fails", async () => {
-        const { client, removed } = mockClient({ metadataError: "db unavailable" });
-        const result = await uploadRemoteAssetWithGateway(client, {
-            organizationId: "org-1",
-            attemptId: "attempt-1",
-            kind: "attempt_handwriting",
-            body: new TextEncoder().encode('{"1":["M0 0"]}'),
-        }, { assetId: "asset-handwriting" });
-
-        expect(result).toEqual({ status: "metadata_unavailable", error: "db unavailable" });
-        expect(removed).toEqual([["organizations/org-1/attempts/attempt-1/handwriting/asset-handwriting.json"]]);
-    });
-
-    it("rejects a cross-organization metadata collision and removes only the new object", async () => {
-        const { client, removed, rows } = mockClient();
-        await expect(uploadRemoteAssetWithGateway(client, {
-            organizationId: "org-1",
-            examId: "exam-1",
-            kind: "problem_pdf",
-            body: new Uint8Array([1]),
-        }, { assetId: "shared-asset" })).resolves.toMatchObject({ status: "uploaded" });
-
-        await expect(uploadRemoteAssetWithGateway(client, {
-            organizationId: "org-2",
-            examId: "exam-2",
-            kind: "problem_pdf",
-            body: new Uint8Array([2]),
-        }, { assetId: "shared-asset" })).resolves.toEqual({
-            status: "metadata_unavailable",
-            error: "remote asset identifier belongs to another scope",
-        });
-
-        expect(rows.get("shared-asset")).toMatchObject({
-            organization_id: "org-1",
-            exam_id: "exam-1",
-        });
-        expect(removed).toEqual([["organizations/org-2/exams/exam-2/problem/shared-asset.pdf"]]);
-    });
-
     it("signs student downloads only for the exact problem PDF organization and exam scope", async () => {
-        const { client, signed } = mockClient();
-        await uploadRemoteAssetWithGateway(client, {
-            organizationId: "org-1",
-            examId: "exam-1",
-            kind: "problem_pdf",
-            body: new Uint8Array([1]),
-            originalName: "문제지.pdf",
-        }, { assetId: "asset-problem" });
-        await uploadRemoteAssetWithGateway(client, {
-            organizationId: "org-1",
-            examId: "exam-1",
-            kind: "answer_key_pdf",
-            body: new Uint8Array([2]),
-        }, { assetId: "asset-answer" });
+        const { client, signed, rows } = mockClient();
+        rows.set("asset-problem", {
+            id: "asset-problem", organization_id: "org-1", kind: "problem_pdf", exam_id: "exam-1",
+            attempt_id: null, storage_bucket: "omr-private-assets",
+            object_path: "organizations/org-1/exams/exam-1/problem/asset-problem.pdf",
+            mime_type: "application/pdf", byte_size: 1, sha256_hex: "a".repeat(64), original_name: "문제지.pdf",
+            created_by_user_id: null, created_at: "2026-07-14T00:00:00.000Z", updated_at: "2026-07-14T00:00:00.000Z",
+        });
+        rows.set("asset-answer", {
+            id: "asset-answer", organization_id: "org-1", kind: "answer_key_pdf", exam_id: "exam-1",
+            attempt_id: null, storage_bucket: "omr-private-assets",
+            object_path: "organizations/org-1/exams/exam-1/answer/asset-answer.pdf",
+            mime_type: "application/pdf", byte_size: 1, sha256_hex: "b".repeat(64), original_name: null,
+            created_by_user_id: null, created_at: "2026-07-14T00:00:00.000Z", updated_at: "2026-07-14T00:00:00.000Z",
+        });
 
         await expect(createStudentProblemPdfSignedUrlWithGateway(client, {
             assetId: "asset-problem",
@@ -230,13 +152,14 @@ describe("remote asset Supabase gateway", () => {
     });
 
     it("lets an already-authorized staff caller sign an exact answer or handwriting asset", async () => {
-        const { client } = mockClient();
-        await uploadRemoteAssetWithGateway(client, {
-            organizationId: "org-1",
-            attemptId: "attempt-1",
-            kind: "attempt_handwriting",
-            body: new TextEncoder().encode("{}"),
-        }, { assetId: "asset-writing" });
+        const { client, rows } = mockClient();
+        rows.set("asset-writing", {
+            id: "asset-writing", organization_id: "org-1", kind: "attempt_handwriting", exam_id: null,
+            attempt_id: "attempt-1", storage_bucket: "omr-private-assets",
+            object_path: "organizations/org-1/attempts/attempt-1/handwriting/asset-writing.json",
+            mime_type: "application/json", byte_size: 2, sha256_hex: "a".repeat(64), original_name: null,
+            created_by_user_id: null, created_at: "2026-07-14T00:00:00.000Z", updated_at: "2026-07-14T00:00:00.000Z",
+        });
 
         await expect(createStaffRemoteAssetSignedUrlWithGateway(client, {
             assetId: "asset-writing",
@@ -337,7 +260,7 @@ describe("teacher direct remote asset gateway", () => {
             expiresAt: "2026-08-06T02:00:00.000Z",
         });
         expect(calls).toHaveLength(1);
-        expect(calls[0].name).toBe("omr_prepare_teacher_asset_upload_v1");
+        expect(calls[0].name).toBe("omr_prepare_teacher_asset_upload_v2");
         expect(signed).toHaveLength(1);
     });
 
@@ -371,6 +294,33 @@ describe("teacher direct remote asset gateway", () => {
         expect(result).toMatchObject({ status: "prepared", expiresAt: "2026-08-06T01:00:00.000Z" });
     });
 
+    it("never mints a new signed upload capability for a finalized prepare replay", async () => {
+        const storage = vi.fn();
+        const client = {
+            storage: { from: storage },
+            rpc: async (_name: string, params: Record<string, unknown>) => ({
+                data: {
+                    ...(params.p_upload as Record<string, unknown>),
+                    status: "finalized",
+                    capabilityReplay: true,
+                },
+                error: null,
+            }),
+        };
+        const result = await prepareTeacherRemoteAssetUploadWithGateway(client as never, {
+            organizationId: "org-1",
+            examId: "exam-new",
+            kind: "problem_pdf",
+            byteSize: 1024,
+            mimeType: "application/pdf",
+            sha256Hex: "a".repeat(64),
+            idempotencyKey: "upload-01JABCDEF0123456789",
+            createdByUserId: "teacher-1",
+        });
+        expect(result).toMatchObject({ status: "metadata_unavailable", errorCode: "upload_request_conflict" });
+        expect(storage).not.toHaveBeenCalled();
+    });
+
     it("authorizes finalize intent scope before any Storage lookup and exposes only a stable denial", async () => {
         const events: string[] = [];
         const client = {
@@ -401,7 +351,7 @@ describe("teacher direct remote asset gateway", () => {
             createdByUserId: "teacher-1",
         });
 
-        expect(events).toEqual(["omr_authorize_teacher_asset_finalize_v1"]);
+        expect(events).toEqual(["omr_authorize_teacher_asset_finalize_v2"]);
         expect(result).toEqual({
             status: "metadata_unavailable",
             error: "Teacher upload scope denied",
@@ -551,7 +501,7 @@ describe("teacher direct remote asset gateway", () => {
             storage: { from: () => bucket },
             async rpc(name: string) {
                 rpcCalls.push(name);
-                if (name === "omr_authorize_teacher_asset_finalize_v1") {
+                if (name === "omr_authorize_teacher_asset_finalize_v2") {
                     return { data: authorizedTeacherIntent({ status: authorizedStatus }), error: null };
                 }
                 return {
@@ -599,8 +549,8 @@ describe("teacher direct remote asset gateway", () => {
             asset: { id: "asset-1", originalName: "problem.pdf", createdAt: "2026-08-06T00:00:00.000Z" },
         });
         expect(rpcCalls).toEqual([
-            "omr_authorize_teacher_asset_finalize_v1",
-            "omr_finalize_teacher_asset_upload_v1",
+            "omr_authorize_teacher_asset_finalize_v2",
+            "omr_finalize_teacher_asset_upload_v2",
         ]);
         expect(fetchImpl).toHaveBeenCalledOnce();
         expect(bucket).not.toHaveProperty("download");
@@ -617,7 +567,7 @@ describe("teacher direct remote asset gateway", () => {
                 }),
             }) },
             rpc: async (name: string) => {
-                if (name === "omr_authorize_teacher_asset_finalize_v1") {
+                if (name === "omr_authorize_teacher_asset_finalize_v2") {
                     return { data: authorizedTeacherIntent({ byte_size: 5, sha256_hex: "e".repeat(64) }), error: null };
                 }
                 throw new Error("must not finalize");

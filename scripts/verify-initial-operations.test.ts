@@ -9,7 +9,7 @@ import { describe, expect, it } from "vitest";
 const EXPECTED_BUILD = "a".repeat(40);
 const STAGING_PROJECT_HASH = createHash("sha256").update("stagingprojectref").digest("hex");
 const PRODUCTION_PATHS: Record<string, string[]> = {
-    "student-read": ["rpc:omr_open_attempt_session_v1"],
+    "student-read": ["rpc:omr_open_attempt_session_v2"],
     checkpoint: ["rpc:omr_checkpoint_attempt_session_v1"],
     heartbeat: ["rpc:omr_heartbeat_attempt_session_v1"],
     "teacher-live-read": ["rpc:omr_list_active_attempt_sessions_v1"],
@@ -17,9 +17,9 @@ const PRODUCTION_PATHS: Record<string, string[]> = {
     "student-submit": ["rpc:omr_prepare_attempt_session_submit_v1", "rpc:omr_commit_attempt_session_submit_v1"],
     "student-submit-replay": ["rpc:omr_prepare_attempt_session_submit_v1", "rpc:omr_commit_attempt_session_submit_v1"],
     "teacher-max-pdf-upload": [
-        "rpc:omr_prepare_teacher_asset_upload_v1",
-        "rpc:omr_authorize_teacher_asset_finalize_v1",
-        "rpc:omr_finalize_teacher_asset_upload_v1",
+        "rpc:omr_prepare_teacher_asset_upload_v2",
+        "rpc:omr_authorize_teacher_asset_finalize_v2",
+        "rpc:omr_finalize_teacher_asset_upload_v2",
     ],
 };
 const DATABASE_PATHS = [...new Set(Object.values(PRODUCTION_PATHS).flat())];
@@ -217,7 +217,7 @@ function passingEvidence() {
                 database: "ready",
                 observability: "ready",
                 configuration: "ready",
-                version: "202608080007",
+                version: "202608080008",
                 environment: "staging",
                 build: EXPECTED_BUILD,
                 databaseProjectRefHash: STAGING_PROJECT_HASH,
@@ -935,7 +935,7 @@ describe("initial operations load gate", () => {
                     database: "ready",
                     observability: "ready",
                     configuration: "ready",
-                    version: "202608080007",
+                    version: "202608080008",
                     environment: "staging",
                     build: EXPECTED_BUILD,
                     databaseProjectRefHash: STAGING_PROJECT_HASH,
@@ -1051,7 +1051,7 @@ describe("initial operations load gate", () => {
                 status: "ready",
                 database: "ready",
                 observability: "ready",
-                version: "202608080007",
+                version: "202608080008",
                 environment: "staging",
                 build: EXPECTED_BUILD,
                 databaseProjectRefHash: STAGING_PROJECT_HASH,
@@ -1106,7 +1106,7 @@ describe("initial operations load gate", () => {
                 status: "ready",
                 database: "ready",
                 observability: "ready",
-                version: "202608080007",
+                version: "202608080008",
                 environment: "staging",
                 build: EXPECTED_BUILD,
                 databaseProjectRefHash: STAGING_PROJECT_HASH,

@@ -33,7 +33,7 @@ import {
     readRemoteAssetRegistry,
 } from "./storage-backup-gateway.mjs";
 
-const EXPECTED_READINESS_VERSION = "202608080007";
+const EXPECTED_READINESS_VERSION = "202608080008";
 const GIT_SHA_PATTERN = /^[a-f0-9]{40}$/;
 const PROJECT_REF_PATTERN = /^[a-z0-9][a-z0-9-]{2,62}$/;
 const SAFE_DB_IDENTIFIER = /^[A-Za-z0-9_.-]{1,128}$/;

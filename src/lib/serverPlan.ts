@@ -150,20 +150,54 @@ type RpcClient = SupabaseClient & {
     rpc(name: string, params: Record<string, unknown>): PromiseLike<SupabaseRpcResult>;
 };
 
-function firstRpcRow(value: unknown): Record<string, unknown> | null {
-    if (Array.isArray(value)) {
-        const row = value[0];
-        return row && typeof row === "object" ? row as Record<string, unknown> : null;
+function exactRpcObject(value: unknown, keys: string[]): Record<string, unknown> | null {
+    if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+    try {
+        const prototype = Object.getPrototypeOf(value);
+        if ((prototype !== Object.prototype && prototype !== null)
+            || Object.getOwnPropertySymbols(value).length > 0) return null;
+        const descriptors = Object.getOwnPropertyDescriptors(value);
+        const expected = [...keys].sort();
+        const actual = Object.keys(descriptors).sort();
+        if (actual.length !== expected.length
+            || actual.some((key, index) => key !== expected[index])) return null;
+        for (const key of expected) {
+            const descriptor = descriptors[key];
+            if (!descriptor || !("value" in descriptor) || !descriptor.enumerable) return null;
+        }
+        return Object.fromEntries(expected.map(key => [key, descriptors[key]!.value]));
+    } catch {
+        return null;
     }
-    return value && typeof value === "object" ? value as Record<string, unknown> : null;
 }
 
 function countValue(value: number | null): number {
     return typeof value === "number" && Number.isFinite(value) ? Math.max(0, value) : 0;
 }
 
-export function createSupabaseServerPlanStore(client: SupabaseClient): ServerPlanStore {
+export function createSupabaseServerPlanStore(
+    client: SupabaseClient,
+    session?: TeacherSession | null,
+): ServerPlanStore {
     const rpcClient = client as RpcClient;
+    const context = workspaceContextFromTeacherSession(session);
+    const mutationIdentity = context.sessionAuthority && context.accountId
+        && Number.isSafeInteger(context.accountSessionGeneration)
+        && (context.accountSessionGeneration ?? 0) >= 1 && context.actorUserId
+        ? {
+            p_session_authority: context.sessionAuthority,
+            p_account_id: context.accountId,
+            p_session_generation: context.accountSessionGeneration,
+            p_organization_id: context.organizationId,
+            p_actor_user_id: context.actorUserId,
+        }
+        : null;
+    const exactMutationIdentity = (organizationId: string) => {
+        if (!mutationIdentity || mutationIdentity.p_organization_id !== organizationId) {
+            throw new Error("사용량 변경 권한을 확인할 수 없습니다.");
+        }
+        return mutationIdentity;
+    };
     return {
         source: "supabase",
         async readPlan(organizationId) {
@@ -202,17 +236,13 @@ export function createSupabaseServerPlanStore(client: SupabaseClient): ServerPla
             return countValue(data ? Number((data as { used?: unknown }).used) : 0);
         },
         async reserveUsage(input) {
-            const { data, error } = await rpcClient.rpc("omr_reserve_plan_usage", {
-                p_organization_id: input.organizationId,
+            const { data, error } = await rpcClient.rpc("omr_reserve_plan_usage_v2", {
+                ...exactMutationIdentity(input.organizationId),
                 p_metric: input.metric,
-                p_period_start: input.period.key,
                 p_resource_key: input.resourceKey,
-                p_amount: input.attempted,
-                p_observed_used: input.observedUsed,
-                p_limit: input.limit,
             });
             if (error) throw new Error(error.message || "사용량 예약에 실패했습니다.");
-            const row = firstRpcRow(data);
+            const row = exactRpcObject(data, ["allowed", "idempotent", "used"]);
             if (!row || typeof row.allowed !== "boolean") throw new Error("사용량 예약 응답이 올바르지 않습니다.");
             return {
                 allowed: row.allowed,
@@ -221,26 +251,22 @@ export function createSupabaseServerPlanStore(client: SupabaseClient): ServerPla
             };
         },
         async releaseUsage(input) {
-            const { data, error } = await rpcClient.rpc("omr_release_plan_usage", {
-                p_organization_id: input.organizationId,
+            const { data, error } = await rpcClient.rpc("omr_release_plan_usage_v2", {
+                ...exactMutationIdentity(input.organizationId),
                 p_metric: input.metric,
-                p_period_start: input.period.key,
                 p_resource_key: input.resourceKey,
             });
             if (error) throw new Error(error.message || "사용량 예약 해제에 실패했습니다.");
-            const row = firstRpcRow(data);
+            const row = exactRpcObject(data, ["released", "used"]);
             if (!row || typeof row.released !== "boolean") throw new Error("사용량 예약 해제 응답이 올바르지 않습니다.");
             return { released: row.released, used: countValue(Number(row.used)) };
         },
         async syncStudentUsage(input) {
-            const { data, error } = await rpcClient.rpc("omr_sync_student_plan_usage", {
-                p_organization_id: input.organizationId,
-                p_resource_keys: input.resourceKeys,
-                p_observed_used: input.observedUsed,
-                p_limit: input.limit,
+            const { data, error } = await rpcClient.rpc("omr_sync_student_plan_usage_v2", {
+                ...exactMutationIdentity(input.organizationId),
             });
             if (error) throw new Error(error.message || "학생 사용량 동기화에 실패했습니다.");
-            const row = firstRpcRow(data);
+            const row = exactRpcObject(data, ["allowed", "used"]);
             if (!row || typeof row.allowed !== "boolean") throw new Error("학생 사용량 응답이 올바르지 않습니다.");
             return { allowed: row.allowed, used: countValue(Number(row.used)) };
         },
@@ -322,12 +348,15 @@ export function createDevServerPlanStore(env: Env = process.env): ServerPlanStor
     };
 }
 
-export function createServerPlanStoreFromEnv(env: Env = process.env): ServerPlanStore | null {
+export function createServerPlanStoreFromEnv(
+    env: Env = process.env,
+    session?: TeacherSession | null,
+): ServerPlanStore | null {
     const config = getSupabaseServerConfigFromEnv(env);
     if (config) {
         return createSupabaseServerPlanStore(createClient(config.url, config.serviceRoleKey, {
             auth: { persistSession: false, autoRefreshToken: false },
-        }));
+        }), session);
     }
     // Simulation is deliberately opt-in and can never be activated in production.
     if (env.NODE_ENV !== "production" && enabled(env.OMR_PLAN_DEV_SIMULATION)) {
@@ -353,7 +382,7 @@ export async function resolveServerPlanAccess(
 
     const context = workspaceContextFromTeacherSession(session, now.getTime());
     const store = options.store === undefined
-        ? createServerPlanStoreFromEnv(options.env || process.env)
+        ? createServerPlanStoreFromEnv(options.env || process.env, session)
         : options.store;
     if (!store) {
         return {

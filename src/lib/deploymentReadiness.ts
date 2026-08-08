@@ -339,6 +339,7 @@ function productionRlsCheck(
             operationalJobStatusReady: "운영 작업 상태·dead-letter heartbeat 경계",
             operatorPilotProvisioningReady: "운영자 교사·파일럿 플랜 원자 프로비저닝 경계",
             provisionedTeacherLoginReady: "프로비저닝 계정·조직·플랜 로그인 결속 경계",
+            effectiveWorkspacePlanEnforcementReady: "동일 트랜잭션 계정·유효 플랜 변경 경계",
             probeVersion: "probe 버전",
             databaseDeclaredReady: "DB 최종 readiness 판정",
             probeExecution: "probe 실행",

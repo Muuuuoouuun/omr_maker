@@ -20,11 +20,6 @@ import {
 import { isTeacherMutationAuthorized } from "@/lib/teacherMutationAuthorization";
 import { isSameOriginServerActionRequest } from "@/lib/serverActionSecurity";
 import { workspaceContextFromTeacherSession } from "@/lib/workspaceContext";
-import {
-    authorizeAdvancedQuestionDesign,
-    authorizeExamCreation,
-    releaseExamCreationAuthorization,
-} from "@/app/actions/premiumAccess";
 import type { Exam } from "@/types/omr";
 import { reportServerError } from "@/lib/reportServerError";
 import { rotateExamEntryInviteWithGateway } from "@/lib/examEntryInviteGateway";
@@ -68,7 +63,6 @@ async function teacherGatewayContext(requireWrite = false): Promise<{
 export async function saveTeacherCanonicalExam(
     exam: Exam,
 ): Promise<TeacherCanonicalExamSaveResult> {
-    let releaseNewExamReservation = false;
     try {
         const headerStore = await headers();
         if (!isSameOriginServerActionRequest(headerStore)) return { status: "unauthorized" };
@@ -87,36 +81,6 @@ export async function saveTeacherCanonicalExam(
         }
         const client = createSupabaseAdminClient(config) as unknown as TeacherExamGatewayClient;
         const context = workspaceContextFromTeacherSession(session);
-        const existing = await loadTeacherExamWithGateway(client, exam.id, context);
-        if (existing.status === "service_unavailable") {
-            await reportServerError("teacher-exam-save", {
-                status: existing.status,
-                code: "service_unavailable",
-            });
-            return { status: "service_unavailable", error: "시험 저장 서비스를 사용할 수 없습니다." };
-        }
-
-        if (existing.status === "not_found") {
-            const authorization = await authorizeExamCreation(exam.id);
-            if (!authorization.ok) {
-                return { status: "plan_denied", error: authorization.error || "시험 생성 한도를 확인할 수 없습니다." };
-            }
-            // A caller may already own the same idempotent reservation. Only
-            // compensate reservations created by this server boundary.
-            releaseNewExamReservation = authorization.quota?.idempotent !== true;
-        }
-
-        if (exam.questions.some(question => (question.subQuestions?.length || 0) > 0)) {
-            const entitlement = await authorizeAdvancedQuestionDesign();
-            if (!entitlement.ok) {
-                if (releaseNewExamReservation) {
-                    await releaseExamCreationAuthorization(exam.id);
-                    releaseNewExamReservation = false;
-                }
-                return { status: "plan_denied", error: entitlement.error || "하위 질문 저장에는 Pro 이상 플랜이 필요합니다." };
-            }
-        }
-
         const result = await saveTeacherExamWithGateway(client, exam, context);
         const planDeniedByDatabase = result.status === "service_unavailable"
             && /plan (?:exam limit exceeded|entitlement required)/i.test(result.error || "");
@@ -125,10 +89,6 @@ export async function saveTeacherCanonicalExam(
                 status: result.status,
                 code: "service_unavailable",
             });
-        }
-        if (result.status !== "saved" && releaseNewExamReservation) {
-            await releaseExamCreationAuthorization(exam.id);
-            releaseNewExamReservation = false;
         }
         if (
             planDeniedByDatabase
@@ -140,9 +100,6 @@ export async function saveTeacherCanonicalExam(
         }
         return result;
     } catch (error) {
-        if (releaseNewExamReservation) {
-            await releaseExamCreationAuthorization(exam.id).catch(() => undefined);
-        }
         await reportServerError("teacher-exam-save", error);
         return {
             status: "service_unavailable",

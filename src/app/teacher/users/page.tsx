@@ -42,7 +42,6 @@ import {
 } from "@/lib/teacherRosterClient";
 import { seedLocalTestStudentAccounts } from "@/lib/localTestAccounts";
 import { issueStudentStartCredential } from "@/app/actions/studentAuth";
-import { authorizeRosterStudentSet } from "@/app/actions/premiumAccess";
 import { resolveAttemptScore } from "@/lib/attemptScores";
 import {
     applyRosterPerformance,
@@ -297,7 +296,6 @@ function ManageUsersInner() {
     const [issuedStudentCredentialIds, setIssuedStudentCredentialIds] = useState<Set<string>>(new Set());
     const [sessionStudentCodes, setSessionStudentCodes] = useState<Record<string, string>>({});
     const [issuingStudentCode, setIssuingStudentCode] = useState(false);
-    const rosterPlanSyncRef = useRef<Promise<void>>(Promise.resolve());
     const rosterMutationVersionRef = useRef(0);
     const studentCredentialIssuanceLocksRef = useRef(new Set<string>());
     const studentCodeRegistryRef = useRef<Record<string, string>>({});
@@ -464,14 +462,6 @@ function ManageUsersInner() {
         if (undoTimeoutRef.current) clearTimeout(undoTimeoutRef.current);
     }, []);
 
-    const queueRosterPlanSync = (nextStudents: RosterStudent[]) => {
-        const run = rosterPlanSyncRef.current.then(() => (
-            authorizeRosterStudentSet(nextStudents.map(student => student.id))
-        ));
-        rosterPlanSyncRef.current = run.then(() => undefined, () => undefined);
-        return run;
-    };
-
     // Write-through helpers
     const persistRoster = (nextStudents: RosterStudent[], nextGroups: RosterGroup[], nextInvites: RosterInvite[]) => {
         const mutationVersion = ++rosterMutationVersionRef.current;
@@ -514,14 +504,11 @@ function ManageUsersInner() {
         // feedback, without racing a second post-save ledger mutation.
     };
 
+    // The account-bound roster RPC is the only quota mutation boundary. The UI
+    // applies optimistically and rolls back on the server's atomic plan denial.
     const authorizeRosterMutation = async (nextStudents: RosterStudent[]): Promise<boolean> => {
-        const authorization = await queueRosterPlanSync(nextStudents);
-        if (authorization.ok) return true;
-        toast.error(
-            authorization.quota?.allowed === false ? "학생 등록 한도 도달" : "서버 플랜 확인 필요",
-            authorization.error || "서버에서 플랜과 학생 사용량을 확인한 뒤 다시 시도해주세요.",
-        );
-        return false;
+        void nextStudents;
+        return true;
     };
 
     // Recompute group stats from current students

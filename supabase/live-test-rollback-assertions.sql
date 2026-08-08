@@ -42,8 +42,11 @@ begin
            'public.omr_requeue_dead_remote_asset_cleanup_v1(text,text,integer,text,text)'::regprocedure
        ) not like '%attempts = queue.attempts + 1%'
        or pg_catalog.pg_get_functiondef(
-           'public.omr_claim_remote_asset_cleanup_v1(text,integer,integer)'::regprocedure
+           'public.omr_claim_remote_asset_cleanup_v8_snapshot(text,integer,integer)'::regprocedure
        ) not like '%retry_count = queue.retry_count + 1%'
+       or pg_catalog.pg_get_functiondef(
+           'public.omr_claim_remote_asset_cleanup_v1(text,integer,integer)'::regprocedure
+       ) not like '%omr_claim_remote_asset_cleanup_v8_snapshot%'
        or pg_catalog.obj_description(
            'public.omr_checkpoint_attempt_session_v1(text,text,text,bigint,bigint,text,jsonb,jsonb,jsonb,integer,boolean)'::regprocedure,
            'pg_proc'
@@ -91,6 +94,22 @@ begin
        or pg_catalog.has_table_privilege('service_role', 'public.omr_pilot_plan_grants', 'SELECT,INSERT,UPDATE,DELETE') then
         raise exception 'rollback exposed RPC-only pilot grant ledger';
     end if;
+    if exists (
+        select 1 from pg_catalog.unnest(array[
+            'public.omr_remote_assets', 'public.omr_remote_asset_upload_intents',
+            'public.omr_remote_asset_cleanup_queue', 'public.omr_plan_usage',
+            'public.omr_plan_usage_reservations'
+        ]) as guarded(table_name)
+         where not pg_catalog.has_table_privilege('service_role', table_name, 'SELECT')
+            or pg_catalog.has_table_privilege(
+                'service_role', table_name,
+                'INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER,MAINTAIN'
+            )
+    ) or pg_catalog.has_sequence_privilege(
+        'service_role', 'public.omr_remote_asset_cleanup_queue_id_seq', 'USAGE,SELECT,UPDATE'
+    ) then
+        raise exception 'rollback reopened direct Phase C state mutation';
+    end if;
     if not pg_catalog.has_function_privilege(
         'service_role',
         'public.omr_authorize_remote_asset_cleanup_delete_v1(text,text,integer)',
@@ -109,18 +128,18 @@ begin
         'EXECUTE'
     ) or not pg_catalog.has_function_privilege(
         'service_role',
-        'public.omr_save_exam_v2(jsonb,jsonb,jsonb,text,bigint,text)',
+        'public.omr_save_exam_v3(text,text,bigint,text,jsonb,jsonb,jsonb,bigint,text)',
         'EXECUTE'
     ) or not pg_catalog.has_function_privilege(
         'service_role', 'public.omr_bootstrap_workspace_organization_v1(text,text,jsonb,timestamptz)', 'EXECUTE'
     ) or not pg_catalog.has_function_privilege(
-        'service_role', 'public.omr_save_feedback_v2(text,jsonb,bigint,text)', 'EXECUTE'
+        'service_role', 'public.omr_save_feedback_v4(text,text,bigint,text,text,jsonb,bigint,text)', 'EXECUTE'
     ) or not pg_catalog.has_function_privilege(
-        'service_role', 'public.omr_return_feedback_v2(text,text,bigint,text)', 'EXECUTE'
+        'service_role', 'public.omr_return_feedback_v4(text,text,bigint,text,text,text,bigint,text)', 'EXECUTE'
     ) or not pg_catalog.has_function_privilege(
-        'service_role', 'public.omr_save_feedback_v3(text,jsonb,bigint,text)', 'EXECUTE'
+        'service_role', 'public.omr_save_roster_v3(text,text,bigint,text,text,jsonb,jsonb,jsonb,jsonb,bigint)', 'EXECUTE'
     ) or not pg_catalog.has_function_privilege(
-        'service_role', 'public.omr_return_feedback_v3(text,text,bigint,text)', 'EXECUTE'
+        'service_role', 'public.omr_sync_student_plan_usage_v2(text,text,bigint,text,text)', 'EXECUTE'
     ) or not pg_catalog.has_function_privilege(
         'service_role', 'public.omr_gc_attempt_sessions_v1(integer,integer)', 'EXECUTE'
     ) or not pg_catalog.has_function_privilege(
@@ -152,9 +171,9 @@ begin
     ) or not pg_catalog.has_function_privilege(
         'service_role', 'public.omr_mutate_teacher_notification_state_v1(text,text,text,text[])', 'EXECUTE'
     ) or not pg_catalog.has_function_privilege(
-        'service_role', 'public.omr_assign_students_v1(text,text,text,text,text[],text,bigint,text)', 'EXECUTE'
+        'service_role', 'public.omr_assign_students_v2(text,text,bigint,text,text,text,text,text[],text,bigint,text)', 'EXECUTE'
     ) or not pg_catalog.has_function_privilege(
-        'service_role', 'public.omr_clear_student_assignment_v1(text,text,text,text,bigint,text,text[],text)', 'EXECUTE'
+        'service_role', 'public.omr_clear_student_assignment_v2(text,text,bigint,text,text,text,text,bigint,text,text[],text)', 'EXECUTE'
     ) or not pg_catalog.has_function_privilege(
         'service_role', 'public.omr_load_teacher_student_assignment_v1(text,text,text,text)', 'EXECUTE'
     ) or not pg_catalog.has_function_privilege(
@@ -200,8 +219,43 @@ begin
         'service_role', 'public.omr_validate_targeted_attempt_v1()', 'EXECUTE'
     ) or pg_catalog.has_function_privilege(
         'service_role', 'public.omr_guard_targeted_exam_access_v1()', 'EXECUTE'
+    ) or pg_catalog.has_function_privilege(
+        'service_role', 'public.omr_save_exam_v2(jsonb,jsonb,jsonb,text,bigint,text)', 'EXECUTE'
+    ) or pg_catalog.has_function_privilege(
+        'service_role', 'public.omr_save_feedback_v2(text,jsonb,bigint,text)', 'EXECUTE'
+    ) or pg_catalog.has_function_privilege(
+        'service_role', 'public.omr_return_feedback_v2(text,text,bigint,text)', 'EXECUTE'
+    ) or pg_catalog.has_function_privilege(
+        'service_role', 'public.omr_save_feedback_v3(text,jsonb,bigint,text)', 'EXECUTE'
+    ) or pg_catalog.has_function_privilege(
+        'service_role', 'public.omr_return_feedback_v3(text,text,bigint,text)', 'EXECUTE'
     ) then
         raise exception 'rollback reopened a retired or private gateway';
+    end if;
+    if exists (
+        select 1 from pg_catalog.unnest(array[
+            'public.omr_save_roster_v3(text,text,bigint,text,text,jsonb,jsonb,jsonb,jsonb,bigint)',
+            'public.omr_save_exam_v3(text,text,bigint,text,jsonb,jsonb,jsonb,bigint,text)',
+            'public.omr_save_feedback_v4(text,text,bigint,text,text,jsonb,bigint,text)',
+            'public.omr_return_feedback_v4(text,text,bigint,text,text,text,bigint,text)',
+            'public.omr_assign_students_v2(text,text,bigint,text,text,text,text,text[],text,bigint,text)',
+            'public.omr_clear_student_assignment_v2(text,text,bigint,text,text,text,text,bigint,text,text[],text)',
+            'public.omr_open_attempt_session_v2(text,text,text,text,text,text,text,text,text,text,text,integer[],integer[],timestamptz,jsonb,integer,timestamptz,text,text,integer)',
+            'public.omr_prepare_teacher_asset_upload_v2(text,text,bigint,text,text,jsonb)',
+            'public.omr_authorize_teacher_asset_finalize_v2(text,text,bigint,text,text,text,jsonb)',
+            'public.omr_finalize_teacher_asset_upload_v2(text,text,bigint,text,text,text,jsonb)',
+            'public.omr_prepare_attempt_handwriting_asset_v2(text,text,text,jsonb)',
+            'public.omr_attach_attempt_handwriting_v2(text,text,text,text,text)',
+            'public.omr_claim_remote_asset_cleanup_v1(text,integer,integer)',
+            'public.omr_reserve_plan_usage_v2(text,text,bigint,text,text,text,text)',
+            'public.omr_release_plan_usage_v2(text,text,bigint,text,text,text,text)',
+            'public.omr_sync_student_plan_usage_v2(text,text,bigint,text,text)'
+        ]) as signatures(signature)
+         where not pg_catalog.has_function_privilege('service_role', signature, 'EXECUTE')
+            or pg_catalog.has_function_privilege('anon', signature, 'EXECUTE')
+            or pg_catalog.has_function_privilege('authenticated', signature, 'EXECUTE')
+    ) then
+        raise exception 'rollback lost an exact Phase C service gateway ACL';
     end if;
     if exists (
         select 1
@@ -265,3 +319,73 @@ begin
     end if;
 end
 $$;
+
+set role service_role;
+do $$
+declare
+    v_signature text;
+    v_call text;
+begin
+    foreach v_signature in array array[
+        'public.omr_save_remote_asset_metadata_v1(jsonb)',
+        'public.omr_save_roster_v2(text,jsonb,jsonb,jsonb,jsonb,bigint)',
+        'public.omr_save_roster_v1(text,jsonb,jsonb,jsonb,jsonb)',
+        'public.omr_save_roster_plan_unlocked_v1(text,jsonb,jsonb,jsonb,jsonb)',
+        'public.omr_save_roster_unlocked_v1(text,jsonb,jsonb,jsonb,jsonb)',
+        'public.omr_save_exam_v2(jsonb,jsonb,jsonb,text,bigint,text)',
+        'public.omr_save_exam_v1(jsonb,jsonb,jsonb,text)',
+        'public.omr_save_exam_v10_snapshot(jsonb,jsonb,jsonb,text)',
+        'public.omr_save_exam_v6_snapshot(jsonb,jsonb,jsonb,text)',
+        'public.omr_save_exam_plan_unlocked_v1(jsonb,jsonb)',
+        'public.omr_prepare_teacher_asset_upload_v1(jsonb)',
+        'public.omr_prepare_teacher_asset_upload_v6_snapshot(jsonb)',
+        'public.omr_authorize_teacher_asset_finalize_v1(text,text,text,jsonb)',
+        'public.omr_finalize_teacher_asset_upload_v1(text,text,text,jsonb)',
+        'public.omr_prepare_attempt_handwriting_asset_v1(text,jsonb)',
+        'public.omr_attach_attempt_handwriting_v1(text,text,jsonb)',
+        'public.omr_save_feedback_v3(text,jsonb,bigint,text)',
+        'public.omr_return_feedback_v3(text,text,bigint,text)',
+        'public.omr_save_feedback_v2(text,jsonb,bigint,text)',
+        'public.omr_return_feedback_v2(text,text,bigint,text)',
+        'public.omr_save_feedback_v1(text,jsonb)',
+        'public.omr_return_feedback_v1(text,text,timestamp with time zone)',
+        'public.omr_assign_students_v1(text,text,text,text,text[],text,bigint,text)',
+        'public.omr_clear_student_assignment_v1(text,text,text,text,bigint,text,text[],text)',
+        'public.omr_open_attempt_session_v1(text,text,text,text,text,text,text,text,text,text,text,integer[],integer[],timestamp with time zone,jsonb,integer,timestamp with time zone,text,text,integer)',
+        'public.omr_reserve_plan_usage(text,text,date,text,integer,integer,integer)',
+        'public.omr_release_plan_usage(text,text,date,text)',
+        'public.omr_release_plan_usage_v10_snapshot(text,text,date,text)',
+        'public.omr_sync_student_plan_usage(text,text[],integer,integer)'
+    ] loop
+        select pg_catalog.format(
+                   'select %I.%I(%s)', namespace.nspname, routine.proname,
+                   coalesce((
+                       select pg_catalog.string_agg(
+                           'null::' || pg_catalog.format_type(argument_type, null), ','
+                       )
+                         from pg_catalog.unnest(routine.proargtypes::oid[]) argument_type
+                   ), '')
+               )
+          into v_call
+          from pg_catalog.pg_proc routine
+          join pg_catalog.pg_namespace namespace on namespace.oid = routine.pronamespace
+         where routine.oid = pg_catalog.to_regprocedure(v_signature);
+        if v_call is null then
+            raise exception 'rollback retired Phase C signature disappeared: %', v_signature;
+        end if;
+        begin
+            execute v_call;
+            raise exception 'rollback let service_role execute retired Phase C signature: %', v_signature;
+        exception
+            when insufficient_privilege then null;
+        end;
+    end loop;
+    begin
+        perform public.omr_set_effective_plan_transaction_proof_v1('org_probe', '{}'::jsonb);
+        raise exception 'rollback let service_role execute a private Phase C helper';
+    exception
+        when insufficient_privilege then null;
+    end;
+end
+$$;
+reset role;

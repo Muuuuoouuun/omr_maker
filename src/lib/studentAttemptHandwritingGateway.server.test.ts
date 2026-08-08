@@ -1,18 +1,35 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { RemoteAssetSupabaseGatewayClient } from "./remoteAssetGateway.server";
 import {
     archiveStudentAttemptHandwritingWithGateway,
     canonicalAttemptHandwritingAssetId,
 } from "./studentAttemptHandwritingGateway.server";
 
-function mockGateway(options: { attachFailures?: number; prepareResponseLosses?: number } = {}) {
+function mockGateway(options: {
+    attachFailures?: number;
+    prepareResponseLosses?: number;
+    attachResult?: unknown;
+    attachResponseLossAfterCommit?: boolean;
+} = {}) {
     const calls: string[] = [];
     const preparedAssetIds: string[] = [];
     const uploadedPaths = new Set<string>();
     let attached = false;
     let attachFailures = options.attachFailures || 0;
     let prepareResponseLosses = options.prepareResponseLosses || 0;
+    let attachResponseLossAfterCommit = options.attachResponseLossAfterCommit === true;
     let reservedAsset: Record<string, unknown> | null = null;
+    const drawingsRef = () => ({
+        store: "remote",
+        key: String(reservedAsset?.id),
+        organizationId: String(reservedAsset?.organization_id),
+        kind: "attempt_handwriting",
+        attemptId: String(reservedAsset?.attempt_id),
+        name: String(reservedAsset?.original_name),
+        mimeType: "application/json",
+        size: Number(reservedAsset?.byte_size),
+        updatedAt: "2026-08-06T00:00:00.000000Z",
+    });
     const client = {
         storage: {
             from() {
@@ -35,7 +52,9 @@ function mockGateway(options: { attachFailures?: number; prepareResponseLosses?:
         },
         async rpc(name: string, params?: Record<string, unknown>) {
             calls.push(name);
-            if (name === "omr_prepare_attempt_handwriting_asset_v1") {
+            if (name === "omr_prepare_attempt_handwriting_asset_v2") {
+                expect(params?.p_organization_id).toBe("org-1");
+                expect(params?.p_owner_student_id).toBe("student-1");
                 const candidate = params?.p_asset as Record<string, unknown>;
                 preparedAssetIds.push(String(candidate.id));
                 reservedAsset ||= {
@@ -53,18 +72,31 @@ function mockGateway(options: { attachFailures?: number; prepareResponseLosses?:
                         status: attached ? "attached" : "reserved",
                         objectRequired: !uploadedPaths.has(String(reservedAsset.object_path)),
                         asset: reservedAsset,
+                        ...(attached ? { drawingsRef: drawingsRef() } : {}),
                     },
                     error: null,
                 };
             }
-            if (name === "omr_save_remote_asset_metadata_v1") return { data: reservedAsset, error: null };
-            if (name === "omr_attach_attempt_handwriting_v1") {
+            if (name === "omr_attach_attempt_handwriting_v2") {
+                expect(params?.p_session_id).toBe("session-1");
+                expect(params?.p_organization_id).toBe("org-1");
+                expect(params?.p_owner_student_id).toBe("student-1");
+                expect(params).not.toHaveProperty("p_ref");
                 if (attachFailures > 0) {
                     attachFailures -= 1;
                     return { data: null, error: { message: "attach failed" } };
                 }
                 attached = true;
-                return { data: {}, error: null };
+                if (attachResponseLossAfterCommit) {
+                    attachResponseLossAfterCommit = false;
+                    return { data: null, error: { message: "response lost" } };
+                }
+                return {
+                    data: options.attachResult === undefined
+                        ? { drawingsRef: drawingsRef() }
+                        : options.attachResult,
+                    error: null,
+                };
             }
             if (name === "omr_discard_attempt_handwriting_asset_v1") {
                 reservedAsset = null;
@@ -90,6 +122,7 @@ function mockGateway(options: { attachFailures?: number; prepareResponseLosses?:
 const input = {
     sessionId: "session-1",
     organizationId: "org-1",
+    ownerStudentId: "student-1",
     attemptId: "attempt-1",
     attachmentTicketId: "ticket-1",
     body: new TextEncoder().encode("{}"),
@@ -121,6 +154,7 @@ describe("durable attempt handwriting archive gateway", () => {
         expect(preparedAssetIds).toHaveLength(2);
         expect(preparedAssetIds[0]).not.toBe(preparedAssetIds[1]);
         expect(calls.filter(call => call === "upload")).toHaveLength(1);
+        expect(calls).not.toContain("omr_save_remote_asset_metadata_v1");
     });
 
     it("reuses one authoritative immutable reservation after attachment", async () => {
@@ -128,12 +162,46 @@ describe("durable attempt handwriting archive gateway", () => {
         await expect(archiveStudentAttemptHandwritingWithGateway(client, input)).resolves.toMatchObject({ status: "uploaded" });
         await expect(archiveStudentAttemptHandwritingWithGateway(client, input)).resolves.toMatchObject({ status: "uploaded" });
         expect(calls.filter(call => call === "upload")).toHaveLength(1);
-        expect(calls.filter(call => call === "omr_attach_attempt_handwriting_v1")).toHaveLength(1);
+        expect(calls.filter(call => call === "omr_attach_attempt_handwriting_v2")).toHaveLength(1);
+        expect(calls).not.toContain("omr_save_remote_asset_metadata_v1");
     });
 
-    it("discards the registry reservation when canonical attachment fails", async () => {
+    it("does not discard a reservation when the attach response may have been lost", async () => {
         const { client, calls } = mockGateway({ attachFailures: 1 });
         await expect(archiveStudentAttemptHandwritingWithGateway(client, input)).resolves.toEqual({ status: "service_unavailable" });
-        expect(calls).toContain("omr_discard_attempt_handwriting_asset_v1");
+        expect(calls).not.toContain("omr_discard_attempt_handwriting_asset_v1");
+    });
+
+    it("recovers an attach response loss through the exact attached prepare replay", async () => {
+        const { client, calls } = mockGateway({ attachResponseLossAfterCommit: true });
+        await expect(archiveStudentAttemptHandwritingWithGateway(client, input))
+            .resolves.toEqual({ status: "service_unavailable" });
+        await expect(archiveStudentAttemptHandwritingWithGateway(client, input))
+            .resolves.toMatchObject({ status: "uploaded" });
+        expect(calls.filter(call => call === "upload")).toHaveLength(1);
+        expect(calls).not.toContain("omr_discard_attempt_handwriting_asset_v1");
+    });
+
+    it("rejects arrays, extras and accessors in the authoritative attached ref", async () => {
+        const getter = vi.fn(() => "remote");
+        const hostileRef = Object.defineProperty({
+            key: "x", organizationId: "org-1", kind: "attempt_handwriting",
+            attemptId: "attempt-1", name: "handwriting.json", mimeType: "application/json",
+            size: 2, updatedAt: "2026-08-06T00:00:00.000000Z",
+        }, "store", { enumerable: true, get: getter });
+        for (const attachResult of [
+            [{ drawingsRef: {} }],
+            { drawingsRef: {
+                store: "remote", key: "x", organizationId: "org-1", kind: "attempt_handwriting",
+                attemptId: "attempt-1", name: "handwriting.json", mimeType: "application/json",
+                size: 2, updatedAt: "2026-08-06T00:00:00.000000Z", extra: true,
+            } },
+            { drawingsRef: hostileRef },
+        ]) {
+            const { client } = mockGateway({ attachResult });
+            await expect(archiveStudentAttemptHandwritingWithGateway(client, input))
+                .resolves.toEqual({ status: "service_unavailable" });
+        }
+        expect(getter).not.toHaveBeenCalled();
     });
 });

@@ -132,7 +132,8 @@ describe("remote asset server contract", () => {
         expect(action).toContain("prepareTeacherExamAssetUpload");
         expect(action).toContain("finalizeTeacherExamAssetUpload");
         expect(action).toContain("getTeacherRemoteAssetUrl");
-        expect(gateway).toContain("uploadRemoteAssetWithGateway");
+        expect(gateway).not.toContain("uploadRemoteAssetWithGateway");
+        expect(gateway).toContain("omr_prepare_teacher_asset_upload_v2");
         expect(gateway).toContain("createStaffRemoteAssetSignedUrlWithGateway");
     });
 });

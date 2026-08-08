@@ -40,7 +40,7 @@ async function signedTeacherSession() {
 
 async function accessAndStore() {
     const session = await signedTeacherSession();
-    let store = createServerPlanStoreFromEnv();
+    let store = createServerPlanStoreFromEnv(process.env, session);
 
     // Local development must still support the complete teacher workflow when
     // a hosted Supabase backend has not been configured. Keep that fallback
@@ -92,19 +92,15 @@ async function reserveMetric(
         return { ok: false, access, error: serverPlanUnavailableMessage(access) };
     }
     const limit = planLimit(access.plan, metric);
-    if (!Number.isFinite(limit)) {
-        return { ok: true, access, quota: evaluateServerPlanQuota(access.plan, metric, 0, attempted) };
-    }
     try {
         const period = seoulBillingPeriod();
-        const observedUsed = await store.readUsage(access.organizationId, metric, period);
         const reserved = await store.reserveUsage({
             organizationId: access.organizationId,
             metric,
             period,
             resourceKey,
             attempted,
-            observedUsed,
+            observedUsed: 0,
             limit,
         });
         const quota = {
@@ -133,7 +129,6 @@ async function releaseMetric(
         return { ok: false, released: false, error: serverPlanUnavailableMessage(access) };
     }
     if (!resourceKey.trim()) return { ok: false, released: false, error: "사용량 예약 키가 없습니다." };
-    if (!Number.isFinite(planLimit(access.plan, metric))) return { ok: true, released: false };
     try {
         const result = await store.releaseUsage({
             organizationId: access.organizationId,
@@ -183,23 +178,11 @@ export async function authorizeRosterStudentSet(studentIds: string[]): Promise<P
         .map(id => id.trim())
         .filter(Boolean))];
     const limit = planLimit(access.plan, "students");
-    if (!Number.isFinite(limit)) {
-        return { ok: true, access, quota: evaluateServerPlanQuota(access.plan, "students", resourceKeys.length, 0) };
-    }
-    if (resourceKeys.length > limit) {
-        return {
-            ok: false,
-            access,
-            quota: { ...evaluateServerPlanQuota(access.plan, "students", resourceKeys.length, 0), allowed: false },
-            error: `현재 플랜은 학생 ${limit}명까지 등록할 수 있습니다.`,
-        };
-    }
     try {
-        const observedUsed = await store.readUsage(access.organizationId, "students", seoulBillingPeriod());
         const synced = await store.syncStudentUsage({
             organizationId: access.organizationId,
             resourceKeys,
-            observedUsed,
+            observedUsed: 0,
             limit,
         });
         const quota = {

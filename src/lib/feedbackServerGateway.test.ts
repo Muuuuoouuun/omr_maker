@@ -18,9 +18,12 @@ import type { AttemptFeedback } from "@/types/omr";
 import { INITIAL_OPERATIONS_LIMITS } from "./initialOperationsPolicy";
 
 const context = {
-    organizationId: "org-1",
+    organizationId: "pilot_org_0123456789abcdef01234567",
     organizationName: "조직 1",
-    actorUserId: "teacher-1",
+    actorUserId: "teacher_0123456789abcdef",
+    accountId: "teacher_0123456789abcdef",
+    accountSessionGeneration: 3,
+    sessionAuthority: "account" as const,
 };
 
 const feedback: AttemptFeedback = {
@@ -79,7 +82,7 @@ function mockClient(row = returnedRow()) {
         },
         async rpc(name, args) {
             rpcCalls.push({ name, args });
-            if (name === "omr_save_feedback_v3") {
+            if (name === "omr_save_feedback_v4") {
                 const persisted = { ...(args.p_feedback as Record<string, unknown>) };
                 delete persisted.markup_drawings;
                 return {
@@ -96,7 +99,7 @@ function mockClient(row = returnedRow()) {
                     error: null,
                 };
             }
-            if (name === "omr_return_feedback_v3") {
+            if (name === "omr_return_feedback_v4") {
                 const persisted = { ...row };
                 delete persisted.markup_drawings;
                 return {
@@ -127,13 +130,17 @@ describe("feedback server gateway", () => {
         expect(result.status).toBe("saved");
         expect(rpcCalls).toHaveLength(1);
         expect(rpcCalls[0]).toMatchObject({
-            name: "omr_save_feedback_v3",
+            name: "omr_save_feedback_v4",
             args: {
-                p_organization_id: "org-1",
+                p_session_authority: "account",
+                p_account_id: context.accountId,
+                p_session_generation: 3,
+                p_actor_user_id: context.actorUserId,
+                p_organization_id: context.organizationId,
                 p_expected_revision: 2,
                 p_feedback: {
-                    organization_id: "org-1",
-                    teacher_user_id: "teacher-1",
+                    organization_id: context.organizationId,
+                    teacher_user_id: context.actorUserId,
                     status: "draft",
                     markup_drawings: { 1: ["stroke"] },
                 },
@@ -153,11 +160,15 @@ describe("feedback server gateway", () => {
         await expect(returnTeacherFeedbackWithGateway(client, feedback, context)).resolves.toMatchObject({
             status: "returned",
         });
-        expect(filters).toContainEqual(["organization_id", "org-1"]);
+        expect(filters).toContainEqual(["organization_id", context.organizationId]);
         expect(rpcCalls[0]).toMatchObject({
-            name: "omr_return_feedback_v3",
+            name: "omr_return_feedback_v4",
             args: {
-                p_organization_id: "org-1",
+                p_session_authority: "account",
+                p_account_id: context.accountId,
+                p_session_generation: 3,
+                p_actor_user_id: context.actorUserId,
+                p_organization_id: context.organizationId,
                 p_feedback_id: feedback.id,
                 p_expected_revision: 2,
             },

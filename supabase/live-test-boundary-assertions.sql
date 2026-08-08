@@ -76,7 +76,7 @@ begin
         raise exception 'production boundary left browser canonical access';
     end if;
     readiness := public.omr_service_readiness_v1();
-    if readiness ->> 'version' <> '202608080007'
+    if readiness ->> 'version' <> '202608080008'
        or readiness ->> 'ready' <> 'true'
        or readiness ->> 'teacherUploadCleanupQueueReady' <> 'true'
        or readiness ->> 'studentAttemptSessionsReady' <> 'true'
@@ -103,7 +103,8 @@ begin
        or readiness ->> 'teacherAttemptReportingReady' <> 'true'
        or readiness ->> 'operationalJobStatusReady' <> 'true'
        or readiness ->> 'operatorPilotProvisioningReady' <> 'true'
-       or readiness ->> 'provisionedTeacherLoginReady' <> 'true' then
+       or readiness ->> 'provisionedTeacherLoginReady' <> 'true'
+       or readiness ->> 'effectiveWorkspacePlanEnforcementReady' <> 'true' then
         raise exception 'production boundary readiness failed: %', readiness;
     end if;
     if pg_catalog.has_table_privilege(
@@ -118,6 +119,18 @@ begin
         'service_role', 'public.omr_operational_job_status', 'SELECT,INSERT,UPDATE,DELETE'
     ) or pg_catalog.has_table_privilege(
         'service_role', 'public.omr_pilot_plan_grants', 'SELECT,INSERT,UPDATE,DELETE'
+    ) or pg_catalog.has_table_privilege(
+        'service_role', 'public.omr_remote_assets', 'INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER,MAINTAIN'
+    ) or pg_catalog.has_table_privilege(
+        'service_role', 'public.omr_remote_asset_upload_intents', 'INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER,MAINTAIN'
+    ) or pg_catalog.has_table_privilege(
+        'service_role', 'public.omr_remote_asset_cleanup_queue', 'INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER,MAINTAIN'
+    ) or pg_catalog.has_table_privilege(
+        'service_role', 'public.omr_plan_usage', 'INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER,MAINTAIN'
+    ) or pg_catalog.has_table_privilege(
+        'service_role', 'public.omr_plan_usage_reservations', 'INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER,MAINTAIN'
+    ) or pg_catalog.has_sequence_privilege(
+        'service_role', 'public.omr_remote_asset_cleanup_queue_id_seq', 'USAGE,SELECT,UPDATE'
     ) then
         raise exception 'production boundary exposed RPC-only state tables';
     end if;
@@ -159,7 +172,7 @@ begin
         'EXECUTE'
     ) or not pg_catalog.has_function_privilege(
         'service_role',
-        'public.omr_save_exam_v2(jsonb,jsonb,jsonb,text,bigint,text)',
+        'public.omr_save_exam_v3(text,text,bigint,text,jsonb,jsonb,jsonb,bigint,text)',
         'EXECUTE'
     ) or not pg_catalog.has_function_privilege(
         'service_role',
@@ -179,19 +192,19 @@ begin
         'EXECUTE'
     ) or not pg_catalog.has_function_privilege(
         'service_role',
-        'public.omr_save_feedback_v2(text,jsonb,bigint,text)',
+        'public.omr_save_feedback_v4(text,text,bigint,text,text,jsonb,bigint,text)',
         'EXECUTE'
     ) or not pg_catalog.has_function_privilege(
         'service_role',
-        'public.omr_return_feedback_v2(text,text,bigint,text)',
+        'public.omr_return_feedback_v4(text,text,bigint,text,text,text,bigint,text)',
         'EXECUTE'
     ) or not pg_catalog.has_function_privilege(
         'service_role',
-        'public.omr_save_feedback_v3(text,jsonb,bigint,text)',
+        'public.omr_save_roster_v3(text,text,bigint,text,text,jsonb,jsonb,jsonb,jsonb,bigint)',
         'EXECUTE'
     ) or not pg_catalog.has_function_privilege(
         'service_role',
-        'public.omr_return_feedback_v3(text,text,bigint,text)',
+        'public.omr_sync_student_plan_usage_v2(text,text,bigint,text,text)',
         'EXECUTE'
     ) or not pg_catalog.has_function_privilege(
         'service_role', 'public.omr_gc_attempt_sessions_v1(integer,integer)', 'EXECUTE'
@@ -234,8 +247,216 @@ begin
         'service_role', 'public.omr_initial_ops_operation_v1(text,text,text,text,text,text,jsonb)', 'EXECUTE'
     ) or pg_catalog.has_function_privilege(
         'service_role', 'public.omr_initial_ops_reserve_upload_v1(text,text,text,text,text,text,bigint)', 'EXECUTE'
+    ) or pg_catalog.has_function_privilege(
+        'service_role', 'public.omr_save_exam_v2(jsonb,jsonb,jsonb,text,bigint,text)', 'EXECUTE'
+    ) or pg_catalog.has_function_privilege(
+        'service_role', 'public.omr_save_feedback_v2(text,jsonb,bigint,text)', 'EXECUTE'
+    ) or pg_catalog.has_function_privilege(
+        'service_role', 'public.omr_return_feedback_v2(text,text,bigint,text)', 'EXECUTE'
+    ) or pg_catalog.has_function_privilege(
+        'service_role', 'public.omr_save_feedback_v3(text,jsonb,bigint,text)', 'EXECUTE'
+    ) or pg_catalog.has_function_privilege(
+        'service_role', 'public.omr_return_feedback_v3(text,text,bigint,text)', 'EXECUTE'
     ) then
         raise exception 'production boundary exposed a retired unfenced gateway';
     end if;
+    if exists (
+        select 1 from pg_catalog.unnest(array[
+            'public.omr_save_roster_v3(text,text,bigint,text,text,jsonb,jsonb,jsonb,jsonb,bigint)',
+            'public.omr_save_exam_v3(text,text,bigint,text,jsonb,jsonb,jsonb,bigint,text)',
+            'public.omr_save_feedback_v4(text,text,bigint,text,text,jsonb,bigint,text)',
+            'public.omr_return_feedback_v4(text,text,bigint,text,text,text,bigint,text)',
+            'public.omr_assign_students_v2(text,text,bigint,text,text,text,text,text[],text,bigint,text)',
+            'public.omr_clear_student_assignment_v2(text,text,bigint,text,text,text,text,bigint,text,text[],text)',
+            'public.omr_open_attempt_session_v2(text,text,text,text,text,text,text,text,text,text,text,integer[],integer[],timestamptz,jsonb,integer,timestamptz,text,text,integer)',
+            'public.omr_prepare_teacher_asset_upload_v2(text,text,bigint,text,text,jsonb)',
+            'public.omr_authorize_teacher_asset_finalize_v2(text,text,bigint,text,text,text,jsonb)',
+            'public.omr_finalize_teacher_asset_upload_v2(text,text,bigint,text,text,text,jsonb)',
+            'public.omr_prepare_attempt_handwriting_asset_v2(text,text,text,jsonb)',
+            'public.omr_attach_attempt_handwriting_v2(text,text,text,text,text)',
+            'public.omr_claim_remote_asset_cleanup_v1(text,integer,integer)',
+            'public.omr_reserve_plan_usage_v2(text,text,bigint,text,text,text,text)',
+            'public.omr_release_plan_usage_v2(text,text,bigint,text,text,text,text)',
+            'public.omr_sync_student_plan_usage_v2(text,text,bigint,text,text)'
+        ]) as signatures(signature)
+         where not pg_catalog.has_function_privilege('service_role', signature, 'EXECUTE')
+            or pg_catalog.has_function_privilege('anon', signature, 'EXECUTE')
+            or pg_catalog.has_function_privilege('authenticated', signature, 'EXECUTE')
+    ) then
+        raise exception 'production boundary lost an exact Phase C service gateway ACL';
+    end if;
+    if exists (
+        select 1 from pg_catalog.unnest(array[
+            'public.omr_lock_provisioned_teacher_identity_v1(text,bigint,text)',
+            'public.omr_set_effective_plan_transaction_proof_v1(text,jsonb)',
+            'public.omr_save_exam_effective_worker_v3(text,text,text,text,jsonb,jsonb,jsonb)',
+            'public.omr_claim_remote_asset_cleanup_v8_snapshot(text,integer,integer)',
+            'public.omr_assert_targeted_assignment_scope_v1(text,text,text,text,text,text,integer[])'
+        ]) as signatures(signature)
+         where pg_catalog.has_function_privilege('service_role', signature, 'EXECUTE')
+            or pg_catalog.has_function_privilege('anon', signature, 'EXECUTE')
+            or pg_catalog.has_function_privilege('authenticated', signature, 'EXECUTE')
+    ) then
+        raise exception 'production boundary exposed a private Phase C worker';
+    end if;
 end
 $$;
+
+-- The named Phase C readiness bit must detect semantic body, overload, and ACL
+-- drift and return to ready only after the exact catalog is restored.
+do $$
+declare
+    v_original_definition text;
+begin
+    select pg_catalog.pg_get_functiondef(
+        'public.omr_set_effective_plan_transaction_proof_v1(text,jsonb)'::pg_catalog.regprocedure
+    ) into v_original_definition;
+
+    execute $drift$
+        create or replace function public.omr_set_effective_plan_transaction_proof_v1(
+            p_organization_id text, p_effective jsonb
+        )
+        returns void language plpgsql security definer
+        set search_path = '' set statement_timeout = '5s' set lock_timeout = '2s'
+        as 'begin return; end'
+    $drift$;
+    if (public.omr_service_readiness_v1()->>'effectiveWorkspacePlanEnforcementReady')::boolean then
+        raise exception 'Phase C readiness accepted private proof-setter body drift';
+    end if;
+    execute v_original_definition;
+    if not (public.omr_service_readiness_v1()->>'effectiveWorkspacePlanEnforcementReady')::boolean then
+        raise exception 'Phase C readiness did not recover after body restoration';
+    end if;
+
+    create function public.omr_release_plan_usage_v2(text)
+    returns jsonb language sql security definer
+    set search_path = '' set statement_timeout = '5s' set lock_timeout = '2s'
+    as 'select ''{}''::jsonb';
+    if (public.omr_service_readiness_v1()->>'effectiveWorkspacePlanEnforcementReady')::boolean then
+        raise exception 'Phase C readiness accepted an impostor overload';
+    end if;
+    drop function public.omr_release_plan_usage_v2(text);
+    if not (public.omr_service_readiness_v1()->>'effectiveWorkspacePlanEnforcementReady')::boolean then
+        raise exception 'Phase C readiness did not recover after overload removal';
+    end if;
+
+    grant execute on function public.omr_set_effective_plan_transaction_proof_v1(text,jsonb)
+        to service_role;
+    if (public.omr_service_readiness_v1()->>'effectiveWorkspacePlanEnforcementReady')::boolean then
+        raise exception 'Phase C readiness accepted private-helper ACL drift';
+    end if;
+    revoke execute on function public.omr_set_effective_plan_transaction_proof_v1(text,jsonb)
+        from service_role;
+    if not (public.omr_service_readiness_v1()->>'effectiveWorkspacePlanEnforcementReady')::boolean then
+        raise exception 'Phase C readiness did not recover after ACL restoration';
+    end if;
+end
+$$;
+
+set role service_role;
+do $$
+declare
+    v_signature text;
+    v_call text;
+begin
+    foreach v_signature in array array[
+        'public.omr_save_remote_asset_metadata_v1(jsonb)',
+        'public.omr_save_roster_v2(text,jsonb,jsonb,jsonb,jsonb,bigint)',
+        'public.omr_save_roster_v1(text,jsonb,jsonb,jsonb,jsonb)',
+        'public.omr_save_roster_plan_unlocked_v1(text,jsonb,jsonb,jsonb,jsonb)',
+        'public.omr_save_roster_unlocked_v1(text,jsonb,jsonb,jsonb,jsonb)',
+        'public.omr_save_exam_v2(jsonb,jsonb,jsonb,text,bigint,text)',
+        'public.omr_save_exam_v1(jsonb,jsonb,jsonb,text)',
+        'public.omr_save_exam_v10_snapshot(jsonb,jsonb,jsonb,text)',
+        'public.omr_save_exam_v6_snapshot(jsonb,jsonb,jsonb,text)',
+        'public.omr_save_exam_plan_unlocked_v1(jsonb,jsonb)',
+        'public.omr_prepare_teacher_asset_upload_v1(jsonb)',
+        'public.omr_prepare_teacher_asset_upload_v6_snapshot(jsonb)',
+        'public.omr_authorize_teacher_asset_finalize_v1(text,text,text,jsonb)',
+        'public.omr_finalize_teacher_asset_upload_v1(text,text,text,jsonb)',
+        'public.omr_prepare_attempt_handwriting_asset_v1(text,jsonb)',
+        'public.omr_attach_attempt_handwriting_v1(text,text,jsonb)',
+        'public.omr_save_feedback_v3(text,jsonb,bigint,text)',
+        'public.omr_return_feedback_v3(text,text,bigint,text)',
+        'public.omr_save_feedback_v2(text,jsonb,bigint,text)',
+        'public.omr_return_feedback_v2(text,text,bigint,text)',
+        'public.omr_save_feedback_v1(text,jsonb)',
+        'public.omr_return_feedback_v1(text,text,timestamp with time zone)',
+        'public.omr_assign_students_v1(text,text,text,text,text[],text,bigint,text)',
+        'public.omr_clear_student_assignment_v1(text,text,text,text,bigint,text,text[],text)',
+        'public.omr_open_attempt_session_v1(text,text,text,text,text,text,text,text,text,text,text,integer[],integer[],timestamp with time zone,jsonb,integer,timestamp with time zone,text,text,integer)',
+        'public.omr_reserve_plan_usage(text,text,date,text,integer,integer,integer)',
+        'public.omr_release_plan_usage(text,text,date,text)',
+        'public.omr_release_plan_usage_v10_snapshot(text,text,date,text)',
+        'public.omr_sync_student_plan_usage(text,text[],integer,integer)'
+    ] loop
+        select pg_catalog.format(
+                   'select %I.%I(%s)', namespace.nspname, routine.proname,
+                   coalesce((
+                       select pg_catalog.string_agg(
+                           'null::' || pg_catalog.format_type(argument_type, null), ','
+                       )
+                         from pg_catalog.unnest(routine.proargtypes::oid[]) argument_type
+                   ), '')
+               )
+          into v_call
+          from pg_catalog.pg_proc routine
+          join pg_catalog.pg_namespace namespace on namespace.oid = routine.pronamespace
+         where routine.oid = pg_catalog.to_regprocedure(v_signature);
+        if v_call is null then
+            raise exception 'retired Phase C signature disappeared: %', v_signature;
+        end if;
+        begin
+            execute v_call;
+            raise exception 'service_role executed retired Phase C signature: %', v_signature;
+        exception
+            when insufficient_privilege then null;
+        end;
+    end loop;
+    begin
+        perform public.omr_set_effective_plan_transaction_proof_v1('org_probe', '{}'::jsonb);
+        raise exception 'service_role executed a private Phase C helper';
+    exception
+        when insufficient_privilege then null;
+    end;
+end
+$$;
+reset role;
+
+begin;
+set local role service_role;
+do $$
+declare
+    v_created jsonb;
+    v_identity jsonb;
+    v_cleaned jsonb;
+begin
+    v_created := public.omr_initial_ops_fixture_v1(
+        'create', 'phasec-load-0001', pg_catalog.repeat('a', 64),
+        'teacher_2922a7a32fad97c8', 'initial_ops_exam_2922a7a32fad97c8'
+    );
+    v_identity := v_created -> 'teacherIdentity';
+    if pg_catalog.jsonb_typeof(v_identity) <> 'object'
+       or (select pg_catalog.count(*) from pg_catalog.jsonb_object_keys(v_identity)) <> 4
+       or v_identity ->> 'sessionAuthority' <> 'legacy_account'
+       or v_identity ->> 'accountId' <> 'teacher_2922a7a32fad97c8'
+       or v_identity ->> 'actorUserId' <> 'teacher_2922a7a32fad97c8'
+       or (v_identity ->> 'accountSessionGeneration')::bigint <> 1 then
+        raise exception 'initial operations Phase C identity envelope drifted: %', v_identity;
+    end if;
+    if public.omr_initial_ops_fixture_v1(
+        'cleanup', 'phasec-load-0001', pg_catalog.repeat('a', 64),
+        'teacher_2922a7a32fad97c8', 'initial_ops_exam_2922a7a32fad97c8'
+    ) ->> 'status' <> 'cleanup_pending' then
+        raise exception 'initial operations Phase C cleanup did not start';
+    end if;
+    v_cleaned := public.omr_initial_ops_fixture_v1(
+        'finalize_cleanup', 'phasec-load-0001', pg_catalog.repeat('a', 64),
+        'teacher_2922a7a32fad97c8', 'initial_ops_exam_2922a7a32fad97c8'
+    );
+    if v_cleaned ->> 'status' <> 'cleaned' then
+        raise exception 'initial operations Phase C cleanup did not finish: %', v_cleaned;
+    end if;
+end
+$$;
+rollback;

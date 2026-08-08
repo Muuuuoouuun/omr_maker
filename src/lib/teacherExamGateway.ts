@@ -103,9 +103,16 @@ export async function saveTeacherExamWithGateway(
 ): Promise<TeacherExamSaveResult> {
     const organizationId = clean(context.organizationId);
     const actorUserId = clean(context.actorUserId);
+    const accountId = clean(context.accountId);
+    const sessionAuthority = context.sessionAuthority;
+    const sessionGeneration = context.accountSessionGeneration;
     if (
         !organizationId
         || !actorUserId
+        || !accountId
+        || (sessionAuthority !== "account" && sessionAuthority !== "legacy_account")
+        || !Number.isSafeInteger(sessionGeneration)
+        || (sessionGeneration ?? 0) < 1
         || !clean(exam.id)
         || !clean(exam.title)
         || !Array.isArray(exam.questions)
@@ -162,11 +169,14 @@ export async function saveTeacherExamWithGateway(
         teacherAssetIntentIds,
         assetActorUserId: actorUserId,
     });
-    const result = await client.rpc("omr_save_exam_v2", {
+    const result = await client.rpc("omr_save_exam_v3", {
+        p_session_authority: sessionAuthority,
+        p_account_id: accountId,
+        p_session_generation: sessionGeneration,
+        p_actor_user_id: actorUserId,
         p_exam: examRow,
         p_questions: questionRows,
         p_teacher_asset_intent_ids: teacherAssetIntentIds,
-        p_asset_actor_user_id: actorUserId,
         p_expected_revision: expectedRevision,
         p_mutation_id: mutationId,
     });

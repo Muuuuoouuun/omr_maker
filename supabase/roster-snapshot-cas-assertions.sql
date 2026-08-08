@@ -83,21 +83,25 @@ begin
     end if;
     if has_function_privilege(
         'anon',
-        'public.omr_save_roster_v2(text,jsonb,jsonb,jsonb,jsonb,bigint)',
+        'public.omr_save_roster_v3(text,text,bigint,text,text,jsonb,jsonb,jsonb,jsonb,bigint)',
         'EXECUTE'
     ) or has_function_privilege(
         'authenticated',
-        'public.omr_save_roster_v2(text,jsonb,jsonb,jsonb,jsonb,bigint)',
+        'public.omr_save_roster_v3(text,text,bigint,text,text,jsonb,jsonb,jsonb,jsonb,bigint)',
         'EXECUTE'
     ) then
         raise exception 'browser role unexpectedly has roster CAS execute privilege';
     end if;
-    if not has_function_privilege(
+    if has_function_privilege(
         'service_role',
         'public.omr_save_roster_v2(text,jsonb,jsonb,jsonb,jsonb,bigint)',
         'EXECUTE'
+    ) or not has_function_privilege(
+        'service_role',
+        'public.omr_save_roster_v3(text,text,bigint,text,text,jsonb,jsonb,jsonb,jsonb,bigint)',
+        'EXECUTE'
     ) then
-        raise exception 'service role lost roster CAS execute privilege';
+        raise exception 'service role roster CAS boundary is not v3-only';
     end if;
 end;
 $$;
@@ -203,7 +207,7 @@ declare
     v_readiness jsonb;
 begin
     v_readiness := public.omr_service_readiness_v1();
-    if v_readiness->>'version' <> '202608080007'
+    if v_readiness->>'version' <> '202608080008'
        or v_readiness->>'rosterSnapshotCasReady' <> 'false'
        or v_readiness->>'serverGatewayCapabilitiesReady' <> 'false'
        or v_readiness->>'ready' <> 'false' then

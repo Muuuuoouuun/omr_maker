@@ -124,9 +124,23 @@ export async function saveTeacherRosterWithGateway(
     expectedRevision: number | null = null,
 ): Promise<TeacherRosterSaveResult> {
     const organizationId = clean(context.organizationId);
+    const accountId = clean(context.accountId);
+    const actorUserId = clean(context.actorUserId);
+    const sessionAuthority = context.sessionAuthority;
+    const sessionGeneration = context.accountSessionGeneration;
+    const validIdentity = (sessionAuthority === "account" || sessionAuthority === "legacy_account")
+        && !!accountId
+        && !!actorUserId
+        && Number.isSafeInteger(sessionGeneration)
+        && (sessionGeneration ?? 0) >= 1;
     if (!organizationId || !validSnapshot(snapshot)) return { status: "invalid_roster" };
+    if (!validIdentity) return { status: "service_unavailable", error: "Teacher session is unavailable" };
     const rows = rosterSnapshotToSupabaseRows(snapshot, organizationId, undefined, context.organizationName);
-    const result = await client.rpc("omr_save_roster_v2", {
+    const result = await client.rpc("omr_save_roster_v3", {
+        p_session_authority: sessionAuthority,
+        p_account_id: accountId,
+        p_session_generation: sessionGeneration,
+        p_actor_user_id: actorUserId,
         p_organization_id: organizationId,
         p_expected_revision: Number.isSafeInteger(expectedRevision) && (expectedRevision ?? -1) >= 0
             ? expectedRevision

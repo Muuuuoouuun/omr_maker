@@ -86,7 +86,6 @@ import {
     type PdfPageTextItems,
 } from "@/lib/pdfPassageGrouping";
 import { summarizePersistenceWrite } from "@/lib/persistenceFeedback";
-import { authorizeAdvancedQuestionDesign, authorizeExamCreation, releaseExamCreationAuthorization } from "@/app/actions/premiumAccess";
 import { hasPlanEntitlement } from "@/utils/plans";
 import { useServerPlan } from "@/lib/useServerPlan";
 import { readActiveWorkspaceContext } from "@/lib/workspaceContext";
@@ -116,7 +115,6 @@ import {
 import {
     clearNewExamPublishTarget,
     deleteScopedDraftPdfAssets,
-    discardNewExamPublishTarget,
     getOrCreateNewExamPublishTarget,
     getOrCreatePdfUploadAttemptNonce,
     isEditDraftNewerThanExam,
@@ -2259,8 +2257,6 @@ function CreateOMRPageInner() {
         accessConfig: NonNullable<Exam["accessConfig"]>,
         routeGeneration: number,
     ): Promise<DistributionShareResultLike> => {
-        let reservedExamId: string | null = null;
-        let canonicalSaveAttempted = false;
         let publishTargetScopeKey = "";
         const publishDraftAssets = draftAssetsRef.current;
         const currentProblemPdf = problemPdfFileRef.current;
@@ -2299,14 +2295,14 @@ function CreateOMRPageInner() {
 
             const sessionStore = safeBrowserStorage(() => window.sessionStorage);
             const localStore = safeBrowserStorage(() => window.localStorage);
-            const requiresCanonicalReservation = !loadedExam || !loadedExamIsCanonical;
-            if (requiresCanonicalReservation) {
+            const requiresCanonicalTarget = !loadedExam || !loadedExamIsCanonical;
+            if (requiresCanonicalTarget) {
                 publishTargetScopeKey = draftStorageKey;
             }
 
             // Editing? Reuse the existing ID and preserve createdAt; otherwise mint a new one.
             // Unguessable id so shareable /solve/[id] links can't be enumerated.
-            const id = requiresCanonicalReservation
+            const id = requiresCanonicalTarget
                 ? getOrCreateNewExamPublishTarget(
                     localStore,
                     publishTargetScopeKey,
@@ -2314,19 +2310,6 @@ function CreateOMRPageInner() {
                     loadedExam?.id,
                 )
                 : loadedExam!.id;
-            if (requiresCanonicalReservation) {
-                const authorization = await authorizeExamCreation(id);
-                if (!authorization.ok) {
-                    if (isCurrentRoute()) {
-                        toast.error(
-                            authorization.quota?.allowed === false ? "월 시험 생성 한도 도달" : "서버 플랜 확인 필요",
-                            authorization.error || "서버에서 플랜과 사용량을 확인한 뒤 다시 시도해주세요.",
-                        );
-                    }
-                    return "";
-                }
-                reservedExamId = id;
-            }
             const createdAt = loadedExam?.createdAt || new Date().toISOString();
             let pdfData = loadedExam?.pdfData || "";
             let pdfDataRef = loadedExam?.pdfDataRef;
@@ -2349,32 +2332,8 @@ function CreateOMRPageInner() {
                 ? currentAnswerKeyPdf
                 : null;
 
-            const rollbackNewExamPublish = async () => {
-                if (reservedExamId && !canonicalSaveAttempted) {
-                    const release = await releaseExamCreationAuthorization(reservedExamId);
-                    if (!release.ok) console.warn("Exam plan reservation release failed", release.error);
-                    reservedExamId = null;
-                }
-            };
-
             // Fill only missing regions so teacher-tuned regions survive every re-share.
             const questionsWithRegions = attachInferredQuestionPdfRegions(questions, { overwriteExisting: false });
-
-            // Fail closed before any exam or asset persistence. An edit can add
-            // premium prompts without consuming a new-exam quota.
-            if (questionsWithRegions.some(question => (question.subQuestions?.length || 0) > 0)) {
-                const entitlement = await authorizeAdvancedQuestionDesign();
-                if (!entitlement.ok) {
-                    await rollbackNewExamPublish();
-                    if (isCurrentRoute()) {
-                        toast.error(
-                            entitlement.access.authoritative ? "Pro 기능" : "서버 플랜 확인 필요",
-                            entitlement.error || "하위 질문을 저장하려면 서버에서 Pro 이상 플랜이 확인되어야 합니다.",
-                        );
-                    }
-                    return "";
-                }
-            }
 
             const examDataWithAssets = (
                 nextPdfData: string,
@@ -2470,7 +2429,6 @@ function CreateOMRPageInner() {
                         throw new Error("비공개 원격 저장소에 답지를 보관하지 못했습니다.");
                     }
                     : undefined,
-                rollback: rollbackNewExamPublish,
             });
             const assetUploadFailed = assetUploads.problem.status === "failed" || assetUploads.answer.status === "failed";
             if (assetUploadFailed) {
@@ -2502,23 +2460,16 @@ function CreateOMRPageInner() {
             }
             const examData = examDataWithAssets(pdfData, pdfDataRef, answerKeyData, answerKeyPdfRef);
 
-            canonicalSaveAttempted = true;
             const serverSave = await saveTeacherCanonicalExam(examData);
             if (serverSave.status === "unauthorized") {
-                canonicalSaveAttempted = false;
-                await rollbackNewExamPublish();
                 if (isCurrentRoute()) toast.error("교사 인증 필요", "교사로 다시 로그인한 뒤 시험을 저장해주세요.");
                 return "";
             }
             if (serverSave.status === "plan_denied") {
-                canonicalSaveAttempted = false;
-                await rollbackNewExamPublish();
                 if (isCurrentRoute()) toast.error("플랜 확인 필요", serverSave.error);
                 return "";
             }
             if (serverSave.status === "invalid_exam") {
-                canonicalSaveAttempted = false;
-                await rollbackNewExamPublish();
                 if (isCurrentRoute()) {
                     toast.error("배포 저장 실패", serverSave.error || "서버 시험 저장소에 시험을 보관하지 못했습니다.");
                 }
@@ -2537,7 +2488,6 @@ function CreateOMRPageInner() {
                 return "";
             }
             if (serverSave.status === "service_unavailable") {
-                await rollbackNewExamPublish();
                 if (isCurrentRoute()) {
                     toast.error("배포 저장 실패", serverSave.error || "서버 시험 저장소에 시험을 보관하지 못했습니다.");
                 }
@@ -2545,10 +2495,7 @@ function CreateOMRPageInner() {
             }
             const persistedExam = serverSave.status === "saved" ? serverSave.exam : examData;
             if (serverSave.status === "saved") {
-                // From this point the quota belongs to the committed exam, even
-                // if a browser cache write or later UI feedback fails.
-                reservedExamId = null;
-                if (requiresCanonicalReservation) {
+                if (requiresCanonicalTarget) {
                     clearNewExamPublishTarget(localStore, publishTargetScopeKey);
                 }
                 if (isCurrentRoute()) setLoadedExamIsCanonical(true);
@@ -2562,13 +2509,10 @@ function CreateOMRPageInner() {
                 failureTitle: "배포 저장 실패",
             });
             if (!feedback.ok) {
-                await rollbackNewExamPublish();
                 if (isCurrentRoute()) toast.error(feedback.title, feedback.detail);
                 return "";
             }
 
-            // The quota reservation now represents a successfully-created exam.
-            reservedExamId = null;
             if (isCurrentRoute() && feedback.level === "info") {
                 toast.info(feedback.title, feedback.detail);
             }
@@ -2641,10 +2585,6 @@ function CreateOMRPageInner() {
             }
             return { shareUrl, expiresAt: inviteExpiresAt, examId: id };
         } catch (e) {
-            if (reservedExamId && !canonicalSaveAttempted) {
-                const release = await releaseExamCreationAuthorization(reservedExamId);
-                if (!release.ok) console.warn("Exam plan reservation release failed", release.error);
-            }
             console.error(e);
             if (isCurrentRoute()) {
                 toast.error("배포 저장 실패", "파일 저장 공간 또는 브라우저 권한을 확인해주세요.");
@@ -2783,19 +2723,7 @@ function CreateOMRPageInner() {
         if (activeConfirmState.kind === "restoreDraft") {
             if (!draftStorageKey) return;
             const localStore = safeBrowserStorage(() => window.localStorage);
-            try {
-                await discardNewExamPublishTarget(
-                    localStore,
-                    draftStorageKey,
-                    async targetId => {
-                        const released = await releaseExamCreationAuthorization(targetId);
-                        if (!released.ok) throw new Error("Exam reservation release failed");
-                    },
-                );
-            } catch {
-                // The server-side two-hour lease still bounds an unreachable
-                // provisional reservation when explicit release is unavailable.
-            }
+            clearNewExamPublishTarget(localStore, draftStorageKey);
             const cleanup = await deleteScopedDraftPdfAssets({
                 draft: activeConfirmState.draft,
                 scopedDraftKey: draftStorageKey,

@@ -230,7 +230,7 @@ const SCENARIO_ROLES = Object.freeze({
 });
 
 export const INITIAL_OPERATIONS_PRODUCTION_WORKLOAD_PATHS = Object.freeze({
-    "student-read": Object.freeze(["rpc:omr_open_attempt_session_v1"]),
+    "student-read": Object.freeze(["rpc:omr_open_attempt_session_v2"]),
     checkpoint: Object.freeze(["rpc:omr_checkpoint_attempt_session_v1"]),
     heartbeat: Object.freeze(["rpc:omr_heartbeat_attempt_session_v1"]),
     "teacher-live-read": Object.freeze(["rpc:omr_list_active_attempt_sessions_v1"]),
@@ -244,9 +244,9 @@ export const INITIAL_OPERATIONS_PRODUCTION_WORKLOAD_PATHS = Object.freeze({
         "rpc:omr_commit_attempt_session_submit_v1",
     ]),
     "teacher-max-pdf-upload": Object.freeze([
-        "rpc:omr_prepare_teacher_asset_upload_v1",
-        "rpc:omr_authorize_teacher_asset_finalize_v1",
-        "rpc:omr_finalize_teacher_asset_upload_v1",
+        "rpc:omr_prepare_teacher_asset_upload_v2",
+        "rpc:omr_authorize_teacher_asset_finalize_v2",
+        "rpc:omr_finalize_teacher_asset_upload_v2",
     ]),
 });
 
@@ -517,7 +517,7 @@ export function evaluateInitialOperationsEvidence(evidence, expectations = {}) {
         || evidence.probes.readiness.database !== "ready"
         || evidence.probes.readiness.observability !== "ready"
         || evidence.probes.readiness.configuration !== "ready"
-        || evidence.probes.readiness.version !== "202608080007"
+        || evidence.probes.readiness.version !== "202608080008"
         || evidence.probes.readiness.environment !== "staging"
         || evidence.probes.readiness.build !== expectedBuild
         || evidence.probes.readiness.databaseProjectRefHash !== expectedDatabaseProjectRefHash

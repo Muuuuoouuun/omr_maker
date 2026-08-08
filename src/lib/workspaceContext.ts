@@ -13,6 +13,9 @@ export interface WorkspaceContext {
     organizationId: string;
     organizationName: string;
     actorUserId?: string;
+    accountId?: string;
+    accountSessionGeneration?: number;
+    sessionAuthority?: TeacherSessionAuthority;
     actorEmail?: string;
     actorLabel?: string;
     memberRole?: TeacherMemberRole;
@@ -193,7 +196,18 @@ export function workspaceContextFromTeacherSession(
     now = Date.now(),
 ): WorkspaceContext {
     if (!isTeacherSessionActive(session, now)) return DEFAULT_CONTEXT;
-    return workspaceContextFromIdentity(session, session.sessionAuthority);
+    const context = workspaceContextFromIdentity(session, session.sessionAuthority);
+    if ((session.sessionAuthority === "account" || session.sessionAuthority === "legacy_account")
+        && Number.isSafeInteger(session.accountSessionGeneration)
+        && (session.accountSessionGeneration ?? 0) >= 1) {
+        return {
+            ...context,
+            accountId: clean(session.teacherId).toLowerCase(),
+            accountSessionGeneration: session.accountSessionGeneration,
+            sessionAuthority: session.sessionAuthority,
+        };
+    }
+    return context;
 }
 
 export function readActiveWorkspaceContext(

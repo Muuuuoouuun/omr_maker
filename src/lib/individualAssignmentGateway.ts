@@ -114,9 +114,19 @@ function clearMutationId(input: {
     return `assignment-clear:${digest}`;
 }
 
-function validContext(context: WorkspaceContext): context is WorkspaceContext & { actorUserId: string; memberRole: NonNullable<WorkspaceContext["memberRole"]> } {
+function validContext(context: WorkspaceContext): context is WorkspaceContext & {
+    actorUserId: string;
+    accountId: string;
+    accountSessionGeneration: number;
+    sessionAuthority: "account" | "legacy_account";
+    memberRole: NonNullable<WorkspaceContext["memberRole"]>;
+} {
     return !!clean(context.organizationId)
         && !!clean(context.actorUserId)
+        && !!clean(context.accountId)
+        && (context.sessionAuthority === "account" || context.sessionAuthority === "legacy_account")
+        && Number.isSafeInteger(context.accountSessionGeneration)
+        && (context.accountSessionGeneration ?? 0) >= 1
         && !!context.memberRole
         && canTeacherRoleWrite(context.memberRole);
 }
@@ -147,7 +157,10 @@ export async function saveTeacherIndividualAssignmentWithGateway(
         mode: input.mode,
         expectedRevision,
     };
-    const response = await client.rpc("omr_assign_students_v1", {
+    const response = await client.rpc("omr_assign_students_v2", {
+        p_session_authority: context.sessionAuthority,
+        p_account_id: clean(context.accountId),
+        p_session_generation: context.accountSessionGeneration,
         p_organization_id: normalized.organizationId,
         p_actor_user_id: normalized.actorUserId,
         p_actor_role: context.memberRole,
@@ -212,7 +225,10 @@ export async function clearTeacherIndividualAssignmentWithGateway(
         accessType: input.accessType,
         groupIds,
     };
-    const response = await client.rpc("omr_clear_student_assignment_v1", {
+    const response = await client.rpc("omr_clear_student_assignment_v2", {
+        p_session_authority: context.sessionAuthority,
+        p_account_id: clean(context.accountId),
+        p_session_generation: context.accountSessionGeneration,
         p_organization_id: normalized.organizationId,
         p_actor_user_id: normalized.actorUserId,
         p_actor_role: context.memberRole,

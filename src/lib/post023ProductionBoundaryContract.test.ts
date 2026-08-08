@@ -14,7 +14,7 @@ describe("post-023 production boundary integration", () => {
 
     it("pins runtime readiness to migration 027", () => {
         for (const document of [boundary, boundaryAssertions]) {
-            expect(document).toContain("202608080007");
+            expect(document).toContain("202608080008");
         }
     });
 
@@ -44,8 +44,10 @@ describe("post-023 production boundary integration", () => {
     });
 
     it("requires production-path load coverage rather than canned operation coverage", () => {
-        expect(boundary).toContain("initial-operations-production-coverage:202608060026");
+        expect(boundary).toContain("initial-operations-phase-c-identity-and-production-coverage:202608080008");
         expect(boundary).toContain("productionworkloadpaths");
+        expect(boundary).toContain("omr_open_attempt_session_v2");
+        expect(boundary).toContain("omr_finalize_teacher_asset_upload_v2");
         expect(boundaryAssertions).toContain("initialoperationsloadcontrolready");
     });
 });

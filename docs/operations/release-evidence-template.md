@@ -18,7 +18,11 @@
 - `ops:verify:production` 상태: `verified` / `unverified`
 - `/api/healthz` build와 배포 SHA 일치: 예 / 아니오
 - `/api/readyz` 상태: `ready` / 그 외
-- readiness version: `202608080007` / 그 외
+- readiness version: `202608080008` / 그 외
+- `effectiveWorkspacePlanEnforcementReady`: `true` / 그 외
+- Phase C PG17: active/expired/superseded plan, exact receipt replay, asset expiry/GC,
+  canonical quota no-refund, private/retired RPC ACL drift-restore: 통과 / 실패
+- initial-operations v2 identity/load paths: 통과 / 실패
 - scheduler pause confirmation hash (target-bound human attestation, not machine proof; 원문/secret 제외):
 - observability: `ready` / 그 외
 - teacher account delivery probe: 통과 / 실패

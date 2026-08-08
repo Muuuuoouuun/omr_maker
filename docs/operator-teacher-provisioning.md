@@ -101,8 +101,9 @@ PBKDF2 safety ceiling (100 launch users times five identifier attempts) in addit
 per-identifier bucket. It counts all attempts and success does not clear it. This avoids trusting raw
 forwarding headers, but operators must monitor the shared ceiling for coordinated denial-of-service.
 
-Phase C remains a release blocker: request validation/effective-plan reads and existing domain mutation
-RPCs are separate transactions. Migration `202608080008` must add the account/organization/effective-
-plan checks inside paid mutation and asset RPC transactions before the pilot can claim race-free paid
-authorization. The current bridge provides fresh request-time denial, not transaction-atomic
-authorization.
+Phase C is implemented in migration
+`202608080008_effective_workspace_plan_enforcement.sql`: active paid mutation and asset boundaries
+lock the exact account/session/topology and resolve the effective plan in the same database transaction,
+while retired caller-trusting RPCs and direct service-role state writes are denied. Release approval is
+still withheld until the Phase C PG17 behavior, concurrency, ACL-drift/restore, rollback, and full
+application gate matrix is green; Phase B alone continues to claim request-time freshness only.

@@ -124,6 +124,58 @@ revoke all on table public.omr_operational_job_status from public, anon, authent
 revoke all on table public.omr_pilot_plan_grants from public, anon, authenticated, service_role;
 revoke all on sequence public.omr_operational_job_run_sequence from public, anon, authenticated, service_role;
 
+
+-- Phase C keeps service_role on audited public RPCs only. Reassert this after
+-- the blanket compatibility grant so direct DML/private-worker execution cannot
+-- bypass the same-transaction identity and effective-plan fences.
+revoke all on table public.omr_remote_assets from service_role;
+revoke all on table public.omr_remote_asset_upload_intents from service_role;
+revoke all on table public.omr_remote_asset_cleanup_queue from service_role;
+revoke all on table public.omr_plan_usage from service_role;
+revoke all on table public.omr_plan_usage_reservations from service_role;
+grant select on table public.omr_remote_assets to service_role;
+grant select on table public.omr_remote_asset_upload_intents to service_role;
+grant select on table public.omr_remote_asset_cleanup_queue to service_role;
+grant select on table public.omr_plan_usage to service_role;
+grant select on table public.omr_plan_usage_reservations to service_role;
+revoke all on sequence public.omr_remote_asset_cleanup_queue_id_seq from service_role;
+revoke all on function public.omr_lock_provisioned_teacher_identity_v1(text,bigint,text) from public, anon, authenticated, service_role;
+revoke all on function public.omr_authorize_effective_teacher_plan_v1(text,text) from public, anon, authenticated, service_role;
+revoke all on function public.omr_read_effective_organization_plan_v1(text) from public, anon, authenticated, service_role;
+revoke all on function public.omr_set_effective_plan_transaction_proof_v1(text,jsonb) from public, anon, authenticated, service_role;
+revoke all on function public.omr_prove_effective_organization_plan_v1(text) from public, anon, authenticated, service_role;
+revoke all on function public.omr_assert_effective_plan_transaction_proof_v1(text,boolean) from public, anon, authenticated, service_role;
+revoke all on function public.omr_lock_legacy_teacher_identity_v1(text,bigint,text,text) from public, anon, authenticated, service_role;
+revoke all on function public.omr_read_legacy_teacher_plan_v1(text,text,text) from public, anon, authenticated, service_role;
+revoke all on function public.omr_lock_teacher_mutation_identity_v1(text,text,bigint,text,text) from public, anon, authenticated, service_role;
+revoke all on function public.omr_read_teacher_mutation_plan_v1(text,text,text,text) from public, anon, authenticated, service_role;
+revoke all on function public.omr_save_exam_effective_worker_v3(text,text,text,text,jsonb,jsonb,jsonb) from public, anon, authenticated, service_role;
+revoke all on function public.omr_save_feedback_effective_worker_v4(text,jsonb,bigint,text) from public, anon, authenticated, service_role;
+revoke all on function public.omr_claim_remote_asset_cleanup_v8_snapshot(text,integer,integer) from public, anon, authenticated, service_role;
+revoke all on function public.omr_initial_ops_fixture_v26_snapshot(text,text,text,text,text) from public, anon, authenticated, service_role;
+revoke all on function public.omr_initial_ops_database_snapshot_v26_snapshot(text,text,text,text,text) from public, anon, authenticated, service_role;
+revoke all on function public.omr_save_roster_v2(text,jsonb,jsonb,jsonb,jsonb,bigint) from public, anon, authenticated, service_role;
+revoke all on function public.omr_save_roster_v1(text,jsonb,jsonb,jsonb,jsonb) from public, anon, authenticated, service_role;
+revoke all on function public.omr_save_exam_v2(jsonb,jsonb,jsonb,text,bigint,text) from public, anon, authenticated, service_role;
+revoke all on function public.omr_save_exam_v1(jsonb,jsonb,jsonb,text) from public, anon, authenticated, service_role;
+revoke all on function public.omr_prepare_teacher_asset_upload_v1(jsonb) from public, anon, authenticated, service_role;
+revoke all on function public.omr_authorize_teacher_asset_finalize_v1(text,text,text,jsonb) from public, anon, authenticated, service_role;
+revoke all on function public.omr_finalize_teacher_asset_upload_v1(text,text,text,jsonb) from public, anon, authenticated, service_role;
+revoke all on function public.omr_prepare_attempt_handwriting_asset_v1(text,jsonb) from public, anon, authenticated, service_role;
+revoke all on function public.omr_attach_attempt_handwriting_v1(text,text,jsonb) from public, anon, authenticated, service_role;
+revoke all on function public.omr_save_remote_asset_metadata_v1(jsonb) from public, anon, authenticated, service_role;
+revoke all on function public.omr_save_feedback_v3(text,jsonb,bigint,text) from public, anon, authenticated, service_role;
+revoke all on function public.omr_return_feedback_v3(text,text,bigint,text) from public, anon, authenticated, service_role;
+revoke all on function public.omr_save_feedback_v2(text,jsonb,bigint,text) from public, anon, authenticated, service_role;
+revoke all on function public.omr_return_feedback_v2(text,text,bigint,text) from public, anon, authenticated, service_role;
+revoke all on function public.omr_assign_students_v1(text,text,text,text,text[],text,bigint,text) from public, anon, authenticated, service_role;
+revoke all on function public.omr_clear_student_assignment_v1(text,text,text,text,bigint,text,text[],text) from public, anon, authenticated, service_role;
+revoke all on function public.omr_open_attempt_session_v1(text,text,text,text,text,text,text,text,text,text,text,integer[],integer[],timestamp with time zone,jsonb,integer,timestamp with time zone,text,text,integer) from public, anon, authenticated, service_role;
+revoke all on function public.omr_reserve_plan_usage(text,text,date,text,integer,integer,integer) from public, anon, authenticated, service_role;
+revoke all on function public.omr_release_plan_usage(text,text,date,text) from public, anon, authenticated, service_role;
+revoke all on function public.omr_sync_student_plan_usage(text,text[],integer,integer) from public, anon, authenticated, service_role;
+
+
 -- Cleanup completion is fenced by the claim attempt (lease epoch). Keep the
 -- compatibility stubs in the catalog for upgrade diagnostics, but do not let
 -- an old worker call them. Likewise, an old application must not reach the
@@ -535,6 +587,7 @@ declare
     v_teacher_attempt_reporting_ready boolean;
     v_legacy_gateway_catalog_ready boolean;
     v_server_gateway_capabilities_ready boolean;
+    v_effective_workspace_plan_enforcement_ready boolean;
     v_ready boolean;
 begin
     v_previous := public.omr_service_readiness_v10_snapshot();
@@ -589,7 +642,10 @@ begin
                    'omr_exam_entry_invites',
                    'omr_initial_ops_metrics', 'omr_teacher_accounts', 'omr_teacher_account_tokens',
                    'omr_teacher_notification_states', 'omr_operational_job_status',
-                   'omr_pilot_plan_grants'
+                   'omr_pilot_plan_grants',
+                   'omr_remote_assets', 'omr_remote_asset_upload_intents',
+                   'omr_remote_asset_cleanup_queue', 'omr_plan_usage',
+                   'omr_plan_usage_reservations'
                )
                and (
                    not pg_catalog.has_table_privilege('service_role', relation.oid, 'SELECT')
@@ -643,7 +699,10 @@ begin
               from pg_catalog.pg_class relation
               join pg_catalog.pg_namespace namespace on namespace.oid = relation.relnamespace
              where namespace.nspname = 'public' and relation.relkind = 'S'
-               and relation.relname <> 'omr_operational_job_run_sequence'
+               and relation.relname not in (
+                   'omr_operational_job_run_sequence',
+                   'omr_remote_asset_cleanup_queue_id_seq'
+               )
                and (
                    not pg_catalog.has_sequence_privilege('service_role', relation.oid, 'USAGE')
                    or not pg_catalog.has_sequence_privilege('service_role', relation.oid, 'SELECT')
@@ -870,10 +929,10 @@ begin
               join pg_catalog.pg_namespace namespace on namespace.oid = routine.pronamespace
              where namespace.nspname = 'public'
                and routine.proname in (
-                   'omr_open_attempt_session_v1', 'omr_checkpoint_attempt_session_v1',
+                   'omr_open_attempt_session_v2', 'omr_checkpoint_attempt_session_v1',
                    'omr_heartbeat_attempt_session_v1', 'omr_takeover_attempt_session_v1',
                    'omr_prepare_attempt_session_submit_v1', 'omr_commit_attempt_session_submit_v1',
-                   'omr_prepare_attempt_handwriting_asset_v1', 'omr_discard_attempt_handwriting_asset_v1'
+                   'omr_prepare_attempt_handwriting_asset_v2', 'omr_discard_attempt_handwriting_asset_v1'
                )
                and (
                    not pg_catalog.has_function_privilege('service_role', routine.oid, 'EXECUTE')
@@ -886,10 +945,10 @@ begin
              join pg_catalog.pg_namespace namespace on namespace.oid = routine.pronamespace
             where namespace.nspname = 'public'
               and routine.proname in (
-                  'omr_open_attempt_session_v1', 'omr_checkpoint_attempt_session_v1',
+                  'omr_open_attempt_session_v2', 'omr_checkpoint_attempt_session_v1',
                   'omr_heartbeat_attempt_session_v1', 'omr_takeover_attempt_session_v1',
                   'omr_prepare_attempt_session_submit_v1', 'omr_commit_attempt_session_submit_v1',
-                  'omr_prepare_attempt_handwriting_asset_v1', 'omr_discard_attempt_handwriting_asset_v1'
+                  'omr_prepare_attempt_handwriting_asset_v2', 'omr_discard_attempt_handwriting_asset_v1'
               )
         ) = 8;
 
@@ -1028,9 +1087,10 @@ begin
         and not pg_catalog.has_table_privilege('anon', 'public.omr_exam_mutations', 'SELECT,INSERT,UPDATE,DELETE')
         and not pg_catalog.has_table_privilege('authenticated', 'public.omr_exam_mutations', 'SELECT,INSERT,UPDATE,DELETE')
         and not pg_catalog.has_table_privilege('service_role', 'public.omr_exam_mutations', 'SELECT,INSERT,UPDATE,DELETE')
-        and pg_catalog.has_function_privilege('service_role', 'public.omr_save_exam_v2(jsonb,jsonb,jsonb,text,bigint,text)', 'EXECUTE')
-        and not pg_catalog.has_function_privilege('anon', 'public.omr_save_exam_v2(jsonb,jsonb,jsonb,text,bigint,text)', 'EXECUTE')
-        and not pg_catalog.has_function_privilege('authenticated', 'public.omr_save_exam_v2(jsonb,jsonb,jsonb,text,bigint,text)', 'EXECUTE')
+        and pg_catalog.has_function_privilege('service_role', 'public.omr_save_exam_v3(text,text,bigint,text,jsonb,jsonb,jsonb,bigint,text)', 'EXECUTE')
+        and not pg_catalog.has_function_privilege('anon', 'public.omr_save_exam_v3(text,text,bigint,text,jsonb,jsonb,jsonb,bigint,text)', 'EXECUTE')
+        and not pg_catalog.has_function_privilege('authenticated', 'public.omr_save_exam_v3(text,text,bigint,text,jsonb,jsonb,jsonb,bigint,text)', 'EXECUTE')
+        and not pg_catalog.has_function_privilege('service_role', 'public.omr_save_exam_v2(jsonb,jsonb,jsonb,text,bigint,text)', 'EXECUTE')
         and not coalesce(pg_catalog.has_function_privilege(
             'service_role',
             pg_catalog.to_regprocedure('public.omr_save_exam_v1(jsonb,jsonb,jsonb,text)'),
@@ -1061,10 +1121,12 @@ begin
         v_feedback_revision_ready
         and pg_catalog.to_regclass('public.omr_feedback_mutations') is not null
         and not pg_catalog.has_table_privilege('service_role', 'public.omr_feedback_mutations', 'SELECT,INSERT,UPDATE,DELETE')
-        and pg_catalog.has_function_privilege('service_role', 'public.omr_save_feedback_v2(text,jsonb,bigint,text)', 'EXECUTE')
-        and pg_catalog.has_function_privilege('service_role', 'public.omr_return_feedback_v2(text,text,bigint,text)', 'EXECUTE')
-        and not pg_catalog.has_function_privilege('anon', 'public.omr_save_feedback_v2(text,jsonb,bigint,text)', 'EXECUTE')
-        and not pg_catalog.has_function_privilege('authenticated', 'public.omr_return_feedback_v2(text,text,bigint,text)', 'EXECUTE')
+        and pg_catalog.has_function_privilege('service_role', 'public.omr_save_feedback_v4(text,text,bigint,text,text,jsonb,bigint,text)', 'EXECUTE')
+        and pg_catalog.has_function_privilege('service_role', 'public.omr_return_feedback_v4(text,text,bigint,text,text,text,bigint,text)', 'EXECUTE')
+        and not pg_catalog.has_function_privilege('anon', 'public.omr_save_feedback_v4(text,text,bigint,text,text,jsonb,bigint,text)', 'EXECUTE')
+        and not pg_catalog.has_function_privilege('authenticated', 'public.omr_return_feedback_v4(text,text,bigint,text,text,text,bigint,text)', 'EXECUTE')
+        and not pg_catalog.has_function_privilege('service_role', 'public.omr_save_feedback_v2(text,jsonb,bigint,text)', 'EXECUTE')
+        and not pg_catalog.has_function_privilege('service_role', 'public.omr_return_feedback_v2(text,text,bigint,text)', 'EXECUTE')
         and not pg_catalog.has_function_privilege('service_role', 'public.omr_save_feedback_v1(text,jsonb)', 'EXECUTE')
         and not pg_catalog.has_function_privilege('service_role', 'public.omr_return_feedback_v1(text,text,timestamptz)', 'EXECUTE')
         and not pg_catalog.has_function_privilege('service_role', 'public.omr_save_feedback_v12_snapshot(text,jsonb)', 'EXECUTE')
@@ -1083,20 +1145,20 @@ begin
         ) = 'feedback-replay-hardening:202608060014';
 
     v_feedback_core_free_ready :=
-        pg_catalog.to_regprocedure('public.omr_save_feedback_v3(text,jsonb,bigint,text)') is not null
-        and pg_catalog.to_regprocedure('public.omr_return_feedback_v3(text,text,bigint,text)') is not null
-        and pg_catalog.has_function_privilege('service_role', 'public.omr_save_feedback_v3(text,jsonb,bigint,text)', 'EXECUTE')
-        and pg_catalog.has_function_privilege('service_role', 'public.omr_return_feedback_v3(text,text,bigint,text)', 'EXECUTE')
-        and not pg_catalog.has_function_privilege('anon', 'public.omr_save_feedback_v3(text,jsonb,bigint,text)', 'EXECUTE')
-        and not pg_catalog.has_function_privilege('authenticated', 'public.omr_return_feedback_v3(text,text,bigint,text)', 'EXECUTE')
+        pg_catalog.to_regprocedure('public.omr_save_feedback_v4(text,text,bigint,text,text,jsonb,bigint,text)') is not null
+        and pg_catalog.to_regprocedure('public.omr_return_feedback_v4(text,text,bigint,text,text,text,bigint,text)') is not null
+        and pg_catalog.has_function_privilege('service_role', 'public.omr_save_feedback_v4(text,text,bigint,text,text,jsonb,bigint,text)', 'EXECUTE')
+        and pg_catalog.has_function_privilege('service_role', 'public.omr_return_feedback_v4(text,text,bigint,text,text,text,bigint,text)', 'EXECUTE')
+        and not pg_catalog.has_function_privilege('anon', 'public.omr_save_feedback_v4(text,text,bigint,text,text,jsonb,bigint,text)', 'EXECUTE')
+        and not pg_catalog.has_function_privilege('authenticated', 'public.omr_return_feedback_v4(text,text,bigint,text,text,text,bigint,text)', 'EXECUTE')
         and pg_catalog.obj_description(
-            'public.omr_save_feedback_v3(text,jsonb,bigint,text)'::pg_catalog.regprocedure,
+            'public.omr_save_feedback_v4(text,text,bigint,text,text,jsonb,bigint,text)'::pg_catalog.regprocedure,
             'pg_proc'
-        ) = 'feedback-core-free:202608060027'
+        ) = 'Account-session-bound feedback save with identity-before-replay and plan-before-premium-write ordering.'
         and pg_catalog.obj_description(
-            'public.omr_return_feedback_v3(text,text,bigint,text)'::pg_catalog.regprocedure,
+            'public.omr_return_feedback_v4(text,text,bigint,text,text,text,bigint,text)'::pg_catalog.regprocedure,
             'pg_proc'
-        ) = 'feedback-core-free:202608060027';
+        ) = 'Account-session-bound feedback return with identity-before-replay ordering.';
 
     v_exam_entry_invites_ready :=
         pg_catalog.to_regclass('public.omr_exam_entry_invites') is not null
@@ -1164,14 +1226,19 @@ begin
         ) > 0
         and position(
             'retry_count = queue.retry_count + 1' in lower(pg_catalog.pg_get_functiondef(
-                'public.omr_claim_remote_asset_cleanup_v1(text,integer,integer)'::pg_catalog.regprocedure
+                'public.omr_claim_remote_asset_cleanup_v8_snapshot(text,integer,integer)'::pg_catalog.regprocedure
             ))
         ) > 0
         and position(
             'to_jsonb(claimed)' in lower(pg_catalog.pg_get_functiondef(
-                'public.omr_claim_remote_asset_cleanup_v1(text,integer,integer)'::pg_catalog.regprocedure
+                'public.omr_claim_remote_asset_cleanup_v8_snapshot(text,integer,integer)'::pg_catalog.regprocedure
             ))
         ) = 0
+        and position(
+            'omr_claim_remote_asset_cleanup_v8_snapshot' in lower(pg_catalog.pg_get_functiondef(
+                'public.omr_claim_remote_asset_cleanup_v1(text,integer,integer)'::pg_catalog.regprocedure
+            ))
+        ) > 0
         and position(
             'v_now := pg_catalog.clock_timestamp();' in lower(pg_catalog.pg_get_functiondef(
                 'public.omr_checkpoint_attempt_session_v1(text,text,text,bigint,bigint,text,jsonb,jsonb,jsonb,integer,boolean)'::pg_catalog.regprocedure
@@ -1695,11 +1762,11 @@ begin
         and pg_catalog.obj_description(
             'public.omr_initial_ops_fixture_v1(text,text,text,text,text)'::pg_catalog.regprocedure,
             'pg_proc'
-        ) = 'initial-operations-production-coverage:202608060026'
+        ) = 'initial-operations-phase-c-identity-and-production-coverage:202608080008'
         and pg_catalog.obj_description(
             'public.omr_initial_ops_database_snapshot_v1(text,text,text,text,text)'::pg_catalog.regprocedure,
             'pg_proc'
-        ) = 'initial-operations-production-coverage:202608060026'
+        ) = 'initial-operations-phase-c-identity-and-production-coverage:202608080008'
         and pg_catalog.has_function_privilege(
             'service_role', 'public.omr_initial_ops_fixture_v1(text,text,text,text,text)', 'EXECUTE'
         )
@@ -1734,12 +1801,12 @@ begin
             ))
         ) > 0
         and position(
-            'omr_open_attempt_session_v1' in lower(pg_catalog.pg_get_functiondef(
+            'omr_open_attempt_session_v2' in lower(pg_catalog.pg_get_functiondef(
                 'public.omr_initial_ops_database_snapshot_v1(text,text,text,text,text)'::pg_catalog.regprocedure
             ))
         ) > 0
         and position(
-            'omr_finalize_teacher_asset_upload_v1' in lower(pg_catalog.pg_get_functiondef(
+            'omr_finalize_teacher_asset_upload_v2' in lower(pg_catalog.pg_get_functiondef(
                 'public.omr_initial_ops_database_snapshot_v1(text,text,text,text,text)'::pg_catalog.regprocedure
             ))
         ) > 0
@@ -1752,12 +1819,61 @@ begin
             'finalize_cleanup' in lower(pg_catalog.pg_get_functiondef(
                 'public.omr_initial_ops_fixture_v1(text,text,text,text,text)'::pg_catalog.regprocedure
             ))
-        ) > 0;
+        ) > 0
+        and position(
+            '''teacheridentity''' in lower(pg_catalog.pg_get_functiondef(
+                'public.omr_initial_ops_fixture_v1(text,text,text,text,text)'::pg_catalog.regprocedure
+            ))
+        ) > 0
+        and not pg_catalog.has_function_privilege(
+            'service_role',
+            'public.omr_initial_ops_fixture_v26_snapshot(text,text,text,text,text)',
+            'EXECUTE'
+        )
+        and not pg_catalog.has_function_privilege(
+            'service_role',
+            'public.omr_initial_ops_database_snapshot_v26_snapshot(text,text,text,text,text)',
+            'EXECUTE'
+        )
+        and (
+            select pg_catalog.count(*) = 4
+               and encode(extensions.digest(
+                    'phase-c-initial-ops-identity-and-v2-paths:202608080008'
+                    || pg_catalog.chr(10)
+                    || pg_catalog.string_agg(
+                        routine.proname || pg_catalog.chr(31)
+                        || pg_catalog.pg_get_function_identity_arguments(routine.oid)
+                        || pg_catalog.chr(31)
+                        || pg_catalog.pg_get_function_result(routine.oid)
+                        || pg_catalog.chr(31)
+                        || pg_catalog.pg_get_userbyid(routine.proowner)
+                        || pg_catalog.chr(31) || routine.prosecdef::text
+                        || pg_catalog.chr(31) || routine.provolatile::text
+                        || pg_catalog.chr(31)
+                        || coalesce(pg_catalog.array_to_string(routine.proconfig, pg_catalog.chr(30)), '')
+                        || pg_catalog.chr(31)
+                        || coalesce(pg_catalog.obj_description(routine.oid, 'pg_proc'), '')
+                        || pg_catalog.chr(31)
+                        || pg_catalog.pg_get_functiondef(routine.oid),
+                        pg_catalog.chr(10) order by routine.proname
+                    ),
+                    'sha256'
+                ), 'hex') = '6ad9f1959ccff29a114ec1d1a05b27df53ebabfd7adccaebe29ef80f1b208346'
+              from pg_catalog.pg_proc routine
+              join pg_catalog.pg_namespace namespace on namespace.oid = routine.pronamespace
+             where namespace.nspname = 'public'
+               and routine.proname in (
+                   'omr_initial_ops_fixture_v1',
+                   'omr_initial_ops_database_snapshot_v1',
+                   'omr_initial_ops_fixture_v26_snapshot',
+                   'omr_initial_ops_database_snapshot_v26_snapshot'
+               )
+        );
 
     v_roster_snapshot_cas_ready :=
         pg_catalog.to_regprocedure('public.omr_load_roster_v2(text)') is not null
         and pg_catalog.to_regprocedure(
-            'public.omr_save_roster_v2(text,jsonb,jsonb,jsonb,jsonb,bigint)'
+            'public.omr_save_roster_v3(text,text,bigint,text,text,jsonb,jsonb,jsonb,jsonb,bigint)'
         ) is not null
         and coalesce(pg_catalog.has_function_privilege(
             'service_role',
@@ -1767,7 +1883,7 @@ begin
         and coalesce(pg_catalog.has_function_privilege(
             'service_role',
             pg_catalog.to_regprocedure(
-                'public.omr_save_roster_v2(text,jsonb,jsonb,jsonb,jsonb,bigint)'
+                'public.omr_save_roster_v3(text,text,bigint,text,text,jsonb,jsonb,jsonb,jsonb,bigint)'
             ),
             'EXECUTE'
         ), false)
@@ -1781,14 +1897,14 @@ begin
         and not coalesce(pg_catalog.has_function_privilege(
             'anon',
             pg_catalog.to_regprocedure(
-                'public.omr_save_roster_v2(text,jsonb,jsonb,jsonb,jsonb,bigint)'
+                'public.omr_save_roster_v3(text,text,bigint,text,text,jsonb,jsonb,jsonb,jsonb,bigint)'
             ),
             'EXECUTE'
         ), false)
         and not coalesce(pg_catalog.has_function_privilege(
             'authenticated',
             pg_catalog.to_regprocedure(
-                'public.omr_save_roster_v2(text,jsonb,jsonb,jsonb,jsonb,bigint)'
+                'public.omr_save_roster_v3(text,text,bigint,text,text,jsonb,jsonb,jsonb,jsonb,bigint)'
             ),
             'EXECUTE'
         ), false);
@@ -1896,10 +2012,10 @@ begin
         and pg_catalog.to_regclass('public.omr_assignment_targets_retake_source_idx') is not null
         and pg_catalog.to_regclass('public.omr_attempts_student_exam_base_completed_idx') is not null
         and pg_catalog.to_regprocedure(
-            'public.omr_assign_students_v1(text,text,text,text,text[],text,bigint,text)'
+            'public.omr_assign_students_v2(text,text,bigint,text,text,text,text,text[],text,bigint,text)'
         ) is not null
         and pg_catalog.to_regprocedure(
-            'public.omr_clear_student_assignment_v1(text,text,text,text,bigint,text,text[],text)'
+            'public.omr_clear_student_assignment_v2(text,text,bigint,text,text,text,text,bigint,text,text[],text)'
         ) is not null
         and pg_catalog.to_regprocedure(
             'public.omr_load_teacher_student_assignment_v1(text,text,text,text)'
@@ -1916,8 +2032,8 @@ begin
               join pg_catalog.pg_namespace namespace on namespace.oid = routine.pronamespace
              where namespace.nspname = 'public'
                and routine.proname in (
-                   'omr_assign_students_v1',
-                   'omr_clear_student_assignment_v1',
+                   'omr_assign_students_v2',
+                   'omr_clear_student_assignment_v2',
                    'omr_load_teacher_student_assignment_v1',
                    'omr_list_student_assignments_v1',
                    'omr_resolve_student_assignment_v1'
@@ -2024,6 +2140,122 @@ begin
             )
         ) > 0;
 
+    with expected(name, args, result, exposure) as (values
+        ('omr_save_roster_v3', 'text, text, bigint, text, text, jsonb, jsonb, jsonb, jsonb, bigint', 'jsonb', 'public'),
+        ('omr_save_exam_v3', 'text, text, bigint, text, jsonb, jsonb, jsonb, bigint, text', 'jsonb', 'public'),
+        ('omr_save_feedback_v4', 'text, text, bigint, text, text, jsonb, bigint, text', 'jsonb', 'public'),
+        ('omr_return_feedback_v4', 'text, text, bigint, text, text, text, bigint, text', 'jsonb', 'public'),
+        ('omr_assign_students_v2', 'text, text, bigint, text, text, text, text, text[], text, bigint, text', 'jsonb', 'public'),
+        ('omr_clear_student_assignment_v2', 'text, text, bigint, text, text, text, text, bigint, text, text[], text', 'jsonb', 'public'),
+        ('omr_open_attempt_session_v2', 'text, text, text, text, text, text, text, text, text, text, text, integer[], integer[], timestamp with time zone, jsonb, integer, timestamp with time zone, text, text, integer', 'TABLE(session_id text, status text, revision bigint, lease_epoch bigint, started_at timestamp with time zone, deadline_at timestamp with time zone, server_now timestamp with time zone, answers jsonb, sub_question_answers jsonb, progress_payload jsonb, allowed_question_ids integer[], grading_snapshot jsonb, submitted_attempt_id text, lease_acquired boolean, lease_token_rotated boolean)', 'public'),
+        ('omr_prepare_teacher_asset_upload_v2', 'text, text, bigint, text, text, jsonb', 'jsonb', 'public'),
+        ('omr_authorize_teacher_asset_finalize_v2', 'text, text, bigint, text, text, text, jsonb', 'jsonb', 'public'),
+        ('omr_finalize_teacher_asset_upload_v2', 'text, text, bigint, text, text, text, jsonb', 'jsonb', 'public'),
+        ('omr_prepare_attempt_handwriting_asset_v2', 'text, text, text, jsonb', 'jsonb', 'public'),
+        ('omr_attach_attempt_handwriting_v2', 'text, text, text, text, text', 'jsonb', 'public'),
+        ('omr_claim_remote_asset_cleanup_v1', 'text, integer, integer', 'jsonb', 'public'),
+        ('omr_reserve_plan_usage_v2', 'text, text, bigint, text, text, text, text', 'jsonb', 'public'),
+        ('omr_release_plan_usage_v2', 'text, text, bigint, text, text, text, text', 'jsonb', 'public'),
+        ('omr_sync_student_plan_usage_v2', 'text, text, bigint, text, text', 'jsonb', 'public'),
+        ('omr_lock_provisioned_teacher_identity_v1', 'text, bigint, text', 'jsonb', 'private'),
+        ('omr_authorize_effective_teacher_plan_v1', 'text, text', 'jsonb', 'private'),
+        ('omr_read_effective_organization_plan_v1', 'text', 'jsonb', 'private'),
+        ('omr_set_effective_plan_transaction_proof_v1', 'text, jsonb', 'void', 'private'),
+        ('omr_prove_effective_organization_plan_v1', 'text', 'jsonb', 'private'),
+        ('omr_assert_effective_plan_transaction_proof_v1', 'text, boolean', 'void', 'private'),
+        ('omr_lock_legacy_teacher_identity_v1', 'text, bigint, text, text', 'jsonb', 'private'),
+        ('omr_read_legacy_teacher_plan_v1', 'text, text, text', 'jsonb', 'private'),
+        ('omr_lock_teacher_mutation_identity_v1', 'text, text, bigint, text, text', 'jsonb', 'private'),
+        ('omr_read_teacher_mutation_plan_v1', 'text, text, text, text', 'jsonb', 'private'),
+        ('omr_save_exam_effective_worker_v3', 'text, text, text, text, jsonb, jsonb, jsonb', 'jsonb', 'private'),
+        ('omr_save_feedback_effective_worker_v4', 'text, jsonb, bigint, text', 'jsonb', 'private'),
+        ('omr_claim_remote_asset_cleanup_v8_snapshot', 'text, integer, integer', 'jsonb', 'private'),
+        ('omr_assert_targeted_assignment_scope_v1', 'text, text, text, text, text, text, integer[]', 'void', 'private'),
+        ('omr_validate_targeted_attempt_session_v1', '', 'trigger', 'private'),
+        ('omr_validate_targeted_attempt_v1', '', 'trigger', 'private'),
+        ('omr_guard_targeted_exam_access_v1', '', 'trigger', 'private')
+    ), actual(name, args, result, owner_name, security_definer, volatility, config, description, oid, definition) as (
+        select routine.proname::text,
+               pg_catalog.oidvectortypes(routine.proargtypes),
+               pg_catalog.pg_get_function_result(routine.oid),
+               owner_role.rolname::text,
+               routine.prosecdef,
+               routine.provolatile::text,
+               routine.proconfig,
+               coalesce(pg_catalog.obj_description(routine.oid, 'pg_proc'), ''),
+               routine.oid,
+               pg_catalog.pg_get_functiondef(routine.oid)
+          from pg_catalog.pg_proc routine
+          join pg_catalog.pg_namespace namespace on namespace.oid = routine.pronamespace
+          join pg_catalog.pg_roles owner_role on owner_role.oid = routine.proowner
+         where namespace.nspname = 'public'
+           and routine.proname in (select expected.name from expected)
+    )
+    select not exists (select name, args, result from expected except select name, args, result from actual)
+       and not exists (select name, args, result from actual except select name, args, result from expected)
+       and not exists (
+           select 1 from actual join expected using (name, args, result)
+            where owner_name <> 'postgres'
+               or not security_definer
+               or volatility <> 'v'
+               or not coalesce(config @> array['search_path=""'], false)
+               or not coalesce(config @> array['lock_timeout=2s'], false)
+               or not coalesce(config @> array[
+                   case when name = 'omr_claim_remote_asset_cleanup_v1'
+                             or name = 'omr_claim_remote_asset_cleanup_v8_snapshot'
+                        then 'statement_timeout=10s' else 'statement_timeout=5s' end
+               ], false)
+               or description = ''
+               or (exposure = 'public' and not pg_catalog.has_function_privilege('service_role', oid, 'EXECUTE'))
+               or (exposure = 'private' and pg_catalog.has_function_privilege('service_role', oid, 'EXECUTE'))
+               or pg_catalog.has_function_privilege('anon', oid, 'EXECUTE')
+               or pg_catalog.has_function_privilege('authenticated', oid, 'EXECUTE')
+       )
+       and (
+           select pg_catalog.encode(extensions.digest(
+               'phase-c-effective-plan-enforcement:202608080008|' || pg_catalog.string_agg(
+               name || '|' || args || '|' || result || '|' || owner_name || '|'
+                   || security_definer::text || '|' || volatility || '|'
+                   || coalesce(pg_catalog.array_to_string(config, ','), '') || '|'
+                   || description || '|' || definition,
+               E'\n-- phase-c-routine --\n' order by name, args
+               ), 'sha256'), 'hex')
+             from actual
+       ) = 'ef65d771150ecf2f7e744cfb9d10072cb59ecb84fa09268f3db274e304dccfba'
+       and not exists (
+           select 1 from (values
+               ('omr_remote_assets'), ('omr_remote_asset_upload_intents'),
+               ('omr_remote_asset_cleanup_queue'), ('omr_plan_usage'),
+               ('omr_plan_usage_reservations')
+           ) guarded(table_name)
+            where not pg_catalog.has_table_privilege(
+                    'service_role', 'public.' || guarded.table_name, 'SELECT'
+                  )
+               or pg_catalog.has_table_privilege(
+                    'service_role', 'public.' || guarded.table_name,
+                    'INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER,MAINTAIN'
+                  )
+       )
+       and not pg_catalog.has_sequence_privilege(
+           'service_role', 'public.omr_remote_asset_cleanup_queue_id_seq',
+           'USAGE,SELECT,UPDATE'
+       )
+       and pg_catalog.to_regclass('public.omr_remote_assets_handwriting_reservation_expiry_idx') is not null
+       and pg_catalog.to_regclass('public.omr_remote_assets_one_handwriting_per_attempt_uidx') is not null
+       and position('lock table public.omr_organization_members in share mode' in lower(
+           pg_catalog.pg_get_functiondef('public.omr_lock_provisioned_teacher_identity_v1(text,bigint,text)'::pg_catalog.regprocedure)
+       )) > 0
+       and position('omr_read_teacher_mutation_plan_v1' in lower(
+           pg_catalog.pg_get_functiondef('public.omr_save_exam_effective_worker_v3(text,text,text,text,jsonb,jsonb,jsonb)'::pg_catalog.regprocedure)
+       )) > 0
+       and position('handwriting_reservation_grant_id' in lower(
+           pg_catalog.pg_get_functiondef('public.omr_prepare_attempt_handwriting_asset_v2(text,text,text,jsonb)'::pg_catalog.regprocedure)
+       )) > 0
+       and position('omr_claim_remote_asset_cleanup_v8_snapshot' in lower(
+           pg_catalog.pg_get_functiondef('public.omr_claim_remote_asset_cleanup_v1(text,integer,integer)'::pg_catalog.regprocedure)
+       )) > 0
+      into v_effective_workspace_plan_enforcement_ready;
+
     -- Keep exact catalog drift detection for the two legacy-named public
     -- gateway families exercised by the long-lived readiness probes. The v1
     -- exam signature is a denied compatibility stub, but an extra overload or
@@ -2045,6 +2277,7 @@ begin
       into v_legacy_gateway_catalog_ready;
 
     v_server_gateway_capabilities_ready := v_legacy_gateway_catalog_ready
+        and v_effective_workspace_plan_enforcement_ready
         and v_roster_snapshot_cas_ready
         and v_cleanup_epoch_ready
         and v_attempt_sessions_ready
@@ -2066,6 +2299,7 @@ begin
         and v_teacher_live_sessions_ready
         and v_teacher_account_lifecycle_ready
         and v_provisioned_teacher_login_ready
+        and v_effective_workspace_plan_enforcement_ready
         and v_initial_operations_load_control_ready
         and v_individual_student_assignments_ready
         and v_teacher_attempt_reporting_ready;
@@ -2082,6 +2316,9 @@ begin
                   v_previous - 'version' - 'ready' - 'canonicalTablesForceRls'
                   - 'serviceRolePrivilegesReady' - 'serverGatewayCapabilitiesReady'
                   - 'teacherUploadCleanupQueueReady' - 'studentAttemptSessionsReady'
+                  - 'rosterSnapshotCasReady' - 'sessionCleanupFencingReady'
+                  - 'directUploadIntentLifecycleReady'
+                  - 'teacherAssetFinalizePreauthorizationReady'
               ) item
              where item.value is distinct from 'true'::jsonb
         );
@@ -2089,16 +2326,24 @@ begin
     return (v_previous - 'version' - 'ready' - 'canonicalTablesForceRls'
             - 'serviceRolePrivilegesReady' - 'serverGatewayCapabilitiesReady'
             - 'teacherUploadCleanupQueueReady' - 'studentAttemptSessionsReady')
+            - 'rosterSnapshotCasReady' - 'sessionCleanupFencingReady'
+            - 'directUploadIntentLifecycleReady'
+            - 'teacherAssetFinalizePreauthorizationReady'
         || pg_catalog.jsonb_build_object(
-            'version', '202608080007',
+            'version', '202608080008',
             'canonicalTablesForceRls', v_canonical_tables_force_rls,
             'serviceRolePrivilegesReady', v_service_role_privileges_ready,
             'serverGatewayCapabilitiesReady', v_server_gateway_capabilities_ready,
+            'effectiveWorkspacePlanEnforcementReady', v_effective_workspace_plan_enforcement_ready,
             'operationalJobStatusReady', v_operational_job_status_ready,
             'operatorPilotProvisioningReady', v_operator_pilot_provisioning_ready,
             'provisionedTeacherLoginReady', v_provisioned_teacher_login_ready,
             'teacherUploadCleanupQueueReady', v_cleanup_epoch_ready,
             'studentAttemptSessionsReady', v_attempt_sessions_ready,
+            'rosterSnapshotCasReady', v_roster_snapshot_cas_ready,
+            'sessionCleanupFencingReady', v_effective_workspace_plan_enforcement_ready,
+            'directUploadIntentLifecycleReady', v_effective_workspace_plan_enforcement_ready,
+            'teacherAssetFinalizePreauthorizationReady', v_effective_workspace_plan_enforcement_ready,
             'durableRateLimitsReady', v_durable_rate_limits_ready,
             'examRevisionReady', v_exam_revision_ready,
             'teacherExamCasReady', v_teacher_exam_cas_ready,
@@ -2111,9 +2356,7 @@ begin
             'feedbackReplayHardeningReady', v_feedback_replay_hardening_ready,
             'feedbackCoreFreeReady', v_feedback_core_free_ready,
             'examEntryInvitesReady', v_exam_entry_invites_ready,
-            'sessionCleanupFencingReady', v_session_cleanup_fencing_ready,
             'attemptCheckpointNullCasReady', v_attempt_checkpoint_null_cas_ready,
-            'rosterSnapshotCasReady', v_roster_snapshot_cas_ready,
             'attemptMutationCasReady', v_attempt_mutation_cas_ready,
             'examDeleteSessionSafe', v_exam_delete_session_safe,
             'studentQuestionAtomicReady', v_student_question_atomic_ready,
@@ -2131,5 +2374,99 @@ revoke all on function public.omr_service_readiness_v1()
     from public, anon, authenticated;
 grant execute on function public.omr_service_readiness_v1()
     to service_role;
+
+
+-- Final Phase C ACL fence. Keep this after every compatibility grant above.
+revoke all on table public.omr_remote_assets from service_role;
+revoke all on table public.omr_remote_asset_upload_intents from service_role;
+revoke all on table public.omr_remote_asset_cleanup_queue from service_role;
+revoke all on table public.omr_plan_usage from service_role;
+revoke all on table public.omr_plan_usage_reservations from service_role;
+grant select on table public.omr_remote_assets to service_role;
+grant select on table public.omr_remote_asset_upload_intents to service_role;
+grant select on table public.omr_remote_asset_cleanup_queue to service_role;
+grant select on table public.omr_plan_usage to service_role;
+grant select on table public.omr_plan_usage_reservations to service_role;
+revoke all on sequence public.omr_remote_asset_cleanup_queue_id_seq from service_role;
+revoke all on function public.omr_lock_provisioned_teacher_identity_v1(text,bigint,text) from public, anon, authenticated, service_role;
+revoke all on function public.omr_authorize_effective_teacher_plan_v1(text,text) from public, anon, authenticated, service_role;
+revoke all on function public.omr_read_effective_organization_plan_v1(text) from public, anon, authenticated, service_role;
+revoke all on function public.omr_set_effective_plan_transaction_proof_v1(text,jsonb) from public, anon, authenticated, service_role;
+revoke all on function public.omr_prove_effective_organization_plan_v1(text) from public, anon, authenticated, service_role;
+revoke all on function public.omr_assert_effective_plan_transaction_proof_v1(text,boolean) from public, anon, authenticated, service_role;
+revoke all on function public.omr_lock_legacy_teacher_identity_v1(text,bigint,text,text) from public, anon, authenticated, service_role;
+revoke all on function public.omr_read_legacy_teacher_plan_v1(text,text,text) from public, anon, authenticated, service_role;
+revoke all on function public.omr_lock_teacher_mutation_identity_v1(text,text,bigint,text,text) from public, anon, authenticated, service_role;
+revoke all on function public.omr_read_teacher_mutation_plan_v1(text,text,text,text) from public, anon, authenticated, service_role;
+revoke all on function public.omr_save_exam_effective_worker_v3(text,text,text,text,jsonb,jsonb,jsonb) from public, anon, authenticated, service_role;
+revoke all on function public.omr_save_feedback_effective_worker_v4(text,jsonb,bigint,text) from public, anon, authenticated, service_role;
+revoke all on function public.omr_claim_remote_asset_cleanup_v8_snapshot(text,integer,integer) from public, anon, authenticated, service_role;
+revoke all on function public.omr_initial_ops_fixture_v26_snapshot(text,text,text,text,text) from public, anon, authenticated, service_role;
+revoke all on function public.omr_initial_ops_database_snapshot_v26_snapshot(text,text,text,text,text) from public, anon, authenticated, service_role;
+revoke all on function public.omr_assert_targeted_assignment_scope_v1(text,text,text,text,text,text,integer[]) from public, anon, authenticated, service_role;
+revoke all on function public.omr_validate_targeted_attempt_session_v1() from public, anon, authenticated, service_role;
+revoke all on function public.omr_validate_targeted_attempt_v1() from public, anon, authenticated, service_role;
+revoke all on function public.omr_guard_targeted_exam_access_v1() from public, anon, authenticated, service_role;
+revoke all on function public.omr_save_roster_v2(text,jsonb,jsonb,jsonb,jsonb,bigint) from public, anon, authenticated, service_role;
+revoke all on function public.omr_save_roster_v1(text,jsonb,jsonb,jsonb,jsonb) from public, anon, authenticated, service_role;
+revoke all on function public.omr_save_roster_plan_unlocked_v1(text,jsonb,jsonb,jsonb,jsonb) from public, anon, authenticated, service_role;
+revoke all on function public.omr_save_roster_unlocked_v1(text,jsonb,jsonb,jsonb,jsonb) from public, anon, authenticated, service_role;
+revoke all on function public.omr_save_exam_v2(jsonb,jsonb,jsonb,text,bigint,text) from public, anon, authenticated, service_role;
+revoke all on function public.omr_save_exam_v1(jsonb,jsonb,jsonb,text) from public, anon, authenticated, service_role;
+revoke all on function public.omr_save_exam_v10_snapshot(jsonb,jsonb,jsonb,text) from public, anon, authenticated, service_role;
+revoke all on function public.omr_save_exam_v6_snapshot(jsonb,jsonb,jsonb,text) from public, anon, authenticated, service_role;
+revoke all on function public.omr_save_exam_plan_unlocked_v1(jsonb,jsonb) from public, anon, authenticated, service_role;
+revoke all on function public.omr_prepare_teacher_asset_upload_v1(jsonb) from public, anon, authenticated, service_role;
+revoke all on function public.omr_prepare_teacher_asset_upload_v6_snapshot(jsonb) from public, anon, authenticated, service_role;
+revoke all on function public.omr_authorize_teacher_asset_finalize_v1(text,text,text,jsonb) from public, anon, authenticated, service_role;
+revoke all on function public.omr_finalize_teacher_asset_upload_v1(text,text,text,jsonb) from public, anon, authenticated, service_role;
+revoke all on function public.omr_prepare_attempt_handwriting_asset_v1(text,jsonb) from public, anon, authenticated, service_role;
+revoke all on function public.omr_attach_attempt_handwriting_v1(text,text,jsonb) from public, anon, authenticated, service_role;
+revoke all on function public.omr_save_remote_asset_metadata_v1(jsonb) from public, anon, authenticated, service_role;
+revoke all on function public.omr_save_feedback_v3(text,jsonb,bigint,text) from public, anon, authenticated, service_role;
+revoke all on function public.omr_return_feedback_v3(text,text,bigint,text) from public, anon, authenticated, service_role;
+revoke all on function public.omr_save_feedback_v2(text,jsonb,bigint,text) from public, anon, authenticated, service_role;
+revoke all on function public.omr_return_feedback_v2(text,text,bigint,text) from public, anon, authenticated, service_role;
+revoke all on function public.omr_save_feedback_v1(text,jsonb) from public, anon, authenticated, service_role;
+revoke all on function public.omr_return_feedback_v1(text,text,timestamptz) from public, anon, authenticated, service_role;
+revoke all on function public.omr_assign_students_v1(text,text,text,text,text[],text,bigint,text) from public, anon, authenticated, service_role;
+revoke all on function public.omr_clear_student_assignment_v1(text,text,text,text,bigint,text,text[],text) from public, anon, authenticated, service_role;
+revoke all on function public.omr_open_attempt_session_v1(text,text,text,text,text,text,text,text,text,text,text,integer[],integer[],timestamp with time zone,jsonb,integer,timestamp with time zone,text,text,integer) from public, anon, authenticated, service_role;
+revoke all on function public.omr_reserve_plan_usage(text,text,date,text,integer,integer,integer) from public, anon, authenticated, service_role;
+revoke all on function public.omr_release_plan_usage(text,text,date,text) from public, anon, authenticated, service_role;
+revoke all on function public.omr_release_plan_usage_v10_snapshot(text,text,date,text) from public, anon, authenticated, service_role;
+revoke all on function public.omr_sync_student_plan_usage(text,text[],integer,integer) from public, anon, authenticated, service_role;
+revoke all on function public.omr_save_roster_v3(text,text,bigint,text,text,jsonb,jsonb,jsonb,jsonb,bigint) from public, anon, authenticated;
+grant execute on function public.omr_save_roster_v3(text,text,bigint,text,text,jsonb,jsonb,jsonb,jsonb,bigint) to service_role;
+revoke all on function public.omr_save_exam_v3(text,text,bigint,text,jsonb,jsonb,jsonb,bigint,text) from public, anon, authenticated;
+grant execute on function public.omr_save_exam_v3(text,text,bigint,text,jsonb,jsonb,jsonb,bigint,text) to service_role;
+revoke all on function public.omr_save_feedback_v4(text,text,bigint,text,text,jsonb,bigint,text) from public, anon, authenticated;
+grant execute on function public.omr_save_feedback_v4(text,text,bigint,text,text,jsonb,bigint,text) to service_role;
+revoke all on function public.omr_return_feedback_v4(text,text,bigint,text,text,text,bigint,text) from public, anon, authenticated;
+grant execute on function public.omr_return_feedback_v4(text,text,bigint,text,text,text,bigint,text) to service_role;
+revoke all on function public.omr_assign_students_v2(text,text,bigint,text,text,text,text,text[],text,bigint,text) from public, anon, authenticated;
+grant execute on function public.omr_assign_students_v2(text,text,bigint,text,text,text,text,text[],text,bigint,text) to service_role;
+revoke all on function public.omr_clear_student_assignment_v2(text,text,bigint,text,text,text,text,bigint,text,text[],text) from public, anon, authenticated;
+grant execute on function public.omr_clear_student_assignment_v2(text,text,bigint,text,text,text,text,bigint,text,text[],text) to service_role;
+revoke all on function public.omr_open_attempt_session_v2(text,text,text,text,text,text,text,text,text,text,text,integer[],integer[],timestamp with time zone,jsonb,integer,timestamp with time zone,text,text,integer) from public, anon, authenticated;
+grant execute on function public.omr_open_attempt_session_v2(text,text,text,text,text,text,text,text,text,text,text,integer[],integer[],timestamp with time zone,jsonb,integer,timestamp with time zone,text,text,integer) to service_role;
+revoke all on function public.omr_prepare_teacher_asset_upload_v2(text,text,bigint,text,text,jsonb) from public, anon, authenticated;
+grant execute on function public.omr_prepare_teacher_asset_upload_v2(text,text,bigint,text,text,jsonb) to service_role;
+revoke all on function public.omr_authorize_teacher_asset_finalize_v2(text,text,bigint,text,text,text,jsonb) from public, anon, authenticated;
+grant execute on function public.omr_authorize_teacher_asset_finalize_v2(text,text,bigint,text,text,text,jsonb) to service_role;
+revoke all on function public.omr_finalize_teacher_asset_upload_v2(text,text,bigint,text,text,text,jsonb) from public, anon, authenticated;
+grant execute on function public.omr_finalize_teacher_asset_upload_v2(text,text,bigint,text,text,text,jsonb) to service_role;
+revoke all on function public.omr_prepare_attempt_handwriting_asset_v2(text,text,text,jsonb) from public, anon, authenticated;
+grant execute on function public.omr_prepare_attempt_handwriting_asset_v2(text,text,text,jsonb) to service_role;
+revoke all on function public.omr_attach_attempt_handwriting_v2(text,text,text,text,text) from public, anon, authenticated;
+grant execute on function public.omr_attach_attempt_handwriting_v2(text,text,text,text,text) to service_role;
+revoke all on function public.omr_claim_remote_asset_cleanup_v1(text,integer,integer) from public, anon, authenticated;
+grant execute on function public.omr_claim_remote_asset_cleanup_v1(text,integer,integer) to service_role;
+revoke all on function public.omr_reserve_plan_usage_v2(text,text,bigint,text,text,text,text) from public, anon, authenticated;
+grant execute on function public.omr_reserve_plan_usage_v2(text,text,bigint,text,text,text,text) to service_role;
+revoke all on function public.omr_release_plan_usage_v2(text,text,bigint,text,text,text,text) from public, anon, authenticated;
+grant execute on function public.omr_release_plan_usage_v2(text,text,bigint,text,text,text,text) to service_role;
+revoke all on function public.omr_sync_student_plan_usage_v2(text,text,bigint,text,text) from public, anon, authenticated;
+grant execute on function public.omr_sync_student_plan_usage_v2(text,text,bigint,text,text) to service_role;
 
 commit;

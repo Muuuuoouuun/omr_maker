@@ -6,22 +6,35 @@ function source(path: string): string {
     return readFileSync(resolve(process.cwd(), path), "utf8");
 }
 
+function sqlFunctionBody(sql: string, signaturePrefix: string): string {
+    const start = sql.toLowerCase().indexOf(signaturePrefix.toLowerCase());
+    if (start < 0) return "";
+    const remaining = sql.slice(start);
+    const opening = /\bas\s+(\$[a-z0-9_]*\$)/i.exec(remaining);
+    if (!opening) return "";
+    const tag = opening[1];
+    const bodyStart = (opening.index ?? 0) + opening[0].length;
+    const bodyEnd = remaining.indexOf(tag, bodyStart);
+    return bodyEnd < 0 ? "" : remaining.slice(bodyStart, bodyEnd);
+}
+
 const requiredProductionPaths = [
-    "rpc:omr_open_attempt_session_v1",
+    "rpc:omr_open_attempt_session_v2",
     "rpc:omr_checkpoint_attempt_session_v1",
     "rpc:omr_heartbeat_attempt_session_v1",
     "rpc:omr_prepare_attempt_session_submit_v1",
     "rpc:omr_commit_attempt_session_submit_v1",
     "rpc:omr_list_active_attempt_sessions_v1",
     "table:omr_remote_assets",
-    "rpc:omr_prepare_teacher_asset_upload_v1",
-    "rpc:omr_authorize_teacher_asset_finalize_v1",
-    "rpc:omr_finalize_teacher_asset_upload_v1",
+    "rpc:omr_prepare_teacher_asset_upload_v2",
+    "rpc:omr_authorize_teacher_asset_finalize_v2",
+    "rpc:omr_finalize_teacher_asset_upload_v2",
 ] as const;
 
 describe("initial-operations production workload coverage", () => {
     it("executes production workload RPCs instead of the canned load operation RPC", () => {
         const gateway = source("src/lib/initialOperationsLoadGateway.server.ts");
+        const studentSessionGateway = source("src/lib/studentAttemptSessionGateway.server.ts");
         expect(gateway).not.toContain('client.rpc("omr_initial_ops_operation_v1"');
         expect(gateway).not.toContain('client.rpc("omr_initial_ops_reserve_upload_v1"');
         for (const path of requiredProductionPaths) {
@@ -33,6 +46,8 @@ describe("initial-operations production workload coverage", () => {
         expect(gateway).toContain("prepareStudentAttemptSessionSubmitWithGateway");
         expect(gateway).toContain("commitStudentAttemptSessionSubmitWithGateway");
         expect(gateway).toContain("listTeacherActiveAttemptSessionsWithGateway");
+        expect(studentSessionGateway).toContain('client.rpc("omr_open_attempt_session_v2"');
+        expect(studentSessionGateway).not.toContain('client.rpc("omr_open_attempt_session_v1"');
     });
 
     it("attests the exact production path map in the staging contract and every raw request", () => {
@@ -57,11 +72,16 @@ describe("initial-operations production workload coverage", () => {
         expect(existsSync(migrationPath)).toBe(true);
         if (!existsSync(migrationPath)) return;
         const migration = readFileSync(migrationPath, "utf8");
+        const effectiveMigration = source("supabase/migrations/202608080008_effective_workspace_plan_enforcement.sql");
+        const effectiveSnapshotBody = sqlFunctionBody(
+            effectiveMigration,
+            "create function public.omr_initial_ops_database_snapshot_v1",
+        );
         const bundle = source("scripts/initial-operations-evidence-bundle.mjs");
         const core = source("scripts/initial-operations-core.mjs");
 
         for (const path of requiredProductionPaths) {
-            expect(migration).toContain(path);
+            expect(effectiveSnapshotBody).toContain(path);
         }
         expect(migration).not.toMatch(/query\s+ilike\s+'%omr_initial_ops_%'/i);
         expect(migration).toContain("p_phase text");
@@ -74,6 +94,33 @@ describe("initial-operations production workload coverage", () => {
         expect(bundle).toContain("callsDelta");
         expect(bundle).toContain("workloadPath");
         expect(core).toContain('fail("database_workload_coverage"');
+    });
+
+    it("overrides initial-operations fixture and database evidence for v2 identity-bound workload paths", () => {
+        const migration = source("supabase/migrations/202608080008_effective_workspace_plan_enforcement.sql");
+        const fixtureBody = sqlFunctionBody(
+            migration,
+            "create function public.omr_initial_ops_fixture_v1",
+        );
+        const snapshotBody = sqlFunctionBody(
+            migration,
+            "create function public.omr_initial_ops_database_snapshot_v1",
+        );
+
+        expect(fixtureBody).toContain("teacherIdentity");
+        expect(fixtureBody).toContain("sessionAuthority");
+        expect(fixtureBody).toContain("legacy_account");
+        expect(fixtureBody).toContain("accountId");
+        expect(fixtureBody).toContain("accountSessionGeneration");
+        expect(fixtureBody).toContain("actorUserId");
+        expect(snapshotBody).toContain("rpc:omr_open_attempt_session_v2");
+        expect(snapshotBody).toContain("rpc:omr_prepare_teacher_asset_upload_v2");
+        expect(snapshotBody).toContain("rpc:omr_authorize_teacher_asset_finalize_v2");
+        expect(snapshotBody).toContain("rpc:omr_finalize_teacher_asset_upload_v2");
+        expect(snapshotBody).not.toContain("rpc:omr_open_attempt_session_v1");
+        expect(snapshotBody).not.toContain("rpc:omr_prepare_teacher_asset_upload_v1");
+        expect(snapshotBody).not.toContain("rpc:omr_authorize_teacher_asset_finalize_v1");
+        expect(snapshotBody).not.toContain("rpc:omr_finalize_teacher_asset_upload_v1");
     });
 
     it("keeps only fixture, cleanup, and instrumentation on dedicated load RPCs", () => {
@@ -112,14 +159,15 @@ describe("initial-operations production workload coverage", () => {
         expect(gateway).toContain('p_action: "finalize_cleanup"');
     });
 
-    it("seeds actor-bound uploader memberships so ten 50 MiB uploads do not share one quota", () => {
+    it("uses one exact fixture teacher identity while retaining ten distinct uploader transport actors", () => {
         const gateway = source("src/lib/initialOperationsLoadGateway.server.ts");
-        const migration = source("supabase/migrations/202608060026_initial_operations_production_coverage.sql");
-        expect(gateway).toContain("createdByUserId: context.actorId");
-        expect(migration).toContain("insert into public.omr_organization_members");
-        expect(migration).toContain("'uploader_' || v_suffix || '_'");
-        expect(migration).toContain("'members'");
-        expect(migration).toContain("delete from public.omr_remote_asset_cleanup_queue");
+        const driver = source("scripts/initial-operations-driver.mjs");
+        expect(gateway).toContain("createdByUserId: teacherIdentity.actorUserId");
+        expect(gateway).toContain("originalName: `${context.actorId}.pdf`");
+        expect(gateway).toContain("teacherIdentityForFixture(input.teacherIdentity, fixture)");
+        expect(gateway).not.toContain("createdByUserId: context.actorId");
+        expect(driver).toContain("teacherIdentity: fixtureTeacherIdentity");
+        expect(driver).toContain("workload.uploads");
     });
 
     it("uses the production finalize gateway and production TUS metadata semantics", () => {

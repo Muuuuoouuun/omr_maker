@@ -49,7 +49,7 @@ describe("student attempt session gateway", () => {
         });
 
         expect(result).toMatchObject({ status: "lease_conflict", session: { sessionId: "session-1" } });
-        expect(rpc).toHaveBeenCalledWith("omr_open_attempt_session_v1", expect.objectContaining({
+        expect(rpc).toHaveBeenCalledWith("omr_open_attempt_session_v2", expect.objectContaining({
             p_new_lease_token_hash: "new-hash",
             p_current_lease_token_hash: "current-hash",
         }));

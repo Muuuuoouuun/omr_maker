@@ -60,8 +60,8 @@ describe("feedback replay hardening follow-up migration", () => {
         expect(boundary).toContain("v_feedback_replay_hardening_ready");
         expect(boundary).toContain("feedback-replay-hardening:202608060014");
         expect(boundary).toContain("'feedbackReplayHardeningReady'");
-        expect(boundary).toContain("'version', '202608080007'");
-        expect(probe).toContain('SUPABASE_READINESS_VERSION = "202608080007"');
+        expect(boundary).toContain("'version', '202608080008'");
+        expect(probe).toContain('SUPABASE_READINESS_VERSION = "202608080008"');
         expect(probe).toContain('"feedbackReplayHardeningReady"');
     });
 });

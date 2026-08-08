@@ -151,6 +151,56 @@ revoke all on table public.omr_operational_job_status from public, anon, authent
 revoke all on table public.omr_pilot_plan_grants from public, anon, authenticated, service_role;
 revoke all on sequence public.omr_operational_job_run_sequence from public, anon, authenticated, service_role;
 
+
+-- Phase C keeps service_role on audited public RPCs only. Reassert this after
+-- the blanket compatibility grant so direct DML/private-worker execution cannot
+-- bypass the same-transaction identity and effective-plan fences.
+revoke all on table public.omr_remote_assets from service_role;
+revoke all on table public.omr_remote_asset_upload_intents from service_role;
+revoke all on table public.omr_remote_asset_cleanup_queue from service_role;
+revoke all on table public.omr_plan_usage from service_role;
+revoke all on table public.omr_plan_usage_reservations from service_role;
+grant select on table public.omr_remote_assets to service_role;
+grant select on table public.omr_remote_asset_upload_intents to service_role;
+grant select on table public.omr_remote_asset_cleanup_queue to service_role;
+grant select on table public.omr_plan_usage to service_role;
+grant select on table public.omr_plan_usage_reservations to service_role;
+revoke all on sequence public.omr_remote_asset_cleanup_queue_id_seq from service_role;
+revoke all on function public.omr_lock_provisioned_teacher_identity_v1(text,bigint,text) from public, anon, authenticated, service_role;
+revoke all on function public.omr_authorize_effective_teacher_plan_v1(text,text) from public, anon, authenticated, service_role;
+revoke all on function public.omr_read_effective_organization_plan_v1(text) from public, anon, authenticated, service_role;
+revoke all on function public.omr_set_effective_plan_transaction_proof_v1(text,jsonb) from public, anon, authenticated, service_role;
+revoke all on function public.omr_prove_effective_organization_plan_v1(text) from public, anon, authenticated, service_role;
+revoke all on function public.omr_assert_effective_plan_transaction_proof_v1(text,boolean) from public, anon, authenticated, service_role;
+revoke all on function public.omr_lock_legacy_teacher_identity_v1(text,bigint,text,text) from public, anon, authenticated, service_role;
+revoke all on function public.omr_read_legacy_teacher_plan_v1(text,text,text) from public, anon, authenticated, service_role;
+revoke all on function public.omr_lock_teacher_mutation_identity_v1(text,text,bigint,text,text) from public, anon, authenticated, service_role;
+revoke all on function public.omr_read_teacher_mutation_plan_v1(text,text,text,text) from public, anon, authenticated, service_role;
+revoke all on function public.omr_save_exam_effective_worker_v3(text,text,text,text,jsonb,jsonb,jsonb) from public, anon, authenticated, service_role;
+revoke all on function public.omr_save_feedback_effective_worker_v4(text,jsonb,bigint,text) from public, anon, authenticated, service_role;
+revoke all on function public.omr_claim_remote_asset_cleanup_v8_snapshot(text,integer,integer) from public, anon, authenticated, service_role;
+revoke all on function public.omr_save_roster_v2(text,jsonb,jsonb,jsonb,jsonb,bigint) from public, anon, authenticated, service_role;
+revoke all on function public.omr_save_roster_v1(text,jsonb,jsonb,jsonb,jsonb) from public, anon, authenticated, service_role;
+revoke all on function public.omr_save_exam_v2(jsonb,jsonb,jsonb,text,bigint,text) from public, anon, authenticated, service_role;
+revoke all on function public.omr_save_exam_v1(jsonb,jsonb,jsonb,text) from public, anon, authenticated, service_role;
+revoke all on function public.omr_prepare_teacher_asset_upload_v1(jsonb) from public, anon, authenticated, service_role;
+revoke all on function public.omr_authorize_teacher_asset_finalize_v1(text,text,text,jsonb) from public, anon, authenticated, service_role;
+revoke all on function public.omr_finalize_teacher_asset_upload_v1(text,text,text,jsonb) from public, anon, authenticated, service_role;
+revoke all on function public.omr_prepare_attempt_handwriting_asset_v1(text,jsonb) from public, anon, authenticated, service_role;
+revoke all on function public.omr_attach_attempt_handwriting_v1(text,text,jsonb) from public, anon, authenticated, service_role;
+revoke all on function public.omr_save_remote_asset_metadata_v1(jsonb) from public, anon, authenticated, service_role;
+revoke all on function public.omr_save_feedback_v3(text,jsonb,bigint,text) from public, anon, authenticated, service_role;
+revoke all on function public.omr_return_feedback_v3(text,text,bigint,text) from public, anon, authenticated, service_role;
+revoke all on function public.omr_save_feedback_v2(text,jsonb,bigint,text) from public, anon, authenticated, service_role;
+revoke all on function public.omr_return_feedback_v2(text,text,bigint,text) from public, anon, authenticated, service_role;
+revoke all on function public.omr_assign_students_v1(text,text,text,text,text[],text,bigint,text) from public, anon, authenticated, service_role;
+revoke all on function public.omr_clear_student_assignment_v1(text,text,text,text,bigint,text,text[],text) from public, anon, authenticated, service_role;
+revoke all on function public.omr_open_attempt_session_v1(text,text,text,text,text,text,text,text,text,text,text,integer[],integer[],timestamp with time zone,jsonb,integer,timestamp with time zone,text,text,integer) from public, anon, authenticated, service_role;
+revoke all on function public.omr_reserve_plan_usage(text,text,date,text,integer,integer,integer) from public, anon, authenticated, service_role;
+revoke all on function public.omr_release_plan_usage(text,text,date,text) from public, anon, authenticated, service_role;
+revoke all on function public.omr_sync_student_plan_usage(text,text[],integer,integer) from public, anon, authenticated, service_role;
+
+
 do $$
 declare
     guarded_function text;
@@ -347,6 +397,100 @@ grant execute on function public.omr_gc_attempt_sessions_v1(integer,integer)
     to service_role;
 grant execute on function public.omr_requeue_dead_remote_asset_cleanup_v1(text,text,integer,text,text)
     to service_role;
+
+
+-- Final Phase C ACL fence. Keep this after every compatibility grant above.
+revoke all on table public.omr_remote_assets from service_role;
+revoke all on table public.omr_remote_asset_upload_intents from service_role;
+revoke all on table public.omr_remote_asset_cleanup_queue from service_role;
+revoke all on table public.omr_plan_usage from service_role;
+revoke all on table public.omr_plan_usage_reservations from service_role;
+grant select on table public.omr_remote_assets to service_role;
+grant select on table public.omr_remote_asset_upload_intents to service_role;
+grant select on table public.omr_remote_asset_cleanup_queue to service_role;
+grant select on table public.omr_plan_usage to service_role;
+grant select on table public.omr_plan_usage_reservations to service_role;
+revoke all on sequence public.omr_remote_asset_cleanup_queue_id_seq from service_role;
+revoke all on function public.omr_lock_provisioned_teacher_identity_v1(text,bigint,text) from public, anon, authenticated, service_role;
+revoke all on function public.omr_authorize_effective_teacher_plan_v1(text,text) from public, anon, authenticated, service_role;
+revoke all on function public.omr_read_effective_organization_plan_v1(text) from public, anon, authenticated, service_role;
+revoke all on function public.omr_set_effective_plan_transaction_proof_v1(text,jsonb) from public, anon, authenticated, service_role;
+revoke all on function public.omr_prove_effective_organization_plan_v1(text) from public, anon, authenticated, service_role;
+revoke all on function public.omr_assert_effective_plan_transaction_proof_v1(text,boolean) from public, anon, authenticated, service_role;
+revoke all on function public.omr_lock_legacy_teacher_identity_v1(text,bigint,text,text) from public, anon, authenticated, service_role;
+revoke all on function public.omr_read_legacy_teacher_plan_v1(text,text,text) from public, anon, authenticated, service_role;
+revoke all on function public.omr_lock_teacher_mutation_identity_v1(text,text,bigint,text,text) from public, anon, authenticated, service_role;
+revoke all on function public.omr_read_teacher_mutation_plan_v1(text,text,text,text) from public, anon, authenticated, service_role;
+revoke all on function public.omr_save_exam_effective_worker_v3(text,text,text,text,jsonb,jsonb,jsonb) from public, anon, authenticated, service_role;
+revoke all on function public.omr_save_feedback_effective_worker_v4(text,jsonb,bigint,text) from public, anon, authenticated, service_role;
+revoke all on function public.omr_claim_remote_asset_cleanup_v8_snapshot(text,integer,integer) from public, anon, authenticated, service_role;
+revoke all on function public.omr_initial_ops_fixture_v26_snapshot(text,text,text,text,text) from public, anon, authenticated, service_role;
+revoke all on function public.omr_initial_ops_database_snapshot_v26_snapshot(text,text,text,text,text) from public, anon, authenticated, service_role;
+revoke all on function public.omr_assert_targeted_assignment_scope_v1(text,text,text,text,text,text,integer[]) from public, anon, authenticated, service_role;
+revoke all on function public.omr_validate_targeted_attempt_session_v1() from public, anon, authenticated, service_role;
+revoke all on function public.omr_validate_targeted_attempt_v1() from public, anon, authenticated, service_role;
+revoke all on function public.omr_guard_targeted_exam_access_v1() from public, anon, authenticated, service_role;
+revoke all on function public.omr_save_roster_v2(text,jsonb,jsonb,jsonb,jsonb,bigint) from public, anon, authenticated, service_role;
+revoke all on function public.omr_save_roster_v1(text,jsonb,jsonb,jsonb,jsonb) from public, anon, authenticated, service_role;
+revoke all on function public.omr_save_roster_plan_unlocked_v1(text,jsonb,jsonb,jsonb,jsonb) from public, anon, authenticated, service_role;
+revoke all on function public.omr_save_roster_unlocked_v1(text,jsonb,jsonb,jsonb,jsonb) from public, anon, authenticated, service_role;
+revoke all on function public.omr_save_exam_v2(jsonb,jsonb,jsonb,text,bigint,text) from public, anon, authenticated, service_role;
+revoke all on function public.omr_save_exam_v1(jsonb,jsonb,jsonb,text) from public, anon, authenticated, service_role;
+revoke all on function public.omr_save_exam_v10_snapshot(jsonb,jsonb,jsonb,text) from public, anon, authenticated, service_role;
+revoke all on function public.omr_save_exam_v6_snapshot(jsonb,jsonb,jsonb,text) from public, anon, authenticated, service_role;
+revoke all on function public.omr_save_exam_plan_unlocked_v1(jsonb,jsonb) from public, anon, authenticated, service_role;
+revoke all on function public.omr_prepare_teacher_asset_upload_v1(jsonb) from public, anon, authenticated, service_role;
+revoke all on function public.omr_prepare_teacher_asset_upload_v6_snapshot(jsonb) from public, anon, authenticated, service_role;
+revoke all on function public.omr_authorize_teacher_asset_finalize_v1(text,text,text,jsonb) from public, anon, authenticated, service_role;
+revoke all on function public.omr_finalize_teacher_asset_upload_v1(text,text,text,jsonb) from public, anon, authenticated, service_role;
+revoke all on function public.omr_prepare_attempt_handwriting_asset_v1(text,jsonb) from public, anon, authenticated, service_role;
+revoke all on function public.omr_attach_attempt_handwriting_v1(text,text,jsonb) from public, anon, authenticated, service_role;
+revoke all on function public.omr_save_remote_asset_metadata_v1(jsonb) from public, anon, authenticated, service_role;
+revoke all on function public.omr_save_feedback_v3(text,jsonb,bigint,text) from public, anon, authenticated, service_role;
+revoke all on function public.omr_return_feedback_v3(text,text,bigint,text) from public, anon, authenticated, service_role;
+revoke all on function public.omr_save_feedback_v2(text,jsonb,bigint,text) from public, anon, authenticated, service_role;
+revoke all on function public.omr_return_feedback_v2(text,text,bigint,text) from public, anon, authenticated, service_role;
+revoke all on function public.omr_save_feedback_v1(text,jsonb) from public, anon, authenticated, service_role;
+revoke all on function public.omr_return_feedback_v1(text,text,timestamptz) from public, anon, authenticated, service_role;
+revoke all on function public.omr_assign_students_v1(text,text,text,text,text[],text,bigint,text) from public, anon, authenticated, service_role;
+revoke all on function public.omr_clear_student_assignment_v1(text,text,text,text,bigint,text,text[],text) from public, anon, authenticated, service_role;
+revoke all on function public.omr_open_attempt_session_v1(text,text,text,text,text,text,text,text,text,text,text,integer[],integer[],timestamp with time zone,jsonb,integer,timestamp with time zone,text,text,integer) from public, anon, authenticated, service_role;
+revoke all on function public.omr_reserve_plan_usage(text,text,date,text,integer,integer,integer) from public, anon, authenticated, service_role;
+revoke all on function public.omr_release_plan_usage(text,text,date,text) from public, anon, authenticated, service_role;
+revoke all on function public.omr_release_plan_usage_v10_snapshot(text,text,date,text) from public, anon, authenticated, service_role;
+revoke all on function public.omr_sync_student_plan_usage(text,text[],integer,integer) from public, anon, authenticated, service_role;
+revoke all on function public.omr_save_roster_v3(text,text,bigint,text,text,jsonb,jsonb,jsonb,jsonb,bigint) from public, anon, authenticated;
+grant execute on function public.omr_save_roster_v3(text,text,bigint,text,text,jsonb,jsonb,jsonb,jsonb,bigint) to service_role;
+revoke all on function public.omr_save_exam_v3(text,text,bigint,text,jsonb,jsonb,jsonb,bigint,text) from public, anon, authenticated;
+grant execute on function public.omr_save_exam_v3(text,text,bigint,text,jsonb,jsonb,jsonb,bigint,text) to service_role;
+revoke all on function public.omr_save_feedback_v4(text,text,bigint,text,text,jsonb,bigint,text) from public, anon, authenticated;
+grant execute on function public.omr_save_feedback_v4(text,text,bigint,text,text,jsonb,bigint,text) to service_role;
+revoke all on function public.omr_return_feedback_v4(text,text,bigint,text,text,text,bigint,text) from public, anon, authenticated;
+grant execute on function public.omr_return_feedback_v4(text,text,bigint,text,text,text,bigint,text) to service_role;
+revoke all on function public.omr_assign_students_v2(text,text,bigint,text,text,text,text,text[],text,bigint,text) from public, anon, authenticated;
+grant execute on function public.omr_assign_students_v2(text,text,bigint,text,text,text,text,text[],text,bigint,text) to service_role;
+revoke all on function public.omr_clear_student_assignment_v2(text,text,bigint,text,text,text,text,bigint,text,text[],text) from public, anon, authenticated;
+grant execute on function public.omr_clear_student_assignment_v2(text,text,bigint,text,text,text,text,bigint,text,text[],text) to service_role;
+revoke all on function public.omr_open_attempt_session_v2(text,text,text,text,text,text,text,text,text,text,text,integer[],integer[],timestamp with time zone,jsonb,integer,timestamp with time zone,text,text,integer) from public, anon, authenticated;
+grant execute on function public.omr_open_attempt_session_v2(text,text,text,text,text,text,text,text,text,text,text,integer[],integer[],timestamp with time zone,jsonb,integer,timestamp with time zone,text,text,integer) to service_role;
+revoke all on function public.omr_prepare_teacher_asset_upload_v2(text,text,bigint,text,text,jsonb) from public, anon, authenticated;
+grant execute on function public.omr_prepare_teacher_asset_upload_v2(text,text,bigint,text,text,jsonb) to service_role;
+revoke all on function public.omr_authorize_teacher_asset_finalize_v2(text,text,bigint,text,text,text,jsonb) from public, anon, authenticated;
+grant execute on function public.omr_authorize_teacher_asset_finalize_v2(text,text,bigint,text,text,text,jsonb) to service_role;
+revoke all on function public.omr_finalize_teacher_asset_upload_v2(text,text,bigint,text,text,text,jsonb) from public, anon, authenticated;
+grant execute on function public.omr_finalize_teacher_asset_upload_v2(text,text,bigint,text,text,text,jsonb) to service_role;
+revoke all on function public.omr_prepare_attempt_handwriting_asset_v2(text,text,text,jsonb) from public, anon, authenticated;
+grant execute on function public.omr_prepare_attempt_handwriting_asset_v2(text,text,text,jsonb) to service_role;
+revoke all on function public.omr_attach_attempt_handwriting_v2(text,text,text,text,text) from public, anon, authenticated;
+grant execute on function public.omr_attach_attempt_handwriting_v2(text,text,text,text,text) to service_role;
+revoke all on function public.omr_claim_remote_asset_cleanup_v1(text,integer,integer) from public, anon, authenticated;
+grant execute on function public.omr_claim_remote_asset_cleanup_v1(text,integer,integer) to service_role;
+revoke all on function public.omr_reserve_plan_usage_v2(text,text,bigint,text,text,text,text) from public, anon, authenticated;
+grant execute on function public.omr_reserve_plan_usage_v2(text,text,bigint,text,text,text,text) to service_role;
+revoke all on function public.omr_release_plan_usage_v2(text,text,bigint,text,text,text,text) from public, anon, authenticated;
+grant execute on function public.omr_release_plan_usage_v2(text,text,bigint,text,text,text,text) to service_role;
+revoke all on function public.omr_sync_student_plan_usage_v2(text,text,bigint,text,text) from public, anon, authenticated;
+grant execute on function public.omr_sync_student_plan_usage_v2(text,text,bigint,text,text) to service_role;
 
 commit;
 
@@ -598,5 +742,101 @@ grant execute on function public.omr_gc_attempt_sessions_v1(integer,integer)
     to service_role;
 grant execute on function public.omr_requeue_dead_remote_asset_cleanup_v1(text,text,integer,text,text)
     to service_role;
+
+-- Final Stage 3 Phase C ACL fence. Rollback may restore the historical browser
+-- policies, but it must never restore direct service-role paid-mutation,
+-- private-worker, quota-ledger, or Storage-metadata bypasses.
+revoke all on table public.omr_remote_assets from service_role;
+revoke all on table public.omr_remote_asset_upload_intents from service_role;
+revoke all on table public.omr_remote_asset_cleanup_queue from service_role;
+revoke all on table public.omr_plan_usage from service_role;
+revoke all on table public.omr_plan_usage_reservations from service_role;
+grant select on table public.omr_remote_assets to service_role;
+grant select on table public.omr_remote_asset_upload_intents to service_role;
+grant select on table public.omr_remote_asset_cleanup_queue to service_role;
+grant select on table public.omr_plan_usage to service_role;
+grant select on table public.omr_plan_usage_reservations to service_role;
+revoke all on sequence public.omr_remote_asset_cleanup_queue_id_seq from service_role;
+
+revoke all on function public.omr_lock_provisioned_teacher_identity_v1(text,bigint,text) from public, anon, authenticated, service_role;
+revoke all on function public.omr_authorize_effective_teacher_plan_v1(text,text) from public, anon, authenticated, service_role;
+revoke all on function public.omr_read_effective_organization_plan_v1(text) from public, anon, authenticated, service_role;
+revoke all on function public.omr_set_effective_plan_transaction_proof_v1(text,jsonb) from public, anon, authenticated, service_role;
+revoke all on function public.omr_prove_effective_organization_plan_v1(text) from public, anon, authenticated, service_role;
+revoke all on function public.omr_assert_effective_plan_transaction_proof_v1(text,boolean) from public, anon, authenticated, service_role;
+revoke all on function public.omr_lock_legacy_teacher_identity_v1(text,bigint,text,text) from public, anon, authenticated, service_role;
+revoke all on function public.omr_read_legacy_teacher_plan_v1(text,text,text) from public, anon, authenticated, service_role;
+revoke all on function public.omr_lock_teacher_mutation_identity_v1(text,text,bigint,text,text) from public, anon, authenticated, service_role;
+revoke all on function public.omr_read_teacher_mutation_plan_v1(text,text,text,text) from public, anon, authenticated, service_role;
+revoke all on function public.omr_save_exam_effective_worker_v3(text,text,text,text,jsonb,jsonb,jsonb) from public, anon, authenticated, service_role;
+revoke all on function public.omr_save_feedback_effective_worker_v4(text,jsonb,bigint,text) from public, anon, authenticated, service_role;
+revoke all on function public.omr_claim_remote_asset_cleanup_v8_snapshot(text,integer,integer) from public, anon, authenticated, service_role;
+revoke all on function public.omr_initial_ops_fixture_v26_snapshot(text,text,text,text,text) from public, anon, authenticated, service_role;
+revoke all on function public.omr_initial_ops_database_snapshot_v26_snapshot(text,text,text,text,text) from public, anon, authenticated, service_role;
+revoke all on function public.omr_assert_targeted_assignment_scope_v1(text,text,text,text,text,text,integer[]) from public, anon, authenticated, service_role;
+revoke all on function public.omr_validate_targeted_attempt_session_v1() from public, anon, authenticated, service_role;
+revoke all on function public.omr_validate_targeted_attempt_v1() from public, anon, authenticated, service_role;
+revoke all on function public.omr_guard_targeted_exam_access_v1() from public, anon, authenticated, service_role;
+
+revoke all on function public.omr_save_roster_v2(text,jsonb,jsonb,jsonb,jsonb,bigint) from public, anon, authenticated, service_role;
+revoke all on function public.omr_save_roster_v1(text,jsonb,jsonb,jsonb,jsonb) from public, anon, authenticated, service_role;
+revoke all on function public.omr_save_roster_plan_unlocked_v1(text,jsonb,jsonb,jsonb,jsonb) from public, anon, authenticated, service_role;
+revoke all on function public.omr_save_roster_unlocked_v1(text,jsonb,jsonb,jsonb,jsonb) from public, anon, authenticated, service_role;
+revoke all on function public.omr_save_exam_v2(jsonb,jsonb,jsonb,text,bigint,text) from public, anon, authenticated, service_role;
+revoke all on function public.omr_save_exam_v1(jsonb,jsonb,jsonb,text) from public, anon, authenticated, service_role;
+revoke all on function public.omr_save_exam_v10_snapshot(jsonb,jsonb,jsonb,text) from public, anon, authenticated, service_role;
+revoke all on function public.omr_save_exam_v6_snapshot(jsonb,jsonb,jsonb,text) from public, anon, authenticated, service_role;
+revoke all on function public.omr_save_exam_plan_unlocked_v1(jsonb,jsonb) from public, anon, authenticated, service_role;
+revoke all on function public.omr_prepare_teacher_asset_upload_v1(jsonb) from public, anon, authenticated, service_role;
+revoke all on function public.omr_prepare_teacher_asset_upload_v6_snapshot(jsonb) from public, anon, authenticated, service_role;
+revoke all on function public.omr_authorize_teacher_asset_finalize_v1(text,text,text,jsonb) from public, anon, authenticated, service_role;
+revoke all on function public.omr_finalize_teacher_asset_upload_v1(text,text,text,jsonb) from public, anon, authenticated, service_role;
+revoke all on function public.omr_prepare_attempt_handwriting_asset_v1(text,jsonb) from public, anon, authenticated, service_role;
+revoke all on function public.omr_attach_attempt_handwriting_v1(text,text,jsonb) from public, anon, authenticated, service_role;
+revoke all on function public.omr_save_remote_asset_metadata_v1(jsonb) from public, anon, authenticated, service_role;
+revoke all on function public.omr_save_feedback_v3(text,jsonb,bigint,text) from public, anon, authenticated, service_role;
+revoke all on function public.omr_return_feedback_v3(text,text,bigint,text) from public, anon, authenticated, service_role;
+revoke all on function public.omr_save_feedback_v2(text,jsonb,bigint,text) from public, anon, authenticated, service_role;
+revoke all on function public.omr_return_feedback_v2(text,text,bigint,text) from public, anon, authenticated, service_role;
+revoke all on function public.omr_assign_students_v1(text,text,text,text,text[],text,bigint,text) from public, anon, authenticated, service_role;
+revoke all on function public.omr_clear_student_assignment_v1(text,text,text,text,bigint,text,text[],text) from public, anon, authenticated, service_role;
+revoke all on function public.omr_open_attempt_session_v1(text,text,text,text,text,text,text,text,text,text,text,integer[],integer[],timestamp with time zone,jsonb,integer,timestamp with time zone,text,text,integer) from public, anon, authenticated, service_role;
+revoke all on function public.omr_reserve_plan_usage(text,text,date,text,integer,integer,integer) from public, anon, authenticated, service_role;
+revoke all on function public.omr_release_plan_usage(text,text,date,text) from public, anon, authenticated, service_role;
+revoke all on function public.omr_release_plan_usage_v10_snapshot(text,text,date,text) from public, anon, authenticated, service_role;
+revoke all on function public.omr_sync_student_plan_usage(text,text[],integer,integer) from public, anon, authenticated, service_role;
+
+revoke all on function public.omr_save_roster_v3(text,text,bigint,text,text,jsonb,jsonb,jsonb,jsonb,bigint) from public, anon, authenticated;
+grant execute on function public.omr_save_roster_v3(text,text,bigint,text,text,jsonb,jsonb,jsonb,jsonb,bigint) to service_role;
+revoke all on function public.omr_save_exam_v3(text,text,bigint,text,jsonb,jsonb,jsonb,bigint,text) from public, anon, authenticated;
+grant execute on function public.omr_save_exam_v3(text,text,bigint,text,jsonb,jsonb,jsonb,bigint,text) to service_role;
+revoke all on function public.omr_save_feedback_v4(text,text,bigint,text,text,jsonb,bigint,text) from public, anon, authenticated;
+grant execute on function public.omr_save_feedback_v4(text,text,bigint,text,text,jsonb,bigint,text) to service_role;
+revoke all on function public.omr_return_feedback_v4(text,text,bigint,text,text,text,bigint,text) from public, anon, authenticated;
+grant execute on function public.omr_return_feedback_v4(text,text,bigint,text,text,text,bigint,text) to service_role;
+revoke all on function public.omr_assign_students_v2(text,text,bigint,text,text,text,text,text[],text,bigint,text) from public, anon, authenticated;
+grant execute on function public.omr_assign_students_v2(text,text,bigint,text,text,text,text,text[],text,bigint,text) to service_role;
+revoke all on function public.omr_clear_student_assignment_v2(text,text,bigint,text,text,text,text,bigint,text,text[],text) from public, anon, authenticated;
+grant execute on function public.omr_clear_student_assignment_v2(text,text,bigint,text,text,text,text,bigint,text,text[],text) to service_role;
+revoke all on function public.omr_open_attempt_session_v2(text,text,text,text,text,text,text,text,text,text,text,integer[],integer[],timestamp with time zone,jsonb,integer,timestamp with time zone,text,text,integer) from public, anon, authenticated;
+grant execute on function public.omr_open_attempt_session_v2(text,text,text,text,text,text,text,text,text,text,text,integer[],integer[],timestamp with time zone,jsonb,integer,timestamp with time zone,text,text,integer) to service_role;
+revoke all on function public.omr_prepare_teacher_asset_upload_v2(text,text,bigint,text,text,jsonb) from public, anon, authenticated;
+grant execute on function public.omr_prepare_teacher_asset_upload_v2(text,text,bigint,text,text,jsonb) to service_role;
+revoke all on function public.omr_authorize_teacher_asset_finalize_v2(text,text,bigint,text,text,text,jsonb) from public, anon, authenticated;
+grant execute on function public.omr_authorize_teacher_asset_finalize_v2(text,text,bigint,text,text,text,jsonb) to service_role;
+revoke all on function public.omr_finalize_teacher_asset_upload_v2(text,text,bigint,text,text,text,jsonb) from public, anon, authenticated;
+grant execute on function public.omr_finalize_teacher_asset_upload_v2(text,text,bigint,text,text,text,jsonb) to service_role;
+revoke all on function public.omr_prepare_attempt_handwriting_asset_v2(text,text,text,jsonb) from public, anon, authenticated;
+grant execute on function public.omr_prepare_attempt_handwriting_asset_v2(text,text,text,jsonb) to service_role;
+revoke all on function public.omr_attach_attempt_handwriting_v2(text,text,text,text,text) from public, anon, authenticated;
+grant execute on function public.omr_attach_attempt_handwriting_v2(text,text,text,text,text) to service_role;
+revoke all on function public.omr_claim_remote_asset_cleanup_v1(text,integer,integer) from public, anon, authenticated;
+grant execute on function public.omr_claim_remote_asset_cleanup_v1(text,integer,integer) to service_role;
+revoke all on function public.omr_reserve_plan_usage_v2(text,text,bigint,text,text,text,text) from public, anon, authenticated;
+grant execute on function public.omr_reserve_plan_usage_v2(text,text,bigint,text,text,text,text) to service_role;
+revoke all on function public.omr_release_plan_usage_v2(text,text,bigint,text,text,text,text) from public, anon, authenticated;
+grant execute on function public.omr_release_plan_usage_v2(text,text,bigint,text,text,text,text) to service_role;
+revoke all on function public.omr_sync_student_plan_usage_v2(text,text,bigint,text,text) from public, anon, authenticated;
+grant execute on function public.omr_sync_student_plan_usage_v2(text,text,bigint,text,text) to service_role;
 
 commit;

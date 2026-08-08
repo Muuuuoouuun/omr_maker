@@ -25,7 +25,7 @@ const OPERATIONS = new Set([
 ]);
 
 export const INITIAL_OPERATIONS_CONTROL_PRODUCTION_PATHS = Object.freeze({
-    "student-read": Object.freeze(["rpc:omr_open_attempt_session_v1"]),
+    "student-read": Object.freeze(["rpc:omr_open_attempt_session_v2"]),
     checkpoint: Object.freeze(["rpc:omr_checkpoint_attempt_session_v1"]),
     heartbeat: Object.freeze(["rpc:omr_heartbeat_attempt_session_v1"]),
     "teacher-live-read": Object.freeze(["rpc:omr_list_active_attempt_sessions_v1"]),
@@ -38,10 +38,10 @@ export const INITIAL_OPERATIONS_CONTROL_PRODUCTION_PATHS = Object.freeze({
         "rpc:omr_prepare_attempt_session_submit_v1",
         "rpc:omr_commit_attempt_session_submit_v1",
     ]),
-    "teacher-max-pdf-upload-prepare": Object.freeze(["rpc:omr_prepare_teacher_asset_upload_v1"]),
+    "teacher-max-pdf-upload-prepare": Object.freeze(["rpc:omr_prepare_teacher_asset_upload_v2"]),
     "teacher-max-pdf-upload-finalize": Object.freeze([
-        "rpc:omr_authorize_teacher_asset_finalize_v1",
-        "rpc:omr_finalize_teacher_asset_upload_v1",
+        "rpc:omr_authorize_teacher_asset_finalize_v2",
+        "rpc:omr_finalize_teacher_asset_upload_v2",
     ]),
 });
 
@@ -95,6 +95,31 @@ export function buildInPathRssEvidence(runId, build, requestRecords, probeRecord
 
 function clean(value) {
     return typeof value === "string" ? value.trim() : "";
+}
+
+export function normalizeInitialOperationsTeacherIdentity(value, fixture) {
+    if (!value || typeof value !== "object" || Array.isArray(value)
+        || !fixture || typeof fixture !== "object" || Array.isArray(fixture)
+        || Object.keys(value).sort().join(",") !== [
+            "accountId",
+            "accountSessionGeneration",
+            "actorUserId",
+            "sessionAuthority",
+        ].join(",")) return null;
+    const accountId = clean(value.accountId);
+    const actorUserId = clean(value.actorUserId);
+    if (value.sessionAuthority !== "legacy_account"
+        || !/^teacher_[a-z0-9]{16}$/.test(accountId)
+        || accountId !== clean(fixture.organizationId)
+        || !/^teacher_[a-z0-9]{7,16}$/.test(actorUserId)
+        || !Number.isSafeInteger(value.accountSessionGeneration)
+        || value.accountSessionGeneration < 1) return null;
+    return Object.freeze({
+        sessionAuthority: "legacy_account",
+        accountId,
+        accountSessionGeneration: value.accountSessionGeneration,
+        actorUserId,
+    });
 }
 
 function strictOrigin(value, label, requiredSuffix = "") {
@@ -806,6 +831,14 @@ export async function runInitialOperationsStagingLoad(config, overrides = {}) {
             failureCode = "fixture_create_unverified";
             throw new Error("Fixture exam revision is invalid");
         }
+        const fixtureTeacherIdentity = normalizeInitialOperationsTeacherIdentity(
+            created.teacherIdentity,
+            plan.fixture,
+        );
+        if (!fixtureTeacherIdentity) {
+            failureCode = "fixture_create_unverified";
+            throw new Error("Fixture teacher identity is invalid");
+        }
         await writer.append({ kind: "lifecycle", event: "fixture-created", ...plan.fixture });
         await overrides.collectors.database.start({ config, plan });
         databaseStarted = true;
@@ -817,7 +850,7 @@ export async function runInitialOperationsStagingLoad(config, overrides = {}) {
             plan,
             controlPlane,
             writer,
-            overrides: { ...overrides, storageWriter, fixtureExamUpdatedAt },
+            overrides: { ...overrides, storageWriter, fixtureExamUpdatedAt, fixtureTeacherIdentity },
         });
         workloadRequestRecords = Array.isArray(workload?.requestRecords) ? workload.requestRecords : [];
     } catch {
@@ -882,6 +915,13 @@ function stableJson(value) {
 
 export async function executeInitialOperationsWorkload({ config, plan, controlPlane, writer, overrides = {} }) {
     const now = overrides.now ?? Date.now;
+    const fixtureTeacherIdentity = normalizeInitialOperationsTeacherIdentity(
+        overrides.fixtureTeacherIdentity,
+        plan.fixture,
+    );
+    if (plan.uploads.length > 0 && !fixtureTeacherIdentity) {
+        throw new Error("Fixture teacher identity is required for upload workload");
+    }
     const controller = new AbortController();
     const pendingWaitCancellations = new Set();
     const cancelled = new Promise((resolve) => {
@@ -1041,6 +1081,7 @@ export async function executeInitialOperationsWorkload({ config, plan, controlPl
                 requestId: `${item.requestId}:prepare`,
                 body: {
                     fixture: plan.fixture,
+                    teacherIdentity: fixtureTeacherIdentity,
                     byteSize: item.byteSize,
                     sha256Hex: declaredSha256,
                     idempotencyKey: item.idempotencyKey,
@@ -1077,6 +1118,7 @@ export async function executeInitialOperationsWorkload({ config, plan, controlPl
                         requestId: `${item.requestId}:finalize`,
                         body: {
                             fixture: plan.fixture,
+                            teacherIdentity: fixtureTeacherIdentity,
                             objectPath: prepare.body.objectPath,
                             expectedBytes,
                             expectedSha256,

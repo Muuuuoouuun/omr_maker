@@ -16,6 +16,15 @@ const context = {
     actorUserId: "teacher-1",
 };
 
+const mutationContext = {
+    organizationId: "pilot_org_0123456789abcdef01234567",
+    organizationName: "테스트 학원",
+    actorUserId: "teacher_0123456789abcdef",
+    accountId: "teacher_0123456789abcdef",
+    sessionAuthority: "account" as const,
+    accountSessionGeneration: 3,
+};
+
 const snapshot: RosterSnapshot = {
     groups: [{ id: "class-a", name: "A반", region: "서울", count: 1, avgScore: 80, color: "#4f46e5" }],
     students: [{
@@ -146,21 +155,25 @@ describe("teacher roster gateway", () => {
 
     it("saves one organization-scoped atomic RPC payload", async () => {
         const { client, rpcCalls } = mockClient();
-        await expect(saveTeacherRosterWithGateway(client, snapshot, context, 7)).resolves.toEqual({
+        await expect(saveTeacherRosterWithGateway(client, snapshot, mutationContext, 7)).resolves.toEqual({
             status: "saved",
             snapshot,
             revision: 8,
         });
         expect(rpcCalls).toHaveLength(1);
         expect(rpcCalls[0]).toMatchObject({
-            name: "omr_save_roster_v2",
+            name: "omr_save_roster_v3",
             params: {
-                p_organization_id: "org-1",
+                p_session_authority: "account",
+                p_account_id: "teacher_0123456789abcdef",
+                p_session_generation: 3,
+                p_actor_user_id: "teacher_0123456789abcdef",
+                p_organization_id: "pilot_org_0123456789abcdef01234567",
                 p_expected_revision: 7,
-                p_classes: [expect.objectContaining({ id: "class-a", organization_id: "org-1" })],
-                p_students: [expect.objectContaining({ id: "student-1", organization_id: "org-1" })],
+                p_classes: [expect.objectContaining({ id: "class-a", organization_id: mutationContext.organizationId })],
+                p_students: [expect.objectContaining({ id: "student-1", organization_id: mutationContext.organizationId })],
                 p_enrollments: [expect.objectContaining({ class_id: "class-a", student_profile_id: "student-1" })],
-                p_invites: [expect.objectContaining({ id: "invite-1", organization_id: "org-1" })],
+                p_invites: [expect.objectContaining({ id: "invite-1", organization_id: mutationContext.organizationId })],
             },
         });
     });
@@ -169,7 +182,7 @@ describe("teacher roster gateway", () => {
         await expect(saveTeacherRosterWithGateway(
             mockClient({ rpcError: "roster revision conflict" }).client,
             snapshot,
-            context,
+            mutationContext,
             6,
         )).resolves.toEqual({
             status: "conflict",
@@ -187,7 +200,7 @@ describe("teacher roster gateway", () => {
     it("propagates read and atomic write failures without claiming success", async () => {
         await expect(loadTeacherRosterWithGateway(mockClient({ loadRpcError: "db down" }).client, context))
             .resolves.toEqual({ status: "service_unavailable", error: "db down" });
-        await expect(saveTeacherRosterWithGateway(mockClient({ rpcError: "write failed" }).client, snapshot, context))
+        await expect(saveTeacherRosterWithGateway(mockClient({ rpcError: "write failed" }).client, snapshot, mutationContext))
             .resolves.toEqual({ status: "service_unavailable", error: "write failed" });
     });
 });
