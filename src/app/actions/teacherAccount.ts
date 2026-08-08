@@ -23,6 +23,7 @@ import {
     validateTeacherSignupInput,
 } from "@/lib/teacherAccountLifecycle";
 import { isSameOriginServerActionRequest } from "@/lib/serverActionSecurity";
+import { resolveTeacherIdentityMode } from "@/lib/teacherIdentityMode";
 import {
     createSupabaseAdminClient,
     getSupabaseServerConfigFromEnv,
@@ -34,6 +35,7 @@ export type TeacherAccountPublicStatus =
     | "verified"
     | "invalid_input"
     | "invalid_or_expired"
+    | "dependency_unavailable"
     | "delivery_unavailable"
     | "rate_limited"
     | "service_unavailable"
@@ -41,6 +43,10 @@ export type TeacherAccountPublicStatus =
 
 const REQUEST_POLICY = { limit: 5, windowMs: 60 * 60 * 1_000 };
 const COMPLETE_POLICY = { limit: 10, windowMs: 60 * 60 * 1_000 };
+
+function teacherSelfServiceUnavailable(): boolean {
+    return resolveTeacherIdentityMode() !== "self_service";
+}
 
 function gatewayClient(): TeacherAccountGatewayClient | null {
     const config = getSupabaseServerConfigFromEnv();
@@ -75,6 +81,7 @@ export async function requestTeacherSignup(input: {
     displayName: string;
     password: string;
 }): Promise<{ status: TeacherAccountPublicStatus }> {
+    if (teacherSelfServiceUnavailable()) return { status: "dependency_unavailable" };
     const headerStore = await actionHeaders();
     if (!headerStore) return { status: "unauthenticated" };
     const validated = validateTeacherSignupInput(input);
@@ -112,6 +119,7 @@ export async function requestTeacherSignup(input: {
 export async function requestTeacherPasswordReset(
     emailInput: string,
 ): Promise<{ status: TeacherAccountPublicStatus }> {
+    if (teacherSelfServiceUnavailable()) return { status: "dependency_unavailable" };
     const headerStore = await actionHeaders();
     if (!headerStore) return { status: "unauthenticated" };
     const email = normalizeTeacherAccountEmail(emailInput);
@@ -149,6 +157,7 @@ export async function finishTeacherPasswordReset(input: {
     token: string;
     password: string;
 }): Promise<{ status: TeacherAccountPublicStatus }> {
+    if (teacherSelfServiceUnavailable()) return { status: "dependency_unavailable" };
     const headerStore = await actionHeaders();
     if (!headerStore) return { status: "unauthenticated" };
     const token = typeof input.token === "string" ? input.token.trim() : "";
@@ -173,6 +182,7 @@ export async function finishTeacherPasswordReset(input: {
 export async function confirmTeacherSignupEmail(
     tokenInput: string,
 ): Promise<{ status: TeacherAccountPublicStatus }> {
+    if (teacherSelfServiceUnavailable()) return { status: "dependency_unavailable" };
     const headerStore = await actionHeaders();
     if (!headerStore) return { status: "unauthenticated" };
     const token = typeof tokenInput === "string" ? tokenInput.trim() : "";

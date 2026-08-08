@@ -57,6 +57,7 @@ import { normalizeTeacherRedirectPath, saveTeacherSessionWithIdentity } from "@/
 import { setCurrentPlan } from "@/utils/plans";
 import { readGuestRecoveryState } from "@/lib/studentGuestRecovery";
 import { readExamEntryInviteHandoff } from "@/lib/examEntryInviteHandoff";
+import { useTeacherIdentityMode } from "@/components/TeacherIdentityModeProvider";
 
 /* ─── SVG Icons ──────────────────────────────────────── */
 
@@ -220,6 +221,8 @@ function pendingGuestAttemptIds(): string[] {
 
 export default function Home() {
   const router = useRouter();
+  const teacherIdentityMode = useTeacherIdentityMode();
+  const teacherSelfServiceEnabled = teacherIdentityMode === "self_service";
   const [role, setRole] = useState<"none" | "teacher" | "student">("none");
   const [studentName, setStudentName] = useState("");
   const [studentLookup, setStudentLookup] = useState("");
@@ -231,6 +234,7 @@ export default function Home() {
   const [password, setPassword] = useState("");
   const [teacherDisplayName, setTeacherDisplayName] = useState("");
   const [teacherAccountMode, setTeacherAccountMode] = useState<"login" | "signup" | "reset" | "reset_complete">("login");
+  const visibleTeacherAccountMode = teacherSelfServiceEnabled ? teacherAccountMode : "login";
   const [teacherResetToken, setTeacherResetToken] = useState("");
   const [teacherLifecyclePending, setTeacherLifecyclePending] = useState(false);
   const [mockupLoginPending, setMockupLoginPending] = useState(false);
@@ -254,21 +258,21 @@ export default function Home() {
   const clearLoginError = () => setError("");
   const teacherIdentifierInvalid = Boolean(error && (error.includes("아이디") || error.includes("계정")));
   const teacherPasswordInvalid = Boolean(error && error.includes("비밀번호"));
-  const teacherAccountFormLabel = teacherAccountMode === "signup"
+  const teacherAccountFormLabel = visibleTeacherAccountMode === "signup"
     ? "교사 계정 만들기"
-    : teacherAccountMode === "reset"
+    : visibleTeacherAccountMode === "reset"
       ? "비밀번호 재설정"
-      : teacherAccountMode === "reset_complete"
+      : visibleTeacherAccountMode === "reset_complete"
         ? "새 비밀번호 설정"
         : "교사 로그인";
-  const teacherAccountHeading = teacherAccountMode === "login" ? "환영합니다" : teacherAccountFormLabel;
-  const teacherAccountSubmitLabel = teacherAccountMode === "signup" ? "가입 이메일 요청"
-    : teacherAccountMode === "reset" ? "재설정 이메일 요청"
-      : teacherAccountMode === "reset_complete" ? "새 비밀번호 저장"
+  const teacherAccountHeading = visibleTeacherAccountMode === "login" ? "환영합니다" : teacherAccountFormLabel;
+  const teacherAccountSubmitLabel = visibleTeacherAccountMode === "signup" ? "가입 이메일 요청"
+    : visibleTeacherAccountMode === "reset" ? "재설정 이메일 요청"
+      : visibleTeacherAccountMode === "reset_complete" ? "새 비밀번호 저장"
         : "대시보드 입장";
-  const teacherAccountPendingLabel = teacherAccountMode === "signup" ? "가입 요청 중…"
-    : teacherAccountMode === "reset" ? "요청 중…"
-      : teacherAccountMode === "reset_complete" ? "저장 중…"
+  const teacherAccountPendingLabel = visibleTeacherAccountMode === "signup" ? "가입 요청 중…"
+    : visibleTeacherAccountMode === "reset" ? "요청 중…"
+      : visibleTeacherAccountMode === "reset_complete" ? "저장 중…"
         : teacherAccountSubmitLabel;
   const studentGroupOptions = useMemo(
     () => buildStudentLoginGroupOptions(groups, rosterStudents),
@@ -309,11 +313,11 @@ export default function Home() {
     }
     const resetToken = query.get("teacherResetToken")?.trim() || "";
     const verifyToken = query.get("teacherVerifyToken")?.trim() || "";
-    if (resetToken) {
+    if (teacherSelfServiceEnabled && resetToken) {
       setRole("teacher");
       setTeacherResetToken(resetToken);
       setTeacherAccountMode("reset_complete");
-    } else if (verifyToken) {
+    } else if (teacherSelfServiceEnabled && verifyToken) {
       setRole("teacher");
       setTeacherLifecyclePending(true);
       void confirmTeacherSignupEmail(verifyToken).then(result => {
@@ -397,7 +401,7 @@ export default function Home() {
       });
     }
     return () => { cancelled = true; };
-  }, [router]);
+  }, [router, teacherSelfServiceEnabled]);
 
   // Surface the start-code field proactively for returning students.
   useEffect(() => {
@@ -540,6 +544,7 @@ export default function Home() {
   };
 
   const handleTeacherAccountSubmit = () => {
+    if (!teacherSelfServiceEnabled) return handleTeacherLogin();
     if (teacherAccountMode === "signup") return handleTeacherSignup();
     if (teacherAccountMode === "reset") return handleTeacherPasswordReset();
     if (teacherAccountMode === "reset_complete") return handleTeacherPasswordResetCompletion();
@@ -1289,7 +1294,7 @@ export default function Home() {
                     void handleTeacherAccountSubmit();
                   }}
                 >
-                  {teacherAccountMode !== "reset_complete" && (
+                  {visibleTeacherAccountMode !== "reset_complete" && (
                     <div style={{ marginBottom: "1.05rem" }}>
                       <label
                         htmlFor="teacher-identifier"
@@ -1303,21 +1308,21 @@ export default function Home() {
                           letterSpacing: "0.07em",
                         }}
                       >
-                        {teacherAccountMode === "login" ? "아이디 또는 이메일" : "이메일"}
+                        {visibleTeacherAccountMode === "login" ? "아이디 또는 이메일" : "이메일"}
                       </label>
                       <input
                         id="teacher-identifier"
-                        type={teacherAccountMode === "login" ? "text" : "email"}
+                        type={visibleTeacherAccountMode === "login" ? "text" : "email"}
                         className="input-field"
                         value={teacherIdentifier}
                         onChange={(event) => {
                           setTeacherIdentifier(event.target.value);
                           clearLoginError();
                         }}
-                        placeholder={teacherAccountMode === "login" ? "admin 또는 teacher@example.com" : "teacher@example.com"}
+                        placeholder={visibleTeacherAccountMode === "login" ? "admin 또는 teacher@example.com" : "teacher@example.com"}
                         autoFocus
-                        autoComplete={teacherAccountMode === "login" ? "username" : "email"}
-                        inputMode={teacherAccountMode === "login" ? undefined : "email"}
+                        autoComplete={visibleTeacherAccountMode === "login" ? "username" : "email"}
+                        inputMode={visibleTeacherAccountMode === "login" ? undefined : "email"}
                         autoCapitalize="none"
                         spellCheck={false}
                         aria-invalid={teacherIdentifierInvalid}
@@ -1326,7 +1331,7 @@ export default function Home() {
                     </div>
                   )}
 
-                  {teacherAccountMode === "signup" && (
+                  {visibleTeacherAccountMode === "signup" && (
                     <div style={{ marginBottom: "1.05rem" }}>
                       <label
                         htmlFor="teacher-display-name"
@@ -1357,7 +1362,7 @@ export default function Home() {
                     </div>
                   )}
 
-                  {teacherAccountMode !== "reset" && (
+                  {visibleTeacherAccountMode !== "reset" && (
                     <div style={{ marginBottom: "1.05rem" }}>
                       <label
                         htmlFor="teacher-password"
@@ -1371,7 +1376,7 @@ export default function Home() {
                           letterSpacing: "0.07em",
                         }}
                       >
-                        {teacherAccountMode === "reset_complete" ? "새 비밀번호" : "비밀번호"}
+                        {visibleTeacherAccountMode === "reset_complete" ? "새 비밀번호" : "비밀번호"}
                       </label>
                       <input
                         id="teacher-password"
@@ -1382,26 +1387,26 @@ export default function Home() {
                           setPassword(event.target.value);
                           clearLoginError();
                         }}
-                        placeholder={teacherAccountMode === "reset_complete" ? "12자 이상의 새 비밀번호" : "비밀번호 입력"}
-                        autoFocus={teacherAccountMode === "reset_complete"}
-                        autoComplete={teacherAccountMode === "login" ? "current-password" : "new-password"}
+                        placeholder={visibleTeacherAccountMode === "reset_complete" ? "12자 이상의 새 비밀번호" : "비밀번호 입력"}
+                        autoFocus={visibleTeacherAccountMode === "reset_complete"}
+                        autoComplete={visibleTeacherAccountMode === "login" ? "current-password" : "new-password"}
                         aria-invalid={teacherPasswordInvalid}
                         aria-describedby="teacher-login-feedback"
                       />
                     </div>
                   )}
 
-                  {teacherAccountMode === "signup" && (
+                  {visibleTeacherAccountMode === "signup" && (
                     <p style={{ color: "var(--muted)", fontSize: "var(--type-label)", lineHeight: 1.5, marginBottom: "1.05rem" }}>
                       위 이메일과 12자 이상의 비밀번호로 가입합니다. 이메일 확인 전에는 로그인할 수 없습니다.
                     </p>
                   )}
-                  {teacherAccountMode === "reset" && (
+                  {visibleTeacherAccountMode === "reset" && (
                     <p style={{ color: "var(--muted)", fontSize: "var(--type-label)", lineHeight: 1.5, marginBottom: "1.05rem" }}>
                       위 이메일로 재설정 링크를 요청합니다. 계정 존재 여부는 화면에 표시하지 않습니다.
                     </p>
                   )}
-                  {teacherAccountMode === "reset_complete" && (
+                  {visibleTeacherAccountMode === "reset_complete" && (
                     <p style={{ color: "var(--muted)", fontSize: "var(--type-label)", lineHeight: 1.5, marginBottom: "1.05rem" }}>
                       12자 이상의 새 비밀번호를 입력하세요. 링크는 한 번만 사용할 수 있습니다.
                     </p>
@@ -1425,7 +1430,7 @@ export default function Home() {
                       </>
                     ) : (
                       <p style={{ fontSize: "var(--type-label)", color: "var(--muted)", opacity: 0.82 }}>
-                        {teacherAccountMode === "login" ? "교사용 계정 정보를 입력하세요." : "요청 결과가 여기에 표시됩니다."}
+                        {visibleTeacherAccountMode === "login" ? "교사용 계정 정보를 입력하세요." : "요청 결과가 여기에 표시됩니다."}
                       </p>
                     )}
                   </div>
@@ -1436,33 +1441,41 @@ export default function Home() {
                 </form>
 
                 <div style={{ marginTop: "0.85rem", display: "grid", gap: "0.65rem" }}>
-                  {teacherAccountMode !== "reset_complete" && (
-                    <div style={{ display: "flex", gap: "0.55rem", flexWrap: "wrap" }}>
-                      <button
-                        type="button"
-                        className="btn"
-                        onClick={() => {
-                          setTeacherAccountMode(mode => mode === "signup" ? "login" : "signup");
-                          setError("");
-                        }}
-                      >
-                        {teacherAccountMode === "signup" ? "로그인으로 돌아가기" : "교사 계정 만들기"}
-                      </button>
-                      <button
-                        type="button"
-                        className="btn"
-                        onClick={() => {
-                          setTeacherAccountMode(mode => mode === "reset" ? "login" : "reset");
-                          setError("");
-                        }}
-                      >
-                        {teacherAccountMode === "reset" ? "로그인으로 돌아가기" : "비밀번호 재설정"}
-                      </button>
-                    </div>
+                  {teacherSelfServiceEnabled ? (
+                    <>
+                      {visibleTeacherAccountMode !== "reset_complete" && (
+                        <div style={{ display: "flex", gap: "0.55rem", flexWrap: "wrap" }}>
+                          <button
+                            type="button"
+                            className="btn"
+                            onClick={() => {
+                              setTeacherAccountMode(mode => mode === "signup" ? "login" : "signup");
+                              setError("");
+                            }}
+                          >
+                            {visibleTeacherAccountMode === "signup" ? "로그인으로 돌아가기" : "교사 계정 만들기"}
+                          </button>
+                          <button
+                            type="button"
+                            className="btn"
+                            onClick={() => {
+                              setTeacherAccountMode(mode => mode === "reset" ? "login" : "reset");
+                              setError("");
+                            }}
+                          >
+                            {visibleTeacherAccountMode === "reset" ? "로그인으로 돌아가기" : "비밀번호 재설정"}
+                          </button>
+                        </div>
+                      )}
+                      <p style={{ color: "var(--muted)", fontSize: "var(--type-caption)", lineHeight: 1.5 }}>
+                        부트스트랩 계정은 초기 운영자가 명시적으로 허용한 경우에만 사용됩니다.
+                      </p>
+                    </>
+                  ) : (
+                    <p style={{ color: "var(--muted)", fontSize: "var(--type-caption)", lineHeight: 1.5 }}>
+                      운영자에게 계정 또는 비밀번호 재발급을 요청해주세요
+                    </p>
                   )}
-                  <p style={{ color: "var(--muted)", fontSize: "var(--type-caption)", lineHeight: 1.5 }}>
-                    부트스트랩 계정은 초기 운영자가 명시적으로 허용한 경우에만 사용됩니다.
-                  </p>
                 </div>
 
                 <div className="mockup-login-divider" aria-hidden="true"><span>또는 바로 체험하기</span></div>

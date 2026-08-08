@@ -833,8 +833,8 @@ describe("service UI surface", () => {
         const homePage = readProjectFile("src/app/page.tsx");
         const solvePage = readProjectFile("src/app/solve/[id]/page.tsx");
 
-        expect(homePage).toContain('autoComplete={teacherAccountMode === "login" ? "username" : "email"}');
-        expect(homePage).toContain('autoComplete={teacherAccountMode === "login" ? "current-password" : "new-password"}');
+        expect(homePage).toContain('autoComplete={visibleTeacherAccountMode === "login" ? "username" : "email"}');
+        expect(homePage).toContain('autoComplete={visibleTeacherAccountMode === "login" ? "current-password" : "new-password"}');
         expect(homePage).toContain('autoComplete="name"');
         expect(homePage).toContain('autoComplete="email"');
         expect(homePage).toContain('inputMode="email"');

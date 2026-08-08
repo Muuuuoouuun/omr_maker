@@ -1,13 +1,16 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const controls = vi.hoisted(() => ({
     sameOrigin: true,
     adminClientCalls: 0,
     durableCalls: 0,
+    deliveryCalls: 0,
+    lifecycleCalls: 0,
     deliveryAvailable: false,
     deliveryStatuses: [] as Array<"delivered" | "rejected">,
     deliveredTokens: [] as Array<{ email: string; token: string }>,
     signupRpcResults: [] as boolean[],
+    rpcResults: {} as Record<string, unknown>,
 }));
 
 vi.mock("next/headers", () => ({
@@ -30,7 +33,7 @@ vi.mock("@/lib/supabaseServerAdmin", () => ({
             rpc: vi.fn(async (name: string) => ({
                 data: name === "omr_begin_teacher_signup_v1"
                     ? (controls.signupRpcResults.shift() ?? false)
-                    : false,
+                    : (controls.rpcResults[name] ?? false),
                 error: null,
             })),
         };
@@ -38,12 +41,47 @@ vi.mock("@/lib/supabaseServerAdmin", () => ({
 }));
 
 vi.mock("@/lib/teacherAccountDelivery", () => ({
-    resolveTeacherAccountDeliveryAdapter: () => controls.deliveryAvailable ? {} : null,
+    resolveTeacherAccountDeliveryAdapter: () => {
+        controls.deliveryCalls += 1;
+        return controls.deliveryAvailable ? {} : null;
+    },
     deliverTeacherAccountToken: async (message: { email: string; token: string }) => {
+        controls.deliveryCalls += 1;
         controls.deliveredTokens.push(message);
         return { status: controls.deliveryStatuses.shift() || "delivered" };
     },
 }));
+
+vi.mock("@/lib/teacherAccountLifecycle", async (importOriginal) => {
+    const actual = await importOriginal<typeof import("@/lib/teacherAccountLifecycle")>();
+    return {
+        ...actual,
+        createTeacherAccountToken: (...args: Parameters<typeof actual.createTeacherAccountToken>) => {
+            controls.lifecycleCalls += 1;
+            return actual.createTeacherAccountToken(...args);
+        },
+        hashTeacherAccountPasswordAsync: (...args: Parameters<typeof actual.hashTeacherAccountPasswordAsync>) => {
+            controls.lifecycleCalls += 1;
+            return actual.hashTeacherAccountPasswordAsync(...args);
+        },
+        hashTeacherAccountToken: (...args: Parameters<typeof actual.hashTeacherAccountToken>) => {
+            controls.lifecycleCalls += 1;
+            return actual.hashTeacherAccountToken(...args);
+        },
+        isValidTeacherAccountEmail: (...args: Parameters<typeof actual.isValidTeacherAccountEmail>) => {
+            controls.lifecycleCalls += 1;
+            return actual.isValidTeacherAccountEmail(...args);
+        },
+        normalizeTeacherAccountEmail: (...args: Parameters<typeof actual.normalizeTeacherAccountEmail>) => {
+            controls.lifecycleCalls += 1;
+            return actual.normalizeTeacherAccountEmail(...args);
+        },
+        validateTeacherSignupInput: (...args: Parameters<typeof actual.validateTeacherSignupInput>) => {
+            controls.lifecycleCalls += 1;
+            return actual.validateTeacherSignupInput(...args);
+        },
+    };
+});
 
 vi.mock("@/lib/durableRateLimit", () => ({
     applyDurableRateLimit: async () => {
@@ -53,19 +91,60 @@ vi.mock("@/lib/durableRateLimit", () => ({
 }));
 
 import {
+    confirmTeacherSignupEmail,
+    finishTeacherPasswordReset,
     requestTeacherPasswordReset,
     requestTeacherSignup,
 } from "@/app/actions/teacherAccount";
 
 describe("teacher account public action boundary", () => {
     beforeEach(() => {
+        vi.stubEnv("NODE_ENV", "test");
+        vi.stubEnv("OMR_TEACHER_IDENTITY_MODE", "self_service");
         controls.sameOrigin = true;
         controls.adminClientCalls = 0;
         controls.durableCalls = 0;
+        controls.deliveryCalls = 0;
+        controls.lifecycleCalls = 0;
         controls.deliveryAvailable = false;
         controls.deliveryStatuses = [];
         controls.deliveredTokens = [];
         controls.signupRpcResults = [];
+        controls.rpcResults = {};
+    });
+
+    afterEach(() => vi.unstubAllEnvs());
+
+    it("fails every self-service action closed before dependencies in provisioned-only mode", async () => {
+        vi.stubEnv("OMR_TEACHER_IDENTITY_MODE", "provisioned_only");
+        controls.deliveryAvailable = true;
+        const email = "private.teacher@example.com";
+        const token = "private-legacy-token";
+
+        const results = [
+            await requestTeacherSignup({
+                email,
+                displayName: "개인 이름",
+                password: "safe-password-123",
+            }),
+            await requestTeacherPasswordReset(email),
+            await finishTeacherPasswordReset({ token, password: "safe-password-123" }),
+            await confirmTeacherSignupEmail(token),
+        ];
+
+        expect(results).toEqual([
+            { status: "dependency_unavailable" },
+            { status: "dependency_unavailable" },
+            { status: "dependency_unavailable" },
+            { status: "dependency_unavailable" },
+        ]);
+        expect(controls.lifecycleCalls).toBe(0);
+        expect(controls.deliveryCalls).toBe(0);
+        expect(controls.durableCalls).toBe(0);
+        expect(controls.adminClientCalls).toBe(0);
+        expect(JSON.stringify(results)).not.toContain(email);
+        expect(JSON.stringify(results)).not.toContain(token);
+        expect(JSON.stringify(results)).not.toContain("개인 이름");
     });
 
     it("rejects cross-origin signup before rate-limit or database work", async () => {
@@ -119,5 +198,21 @@ describe("teacher account public action boundary", () => {
         expect(controls.deliveredTokens).toHaveLength(2);
         expect(controls.deliveredTokens[0]?.token).not.toBe(controls.deliveredTokens[1]?.token);
         expect(controls.adminClientCalls).toBe(3);
+    });
+
+    it("preserves completion and verification flows in explicitly enabled nonproduction self-service mode", async () => {
+        controls.rpcResults = {
+            omr_complete_teacher_password_reset_v1: true,
+            omr_verify_teacher_email_v1: true,
+        };
+
+        await expect(finishTeacherPasswordReset({
+            token: "legacy-reset-token",
+            password: "safe-password-123",
+        })).resolves.toEqual({ status: "completed" });
+        await expect(confirmTeacherSignupEmail("legacy-verification-token"))
+            .resolves.toEqual({ status: "verified" });
+        expect(controls.durableCalls).toBe(2);
+        expect(controls.adminClientCalls).toBe(2);
     });
 });

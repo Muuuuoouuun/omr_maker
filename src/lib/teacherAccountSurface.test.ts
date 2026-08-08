@@ -53,11 +53,11 @@ describe("teacher account lifecycle surface", () => {
         expect(teacherSurface).toContain('htmlFor="teacher-display-name"');
         expect(teacherSurface).toContain('id="teacher-display-name"');
         expect(teacherSurface).toContain('autoComplete="name"');
-        expect(teacherSurface).toContain('autoComplete={teacherAccountMode === "login" ? "current-password" : "new-password"}');
+        expect(teacherSurface).toContain('autoComplete={visibleTeacherAccountMode === "login" ? "current-password" : "new-password"}');
 
-        expect(page).toContain('teacherAccountMode === "signup" ? "가입 이메일 요청"');
-        expect(page).toContain('teacherAccountMode === "reset" ? "재설정 이메일 요청"');
-        expect(page).toContain('teacherAccountMode === "reset_complete" ? "새 비밀번호 저장"');
+        expect(page).toContain('visibleTeacherAccountMode === "signup" ? "가입 이메일 요청"');
+        expect(page).toContain('visibleTeacherAccountMode === "reset" ? "재설정 이메일 요청"');
+        expect(page).toContain('visibleTeacherAccountMode === "reset_complete" ? "새 비밀번호 저장"');
         expect(page).toContain(': "대시보드 입장"');
     });
 });

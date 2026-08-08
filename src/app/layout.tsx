@@ -11,7 +11,9 @@ import MobileInstallPrompt from "@/components/MobileInstallPrompt";
 import SyncFlusher from "@/components/SyncFlusher";
 import ViewportHeightSync from "@/components/ViewportHeightSync";
 import NativePlatformSync from "@/components/NativePlatformSync";
+import TeacherIdentityModeProvider from "@/components/TeacherIdentityModeProvider";
 import { PWA_STARTUP_IMAGE_LINKS } from "@/lib/pwaStartupImages";
+import { resolveTeacherIdentityMode } from "@/lib/teacherIdentityMode";
 
 export const metadata: Metadata = {
   applicationName: "OMR Maker",
@@ -114,6 +116,8 @@ export default function RootLayout({
 }: Readonly<{
   children: React.ReactNode;
 }>) {
+  const teacherIdentityMode = resolveTeacherIdentityMode();
+
   return (
     <html lang="ko" data-theme="light" data-scroll-behavior="smooth" suppressHydrationWarning>
       <head>
@@ -124,7 +128,9 @@ export default function RootLayout({
         <ViewportHeightSync />
         <PWARegister />
         <SyncFlusher />
-        {children}
+        <TeacherIdentityModeProvider mode={teacherIdentityMode}>
+          {children}
+        </TeacherIdentityModeProvider>
         <MobileInstallPrompt />
         <ToastHost />
       </body>
