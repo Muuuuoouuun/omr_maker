@@ -435,7 +435,7 @@ export default function TeacherAttemptPage() {
                 cumulativeSettledAttemptIdRef.current = targetAttemptId;
                 setCumulativeError(
                     warnings.join(" ")
-                    || (attemptCompleteness === "stale" ? "서버 동기화 전 로컬 제출 기준입니다." : "")
+                    || (attemptCompleteness === "stale" ? "일부 자료는 서버 동기화 전 로컬 저장본 기준입니다." : "")
                     || (attemptCompleteness === "error" ? "서버에서 성장 데이터를 확인하지 못했습니다." : ""),
                 );
                 setCumulativeStatus(attemptCompleteness);

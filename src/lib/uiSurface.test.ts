@@ -1370,6 +1370,8 @@ describe("service UI surface", () => {
         expect(loaderBlock).toContain("...rosterResult");
         expect(loaderBlock).toContain("items: [...rosterResult.students, ...rosterResult.groups]");
         expect(loaderBlock).toContain("setCumulativeStatus(attemptCompleteness)");
+        expect(loaderBlock).toContain("일부 자료는 서버 동기화 전 로컬 저장본 기준입니다.");
+        expect(loaderBlock).not.toContain("서버 동기화 전 로컬 제출 기준입니다.");
         expect(loaderBlock).not.toContain("if (attemptResult.remotePartial)");
     });
 
